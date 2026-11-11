@@ -31,10 +31,13 @@ import {
 import { safeStoredLink } from "../featured";
 import { featuredImageSrc } from "../featured-image";
 import { parseRecordId } from "./record-id";
+import { featuredSaveBaseline, SAVE_BASELINE_FIELD } from "./save-baseline";
 import type { FeaturedEditRow } from "./store-featured";
 
 /** The edit-form values the Hono featuredValues() helper renders. */
 export type KitFeaturedEditValues = {
+  /** Hidden stale-save carrier: the digest of the row as displayed. */
+  [SAVE_BASELINE_FIELD]: string;
   title: string;
   body: string;
   url: string;
@@ -137,6 +140,7 @@ export async function resolveKitFeaturedEdit(
       id: row.id,
       title: row.title,
       values: {
+        [SAVE_BASELINE_FIELD]: await featuredSaveBaseline(row),
         title: row.title,
         body: row.body ?? "",
         url: row.url ?? "",
@@ -167,7 +171,8 @@ export async function resolveKitFeaturedEdit(
       endsAt: endBound.kind === "instant" ? endBound.iso : null,
       startsAtText: row.startsAtText ?? null,
       endsAtText: row.endsAtText ?? null,
-      updatedAt: row.updatedAt.toISOString(),
+      // A legacy nonfinite stamp stays loadable (and repairable) instead of throwing.
+      updatedAt: Number.isFinite(row.updatedAt.getTime()) ? row.updatedAt.toISOString() : "",
       checkedAt: now.toISOString(),
       imageSrc,
       imageAlt: row.imageAlt?.trim() || row.title,

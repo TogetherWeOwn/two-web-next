@@ -33,6 +33,10 @@ Guidance for human and AI contributors.
 
 Use Node 22.23.0+ on the 22.x line, or 24+ (CI uses Node 24).
 
+The commands below are a tooling reference, not permission for agents to run local CI. For AI contributors, full suites and CI gates run only on GitHub Actions for the exact PR head. Push to the PR branch and keep the PR draft while incomplete. Record exact-head Actions run/job links and conclusions; local output never replaces that evidence. Neither a delegated builder nor its caller may run a local full suite or CI mirror, including in Boat or a fallback.
+
+Agent local test execution is limited to an authorized focused reproduction of one failing test or crate, never a suite split into multiple commands. Any heavy build for that reproduction must use the guarded `boat` PATH wrapper with approved source-only export, sizing/budget controls, `--no-env`, and verified cleanup; never bypass it or fall back to a heavy raw-host run. If that path is unavailable, defer to Actions or route the actual prerequisite. Report any focused reproduction separately as diagnostic evidence.
+
 ```sh
 npm ci --include=dev
 cp .dev.vars.example .dev.vars   # local settings only; never commit
@@ -46,6 +50,8 @@ Full test suites and CI gates run only on **GitHub Actions**. Push the PR branch
 Heavy builds for an allowed focused reproduction must use the guarded `boat` PATH wrapper with its sizing/budget/security controls, `--no-env`, a gitleaks-clean source-only export preserving input identity, and verified cleanup. Never bypass it. Boat fallback does not authorize a forbidden full suite/CI mirror or heavy raw-host run; defer to Actions or route the actual prerequisite when the focused/local limit cannot be met.
 
 Run focused reproductions only against the disposable test database or local fixtures described in the README, with `DATABASE_URL` set to that URL when needed. Apply migrations with `npm run db:migrate` and validate history with `npm run db:check`. Never point tests, probes, or test migrations at a production or staging database. If a credential fails, stop and report it. Do not try another one.
+
+Human contributors can reproduce CI's Vitest gates with disposable Postgres 17 containers using `bin/local-ci.sh`. This local tooling does not authorize agent full-suite or CI-mirror execution. For the agent Actions workflow and the separate human local workflow, see [Verify a change with GitHub Actions](CONTRIBUTING.md#verify-a-change-with-github-actions) in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 See [Verify a change with GitHub Actions](CONTRIBUTING.md#verify-a-change-with-github-actions). Cite Actions run/job URLs for the exact PR head SHA, conclusions and scope skips in Verification; local transcripts are not CI evidence for reviewers or the Release Manager. A green draft or docs-only fast-pass does not mean a skipped suite executed. Keep all required checks, review and exact-head production approval gates.
 
@@ -62,7 +68,7 @@ A user-visible change to a page, component, CSS, typography, navigation, form, o
 ## Definition of done
 
 - Behavior matches the request.
-- Applicable GitHub Actions gates are green on the exact head SHA, with run/job URLs and honest scope skips recorded. Report any focused local reproduction separately; do not run a local full suite or CI mirror.
+- Applicable GitHub Actions gates are green on the exact head SHA, with run/job URLs and honest scope skips recorded. Report any focused local reproduction separately; do not run a local full suite or CI mirror. Human local verification follows [CONTRIBUTING.md](CONTRIBUTING.md).
 - A UI change carries the evidence listed under UI changes.
 - Every required check is green on the exact head SHA that merges: `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review`. No approving review is required.
 - Every review finding is fixed, or answered with evidence.

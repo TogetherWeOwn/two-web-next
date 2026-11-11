@@ -18,6 +18,13 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 [docs/runbook.md](docs/runbook.md). Security boundaries and repository evidence:
 [docs/threat-model.md](docs/threat-model.md).
 
+## Roadmap
+
+See the [website roadmap](ROADMAP.md) for approved direction, Ember Hours scope
+and non-goals. It describes intentions, not delivery commitments; implemented
+capabilities are listed below and shipped history is in
+[releases](https://github.com/TogetherWeOwn/two-web-next/releases).
+
 ## What works today
 
 - Homepage member/online counts and rank reads come from bot-owned `web_v1` views, are cached for 60 seconds, and hide missing or stale counts; the page degrades when reads fail. House rules, the versioned privacy page, branded error pages, manifest/icons, canonical metadata, sitemap, robots, and security/cache headers are also implemented ([`src/counts.ts`](src/counts.ts), [`src/pages.tsx`](src/pages.tsx), [`src/index.tsx`](src/index.tsx), [`src/seo.ts`](src/seo.ts), [`test/home-counts.test.ts`](test/home-counts.test.ts), [`test/seo.test.ts`](test/seo.test.ts), [`test/n2-manifest-errors.test.ts`](test/n2-manifest-errors.test.ts)). `/.well-known/security.txt` serves the RFC 9116 disclosure file ([`src/security-txt.ts`](src/security-txt.ts), [`src/index.tsx`](src/index.tsx), [`test/security-txt.test.ts`](test/security-txt.test.ts)).
@@ -84,9 +91,7 @@ results without changing the event's canonical or share URLs.
 
 ## Develop and test safely
 
-**Full suites and CI gates run on GitHub Actions, not locally on the shared host.**
-Push a public-safe PR branch and open a draft PR while work is incomplete; mark
-it ready when complete. The existing workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+**Full suites and CI gates run on GitHub Actions, not locally on the shared host.** For AI contributors, this means the exact PR head: push a public-safe PR branch and open a draft PR while work is incomplete; mark it ready when complete. The existing workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 (`check` → `ci-ok`) applies its normal draft/docs scope rules. Cite Actions
 run/job links for the exact PR head SHA, with observed conclusions and skips,
 not local transcripts. See [the verification procedure](CONTRIBUTING.md#verify-a-change-with-github-actions)
@@ -97,6 +102,9 @@ and verified cleanup. Never bypass its controls. Boat fallback is not permission
 for a full suite/CI mirror or a heavy raw-host run; defer to Actions or route the
 actual prerequisite instead. This changes execution location, not required
 checks, security floors, review or exact-head production approval gates.
+The local command examples below are a tooling reference for human development;
+they do not authorize agent full-suite or CI-mirror execution, including in
+Boat, through a fallback or by the delegated builder's caller.
 
 Use Node **22.23.0+ on the 22.x line, or 24+** (CI uses Node 24; the probe CLIs
 require default native TypeScript stripping, not early Node 22/23 releases).

@@ -77,6 +77,39 @@ describe.skipIf(!process.env.DATABASE_URL)(
     });
     afterAll(() => fixture?.dispose());
 
+    it("refuses a roster programming error instead of rendering an empty roster", async () => {
+      const failure = Object.assign(new Error("private roster SQL syntax error"), {
+        code: "42601",
+      });
+      const execute = vi.fn(async () => {
+        throw failure;
+      });
+      const listRoster = reads.listRoster;
+      // Inject after dbFor's observation clone, retaining the real count read
+      // and listRoster control flow before its raw page statement rejects.
+      vi.spyOn(reads, "listRoster").mockImplementationOnce((db, key, query) =>
+        listRoster(
+          new Proxy(db, {
+            get(target, property) {
+              if (property === "execute") return execute;
+              const value = Reflect.get(target, property);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          }),
+          key,
+          query,
+        ),
+      );
+      const response = await request(`/events/${EVENT_KEY}`);
+      expect(execute).toHaveBeenCalledOnce();
+      const body = await response.clone().text();
+      await denial(response);
+      expect(body).not.toContain("No RSVPs yet.");
+      expect(body).not.toContain("No RSVPs match this member search.");
+      expect(body).not.toContain('data-testid="rsvp-roster"');
+      expect(body).not.toContain(failure.message);
+    });
+
     it.each(["roster", "dashboard"])(
       "refuses an added unwrapped sensitive query in the existing %s handler",
       async (surface) => {

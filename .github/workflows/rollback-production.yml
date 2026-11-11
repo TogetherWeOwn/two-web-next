@@ -90,8 +90,11 @@ permissions:
   contents: read
   actions: read
 
+# A main drill already owns deploy-staging before invoking this workflow.
+# Do not acquire rollback-staging inside it: an ordinary rollback may own that
+# group while waiting for deploy-staging, creating an inverted lock order.
 concurrency:
-  group: rollback-${{ inputs.environment }}
+  group: ${{ inputs.environment == 'staging' && github.workflow == 'staging-rollback-drill' && github.ref == 'refs/heads/main' && format('staging-drill-call-{0}', github.run_id) || format('rollback-{0}', inputs.environment) }}
   cancel-in-progress: false
 
 jobs:
@@ -144,12 +147,14 @@ jobs:
     timeout-minutes: 15
     # Shared Worker mutation lock per environment: production shares the
     # static non-cancelling group with the promotion job, staging shares the
-    # deploy-staging group with deploy.yml, so a rollback never interleaves
-    # with a deploy to the same Worker. Workflow-level groups stay distinct
-    # so the run never nests this group.
+    # deploy-staging group with deploy.yml and qualification. The trusted main
+    # drill caller owns that mutex across both legs, so its nested jobs use a
+    # run-unique group instead of deadlocking on their parent's lock. There is
+    # no caller input that can disable locking on an ordinary rollback.
     concurrency:
-      group: ${{ inputs.environment == 'staging' && 'deploy-staging' || 'production-worker-mutation' }}
+      group: ${{ inputs.environment == 'staging' && ((github.workflow == 'staging-rollback-drill' && github.ref == 'refs/heads/main') && format('staging-drill-leg-{0}', github.run_id) || 'deploy-staging') || 'production-worker-mutation' }}
       cancel-in-progress: false
+      queue: max
     # Preflight verifies the environment name and the configured
     # automated-evidence or reviewer mode before GitHub can auto-create a
     # missing/unprotected Environment.

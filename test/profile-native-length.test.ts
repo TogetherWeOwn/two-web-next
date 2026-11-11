@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import { createContext, runInContext } from "node:vm";
@@ -259,7 +260,7 @@ describe("real island binder: oversized synthetic lists", () => {
       name: "invalid tail after too many names",
       tail: ["🎮".repeat(81), "bad\u0000game"],
       errors: [
-        "Remove control characters.",
+        "Remove control or invisible characters.",
         "Games list is too long.",
         "Keep each game name to 80 characters or fewer.",
         "Add no more than 20 games.",
@@ -418,6 +419,16 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       const server = createServer(async (request, reply) => {
         try {
           const url = new URL(request.url!, base);
+          if (
+            ["/theme.css", "/theme-tokens.css", "/profile-theme.css"].includes(url.pathname) ||
+            url.pathname === "/fonts/display-latin-700.woff2"
+          ) {
+            reply.writeHead(200, {
+              "content-type": url.pathname.endsWith(".woff2") ? "font/woff2" : "text/css",
+            });
+            reply.end(readFileSync(`public${url.pathname}`));
+            return;
+          }
           const asset = assets[url.pathname];
           if (asset) {
             reply.writeHead(200, { "content-type": asset.contentType });
@@ -500,6 +511,48 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       await page.keyboard.insertText(value);
       expect(await page.locator(`[name="${name}"]`).inputValue()).toBe(value);
     }
+
+    it("matches browser and native server control-refusal wording at both widths", async () => {
+      const copy = "Remove control or invisible characters.";
+      const bio = "I enjoy cooperative games.\u0007";
+      const games = "Deep Rock Galactic\u0007";
+      const screenshots = process.env.PROFILE_REFUSAL_SCREENSHOTS;
+      if (screenshots) mkdirSync(screenshots, { recursive: true });
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        for (const javaScriptEnabled of [true, false]) {
+          const { page, writes, save } = await openProfile(javaScriptEnabled);
+          await page.setViewportSize(viewport);
+          await enter(page, "bio", bio);
+          await enter(page, "games_text", games);
+          await page.getByTestId("profile-save").click();
+          await page.getByTestId("profile-error").waitFor();
+          if (screenshots) {
+            await page.evaluate("document.fonts.ready");
+            await page.getByTestId("profile-error").scrollIntoViewIfNeeded();
+            await page.screenshot({
+              path: join(
+                screenshots,
+                `${javaScriptEnabled ? "browser" : "server"}-${viewport.width}.png`,
+              ),
+            });
+          }
+          for (const field of ["bio", "games_text"]) {
+            const input = page.locator(`[name="${field}"]`);
+            const errorId = `profile-${field === "games_text" ? "games-text" : field}-error`;
+            expect.soft(await page.locator(`#${errorId}`).textContent()).toBe(copy);
+            expect.soft(await input.getAttribute("aria-invalid")).toBe("true");
+            expect.soft(await input.inputValue()).toBe(field === "bio" ? bio : games);
+          }
+          expect.soft(await page.getByTestId("profile-error").textContent()).toContain(copy);
+          if (javaScriptEnabled) expect(writes).toEqual([]);
+          else expect(writes).toMatchObject([{ method: "POST", status: 422 }]);
+          expect(save).not.toHaveBeenCalled();
+        }
+      }
+    });
 
     it("JS island preserves ordered deduplication after whitespace normalization", async () => {
       const { page, writes, save } = await openProfile(true);

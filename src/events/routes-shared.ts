@@ -33,7 +33,12 @@ export const PUBLIC_EVENT_READS_PER_MINUTE = 60;
  * override).
  */
 export function publicReadBudget(env: Env): number {
-  const override = Number(env.E2E_PUBLIC_READ_BUDGET);
+  let override: number;
+  try {
+    override = Number(env.E2E_PUBLIC_READ_BUDGET);
+  } catch {
+    override = Number.NaN;
+  }
   return Number.isInteger(override) && override > 0 ? override : PUBLIC_EVENT_READS_PER_MINUTE;
 }
 

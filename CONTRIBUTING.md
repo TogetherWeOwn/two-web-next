@@ -385,12 +385,16 @@ npm run format                   # formatting only; never rewrites lint violatio
 
 ### Verify a change with GitHub Actions
 
-Full test suites and CI gates run on **GitHub Actions**, not on the shared host.
-Push to the PR branch to run them. Open a **draft PR while work is incomplete**;
-mark it ready only when the work is complete. Do not run `npm run check`,
-`npm run check:offline`, unfiltered `npm test`, `npm run test:coverage`, or the `bin/local-ci.sh` /
-`npm run ci:local` CI mirror locally. A disposable database, a DB-free lane,
-Docker or Boat does not make a local full-suite/CI-mirror run permissible.
+Full test suites and CI gates run only on **GitHub Actions** for the exact PR
+head, not on the shared host. Push to the PR branch, open or keep a **draft PR
+while work is incomplete**, and record exact-head Actions run/job links and
+conclusions in Verification before marking ready. Do not run `npm run check`,
+`npm run check:offline`, unfiltered `npm test`, `npm run test:coverage`, or the
+`bin/local-ci.sh` / `npm run ci:local` CI mirror locally. A disposable
+database, a DB-free lane, Docker or Boat does not make a local full-suite or
+CI-mirror run permissible. Neither the builder nor its caller may run local
+full suites or CI mirrors on the shared host, in Boat or through a fallback;
+do not split a suite into successive focused commands.
 
 This repo's entrypoint is [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 (workflow `ci`, job `check`, required aggregator `ci-ok`), not `check.yml`.
@@ -398,7 +402,14 @@ It also runs the `docs-links`, `node22-compat`, accessibility and performance
 jobs selected by its existing scope rules. Browser journeys report through
 `e2e-ok` in [`.github/workflows/e2e.yml`](.github/workflows/e2e.yml); PR lint and
 secret scanning remain in `pr-gates.yml`. Keep every existing required check,
-security floor, review and release gate.
+database-safety rule, security floor, native review and release gate.
+Changes to `src/`, `test/` or migrations still require the full gate; draft
+or scope-skipped jobs are not a full-suite pass. If the draft run skips heavy
+steps, dispatch the existing CI workflow on that PR branch for full
+verification. Read-only reviewers inspect source and existing evidence and do
+not execute tests, builds or installs. The command examples in Local
+development and the human workflow below are a tooling reference, not an
+exception to these agent execution limits.
 
 ```sh
 # Keep a workspace-managed local branch; publish only a public-safe ref.
@@ -455,6 +466,43 @@ fallback does **not** authorize a full suite/CI mirror or a heavy raw-host run;
 if it cannot meet the focused/local limit, defer to Actions or route the actual
 prerequisite. Record the focused command, tested SHA, result and cleanup, not a
 claim of CI success.
+
+#### Human contributors: local verification
+
+`bin/local-ci.sh` (also `npm run ci:local --`) reproduces the Vitest gates of
+the CI `check` job on any host with Docker. It needs no `.dev.vars` and no
+credentials. Network access is needed only to pull `node:24-bookworm` and
+`postgres:17`, and for `npm ci` to reach the npm registry when the local npm
+cache is cold. Each shard gets its own disposable Postgres 17 container on its
+own Docker network, aliased `agent-testdb` so the `testDatabaseUrl` guard
+accepts it. Nothing is published on host ports. Suites run in the CI job image
+as your user. Containers and networks are removed on exit.
+
+```sh
+bin/local-ci.sh -- test/events.test.ts test/event-page.test.ts  # only the affected files
+bin/local-ci.sh -- test/admin                                   # every file matching a filter
+bin/local-ci.sh -j 8                                            # full gate on 8 shards
+bin/local-ci.sh -j 8 --no-coverage --no-static                  # suite only, quicker
+```
+
+- Focused runs apply migrations to a fresh database and run `vitest run` on the
+  given files or filters. Start with the test files beside the code you changed
+  and the files that import it (`git grep -l <module> test/`).
+- A full run does lint, typecheck, migrations, and `vitest run --coverage`
+  split over `-j N` shards (default `nproc / 4` capped at 8; up to 16 explicitly). It then merges the
+  shard reports, so pass counts and coverage thresholds cover the whole suite.
+  Last, it reruns the hotzone suite under `TZ=America/Los_Angeles` and runs Tier-0.
+  Shard logs are in `.local-ci/<run>/logs/`, so concurrent runs never share files.
+- `npm ci` (root and `web/`) runs inside the CI image the first time and again
+  whenever a lockfile changes. `--install` forces it. Each run holds a shared lock
+  on the dependencies while it runs, and an install waits for the exclusive lock, so
+  `npm ci` never replaces `node_modules` under another run in the same checkout.
+- Human contributors run the full local gate before opening a PR that touches
+  `src/`, `test/` or migrations and paste the merged `Test Files` / `Tests` lines
+  into Verification. AI contributors instead follow the Actions-only workflow
+  above; neither the builder nor its caller runs this local gate.
+- Not covered: the browser journeys (`e2e-ok`), the a11y job, the Kit build and
+  parity gates, and Semgrep. CI still runs them on the PR.
 
 Biome is pinned in `package-lock.json`. `npm run lint` uses the read-only
 [`biome ci`](https://biomejs.dev/reference/cli/#biome-ci) command to enforce both

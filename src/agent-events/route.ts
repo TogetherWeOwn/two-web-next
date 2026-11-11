@@ -24,7 +24,12 @@ type IngressEnv = {
 export type EnvWithAgentStore = Env & { AGENT_EVENT_SQL?: postgres.Sql };
 
 export function ingressConfig(env: Env): IngressConfig {
-  const routePerMinute = Number(env.AGENT_EVENTS_ROUTE_PER_MINUTE);
+  let routePerMinute: number;
+  try {
+    routePerMinute = Number(env.AGENT_EVENTS_ROUTE_PER_MINUTE);
+  } catch {
+    routePerMinute = Number.NaN;
+  }
   return {
     ...DEFAULT_CONFIG,
     enabled: env.AGENT_EVENTS_ENABLED === "true" || env.AGENT_EVENTS_ENABLED === "1",
