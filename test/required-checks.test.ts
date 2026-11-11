@@ -96,7 +96,7 @@ describe("required checks always report", () => {
     const ci = readFileSync(join(dir, "ci.yml"), "utf8");
     const ok = job(ci, "ci-ok");
     expect(ok).toMatch(
-      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope, bot-contract-drift\]\n/,
+      /\n    needs:\s+\[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope, bot-contract-drift\]\n/,
     );
     expect(ok).toContain("BOT_CONTRACT_RESULT: ${{ needs.bot-contract-drift.result }}");
     expect(ok).toContain('run: test "$BOT_CONTRACT_RESULT" = success');
