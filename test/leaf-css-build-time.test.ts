@@ -56,12 +56,24 @@ describe("critical CSS is a build output, not a source", () => {
     expect(scriptsOf("web/package.json").prebuild ?? "").toContain("ci/build-leaf-css.mjs");
   });
 
+  it("checks token adapters before every Kit build", () => {
+    expect(scriptsOf("web/package.json").build ?? "").toContain(
+      "ci/build-ember-tokens.mjs --check",
+    );
+  });
+
+  it("checks token adapters before every Kit check", () => {
+    expect(scriptsOf("web/package.json").check ?? "").toContain(
+      "ci/build-ember-tokens.mjs --check",
+    );
+  });
+
   it("regenerates the bundle on every Kit install", () => {
     expect(scriptsOf("web/package.json").postinstall ?? "").toContain("build-leaf-css");
   });
 
   it.each(["build", "check"])(
-    "regenerates missing and stale CSS before Kit %s with lifecycle hooks disabled",
+    "checks tokens and regenerates missing and stale CSS before Kit %s with lifecycle hooks disabled",
     (command) => {
       const fixture = mkdtempSync(join(tmpdir(), "kit-css-lifecycle-"));
       try {
@@ -71,6 +83,10 @@ describe("critical CSS is a build output, not a source", () => {
         writeFileSync(
           join(fixture, "ci/build-leaf-css.mjs"),
           readFileSync(join(root, "ci/build-leaf-css.mjs")),
+        );
+        writeFileSync(
+          join(fixture, "ci/build-ember-tokens.mjs"),
+          `import { writeFileSync } from "node:fs";\nimport { dirname, join } from "node:path";\nimport { fileURLToPath } from "node:url";\nconst dir = dirname(fileURLToPath(import.meta.url));\nwriteFileSync(join(dir, "..", "ember-tokens-checked.txt"), "checked");\n`,
         );
         for (const source of ["styles.css", "theme-tokens.css", "theme.css"]) {
           writeFileSync(join(fixture, "public", source), ":root { color: red; }");
@@ -96,6 +112,7 @@ describe("critical CSS is a build output, not a source", () => {
             timeout: 10_000,
           });
           expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(42);
+          expect(readFileSync(join(fixture, "ember-tokens-checked.txt"), "utf8")).toBe("checked");
           expect(readFileSync(output, "utf8")).toContain(":root { color: red; }");
           expect(readFileSync(output, "utf8")).not.toContain("stale CSS");
         }
