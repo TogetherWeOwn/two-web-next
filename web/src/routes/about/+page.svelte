@@ -26,6 +26,7 @@ const { appUrl, strap, lead, facts, leafCss } = $derived(data);
 
 {#snippet accountJoin()}<div><span class="account-caption">Welcome, guest</span><a class="btn" href="/join">Join with Discord</a></div>{/snippet}
 <Shell
+  restoredWrite={data.restoredWrite}
   title="About"
   canonical={canonicalUrl(appUrl, "/about")}
   theme="content"

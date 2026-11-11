@@ -421,7 +421,9 @@ describe("Kit activity-log page: Hono markup contract, no island, no payload", (
   });
 
   it("renders inside the admin chrome with its own title and never indexes", () => {
-    expect(page()).toContain('<AdminShell title="Activity log">');
+    expect(page()).toContain(
+      '<AdminShell restoredWrite={data.restoredWrite} title="Activity log">',
+    );
     expect(read("web/src/lib/AdminShell.svelte")).toContain("noindex");
   });
 
@@ -442,7 +444,9 @@ describe("Kit activity-log page: Hono markup contract, no island, no payload", (
 
   it("the group outlet carries no chrome of its own: children own their titles", () => {
     expect(read("web/src/routes/admin/+layout.svelte")).not.toContain('title="Dashboard"');
-    expect(read("web/src/routes/admin/+page.svelte")).toContain('<AdminShell title="Dashboard">');
+    expect(read("web/src/routes/admin/+page.svelte")).toContain(
+      '<AdminShell restoredWrite={data.restoredWrite} title="Dashboard">',
+    );
   });
 });
 

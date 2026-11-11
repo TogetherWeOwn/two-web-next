@@ -283,6 +283,7 @@ exactly once.
 | `src/auth-status.ts` | auth |
 | `src/body-limit.ts` | http-guard |
 | `src/bot/` | bot |
+| `src/config-warn.ts` | observability |
 | `src/counts.ts` | content |
 | `src/csp-report-body.ts` | http-guard |
 | `src/csp-report-uri.ts` | http-guard |
@@ -291,6 +292,7 @@ exactly once.
 | `src/discord-http.ts` | auth |
 | `src/discord-widget.ts` | join |
 | `src/discord.ts` | auth |
+| `src/ember-fallback-style.ts` | http-guard |
 | `src/env.ts` | entry |
 | `src/error-pages.tsx` | entry |
 | `src/error-registration.ts` | entry |
@@ -330,6 +332,7 @@ exactly once.
 | `src/kit-hotzones.ts` | events |
 | `src/kit-members.ts` | profiles |
 | `src/kit-past-events.ts` | events |
+| `src/kit-restored-write.ts` | entry |
 | `src/kit-session.ts` | auth |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |

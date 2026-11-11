@@ -2,6 +2,9 @@ import { HtmlEscapedCallbackPhase, resolveCallback } from "hono/utils/html";
 import { EventsCalendarPage, EventsSearchTooLongPage } from "./events/pages";
 import type { KitEventsLoadData } from "./kit-events";
 
+const RESTORED_WRITE_NOTICE =
+  '<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>';
+
 export interface KitEventsHtml {
   status: 200;
   headers: Record<string, string>;
@@ -23,6 +26,7 @@ export interface KitEventsHtml {
 export async function renderEventsHtml(
   data: KitEventsLoadData | { queryTooLong: true; appUrl: string },
   headers: Record<string, string>,
+  restoredWrite = false,
 ): Promise<KitEventsHtml> {
   const element = data.queryTooLong ? (
     <EventsSearchTooLongPage appUrl={data.appUrl} />
@@ -50,9 +54,14 @@ export async function renderEventsHtml(
     />
   );
   const body = await resolveCallback(element, HtmlEscapedCallbackPhase.Stringify, false, {});
+  let html = String(body);
+  // Full successful calendar documents only: never the too-long 422 screen or
+  // an island fragment (no doctype/main). The notice leads the main landmark.
+  if (restoredWrite && !data.queryTooLong && /^\s*<!doctype html>/i.test(html))
+    html = html.replace(/<main\b[^>]*>/i, (open) => `${open}${RESTORED_WRITE_NOTICE}`);
   return {
     status: 200,
     headers: { ...headers, "content-type": "text/html; charset=UTF-8" },
-    body: String(body),
+    body: html,
   };
 }

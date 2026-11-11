@@ -155,7 +155,7 @@ describe("calendar reduced-motion loader SSR", () => {
   it("gates motion in CSS and ships no loader shimmer", () => {
     // The only motion rule stays gated: transitions run under no-preference,
     // so reduced-motion gets none. No calendar loader keyframes/shimmer exist to gate.
-    expect(themeCss).toContain("prefers-reduced-motion: no-preference");
+    expect(themeCss).toMatch(/@media\s*\(prefers-reduced-motion:\s*no-preference\)/);
     expect(themeCss).not.toContain("@keyframes");
     expect(themeCss).not.toMatch(/shimmer/i);
     expect(themeCss).not.toContain(EVENTS_LOADING_TESTID);

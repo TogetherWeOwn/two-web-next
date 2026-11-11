@@ -129,8 +129,19 @@ node ci/build-leaf-css.mjs
 # Or, from the root: npm run build:leaf-css
 ```
 
-The generator uses only Node builtins, so it also works before dependency
-installation. See [security-pin contracts](docs/security-pin-contracts.md)
+`ci/build-leaf-css.mjs` uses only Node builtins and concatenates the three
+checked sheets, so it runs in dependency-free scratch snapshots. The separate
+`ci/build-ember-tokens.mjs` adapter builds the Hono and Kit token sheets from
+the pinned vendored design-kit CSS and needs the locked esbuild installed to
+compact served sheets. It composes scoped roles with `assets/styles.css` and
+`assets/theme.css`; all three existing Hono sheets keep their original raw and
+gzip ceilings, without extra requests or changes to unthemed legacy pages.
+Root postinstall and predev, plus Kit postinstall and
+prebuild, **check** the tracked adapters before generating ignored critical CSS.
+They fail without repairing stale committed output, so install cannot mask drift
+before CI checks it. After editing the kit pin or theme source, explicitly run
+`npm run build:assets` or `npm run build:leaf-css` and commit the regenerated
+adapters with their sources. Never hand-edit generated outputs. See [security-pin contracts](docs/security-pin-contracts.md)
 for the offline static gate and generated-hash review evidence.
 
 Set the local origin in `.dev.vars` to match Wrangler's local server and the
@@ -357,7 +368,7 @@ to execute the same Chromium proof.
 | `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
 | `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
-| `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
+| `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (20 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; includes restored-write screenshots in CI; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
 | `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (44 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
 | `ci/schedule-search-context-browser.test.ts` | None—always runs | `npx vitest run --config ci/schedule-search-context-browser.vitest.ts ci/schedule-search-context-browser.test.ts` (5 Hono and 5 Kit real Chromium cases; requires Kit dependencies and Chromium; JSON-verified in `a11y` via `ci/a11y-require-executed.mjs`) |
 | `ci/calendar-subscription-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts` (10 cases on each of the four calendar surfaces; intercepted clipboard fixtures; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |

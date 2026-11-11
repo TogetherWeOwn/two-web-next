@@ -123,7 +123,9 @@ function countAuthPerfLogins() {
 function pacingPositions() {
   const workflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
   const journeys = workflow.indexOf("name: Critical browser journeys");
-  const parity = workflow.indexOf("playwright.kit-parity.config.ts");
+  // The read-only viewport capture also uses the parity config, before journeys.
+  // Only the login-bearing parity step belongs between the pacing sleeps.
+  const parity = workflow.indexOf("name: Kit journey parity (Hono vs built Kit Worker)");
   const authPerf = workflow.indexOf("name: Authenticated perf budgets");
   // Anchored to real `run:` lines so a comment mentioning the sleep cannot
   // stand in for one, and located relative to the login-bearing steps: a

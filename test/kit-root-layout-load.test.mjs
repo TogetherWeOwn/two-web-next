@@ -35,11 +35,14 @@ beforeAll(async () => {
 
 describe("Kit root layout load: requestId forwarding", () => {
   it("forwards a validated cf-ray verbatim", () => {
-    expect(load({ locals: { requestId: RAY } })).toEqual({ requestId: RAY });
+    expect(load({ locals: { requestId: RAY } })).toEqual({ requestId: RAY, restoredWrite: false });
   });
 
   it("forwards a validated ULID verbatim", () => {
-    expect(load({ locals: { requestId: ULID } })).toEqual({ requestId: ULID });
+    expect(load({ locals: { requestId: ULID } })).toEqual({
+      requestId: ULID,
+      restoredWrite: false,
+    });
   });
 
   it("serializes only the safe reference, never member or session locals", () => {
@@ -51,21 +54,54 @@ describe("Kit root layout load: requestId forwarding", () => {
         email: "private@example.test",
       },
     });
-    expect(JSON.parse(JSON.stringify(payload))).toEqual({ requestId: RAY });
+    expect(JSON.parse(JSON.stringify(payload))).toEqual({
+      requestId: RAY,
+      restoredWrite: false,
+    });
+  });
+
+  it("forwards only a strict boolean true for the verified restored bit", () => {
+    expect(load({ locals: { requestId: RAY, restoredWrite: true } })).toEqual({
+      requestId: RAY,
+      restoredWrite: true,
+    });
+    for (const value of ["true", 1, {}, "restored|/events/42", null, undefined]) {
+      expect(load({ locals: { restoredWrite: value } }).restoredWrite).toBe(false);
+    }
+  });
+
+  it("serializes the restored bit without any destination or session data", () => {
+    const payload = load({
+      locals: { restoredWrite: true, session: { token: "private-token" }, next: "/events/42" },
+    });
+    expect(JSON.parse(JSON.stringify(payload))).toEqual({
+      requestId: undefined,
+      restoredWrite: true,
+    });
   });
 
   it("drops a hostile locals id to undefined", () => {
     expect(load({ locals: { requestId: "<script>alert(1)</script>" } })).toEqual({
       requestId: undefined,
+      restoredWrite: false,
     });
   });
 
   it("renders blank-safe when locals carries no id", () => {
-    expect(load({ locals: {} })).toEqual({ requestId: undefined });
-    expect(load({ locals: { requestId: undefined } })).toEqual({ requestId: undefined });
+    expect(load({ locals: {} })).toEqual({
+      requestId: undefined,
+      restoredWrite: false,
+    });
+    expect(load({ locals: { requestId: undefined } })).toEqual({
+      requestId: undefined,
+      restoredWrite: false,
+    });
   });
 
   it("drops a non-string locals id to undefined", () => {
-    expect(load({ locals: { requestId: 42 } })).toEqual({ requestId: undefined });
+    expect(load({ locals: { requestId: 42 } })).toEqual({
+      requestId: undefined,
+      restoredWrite: false,
+    });
   });
 });

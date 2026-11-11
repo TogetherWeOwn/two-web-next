@@ -40,6 +40,7 @@ const islands =
 </script>
 
 <Shell
+  restoredWrite={data.restoredWrite}
   title="Past events"
   canonical={canonicalUrl(appUrl, destination)}
   robots="noindex, follow"
