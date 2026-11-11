@@ -28,21 +28,37 @@ for (const [viewport, size] of VIEWPORTS) {
       const response = await page.goto(path);
       expect(response?.status()).toBe(200);
       await page.waitForLoadState("networkidle");
-      // The content display face is font-display: optional and fetched lazily
-      // for below-fold headings, so without forcing it the face can land
-      // mid-capture and retry attempts oscillate between fallback and loaded
-      // heights (8741px vs 8727px on privacy-mobile; scrolling alone did not
-      // settle it under load). document.fonts.load() starts the fetch
-      // explicitly, so every capture attempt renders the same metrics.
+      // The content display face is font-display: optional: text painted with
+      // the fallback never swaps in a late-arriving face, so a cold load can
+      // paint headings twice (8741px vs 8727px on privacy-mobile; scrolling
+      // and document.fonts.load() alone did not settle it under load). Warm
+      // the face, then reload so the first paint of the settled document uses
+      // it, and require check() before capture: capture then always renders
+      // the loaded metrics.
+      const isContentPage = await page.evaluate(() =>
+        Boolean(document.querySelector(".content-theme")),
+      );
+      if (isContentPage) {
+        await page.evaluate(async () => {
+          await Promise.all([
+            document.fonts.load('700 16px "Mona Sans Content"', "Privacy"),
+            document.fonts.load('400 16px "Mona Sans Content"', "Privacy"),
+          ]);
+        });
+        await page.reload({ waitUntil: "networkidle" });
+      }
       await page.evaluate(async () => {
         window.scrollTo(0, document.documentElement.scrollHeight);
         await new Promise((resolve) => setTimeout(resolve, 50));
         window.scrollTo(0, 0);
         if (document.querySelector(".content-theme")) {
-          await Promise.all([
-            document.fonts.load('700 16px "Mona Sans Content"', "Privacy"),
-            document.fonts.load('400 16px "Mona Sans Content"', "Privacy"),
-          ]);
+          const deadline = Date.now() + 10000;
+          while (!document.fonts.check('700 16px "Mona Sans Content"')) {
+            if (Date.now() > deadline) {
+              throw new Error("Mona Sans Content face never became available");
+            }
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
         }
         await document.fonts.ready;
       });
