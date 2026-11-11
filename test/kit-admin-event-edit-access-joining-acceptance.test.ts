@@ -36,6 +36,7 @@ import {
 } from "../src/admin/kit-event-edit";
 import { parseEventForm, type EventFormInput } from "../src/admin/validation-event-form";
 import { ValidationError } from "../src/admin/validation-shared";
+import { EventFormFields } from "../src/admin/pages/event-form-fields";
 import { ROUTE_MANIFEST } from "../src/route-ownership";
 
 const db = {} as Db;
@@ -389,6 +390,11 @@ describe("limits and public URL policy", () => {
 
 describe("rejected save re-renders the access/joining fields inline", () => {
   it("shows retained input, aria wiring and per-field alerts", async () => {
+    // The Kit route is GET-only: the resolver's fieldsHtml is rendered with
+    // errors: {} for a fresh read, and rejected saves re-render in Hono via
+    // EventFormFields (edit mode) with the submitted values and the field
+    // errors. Render that production path, not the Svelte view with
+    // overridden errors — the view's fieldsHtml is already a fixed string.
     const rejected = {
       accessibility_notes: "a".repeat(1001),
       organizer_name: "b".repeat(501),
@@ -401,12 +407,14 @@ describe("rejected save re-renders the access/joining fields inline", () => {
     });
     expect(Object.keys(errors).sort()).toEqual([...ACCESS].sort());
     const view = await viewOf(storedRow);
-    const html = render({
-      ...view,
-      values: { ...view.values, ...rejected },
-      errors,
-      hasErrors: true,
-    });
+    const html = String(
+      EventFormFields({
+        mode: "edit",
+        values: { ...view.values, ...rejected },
+        errors,
+        action: `/admin/events/${KEY}`,
+      }),
+    );
     const form = firstForm(html);
     const submitted = submittedFields(html);
     for (const name of ACCESS) {
