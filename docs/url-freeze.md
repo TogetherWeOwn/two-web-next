@@ -317,6 +317,8 @@ production/staging-host configurations; no live database or network is used.
    its mapping or intentional divergence. Remove obsolete test-reference comments
    on route deletion. If no behavioral test exists, file the gap separately;
    a reference is not an assertion of executed behavioral coverage.
-5. Run `env -u DATABASE_URL npm run check` for fixtures only, or set
-   `DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next` for the
-   authorized disposable test DB. Never run tests against staging or production.
+5. Verify with GitHub Actions: push the PR branch (draft while incomplete,
+   ready when complete) and cite the exact-head run and job URLs. Policy:
+   [Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions). Local reproduction is limited to one failing
+   test, against fixtures or the authorized disposable test DB. Never run tests
+   against staging or production.

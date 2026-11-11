@@ -115,15 +115,21 @@ on that scoped pool. Finally, the fixture closes its pool and drops only its own
 schema. Eighteen DB-free safety cases and a real sibling-schema test prove URL
 refusal, option pinning, row/FK isolation, failure-DDL rollback and disposal.
 
-No pre-migrated database is needed for the focused W15 run:
+No pre-migrated database is needed for the isolated-schema W15 tests. Run the
+suite and typecheck through GitHub Actions by pushing the PR branch; use a
+draft while incomplete and mark it ready when complete. Cite exact-head
+run/job URLs, including scope skips, as CI evidence. See
+[the verification policy](../CONTRIBUTING.md#verify-a-change-with-github-actions).
+Local reproduction is limited to one failing case, not the W15 suite:
 
 ```sh
-DATABASE_URL=postgres://agent_test@agent-testdb:5432/postgres npx vitest run test/member-data-fixture.test.ts test/member-exposure.test.ts test/member-data-access.test.ts test/keyed-member-reads.test.ts test/keyed-profile-routes.test.ts test/admin-keyed-mounted.test.ts test/event-attendees.test.ts test/keyed-member-worker.test.ts test/keyed-profile-worker.test.ts test/keyed-admin-event-worker.test.ts
-npm run typecheck
+DATABASE_URL=postgres://agent_test@agent-testdb:5432/postgres \
+  npx vitest run test/member-data-fixture.test.ts -t '<exact failing test name>'
 ```
 
 Other pre-existing suites still delete shared tables; serial files do not
-serialize other agents, so broad local tests use one fresh, run-owned database.
+serialize other agents, so a focused local reproduction uses a fresh, run-owned
+database when its fixture does not isolate its own schema.
 Importer, migration, event-sync and jobs fixtures all pass through the global
 `testDatabaseUrl` guard, then create or use their own disposable schemas. No
 fixture needs to pin the database name to the shared `two_web_next` database.
@@ -142,7 +148,7 @@ export PGPASSWORD=
 export W1_AGENT_TESTDB=0
 npm run db:migrate
 npm run db:check
-npm run check
+# Then reproduce only the named failing test; full suites run in Actions.
 ```
 
 CI's job-private Postgres service allows all suites in one run. Local accessibility

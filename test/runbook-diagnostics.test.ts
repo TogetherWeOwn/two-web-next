@@ -22,11 +22,9 @@ function routeRow(path: string) {
   return row!;
 }
 
-// Offline semantic guard for the run-owned full-suite contract. It flags the
-// stale shared-database instruction in either corrected passage and requires
-// the fresh run-owned contract with its canonical link and tier distinction.
-// Scoped to full-suite wording so focused isolated-schema fixtures that name
-// the shared database (restore drill, queue inspection) do not trip it.
+// Full suites belong in Actions; local execution is one failing test against
+// fixtures or a fresh run-owned database. Preserve the shared-database refusal
+// without rejecting separately authorized isolated-schema operational drills.
 function contractViolations(doc: string): string[] {
   const violations: string[] = [];
   if (/Tests use `agent-testdb`, database `two_web_next`/.test(doc)) {
@@ -39,20 +37,39 @@ function contractViolations(doc: string): string[] {
   ) {
     violations.push("stale full-check passage directs full verification to shared two_web_next");
   }
-  if (!/fresh, run-owned[\s\S]*`two_web_next_tog<[^`]+>`/.test(doc)) {
+  if (!/fresh,? run-owned[\s\S]*`two_web_next_tog<[^`]+>`/.test(doc)) {
     violations.push("missing fresh run-owned two_web_next_tog<digits> requirement");
   }
-  if (!/never the shared\s+`two_web_next`/.test(doc)) {
-    violations.push("missing refusal of the shared two_web_next database for full verification");
+  if (
+    !/Full suites and CI gates run only through GitHub Actions/.test(doc) ||
+    !/against\s+its disposable Postgres service/.test(doc)
+  ) {
+    violations.push("missing Actions-only full-suite disposable-service requirement");
   }
   if (!/README\.md#database-and-migrations/.test(doc)) {
     violations.push("missing link to the canonical README database setup");
   }
-  if (!/Fixture-only `npm run check:offline` is limited evidence/.test(doc)) {
-    violations.push("missing fixture-only check:offline limited-evidence distinction");
+  if (!/`npm run check:offline` is a CI mirror, not a permitted local workaround/.test(doc)) {
+    violations.push("missing refusal of the local check:offline CI mirror");
   }
-  if (!/focused isolated-schema tests remain\s+allowed/.test(doc)) {
-    violations.push("missing focused isolated-schema allowance");
+  if (!/Local execution is\s+limited to focused reproduction of one failing test/.test(doc)) {
+    violations.push("missing single-failing-test local limit");
+  }
+  if (
+    !doc
+      .replace(/\s+/g, " ")
+      .includes(
+        "Never test, probe or verify database behavior against staging or production databases",
+      )
+  ) {
+    violations.push("missing staging and production database refusal");
+  }
+  if (
+    /^(?:Run|Execute)\s+`(?:npm (?:run (?:check(?::offline)?|ci:local|test:coverage)|test)|bin\/local-ci\.sh)`\s+(?:locally|on the shared host|in Boat)/im.test(
+      doc,
+    )
+  ) {
+    violations.push("local full-suite or CI-mirror instruction");
   }
   return violations;
 }
@@ -180,21 +197,21 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(watch).toMatch(new RegExp(`for production substitute[\\s\\S]*\`${app}\``, "i"));
   });
 
-  it("directs full database verification to a fresh run-owned database, not the shared one", () => {
+  it("directs full suites to Actions and local reproduction to one safe failing test", () => {
     expect(contractViolations(runbook)).toEqual([]);
-    // Both corrected passages link the canonical setup instead of a competing recipe.
     expect(runbook).toContain("README.md#database-and-migrations");
-    // Full-suite tier requires a fresh run-owned disposable database ...
-    expect(runbook).toMatch(/fresh, run-owned[\s\S]*`two_web_next_tog<[^`]+>`/);
-    // ... and explicitly refuses the shared database for that tier ...
-    expect(runbook).toMatch(/never the shared\s+`two_web_next`/);
-    // ... while keeping the other tiers: fixture-only offline is limited
-    // evidence, and focused isolated-schema tests stay allowed.
-    expect(runbook).toMatch(/Fixture-only `npm run check:offline` is limited evidence/);
-    expect(runbook).toMatch(/focused isolated-schema tests remain\s+allowed/);
-    // The guard is scoped to the full-suite instruction: focused fixtures that
-    // name the shared database for an isolated schema (restore drill, queue
-    // inspection) remain in the document and must not trip it.
+    expect(runbook).toMatch(/fresh,? run-owned[\s\S]*`two_web_next_tog<[^`]+>`/);
+    expect(runbook).toMatch(/Full suites and CI gates run only through GitHub Actions/);
+    expect(runbook).toMatch(
+      /`npm run check:offline` is a CI mirror, not a permitted local workaround/,
+    );
+    expect(runbook).toMatch(
+      /Local execution is\s+limited to focused reproduction of one failing test/,
+    );
+    expect(runbook).toMatch(
+      /reports success as \*\*limited evidence\*\*, not a substitute for exact-head CI with\s+service-container DB coverage/,
+    );
+    // Separately authorized isolated-schema drills do not authorize local CI.
     expect(runbook).toContain("PGDATABASE=two_web_next");
   });
 
@@ -209,19 +226,46 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(contractViolations(staleSafety)).not.toEqual([]);
     expect(contractViolations(staleFull)).not.toEqual([]);
     expect(contractViolations(`${staleSafety}\n${staleFull}`)).not.toEqual([]);
-    // A fixed document passes again: the guard tracks the contract, not a
-    // blocklist of the fixture strings.
+    // A fixed document passes again: the guard tracks the current policy,
+    // not only a blocklist of the old shared-database fixture strings.
     const repaired =
-      "Full database verification uses a fresh, run-owned disposable " +
-      "database (`two_web_next_tog<digits>`) on `agent-testdb` with the migrated " +
-      "schema; follow the canonical setup in " +
-      "[README Database and migrations](../README.md#database-and-migrations). " +
-      "Full database verification must use a fresh, run-owned `two_web_next_tog<digits>` " +
-      "database on `agent-testdb` with the migrated schema, never the shared " +
-      "`two_web_next` database nor a live service. " +
-      "Fixture-only `npm run check:offline` is limited evidence, not database " +
-      "acceptance, and focused isolated-schema tests remain allowed.";
+      "Never test, probe or verify database behavior against staging or production databases. " +
+      "Full suites and CI gates run only through GitHub Actions " +
+      "against its disposable Postgres service. Local execution is limited to " +
+      "focused reproduction of one failing test, using fixtures or a " +
+      "fresh run-owned disposable database (`two_web_next_tog<digits>`) on `agent-testdb`; " +
+      "follow [safe database setup](../README.md#database-and-migrations). " +
+      "`npm run check:offline` is a CI mirror, not a permitted local workaround.";
     expect(contractViolations(repaired)).toEqual([]);
+    expect(contractViolations(`${repaired}\n${staleSafety}`)).toContain(
+      "stale safety passage directs full verification to shared two_web_next",
+    );
+    expect(contractViolations(`${repaired}\n${staleFull}`)).toContain(
+      "stale full-check passage directs full verification to shared two_web_next",
+    );
+    expect(contractViolations(repaired.replace("GitHub Actions", "the shared host"))).toContain(
+      "missing Actions-only full-suite disposable-service requirement",
+    );
+    expect(
+      contractViolations(repaired.replace("one failing test", "all affected tests")),
+    ).toContain("missing single-failing-test local limit");
+    expect(contractViolations(repaired.replace("staging or production", "unapproved"))).toContain(
+      "missing staging and production database refusal",
+    );
+  });
+
+  it.each([
+    "npm run check",
+    "npm run check:offline",
+    "npm test",
+    "npm run test:coverage",
+    "npm run ci:local",
+    "bin/local-ci.sh",
+  ])("rejects a restored local full-suite or CI-mirror recipe: %s", (command) => {
+    expect(contractViolations(`${runbook}\nRun \`${command}\` locally.`)).toContain(
+      "local full-suite or CI-mirror instruction",
+    );
+    expect(contractViolations(`${runbook}\nDo not run \`${command}\` locally.`)).toEqual([]);
   });
 
   it("smokes the apex with --allow-indexable over the 24-route set", () => {

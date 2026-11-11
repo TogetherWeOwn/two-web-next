@@ -1,7 +1,16 @@
 # Quality gates
 
 Deterministic gates over reviewer judgment. New gates start WARN (report, do
-not fail) unless marked HARD. All of them run on the existing runners only.
+not fail) unless marked HARD. All of them run through GitHub Actions on the
+existing runners only. Push a PR branch and use a draft PR while incomplete;
+mark it ready when complete. CI mirrors, full test/coverage suites and multi-case
+mutation gates must not run locally on the shared host, including in Docker or
+Boat. Local reproduction is limited to one failing test; heavy focused builds
+follow the guarded Boat controls, `--no-env`, source-only export and cleanup,
+never a heavy raw-host fallback. See [the verification procedure](../CONTRIBUTING.md#verify-a-change-with-github-actions).
+For reviewers and the Release Manager, cite exact-head Actions run/job URLs,
+conclusions and scope skips, not local transcripts. No threshold, required
+check, security, review or exact-head production approval gate changes.
 
 - **fetch-await (HARD):** `sg-rules/fetch-await.yml` (`language: ts`,
   `src/**/*.ts`) plus its twin `sg-rules/fetch-await-tsx.yml`
@@ -154,9 +163,9 @@ write files, retry, use the network, or act on a deployment/database.
 node ci/patch-coverage.mjs --help
 node ci/patch-coverage.mjs --json --base origin/main
 node ci/patch-coverage.mjs --strict --json --base origin/main
-# Hermetic, no report/database/dependencies/network needed:
+# Hermetic checks run by Actions, not a local CI mirror:
 npm run patch:coverage:selftest
-# Independent boundary corpus alone:
+# Independent boundary corpus in the existing CI step:
 node --test ci/patch-coverage-acceptance.test.mjs
 ```
 
@@ -218,7 +227,7 @@ semantics change. Extra fields may be added compatibly.
 | `PASS` / null, at least 80% | 0 | `none` |
 | `WARN` / null, below 80% by default | 0 | `add_tests` |
 | `FAIL` / null, below 80% with `--strict` | 1 | `add_tests` |
-| `ERROR` / `missing_report` | 1 | `generate_coverage`: run `npm run test:coverage` in the disposable test environment |
+| `ERROR` / `missing_report` | 1 | `generate_coverage`: obtain the exact-head Actions `check` job's coverage evidence; if needed, dispatch `ci.yml` on the PR branch, never a local full-suite run |
 | `ERROR` / `invalid_coverage` | 1 | `fix_coverage_report`: regenerate a complete valid report; never hand-fill missing maps |
 | `ERROR` / `git_failed` | 1 | `check_base`: check the local ref/repository, then rerun |
 | `ERROR` / `invalid_arguments` | 2 | `fix_arguments`: follow `--help` |
@@ -236,8 +245,9 @@ independently authored acceptance corpus, and supplementary edge fixtures
 through the existing required CI step. Fixtures exercise real local Git and
 the shipped CLI: exact counts/line IDs, default/strict exits, malformed
 reports with canaries, repeatability, and no writes/network/timers/retries.
-They do not need a full coverage run. Generating a real report still requires
-the disposable test database described in [the README](../README.md#coverage-ratchet).
+They do not need a full coverage run. Generate real coverage only in Actions
+against its disposable Postgres service, as described in
+[the README](../README.md#coverage-ratchet).
 
 ## Focused mutation rollout (WARN-first)
 
@@ -249,7 +259,8 @@ admitted). It runs only `test/moderator-malformed-success.test.ts` and
 by Vitest. The slow session/join/admin mutants remain in the existing nightly
 job; that inventory, its safeguards and all coverage floors are unchanged.
 
-Run `env -u DATABASE_URL npm run mutation:roles-wall-time` locally. The runner
+Run the existing `mutation-roles-wall-time.yml` Actions workflow on the PR branch,
+not its local multi-test mirror. The runner
 refuses dirty targets, requires a green unmutated baseline, checks unique
 anchors, and reuses the nightly targeted restore with SHA-256 verification
 before proceeding to another mutant. Each Vitest child has a 20-second cap;
@@ -267,6 +278,6 @@ actual failed test. Reports include per-mutant before/after hashes. The
 always-run workflow summary writes an infrastructure fallback if no runner
 report exists, and the always-run upload preserves available reports and logs.
 
-Run `npm run mutation:roles-wall-time:selftest` for hermetic harness and workflow
-wiring checks. Promotion to HARD remains a separate reviewed slice: this job
+Actions runs `npm run mutation:roles-wall-time:selftest` for hermetic harness
+and workflow wiring checks. Promotion to HARD remains a separate reviewed slice: this job
 is intentionally WARN-only and neither branch protection nor `ci-ok` reads it.

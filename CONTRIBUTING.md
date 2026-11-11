@@ -5,7 +5,8 @@
 The same contract applies to humans and AI agents. [AGENTS.md](AGENTS.md) is the short
 version.
 
-- Work on a branch and open a PR. Never push to `main`. Name branches
+- Work on a branch and open a draft PR while work is incomplete. Mark it ready
+  only when the work is complete. Never push to `main`. Name branches
   `type/short-slug`, for example `fix/sudo-window`. Head branches are deleted when
   the PR merges.
 - The workspace may hand you a local branch named after a tracker card; keep committing to it, never publish that name, push `git push origin HEAD:refs/heads/<type>/<short-slug>` and open the PR from that ref.
@@ -66,7 +67,7 @@ The repository rulesets enforce the following on `main`:
 The `pr-size-gate` job's check, `pr-size-gate / gate`, joins this list after
 the caller has reported on the default branch (two-step ship; STANDARD.md).
 
-Who merges: when native review stages apply, the final-stage reviewer
+**Who merges.** When native review stages apply, the final-stage reviewer
 squash-merges the exact reviewed head before closing the task; without a review
 stage, the author merges. Every required check must be green on that head and
 every review finding must be fixed or answered with evidence. Pin the merge to
@@ -386,37 +387,91 @@ npm ci --include=dev
 cp .dev.vars.example .dev.vars   # fill in locally; never commit
 npm run dev
 npm run format                   # formatting only; never rewrites lint violations
-npm run lint                     # read-only Biome lint + format gate
-npm run check                    # lint + format + typecheck + config drift + tests
 ```
 
-### Verify a change before opening a PR
+### Verify a change with GitHub Actions
 
-#### AI contributors: exact-head GitHub Actions
-
-Full suites and CI gates run only on GitHub Actions for the exact PR head.
-Push to the PR branch, open or keep the PR as a draft while incomplete, and
-record exact-head Actions run/job links and conclusions in Verification before
-marking ready. Changes to `src/`, `test/` or migrations still require the full
-gate; draft or scope-skipped jobs are not a full-suite pass. If the draft run
-skips heavy steps, dispatch the existing CI workflow on that PR branch for full
-verification. Every required check, database-safety rule, native review and
-release gate remains in force.
-
-Local agent test execution is limited to an authorized focused reproduction of
-one failing test or crate. Neither the builder nor its caller may run local
+Full test suites and CI gates run only on **GitHub Actions** for the exact PR
+head, not on the shared host. Push to the PR branch, open or keep a **draft PR
+while work is incomplete**, and record exact-head Actions run/job links and
+conclusions in Verification before marking ready. Do not run `npm run check`,
+`npm run check:offline`, unfiltered `npm test`, `npm run test:coverage`, or the
+`bin/local-ci.sh` / `npm run ci:local` CI mirror locally. A disposable
+database, a DB-free lane, Docker or Boat does not make a local full-suite or
+CI-mirror run permissible. Neither the builder nor its caller may run local
 full suites or CI mirrors on the shared host, in Boat or through a fallback;
-do not split a suite into successive focused commands. Any heavy build needed
-for that reproduction must use the guarded `boat` PATH wrapper with approved
-source-only export, sizing/budget controls, `--no-env`, and verified cleanup.
-Never bypass the wrapper or use a heavy raw-host fallback. If no compliant
-path is available, defer to Actions or route the actual prerequisite. Report
-focused reproduction output separately as diagnostic evidence; it does not
-replace Actions evidence. Read-only reviewers inspect source and existing
-evidence and do not execute tests, builds or installs.
+do not split a suite into successive focused commands.
 
-The command examples in Local development and the human workflow below are
-a tooling reference, not an exception to these agent execution limits.
+This repo's entrypoint is [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+(workflow `ci`, job `check`, required aggregator `ci-ok`), not `check.yml`.
+It also runs the `docs-links`, `node22-compat`, accessibility and performance
+jobs selected by its existing scope rules. Browser journeys report through
+`e2e-ok` in [`.github/workflows/e2e.yml`](.github/workflows/e2e.yml); PR lint and
+secret scanning remain in `pr-gates.yml`. Keep every existing required check,
+database-safety rule, security floor, native review and release gate.
+Changes to `src/`, `test/` or migrations still require the full gate; draft
+or scope-skipped jobs are not a full-suite pass. If the draft run skips heavy
+steps, dispatch the existing CI workflow on that PR branch for full
+verification. Read-only reviewers inspect source and existing evidence and do
+not execute tests, builds or installs. The command examples in Local
+development and the human workflow below are a tooling reference, not an
+exception to these agent execution limits.
+
+```sh
+# Keep a workspace-managed local branch; publish only a public-safe ref.
+git push origin HEAD:refs/heads/docs/short-slug
+gh pr create --draft --head docs/short-slug --title "docs: describe the change" --body-file /path/to/pr-body.md
+# Once complete, mark ready to run the existing non-draft gates.
+gh pr ready <pr-number>
+gh pr checks <pr-number>
+gh run list --workflow ci.yml --branch docs/short-slug --json databaseId,headSha,status,conclusion,url
+gh run view <run-id> --json headSha,url,jobs
+```
+
+Use the appropriate `type/short-slug` for the change. The workflow already
+fast-passes heavy steps on drafts and scope-approved docs-only changes;
+readiness triggers `ready_for_review` and scope still decides what runs.
+`ci/change-scope.sh` refuses the docs-only fast-pass when a test, gate or build
+reads changed Markdown, so a prose-only diff can still run the full suites in
+Actions. A scope-approved skip is
+not evidence that the skipped suite executed. Do not touch app files or change
+workflow scope merely to force a docs-only PR through the full suite. If a full
+run is needed, use the existing Actions `workflow_dispatch` on the PR branch,
+then verify its SHA; never dispatch a deploy as a test.
+
+In **Verification**, link the Actions run and relevant jobs for the **exact PR
+head SHA**, with the observed conclusions and any scope/draft skips. Include
+`ci-ok`, `check`/`docs-links`, `e2e-ok` and other applicable gate evidence;
+use `gh run view` to confirm `headSha` and copy job URLs. PR-event jobs may check
+out a synthetic merge commit: record the PR head identity as well, not just that
+checkout SHA. A new push invalidates older evidence. Local transcripts and an
+earlier SHA's green run are not CI evidence for reviewers or the Release Manager.
+Where the PR template asks for the `npm run check` result, supply that Actions
+job link and observed result, not a local run. Command inventories in subsystem
+READMEs describe the checks, not permission to mirror CI locally.
+A ready PR must meet all merge gates on its settled head; a green draft is not
+a merge approval.
+
+Local execution is limited to **focused reproduction of one failing test** (or
+one failing crate in repositories that have crates), using only the disposable
+test database or local fixtures in [README.md](README.md). For example, after
+setting the safe test URL and applying its migrations when needed:
+
+```sh
+npx vitest run test/events.test.ts -t '<exact failing test name>'
+```
+
+Do not broaden that reproduction to every affected file, a directory filter,
+coverage or a CI mirror. For docs-only changes, use focused static/diff checks
+such as `git diff --check`, and report what was not run. Heavy builds for an
+allowed focused reproduction use only the guarded `boat` PATH wrapper, with
+its sizing, budget and security controls, `--no-env`, a gitleaks-clean source-only
+export preserving the tested input identity, and box cleanup verified even on
+failure. Never bypass the wrapper or run a heavy build on the raw host. A Boat
+fallback does **not** authorize a full suite/CI mirror or a heavy raw-host run;
+if it cannot meet the focused/local limit, defer to Actions or route the actual
+prerequisite. Record the focused command, tested SHA, result and cleanup, not a
+claim of CI success.
 
 #### Human contributors: local verification
 
