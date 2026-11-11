@@ -1,0 +1,57 @@
+name: admin-stale-save-ubuntu24-proof
+
+# Separate, non-deploy diagnostic for the immutable recovery-proof target.
+# Required gates and the original workflow remain unchanged.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      TARGET_SHA: 945e1171cb92b7afe0ce7a12042c6fd97e0aebd9
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 945e1171cb92b7afe0ce7a12042c6fd97e0aebd9
+          persist-credentials: false
+      - name: Record workflow and target revisions
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          printf 'Workflow revision: %s\nCheckout revision: %s\n' "$WORKFLOW_SHA" "$(git rev-parse HEAD)"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Generate assets on Actions for review and commit-back
+        run: |
+          npm run build:assets
+          node ci/build-leaf-css.mjs
+      - name: Retain generated editor for the author without pushing from CI
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: generated-admin-editor-${{ env.TARGET_SHA }}
+          path: public/islands/admin-save-baseline.js
+          if-no-files-found: error
+          retention-days: 7
+      - run: npx playwright install --with-deps chromium
+      - name: Focused route and recovery checks
+        run: npx vitest run test/admin-stale-save-route.test.ts test/admin-stale-save-history.test.ts
+      - name: Browser recovery and desktop/mobile captures
+        run: npx playwright test --config playwright.admin-stale-save.config.ts
+      - name: Retain visual evidence and failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: admin-stale-save-evidence-${{ env.TARGET_SHA }}
+          path: |
+            test-results/
+            playwright-report-stale-save/
+          if-no-files-found: error
+          retention-days: 14
