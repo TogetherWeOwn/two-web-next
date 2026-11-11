@@ -83,9 +83,26 @@ test("intentional RSVP controls suppress raw failure uploads with the exact pred
 
 test("RSVP control upload predicate never gates browser checks or cleanup", () => {
   const workflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
-  const execution = workflow
-    .split(/(?=^      - )/m)
-    .filter((step) => !step.startsWith("      - name: Failure traces and report\n"))
+  const steps = workflow.split(/(?=^      - )/m);
+  const screenshots = steps.filter((step) =>
+    step.startsWith("      - name: Saved review screenshots\n"),
+  );
+  assert.equal(screenshots.length, 1);
+  assert.equal(
+    screenshots[0].match(/^        if: (.+)$/m)?.[1],
+    "${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'test/rsvp-pending-control-')) }}",
+  );
+  assert.match(screenshots[0], /^        uses: actions\/upload-artifact@/m);
+  assert.match(screenshots[0], /test-results\/\*\*\/attachments\/hono-review-\*\.png/);
+  assert.match(screenshots[0], /test-results-kit-parity\/\*\*\/attachments\/kit-review-\*\.png/);
+  assert.match(screenshots[0], /if-no-files-found: error/);
+  assert.match(screenshots[0], /retention-days: 7/);
+  const execution = steps
+    .filter(
+      (step) =>
+        !step.startsWith("      - name: Failure traces and report\n") &&
+        !step.startsWith("      - name: Saved review screenshots\n"),
+    )
     .join("");
   for (const name of [
     "Verify CI isolation",
@@ -101,7 +118,7 @@ test("RSVP control upload predicate never gates browser checks or cleanup", () =
   ]) {
     assert.ok(execution.includes(`      - name: ${name}\n`), `missing execution step: ${name}`);
   }
-  // Exclude the upload step only: job-level gates and every other step stay checked.
+  // Exclude only the two verified uploads: job-level gates and every execution step stay checked.
   assert.doesNotMatch(execution, /test\/rsvp-pending-control-/);
 });
 

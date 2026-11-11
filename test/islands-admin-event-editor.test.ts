@@ -1,7 +1,147 @@
+import { readFileSync } from "node:fs";
+import { URL } from "node:url";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { eventEditorBrowser as browser } from "./helpers/admin-event-editor";
 
+// Keep the acceptance-owned expiry harness unchanged; this fixture owns only
+// the new review link and its dirty snapshot.
+function reviewBrowser(draft = false) {
+  const values = new Map([["title", "Game night"]]);
+  const link = {
+    href: "https://next.example/e/abc?review=1",
+    onclick: null as (() => void) | null,
+  };
+  const listeners = new Map<
+    string,
+    (event: { preventDefault: () => void; returnValue?: string }) => void
+  >();
+  const editorListeners = new Map<string, Array<() => void>>();
+  const timers: Array<() => void> = [];
+  const editor = {
+    removeAttribute: vi.fn(),
+    hasAttribute: () => draft,
+    addEventListener: (name: string, fn: () => void) => {
+      editorListeners.set(name, [...(editorListeners.get(name) ?? []), fn]);
+    },
+  };
+  runInNewContext(
+    readFileSync(new URL("../public/islands/admin-event-editor.js", import.meta.url), "utf8"),
+    {
+      document: {
+        querySelector: (selector: string) =>
+          selector === "[data-event-editor]"
+            ? editor
+            : selector === '[data-testid="review-event"]'
+              ? link
+              : null,
+      },
+      window: {
+        addEventListener: (
+          name: string,
+          fn: (event: { preventDefault: () => void; returnValue?: string }) => void,
+        ) => listeners.set(name, fn),
+      },
+      FormData: class {
+        [Symbol.iterator]() {
+          return values[Symbol.iterator]();
+        }
+      },
+      URLSearchParams,
+      setTimeout: (fn: () => void) => timers.push(fn),
+      clearTimeout: vi.fn(),
+    },
+  );
+  return {
+    values,
+    link,
+    pageshow: () => listeners.get("pageshow")!({ preventDefault: vi.fn() }),
+    fireTimers: () => {
+      for (const fn of timers.splice(0)) fn();
+    },
+    edit: (name: "input" | "change") => {
+      for (const fn of editorListeners.get(name) ?? []) fn();
+    },
+    navigate: () => {
+      const event = { preventDefault: vi.fn(), returnValue: undefined as string | undefined };
+      listeners.get("beforeunload")!(event);
+      return event;
+    },
+  };
+}
+
 describe("Admin event editor navigation guard", () => {
+  it.each(["/auth/recover\\n", "/auth/recover\\r\\n", "/auth/recover\\u2028"])(
+    "refuses a recovery path with a trailing control: %j",
+    (path) => {
+      const b = browser();
+      b.expireSession(path);
+      expect(b.recoveryLink()!.href).toBe("/auth/recover?next=%2Fadmin%2Fevents%2Fabc");
+    },
+  );
+
+  it.each(["input", "change"] as const)(
+    "syncs the review href on %s without a click and leaves protection armed",
+    (kind) => {
+      const b = reviewBrowser();
+      const link = b.link;
+      expect(link.href).toBe("https://next.example/e/abc?review=1");
+      const saved = b.values.get("title")!;
+      b.values.set("title", "Unsaved title");
+      b.edit(kind);
+      expect(link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
+      expect(b.navigate().preventDefault).toHaveBeenCalledOnce();
+      b.edit(kind);
+      expect(link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
+      b.values.set("title", saved);
+      b.edit(kind);
+      expect(link.href).toBe("https://next.example/e/abc?review=1");
+      expect(b.navigate().preventDefault).not.toHaveBeenCalled();
+    },
+  );
+
+  it("syncs restored history values without input/change before normal or new-tab review", () => {
+    const b = reviewBrowser();
+    // A new document snapshots saved values before native history restoration.
+    b.pageshow();
+    b.values.set("title", "Restored unsaved title");
+    b.fireTimers();
+    // Middle-click and context-menu opens read this href without onclick.
+    expect(b.link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
+    b.link.onclick?.();
+    expect(b.link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
+    expect(b.navigate().preventDefault).toHaveBeenCalledOnce();
+    // A later restore to the saved baseline must remove the advisory too.
+    b.pageshow();
+    b.values.set("title", "Game night");
+    b.fireTimers();
+    expect(b.link.href).toBe("https://next.example/e/abc?review=1");
+    expect(b.navigate().preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("refreshes review on activation if values changed without an edit event", () => {
+    const b = reviewBrowser();
+    b.values.set("title", "Restored unsaved title");
+    expect(b.link.onclick).toBeTypeOf("function");
+    b.link.onclick!();
+    expect(b.link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
+    expect(b.navigate().preventDefault).toHaveBeenCalledOnce();
+    b.values.set("title", "Game night");
+    b.link.onclick!();
+    expect(b.link.href).toBe("https://next.example/e/abc?review=1");
+  });
+
+  it("marks a rejected Save as unsaved without a click or another keystroke", () => {
+    const b = reviewBrowser(true);
+    expect(b.link.href).toContain("&unsaved=1");
+    expect(b.navigate().preventDefault).toHaveBeenCalledOnce();
+    b.values.set("title", "Edited rejected draft");
+    b.edit("input");
+    b.values.set("title", "Game night");
+    b.edit("change");
+    expect(b.link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
+  });
+
   it.each(["search", "sort"] as const)("allows clean roster %s navigation", (kind) => {
     const b = browser();
     expect(b.navigate(kind).preventDefault).not.toHaveBeenCalled();

@@ -662,6 +662,19 @@ waits on an approval nobody gives), the failure mode is a live promoted
 version, never a silent rollback: restore manually with this workflow using
 the version ID in the failed step's logs.
 
+The watch measures its retained 30 minutes with a monotonic clock, not UTC;
+UTC still identifies the analytics query window. Readiness and rate-check
+cadences are anchored to the original start, so normal probe/query latency
+does not accumulate into fewer five-minute opportunities. There are six rate
+opportunities, including the final check at 30 minutes. Operations are serial:
+if latency crosses multiple rate slots, only the latest due slot is queried,
+and each earlier missed slot is counted as unavailable, never backfilled or
+claimed as measured. Any missed slot makes the final verdict `insufficient`
+(no release tag and no automatic rollback), even if later queries succeed.
+The original watch is not restarted or extended to recover missing evidence;
+the final probe/query may finish after its deadline because of I/O latency.
+A real readiness/error-rate breach or superseding version still takes priority.
+
 #### Daily staging rollback drill and the promotion rollback target
 
 [.github/workflows/staging-rollback-drill.yml](../.github/workflows/staging-rollback-drill.yml)

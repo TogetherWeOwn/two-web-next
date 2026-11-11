@@ -237,6 +237,27 @@ warning stays armed after rejection and while you correct the draft; navigating
 away can still discard it. Kit presentations use the same form actions: rejected
 POSTs are rendered by Hono, not a second Kit save or error endpoint.
 
+## Recover a stale event or featured draft
+
+If another moderator saves after you open an editor, **Save** refuses with HTTP
+409 instead of replacing their work. Your submitted values and checkbox state
+remain in the form. A stale draft with validation errors still returns 409;
+correct those fields while reconciling, not by repeatedly submitting the old page.
+
+Choose **Open the latest version in a new tab** to keep this draft beside a fresh
+editor. Copy the changes you still want into that latest version, review the
+combined result, then save there. Saving the stale page again is refused again:
+it deliberately keeps the older version token. There is no automatic retry or
+force-save. The featured preview and event status describe the saved snapshot,
+not your unsaved draft. The RSVP roster stays hidden on a refused event save.
+
+Choose **Discard my changes and load the latest version** only when you intend
+to replace this draft. Both links work without JavaScript; with JavaScript the
+existing departure warning remains armed. If an old or malformed form cannot
+verify its saved version (HTTP 400), use the same new-tab recovery rather than
+repeatedly submitting it. New-event and new-featured forms have no prior version
+and keep their existing create workflow.
+
 ## Screens and route reference
 
 Use the navigation **Events**, **Featured**, **Join attempts**, **Activity log**, or **Site**.
@@ -406,10 +427,14 @@ leave-page warning for unsaved changes (including after a rejected Save).
    drafts receive publication corrections. RSVP is disabled in preview; other
    member links work normally. Published and cancelled previews describe their
    current state without offering another publication.
-5. **Back to edit** returns to the editor. In this read-only slice, publication
-   still uses the editor's separate **Publish** action and its existing row lock.
-   Publish-from-review and its stale-record check follow separately. Earlier
-   readiness advice is never authorization to publish a later saved record.
+5. Choose **Publish** at the bottom of the review, or **Back to edit** to correct
+   something. Publish uses only the saved record shown, not unsaved editor edits.
+   If another save happened since you opened review, nothing publishes: the page
+   shows the latest saved record and a change warning. Check that record before
+   trying again. Validation refusals also return to review with a specific reason.
+6. Successful publication lands on the live member detail page with **Published.
+   Members can now see this event.** The editor and list still offer their direct
+   Publish actions; those keep the existing editor landing.
 
 Hono and Kit share the preview chrome without duplicating the member rendering.
 
@@ -523,12 +548,20 @@ series cancel or repeat-rule editor.
 
 ### Read the RSVP roster
 
-The event edit screen shows **RSVPs (count)** with **Member**, **Status**, and
-**Answered** (UTC), newest responses first by default. **Search members** with
-**Search** matches username text case-insensitively; **Status** and **Answered**
-column links toggle sorting while retaining the search. The count is the number
+The event edit screen shows **RSVPs (count)** with **Member**, **Status**,
+**Answered** (UTC), and **Waitlist position**, newest responses first by default.
+**Search members** with **Search** matches username text case-insensitively;
+**Status**, **Answered**, and **Waitlist position** column links toggle sorting while
+retaining the search. The count is the number
 of matching answers (all statuses, not just going seats), so searching can
-reduce it. The roster shows 100 answers per page with a "Showing a-b of N"
+reduce it. The **Waitlist position** column shows each waitlisted member's place
+in this event's whole queue (`#1` is next to be promoted); other answers show a dash.
+Searching, filtering, paging, or sorting never renumbers the queue, so numbers
+can skip. Positions reflect the queue at page render and can change after RSVPs
+move; reload before quoting one. A place in line is not a promised seat, and paused
+or closed queues do not advance. **Answered** is answer recency, not queue priority.
+Sorting by **Waitlist position** lists the queue head first (last in descending
+order); unranked answers always sort last. The roster shows 100 answers per page with a "Showing a-b of N"
 line; **Previous** and **Next** keep the search and sort and return to the
 roster section. Sorting or searching again starts back on page 1. Save event
 edits before these controls reload the page. This is a read-only roster: no adding/removing answers,

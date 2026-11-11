@@ -262,6 +262,70 @@ describe("member-detail review mode", () => {
     },
   );
 
+  it("carries publish_error and unsaved into escaped shared chrome with a live publish form", async () => {
+    const event = {
+      ...row({ status: "draft", title: '<b>Chess</b> "night"' }),
+      goingCount: 0,
+      goingOccupancy: 0,
+    };
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event }),
+      memberSession(MOD_ID, true),
+      null,
+      "?review=1&publish_error=stale&unsaved=1",
+    );
+    if (outcome.kind !== "ok") throw new Error(outcome.kind);
+    const { banner, actions } = outcome.model.review!;
+    expect(banner).toContain('data-testid="event-review-error"');
+    expect(banner).toContain("This draft changed after you opened review.");
+    expect(banner).toContain('data-testid="event-review-unsaved"');
+    expect(actions).toContain(`action="/admin/events/${KEY}/publish"`);
+    expect(actions).toContain(
+      `name="reviewed_updated_at" value="${event.updatedAt.toISOString()}"`,
+    );
+    expect(actions).not.toMatch(/disabled=""[^>]*data-testid="publish-reviewed-event"/);
+    expect(actions).not.toContain("<b>Chess</b>");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-review-error"');
+    expect(html).not.toContain("<b>Chess</b>");
+  });
+
+  it("offers the published notice only to moderators on a published, non-review view", async () => {
+    const event = { ...row({ status: "published" }), goingCount: 0, goingOccupancy: 0 };
+    const store = fakeStore({ event });
+    const mod = memberSession(MOD_ID, true);
+    const ok = await resolve(KEY, store, mod, null, "?published=1");
+    if (ok.outcome.kind !== "ok") throw new Error(ok.outcome.kind);
+    expect(ok.outcome.model.publishedNotice).toContain('data-testid="event-published"');
+    expect(ok.outcome.model.review).toBeUndefined();
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(ok.outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-published"');
+    expect(html).not.toContain('data-testid="event-review"');
+    for (const session of [GUEST, memberSession()]) {
+      const res = await resolve(KEY, store, session, null, "?published=1");
+      if (res.outcome.kind !== "ok") throw new Error(res.outcome.kind);
+      expect(res.outcome.model.publishedNotice).toBeUndefined();
+    }
+    for (const [search, status] of [
+      ["", "published"],
+      ["?published=1", "draft"],
+      ["?review=1&published=1", "published"],
+    ] as const) {
+      const res = await resolve(
+        KEY,
+        fakeStore({ event: { ...row({ status }), goingCount: 0, goingOccupancy: 0 } }),
+        mod,
+        null,
+        search,
+      );
+      if (res.outcome.kind !== "ok") throw new Error(res.outcome.kind);
+      expect(res.outcome.model.publishedNotice).toBeUndefined();
+    }
+  });
+
   it("keeps unreadable dates renderable without inventing JSON-LD instants", async () => {
     const event = {
       ...row({ status: "draft", startsAt: new Date(NaN), endsAt: new Date(NaN) }),

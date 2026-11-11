@@ -137,6 +137,50 @@ test("deploy outcomes name what fired", () => {
   }
 });
 
+test("an insufficient watch retains the release hold in the owner notification", () => {
+  const env = deployEnv({ WATCH_VERDICT: "insufficient" });
+  const result = deployOutcome(env);
+  assert.equal(result.outcome, "failed");
+  assert.match(result.reason, /watch evidence insufficient/);
+  assert.match(result.reason, /release hold retained/);
+  assert.match(result.reason, /promoted version remains live/);
+  const payload = buildPayload(env, { now: NOW });
+  assert.equal(payload.outcome, "failed");
+  assert.equal(payload.reason, result.reason);
+  assert.equal(payload.versionId, PROMOTED);
+  assert.equal(payload.previousVersionId, PREVIOUS);
+});
+
+test("a later deploy failure retains completed insufficient watch evidence and rollback precedence", () => {
+  const env = deployEnv({ DEPLOY_RESULT: "failure", WATCH_VERDICT: "insufficient" });
+  const result = deployOutcome(env);
+  assert.equal(result.outcome, "failed");
+  assert.match(result.reason, /deploy job failed after the verified 100% promotion/);
+  assert.match(result.reason, /watch evidence insufficient/);
+  assert.match(result.reason, /release hold retained/);
+  assert.match(result.reason, /promoted version remains live without automatic rollback/);
+  assert.doesNotMatch(result.reason, /unwatched/);
+  const payload = buildPayload(env, { now: NOW });
+  assert.equal(payload.reason, result.reason);
+  assert.equal(payload.outcome, "failed");
+  assert.equal(payload.versionId, PROMOTED);
+  assert.equal(payload.previousVersionId, PREVIOUS);
+  for (const rollback of [
+    { ROLLBACK_RESULT: "success" },
+    { ROLLBACK_RESULT: "failure" },
+    {
+      ROLLBACK_RESULT: "failure",
+      ROLLBACK_MUTATION: "success",
+      ROLLBACK_SMOKE: "failure",
+    },
+    { ROLLBACK_RESULT: "failure", ROLLBACK_ACTION: "skip", ROLLBACK_SMOKE: "failure" },
+  ]) {
+    const rolledBack = deployOutcome({ ...env, ...rollback });
+    assert.deepEqual(rolledBack, deployOutcome(deployEnv(rollback)));
+    assert.doesNotMatch(rolledBack.reason, /insufficient|release hold retained/);
+  }
+});
+
 test("rollback events report the target and the version they replaced", () => {
   const env = {
     ...run,

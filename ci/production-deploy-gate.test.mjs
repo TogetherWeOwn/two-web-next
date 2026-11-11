@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 import {
@@ -1032,6 +1033,57 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   assert.match(workflow, /ROLLBACK_VERSION_ID: \$\{\{ inputs\.version_id \}\}/);
 });
 
+test("production gates import from every actual sparse checkout shape", () => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const workflow = readFileSync(join(root, ".github/workflows/deploy-production.yml"), "utf8");
+  const shapes = [...workflow.matchAll(/sparse-checkout: \|\n((?: +\/.*\n)+)/g)].map((match) =>
+    match[1]
+      .trim()
+      .split("\n")
+      .map((line) => line.trim()),
+  );
+  assert.ok(shapes.length > 0, "the production sparse shapes must be exercised");
+  for (const paths of shapes) {
+    assert.ok(paths.includes("/ci/"));
+    assert.ok(paths.includes("/bin/version-check.mjs"), "CI imports need the version helper");
+  }
+  const dir = mkdtempSync(join(tmpdir(), "production-sparse-import-"));
+  try {
+    for (const [index, shape] of [
+      ...new Set(shapes.map((shape) => JSON.stringify(shape))),
+    ].entries()) {
+      const cwd = join(dir, String(index));
+      mkdirSync(cwd);
+      for (const path of JSON.parse(shape)) {
+        const relative = path.slice(1).replace(/\/$/, "");
+        const destination = join(cwd, relative);
+        mkdirSync(dirname(destination), { recursive: true });
+        cpSync(join(root, relative), destination, { recursive: true });
+      }
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          "await import(process.argv[1]); await import(process.argv[2]);",
+          pathToFileURL(join(cwd, "ci/resolve-promotion-sha.mjs")).href,
+          pathToFileURL(join(cwd, "ci/production-deploy-gate.mjs")).href,
+        ],
+        {
+          cwd,
+          encoding: "utf8",
+          timeout: 15_000,
+          maxBuffer: 8192,
+          env: { PATH: process.env.PATH },
+        },
+      );
+      assert.equal(result.status, 0, `sparse imports failed: ${result.stderr || result.error}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 const sharedMutationGroup = "production-worker-mutation";
 
 function jobConcurrencyBlocks(workflow) {
@@ -1051,10 +1103,10 @@ test("production promotion and rollback mutations share one static non-cancellin
     new URL("../.github/workflows/rollback-production.yml", import.meta.url),
     "utf8",
   );
-  // The rollback lock is chosen per environment from two static names:
-  // production shares the promotion lock, staging shares deploy.yml's.
+  // Production always shares the promotion lock. Ordinary staging rollback
+  // shares deploy.yml's; the main drill caller already holds it across both legs.
   const rollbackSelector =
-    "${{ inputs.environment == 'staging' && 'deploy-staging' || 'production-worker-mutation' }}";
+    "${{ inputs.environment == 'staging' && ((github.workflow == 'staging-rollback-drill' && github.ref == 'refs/heads/main') && format('staging-drill-leg-{0}', github.run_id) || 'deploy-staging') || 'production-worker-mutation' }}";
   assert.deepEqual(
     jobConcurrencyBlocks(rollback).map((block) => block.group),
     [rollbackSelector],
@@ -1103,10 +1155,15 @@ test("shared production mutation lock never nests at workflow level nor leaks in
     "utf8",
   );
   // Workflow-level groups stay distinct and non-cancelling, so the run never
-  // nests the shared job-level group.
+  // nests the shared job-level group. Only the trusted main staging drill gets
+  // a run-unique caller group; rollback-target.test.mjs covers each selector leg.
   for (const [label, workflow, expected] of [
     ["deploy-production.yml", deploy, "deploy-production"],
-    ["rollback-production.yml", rollback, "rollback-${{ inputs.environment }}"],
+    [
+      "rollback-production.yml",
+      rollback,
+      "${{ inputs.environment == 'staging' && github.workflow == 'staging-rollback-drill' && github.ref == 'refs/heads/main' && format('staging-drill-call-{0}', github.run_id) || format('rollback-{0}', inputs.environment) }}",
+    ],
   ]) {
     const header = workflow.slice(0, workflow.indexOf("\njobs:"));
     assert.ok(

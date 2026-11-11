@@ -31,6 +31,9 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // one new-asset fragment ported from an open branch during its post-split
 // merge: public/islands/event-time-from-now.js 2048/1024 (see
 // ci/budgets/decisions/bundle/2026-10-26-event-time-from-now.md).
+// The stale-save history island adds its measured new-asset allocation:
+// public/islands/admin-save-baseline.js 1024/512 (see
+// ci/budgets/decisions/bundle/2026-11-10-admin-save-baseline.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
@@ -46,6 +49,7 @@ const SHIPPING_KIT_BUDGET = {
 const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/admin-event-editor.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
   "public/islands/admin-event-text-limits.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
+  "public/islands/admin-save-baseline.js": { maxRawBytes: 1024, maxGzipBytes: 512 },
   "public/islands/auth-status.js": { maxRawBytes: 3072, maxGzipBytes: 1536 },
   "public/islands/avatar.js": { maxRawBytes: 512, maxGzipBytes: 512 },
   "public/islands/copy-link.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },

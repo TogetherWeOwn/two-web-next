@@ -9,6 +9,7 @@ import { runInNewContext } from "node:vm";
 import { fileURLToPath, URL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { EventFormPage } from "../src/admin/pages";
+import { EventEditableFields } from "../src/admin/pages/event-editable-fields";
 import type { EventRow } from "../src/admin/store";
 
 const DESCRIPTION_MAX = 1000;
@@ -76,9 +77,12 @@ describe("event description text limit templates", () => {
     ["Kit edit", "../web/src/routes/admin/events/[key]/+page.svelte"],
   ] as const)(
     "%s page annotates the description textarea with the 1000 code-point limit",
-    (_label, path) => {
+    (label, path) => {
       const source = readFileSync(fileURLToPath(new URL(path, import.meta.url).href), "utf8");
-      const tag = textareaTag(source);
+      if (label === "Kit edit") expect(source).toContain("{@html view.fieldsHtml}");
+      const tag = textareaTag(
+        label === "Kit edit" ? String(EventEditableFields({ values: base, errors: {} })) : source,
+      );
       expect(tag).toMatch(
         new RegExp(`data-event-text-limit=(?:"${DESCRIPTION_MAX}"|\\{${DESCRIPTION_MAX}\\})`),
       );

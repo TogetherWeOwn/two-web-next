@@ -46,29 +46,39 @@ import {
   type SortOrder,
 } from "./table-list";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
+import { eventSaveBaseline, SAVE_BASELINE_FIELD, type EventSaveSnapshot } from "./save-baseline";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { rosterWaitlistHint } from "./roster-copy";
 import { formatAdminTime } from "./chronology";
 import { renderSavedEventNoticeHtml } from "./pages/event-form-review";
 import { EventRosterSection } from "./pages/event-form-roster";
+import { EventEditableFields } from "./pages/event-editable-fields";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
+  /** Hidden stale-save carrier: the digest of the row as displayed. */
+  [SAVE_BASELINE_FIELD]: string;
   title: string;
   game: string;
   description: string;
+  accessibility_notes: string;
   starts_at: string;
   ends_at: string;
   timezone: string;
   location: string;
+  organizer_name: string;
+  join_url: string;
+  join_instructions: string;
   capacity: string;
 };
 
-/** One roster row as the Hono table renders it: display name, status and the
- * ISO instant, or null when the stored timestamp is unusable. The member
- * identifier stays out of the view and the shared roster HTML. */
+/** One roster row as the Hono table renders it: display name, status, global
+ * waitlist position and ISO instant (null when the stored time is unusable).
+ * The member identifier stays out of the view and shared roster HTML. */
 export type KitEventEditRosterEntry = {
   member: string;
   status: string;
+  waitlistPosition: number | null;
   answeredAt: string | null;
 };
 
@@ -110,6 +120,7 @@ export type KitEventEditRosterView = {
   /** Past-end and zero-row copy, exactly like the Hono section; null when rows render. */
   emptyText: string | null;
   sortHeaders: KitEventEditSortHeader[];
+  waitlistHint: string;
   /** The Hono-owned GET search target, with its roster anchor. */
   searchAction: string;
 };
@@ -136,6 +147,8 @@ export type KitEventEditView = {
    * strings or disclosure markup (client gzip ceiling). */
   pauseReviewHtml: string | null;
   savedNoticeHtml: string | null;
+  /** Shared escaped editable fields, in their original positions in the form. */
+  fieldsHtml: string;
 };
 
 export type KitEventEditOutcome =
@@ -146,18 +159,7 @@ export type KitEventEditOutcome =
 /** Structural minimum the resolver reads: the real getEvent EventRow and the
  * real listRoster RosterEntry both extend these, so the load passes the
  * shared helpers straight through. */
-export type KitEventEditRow = {
-  eventKey: string;
-  title: string;
-  game: string | null;
-  description: string | null;
-  startsAt: Date;
-  endsAt: Date;
-  timezone: string;
-  location: string | null;
-  capacity: number | null;
-  status: string;
-  rsvpOpen: boolean;
+export type KitEventEditRow = EventSaveSnapshot & {
   recurrenceFrequency: string | null;
 };
 
@@ -165,6 +167,7 @@ export type KitEventEditRosterRow = {
   username: string | null;
   status: string;
   answeredAt: Date;
+  waitlistPosition?: number | null;
 };
 
 export type KitEventEditDeps = {
@@ -237,6 +240,9 @@ export async function resolveKitEventEdit(
   const entries = roster.rows.map((r) => ({
     member: r.username?.trim() || "Unknown member",
     status: r.status,
+    // Rendered only for waitlisted rows: the window rank is global, but a
+    // non-waitlisted row must never show a queue number.
+    waitlistPosition: r.status === "waitlisted" ? (r.waitlistPosition ?? null) : null,
     answeredAt: formatAdminTime(r.answeredAt).iso,
   }));
   const rangeStart = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + 1 : 0;
@@ -255,6 +261,23 @@ export async function resolveKitEventEdit(
   // stays visible for correction but is never formatted.
   const knownTimezone = isKnownTimezone(row.timezone);
   const startFinite = Number.isFinite(row.startsAt.getTime());
+  const values: KitEventEditValues = {
+    [SAVE_BASELINE_FIELD]: await eventSaveBaseline(row),
+    title: row.title,
+    game: row.game ?? "",
+    description: row.description ?? "",
+    accessibility_notes: row.accessibilityNotes ?? "",
+    // Wall text in the row's zone — what the moderator typed is what they
+    // see; the stored instant is preserved by the Hono UTC carriers.
+    starts_at: knownTimezone && startFinite ? utcToWall(row.startsAt, row.timezone) : "",
+    ends_at: knownTimezone && endFinite ? utcToWall(row.endsAt, row.timezone) : "",
+    timezone: row.timezone,
+    location: row.location ?? "",
+    organizer_name: row.organizer_name ?? "",
+    join_url: row.join_url ?? "",
+    join_instructions: row.join_instructions ?? "",
+    capacity: row.capacity === null ? "" : String(row.capacity),
+  };
   return {
     kind: "ok",
     view: {
@@ -265,18 +288,8 @@ export async function resolveKitEventEdit(
         rawQuery.saved === "1" && row.status === "draft"
           ? renderSavedEventNoticeHtml(row.eventKey)
           : null,
-      values: {
-        title: row.title,
-        game: row.game ?? "",
-        description: row.description ?? "",
-        // Wall text in the row's zone — what the moderator typed is what they
-        // see; the stored instant is preserved by the Hono UTC carriers.
-        starts_at: knownTimezone && startFinite ? utcToWall(row.startsAt, row.timezone) : "",
-        ends_at: knownTimezone && endFinite ? utcToWall(row.endsAt, row.timezone) : "",
-        timezone: row.timezone,
-        location: row.location ?? "",
-        capacity: row.capacity === null ? "" : String(row.capacity),
-      },
+      values,
+      fieldsHtml: String(EventEditableFields({ values, errors: {} })),
       errors: {},
       hasErrors: false,
       isDraft: false,
@@ -323,7 +336,9 @@ export async function resolveKitEventEdit(
         sortHeaders: [
           sortHeader(row.eventKey, query, "status", "Status"),
           sortHeader(row.eventKey, query, "answered", "Answered (UTC)"),
+          sortHeader(row.eventKey, query, "waitlist", "Waitlist position"),
         ],
+        waitlistHint: rosterWaitlistHint,
         // The Hono edit action, unencoded like the Hono page's own form target.
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,
       },

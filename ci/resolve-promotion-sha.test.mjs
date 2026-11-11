@@ -921,6 +921,35 @@ test("resolver CLI promotes a soaked green on automatic triggers", () => {
   assert.match(result.stdout, /Promoting/);
 });
 
+test("resolver CLI emits exactly one staging coverage notice for explicit and automatic selection", () => {
+  const notice =
+    "::warning::actual staging coverage: UNKNOWN/INSUFFICIENT - no identity-bound interval receipt; legacy age/journey checks are not coverage proof; retain release holds";
+  const oldAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  for (const explicit of [true, false]) {
+    const result = spawnResolverCli(
+      {
+        ...cliBase,
+        GITHUB_EVENT_NAME: explicit ? "workflow_dispatch" : "schedule",
+        INPUT_SHA: explicit ? A : "",
+      },
+      explicit
+        ? []
+        : [
+            {
+              match: "/actions/workflows/e2e-staging.yml/runs",
+              body: { workflow_runs: [cliRun(7, A, oldAt)] },
+            },
+            cliJobs(7),
+            { match: `/commits/${A}`, body: { commit: { committer: { date: oldAt } } } },
+          ],
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.written, `sha=${A}\n`);
+    assert.equal(result.stderr, `${notice}\n`, explicit ? "explicit" : "automatic");
+    assert.ok(!result.stdout.includes(notice), "do not duplicate the notice on stdout");
+  }
+});
+
 test("resolver CLI skips cleanly on automatic triggers with nothing soaked and green", () => {
   // A fresh green is not promotable yet and there is no older candidate: the
   // run stays green with an empty sha instead of going red.

@@ -21,6 +21,7 @@ import {
   type KitEventEditRosterRow,
   type KitEventEditRow,
 } from "../src/admin/kit-event-edit";
+import { eventSaveBaseline } from "../src/admin/save-baseline";
 import { EventRosterSection } from "../src/admin/pages/event-form-roster";
 import { parseRosterQuery, ROSTER_PAGE_SIZE } from "../src/admin/table-list";
 
@@ -91,13 +92,18 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
     expect(outcome.view.title).toBe("Game night");
     // 19:00Z July London is 20:00 wall; storage stays the UTC instant.
     expect(outcome.view.values).toEqual({
+      saved_baseline: await eventSaveBaseline(baseRow),
       title: "Game night",
       game: "Chess",
       description: "Casual play",
+      accessibility_notes: "",
       starts_at: "2026-07-01 20:00",
       ends_at: "2026-07-01 22:00",
       timezone: "Europe/London",
       location: "Hall",
+      organizer_name: "",
+      join_url: "",
+      join_instructions: "",
       capacity: "8",
     });
     expect(outcome.view.endsAt).toBe("2026-07-01T21:00:00.000Z");
@@ -244,13 +250,52 @@ describe("resolveKitEventEdit: bounded roster paging", () => {
     const outcome = await resolveKitEventEdit("EVTPAST01", {}, depsFor());
     if (outcome.kind !== "ok") throw new Error("expected ok");
     expect(outcome.view.roster.entries).toEqual([
-      { member: "mod", status: "going", answeredAt: "2026-06-01T12:00:00.000Z" },
-      { member: "Unknown member", status: "waitlisted", answeredAt: "2026-06-01T12:00:00.000Z" },
+      {
+        member: "mod",
+        status: "going",
+        waitlistPosition: null,
+        answeredAt: "2026-06-01T12:00:00.000Z",
+      },
+      {
+        member: "Unknown member",
+        status: "waitlisted",
+        waitlistPosition: null,
+        answeredAt: "2026-06-01T12:00:00.000Z",
+      },
     ]);
     for (const entry of outcome.view.roster.entries) {
       expect(entry).not.toHaveProperty("userId");
       expect(entry).not.toHaveProperty("username");
     }
+  });
+
+  it("carries the global waitlist rank only on waitlisted rows", async () => {
+    const outcome = await resolveKitEventEdit(
+      "EVTPAST01",
+      {},
+      depsFor({
+        list: async () => ({
+          total: 2,
+          rows: [
+            { username: "early", status: "waitlisted", answeredAt, waitlistPosition: 7 },
+            // A stale rank on a non-waitlisted row must never reach the view.
+            { username: "seated", status: "going", answeredAt, waitlistPosition: 3 },
+          ],
+        }),
+      }),
+    );
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.view.roster.entries.map((e) => e.waitlistPosition)).toEqual([7, null]);
+    const waitlist = outcome.view.roster.sortHeaders.find((h) => h.key === "waitlist")!;
+    expect(waitlist.label).toBe("Waitlist position");
+    expect(waitlist.active).toBe(false);
+    expect(waitlist.linkLabel).toBe("Sort by waitlist position ascending");
+    expect(outcome.view.roster.sortHeaders.map((h) => h.key)).toEqual([
+      "status",
+      "answered",
+      "waitlist",
+    ]);
+    expect(outcome.view.roster.waitlistHint).toContain("so numbers can skip.");
   });
 
   it("nulls an unusable roster instant instead of throwing, keeping the row", async () => {
@@ -269,8 +314,13 @@ describe("resolveKitEventEdit: bounded roster paging", () => {
     );
     if (outcome.kind !== "ok") throw new Error("expected ok");
     expect(outcome.view.roster.entries).toEqual([
-      { member: "mod", status: "going", answeredAt: "2026-06-01T12:00:00.000Z" },
-      { member: "broken", status: "going", answeredAt: null },
+      {
+        member: "mod",
+        status: "going",
+        waitlistPosition: null,
+        answeredAt: "2026-06-01T12:00:00.000Z",
+      },
+      { member: "broken", status: "going", waitlistPosition: null, answeredAt: null },
     ]);
   });
 
@@ -443,6 +493,9 @@ describe("resolveKitEventEdit: rosterHtml is the shared EventRosterSection rende
     expect(html).toBe(honoRoster({}, list));
     expect(html).toContain('<time datetime="2026-06-01T12:00:00.000Z">');
     expect(html).toContain("Unknown member");
+    expect(html).toContain(
+      "Answered shows the latest response update in UTC, not the original waitlist join time.",
+    );
     expect(html.match(/<time\b/g) ?? []).toHaveLength(2);
   });
 
@@ -505,9 +558,95 @@ describe("resolveKitEventEdit: rosterHtml is the shared EventRosterSection rende
     const outcome = await resolveKitEventEdit(baseRow.eventKey, {}, depsFor());
     if (outcome.kind !== "ok") throw new Error("expected ok");
     expect(outcome.view.roster.entries).toEqual([
-      { member: "mod", status: "going", answeredAt: "2026-06-01T12:00:00.000Z" },
-      { member: "Unknown member", status: "waitlisted", answeredAt: "2026-06-01T12:00:00.000Z" },
+      {
+        member: "mod",
+        status: "going",
+        waitlistPosition: null,
+        answeredAt: "2026-06-01T12:00:00.000Z",
+      },
+      {
+        member: "Unknown member",
+        status: "waitlisted",
+        waitlistPosition: null,
+        answeredAt: "2026-06-01T12:00:00.000Z",
+      },
     ]);
     expect(typeof outcome.view.rosterHtml).toBe("string");
+  });
+});
+
+describe("resolveKitEventEdit: saved baseline and public fields", () => {
+  const rich: KitEventEditRow = {
+    ...baseRow,
+    accessibilityNotes: "Step-free entrance.",
+    organizer_name: "Sam",
+    join_url: "https://example.test/join",
+    join_instructions: "Ring the bell.",
+    updatedAt: new Date("2026-06-01T10:00:00.000Z"),
+    agentVersion: 2,
+  };
+
+  async function load(row: KitEventEditRow) {
+    const outcome = await resolveKitEventEdit(row.eventKey, {}, depsFor({ get: async () => row }));
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    return outcome.view.values;
+  }
+
+  it("preserves the notes, host and joining values instead of narrowing them away", async () => {
+    const values = await load(rich);
+    expect(values.accessibility_notes).toBe("Step-free entrance.");
+    expect(values.organizer_name).toBe("Sam");
+    expect(values.join_url).toBe("https://example.test/join");
+    expect(values.join_instructions).toBe("Ring the bell.");
+    expect(values.saved_baseline).toBe(await eventSaveBaseline(rich));
+  });
+
+  it("renders null public fields as empty strings", async () => {
+    const values = await load({
+      ...rich,
+      accessibilityNotes: null,
+      organizer_name: null,
+      join_url: null,
+      join_instructions: null,
+    });
+    expect(values).toMatchObject({
+      accessibility_notes: "",
+      organizer_name: "",
+      join_url: "",
+      join_instructions: "",
+    });
+  });
+
+  it.each([
+    ["accessibilityNotes", { accessibilityNotes: "Changed." }],
+    ["organizer_name", { organizer_name: "Alex" }],
+    ["join_url", { join_url: "https://example.test/other" }],
+    ["join_instructions", { join_instructions: "Knock." }],
+    ["updatedAt", { updatedAt: new Date("2026-06-01T10:00:00.001Z") }],
+    ["agentVersion", { agentVersion: 3 }],
+  ] as Array<[string, Partial<KitEventEditRow>]>)(
+    "moves the carried baseline when %s changes",
+    async (_name, over) => {
+      expect((await load({ ...rich, ...over })).saved_baseline).not.toBe(
+        (await load(rich)).saved_baseline,
+      );
+    },
+  );
+
+  it("still loads a nonfinite instant or unknown zone, with an empty wall text and a baseline", async () => {
+    const nonfinite = await load({ ...rich, startsAt: new Date(Number.NaN) });
+    expect(nonfinite.starts_at).toBe("");
+    expect(nonfinite.saved_baseline).toMatch(/^[0-9a-f]{64}$/);
+    const nonfiniteEnd = await load({ ...rich, endsAt: new Date(Number.NaN) });
+    expect(nonfiniteEnd.ends_at).toBe("");
+    expect(nonfiniteEnd.starts_at).not.toBe("");
+    expect(nonfiniteEnd.saved_baseline).toMatch(/^[0-9a-f]{64}$/);
+    const nonfiniteStamp = await load({ ...rich, updatedAt: new Date(Number.NaN) });
+    expect(nonfiniteStamp.saved_baseline).toMatch(/^[0-9a-f]{64}$/);
+    const unknown = await load({ ...rich, timezone: "Not/AZone" });
+    expect(unknown.timezone).toBe("Not/AZone");
+    expect(unknown.starts_at).toBe("");
+    expect(unknown.ends_at).toBe("");
+    expect(unknown.saved_baseline).not.toBe((await load(rich)).saved_baseline);
   });
 });

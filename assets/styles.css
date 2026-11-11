@@ -32,7 +32,7 @@ dl.facts > div { display: block; }
 .home-event-link { display: block; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
 .home-event-link h3 { margin: .5rem 0; }
 .home-event-link:hover h3 { color: var(--brand); text-decoration: underline; }
-.home-event-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
+.home-event-link:focus-visible { outline: var(--focus-width,2px) solid var(--focus-ring,var(--brand)); outline-offset: var(--focus-offset,3px); }
 .home-events-group { grid-column: 1 / -1; }
 @media (max-width: 40rem) { .home-events { grid-template-columns: 1fr; } }
 .featured-image { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; margin-top: 1rem; border: 1px solid #d8cfc0; }
@@ -55,7 +55,7 @@ legend { font-weight: 700; padding: 0 .5rem; }
 .filters { display: flex; gap: .75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
 .filters .field { margin: 0; }
 .featured-form { overflow-wrap: anywhere; }
-.featured-table-scroll, .admin-table-scroll { max-width: 100%; overflow-x: auto; }
+.featured-table-scroll, .admin-table-scroll { position: relative; max-width: 100%; overflow-x: auto; }
 .featured-table { min-width: 64rem; }
 .featured-table :is(th, td) { overflow-wrap: normal; word-break: normal; }
 .featured-table :is(th, time) { white-space: nowrap; }

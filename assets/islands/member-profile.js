@@ -343,9 +343,10 @@
 
   function clientErrors(bio, games, tz) {
     var e = [];
-    if (control(bio)) e.push({ key: "bio", text: "Remove control characters." });
-    if (control(games)) e.push({ key: "games_text", text: "Remove control characters." });
-    if (control(tz)) e.push({ key: "timezone", text: "Remove control characters." });
+    if (control(bio)) e.push({ key: "bio", text: "Remove control or invisible characters." });
+    if (control(games))
+      e.push({ key: "games_text", text: "Remove control or invisible characters." });
+    if (control(tz)) e.push({ key: "timezone", text: "Remove control or invisible characters." });
     if (Array.from(bio).length > 1000)
       e.push({ key: "bio", text: "Keep your bio to 1000 characters or fewer." });
     if (Array.from(games).length > 1700)

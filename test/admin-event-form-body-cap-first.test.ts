@@ -13,6 +13,7 @@
 // spies and a fail-if-touched Db double; no DATABASE_URL, no sockets.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
+import { eventSaveBaseline } from "../src/admin/save-baseline";
 import { createEvent, getEvent, recordAccess, updateEvent } from "../src/admin/store";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { events } from "../src/db/admin-schema";
@@ -169,6 +170,18 @@ const formPosts = [
   ["update", `/events/${KEY}`],
 ] as const;
 
+// An update POST carries the token of the stored row the mocked GET displays;
+// create has no stored row and no token.
+async function formFor(
+  label: string,
+  values: Record<string, string> = FORM,
+  current: Parameters<typeof eventSaveBaseline>[0] = row,
+): Promise<Record<string, string>> {
+  return label === "update"
+    ? { ...values, saved_baseline: await eventSaveBaseline(current) }
+    : { ...values };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getEvent).mockResolvedValue(row);
@@ -189,7 +202,11 @@ describe("saved-event notice admission", () => {
         childWriteBacks: [],
       });
       const { app, cookie, bindings } = await mounted(MODERATOR, throttleFixture(0));
-      const response = await app.request(`/events/${KEY}`, postForm(cookie, FORM), bindings);
+      const response = await app.request(
+        `/events/${KEY}`,
+        postForm(cookie, await formFor("update", FORM, current)),
+        bindings,
+      );
       expect(response.status).toBe(303);
       expect(response.headers.get("location")).toBe(
         `/admin/events/${KEY}${status === "draft" ? "?saved=1" : ""}`,
@@ -320,7 +337,11 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
     async (label, path) => {
       const throttle = throttleFixture(0);
       const { app, cookie, bindings } = await mounted(MODERATOR, throttle);
-      const response = await app.request(path, postForm(cookie, FORM), bindings);
+      const response = await app.request(
+        path,
+        postForm(cookie, await formFor(label, FORM)),
+        bindings,
+      );
       expect(response.status).toBe(303);
       expect(response.headers.get("location")).toBe(`/admin/events/${KEY}?saved=1`);
       expect(throttle.count()).toBe(1);
@@ -345,7 +366,7 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
       const { app, cookie, bindings } = await mounted(MODERATOR, throttle);
       const response = await app.request(
         `${path}?saved=1`,
-        postForm(cookie, { ...FORM, starts_at: "not-a-time" }),
+        postForm(cookie, await formFor(label, { ...FORM, starts_at: "not-a-time" })),
         bindings,
       );
       expect(response.status).toBe(422);

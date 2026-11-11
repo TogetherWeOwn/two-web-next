@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { EventFormPage, FeaturedFormPage } from "../../src/admin/pages";
+import { EventEditableFields } from "../../src/admin/pages/event-editable-fields";
 import type { EventRow, FeaturedRow } from "../../src/admin/store";
 import { buildEventCreateView } from "../../src/admin/kit-event-create";
 import { resolveKitEventEdit } from "../../src/admin/kit-event-edit";
@@ -249,6 +250,7 @@ export async function formFixtures(
               ...view.view,
               values: eventValues,
               errors,
+              fieldsHtml: String(EventEditableFields({ values: eventValues, errors })),
               hasErrors: rejected,
               isDraft: rejected,
             },

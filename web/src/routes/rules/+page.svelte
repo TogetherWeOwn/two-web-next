@@ -24,6 +24,7 @@ let { data }: PageProps = $props();
 
 {#snippet accountJoin()}<div><span class="account-caption">Welcome, guest</span><a class="btn" href="/join">Join with Discord</a></div>{/snippet}
 <Shell
+  restoredWrite={data.restoredWrite}
   title="House rules"
   canonical={canonicalUrl(data.appUrl, "/rules")}
   theme="content"

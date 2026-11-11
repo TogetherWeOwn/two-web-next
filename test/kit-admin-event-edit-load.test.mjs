@@ -248,6 +248,50 @@ describe("Kit admin event-edit load: guard and failure wiring", () => {
     expect(err).toBe(failure);
   });
 
+  it("a roster programming error after the event loads propagates, never an empty-success view", async () => {
+    const bug = new TypeError("Cannot read properties of undefined (reading 'rows')");
+    // Count leg: the event read succeeds, then the roster count select rejects.
+    const countLeg = rowsDb([eventRow()], [{ n: 0 }], []);
+    const select = countLeg.select;
+    let reads = 0;
+    countLeg.select = () => (++reads === 1 ? select() : rejectingDb(bug).select());
+    // Page leg: event and count succeed, the raw roster page execute rejects.
+    const pageLeg = rowsDb([eventRow()], [{ n: 3 }], []);
+    pageLeg.execute = async () => {
+      throw bug;
+    };
+    for (const db of [countLeg, pageLeg]) {
+      vi.stubGlobal("__kitAdminEventEditDb", db);
+      const setHeaders = vi.fn();
+      const err = await load(
+        { parent: async () => ({ actor }), params: { key: "EVT1" }, url: editUrl(), setHeaders },
+        {},
+      ).then(
+        (data) => ({ data }),
+        (e) => e,
+      );
+      expect(err).toBe(bug);
+      expect(err).not.toHaveProperty("data");
+      expect(err).not.toHaveProperty("status");
+      expect(setHeaders).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a classified roster outage after the event loads is a 503, never an empty roster", async () => {
+    const db = rowsDb([eventRow()], [{ n: 3 }], []);
+    db.execute = async () => {
+      throw refused();
+    };
+    vi.stubGlobal("__kitAdminEventEditDb", db);
+    const setHeaders = vi.fn();
+    const err = await load(
+      { parent: async () => ({ actor }), params: { key: "EVT1" }, url: editUrl(), setHeaders },
+      {},
+    ).catch((e) => e);
+    expect(err?.status).toBe(503);
+    expect(setHeaders).not.toHaveBeenCalled();
+  });
+
   it("a missing event answers 404 and sets no cache headers", async () => {
     vi.stubGlobal("__kitAdminEventEditDb", rowsDb([], [{ n: 0 }], []));
     const setHeaders = vi.fn();
@@ -352,7 +396,12 @@ describe("Kit admin event-edit load: guard and failure wiring", () => {
     expect(data.view.showPublish).toBe(true);
     expect(data.view.roster.total).toBe(1);
     expect(data.view.roster.entries).toEqual([
-      { member: "mod", status: "going", answeredAt: "2026-06-01T12:00:00.000Z" },
+      {
+        member: "mod",
+        status: "going",
+        waitlistPosition: null,
+        answeredAt: "2026-06-01T12:00:00.000Z",
+      },
     ]);
     for (const entry of data.view.roster.entries) {
       expect(entry).not.toHaveProperty("userId");

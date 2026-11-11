@@ -127,6 +127,62 @@ secret `QA_AUTH_TOKEN` (secret name only here — never a value), masked in logs
 sent only as the `X-TWO-QA-Auth` header next to an explicit staging `Origin`,
 and never printed or placed in a URL.
 
+### Candidate identity and the qualification window
+
+The scope job resolves the exact `deploy <sha>` title from a successful,
+same-repository main deploy. The deploy workflow's API `head_sha` can be a
+later main tip; it is not candidate provenance. The candidate must be a main
+ancestor. Scope runs trusted workflow-revision code and diffs that candidate
+as data without checking it out. When the candidate differs from the workflow
+revision, scope runs qualification in full: the later tree's helper import
+inventory cannot justify skipping the candidate's journeys or passive set.
+Same-revision deploys retain the existing docs/test-only scope optimization.
+Passive and critical journey code, ZAP and
+quality checkers check out the candidate with cache writes disabled. A manual
+dispatch must target `main` and uses its exact dispatch SHA; it does not become
+automatic-promotion evidence.
+
+Before and after each qualification set, `ci/staging-provenance.mjs` reads
+staging `/version` once, without redirects or cache reuse. Missing, invalid
+or mismatched identity fails the job, as does a changed upload timestamp
+(including a same-SHA redeploy). The passive `commit` file is written from the
+validated served identity only after the passive set. Sanitized identity
+artifacts contain only SHA and upload time, never response bodies or secrets.
+A failed identity check is not retried into a pass or reduced to a passive
+ledger verdict. Promotion requires both passive identity files to name the
+candidate with the same valid upload timestamp; a matching `commit` file alone
+is insufficient. Historical artifacts are never rewritten or relabelled, and
+artifacts without the observations remain ineligible.
+
+The whole qualification workflow shares `deploy-staging` concurrency with
+the staging deploy job, ordinary staging rollbacks and the entire staging
+rollback drill (plan through restore). The drill's nested workflow and mutation
+jobs use run-specific groups because their caller already owns the shared mutex;
+they must not take `rollback-staging` inside `deploy-staging` and invert the lock
+order of an ordinary rollback. Every entry to the shared staging group sets
+[`queue: max`](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
+so a qualification does not replace a pending deployment. GitHub retains at most
+100 pending entries and cancels new arrivals when full; ordering follows entry to
+the lock queue, not dispatch time. Overflow/cancellation is not qualification
+evidence. The shared rollback mutation job also preserves pending production
+entries; its static production group, non-cancellation and authorization gates
+remain unchanged. The required scope gate uses integrity-pinned actionlint
+1.7.12 plus `ci/workflow-lint.mjs`: the latter validates plain `single`/`max`
+queue values at workflow/job concurrency locations and refuses cancellation,
+expressions, flow mappings and alias/merge ambiguity. It then blanks only the
+validated extension, preserving source locations, and actionlint checks every
+other field with no ignored diagnostics. Invalid queue syntax fails closed;
+fixtures also prove unrelated actionlint errors still fail. Remove this
+compatibility projection when upstream actionlint supports the extension.
+Repository mutations therefore cannot replace the Worker during qualification,
+even by rolling away and back between samples. A deploy that wins the mutex
+before an older qualification makes the older candidate fail closed at `/version`.
+Two observations alone do not prove full-window stability against out-of-band
+Cloudflare changes; those mutations must remain excluded from the protected window. This change adds no staging
+startup, keep-alive, alarm or scheduler, and lifts no existing staging or
+production hold. All on-demand lifecycle, security, soak and release gates
+remain applicable.
+
 Coverage reuses the CI journey logic with staging-safe setup:
 
 | Journey | Spec | Evidence required |
@@ -164,8 +220,9 @@ database error fails the teardown loudly instead of claiming cleanup
 succeeded. The staging sweep allows four passes and
 at most four cancellation throttle waits within its five-minute sweep bound. An exhausted bound fails the run rather than claiming cleanup
 succeeded.
-On failure the job sweeps `test-results/` and `playwright-report/`, but uploads
-only the derived journey ledger after the sweep completes; that artifact is
+On failure the job sweeps `test-results/`, `playwright-report/` and
+`staging-identity/`, but uploads only the derived journey ledger and the two
+SHA/timestamp identity files after the sweep completes; that artifact is
 retained for seven days. The repo is public, so uploaded artifacts are
 world-readable and log masking does not cover them. Playwright puts request headers (including `X-TWO-QA-Auth`) into a
 transport-level request error, so token-bearing requests go through
@@ -248,11 +305,16 @@ closed. Check for a `--retries` override or a report produced by another config;
 verify that provenance rather than trusting the row as a pass. Its first-attempt reason is a bounded, single-line
 summary in the derived ledger; it is not the raw Playwright report. The
 failure-only upload is gated on the existing QA-token scrub completing across
-`test-results/` and `playwright-report/`; a failed or incomplete scrub uploads
-nothing. The separate ledger artifact contains only the derived JSON and
-Markdown ledger, never the raw report. The `e2e-staging-failure-*` artifact, retained for seven days, contains only
-the derived ledger; the raw report, HTML report and traces are not published
-as artifacts. For a failed run on `main`, follow the [documented host-flake loop](rum-web-vitals.md):
+`test-results/`, `playwright-report/` and `staging-identity/`; a failed or
+incomplete scrub uploads nothing. Both the separate ledger artifact and the
+`e2e-staging-failure-*` artifact, retained for seven days, use exactly four paths:
+`test-results/staging-journey-ledger.json`, `test-results/staging-journey-ledger.md`,
+`staging-identity/critical.before.json` and `staging-identity/critical.after.json`.
+The identity writer retains only the validated candidate SHA and canonical
+upload timestamp, never extra response fields. Identity files stay outside
+Playwright's output directory so startup cleanup cannot erase the before sample.
+No directory or glob is uploaded; the raw report, HTML report and traces are
+not published as artifacts. For a failed run on `main`, follow the [documented host-flake loop](rum-web-vitals.md):
 it reruns once, then opens a private main-red card for the Web Engineer if it
 fails again. Never rerun-until-green to clear a failure: the production gate
 refuses any commit whose `e2e-staging` run failed or was re-run

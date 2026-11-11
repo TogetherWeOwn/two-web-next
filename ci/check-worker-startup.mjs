@@ -49,6 +49,15 @@ export function validateBudget(budget) {
   );
   return budget;
 }
+function sampleValue(value) {
+  let rendered;
+  try {
+    rendered = typeof value === "number" ? String(value) : JSON.stringify(value);
+  } catch {
+    rendered = String(value);
+  }
+  return (rendered ?? String(value)).slice(0, 64);
+}
 export function summarizeProfile(profile) {
   requireValue(
     profile &&
@@ -90,33 +99,78 @@ export function summarizeProfile(profile) {
     );
   }
   let sampledUs = 0;
+  let reversals = 0;
+  let maxReversalUs = 0;
+  const windowUs = profile.endTime - profile.startTime;
+  const maxReversals = Math.min(3, Math.floor(0.02 * profile.samples.length));
+  const samples = [];
+  for (let i = 0; i < profile.samples.length; i++) {
+    const id = profile.samples[i];
+    const delta = profile.timeDeltas[i];
+    if (!Number.isSafeInteger(id))
+      throw new Error(
+        `Invalid CPU profile sample: non-integer node id at sample ${i} (${sampleValue(id)})`,
+      );
+    if (!nodes.has(id))
+      throw new Error(`Invalid CPU profile sample: unknown node ${id} at sample ${i}`);
+    if (typeof delta !== "number" || !Number.isFinite(delta))
+      throw new Error(
+        `Invalid CPU profile sample: non-finite timeDelta at sample ${i} (${sampleValue(delta)})`,
+      );
+    sampledUs += delta;
+    const timestamp = profile.startTime + sampledUs;
+    if (
+      sampledUs < 0 ||
+      sampledUs > windowUs ||
+      timestamp < profile.startTime ||
+      timestamp > profile.endTime
+    )
+      throw new Error(
+        `Invalid CPU profile sample: timestamp outside profile window at sample ${i}`,
+      );
+    // The raw adjacent step retains reversals even when absolute timestamps round to a tie.
+    if (delta < 0) {
+      const reversalUs = -delta;
+      if (reversalUs > 1000)
+        throw new Error(
+          `Invalid CPU profile sample: reversal ${reversalUs} us exceeds 1000 us at sample ${i}`,
+        );
+      reversals++;
+      maxReversalUs = Math.max(maxReversalUs, reversalUs);
+      if (reversals > maxReversals)
+        throw new Error(
+          `Invalid CPU profile sample: reversal count ${reversals} exceeds ${maxReversals} at sample ${i}`,
+        );
+    }
+    samples.push({ offsetUs: sampledUs, id, sampleIndex: i });
+  }
+  // V8 drains by code-event id. Sort relative times to avoid absolute-timestamp rounding.
+  samples.sort((a, b) => a.offsetUs - b.offsetUs || a.sampleIndex - b.sampleIndex);
   let idleUs = 0;
   let gcUs = 0;
-  for (let i = 0; i < profile.samples.length; i++) {
-    const node = nodes.get(profile.samples[i]);
-    const delta = profile.timeDeltas[i];
-    requireValue(
-      node && Number.isSafeInteger(profile.samples[i]) && finite(delta),
-      "Invalid CPU profile sample/delta pair",
-    );
-    sampledUs += delta;
+  let attributedUs = 0;
+  for (const sample of samples) {
+    const delta = sample.offsetUs - attributedUs;
+    const node = nodes.get(sample.id);
     if (node.callFrame.functionName === "(idle)") idleUs += delta;
     if (node.callFrame.functionName === "(garbage collector)") gcUs += delta;
+    attributedUs = sample.offsetUs;
   }
-  const windowUs = profile.endTime - profile.startTime;
   requireValue(
-    finite(sampledUs) && sampledUs > 0 && sampledUs <= windowUs + 1000 && sampledUs > idleUs,
+    finite(sampledUs) && sampledUs > 0 && sampledUs <= windowUs + 1000 && attributedUs > idleUs,
     "Incomplete CPU profile timing",
   );
   return {
-    [METRIC]: (sampledUs - idleUs) / 1000,
+    [METRIC]: (attributedUs - idleUs) / 1000,
     sampledMs: sampledUs / 1000,
     idleMs: idleUs / 1000,
     gcMs: gcUs / 1000,
     windowMs: windowUs / 1000,
-    // Sampling may leave a valid unsampled tail; retain it, do not call it CPU.
-    unsampledMs: Math.max(0, windowUs - sampledUs) / 1000,
+    // The sorted horizon includes a reversed raw tail; only time beyond it is unsampled.
+    unsampledMs: Math.max(0, windowUs - attributedUs) / 1000,
     samples: profile.samples.length,
+    reversals,
+    maxReversalUs,
   };
 }
 function readBounded(file, max) {
@@ -483,7 +537,13 @@ export async function collect({ outdir, budget, identity, cli, run = runCommand 
 }
 export function summary(evidence) {
   const numeric = evidence.runs.map((r) => r.measurement[METRIC].toFixed(3)).join(", ");
-  return `## Worker local startup diagnostic\n\n${METRIC}: **${evidence.status}**, maximum **${evidence.maximumMs.toFixed(3)} ms** of exactly 3 cold runs (${numeric} ms). Warning >=400 ms; failure >=700 ms.\n\nAuthoritative Cloudflare startup_time_ms: **unavailable**. Production margin: **unmet**. This local sampling diagnostic is not provider startup CPU or validation.\n\nSource: \`${evidence.identity.sha}\`; upload SHA-256: \`${evidence.identity.uploadSha256}\`. Original profiles and build/tool/runner-bound numeric evidence are in the worker-startup-local artifact.\n`;
+  const reversals = evidence.runs
+    .map(
+      (r) =>
+        `Cold ${r.invocation}: ${r.measurement.reversals} reversals; largest ${r.measurement.maxReversalUs} us.`,
+    )
+    .join("\n");
+  return `## Worker local startup diagnostic\n\n${METRIC}: **${evidence.status}**, maximum **${evidence.maximumMs.toFixed(3)} ms** of exactly 3 cold runs (${numeric} ms). Warning >=400 ms; failure >=700 ms.\n\n${reversals}\n\nAuthoritative Cloudflare startup_time_ms: **unavailable**. Production margin: **unmet**. This local sampling diagnostic is not provider startup CPU or validation.\n\nSource: \`${evidence.identity.sha}\`; upload SHA-256: \`${evidence.identity.uploadSha256}\`. Original profiles and build/tool/runner-bound numeric evidence are in the worker-startup-local artifact.\n`;
 }
 async function main() {
   const args = process.argv.slice(2);

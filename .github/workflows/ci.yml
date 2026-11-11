@@ -160,10 +160,30 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       # Tier 0 (pipeline review 2026-10-10): workflow logic was the largest class of review
       # findings a linter catches. scope gates ci-ok (fails closed), so a red lint blocks merge.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: github.event_name == 'pull_request'
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install locked workflow parser without hooks
+        if: github.event_name == 'pull_request'
+        run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
       # Patched immutable v1.7.7: validated native queue grammar, not a lint exemption.
       - name: Lint workflows (actionlint)
         if: github.event_name == 'pull_request'
         run: bash ci/actionlint/build.sh
+      - name: Lint workflows (actionlint and queue contract)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          lint_dir=$(mktemp -d "$RUNNER_TEMP/actionlint.XXXXXX")
+          curl -fsSL -o "$lint_dir/actionlint.tgz" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $lint_dir/actionlint.tgz" | sha256sum -c -
+          tar -xzf "$lint_dir/actionlint.tgz" -C "$lint_dir" actionlint
+          export ACTIONLINT="$lint_dir/actionlint"
+          node --test ci/workflow-lint.test.mjs
+          node ci/workflow-lint.mjs "$ACTIONLINT"
 
   # Native parser proof only: every event parses and schedules a `queue: max`
   # group here. It must run on main too: the staging gate requires every job
@@ -399,7 +419,7 @@ jobs:
         run: |
           mkdir -p artifacts/a11y
           node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/kit-member-auth.tap ci/kit-member-auth-browser.test.mjs
-          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/kit-member-auth.tap "Kit member auth in Chromium" 15
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/kit-member-auth.tap "Kit member auth in Chromium" 20
       - name: Native event share (real Chromium, Hono and Kit fixtures)
         run: |
           mkdir -p artifacts/a11y
@@ -573,6 +593,9 @@ jobs:
         run: npm run deps:pins:selftest && npm run deps:pins
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      - name: Design-kit provenance and adapter drift
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:design-kit-drift:selftest && npm run check:design-kit-drift && npm run check:ember-sync:selftest && npm run check:ember-sync
       # The toolchain suite pins the declared browser-helper peer metadata;
       # this pins the installed half: the root proxy-agent pin must exist and
       # be the copy that resolves from the helper's context (the LHCI-nested
@@ -596,6 +619,27 @@ jobs:
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Route parity selftests (no Worker or DB)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:route-parity:selftest
+      # Pure-Hono contract goldens (docs/kit-parity-gates.md): record root
+      # wrangler.jsonc twice on loopback against clones of the service DB and
+      # require zero differences, plus the committed goldens while current.
+      - name: Route parity (pure Hono recorded twice, zero differences)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        timeout-minutes: 15
+        run: npm run check:route-parity
+        env:
+          PARITY_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          PARITY_ARTIFACT_DIR: artifacts/route-parity
+      - name: Route parity recording
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: route-parity-${{ github.sha }}
+          path: artifacts/route-parity/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Deterministic capture fixture (owned schema, two clean seeds, no captures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run capture:verify
@@ -739,7 +783,17 @@ jobs:
         run: node --test ci/check-auth-perf*.test.mjs
       - name: Worker local startup diagnostic selftests (offline fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        env:
+          WORKER_STARTUP_SELFTEST_EVIDENCE_DIR: artifacts/worker-startup-selftest
         run: node --test ci/check-worker-startup.test.mjs ci/worker-startup-runner.test.mjs ci/worker-startup-ci-wiring.test.mjs
+      - name: Worker local startup selftest evidence
+        if: failure() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: worker-startup-selftest
+          path: artifacts/worker-startup-selftest
+          if-no-files-found: warn
+          retention-days: 14
       - name: Kit adapter build and local startup diagnostic (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         env:
@@ -940,6 +994,9 @@ jobs:
       - name: Gradual promotion proof harness selftest (real smoke checker, loopback only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/gradual-promote-proof/proof.test.mjs
+      - name: Staging provenance selftest (offline identities, no deployment)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/staging-provenance.test.mjs
       - name: Promotion resolver selftest (stubbed GitHub API, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/resolve-promotion-sha.test.mjs
@@ -1132,11 +1189,29 @@ jobs:
       - run: npm ci --include=dev --no-audit --no-fund
       # The served public/ files are the deterministic esbuild output of
       # assets/; fail when a source changed without its rebuilt output.
-      - run: node ci/minify-assets.mjs --selftest
-      - run: node ci/minify-assets.mjs --check
+      - id: asset_selftest
+        run: node ci/minify-assets.mjs --selftest
+      - id: asset_check
+        run: node ci/minify-assets.mjs --check
       # The checker uses only Node built-ins; no network needed.
       - run: node ci/check-bundle-budget.mjs --selftest
       - run: node ci/check-bundle-budget.mjs
+      # Retain canonical bytes for repair without turning a drift failure green.
+      - name: Generate asset drift evidence
+        id: asset_drift
+        if: failure() && (steps.asset_selftest.outcome == 'failure' || steps.asset_check.outcome == 'failure')
+        run: |
+          mkdir -p artifacts/asset-drift
+          npm run build:assets
+          git diff --binary -- public/ > artifacts/asset-drift/public-assets.patch
+      - name: Upload asset drift evidence
+        if: failure() && steps.asset_drift.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: asset-drift-${{ github.sha }}
+          path: artifacts/asset-drift/public-assets.patch
+          if-no-files-found: error
+          retention-days: 3
 
   lighthouse:
     needs: scope

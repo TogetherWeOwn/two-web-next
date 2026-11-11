@@ -147,6 +147,20 @@ describe("native admin error server chunking", () => {
     expect(groupPattern("admin").test("/checkout/src/admin/reads.ts")).toBe(true);
   });
 
+  it("groups the Hono application entry with admin without capturing Kit hooks or loaders", () => {
+    const pattern = groupPattern("admin");
+    expect(pattern.test("/checkout/src/index.tsx")).toBe(true);
+    expect(pattern.test("/checkout/src/admin/routes.tsx")).toBe(true);
+    for (const module of [
+      "src/index.tsx.backup",
+      "web/src/hooks.server.ts",
+      "web/src/routes/admin/+page.server.ts",
+      "web/src/routes/admin/+server.ts",
+    ]) {
+      expect(pattern.test(`/checkout/${module}`), module).toBe(false);
+    }
+  });
+
   it("keeps grouping on SSR and preserves conservative minification", () => {
     const { environments, output } = serverOutput();
     assert.ok(environments.type === "ObjectExpression");

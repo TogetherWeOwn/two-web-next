@@ -497,7 +497,12 @@ describe("stored infinity timestamps through the admin routes (isolated fixture)
     const pageHtml = await page.text();
     expect(pageHtml).toContain("Imported night (broken start)");
 
+    // The token the guarded edit page rendered for this unrenderable row.
+    const tag = pageHtml.match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+    const baseline = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+    expect(baseline, "edit page carries a saved_baseline token").toBeDefined();
     const body = new URLSearchParams({
+      saved_baseline: baseline!,
       title: "Imported night (broken start)",
       starts_at: "2026-11-03 19:00",
       ends_at: "2026-11-03 22:00",

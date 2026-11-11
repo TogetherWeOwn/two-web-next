@@ -61,12 +61,12 @@ describe("homepage theme", () => {
     const html = render();
     expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
     // The homepage inlines the shared critical-CSS bundle and retains the
-    // Display-700 preload for an early font fetch; the Arial-metric
-    // 'Display Fallback' reduces delayed-font layout shift.
+    // Mona Sans variable preload for an early font fetch; the Arimo-metric
+    // 'Mona Sans Fallback' reduces delayed-font layout shift.
     expect(html).toContain("<style>");
     expect(html).toContain(".hero h1");
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+    expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
     expect(html).toContain('src="/logo.svg" width="180" height="50" alt="Together We Own"');
     expect(html).toContain('data-testid="site-jsonld"');
     const withoutJsonLd = html.replace(
@@ -261,39 +261,50 @@ describe("homepage theme", () => {
   });
 
   it("keeps the responsive, focus and reduced-motion rules external and compact", () => {
+    // public/theme.css is generated and minified from assets/theme.css plus
+    // the kit role block (exactness is gated by ci/check-ember-token-sync), so
+    // served assertions are semantic. Source assertions pin the authored text.
     const css = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
+    const source = readFileSync(new URL("../assets/theme.css", import.meta.url), "utf8");
     expect(css).toContain(".base-theme :focus-visible");
-    expect(css).toContain("@media (max-width: 48rem)");
-    expect(css).toContain("prefers-reduced-motion: no-preference");
+    expect(css).toMatch(/@media\s*\(max-width:\s*48rem\)/);
+    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*no-preference\)/);
     expect(css).not.toContain("@import");
     expect(css).not.toContain("https://");
-    // Scoping every Display text rule away from the content leaves (late
-    // font swap became mobile LCP) raised the cap from 12000: it costs
-    // ~600 bytes of :not(.content-theme) guards. Still no @import, no remote
-    // URLs, still one hand-readable file.
-    expect(css.length).toBeLessThan(13000);
+    // Focus ring: authored source and served sheet agree, widths come from the
+    // generated roles (2px width, 3px offset).
+    expect(source).toMatch(
+      /\.base-theme :focus-visible\s*\{\s*outline:\s*var\(--focus-width\) solid var\(--focus-ring\);\s*outline-offset:\s*var\(--focus-offset\);/,
+    );
+    expect(css).toMatch(
+      /\.base-theme :focus-visible\s*\{\s*outline:\s*var\(--focus-width\) solid var\(--focus-ring\);\s*outline-offset:\s*var\(--focus-offset\);?\s*\}/,
+    );
+    const tokens = readFileSync(new URL("../public/theme-tokens.css", import.meta.url), "utf8");
+    expect(tokens).toMatch(/--focus-width:\s*2px/);
+    expect(tokens).toMatch(/--focus-offset:\s*3px/);
+    expect(source).not.toContain("@import");
+    expect(source).not.toContain("https://");
+    // Keep the original strict ceiling, including generated kit roles.
+    // Shared type roles also ship in styles.css under its unchanged budget.
+    expect(Buffer.byteLength(css, "utf8")).toBeLessThan(13000);
   });
 
   it("crops the lockup to its mark on narrow screens without shrinking account chrome", () => {
     const css = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
     expect(css).toMatch(
-      /@media \(max-width: 30rem\)\s*\{\s*\.base-theme \.brand img\s*\{\s*width: 50px; height: 50px; object-fit: cover; object-position: left center;\s*\}\s*\}/,
+      /@media\s*\(max-width:\s*30rem\)\s*\{\s*\.base-theme \.brand img\s*\{\s*width:\s*50px;\s*height:\s*50px;\s*object-fit:\s*cover;\s*object-position:\s*left center;?\s*\}\s*\}/,
     );
-    expect(css).toContain(".base-theme .who { max-width: 9rem; }");
+    expect(css).toMatch(/\.base-theme \.who\s*\{\s*max-width:\s*9rem;?\s*\}/);
     expect(render()).toContain('src="/logo.svg" width="180" height="50"');
   });
 
-  it("keeps the primary .btn:hover lift on the brand token", () => {
-    // The brightness lift is the entire hover affordance: rest and hover
-    // share background var(--brand) and color var(--paper), so deleting or
-    // inverting the filter leaves the join and RSVP CTAs with no visible
-    // hover change. Pin the exact lift and its direction here; the
-    // acceptance file owns only the brand-derivation shape.
+  it("uses the kit hover and on-accent roles for the primary button", () => {
     const css = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
     const hovers = css.match(/\.base-theme \.btn:hover\s*\{[^}]*\}/g) ?? [];
     expect(hovers).toHaveLength(1);
-    expect(hovers[0]).toContain("var(--brand)");
-    expect(hovers[0]).toContain("filter: brightness(1.1)");
+    expect(hovers[0]).toContain("var(--accent-hi)");
+    expect(hovers[0]).toContain("var(--on-accent)");
+    expect(hovers[0]).not.toContain("filter:");
     const rests = css.match(/\.base-theme \.btn\s*\{[^}]*\}/g) ?? [];
     expect(rests.length).toBeGreaterThanOrEqual(1);
     for (const rest of rests) {

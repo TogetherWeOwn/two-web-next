@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
@@ -11,6 +22,7 @@ import {
   METRIC,
   runCommand,
   summarizeProfile,
+  summary,
   validateBudget,
   validateEvidence,
   validateUpload,
@@ -100,6 +112,11 @@ const work = (us) =>
     [2, 1000],
   ]);
 const buf = (p) => Buffer.from(JSON.stringify(p));
+function reversalProfile(count = 50, indices = [1], reversalUs = 2) {
+  return profile(
+    Array.from({ length: count }, (_, i) => [5, indices.includes(i) ? -reversalUs : 2000]),
+  );
+}
 
 function multipart({ metadata, parts = { "index.js": "export default {}" } }) {
   const b = "----testboundary123";
@@ -195,6 +212,8 @@ describe("summarizeProfile", () => {
       windowMs: 105,
       unsampledMs: 0,
       samples: 5,
+      reversals: 0,
+      maxReversalUs: 0,
     });
   });
   test("GC, program/wrapper and request frames all count as non-idle", () => {
@@ -223,12 +242,258 @@ describe("summarizeProfile", () => {
     assert.equal(s[METRIC], 184.281);
   });
   test("rejects sampled time exceeding window by more than 1ms", () => {
-    const p = work(50000);
+    const p = profile([
+      [5, 1000],
+      [5, 50000],
+    ]);
     p.endTime -= 1001;
-    assert.throws(() => summarizeProfile(p), /Incomplete CPU profile timing/);
+    assert.throws(() => summarizeProfile(p), {
+      message: "Invalid CPU profile sample: timestamp outside profile window at sample 1",
+    });
+  });
+  test("accepts the retained 86-sample profile shape with one -2 us reversal", () => {
+    // Numeric timing and frame classes from the failing cold-1 profile in run 42385737608.
+    const timeDeltas = [
+      38336, 9772, 1064, 1066, 1063, 1063, 1070, 1073, 1057, 1062, 1069, 1065, 1062, 1063, 1088,
+      1061, 1061, 1065, 1066, 1064, 1063, 1059, 1063, 1064, 1069, 1066, 1064, 1064, 1066, 1068,
+      1064, 1063, 1065, 1072, 1058, 1063, 1063, 1061, 1065, 1064, 1065, 1065, 1065, 1067, 1062,
+      1063, 1066, 1062, 1066, 1067, 1081, 1072, 1068, 1081, 1079, 1081, 1083, 1084, 1068, 1082,
+      1064, 1069, 1066, 77, 984, 1060, 1066, 1064, -2, 30, 1025, 1061, 1071, 1062, 1066, 1064, 1074,
+      1066, 1073, 119, 948, 1063, 1385, 1068, 1064, 1062,
+    ];
+    const p = profile(
+      timeDeltas.map((delta, i) => [i === 0 ? 2 : [14, 50, 58, 65, 82].includes(i) ? 3 : 5, delta]),
+      { start: 2601042521 },
+    );
+    p.endTime = 2601184460;
+    assert.deepEqual(summarizeProfile(p), {
+      [METRIC]: 95.414,
+      sampledMs: 133.75,
+      idleMs: 38.336,
+      gcMs: 5.682,
+      windowMs: 141.939,
+      unsampledMs: 8.189,
+      samples: 86,
+      reversals: 1,
+      maxReversalUs: 2,
+    });
+  });
+  test("sorts a -2 us reversal before idle and GC attribution without mutating the profile", () => {
+    const p = reversalProfile();
+    p.samples[0] = 2;
+    p.samples[1] = 3;
+    p.endTime += 15393;
+    const before = clone(p);
+    assert.deepEqual(summarizeProfile(p), {
+      [METRIC]: 97.996,
+      sampledMs: 97.998,
+      idleMs: 0.002,
+      gcMs: 1.998,
+      windowMs: 113.391,
+      unsampledMs: 15.393,
+      samples: 50,
+      reversals: 1,
+      maxReversalUs: 2,
+    });
+    assert.deepEqual(p, before);
+  });
+  test("stable timestamp ties charge the first original sample and keep the raw delta sum", () => {
+    const p = reversalProfile(100, [1, 99]);
+    p.samples[1] = 2;
+    p.timeDeltas[2] = 0;
+    p.samples[2] = 3;
+    // The final reversal leaves the last raw timestamp below the sorted maximum.
+    p.endTime = p.startTime + p.timeDeltas.reduce((sum, delta) => sum + delta, 0) + 2;
+    const s = summarizeProfile(p);
+    assert.equal(s.sampledMs, 193.996);
+    assert.equal(s.idleMs, 1.998);
+    assert.equal(s.gcMs, 0);
+    assert.equal(s[METRIC], 192);
+    assert.equal(s.unsampledMs, 0);
+    assert.equal(s.reversals, 2);
+    assert.equal(s.maxReversalUs, 2);
+  });
+  test("a reversed idle tail does not reject valid work when raw sampled time is below idle", () => {
+    const p = profile([
+      ...Array.from({ length: 48 }, (_, i) => [5, i === 0 ? 1 : 0]),
+      [2, 1000],
+      [5, -1000],
+    ]);
+    p.endTime = p.startTime + 1001;
+    const s = summarizeProfile(p);
+    assert.equal(s[METRIC], 0.001);
+    assert.equal(s.sampledMs, 0.001);
+    assert.equal(s.idleMs, 1);
+    assert.equal(s.unsampledMs, 0);
+  });
+  for (const [delta, message] of [
+    [-1001, "reversal 1001 us exceeds 1000 us"],
+    [-1, "reversal count 1 exceeds 0"],
+  ]) {
+    test(`absolute timestamp rounding cannot hide ${message}`, () => {
+      const p = profile(
+        [
+          [5, 2048],
+          [5, delta],
+        ],
+        { start: 2 ** 63 },
+      );
+      p.endTime = p.startTime + 4096;
+      assert.throws(() => summarizeProfile(p), {
+        message: `Invalid CPU profile sample: ${message} at sample 1`,
+      });
+    });
+  }
+  test("relative attribution preserves allowed reversals and idle intervals at a large origin", () => {
+    for (const steps of [
+      [
+        [5, 2048],
+        [2, 1000],
+      ],
+      [[5, 2048], [3, -1000], ...Array.from({ length: 48 }, () => [5, 0])],
+    ]) {
+      const ordinary = profile(steps, { start: 0 });
+      ordinary.endTime = 4096;
+      const large = { ...ordinary, startTime: 2 ** 63, endTime: 2 ** 63 + 4096 };
+      assert.deepEqual(summarizeProfile(large), summarizeProfile(ordinary));
+    }
+  });
+  for (const steps of [
+    [
+      [5, 4096],
+      [5, 1],
+    ],
+    [
+      [5, 0],
+      [5, -1],
+    ],
+  ]) {
+    test(`absolute timestamp rounding cannot hide a window escape of ${steps[1][1]} us`, () => {
+      const p = profile(steps, { start: 2 ** 63 });
+      p.endTime = p.startTime + 4096;
+      assert.throws(() => summarizeProfile(p), {
+        message: "Invalid CPU profile sample: timestamp outside profile window at sample 1",
+      });
+    });
+  }
+  test("accepts a reversal of exactly 1000 us", () => {
+    const s = summarizeProfile(reversalProfile(50, [1], 1000));
+    assert.equal(s.reversals, 1);
+    assert.equal(s.maxReversalUs, 1000);
+    assert.equal(s.sampledMs, 97);
+  });
+  test("rejects a reversal over 1000 us with its sample index", () => {
+    assert.throws(() => summarizeProfile(reversalProfile(50, [1], 1001)), {
+      message: "Invalid CPU profile sample: reversal 1001 us exceeds 1000 us at sample 1",
+    });
+  });
+  for (const [count, indices, allowed] of [
+    [49, [1], 0],
+    [100, [1, 3, 5], 2],
+    [149, [1, 3, 5], 2],
+    [200, [1, 3, 5, 7], 3],
+    [100, Array.from({ length: 50 }, (_, i) => i * 2 + 1), 2],
+  ]) {
+    test(`rejects ${indices.length} reversals in ${count} samples (limit ${allowed})`, () => {
+      assert.throws(() => summarizeProfile(reversalProfile(count, indices)), {
+        message: `Invalid CPU profile sample: reversal count ${allowed + 1} exceeds ${allowed} at sample ${indices[allowed]}`,
+      });
+    });
+  }
+  test("accepts three reversals at the 150-sample boundary and reports the largest", () => {
+    const p = reversalProfile(150, [1, 3, 5]);
+    p.timeDeltas[3] = -10;
+    const s = summarizeProfile(p);
+    assert.equal(s.reversals, 3);
+    assert.equal(s.maxReversalUs, 10);
+    assert.equal(s.sampledMs, 293.986);
+  });
+  test("rejects timestamps below the window without clamping", () => {
+    const p = reversalProfile();
+    p.timeDeltas[0] = -2;
+    assert.throws(() => summarizeProfile(p), {
+      message: "Invalid CPU profile sample: timestamp outside profile window at sample 0",
+    });
+  });
+  test("rejects timestamps above the window even within the old 1000 us tolerance", () => {
+    const p = work(50000);
+    p.endTime -= 1;
+    assert.throws(() => summarizeProfile(p), {
+      message: "Invalid CPU profile sample: timestamp outside profile window at sample 1",
+    });
+  });
+  test("accepts timestamps on both inclusive window boundaries", () => {
+    assert.equal(
+      summarizeProfile(
+        profile([
+          [5, 0],
+          [5, 1000],
+        ]),
+      ).sampledMs,
+      1,
+    );
   });
   test("rejects idle-only profile", () => {
     assert.throws(() => summarizeProfile(profile([[2, 5000]])), /Incomplete CPU profile timing/);
+  });
+  for (const [name, field, value, message] of [
+    [
+      "non-integer node id",
+      "samples",
+      1.5,
+      "Invalid CPU profile sample: non-integer node id at sample 1 (1.5)",
+    ],
+    ["unknown node", "samples", 999, "Invalid CPU profile sample: unknown node 999 at sample 1"],
+    [
+      "non-finite timeDelta",
+      "timeDeltas",
+      Infinity,
+      "Invalid CPU profile sample: non-finite timeDelta at sample 1 (Infinity)",
+    ],
+    [
+      "excess reversal count",
+      "timeDeltas",
+      -5,
+      "Invalid CPU profile sample: reversal count 1 exceeds 0 at sample 1",
+    ],
+  ]) {
+    test(`names ${name} and the offending sample index`, () => {
+      const p = work(50000);
+      p[field][1] = value;
+      assert.throws(() => summarizeProfile(p), { message });
+    });
+  }
+  test("still rejects the NaN delta regression without rendering it as null", () => {
+    const p = work(50000);
+    p.timeDeltas[0] = NaN;
+    assert.throws(() => summarizeProfile(p), {
+      message: "Invalid CPU profile sample: non-finite timeDelta at sample 0 (NaN)",
+    });
+  });
+  test("reports the first failing class in sample validation order", () => {
+    const p = work(50000);
+    p.samples[0] = "5";
+    p.timeDeltas[0] = -5;
+    assert.throws(() => summarizeProfile(p), {
+      message: 'Invalid CPU profile sample: non-integer node id at sample 0 ("5")',
+    });
+    p.samples[0] = 999;
+    assert.throws(() => summarizeProfile(p), {
+      message: "Invalid CPU profile sample: unknown node 999 at sample 0",
+    });
+  });
+  test("bounds JSON-rendered values and falls back for unstringifiable values", () => {
+    const p = work(50000);
+    for (const [value, rendered] of [
+      ["x".repeat(100), JSON.stringify("x".repeat(100)).slice(0, 64)],
+      [undefined, "undefined"],
+      [1n, "1"],
+    ]) {
+      p.timeDeltas[0] = value;
+      assert.throws(() => summarizeProfile(p), {
+        message: `Invalid CPU profile sample: non-finite timeDelta at sample 0 (${rendered})`,
+      });
+    }
   });
   const bad = {
     "null profile": () => null,
@@ -390,6 +655,33 @@ describe("validateEvidence verdict boundaries", () => {
       }
     });
   }
+  test("a final reversal after an idle tail cannot hide a startup-budget breach", () => {
+    const p = profile(
+      [
+        ...Array.from({ length: 48 }, (_, i) => [5, i === 0 ? 42500 : 14000]),
+        [2, 1000],
+        [5, -1000],
+      ],
+      { start: 0 },
+    );
+    p.endTime = 701500;
+    const s = summarizeProfile(p);
+    assert.equal(s[METRIC], 700.5);
+    assert.equal(s.sampledMs, 700.5);
+    assert.equal(s.idleMs, 1);
+    assert.equal(s.unsampledMs, 0);
+    const bufs = [buf(work(50000)), buf(p), buf(work(60000))];
+    const ev = makeEvidence(bufs);
+    assert.equal(ev.maximumMs, 700.5);
+    assert.equal(ev.status, "fail");
+    assert.equal(validateEvidence(ev, IDENTITY, bufs, BUDGET), "fail");
+    ev.maximumMs = 699.5;
+    ev.status = "warn";
+    assert.throws(
+      () => validateEvidence(ev, IDENTITY, bufs, BUDGET),
+      /Incorrect local startup verdict/,
+    );
+  });
   test("a low maximum run cannot hide behind low others and vice versa", () => {
     const bufs = threeBufs(399999, 399999, 400000);
     assert.equal(validateEvidence(makeEvidence(bufs), IDENTITY, bufs, BUDGET), "warn");
@@ -524,6 +816,16 @@ describe("validateEvidence strictness", () => {
     check((e) => {
       e.runs[0].measurement.samples += 1;
     }, /Mismatched numeric profile evidence/));
+  for (const field of ["reversals", "maxReversalUs"]) {
+    test(`altered measurement ${field}`, () =>
+      check((e) => {
+        e.runs[0].measurement[field] += 1;
+      }, /Mismatched numeric profile evidence/));
+    test(`missing measurement ${field}`, () =>
+      check((e) => {
+        delete e.runs[0].measurement[field];
+      }, /Mismatched numeric profile evidence/));
+  }
   test("altered maximum", () =>
     check((e) => {
       e.maximumMs = 1;
@@ -555,7 +857,7 @@ describe("validateEvidence strictness", () => {
     ev.runs[0].profileSha256 = sha256(b[0]);
     assert.throws(
       () => validateEvidence(ev, IDENTITY, b, BUDGET),
-      /Invalid CPU profile sample\/delta pair/,
+      /Invalid CPU profile sample: timestamp outside profile window at sample 0/,
     );
   });
   test("empty profile buffer", () => {
@@ -708,6 +1010,28 @@ describe("collect orchestration", () => {
     const bufs = ev.runs.map((r) => readFileSync(join(h.outdir, r.profile)));
     assert.equal(validateEvidence(ev, ev.identity, bufs, BUDGET), "warn");
   });
+  test("retains, validates and summarizes reversal diagnostics for each cold run", async () => {
+    const h = harness({
+      profiles: [reversalProfile(), reversalProfile(150, [1, 3, 5], 10), work(50000)],
+    });
+    const ev = await collect({ outdir: h.outdir, budget: BUDGET, identity: {}, cli, run: h.run });
+    assert.equal(h.calls.length, 4);
+    const bufs = ev.runs.map((r) => readFileSync(join(h.outdir, r.profile)));
+    assert.equal(validateEvidence(ev, ev.identity, bufs, BUDGET), "pass");
+    for (const [i, reversals, maxReversalUs] of [
+      [0, 1, 2],
+      [1, 3, 10],
+      [2, 0, 0],
+    ]) {
+      const numeric = JSON.parse(readFileSync(join(h.outdir, `cold-${i + 1}.json`), "utf8"));
+      assert.deepEqual(numeric, ev.runs[i]);
+      assert.equal(numeric.measurement.reversals, reversals);
+      assert.equal(numeric.measurement.maxReversalUs, maxReversalUs);
+      assert(
+        summary(ev).includes(`Cold ${i + 1}: ${reversals} reversals; largest ${maxReversalUs} us.`),
+      );
+    }
+  });
   test("fail verdict at 700 ms", async () => {
     const h = harness({ profiles: [work(10000), work(700000), work(10000)] });
     const ev = await collect({ outdir: h.outdir, budget: BUDGET, identity: {}, cli, run: h.run });
@@ -754,7 +1078,7 @@ describe("collect orchestration", () => {
     const h = harness({ profiles: [bad, work(1), work(1)] });
     await assert.rejects(
       collect({ outdir: h.outdir, budget: BUDGET, identity: {}, cli, run: h.run }),
-      /Invalid CPU profile sample\/delta pair/,
+      /Invalid CPU profile sample: unknown node 999 at sample 0/,
     );
     assert.equal(h.calls.length, 2);
   });
@@ -821,6 +1145,94 @@ describe("collect orchestration", () => {
   });
 });
 
+async function withSelftestEvidence(
+  cwd,
+  run,
+  evidenceDir = process.env.WORKER_STARTUP_SELFTEST_EVIDENCE_DIR,
+) {
+  try {
+    return await run();
+  } catch (error) {
+    try {
+      if (evidenceDir) {
+        mkdirSync(evidenceDir, { recursive: true });
+        for (const file of readdirSync(cwd, { withFileTypes: true })) {
+          if (
+            file.isFile() &&
+            (/^cold-.*\.(cpuprofile|json)$/.test(file.name) || file.name === "checkpoint.json")
+          )
+            copyFileSync(join(cwd, file.name), join(evidenceDir, file.name));
+        }
+      }
+    } catch {
+      // Retention is best-effort and must not replace the collection failure.
+      process.stderr.write("Could not retain startup selftest evidence\n");
+    }
+    throw error;
+  }
+}
+
+describe("selftest evidence retention", () => {
+  test("copies only regular allowlisted files and rethrows the original error", async () => {
+    const cwd = mkdtempSync(join(tmp, "retention-source-"));
+    const evidenceDir = join(tmp, "retention-output", "nested");
+    const allowed = ["cold-1.cpuprofile", "cold-2.cpuprofile", "cold-1.json", "checkpoint.json"];
+    for (const file of [
+      ...allowed,
+      ".env",
+      ".env.local",
+      "empty.env",
+      "owned-runtime",
+      "worker.bundle",
+      "control.bundle",
+      "control.cpuprofile",
+      "report.json",
+      "cold-1.json.env",
+    ])
+      writeFileSync(join(cwd, file), `fixture ${file}`);
+    mkdirSync(join(cwd, "cold-directory.json"));
+    writeFileSync(join(cwd, "cold-directory.json", "nested.json"), "not evidence");
+    symlinkSync(join(cwd, ".env"), join(cwd, "cold-link.json"));
+    const original = new Error("original collection failure");
+    await assert.rejects(
+      withSelftestEvidence(
+        cwd,
+        async () => {
+          throw original;
+        },
+        evidenceDir,
+      ),
+      (error) => error === original,
+    );
+    assert.deepEqual(readdirSync(evidenceDir).sort(), [...allowed].sort());
+    for (const file of allowed)
+      assert.deepEqual(readFileSync(join(evidenceDir, file)), readFileSync(join(cwd, file)));
+  });
+  test("does not create evidence on success", async () => {
+    const evidenceDir = join(tmp, "retention-success");
+    const result = {};
+    assert.equal(await withSelftestEvidence(tmp, async () => result, evidenceDir), result);
+    assert.equal(existsSync(evidenceDir), false);
+  });
+  test("retention disabled or failing still rethrows the original error", async () => {
+    const original = new Error("original collection failure");
+    const notDirectory = join(tmp, "retention-not-directory");
+    writeFileSync(notDirectory, "fixture");
+    for (const evidenceDir of ["", notDirectory]) {
+      await assert.rejects(
+        withSelftestEvidence(
+          tmp,
+          async () => {
+            throw original;
+          },
+          evidenceDir,
+        ),
+        (error) => error === original,
+      );
+    }
+  });
+});
+
 test("pinned real Wrangler loader cannot restore ignored dotenv runtime overrides", {
   timeout: 60000,
 }, async () => {
@@ -853,18 +1265,20 @@ test("pinned real Wrangler loader cannot restore ignored dotenv runtime override
   assert.equal(existsSync(marker), true, "control must execute the owned override");
   rmSync(marker);
   const calls = [];
-  const evidence = await collect({
-    outdir: cwd,
-    budget: BUDGET,
-    identity: {},
-    cli,
-    run: async (command, args, options) => {
-      calls.push({ command, args });
-      if (args.includes("deploy")) {
-        writeFileSync(args[args.indexOf("--outfile") + 1], loaderUpload);
-      } else await runCommand(command, args, { ...options, cwd });
-    },
-  });
+  const evidence = await withSelftestEvidence(cwd, () =>
+    collect({
+      outdir: cwd,
+      budget: BUDGET,
+      identity: {},
+      cli,
+      run: async (command, args, options) => {
+        calls.push({ command, args });
+        if (args.includes("deploy")) {
+          writeFileSync(args[args.indexOf("--outfile") + 1], loaderUpload);
+        } else await runCommand(command, args, { ...options, cwd });
+      },
+    }),
+  );
   assert.equal(existsSync(marker), false, "ignored dotenv must not change the runtime");
   assert.equal(evidence.runs.length, 3);
   assertCommands(evidence.identity.commands, calls, cwd);

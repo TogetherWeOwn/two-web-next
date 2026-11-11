@@ -3,6 +3,7 @@
 // The combined implementation must wire this command into browser-enabled CI.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash, X509Certificate } from "node:crypto";
 import { mkdtemp, readFile, rm, mkdir } from "node:fs/promises";
 import { createServer } from "node:https";
 import { tmpdir } from "node:os";
@@ -15,12 +16,15 @@ import {
   OTHER_PROFILE,
   kitMemberAuthFixture,
   memberAuthRenderers,
+  restoredWriteCookie,
 } from "../test/fixtures/kit-member-auth.ts";
 
 let browser;
 let render;
 let scratch;
-const evidence = process.env.KIT_MEMBER_AUTH_EVIDENCE_DIR;
+const evidence =
+  process.env.KIT_MEMBER_AUTH_EVIDENCE_DIR ??
+  (process.env.CI ? "artifacts/a11y/restored-write" : undefined);
 const T0 = Date.UTC(2030, 0, 1);
 before(async () => {
   scratch = await mkdtemp(
@@ -51,7 +55,19 @@ before(async () => {
     { stdio: "ignore" },
   );
   render = await memberAuthRenderers();
-  browser = await chromium.launch({ headless: true });
+  // Trust only this fixture's ephemeral certificate so Chromium can exercise
+  // its real HTTP cache, rather than disabling caching for a TLS error.
+  const cert = new X509Certificate(await readFile(join(scratch, "cert.pem")));
+  const spki = createHash("sha256")
+    .update(cert.publicKey.export({ type: "spki", format: "der" }))
+    .digest("base64");
+  browser = await chromium.launch({
+    headless: true,
+    args: [
+      `--ignore-certificate-errors-spki-list=${spki}`,
+      "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost",
+    ],
+  });
   if (evidence) await mkdir(evidence, { recursive: true });
 });
 after(async () => {
@@ -97,7 +113,7 @@ const trace = () => {
   };
 };
 
-async function fixture(t, mode = "kit", storage = false) {
+async function fixture(t, mode = "kit", storage = false, httpCache = false) {
   const f = kitMemberAuthFixture(render);
   const requests = [];
   const forbidden = [];
@@ -147,6 +163,7 @@ async function fixture(t, mode = "kit", storage = false) {
         else if (
           ["/auth/status", "/logout", "/auth/recover"].includes(path) ||
           path === "/profile" ||
+          (mode === "kit" && (path === "/about" || path === "/faq")) ||
           path.startsWith("/members/") ||
           (mode === "kit" && path === BOARD)
         ) {
@@ -190,12 +207,20 @@ async function fixture(t, mode = "kit", storage = false) {
     assert.deepEqual(forbidden, [], "no live OAuth or unmodelled request is allowed");
     assert.deepEqual(errors, [], "fixture and page JavaScript must execute without errors");
   });
-  await context.route("**/*", (route) => {
-    const url = new URL(route.request().url());
-    if (url.origin === f.env.APP_URL) return route.continue();
-    forbidden.push(url.origin + url.pathname);
-    return route.abort();
-  });
+  // Playwright disables the HTTP cache while any route is installed, so the
+  // warm-cache cases observe outbound requests instead of intercepting them.
+  if (httpCache)
+    context.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.origin !== f.env.APP_URL) forbidden.push(url.origin + url.pathname);
+    });
+  else
+    await context.route("**/*", (route) => {
+      const url = new URL(route.request().url());
+      if (url.origin === f.env.APP_URL) return route.continue();
+      forbidden.push(url.origin + url.pathname);
+      return route.abort();
+    });
   if (storage)
     await context.addInitScript(() => {
       window.BroadcastChannel = undefined;
@@ -272,6 +297,16 @@ async function screenshots(page, prefix) {
   }
 }
 
+const NOTICE =
+  "You signed in again. Your earlier changes were not saved. Review and submit them again.";
+async function restoredShot(page, state, width) {
+  if (evidence)
+    await page.screenshot({
+      path: join(evidence, `restored-write-${state}-${width}.png`),
+      fullPage: true,
+    });
+}
+
 // Named suite: the executed-count verifier admits only cases under this title.
 describe("Kit member auth in Chromium", () => {
   for (const path of [BOARD, SELF, OTHER_PROFILE]) {
@@ -288,6 +323,131 @@ describe("Kit member auth in Chromium", () => {
       );
     });
   }
+
+  for (const [width, height] of [
+    [1280, 800],
+    [390, 844],
+  ]) {
+    test(`Kit restored-write notice appears once, first in main, then is consumed at ${width}x${height}`, async (t) => {
+      const f = await fixture(t);
+      const page = await f.page(SELF);
+      await page.setViewportSize({ width, height });
+      const notice = page.getByTestId("auth-error");
+      const url = f.env.APP_URL + SELF;
+      await page.goto(url);
+      assert.equal(await notice.count(), 0, "a clean visit shows no notice");
+      await restoredShot(page, "clean", width);
+      const [name, ...rest] = (await restoredWriteCookie()).split("=");
+      await f.context.addCookies([
+        {
+          name,
+          value: rest.join("="),
+          url: f.env.APP_URL,
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        },
+      ]);
+      const navigation = await page.goto(url);
+      assert.equal(await notice.count(), 1);
+      assert.equal(await notice.getAttribute("role"), "status");
+      assert.equal(await notice.innerText(), NOTICE);
+      assert.equal(
+        await notice.evaluate((node) => node === document.querySelector("main").firstElementChild),
+        true,
+      );
+      assert.ok(
+        (await navigation.headerValues("set-cookie")).some(
+          (c) => c.startsWith(`${name}=`) && /Max-Age=0/i.test(c),
+        ),
+        "the released document consumes the cookie",
+      );
+      await restoredShot(page, "notice", width);
+      await page.goto(url);
+      assert.equal(await notice.count(), 0, "the notice is shown once");
+      assert.equal((await f.context.cookies()).filter((c) => c.name === name).length, 0);
+      await restoredShot(page, "consumed", width);
+    });
+  }
+
+  // Public leaves are cacheable for an hour. A warm clean copy must never hide
+  // the notice, and a fetch that discards its shell must never consume it.
+  async function warmPublic(t, path) {
+    const f = await fixture(t, "kit", false, true);
+    await f.context.clearCookies(); // a session cookie would make the page uncacheable
+    const page = await f.page(path);
+    const link = (to) =>
+      Promise.all([
+        page.waitForNavigation(),
+        page.evaluate((href) => {
+          const a = document.createElement("a");
+          a.href = href;
+          document.body.append(a);
+          a.click();
+        }, to),
+      ]).then(([response]) => response);
+    const seen = (p) => f.requests.filter((r) => r.path === p).length;
+    return { f, page, link, seen };
+  }
+  const restore = async (f) => {
+    const [name, ...rest] = (await restoredWriteCookie()).split("=");
+    await f.context.addCookies([
+      {
+        name,
+        value: rest.join("="),
+        url: f.env.APP_URL,
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    ]);
+    return name;
+  };
+  for (const path of ["/about", "/faq"]) {
+    test(`Kit clean ${path} warms the public cache, then a restored cookie navigation shows the notice once`, async (t) => {
+      const { f, page, link, seen } = await warmPublic(t, path);
+      const other = path === "/about" ? "/faq" : "/about";
+      assert.equal(seen(path), 1);
+      await link(other);
+      const warm = seen(path);
+      await link(path);
+      assert.equal(seen(path), warm, "the clean second visit is served from the warm cache");
+      assert.equal(await page.getByTestId("auth-error").count(), 0);
+      await link(other);
+      const name = await restore(f);
+      const navigation = await link(path);
+      assert.equal(seen(path), warm + 1, "the server saw the cookie-bearing navigation");
+      const headers = navigation.headers();
+      assert.match(headers["cache-control"], /no-store/);
+      assert.match(headers.vary, /cookie/i);
+      assert.equal(await page.getByTestId("auth-error").count(), 1);
+      assert.equal(await page.getByTestId("auth-error").innerText(), NOTICE);
+      assert.ok(
+        (await navigation.headerValues("set-cookie")).some(
+          (c) => c.startsWith(`${name}=`) && /Max-Age=0/i.test(c),
+        ),
+      );
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await restoredShot(page, `public${path.replace("/", "-")}-notice`, 1280);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await restoredShot(page, `public${path.replace("/", "-")}-notice`, 390);
+      await link(other);
+      await link(path);
+      assert.equal(await page.getByTestId("auth-error").count(), 0, "the notice is shown once");
+    });
+  }
+
+  test("Kit shell-discarding fetch with a restored cookie gets no notice and leaves it pending", async (t) => {
+    const { f, page, link } = await warmPublic(t, "/about");
+    const name = await restore(f);
+    const body = await page.evaluate(() =>
+      fetch("/about", { headers: { accept: "text/html" } }).then((r) => r.text()),
+    );
+    assert.equal(body.includes('data-testid="auth-error"'), false);
+    assert.equal((await f.context.cookies()).filter((c) => c.name === name).length, 1);
+    await link("/about");
+    assert.equal(await page.getByTestId("auth-error").count(), 1);
+  });
 
   // The Hono cases are healthy controls, not substitute evidence for Kit. Both
   // modes execute the same minified bytes; Kit must obtain them from its own SSR.

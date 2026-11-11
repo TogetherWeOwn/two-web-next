@@ -21,6 +21,7 @@
 
 import type { Context } from "hono";
 import type { Env } from "./env";
+import { warnInvalidConfigOnce } from "./config-warn";
 import { readCappedBody } from "./csp-report-body";
 import { redactCspReportUri } from "./csp-report-uri";
 import { createLogBudget } from "./log-budget";
@@ -115,8 +116,17 @@ export function cspReportLogFields(report: CspReportFields): {
  */
 export function parseCspSampleRate(raw: string | undefined): number {
   if (raw === undefined) return 1.0;
-  const rate = Number.parseFloat(raw);
-  if (!Number.isFinite(rate)) return 1.0;
+  let rate: number;
+  try {
+    rate = Number.parseFloat(raw);
+  } catch {
+    rate = Number.NaN;
+  }
+  if (!Number.isFinite(rate)) {
+    if (typeof raw !== "string" || raw.trim() !== "")
+      warnInvalidConfigOnce("CSP_REPORT_SAMPLE_RATE");
+    return 1.0;
+  }
   return Math.min(1, Math.max(0, rate));
 }
 

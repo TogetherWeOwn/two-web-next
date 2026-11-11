@@ -18,6 +18,7 @@ import {
   type ParityTarget,
 } from "../kit-parity";
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
+import { expectSavedReviewActions } from "../saved-review-actions";
 import { postParityQaLogin } from "./parity-qa-login.mjs";
 
 // Kit journey parity (docs/kit-parity-gates.md): the journeys run
@@ -506,40 +507,54 @@ for (const target of targets) {
   test.describe(`${target.name}: hot-zone heatmaps keep their aggregate contract`, () => {
     const hotzonePaths = ["/hotzones", "/hotzones/joins", "/hotzones/voice", "/hotzones/games"];
 
-    test("index and signals serve aggregate grids with the manifest marker", async () => {
-      for (const path of hotzonePaths) {
-        const response = await api(target).get(path);
-        expect(response.status(), `${target.name} ${path}`).toBe(200);
-        expect(response.headers()["content-type"]).toContain("text/html");
-        // Renderer ownership is per target: Kit answers with the
-        // manifest-derived marker once enabled, Hono never carries one.
-        const derived = expectedKitMarker(path);
-        expect(derived, `manifest owns ${path} on Kit`).toBe("kit");
-        const expectedMarker = target.name === "kit" ? derived : null;
-        expect(response.headers()["x-two-renderer"] ?? null, `${target.name} ${path} marker`).toBe(
-          expectedMarker,
-        );
-        // The Kit target must answer from the Kit load, not the Hono
-        // fallback: pin the literal kit marker so Hono-vs-Hono cannot pass.
-        if (target.name === "kit")
+    test("index and signals serve aggregate grids with the manifest marker", async ({
+      playwright,
+    }) => {
+      // Earlier auth journeys rotate cookies into the shared jar. Pin the
+      // public-cache proof to a fresh guest context, not test execution order.
+      const guest = await playwright.request.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+      });
+      try {
+        for (const path of hotzonePaths) {
+          expect((await guest.storageState()).cookies).toEqual([]);
+          const response = await guest.get(path);
+          expect(response.status(), `${target.name} ${path}`).toBe(200);
+          expect(response.headers()["content-type"]).toContain("text/html");
+          // Renderer ownership is per target: Kit answers with the
+          // manifest-derived marker once enabled, Hono never carries one.
+          const derived = expectedKitMarker(path);
+          expect(derived, `manifest owns ${path} on Kit`).toBe("kit");
+          const expectedMarker = target.name === "kit" ? derived : null;
           expect(
             response.headers()["x-two-renderer"] ?? null,
-            `${path} Kit target answers from Kit`,
-          ).toBe("kit");
-        expect(response.headers()["cache-control"]).toBe("public, max-age=300");
-        const body = await response.text();
-        expect(scrubSecrets(body), `${target.name} ${path} secret scrub`).toEqual([]);
-        expect(body).toContain("<table>");
-        expect(body).toContain('<meta name="robots" content="noindex, follow"');
-        // Both renderers replace guest sign-in with the direct Discord action.
-        const header = body.match(/<header\b[^>]*>[\s\S]*?<\/header>/)?.[0];
-        expect(header).toContain('href="/discord"');
-        expect(header).toContain("Open Discord");
-        expect(header).not.toContain("Sign in with Discord");
-        expect(header).not.toContain("/join/discord");
-        expect(body).not.toContain("Sign out");
-        expect(body).not.toMatch(/discord_id|created_at/i);
-        expect(body).toContain('<link rel="canonical"');
+            `${target.name} ${path} marker`,
+          ).toBe(expectedMarker);
+          // The Kit target must answer from the Kit load, not the Hono
+          // fallback: pin the literal kit marker so Hono-vs-Hono cannot pass.
+          if (target.name === "kit")
+            expect(
+              response.headers()["x-two-renderer"] ?? null,
+              `${path} Kit target answers from Kit`,
+            ).toBe("kit");
+          expect(response.headers()["cache-control"]).toBe("public, max-age=300");
+          const body = await response.text();
+          expect(scrubSecrets(body), `${target.name} ${path} secret scrub`).toEqual([]);
+          expect(body).toContain("<table>");
+          expect(body).toContain('<meta name="robots" content="noindex, follow"');
+          // Both renderers replace guest sign-in with the direct Discord action.
+          const header = body.match(/<header\b[^>]*>[\s\S]*?<\/header>/)?.[0];
+          expect(header).toContain('href="/discord"');
+          expect(header).toContain("Open Discord");
+          expect(header).not.toContain("Sign in with Discord");
+          expect(header).not.toContain("/join/discord");
+          expect(body).not.toContain("Sign out");
+          expect(body).not.toMatch(/discord_id|created_at/i);
+          expect(body).toContain('<link rel="canonical"');
+        }
+      } finally {
+        await guest.dispose();
       }
       // Index links all three signals and ships the voice/games estimate
       // labels; signal pages carry the cross-signal nav.
@@ -574,6 +589,34 @@ for (const target of targets) {
       expect(gamesBody).toContain("games hot zone");
       expect(gamesBody).toContain("Season-independent seeded estimate of games activity");
       expect(gamesBody).toContain("estimates until bot event-store calibration");
+    });
+
+    test("cookie-bearing hot zones retain the renderer's cache privacy contract", async ({
+      playwright,
+    }) => {
+      const guest = await playwright.request.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+      });
+      try {
+        for (const path of hotzonePaths) {
+          // Even an unverified, non-session cookie makes Kit HTML private.
+          // Hono's aggregate route keeps its existing public-cache contract.
+          const response = await guest.get(path, { headers: { cookie: "parity-cache=1" } });
+          expect(response.status(), `${target.name} ${path}`).toBe(200);
+          expect(response.headers()["cache-control"]).toBe(
+            target.name === "kit" ? "private, no-store" : "public, max-age=300",
+          );
+          expect(response.headers()["vary"] ?? "").toMatch(/cookie/i);
+          const body = await response.text();
+          expect(scrubSecrets(body)).toEqual([]);
+          expect(body).toContain("<table>");
+          expect(body).not.toContain('data-testid="auth-error"');
+          expect(body).not.toContain("Sign out");
+        }
+      } finally {
+        await guest.dispose();
+      }
     });
 
     test("bad season answers 400 before any grid", async () => {
@@ -1660,6 +1703,100 @@ function archiveTurnEndsAt(i: number): string {
   return `2024-06-${String(i).padStart(2, "0")}T20:00:00Z`;
 }
 
+test("Kit saved review states at desktop and mobile widths", async ({ browser }) => {
+  test.setTimeout(60_000);
+  const target = targets.find((item) => item.name === "kit")!;
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const key = "01J00000000000000000000990";
+  const userId = "900000000000000844";
+  const bearer = `two_${randomBytes(32).toString("base64url")}`;
+  const hash = createHash("sha256").update(bearer).digest("hex");
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
+  const context = await browser.newContext({ baseURL: target.origin, ignoreHTTPSErrors: true });
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+        values (${hash}, ${hash}, ${userId}, 'Review fixture', true, true, ${new Date(Date.now() + 7_200_000)})`;
+      await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status)
+        values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
+          '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'draft')`;
+    });
+    await context.addCookies([
+      {
+        name: "__Host-two_session",
+        value: `${bearer}.${signature}`,
+        domain: new URL(target.origin).hostname,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    ]);
+    await context.route("**/*", (route) =>
+      new URL(route.request().url()).origin === target.origin
+        ? route.continue()
+        : route.abort("blockedbyclient"),
+    );
+    const page = await context.newPage();
+    for (const state of [
+      "ready",
+      "corrections",
+      "stale",
+      "unsaved",
+      "published",
+      "cancelled",
+      "success",
+    ]) {
+      await withSessionDb(async (sql) => {
+        await sql`update events set status = ${state === "published" || state === "success" ? "published" : state === "cancelled" ? "cancelled" : "draft"},
+          location = ${state === "corrections" ? "" : "Community voice"}, updated_at = now() where event_key = ${key}`;
+      });
+      const query =
+        state === "success"
+          ? "published=1"
+          : `review=1${state === "stale" ? "&publish_error=stale" : state === "unsaved" ? "&unsaved=1" : ""}`;
+      const response = await page.goto(`/e/${key}?${query}`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      await expect(
+        page.getByRole("heading", { name: "Community game night", exact: true }),
+      ).toBeVisible();
+      if (state === "success") {
+        await expect(page.getByTestId("event-published")).toBeVisible();
+        await expect(page.getByTestId("event-review")).toHaveCount(0);
+      } else {
+        await expect(page.getByTestId("event-review")).toBeVisible();
+        await expect(page.getByRole("button", { name: "RSVP", exact: true })).toBeDisabled();
+        if (state === "published" || state === "cancelled")
+          await expect(page.getByTestId("publish-reviewed-event")).toHaveCount(0);
+        else if (state === "corrections")
+          await expect(page.getByTestId("publish-reviewed-event")).toBeDisabled();
+        else await expect(page.getByTestId("publish-reviewed-event")).toBeEnabled();
+      }
+      if (state === "stale") await expect(page.getByTestId("event-review-error")).toBeFocused();
+      if (state === "unsaved") await expect(page.getByTestId("event-review-unsaved")).toBeVisible();
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await expectSavedReviewActions(page, state, viewport.width);
+        const name = `kit-review-${state}-${viewport.width}`;
+        const path = test.info().outputPath(`${name}.png`);
+        await page.screenshot({ path, fullPage: true });
+        await test.info().attach(name, { path, contentType: "image/png" });
+      }
+    }
+  } finally {
+    await context.close();
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key = ${key}`;
+      await sql`delete from web_session_grace where user_id = ${userId}`;
+      await sql`delete from web_sessions where user_id = ${userId}`;
+    });
+  }
+});
+
 async function seedArchiveTurns(): Promise<void> {
   requireGithubRunner();
   const url = requireTestDatabase(process.env.DATABASE_URL) as string;
@@ -1694,6 +1831,83 @@ test.describe("archive page turns prove successful paging and history", () => {
 
   test.afterAll(async () => {
     await sweepArchiveTurns();
+  });
+
+  test("Kit metadata-less archive pagination preserves the restored notice for navigation", async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({ baseURL: KIT_ORIGIN });
+    const name = "__Host-two_expired_write";
+    try {
+      // Model a client that omits Fetch Metadata, without removing the shipped
+      // island's explicit marker. No request may leave the local Kit fixture.
+      await context.route("**/*", (route) => {
+        if (new URL(route.request().url()).origin !== KIT_ORIGIN)
+          return route.abort("blockedbyclient");
+        const headers = { ...route.request().headers() };
+        for (const key of Object.keys(headers))
+          if (key.startsWith("sec-fetch-")) delete headers[key];
+        return route.continue({ headers });
+      });
+      // Read the newly seeded archive rows, not the isolate's earlier guest entry.
+      await context.addCookies([{ name: "e2e-archive-bypass", value: "1", url: KIT_ORIGIN }]);
+      const page = await context.newPage();
+      await page.goto("/events/past");
+      await expect(page.getByTestId("auth-error")).toHaveCount(0);
+      const raw = "restored|/events/past";
+      const signature = createHmac("sha256", kitFixtureSessionSecret())
+        .update(raw)
+        .digest("base64");
+      await context.addCookies([
+        {
+          name,
+          value: encodeURIComponent(`${raw}.${signature}`),
+          domain: new URL(KIT_ORIGIN).hostname,
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        },
+      ]);
+      await page.evaluate("window.__noticeSameDoc = 1");
+      const responsePromise = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === "/events/past" &&
+          new URL(response.url()).search === "?page=2",
+      );
+      await page.locator('a[data-archive-page]:has-text("Older")').click();
+      const pagination = await responsePromise;
+      expect(pagination.status()).toBe(200);
+      const paginationHeaders = await pagination.request().allHeaders();
+      expect(paginationHeaders["x-two-island"]).toBe("past-events");
+      expect(paginationHeaders["sec-fetch-dest"]).toBeUndefined();
+      expect(paginationHeaders["sec-fetch-mode"]).toBeUndefined();
+      expect((paginationHeaders["cookie"] ?? "").includes(`${name}=`)).toBe(true);
+      expect(await pagination.text()).not.toContain('data-testid="auth-error"');
+      await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "2");
+      await expect(page.getByTestId("past-events")).not.toHaveAttribute("aria-busy");
+      expect(await page.evaluate("window.__noticeSameDoc")).toBe(1);
+      expect(
+        (await context.cookies(KIT_ORIGIN)).filter((cookie) => cookie.name === name),
+      ).toHaveLength(1);
+      expect(
+        (await pagination.headerValues("set-cookie")).some((cookie) =>
+          cookie.startsWith(`${name}=`),
+        ),
+      ).toBe(false);
+
+      const navigation = await page.goto("/events/past");
+      expect(navigation?.status()).toBe(200);
+      expect(navigation?.headers()["x-two-renderer"]).toBe("kit");
+      await expect(page.getByTestId("auth-error")).toHaveCount(1);
+      expect(
+        (await context.cookies(KIT_ORIGIN)).filter((cookie) => cookie.name === name),
+      ).toHaveLength(0);
+      await page.goto("/events/past");
+      await expect(page.getByTestId("auth-error")).toHaveCount(0);
+    } finally {
+      await context.close();
+    }
   });
 
   for (const target of targets) {

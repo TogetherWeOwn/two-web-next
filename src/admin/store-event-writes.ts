@@ -28,6 +28,7 @@ import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
 import { retireApiPublicEventCache } from "../public-data/cache";
 import { audit, boundModeratorWrite, dirty, NotFoundError, type Actor } from "./store-shared";
+import { eventSaveBaseline, StaleSaveError } from "./save-baseline";
 
 export type EventRow = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
   /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
@@ -297,6 +298,7 @@ export async function updateEvent(
   actor: Actor,
   eventKey: string,
   input: EventFormInput,
+  expectedBaseline?: string,
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
   const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
     await db.transaction(async (tx) => {
@@ -309,6 +311,12 @@ export async function updateEvent(
         .where(eq(events.eventKey, eventKey))
         .for("update");
       if (!locked) throw new NotFoundError("event");
+      if (
+        expectedBaseline !== undefined &&
+        expectedBaseline !== (await eventSaveBaseline(locked))
+      ) {
+        throw new StaleSaveError(locked);
+      }
       return commitLockedUpdate(tx, actor, eventKey, locked, input);
     });
   // Committed: the edit is visible to guests on the next fetch (N6).
@@ -412,6 +420,13 @@ export async function patchEvent(
   return result;
 }
 
+// A locked write must invalidate review even within one millisecond or when
+// the worker clock moves backwards. Nonfinite imported stamps can be repaired.
+function nextUpdatedAt(row: EventRow, now = new Date()): Date {
+  const previous = row.updatedAt.getTime();
+  return new Date(Math.max(now.getTime(), Number.isFinite(previous) ? previous + 1 : 0));
+}
+
 async function commitLockedUpdate(
   tx: Writer,
   actor: Actor,
@@ -452,7 +467,7 @@ async function commitLockedUpdate(
       capacity: input.capacity,
       // A moderator edit must invalidate an agent's full-field stale write.
       agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
-      updatedAt: new Date(),
+      updatedAt: nextUpdatedAt(locked),
     })
     .where(eq(events.eventKey, eventKey))
     .returning();
@@ -547,7 +562,7 @@ async function shiftFutureChildren(
         startsAt: shift(child, "startsAt"),
         endsAt: shift(child, "endsAt"),
         agentVersion: child.agentGrantId === null ? child.agentVersion : child.agentVersion + 1,
-        updatedAt: new Date(),
+        updatedAt: nextUpdatedAt(child),
       })
       .where(eq(events.id, child.id))
       .returning();
@@ -583,6 +598,7 @@ export async function transitionEvent(
   actor: Actor,
   eventKey: string,
   to: "published" | "cancelled",
+  reviewedUpdatedAt?: string,
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
     await boundModeratorWrite(tx);
@@ -594,8 +610,24 @@ export async function transitionEvent(
       .where(eq(events.eventKey, eventKey))
       .for("update");
     if (!locked) throw new NotFoundError("event");
+    // Review publication must judge the saved revision after every earlier
+    // writer commits, before any transition, audit or write-back can happen.
+    if (
+      to === "published" &&
+      reviewedUpdatedAt !== undefined &&
+      (!Number.isFinite(locked.updatedAt.getTime()) ||
+        reviewedUpdatedAt !== locked.updatedAt.toISOString())
+    ) {
+      throw new ValidationError({ reviewed_updated_at: "The reviewed draft has changed." });
+    }
     const from = toEventStatus(locked.status);
     const target = nextStatus(from, to);
+    if (
+      to === "published" &&
+      (!Number.isFinite(locked.startsAt.getTime()) || !Number.isFinite(locked.endsAt.getTime()))
+    ) {
+      throw new ValidationError({ dates: "The saved event times cannot be read." });
+    }
     // Judge persisted dates only after the lock wait. Equality is still legal
     // for publication (legacy's strict isPast boundary); cancellation is exempt.
     if (to === "published" && locked.endsAt.getTime() < Date.now()) {
@@ -616,7 +648,7 @@ export async function transitionEvent(
       .set({
         status: target,
         agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
-        updatedAt: new Date(),
+        updatedAt: nextUpdatedAt(locked),
       })
       .where(eq(events.eventKey, eventKey))
       .returning();
@@ -676,7 +708,7 @@ export async function setRsvpOpen(
     if (locked.rsvpOpen === open) return { row: locked, writeBack: null };
     const [row] = await tx
       .update(events)
-      .set({ rsvpOpen: open, updatedAt: now })
+      .set({ rsvpOpen: open, updatedAt: nextUpdatedAt(locked, now) })
       .where(eq(events.eventKey, eventKey))
       .returning();
     if (!row) throw new Error("event RSVP toggle returned no row");

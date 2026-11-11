@@ -103,6 +103,35 @@ merits a finding", "Test rigor" and "Skip"; they never make an item
 reportable. Most of the Not Severe items are skipped outright, and any
 that is still reported is Non-severe.
 
+## Before you flag a security issue
+
+- Flag security only with a concrete exploit path at the exact reviewed commit:
+  name the attacker, the input they control, what they gain, and the file and
+  lines where protection is missing. Keep suspected vulnerabilities with an
+  unverified step on the private `SECURITY.md` reporting path above.
+- First check documented design: ADRs, README, module docs, and the PR body.
+  Behavior explicitly intended there is not a security finding; raise design
+  disagreement as a non-blocking question instead.
+- Trace earlier protection before claiming it is missing: middleware, size
+  caps, signature checks, server-only creation, and allowlists.
+- Hypothetical hardening without an exploit path ("could log", "might leak",
+  defence in depth) is Non-severe at most, categorized as analysis, not security;
+  the existing Skip rules still apply.
+
+Examples grounded in this repo:
+
+- **Real security finding, conditional regression (not present):** if a PR
+  changes the blank-allowlist branches in `src/roles.ts`'s `recomputeModerator`
+  and `isModerator` to grant moderator status, an ordinary guild member could
+  use their own Discord sign-in to gain moderator-only admin access. The join
+  callback stores that computed bit; `src/admin/guard.ts` trusts the session
+  row's bit. Both helpers currently deny a blank allowlist (README).
+- **False alarm:** a missing null-session check inside the profile read
+  renderer is not an auth bypass. `src/profiles/routes.tsx` registers
+  `registerGate` before read routes; `src/profiles/routes-gate.ts` redirects
+  guests and refuses non-members before `routes-reads.tsx` runs. Check that
+  registration order rather than asking each handler to duplicate the gate.
+
 ## Disproof pass (before posting any finding)
 
 Try to prove your own candidate wrong first:
@@ -120,6 +149,15 @@ Try to prove your own candidate wrong first:
    and lock contention). Intentional, documented behavior is not a defect.
 4. Pre-existing issues are out of scope unless this PR makes them newly
    reachable or worse; if so, explain the new reachability.
+
+## Dependency-bump PRs
+
+For dependency version-bump PRs (including Dependabot-style updates):
+
+- Evaluate the bump against the dependency's own changelog and this repository's actual usage.
+- Do not flag lockfile or transitive-dependency churn by itself. A dependency-induced correctness, compatibility, installation, build, output, or reliability regression remains reportable under this repository's existing finding rules, whether or not it involves a changed API this repository calls. Identify the affected repository call site or path, concrete trigger and wrong outcome, and supporting evidence at the reviewed commit.
+- Report a known security advisory introduced or left unfixed with its concrete impact. Existing security-review rules take precedence over this churn guidance: do not suppress a plausible security issue merely because it has no published advisory; apply the existing exploit-path and evidence requirements and state any unverified step.
+- Follow this repository's existing dependency policy for pins versus ranges; do not substitute reviewer preference.
 
 ## Test rigor
 

@@ -9,7 +9,8 @@ import { EVENT_ONGOING_TESTID } from "../../../src/islands/contracts";
 
 // Member metadata, RSVP and roster are escaped server leaves shared with Hono.
 // Mutation ownership and native island mounts stay unchanged; this route is csr=false.
-let { model }: { model: KitEventDetailModel } = $props();
+let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrite?: boolean } =
+  $props();
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
@@ -85,6 +86,7 @@ const detailIslands = [
   </form>
 {/snippet}
 <Shell
+  {restoredWrite}
   title={model.title}
   canonical={model.canonical}
   robots={model.robots ?? undefined}
@@ -100,6 +102,7 @@ const detailIslands = [
     <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
   </nav>
   {#if model.viewerModerator && model.review}{@html model.review.banner}{/if}
+  {#if model.viewerModerator && model.publishedNotice}{@html model.publishedNotice}{/if}
   <section class="event-hero" aria-label="Event overview">
     <p class="event-kicker">{model.game ?? "Community event"}</p>
     {#if model.isDraft}

@@ -288,6 +288,8 @@ describe("avatar load-failure fallback render", () => {
       new NodeURL("../public/event-theme.css", import.meta.url),
       "utf8",
     );
-    expect(eventCss).toContain(".event-attendee-mark { width: 3rem; height: 3rem; flex-shrink: 0;");
+    expect(eventCss).toMatch(
+      /\.event-attendee-mark\s*\{\s*width:\s*3rem;\s*height:\s*3rem;\s*flex-shrink:\s*0;/,
+    );
   });
 });

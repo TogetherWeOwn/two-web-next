@@ -24,6 +24,8 @@ const titleSha = /^e2e-staging deploy ([0-9a-f]{40})$/;
 // Soak window and red conclusions are pinned here so the workflow, the gate
 // and the tests share one definition.
 export const PROMOTION_SOAK_MS = 30 * 60 * 1000;
+export const STAGING_COVERAGE_NOTICE =
+  "::warning::actual staging coverage: UNKNOWN/INSUFFICIENT - no identity-bound interval receipt; legacy age/journey checks are not coverage proof; retain release holds";
 const RED_CONCLUSIONS = new Set(["failure", "timed_out"]);
 
 function runCompletedAtMs(run) {
@@ -86,7 +88,9 @@ export async function resolvePromotionSha({
   fetchImpl = fetch,
   pages = 5,
   nowMs = Date.now(),
+  log = console.warn,
 }) {
+  log(STAGING_COVERAGE_NOTICE);
   async function get(path) {
     const response = await fetchImpl(`https://api.github.com/repos/${repository}${path}`, {
       headers: {
@@ -172,6 +176,7 @@ export async function resolvePromotionSha({
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const input = (process.env.INPUT_SHA ?? "").replace(/\s+/g, "").toLowerCase();
+    if (input) console.warn(STAGING_COVERAGE_NOTICE);
     const sha =
       input ||
       (await resolvePromotionSha({

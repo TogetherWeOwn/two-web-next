@@ -229,12 +229,19 @@ describe("CSP report URI log confidentiality", () => {
     random.mockReturnValue(0.5);
     await post(payload, "0.5");
     await post(payload, "typo");
-    expect(warn).toHaveBeenCalledTimes(2);
-    for (const call of warn.mock.calls)
+    const configWarnings = warn.mock.calls.filter((call) => call[0] === "operator.config.invalid");
+    expect(configWarnings).toEqual([
+      ["operator.config.invalid", { variable: "CSP_REPORT_SAMPLE_RATE", action: "using_default" }],
+    ]);
+    const reportWarnings = warn.mock.calls.filter((call) => call[0] !== "operator.config.invalid");
+    expect(reportWarnings).toHaveLength(2);
+    for (const call of reportWarnings) {
+      expect(call[0]).toBe("csp.report.violation");
       expect(call[1]).toMatchObject({
         blocked_uri: "inline",
         document_uri: "https://next.example.test/document",
       });
+    }
     for (const marker of markers) expect(JSON.stringify(warn.mock.calls)).not.toContain(marker);
   });
 });

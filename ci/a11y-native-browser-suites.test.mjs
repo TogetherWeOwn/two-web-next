@@ -456,7 +456,7 @@ test("a11y job runs ci/event-native-share-browser.test.mjs unconditionally after
 
 const MEMBER_AUTH_FILE = "ci/kit-member-auth-browser.test.mjs";
 const MEMBER_AUTH_SUITE = "Kit member auth in Chromium";
-const MEMBER_AUTH_MIN = 15;
+const MEMBER_AUTH_MIN = 20;
 
 test("a11y job runs ci/kit-member-auth-browser.test.mjs unconditionally after Chromium and Kit installs", async () => {
   const step = steps.find(

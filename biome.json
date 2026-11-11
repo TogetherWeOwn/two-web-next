@@ -6,7 +6,14 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!!**/node_modules", "!!**/dist", "!!drizzle/meta", "!package-lock.json"]
+    "includes": [
+      "**",
+      "!!**/node_modules",
+      "!!**/dist",
+      "!!drizzle/meta",
+      "!package-lock.json",
+      "!test/fixtures/parity/hono-*"
+    ]
   },
   "formatter": {
     "indentStyle": "space",
@@ -46,6 +53,9 @@
     {
       "includes": [
         "assets/styles.css",
+        "assets/theme.css",
+        "public/theme-tokens.css",
+        "web/src/ember-theme.css",
         "assets/admin-rsvp-review.css",
         "public/styles.css",
         "public/admin-rsvp-review.css",
@@ -62,6 +72,11 @@
     },
     {
       "includes": ["public/islands/**", "ci/featured-proof/fixtures/**"],
+      "linter": { "enabled": false }
+    },
+    {
+      "includes": ["vendor/design-kit/**"],
+      "formatter": { "enabled": false },
       "linter": { "enabled": false }
     },
     {
@@ -82,7 +97,7 @@
       }
     },
     {
-      "includes": ["web/src/app.css"],
+      "includes": ["web/src/app.css", "web/src/ember-theme.css"],
       "css": { "parser": { "tailwindDirectives": true } }
     },
     {
