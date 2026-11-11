@@ -3,6 +3,7 @@
 // this file holds what at least two groups use. Re-exported from the barrel.
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import type { Env, Session } from "../env";
+import { warnInvalidConfigOnce } from "../config-warn";
 import { loginUrl, wallDateIso, wallTimeHm } from "../islands/contracts";
 import { safeNext } from "../join/service";
 import { safeRequestId } from "../request-log";
@@ -33,13 +34,17 @@ export const PUBLIC_EVENT_READS_PER_MINUTE = 60;
  * override).
  */
 export function publicReadBudget(env: Env): number {
+  const raw = env.E2E_PUBLIC_READ_BUDGET;
   let override: number;
   try {
-    override = Number(env.E2E_PUBLIC_READ_BUDGET);
+    override = Number(raw);
   } catch {
     override = Number.NaN;
   }
-  return Number.isInteger(override) && override > 0 ? override : PUBLIC_EVENT_READS_PER_MINUTE;
+  if (Number.isInteger(override) && override > 0) return override;
+  if (raw !== undefined && (typeof raw !== "string" || raw.trim() !== ""))
+    warnInvalidConfigOnce("E2E_PUBLIC_READ_BUDGET");
+  return PUBLIC_EVENT_READS_PER_MINUTE;
 }
 
 /** One client budget across public pages and feeds, before event or session reads. */

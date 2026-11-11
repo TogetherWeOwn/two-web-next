@@ -1,7 +1,7 @@
 import type { Context, Next } from "hono";
 import { KIT_FALLBACK_INLINE_STYLE, KIT_FALLBACK_STYLE_SHA256 } from "./ember-fallback-style";
 import type { Env } from "./env";
-import { imageHosts } from "./image-policy";
+import { operatorImageHosts } from "./config-warn";
 import { LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";
 
 export { KIT_FALLBACK_INLINE_STYLE, KIT_FALLBACK_STYLE_SHA256 };
@@ -176,7 +176,7 @@ export function securityHeadersFor(
   featuredImageHosts?: string,
 ): Array<[string, string]> {
   const framed = request.path === "/join" && ["GET", "HEAD"].includes(request.method);
-  const images = imageHosts(featuredImageHosts)
+  const images = operatorImageHosts(featuredImageHosts)
     .map((host) => `https://${host}`)
     .join(" ");
   // Only the inline-critical pages (/ plus about/faq/rules/privacy) emit an
