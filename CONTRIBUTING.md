@@ -52,9 +52,10 @@ The repository rulesets enforce the following on `main`:
 
 - `protect-main`: changes arrive through a pull request, the branch cannot be
   deleted or force-pushed, only squash merges are allowed, and `ci-ok`,
-  `gitleaks` and `e2e-ok` must pass on the exact head, and so must
-  `pr-size-gate` and the two review app checks, CodeRabbit and Devin
-  Review. No approving review is required.
+  `gitleaks` and `e2e-ok` must pass on the exact head, and so must the two
+  review app checks, CodeRabbit and Devin Review. No approving review is
+  required. `pr-size-gate` joins this list after the caller has reported on
+  the default branch (two-step ship; STANDARD.md).
 
   The journeys count only through the aggregator in e2e.yml: it fails when the
   scope job fails or the browser journeys fail or are cancelled, and passes a
