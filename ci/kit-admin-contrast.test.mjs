@@ -47,6 +47,19 @@ before(async () => {
   assert.equal(featured.kind, "ok");
   fixtures = [
     { name: "event-new", path: "/admin/events/new", data: buildEventCreateView() },
+    {
+      name: "event-new-populated",
+      path: "/admin/events/new",
+      data: buildEventCreateView({ accessibility_notes: "Step-free entrance." }),
+    },
+    {
+      name: "event-new-invalid",
+      path: "/admin/events/new",
+      data: buildEventCreateView(
+        { accessibility_notes: "Step-free entrance." },
+        { accessibility_notes: "Accessibility notes are too long." },
+      ),
+    },
     { name: "event-edit", path: `/admin/events/${eventRow.eventKey}`, data: { view: event.view } },
     { name: "featured-new", path: "/admin/featured/new", data: {} },
     { name: "featured-edit", path: "/admin/featured/7", data: { view: featured.view } },
@@ -127,7 +140,15 @@ after(async () => {
 // Named suite: the executed-count verifier admits only cases under this title.
 describe("Kit admin contrast", () => {
   for (const width of [1280, 390]) {
-    for (const name of ["event-new", "event-edit", "featured-new", "featured-edit", "dashboard"]) {
+    for (const name of [
+      "event-new",
+      "event-new-populated",
+      "event-new-invalid",
+      "event-edit",
+      "featured-new",
+      "featured-edit",
+      "dashboard",
+    ]) {
       test(`Kit admin contrast: ${name} at ${width}`, async () => {
         const f = fixtures.find((fixture) => fixture.name === name);
         const isDashboard = name === "dashboard";
@@ -183,7 +204,28 @@ describe("Kit admin contrast", () => {
               "help text is actually present",
             );
           }
-          if (name === "event-new") assert.equal(await page.locator("fieldset label").count(), 3);
+          if (name.startsWith("event-new")) {
+            assert.equal(await page.locator("fieldset label").count(), 3);
+            const notes = page.locator("#f-accessibility-notes");
+            assert.equal(await notes.count(), 1);
+            assert.equal(
+              await notes.inputValue(),
+              name === "event-new" ? "" : "Step-free entrance.",
+            );
+            if (name === "event-new-invalid") {
+              assert.equal(await notes.getAttribute("aria-invalid"), "true");
+              assert.equal(
+                await page
+                  .locator('[data-testid="form-errors"] a[href="#f-accessibility-notes"]')
+                  .count(),
+                1,
+              );
+              assert.equal(
+                (await page.locator("#f-accessibility-notes-error").textContent()).trim(),
+                "Accessibility notes are too long.",
+              );
+            }
+          }
           const axe = new AxeBuilder({ page });
           if (isDashboard) {
             // Card descriptions and footer only: the card heading links carry

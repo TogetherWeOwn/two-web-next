@@ -77,21 +77,34 @@ it("serializes the full Unicode boundary and participates in dirty-form protecti
 });
 
 it("retains the serialized notes through the real Hono validation response", async () => {
-  const touched = vi.fn(() => { throw new Error("Unexpected SQL"); });
+  const touched = vi.fn(() => {
+    throw new Error("Unexpected SQL");
+  });
   const db = Object.fromEntries(
     ["select", "insert", "update", "delete", "transaction", "execute"].map((key) => [key, touched]),
   ) as unknown as Db;
   const sessions = createMemorySessionStore();
   const cookie = await cookieFor(sessions, MODERATOR);
-  const app = new Hono().use("*", sameOrigin).route("/admin", adminApp({ sessionStore: sessions, db }));
+  const app = new Hono()
+    .use("*", sameOrigin)
+    .route("/admin", adminApp({ sessionStore: sessions, db }));
   const form = nativeForm(render({ ...values, title: "" }));
   expect(form.attrs.method).toBe("post");
   expect(form.attrs.action).toBe("/admin/events");
-  const response = await app.request("/admin/events", {
-    method: "POST",
-    headers: { cookie, origin: env.APP_URL, accept: "text/html", "content-type": "application/x-www-form-urlencoded" },
-    body: form.body,
-  }, { ...env, ADMIN_DB: db });
+  const response = await app.request(
+    "/admin/events",
+    {
+      method: "POST",
+      headers: {
+        cookie,
+        origin: env.APP_URL,
+        accept: "text/html",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: form.body,
+    },
+    { ...env, ADMIN_DB: db },
+  );
   expect(response.status).toBe(422);
   expect(response.headers.get("cache-control")).toContain("private");
   expect(response.headers.get("cache-control")).toContain("no-store");
@@ -108,11 +121,20 @@ it("retains the serialized notes through the real Hono validation response", asy
     ["Public​detail", "Remove control or invisible characters."],
   ] as const) {
     const invalid = nativeForm(render({ ...values, [field.name]: value }));
-    const rejected = await app.request("/admin/events", {
-      method: "POST",
-      headers: { cookie, origin: env.APP_URL, accept: "text/html", "content-type": "application/x-www-form-urlencoded" },
-      body: invalid.body,
-    }, { ...env, ADMIN_DB: db });
+    const rejected = await app.request(
+      "/admin/events",
+      {
+        method: "POST",
+        headers: {
+          cookie,
+          origin: env.APP_URL,
+          accept: "text/html",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: invalid.body,
+      },
+      { ...env, ADMIN_DB: db },
+    );
     expect(rejected.status).toBe(422);
     const rejectedHtml = await rejected.text();
     expect(summaryFragment(rejectedHtml)).toContain(message);
