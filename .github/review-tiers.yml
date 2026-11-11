@@ -1,0 +1,160 @@
+# Risk-tier map for tiered review (TogetherWeOwn/two-web-next).
+#
+# Classification: a pull request's tier is the highest tier of any changed
+# file. `sensitive` wins on overlap. Anything unmatched defaults to
+# `sensitive` (every new top-level path stays sensitive until classified).
+#
+# Content triggers escalate to `sensitive` regardless of path: a new or
+# changed public endpoint or input parsing; auth, authz or session handling;
+# crypto or keys; secrets or credentials; permission checks; tenant
+# isolation or personal data; SQL, schema or migrations; dependency or
+# lockfile changes; CI or workflow changes; weakened test assertions, deleted
+# tests or snapshots, or lowered gates in test files.
+#
+# Review per tier: low -> QA. ordinary -> QA. sensitive/unclassified ->
+# Security, then QA. QA verifies the author's `risk_tier` attestation and may
+# escalate any pull request. This file itself is always sensitive.
+#
+# When in doubt, leave a path unlisted (= sensitive). Do not broaden
+# low/ordinary to look productive; a small correct map beats a big wrong one.
+
+version: 1
+default_tier: sensitive # anything not matched below
+
+tiers:
+  # Allowlisted docs copy, static non-sensitive fixtures, and additive unit
+  # tests. Content triggers still escalate any of these to sensitive.
+  low:
+    - "README.md"
+    - "CHANGELOG.md"
+    - "CODE_OF_CONDUCT.md"
+    - "REVIEW.md"
+    - "ROADMAP.md"
+    - "SECURITY.md"
+    - "docs/**/*.md"
+    - "content/**/*.md"
+    - "src/privacy-content.ts" # GENERATED from content/privacy-policy-*.md
+    - "public/logo.svg"
+    - "public/favicon.svg"
+    - "public/favicon.ico"
+    - "public/og-1200x630.png"
+    - "public/fonts/**"
+    - "public/icons/**"
+    # Additive unit tests only. Content triggers still escalate weakened
+    # assertions, deleted tests/snapshots, or lowered gates in test files.
+    - "test/**/*.test.ts"
+  # Exactly audited modules with no untrusted input, sensitive output,
+  # permission check, persistence effect, or trust-boundary effect.
+  # Each entry is justified in the pull request that adds it; each was read
+  # and found to be static copy or a pure builder with no session, cookie,
+  # database, or network access:
+  # - src/about-content.ts: static about-page copy, no session/cookie/db.
+  # - src/faq-content.ts: static FAQ copy, no session/cookie/db.
+  # - src/rules-content.ts: static house-rules copy, no session/cookie/db.
+  # - src/security-txt.ts: pure builder for the RFC 9116 contact text; the
+  #   only input is the app origin from server config (no request input),
+  #   and the output is fixed contact/policy strings.
+  ordinary:
+    - "src/about-content.ts"
+    - "src/faq-content.ts"
+    - "src/rules-content.ts"
+    - "src/security-txt.ts"
+  sensitive:
+    # Review policy and CI, always sensitive (this file included).
+    - ".github/review-tiers.yml"
+    - ".github/workflows/**"
+    - ".github/CODEOWNERS"
+    - ".github/**"
+    # Dependency manifests, lockfiles, and install/build/gate scripts.
+    - "package.json"
+    - "package-lock.json"
+    - "web/package.json"
+    - "web/package-lock.json"
+    - "release-please-config.json"
+    - "bin/**"
+    - "ci/**"
+    - "sg-rules/**"
+    - "vendor/**"
+    # Test, e2e, and build configuration (gates, budgets, coverage floors).
+    - "vitest.config.ts"
+    - "biome.json"
+    - "tsconfig.json"
+    - "sgconfig.yml"
+    - "playwright.config.ts"
+    - "playwright.*.config.ts"
+    - "tier0/**"
+    - "e2e/**"
+    # Auth, session, OAuth, roles, and permission checks.
+    - "src/auth/**"
+    - "src/sessions.ts"
+    - "src/session-cookie.ts"
+    - "src/session-revocation.ts"
+    - "src/session-role-refresh.ts"
+    - "src/kit-session.ts"
+    - "src/auth-status.ts"
+    - "src/oauth-journeys.ts"
+    - "src/oauth-code-state-length.ts"
+    - "src/roles.ts"
+    - "src/route-ownership.ts"
+    # Public endpoints, routes, and input parsing (Hono and SvelteKit).
+    - "src/index.tsx"
+    - "src/pages.tsx"
+    - "src/screens/**"
+    - "src/admin/**"
+    - "src/events/**"
+    - "src/join/**"
+    - "src/profiles/**"
+    - "src/leaderboards/**"
+    - "src/agent-events/**"
+    - "src/mcp/**"
+    - "src/public-data/**"
+    - "src/bot/**"
+    - "src/hotzones/**"
+    - "src/islands/**"
+    - "src/kit-*.ts"
+    - "src/kit-*.tsx"
+    - "src/body-limit.ts"
+    - "src/up-body.ts"
+    - "src/media-type.ts"
+    - "web/**"
+    # Tenant isolation, personal data, access auditing, and erasure.
+    - "src/member-erasure.ts"
+    - "src/member-reads.ts"
+    - "src/access-log.ts"
+    - "src/privacy.ts"
+    - "src/privacy-history.ts"
+    # Database schema, migrations, and data access.
+    - "drizzle/**"
+    - "drizzle.config.ts"
+    - "migrations.lock"
+    - "src/db/**"
+    # Security headers, CSP, origin trust, throttling, and alerting.
+    - "src/headers.ts"
+    - "src/csp-report-body.ts"
+    - "src/csp-report-uri.ts"
+    - "src/csp-reports.ts"
+    - "src/trust-hosts.ts"
+    - "src/same-origin.ts"
+    - "src/fixture-origin.ts"
+    - "src/throttle.ts"
+    - "src/alerts.ts"
+    - "src/alert-probe.ts"
+    - "src/alert-probe-error.ts"
+    - "src/image-policy.ts"
+    - "src/featured-policy.ts"
+    # Jobs and queue workers (infrastructure and side effects).
+    - "src/jobs/**"
+    - "src/jobs-worker.ts"
+    # Runtime, network, and deploy configuration; secrets-adjacent files.
+    - "wrangler.jsonc"
+    - "wrangler.local.jsonc"
+    - "wrangler.jobs.jsonc"
+    - "src/env.ts"
+    - ".dev.vars.example"
+    - ".gitleaks.toml"
+    # Governance and tool-permission files.
+    - "AGENTS.md"
+    - "CONSTRAINTS.md"
+    - "CONTRIBUTING.md"
+    - ".claude/**"
+    - ".constraintsignore"
