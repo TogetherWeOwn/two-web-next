@@ -30,55 +30,63 @@ for (const [viewport, size] of VIEWPORTS) {
       // settle (scroll, fonts.load(), warm + reload + check()) still raced
       // first paint on the long privacy page (8741px vs 8727px, five flakes
       // in a row). The screenshot must prove the final brand rendering, so
-      // this suite serves the document with that one descriptor rewritten
-      // to swap in-test only (production CSS ships optional with no
-      // preload; the swap makes the end state — face metrics —
-      // deterministic). The rewrite is exact-match and fails loudly on
-      // content pages if the face signature ever changes.
+      // on content pages this suite registers the same woff2 face with
+      // font-display: swap through the FontFace API — in-test only; the
+      // served document and its CSP hash are untouched (a document
+      // rewrite invalidates the leaf CSS hash and blocks the inline
+      // stylesheet). A constructed face loads over font-src, and faces
+      // added later win for matching text, so painted text swaps to the
+      // brand metrics deterministically before capture. The exact-match
+      // anchor below fails loudly on content pages if the shipped face
+      // signature ever changes.
       const OPTIONAL_FACE =
         "font-family:Mona Sans Content;font-weight:200 900;font-stretch:75% 125%;font-display:optional";
-      const SWAP_FACE = OPTIONAL_FACE.replace("optional", "swap");
-      let sawContentFace = false;
-      await page.route(/.*/, async (route) => {
-        if (route.request().resourceType() !== "document") {
-          await route.continue();
-          return;
-        }
-        const response = await route.fetch();
-        const html = await response.text();
-        if (html.includes(OPTIONAL_FACE)) {
-          sawContentFace = true;
-          await route.fulfill({ response, body: html.split(OPTIONAL_FACE).join(SWAP_FACE) });
-        } else {
-          await route.fulfill({ response, body: html });
-        }
-      });
+      const LATIN_RANGE =
+        "U+0-FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD";
       const response = await page.goto(path);
       expect(response?.status()).toBe(200);
       await page.waitForLoadState("networkidle");
       const isContentPage = await page.evaluate(() =>
         Boolean(document.querySelector(".content-theme")),
       );
-      if (isContentPage) expect(sawContentFace).toBe(true);
-      await page.evaluate(async () => {
-        window.scrollTo(0, document.documentElement.scrollHeight);
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        window.scrollTo(0, 0);
-        if (document.querySelector(".content-theme")) {
-          await Promise.all([
-            document.fonts.load('700 16px "Mona Sans Content"', "Privacy"),
-            document.fonts.load('400 16px "Mona Sans Content"', "Privacy"),
-          ]);
-          const deadline = Date.now() + 10000;
-          while (!document.fonts.check('700 16px "Mona Sans Content"')) {
-            if (Date.now() > deadline) {
-              throw new Error("Mona Sans Content face never became available");
+      if (isContentPage) {
+        const sawContentFace = await page.evaluate(
+          (signature: string) => Boolean(document.head.textContent?.includes(signature)),
+          OPTIONAL_FACE,
+        );
+        expect(sawContentFace).toBe(true);
+      }
+      await page.evaluate(
+        async (args: { range: string }) => {
+          if (document.querySelector(".content-theme")) {
+            document.fonts.add(
+              new FontFace(
+                "Mona Sans Content",
+                'url("/fonts/mona-sans-latin-var.woff2") format("woff2")',
+                {
+                  weight: "200 900",
+                  stretch: "75% 125%",
+                  display: "swap",
+                  unicodeRange: args.range,
+                },
+              ),
+            );
+            await Promise.all([
+              document.fonts.load('700 16px "Mona Sans Content"', "Privacy"),
+              document.fonts.load('400 16px "Mona Sans Content"', "Privacy"),
+            ]);
+            const deadline = Date.now() + 10000;
+            while (!document.fonts.check('700 16px "Mona Sans Content"')) {
+              if (Date.now() > deadline) {
+                throw new Error("Mona Sans Content face never became available");
+              }
+              await new Promise((resolve) => setTimeout(resolve, 50));
             }
-            await new Promise((resolve) => setTimeout(resolve, 50));
           }
-        }
-        await document.fonts.ready;
-      });
+          await document.fonts.ready;
+        },
+        { range: LATIN_RANGE },
+      );
       await expect(page).toHaveScreenshot(`${name}-${viewport}.png`, {
         fullPage: true,
         mask: [page.locator("time")],
