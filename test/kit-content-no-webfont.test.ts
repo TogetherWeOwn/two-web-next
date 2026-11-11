@@ -1,12 +1,15 @@
-// Kit content leaves must not preload the Mona Sans webfont.
+// Kit content leaves render the display face through the optional content face
+// and must not preload the Mona Sans webfont.
 // Staging mobile LCP on /about, /faq, /rules and /privacy measured 2197–2255
-// ms against the 2000 ms budget while FCP sat at 1687–1750 ms: the display
-// webfont arrives after first paint and its swap re-lays-out the leaf, so the
-// largest text block repaints late and becomes LCP. The Hono shell
-// (src/page-shell.tsx) already skips the Mona Sans preload for theme "content";
-// the SvelteKit twin (web/src/lib/SiteMetadata.svelte) must agree, or enabling
-// the Kit routes reintroduces the same unused high-priority fetch on the same
-// mobile-LCP pages.
+// ms against the 2000 ms budget while FCP sat at 1687–1750 ms: the swap face
+// arrives after first paint and its swap re-lays-out the leaf, so the largest
+// text block repaints late and becomes LCP. The leaves now paint through a
+// content-only 'Mona Sans Content' face with font-display: optional over the
+// same woff2, unguarded display rules resolving through --font-display, and no
+// preload. The Hono shell (src/page-shell.tsx) already skips the Mona Sans
+// preload for theme "content"; the SvelteKit twin (web/src/lib/SiteMetadata.svelte)
+// must agree, or enabling the Kit routes reintroduces the same unused
+// high-priority fetch on the same mobile-LCP pages.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -85,6 +88,20 @@ export function renderMeta(props) {
   }
 }
 
+const stripComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, "");
+const rulesOf = (css: string): Array<{ selector: string; body: string }> =>
+  (stripComments(css).match(/[^{}]+{[^{}]*}/g) ?? []).map((rule) => ({
+    selector: rule.slice(0, rule.indexOf("{")).trim(),
+    body: rule.slice(rule.indexOf("{") + 1, -1),
+  }));
+const isDisplayBody = (body: string): boolean =>
+  body
+    .split(";")
+    .some(
+      (declaration) =>
+        /^\s*font(?:-family)?\s*:/.test(declaration) && declaration.includes("var(--font-display)"),
+    );
+
 describe("Kit content shell preloads no Mona Sans webfont", () => {
   let renderMeta: (props: { title: string; theme: Theme; leafCss?: string }) => string;
 
@@ -118,5 +135,51 @@ describe("Kit content shell preloads no Mona Sans webfont", () => {
       expect(html).toContain('rel="stylesheet" href="/theme.css"');
       expect(html).not.toContain("<style>");
     }
+  });
+
+  it("leaves no :not(.content-theme) guard on any display rule in the inlined leaf block", () => {
+    const displayRules = rulesOf(LEAF_CRITICAL_CSS).filter(
+      (rule) => !/^@font-face/.test(rule.selector) && isDisplayBody(rule.body),
+    );
+    // Counted per target (selector): the minifier merges rules that share a
+    // declaration once the guards are gone.
+    const targets = displayRules.flatMap((rule) =>
+      rule.selector.split(/,(?![^(]*\))/).map((part) => part.trim()),
+    );
+    expect(targets.length).toBeGreaterThanOrEqual(7);
+    expect(displayRules.filter((rule) => rule.selector.includes(":not(.content-theme)"))).toEqual(
+      [],
+    );
+  });
+
+  it("ships the content face with font-display: optional over the same file as the main face", () => {
+    const faces = [...stripComments(LEAF_CRITICAL_CSS).matchAll(/@font-face\s*\{([^}]*)\}/g)].map(
+      (match) => match[1] ?? "",
+    );
+    const faceOf = (family: string) =>
+      faces.find((body) => new RegExp(`font-family\\s*:\\s*["']?${family}["']?\\s*;`).test(body));
+    const main = faceOf("Mona Sans");
+    const content = faceOf("Mona Sans Content");
+    expect(main).toBeDefined();
+    expect(content).toBeDefined();
+    expect(content).toContain("font-display:optional");
+    const srcOf = (body: string) => /src\s*:\s*url\(["']?([^)'" ]+)["']?\)/.exec(body)?.[1];
+    expect(srcOf(content!)).toBe(srcOf(main!));
+    expect(srcOf(content!)).toBe("/fonts/mona-sans-latin-var.woff2");
+  });
+
+  it("points the content theme at the content face with the fallback second", () => {
+    const rule = rulesOf(LEAF_CRITICAL_CSS).find((entry) =>
+      /\.base-theme\.content-theme/.test(entry.selector),
+    );
+    expect(rule).toBeDefined();
+    const value = /--font-display\s*:\s*([^;{}]+)/.exec(rule?.body ?? "")?.[1] ?? "";
+    const families = value.split(",").map((family) =>
+      family
+        .trim()
+        .replace(/^["']|["']$/g, "")
+        .replace(/\s+/g, " "),
+    );
+    expect(families.slice(0, 2)).toEqual(["Mona Sans Content", "Mona Sans Fallback"]);
   });
 });

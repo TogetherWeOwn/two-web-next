@@ -56,8 +56,8 @@ describe("content-leaf inlined CSS", () => {
     expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
     expect(html).not.toContain('rel="stylesheet"');
     expect(html).not.toMatch(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")/);
-    // Content leaves render no Display text, so the font is
-    // neither used nor preloaded there (its late swap became mobile LCP).
+    // Content leaves render the display face through the optional content
+    // face, so it is rendered without a preload (a late swap became mobile LCP).
     expect(html).not.toContain('.woff2" as="font"');
   });
 
