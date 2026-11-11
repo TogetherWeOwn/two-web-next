@@ -59,7 +59,7 @@ describe("EventRosterSection chronology", () => {
 
   it("explains that Answered is the latest response update in UTC", () => {
     expect(html([row("u1", new Date("2026-10-01T12:00:00.000Z"))])).toContain(
-      "latest response update in UTC",
+      "latest response update in UTC, not the original waitlist join time.",
     );
   });
 });

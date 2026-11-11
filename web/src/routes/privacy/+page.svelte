@@ -29,6 +29,7 @@ const canonical = $derived(canonicalUrl(appUrl, "/privacy"));
 {/snippet}
 
 <Shell
+  restoredWrite={data.restoredWrite}
   title="Privacy policy"
   {canonical}
   theme="content"

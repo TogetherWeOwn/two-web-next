@@ -197,7 +197,7 @@
     try {
       var response = await fetch(url.pathname + url.search, {
         method: "GET",
-        headers: { accept: "text/html" },
+        headers: { accept: "text/html", "x-two-island": "past-events" },
         signal: controller.signal,
       });
       if (!response.ok) throw new Error("Archive unavailable");

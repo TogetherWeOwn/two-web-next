@@ -58,7 +58,7 @@ const now = new Date();
   </td>
 {/snippet}
 
-<AdminShell title="Events">
+<AdminShell restoredWrite={data.restoredWrite} title="Events">
 <section aria-labelledby="events-heading">
   <h1 id="events-heading">Events</h1>
   <form method="get" action="/admin/events" class="filters">

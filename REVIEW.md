@@ -150,6 +150,15 @@ Try to prove your own candidate wrong first:
 4. Pre-existing issues are out of scope unless this PR makes them newly
    reachable or worse; if so, explain the new reachability.
 
+## Dependency-bump PRs
+
+For dependency version-bump PRs (including Dependabot-style updates):
+
+- Evaluate the bump against the dependency's own changelog and this repository's actual usage.
+- Do not flag lockfile or transitive-dependency churn by itself. A dependency-induced correctness, compatibility, installation, build, output, or reliability regression remains reportable under this repository's existing finding rules, whether or not it involves a changed API this repository calls. Identify the affected repository call site or path, concrete trigger and wrong outcome, and supporting evidence at the reviewed commit.
+- Report a known security advisory introduced or left unfixed with its concrete impact. Existing security-review rules take precedence over this churn guidance: do not suppress a plausible security issue merely because it has no published advisory; apply the existing exploit-path and evidence requirements and state any unverified step.
+- Follow this repository's existing dependency policy for pins versus ranges; do not substitute reviewer preference.
+
 ## Test rigor
 
 A missing test alone is not a runtime bug. These are blocking findings:

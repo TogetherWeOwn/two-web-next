@@ -13,6 +13,7 @@ import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { adminApp } from "../src/admin/routes";
+import { eventSaveBaseline } from "../src/admin/save-baseline";
 import { updateEvent, type EventRow } from "../src/admin/store";
 import { parseEventForm, ValidationError } from "../src/admin/validation";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
@@ -235,6 +236,14 @@ describe.skipIf(!url)("series child eligibility after real lock waits (live)", (
         throw error;
       }
     }
+    // The admin form posts the token of the stored row it displayed; reading the
+    // row (not the edit page) keeps the pre-edit snapshots free of read side effects.
+    const baseline =
+      surface === "native Save"
+        ? await eventSaveBaseline(
+            (await fixture.db.select().from(events).where(eq(events.eventKey, key)))[0]!,
+          )
+        : "";
     const res =
       surface === "JSON PATCH"
         ? await patch(key, changes)
@@ -243,7 +252,7 @@ describe.skipIf(!url)("series child eligibility after real lock waits (live)", (
             {
               method: "POST",
               headers: { cookie, origin: baseEnv.APP_URL },
-              body: new URLSearchParams({ ...FORM, ...changes }),
+              body: new URLSearchParams({ ...FORM, saved_baseline: baseline, ...changes }),
             },
             env(),
           );

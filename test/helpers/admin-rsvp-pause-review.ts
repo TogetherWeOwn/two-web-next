@@ -11,6 +11,7 @@ import { resolveKitEventEdit } from "../../src/admin/kit-event-edit";
 import { buildEventListView } from "../../src/admin/kit-events";
 import type { Db } from "../../src/db/index";
 import { EventFormPage, EventsPage } from "../../src/admin/pages";
+import { EventEditableFields } from "../../src/admin/pages/event-editable-fields";
 import type { EventListRow } from "../../src/admin/store";
 
 export const REVIEW_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -141,12 +142,15 @@ export async function kitReviewData(
   );
   if (outcome.kind !== "ok") throw new Error(`Fixture read failed: ${outcome.kind}`);
   const view = outcome.view;
+  const values = { ...view.values, title: DIRTY_TARGET };
+  const errors = { title: "Fixture rejected Save" };
   return {
     view: rejectedSave
       ? {
           ...view,
-          values: { ...view.values, title: DIRTY_TARGET },
-          errors: { title: "Fixture rejected Save" },
+          values,
+          errors,
+          fieldsHtml: String(EventEditableFields({ values, errors })),
           hasErrors: true,
           isDraft: true,
         }

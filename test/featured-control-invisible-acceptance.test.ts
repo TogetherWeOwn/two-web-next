@@ -469,6 +469,15 @@ describe.skipIf(!process.env.DATABASE_URL)(
       headers: { cookie, origin: APP_URL, "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(fields),
     });
+    // The saved_baseline the guarded edit GET renders right now.
+    const tokenFor = async (path: string): Promise<string> => {
+      const res = await app().request(path, { headers: { cookie } }, liveEnv());
+      expect(res.status).toBe(200);
+      const tag = (await res.text()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+      const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+      if (!token) throw new Error("edit page carries no saved_baseline token");
+      return token;
+    };
     const seed = (overrides: Record<string, unknown> = {}) =>
       db
         .insert(featuredContents)
@@ -574,6 +583,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           const res = await app().request(
             `/featured/${id}`,
             form({
+              saved_baseline: await tokenFor(`/featured/${id}`),
               title: forbiddenValue(char),
               body: "Original body",
               image_url: "https://cdn.discordapp.com/photo.png",
@@ -601,6 +611,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           const res = await app().request(
             `/featured/${id}`,
             form({
+              saved_baseline: await tokenFor(`/featured/${id}`),
               title: "Original slot",
               body: forbiddenValue(char),
               position: "4",
@@ -620,6 +631,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           const res = await app().request(
             `/featured/${id}`,
             form({
+              saved_baseline: await tokenFor(`/featured/${id}`),
               title: "Original slot",
               body: "Original body",
               image_url: "https://cdn.discordapp.com/photo.png",
@@ -651,7 +663,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
           const [seeded] = await seed();
           const res = await app().request(
             appPath(kitEditAction(seeded!.id)),
-            form({ title: "Original slot", body: forbiddenValue(char), position: "4" }),
+            form({
+              saved_baseline: await tokenFor(appPath(kitEditAction(seeded!.id))),
+              title: "Original slot",
+              body: forbiddenValue(char),
+              position: "4",
+            }),
             liveEnv(),
           );
           expect(res.status).toBe(422);
@@ -670,6 +687,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const res = await app().request(
           appPath(kitEditAction(seeded!.id)),
           form({
+            saved_baseline: await tokenFor(appPath(kitEditAction(seeded!.id))),
             title: "Original slot",
             body: "Original body",
             image_url: "https://cdn.discordapp.com/photo.png",

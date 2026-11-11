@@ -252,10 +252,22 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
   });
 
   it("an unparseable sample rate keeps logging instead of blinding the sink", async () => {
+    // Fresh isolate: parser tests may already have warned for this setting.
+    vi.resetModules();
+    const { default: freshApp } = await import("./app");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const res = await post(classicBody(), { ...env, CSP_REPORT_SAMPLE_RATE: "typo" });
+    const res = await freshApp.request(
+      "/csp-reports",
+      { method: "POST", body: classicBody() },
+      { ...env, CSP_REPORT_SAMPLE_RATE: "typo" },
+    );
     expect(res.status).toBe(204);
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith("operator.config.invalid", {
+      variable: "CSP_REPORT_SAMPLE_RATE",
+      action: "using_default",
+    });
+    expect(warn).toHaveBeenCalledWith("csp.report.violation", expect.any(Object));
   });
 
   it("selects the Reporting API endpoint in the CSP and drops the deprecated report-uri", async () => {

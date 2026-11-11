@@ -14,6 +14,7 @@ import { createWebV1Fixture, type WebV1Fixture } from "./helpers/web-v1-fixture"
 const state = vi.hoisted(() => ({
   fixture: null as WebV1Fixture | null,
   queries: [] as string[],
+  rankTransfers: [] as Record<string, unknown>[][],
   error: null as Error | null,
 }));
 vi.mock("postgres", async (importOriginal) => {
@@ -22,10 +23,16 @@ vi.mock("postgres", async (importOriginal) => {
     default: (raw: string, options: Record<string, unknown>) => {
       const url = testDatabaseUrl(raw); // Even the driver double refuses non-test URLs.
       if (!state.fixture) return original(url.href, { ...options, password: () => url.password });
-      const sql = (parts: TemplateStringsArray, ...values: unknown[]) => {
-        state.queries.push(parts.join(""));
-        if (state.error) return Promise.reject(state.error);
-        return state.fixture!.sql(parts, ...(values as postgres.ParameterOrFragment<never>[]));
+      const sql = async (parts: TemplateStringsArray, ...values: unknown[]) => {
+        const query = parts.join("");
+        state.queries.push(query);
+        if (state.error) throw state.error;
+        const rows = await state.fixture!.sql(
+          parts,
+          ...(values as postgres.ParameterOrFragment<never>[]),
+        );
+        if (query.includes("web_v1.rank_counts")) state.rankTransfers.push([...rows]);
+        return rows;
       };
       sql.end = async () => {}; // Fixture owns the transaction/socket, not the request.
       return sql;
@@ -53,6 +60,7 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
   beforeEach(async () => {
     vi.resetModules();
     state.queries = [];
+    state.rankTransfers = [];
     state.error = null;
     fixture = await createWebV1Fixture(process.env.DATABASE_URL!);
     const sql = fixture.sql;
@@ -184,6 +192,87 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     );
     expect(ordered).toEqual([...ordered].sort((a, b) => a - b));
     expect(state.queries).toHaveLength(2);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("transfers exact large aggregates without limiting the member population", async () => {
+    await fixture.sql`UPDATE web_v1.rank_counts SET member_count = 9007199254740991 WHERE rank_key = 'member'`;
+    const html = await home();
+    expect(html).toContain("<dt>Member</dt><dd>9007199254740991</dd>");
+    const rows = state.rankTransfers[0]!;
+    expect(rows).toHaveLength(5);
+    expect(rows.map((row) => row.rank_key)).toEqual([
+      "prospect",
+      "member",
+      "soldier",
+      "veteran",
+      "legend",
+    ]);
+    expect(rows[1]!.member_count).toBe("9007199254740991");
+    expect(rows[3]!.member_count).toBeNull();
+    expect(rows[4]!.member_count).toBe("0");
+    expect(
+      rows.every((row) => Object.keys(row).sort().join() === "member_count,rank_key,rank_label"),
+    ).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("bounds an oversized ladder before transfer and never displays partial totals", async () => {
+    await fixture.sql`
+      INSERT INTO web_v1.rank_counts
+      SELECT 'extra-' || n, repeat('x', 10000), 123456789, n + 5
+      FROM generate_series(1, 2500) AS n
+    `;
+    const html = await home();
+    const rows = state.rankTransfers[0]!;
+    expect(rows).toHaveLength(21);
+    expect(rows.slice(5).every((row) => row.rank_label === null)).toBe(true);
+    expect(JSON.stringify(rows).length).toBeLessThan(4096);
+    for (const rank of ["Prospect", "Member", "Soldier", "Veteran", "Legend"]) {
+      expect(html).toContain(`<dt>${rank}</dt><dd></dd>`);
+    }
+    expect(html).not.toContain("123456789");
+    expect(html).not.toContain("unclaimed");
+    expect(html).toContain("<strong>84</strong> members");
+    expect(warn).toHaveBeenCalledExactlyOnceWith("Counts read unavailable", {
+      key: "counts.ranks",
+      exception: "Error",
+    });
+  });
+
+  it.each(["rank_key", "rank_label"] as const)(
+    "nulls oversized %s in SQL instead of transferring or truncating it",
+    async (field) => {
+      // One overlong row invalidates the whole ladder, even with valid siblings.
+      await fixture.sql`UPDATE web_v1.rank_counts SET ${fixture.sql(field)} = repeat('🦊', 100000) WHERE rank_key = 'member'`;
+      const html = await home();
+      const rows = state.rankTransfers[0]!;
+      expect(rows).toHaveLength(5);
+      expect(rows[1]![field]).toBeNull();
+      expect(JSON.stringify(rows)).not.toContain("🦊");
+      expect(html).not.toContain("<dt>Prospect</dt><dd>24</dd>");
+      expect(html).toContain("<strong>84</strong> members");
+      expect(warn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("preserves Unicode at the exact SQL character boundary and partial ladder order", async () => {
+    await fixture.sql`DELETE FROM web_v1.rank_counts WHERE rank_key IN ('prospect', 'soldier', 'veteran')`;
+    await fixture.sql`UPDATE web_v1.rank_counts SET rank_label = repeat('🦊', 64) WHERE rank_key = 'member'`;
+    const html = await home();
+    expect(html).toContain(`<dt>${"🦊".repeat(64)}</dt><dd>40</dd>`);
+    expect(html).toContain("<dt>Legend</dt><dd>unclaimed</dd>");
+    expect(html).not.toContain("<dt>Prospect</dt>");
+    expect(state.rankTransfers[0]!.map((row) => row.rank_key)).toEqual(["member", "legend"]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("retains label-only fallback for an empty aggregate view without warning", async () => {
+    await fixture.sql`DELETE FROM web_v1.rank_counts`;
+    const html = await home();
+    expect(state.rankTransfers).toEqual([[]]);
+    expect(html).toContain("<dt>Member</dt><dd></dd>");
+    expect(html).not.toContain("unclaimed");
     expect(warn).not.toHaveBeenCalled();
   });
 

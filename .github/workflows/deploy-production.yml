@@ -68,6 +68,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             /ci/
+            /bin/version-check.mjs
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
       - name: Resolve the commit to promote
@@ -166,6 +167,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             /ci/
+            /bin/version-check.mjs
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -215,6 +217,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             /ci/
+            /bin/version-check.mjs
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -262,6 +265,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             /ci/
+            /bin/version-check.mjs
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -367,6 +371,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             /ci/
+            /bin/version-check.mjs
             /.github/actions/gradual-promote/
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -625,6 +630,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             /ci/
+            /bin/version-check.mjs
             /.github/actions/gradual-promote/
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -726,6 +732,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             /ci/
+            /bin/version-check.mjs
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

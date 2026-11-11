@@ -80,31 +80,54 @@ export async function watchProduction(config, deps = {}) {
   if (!VERSION_PATTERN.test(settings.versionId ?? "")) {
     throw new Error("PROMOTED_VERSION_ID must be a Worker Version ID (lowercase UUID)");
   }
+  const monotonicNow = deps.monotonicNow ?? (() => performance.now());
+  const startedAt = monotonicNow();
   const started = now();
-  const deadline = started.getTime() + settings.durationSeconds * 1000;
+  const durationMs = settings.durationSeconds * 1000;
+  const intervalMs = settings.intervalSeconds * 1000;
+  const rateEveryMs = settings.errorRateEverySeconds * 1000;
+  const opportunities = Math.ceil(durationMs / rateEveryMs);
+  const elapsed = () => monotonicNow() - startedAt;
   let misses = 0;
   let judged = 0;
-  let lastErrorRateAt = started.getTime();
+  let handled = 0;
+  let missed = 0;
+  let nextProbeAt = 0;
   for (;;) {
-    const result = await probe({ origin: settings.origin, versionId: settings.versionId });
-    if (result.state === "superseded") {
-      log(`::notice::watch stands down: ${result.reason}`);
-      return { verdict: "superseded", judged };
+    const before = elapsed();
+    const nextRateAt = (handled + 1) * rateEveryMs;
+    const nextAt = Math.min(nextProbeAt, nextRateAt, durationMs);
+    if (before < nextAt) {
+      // Timers can wake early; retain the deadline and recheck eligibility.
+      await sleep(Math.max(1, Math.ceil(nextAt - before)) / 1000);
+      continue;
     }
-    if (result.state === "ok") {
-      misses = 0;
-    } else {
-      misses += 1;
-      log(`readiness miss ${misses}/${settings.readinessMisses}: ${result.reason}`);
-      if (misses >= settings.readinessMisses) {
-        log(`::error::readiness breach: ${settings.readinessMisses} consecutive misses`);
-        return { verdict: "breach", reason: "readiness", judged };
+    const probeDue = before >= nextProbeAt || before >= durationMs;
+    if (probeDue) {
+      const result = await probe({ origin: settings.origin, versionId: settings.versionId });
+      if (result.state === "superseded") {
+        log(`::notice::watch stands down: ${result.reason}`);
+        return { verdict: "superseded", judged };
+      }
+      if (result.state === "ok") {
+        misses = 0;
+      } else {
+        misses += 1;
+        log(`readiness miss ${misses}/${settings.readinessMisses}: ${result.reason}`);
+        if (misses >= settings.readinessMisses) {
+          log(`::error::readiness breach: ${settings.readinessMisses} consecutive misses`);
+          return { verdict: "breach", reason: "readiness", judged };
+        }
       }
     }
-    const at = now().getTime();
-    const final = at >= deadline;
-    if (final || at - lastErrorRateAt >= settings.errorRateEverySeconds * 1000) {
-      lastErrorRateAt = at;
+    const at = elapsed();
+    const final = at >= durationMs;
+    const due = final ? opportunities : Math.floor(at / rateEveryMs);
+    if (due > handled) {
+      // One bounded query for the latest due slot, never a burst of backfills.
+      // Earlier slots lost to I/O latency remain unavailable evidence.
+      missed += due - handled - 1;
+      handled = due;
       const rate = await errorRate(
         {
           accountId: settings.accountId,
@@ -132,13 +155,23 @@ export async function watchProduction(config, deps = {}) {
       }
     }
     if (final) break;
-    await sleep(settings.intervalSeconds);
+    if (probeDue) {
+      const after = elapsed();
+      nextProbeAt = Math.max(nextProbeAt, (Math.floor(after / intervalMs) + 1) * intervalMs);
+    }
+  }
+  if (missed > 0) {
+    log(
+      `::warning::${missed}/${opportunities} scheduled error-rate opportunities missed; ` +
+        "post-deploy watch insufficient, no automatic rollback",
+    );
+    return { verdict: "insufficient", judged, missed };
   }
   if (judged === 0) {
     log("::warning::no error-rate judgment succeeded during the watch; readiness held throughout");
   }
   log(`post-deploy watch passed for ${settings.versionId}`);
-  return { verdict: "pass", judged };
+  return { verdict: "pass", judged, missed };
 }
 
 export function configFromEnv(env) {

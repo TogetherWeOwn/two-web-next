@@ -63,7 +63,7 @@ const islands =
   </div>
 {/snippet}
 
-<AdminShell title="New event">
+<AdminShell restoredWrite={data.restoredWrite} title="New event">
 <section>
   <h1>New event</h1>
   {#if hasErrors}

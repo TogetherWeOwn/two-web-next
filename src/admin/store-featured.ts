@@ -20,6 +20,7 @@ import {
   type Actor,
 } from "./store-shared";
 import { retireHomeGuestCache } from "../home-cache";
+import { featuredSaveBaseline, nextSaveVersion, StaleSaveError } from "./save-baseline";
 
 export type FeaturedRow = typeof featuredContents.$inferSelect;
 export type FeaturedEditRow = FeaturedRow & {
@@ -107,6 +108,7 @@ export async function updateFeatured(
   actor: Actor,
   id: number,
   input: FeaturedFormInput,
+  expectedBaseline?: string,
 ): Promise<FeaturedRow> {
   const row = await db.transaction(async (tx) => {
     await boundModeratorWrite(tx);
@@ -116,6 +118,12 @@ export async function updateFeatured(
       .where(eq(featuredContents.id, id))
       .for("update");
     if (!locked) throw new NotFoundError("featured content");
+    if (
+      expectedBaseline !== undefined &&
+      expectedBaseline !== (await featuredSaveBaseline(locked))
+    ) {
+      throw new StaleSaveError(locked);
+    }
     const [row] = await tx
       .update(featuredContents)
       .set({
@@ -128,7 +136,7 @@ export async function updateFeatured(
         position: input.position,
         startsAt: featuredTimestamp(input.startsAtUtc, input.startsAtUtcText),
         endsAt: featuredTimestamp(input.endsAtUtc, input.endsAtUtcText),
-        updatedAt: new Date(),
+        updatedAt: nextSaveVersion(locked.updatedAt),
       })
       .where(eq(featuredContents.id, id))
       .returning(featuredEditSelection);
@@ -155,7 +163,11 @@ export async function unpublishFeatured(db: Db, actor: Actor, id: number): Promi
   const changed = await db.transaction(async (tx) => {
     await boundModeratorWrite(tx);
     const [locked] = await tx
-      .select({ title: featuredContents.title, isPublished: featuredContents.isPublished })
+      .select({
+        title: featuredContents.title,
+        isPublished: featuredContents.isPublished,
+        updatedAt: featuredContents.updatedAt,
+      })
       .from(featuredContents)
       .where(eq(featuredContents.id, id))
       .for("update");
@@ -163,7 +175,7 @@ export async function unpublishFeatured(db: Db, actor: Actor, id: number): Promi
     if (!locked.isPublished) return false;
     await tx
       .update(featuredContents)
-      .set({ isPublished: false, updatedAt: new Date() })
+      .set({ isPublished: false, updatedAt: nextSaveVersion(locked.updatedAt) })
       .where(eq(featuredContents.id, id));
     await audit(tx, {
       subjectType: "FeaturedContent",

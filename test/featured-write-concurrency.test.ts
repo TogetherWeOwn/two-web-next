@@ -10,6 +10,7 @@ import {
 } from "../src/admin/store";
 import type { FeaturedFormInput } from "../src/admin/validation";
 import { activityLog, featuredContents } from "../src/db/admin-schema";
+import { featuredSaveBaseline, StaleSaveError } from "../src/admin/save-baseline";
 import type { Db } from "../src/db/index";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -234,12 +235,18 @@ describe.skipIf(!url)("featured write serialization (owned Postgres schema)", ()
     expect(await audits()).toHaveLength(1);
   });
 
-  it("keeps same-clock no-op saves audit-free and retains timestamp-only save audits", async () => {
+  it("advances same-clock saves without changing content and retains timestamp-only save audits", async () => {
     const before = await getFeatured(fixture.db, id);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(initialUpdatedAt);
-    expect(await updateFeatured(fixture.db, firstActor, id, form)).toEqual(before);
-    expect(await audits()).toHaveLength(0);
+    // Every accepted full-form save consumes its displayed version, even when
+    // its content is unchanged. A frozen clock must not revalidate an old tab.
+    const first = new Date(initialUpdatedAt.getTime() + 1);
+    expect(await updateFeatured(fixture.db, firstActor, id, form)).toEqual({
+      ...before,
+      updatedAt: first,
+    });
+    expect(await audits()).toHaveLength(1);
     const next = new Date(initialUpdatedAt.getTime() + 1000);
     vi.setSystemTime(next);
     expect(await updateFeatured(fixture.db, firstActor, id, form)).toEqual({
@@ -247,8 +254,73 @@ describe.skipIf(!url)("featured write serialization (owned Postgres schema)", ()
       updatedAt: next,
     });
     expect((await audits()).map((log) => log.properties)).toEqual([
-      { updatedAt: { before: initialUpdatedAt.toISOString(), after: next.toISOString() } },
+      { updatedAt: { before: initialUpdatedAt.toISOString(), after: first.toISOString() } },
+      { updatedAt: { before: first.toISOString(), after: next.toISOString() } },
     ]);
+  });
+
+  it("two full-form saves from one baseline: the first wins, the second waits then is refused stale", async () => {
+    // Both tabs displayed this stored row, so both submit the same token.
+    const baseline = await featuredSaveBaseline((await getFeatured(fixture.db, id))!);
+    const before = await metadata();
+    const loser = {
+      ...form,
+      title: "Loser title",
+      body: "Loser body",
+      position: 8,
+    };
+    const outcome = await overlap(
+      (tx) => updateFeatured(tx, firstActor, id, { ...form, title: "Winner title" }, baseline),
+      () =>
+        updateFeatured(fixture.db, secondActor, id, loser, baseline).then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
+    );
+    expect(outcome).toBeInstanceOf(StaleSaveError);
+    // The refusal carries the locked, committed winner row for draft recovery.
+    expect((outcome as StaleSaveError<{ title: string }>).current?.title).toBe("Winner title");
+    expect(await getFeatured(fixture.db, id)).toMatchObject({
+      title: "Winner title",
+      body: form.body,
+      url: form.url,
+      imageUrl: form.imageUrl,
+      imageAlt: form.imageAlt,
+      isPublished: true,
+      position: 3,
+    });
+    expect(await metadata()).toEqual(before);
+    const logs = await audits();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      causerId: firstActor.id,
+      description: "updated featured content Winner title",
+      properties: { title: { before: form.title, after: "Winner title" } },
+    });
+    expect(JSON.stringify(logs[0]!.properties)).not.toContain("Loser");
+  });
+
+  it("a baseline is stale after a successful save advances the version, even if content reverts", async () => {
+    const original = (await getFeatured(fixture.db, id))!;
+    const baseline = await featuredSaveBaseline(original);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // A frozen clock must still never reissue the version an old tab displayed.
+    vi.setSystemTime(initialUpdatedAt);
+    await updateFeatured(fixture.db, firstActor, id, { ...form, title: "Changed" }, baseline);
+    const changed = (await getFeatured(fixture.db, id))!;
+    await updateFeatured(fixture.db, firstActor, id, form, await featuredSaveBaseline(changed));
+    const reverted = (await getFeatured(fixture.db, id))!;
+    expect(reverted).toMatchObject({ title: form.title, body: form.body, position: form.position });
+    expect(reverted.updatedAt.getTime()).toBeGreaterThan(original.updatedAt.getTime());
+    expect(await featuredSaveBaseline(reverted)).not.toBe(baseline);
+    const metadataBefore = await metadata();
+    const auditCount = (await audits()).length;
+    await expect(
+      updateFeatured(fixture.db, secondActor, id, { ...form, title: "Stale ABA" }, baseline),
+    ).rejects.toBeInstanceOf(StaleSaveError);
+    expect((await getFeatured(fixture.db, id))!.title).toBe(form.title);
+    expect(await metadata()).toEqual(metadataBefore);
+    expect(await audits()).toHaveLength(auditCount);
   });
 
   it.each(["update", "delete"] as const)(

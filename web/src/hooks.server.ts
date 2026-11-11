@@ -36,6 +36,7 @@ import { honoFetch } from "#lib/server/hono.ts";
 const base: Handle = async ({ event, resolve }) => {
   return dispatchHookRequest(event, {
     appUrl: env.APP_URL,
+    sessionSecret: env.SESSION_SECRET,
     kitRouteArchive: env.KIT_ROUTE_ARCHIVE,
     kitRouteStatic: env.KIT_ROUTE_STATIC,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,

@@ -386,6 +386,34 @@ npm run check                    # lint + format + typecheck + config drift + te
 
 ### Verify a change before opening a PR
 
+#### AI contributors: exact-head GitHub Actions
+
+Full suites and CI gates run only on GitHub Actions for the exact PR head.
+Push to the PR branch, open or keep the PR as a draft while incomplete, and
+record exact-head Actions run/job links and conclusions in Verification before
+marking ready. Changes to `src/`, `test/` or migrations still require the full
+gate; draft or scope-skipped jobs are not a full-suite pass. If the draft run
+skips heavy steps, dispatch the existing CI workflow on that PR branch for full
+verification. Every required check, database-safety rule, native review and
+release gate remains in force.
+
+Local agent test execution is limited to an authorized focused reproduction of
+one failing test or crate. Neither the builder nor its caller may run local
+full suites or CI mirrors on the shared host, in Boat or through a fallback;
+do not split a suite into successive focused commands. Any heavy build needed
+for that reproduction must use the guarded `boat` PATH wrapper with approved
+source-only export, sizing/budget controls, `--no-env`, and verified cleanup.
+Never bypass the wrapper or use a heavy raw-host fallback. If no compliant
+path is available, defer to Actions or route the actual prerequisite. Report
+focused reproduction output separately as diagnostic evidence; it does not
+replace Actions evidence. Read-only reviewers inspect source and existing
+evidence and do not execute tests, builds or installs.
+
+The command examples in Local development and the human workflow below are
+a tooling reference, not an exception to these agent execution limits.
+
+#### Human contributors: local verification
+
 `bin/local-ci.sh` (also `npm run ci:local --`) reproduces the Vitest gates of
 the CI `check` job on any host with Docker. It needs no `.dev.vars` and no
 credentials. Network access is needed only to pull `node:24-bookworm` and
@@ -414,8 +442,10 @@ bin/local-ci.sh -j 8 --no-coverage --no-static                  # suite only, qu
   whenever a lockfile changes. `--install` forces it. Each run holds a shared lock
   on the dependencies while it runs, and an install waits for the exclusive lock, so
   `npm ci` never replaces `node_modules` under another run in the same checkout.
-- Run the full gate before you open a PR that touches `src/`, `test/` or
-  migrations. Paste the merged `Test Files` / `Tests` lines into Verification.
+- Human contributors run the full local gate before opening a PR that touches
+  `src/`, `test/` or migrations and paste the merged `Test Files` / `Tests` lines
+  into Verification. AI contributors instead follow the Actions-only workflow
+  above; neither the builder nor its caller runs this local gate.
 - Not covered: the browser journeys (`e2e-ok`), the a11y job, the Kit build and
   parity gates, and Semgrep. CI still runs them on the PR.
 

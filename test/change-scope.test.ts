@@ -865,7 +865,9 @@ describe("e2e-staging scope gate", () => {
     expect(scopeJob).toContain("docs_only:");
     expect(scopeJob).toContain("skip_e2e:");
     expect(scopeJob).not.toContain("pulls/$PR_NUMBER/files");
-    expect(scopeJob).toContain("workflow_run.head_sha");
+    expect(scopeJob).toContain("node ci/staging-provenance.mjs candidate");
+    expect(scopeJob).toContain("steps.candidate.outputs.sha");
+    expect(scopeJob).not.toContain("workflow_run.head_sha");
     expect(scopeJob).toContain("git diff --name-status");
     expect(journeys).toMatch(/\n    needs: scope\n/);
     expect(journeys).toMatch(/needs\.scope\.outputs\.skip_e2e != 'true'/);
@@ -954,7 +956,7 @@ describe("changed-path fixture matrix", () => {
     "public/islands/rsvp-button.js",
     "public/styles.css",
     "public/event-theme.css",
-    "public/fonts/display-latin-700.woff2",
+    "public/fonts/mona-sans-latin-var.woff2",
     "public/icons/icon-192.png",
     "public/site.webmanifest",
     "public/logo.svg",

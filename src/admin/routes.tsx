@@ -90,8 +90,16 @@ import {
   parseFeaturedForm,
   utcToWall,
   ValidationError,
+  wallToUtc,
 } from "./validation";
 import { dispatchWriteBack } from "./writeback";
+import {
+  eventSaveBaseline,
+  featuredSaveBaseline,
+  isSaveBaseline,
+  SAVE_BASELINE_FIELD,
+  StaleSaveError,
+} from "./save-baseline";
 import {
   ActivityLogPage,
   AdminDashboard,
@@ -190,6 +198,102 @@ function formError(
 ): Response | Promise<Response> {
   c.status(422);
   return render(err.fields, values);
+}
+
+// A carrier-less reparse of a refused draft loses two things the saved
+// carriers preserve: which side of an autumn fold a wall time came from,
+// and any seconds (the form speaks minutes). Either loss can invent an
+// ordering error — a fold wall can shift onto the other endpoint, and
+// minute-identical walls can hide a valid seconds-ordered pair. So an
+// ordering error survives only when it holds across every possible
+// interpretation: the latest possible end (later fold instant plus the
+// whole minute) is still at or before the earliest possible start.
+// Syntax and gap errors do not depend on the carrier and always survive.
+function possibleRange(wall: unknown, timezone: string): { min: number; max: number } | null {
+  if (typeof wall !== "string" || !wall.trim()) return null;
+  try {
+    const earlier = wallToUtc(wall, timezone, "earlier").getTime();
+    const later = wallToUtc(wall, timezone, "later").getTime();
+    return { min: Math.min(earlier, later), max: Math.max(earlier, later) + 59_999 };
+  } catch {
+    return null;
+  }
+}
+
+function orderingDefinitelyInvalid(
+  startWall: unknown,
+  endWall: unknown,
+  timezone: string,
+): boolean {
+  const start = possibleRange(startWall, timezone);
+  const end = possibleRange(endWall, timezone);
+  // An unresolvable wall already carries its own intrinsic error; keep the
+  // ordering diagnostic rather than dropping the only signal.
+  if (!start || !end) return true;
+  return end.max <= start.min;
+}
+
+function refusedEventSave(
+  c: Context<Vars>,
+  row: EventRow,
+  values: Record<string, unknown>,
+  status: 400 | 409,
+) {
+  let errors: Record<string, string> = {};
+  try {
+    parseEventForm(values);
+  } catch (err) {
+    if (!(err instanceof ValidationError)) throw err;
+    errors = { ...err.fields };
+    const timezone =
+      typeof values.timezone === "string" && values.timezone.trim()
+        ? values.timezone.trim()
+        : "Europe/London";
+    if (
+      errors.ends_at === "The end is after the start." &&
+      !orderingDefinitelyInvalid(values.starts_at, values.ends_at, timezone)
+    ) {
+      delete errors.ends_at;
+    }
+  }
+  c.status(status);
+  return c.html(
+    <EventFormPage
+      mode="edit"
+      row={row}
+      values={values}
+      errors={errors}
+      rosterHiddenNotice
+      saveRefused={status === 409 ? "stale" : "unverified"}
+    />,
+  );
+}
+
+function refusedFeaturedSave(
+  c: Context<Vars>,
+  row: FeaturedEditRow,
+  values: Record<string, unknown>,
+  status: 400 | 409,
+) {
+  let errors: Record<string, string> = {};
+  try {
+    parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
+  } catch (err) {
+    if (!(err instanceof ValidationError)) throw err;
+    errors = err.fields;
+  }
+  c.status(status);
+  return c.html(
+    <FeaturedFormPage
+      appUrl={c.env.APP_URL}
+      imageHosts={c.env.FEATURED_IMAGE_HOSTS}
+      mode="edit"
+      row={row}
+      values={values}
+      errors={errors}
+      saveRefused={status === 409 ? "stale" : "unverified"}
+    />,
+  );
 }
 
 /**
@@ -487,7 +591,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       <EventFormPage
         mode="edit"
         row={row}
-        values={eventValues(row)}
+        values={await eventValues(row)}
         errors={{}}
         roster={roster}
         rosterTotal={rosterTotal}
@@ -512,6 +616,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       if (!existing) return eventNotFound(c);
       const values = await parsedForm(c);
       if (!values) return badRequest(c);
+      const baseline = values[SAVE_BASELINE_FIELD];
+      if (!isSaveBaseline(baseline)) return refusedEventSave(c, existing, values, 400);
+      if (baseline !== (await eventSaveBaseline(existing))) {
+        return refusedEventSave(c, existing, values, 409);
+      }
       // Hidden carriers: an untouched fold/gap wall time keeps the stored
       // instant. A nonfinite stored date has no hint; parse its replacement.
       const carriers = {
@@ -551,6 +660,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           c.get("adminActor"),
           key,
           input,
+          baseline,
         );
         if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
         for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb, c.get("requestId"));
@@ -560,6 +670,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         );
       } catch (err) {
         if (err instanceof NotFoundError) return eventNotFound(c);
+        if (err instanceof StaleSaveError) {
+          // The locked snapshot is carried by the error: a second read can fail
+          // after refusal and must never replace the recoverable draft with 503.
+          return refusedEventSave(c, err.current as EventRow, values, 409);
+        }
         if (err instanceof ValidationError) {
           return formError(
             c,
@@ -651,7 +766,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
                 err,
                 (errors, v) =>
                   c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
-                eventValues(row),
+                await eventValues(row),
               );
             }
             return errorPage(
@@ -703,7 +818,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
             err,
             (errors, v) =>
               c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
-            eventValues(row),
+            await eventValues(row),
           );
         }
         throw err;
@@ -806,7 +921,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         imageHosts={c.env.FEATURED_IMAGE_HOSTS}
         mode="edit"
         row={row}
-        values={featuredValues(row)}
+        values={await featuredValues(row)}
         errors={{}}
       />,
     );
@@ -826,6 +941,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       if (!existing) return featuredNotFound(c);
       const values = await parsedForm(c);
       if (!values) return badRequest(c);
+      const baseline = values[SAVE_BASELINE_FIELD];
+      if (!isSaveBaseline(baseline)) return refusedFeaturedSave(c, existing, values, 400);
+      if (baseline !== (await featuredSaveBaseline(existing))) {
+        return refusedFeaturedSave(c, existing, values, 409);
+      }
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
@@ -851,10 +971,13 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         throw err;
       }
       try {
-        const row = await updateFeatured(db, c.get("adminActor"), id, input);
+        const row = await updateFeatured(db, c.get("adminActor"), id, input, baseline);
         return c.redirect(`/admin/featured/${row.id}`, 303);
       } catch (err) {
         if (err instanceof NotFoundError) return featuredNotFound(c);
+        if (err instanceof StaleSaveError) {
+          return refusedFeaturedSave(c, err.current as FeaturedEditRow, values, 409);
+        }
         throw err;
       }
     },
@@ -903,11 +1026,12 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   return admin;
 }
 
-function eventValues(row: EventRow): Record<string, unknown> {
+async function eventValues(row: EventRow): Promise<Record<string, unknown>> {
   // A validation refusal can retain a corrupt stored zone or instant. Keep the
   // bad zone visible for correction, but never format it or invent wall times.
   const knownTimezone = isKnownTimezone(row.timezone);
   return {
+    [SAVE_BASELINE_FIELD]: await eventSaveBaseline(row),
     title: row.title,
     game: row.game ?? "",
     description: row.description ?? "",
@@ -930,8 +1054,9 @@ function eventValues(row: EventRow): Record<string, unknown> {
   };
 }
 
-function featuredValues(row: FeaturedEditRow): Record<string, unknown> {
+async function featuredValues(row: FeaturedEditRow): Promise<Record<string, unknown>> {
   return {
+    [SAVE_BASELINE_FIELD]: await featuredSaveBaseline(row),
     title: row.title,
     body: row.body ?? "",
     url: row.url ?? "",
