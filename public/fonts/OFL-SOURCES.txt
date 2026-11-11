@@ -1,0 +1,45 @@
+Ember Hours webfonts (two-design-kit v0.2.0, tokens §2). All SIL OFL-1.1,
+self-hosted; full texts in LICENSE.txt. No remote font origin.
+Reproduce: bash bin/fetch-ember-fonts.sh (needs pyftsubset for the subsets).
+
+1. Mona Sans variable (font.display: display and all UI)
+   Upstream: Google Fonts css2 family "Mona Sans" (monasans v4),
+   axes wght 200-900 + wdth 75-125, latin subset.
+   File: mona-sans-latin-var.woff2 (98124 B)
+   sha256: 5ea3740633e5ac7af56c13d7e8ec32bcae12e7723e53d34284469a8947ccb2f3
+   Source bytes are Google's exact latin subset, unmodified; the subset's
+   unicode-range omits arrows, so arrows keep prior system rendering.
+   Copyright: 2022 The Mona Sans Project Authors
+   (https://github.com/github/mona-sans), Reserved Font Name "Mona".
+   Served with font-display: swap, preloaded once on themed pages.
+   Metric-matched fallback 'Mona Sans Fallback' (local Liberation Sans /
+   Arimo / Arial): size-adjust 103.33%, ascent-override 105.49%,
+   descent-override 30.97%, line-gap-override 0%, unicode-range U+0000-00FF.
+   Derived by matching average advance widths over printable ASCII at
+   wght 400 / wdth 100 against Arimo (Arial-metric-compatible), then
+   scaling hhea ascent/descent by the same factor. See bin/fetch-ember-fonts.sh.
+
+2. Instrument Serif Italic 400 (font.accent: one accent phrase per heading)
+   Upstream: Google Fonts css2 family "Instrument Serif" italic
+   (instrumentserif v5), latin subset re-subset with pyftsubset.
+   File: instrument-serif-latin-400-italic.woff2 (10704 B)
+   sha256: 2ea8887dec935b5a45ba939c463d9733fc3f6c465c30ae6881b8c331a9a1dece
+   Subset: ASCII printable + nbsp + en/em dash + smart quotes + ellipsis +
+   euro + trademark (kit budget: subset < 12 KB). Missing glyphs fall back
+   to the system serif stack; the face is display: optional, never preloaded.
+   Copyright: 2022 The Instrument Serif Project Authors
+   (https://github.com/Instrument/instrument-serif).
+
+3. Fragment Mono 400 (font.data: times, counts, freshness, labels)
+   Upstream: Google Fonts css2 family "Fragment Mono" (fragmentmono v6),
+   latin subset re-subset with pyftsubset.
+   File: fragment-mono-latin-400.woff2 (10692 B)
+   sha256: d1c6a317e267c5db61bf1744a774d65ffe5258bdd6ffcc678db482ef50b490b4
+   Subset: same set as Instrument Serif above (kit budget: subset < 12 KB).
+   Missing glyphs fall back to the system mono stack; the face is display:
+   optional, never preloaded.
+   Copyright: 2022 The Fragment-Mono Project Authors
+   (https://github.com/weiweihuanghuang/fragment-mono).
+
+Retired: display-latin-{500,700}.woff2 (Rajdhani statics) were removed with
+the Display stacks; nothing references them after this migration.

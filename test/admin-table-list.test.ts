@@ -673,7 +673,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
         await seedRoster();
         const clean = await request("/events/01K00000000000000000000011");
         expect(clean).not.toContain("data-event-draft");
+        // The token the guarded edit page just rendered; a refused save leaves the row alone.
+        const tag = clean.match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+        const saved_baseline = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+        expect(saved_baseline, "edit page carries a saved_baseline token").toBeDefined();
         const fields = {
+          saved_baseline: saved_baseline!,
           title: "Rejected draft",
           starts_at: "2099-10-01 20:00",
           ends_at: "2099-10-01 22:00",

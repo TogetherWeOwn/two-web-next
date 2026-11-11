@@ -12,6 +12,7 @@ import {
   updateFeatured,
 } from "../src/admin/store";
 import type { Db } from "../src/db/index";
+import { eventSaveBaseline, featuredSaveBaseline } from "../src/admin/save-baseline";
 import { createMemorySessionStore } from "../src/sessions";
 import { sameOrigin } from "../src/same-origin";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
@@ -170,7 +171,25 @@ beforeEach(() => {
   });
 });
 
-const posts = [
+// Edit POSTs carry the token of the row the mocked guarded GET would display.
+const editRows = {
+  event: () => eventSaveBaseline(eventRow),
+  featured: () => featuredSaveBaseline({ ...featuredRow, startsAtText: null, endsAtText: null }),
+};
+async function valuesFor(row: (typeof posts)[number]): Promise<Record<string, string>> {
+  return row.edit
+    ? { ...row.values, saved_baseline: await editRows[row.edit]() }
+    : { ...row.values };
+}
+
+const posts: {
+  name: string;
+  path: string;
+  values: Record<string, string>;
+  links: string[];
+  fields: string[];
+  edit?: "event" | "featured";
+}[] = [
   {
     name: "event create DST-gap/capacity/recurrence",
     path: "/admin/events",
@@ -181,6 +200,7 @@ const posts = [
   {
     name: "event edit DST-gap/capacity",
     path: `/admin/events/${key}`,
+    edit: "event",
     values: eventValues,
     links: ["f-starts-at", "f-capacity"],
     fields: ["starts_at", "capacity"],
@@ -195,6 +215,7 @@ const posts = [
   {
     name: "featured edit image/alt/window/position",
     path: "/admin/featured/7",
+    edit: "featured",
     values: featuredValues,
     links: ["f-image-url", "f-image-alt", "f-ends-at", "f-position"],
     fields: ["image_url", "image_alt", "ends_at", "position"],
@@ -204,7 +225,7 @@ describe("real native rejected document dispatch", () => {
   for (const row of posts) {
     it(`${row.name}: 422 summary links actual validator errors`, async () => {
       const { app, cookie, bindings } = await mounted();
-      const response = await app.request(row.path, request(cookie, row.values), bindings);
+      const response = await app.request(row.path, request(cookie, await valuesFor(row)), bindings);
       expect(response.status).toBe(422);
       const html = await response.text();
       const summary = summaryFragment(html);
@@ -214,7 +235,7 @@ describe("real native rejected document dispatch", () => {
     });
     it(`${row.name}: positive control preserves rejected input, associations and no-save classification`, async () => {
       const { app, cookie, bindings } = await mounted();
-      const response = await app.request(row.path, request(cookie, row.values), bindings);
+      const response = await app.request(row.path, request(cookie, await valuesFor(row)), bindings);
       expect(response.status).toBe(422);
       expect(response.headers.get("content-type")).toContain("text/html");
       expect(response.headers.get("cache-control")).toContain("no-store");

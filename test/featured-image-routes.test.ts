@@ -5,6 +5,7 @@ import app from "./app";
 import { createFeatured, getFeatured, updateFeatured } from "../src/admin/store";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Db } from "../src/db/index";
+import { featuredSaveBaseline } from "../src/admin/save-baseline";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 
 vi.mock("../src/admin/store", async (importOriginal) => ({
@@ -86,6 +87,8 @@ async function post(path: string, imageUrl: string, bindings = env) {
       method: "POST",
       headers: { cookie, origin: env.APP_URL },
       body: new URLSearchParams({
+        // Edit saves carry the token of the stored row the form displayed.
+        ...(path === "/featured" ? {} : { saved_baseline: await featuredSaveBaseline(existing) }),
         title: "Featured",
         image_url: imageUrl,
         image_alt: "Players together",
@@ -101,12 +104,8 @@ describe("featured preview response image policy (local fixtures)", () => {
     ["https://images.unsplash.com/photo.jpg", "https://images.unsplash.com"],
     ["https://unapproved.com/photo.jpg", null],
   ])("only emits a CSP-permitted saved image for %s", async (imageUrl, allowedOrigin) => {
-    vi.mocked(getFeatured).mockResolvedValue({
-      ...existing,
-      isPublished: true,
-      imageUrl,
-      imageAlt: "Players together",
-    });
+    const saved = { ...existing, isPublished: true, imageUrl, imageAlt: "Players together" };
+    vi.mocked(getFeatured).mockResolvedValue(saved);
     const store = createMemorySessionStore();
     const token = newSessionToken();
     await store.create({
@@ -134,7 +133,11 @@ describe("featured preview response image policy (local fixtures)", () => {
         {
           method: "POST",
           headers: { cookie, origin: env.APP_URL },
-          body: new URLSearchParams({ title: "", image_url: "https://unapproved.com/bad.jpg" }),
+          body: new URLSearchParams({
+            saved_baseline: await featuredSaveBaseline(saved),
+            title: "",
+            image_url: "https://unapproved.com/bad.jpg",
+          }),
         },
       ],
     ] as const) {
@@ -201,7 +204,17 @@ describe("featured create/edit image validation (local fixtures)", () => {
       expect((await post(path, url)).status).toBe(303);
       const write = path === "/featured" ? createFeatured : updateFeatured;
       expect(write).toHaveBeenCalled();
-      expect(vi.mocked(write).mock.calls[0]!.at(-1)).toMatchObject({ imageUrl: url });
+      // createFeatured(db, actor, input); updateFeatured(db, actor, id, input, baseline).
+      const input =
+        path === "/featured"
+          ? vi.mocked(createFeatured).mock.calls[0]![2]
+          : vi.mocked(updateFeatured).mock.calls[0]![3];
+      expect(input).toMatchObject({ imageUrl: url });
+      if (path !== "/featured") {
+        expect(vi.mocked(updateFeatured).mock.calls[0]![4]).toBe(
+          await featuredSaveBaseline(existing),
+        );
+      }
       expect((await post(path, url, { ...env, FEATURED_IMAGE_HOSTS: "" })).status).toBe(422);
     });
   }

@@ -232,7 +232,14 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(response.status).toBe(200);
       return response.text();
     };
-    const save = (values: Record<string, string>) =>
+    // The saved_baseline the guarded edit GET renders right now.
+    const currentToken = async () => {
+      const tag = (await read()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+      const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+      if (!token) throw new Error("edit page carries no saved_baseline token");
+      return token;
+    };
+    const save = async (values: Record<string, string>) =>
       admin.request(
         `/featured/${id}`,
         {
@@ -242,7 +249,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
             origin: env.APP_URL,
             "content-type": "application/x-www-form-urlencoded",
           },
-          body: new URLSearchParams({ ...fields, ...values }),
+          body: new URLSearchParams({
+            ...fields,
+            saved_baseline: await currentToken(),
+            ...values,
+          }),
         },
         bindings,
       );

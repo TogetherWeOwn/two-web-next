@@ -127,6 +127,18 @@ describe("route CSP (local fixtures, no DB)", () => {
     }
   });
 
+  it.each(["[]", '["images.unsplash.com"]', "{}", '{"toString":null}', "42", "true"])(
+    "serves safe CSP headers when FEATURED_IMAGE_HOSTS is JSON %s",
+    async (json) => {
+      const configured = { ...env, FEATURED_IMAGE_HOSTS: JSON.parse(json) };
+      const res = await app.request("/join", {}, configured);
+      expect(res.status).toBe(200);
+      const csp = directives(res);
+      expect(csp["img-src"]).toBe("'self' https://cdn.discordapp.com");
+      expect(csp["script-src"]).toBe("'self'");
+    },
+  );
+
   it("reports through report-to only: the deprecated report-uri is gone", async () => {
     for (const path of ["/join", "/about"]) {
       const res = await app.request(path, {}, env);

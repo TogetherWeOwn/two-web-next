@@ -23,7 +23,7 @@ const outcomes = $derived(
 );
 </script>
 
-<AdminShell title="Join attempts">
+<AdminShell restoredWrite={data.restoredWrite} title="Join attempts">
 <section aria-labelledby="join-attempts-heading">
   <h1 id="join-attempts-heading">Join attempts</h1>
   <p class="hint">

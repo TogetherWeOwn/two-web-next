@@ -19,7 +19,7 @@ let { data }: PageProps = $props();
 const view = $derived(data.view);
 </script>
 
-<AdminShell title={`Join attempt ${view.id}`}>
+<AdminShell restoredWrite={data.restoredWrite} title={`Join attempt ${view.id}`}>
 <section aria-labelledby="join-attempt-heading">
   <p>
     <a href="/admin/join-attempts">Back to join attempts</a>

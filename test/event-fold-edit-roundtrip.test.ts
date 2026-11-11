@@ -117,6 +117,15 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
       env,
     );
 
+  // The saved_baseline the guarded edit GET renders right now.
+  const editToken = async (key: string): Promise<string> => {
+    const page = await app.request(APP_URL + `/admin/events/${key}`, { headers: { cookie } }, env);
+    expect(page.status).toBe(200);
+    const token = inputValue(await page.text(), "saved_baseline");
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    return token;
+  };
+
   // GET the real edit page, resubmit its rendered wall text unchanged: the
   // stored instant must survive byte-for-byte on either side of the fold.
   for (const [side, stored] of [
@@ -137,6 +146,7 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
       expect(inputValue(html, "starts_at")).toBe(WALL);
       const res = await post(key, {
         ...FORM,
+        saved_baseline: inputValue(html, "saved_baseline"),
         starts_at: inputValue(html, "starts_at"),
         ends_at: inputValue(html, "ends_at"),
       });
@@ -171,6 +181,7 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
       const html = await page.text();
       const res = await post(key, {
         ...FORM,
+        saved_baseline: inputValue(html, "saved_baseline"),
         starts_at: inputValue(html, "starts_at"),
         ends_at: inputValue(html, "ends_at"),
       });
@@ -188,6 +199,7 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
     await seed("01K00000000000000000000028", FIRST_OCCURRENCE, "2026-10-25T03:00:00.000Z");
     const res = await post("01K00000000000000000000028", {
       ...FORM,
+      saved_baseline: await editToken("01K00000000000000000000028"),
       starts_at: "2026-10-25 01:45",
     });
     expect(res.status).toBe(303);
@@ -200,6 +212,7 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
     await seed("01K00000000000000000000029", SECOND_OCCURRENCE, "2026-10-25T03:00:00.000Z");
     const res = await post("01K00000000000000000000029", {
       ...FORM,
+      saved_baseline: await editToken("01K00000000000000000000029"),
       starts_at: "2026-10-25 02:30",
     });
     expect(res.status).toBe(303);

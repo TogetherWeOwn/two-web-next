@@ -419,10 +419,15 @@ function fetchLedgers(options, unzipSeen = {}) {
     { repository: "fixture/repo", sha: SHA, token: "fixture-only", dir },
     {
       fetchImpl: githubArtifacts(options),
-      // The fake archive holds only the commit file.
+      // The fake archive carries the commit plus the producer's observations.
       unzip: (zip, out) => {
         unzipSeen.zip = zip;
         writeFileSync(join(out, "commit"), `${readFileSync(zip, "utf8")}\n`);
+        const identity = { sha: SHA, deployedAt: "2026-01-01T00:00:00.000Z" };
+        const identities = options.identities ?? { before: identity, after: identity };
+        for (const [phase, value] of Object.entries(identities)) {
+          writeFileSync(join(out, `identity.${phase}.json`), JSON.stringify(value));
+        }
       },
     },
   );
@@ -501,6 +506,29 @@ test("missing, expired or mismatched passive ledgers refuse promotion", async ()
   );
 });
 
+test("historical or changed staging identities cannot be promoted by a matching commit file", async () => {
+  const valid = { sha: SHA, deployedAt: "2026-01-01T00:00:00.000Z" };
+  for (const identities of [
+    {},
+    { before: valid },
+    { after: valid },
+    { before: null, after: valid },
+    { before: valid, after: { ...valid, sha: "b".repeat(40) } },
+    { before: { ...valid, sha: "b".repeat(40) }, after: valid },
+    { before: valid, after: { ...valid, deployedAt: "2026-01-02T00:00:00.000Z" } },
+    { before: valid, after: { ...valid, deployedAt: "not a timestamp" } },
+  ]) {
+    await assert.rejects(
+      fetchLedgers({
+        runs: [e2eRun(9)],
+        artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+        identities,
+      }),
+      /lacks matching before\/after served identities/,
+    );
+  }
+});
+
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
 test("e2e-staging records the passive set for every promotable deploy", () => {
@@ -510,10 +538,7 @@ test("e2e-staging records the passive set for every promotable deploy", () => {
     workflow.indexOf("\n  staging-journeys:\n"),
   );
   assert.match(job, /needs\.scope\.outputs\.skip_e2e != 'true'/);
-  assert.match(
-    job,
-    /ref: \$\{\{ github\.event_name == 'workflow_run' && github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}/,
-  );
+  assert.match(job, /ref: \$\{\{ needs\.scope\.outputs\.sha \}\}/);
   assert.match(
     job,
     /node bin\/smoke\.mjs https:\/\/next\.togetherweown\.com --ledger passive\/smoke\.json/,

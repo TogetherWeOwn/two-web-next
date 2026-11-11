@@ -9,6 +9,7 @@ import {
   updateFeatured,
   type FeaturedRow,
 } from "../src/admin/store";
+import { featuredSaveBaseline } from "../src/admin/save-baseline";
 import type { Db } from "../src/db/index";
 import { createMemorySessionStore, type Sql } from "../src/sessions";
 import type { EnvWithAdminDb } from "../src/admin/db";
@@ -125,13 +126,26 @@ async function request(
   const sessions = createMemorySessionStore();
   const identity = options.actor === undefined ? MODERATOR : options.actor;
   const cookie = identity ? await cookieFor(sessions, identity) : "";
+  // The edit POST carries the token of the row the mocked getFeatured displays.
+  const savedBaseline = await featuredSaveBaseline({
+    ...row,
+    id: Number(id),
+    startsAtText: null,
+    endsAtText: null,
+  });
   return adminApp({ sessionStore: sessions, db }).request(
     `/featured/${encodeURIComponent(id)}${route.suffix}`,
     {
       method: route.method,
       headers: { cookie, origin: env.APP_URL },
       ...(route.method === "POST"
-        ? { body: new URLSearchParams({ title: "Updated fixture", position: "0" }) }
+        ? {
+            body: new URLSearchParams({
+              ...(route.suffix === "" ? { saved_baseline: savedBaseline } : {}),
+              title: "Updated fixture",
+              position: "0",
+            }),
+          }
         : {}),
     },
     options.bindings ?? bindings,
@@ -193,6 +207,7 @@ for (const route of routes) {
           actor,
           id,
           expect.objectContaining({ title: "Updated fixture" }),
+          await featuredSaveBaseline({ ...row, id, startsAtText: null, endsAtText: null }),
         );
         expect(deleteFeatured).not.toHaveBeenCalled();
       }

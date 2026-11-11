@@ -47,6 +47,7 @@ import {
   updateFeatured,
   type Actor,
 } from "../src/admin/store";
+import { eventSaveBaseline } from "../src/admin/save-baseline";
 import { dispatchWriteBack } from "../src/admin/writeback";
 import { parseEventForm, parseFeaturedForm, ValidationError } from "../src/admin/validation";
 import { NotFoundError } from "../src/admin/store";
@@ -839,6 +840,9 @@ describe.skipIf(!raw)("moderator writes bounded waits (test database)", () => {
 
   it("admin event save behind a held row answers 503 with no redirect or write-back", async () => {
     const seeded = await seedEvent({ status: "published" });
+    // The token of the row the guarded edit form would display; the refused
+    // first attempt leaves the row unchanged, so the retry reuses it.
+    const baseline = await eventSaveBaseline(seeded);
     const holder = holderClient();
     let pending: Promise<Response> | undefined;
     try {
@@ -855,7 +859,7 @@ describe.skipIf(!raw)("moderator writes bounded waits (test database)", () => {
               origin: baseEnv.APP_URL,
               "content-type": "application/x-www-form-urlencoded",
             },
-            body: new URLSearchParams(EVENT_FORM),
+            body: new URLSearchParams({ ...EVENT_FORM, saved_baseline: baseline }),
           },
           liveEnv(),
         ),
@@ -892,7 +896,7 @@ describe.skipIf(!raw)("moderator writes bounded waits (test database)", () => {
           origin: baseEnv.APP_URL,
           "content-type": "application/x-www-form-urlencoded",
         },
-        body: new URLSearchParams(EVENT_FORM),
+        body: new URLSearchParams({ ...EVENT_FORM, saved_baseline: baseline }),
       },
       liveEnv(),
     );
