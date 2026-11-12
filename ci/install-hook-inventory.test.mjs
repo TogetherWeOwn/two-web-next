@@ -75,6 +75,16 @@ describe("hook inventory", () => {
       assert.ok(name in inv.rootHooks);
     }
   });
+  it("inventories dependency-change lifecycle events in root and Kit manifests", () => {
+    for (const name of ["predependencies", "dependencies", "postdependencies"]) {
+      const root = fixture({ ...REVIEWED_ROOT_HOOKS, [name]: "node extra.js" });
+      put(root, "web/package.json", JSON.stringify({ scripts: { [name]: "node kit.js" } }));
+      const inv = inventoryHooks(root);
+      assert.equal(inv.ok, false, name);
+      assert.equal(inv.rootHooks[name], "node extra.js");
+      assert.equal(inv.kitHooks[name], "node kit.js");
+    }
+  });
   it("classifies an unreviewed script", () => {
     const inv = inventoryHooks(fixture({ postinstall: "node ci/other-generator.mjs" }));
     assert.equal(inv.ok, false);
