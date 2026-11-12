@@ -24,6 +24,10 @@ const workflows = readdirSync(dir)
   .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
 
 const hosted = "ubuntu-latest";
+// The recovery proof needs the same fixed GitHub-hosted OS as its qualification run.
+const pinnedHostedJob = (name: string, id: string) =>
+  (name === "e2e.yml" && id === "browser-smoke") ||
+  (name === "admin-stale-save-ubuntu24-proof.yml" && id === "recovery-proof");
 const byVisibility = `\${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
 const byVisibilityPrGuarded = `\${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
 const publicGuard = `!github.event.repository.private && '["${hosted}"]'`;
@@ -66,7 +70,7 @@ describe("workflow runner labels", () => {
         // ubuntu-24.04 is still GitHub-hosted Linux, so the self-hosted
         // queue-forever risk does not apply.
         const allowed =
-          name === "e2e.yml" && id === "browser-smoke"
+          pinnedHostedJob(name, id)
             ? [hosted, "ubuntu-24.04", byVisibility, byVisibilityPrGuarded, overflowSwitch(id)]
             : [hosted, byVisibility, byVisibilityPrGuarded, overflowSwitch(id)];
         expect(allowed, `${name} job ${id}`).toContain(runsOn);
@@ -170,7 +174,7 @@ describe("workflow runner labels", () => {
         }
         if (runsOn === undefined) continue;
         const allowed =
-          name === "e2e.yml" && id === "browser-smoke"
+          pinnedHostedJob(name, id)
             ? [hosted, "ubuntu-24.04", byVisibilityPrGuarded, overflowSwitch(id)]
             : [hosted, byVisibilityPrGuarded, overflowSwitch(id)];
         expect(allowed, `${name} job ${id} keeps PR events hosted`).toContain(runsOn);
