@@ -200,6 +200,13 @@ A missing test alone is not a runtime bug. These are blocking findings:
   backward-compatible for the currently deployed code (expand before
   contract). Tests, probes, and migrations must never target a production or
   staging database.
+- **CI and deploy wiring** (`.github/workflows/ci.yml`, `.github/workflows/deploy-production.yml`):
+  when a PR adds or tightens a CI, deploy, or gate check, or edits a workflow,
+  trace each new input, env, and output to its supplying job and verify `needs:` ordering.
+  Judge the merge-commit and post-merge deploy path, not just PR-head checks; compare
+  migration, history, and allowlist gates against current `main`, not the PR base.
+  For publish or artifact jobs, confirm keys, tokens, and secrets cannot reach uploaded
+  artifacts or public output. Report a violation as Severe only with the exact job/line and failing path.
 - **Generated assets:** `build:assets` generates budgeted outputs from
   `assets/`; see `ci/minify-assets.mjs` for the mapping and the authored CSS
   exceptions. Check generated output for drift or hand-edits, accounting for
