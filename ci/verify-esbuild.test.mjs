@@ -110,6 +110,30 @@ test("rejects a modified shim before executing it", (t) => {
   assert.equal(result.jsShim, false);
 });
 
+test("ignores a working binary override for both probes", (t) => {
+  const { root, binary } = fixture(t);
+  const override = join(root, "override");
+  copyFileSync(binary, override);
+  requireExecutable(override);
+  const previous = process.env.ESBUILD_BINARY_PATH;
+  process.env.ESBUILD_BINARY_PATH = override;
+  t.after(() => {
+    if (previous === undefined) delete process.env.ESBUILD_BINARY_PATH;
+    else process.env.ESBUILD_BINARY_PATH = previous;
+  });
+  rmSync(binary);
+  assert.equal(verifyEsbuild(root).ok, false);
+  writeFileSync(
+    binary,
+    `#!/usr/bin/env node\nprocess.stdout.write(process.argv.includes('--version') ? '${LOCKED_ESBUILD}\\n' : 'wrong\\n');\n`,
+  );
+  requireExecutable(binary);
+  const result = verifyEsbuild(root);
+  assert.equal(result.version, LOCKED_ESBUILD);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.includes("esbuild minify probe failed"));
+});
+
 test("rejects binary version and minification failures", (t) => {
   const { root, binary } = fixture(t);
   for (const [version, minified] of [

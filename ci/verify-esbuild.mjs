@@ -47,12 +47,16 @@ export function verifyEsbuild(root) {
     if (!result.jsShim) problems.push("esbuild bin is not the reviewed JS shim");
     // Never execute the binary when the static prerequisites failed.
     if (problems.length) return result;
-    const version = spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 30_000 });
+    // The proof must exercise the installed platform package, not an override.
+    const env = { ...process.env };
+    delete env.ESBUILD_BINARY_PATH;
+    const version = spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 30_000, env });
     result.version = version.status === 0 ? version.stdout.trim() : null;
     const minified = spawnSync(bin, ["--minify", "--loader=js"], {
       input: "let   answer = 1 ;\n",
       encoding: "utf8",
       timeout: 30_000,
+      env,
     });
     if (result.version !== LOCKED_ESBUILD) problems.push(`esbuild --version is ${result.version}`);
     if (minified.status !== 0 || minified.stdout !== "let answer=1;\n") {
