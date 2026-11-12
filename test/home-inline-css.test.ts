@@ -75,7 +75,10 @@ describe("homepage inlined critical CSS", () => {
   it("uses a bold local fallback for bold display text", () => {
     const faces = [...LEAF_CRITICAL_CSS.matchAll(/@font-face\s*\{([^}]*)\}/g)]
       .map((match) => match[1])
-      .filter((face) => /font-family:\s*["']?Mona Sans Fallback["']?\s*;/.test(face));
+      .filter(
+        (face) =>
+          face !== undefined && /font-family:\s*["']?Mona Sans Fallback["']?\s*;/.test(face),
+      );
     expect(faces).toHaveLength(2);
     expect(faces[0]).toMatch(/font-weight:\s*200\s+500\s*;/);
     expect(faces[1]).toMatch(/font-weight:\s*600\s+900\s*;/);
