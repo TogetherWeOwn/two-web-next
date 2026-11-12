@@ -28,12 +28,16 @@ const pullRequestBlock = (text: string) =>
   triggers(text).match(/(?:^|\n)  pull_request:[^\n]*((?:\n {4,}[^\n]*)*)/)?.[1] ?? "";
 const job = (text: string, id: string) =>
   text.split(new RegExp(`\\n  ${id}:\\n`))[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";
-const evidenceGuard = (block: string, id: string, variable: string) =>
-  block.match(
-    new RegExp(
-      `\\n      - name: [^\\n]+\\n        env:\\n          ${variable}: \\$\\{\\{ needs\\.${id}\\.result \\}\\}\\n        run: ([^\\n]+)`,
-    ),
-  )?.[1];
+const evidenceGuard = (block: string, id: string, variable: string) => {
+  const pattern = new RegExp(
+    `^name: [^\\n]+\\n        env:\\n          ${variable}: \\$\\{\\{ needs\\.${id}\\.result \\}\\}\\n        run: ([^\\n]+)\\n*$`,
+  );
+  return block
+    .split(/\n      - /)
+    .slice(1)
+    .map((step) => step.split(/\n    \S/)[0]?.match(pattern)?.[1])
+    .find((guard) => guard !== undefined);
+};
 const guardStatus = (guard: string, variable: string, result: string) =>
   spawnSync("bash", ["-c", guard], { env: { [variable]: result } }).status;
 
@@ -141,6 +145,10 @@ describe("required checks always report", () => {
           id,
           variable,
         ),
+      ).toBeUndefined();
+      expect(evidenceGuard(`${block}        if: false\n`, id, variable)).toBeUndefined();
+      expect(
+        evidenceGuard(`${block}        continue-on-error: true\n`, id, variable),
       ).toBeUndefined();
       for (const [result, status] of [
         ["success", 0],
