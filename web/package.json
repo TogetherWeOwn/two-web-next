@@ -9,8 +9,8 @@
   "scripts": {
     "postinstall": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs",
     "prebuild": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs",
-    "build": "vite build && node scripts/copy-public.mjs && node ../ci/kit-route-evidence.mjs",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "build": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs && vite build && node scripts/copy-public.mjs && node ../ci/kit-route-evidence.mjs",
+    "check": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "preview:deploy": "wrangler deploy"
   },
   "devDependencies": {
@@ -20,7 +20,7 @@
     "@tailwindcss/vite": "^4.3.3",
     "svelte": "5.57.2",
     "svelte-check": "4.7.7",
-    "tailwindcss": "^4.3.3",
+    "tailwindcss": "^4.3.4",
     "typescript": "6.0.3",
     "vite": "8.3.5",
     "wrangler": "4.156.1"
