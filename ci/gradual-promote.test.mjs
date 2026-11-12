@@ -55,8 +55,9 @@ test("inactive verifier matches the immutable publisher bytes", () => {
   );
 });
 
-const verifierEnv = () => ({
-  ...process.env,
+const verifierEnv = (ambient = process.env) => ({
+  ...ambient,
+  PRE_PROMOTION_TIMEOUT_SECONDS: "30",
   GITHUB_WORKSPACE: fileURLToPath(new URL("../", import.meta.url)),
   PRE_PROMOTION_VERIFIER: ".github/actions/gradual-promote/gradual-promote.mjs",
   REQUIRE_PRE_PROMOTION_VERIFIER: "true",
@@ -66,6 +67,16 @@ const verifierEnv = () => ({
   PREV_VERSION: PREV,
   VERSION_TAG: TAG,
   PROMOTION_PERCENTAGE: "5",
+});
+
+test("verifier fixture isolates its timeout from the ambient environment", async () => {
+  for (const timeout of ["", "0", "301"]) {
+    const ambient = { PRE_PROMOTION_TIMEOUT_SECONDS: timeout };
+    const env = verifierEnv(ambient);
+    assert.equal(env.PRE_PROMOTION_TIMEOUT_SECONDS, "30");
+    assert.ok(await verifierConfig(env));
+    assert.equal(ambient.PRE_PROMOTION_TIMEOUT_SECONDS, timeout);
+  }
 });
 
 test("verifier is inert by default and rejects unsafe configuration", async () => {
