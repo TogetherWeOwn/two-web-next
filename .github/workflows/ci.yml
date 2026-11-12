@@ -567,6 +567,12 @@ jobs:
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit:selftest
+      - name: npm policy enforcement fixtures
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        env:
+          npm_config_ignore_scripts: "true"
+          npm_config_min_release_age: "3"
+        run: node ci/npm-policy-fixtures.mjs "$RUNNER_TEMP/npm-policy-fixtures.json"
       - name: Dependency audit (lockfile, including dev dependencies)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit
