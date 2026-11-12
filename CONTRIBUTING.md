@@ -418,8 +418,9 @@ Before every push, agents verify a fresh worktree with a bounded,
 offline-fixture set of checks. GitHub Actions is the only place agents run the
 full suite, the database tests, Docker and the browser gates.
 
-Install once per worktree and reuse it unless a lockfile changes. Use `--ignore-scripts`
-so no dependency lifecycle script runs and use a per-task npm cache. `npm ci`
+Install once per worktree and reuse it unless a lockfile changes. Project npm
+configuration disables lifecycle scripts by default; keep `--ignore-scripts`
+explicit and use a per-task npm cache. `npm ci`
 uses the frozen lockfile and its integrity checks; this change does not add or
 update dependencies. Although npm 11.19 accepts `--min-release-age`, it does not
 enforce that age on locked packages installed by `npm ci`. Do not treat this
@@ -427,6 +428,7 @@ command as a package-age check. Use the Node floor stated in the README.
 
 ```sh
 nice timeout -k 10 300 npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund --cache "$PAPERCLIP_TASK_SCRATCH_DIR/npm-cache"
+nice timeout -k 10 120 npm run generate:first-party
 nice timeout -k 10 120 npm run typecheck
 nice timeout -k 10 300 env -u DATABASE_URL -u BOT_DATABASE_URL npm run test:unit -- test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
 ```

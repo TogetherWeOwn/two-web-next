@@ -191,6 +191,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --include=dev --no-audit --no-fund
+      - name: Prepare first-party generated inputs
+        run: npm run generate:first-party
       - name: Verify CI isolation
         run: node e2e/prepare.mjs
       - name: Apply migrations to disposable Postgres

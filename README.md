@@ -119,20 +119,19 @@ npm ci --include=dev
 cp .dev.vars.example .dev.vars   # local settings only; never commit this file
 ```
 
-Root and `web/` installs generate the ignored critical-CSS module through
-`postinstall`. If install scripts are disabled (`npm ci --ignore-scripts`),
-run the generator explicitly **from the repository root before typecheck,
-tests or bundling**:
+The root and `web/` npm configurations disable lifecycle scripts by default.
+After a frozen install, check the tracked token adapters and generate the ignored
+critical-CSS module explicitly **from the repository root before tests or bundling**:
 
 ```sh
-node ci/build-leaf-css.mjs
-# Or, from the root: npm run build:leaf-css
+npm run generate:first-party
 ```
 
-Under `--ignore-scripts`, `npm run typecheck` and `npm run test:unit` bootstrap
-the generator themselves (see "Verify a change before opening a PR" in
-[CONTRIBUTING.md](CONTRIBUTING.md)). Raw `tsc`, direct `vitest` and bundlers do
-not: run the generator explicitly first.
+`npm run dev`, `npm test`, `npm run test:coverage` and the Kit `npm run build`
+invoke this preparation explicitly. `npm run typecheck` and `npm run test:unit`
+bootstrap critical CSS themselves (see "Verify a change before opening a PR" in
+[CONTRIBUTING.md](CONTRIBUTING.md)). Raw `tsc`, direct `vitest`, Wrangler and
+bundlers do not: run the named preparation command explicitly first.
 
 `ci/build-leaf-css.mjs` uses only Node builtins and concatenates the three
 checked sheets, so it runs in dependency-free scratch snapshots. The separate
@@ -141,10 +140,11 @@ the pinned vendored design-kit CSS and needs the locked esbuild installed to
 compact served sheets. It composes scoped roles with `assets/styles.css` and
 `assets/theme.css`; all three existing Hono sheets keep their original raw and
 gzip ceilings, without extra requests or changes to unthemed legacy pages.
-Root postinstall and predev, plus Kit postinstall and
-prebuild, **check** the tracked adapters before generating ignored critical CSS.
-They fail without repairing stale committed output, so install cannot mask drift
-before CI checks it. After editing the kit pin or theme source, explicitly run
+The explicit preparation command **checks** the tracked adapters before
+generating ignored critical CSS. It fails without repairing stale committed
+output, so preparation cannot mask drift before CI checks it. The redundant
+postinstall, predev and prebuild hooks do not run under the project defaults.
+After editing the kit pin or theme source, explicitly run
 `npm run build:assets` or `npm run build:leaf-css` and commit the regenerated
 adapters with their sources. Never hand-edit generated outputs. See [security-pin contracts](docs/security-pin-contracts.md)
 for the offline static gate and generated-hash review evidence.
