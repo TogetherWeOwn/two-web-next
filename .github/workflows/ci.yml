@@ -870,6 +870,22 @@ jobs:
           path: artifacts/kit-admin-contrast/
           if-no-files-found: error
           retention-days: 14
+      - name: Join presence browser evidence (built runtime, intercepted fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        env:
+          JOIN_PRESENCE_EVIDENCE_DIR: artifacts/join-presence
+        run: |
+          mkdir -p artifacts/join-presence
+          node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/join-presence/report.tap ci/join-presence-browser.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/join-presence/report.tap "Join presence browser" 16
+      - name: Upload join presence evidence
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: join-presence
+          path: artifacts/join-presence/
+          if-no-files-found: error
+          retention-days: 14
       - name: Kit performance budgets (worker + generated assets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/check-kit-perf.mjs

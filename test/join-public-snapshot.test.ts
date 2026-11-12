@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL, URL as NodeURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  DISCORD_WIDGET_VERDICT_TTL_MS,
   parseDiscordWidgetJson,
   toPublicWidgetSnapshot,
   type DiscordWidgetSnapshot,
@@ -103,6 +104,10 @@ function shared(): SharedStub {
 }
 
 beforeAll(async () => {
+  // The bundled singleton captures Date.now at import. Install the controlled
+  // clock first; leave timers real so Discord probe deadlines still settle.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
   // Same bundle harness as the home featured-DTO suite: the real route load
   // with only the Worker env stubbed. The bundled discord-widget singleton
   // starts cold, so the first load schedules its probe through waitUntil.
@@ -167,6 +172,7 @@ beforeAll(async () => {
 }, 60000);
 
 afterAll(() => {
+  vi.useRealTimers();
   if (scratch) rmSync(scratch, { recursive: true, force: true });
   delete (globalThis as Record<string, unknown>)[ENV_KEY];
 });
@@ -208,6 +214,7 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
     // Cold isolate: the probe is scheduled, never awaited — no presence yet.
     const cold = await load(args());
     expect(cold.widgetSnapshot).toBeNull();
+    expect(cold.widgetStale).toBe(false);
     expect(shared().pending).toHaveLength(1);
     await Promise.all(shared().pending);
 
@@ -215,6 +222,7 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
     // same four fields and values the view read before (no view change).
     const data = await load(args());
     expect(data.widgetSnapshot).not.toBeNull();
+    expect(data.widgetStale).toBe(false);
     expect(Object.keys(data.widgetSnapshot!).sort()).toEqual(AGGREGATE_KEYS);
     expect(data.widgetSnapshot).toEqual({
       name: "Together We Own",
@@ -238,6 +246,25 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
     ]) {
       expect(bytes, `anonymous payload leaked ${needle}`).not.toContain(needle);
     }
+
+    // Past one verdict TTL but within the three-TTL servable bound, the real
+    // load must carry freshness separately from the four-field projection.
+    vi.setSystemTime(Date.now() + DISCORD_WIDGET_VERDICT_TTL_MS + 1);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 429 })),
+    );
+    const aged = await load(args());
+    expect(aged.widgetSnapshot).toEqual(data.widgetSnapshot);
+    expect(aged.widgetStale).toBe(true);
+    expect(shared().pending).toHaveLength(2);
+    await Promise.all(shared().pending);
+
+    // A completed 429 probe refreshes the verdict, not the presence data:
+    // the same aggregates remain available and still need qualified copy.
+    const preserved = await load(args());
+    expect(preserved.widgetSnapshot).toEqual(data.widgetSnapshot);
+    expect(preserved.widgetStale).toBe(true);
   });
 });
 

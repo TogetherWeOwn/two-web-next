@@ -5,8 +5,9 @@
 // Hono joinPage render in src/index.tsx exactly: carrying the join-result
 // flash makes the response viewer-specific (a guest must never read another
 // member's banner from a shared cache), a rendered presence snapshot says
-// "now" (60 s shared TTL matching DISCORD_WIDGET_VERDICT_TTL_MS), and the
-// static page without presence keeps 3600 s. Vary: Cookie is set by the load
+// "now" when fresh ("as of" when stale-but-preserved, 60 s shared TTL
+// matching DISCORD_WIDGET_VERDICT_TTL_MS), and the static page without
+// presence keeps 3600 s. Vary: Cookie is set by the load
 // on every variant (the representation depends on the flash cookie even when
 // the view has nothing to consume); only the max-age/no-store selection is
 // a pure function, so only it lives here.
