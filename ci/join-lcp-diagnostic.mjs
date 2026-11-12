@@ -300,11 +300,16 @@ export function resolveSha(env = process.env, git = spawnSync) {
   };
 }
 
+export async function loadChromeLauncher() {
+  const lighthouseRequire = createRequire(require.resolve("lighthouse"));
+  return (await import(pathToFileURL(lighthouseRequire.resolve("chrome-launcher")))).launch;
+}
+
 export async function lighthouseCollect(configPath, cwd, dependencies = {}) {
   let chrome;
   try {
     const lighthouse = dependencies.lighthouse ?? (await import("lighthouse")).default;
-    const launch = dependencies.launch ?? (await import("chrome-launcher")).launch;
+    const launch = dependencies.launch ?? (await loadChromeLauncher());
     const collect = JSON.parse(readFileSync(configPath, "utf8")).ci.collect;
     const { chromeFlags, ...settings } = collect.settings;
     chrome = await launch({ chromeFlags: [...chromeFlags.split(/\s+/), "--headless=new"] });

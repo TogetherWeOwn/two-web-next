@@ -13,6 +13,7 @@ import {
   createProxy,
   main,
   lighthouseCollect,
+  loadChromeLauncher,
   planRuns,
   resolveSha,
   scheduleStylesheetsLate,
@@ -27,6 +28,10 @@ const LINKS =
   '<link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/theme-tokens.css"><link rel="stylesheet" href="/theme.css">';
 const HTML = `<!doctype html><html><head><title>x</title>${LINKS}</head><body><main><h1>Join Together We Own</h1></main></body></html>`;
 const CSS = `a{color:red}${HEADING_RULE}b{margin:0}`;
+
+test("locked Lighthouse dependency exposes its Chrome launcher", async () => {
+  assert.equal(typeof (await loadChromeLauncher()), "function");
+});
 
 test("plan: 3 paired controls per variant, alternating order, 12 runs", () => {
   const plan = planRuns();
