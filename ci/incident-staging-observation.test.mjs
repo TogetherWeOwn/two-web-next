@@ -81,7 +81,7 @@ test("staging replay freshness rejects old observations without suppressing usef
       "only an executed newer green retires the quality failure",
     );
   }
-  for (const status of ["queued", "in_progress", "waiting"]) {
+  for (const status of ["queued", "in_progress", "waiting", "requested", "pending"]) {
     const pending = replay(gates("success"), { newer: { status } });
     const stale = await observe(pending.api);
     assert.equal(
@@ -252,6 +252,31 @@ test("staging observation identity and job pagination stay bounded and fail clos
   await assert.rejects(observe(duplicated.api), /Inconsistent staging observation sequence/);
   const missing = fixture({ workflowRuns: [] });
   await assert.rejects(observe(missing.api), /missing source|page cap/i);
+  const regressed = fixture({ workflowRuns: [source(42, 1)] });
+  await assert.rejects(
+    observe(regressed.api, { runAttempt: 2, attempt: 1 }),
+    /Inconsistent staging observation identity/,
+  );
+  const advanced = fixture({
+    workflowRuns: [source(42, 3)],
+    jobsByAttempt: { "42/3": gates("skipped"), "42/2": gates("skipped") },
+  });
+  const advancedStale = await observe(advanced.api, { runAttempt: 2, attempt: 1 });
+  assert.equal(
+    advancedStale.size,
+    0,
+    "history that advanced past the source attempt is still accepted",
+  );
+  assert.ok(
+    advanced.calls.some((call) => call.path.includes("/runs/42/attempts/3/jobs?")),
+    "the later-attempt snapshot of the source run is read",
+  );
+  for (const status of [undefined, "invalid", "action_required"]) {
+    const badStatus = fixture({
+      workflowRuns: [{ ...source(43), status }, source(42)],
+    });
+    await assert.rejects(observe(badStatus.api), /Malformed staging observation status/);
+  }
   const malformedJobs = fixture({
     workflowRuns: [source(42), source(43)],
     jobsByAttempt: { "43/1": null },

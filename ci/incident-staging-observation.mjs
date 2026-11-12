@@ -2,6 +2,7 @@
 // Read-only: observers retain the original source run/attempt, never the
 // observer's chronology, and nothing here writes to any sink.
 const RED = new Set(["failure", "timed_out", "cancelled", "action_required"]);
+const UNFINISHED = new Set(["queued", "in_progress", "waiting", "requested", "pending"]);
 
 async function jobsFor(api, runId, attempt) {
   const jobs = [];
@@ -68,8 +69,10 @@ async function staleStagingKeys(api, source, runId, attempt) {
     for (const run of result.workflow_runs) {
       if (!trusted(run)) continue;
       if (!valid(run)) throw new Error("Malformed staging observation identity");
+      if (run.status !== "completed" && !UNFINISHED.has(run.status))
+        throw new Error("Malformed staging observation status");
       if (run.id === source.id) {
-        if (run.run_number !== source.run_number || run.run_attempt < Number(attempt))
+        if (run.run_number !== source.run_number || run.run_attempt < source.run_attempt)
           throw new Error("Inconsistent staging observation identity");
         found = true;
       }
