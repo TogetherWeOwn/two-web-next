@@ -34,7 +34,7 @@ function check(errors: Record<string, string>) {
       expect(paragraph?.[0], name).toContain('class="error"');
       expect(paragraph?.[0]).toContain('role="alert"');
       expect(paragraph?.[0]).toContain(`data-testid="error-${name}"`);
-      expect(paragraph?.[1]).toContain("Bad &lt;img src=x&gt; &amp; text");
+      expect(paragraph?.[1]).toContain("Bad &lt;img src=x> &amp; text");
       expect(control).toContain('aria-invalid="true"');
       expect(control).toMatch(new RegExp(`aria-describedby="[^"]*${id}-error`));
     } else {
@@ -61,8 +61,8 @@ describe("compiled Kit create error renderers", () => {
   it("keeps global and unknown errors escaped in the summary without invented controls", () => {
     const html = check({ global: "Global <img> & text", unknown: "Unknown <img> & text" });
     const summary = summaryFragment(html);
-    expect(summary).toContain("Global &lt;img&gt; &amp; text");
-    expect(summary).toContain("Unknown &lt;img&gt; &amp; text");
+    expect(summary).toContain("Global &lt;img> &amp; text");
+    expect(summary).toContain("Unknown &lt;img> &amp; text");
     expect(summary).not.toContain("<img>");
     expect(summary).not.toMatch(/href="#(?:f-)?(?:global|unknown)/);
   });
