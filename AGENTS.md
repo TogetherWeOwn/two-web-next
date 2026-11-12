@@ -27,6 +27,8 @@ Guidance for human and AI contributors.
 - Credit the contributors whose work you build on.
 - Never commit `.dev.vars`, secrets, or `node_modules/`. Use variable names in docs, never values.
 - Read [CONSTRAINTS.md](CONSTRAINTS.md) before writing code. Do not weaken it to make a change pass.
+- No features, content, accessibility or design are cut to save bytes. A size-driven design trade-off needs a product/UX decision, not only a perf PR.
+- Summed-gzip chunk regrouping alone is not code savings. Remove duplicate Hono implementations through the existing route migration work, not by expanding a performance PR.
 - Done means merged. Do not leave an orphan PR open: merge it, or close it with a note naming its replacement.
 
 ## Commands

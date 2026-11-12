@@ -3,10 +3,10 @@ name: rum-web-vitals
 # Nightly real-user Core Web Vitals check for production (docs/rum-web-vitals.md).
 # Reads the last 24 h of Cloudflare Web Analytics through the GraphQL Analytics
 # API with a READ-ONLY token and fails when a p75 exceeds ci/rum-budget.json
-# (only with enough samples). A failed run on main is picked up by the host
-# flake ledger, which re-runs it once and opens a main-red card for the Web
-# Engineer. Until the token and variables exist the check reports
-# "not configured" and passes. Public repo: standard GitHub-hosted runners.
+# (only with enough samples). Missing config or fewer than minSamples fails
+# collection health, not the metric verdict. A failed run on main is picked up
+# by the host flake ledger, which re-runs it once and opens a main-red card for
+# the Web Engineer. Public repo: standard GitHub-hosted runners.
 
 on:
   schedule:
@@ -33,9 +33,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - name: p75 LCP / CLS / INP against ci/rum-budget.json
+      - name: Required collection health and p75 LCP / CLS / INP against ci/rum-budget.json
         env:
           CF_ANALYTICS_READ_TOKEN: ${{ secrets.CF_ANALYTICS_READ_TOKEN }}
           CF_RUM_ACCOUNT_ID: ${{ vars.CF_RUM_ACCOUNT_ID }}
           CF_RUM_SITE_TAG: ${{ vars.CF_RUM_SITE_TAG }}
-        run: node ci/rum-check.mjs
+        run: node ci/rum-check.mjs --require-collection
