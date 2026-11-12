@@ -14,14 +14,14 @@
 // bytes before its run. Production source, CSP headers, fixture identity and
 // ci/lighthouserc.cjs are untouched: the Lighthouse settings are copied from the
 // checked-in config; only the single URL differs. The engine is the existing
-// `lhci collect` (@lhci/cli), one run per invocation, so every raw LHR is kept.
+// Lighthouse Node API, one attempt per invocation, so failed LHRs are kept.
 //
 // Order alternates control/variant (ABBA-style per round) so drift is not
 // confounded with a variant: each variant gets 3 controls and 3 variant runs.
 //
 // Usage: node ci/join-lcp-diagnostic.mjs [--out artifacts/join-lcp-diagnostic]
 // Selftest: node --test ci/join-lcp-diagnostic.test.mjs
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
@@ -292,22 +292,25 @@ export function resolveSha(env = process.env, git = spawnSync) {
   };
 }
 
-function lhciCollect(configPath, cwd) {
-  return new Promise((resolveRun) => {
-    const child = spawn(
-      process.execPath,
-      [require.resolve("@lhci/cli/src/cli.js"), "collect", `--config=${configPath}`],
-      {
-        cwd,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    let output = "";
-    child.stdout.on("data", (chunk) => (output += chunk));
-    child.stderr.on("data", (chunk) => (output += chunk));
-    child.on("close", (code) => resolveRun({ code, output }));
-    child.on("error", (error) => resolveRun({ code: 1, output: String(error) }));
-  });
+export async function lighthouseCollect(configPath, cwd, dependencies = {}) {
+  let chrome;
+  try {
+    const lighthouse = dependencies.lighthouse ?? (await import("lighthouse")).default;
+    const launch = dependencies.launch ?? (await import("chrome-launcher")).launch;
+    const collect = JSON.parse(readFileSync(configPath, "utf8")).ci.collect;
+    const { chromeFlags, ...settings } = collect.settings;
+    chrome = await launch({ chromeFlags: [...chromeFlags.split(/\s+/), "--headless=new"] });
+    const result = await lighthouse(collect.url[0], { ...settings, port: chrome.port });
+    if (!result?.lhr) throw new Error("Lighthouse returned no LHR");
+    const dir = join(cwd, ".lighthouseci");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "lhr-1.json"), JSON.stringify(result.lhr));
+    return { code: result.lhr.runtimeError ? 1 : 0, output: "One Lighthouse attempt completed" };
+  } catch (error) {
+    return { code: 1, output: String(error?.stack || error) };
+  } finally {
+    if (chrome) await chrome.kill();
+  }
 }
 
 const write = (file, data) =>
@@ -317,7 +320,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const outIndex = argv.indexOf("--out");
   const out = resolve(outIndex >= 0 ? argv[outIndex + 1] : OUTPUT_DIR);
   const base = deps.base ?? require("./lighthouserc.cjs");
-  const collect = deps.collect ?? lhciCollect;
+  const collect = deps.collect ?? lighthouseCollect;
   const upstream = deps.upstream ?? UPSTREAM;
   const { startFixture } = deps.admission ?? require("./lighthouse-admission.cjs");
   const log = deps.log ?? console.log;

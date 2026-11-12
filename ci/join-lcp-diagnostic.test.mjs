@@ -12,6 +12,7 @@ import {
   buildCollectConfig,
   createProxy,
   main,
+  lighthouseCollect,
   planRuns,
   resolveSha,
   scheduleStylesheetsLate,
@@ -144,6 +145,48 @@ test("config copies checked-in settings verbatim, only the URL differs", () => {
       ),
     /loopback/,
   );
+});
+
+test("collector makes one attempt and retains a runtime-error LHR", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "join-attempt-"));
+  let calls = 0;
+  let kills = 0;
+  try {
+    const configPath = join(dir, "config.json");
+    const config = buildCollectConfig(require("./lighthouserc.cjs"), 1234);
+    writeFileSync(configPath, JSON.stringify(config));
+    const result = await lighthouseCollect(configPath, dir, {
+      launch: async ({ chromeFlags }) => {
+        assert.deepEqual(chromeFlags, [
+          "--no-sandbox",
+          "--disable-dev-shm-usage",
+          "--headless=new",
+        ]);
+        return {
+          port: 9876,
+          kill: async () => {
+            kills += 1;
+          },
+        };
+      },
+      lighthouse: async (url, flags) => {
+        calls += 1;
+        assert.equal(url, config.ci.collect.url[0]);
+        assert.equal(flags.port, 9876);
+        assert.equal(flags.throttlingMethod, config.ci.collect.settings.throttlingMethod);
+        return { lhr: { runtimeError: { code: "FAIL" } } };
+      },
+    });
+    assert.equal(result.code, 1);
+    assert.equal(calls, 1);
+    assert.equal(kills, 1);
+    assert.equal(
+      JSON.parse(readFileSync(join(dir, ".lighthouseci/lhr-1.json"))).runtimeError.code,
+      "FAIL",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("LHR must stay on the proxy origin", () => {
