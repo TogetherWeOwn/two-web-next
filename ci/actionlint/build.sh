@@ -92,3 +92,5 @@ run_tests queue
 "$go" -C "$src" mod verify
 sha256sum -c "$work/modules.sha256"
 node "$root/ci/actionlint/queue-cli.mjs" "$work/stock-actionlint" "$work/actionlint"
+# Lint the original workflow files with the queue-aware checker.
+"$work/actionlint" -shellcheck= -pyflakes=
