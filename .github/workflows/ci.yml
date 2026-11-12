@@ -99,9 +99,11 @@ jobs:
           node ci/build-leaf-css.mjs
           npm run build --prefix web
       - name: Test pinned join fixture rendering
+        working-directory: pinned-application
         env:
           APP_ROOT: ${{ github.workspace }}/pinned-application
-        run: node --import ./pinned-application/node_modules/tsx/dist/loader.mjs --test ci/join-state-render.test.mjs
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/pinned-application/tsconfig.json
+        run: node --import tsx --test "$GITHUB_WORKSPACE/ci/join-state-render.test.mjs"
 
   bot-contract-drift:
     name: bot-contract-drift
