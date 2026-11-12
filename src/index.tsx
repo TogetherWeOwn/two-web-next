@@ -61,6 +61,7 @@ import { trustHosts } from "./trust-hosts";
 import { authStatusScript, enableAuthStatus } from "./auth-status";
 import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
+import { withStreamedBody } from "./html-stream";
 import { webmcpPilot } from "./webmcp-pilot";
 
 export { faqLastReviewed } from "./faq-last-reviewed";
@@ -72,6 +73,20 @@ export { rulesLastUpdated } from "./rules-last-updated";
 export const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Wire encoding, outermost (TWO-7591): staged edge probes showed every HTML
+// response leaving with a fixed Content-Length plus `cache-control:
+// no-transform`, the platform's untransformable-body marker, so Lighthouse
+// saw raw HTML while CSS/JSON compressed. Streaming the final response body
+// drops the declared length so the edge applies its own br/gzip negotiation.
+// Registered before requestLog so its post-next wrap sees the fully settled
+// response; Hono's header-merge copy preserves the streamed body and the
+// automatic encodeBody default. Same seam serves the Kit worker's Hono
+// fallback via honoFetch; Kit-resolved pages stream in hooks.server.ts.
+app.use("*", async (c, next) => {
+  await next();
+  c.res = withStreamedBody(c.res);
+});
 
 // The violation sink (TOG-10107): the CSP report-to directive selects the
 // Reporting-Endpoints group. No report-uri: it is deprecated (ZAP 10055

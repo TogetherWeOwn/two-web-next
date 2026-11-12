@@ -333,6 +333,20 @@ export async function smoke(
       if (route.type) {
         check(contentType === route.type, `Content-Type ${route.type}`, contentType ?? "missing");
       }
+      // TWO-7591: HTML must reach the client compressed. A regression that
+      // declares a fixed Content-Length on text/html gets marked
+      // no-transform by the edge and skips br/gzip entirely (the
+      // Lighthouse-flagged staging defect). The probe runs only on https
+      // origins: loopback fixtures never encode. Node fetch negotiates
+      // Accept-Encoding itself, so a compressed wire body surfaces as the
+      // Content-Encoding header the platform appends.
+      if (contentType === "text/html" && base.protocol === "https:") {
+        check(
+          ["br", "gzip", "zstd"].includes(headers.get("content-encoding") ?? ""),
+          "Content-Encoding br/gzip/zstd on HTML",
+          headers.get("content-encoding") ?? "uncompressed",
+        );
+      }
       const body = await response.text();
       if (route.path === "/up") {
         // Cutover identity gate (TOG-12863): the deploy target must answer as
