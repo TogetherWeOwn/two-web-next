@@ -194,6 +194,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - name: Install-hook inventory and asset boundary tests
+        if: github.event_name == 'pull_request'
+        run: node --test ci/install-hook-inventory.test.mjs ci/asset-output-boundary.test.mjs
       - name: Install locked workflow parser without hooks
         if: github.event_name == 'pull_request'
         run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
@@ -255,6 +258,8 @@ jobs:
       # resolution and explicit selection without an app build or database.
       - name: Fresh-worktree check bootstrap
         run: env -u DATABASE_URL -u BOT_DATABASE_URL npm --ignore-scripts run test:unit -- test/check-bootstrap.test.ts test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
+      - name: Incident staging observation selftests (fixtures, no network)
+        run: node --test ci/incident-staging-observation.test.mjs
       - name: Timeout ledger ratchet (HARD)
         run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
@@ -563,7 +568,7 @@ jobs:
         if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
         run: echo "Docs-only or draft change per the scope job; required check passes without the heavy suite."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        if: needs.scope.outputs.docs_only != 'true'
         with:
           # Migration history needs the base commit; fresh (hosted/overflow)
           # workspaces lack it, unlike reused self-hosted ones.
@@ -612,6 +617,9 @@ jobs:
       - name: Security-pin contracts selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:security-pins:selftest && node ci/check-security-pins.mjs --static-only
+      - name: Incident issue lifecycle fixtures
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/incident-issue-lifecycle.test.mjs
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit:selftest
