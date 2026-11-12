@@ -119,6 +119,42 @@ describe("hook inventory", () => {
       assert.equal(inv.kitHooks[name], "node kit.js");
     }
   });
+  it("reports implicit node-gyp hooks and npm suppression cases for root and Kit", () => {
+    const absent = fixture(REVIEWED_ROOT_HOOKS);
+    assert.equal(inventoryHooks(absent).rootHooks.install, undefined);
+    mkdirSync(join(absent, "binding.gyp"));
+    assert.equal(inventoryHooks(absent).rootHooks.install, undefined);
+    for (const [extra, scripts, implicit] of [
+      [{}, {}, true],
+      [{ gypfile: false }, {}, false],
+      [{}, { preinstall: "custom" }, false],
+      [{}, { install: "custom" }, false],
+      [{}, { install: "" }, true],
+    ]) {
+      const root = fixture({ ...REVIEWED_ROOT_HOOKS, ...scripts });
+      put(
+        root,
+        "package.json",
+        JSON.stringify({ ...extra, scripts: { ...REVIEWED_ROOT_HOOKS, ...scripts } }),
+      );
+      put(root, "web/package.json", JSON.stringify({ ...extra, scripts }));
+      put(root, "binding.gyp", "{}");
+      put(root, "web/binding.gyp", "{}");
+      const inv = inventoryHooks(root);
+      assert.equal(inv.rootHooks.install === "node-gyp rebuild", implicit);
+      assert.equal(inv.kitHooks.install === "node-gyp rebuild", implicit);
+      if (implicit) assert.equal(inv.ok, false);
+    }
+  });
+  it("preserves unreviewed parent-relative generator identity", () => {
+    const root = fixture({ postinstall: "node ../ci/build-leaf-css.mjs" });
+    put(root, "ci/build-leaf-css.mjs", "wrong file");
+    const inv = inventoryHooks(root);
+    assert.deepEqual(inv.rootHookGenerators, [
+      { hook: "postinstall", path: "../ci/build-leaf-css.mjs", reviewed: false, sha256: null },
+    ]);
+    assert.equal(inv.ok, false);
+  });
   it("classifies an unreviewed script", () => {
     const inv = inventoryHooks(fixture({ postinstall: "node ci/other-generator.mjs" }));
     assert.equal(inv.ok, false);

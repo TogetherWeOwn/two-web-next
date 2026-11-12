@@ -1,7 +1,7 @@
 // Inventory npm lifecycle hooks and locked sources without installing dependencies.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -89,8 +89,22 @@ export function inventoryHooks(root = repoRoot) {
   const pick = (rel) => {
     const path = join(root, rel);
     if (!existsSync(path)) return null;
-    const scripts = JSON.parse(readFileSync(path, "utf8")).scripts ?? {};
-    return Object.fromEntries(LIFECYCLE.filter((n) => n in scripts).map((n) => [n, scripts[n]]));
+    const manifest = JSON.parse(readFileSync(path, "utf8"));
+    const scripts = manifest.scripts ?? {};
+    const hooks = Object.fromEntries(
+      LIFECYCLE.filter((n) => n in scripts).map((n) => [n, scripts[n]]),
+    );
+    const binding = join(dirname(path), "binding.gyp");
+    if (
+      !scripts.install &&
+      !scripts.preinstall &&
+      manifest.gypfile !== false &&
+      existsSync(binding) &&
+      statSync(binding).isFile()
+    ) {
+      hooks.install = "node-gyp rebuild";
+    }
+    return hooks;
   };
   const locks = Object.fromEntries(
     ["package-lock.json", "web/package-lock.json"].map((path) => [path, inventoryLock(root, path)]),
@@ -106,14 +120,16 @@ export function inventoryHooks(root = repoRoot) {
   }
   const rootHookGenerators = [];
   for (const [name, command] of Object.entries(rootHooks)) {
-    for (const path of command.match(/\b[\w./-]+\.(?:mjs|cjs|js|ts|sh)\b/g) ?? []) {
+    for (const path of command.match(/[\w./-]+\.(?:mjs|cjs|js|ts|sh)\b/g) ?? []) {
       const isReviewed = REVIEWED_FIRST_PARTY_GENERATORS.includes(path);
-      const file = join(root, path);
+      const file = resolve(root, path);
+      const fromRoot = relative(resolve(root), file);
+      const insideRoot = fromRoot !== ".." && !fromRoot.startsWith("../") && !isAbsolute(fromRoot);
       rootHookGenerators.push({
         hook: name,
         path,
         reviewed: isReviewed,
-        sha256: existsSync(file) ? sha256(readFileSync(file)) : null,
+        sha256: insideRoot && existsSync(file) ? sha256(readFileSync(file)) : null,
       });
       if (!isReviewed) problems.push(`root hook ${name} runs unreviewed script ${path}`);
     }
