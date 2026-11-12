@@ -31,6 +31,7 @@ before(async () => {
     "join-state-evidence.test.mjs",
     "join-state-evidence-source.mjs",
     "join-state-fixtures.mjs",
+    "join-state-render.mjs",
   ]) {
     await writeFile(join(controller, "ci", file), `fixture ${file}\n`);
   }
@@ -90,6 +91,7 @@ test("writes pinned identities, complete image metadata and file hashes", async 
     harnessSha256: "join-state-evidence.test.mjs",
     sourceHelperSha256: "join-state-evidence-source.mjs",
     fixtureHelperSha256: "join-state-fixtures.mjs",
+    renderHelperSha256: "join-state-render.mjs",
   })) {
     assert.equal(manifest[key], sha256(await readFile(join(controller, "ci", file))));
   }
