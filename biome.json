@@ -82,6 +82,10 @@
       "linter": { "enabled": false }
     },
     {
+      "includes": ["test/fixtures/bot-site-contract-v2.json"],
+      "formatter": { "enabled": false }
+    },
+    {
       "includes": [
         "test/import-audit.test.ts",
         "test/import-events-rsvps.test.ts",

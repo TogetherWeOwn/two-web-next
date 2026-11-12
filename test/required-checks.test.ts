@@ -1,4 +1,6 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -94,11 +96,53 @@ describe("required checks always report", () => {
     const ci = readFileSync(join(dir, "ci.yml"), "utf8");
     const ok = job(ci, "ci-ok");
     expect(ok).toMatch(
-      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
+      /\n    needs:\s+\[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope, bot-contract-drift\]\n/,
     );
+    expect(ok).toContain("BOT_CONTRACT_RESULT: ${{ needs.bot-contract-drift.result }}");
+    expect(ok).toContain('run: test "$BOT_CONTRACT_RESULT" = success');
     expect(ok).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     // ci-ok is required (ruleset protect-main); the change-gating section documents what it aggregates.
     expect(readFileSync("CONTRIBUTING.md", "utf8")).toContain("### Change-gated CI and `ci-ok`");
+  });
+
+  it("runs the production fixture comparison against matching and mismatched bytes", () => {
+    const ci = readFileSync(join(dir, "ci.yml"), "utf8");
+    const drift = job(ci, "bot-contract-drift");
+    const script = drift.match(
+      /      - name: Compare canonical bot fixture with site mirror\n        run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(script).toBeDefined();
+    const root = mkdtempSync(join(tmpdir(), "bot-contract-drift-"));
+    try {
+      mkdirSync(join(root, "bin"));
+      mkdirSync(join(root, "test/fixtures"), { recursive: true });
+      const canonical = join(root, "canonical.json");
+      const mirror = join(root, "test/fixtures/bot-site-contract-v2.json");
+      writeFileSync(
+        join(root, "bin/curl"),
+        '#!/bin/bash\nwhile [ "$1" != "-o" ]; do shift; done\ncp "$CANONICAL_FIXTURE" "$2"\n',
+        { mode: 0o755 },
+      );
+      const run = (source: string, local: string) => {
+        writeFileSync(canonical, source);
+        writeFileSync(mirror, local);
+        return spawnSync("bash", ["-e", "-c", script ?? ""], {
+          cwd: root,
+          env: {
+            ...process.env,
+            PATH: `${join(root, "bin")}:${process.env.PATH}`,
+            CANONICAL_FIXTURE: canonical,
+          },
+          encoding: "utf8",
+          timeout: 3000,
+        });
+      };
+      expect(run("same", "same").status).toBe(0);
+      expect(run("canonical changed", "same").status).toBe(1);
+      expect(run("same", "mirror changed").status).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // package.json declares `^22.23.0 || >=24` (22.23.0 is the 22.x floor
