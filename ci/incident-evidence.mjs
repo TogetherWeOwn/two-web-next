@@ -35,25 +35,27 @@ async function boundedText(response, limit) {
 export function githubApi(token, fetchImpl = fetch) {
   return async (method, path, body) => {
     const prefix = "/repos/TogetherWeOwn/two-web-next/";
-    if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//") || path.includes("\\"))
+    if (
+      typeof path !== "string" ||
+      !path.startsWith("/") ||
+      path.startsWith("//") ||
+      path.includes("\\")
+    )
       throw new Error("Invalid incident API path");
     const url = new URL(`https://api.github.com${prefix.slice(0, -1)}${path}`);
     if (!url.pathname.startsWith(prefix)) throw new Error("Invalid incident API path");
-    const response = await fetchImpl(
-      url.href,
-      {
-        method,
-        redirect: "error",
-        signal: AbortSignal.timeout(15_000),
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github+json",
-          "X-GitHub-Api-Version": "2022-11-28",
-          "Content-Type": "application/json",
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    const response = await fetchImpl(url.href, {
+      method,
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
       },
-    );
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
     if (!response.ok) {
       const error = new Error(`Incident API ${method} failed (HTTP ${response.status})`);
       error.status = response.status;
