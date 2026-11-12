@@ -11,7 +11,10 @@ const check = workflow.slice(workflow.indexOf("\n  check:\n"));
 const args = ["run", "--coverage", "--pool=threads"];
 
 test("the required check keeps full coverage in isolated serial threads inside main's job budget", async () => {
-  assert.equal(manifest.scripts["test:coverage"], `vitest ${args.join(" ")}`);
+  assert.equal(
+    manifest.scripts["test:coverage"],
+    `npm run generate:first-party && vitest ${args.join(" ")}`,
+  );
   assert.equal(manifest.scripts["pretest:coverage"], undefined);
   assert.equal(manifest.scripts["posttest:coverage"], undefined);
   // main owns the budget (raised 10 -> 20 -> 40 for shared-runner
@@ -345,8 +348,9 @@ for (const scopeName of ["docs_only", "draft"]) {
 
 // Exercise the shipped npm script against a local CLI fixture. A successful-looking
 // summary must not turn a failed coverage invocation into a passing required gate.
-for (const [label, body, expected] of [
+for (const [label, body, expected, prepareFails] of [
   ["success", "process.exitCode = 0;", 0],
+  ["preparation failure", 'console.log("unexpected coverage");', 9, true],
   [
     "coverage failure after a passing summary",
     'console.log("Tests 2808 passed"); process.exitCode = 7;',
@@ -364,8 +368,15 @@ for (const [label, body, expected] of [
       JSON.stringify({
         private: true,
         type: "module",
-        scripts: { "test:coverage": manifest.scripts["test:coverage"] },
+        scripts: {
+          "test:coverage": manifest.scripts["test:coverage"],
+          "generate:first-party": "node prepare.mjs",
+        },
       }),
+    );
+    await writeFile(
+      join(fixture, "prepare.mjs"),
+      `console.log("preparation completed"); process.exitCode = ${prepareFails ? 9 : 0};`,
     );
     const cli = join(fixture, "node_modules/.bin/vitest");
     await writeFile(
@@ -395,6 +406,8 @@ ${body}
     });
     assert.equal(signal, null, stderr);
     assert.equal(code, expected, stderr);
+    assert.match(stdout, /preparation completed/);
+    if (prepareFails) assert.doesNotMatch(stdout, /unexpected coverage/);
     if (expected === 7) assert.match(stdout, /Tests 2808 passed/);
   });
 }
