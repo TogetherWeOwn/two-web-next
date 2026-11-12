@@ -35,6 +35,9 @@ import {
   type KitEventEditView,
 } from "../src/admin/kit-event-edit";
 import { parseEventForm, type EventFormInput } from "../src/admin/validation-event-form";
+import { ValidationError } from "../src/admin/validation-shared";
+import { EventFormFields } from "../src/admin/pages/event-form-fields";
+import { ROUTE_MANIFEST } from "../src/route-ownership";
 
 const db = {} as Db;
 const now = new Date("2026-06-15T12:00:00.000Z");
@@ -123,6 +126,16 @@ async function save(
   const input = parseEventForm(submitted);
   const next = applyUpdate(row, input);
   return { submitted, input, next, view: await viewOf(next) };
+}
+
+function fieldErrors(form: Record<string, unknown>): Record<string, string> {
+  try {
+    parseEventForm(form);
+  } catch (err) {
+    if (!(err instanceof ValidationError)) throw err;
+    return err.fields;
+  }
+  return {};
 }
 
 describe("native edit control extraction", () => {
@@ -312,5 +325,152 @@ describe("omitted controls keep the existing full-form null semantics", () => {
       if (other === name) expect(parsed[other]).toBeNull();
       else expect(parsed[other]).toBeTruthy();
     }
+  });
+});
+
+describe("limits and public URL policy", () => {
+  const base = async () => submittedFields(render(await viewOf(storedRow)));
+
+  it("refuses over-limit values with the Hono field messages", async () => {
+    const f = await base();
+    expect(fieldErrors({ ...f, accessibility_notes: "a".repeat(1001) })).toEqual({
+      accessibility_notes: "Keep accessibility notes to 1000 characters.",
+    });
+    expect(fieldErrors({ ...f, organizer_name: "a".repeat(501) })).toEqual({
+      organizer_name: "Keep the organizer name to 500 characters.",
+    });
+    expect(fieldErrors({ ...f, join_url: `https://example.com/${"a".repeat(2048)}` })).toEqual({
+      join_url: "Keep the public joining link to 2048 characters.",
+    });
+    expect(fieldErrors({ ...f, join_instructions: "a".repeat(5001) })).toEqual({
+      join_instructions: "Keep joining instructions to 5000 characters.",
+    });
+  });
+
+  it("accepts at-limit values and resolves them back unchanged", async () => {
+    const url = `https://example.com/${"a".repeat(2048 - "https://example.com/".length)}`;
+    const { view } = await save(storedRow, (f) => ({
+      ...f,
+      accessibility_notes: "a".repeat(1000),
+      organizer_name: "b".repeat(500),
+      join_url: url,
+      join_instructions: "c".repeat(5000),
+    }));
+    const values = view.values as unknown as Record<string, string>;
+    expect(values.accessibility_notes).toHaveLength(1000);
+    expect(values.organizer_name).toHaveLength(500);
+    expect(values.join_url).toBe(url);
+    expect(values.join_instructions).toHaveLength(5000);
+  });
+
+  it("refuses non-public, credentialed and malformed joining links", async () => {
+    const f = await base();
+    const refusal = "Enter a valid public HTTP or HTTPS link without sign-in credentials.";
+    for (const bad of [
+      "ftp://example.com/lobby",
+      "javascript:alert(1)",
+      "/relative/path",
+      "//example.com/lobby",
+      "https://user:pass@example.com/lobby",
+      "https://example.com/has space",
+      "https://",
+      "not a url",
+    ]) {
+      expect(fieldErrors({ ...f, join_url: bad }).join_url, bad).toBe(refusal);
+    }
+  });
+
+  it("accepts public http and https links", async () => {
+    const f = await base();
+    for (const ok of ["https://example.com/lobby", "http://example.com/lobby"]) {
+      expect(parseEventForm({ ...f, join_url: ok }).join_url).toBe(ok);
+    }
+  });
+});
+
+describe("rejected save re-renders the access/joining fields inline", () => {
+  it("shows retained input, aria wiring and per-field alerts", async () => {
+    // The Kit route is GET-only: the resolver's fieldsHtml is rendered with
+    // errors: {} for a fresh read, and rejected saves re-render in Hono via
+    // EventFormFields (edit mode) with the submitted values and the field
+    // errors. Render that production path, not the Svelte view with
+    // overridden errors — the view's fieldsHtml is already a fixed string.
+    const rejected = {
+      accessibility_notes: "a".repeat(1001),
+      organizer_name: "b".repeat(501),
+      join_url: "ftp://example.com/lobby",
+      join_instructions: "c".repeat(5001),
+    };
+    const errors = fieldErrors({
+      ...submittedFields(render(await viewOf(storedRow))),
+      ...rejected,
+    });
+    expect(Object.keys(errors).sort()).toEqual([...ACCESS].sort());
+    const view = await viewOf(storedRow);
+    const html = String(
+      EventFormFields({
+        mode: "edit",
+        values: { ...view.values, ...rejected },
+        errors,
+        action: `/admin/events/${KEY}`,
+      }),
+    );
+    const form = firstForm(html);
+    const submitted = submittedFields(html);
+    for (const name of ACCESS) {
+      const el = controlNamed(html, name)!;
+      const id = `f-${name.replaceAll("_", "-")}-error`;
+      expect(attr(el, "aria-invalid"), name).toBe("true");
+      const describedBy = (attr(el, "aria-describedby") ?? "").split(/\s+/).filter(Boolean);
+      expect(describedBy, name).toContain(id);
+      for (const reference of describedBy) {
+        expect(
+          elements(form).filter((e) => attr(e, "id") === reference),
+          reference,
+        ).toHaveLength(1);
+      }
+      expect(submitted[name]).toBe(rejected[name]);
+      const alert = elements(form).find((e) => attr(e, "data-testid") === `error-${name}`);
+      expect(alert, name).toBeDefined();
+      expect(attr(alert!, "id")).toBe(id);
+      expect(attr(alert!, "role")).toBe("alert");
+      expect(textOf(alert!).trim()).toBe(errors[name]);
+    }
+  });
+
+  it("leaves the controls unmarked on a fresh read", async () => {
+    const html = render(await viewOf(storedRow));
+    for (const name of ACCESS) {
+      expect(attr(controlNamed(html, name)!, "aria-invalid")).toBeUndefined();
+    }
+  });
+});
+
+describe("resolver admission and ownership", () => {
+  it("answers notFound for a missing row and unavailable without a database", async () => {
+    expect((await resolveKitEventEdit(KEY, {}, depsFor(null))).kind).toBe("notFound");
+    expect((await resolveKitEventEdit("", {}, depsFor(storedRow))).kind).toBe("notFound");
+    expect((await resolveKitEventEdit(KEY, {}, depsFor(storedRow, { db: null }))).kind).toBe(
+      "unavailable",
+    );
+  });
+
+  it("targets the form at the stored row key, never another event", async () => {
+    const other = { ...storedRow, eventKey: "EVTOTHER1" } as KitEventEditRow;
+    const outcome = await resolveKitEventEdit("EVTOTHER1", {}, depsFor(other));
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(attr(firstForm(render(outcome.view)), "action")).toBe("/admin/events/EVTOTHER1");
+  });
+
+  it("keeps edit routes Hono-owned: the GET is disabled and no POST edit entry exists", () => {
+    const entry = ROUTE_MANIFEST.find(
+      (route) => route.method === "GET" && route.path === "/admin/events/:key",
+    );
+    expect(entry?.enabled).toBe(false);
+    expect(
+      ROUTE_MANIFEST.filter(
+        (route) => route.method === "POST" && route.path.startsWith("/admin/events/"),
+      ),
+    ).toEqual([]);
   });
 });
