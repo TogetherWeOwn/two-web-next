@@ -88,6 +88,8 @@
     "build:assets:check": "node ci/minify-assets.mjs --check",
     "dev:lighthouse": "wrangler dev --config ci/wrangler.lighthouse.jsonc --local --ip 127.0.0.1 --port 8787",
     "lighthouse": "node ci/lighthouse-perf-run.mjs",
+    "lighthouse:join-diagnostic": "node ci/join-lcp-diagnostic.mjs",
+    "lighthouse:join-diagnostic:selftest": "node --test ci/join-lcp-diagnostic.test.mjs",
     "lighthouse:origin": "node ci/lighthouse-origin-run.mjs",
     "lighthouse:origin:selftest": "node --test ci/lighthouse-origin.test.mjs && node ci/lighthouse-origin-run.mjs --selftest",
     "lighthouse:evidence:selftest": "node --test ci/lighthouse-evidence.test.mjs",

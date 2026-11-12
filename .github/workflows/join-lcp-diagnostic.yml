@@ -1,0 +1,61 @@
+name: Join LCP diagnostic
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, converted_to_draft]
+    paths:
+      - .github/workflows/join-lcp-diagnostic.yml
+      - ci/join-lcp-diagnostic.mjs
+      - ci/join-lcp-diagnostic.test.mjs
+      - ci/join-lcp-diagnostic-wiring.test.mjs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: join-lcp-diagnostic-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  paired-fixture:
+    if: github.event.pull_request.draft == true
+    runs-on: ubuntu-latest
+    container:
+      image: node:24-bookworm
+    timeout-minutes: 45
+    env:
+      WRANGLER_SEND_METRICS: "false"
+      CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false"
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "false"
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - name: Prepare generated fixture inputs
+        run: |
+          node ci/build-ember-tokens.mjs --check
+          node ci/build-leaf-css.mjs
+      - name: Check diagnostic fixture and workflow wiring
+        run: node --test ci/join-lcp-diagnostic.test.mjs ci/join-lcp-diagnostic-wiring.test.mjs
+      - name: Install Chromium
+        run: |
+          npx playwright install --with-deps chromium
+          node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
+      - name: Run fixture counterfactual
+        run: node ci/join-lcp-diagnostic.mjs
+      - name: Retain independent samples
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: join-lcp-diagnostic-${{ github.event.pull_request.head.sha }}
+          path: artifacts/join-lcp-diagnostic/
+          if-no-files-found: warn
+          retention-days: 14
