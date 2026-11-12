@@ -88,6 +88,8 @@ describe("narrow database outage classification", () => {
     { accept: "text/html;q=1, application/json;q=0.1", format: "text/html" },
     { accept: "text/html;q=0.1, application/json;q=1", format: "application/json" },
     { accept: "text/html;q=0, application/json;q=0.5", format: "application/json" },
+    { accept: "text/html;q=0, text/*;q=1, application/json;q=0.5", format: "application/json" },
+    { accept: "text/html;q=0.1, text/*;q=1, application/json;q=0.5", format: "application/json" },
     { accept: "application/json;q=0, */*;q=1", format: "text/html" },
     { accept: "text/html;q=0, */*;q=1", format: "application/json" },
     { accept: "application/*;q=0.9, text/*;q=0.1", format: "application/json" },
