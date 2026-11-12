@@ -50,6 +50,10 @@ jobs:
           npx playwright install --with-deps chromium
           node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
       - name: Run fixture counterfactual
+        env:
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: ${{ github.workspace }}
         run: node ci/join-lcp-diagnostic.mjs
       - name: Retain independent samples
         if: always()

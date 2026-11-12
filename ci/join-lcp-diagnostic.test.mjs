@@ -105,7 +105,10 @@ test("heading font appends one #join-heading rule and preserves the rest", () =>
 test("source sha is the checked-out HEAD, validated against PR_HEAD_SHA", () => {
   const head = "a".repeat(40);
   const other = "b".repeat(40);
-  const git = (_cmd, args) => ({ stdout: args[0] === "rev-parse" ? `${head}\n` : " M x\n" });
+  const git = (_cmd, args) => ({
+    status: 0,
+    stdout: args[0] === "rev-parse" ? `${head}\n` : " M x\n",
+  });
   assert.deepEqual(resolveSha({ GITHUB_SHA: other }, git), {
     sha: head,
     expectedHeadSha: null,
@@ -122,7 +125,20 @@ test("source sha is the checked-out HEAD, validated against PR_HEAD_SHA", () => 
     /required/,
   );
   assert.throws(() => resolveSha({ PR_HEAD_SHA: "abc" }, git), /full sha/);
-  assert.throws(() => resolveSha({}, () => ({ stdout: "" })), /unavailable/);
+  assert.throws(() => resolveSha({}, () => ({ status: 0, stdout: "" })), /unavailable/);
+  assert.throws(
+    () => resolveSha({}, () => ({ status: 128, stderr: "unsafe repository" })),
+    /git rev-parse failed/,
+  );
+  assert.throws(
+    () =>
+      resolveSha({}, (_cmd, args) =>
+        args[0] === "rev-parse"
+          ? { status: 0, stdout: head }
+          : { status: 128, stderr: "status failed" },
+      ),
+    /git status failed/,
+  );
 });
 
 test("config copies checked-in settings verbatim, only the URL differs", () => {
@@ -302,7 +318,7 @@ const lhrFor = (origin, path = "/join") =>
 function baseDeps(upstream, out, collect, stops) {
   return {
     env: { PR_HEAD_SHA: "a".repeat(40) },
-    git: (_cmd, args) => ({ stdout: args[0] === "rev-parse" ? "a".repeat(40) : "" }),
+    git: (_cmd, args) => ({ status: 0, stdout: args[0] === "rev-parse" ? "a".repeat(40) : "" }),
     log: () => {},
     upstream: { host: "127.0.0.1", port: upstream.port },
     admission: {
@@ -397,8 +413,10 @@ test("main: a failed validation keeps its LHR, network log, order and failure", 
     assert.equal(order.attempted.length, 2);
     assert.equal(order.attempted[1].status, "failed");
     assert.match(order.failure, /non-loopback/);
-    assert.ok(
-      readFileSync(join(out, order.attempted[1].lhr[0].file), "utf8").includes("example.com"),
+    const savedLhr = JSON.parse(readFileSync(join(out, order.attempted[1].lhr[0].file), "utf8"));
+    assert.equal(
+      new URL(savedLhr.audits["network-requests"].details.items[0].url).hostname,
+      "example.com",
     );
     assert.ok(readFileSync(join(out, order.attempted[1].network), "utf8").includes("/join"));
   } finally {

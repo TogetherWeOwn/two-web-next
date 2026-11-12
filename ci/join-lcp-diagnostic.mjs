@@ -273,7 +273,15 @@ export function assertLoopbackLhr(lhr, proxyPort) {
 // commit, so it is never used). PR_HEAD_SHA, when set, is the explicit PR head the
 // checkout must equal; on pull_request events it is mandatory.
 export function resolveSha(env = process.env, git = spawnSync) {
-  const run = (args) => String(git("git", args, { encoding: "utf8" }).stdout || "").trim();
+  const run = (args) => {
+    const result = git("git", args, { encoding: "utf8" });
+    if (result.error || result.status !== 0) {
+      throw new Error(
+        `git ${args[0]} failed: ${result.error?.message || result.stderr || "unknown error"}`,
+      );
+    }
+    return String(result.stdout || "").trim();
+  };
   const head = run(["rev-parse", "HEAD"]);
   if (!/^[0-9a-f]{40}$/.test(head)) throw new Error("checked-out HEAD unavailable");
   const expected = env.PR_HEAD_SHA || null;
