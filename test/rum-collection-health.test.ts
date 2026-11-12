@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-const rumModulePath = ["..", "ci", "rum-check.mjs"].join("/");
-const { runRumCheck } = await import(rumModulePath);
+import { runRumCheck } from "../ci/rum-check.mjs";
 
 const budget = { lcpMs: 2500, cls: 0.1, inpMs: 200, minSamples: 50 };
 const env = {
