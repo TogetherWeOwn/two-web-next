@@ -69,10 +69,9 @@ describe("workflow runner labels", () => {
         // re-baselined in the same PR on bumps (docs/visual-regression.md).
         // ubuntu-24.04 is still GitHub-hosted Linux, so the self-hosted
         // queue-forever risk does not apply.
-        const allowed =
-          pinnedHostedJob(name, id)
-            ? [hosted, "ubuntu-24.04", byVisibility, byVisibilityPrGuarded, overflowSwitch(id)]
-            : [hosted, byVisibility, byVisibilityPrGuarded, overflowSwitch(id)];
+        const allowed = pinnedHostedJob(name, id)
+          ? [hosted, "ubuntu-24.04", byVisibility, byVisibilityPrGuarded, overflowSwitch(id)]
+          : [hosted, byVisibility, byVisibilityPrGuarded, overflowSwitch(id)];
         expect(allowed, `${name} job ${id}`).toContain(runsOn);
       }
     }
@@ -173,10 +172,9 @@ describe("workflow runner labels", () => {
           continue;
         }
         if (runsOn === undefined) continue;
-        const allowed =
-          pinnedHostedJob(name, id)
-            ? [hosted, "ubuntu-24.04", byVisibilityPrGuarded, overflowSwitch(id)]
-            : [hosted, byVisibilityPrGuarded, overflowSwitch(id)];
+        const allowed = pinnedHostedJob(name, id)
+          ? [hosted, "ubuntu-24.04", byVisibilityPrGuarded, overflowSwitch(id)]
+          : [hosted, byVisibilityPrGuarded, overflowSwitch(id)];
         expect(allowed, `${name} job ${id} keeps PR events hosted`).toContain(runsOn);
         if (runsOn.includes("self-hosted")) guardedJobs += 1;
         if (runsOn.includes("vars.CI_OVERFLOW_")) {
