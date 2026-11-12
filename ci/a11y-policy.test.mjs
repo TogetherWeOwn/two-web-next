@@ -186,10 +186,24 @@ test("the required ci-ok gate runs after a non-green audit and rejects every non
   // check no longer waits on the audit; the guard below lives in ci-ok.
   assert.match(check, /\n    needs: \[scope\]\n/);
   const ciOk = workflow.split("\n  ci-ok:\n")[1];
-  assert.match(
-    ciOk,
-    /\n    needs:\s+\[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope, bot-contract-drift\]\n/,
-  );
+  const needs = ciOk.match(/\n    needs:\s*\[([^\]]*)\]/)?.[1];
+  assert(needs, "ci-ok must declare its dependencies");
+  const dependencies = needs
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  for (const required of [
+    "a11y",
+    "lighthouse",
+    "bundle-budget",
+    "docs-links",
+    "check",
+    "node22-compat",
+    "scope",
+    "bot-contract-drift",
+  ]) {
+    assert(dependencies.includes(required), `ci-ok must depend on ${required}`);
+  }
   assert.match(ciOk, /\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   assert.match(ciOk, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);
   const guard = ciOk.match(
