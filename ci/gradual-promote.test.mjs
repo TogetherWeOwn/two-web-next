@@ -71,7 +71,7 @@ const verifierEnv = (ambient = process.env) => ({
 
 test("verifier fixture isolates its timeout from the ambient environment", async () => {
   for (const timeout of ["", "0", "301"]) {
-    const ambient = { PRE_PROMOTION_TIMEOUT_SECONDS: timeout };
+    const ambient = { ...process.env, PRE_PROMOTION_TIMEOUT_SECONDS: timeout };
     const env = verifierEnv(ambient);
     assert.equal(env.PRE_PROMOTION_TIMEOUT_SECONDS, "30");
     assert.ok(await verifierConfig(env));
