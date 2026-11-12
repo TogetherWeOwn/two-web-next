@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -43,6 +44,43 @@ function withSourceTree(run: (dir: string) => void) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+describe("production target preparation", () => {
+  it("supports old targets and fails closed when preparation fails", () => {
+    const workflow = readFileSync(join(root, ".github/workflows/deploy-production.yml"), "utf8");
+    const step = workflow.match(
+      /- name: Prepare first-party generated inputs\n(?:        #.*\n)*        run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(step).toBeDefined();
+    const dir = mkdtempSync(join(tmpdir(), "production-preparation-"));
+    try {
+      const marker = (value: string) =>
+        `node -e "require('fs').writeFileSync('prepared', '${value}')"`;
+      for (const [scripts, expected, status] of [
+        [{ "generate:first-party": marker("modern"), postinstall: marker("legacy") }, "modern", 0],
+        [{ postinstall: marker("legacy") }, "legacy", 0],
+        [
+          { "generate:first-party": "node -e 'process.exit(1)'", postinstall: marker("legacy") },
+          "",
+          1,
+        ],
+        [{ postinstall: "node -e 'process.exit(1)'" }, "", 1],
+        [{}, "", 0],
+      ] as const) {
+        rmSync(join(dir, "prepared"), { force: true });
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "fixture", scripts }));
+        const result = spawnSync("bash", ["-e", "-c", step ?? ""], { cwd: dir, encoding: "utf8" });
+        expect(result.error).toBeUndefined();
+        expect(result.status).toBe(status);
+        expect(
+          existsSync(join(dir, "prepared")) ? readFileSync(join(dir, "prepared"), "utf8") : "",
+        ).toBe(expected);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("first-party preparation in a fresh source tree", () => {
   for (const workspace of [".", "web"]) {

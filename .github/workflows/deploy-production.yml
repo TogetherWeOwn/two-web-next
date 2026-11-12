@@ -388,7 +388,13 @@ jobs:
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
       - run: npm ci --include=dev
       - name: Prepare first-party generated inputs
-        run: npm run generate:first-party
+        # Rescue targets can predate the explicit preparation command.
+        run: |
+          if node -e 'process.exit(typeof require("./package.json").scripts?.["generate:first-party"] === "string" ? 0 : 1)'; then
+            npm run generate:first-party
+          else
+            npm run --if-present postinstall
+          fi
       # No migrations, queue creation or SQL tests here: provisioning and W16
       # rehearsal are separate operator work. CI uses disposable SQL services.
       - name: Build production target without deploying
