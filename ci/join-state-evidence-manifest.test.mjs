@@ -52,8 +52,11 @@ before(async () => {
     tapSource,
     `import { describe, test } from 'node:test';\ndescribe('Join presence state evidence', () => {\n${names.map((name) => `test(${JSON.stringify(name)}, () => {});`).join("\n")}\n});\n`,
   );
+  const childEnv = { ...process.env };
+  delete childEnv.NODE_TEST_CONTEXT;
   report = execFileSync(process.execPath, ["--test", "--test-reporter=tap", tapSource], {
     encoding: "utf8",
+    env: childEnv,
   });
   await writeFile(join(output, "test-report.tap"), report);
 });
