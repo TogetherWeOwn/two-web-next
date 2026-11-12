@@ -156,6 +156,44 @@ test("staging replay freshness rejects old observations without suppressing usef
     },
   });
   await assert.rejects(observe(capped.api), /history.*cap/i);
+  const atCap = fixture({
+    workflowRuns: [source(43, 20), source(42)],
+    intercept(method, path) {
+      if (method === "GET" && path.startsWith("/actions/runs/43/attempts/"))
+        return { jobs: gates("skipped") };
+    },
+  });
+  assert.equal(
+    (await observe(atCap.api)).size,
+    0,
+    "exactly 20 snapshots succeeds; the cap rejects only the 21st",
+  );
+  const fullJobsPage = fixture({
+    workflowRuns: [source(42), source(43)],
+    intercept(method, path) {
+      if (method === "GET" && path.includes("/runs/43/attempts/1/jobs?")) {
+        if (path.endsWith("page=1"))
+          return {
+            jobs: Array.from({ length: 100 }, (_, i) => ({
+              name: `unit-${i}`,
+              conclusion: "skipped",
+            })),
+          };
+        return { jobs: [{ name: "staging-journeys", conclusion: "failure" }] };
+      }
+    },
+  });
+  const pagedJobs = await observe(fullJobsPage.api);
+  assert.ok(
+    pagedJobs.has("staging-journeys") && pagedJobs.has("e2e-staging"),
+    "a full 100-job page continues to a short final page that still yields observations",
+  );
+  assert.ok(
+    fullJobsPage.calls.some(
+      (call) => call.path.includes("/runs/43/attempts/1/jobs?") && call.path.endsWith("page=2"),
+    ),
+    "the second jobs page was read",
+  );
 });
 
 test("staging observations report per-key determinate evidence without partial aggregate recovery", () => {
