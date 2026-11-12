@@ -51,7 +51,7 @@ function assertShell(html: string) {
     expect(html).toContain("base-theme homepage-theme");
     expect(html).toContain(".hero h1");
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
+    expect(html).toContain('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
   } else {
     expect(html).toContain('rel="stylesheet" href="/styles.css"');
   }

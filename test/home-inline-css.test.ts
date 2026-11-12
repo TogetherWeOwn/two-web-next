@@ -12,13 +12,13 @@ describe("homepage inlined critical CSS", () => {
     const html = Layout({ title: "Fixture", theme: "home", inlineCriticalCss: true })!.toString();
     expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
+    expect(html).toContain('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
   });
 
   it("keeps the unflagged home shell on external stylesheets with the preload", () => {
     const html = Layout({ title: "Fixture", theme: "home" })!.toString();
     expect(html).toContain('rel="stylesheet" href="/styles.css"');
-    expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
+    expect(html).toContain('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
     expect(html).not.toContain("<style>");
   });
 
@@ -28,7 +28,7 @@ describe("homepage inlined critical CSS", () => {
     const html = await response.text();
     expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
+    expect(html).toContain('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
     const csp = response.headers.get("content-security-policy") ?? "";
     expect(csp).toContain(`style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`);
     expect(csp).not.toContain("unsafe-inline");
@@ -78,7 +78,7 @@ describe("homepage inlined critical CSS", () => {
     // simulated font completion hovered at the paint boundary and flipped `/`
     // LCP between FCP and FCP + ~450 ms. Early discovery keeps LCP at FCP.
     const assertPreloadBeforeStyle = (html: string) => {
-      const preload = html.indexOf('href="/fonts/mona-sans-latin-var.woff2" as="font"');
+      const preload = html.indexOf('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
       const style = html.indexOf("<style>");
       expect(preload).toBeGreaterThanOrEqual(0);
       expect(style).toBeGreaterThanOrEqual(0);

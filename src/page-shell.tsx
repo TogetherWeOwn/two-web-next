@@ -60,7 +60,7 @@ export const Layout: FC<
           // preloaded family (kit §2); serif and mono are display-optional.
           <link
             rel="preload"
-            href="/fonts/mona-sans-latin-var.woff2"
+            href="/fonts/mona-sans-latin-wght.woff2"
             as="font"
             type="font/woff2"
             crossorigin="anonymous"

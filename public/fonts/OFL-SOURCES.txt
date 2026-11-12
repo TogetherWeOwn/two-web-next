@@ -4,11 +4,18 @@ Reproduce: bash bin/fetch-ember-fonts.sh (needs pyftsubset for the subsets).
 
 1. Mona Sans variable (font.display: display and all UI)
    Upstream: Google Fonts css2 family "Mona Sans" (monasans v4),
-   axes wght 200-900 + wdth 75-125, latin subset.
-   File: mona-sans-latin-var.woff2 (98124 B)
-   sha256: 5ea3740633e5ac7af56c13d7e8ec32bcae12e7723e53d34284469a8947ccb2f3
-   Source bytes are Google's exact latin subset, unmodified; the subset's
-   unicode-range omits arrows, so arrows keep prior system rendering.
+   axes wght 200-900 + wdth 75-125, latin subset (98124 B, sha256
+   5ea3740633e5ac7af56c13d7e8ec32bcae12e7723e53d34284469a8947ccb2f3).
+   File: mona-sans-latin-wght.woff2 (39652 B)
+   sha256: 601c075ca70a22956716067e9741103d16cab2cb61c11f519a8c55605d2a47d9
+   Optimized: wdth axis pinned at its default 100 (fontTools instancer);
+   wght 200-900 kept. Same character set, OpenType features, name/license
+   metadata, and identical glyph outlines and advances at width 100 for
+   wght 200/400/600/700/900 (checked by bin/fetch-ember-fonts.sh), so it is
+   functionally equivalent per OFL-FAQ 2.8. The subset's unicode-range omits
+   arrows, so arrows keep prior system rendering.
+   Retiring: mona-sans-latin-var.woff2 (the unmodified 98124 B source above)
+   is no longer referenced and is removed in a follow-up change.
    Copyright: 2022 The Mona Sans Project Authors
    (https://github.com/github/mona-sans), Reserved Font Name "Mona".
    Served with font-display: swap, preloaded once on themed pages.
