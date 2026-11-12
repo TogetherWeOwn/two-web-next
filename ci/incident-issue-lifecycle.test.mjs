@@ -62,6 +62,32 @@ test("first failure creates the label and one keyed incident; repeats comment", 
   );
 });
 
+test("creation truncates title and content at their boundaries and retains the marker", async () => {
+  for (const delta of [-1, 0, 1]) {
+    const f = fixture();
+    const title = "t".repeat(200 + delta);
+    const body = "b".repeat(5800 + delta);
+    await sync(f, { title, body });
+    const created = f.state.issues[0];
+    assert.equal(created.title, title.slice(0, 200));
+    assert.equal(created.body, `${body.slice(0, 5800)}\n\n${marker("staging-quality")}\n`);
+    assert.ok(created.body.includes(marker("staging-quality")));
+  }
+});
+
+test("repeat and recovery comments truncate the complete message at 6000 characters", async () => {
+  for (const recovered of [false, true]) {
+    const prefix = recovered ? "Recovered.\n\n" : "Still failing.\n\n";
+    for (const delta of [-1, 0, 1]) {
+      const f = fixture({ issues: [keyed(1)] });
+      const body = "b".repeat(6000 - prefix.length + delta);
+      await sync(f, { body, recovered });
+      const comment = f.calls.find((call) => call.path === "/issues/1/comments");
+      assert.equal(comment.body.body, `${prefix}${body}`.slice(0, 6000));
+    }
+  }
+});
+
 test("recovery closes all keyed duplicates and does not create an incident", async () => {
   const f = fixture({ issues: [keyed(2), keyed(1), keyed(3, "other")] });
   await sync(f, { recovered: true });
