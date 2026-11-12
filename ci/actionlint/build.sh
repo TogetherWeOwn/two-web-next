@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Actions-only stock build; never install the checker on the host.
+# Actions-only compatibility build; never install a patched checker on the host.
 set -euo pipefail
 [[ "${GITHUB_ACTIONS:-}" == true ]] || { printf '%s\n' 'Run this gate in GitHub Actions.' >&2; exit 1; }
 root=$(git rev-parse --show-toplevel)
@@ -47,7 +47,8 @@ sha256sum -c "$work/modules.sha256"
 [[ -d "$src/.github/workflows" && ! -e "$src/.git" ]]
 mkdir "$src/.git"
 printf '%s  %s\n' \
-  3d2c2906c267b0954a2f634f7628e8ec3e4066884448384a43742ffaa9904d71 "$root/ci/actionlint/test-harness.patch" | sha256sum -c -
+  3d2c2906c267b0954a2f634f7628e8ec3e4066884448384a43742ffaa9904d71 "$root/ci/actionlint/test-harness.patch" \
+  5469da536031422230495284312dd17e25ab8f0554443b837fe210fb4881eb27 "$root/ci/actionlint/queue.patch" | sha256sum -c -
 sha256sum "$src/ast.go" "$src/parse.go" > "$work/grammar.sha256"
 apply_patch() {
   local patch="$root/ci/actionlint/$1.patch"
@@ -81,3 +82,13 @@ fi
 apply_patch test-harness
 run_tests stock
 sha256sum -c "$work/grammar.sha256"
+apply_patch queue
+[[ ! -e "$src/concurrency_queue_test.go" && ! -e "$src/queue-cases.json" ]]
+cp "$root/ci/actionlint/concurrency_queue_test.go" "$src/concurrency_queue_test.go"
+cp "$root/ci/actionlint/queue-cases.json" "$src/queue-cases.json"
+# Full inventory again, now including the added parser matrix.
+run_tests queue
+"$go" -C "$src" build -trimpath -o "$work/actionlint" ./cmd/actionlint
+"$go" -C "$src" mod verify
+sha256sum -c "$work/modules.sha256"
+node "$root/ci/actionlint/queue-cli.mjs" "$work/stock-actionlint" "$work/actionlint"
