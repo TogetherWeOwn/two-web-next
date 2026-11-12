@@ -159,20 +159,18 @@ const CONDITIONAL_PARAMETER = {
   in: "header",
   required: false,
   schema: { type: "string" },
-  description: "A matching ETag (including weak tags, lists or *) returns 304 after admission.",
+  description: "Matching ETag (weak, list or *) returns 304 after admission.",
 };
 
 const CACHE_HEADERS = {
-  ETag: { description: "Validator for the response representation.", schema: { type: "string" } },
+  ETag: { description: "Representation validator.", schema: { type: "string" } },
   "Cache-Control": {
-    description: "Public cache policy; cached events carry only their remaining freshness.",
+    description: "Public policy; cached events use remaining freshness.",
     schema: { type: "string" },
   },
 };
 
-function notModified() {
-  return { description: "Not modified; no response body.", headers: CACHE_HEADERS };
-}
+const NOT_MODIFIED = { description: "Not modified; no response body.", headers: CACHE_HEADERS };
 
 function jsonRef(name: string, description: string) {
   return {
@@ -215,7 +213,7 @@ export function getOpenApiDocument(appUrl: string) {
           parameters: [...PAGING_PARAMETERS, CONDITIONAL_PARAMETER],
           responses: {
             "200": jsonRef("PublicApiEventCollection", "At most 20 published events."),
-            "304": notModified(),
+            "304": NOT_MODIFIED,
             "429": error(429, "Shared public-read budget exhausted."),
             "500": error(500, "Unexpected failure reading event data. Try again shortly."),
             "503": error(503, "Event data temporarily unavailable."),
@@ -237,7 +235,7 @@ export function getOpenApiDocument(appUrl: string) {
           ],
           responses: {
             "200": jsonRef("PublicApiEvent", "The published event."),
-            "304": notModified(),
+            "304": NOT_MODIFIED,
             "404": error(404, "No published event with that key (drafts and cancelled rows 404)."),
             "422": error(422, "That event key is not valid."),
             "429": error(429, "Shared public-read budget exhausted."),
@@ -255,7 +253,7 @@ export function getOpenApiDocument(appUrl: string) {
               "CommunitySnapshot",
               "Live counts, null when the collectors are unavailable.",
             ),
-            "304": notModified(),
+            "304": NOT_MODIFIED,
             "429": error(429, "Shared public-read budget exhausted."),
           },
         },
@@ -267,7 +265,7 @@ export function getOpenApiDocument(appUrl: string) {
           parameters: [CONDITIONAL_PARAMETER],
           responses: {
             "200": jsonRef("JoinHandoff", "The public invite and intro."),
-            "304": notModified(),
+            "304": NOT_MODIFIED,
             "429": error(429, "Shared public-read budget exhausted."),
           },
         },
