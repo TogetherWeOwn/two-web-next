@@ -515,7 +515,7 @@ jobs:
         if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
         run: echo "Docs-only or draft change per the scope job; required check passes without the heavy suite."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        if: needs.scope.outputs.docs_only != 'true'
         with:
           # Migration history needs the base commit; fresh (hosted/overflow)
           # workspaces lack it, unlike reused self-hosted ones.
@@ -564,6 +564,9 @@ jobs:
       - name: Security-pin contracts selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:security-pins:selftest && node ci/check-security-pins.mjs --static-only
+      - name: Incident issue lifecycle fixtures
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/incident-issue-lifecycle.test.mjs
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit:selftest
