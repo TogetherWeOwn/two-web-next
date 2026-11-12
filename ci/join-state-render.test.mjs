@@ -39,8 +39,9 @@ test("renders the five real pinned application states without member names", asy
       for (const html of [fixture.hono, fixture.kit]) {
         assert.match(html, /join-heading/);
         assert.doesNotMatch(html, /private-member-one|private-member-two/);
-        if (fixture.name === "expired") assert.doesNotMatch(html, /42 members online/);
-        else assert.match(html, /42 members online/);
+        const text = html.replace(/<[^>]*>/g, "");
+        if (fixture.name === "expired") assert.doesNotMatch(text, /42\s+members online/);
+        else assert.match(text, /42\s+members online/);
       }
     }
   } finally {
