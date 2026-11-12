@@ -47,9 +47,16 @@ export function verifyEsbuild(root) {
     if (!result.jsShim) problems.push("esbuild bin is not the reviewed JS shim");
     // Never execute the binary when the static prerequisites failed.
     if (problems.length) return result;
-    // The proof must exercise the installed platform package, not an override.
-    const env = { ...process.env };
-    delete env.ESBUILD_BINARY_PATH;
+    // Pin the reviewed shim to this installation, including when NODE_PATH is set.
+    const executable = realpathSync(
+      join(
+        root,
+        "node_modules",
+        platform,
+        process.platform === "win32" ? "esbuild.exe" : "bin/esbuild",
+      ),
+    );
+    const env = { ...process.env, ESBUILD_BINARY_PATH: executable };
     const version = spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 30_000, env });
     result.version = version.status === 0 ? version.stdout.trim() : null;
     const minified = spawnSync(bin, ["--minify", "--loader=js"], {

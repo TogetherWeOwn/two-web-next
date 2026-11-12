@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   mkdirSync,
@@ -132,6 +133,37 @@ test("ignores a working binary override for both probes", (t) => {
   assert.equal(result.version, LOCKED_ESBUILD);
   assert.equal(result.ok, false);
   assert.ok(result.problems.includes("esbuild minify probe failed"));
+});
+
+test("rejects a missing local binary despite a working NODE_PATH package", (t) => {
+  const { root, binary, sentinel } = fixture(t);
+  const external = join(root, "external");
+  const externalBinary = join(external, platform, "bin", "esbuild");
+  mkdirSync(dirname(externalBinary), { recursive: true });
+  copyFileSync(binary, externalBinary);
+  requireExecutable(externalBinary);
+  const previous = process.env.NODE_PATH;
+  process.env.NODE_PATH = external;
+  t.after(() => {
+    if (previous === undefined) delete process.env.NODE_PATH;
+    else process.env.NODE_PATH = previous;
+  });
+  assert.equal(verifyEsbuild(root).ok, true);
+  rmSync(sentinel);
+  rmSync(binary);
+  const env = { ...process.env };
+  delete env.ESBUILD_BINARY_PATH;
+  const externalProbe = spawnSync(join(root, "node_modules", ".bin", "esbuild"), ["--version"], {
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(externalProbe.stdout.trim(), LOCKED_ESBUILD);
+  assert.equal(existsSync(sentinel), true);
+  rmSync(sentinel);
+  const result = verifyEsbuild(root);
+  assert.equal(result.ok, false);
+  assert.equal(result.version, null);
+  assert.equal(existsSync(sentinel), false);
 });
 
 test("rejects binary version and minification failures", (t) => {
