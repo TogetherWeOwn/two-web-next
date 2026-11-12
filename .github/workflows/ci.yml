@@ -78,6 +78,10 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - name: Test evidence manifest offline
+        env:
+          APP_ROOT: ${{ github.workspace }}/pinned-application
+        run: node --test ci/join-state-evidence-manifest.test.mjs
       - name: Install pinned application dependencies without hooks
         working-directory: pinned-application
         run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
