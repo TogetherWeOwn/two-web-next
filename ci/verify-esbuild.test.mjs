@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdtempSync,
   mkdirSync,
+  existsSync,
   copyFileSync,
   readFileSync,
   writeFileSync,
@@ -36,10 +37,11 @@ function fixture(t) {
   json(root, "package-lock.json", lock);
   json(root, "package.json", { devDependencies: { esbuild: LOCKED_ESBUILD } });
   json(root, `node_modules/${platform}/package.json`, { version: LOCKED_ESBUILD });
+  const sentinel = join(root, "binary-executed");
   write(
     root,
     `node_modules/${platform}/bin/esbuild`,
-    `#!/usr/bin/env node\nprocess.stdout.write(process.argv.includes('--version') ? '${LOCKED_ESBUILD}\\n' : 'let answer=1;\\n');\n`,
+    `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'executed');\nprocess.stdout.write(process.argv.includes('--version') ? '${LOCKED_ESBUILD}\\n' : 'let answer=1;\\n');\n`,
   );
   const binary = join(root, "node_modules", platform, "bin", "esbuild");
   // A local executable fixture stands in for the platform binary; it does not minify.
@@ -50,7 +52,7 @@ function fixture(t) {
   requireExecutable(shim);
   mkdirSync(join(root, "node_modules", ".bin"));
   symlinkSync("../esbuild/bin/esbuild", join(root, "node_modules", ".bin", "esbuild"));
-  return { root, lock, shim, binary };
+  return { root, lock, shim, binary, sentinel };
 }
 
 import { chmodSync } from "node:fs";
@@ -59,12 +61,19 @@ function requireExecutable(path) {
 }
 
 test("accepts the reviewed shim and a functioning locked platform fixture", (t) => {
-  const { root } = fixture(t);
+  const { root, sentinel } = fixture(t);
   assert.equal(verifyEsbuild(root).ok, true);
+  assert.equal(existsSync(sentinel), true);
 });
 
 test("rejects lock, pin, optional and installed platform mismatches", (t) => {
-  const { root, lock } = fixture(t);
+  const { root, lock, sentinel } = fixture(t);
+  const verifyWithoutExecution = () => {
+    const result = verifyEsbuild(root);
+    assert.equal(result.version, null);
+    assert.equal(existsSync(sentinel), false);
+    return result;
+  };
   for (const mutate of [
     () => {
       lock.packages["node_modules/esbuild"].version = "0.0.0";
@@ -79,17 +88,17 @@ test("rejects lock, pin, optional and installed platform mismatches", (t) => {
     const original = structuredClone(lock);
     mutate();
     json(root, "package-lock.json", lock);
-    assert.equal(verifyEsbuild(root).ok, false);
+    assert.equal(verifyWithoutExecution().ok, false);
     Object.assign(lock, original);
   }
   json(root, "package-lock.json", lock);
   json(root, "package.json", { devDependencies: { esbuild: "0.0.0" } });
-  assert.equal(verifyEsbuild(root).ok, false);
+  assert.equal(verifyWithoutExecution().ok, false);
   json(root, "package.json", { devDependencies: { esbuild: LOCKED_ESBUILD } });
   rmSync(join(root, "node_modules", platform, "package.json"));
-  assert.equal(verifyEsbuild(root).ok, false);
+  assert.equal(verifyWithoutExecution().ok, false);
   json(root, `node_modules/${platform}/package.json`, { version: "0.0.0" });
-  assert.equal(verifyEsbuild(root).ok, false);
+  assert.equal(verifyWithoutExecution().ok, false);
 });
 
 test("rejects a modified shim before executing it", (t) => {
