@@ -37,6 +37,10 @@ on:
         description: "Optional 40-character base SHA for featured before/after evidence"
         required: false
         type: string
+      join_capture_sha:
+        description: "Pinned application SHA for join fixture evidence"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -51,6 +55,85 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  join-state-evidence:
+    name: join-state-evidence
+    if: github.event_name == 'workflow_dispatch' && inputs.join_capture_sha != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Validate application selection
+        env:
+          APP_SHA: ${{ inputs.join_capture_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$APP_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [ "$APP_SHA" = 60c47d13e96b254e71303f24e777932a0e506713 ]
+      - name: Check out controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - name: Check out pinned application
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 60c47d13e96b254e71303f24e777932a0e506713
+          path: application
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Verify source identities
+        env:
+          APP_SHA: ${{ inputs.join_capture_sha }}
+          CONTROLLER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [ "$(git -C application rev-parse HEAD)" = "$APP_SHA" ]
+          [ "$(git -C controller rev-parse HEAD)" = "$CONTROLLER_SHA" ]
+          git -C application diff --exit-code
+          git -C application diff --cached --exit-code
+      - name: Install target dependencies and build Kit
+        working-directory: application
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          set -euo pipefail
+          npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+          npm ci --prefix web --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+          node ci/build-ember-tokens.mjs --check
+          node ci/build-leaf-css.mjs
+          npm run build --prefix web
+          npx playwright install --with-deps chromium
+      - name: Capture join fixture states
+        env:
+          APP_ROOT: ${{ github.workspace }}/application
+          CONTROLLER_ROOT: ${{ github.workspace }}/controller
+          JOIN_EVIDENCE_DIR: ${{ runner.temp }}/join-state-evidence
+        run: |
+          set -euo pipefail
+          mkdir -p "$JOIN_EVIDENCE_DIR"
+          ln -s "$APP_ROOT/node_modules" "$CONTROLLER_ROOT/node_modules"
+          cd "$APP_ROOT"
+          env -i PATH="$PATH" HOME="$HOME" APP_ROOT="$APP_ROOT" \
+            TSX_TSCONFIG_PATH="$APP_ROOT/tsconfig.json" JOIN_EVIDENCE_DIR="$JOIN_EVIDENCE_DIR" \
+            node --import tsx --test --test-reporter=tap --test-timeout=60000 "$CONTROLLER_ROOT/ci/join-state-evidence.test.mjs" \
+            2>&1 | tee "$JOIN_EVIDENCE_DIR/test-report.tap"
+          git diff --exit-code
+          git diff --cached --exit-code
+          node "$CONTROLLER_ROOT/ci/join-state-evidence-manifest.mjs"
+      - name: Upload join-state evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: join-state-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/join-state-evidence/
+          if-no-files-found: error
+          retention-days: 7
+
   # Cheap change-scope gate (mirrors ci.yml): a PR that only touches prose
   # (`docs/**`, root `*.md`) that no gate, test or build reads, or only the
   # `test/` unit tree the journeys never execute, fast-passes the browser
