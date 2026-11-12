@@ -33,7 +33,7 @@ const IMMUTABLE = "public, max-age=31536000, immutable";
 // public/fonts/OFL-SOURCES.txt; full license texts in public/fonts/LICENSE.txt.
 const FONT_PINS = {
   "mona-sans-latin-var.woff2": "5ea3740633e5ac7af56c13d7e8ec32bcae12e7723e53d34284469a8947ccb2f3",
-  "mona-sans-latin-wght.woff2": "601c075ca70a22956716067e9741103d16cab2cb61c11f519a8c55605d2a47d9",
+  "mona-sans-latin-wght.woff2": "a59061e38c5e7e6a00aaa6b6645a220c7d9c530991167f058cc0f8575f5d5844",
   "instrument-serif-latin-400-italic.woff2":
     "2ea8887dec935b5a45ba939c463d9733fc3f6c465c30ae6881b8c331a9a1dece",
   "fragment-mono-latin-400.woff2":
