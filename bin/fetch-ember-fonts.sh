@@ -13,7 +13,7 @@
 # one is 40 KB with identical glyphs at width 100 (fixes the PR #2032 LCP
 # regression). Serif and mono are re-subset with pyftsubset to meet the kit's < 12 KB budgets; the
 # set is ASCII printable + nbsp + smart punctuation + euro + trademark.
-# Arrows stay out of every subset, keeping prior system rendering.
+# Arrows stay out of the serif/mono subsets, keeping prior system rendering.
 #
 # Usage: bash bin/fetch-ember-fonts.sh   (writes public/fonts/*.woff2)
 set -euo pipefail
@@ -30,6 +30,7 @@ MONO_URL='https://fonts.gstatic.com/s/fragmentmono/v6/4iCr6K5wfMRRjxp0DA6-2CLnB4
 SMALL_SUBSET='U+0020-007E,U+00A0,U+2013-2014,U+2018-2019,U+201C-201D,U+2026,U+20AC,U+2122'
 
 curl -fsSL -o "$TMP/mona.woff2" "$MONA_URL"
+echo 'a59061e38c5e7e6a00aaa6b6645a220c7d9c530991167f058cc0f8575f5d5844  '"$TMP/mona.woff2" | sha256sum -c --quiet -
 curl -fsSL -o "$TMP/serif.woff2" "$SERIF_URL"
 curl -fsSL -o "$TMP/mono.woff2" "$MONO_URL"
 

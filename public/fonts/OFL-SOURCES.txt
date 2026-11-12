@@ -1,14 +1,15 @@
 Ember Hours webfonts (two-design-kit v0.2.0, tokens §2). All SIL OFL-1.1,
 self-hosted; full texts in LICENSE.txt. No remote font origin.
-Reproduce: bash bin/fetch-ember-fonts.sh (needs pyftsubset for the subsets).
+Reproduce: bash bin/fetch-ember-fonts.sh (needs fonttools 4.68.0 + brotli 1.2.1).
 
 1. Mona Sans variable (font.display: display and all UI)
-   Upstream: Google Fonts css2 family "Mona Sans:wght@200..900" (monasans v4),
+   Upstream: Google Fonts css2 family=Mona+Sans:wght@200..900 (monasans v4),
    axis wght 200-900 (no wdth axis), latin subset.
    File: mona-sans-latin-wght.woff2 (39788 B)
    sha256: a59061e38c5e7e6a00aaa6b6645a220c7d9c530991167f058cc0f8575f5d5844
-   Source bytes are Google's exact latin subset, unmodified; the subset's
-   unicode-range omits arrows, so arrows keep prior system rendering.
+   Source bytes are Google's exact latin subset, unmodified. Of the arrows
+   it covers only U+2191/U+2193 (up/down); left/right arrows keep system
+   rendering.
    Glyph outlines and advances match the previous wght+wdth file at width 100.
    Retiring: mona-sans-latin-var.woff2 (98124 B, sha256
    5ea3740633e5ac7af56c13d7e8ec32bcae12e7723e53d34284469a8947ccb2f3; the same
