@@ -23,6 +23,21 @@ let scratch;
 let browser;
 let server;
 let fixtures;
+const createErrorFields = [
+  "title",
+  "game",
+  "description",
+  "starts_at",
+  "ends_at",
+  "timezone",
+  "location",
+  "capacity",
+  "recurrence_frequency",
+  "recurrence_count",
+  "recurrence_ends_on",
+];
+const hostileError = `Bad <img src=x onerror=alert(1)> </script><script>alert(2)</script> & "quoted" 'text'`;
+const createErrors = (text) => Object.fromEntries(createErrorFields.map((name) => [name, text]));
 
 before(async () => {
   scratch = await mkdtemp(
@@ -47,6 +62,19 @@ before(async () => {
   assert.equal(featured.kind, "ok");
   fixtures = [
     { name: "event-new", path: "/admin/events/new", data: buildEventCreateView() },
+    // Invalid create states: every field error at once, plain and hostile.
+    {
+      name: "event-new-invalid",
+      path: "/admin/events/new",
+      data: buildEventCreateView({}, createErrors("Check this value.")),
+      errorText: "Check this value.",
+    },
+    {
+      name: "event-new-hostile",
+      path: "/admin/events/new",
+      data: buildEventCreateView({ title: hostileError }, createErrors(hostileError)),
+      errorText: hostileError,
+    },
     { name: "event-edit", path: `/admin/events/${eventRow.eventKey}`, data: { view: event.view } },
     { name: "featured-new", path: "/admin/featured/new", data: {} },
     { name: "featured-edit", path: "/admin/featured/7", data: { view: featured.view } },
@@ -127,7 +155,15 @@ after(async () => {
 // Named suite: the executed-count verifier admits only cases under this title.
 describe("Kit admin contrast", () => {
   for (const width of [1280, 390]) {
-    for (const name of ["event-new", "event-edit", "featured-new", "featured-edit", "dashboard"]) {
+    for (const name of [
+      "event-new",
+      "event-new-invalid",
+      "event-new-hostile",
+      "event-edit",
+      "featured-new",
+      "featured-edit",
+      "dashboard",
+    ]) {
       test(`Kit admin contrast: ${name} at ${width}`, async () => {
         const f = fixtures.find((fixture) => fixture.name === name);
         const isDashboard = name === "dashboard";
@@ -183,7 +219,23 @@ describe("Kit admin contrast", () => {
               "help text is actually present",
             );
           }
-          if (name === "event-new") assert.equal(await page.locator("fieldset label").count(), 3);
+          if (name.startsWith("event-new"))
+            assert.equal(await page.locator("fieldset label").count(), 3);
+          if (name === "event-new") {
+            assert.equal(await page.locator('[data-testid^="error-"]').count(), 0);
+            assert.equal(await page.locator('[data-testid="form-errors"]').count(), 0);
+          }
+          if (f.errorText) {
+            const rendered = page.locator('[data-testid^="error-"]');
+            assert.equal(await rendered.count(), createErrorFields.length, "every error renders");
+            assert.deepEqual(
+              await rendered.evaluateAll((els) => els.map((el) => el.textContent)),
+              createErrorFields.map(() => f.errorText),
+              "error text renders as text",
+            );
+            assert.equal(await page.locator('[data-testid="form-errors"]').count(), 1);
+            assert.equal(await page.locator("[data-event-editor] img, main img").count(), 0);
+          }
           const axe = new AxeBuilder({ page });
           if (isDashboard) {
             // Card descriptions and footer only: the card heading links carry

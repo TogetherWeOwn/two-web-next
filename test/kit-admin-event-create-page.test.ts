@@ -8,6 +8,8 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { buildEventCreateView } from "../src/admin/kit-event-create";
+import { compileKitForms } from "./helpers/admin-validation-correction";
 
 const source = readFileSync(
   fileURLToPath(new URL("../web/src/routes/admin/events/new/+page.svelte", import.meta.url).href),
@@ -62,13 +64,29 @@ describe("Kit event-create page contract", () => {
     expect(source).toContain("Repeat until (YYYY-MM-DD)");
   });
 
-  it("renders the Hono 422 error shape with retained values and the draft marker", () => {
+  it("renders the Hono 422 error shape with retained values and the draft marker", async () => {
     expect(source).toContain('data-testid="form-errors"');
     expect(source).toContain("Check the highlighted fields and try again.");
     expect(source).toContain("data-event-draft");
-    expect(source).toContain("error-title");
-    expect(source).toContain("error-starts_at");
-    expect(source).toContain("error-recurrence_count");
+    const compiler = await compileKitForms();
+    try {
+      const html = compiler.renderForm(
+        0,
+        buildEventCreateView(
+          {},
+          {
+            title: "Title error",
+            starts_at: "Start error",
+            recurrence_count: "Count error",
+          },
+        ),
+      );
+      expect(html).toContain("error-title");
+      expect(html).toContain("error-starts_at");
+      expect(html).toContain("error-recurrence_count");
+    } finally {
+      compiler.dispose();
+    }
     expect(source).toContain('role="alert"');
     expect(source).toContain("aria-invalid=");
   });
