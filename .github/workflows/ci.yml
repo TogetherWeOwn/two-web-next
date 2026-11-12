@@ -58,6 +58,34 @@ jobs:
       - name: Test target source resolution
         run: node --test ci/join-state-evidence-source.test.mjs
 
+  join-evidence-fixtures:
+    name: join-evidence-fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out pinned application
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 60c47d13e96b254e71303f24e777932a0e506713
+          path: pinned-application
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install pinned application dependencies without hooks
+        working-directory: pinned-application
+        run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - name: Test real pinned widget health fixtures
+        env:
+          APP_ROOT: ${{ github.workspace }}/pinned-application
+        run: node --import ./pinned-application/node_modules/tsx/dist/loader.mjs --test ci/join-state-fixtures.test.mjs
+
   bot-contract-drift:
     name: bot-contract-drift
     runs-on: ubuntu-latest
@@ -1335,6 +1363,7 @@ jobs:
         scope,
         bot-contract-drift,
         join-evidence-source,
+        join-evidence-fixtures,
       ]
     if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
@@ -1346,6 +1375,10 @@ jobs:
       # check. They moved here so `check` can start in parallel with those
       # jobs; the aggregate step below still re-checks the scope, check,
       # audit and performance verdicts.
+      - name: Require real pinned widget health fixtures
+        env:
+          JOIN_FIXTURES_RESULT: ${{ needs.join-evidence-fixtures.result }}
+        run: test "$JOIN_FIXTURES_RESULT" = success
       - name: Require join evidence source tests
         env:
           JOIN_SOURCE_RESULT: ${{ needs.join-evidence-source.result }}
