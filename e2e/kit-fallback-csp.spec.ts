@@ -57,8 +57,8 @@ async function mount(page: Page, csp: string) {
 test("widened production CSP renders the branded shell with no dependencies", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const { dependencies } = await mount(page, productionCsp(true));
-  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(18, 23, 25)");
-  await expect(page.locator("body")).toHaveCSS("color", "rgb(245, 245, 235)");
+  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(21, 16, 15)");
+  await expect(page.locator("body")).toHaveCSS("color", "rgb(246, 241, 234)");
   expect(dependencies).toEqual([]);
 });
 

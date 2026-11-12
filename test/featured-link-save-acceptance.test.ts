@@ -5,6 +5,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import { adminApp } from "../src/admin/routes";
+import { featuredSaveBaseline } from "../src/admin/save-baseline";
 import { createFeatured, getFeatured, updateFeatured } from "../src/admin/store";
 import { parseFeaturedForm, ValidationError } from "../src/admin/validation";
 import type { Db } from "../src/db/index";
@@ -222,7 +223,15 @@ describe("featured link spelling acceptance: real create/edit POST", () => {
         {
           method: "POST",
           headers: { cookie, origin: env.APP_URL },
-          body: new URLSearchParams({ ...base, url, image_alt: "Draft photo description" }),
+          body: new URLSearchParams({
+            // Edit saves carry the token of the stored row the form displayed.
+            ...(path === "/featured"
+              ? {}
+              : { saved_baseline: await featuredSaveBaseline(existing) }),
+            ...base,
+            url,
+            image_alt: "Draft photo description",
+          }),
         },
         env,
       );
@@ -253,14 +262,25 @@ describe("featured link spelling acceptance: real create/edit POST", () => {
         {
           method: "POST",
           headers: { cookie, origin: env.APP_URL },
-          body: new URLSearchParams({ ...base, url }),
+          body: new URLSearchParams({
+            ...(path === "/featured"
+              ? {}
+              : { saved_baseline: await featuredSaveBaseline(existing) }),
+            ...base,
+            url,
+          }),
         },
         env,
       );
       expect(res.status).toBe(303);
       const write = path === "/featured" ? createFeatured : updateFeatured;
       expect(write).toHaveBeenCalledOnce();
-      expect(vi.mocked(write).mock.calls[0]!.at(-1)).toMatchObject({ url });
+      // createFeatured(db, actor, input); updateFeatured(db, actor, id, input, baseline).
+      const input =
+        path === "/featured"
+          ? vi.mocked(createFeatured).mock.calls[0]![2]
+          : vi.mocked(updateFeatured).mock.calls[0]![3];
+      expect(input).toMatchObject({ url });
     });
   }
   it.each(["/featured/new", "/featured/1"])(

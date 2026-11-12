@@ -1,5 +1,13 @@
 # M5: post-cutover hardening milestone
 
+> Historical milestone proposal — reviewed 2026-11-09 (UTC). The original
+> proposal below is preserved for context, including its entry criteria and
+> relative target; it is not an active plan or delivery commitment. See the
+> [README roadmap entry](../README.md#roadmap) and the current
+> [website roadmap](../ROADMAP.md) for public direction. Any remaining unique
+> ideas require acceptance through normal product planning before implementation;
+> editing this historical proposal does not approve scope.
+
 Agreed definition of the post-cutover milestone, carried forward from the v8
 roadmap proposal so the next roadmap run adopts it instead of re-mining settled
 scope. M5 starts only after the cutover decision. Nothing in M5 touches

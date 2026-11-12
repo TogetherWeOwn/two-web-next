@@ -248,13 +248,23 @@ describe.skipIf(!process.env.DATABASE_URL)(
     let cookie = "";
     const liveEnv = () => ({ ...envBase, ADMIN_DB: db }) as Env;
     const app = () => adminApp({ sessionStore: store, db });
-    const post = (publicPath: string, fields: Fields) =>
+    // Edit saves carry the token the guarded edit GET renders right now.
+    const editToken = async (path: string): Promise<Record<string, string>> => {
+      if (!/^\/featured\/\d+$/.test(path)) return {};
+      const page = await app().request(path, { headers: { cookie } }, liveEnv());
+      expect(page.status).toBe(200);
+      const tag = (await page.text()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+      const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+      if (!token) throw new Error("edit page carries no saved_baseline token");
+      return { saved_baseline: token };
+    };
+    const post = async (publicPath: string, fields: Fields) =>
       app().request(
         appPath(publicPath),
         {
           method: "POST",
           headers: { cookie, origin: APP_URL, "content-type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams(fields),
+          body: new URLSearchParams({ ...(await editToken(appPath(publicPath))), ...fields }),
         },
         liveEnv(),
       );

@@ -1,7 +1,10 @@
 import type { Context, Next } from "hono";
+import { KIT_FALLBACK_INLINE_STYLE, KIT_FALLBACK_STYLE_SHA256 } from "./ember-fallback-style";
 import type { Env } from "./env";
-import { imageHosts } from "./image-policy";
+import { operatorImageHosts } from "./config-warn";
 import { LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";
+
+export { KIT_FALLBACK_INLINE_STYLE, KIT_FALLBACK_STYLE_SHA256 };
 
 // Response-header parity (TOG-10118 ports two-web TOG-7328 + TOG-8729).
 // Two layers, same split as legacy:
@@ -141,11 +144,8 @@ export function leafInlineStyleCsp(c: Context): void {
 // defaults. The block is allowlisted by hash so style-src keeps no
 // 'unsafe-inline' — the same shape as the leaf allowlist above, but scoped
 // to the fallback RESPONSE (any path can fail catastrophically) instead of
-// a path list. Pinned byte-identical to the template plus its sha256 by
-// test/kit-fallback-style.test.ts; edit the template and the constant together.
-export const KIT_FALLBACK_INLINE_STYLE: string =
-  "body{max-width:35rem;margin:3rem auto;padding:0 1.5rem;background:#121719;color:#f5f5eb;font:1rem/1.6 system-ui}a{display:inline-block;padding:.5rem;color:#c2f45b}a:focus-visible{outline:3px solid;outline-offset:3px}";
-export const KIT_FALLBACK_STYLE_SHA256: string = "U0fk7vWGFjI74MKJiDTgbYe0GqkdbUrAITcJlds8xL4=";
+// a path list. The token adapter generates the template, constants and hash
+// together; test/kit-fallback-style.test.ts independently proves byte equality.
 
 // True when the body carries the exact fallback style element. The full
 // element (tags included) is the match, so the allowlist below can only
@@ -176,7 +176,7 @@ export function securityHeadersFor(
   featuredImageHosts?: string,
 ): Array<[string, string]> {
   const framed = request.path === "/join" && ["GET", "HEAD"].includes(request.method);
-  const images = imageHosts(featuredImageHosts)
+  const images = operatorImageHosts(featuredImageHosts)
     .map((host) => `https://${host}`)
     .join(" ");
   // Only the inline-critical pages (/ plus about/faq/rules/privacy) emit an

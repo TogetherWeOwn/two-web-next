@@ -18,6 +18,13 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 [docs/runbook.md](docs/runbook.md). Security boundaries and repository evidence:
 [docs/threat-model.md](docs/threat-model.md).
 
+## Roadmap
+
+See the [website roadmap](ROADMAP.md) for approved direction, Ember Hours scope
+and non-goals. It describes intentions, not delivery commitments; implemented
+capabilities are listed below and shipped history is in
+[releases](https://github.com/TogetherWeOwn/two-web-next/releases).
+
 ## What works today
 
 - Homepage member/online counts and rank reads come from bot-owned `web_v1` views, are cached for 60 seconds, and hide missing or stale counts; the page degrades when reads fail. House rules, the versioned privacy page, branded error pages, manifest/icons, canonical metadata, sitemap, robots, and security/cache headers are also implemented ([`src/counts.ts`](src/counts.ts), [`src/pages.tsx`](src/pages.tsx), [`src/index.tsx`](src/index.tsx), [`src/seo.ts`](src/seo.ts), [`test/home-counts.test.ts`](test/home-counts.test.ts), [`test/seo.test.ts`](test/seo.test.ts), [`test/n2-manifest-errors.test.ts`](test/n2-manifest-errors.test.ts)). `/.well-known/security.txt` serves the RFC 9116 disclosure file ([`src/security-txt.ts`](src/security-txt.ts), [`src/index.tsx`](src/index.tsx), [`test/security-txt.test.ts`](test/security-txt.test.ts)).
@@ -84,6 +91,17 @@ results without changing the event's canonical or share URLs.
 
 ## Develop and test safely
 
+**AI contributors:** full suites and CI gates run only on GitHub Actions for
+the exact PR head. Push to the PR branch, keep the PR draft while incomplete,
+and record exact-head Actions run/job links and conclusions. The local command
+examples below document human development tooling; they do not authorize agent
+full-suite or CI-mirror execution, including in Boat, through a fallback or by
+the delegated builder's caller. Local agent test execution is limited to an
+authorized focused reproduction of one failing test or crate, with the guarded
+heavy-build controls in [AGENTS.md](AGENTS.md#commands). See the
+[verification workflow](CONTRIBUTING.md#verify-a-change-before-opening-a-pr).
+All database-safety and merge/release gates still apply.
+
 Use Node **22.23.0+ on the 22.x line, or 24+** (CI uses Node 24; the probe CLIs
 require default native TypeScript stripping, not early Node 22/23 releases).
 The 22 floor is 22.23.0, the 22.x release verified end to end here:
@@ -101,18 +119,38 @@ npm ci --include=dev
 cp .dev.vars.example .dev.vars   # local settings only; never commit this file
 ```
 
-Root and `web/` installs generate the ignored critical-CSS module through
-`postinstall`. If install scripts are disabled (`npm ci --ignore-scripts`),
-run the generator explicitly **from the repository root before typecheck,
-tests or bundling**:
+Root installs generate the ignored critical-CSS module through `postinstall`
+when install scripts are enabled. The `web/.npmrc` disables lifecycle hooks,
+including the project's own `postinstall` and `prebuild`, to avoid running
+dependency install scripts. Kit's explicit `build` and `check` commands regenerate
+the module directly, so missing or stale CSS does not depend on those hooks.
+After a web-only install, or a root install with scripts disabled
+(`npm ci --ignore-scripts`), run the generator explicitly **from the repository
+root before root typecheck, tests or bundling**:
 
 ```sh
 node ci/build-leaf-css.mjs
 # Or, from the root: npm run build:leaf-css
 ```
 
-The generator uses only Node builtins, so it also works before dependency
-installation. See [security-pin contracts](docs/security-pin-contracts.md)
+Under `--ignore-scripts`, `npm run typecheck` and `npm run test:unit` bootstrap
+the generator themselves (see "Verify a change before opening a PR" in
+[CONTRIBUTING.md](CONTRIBUTING.md)). Raw `tsc`, direct `vitest` and bundlers do
+not: run the generator explicitly first.
+
+`ci/build-leaf-css.mjs` uses only Node builtins and concatenates the three
+checked sheets, so it runs in dependency-free scratch snapshots. The separate
+`ci/build-ember-tokens.mjs` adapter builds the Hono and Kit token sheets from
+the pinned vendored design-kit CSS and needs the locked esbuild installed to
+compact served sheets. It composes scoped roles with `assets/styles.css` and
+`assets/theme.css`; all three existing Hono sheets keep their original raw and
+gzip ceilings, without extra requests or changes to unthemed legacy pages.
+Root postinstall and predev, plus Kit postinstall and
+prebuild, **check** the tracked adapters before generating ignored critical CSS.
+They fail without repairing stale committed output, so install cannot mask drift
+before CI checks it. After editing the kit pin or theme source, explicitly run
+`npm run build:assets` or `npm run build:leaf-css` and commit the regenerated
+adapters with their sources. Never hand-edit generated outputs. See [security-pin contracts](docs/security-pin-contracts.md)
 for the offline static gate and generated-hash review evidence.
 
 Set the local origin in `.dev.vars` to match Wrangler's local server and the
@@ -339,7 +377,7 @@ to execute the same Chromium proof.
 | `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
 | `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
-| `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
+| `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (20 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; includes restored-write screenshots in CI; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
 | `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (44 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
 | `ci/schedule-search-context-browser.test.ts` | None—always runs | `npx vitest run --config ci/schedule-search-context-browser.vitest.ts ci/schedule-search-context-browser.test.ts` (5 Hono and 5 Kit real Chromium cases; requires Kit dependencies and Chromium; JSON-verified in `a11y` via `ci/a11y-require-executed.mjs`) |
 | `ci/calendar-subscription-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts` (10 cases on each of the four calendar surfaces; intercepted clipboard fixtures; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |

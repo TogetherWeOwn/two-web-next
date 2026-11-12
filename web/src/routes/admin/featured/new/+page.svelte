@@ -1,5 +1,8 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import type { PageProps } from "./$types";
+
+let { data }: PageProps = $props();
 
 // Markup contract of FeaturedFormPage mode="new"
 // (src/admin/pages/featured-form.tsx): the POST destination, every Hono
@@ -13,7 +16,7 @@ import AdminShell from "#lib/AdminShell.svelte";
 const island = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
-<AdminShell title="New featured slot">
+<AdminShell restoredWrite={data.restoredWrite} title="New featured slot">
 <section class="featured-form">
   <h1>New featured slot</h1>
   <form method="post" action="/admin/featured" data-event-editor="">

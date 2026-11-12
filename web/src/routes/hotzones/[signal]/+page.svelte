@@ -25,6 +25,7 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
 </script>
 
 <Shell
+  restoredWrite={data.restoredWrite}
   title="{signal} hot zone"
   canonical={canonicalUrl(appUrl, destination)}
   robots="noindex, follow"

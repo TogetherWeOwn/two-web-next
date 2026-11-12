@@ -27,9 +27,16 @@ const IMMUTABLE = "public, max-age=31536000, immutable";
 
 // Pinned binaries: a byte change without a filename change serves stale
 // glyphs under `immutable`, so the pin fails CI until renamed (TOG-6785).
+// Ember Hours families (two-design-kit v0.2.0, tokens §2): one variable
+// Mona Sans plus subset Instrument Serif Italic and Fragment Mono.
+// Provenance, subset ranges and reproduction live in
+// public/fonts/OFL-SOURCES.txt; full license texts in public/fonts/LICENSE.txt.
 const FONT_PINS = {
-  "display-latin-500.woff2": "23afdb9b5b89b878fab04d80cc30bf41bb4f3f7e8be88e5f16a7cc7671cdb2dc",
-  "display-latin-700.woff2": "5b7e4a6f97163c2636724d4de90304fc895653dcfe64c67a7a22f26331ca5c5f",
+  "mona-sans-latin-var.woff2": "5ea3740633e5ac7af56c13d7e8ec32bcae12e7723e53d34284469a8947ccb2f3",
+  "instrument-serif-latin-400-italic.woff2":
+    "2ea8887dec935b5a45ba939c463d9733fc3f6c465c30ae6881b8c331a9a1dece",
+  "fragment-mono-latin-400.woff2":
+    "d1c6a317e267c5db61bf1744a774d65ffe5258bdd6ffcc678db482ef50b490b4",
 } as const;
 
 const fontBytes = (name: string) => readFileSync(resolve(root, "public/fonts", name));
@@ -77,8 +84,9 @@ function sizesOf(view: DataView, count: number): number {
 
 describe("pinned font cache", () => {
   it("stamps the immutable header on /fonts/*.woff2 only", () => {
-    expect(isPinnedAssetPath("/fonts/display-latin-500.woff2")).toBe(true);
-    expect(isPinnedAssetPath("/fonts/display-latin-700.woff2")).toBe(true);
+    expect(isPinnedAssetPath("/fonts/mona-sans-latin-var.woff2")).toBe(true);
+    expect(isPinnedAssetPath("/fonts/instrument-serif-latin-400-italic.woff2")).toBe(true);
+    expect(isPinnedAssetPath("/fonts/fragment-mono-latin-400.woff2")).toBe(true);
     for (const notPinned of [
       "/favicon.ico",
       "/styles.css",
@@ -87,11 +95,12 @@ describe("pinned font cache", () => {
       "/icons/icon-192.png",
       "/islands/rsvp-button.js",
       "/fonts/LICENSE.txt",
-      "/fonts/display-latin-500.woff2.bak",
-      "/fonts/nested/display-latin-500.woff2",
-      "/fonts/display-latin-500.WOFF2",
-      "/fonts/display-latin-500.woff",
-      "/fontsx/display-latin-500.woff2",
+      "/fonts/OFL-SOURCES.txt",
+      "/fonts/mona-sans-latin-var.woff2.bak",
+      "/fonts/nested/mona-sans-latin-var.woff2",
+      "/fonts/mona-sans-latin-var.WOFF2",
+      "/fonts/mona-sans-latin-var.woff",
+      "/fontsx/mona-sans-latin-var.woff2",
       "/fonts/",
     ]) {
       expect(isPinnedAssetPath(notPinned), notPinned).toBe(false);
@@ -101,18 +110,18 @@ describe("pinned font cache", () => {
   it("font responses carry the immutable header, other assets pass through unchanged", async () => {
     const url = (path: string) => `https://next.example.test${path}`;
     const font = withPinnedAssetCache(
-      url("/fonts/display-latin-500.woff2"),
-      new Response(fontBytes("display-latin-500.woff2"), {
+      url("/fonts/mona-sans-latin-var.woff2"),
+      new Response(fontBytes("mona-sans-latin-var.woff2"), {
         headers: { "content-type": "font/woff2" },
       }),
     );
     expect(font.headers.get("cache-control")).toBe(IMMUTABLE);
     expect(font.headers.get("content-type")).toContain("font/woff2");
     expect(await font.arrayBuffer()).toEqual(
-      fontBytes("display-latin-500.woff2").buffer.slice(
-        fontBytes("display-latin-500.woff2").byteOffset,
-        fontBytes("display-latin-500.woff2").byteOffset +
-          fontBytes("display-latin-500.woff2").byteLength,
+      fontBytes("mona-sans-latin-var.woff2").buffer.slice(
+        fontBytes("mona-sans-latin-var.woff2").byteOffset,
+        fontBytes("mona-sans-latin-var.woff2").byteOffset +
+          fontBytes("mona-sans-latin-var.woff2").byteLength,
       ),
     );
 
@@ -124,10 +133,14 @@ describe("pinned font cache", () => {
   });
 
   it("end to end: font hits get the header through the ASSETS branch, CSS does not", async () => {
-    const fontEnv = assetEnv(fontBytes("display-latin-700.woff2"), {
+    const fontEnv = assetEnv(fontBytes("instrument-serif-latin-400-italic.woff2"), {
       headers: { "content-type": "font/woff2" },
     });
-    const font = await app.request(`${baseEnv.APP_URL}/fonts/display-latin-700.woff2`, {}, fontEnv);
+    const font = await app.request(
+      `${baseEnv.APP_URL}/fonts/instrument-serif-latin-400-italic.woff2`,
+      {},
+      fontEnv,
+    );
     expect(font.status).toBe(200);
     expect(font.headers.get("cache-control")).toBe(IMMUTABLE);
 
@@ -149,5 +162,19 @@ describe("font byte pins", () => {
   it.each(Object.entries(FONT_PINS))("%s matches its pinned sha256", (name, pinned) => {
     const actual = createHash("sha256").update(fontBytes(name)).digest("hex");
     expect(actual).toBe(pinned);
+  });
+});
+
+describe("font provenance", () => {
+  it("ships OFL sources and license texts alongside the pinned families", () => {
+    const sources = readFileSync(resolve(root, "public/fonts/OFL-SOURCES.txt"), "utf8");
+    const license = readFileSync(resolve(root, "public/fonts/LICENSE.txt"), "utf8");
+    for (const name of Object.keys(FONT_PINS)) {
+      expect(sources, `OFL-SOURCES.txt names ${name}`).toContain(name);
+    }
+    for (const marker of ["Mona Sans", "Instrument Serif", "Fragment Mono"]) {
+      expect(sources, `OFL-SOURCES.txt credits ${marker}`).toContain(marker);
+      expect(license, `LICENSE.txt carries the ${marker} OFL text`).toContain(marker);
+    }
   });
 });

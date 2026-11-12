@@ -114,16 +114,38 @@ const readLive = cachedRead<LiveCounts>(
   },
 );
 
+// The bot view already aggregates highest-rank-held counts. Bound the ladder,
+// not the member population: never LIMIT member rows or substitute role totals.
+// Normal data has five rungs; allow 20, with one sentinel to detect overflow.
+// CASE keeps oversized text off the wire; inspect only 65 characters in SQL.
+// Refuse the whole ladder on overflow/malformed text, never return a truncation.
+export const RANK_ROW_CAP = 20;
+export const RANK_TEXT_MAX_CHARS = 64;
+
 const readRanks = cachedRead<Rank[]>("counts.ranks", [], async (sql) => {
   const rows = await sql<Row[]>`
-    SELECT rank_key, rank_label, member_count
-    FROM web_v1.rank_counts ORDER BY rank_order
+    SELECT
+      CASE WHEN length(substring(rank_key FROM 1 FOR 65)) <= 64
+           THEN rank_key END AS rank_key,
+      CASE WHEN length(substring(rank_label FROM 1 FOR 65)) <= 64
+           THEN rank_label END AS rank_label,
+      member_count
+    FROM web_v1.rank_counts ORDER BY rank_order LIMIT 21
   `;
-  return rows.map((row) => ({
-    key: String(row.rank_key),
-    label: String(row.rank_label),
-    memberCount: count(row.member_count),
-  }));
+  if (rows.length > RANK_ROW_CAP) throw new Error("RankCountsOverCap");
+  return rows.map((row) => {
+    const key = row.rank_key;
+    const label = row.rank_label;
+    if (
+      typeof key !== "string" ||
+      typeof label !== "string" ||
+      [...key].length > RANK_TEXT_MAX_CHARS ||
+      [...label].length > RANK_TEXT_MAX_CHARS
+    ) {
+      throw new Error("RankCountsOversized");
+    }
+    return { key, label, memberCount: count(row.member_count) };
+  });
 });
 
 export async function readCounts(env: Env): Promise<Counts> {

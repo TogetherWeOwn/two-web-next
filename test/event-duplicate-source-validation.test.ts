@@ -1,9 +1,11 @@
 // Regression: validate stored source fields before truncating the copy title,
 // and refuse unrepresentable dates/zones without crashing the HTML editor.
+import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { adminApp } from "../src/admin/routes";
+import { eventSaveBaseline } from "../src/admin/save-baseline";
 import { newEventKey } from "../src/admin/validation";
 import { activityLog, events } from "../src/db/admin-schema";
 import type { Env, Session } from "../src/env";
@@ -113,13 +115,17 @@ describe.skipIf(!process.env.DATABASE_URL)("duplicate invalid source regressions
           { ...env, ADMIN_DB: fixture.db } as Env,
         );
 
-  const save = (key: string, values: Record<string, string> = {}) =>
-    adminApp({ sessionStore: store, db: fixture.db }).request(
+  const save = async (key: string, values: Record<string, string> = {}) => {
+    // Edit saves carry the token of the stored row the form displayed.
+    const [current] = await fixture.db.select().from(events).where(eq(events.eventKey, key));
+    const saved_baseline = await eventSaveBaseline(current!);
+    return adminApp({ sessionStore: store, db: fixture.db }).request(
       `/events/${key}`,
       {
         method: "POST",
         headers: { cookie, origin: env.APP_URL },
         body: new URLSearchParams({
+          saved_baseline,
           title: "Rolling plan night",
           starts_at: "2099-06-04 19:00",
           ends_at: "2099-06-04 21:00",
@@ -130,6 +136,7 @@ describe.skipIf(!process.env.DATABASE_URL)("duplicate invalid source regressions
       },
       { ...env, ADMIN_DB: fixture.db } as Env,
     );
+  };
 
   const seedSeries = async () => {
     const parent = await seed({

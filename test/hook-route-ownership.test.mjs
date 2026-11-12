@@ -606,7 +606,8 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).not.toContain("resolveRequestSession");
     expect(source).not.toContain("readReturnJourney");
     expect(source).not.toContain("storeForEnv");
-    expect(source).not.toContain("SESSION_SECRET");
+    expect(source).toContain("sessionSecret: env.SESSION_SECRET");
+    expect(source.match(/env\.SESSION_SECRET/g)?.length).toBe(1);
     expect(source).not.toContain("Promise.all");
     // Production trust and ownership live in the core (imported, not
     // injected): the hook must not carry any owner logic to mutate. Each of

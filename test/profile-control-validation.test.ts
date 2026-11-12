@@ -57,7 +57,12 @@ describe("profile control-character validation", () => {
       const value = `a${String.fromCodePoint(code)}b`;
       const client = profileClientErrors({ bio: value, games_text: value, timezone: "" });
       for (const shape of shapes) {
-        expect(validateProfile(shape.input(value)).ok).toBe(!client.control);
+        const server = validateProfile(shape.input(value));
+        expect(server.ok).toBe(!client.control);
+        if (!server.ok) {
+          expect(client.control).toBe("Remove control or invisible characters.");
+          expect(server.errors[shape.field]).toBe(client.control);
+        }
       }
     }
   });

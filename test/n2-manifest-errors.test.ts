@@ -41,8 +41,8 @@ describe("site.webmanifest", () => {
       start_url: "/",
       scope: "/",
       display: "standalone",
-      background_color: "#151720",
-      theme_color: "#151720",
+      background_color: "#15100f",
+      theme_color: "#15100f",
     });
     expect(manifest.icons).toEqual([
       { src: "/favicon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
@@ -67,7 +67,7 @@ describe("install icons", () => {
 describe("shell head", () => {
   it("GET / carries theme-color meta + manifest/icon/apple-touch-icon links", async () => {
     const html = await (await app.request("/", {}, env)).text();
-    expect(html).toContain('<meta name="theme-color" content="#151720"');
+    expect(html).toContain('<meta name="theme-color" content="#15100f"');
     expect(html).toContain('<link rel="manifest" href="/site.webmanifest"');
     expect(html).toContain(
       '<link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192"',
@@ -80,7 +80,7 @@ describe("shell head", () => {
   it("leaves carry the same head links", async () => {
     const html = await (await app.request("/about", {}, env)).text();
     expect(html).toContain('<link rel="manifest" href="/site.webmanifest"');
-    expect(html).toContain('<meta name="theme-color" content="#151720"');
+    expect(html).toContain('<meta name="theme-color" content="#15100f"');
   });
 });
 

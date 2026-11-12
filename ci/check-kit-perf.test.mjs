@@ -558,6 +558,13 @@ const SHIPPING_SERVER_RAW_CAP = JSON.parse(SHIPPING_BUDGET_BYTES.toString("utf8"
   .maxRawBytes;
 // 1213440 is the admin UTC chronology remeasure: 1213135 raw worst of the
 // composed-stack builds; the previous 1212416 cap rejects by 719.
+// 1232896 admits the restored-write notice (#2113) and the stale-save
+// rejection (#2112) composed on main with the theme migration (#2032):
+// main-tip CI measured 1232399 raw (run 42939882535); 1232384 rejects by 15.
+// 1233408 admits the operator-settings warning (#2111) merged after that
+// sizing: main-tip CI measured 1233211 raw (run 42954334978); 1232896 rejects by 315.
+// 1233920 admits the content display face leaf growth (#2120): exact-head
+// CI measured 1233453 raw (run 42985471999); the 1233408 step rejects by 45.
 const SHIPPING_SERVER_RAW_ALLOCATIONS = {
   1212416: { intervalBytes: 1212373, exactBytes: 1212416, overBytes: 1212417 },
   1213440: { intervalBytes: 1213135, exactBytes: 1213440, overBytes: 1213441 },
@@ -565,10 +572,13 @@ const SHIPPING_SERVER_RAW_ALLOCATIONS = {
   1222656: { intervalBytes: 1222251, exactBytes: 1222656, overBytes: 1222657 },
   1228800: { intervalBytes: 1228316, exactBytes: 1228800, overBytes: 1228801 },
   1229312: { intervalBytes: 1228751, exactBytes: 1229312, overBytes: 1229313 },
+  1232896: { intervalBytes: 1232399, exactBytes: 1232896, overBytes: 1232897 },
+  1233408: { intervalBytes: 1233211, exactBytes: 1233408, overBytes: 1233409 },
+  1233920: { intervalBytes: 1233453, exactBytes: 1233920, overBytes: 1233921 },
 };
 const SHIPPING_SERVER_RAW_UNSUPPORTED =
   `unsupported server raw allocation ${String(SHIPPING_SERVER_RAW_CAP)}: ` +
-  `expected one of 1212416, 1213440, 1220608, 1222656, 1228800, 1229312`;
+  `expected one of 1212416, 1213440, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408, 1233920`;
 
 test("shipping budget: server raw allocation is explicitly approved", () => {
   assert.ok(
@@ -1540,12 +1550,14 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
     ceiling: 1536,
     breach: true,
   },
+  { name: "CSS raw newly allowed interval", group: "kit.client.css", axis: "raw", bytes: 3235 },
+  { name: "CSS raw exact ceiling", group: "kit.client.css", axis: "raw", bytes: 3584 },
   {
     name: "CSS raw one byte over",
     group: "kit.client.css",
     axis: "raw",
-    bytes: 3073,
-    ceiling: 3072,
+    bytes: 3585,
+    ceiling: 3584,
     breach: true,
   },
   { name: "CSS gzip newly allowed interval", group: "kit.client.css", axis: "gzip", bytes: 1029 },

@@ -18,6 +18,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { adminApp } from "../src/admin/routes";
+import { eventSaveBaseline } from "../src/admin/save-baseline";
 import { dispatchWriteBack } from "../src/admin/writeback";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -82,12 +83,21 @@ describe.skipIf(!process.env.DATABASE_URL)(
       vi.mocked(dispatchWriteBack).mockClear();
     });
 
-    const post = (path: string, values: Record<string, string>) =>
-      native().request(
+    // Edit saves carry the token of the stored row the form displayed. Read the
+    // row rather than the edit page so no GET side effect enters the assertions.
+    const post = async (path: string, values: Record<string, string>) => {
+      const editKey = path.match(/^\/events\/([^/]+)$/)?.[1];
+      const body = { ...values };
+      if (editKey && body.saved_baseline === undefined) {
+        const [current] = await db.select().from(events).where(eq(events.eventKey, editKey));
+        body.saved_baseline = await eventSaveBaseline(current!);
+      }
+      return native().request(
         path,
-        { method: "POST", headers: { cookie }, body: new URLSearchParams(values) },
+        { method: "POST", headers: { cookie }, body: new URLSearchParams(body) },
         liveEnv(),
       );
+    };
     const patch = (key: string, body: unknown) =>
       app.request(
         `/events/${key}`,

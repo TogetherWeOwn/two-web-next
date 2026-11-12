@@ -6,6 +6,7 @@ import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { adminApp } from "../src/admin/routes";
+import { eventSaveBaseline } from "../src/admin/save-baseline";
 import { getEvent, updateEvent } from "../src/admin/store";
 import {
   type EventFormInput,
@@ -157,6 +158,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
     );
   }
   async function browser(path: string, values?: Record<string, string>): Promise<Response> {
+    // An edit form POST carries the token of the stored row the form displayed.
+    const editKey = path.match(/^\/events\/([^/]+)$/)?.[1];
+    if (values && editKey && values.saved_baseline === undefined) {
+      const [current] = await fixture.db.select().from(events).where(eq(events.eventKey, editKey));
+      values = { ...values, saved_baseline: await eventSaveBaseline(current!) };
+    }
     return adminApp({ sessionStore: store, db: fixture.db }).request(
       path,
       {

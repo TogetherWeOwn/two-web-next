@@ -233,7 +233,13 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
       ),
     );
     for (const res of responses) await expectFunnel(res);
-    expect(warn).toHaveBeenCalledTimes(21);
+    const configWarnings = warn.mock.calls.filter((call) => call[0] === "operator.config.invalid");
+    expect(configWarnings).toEqual([
+      ["operator.config.invalid", { variable: "CSP_REPORT_SAMPLE_RATE", action: "using_default" }],
+    ]);
+    // The fixed operator diagnostic is separate from the unchanged sink budget.
+    const reportWarnings = warn.mock.calls.filter((call) => call[0] !== "operator.config.invalid");
+    expect(reportWarnings).toHaveLength(21);
     expectShedLines(warn, 1);
     expect(warn.mock.calls.some((call) => call[0] === "csp.report.violation")).toBe(true);
     expect(warn.mock.calls.some((call) => call[0] === "csp.report.dropped_oversize")).toBe(true);

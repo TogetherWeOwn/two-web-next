@@ -67,6 +67,7 @@ let {
   errors = null,
   values = null,
   sharedGames = undefined,
+  restoredWrite = false,
 }: {
   member: MemberView;
   stats?: MemberStats | null;
@@ -83,6 +84,8 @@ let {
    * equal to a value render the shared marker. Absent (or empty) renders the
    * plain list: own profile and zero-shared never mark. */
   sharedGames?: string[];
+  /** Trusted root-layout display bit for the restored-write notice. */
+  restoredWrite?: boolean;
 } = $props();
 
 const img = $derived(profileAvatarSrcset(member.id, member.avatar));
@@ -174,6 +177,9 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
     </div>
   </header>
   <main id="main" tabindex="-1">
+    {#if restoredWrite}
+      <div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>
+    {/if}
     {#if joinResult}
       <p class="notice" role="status" data-testid="join-result">
         {#if joinResult === "added"}

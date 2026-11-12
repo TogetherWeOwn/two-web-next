@@ -31,6 +31,9 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // one new-asset fragment ported from an open branch during its post-split
 // merge: public/islands/event-time-from-now.js 2048/1024 (see
 // ci/budgets/decisions/bundle/2026-10-26-event-time-from-now.md).
+// The stale-save history island adds its measured new-asset allocation:
+// public/islands/admin-save-baseline.js 1024/512 (see
+// ci/budgets/decisions/bundle/2026-11-10-admin-save-baseline.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
@@ -38,7 +41,7 @@ const SHIPPING_KIT_BUDGET = {
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
     js: { maxRawBytes: 257024, maxGzipBytes: 103168, maxFiles: 55 },
-    css: { maxRawBytes: 3072, maxGzipBytes: 1280, maxFiles: 4 },
+    css: { maxRawBytes: 3584, maxGzipBytes: 1280, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
 };
@@ -46,6 +49,7 @@ const SHIPPING_KIT_BUDGET = {
 const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/admin-event-editor.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
   "public/islands/admin-event-text-limits.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
+  "public/islands/admin-save-baseline.js": { maxRawBytes: 1024, maxGzipBytes: 512 },
   "public/islands/auth-status.js": { maxRawBytes: 3072, maxGzipBytes: 1536 },
   "public/islands/avatar.js": { maxRawBytes: 512, maxGzipBytes: 512 },
   "public/islands/copy-link.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
@@ -61,6 +65,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
   "public/admin-rsvp-review.css": { maxRawBytes: 1024, maxGzipBytes: 512 },
+  "public/admin-theme.css": { maxRawBytes: 4608, maxGzipBytes: 1280 },
   "public/operator-overrides-theme.css": { maxRawBytes: 512, maxGzipBytes: 256 },
   "public/theme.css": { maxRawBytes: 15360, maxGzipBytes: 3584 },
   "public/theme-tokens.css": { maxRawBytes: 1536, maxGzipBytes: 512 },
@@ -207,9 +212,20 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // 1229312 admits the profile bidi and invisible-character rule on top of that
 // (+435 over the joiner build; projected 1228751 over main 2c86dc09 leaves
 // 49 bytes at 1228800, too thin to absorb further main growth).
+// 1232896 admits the restored-write notice (#2113) and the stale-save
+// rejection (#2112) composed on main with the theme migration (#2032):
+// exact-head CI measured main tip `66ee3682` at 1232399 raw (run 42939882535)
+// and the #2110 head at 1232397 raw (run 42946370296); 1232384 rejects by 15.
+// 1233408 admits the operator-settings warning (#2111) merged onto that
+// tip after the 1232896 sizing: exact-head main CI measured `fe707a0ec`
+// at 1233211 raw (run 42954334978); the 1232896 step rejects by 315,
+// so one further 512 step is the least cover.
+// 1233920 admits the content display face leaf growth on top of that
+// (exact-head CI 1233453 raw, run 42985471999; the 1233408 step rejects
+// by 45, so one further 512 step is the least cover).
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
   1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440,
-  1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312,
+  1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408, 1233920,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
@@ -253,7 +269,7 @@ function assertShippingKitBudget(actual, approvedClient) {
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440, 1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440, 1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408, 1233920`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = approvedClient

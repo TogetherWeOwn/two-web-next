@@ -53,9 +53,14 @@
     {
       "includes": [
         "assets/styles.css",
+        "assets/theme.css",
+        "public/theme-tokens.css",
+        "web/src/ember-theme.css",
         "assets/admin-rsvp-review.css",
+        "assets/admin-theme.css",
         "public/styles.css",
         "public/admin-rsvp-review.css",
+        "public/admin-theme.css",
         "public/theme.css",
         "public/profile-theme.css",
         "public/schedule-theme.css",
@@ -70,6 +75,15 @@
     {
       "includes": ["public/islands/**", "ci/featured-proof/fixtures/**"],
       "linter": { "enabled": false }
+    },
+    {
+      "includes": ["vendor/design-kit/**"],
+      "formatter": { "enabled": false },
+      "linter": { "enabled": false }
+    },
+    {
+      "includes": ["test/fixtures/bot-site-contract-v2.json"],
+      "formatter": { "enabled": false }
     },
     {
       "includes": [
@@ -89,7 +103,7 @@
       }
     },
     {
-      "includes": ["web/src/app.css"],
+      "includes": ["web/src/app.css", "web/src/ember-theme.css"],
       "css": { "parser": { "tailwindDirectives": true } }
     },
     {
