@@ -93,6 +93,7 @@ export async function writeManifest({ app, controller, output, githubSha, runId,
     harnessSha256: await digest(join(controller, "ci/join-state-evidence.test.mjs")),
     sourceHelperSha256: await digest(join(controller, "ci/join-state-evidence-source.mjs")),
     fixtureHelperSha256: await digest(join(controller, "ci/join-state-fixtures.mjs")),
+    renderHelperSha256: await digest(join(controller, "ci/join-state-render.mjs")),
     sourceLockfiles: {
       root: await digest(join(app, "package-lock.json")),
       web: await digest(join(app, "web/package-lock.json")),
