@@ -130,6 +130,11 @@ implementation that retains this anchor and the complete ordered history; no
 such transition is implemented or authorized here. The automatic ratchet cannot
 admit routes, change file caps or reset the anchor. Existing ceilings must not rise.
 
+Reviewed amendment (2026-11-11): the aggregate CSS raw ceiling rose to 3,584 B,
+so each page's CSS raw ceiling, clipped to it above, moves from 3,072 B to the
+3,584 B default target. Nothing else in the snapshot changed. See
+`2026-11-11-admin-validation-css-raw.md`.
+
 ## Initial approved route plan
 
 ```json
@@ -144,7 +149,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 18
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -168,7 +173,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 18
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -180,7 +185,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 21
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 3
       }
@@ -192,7 +197,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 22
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -204,7 +209,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 23
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -216,7 +221,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 22
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -228,7 +233,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 22
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -240,7 +245,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 21
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -252,7 +257,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 21
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -264,7 +269,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 21
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -276,7 +281,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 22
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -288,7 +293,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 22
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -300,7 +305,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 17
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -312,7 +317,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 21
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -336,7 +341,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 17
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -348,7 +353,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 18
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -360,7 +365,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 18
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -372,7 +377,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 18
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -384,7 +389,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 17
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -396,7 +401,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 18
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -408,7 +413,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 18
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -420,7 +425,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 17
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -432,7 +437,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 18
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
@@ -444,7 +449,7 @@ admit routes, change file caps or reset the anchor. Existing ceilings must not r
         "maxFiles": 18
       },
       "css": {
-        "maxRawBytes": 3072,
+        "maxRawBytes": 3584,
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }

@@ -403,17 +403,56 @@ skips heavy steps, dispatch the existing CI workflow on that PR branch for full
 verification. Every required check, database-safety rule, native review and
 release gate remains in force.
 
-Local agent test execution is limited to an authorized focused reproduction of
-one failing test or crate. Neither the builder nor its caller may run local
+Local agent test execution is limited to the bounded pre-push fixture checks
+below and, when Actions cannot run it, an authorized focused reproduction of
+one failing non-Rust test. Neither the builder nor its caller may run local
 full suites or CI mirrors on the shared host, in Boat or through a fallback;
-do not split a suite into successive focused commands. Any heavy build needed
-for that reproduction must use the guarded `boat` PATH wrapper with approved
-source-only export, sizing/budget controls, `--no-env`, and verified cleanup.
-Never bypass the wrapper or use a heavy raw-host fallback. If no compliant
-path is available, defer to Actions or route the actual prerequisite. Report
-focused reproduction output separately as diagnostic evidence; it does not
-replace Actions evidence. Read-only reviewers inspect source and existing
-evidence and do not execute tests, builds or installs.
+do not split a suite into successive focused commands. Do not use Boat or a
+heavy raw-host fallback for non-Cargo work. If no compliant path is available,
+defer to Actions or route the actual prerequisite. Report focused reproduction
+output separately as diagnostic evidence; it does not replace Actions evidence.
+Read-only reviewers inspect source and existing evidence and do not execute
+tests, builds or installs.
+
+Before every push, agents verify a fresh worktree with a bounded,
+offline-fixture set of checks. GitHub Actions is the only place agents run the
+full suite, the database tests, Docker and the browser gates.
+
+Install once per worktree and reuse it unless a lockfile changes. Use `--ignore-scripts`
+so no dependency lifecycle script runs and use a per-task npm cache. `npm ci`
+uses the frozen lockfile and its integrity checks; this change does not add or
+update dependencies. Although npm 11.19 accepts `--min-release-age`, it does not
+enforce that age on locked packages installed by `npm ci`. Do not treat this
+command as a package-age check. Use the Node floor stated in the README.
+
+```sh
+nice timeout -k 10 300 npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund --cache "$PAPERCLIP_TASK_SCRATCH_DIR/npm-cache"
+nice timeout -k 10 120 npm run typecheck
+nice timeout -k 10 300 env -u DATABASE_URL -u BOT_DATABASE_URL npm run test:unit -- test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
+```
+
+- `--ignore-scripts` suppresses npm pre and post hooks, so `postinstall` and
+  `pretypecheck` do not run. `npm run typecheck` therefore runs the generator
+  itself: `node ci/build-leaf-css.mjs && tsc --noEmit && tsc --noEmit -p ci/tsconfig.json`.
+- `npm run test:unit` is `node ci/test-unit.mjs`. It requires explicit, exact
+  `test/*.test.ts` paths and rejects no arguments, invalid names, directories,
+  flags, globs and missing paths. It regenerates the same critical-CSS module
+  through the generator before Vitest and does not build the app. Run tests
+  separately from typecheck; neither depends on the other.
+- Choose test files beside the code you changed and the files that import it
+  (`git grep -l <module> test/`). Pick only fixtures that run offline. The two
+  files above are an example. Do not provide `DATABASE_URL` or any credential.
+- Format and lint each changed file with a 120 second limit, for example
+  `nice timeout -k 10 120 npm exec --no -- biome format package.json ci/test-unit.mjs test/<file>.test.ts`,
+  then `nice timeout -k 10 120 npm exec --no -- biome check --error-on-warnings <same paths>`.
+- Precheck resources first. If the load average exceeds `nproc`, `MemAvailable`
+  is under 10% of total memory, or `/home` has 85% or more used, skip the
+  install-dependent checks and record that you skipped them and why.
+- Clean up only what you created: remove the worktree's `node_modules` and the
+  per-task npm cache when you finish.
+- Run in Actions only, on the exact head SHA: `npm run check`, the full build,
+  database tests, Docker and the browser, a11y and Kit gates. Cite that head's
+  results as evidence. Do not claim a result you did not see.
 
 The command examples in Local development and the human workflow below are
 a tooling reference, not an exception to these agent execution limits.
@@ -454,6 +493,9 @@ bin/local-ci.sh -j 8 --no-coverage --no-static                  # suite only, qu
   above; neither the builder nor its caller runs this local gate.
 - Not covered: the browser journeys (`e2e-ok`), the a11y job, the Kit build and
   parity gates, and Semgrep. CI still runs them on the PR.
+
+`bin/local-ci.sh` (also `npm run ci:local --`) is a human workflow; agents do
+not run it. Agents do not run the full suite locally; use the Actions run instead.
 
 Biome is pinned in `package-lock.json`. `npm run lint` uses the read-only
 [`biome ci`](https://biomejs.dev/reference/cli/#biome-ci) command to enforce both

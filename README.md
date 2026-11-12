@@ -133,6 +133,11 @@ node ci/build-leaf-css.mjs
 # Or, from the root: npm run build:leaf-css
 ```
 
+Under `--ignore-scripts`, `npm run typecheck` and `npm run test:unit` bootstrap
+the generator themselves (see "Verify a change before opening a PR" in
+[CONTRIBUTING.md](CONTRIBUTING.md)). Raw `tsc`, direct `vitest` and bundlers do
+not: run the generator explicitly first.
+
 `ci/build-leaf-css.mjs` uses only Node builtins and concatenates the three
 checked sheets, so it runs in dependency-free scratch snapshots. The separate
 `ci/build-ember-tokens.mjs` adapter builds the Hono and Kit token sheets from
