@@ -26,6 +26,12 @@ const textLimitsIsland =
 const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
+{#snippet fieldError(name: string, id: string)}
+  {#if errors[name]}
+    <p {id} class="error" role="alert" data-testid={`error-${name}`}>{errors[name]}</p>
+  {/if}
+{/snippet}
+
 <AdminShell restoredWrite={data.restoredWrite} title="New event">
 <section>
   <h1>New event</h1>
@@ -63,9 +69,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         aria-invalid={errors.title ? "true" : undefined}
         aria-describedby={errors.title ? "f-title-error" : undefined}
       />
-      {#if errors.title}
-        <p id="f-title-error" class="error" role="alert" data-testid="error-title">{errors.title}</p>
-      {/if}
+      {@render fieldError("title", "f-title-error")}
     </div>
     <div class="field">
       <label for="f-game">Game</label>
@@ -78,9 +82,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         aria-invalid={errors.game ? "true" : undefined}
         aria-describedby={errors.game ? "f-game-error" : undefined}
       />
-      {#if errors.game}
-        <p id="f-game-error" class="error" role="alert" data-testid="error-game">{errors.game}</p>
-      {/if}
+      {@render fieldError("game", "f-game-error")}
     </div>
     <div class="field">
       <label for="f-description">Description</label>
@@ -92,11 +94,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         aria-invalid={errors.description ? "true" : undefined}
         aria-describedby={errors.description ? "f-description-error" : undefined}
       >{val("description")}</textarea>
-      {#if errors.description}
-        <p id="f-description-error" class="error" role="alert" data-testid="error-description">
-          {errors.description}
-        </p>
-      {/if}
+      {@render fieldError("description", "f-description-error")}
     </div>
     <div class="field">
       <label for="f-starts-at">Starts (local wall time, YYYY-MM-DD HH:mm)</label>
@@ -109,11 +107,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         aria-invalid={errors.starts_at ? "true" : undefined}
         aria-describedby={errors.starts_at ? "f-starts-at-error" : undefined}
       />
-      {#if errors.starts_at}
-        <p id="f-starts-at-error" class="error" role="alert" data-testid="error-starts_at">
-          {errors.starts_at}
-        </p>
-      {/if}
+      {@render fieldError("starts_at", "f-starts-at-error")}
     </div>
     <div class="field">
       <label for="f-ends-at">Ends (local wall time, YYYY-MM-DD HH:mm)</label>
@@ -126,11 +120,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         aria-invalid={errors.ends_at ? "true" : undefined}
         aria-describedby={errors.ends_at ? "f-ends-at-error" : undefined}
       />
-      {#if errors.ends_at}
-        <p id="f-ends-at-error" class="error" role="alert" data-testid="error-ends_at">
-          {errors.ends_at}
-        </p>
-      {/if}
+      {@render fieldError("ends_at", "f-ends-at-error")}
     </div>
     <div class="field">
       <label for="f-timezone">Timezone</label>
@@ -145,11 +135,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       <p id="f-timezone-hint" class="hint">
         The IANA zone the wall time above is typed in. Storage is UTC.
       </p>
-      {#if errors.timezone}
-        <p id="f-timezone-error" class="error" role="alert" data-testid="error-timezone">
-          {errors.timezone}
-        </p>
-      {/if}
+      {@render fieldError("timezone", "f-timezone-error")}
     </div>
     <div class="field">
       <label for="f-location">Location</label>
@@ -162,11 +148,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         aria-invalid={errors.location ? "true" : undefined}
         aria-describedby={errors.location ? "f-location-error" : undefined}
       />
-      {#if errors.location}
-        <p id="f-location-error" class="error" role="alert" data-testid="error-location">
-          {errors.location}
-        </p>
-      {/if}
+      {@render fieldError("location", "f-location-error")}
     </div>
     <div class="field">
       <label for="f-capacity">Capacity (empty = unlimited)</label>
@@ -179,11 +161,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         aria-invalid={errors.capacity ? "true" : undefined}
         aria-describedby={errors.capacity ? "f-capacity-error" : undefined}
       />
-      {#if errors.capacity}
-        <p id="f-capacity-error" class="error" role="alert" data-testid="error-capacity">
-          {errors.capacity}
-        </p>
-      {/if}
+      {@render fieldError("capacity", "f-capacity-error")}
     </div>
     <fieldset>
       <legend>Repeat</legend>
@@ -204,16 +182,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
           Empty = a one-off event. Weeks keep the same wall time in the zone above across clock
           changes.
         </p>
-        {#if errors.recurrence_frequency}
-          <p
-            id="f-recurrence-frequency-error"
-            class="error"
-            role="alert"
-            data-testid="error-recurrence_frequency"
-          >
-            {errors.recurrence_frequency}
-          </p>
-        {/if}
+        {@render fieldError("recurrence_frequency", "f-recurrence-frequency-error")}
       </div>
       <div class="field">
         <label for="f-recurrence-count">Occurrences (including the first, max 52)</label>
@@ -226,16 +195,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
           aria-invalid={errors.recurrence_count ? "true" : undefined}
           aria-describedby={errors.recurrence_count ? "f-recurrence-count-error" : undefined}
         />
-        {#if errors.recurrence_count}
-          <p
-            id="f-recurrence-count-error"
-            class="error"
-            role="alert"
-            data-testid="error-recurrence_count"
-          >
-            {errors.recurrence_count}
-          </p>
-        {/if}
+        {@render fieldError("recurrence_count", "f-recurrence-count-error")}
       </div>
       <div class="field">
         <label for="f-recurrence-ends-on">Repeat until (YYYY-MM-DD)</label>
@@ -247,16 +207,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
           aria-invalid={errors.recurrence_ends_on ? "true" : undefined}
           aria-describedby={errors.recurrence_ends_on ? "f-recurrence-ends-on-error" : undefined}
         />
-        {#if errors.recurrence_ends_on}
-          <p
-            id="f-recurrence-ends-on-error"
-            class="error"
-            role="alert"
-            data-testid="error-recurrence_ends_on"
-          >
-            {errors.recurrence_ends_on}
-          </p>
-        {/if}
+        {@render fieldError("recurrence_ends_on", "f-recurrence-ends-on-error")}
       </div>
     </fieldset>
     <div class="actions">
