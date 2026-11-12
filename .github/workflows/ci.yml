@@ -243,6 +243,8 @@ jobs:
       # resolution and explicit selection without an app build or database.
       - name: Fresh-worktree check bootstrap
         run: env -u DATABASE_URL -u BOT_DATABASE_URL npm --ignore-scripts run test:unit -- test/check-bootstrap.test.ts test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
+      - name: Incident staging observation selftests (fixtures, no network)
+        run: node --test ci/incident-staging-observation.test.mjs
       - name: Timeout ledger ratchet (HARD)
         run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
