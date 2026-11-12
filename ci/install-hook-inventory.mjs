@@ -32,14 +32,8 @@ export const REVIEWED_FIRST_PARTY_GENERATORS = [
 const REGISTRY_PREFIX = "https://registry.npmjs.org/";
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-export function inventoryHooks(root = repoRoot) {
-  const pick = (rel) => {
-    const path = join(root, rel);
-    if (!existsSync(path)) return null;
-    const scripts = JSON.parse(readFileSync(path, "utf8")).scripts ?? {};
-    return Object.fromEntries(LIFECYCLE.filter((n) => n in scripts).map((n) => [n, scripts[n]]));
-  };
-  const lockBytes = readFileSync(join(root, "package-lock.json"));
+function inventoryLock(root, lockPath) {
+  const lockBytes = readFileSync(join(root, lockPath));
   const lock = JSON.parse(lockBytes);
   if (!lock.packages || typeof lock.packages !== "object" || Array.isArray(lock.packages)) {
     throw new Error("lockfile packages must be an object");
@@ -83,6 +77,25 @@ export function inventoryHooks(root = repoRoot) {
       unpinned.push({ path, resolved: meta.resolved ?? null, link: Boolean(meta.link) });
     }
   }
+  return {
+    sha256: sha256(lockBytes),
+    lockedDependencyHooks: hooks.sort((a, b) => a.path.localeCompare(b.path)),
+    nonRegistrySources: unpinned,
+    resolvedOrigins: resolvedOrigins.sort((a, b) => a.path.localeCompare(b.path)),
+  };
+}
+
+export function inventoryHooks(root = repoRoot) {
+  const pick = (rel) => {
+    const path = join(root, rel);
+    if (!existsSync(path)) return null;
+    const scripts = JSON.parse(readFileSync(path, "utf8")).scripts ?? {};
+    return Object.fromEntries(LIFECYCLE.filter((n) => n in scripts).map((n) => [n, scripts[n]]));
+  };
+  const locks = Object.fromEntries(
+    ["package-lock.json", "web/package-lock.json"].map((path) => [path, inventoryLock(root, path)]),
+  );
+  const rootLock = locks["package-lock.json"];
   const rootHooks = pick("package.json") ?? {};
   const problems = [];
   const reviewed = JSON.stringify(REVIEWED_ROOT_HOOKS);
@@ -108,14 +121,16 @@ export function inventoryHooks(root = repoRoot) {
   return {
     ok: problems.length === 0,
     problems,
-    lockSha256: sha256(lockBytes),
+    // Legacy fields describe the root lock only; use locks for both independent trees.
+    lockSha256: rootLock.sha256,
     rootHooks,
     rootHookGenerators,
     kitHooks: pick("web/package.json"),
-    lockedDependencyHooks: hooks.sort((a, b) => a.path.localeCompare(b.path)),
+    lockedDependencyHooks: rootLock.lockedDependencyHooks,
     // Compatibility only: this legacy prefix filter does not classify dependency specs.
-    nonRegistrySources: unpinned,
-    resolvedOrigins: resolvedOrigins.sort((a, b) => a.path.localeCompare(b.path)),
+    nonRegistrySources: rootLock.nonRegistrySources,
+    resolvedOrigins: rootLock.resolvedOrigins,
+    locks,
   };
 }
 

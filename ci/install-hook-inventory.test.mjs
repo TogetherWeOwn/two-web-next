@@ -21,6 +21,7 @@ const fixture = (scripts, packages = {}) => {
   roots.push(root);
   put(root, "package.json", JSON.stringify({ scripts }));
   put(root, "package-lock.json", JSON.stringify({ packages: { "": {}, ...packages } }));
+  put(root, "web/package-lock.json", JSON.stringify({ packages: { "": {} } }));
   return root;
 };
 
@@ -60,6 +61,39 @@ describe("hook inventory", () => {
       ],
     );
     assert.deepEqual(inv.kitHooks, { prepare: "kit sync" });
+  });
+  it("attributes independent root and Kit lock inventories and rejects bad Kit metadata", () => {
+    const root = fixture(REVIEWED_ROOT_HOOKS, {
+      "node_modules/workerd": { version: "1.0.0", hasInstallScript: true },
+    });
+    const kitLock = JSON.stringify({
+      packages: {
+        "": {},
+        "node_modules/workerd": {
+          version: "2.0.0",
+          hasInstallScript: true,
+          resolved: "https://example.com/workerd.tgz",
+          integrity: "sha512-kit",
+        },
+      },
+    });
+    put(root, "web/package-lock.json", kitLock);
+    const inv = inventoryHooks(root);
+    assert.equal(inv.locks["package-lock.json"].sha256, inv.lockSha256);
+    assert.equal(inv.locks["web/package-lock.json"].sha256, sha256(kitLock));
+    assert.equal(inv.locks["package-lock.json"].lockedDependencyHooks[0].version, "1.0.0");
+    assert.equal(inv.locks["web/package-lock.json"].lockedDependencyHooks[0].version, "2.0.0");
+    assert.equal(
+      inv.locks["web/package-lock.json"].lockedDependencyHooks[0].integrity,
+      "sha512-kit",
+    );
+    assert.equal(inv.locks["web/package-lock.json"].resolvedOrigins[0].origin, "other-resolved");
+    assert.equal(
+      inv.locks["web/package-lock.json"].nonRegistrySources[0].path,
+      "node_modules/workerd",
+    );
+    put(root, "web/package-lock.json", JSON.stringify({ packages: { "": {}, bad: { link: 1 } } }));
+    assert.throws(() => inventoryHooks(root), /invalid link value/);
   });
   it("fails closed on added, changed or removed root hooks", () => {
     for (const hooks of [
