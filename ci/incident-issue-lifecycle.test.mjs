@@ -180,7 +180,18 @@ test("sink failures propagate; invalid keys cannot reach the API", async () => {
     },
   });
   await assert.rejects(sync(f), /sink unavailable/);
-  const invalid = fixture();
-  await assert.rejects(sync(invalid, { key: "bad\nkey" }), /Invalid incident key/);
-  assert.equal(invalid.calls.length, 0);
+  for (const key of ["bad\nkey", "", "-leading", "Uppercase", "a".repeat(81)]) {
+    const invalid = fixture();
+    await assert.rejects(sync(invalid, { key }), /Invalid incident key/);
+    assert.equal(invalid.calls.length, 0);
+  }
+});
+
+test("incident keys accept one and eighty characters", async () => {
+  for (const key of ["a", "a".repeat(80)]) {
+    const f = fixture();
+    await sync(f, { key });
+    assert.equal(f.state.issues.length, 1);
+    assert.ok(f.state.issues[0].body.includes(marker(key)));
+  }
 });
