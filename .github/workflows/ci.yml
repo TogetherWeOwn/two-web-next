@@ -260,6 +260,8 @@ jobs:
         run: env -u DATABASE_URL -u BOT_DATABASE_URL npm --ignore-scripts run test:unit -- test/check-bootstrap.test.ts test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
       - name: Incident staging observation selftests (fixtures, no network)
         run: node --test ci/incident-staging-observation.test.mjs
+      - name: Incident evidence and hold selftests (fixtures, no network)
+        run: node --test ci/incident-evidence.test.mjs ci/incident-hold.test.mjs
       - name: Timeout ledger ratchet (HARD)
         run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
@@ -1047,9 +1049,6 @@ jobs:
       - name: Rollback target and drill selftest (stubbed GitHub API and wrangler output, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/rollback-target.test.mjs ci/drill-scripts-ref.test.mjs
-      - name: Incident evidence and hold selftests (fixtures, no network)
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/incident-evidence.test.mjs ci/incident-hold.test.mjs
       - name: Post-deploy watch selftest (fake clock and probes, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/post-deploy-watch.test.mjs
