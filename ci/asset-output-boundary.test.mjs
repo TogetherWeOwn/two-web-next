@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -33,7 +41,7 @@ describe("asset patch collection", () => {
     assert.deepEqual(collectAssetPatch(input), {
       sourceSha: input.sourceSha,
       files: [],
-      patch: "",
+      patch: Buffer.alloc(0),
     });
     writeFileSync(join(input.root, "public/a.js"), "changed\n");
     writeFileSync(join(input.root, "public/b.css"), "new\n");
@@ -47,7 +55,38 @@ describe("asset patch collection", () => {
     rmSync(join(input.root, "public/b.css"), { force: true });
     input.git("apply", "--check", patchFile);
     input.git("apply", patchFile);
-    assert.match(result.patch, /new file mode 100644/);
+    assert.match(result.patch.toString("utf8"), /new file mode 100644/);
+  });
+
+  it("round trips non-UTF-8 text and binary bytes despite configured diff drivers", (t) => {
+    const input = checkout(t);
+    const text = Buffer.from([0x61, 0xff, 0x0a]);
+    const binary = Buffer.from([0x00, 0xff, 0x01, 0x00, 0x0a]);
+    writeFileSync(join(input.root, ".git/info/attributes"), "public/* diff=fixture\n");
+    input.git("config", "diff.fixture.command", "false");
+    input.git("config", "diff.fixture.textconv", "false");
+    writeFileSync(join(input.root, "public/a.js"), text);
+    writeFileSync(join(input.root, "public/b.css"), binary);
+    const result = collectAssetPatch(input);
+    const withoutBinary = input.git("diff", "--no-ext-diff", "--no-textconv", "--", ...allowed);
+    assert.match(withoutBinary, /Binary files/);
+    const patchFile = join(input.root, ".git/fixture.patch");
+    writeFileSync(patchFile, result.patch);
+    input.git("reset", "--hard", "-q", input.sourceSha);
+    rmSync(join(input.root, "public/b.css"), { force: true });
+    writeFileSync(join(input.root, ".git/no-binary.patch"), withoutBinary);
+    assert.throws(() => input.git("apply", "--check", ".git/no-binary.patch"));
+    input.git("apply", patchFile);
+    assert.deepEqual(readFileSync(join(input.root, "public/a.js")), text);
+    assert.deepEqual(readFileSync(join(input.root, "public/b.css")), binary);
+  });
+
+  it("fails closed when patch output exceeds the one MiB bound", (t) => {
+    const input = checkout(t);
+    writeFileSync(join(input.root, "public/a.js"), Buffer.alloc(900 * 1024, 0x61));
+    assert.ok(collectAssetPatch(input).patch.length > 900 * 1024);
+    writeFileSync(join(input.root, "public/a.js"), Buffer.alloc(1024 * 1024, 0x61));
+    assert.throws(() => collectAssetPatch(input), /maxBuffer|ENOBUFS/);
   });
 
   it("rejects unexpected, deleted and staged paths", (t) => {
