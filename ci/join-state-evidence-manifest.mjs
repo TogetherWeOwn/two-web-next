@@ -70,6 +70,9 @@ export async function writeManifest({ app, controller, output, githubSha, runId,
       }
     }
   }
+  assert.doesNotMatch(report, /^\s*not ok\b/m, "TAP must not contain failed cases");
+  const labels = [...report.matchAll(/^    # Subtest: (.+)$/gm)].map((match) => match[1]);
+  assert.deepEqual(labels.sort(), [...testNames].sort(), "TAP must contain every capture label");
   const passedCases = [...report.matchAll(/^    ok [0-9]+ - (.+)$/gm)].map((match) => match[1]);
   assert.deepEqual(
     passedCases.sort(),

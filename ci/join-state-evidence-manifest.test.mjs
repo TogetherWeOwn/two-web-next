@@ -121,8 +121,10 @@ test("rejects missing, duplicated, or unsuccessful TAP cases and summaries", asy
   const cases = [
     report.replace(`# pass 20`, `# pass 19`),
     `${report}\n# fail 0\n`,
-    report.replace(names[0], "unexpected case"),
+    report.replace(`    # Subtest: ${names[0]}`, "    # Subtest: unexpected case"),
+    report.replace(`    ok 1 - ${names[0]}`, "    ok 1 - unexpected case"),
     report.replace(/    ok 1 - /, "    not ok 1 - "),
+    `${report}\nnot ok 2 - unexpected failure\n`,
     report.replace("# skipped 0", "# skipped 1"),
   ];
   try {
