@@ -18,6 +18,15 @@ test("diagnostic stays on draft PRs with a pinned head and no protected environm
   assert.doesNotMatch(workflow, /workflow_dispatch:|workflow_run:|environment:|secrets\./);
 });
 
+test("synthetic browser preflight runs before fixture collection", () => {
+  assert.match(workflow, /- ci\/join-lcp-browser-preflight\.mjs/);
+  assert.match(workflow, /- ci\/join-lcp-browser-preflight\.test\.mjs/);
+  const install = workflow.indexOf("npx playwright install --with-deps chromium");
+  const preflight = workflow.indexOf("node --test ci/join-lcp-browser-preflight.test.mjs");
+  const collect = workflow.indexOf("node ci/join-lcp-diagnostic.mjs");
+  assert.ok(install !== -1 && install < preflight && preflight < collect);
+});
+
 test("diagnostic retains fixture evidence without replacing the quality gate", () => {
   assert.match(workflow, /node ci\/join-lcp-diagnostic\.mjs/);
   assert.match(workflow, /path: artifacts\/join-lcp-diagnostic\//);

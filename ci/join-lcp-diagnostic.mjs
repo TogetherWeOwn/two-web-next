@@ -47,6 +47,51 @@ export const HEADING_APPEND =
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
+// Match the shipped bundle generator without importing it (its module writes a file).
+export function inlineStylesheetBundle(html, sheets, csp) {
+  if (sheets.length !== 3 || sheets.some((sheet) => !Buffer.isBuffer(sheet))) {
+    throw new Error("expected three served stylesheet buffers");
+  }
+  const css = sheets
+    .map((sheet) => {
+      const text = sheet.toString("utf8");
+      if (!Buffer.from(text, "utf8").equals(sheet)) throw new Error("stylesheet is not UTF-8");
+      return text;
+    })
+    .join("\n");
+  if (/<\/style/i.test(css)) throw new Error("stylesheet contains a closing style tag");
+  const block = oneBlock(html);
+  const directives = csp.split(";");
+  const names = directives
+    .map((value) => value.trim().split(/\s+/)[0].toLowerCase())
+    .filter(Boolean);
+  if (new Set(names).size !== names.length) throw new Error("duplicate CSP directive");
+  const style = directives
+    .map((value) => value.trim())
+    .filter((value) => /^style-src(?:\s|$)/.test(value));
+  if (directives.some((value) => /^style-src-elem(?:\s|$)/i.test(value.trim()))) {
+    throw new Error("unsupported style-src-elem policy");
+  }
+  if (
+    style.length !== 1 ||
+    !/^style-src\s+'self'(?:\s|$)/.test(style[0]) ||
+    style[0].includes("'unsafe-inline'")
+  ) {
+    throw new Error("unexpected style-src policy");
+  }
+  const hash = createHash("sha256").update(css, "utf8").digest("base64");
+  const replacement = `<style>${css}</style>`;
+  return {
+    html: html.slice(0, block.index) + replacement + html.slice(block.index + block.text.length),
+    csp: directives
+      .map((value) =>
+        /^style-src(?:\s|$)/.test(value.trim()) ? `${value} 'sha256-${hash}'` : value,
+      )
+      .join(";"),
+    hash,
+  };
+}
+
 function countOf(text, needle) {
   let count = 0;
   for (let at = text.indexOf(needle); at !== -1; at = text.indexOf(needle, at + needle.length))
@@ -170,9 +215,127 @@ function fetchUpstream(upstream, req) {
   });
 }
 
+const SHEET_PATHS = ["/styles.css", "/theme-tokens.css", "/theme.css"];
+
+// Capture once before collection; these buffers are never fetched on a measured navigation.
+export async function freezeStylesheets(upstream, controlEquality) {
+  const sheets = [];
+  const manifest = [];
+  for (const path of SHEET_PATHS) {
+    const { res, body } = await fetchUpstream(upstream, { method: "GET", url: path, headers: {} });
+    const type = String(res.headers["content-type"] || "");
+    if (
+      res.statusCode !== 200 ||
+      !/^text\/css(?:\s*;|$)/i.test(type) ||
+      res.headers["content-encoding"] ||
+      res.headers.location
+    ) {
+      throw new Error(`unexpected stylesheet response: ${path}`);
+    }
+    const digest = sha256(body);
+    if (
+      !controlEquality[path] ||
+      controlEquality[path].direct !== digest ||
+      controlEquality[path].viaProxy !== digest ||
+      controlEquality[path].bytes !== body.length
+    ) {
+      throw new Error(`stylesheet differs from control: ${path}`);
+    }
+    sheets.push(Buffer.from(body));
+    manifest.push({ path, bytes: body.length, sha256: digest });
+  }
+  const combined = Buffer.concat(
+    sheets.flatMap((sheet, index) => (index ? [Buffer.from("\n"), sheet] : [sheet])),
+  );
+  return {
+    sheets,
+    manifest: {
+      sheets: manifest,
+      combinedBytes: combined.length,
+      combinedSha256: sha256(combined),
+      cspSha256Base64: createHash("sha256").update(combined).digest("base64"),
+    },
+  };
+}
+
+// Compare actual proxy bytes and headers independently of the transformation helper.
+export function validateInlineResponse(direct, actual, sheets, control) {
+  if (
+    direct.res.statusCode !== 200 ||
+    actual.res.statusCode !== 200 ||
+    sha256(direct.body) !== control.direct ||
+    direct.body.length !== control.bytes
+  ) {
+    throw new Error("inline document differs from frozen control");
+  }
+  const html = direct.body.toString("utf8");
+  if (!Buffer.from(html).equals(direct.body)) throw new Error("document is not UTF-8");
+  const block = oneBlock(html);
+  const css = Buffer.concat(
+    sheets.flatMap((sheet, index) => (index ? [Buffer.from("\n"), sheet] : [sheet])),
+  );
+  const expected = Buffer.concat([
+    Buffer.from(html.slice(0, block.index)),
+    Buffer.from("<style>"),
+    css,
+    Buffer.from("</style>"),
+    Buffer.from(html.slice(block.index + block.text.length)),
+  ]);
+  if (!actual.body.equals(expected))
+    throw new Error("inline response body differs from expected bytes");
+  const csp = direct.res.headers["content-security-policy"];
+  if (typeof csp === "string") {
+    const seen = new Set();
+    for (const directive of csp.split(";")) {
+      const name = directive.trim().split(/\s+/)[0].toLowerCase();
+      if (name && seen.has(name)) throw new Error("duplicate CSP directive");
+      if (name === "style-src-elem") throw new Error("unsupported style-src-elem policy");
+      if (name) seen.add(name);
+    }
+  }
+  if (typeof csp !== "string" || !/(?:^|;)\s*style-src\s+'self'(?:\s*;|\s*$)/.test(csp)) {
+    throw new Error("unsupported inline validation CSP");
+  }
+  const digest = createHash("sha256").update(css).digest("base64");
+  const expectedCsp = csp.replace(
+    /((?:^|;)\s*style-src\s+'self')(?=\s*;|\s*$)/,
+    `$1 'sha256-${digest}'`,
+  );
+  const expectedHeaders = {};
+  for (const [name, value] of Object.entries(direct.res.headers)) {
+    if (!HOP.has(name) && name !== "etag" && name !== "last-modified")
+      expectedHeaders[name] = value;
+  }
+  expectedHeaders["content-security-policy"] = expectedCsp;
+  expectedHeaders["content-length"] = String(expected.length);
+  const sorted = (headers) =>
+    JSON.stringify(
+      Object.entries(headers)
+        .filter(
+          ([name]) =>
+            name !== "connection" && name !== "keep-alive" && name !== "transfer-encoding",
+        )
+        .sort(([a], [b]) => a.localeCompare(b)),
+    );
+  if (sorted(actual.res.headers) !== sorted(expectedHeaders))
+    throw new Error("inline response headers differ from expected headers");
+  return { bodySha256: sha256(actual.body), bytes: actual.body.length, cspSha256Base64: digest };
+}
+
 // Loopback-only proxy. `mode` and `runIndex` are set by the runner between runs.
 export function createProxy({ upstream = UPSTREAM } = {}) {
-  const state = { mode: "control", runIndex: 0, log: [], failures: [], documents: {} };
+  const state = {
+    mode: "control",
+    runIndex: 0,
+    log: [],
+    failures: [],
+    captureInlineUpstream: false,
+    inlineUpstream: null,
+  };
+  let frozenSheets = null;
+  const setFrozenStylesheets = (sheets) => {
+    frozenSheets = sheets.map((sheet) => Buffer.from(sheet));
+  };
   const server = http.createServer(async (req, res) => {
     const path = (req.url || "").split("?")[0];
     try {
@@ -184,7 +347,38 @@ export function createProxy({ upstream = UPSTREAM } = {}) {
       const type = String(up.headers["content-type"] || "");
       let served = body;
       let transform = "none";
-      if (state.mode === "stylesheet-scheduling" && path === "/join" && /text\/html/.test(type)) {
+      if (state.mode === "inline-stylesheets" && path === "/join" && req.method === "GET") {
+        if (
+          up.statusCode !== 200 ||
+          !/^text\/html(?:\s*;|$)/i.test(type) ||
+          up.headers["content-encoding"] ||
+          up.headers.location
+        ) {
+          throw new Error("unexpected join document response");
+        }
+        if (!frozenSheets) throw new Error("stylesheet preflight not completed");
+        const html = body.toString("utf8");
+        if (!Buffer.from(html, "utf8").equals(body)) throw new Error("document is not UTF-8");
+        const csp = up.headers["content-security-policy"];
+        if (typeof csp !== "string" || up.headers["content-security-policy-report-only"]) {
+          throw new Error("unexpected document CSP");
+        }
+        if (state.captureInlineUpstream) {
+          state.inlineUpstream = {
+            res: { statusCode: up.statusCode, headers: { ...up.headers } },
+            body: Buffer.from(body),
+          };
+          state.captureInlineUpstream = false;
+        }
+        const result = inlineStylesheetBundle(html, frozenSheets, csp);
+        served = Buffer.from(result.html, "utf8");
+        up.headers["content-security-policy"] = result.csp;
+        transform = "inline-stylesheets";
+      } else if (
+        state.mode === "stylesheet-scheduling" &&
+        path === "/join" &&
+        /text\/html/.test(type)
+      ) {
         const html = body.toString("utf8");
         const next = scheduleStylesheetsLate(html);
         validateStylesheetScheduling(html, next);
@@ -232,7 +426,7 @@ export function createProxy({ upstream = UPSTREAM } = {}) {
       server.listen(0, "127.0.0.1", () => resolveListen(server.address().port));
     });
   const close = () => new Promise((resolveClose) => server.close(() => resolveClose()));
-  return { server, state, listen, close };
+  return { server, state, listen, close, setFrozenStylesheets };
 }
 
 // The checked-in mobile settings, verbatim, with only the URL swapped. A proxy
@@ -267,6 +461,34 @@ export function assertLoopbackLhr(lhr, proxyPort) {
     }
   }
   return items.length;
+}
+
+export function assertSampleEvidence(entry, network, failures, controlEquality) {
+  for (const metric of ["performance", "fcp", "lcp", "cls", "tbt"]) {
+    if (!Number.isFinite(entry[metric])) throw new Error(`missing or non-finite ${metric}`);
+  }
+  if (failures.length) throw new Error(`proxy failed during sample: ${failures[0].path}`);
+  const stylesheets = ["/styles.css", "/theme-tokens.css", "/theme.css"];
+  for (const path of ["/join", ...stylesheets]) {
+    const requests = network.filter(
+      (item) => item.method === "GET" && item.path.split("?")[0] === path,
+    );
+    if (entry.mode === "inline-stylesheets" && stylesheets.includes(path)) {
+      if (requests.length) throw new Error(`inline arm requested stylesheet: ${path}`);
+    } else if (!requests.length || requests.some((item) => item.status !== 200)) {
+      throw new Error(`missing or failed required resource: ${path}`);
+    }
+    if (
+      controlEquality &&
+      requests.some(
+        (item) =>
+          item.upstreamSha256 !== controlEquality[path]?.direct ||
+          item.upstreamBytes !== controlEquality[path]?.bytes,
+      )
+    ) {
+      throw new Error(`sample resource differs from frozen control: ${path}`);
+    }
+  }
 }
 
 // The sha is the ACTUAL checked-out HEAD (on pull_request GITHUB_SHA is the merge
@@ -337,7 +559,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const upstream = deps.upstream ?? UPSTREAM;
   const { startFixture } = deps.admission ?? require("./lighthouse-admission.cjs");
   const log = deps.log ?? console.log;
-  const plan = planRuns();
+  const plan = planRuns(deps.variants ?? VARIANTS, deps.rounds ?? ROUNDS);
   const results = [];
   let source = null;
   let preflight = null;
@@ -396,6 +618,47 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       };
       if (sha256(direct) !== sha256(viaProxy)) throw new Error(`control proxy altered ${path}`);
     }
+    const frozen = await freezeStylesheets(upstream, preflight.controlEquality);
+    proxy.setFrozenStylesheets(frozen.sheets);
+    preflight.inlineStylesheetManifest = frozen.manifest;
+    if (plan.some((step) => step.mode === "inline-stylesheets")) {
+      const request = { method: "GET", url: "/join", headers: {} };
+      proxy.state.mode = "inline-stylesheets";
+      proxy.state.captureInlineUpstream = true;
+      const actual = await fetchUpstream({ host: "127.0.0.1", port: proxyPort }, request);
+      const direct = proxy.state.inlineUpstream;
+      if (!direct) throw new Error("inline upstream response was not captured");
+      preflight.inlineResponse = validateInlineResponse(
+        direct,
+        actual,
+        frozen.sheets,
+        preflight.controlEquality["/join"],
+      );
+      proxy.state.inlineUpstream = null;
+      proxy.state.mode = "control";
+      preflight.browser = { status: "running" };
+      persist();
+      try {
+        const validateBrowser =
+          deps.validateBrowser ??
+          (await import("./join-lcp-browser-preflight.mjs")).validateInlineInBrowser;
+        const chromium =
+          deps.chromium ??
+          (deps.validateBrowser ? undefined : (await import("playwright")).chromium);
+        const observations = await validateBrowser(
+          proxyPort,
+          (mode) => {
+            proxy.state.mode = mode;
+          },
+          chromium,
+        );
+        preflight.browser = { status: "ok", observations };
+      } catch (error) {
+        preflight.browser = { status: "failed", error: String(error?.message || error) };
+        throw error;
+      }
+    }
+    persist();
     const html = (await fetchBytes(upstream.port, "/join")).toString("utf8");
     const css = (await fetchBytes(upstream.port, "/theme.css")).toString("utf8");
     preflight.stylesheetScheduling = validateStylesheetScheduling(
@@ -416,7 +679,32 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       proxy.state.runIndex = step.index;
       const entry = { ...step, startedAt: new Date().toISOString(), status: "failed" };
       results.push(entry);
-      const { code, output } = await collect(configPath, dir);
+      // The inline navigation does not request external sheets. Check the upstream
+      // snapshot on both sides of the sample, outside Lighthouse's timing window.
+      const checkInlineDrift = async (phase) => {
+        if (step.mode !== "inline-stylesheets") return;
+        entry.stylesheetChecks ??= {};
+        try {
+          const snapshot = await freezeStylesheets(upstream, preflight.controlEquality);
+          entry.stylesheetChecks[phase] = { status: "ok", manifest: snapshot.manifest };
+        } catch (error) {
+          entry.stylesheetChecks[phase] = {
+            status: "failed",
+            error: String(error?.message || error),
+          };
+          persist();
+          throw error;
+        }
+        persist();
+      };
+      await checkInlineDrift("before");
+      let collection;
+      try {
+        collection = await collect(configPath, dir);
+      } catch (error) {
+        collection = { code: 1, output: String(error?.stack || error) };
+      }
+      const { code, output } = collection;
       write(join(dir, "collect.log"), output);
       // Retain everything available BEFORE any check can throw.
       const network = proxy.state.log.filter((e) => e.run === step.index);
@@ -437,6 +725,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       });
       entry.collectExit = code;
       persist();
+      await checkInlineDrift("after");
       if (code !== 0 || lhrDir.length !== 1)
         throw new Error(`${step.label}: collect exit ${code}, ${lhrDir.length} LHR files`);
       const lhr = JSON.parse(readFileSync(join(out, entry.lhr[0].file), "utf8"));
@@ -449,6 +738,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
         tbt: audit("total-blocking-time"),
       });
       entry.lhrNetworkRequests = assertLoopbackLhr(lhr, proxyPort);
+      assertSampleEvidence(
+        entry,
+        network,
+        proxy.state.failures.filter((item) => item.run === step.index),
+        preflight.controlEquality,
+      );
       if (
         network.some(
           (e) => e.clientAddress !== "127.0.0.1" && e.clientAddress !== "::ffff:127.0.0.1",

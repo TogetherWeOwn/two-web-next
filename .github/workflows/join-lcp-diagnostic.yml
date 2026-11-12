@@ -6,6 +6,8 @@ on:
     paths:
       - .github/workflows/join-lcp-diagnostic.yml
       - ci/join-lcp-diagnostic.mjs
+      - ci/join-lcp-browser-preflight.mjs
+      - ci/join-lcp-browser-preflight.test.mjs
       - ci/join-lcp-diagnostic.test.mjs
       - ci/join-lcp-diagnostic-wiring.test.mjs
 
@@ -49,6 +51,8 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
+      - name: Exercise browser preflight
+        run: node --test ci/join-lcp-browser-preflight.test.mjs
       - name: Run fixture counterfactual
         env:
           GIT_CONFIG_COUNT: 1
