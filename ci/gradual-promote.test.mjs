@@ -6,7 +6,9 @@
 // composite action resolves, so caller-relative drift fails here first.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -15,6 +17,10 @@ import {
   configFromEnv,
   runErrorRateGate,
 } from "../.github/actions/gradual-promote/error-rate-gate.mjs";
+import {
+  runPrePromotionCheck,
+  verifierConfig,
+} from "../.github/actions/gradual-promote/pre-promotion-check.mjs";
 import {
   GRADUAL_STEPS,
   assertVersionTag,
@@ -35,6 +41,94 @@ const GATE_DIR = fileURLToPath(new URL("../.github/actions/gradual-promote/", im
 const PREV = "12345678-1234-1234-1234-123456789abc";
 const NEXT = "22345678-1234-1234-1234-123456789abc";
 const TAG = "abc123-456-1";
+
+// Inactive mirror only: this does not enable or qualify recovery.
+// Publisher: TogetherWeOwn/.github@97cadcb231e55fad95cbc6468be078ecef571bc2,
+// actions/gradual-promote/pre-promotion-check.mjs, Git blob 163dc080f7fa664dae6ef746dcc557c05f4f6ac9.
+test("inactive verifier matches the immutable publisher bytes", () => {
+  const bytes = readFileSync(
+    new URL("../.github/actions/gradual-promote/pre-promotion-check.mjs", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(bytes).digest("hex"),
+    "9d61c85f02c461fdd002a6c09ea2a0da6fe220f8ca6f27d7357b7b1413074bce",
+  );
+});
+
+const verifierEnv = () => ({
+  ...process.env,
+  GITHUB_WORKSPACE: fileURLToPath(new URL("../", import.meta.url)),
+  PRE_PROMOTION_VERIFIER: ".github/actions/gradual-promote/gradual-promote.mjs",
+  REQUIRE_PRE_PROMOTION_VERIFIER: "true",
+  CLOUDFLARE_ACCOUNT_ID: "0123456789abcdef0123456789abcdef",
+  WORKER_NAME: "example-worker",
+  NEW_VERSION: NEXT,
+  PREV_VERSION: PREV,
+  VERSION_TAG: TAG,
+  PROMOTION_PERCENTAGE: "5",
+});
+
+test("verifier is inert by default and rejects unsafe configuration", async () => {
+  assert.equal(await verifierConfig({}), null);
+  for (const path of [
+    "../bad.mjs",
+    "/tmp/bad.mjs",
+    "a//b.mjs",
+    ".git/config.mjs",
+    "bad;cmd.mjs",
+    "missing.mjs",
+  ]) {
+    await assert.rejects(verifierConfig({ ...verifierEnv(), PRE_PROMOTION_VERIFIER: path }));
+  }
+  for (const timeout of ["0", "301", "1.5", "01"]) {
+    await assert.rejects(
+      verifierConfig({ ...verifierEnv(), PRE_PROMOTION_TIMEOUT_SECONDS: timeout }),
+    );
+  }
+  await assert.rejects(verifierConfig({ ...verifierEnv(), REQUIRE_PRE_PROMOTION_VERIFIER: "yes" }));
+  await assert.rejects(verifierConfig({ ...verifierEnv(), PROMOTION_PERCENTAGE: "05" }));
+  await assert.rejects(verifierConfig(verifierEnv(), "win32"));
+});
+
+test("verifier passes exact arguments without a shell and fails closed", async () => {
+  const env = verifierEnv();
+  const config = await verifierConfig(env);
+  assert.deepEqual(config.args, [
+    "--candidate-version-id",
+    NEXT,
+    "--candidate-tag",
+    TAG,
+    "--worker-name",
+    "example-worker",
+    "--account-id",
+    env.CLOUDFLARE_ACCOUNT_ID,
+    "--environment",
+    "production",
+    "--percentage",
+    "5",
+    "--previous-version-id",
+    PREV,
+  ]);
+  const run = (exitCode) =>
+    runPrePromotionCheck(env, (executable, args, options) => {
+      assert.equal(executable, process.execPath);
+      assert.deepEqual(args, ["--", config.file, ...config.args]);
+      assert.equal(options.shell, false);
+      assert.equal(options.detached, true);
+      assert.equal(options.stdio, "ignore");
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("close", exitCode, null));
+      return child;
+    });
+  await run(0);
+  await assert.rejects(run(1), /pre-promotion verifier failed/);
+  await assert.rejects(
+    runPrePromotionCheck(env, () => {
+      throw new Error("secret");
+    }),
+    /could not start/,
+  );
+});
 
 function deployments(versions, created = "2026-10-15T00:00:00Z") {
   return [{ id: "d1", created_on: created, versions }];
