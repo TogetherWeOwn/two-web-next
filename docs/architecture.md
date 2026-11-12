@@ -314,6 +314,7 @@ exactly once.
 | `src/home-copy.ts` | content |
 | `src/hotzones/` | events |
 | `src/html-outcome.ts` | entry |
+| `src/html-stream.ts` | http-guard |
 | `src/image-policy.ts` | content |
 | `src/index.tsx` | entry |
 | `src/invite-fallback.ts` | join |

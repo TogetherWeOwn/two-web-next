@@ -11,8 +11,7 @@ import {
   kitEventsSessionFor,
   kitSessionBridge,
 } from "../../src/kit-session";
-import { dispatchHookRequest, KIT_RENDERER_HEADER } from "../../src/route-ownership";
-import { withStreamedBody } from "../../src/html-stream";
+import { dispatchHookRequest } from "../../src/route-ownership";
 import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
@@ -35,7 +34,7 @@ import { honoFetch } from "#lib/server/hono.ts";
 // Hono-owned, and a missing secret (the preview Worker sets none) resolves
 // to "unknown" rather than a false logout.
 const base: Handle = async ({ event, resolve }) => {
-  const dispatched = await dispatchHookRequest(event, {
+  return dispatchHookRequest(event, {
     appUrl: env.APP_URL,
     sessionSecret: env.SESSION_SECRET,
     kitRouteArchive: env.KIT_ROUTE_ARCHIVE,
@@ -79,15 +78,6 @@ const base: Handle = async ({ event, resolve }) => {
     afterMemberRead: (event, response) =>
       recordQueuedBoardView(event.locals, response.status, recordBoardView),
   });
-  // Wire encoding (TWO-7591): the staged edge marks fixed-length HTML
-  // untransformable (`cache-control: no-transform` plus Content-Length), so
-  // Kit-rendered pages left uncompressed while other types were encoded.
-  // Streaming the decorated response body drops the declared length for the
-  // platform's own br/gzip negotiation. Hono answers already stream inside
-  // app.fetch (the identical middleware in src/index.tsx); only responses
-  // carrying the Kit marker are wrapped here so the fallback path is never
-  // re-streamed.
-  return dispatched.headers.has(KIT_RENDERER_HEADER) ? withStreamedBody(dispatched) : dispatched;
 };
 
 export const handle: Handle =

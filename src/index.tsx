@@ -82,7 +82,8 @@ const app = new Hono<{ Bindings: Env }>();
 // Registered before requestLog so its post-next wrap sees the fully settled
 // response; Hono's header-merge copy preserves the streamed body and the
 // automatic encodeBody default. Same seam serves the Kit worker's Hono
-// fallback via honoFetch; Kit-resolved pages stream in hooks.server.ts.
+// fallback via honoFetch; Kit-resolved pages stream in route-ownership's
+// decorateKitResponse so hooks.server.ts stays a pure env binding.
 app.use("*", async (c, next) => {
   await next();
   c.res = withStreamedBody(c.res);
