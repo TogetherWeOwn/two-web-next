@@ -38,10 +38,13 @@ export function build() {
     throw new Error("refusing to inline CSS containing a closing style tag");
   }
   const sha256 = createHash("sha256").update(css, "utf8").digest("base64");
+  const packed = !css.includes("~");
+  const literal = JSON.stringify(packed ? css.replaceAll(".base-theme", "~") : css);
+  const initializer = packed ? `${literal}.split("~").join(".base-theme")` : literal;
   const text =
     `// GENERATED from ${SOURCES.join(", ")} — do not hand-edit.\n` +
     `// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-drift.test.ts).\n` +
-    `export const LEAF_CRITICAL_CSS: string =\n  ${JSON.stringify(css)};\n` +
+    `export const LEAF_CRITICAL_CSS: string =\n  ${initializer};\n` +
     `export const LEAF_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n`;
   return { text, sha256 };
 }
