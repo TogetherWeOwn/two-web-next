@@ -20,7 +20,7 @@ describe("timeout ledger CI wiring", () => {
 
   it("requires docs-links success in ci-ok", () => {
     const gate = workflow.split("\n  ci-ok:\n")[1] ?? "";
-    expect(gate).toMatch(/needs:.*docs-links/);
+    expect(gate).toMatch(/needs:\s+\[[^\]]*\bdocs-links\b[^\]]*\]/);
     expect(gate).toContain("needs.docs-links.result");
   });
 });

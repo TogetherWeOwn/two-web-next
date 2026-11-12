@@ -11,6 +11,7 @@
 // declaration instead of a copy.
 import { describe, expect, it, vi, afterEach } from "vitest";
 import type { AccessEntry } from "../src/access-log";
+import { loadActivityLogPage } from "../src/admin/kit-activity-log";
 import type { KitLocals } from "../src/kit-session";
 import {
   declareMemberResult,
@@ -211,6 +212,84 @@ describe("Kit admin dispatch: privileged boundary releases and refusals", () => 
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     const body = await res.text();
     expect(body).toBe(REFUSAL);
+    expect(body).not.toContain(SUBJECT);
+  });
+
+  it("activity-log member-access audit failure answers 503 and releases no rows", async () => {
+    const shipped = ROUTE_MANIFEST.find(
+      (e) => e.method === "GET" && e.path === "/admin/activity-log",
+    );
+    if (!shipped) throw new Error("shipped GET /admin/activity-log manifest entry missing");
+    const request = new Request(`${APP_URL}/admin/activity-log`, {
+      method: "GET",
+      headers: { host: "next.example.test" },
+    });
+    const event: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin/activity-log" },
+    };
+    const logRow = {
+      id: 1,
+      description: "ACTIVITY_ROW_MUST_NOT_RELEASE",
+      subjectType: "Event",
+      subjectId: "01J00000000000000000000015",
+      causerId: SUBJECT,
+      event: "updated",
+      createdAt: new Date("2026-10-01T12:00:00.000Z"),
+    };
+    // The real listActivityLog runs against a fake transaction, so the
+    // causer-subject declaration and the permit accounting are the shipped ones.
+    const tx = {
+      execute: async () => {
+        memberQueryPermit();
+        return [];
+      },
+      select: () => {
+        const chain: Record<string, unknown> = {};
+        for (const m of ["from", "where", "orderBy", "limit", "offset"]) chain[m] = () => chain;
+        chain.then = (resolve: (rows: unknown[]) => unknown, reject: (e: unknown) => unknown) => {
+          try {
+            memberQueryPermit();
+          } catch (e) {
+            return Promise.reject(e).then(resolve, reject);
+          }
+          return Promise.resolve([logRow]).then(resolve, reject);
+        };
+        return chain;
+      },
+    };
+    const fakeDb = { transaction: async (fn: (t: typeof tx) => unknown) => fn(tx) } as never;
+    const resolve = vi.fn(async () => {
+      const page = await loadActivityLogPage({
+        env: {} as never,
+        subjectParam: null,
+        causerParam: null,
+        pageParam: null,
+        setHeaders: () => {},
+        dbForFn: async () => fakeDb,
+      });
+      return new Response(JSON.stringify(page.rows), { status: 200 });
+    });
+    const failingSink = vi.fn(async (_entry: AccessEntry) => {
+      throw new Error("audit store down");
+    });
+    const res = await dispatchHookRequest(
+      event,
+      depsFor({
+        manifest: [{ ...shipped, enabled: true }],
+        resolve,
+        accessSink: async () => failingSink,
+      }),
+    );
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(failingSink).toHaveBeenCalled();
+    expect(failingSink.mock.calls[0]![0].subjectUserIds).toEqual([SUBJECT]);
+    expect(res.status).toBe(503);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    const body = await res.text();
+    expect(body).toBe(REFUSAL);
+    expect(body).not.toContain("ACTIVITY_ROW_MUST_NOT_RELEASE");
     expect(body).not.toContain(SUBJECT);
   });
 

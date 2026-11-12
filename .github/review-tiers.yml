@@ -1,0 +1,200 @@
+# Risk-tier map for tiered review (TogetherWeOwn/two-web-next).
+#
+# Classification: a pull request's tier is the highest tier of any changed
+# file. `sensitive` wins on overlap. Anything unmatched defaults to
+# `sensitive` (every new top-level path stays sensitive until classified).
+#
+# Content triggers escalate to `sensitive` regardless of path: a new or
+# changed public endpoint or input parsing; auth, authz or session handling;
+# crypto or keys; secrets or credentials; permission checks; tenant
+# isolation or personal data; SQL, schema or migrations; dependency or
+# lockfile changes; CI or workflow changes; weakened test assertions, deleted
+# tests or snapshots, or lowered gates in test files.
+#
+# Review per tier: low -> QA. ordinary -> QA. sensitive/unclassified ->
+# Security, then QA. QA verifies the author's `risk_tier` attestation and may
+# escalate any pull request. This file itself is always sensitive.
+#
+# When in doubt, leave a path unlisted (= sensitive). Do not broaden
+# low/ordinary to look productive; a small correct map beats a big wrong one.
+#
+# The pull request template's `risk_tier` attestation (T0 critical, T1
+# standard, T2 docs-only) is the existing author declaration and is separate
+# from this map's routing tier. A pull request touching `.github/**` is never
+# T2 and must declare T0 (declaring higher risk is allowed). The formal
+# low/ordinary/sensitive <-> T0/T1/T2 correspondence is a follow-up; it is not
+# defined by this file and must not be assumed.
+
+version: 1
+default_tier: sensitive # anything not matched below
+
+tiers:
+  # Allowlisted docs copy, static non-sensitive fixtures, and additive unit
+  # tests. Content triggers still escalate any of these to sensitive.
+  low:
+    - "README.md"
+    - "CHANGELOG.md"
+    - "CODE_OF_CONDUCT.md"
+    - "ROADMAP.md"
+    # Docs copy only. Gate-input docs (parsed by CI scripts) are overridden
+    # to sensitive below: sensitive wins on overlap.
+    - "docs/**/*.md"
+    - "public/favicon.ico"
+    - "public/og-1200x630.png"
+    # Inert asset types only. The sensitive tier overrides `public/**/*.svg`
+    # (served SVG is active content).
+    - "public/fonts/**"
+    - "public/icons/**"
+    # Additive unit tests only. Content triggers still escalate weakened
+    # assertions, deleted tests/snapshots, or lowered gates in test files.
+    - "test/**/*.test.ts"
+  # Exactly audited modules with no untrusted input, sensitive output,
+  # permission check, persistence effect, or trust-boundary effect.
+  # Each entry is justified in the pull request that adds it; each was read
+  # and found to be static copy or a pure builder with no session, cookie,
+  # database, or network access:
+  # - src/about-content.ts: static about-page copy, no session/cookie/db.
+  # - src/faq-content.ts: static FAQ copy, no session/cookie/db.
+  # - src/rules-content.ts: static house-rules copy, no session/cookie/db.
+  ordinary:
+    - "src/about-content.ts"
+    - "src/faq-content.ts"
+    - "src/rules-content.ts"
+  sensitive:
+    # Review policy and CI, always sensitive (this file included).
+    - ".github/review-tiers.yml"
+    - ".github/workflows/**"
+    - ".github/CODEOWNERS"
+    - ".github/**"
+    # Dependency manifests, lockfiles, and install/build/gate scripts.
+    - "package.json"
+    - "package-lock.json"
+    - "web/package.json"
+    - "web/package-lock.json"
+    - "release-please-config.json"
+    - "bin/**"
+    - "ci/**"
+    - "sg-rules/**"
+    - "vendor/**"
+    # Test, e2e, and build configuration (gates, budgets, coverage floors).
+    - "vitest.config.ts"
+    - "biome.json"
+    - "tsconfig.json"
+    - "sgconfig.yml"
+    - "playwright.config.ts"
+    - "playwright.*.config.ts"
+    - "tier0/**"
+    - "e2e/**"
+    # Docs that CI gates parse as inputs (enumerated by grepping ci/ for
+    # docs/*.md reads). They override the broad `docs/**/*.md` low glob
+    # above: an .md-only change here must not relax a gate at low tier.
+    - "docs/a11y-ci.md" # pinned a11y matrix counts
+    - "docs/ci-load-sensitive-tests.md" # timeout ledger
+    - "docs/config.md" # tail config inventory
+    - "docs/critical-journeys.md" # staging journey contract
+    - "docs/db-migrations.md" # migration inventory
+    - "docs/kit-parity-gates.md" # parity gate inputs
+    - "docs/machine-errors.md" # refusal-vocabulary check input
+    - "docs/machine-interface.md" # machine contract check input
+    - "docs/parity.md" # parity citation check input
+    - "docs/performance-budgets.md" # perf budget inputs
+    - "docs/quality-gates.md" # coverage/test inventory inputs
+    - "docs/runbook.md" # production runbook checks
+    - "docs/security-pin-contracts.md" # security pin contracts
+    - "docs/threat-model.md" # security pin inputs
+    - "docs/url-freeze.md" # cutover freeze list
+    # Auth, session, OAuth, roles, and permission checks.
+    - "src/auth/**"
+    - "src/sessions.ts"
+    - "src/session-cookie.ts"
+    - "src/session-revocation.ts"
+    - "src/session-role-refresh.ts"
+    - "src/kit-session.ts"
+    - "src/auth-status.ts"
+    - "src/oauth-journeys.ts"
+    - "src/oauth-code-state-length.ts"
+    - "src/roles.ts"
+    - "src/route-ownership.ts"
+    # Public endpoints, routes, and input parsing (Hono and SvelteKit).
+    - "src/index.tsx"
+    - "src/pages.tsx"
+    - "src/screens/**"
+    - "src/admin/**"
+    - "src/events/**"
+    - "src/join/**"
+    - "src/profiles/**"
+    - "src/leaderboards/**"
+    - "src/agent-events/**"
+    - "src/mcp/**"
+    - "src/public-data/**"
+    - "src/bot/**"
+    - "src/hotzones/**"
+    - "src/islands/**"
+    - "src/kit-*.ts"
+    - "src/kit-*.tsx"
+    - "src/body-limit.ts"
+    - "src/up-body.ts"
+    - "src/media-type.ts"
+    - "web/**"
+    # Tenant isolation, personal data, access auditing, and erasure. The
+    # versioned privacy policies under content/ and their generated copy are
+    # the member-facing personal-data commitment, so they stay with the
+    # machinery that renders and enforces them.
+    - "src/member-erasure.ts"
+    - "src/member-reads.ts"
+    - "src/access-log.ts"
+    - "src/privacy.ts"
+    - "src/privacy-history.ts"
+    - "content/**/*.md" # versioned privacy policies
+    - "src/privacy-content.ts" # GENERATED from content/privacy-policy-*.md
+    # Database schema, migrations, and data access.
+    - "drizzle/**"
+    - "drizzle.config.ts"
+    - "migrations.lock"
+    - "src/db/**"
+    # Security headers, CSP, origin trust, throttling, and alerting.
+    # src/security-txt.ts builds the served security.txt contact/policy text;
+    # editing it redirects vulnerability reports, a trust-boundary effect.
+    - "src/security-txt.ts"
+    - "src/headers.ts"
+    - "src/csp-report-body.ts"
+    - "src/csp-report-uri.ts"
+    - "src/csp-reports.ts"
+    - "src/trust-hosts.ts"
+    - "src/same-origin.ts"
+    - "src/fixture-origin.ts"
+    - "src/throttle.ts"
+    - "src/alerts.ts"
+    - "src/alert-probe.ts"
+    - "src/alert-probe-error.ts"
+    - "src/image-policy.ts"
+    - "src/featured-policy.ts"
+    # Served SVG assets. SVG is active content: script in a top-level
+    # navigation to an SVG served from the site origin executes there. This
+    # blanket override beats the broader low asset globs above (sensitive
+    # wins on overlap), including future SVG files under public/icons and
+    # public/fonts.
+    - "public/**/*.svg"
+    # Jobs and queue workers (infrastructure and side effects).
+    - "src/jobs/**"
+    - "src/jobs-worker.ts"
+    # Runtime, network, and deploy configuration; secrets-adjacent files.
+    - "wrangler.jsonc"
+    - "wrangler.local.jsonc"
+    - "wrangler.jobs.jsonc"
+    - "src/env.ts"
+    - ".dev.vars.example"
+    - ".gitleaks.toml"
+    # Governance and tool-permission files. SECURITY.md defines the private
+    # vulnerability-reporting channel (and is the security.txt Policy target);
+    # REVIEW.md governs reviewer behavior.
+    - "AGENTS.md"
+    # Agent-instruction files at any depth (e.g. nested docs/**/AGENTS.md)
+    # are sensitive-floor, matching the root AGENTS.md above.
+    - "**/AGENTS.md"
+    - "CONSTRAINTS.md"
+    - "CONTRIBUTING.md"
+    - "SECURITY.md"
+    - "REVIEW.md"
+    - ".claude/**"
+    - ".constraintsignore"

@@ -237,6 +237,27 @@ warning stays armed after rejection and while you correct the draft; navigating
 away can still discard it. Kit presentations use the same form actions: rejected
 POSTs are rendered by Hono, not a second Kit save or error endpoint.
 
+## Recover a stale event or featured draft
+
+If another moderator saves after you open an editor, **Save** refuses with HTTP
+409 instead of replacing their work. Your submitted values and checkbox state
+remain in the form. A stale draft with validation errors still returns 409;
+correct those fields while reconciling, not by repeatedly submitting the old page.
+
+Choose **Open the latest version in a new tab** to keep this draft beside a fresh
+editor. Copy the changes you still want into that latest version, review the
+combined result, then save there. Saving the stale page again is refused again:
+it deliberately keeps the older version token. There is no automatic retry or
+force-save. The featured preview and event status describe the saved snapshot,
+not your unsaved draft. The RSVP roster stays hidden on a refused event save.
+
+Choose **Discard my changes and load the latest version** only when you intend
+to replace this draft. Both links work without JavaScript; with JavaScript the
+existing departure warning remains armed. If an old or malformed form cannot
+verify its saved version (HTTP 400), use the same new-tab recovery rather than
+repeatedly submitting it. New-event and new-featured forms have no prior version
+and keep their existing create workflow.
+
 ## Screens and route reference
 
 Use the navigation **Events**, **Featured**, **Join attempts**, **Activity log**, or **Site**.

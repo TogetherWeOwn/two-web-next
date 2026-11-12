@@ -26,7 +26,7 @@ const textLimitsIsland =
 const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
-<AdminShell title="New event">
+<AdminShell restoredWrite={data.restoredWrite} title="New event">
 <section>
   <h1>New event</h1>
   {#if hasErrors}

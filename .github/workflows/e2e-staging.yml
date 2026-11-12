@@ -28,9 +28,13 @@ on:
 permissions:
   contents: read
 
+# Share the deploy job's mutex for the whole qualification window. A newer
+# deploy can win the lock first; the identity observations then refuse the old
+# candidate. Rejected completion events must not evict a pending main deploy.
 concurrency:
-  group: e2e-staging
+  group: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository)) && 'deploy-staging' || format('e2e-staging-rejected-{0}', github.run_id) }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   # Cheap change-scope gate (mirrors e2e.yml): a deploy whose head commit only
@@ -42,31 +46,44 @@ jobs:
   scope:
     name: scope
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      sha: ${{ steps.candidate.outputs.sha }}
       docs_only: ${{ steps.scope.outputs.docs_only }}
       skip_e2e: ${{ steps.scope.outputs.skip_e2e }}
     steps:
+      # Resolve with trusted workflow code before checking out the candidate.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # workflow_run's github.sha is the default branch tip, not the
-          # deployed SHA. Full history lets the diff below reach the parent.
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Resolve deployed candidate
+        id: candidate
+        run: node ci/staging-provenance.mjs candidate
+      - name: Require a main-ancestor candidate
+        env:
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+        run: git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
+      # Diff the validated candidate as data; keep scope code on the trusted
+      # workflow revision. Never execute candidate code in this privileged job.
       - id: scope
+        env:
+          HEAD_SHA: ${{ steps.candidate.outputs.sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          HEAD_SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
-          # A manual dispatch always runs the journeys; a deploy with no
-          # parent (practically impossible on main) fails closed.
-          if [ "${{ github.event_name }}" = workflow_dispatch ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
+          # The trusted tree supplies the helper import inventory. If main
+          # moved past the candidate, that inventory cannot justify a skip.
+          # Manual dispatch and a candidate without a parent also run fully.
+          if [ "${{ github.event_name }}" = workflow_dispatch ] || [ "$HEAD_SHA" != "$WORKFLOW_SHA" ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "skip_e2e=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Same shape as the pull-request files API that ci/change-scope.sh
@@ -82,12 +99,15 @@ jobs:
   # the live Worker, not the diff). A failing scan fails this run, which keeps
   # the commit from being promoted to production.
   zap-baseline:
+    needs: scope
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     uses: ./.github/workflows/zap-staging.yml
+    with:
+      candidate_sha: ${{ needs.scope.outputs.sha }}
 
   # Passive set for the promotion regression check (G1): bin/smoke.mjs and
   # the GET-only guest journeys (e2e/watch) against staging, with the deployed
@@ -100,7 +120,7 @@ jobs:
     name: staging-passive
     needs: scope
     if: >-
-      needs.scope.outputs.skip_e2e != 'true' && (github.event_name == 'workflow_dispatch' ||
+      needs.scope.outputs.skip_e2e != 'true' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository))
@@ -109,23 +129,26 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ needs.scope.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          package-manager-cache: false
       # No caches in this job: it checks out the workflow_run head, so a
       # cache write could poison the default branch (CodeQL cache-poisoning).
       - run: npm ci --include=dev --no-audit --no-fund
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
+      - name: Staging identity before passive set
+        id: identity-before
+        env:
+          CANDIDATE_SHA: ${{ needs.scope.outputs.sha }}
+        run: node ci/staging-provenance.mjs observe "$CANDIDATE_SHA" before passive/identity
       - name: Passive set against staging (ledgers only)
-        # Records the deployed commit with the ledgers so the promotion can
-        # match them to its candidate. Exit codes are reported in the log; the
-        # promotion judges the ledgers against production.
+        # Exit codes are reported in the log; promotion judges the ledgers
+        # against production. Identity failure is never a ledger-only verdict.
         run: |
-          mkdir -p passive
-          printf '%s\n' "$DEPLOYED_SHA" > passive/commit
           set +e
           node bin/smoke.mjs https://next.togetherweown.com --ledger passive/smoke.json
           echo "staging passive smoke exit $?"
@@ -136,13 +159,18 @@ jobs:
           # the ledgers, and this exit line is the log signal.
           echo "staging guest journeys exit $?"
         env:
-          DEPLOYED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           WATCH_ORIGIN: https://next.togetherweown.com
           PLAYWRIGHT_JSON_OUTPUT_FILE: passive/journeys.json
           # Both sides skip the dead-letter gate: retained queue_failed_jobs
           # rows are database history, not a property of either version.
           SMOKE_ALLOW_MISSING_BASELINE: "1"
+      - name: Staging identity after passive set
+        if: ${{ !cancelled() && steps.identity-before.outcome == 'success' }}
+        env:
+          CANDIDATE_SHA: ${{ needs.scope.outputs.sha }}
+        run: node ci/staging-provenance.mjs observe "$CANDIDATE_SHA" after passive/identity passive/commit
       - name: Staging passive ledger artifact
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: staging-passive-ledger-${{ github.run_id }}
@@ -156,7 +184,7 @@ jobs:
     name: staging-journeys
     needs: scope
     if: >-
-      needs.scope.outputs.skip_e2e != 'true' && (github.event_name == 'workflow_dispatch' ||
+      needs.scope.outputs.skip_e2e != 'true' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository))
@@ -168,25 +196,29 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.scope.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
+          package-manager-cache: false
       - run: npm ci --include=dev --no-audit --no-fund
-      - name: Cache Playwright Chromium
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            playwright-chromium-${{ runner.os }}-
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
+      - name: Staging identity before critical journeys
+        id: identity-before
+        env:
+          CANDIDATE_SHA: ${{ needs.scope.outputs.sha }}
+        run: node ci/staging-provenance.mjs observe "$CANDIDATE_SHA" before staging-identity/critical
       - name: Staging critical journeys
         run: npm run e2e:staging
         env:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
+      - name: Staging identity after critical journeys
+        if: ${{ !cancelled() && steps.identity-before.outcome == 'success' }}
+        env:
+          CANDIDATE_SHA: ${{ needs.scope.outputs.sha }}
+        run: node ci/staging-provenance.mjs observe "$CANDIDATE_SHA" after staging-identity/critical
       - name: Journey ledger (pass/skip/fail accounting)
         # Playwright can exit 0 with only skips or retries that eventually pass.
         # The gate writes a per-journey ledger (JSON + Markdown) and fails loud
@@ -203,14 +235,14 @@ jobs:
         # upload below runs only when this sweep finished the whole tree.
         id: scrub
         if: failure()
-        run: python3 ci/scrub-qa-token.py test-results playwright-report
+        run: python3 ci/scrub-qa-token.py test-results playwright-report staging-identity
         env:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
       - name: Failure traces and report (sanitized ledger only)
-        # Upload only the derived, bounded ledger, never the raw report, HTML
-        # report or traces (which may contain request data, cookies or member
-        # content). The QA-token sweep still covers their full source tree and
-        # the ledger; a crashed or incomplete sweep uploads nothing.
+        # Upload only the derived, bounded ledger and SHA/timestamp identities,
+        # never the raw report, HTML report or traces (which may contain request
+        # data, cookies or member content). The QA-token sweep covers all source
+        # trees and these four files; an incomplete sweep uploads nothing.
         if: failure() && steps.scrub.outputs.swept == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -218,11 +250,13 @@ jobs:
           path: |
             test-results/staging-journey-ledger.json
             test-results/staging-journey-ledger.md
+            staging-identity/critical.before.json
+            staging-identity/critical.after.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Journey ledger artifact
-        # Ships only the derived ledger files (journey titles, outcomes and
-        # reasons), never the raw Playwright JSON report, HTML report or traces.
+        # Ships only derived ledger files (journey titles, outcomes and reasons)
+        # and SHA/timestamp identities, never raw Playwright JSON, HTML or traces.
         # The ledger carries only bounded single-line first-failure context. On
         # failed runs it waits for the scrub sweep to finish the whole tree;
         # on green runs no failure evidence is uploaded. A crashed or incomplete
@@ -234,6 +268,8 @@ jobs:
           path: |
             test-results/staging-journey-ledger.json
             test-results/staging-journey-ledger.md
+            staging-identity/critical.before.json
+            staging-identity/critical.after.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -246,10 +282,11 @@ jobs:
     name: staging-quality
     needs: scope
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     uses: ./.github/workflows/web-quality-origin.yml
     with:
       origin: https://next.togetherweown.com
+      candidate_sha: ${{ needs.scope.outputs.sha }}

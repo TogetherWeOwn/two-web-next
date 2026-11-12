@@ -31,6 +31,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
 {/snippet}
 
 <Shell
+  restoredWrite={data.restoredWrite}
   title="Join Together We Own"
   canonical={canonicalUrl(appUrl, "/join")}
   description={JOIN_INTRO}

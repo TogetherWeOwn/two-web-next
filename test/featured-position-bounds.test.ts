@@ -86,7 +86,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const token = newSessionToken();
       await store.create({
         tokenHash: await hashToken(token),
-        userId: "position-mod",
+        userId: "700000000000000004",
         username: "mod",
         avatar: null,
         member: true,
@@ -105,13 +105,24 @@ describe.skipIf(!process.env.DATABASE_URL)(
       bindings = { ...env, ADMIN_DB: fixture.db };
     });
 
-    function post(path: string, raw: string | undefined, title = "Featured") {
+    // Edit saves carry the token the guarded edit GET renders right now.
+    async function tokenFor(path: string): Promise<Record<string, string>> {
+      if (path === "/featured") return {};
+      const page = await app.request(path, { headers: { cookie } }, bindings);
+      expect(page.status).toBe(200);
+      const tag = (await page.text()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+      const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+      if (!token) throw new Error("edit page carries no saved_baseline token");
+      return { saved_baseline: token };
+    }
+
+    async function post(path: string, raw: string | undefined, title = "Featured") {
       return app.request(
         path,
         {
           method: "POST",
           headers: { cookie, origin: env.APP_URL },
-          body: new URLSearchParams(form(raw, title)),
+          body: new URLSearchParams({ ...(await tokenFor(path)), ...form(raw, title) }),
         },
         bindings,
       );

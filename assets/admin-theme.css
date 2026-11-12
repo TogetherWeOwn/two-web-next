@@ -1,0 +1,229 @@
+/* Kit-only admin register: the denser, token-bound admin design. Served as
+   a separate stylesheet linked from the admin shells (after /styles.css)
+   so these rules never enter the inlined leaf critical-CSS bundle, exactly
+   like admin-rsvp-review.css. Hono's light admin palette in /styles.css is
+   frozen for the Rollback twin; the Kit twin renders on the pinned kit
+   tokens instead. Every styling rule is scoped under .kit-admin, which only
+   AdminShell renders, and uses generated kit tokens only — align-only:
+   layout, column order, named row actions and UTC-labelled columns stay
+   as shipped, and no control is removed, hidden or weakened.
+
+   Token resolution: the sheet is served as a static file and never passes
+   through Tailwind, so the kit `@theme` variables it names (`--color-*`,
+   `--space-*`, `--radius-*`, `--text-*`, `--font-display`, `--font-data`)
+   are NOT emitted into the Kit bundle — Tailwind keeps only the theme
+   variables its own compiled CSS uses, and an undefined `var()` makes the
+   winning declaration compute to `unset`, discarding the Hono value
+   underneath. The guaranteed tokens are therefore the generated
+   `.base-theme` aliases (plain CSS in the Kit bundle, always emitted):
+   grounds `--g0`–`--g4`, text `--t1`–`--t3`, `--ember`, `--on-accent`,
+   `--accent-hi`, `--border`, `--live`, `--echo-bg`, `--danger` and the
+   focus triple `--focus-ring`/`--focus-width`/`--focus-offset`. AdminShell
+   renders that `.base-theme` wrapper exactly as the public Shell does, so
+   they resolve on every admin page. `--font-ui` and `--color-lobby-muted`
+   survive as used `@theme` variables. The spacing, radius, text-size,
+   tracking, motion and data-font primitives have no generated alias, so
+   they carry literal fallbacks (the current pinned-kit values) behind the
+   kit variable name, following the `.home-event-link:focus-visible`
+   precedent in styles.css; hairlines use `--border` because the generated
+   `.base-theme` carries no hair alias on this pin. The data font face is
+   the one exception outside `.kit-admin`: `--font-data` alone names the
+   family, but admin pages link only `/styles.css`,
+   `/admin-rsvp-review.css` and this sheet, never `/theme.css` (which
+   carries the Hono `@font-face` rules), so without the rule below
+   timestamps fall back to the system monospace. Source for
+   public/admin-theme.css (esbuild --minify via `npm run build:assets`;
+   drift fails CI). */
+@font-face {
+  font-family: "Fragment Mono";
+  font-display: optional;
+  src: url("/fonts/fragment-mono-latin-400.woff2") format("woff2");
+  unicode-range:
+    U+20-7E, U+00A0, U+2013-2014, U+2018-2019, U+201C-201D, U+2026, U+20AC, U+2122;
+}
+.kit-admin {
+  background: var(--g1);
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: var(--text-body, var(--font-size-body));
+  line-height: var(--leading-body, var(--line-height-body));
+}
+.kit-admin :is(h1, h2, h3) {
+  font-family: var(--font-display, var(--font-ui));
+}
+.kit-admin a {
+  color: var(--ember);
+  text-underline-offset: 0.25em;
+}
+.kit-admin a:not(.skip-link, .btn):hover {
+  color: var(--accent-hi);
+}
+.kit-admin button.link {
+  color: var(--ember);
+}
+.kit-admin :focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring, var(--ember));
+  outline-offset: var(--focus-offset, 3px);
+}
+@media (forced-colors: active) {
+  .kit-admin :focus-visible {
+    outline-color: Highlight;
+  }
+}
+.kit-admin .skip-link {
+  background: var(--ember);
+  color: var(--on-accent);
+}
+.kit-admin .bar {
+  background: var(--g0);
+  border-bottom-color: var(--border);
+}
+.kit-admin .brand {
+  color: var(--t1);
+}
+.kit-admin .bar nav a {
+  color: var(--t2);
+}
+.kit-admin .bar nav a:hover {
+  color: var(--t1);
+}
+.kit-admin section {
+  border-top-color: var(--border);
+}
+.kit-admin footer {
+  color: var(--color-lobby-muted);
+  border-top: 1px solid var(--border);
+}
+.kit-admin .lead {
+  color: var(--t2);
+}
+.kit-admin :is(.strap, .who, .counts) {
+  color: var(--t3);
+}
+.kit-admin :is(.card, fieldset) {
+  background: var(--g2);
+  border-color: var(--border);
+  border-radius: var(--radius-m, 10px);
+}
+.kit-admin .card :is(dt, h2, h3) {
+  color: var(--t1);
+}
+.kit-admin .card :is(dd, p) {
+  color: var(--t2);
+}
+.kit-admin .notice {
+  background: var(--g2);
+  border-left-color: var(--ember);
+  color: var(--t1);
+}
+.kit-admin .btn {
+  background: var(--ember);
+  color: var(--on-accent);
+  border: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  border-radius: var(--radius-s, 6px);
+}
+.kit-admin .btn:hover {
+  background: var(--accent-hi);
+  color: var(--on-accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .kit-admin .btn {
+    transition:
+      background-color var(--motion-duration-base, 160ms) var(--motion-ease, cubic-bezier(0.22, 1, 0.36, 1)),
+      color var(--motion-duration-base, 160ms) var(--motion-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  }
+}
+.kit-admin :is(.field label, legend) {
+  color: var(--t2);
+}
+.kit-admin .field :is(input, textarea, select) {
+  background: var(--g0);
+  border: 1px solid var(--border);
+  color: var(--t1);
+  border-radius: var(--radius-s, 6px);
+}
+.kit-admin :is(input, textarea, select)::placeholder {
+  color: var(--t3);
+  opacity: 1;
+}
+.kit-admin :is(input[type="checkbox"], input[type="radio"]) {
+  accent-color: var(--ember);
+}
+/* The frozen /styles.css `.field input { width: 100% }` stretches the
+   checkbox across the whole row, floating it far from its label (the
+   Published toggle on the featured pages). Keep it under its label. */
+.kit-admin .field :is(input[type="checkbox"], input[type="radio"]) {
+  width: auto;
+}
+.kit-admin :is(.field .error, .error) {
+  color: var(--danger);
+}
+.kit-admin :is(.field .hint, .hint) {
+  color: var(--color-lobby-muted);
+}
+.kit-admin :is(.admin-table, .featured-table) {
+  font-size: var(--text-small, 14px);
+}
+.kit-admin :is(.admin-table, .featured-table) :is(th, td) {
+  padding: var(--space-1, 4px) var(--space-3, 12px);
+  border-bottom-color: var(--border);
+}
+.kit-admin :is(.admin-table, .featured-table) th {
+  font-size: var(--text-label, 12px);
+  font-weight: 600;
+  letter-spacing: var(--tracking-label, 0.04em);
+  text-transform: uppercase;
+  color: var(--t3);
+}
+.kit-admin code,
+.kit-admin .admin-chronology,
+.kit-admin .featured-window-bound,
+.kit-admin time {
+  font-family:
+    var(--font-data, "Fragment Mono", ui-monospace, monospace);
+}
+.kit-admin :is(.featured-table-scroll, .admin-table-scroll) {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m, 10px);
+}
+.kit-admin .featured-status {
+  border-radius: var(--radius-pill, 999px);
+  font-size: var(--text-label, 12px);
+  letter-spacing: var(--tracking-label, 0.04em);
+  text-transform: uppercase;
+}
+.kit-admin .featured-status-live {
+  color: var(--live);
+  background: var(--live-bg);
+}
+.kit-admin .featured-status-scheduled {
+  color: var(--t2);
+  background: var(--echo-bg);
+}
+.kit-admin :is(.featured-status-expired, .featured-status-unpublished) {
+  color: var(--t3);
+  background: var(--g3);
+}
+.kit-admin .featured-image {
+  border-color: var(--border);
+}
+.kit-admin .featured-preview img {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m, 10px);
+}
+.kit-admin .rsvp-review[open] {
+  background: var(--g2);
+  border-color: var(--border);
+}
+.kit-admin .rsvp-review summary {
+  color: var(--ember);
+}
+.kit-admin .rsvp-review-id {
+  color: var(--t3);
+}
+.kit-admin .support-reference {
+  color: var(--t2);
+}

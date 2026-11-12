@@ -63,6 +63,9 @@ The repository rulesets enforce the following on `main`:
 
 - `pr-conventions`: `pr-lint` must pass.
 
+The `pr-size-gate` job's check, `pr-size-gate / gate`, joins this list after
+the caller has reported on the default branch (two-step ship; STANDARD.md).
+
 Who merges: when native review stages apply, the final-stage reviewer
 squash-merges the exact reviewed head before closing the task; without a review
 stage, the author merges. Every required check must be green on that head and
@@ -152,9 +155,12 @@ and fixtures. The labeller lives once in the org
 [TogetherWeOwn/.github](https://github.com/TogetherWeOwn/.github) repository
 (`CI-STANDARD.md`, "Advisory PR-size labels"); the workflow here is a thin
 caller pinned to a central SHA and passes only this repo's generated paths.
-This is advisory only: it is not a required check and never blocks a merge.
-A Monday run of the same workflow prints the weekly tally of merged pull
-requests per size; the labels are the durable record behind it.
+The labeller is advisory only: it is not a required check and never blocks a
+merge. The same workflow's `pr-size-gate` job is the required size gate
+(reported as `pr-size-gate / gate` once the ruleset requires it; see Branch
+protection and required checks above). A Monday run of the same workflow
+prints the weekly tally of merged pull requests per size; the labels are the
+durable record behind it.
 
 ### Change-gated CI and `ci-ok`
 
@@ -386,6 +392,73 @@ npm run check                    # lint + format + typecheck + config drift + te
 
 ### Verify a change before opening a PR
 
+#### AI contributors: exact-head GitHub Actions
+
+Full suites and CI gates run only on GitHub Actions for the exact PR head.
+Push to the PR branch, open or keep the PR as a draft while incomplete, and
+record exact-head Actions run/job links and conclusions in Verification before
+marking ready. Changes to `src/`, `test/` or migrations still require the full
+gate; draft or scope-skipped jobs are not a full-suite pass. If the draft run
+skips heavy steps, dispatch the existing CI workflow on that PR branch for full
+verification. Every required check, database-safety rule, native review and
+release gate remains in force.
+
+Local agent test execution is limited to the bounded pre-push fixture checks
+below and, when Actions cannot run it, an authorized focused reproduction of
+one failing non-Rust test. Neither the builder nor its caller may run local
+full suites or CI mirrors on the shared host, in Boat or through a fallback;
+do not split a suite into successive focused commands. Do not use Boat or a
+heavy raw-host fallback for non-Cargo work. If no compliant path is available,
+defer to Actions or route the actual prerequisite. Report focused reproduction
+output separately as diagnostic evidence; it does not replace Actions evidence.
+Read-only reviewers inspect source and existing evidence and do not execute
+tests, builds or installs.
+
+Before every push, agents verify a fresh worktree with a bounded,
+offline-fixture set of checks. GitHub Actions is the only place agents run the
+full suite, the database tests, Docker and the browser gates.
+
+Install once per worktree and reuse it unless a lockfile changes. Use `--ignore-scripts`
+so no dependency lifecycle script runs and use a per-task npm cache. `npm ci`
+uses the frozen lockfile and its integrity checks; this change does not add or
+update dependencies. Although npm 11.19 accepts `--min-release-age`, it does not
+enforce that age on locked packages installed by `npm ci`. Do not treat this
+command as a package-age check. Use the Node floor stated in the README.
+
+```sh
+nice timeout -k 10 300 npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund --cache "$PAPERCLIP_TASK_SCRATCH_DIR/npm-cache"
+nice timeout -k 10 120 npm run typecheck
+nice timeout -k 10 300 env -u DATABASE_URL -u BOT_DATABASE_URL npm run test:unit -- test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
+```
+
+- `--ignore-scripts` suppresses npm pre and post hooks, so `postinstall` and
+  `pretypecheck` do not run. `npm run typecheck` therefore runs the generator
+  itself: `node ci/build-leaf-css.mjs && tsc --noEmit && tsc --noEmit -p ci/tsconfig.json`.
+- `npm run test:unit` is `node ci/test-unit.mjs`. It requires explicit, exact
+  `test/*.test.ts` paths and rejects no arguments, invalid names, directories,
+  flags, globs and missing paths. It regenerates the same critical-CSS module
+  through the generator before Vitest and does not build the app. Run tests
+  separately from typecheck; neither depends on the other.
+- Choose test files beside the code you changed and the files that import it
+  (`git grep -l <module> test/`). Pick only fixtures that run offline. The two
+  files above are an example. Do not provide `DATABASE_URL` or any credential.
+- Format and lint each changed file with a 120 second limit, for example
+  `nice timeout -k 10 120 npm exec --no -- biome format package.json ci/test-unit.mjs test/<file>.test.ts`,
+  then `nice timeout -k 10 120 npm exec --no -- biome check --error-on-warnings <same paths>`.
+- Precheck resources first. If the load average exceeds `nproc`, `MemAvailable`
+  is under 10% of total memory, or `/home` has 85% or more used, skip the
+  install-dependent checks and record that you skipped them and why.
+- Clean up only what you created: remove the worktree's `node_modules` and the
+  per-task npm cache when you finish.
+- Run in Actions only, on the exact head SHA: `npm run check`, the full build,
+  database tests, Docker and the browser, a11y and Kit gates. Cite that head's
+  results as evidence. Do not claim a result you did not see.
+
+The command examples in Local development and the human workflow below are
+a tooling reference, not an exception to these agent execution limits.
+
+#### Human contributors: local verification
+
 `bin/local-ci.sh` (also `npm run ci:local --`) reproduces the Vitest gates of
 the CI `check` job on any host with Docker. It needs no `.dev.vars` and no
 credentials. Network access is needed only to pull `node:24-bookworm` and
@@ -414,10 +487,15 @@ bin/local-ci.sh -j 8 --no-coverage --no-static                  # suite only, qu
   whenever a lockfile changes. `--install` forces it. Each run holds a shared lock
   on the dependencies while it runs, and an install waits for the exclusive lock, so
   `npm ci` never replaces `node_modules` under another run in the same checkout.
-- Run the full gate before you open a PR that touches `src/`, `test/` or
-  migrations. Paste the merged `Test Files` / `Tests` lines into Verification.
+- Human contributors run the full local gate before opening a PR that touches
+  `src/`, `test/` or migrations and paste the merged `Test Files` / `Tests` lines
+  into Verification. AI contributors instead follow the Actions-only workflow
+  above; neither the builder nor its caller runs this local gate.
 - Not covered: the browser journeys (`e2e-ok`), the a11y job, the Kit build and
   parity gates, and Semgrep. CI still runs them on the PR.
+
+`bin/local-ci.sh` (also `npm run ci:local --`) is a human workflow; agents do
+not run it. Agents do not run the full suite locally; use the Actions run instead.
 
 Biome is pinned in `package-lock.json`. `npm run lint` uses the read-only
 [`biome ci`](https://biomejs.dev/reference/cli/#biome-ci) command to enforce both

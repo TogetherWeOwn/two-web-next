@@ -428,6 +428,15 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
       liveEnv(),
     );
   const get = (path: string) => app().request(path, { headers: { cookie } }, liveEnv());
+  // The saved_baseline the guarded edit GET renders right now.
+  const tokenFor = async (path: string): Promise<string> => {
+    const res = await get(path);
+    expect(res.status).toBe(200);
+    const tag = (await res.text()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+    const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+    if (!token) throw new Error("edit page carries no saved_baseline token");
+    return token;
+  };
 
   async function seedEvent(overrides: Partial<typeof events.$inferInsert> & { eventKey: string }) {
     const [row] = await db
@@ -450,7 +459,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
       { eventId: row.id, userId: "100000000000000201", status: "going" },
       { eventId: row.id, userId: "100000000000000202", status: "going" },
     ]);
-    const res = await post(`/events/${row.eventKey}`, { ...FORM, capacity: "1" });
+    const res = await post(`/events/${row.eventKey}`, {
+      ...FORM,
+      saved_baseline: await tokenFor(`/events/${row.eventKey}`),
+      capacity: "1",
+    });
     expect(res.status).toBe(422);
     expect(await res.text()).toContain("Occupied seats: 2.");
     const [after] = await db.select().from(events).where(eq(events.eventKey, row.eventKey));
@@ -1058,7 +1071,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
     const childAuditsBefore = (await db.select().from(activityLog)).filter(
       (audit) => audit.subjectId === child!.eventKey,
     );
-    const res = await post(`/events/${parentKey}`, { ...FORM, title: "Renamed series" });
+    const res = await post(`/events/${parentKey}`, {
+      ...FORM,
+      saved_baseline: await tokenFor(`/events/${parentKey}`),
+      title: "Renamed series",
+    });
     expect(res.status).toBe(303);
     const [childAfter] = await db.select().from(events).where(eq(events.id, child!.id));
     expect(childAfter?.startsAt.toISOString()).toBe(child!.startsAt.toISOString());
@@ -1094,6 +1111,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
       .where(eq(events.id, child!.id));
     const res = await post(`/events/${parentKey}`, {
       ...FORM,
+      saved_baseline: await tokenFor(`/events/${parentKey}`),
       starts_at: "2099-11-04 21:00",
       ends_at: "2099-11-04 23:00",
     });

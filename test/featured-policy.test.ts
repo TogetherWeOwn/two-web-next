@@ -181,6 +181,15 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
     headers: { cookie, origin: env.APP_URL, "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(fields),
   });
+  // The saved_baseline the guarded edit GET renders right now.
+  const tokenFor = async (path: string): Promise<string> => {
+    const res = await admin().request(path, { headers: { cookie: modCookie } }, bindings());
+    expect(res.status).toBe(200);
+    const tag = (await res.text()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+    const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+    if (!token) throw new Error("edit page carries no saved_baseline token");
+    return token;
+  };
   // Refusals go through the mounted app: only there does a guest POST recover
   // to its admin GET page (child-root adminApp alone falls back to /events).
   const mounted = (path: string, init?: RequestInit, cookie?: string) =>
@@ -272,6 +281,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
       `/featured/${id}`,
       form(
         {
+          saved_baseline: await tokenFor(`/featured/${id}`),
           title: "Policy slot",
           body: "Hello",
           is_published: "on",

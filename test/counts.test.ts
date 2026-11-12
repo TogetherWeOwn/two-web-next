@@ -95,6 +95,92 @@ describe("readCounts contract", () => {
     expect(state.ends).toBe(2);
   });
 
+  it("bounds the aggregate projection in SQL before driver transfer", async () => {
+    await counts.readCounts(env);
+    const query = state.queries[1]!;
+    expect(query).toContain(`ORDER BY rank_order LIMIT ${counts.RANK_ROW_CAP + 1}`);
+    for (const field of ["rank_key", "rank_label"]) {
+      expect(query).toContain(
+        `CASE WHEN length(substring(${field} FROM 1 FOR ${counts.RANK_TEXT_MAX_CHARS + 1})) <= ${counts.RANK_TEXT_MAX_CHARS}`,
+      );
+      expect(query).toContain(`THEN ${field} END AS ${field}`);
+    }
+    expect(query).not.toMatch(/holders_count|web_v1\.members|SUM\(/i);
+  });
+
+  it("preserves exact aggregate counts, unknowns, zero and partial ladder order", async () => {
+    state.ranks = [
+      { rank_key: "member", rank_label: "Member", member_count: "9007199254740991" },
+      { rank_key: "soldier", rank_label: "Soldier", member_count: "0" },
+      { rank_key: "legend", rank_label: "Legend", member_count: null },
+    ];
+    expect((await counts.readCounts(env)).ranks).toEqual([
+      { key: "member", label: "Member", memberCount: Number.MAX_SAFE_INTEGER },
+      { key: "soldier", label: "Soldier", memberCount: 0 },
+      { key: "legend", label: "Legend", memberCount: null },
+    ]);
+  });
+
+  it.each([-1, "-1", "oops", 1.5, "9007199254740992"])(
+    "keeps unusable rank count %s unknown without discarding readable labels",
+    async (value) => {
+      state.ranks[0]!.member_count = value;
+      expect((await counts.readCounts(env)).ranks).toEqual([
+        { key: "prospect", label: "Prospect", memberCount: null },
+      ]);
+    },
+  );
+
+  it("accepts the full row allowance and Unicode character boundary", async () => {
+    state.ranks = Array.from({ length: counts.RANK_ROW_CAP }, (_, i) => ({
+      rank_key: `rung-${i}`,
+      rank_label: "🦊".repeat(counts.RANK_TEXT_MAX_CHARS),
+      member_count: "123456789",
+    }));
+    const result = await counts.readCounts(env);
+    expect(result.ranks).toHaveLength(counts.RANK_ROW_CAP);
+    expect(result.ranks.at(-1)).toEqual({
+      key: `rung-${counts.RANK_ROW_CAP - 1}`,
+      label: "🦊".repeat(counts.RANK_TEXT_MAX_CHARS),
+      memberCount: 123456789,
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("refuses row overflow as unavailable rather than returning a partial ladder", async () => {
+    state.ranks = Array.from({ length: counts.RANK_ROW_CAP + 1 }, (_, i) => ({
+      rank_key: `rung-${i}`,
+      rank_label: `Rung ${i}`,
+      member_count: "123456789",
+    }));
+    expect(await counts.readCounts(env)).toEqual({ memberCount: 84, onlineCount: 12, ranks: [] });
+    await counts.readCounts(env);
+    expect(state.queries).toHaveLength(2);
+    expect(warn).toHaveBeenCalledExactlyOnceWith("Counts read unavailable", {
+      key: "counts.ranks",
+      exception: "Error",
+    });
+  });
+
+  it.each([
+    { rank_key: null },
+    { rank_label: null },
+    { rank_key: 7 },
+    { rank_label: {} },
+    { rank_key: "x".repeat(65) },
+    { rank_label: "🦊".repeat(65) },
+  ])("refuses the entire malformed ladder: %j", async (row) => {
+    state.ranks.push({ ...state.ranks[0], ...row });
+    expect(await counts.readCounts(env)).toEqual({ memberCount: 84, onlineCount: 12, ranks: [] });
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains empty rank-view behavior without treating it as an error", async () => {
+    state.ranks = [];
+    expect(await counts.readCounts(env)).toEqual({ memberCount: 84, onlineCount: 12, ranks: [] });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("uses the explicit local/dev URL without trying a second credential", async () => {
     await counts.readCounts({ ...env, BOT_DATABASE_URL: "postgres://fixture.test/explicit" });
     expect(state.urls).toEqual([

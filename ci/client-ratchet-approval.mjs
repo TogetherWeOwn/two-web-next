@@ -9,7 +9,8 @@ import { ROUTE_BUDGET, validateRouteBudget } from "./kit-route-budget.mjs";
 
 export const INITIAL_CLIENT_BUDGET = {
   js: { maxRawBytes: 261632, maxGzipBytes: 104448, maxFiles: 55 },
-  css: { maxRawBytes: 3072, maxGzipBytes: 1280, maxFiles: 4 },
+  // CSS raw 3584: ci/budgets/decisions/kit-perf/2026-11-11-admin-validation-css-raw.md
+  css: { maxRawBytes: 3584, maxGzipBytes: 1280, maxFiles: 4 },
 };
 export const INITIAL_ROUTE_DECISION =
   "ci/budgets/decisions/kit-perf/2026-11-04-route-client-closure-and-ratchet.md";

@@ -718,7 +718,7 @@ describe("ci heavy-job scope gates", () => {
   it("ci-ok aggregates every gated job and fails closed on scope", () => {
     const block = jobBlock("ci-ok");
     expect(block).toMatch(
-      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
+      /\n    needs:\s+\[\s*a11y,\s*lighthouse,\s*bundle-budget,\s*docs-links,\s*queue-syntax-smoke,\s*check,\s*node22-compat,\s*scope,\s*bot-contract-drift,?\s*\]\n/,
     );
     expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
@@ -782,8 +782,20 @@ describe("ci heavy-job scope gates", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
     const steps = check.split("\n    steps:\n")[1]?.split(/\n      - /) ?? [];
+    const draftSafeSteps = [
+      "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+      "name: Incident issue lifecycle fixtures",
+    ];
+    for (const name of draftSafeSteps) {
+      const matches = steps.filter((step) => step.split("\n")[0] === name);
+      expect(matches, `expected exactly one draft-safe step: ${name}`).toHaveLength(1);
+      expect(matches[0]?.split("\n").filter((line) => /^        if:/.test(line))).toEqual([
+        "        if: needs.scope.outputs.docs_only != 'true'",
+      ]);
+    }
     const heavyIfs = steps
       .filter((step) => !step.includes("Docs-only fast pass"))
+      .filter((step) => !draftSafeSteps.includes(step.split("\n")[0] ?? ""))
       .flatMap((step) => step.split("\n").filter((line) => /^        if:/.test(line)));
     expect(heavyIfs.length).toBeGreaterThan(10);
     for (const line of heavyIfs) {
@@ -865,7 +877,9 @@ describe("e2e-staging scope gate", () => {
     expect(scopeJob).toContain("docs_only:");
     expect(scopeJob).toContain("skip_e2e:");
     expect(scopeJob).not.toContain("pulls/$PR_NUMBER/files");
-    expect(scopeJob).toContain("workflow_run.head_sha");
+    expect(scopeJob).toContain("node ci/staging-provenance.mjs candidate");
+    expect(scopeJob).toContain("steps.candidate.outputs.sha");
+    expect(scopeJob).not.toContain("workflow_run.head_sha");
     expect(scopeJob).toContain("git diff --name-status");
     expect(journeys).toMatch(/\n    needs: scope\n/);
     expect(journeys).toMatch(/needs\.scope\.outputs\.skip_e2e != 'true'/);
@@ -954,7 +968,7 @@ describe("changed-path fixture matrix", () => {
     "public/islands/rsvp-button.js",
     "public/styles.css",
     "public/event-theme.css",
-    "public/fonts/display-latin-700.woff2",
+    "public/fonts/mona-sans-latin-var.woff2",
     "public/icons/icon-192.png",
     "public/site.webmanifest",
     "public/logo.svg",

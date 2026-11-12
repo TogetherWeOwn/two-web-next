@@ -80,6 +80,26 @@ describe("Kit events list HTML render", () => {
     expect(withoutFlash.body).not.toContain('data-testid="join-result"');
   });
 
+  it("renders the restored-write notice first in main only when requested", async () => {
+    const data = { ...baseData(), emptyState: "never", joinResult: "added" } as never;
+    const shown = await renderEventsHtml(data, headers, true);
+    expect(shown.body).toMatch(
+      /<main\b[^>]*><div role="status" tabindex="-1" data-testid="auth-error">/,
+    );
+    expect(shown.body.match(/data-testid="auth-error"/g)).toHaveLength(1);
+    expect(shown.body.indexOf('data-testid="auth-error"')).toBeLessThan(
+      shown.body.indexOf('data-testid="join-result"'),
+    );
+    const clean = await renderEventsHtml(data, headers);
+    expect(clean.body).not.toContain('data-testid="auth-error"');
+    const refused = await renderEventsHtml(
+      { queryTooLong: true, appUrl: "https://example.test" },
+      headers,
+      true,
+    );
+    expect(refused.body).not.toContain('data-testid="auth-error"');
+  });
+
   it("renders the too-long notice without echoing the query", async () => {
     const sentinel = `qq${"z".repeat(300)}`;
     const rendered = await renderEventsHtml(

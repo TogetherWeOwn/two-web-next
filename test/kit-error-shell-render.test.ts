@@ -32,6 +32,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone CI helper has no declaration file (single-line import: wrapping would detach this from TS7016).
 import { assertNoViolations as gateAssert, WCAG_AA_TAGS as gateTags } from "../ci/a11y-policy.mjs";
 import { kitErrorCopy, type KitErrorStatus } from "../src/kit-errors";
+import { twoSurface } from "../vendor/design-kit/tokens";
 import { registerAdminReadRetryBrowserAcceptance } from "./helpers/admin-read-retry-browser-acceptance";
 import { registerPastArchiveBrowserAcceptance } from "./helpers/past-archive-search-browser-acceptance";
 import { registerPastSearchContextAcceptance } from "./helpers/past-search-context-browser-acceptance";
@@ -323,11 +324,12 @@ export function renderErrorShell(code, adminBack) {
         expect(dom.headings).toEqual([{ tag: "H1", id: "error-heading", text: copy.title }]);
         expect(dom.labelledBy).toBe("error-heading");
         expect(dom.labelTargetTag).toBe("H1");
-        // Palette guard: the page must be evaluating in the dark Open Lobby
-        // colours members see (--color-lobby-surface, #121719, from the
-        // compiled app.css), never the light Hono canvas — otherwise the axe
-        // contrast run below checks a page nobody is served.
-        expect(dom.bodyBackground).toBe("rgb(18, 23, 25)");
+        // Check the pinned Kit surface, never the light legacy Hono canvas:
+        // otherwise axe would evaluate a palette members are not served.
+        const surfaceChannels = [1, 3, 5].map((start) =>
+          Number.parseInt(twoSurface.slice(start, start + 2), 16),
+        );
+        expect(dom.bodyBackground).toBe(`rgb(${surfaceChannels.join(", ")})`);
         expect(dom.title).toBe(`${copy.title} — Together We Own`);
         expect(dom.robots).toBe("noindex, nofollow");
         // The big status numeral is decorative: visible, but out of the a11y tree.

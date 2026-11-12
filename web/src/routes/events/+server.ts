@@ -16,6 +16,7 @@ import { JOIN_RESULT_COOKIE } from "../../../../src/return-journey";
 // and the hook hands the rest to Hono, so POST /events stays Hono-owned.
 export const GET: RequestHandler = async ({ request, cookies, url, locals, setHeaders }) => {
   const collected: Record<string, string> = {};
+  const island = request.headers.has("x-two-island");
   let consumeJoinFlash = false;
   try {
     const data = await loadEventsPage({
@@ -37,7 +38,11 @@ export const GET: RequestHandler = async ({ request, cookies, url, locals, setHe
       // (safeRequestId inside the alert drops anything unvalidated).
       requestId: locals.requestId,
     });
-    const rendered = await renderEventsHtml(data, collected);
+    const rendered = await renderEventsHtml(
+      data,
+      collected,
+      locals.restoredWrite === true && !island,
+    );
     const response = new Response(rendered.body, {
       status: rendered.status,
       headers: rendered.headers,

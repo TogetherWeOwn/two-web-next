@@ -22,6 +22,7 @@ export const FAQS: Array<{
       [
         "How do I join?",
         "Approve once with Discord on the join page and we'll add you to the server — or use the Discord invite link instead. Then accept the rules on Discord's membership screen: that's the gate, and it's how we know you're really in.",
+        { label: "Join page", href: "/join" },
       ],
       [
         "Do I need an invite, referral, or eligibility check?",
@@ -68,15 +69,18 @@ export const FAQS: Array<{
       [
         "When do you actually play together?",
         "Game nights are scheduled in Discord — see the Events page for what's on. Times are posted there, so you always see the current plan.",
+        { label: "Events page", href: "/events" },
       ],
       [
         "Where do I find events, and do I need an account to look?",
         "On the site's Events page: game nights, tournaments, whatever the community puts on. Anyone can read it — including signed-out visitors arriving from a Discord link.",
+        { label: "Events page", href: "/events" },
       ],
       [
         "How do I subscribe to events in my calendar?",
         "On Events or Past events, open “How to subscribe to the calendar”. " +
           SUBSCRIPTION_GUIDANCE.join(" ").replace("feed URL below", "feed URL shown there"),
+        { label: "Events page", href: "/events" },
       ],
       [
         "How do I RSVP, and what do the answers mean?",
@@ -123,6 +127,7 @@ export const FAQS: Array<{
       [
         "How do I fill in my profile?",
         "Sign in with Discord and open your profile. Three things are yours to write: a short bio, your games, and your timezone. We never ask for or store your email.",
+        { label: "Your profile", href: "/profile" },
       ],
     ],
   },
@@ -133,6 +138,7 @@ export const FAQS: Array<{
       [
         "What do you store about me, and what are the rules?",
         "We store Discord user IDs, timestamps, and channel IDs — enough to count joins honestly. We never store message content, email, location, or voice audio. Ask anytime to be removed and we delete your rows.",
+        { label: "Privacy policy", href: "/privacy" },
       ],
     ],
   },

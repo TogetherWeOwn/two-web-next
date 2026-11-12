@@ -32,6 +32,7 @@ const destination = (
 {/snippet}
 
 <Shell
+  restoredWrite={data.restoredWrite}
   title="Member leaderboard"
   canonical={canonicalUrl(appUrl, "/leaderboards/members")}
   robots="noindex, nofollow"
