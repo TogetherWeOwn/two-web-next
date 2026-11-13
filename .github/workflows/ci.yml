@@ -213,6 +213,9 @@ jobs:
       - name: Install-hook inventory and asset boundary tests
         if: github.event_name == 'pull_request'
         run: node --test ci/install-hook-inventory.test.mjs ci/asset-output-boundary.test.mjs
+      - name: Kit CSS collector selftests
+        if: github.event_name == 'pull_request'
+        run: node --test ci/kit-css-collect.test.mjs
       - name: Install locked workflow parser without hooks
         if: github.event_name == 'pull_request'
         run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
