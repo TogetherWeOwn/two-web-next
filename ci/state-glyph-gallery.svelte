@@ -1,5 +1,5 @@
 <script lang="ts">
-import StateGlyph from "$lib/StateGlyph.svelte";
+import StateGlyph from "../../lib/StateGlyph.svelte";
 </script>
 
 <svelte:head>
