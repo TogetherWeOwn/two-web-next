@@ -333,7 +333,9 @@ for (const [directory, hooks] of [
           "web/package.json",
           "ci/build-ember-tokens.mjs",
           "ci/build-leaf-css.mjs",
+          "ci/build-events-css.mjs",
           "public/styles.css",
+          "public/schedule-theme.css",
         ]) {
           cpSync(join(ROOT, path), join(root, path));
         }
