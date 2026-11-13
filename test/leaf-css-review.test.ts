@@ -1,7 +1,7 @@
 // Missing or current-tree-only evidence must not hide a theme-only CSP change.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const root = resolve(import.meta.dirname, "..");
 const script = join(root, "ci/leaf-css-review.mjs");
 const scratch: string[] = [];
+const failure = { ok: false, error_code: "leaf_css_review_failed" };
 afterEach(() => {
   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -41,11 +42,11 @@ function fixture() {
     return git("rev-parse", "HEAD");
   };
   const base = commit();
-  const run = (head = base, baseRef = base) =>
+  const run = (head = base, baseRef = base, env: NodeJS.ProcessEnv = {}) =>
     spawnSync(process.execPath, [script, baseRef, head], {
       cwd: dir,
       encoding: "utf8",
-      env: { ...process.env, GITHUB_STEP_SUMMARY: join(dir, "summary.md") },
+      env: { ...process.env, GITHUB_STEP_SUMMARY: join(dir, "summary.md"), ...env },
       timeout: 15000,
     });
   return { dir, base, commit, run };
@@ -61,6 +62,168 @@ describe("generated leaf CSS review evidence", () => {
     expect(report.base.sha).toBe(base);
     expect(report.head.sha).toBe(base);
     expect(report.base.sha256).toBe(report.head.sha256);
+  });
+
+  it("compares a historical literal with the packed representation", () => {
+    const { dir, base, commit, run } = fixture();
+    const generator = join(dir, "ci/build-leaf-css.mjs");
+    writeFileSync(
+      generator,
+      readFileSync(generator, "utf8").replace(
+        'const initializer = packed ? `${literal}.split("~").join(".base-theme")` : literal;',
+        "const initializer = JSON.stringify(css);",
+      ),
+    );
+    const historical = commit();
+    const result = run(base, historical);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, changed: false });
+  });
+  it.each([
+    ["altered decoder", "text.replace('.join(\".base-theme\")', '.join(\".other\")')"],
+    [
+      "trailing expression",
+      "text.replace(';\\nexport const LEAF_CRITICAL_CSS_SHA256', '+\"x\";\\nexport const LEAF_CRITICAL_CSS_SHA256')",
+    ],
+    ["changed bytes", 'text.replace("body { color: black; }", "body { color: white; }")'],
+    ["changed hash", 'text.replace(sha256, "A".repeat(43) + "=")'],
+  ])("rejects %s in generated snapshots", (_name, mutation) => {
+    const { dir, base, commit, run } = fixture();
+    const generator = join(dir, "ci/build-leaf-css.mjs");
+    const source = readFileSync(generator, "utf8").replace(
+      "writeFileSync(join(repoRoot, OUT), text);",
+      `writeFileSync(join(repoRoot, OUT), ${mutation});`,
+    );
+    writeFileSync(generator, source);
+    const altered = commit();
+    for (const result of [run(altered, base), run(base, altered)]) {
+      expect(result.status).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject(failure);
+    }
+  });
+  it.each(["\r", " ", " "])("rejects statements after comment terminator %j", (terminator) => {
+    const { dir, base, commit, run } = fixture();
+    const generator = join(dir, "ci/build-leaf-css.mjs");
+    const source = readFileSync(generator, "utf8");
+    for (const literal of [false, true]) {
+      const initializer =
+        'const initializer = packed ? `${literal}.split("~").join(".base-theme")` : literal;';
+      const prefix = JSON.stringify(`// comment${terminator}extra();\n`);
+      let modified = source.replace(
+        "writeFileSync(join(repoRoot, OUT), text);",
+        `writeFileSync(join(repoRoot, OUT), ${prefix} + text);`,
+      );
+      if (literal)
+        modified = modified.replace(initializer, "const initializer = JSON.stringify(css);");
+      writeFileSync(generator, modified);
+      const altered = commit();
+      for (const result of [run(altered, base), run(base, altered)]) expect(result.status).toBe(1);
+    }
+  });
+  it.each(["base", "head"])("rejects coherent scratch-input mutation on the %s side", (side) => {
+    const { dir, base, commit, run } = fixture();
+    const generator = join(dir, "ci/build-leaf-css.mjs");
+    writeFileSync(
+      generator,
+      readFileSync(generator, "utf8").replace(
+        "export function build() {",
+        'export function build() {\n  writeFileSync(join(repoRoot, "public/styles.css"), "mutated scratch CSS");',
+      ),
+    );
+    const altered = commit();
+    const result = side === "base" ? run(base, altered) : run(altered, base);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).detail).toContain("does not match revision sources");
+  });
+
+  it.each([
+    ["changed byte", 'css.replace("black", "white")'],
+    ["reordered sources", 'css.split("\\n").reverse().join("\\n")'],
+    ["prefix", '"prefix" + css'],
+    ["suffix", 'css + "suffix"'],
+  ])("rejects coherent %s outside the source recipes on either side", (_name, expression) => {
+    const { dir, base, commit, run } = fixture();
+    const generator = join(dir, "ci/build-leaf-css.mjs");
+    const original = 'const sha256 = createHash("sha256").update(css, "utf8").digest("base64");';
+    const source = readFileSync(generator, "utf8");
+    expect(source).toContain(original);
+    writeFileSync(
+      generator,
+      source
+        .replace("const css =", "let css =")
+        .replace(original, `css = ${expression};\n  ${original}`),
+    );
+    const altered = commit();
+    for (const result of [run(altered, base), run(base, altered)]) {
+      expect(result.status).toBe(1);
+      expect(JSON.parse(result.stdout).detail).toContain("does not match revision sources");
+    }
+  });
+
+  it.each(["missing", "optional", "utf8"])("rejects %s source on either side", (kind) => {
+    const { dir, base, commit, run } = fixture();
+    if (kind === "missing") rmSync(join(dir, "public/theme.css"));
+    if (kind === "utf8") writeFileSync(join(dir, "public/theme.css"), Buffer.from([0xff]));
+    if (kind === "optional") {
+      mkdirSync(join(dir, "assets/leaf-only.css"), { recursive: true });
+      writeFileSync(join(dir, "assets/leaf-only.css/nested"), "not a blob");
+    }
+    const invalid = commit();
+    for (const result of [run(base, invalid), run(invalid, base)]) {
+      expect(result.status).toBe(1);
+      const report = JSON.parse(result.stdout);
+      if (kind === "optional") expect(report.detail).toContain("invalid optional source entry");
+      else expect(report).toMatchObject(failure);
+    }
+  });
+
+  it.each(["ls-tree", "show"])(
+    "fails closed when optional Git %s fails on either side",
+    (command) => {
+      const { dir, commit, run } = fixture();
+      mkdirSync(join(dir, "assets"));
+      writeFileSync(join(dir, "assets/leaf-only.css"), "optional");
+      const base = commit();
+      writeFileSync(join(dir, "public/theme.css"), "changed");
+      const head = commit();
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      const git = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+      const wrapper = join(bin, "git");
+      writeFileSync(
+        wrapper,
+        `#!/bin/sh
+[ "$1" != "$FAIL_COMMAND" ] || case "$*" in *"$FAIL_SHA"*"assets/leaf-only.css"*) exit 1 ;; esac
+exec "$REAL_GIT" "$@"
+`,
+      );
+      chmodSync(wrapper, 0o755);
+      for (const sha of [base, head]) {
+        const result = run(head, base, {
+          PATH: `${bin}:${process.env.PATH}`,
+          REAL_GIT: git,
+          FAIL_COMMAND: command,
+          FAIL_SHA: sha,
+        });
+        expect(result.status).toBe(1);
+        expect(JSON.parse(result.stdout)).toMatchObject(failure);
+      }
+    },
+  );
+
+  it("reports every matching recipe when an optional seam is empty and unused", () => {
+    const { dir, commit, run } = fixture();
+    const generator = join(dir, "ci/build-leaf-css.mjs");
+    writeFileSync(generator, readFileSync(generator, "utf8").replace('.join("\\n")', '.join("")'));
+    mkdirSync(join(dir, "assets"));
+    writeFileSync(join(dir, "assets/leaf-only.css"), "");
+    const head = commit();
+    const result = run(head);
+    expect(result.status, result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout);
+    expect(report.base.recipes).toEqual(["three-lf"]);
+    expect(report.head.recipes).toEqual(["three-empty", "four-empty"]);
+    expect(report.changed).toBe(true);
   });
 
   it("surfaces a theme-only CSP hash change from the two committed snapshots", () => {
@@ -105,10 +268,7 @@ describe("generated leaf CSS review evidence", () => {
     writeFileSync(join(dir, "public/theme.css"), "</style><script>unsafe</script>");
     const result = run(commit());
     expect(result.status).toBe(1);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      ok: false,
-      error_code: "leaf_css_review_failed",
-    });
+    expect(JSON.parse(result.stdout)).toMatchObject(failure);
   });
 
   it("snapshots each revision with its own generator, not the head's", () => {
@@ -150,6 +310,13 @@ describe("generated leaf CSS review evidence", () => {
     writeFileSync(join(dir, "assets/leaf-only.css"), "uncommitted");
     const result = run(head);
     expect(result.status, result.stdout + result.stderr).toBe(0);
+    const subdirectory = spawnSync(process.execPath, [script, base, head], {
+      cwd: join(dir, "public"),
+      encoding: "utf8",
+      timeout: 15000,
+    });
+    expect(subdirectory.status, subdirectory.stdout + subdirectory.stderr).toBe(0);
+    expect(JSON.parse(subdirectory.stdout)).toEqual(JSON.parse(result.stdout));
     const report = JSON.parse(result.stdout);
     expect(report.changed).toBe(true);
     const hash = (parts: string[]) =>
