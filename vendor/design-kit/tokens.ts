@@ -61,12 +61,15 @@ export const twoColorAvatar8 = "#9a3b00" as const;
 export const twoColorAvatar9 = "#3a0086" as const;
 export const twoColorAvatar10 = "#c2185b" as const;
 export const twoColorAvatar11 = "#5e35b1" as const;
+export const twoColorMachine = "#7fb2ff" as const;
+export const twoColorWell = "#121212" as const;
 export const twoColorBgCanvas = "#15100f" as const;
 export const twoColorBgSurface = "#1c1614" as const;
 export const twoColorBgRaised = "#241c19" as const;
 export const twoColorBgOverlay = "#2e2420" as const;
 export const twoColorBgSticky = "rgba(21, 16, 15, 0.86)" as const;
 export const twoColorBgSheet = "rgba(28, 22, 20, 0.94)" as const;
+export const twoColorBgWell = "#121212" as const;
 export const twoColorLineHairline = "rgba(255, 236, 220, 0.08)" as const;
 export const twoColorLineHairlineStrong = "rgba(255, 236, 220, 0.14)" as const;
 export const twoColorLineControl = "#85766b" as const;
@@ -90,6 +93,13 @@ export const twoColorRankArc3 = "#ff0e52" as const;
 export const twoColorRankArc4 = "#ff0e52" as const;
 export const twoColorRankArc5 = "#9d6aff" as const;
 export const twoColorRankArcOff = "#3e322c" as const;
+export const twoColorLabelProposed = "#f2c14e" as const;
+export const twoColorLabelAuto = "#7fb2ff" as const;
+export const twoColorLabelReviewed = "#5fd39a" as const;
+export const twoColorLabelUncertain = "#f6f1ea" as const;
+export const twoColorLabelRejected = "#ff7a6b" as const;
+export const twoColorLabelGhost = "#a89a8e" as const;
+export const twoColorLabelHalo = "#121212" as const;
 export const twoSpace1 = "4px" as const;
 export const twoSpace2 = "8px" as const;
 export const twoSpace3 = "12px" as const;
@@ -142,6 +152,7 @@ export const twoSizeControlMd = "44px" as const;
 export const twoSizeControlLg = "56px" as const;
 export const twoSizeControlNav = "40px" as const;
 export const twoSizeTargetMin = "24px" as const;
+export const twoSizeTargetHandle = "24px" as const;
 export const twoSizeIconSm = "16px" as const;
 export const twoSizeIconMd = "20px" as const;
 export const twoSizeIconGrid = "24px" as const;
@@ -161,6 +172,12 @@ export const twoSizeFocusOffset = "3px" as const;
 export const twoSizeLiveDot = "7px" as const;
 export const twoSizeStateGlyph = "16px" as const;
 export const twoSizeLifelineMarker = "28px" as const;
+export const twoSizeBoxStroke = "2px" as const;
+export const twoSizeBoxHalo = "1px" as const;
+export const twoSizeBoxHandle = "8px" as const;
+export const twoSizeBoxTab = "22px" as const;
+export const twoSizeCropTile = "112px" as const;
+export const twoSizeToolbar = "52px" as const;
 export const twoLayoutContainer = "1240px" as const;
 export const twoLayoutGutterWide = "40px" as const;
 export const twoLayoutGutterCompact = "20px" as const;
@@ -174,6 +191,8 @@ export const twoLayoutColumns = 12 as const;
 export const twoLayoutMeasureLede = 52 as const;
 export const twoLayoutMeasureReading = 62 as const;
 export const twoLayoutMeasureNote = 36 as const;
+export const twoLayoutInspector = "380px" as const;
+export const twoLayoutQueue = "300px" as const;
 export const twoBreakpointCompactMax = "820px" as const;
 export const twoBreakpointReviewMobile = "390px" as const;
 export const twoBreakpointReviewDesktop = "1280px" as const;
@@ -228,6 +247,11 @@ export const twoElevation3 = "#2e2420" as const;
 export const twoElevationSticky = "rgba(21, 16, 15, 0.86)" as const;
 export const twoElevationSheet = "rgba(28, 22, 20, 0.94)" as const;
 export const twoElevationBlur = "14px" as const;
+export const twoBoxDashProposed = "6 4" as const;
+export const twoBoxDashAuto = "none" as const;
+export const twoBoxDashReviewed = "none" as const;
+export const twoBoxDashUncertain = "2 3" as const;
+export const twoBoxDashGhost = "3 3" as const;
 
 export const tokens = {
   "page": twoPage,
@@ -302,6 +326,8 @@ export const tokens = {
       "10": twoColorAvatar10,
       "11": twoColorAvatar11,
     },
+    "machine": twoColorMachine,
+    "well": twoColorWell,
     "bg": {
       "canvas": twoColorBgCanvas,
       "surface": twoColorBgSurface,
@@ -309,6 +335,7 @@ export const tokens = {
       "overlay": twoColorBgOverlay,
       "sticky": twoColorBgSticky,
       "sheet": twoColorBgSheet,
+      "well": twoColorBgWell,
     },
     "line": {
       "hairline": twoColorLineHairline,
@@ -342,6 +369,15 @@ export const tokens = {
       "arc-4": twoColorRankArc4,
       "arc-5": twoColorRankArc5,
       "arc-off": twoColorRankArcOff,
+    },
+    "label": {
+      "proposed": twoColorLabelProposed,
+      "auto": twoColorLabelAuto,
+      "reviewed": twoColorLabelReviewed,
+      "uncertain": twoColorLabelUncertain,
+      "rejected": twoColorLabelRejected,
+      "ghost": twoColorLabelGhost,
+      "halo": twoColorLabelHalo,
     },
   },
   "space": {
@@ -411,6 +447,7 @@ export const tokens = {
       "nav": twoSizeControlNav,
     },
     "target-min": twoSizeTargetMin,
+    "target-handle": twoSizeTargetHandle,
     "icon": {
       "sm": twoSizeIconSm,
       "md": twoSizeIconMd,
@@ -440,6 +477,16 @@ export const tokens = {
     "live-dot": twoSizeLiveDot,
     "state-glyph": twoSizeStateGlyph,
     "lifeline-marker": twoSizeLifelineMarker,
+    "box": {
+      "stroke": twoSizeBoxStroke,
+      "halo": twoSizeBoxHalo,
+      "handle": twoSizeBoxHandle,
+      "tab": twoSizeBoxTab,
+    },
+    "crop": {
+      "tile": twoSizeCropTile,
+    },
+    "toolbar": twoSizeToolbar,
   },
   "layout": {
     "container": twoLayoutContainer,
@@ -461,6 +508,8 @@ export const tokens = {
       "reading": twoLayoutMeasureReading,
       "note": twoLayoutMeasureNote,
     },
+    "inspector": twoLayoutInspector,
+    "queue": twoLayoutQueue,
   },
   "breakpoint": {
     "compact-max": twoBreakpointCompactMax,
@@ -544,9 +593,18 @@ export const tokens = {
     "sheet": twoElevationSheet,
     "blur": twoElevationBlur,
   },
+  "box": {
+    "dash": {
+      "proposed": twoBoxDashProposed,
+      "auto": twoBoxDashAuto,
+      "reviewed": twoBoxDashReviewed,
+      "uncertain": twoBoxDashUncertain,
+      "ghost": twoBoxDashGhost,
+    },
+  },
 } as const;
 
-export type TokenName = "twoPage" | "twoSurface" | "twoRaised" | "twoText" | "twoMuted" | "twoAccent" | "twoAccentInk" | "twoControlBorder" | "twoColorGround0" | "twoColorGround1" | "twoColorGround2" | "twoColorGround3" | "twoColorGround4" | "twoColorHair1" | "twoColorHair2" | "twoColorText1" | "twoColorText2" | "twoColorText3" | "twoColorTextPrimary" | "twoColorTextSecondary" | "twoColorTextTertiary" | "twoColorTextOnAccent" | "twoColorTextAccent" | "twoColorTextLink" | "twoColorEmber" | "twoColorOnAccent" | "twoColorAccentHi" | "twoColorBorder" | "twoColorLive" | "twoColorEcho" | "twoColorOk" | "twoColorDanger" | "twoColorWarn" | "twoColorLiveBg" | "twoColorOkBg" | "twoColorGradEmber" | "twoColorGradMagenta" | "twoColorGradViolet" | "twoColorEchoBg" | "twoColorWarnBg" | "twoColorDangerBg" | "twoColorAvatarText" | "twoColorDiscordEmbedBg" | "twoColorScrimSticky" | "twoColorScrimSheet" | "twoColorHeatMin" | "twoColorHeatMax" | "twoColorAvatar0" | "twoColorAvatar1" | "twoColorAvatar2" | "twoColorAvatar3" | "twoColorAvatar4" | "twoColorAvatar5" | "twoColorAvatar6" | "twoColorAvatar7" | "twoColorAvatar8" | "twoColorAvatar9" | "twoColorAvatar10" | "twoColorAvatar11" | "twoColorBgCanvas" | "twoColorBgSurface" | "twoColorBgRaised" | "twoColorBgOverlay" | "twoColorBgSticky" | "twoColorBgSheet" | "twoColorLineHairline" | "twoColorLineHairlineStrong" | "twoColorLineControl" | "twoColorAccentDefault" | "twoColorAccentHover" | "twoColorFocusRing" | "twoColorFocusRingOnAccent" | "twoColorStateLive" | "twoColorStateLiveBg" | "twoColorStateEcho" | "twoColorStateEchoBg" | "twoColorStateOk" | "twoColorStateOkBg" | "twoColorStateWarn" | "twoColorStateWarnBg" | "twoColorStateDanger" | "twoColorStateDangerBg" | "twoColorRankArc1" | "twoColorRankArc2" | "twoColorRankArc3" | "twoColorRankArc4" | "twoColorRankArc5" | "twoColorRankArcOff" | "twoSpace1" | "twoSpace2" | "twoSpace3" | "twoSpace4" | "twoSpace5" | "twoSpace6" | "twoSpace7" | "twoSpace8" | "twoSpace9" | "twoSpace10" | "twoSpace11" | "twoSpaceSection" | "twoSpaceSectionCompact" | "twoSpaceInsetTagY" | "twoSpaceInsetTagX" | "twoSpaceInsetTight" | "twoSpaceInsetRoom" | "twoSpaceInsetCompact" | "twoSpaceInsetCard" | "twoSpaceInsetCardLg" | "twoRadiusS" | "twoRadiusM" | "twoRadiusL" | "twoRadiusPill" | "twoGridWrap" | "twoGridGutter" | "twoFontSizeHero" | "twoFontSizeH1" | "twoFontSizeH2" | "twoFontSizeH3" | "twoFontSizeFigure" | "twoFontSizeTitle" | "twoFontSizeBodyReading" | "twoFontSizeBody" | "twoFontSizeSmall" | "twoFontSizeLabel" | "twoFontSizeBand" | "twoFontSizeLede" | "twoFontSizeUi" | "twoFontSizeFigureCompact" | "twoFontSizeTile" | "twoTrackingDisplay" | "twoTrackingH2" | "twoTrackingH3" | "twoTrackingFigure" | "twoTrackingBody" | "twoTrackingLabel" | "twoSizeControlSm" | "twoSizeControlMd" | "twoSizeControlLg" | "twoSizeControlNav" | "twoSizeTargetMin" | "twoSizeIconSm" | "twoSizeIconMd" | "twoSizeIconGrid" | "twoSizeAvatarXs" | "twoSizeAvatarSm" | "twoSizeAvatarMd" | "twoSizeAvatarLg" | "twoSizeAvatarXl" | "twoSizeRowCalm" | "twoSizeRowTable" | "twoSizeRowDense" | "twoSizeRowAdmin" | "twoSizeHeaderWide" | "twoSizeHeaderCompact" | "twoSizeFocusWidth" | "twoSizeFocusOffset" | "twoSizeLiveDot" | "twoSizeStateGlyph" | "twoSizeLifelineMarker" | "twoLayoutContainer" | "twoLayoutGutterWide" | "twoLayoutGutterCompact" | "twoLayoutRailMin" | "twoLayoutRailDefault" | "twoLayoutRailSeat" | "twoLayoutRailMax" | "twoLayoutHeroPanel" | "twoLayoutStickyOffset" | "twoLayoutColumns" | "twoLayoutMeasureLede" | "twoLayoutMeasureReading" | "twoLayoutMeasureNote" | "twoBreakpointCompactMax" | "twoBreakpointReviewMobile" | "twoBreakpointReviewDesktop" | "twoDiscordEmbedDefault" | "twoDiscordEmbedLive" | "twoDiscordEmbedEcho" | "twoDiscordEmbedOk" | "twoDiscordEmbedWarn" | "twoDiscordEmbedDanger" | "twoDiscordEmbedNeutral" | "twoDiscordLimitTitle" | "twoDiscordLimitDescription" | "twoDiscordLimitFieldName" | "twoDiscordLimitFieldValue" | "twoDiscordLimitFields" | "twoDiscordLimitFooter" | "twoDiscordLimitButtonLabel" | "twoDiscordLimitButtonsPerRow" | "twoDiscordLimitHouseTitle" | "twoDiscordLimitHouseFields" | "twoFontDisplay" | "twoFontUi" | "twoFontAccent" | "twoFontData" | "twoFontWeightRegular" | "twoFontWeightMedium" | "twoFontWeightDisplay" | "twoFontWeightSemibold" | "twoFontWidthBody" | "twoFontWidthButton" | "twoFontWidthDisplay" | "twoFontWidthBand" | "twoLineHeightDisplay" | "twoLineHeightHeading" | "twoLineHeightTitle" | "twoLineHeightBody" | "twoLineHeightReading" | "twoLineHeightLabel" | "twoMotionEase" | "twoMotionDurationFast" | "twoMotionDurationBase" | "twoMotionDurationSlow" | "twoMotionDurationEnter" | "twoMotionDistanceEnter" | "twoMotionPollLive" | "twoMotionPollStaleAfter" | "twoGradientBrand" | "twoElevation0" | "twoElevation1" | "twoElevation2" | "twoElevation3" | "twoElevationSticky" | "twoElevationSheet" | "twoElevationBlur";
+export type TokenName = "twoPage" | "twoSurface" | "twoRaised" | "twoText" | "twoMuted" | "twoAccent" | "twoAccentInk" | "twoControlBorder" | "twoColorGround0" | "twoColorGround1" | "twoColorGround2" | "twoColorGround3" | "twoColorGround4" | "twoColorHair1" | "twoColorHair2" | "twoColorText1" | "twoColorText2" | "twoColorText3" | "twoColorTextPrimary" | "twoColorTextSecondary" | "twoColorTextTertiary" | "twoColorTextOnAccent" | "twoColorTextAccent" | "twoColorTextLink" | "twoColorEmber" | "twoColorOnAccent" | "twoColorAccentHi" | "twoColorBorder" | "twoColorLive" | "twoColorEcho" | "twoColorOk" | "twoColorDanger" | "twoColorWarn" | "twoColorLiveBg" | "twoColorOkBg" | "twoColorGradEmber" | "twoColorGradMagenta" | "twoColorGradViolet" | "twoColorEchoBg" | "twoColorWarnBg" | "twoColorDangerBg" | "twoColorAvatarText" | "twoColorDiscordEmbedBg" | "twoColorScrimSticky" | "twoColorScrimSheet" | "twoColorHeatMin" | "twoColorHeatMax" | "twoColorAvatar0" | "twoColorAvatar1" | "twoColorAvatar2" | "twoColorAvatar3" | "twoColorAvatar4" | "twoColorAvatar5" | "twoColorAvatar6" | "twoColorAvatar7" | "twoColorAvatar8" | "twoColorAvatar9" | "twoColorAvatar10" | "twoColorAvatar11" | "twoColorMachine" | "twoColorWell" | "twoColorBgCanvas" | "twoColorBgSurface" | "twoColorBgRaised" | "twoColorBgOverlay" | "twoColorBgSticky" | "twoColorBgSheet" | "twoColorBgWell" | "twoColorLineHairline" | "twoColorLineHairlineStrong" | "twoColorLineControl" | "twoColorAccentDefault" | "twoColorAccentHover" | "twoColorFocusRing" | "twoColorFocusRingOnAccent" | "twoColorStateLive" | "twoColorStateLiveBg" | "twoColorStateEcho" | "twoColorStateEchoBg" | "twoColorStateOk" | "twoColorStateOkBg" | "twoColorStateWarn" | "twoColorStateWarnBg" | "twoColorStateDanger" | "twoColorStateDangerBg" | "twoColorRankArc1" | "twoColorRankArc2" | "twoColorRankArc3" | "twoColorRankArc4" | "twoColorRankArc5" | "twoColorRankArcOff" | "twoColorLabelProposed" | "twoColorLabelAuto" | "twoColorLabelReviewed" | "twoColorLabelUncertain" | "twoColorLabelRejected" | "twoColorLabelGhost" | "twoColorLabelHalo" | "twoSpace1" | "twoSpace2" | "twoSpace3" | "twoSpace4" | "twoSpace5" | "twoSpace6" | "twoSpace7" | "twoSpace8" | "twoSpace9" | "twoSpace10" | "twoSpace11" | "twoSpaceSection" | "twoSpaceSectionCompact" | "twoSpaceInsetTagY" | "twoSpaceInsetTagX" | "twoSpaceInsetTight" | "twoSpaceInsetRoom" | "twoSpaceInsetCompact" | "twoSpaceInsetCard" | "twoSpaceInsetCardLg" | "twoRadiusS" | "twoRadiusM" | "twoRadiusL" | "twoRadiusPill" | "twoGridWrap" | "twoGridGutter" | "twoFontSizeHero" | "twoFontSizeH1" | "twoFontSizeH2" | "twoFontSizeH3" | "twoFontSizeFigure" | "twoFontSizeTitle" | "twoFontSizeBodyReading" | "twoFontSizeBody" | "twoFontSizeSmall" | "twoFontSizeLabel" | "twoFontSizeBand" | "twoFontSizeLede" | "twoFontSizeUi" | "twoFontSizeFigureCompact" | "twoFontSizeTile" | "twoTrackingDisplay" | "twoTrackingH2" | "twoTrackingH3" | "twoTrackingFigure" | "twoTrackingBody" | "twoTrackingLabel" | "twoSizeControlSm" | "twoSizeControlMd" | "twoSizeControlLg" | "twoSizeControlNav" | "twoSizeTargetMin" | "twoSizeTargetHandle" | "twoSizeIconSm" | "twoSizeIconMd" | "twoSizeIconGrid" | "twoSizeAvatarXs" | "twoSizeAvatarSm" | "twoSizeAvatarMd" | "twoSizeAvatarLg" | "twoSizeAvatarXl" | "twoSizeRowCalm" | "twoSizeRowTable" | "twoSizeRowDense" | "twoSizeRowAdmin" | "twoSizeHeaderWide" | "twoSizeHeaderCompact" | "twoSizeFocusWidth" | "twoSizeFocusOffset" | "twoSizeLiveDot" | "twoSizeStateGlyph" | "twoSizeLifelineMarker" | "twoSizeBoxStroke" | "twoSizeBoxHalo" | "twoSizeBoxHandle" | "twoSizeBoxTab" | "twoSizeCropTile" | "twoSizeToolbar" | "twoLayoutContainer" | "twoLayoutGutterWide" | "twoLayoutGutterCompact" | "twoLayoutRailMin" | "twoLayoutRailDefault" | "twoLayoutRailSeat" | "twoLayoutRailMax" | "twoLayoutHeroPanel" | "twoLayoutStickyOffset" | "twoLayoutColumns" | "twoLayoutMeasureLede" | "twoLayoutMeasureReading" | "twoLayoutMeasureNote" | "twoLayoutInspector" | "twoLayoutQueue" | "twoBreakpointCompactMax" | "twoBreakpointReviewMobile" | "twoBreakpointReviewDesktop" | "twoDiscordEmbedDefault" | "twoDiscordEmbedLive" | "twoDiscordEmbedEcho" | "twoDiscordEmbedOk" | "twoDiscordEmbedWarn" | "twoDiscordEmbedDanger" | "twoDiscordEmbedNeutral" | "twoDiscordLimitTitle" | "twoDiscordLimitDescription" | "twoDiscordLimitFieldName" | "twoDiscordLimitFieldValue" | "twoDiscordLimitFields" | "twoDiscordLimitFooter" | "twoDiscordLimitButtonLabel" | "twoDiscordLimitButtonsPerRow" | "twoDiscordLimitHouseTitle" | "twoDiscordLimitHouseFields" | "twoFontDisplay" | "twoFontUi" | "twoFontAccent" | "twoFontData" | "twoFontWeightRegular" | "twoFontWeightMedium" | "twoFontWeightDisplay" | "twoFontWeightSemibold" | "twoFontWidthBody" | "twoFontWidthButton" | "twoFontWidthDisplay" | "twoFontWidthBand" | "twoLineHeightDisplay" | "twoLineHeightHeading" | "twoLineHeightTitle" | "twoLineHeightBody" | "twoLineHeightReading" | "twoLineHeightLabel" | "twoMotionEase" | "twoMotionDurationFast" | "twoMotionDurationBase" | "twoMotionDurationSlow" | "twoMotionDurationEnter" | "twoMotionDistanceEnter" | "twoMotionPollLive" | "twoMotionPollStaleAfter" | "twoGradientBrand" | "twoElevation0" | "twoElevation1" | "twoElevation2" | "twoElevation3" | "twoElevationSticky" | "twoElevationSheet" | "twoElevationBlur" | "twoBoxDashProposed" | "twoBoxDashAuto" | "twoBoxDashReviewed" | "twoBoxDashUncertain" | "twoBoxDashGhost";
 
 export const tokenNames = [
   "twoPage",
@@ -608,12 +666,15 @@ export const tokenNames = [
   "twoColorAvatar9",
   "twoColorAvatar10",
   "twoColorAvatar11",
+  "twoColorMachine",
+  "twoColorWell",
   "twoColorBgCanvas",
   "twoColorBgSurface",
   "twoColorBgRaised",
   "twoColorBgOverlay",
   "twoColorBgSticky",
   "twoColorBgSheet",
+  "twoColorBgWell",
   "twoColorLineHairline",
   "twoColorLineHairlineStrong",
   "twoColorLineControl",
@@ -637,6 +698,13 @@ export const tokenNames = [
   "twoColorRankArc4",
   "twoColorRankArc5",
   "twoColorRankArcOff",
+  "twoColorLabelProposed",
+  "twoColorLabelAuto",
+  "twoColorLabelReviewed",
+  "twoColorLabelUncertain",
+  "twoColorLabelRejected",
+  "twoColorLabelGhost",
+  "twoColorLabelHalo",
   "twoSpace1",
   "twoSpace2",
   "twoSpace3",
@@ -689,6 +757,7 @@ export const tokenNames = [
   "twoSizeControlLg",
   "twoSizeControlNav",
   "twoSizeTargetMin",
+  "twoSizeTargetHandle",
   "twoSizeIconSm",
   "twoSizeIconMd",
   "twoSizeIconGrid",
@@ -708,6 +777,12 @@ export const tokenNames = [
   "twoSizeLiveDot",
   "twoSizeStateGlyph",
   "twoSizeLifelineMarker",
+  "twoSizeBoxStroke",
+  "twoSizeBoxHalo",
+  "twoSizeBoxHandle",
+  "twoSizeBoxTab",
+  "twoSizeCropTile",
+  "twoSizeToolbar",
   "twoLayoutContainer",
   "twoLayoutGutterWide",
   "twoLayoutGutterCompact",
@@ -721,6 +796,8 @@ export const tokenNames = [
   "twoLayoutMeasureLede",
   "twoLayoutMeasureReading",
   "twoLayoutMeasureNote",
+  "twoLayoutInspector",
+  "twoLayoutQueue",
   "twoBreakpointCompactMax",
   "twoBreakpointReviewMobile",
   "twoBreakpointReviewDesktop",
@@ -775,4 +852,9 @@ export const tokenNames = [
   "twoElevationSticky",
   "twoElevationSheet",
   "twoElevationBlur",
+  "twoBoxDashProposed",
+  "twoBoxDashAuto",
+  "twoBoxDashReviewed",
+  "twoBoxDashUncertain",
+  "twoBoxDashGhost",
 ] as const;

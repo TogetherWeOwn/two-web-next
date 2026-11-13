@@ -4,7 +4,7 @@ The homepage retains its existing centered composition, uppercase display typogr
 
 The homepage, `/about`, `/faq`, `/rules`, `/privacy`, the `/join` landing, the community schedule (`/events`, `/events/past`), event detail/cancelled pages and branded error/OAuth recovery shells opt into the stylesheet through `Layout.theme`. The homepage and four content leaves (`/about`, `/faq`, `/rules`, `/privacy`) render it as a single generated inline `<style>` block (`src/leaf-critical-css.ts`, git-ignored build output regenerated on every install after adapter validation) allowlisted in `style-src` by its sha256 hash instead of a render-blocking stylesheet request; other themed routes keep the external stylesheet. They share the presentational `SiteHeader` and `SiteFooter`; error/recovery composition uses `RecoveryShell` without reading sessions or requiring a database. The content leaves use compact information navigation with a current-page indicator and readable policy text; Join uses a split content/preview layout that stacks on mobile. The 404 keeps optional event suggestions and labelled GET search below the centered status hero. The maintenance header and primary action link directly to the configured Discord invite, not OAuth. Member profiles opt into the base tokens through `theme="profile"` with layout details in the separate `profile-theme.css` sheet; the schedule does the same through `theme="schedule"` and `schedule-theme.css`, and event pages through `theme="event"` and `event-theme.css`. Other routes, including admin, retain their current layouts. Wrangler serves the external stylesheet, fonts and logos through the existing `public/` asset binding. No Bootstrap, jQuery, preloader, custom cursor, animation bundle, sample photos, original brand marks or third-party template folders ship. The decorative hero uses neutral CSS shapes instead of stock imagery. Feature images continue through the shared same-origin/approved public host policy, including validated configured hosts.
 
-## Ember Hours token migration (two-design-kit v0.2.3)
+## Ember Hours token migration (two-design-kit v0.3.1)
 
 `ci/build-ember-tokens.mjs` generates both consumer adapters from the exact
 vendored `vendor/design-kit/tokens.css` at `VERSION`. Its value-free mapping
@@ -101,7 +101,7 @@ Reduced-motion overrides for consumed aliases stay separate from base values.
 Existing button transitions consume the generated duration and ease only under
 `no-preference`; focus width/offset come from kit roles.
 
-`--font-display` and the distinct v0.2.3 `--font-ui` role preserve the kit family
+`--font-display` and the distinct pinned `--font-ui` role preserve the kit family
 order and insert the measured local Mona fallback once. Body text consumes
 `--font-ui`; headings and existing display rules retain `--font-display`. Equal
 pinned stacks share an alias to save bytes, but generation keeps the UI role
