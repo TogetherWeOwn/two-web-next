@@ -15,6 +15,9 @@
  * Head-only metadata has no utility classes and also stays out of detection. */
 @source "./**/*.svelte";
 @source not "./lib/SiteMetadata.svelte";
+/* SkipLink uses scoped CSS, not utility classes. Its CSS declarations are
+ * otherwise scanned as utility candidates; restore detection if it uses any. */
+@source not "./lib/SkipLink.svelte";
 /* Prose, attributes and the relative leaderboard scope produce these false
  * candidates, never classes. kit-tailwind-sources.test.ts guards that boundary. */
 @source not inline("visible relative static block hidden table");
