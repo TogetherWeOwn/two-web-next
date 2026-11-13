@@ -546,6 +546,8 @@ jobs:
         run: env -u DATABASE_URL -u BOT_DATABASE_URL node --test ci/join-evidence-contract.test.mjs
       - name: Join evidence manifest adapter
         run: env -u DATABASE_URL -u BOT_DATABASE_URL node --test ci/join-evidence-manifest.test.mjs
+      - name: Join evidence bounded CLI
+        run: env -u DATABASE_URL -u BOT_DATABASE_URL node --test ci/join-evidence-cli.test.mjs
   # Name pinned equal to the id. `check` feeds the required `ci-ok` gate.
   # It needs only `scope`, so it starts alongside a11y, lighthouse and
   # bundle-budget instead of after them; the steps that gated those jobs'
