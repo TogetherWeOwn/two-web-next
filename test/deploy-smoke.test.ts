@@ -258,36 +258,6 @@ describe("deploy public-route smoke (offline)", () => {
     expect(rollbackBlock).not.toContain("--fail-on-ready-wait-critical");
   });
 
-  it("scopes the uncompressed-HTML opt-out to the rollback smoke only", () => {
-    // TWO-7591: every current-version smoke requires compressed HTML; the
-    // post-rollback smoke proves a restored (possibly pre-fix) version
-    // serves, so it alone opts out. Dropping the flag reds a good rollback;
-    // adding it to a current-version smoke masks the compression gate.
-    const staging = readFileSync(".github/workflows/deploy.yml", "utf8");
-    expect(staging).toContain(
-      "node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical",
-    );
-    expect(staging).not.toContain("--allow-uncompressed-html");
-    const deployProd = readFileSync(".github/workflows/deploy-production.yml", "utf8");
-    expect(deployProd).not.toContain("--allow-uncompressed-html");
-    const e2eStaging = readFileSync(".github/workflows/e2e-staging.yml", "utf8");
-    expect(e2eStaging).not.toContain("--allow-uncompressed-html");
-    for (const file of [
-      ".github/actions/gradual-promote/action.yml",
-      ".github/workflows/gradual-promote-proof.yml",
-    ]) {
-      expect(readFileSync(file, "utf8")).not.toContain("--allow-uncompressed-html");
-    }
-    const rollback = readFileSync(".github/workflows/rollback-production.yml", "utf8");
-    const rollbackBlock = rollback.match(
-      /      - name: Smoke test public routes on the rolled-back version\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
-    )?.[1];
-    expect(rollbackBlock).toBeDefined();
-    expect(rollbackBlock).toContain(
-      '--allow-uncompressed-html --expected-version-id "$ROLLBACK_VERSION_ID"',
-    );
-  });
-
   it("hands the pre-deploy dead-letter baseline to staging smoke after capture", () => {
     // S7: staging /up serves retained queue.failed rows today, so the smoke
     // fails only on growth past this baseline. Dropping the env handoff

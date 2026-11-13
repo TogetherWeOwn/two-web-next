@@ -286,13 +286,10 @@ jobs:
         # instead of failing on history. Critical ready-wait warns and passes
         # here by design (--fail-on-ready-wait-critical is staging-only): the
         # age reflects shared queue_jobs state, not the rolled-back version,
-        # so it must not fail a good rollback. HTML compression is likewise
-        # opted out (--allow-uncompressed-html): a restored version may
-        # predate the compressed-HTML wire contract, and this gate proves the
-        # restored version serves, not that it is newer. Ordinary-traffic
-        # identity is enforced below: the recorded version UUID travels
-        # inputs -> env -> quoted shell variable and the smoke proves that
-        # version serves unpinned routing (no version-override header).
+        # so it must not fail a good rollback. Ordinary-traffic identity is
+        # enforced below: the recorded version UUID travels inputs -> env ->
+        # quoted shell variable and the smoke proves that version serves
+        # unpinned routing (no version-override header).
         env:
           ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
           ROLLBACK_ORIGIN: ${{ steps.target.outputs.origin }}
@@ -303,7 +300,7 @@ jobs:
           indexable=()
           if [ "$ROLLBACK_INDEXABLE" = "true" ]; then indexable=(--allow-indexable); fi
           for i in 1 2 3 4 5 6; do
-            if node bin/smoke.mjs "$ROLLBACK_ORIGIN" "${indexable[@]}" --allow-uncompressed-html --expected-version-id "$ROLLBACK_VERSION_ID"; then
+            if node bin/smoke.mjs "$ROLLBACK_ORIGIN" "${indexable[@]}" --expected-version-id "$ROLLBACK_VERSION_ID"; then
               echo "rollback smoke ok (attempt $i)"
               exit 0
             fi

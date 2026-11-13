@@ -74,6 +74,20 @@ describe("withStreamedBody", () => {
     await consumed.text();
     expect(withStreamedBody(consumed)).toBe(consumed);
   });
+
+  it("returns an unread-but-reader-locked HTML body unchanged", () => {
+    // Separate predicate from bodyUsed: a body locked by a live reader cannot
+    // pipe either, and removing the body.locked check throws instead of
+    // returning the response untouched.
+    const held = new Response("<p>held</p>", {
+      headers: { "content-type": "text/html" },
+    });
+    const reader = held.body!.getReader();
+    expect(held.bodyUsed).toBe(false);
+    expect(held.body!.locked).toBe(true);
+    expect(withStreamedBody(held)).toBe(held);
+    reader.releaseLock();
+  });
 });
 
 describe("HTML wire shape through the app", () => {
