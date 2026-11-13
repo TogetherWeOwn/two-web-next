@@ -3,8 +3,9 @@
 // Cloudflare Web Analytics (RUM) for the production site via the GraphQL
 // Analytics API and fails when a p75 exceeds its budget in ci/rum-budget.json.
 // Needs a READ-ONLY token (Account Analytics: Read) in CF_ANALYTICS_READ_TOKEN
-// plus the repo variables CF_RUM_ACCOUNT_ID and CF_RUM_SITE_TAG. Missing
-// configuration or insufficient collection is reported diagnostically.
+// plus the repo variables CF_RUM_ACCOUNT_ID and CF_RUM_SITE_TAG. Optional
+// --require-collection fails missing configuration or too few samples separately
+// from a metric breach. Default runs are diagnostic.
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -254,18 +255,19 @@ export async function runRumCheck({
   timeoutMs = RUM_TRANSPORT_TIMEOUT_MS,
   maxResponseBytes = RUM_MAX_RESPONSE_BYTES,
   until = new Date(),
+  requireCollection = false,
 } = {}) {
   const { CF_ANALYTICS_READ_TOKEN: token, CF_RUM_ACCOUNT_ID: account, CF_RUM_SITE_TAG: site } = env;
   const emit = onSummary ?? emitSummary;
   const finish = (result, collectionHealth, metricVerdict = "not-evaluated") => {
-    const summary = `${result.summary}\n\nCollection health: **${collectionHealth}** (diagnostic).\nMetric verdict: **${metricVerdict}**.`;
+    const summary = `${result.summary}\n\nCollection health: **${collectionHealth}** (${requireCollection ? "required" : "diagnostic"}).\nMetric verdict: **${metricVerdict}**.`;
     emit(summary);
     return { ...result, summary, collectionHealth, metricVerdict };
   };
   if (!token || !account || !site) {
     const summary =
       "## Real-user Web Vitals\n\nNot configured (needs secret CF_ANALYTICS_READ_TOKEN and variables CF_RUM_ACCOUNT_ID, CF_RUM_SITE_TAG). Budgets not evaluated.";
-    return finish({ code: 0, kind: "skipped", summary }, "not-configured");
+    return finish({ code: requireCollection ? 2 : 0, kind: "skipped", summary }, "not-configured");
   }
   const resolvedBudget = budget ?? JSON.parse(readFileSync("ci/rum-budget.json", "utf8"));
   const since = new Date(until.getTime() - 24 * 3600 * 1000);
@@ -332,7 +334,10 @@ export async function runRumCheck({
     ...tableLines(rows, enoughData),
   ].join("\n");
   if (!enoughData) {
-    return finish({ code: 0, kind: "insufficient", summary }, "insufficient");
+    return finish(
+      { code: requireCollection ? 2 : 0, kind: "insufficient", summary },
+      "insufficient",
+    );
   }
   const unavailable = rows.filter((row) => row.value === null).length;
   if (failed.length) {
@@ -367,7 +372,14 @@ export async function runRumCheckWithRateLimitRetry(options = {}) {
 }
 
 async function main() {
-  const { code } = await runRumCheckWithRateLimitRetry();
+  const args = process.argv.slice(2);
+  if (args.some((arg) => arg !== "--require-collection")) {
+    console.error("Usage: node ci/rum-check.mjs [--require-collection]");
+    return 2;
+  }
+  const { code } = await runRumCheckWithRateLimitRetry({
+    requireCollection: args.includes("--require-collection"),
+  });
   return code;
 }
 
