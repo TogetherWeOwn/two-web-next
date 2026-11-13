@@ -6,9 +6,8 @@ import { build } from "esbuild";
 import { expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const { compile } = createRequire(new URL("../web/package.json", import.meta.url))(
-  "svelte/compiler",
-) as {
+const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
+const { compile } = webRequire("svelte/compiler") as {
   compile: (
     source: string,
     options: { generate: string; filename: string },
