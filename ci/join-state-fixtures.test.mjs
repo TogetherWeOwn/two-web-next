@@ -16,18 +16,20 @@ function createDiscordWidgetHealth({ now, fetch }) {
   return {
     url(guild, background) {
       if (background && (checkedAt === undefined || now() - checkedAt >= 60_000)) {
-        background((async () => {
-          const response = await fetch();
-          checkedAt = now();
-          if (response.ok) {
-            const payload = await response.json();
-            snapshot = {
-              fetchedAt: now(),
-              presenceCount: payload.presence_count,
-              channels: payload.channels,
-            };
-          }
-        })());
+        background(
+          (async () => {
+            const response = await fetch();
+            checkedAt = now();
+            if (response.ok) {
+              const payload = await response.json();
+              snapshot = {
+                fetchedAt: now(),
+                presenceCount: payload.presence_count,
+                channels: payload.channels,
+              };
+            }
+          })(),
+        );
       }
       return `https://discord.com/widget?id=${guild}&theme=dark`;
     },
