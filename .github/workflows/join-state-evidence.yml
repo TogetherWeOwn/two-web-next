@@ -18,7 +18,7 @@ jobs:
       CONTROLLER_SHA: ${{ github.event.pull_request.head.sha }}
       APP_ROOT: ${{ github.workspace }}/application
       CONTROLLER_ROOT: ${{ github.workspace }}/controller
-      JOIN_EVIDENCE_DIR: ${{ runner.temp }}/join-state-evidence
+      JOIN_EVIDENCE_DIR: ${{ github.workspace }}/join-state-evidence
       WRANGLER_SEND_METRICS: "false"
       CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false"
       CLOUDFLARE_INCLUDE_PROCESS_ENV: "false"
@@ -75,6 +75,6 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: join-state-baseline-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/join-state-evidence/
+          path: ${{ github.workspace }}/join-state-evidence/
           if-no-files-found: error
           retention-days: 14

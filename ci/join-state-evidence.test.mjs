@@ -32,6 +32,12 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { pathToFileURL } from "node:url";
+import {
+  deriveSnapshot,
+  inviteUrl,
+  memberNames as MEMBER_NAMES,
+  scenarios as SCENARIOS,
+} from "./join-state-fixtures.mjs";
 
 const APP_SHA = process.env.JOIN_APP_SHA;
 const WIDTHS = [1280, 390];
@@ -45,31 +51,6 @@ const STATES = [
 ];
 
 const origin = "http://join-state.test";
-const inviteUrl = "https://discord.gg/invite";
-const guildId = "326474832151838730";
-const widgetUrl = `https://discord.com/widget?id=${guildId}&theme=dark`;
-const T0 = 1_700_000_000_000;
-const MEMBER_NAMES = ["private-member-one", "private-member-two"];
-const widgetJson = (channels) => ({
-  id: guildId,
-  name: "Together We Own",
-  instant_invite: inviteUrl,
-  presence_count: 42,
-  channels,
-  members: MEMBER_NAMES.map((username, i) => ({ id: String(i), username, status: "online" })),
-});
-const POPULATED = [
-  { id: "1", name: "Stage Room", position: 1 },
-  { id: "2", name: "Voice Lounge", position: 2 },
-];
-// state -> payload channels, read age (ms after the prime at T0).
-const SCENARIOS = {
-  "fresh-populated": { channels: POPULATED, age: 1_000 },
-  "age61s-populated": { channels: POPULATED, age: 61_000 },
-  "age61s-empty": { channels: [], age: 61_000 },
-  "age180s-populated": { channels: POPULATED, age: 180_000 },
-  "fresh-empty": { channels: [], age: 1_000 },
-};
 
 let appRoot;
 let evidence;
@@ -99,43 +80,6 @@ function appImport(specifier, explicitFile) {
 }
 
 const srcImport = (file) => import(pathToFileURL(join(appRoot, file)).href);
-
-async function deriveSnapshot(createDiscordWidgetHealth, state) {
-  const { channels, age } = SCENARIOS[state];
-  let clock = T0;
-  let status = 200;
-  const health = createDiscordWidgetHealth({
-    now: () => clock,
-    fetch: async () =>
-      status === 429
-        ? new Response("{}", { status: 429 })
-        : new Response(JSON.stringify(widgetJson(channels)), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-  });
-  const work = [];
-  const background = (p) => work.push(p);
-  // Prime at t0: the first url() schedules the one probe that parses widget.json.
-  health.url(guildId, background);
-  await Promise.all(work.splice(0));
-  assert.equal(health.snapshot(guildId)?.fetchedAt, T0, "primed at t0");
-  clock = T0 + age;
-  if (age > 1_000) {
-    // Controlled 429 re-probe: refreshes checkedAt only, never fetchedAt.
-    status = 429;
-    health.url(guildId, background);
-    await Promise.all(work.splice(0));
-  }
-  const snapshot = health.snapshot(guildId);
-  const url = health.url(guildId);
-  assert.ok(snapshot, `${state} base snapshot retained`);
-  assert.equal(snapshot.fetchedAt, T0, "fetchedAt never reset");
-  assert.equal(snapshot.stale, undefined, "base snapshot has no stale flag");
-  assert.equal(snapshot.channels.length, channels.length);
-  assert.equal(url, widgetUrl);
-  return { snapshot, widgetUrl: url };
-}
 
 before(async () => {
   assert.ok(process.env.APP_ROOT, "APP_ROOT is required");
