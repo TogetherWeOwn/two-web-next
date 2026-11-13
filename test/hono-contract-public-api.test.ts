@@ -129,21 +129,26 @@ afterEach(() => {
 });
 
 describe("mounted public API: namespace boundary controls", () => {
-  it.each(["/api/publicity", "/api/publicity/", "/api/publicity/foo", "/api/public-ev", "/api/public2"])(
-    "%s remains a branded HTML 404",
-    async (path) => {
-      const res = await request(path);
-      expect(res.status).toBe(404);
-      expect(res.headers.get("content-type")).toContain("text/html");
-      const body = await res.text();
-      expect(body).toMatch(/We cannot find that page|error-heading/);
-      expect(() => JSON.parse(body)).toThrow();
-      noReads();
-    },
-  );
+  it.each([
+    "/api/publicity",
+    "/api/publicity/",
+    "/api/publicity/foo",
+    "/api/public-ev",
+    "/api/public2",
+  ])("%s remains a branded HTML 404", async (path) => {
+    const res = await request(path);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toMatch(/We cannot find that page|error-heading/);
+    expect(() => JSON.parse(body)).toThrow();
+    noReads();
+  });
 
   it.each([200, 404])("keeps asset lookup outside the namespace (asset %i)", async (status) => {
-    const fetch = vi.fn(async () => new Response(status === 200 ? "asset-canary" : null, { status }));
+    const fetch = vi.fn(
+      async () => new Response(status === 200 ? "asset-canary" : null, { status }),
+    );
     const res = await request("/api/publicity", "GET", {}, { ...env, ASSETS: { fetch } } as Env);
     expect(res.status).toBe(status);
     expect(fetch).toHaveBeenCalledOnce();
