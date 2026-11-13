@@ -1,0 +1,12 @@
+name: Temporary pinned CSS caller
+on:
+  pull_request:
+    paths:
+      - .github/workflows/temporary-css-caller.yml
+permissions: {}
+jobs:
+  css:
+    uses: TogetherWeOwn/two-web-next/.github/workflows/kit-css-diagnostic.yml@0d2caa699344ddd5b34a7d0a3c0e3fe38938b89c
+    with:
+      base_sha: 0d2caa699344ddd5b34a7d0a3c0e3fe38938b89c
+      head_sha: 0d2caa699344ddd5b34a7d0a3c0e3fe38938b89c
