@@ -24,7 +24,7 @@ describe("kit css diagnostic workflow", () => {
     assert.equal(inputLines.length, 2);
     for (const line of inputLines)
       assert.match(line, /^ {10}(BASE|HEAD)_SHA: \$\{\{ inputs\.\w+ \}\}$/);
-    assert.equal(code.filter((line) => /^ {4}permissions: \{\}$/.test(line)).length, 2);
+    assert.equal(code.filter((line) => /^ {4}permissions: \{\}$/.test(line)).length, 3);
     assert.equal(code.filter((line) => /^ {4}timeout-minutes: 15$/.test(line)).length, 1);
     assert.match(text, /^permissions: \{\}$/m);
     assert.doesNotMatch(text, /secrets\.|id-token|environment:|self-hosted|GITHUB_TOKEN/);

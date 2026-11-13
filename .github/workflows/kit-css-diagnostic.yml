@@ -44,13 +44,12 @@ jobs:
     if: github.event_name == 'pull_request' && startsWith(github.workflow_ref, 'TogetherWeOwn/two-web-next/.github/workflows/kit-css-diagnostic.yml@')
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: read
+    permissions: {}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
+      - name: Fetch the public PR head without credentials
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git init -q && git fetch -q --depth=1 https://github.com/TogetherWeOwn/two-web-next.git "$PR_SHA" && git checkout -q --detach FETCH_HEAD
       - name: Collector, error paths and workflow invariants
         run: |
           docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
