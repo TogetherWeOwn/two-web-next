@@ -1,0 +1,77 @@
+name: ember adapter evidence
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/ember-adapter-evidence.yml
+      - ci/build-ember-tokens.mjs
+      - ci/check-ember-token-sync.mjs
+      - ci/check-ember-token-sync.test.mjs
+      - package.json
+      - package-lock.json
+      - .npmrc
+      - vendor/design-kit/**
+      - assets/styles.css
+      - assets/theme.css
+      - assets/admin-rsvp-review.css
+      - public/event-theme.css
+      - public/profile-theme.css
+      - public/schedule-theme.css
+      - web/src/app.css
+      - public/theme-tokens.css
+      - public/theme.css
+      - public/styles.css
+      - web/src/ember-theme.css
+      - src/ember-fallback-style.ts
+      - web/src/error.html
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --include=dev --ignore-scripts
+      - name: Generate and check adapters
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet && git diff --cached --quiet
+          output="$RUNNER_TEMP/ember-adapters"
+          mkdir "$output"
+          inputs=(ci/build-ember-tokens.mjs ci/check-ember-token-sync.mjs ci/check-ember-token-sync.test.mjs package.json package-lock.json .npmrc vendor/design-kit/VERSION vendor/design-kit/tokens.css assets/styles.css assets/theme.css assets/admin-rsvp-review.css public/event-theme.css public/profile-theme.css public/schedule-theme.css web/src/app.css)
+          sha256sum "${inputs[@]}" > "$output/source-input-sha256.txt"
+          node ci/build-ember-tokens.mjs
+          node ci/build-ember-tokens.mjs --check
+          node --test --test-reporter=tap --test-name-pattern='^a version-only pin change detects both stale versioned adapters$' ci/check-ember-token-sync.test.mjs | tee "$RUNNER_TEMP/ember-pin-test.tap"
+          grep -Eq '^ok [0-9]+ - a version-only pin change detects both stale versioned adapters$' "$RUNNER_TEMP/ember-pin-test.tap"
+          files=(public/theme-tokens.css public/theme.css web/src/ember-theme.css public/styles.css src/ember-fallback-style.ts web/src/error.html)
+          cp "$RUNNER_TEMP/ember-pin-test.tap" "$output/"
+          cp --parents "${files[@]}" "$output"
+          git diff -- "${files[@]}" > "$output/generated.patch"
+          printf '%s\n' "$EXPECTED_HEAD" > "$output/head-sha.txt"
+          (cd "$output" && sha256sum "${files[@]}" > SHA256SUMS)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ember-adapters-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ember-adapters/
+          if-no-files-found: error
+          retention-days: 7
