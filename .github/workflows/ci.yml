@@ -42,6 +42,22 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
 
 jobs:
+  join-evidence-source:
+    name: join-evidence-source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Test target source primitives
+        run: node --test ci/join-state-evidence-source.test.mjs
+
   bot-contract-drift:
     name: bot-contract-drift
     runs-on: ubuntu-latest
@@ -1352,6 +1368,7 @@ jobs:
         node22-compat,
         scope,
         bot-contract-drift,
+        join-evidence-source,
       ]
     if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
@@ -1367,6 +1384,10 @@ jobs:
         env:
           QUEUE_SMOKE_RESULT: ${{ needs.queue-syntax-smoke.result }}
         run: test "$QUEUE_SMOKE_RESULT" = success
+      - name: Require join evidence source tests
+        env:
+          JOIN_SOURCE_RESULT: ${{ needs.join-evidence-source.result }}
+        run: test "$JOIN_SOURCE_RESULT" = success
       - name: Require matching bot contract fixture
         env:
           BOT_CONTRACT_RESULT: ${{ needs.bot-contract-drift.result }}
