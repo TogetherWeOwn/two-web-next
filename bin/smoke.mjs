@@ -233,6 +233,7 @@ export async function smoke(
     failedBaseline,
     allowMissingBaseline = false,
     failOnReadyWaitCritical = false,
+    allowUncompressedHtml = false,
     onRoute,
   } = {},
 ) {
@@ -332,6 +333,23 @@ export async function smoke(
       }
       if (route.type) {
         check(contentType === route.type, `Content-Type ${route.type}`, contentType ?? "missing");
+      }
+      // TWO-7591: HTML must reach the client compressed. A regression that
+      // declares a fixed Content-Length on text/html gets marked
+      // no-transform by the edge and skips br/gzip entirely (the
+      // Lighthouse-flagged staging defect). The probe runs only on https
+      // origins: loopback fixtures never encode. Node fetch negotiates
+      // Accept-Encoding itself, so a compressed wire body surfaces as the
+      // Content-Encoding header the platform appends. The post-rollback
+      // smoke exports SMOKE_ALLOW_UNCOMPRESSED_HTML=1: a restored version
+      // may predate this wire requirement, and the rollback gate proves the
+      // restored version serves, not that it is newer.
+      if (contentType === "text/html" && base.protocol === "https:" && !allowUncompressedHtml) {
+        check(
+          ["br", "gzip", "zstd"].includes(headers.get("content-encoding") ?? ""),
+          "Content-Encoding br/gzip/zstd on HTML",
+          headers.get("content-encoding") ?? "uncompressed",
+        );
       }
       const body = await response.text();
       if (route.path === "/up") {
@@ -865,6 +883,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           allowMissingBaseline ||
           allowMissingRaw === "1" ||
           allowMissingRaw?.toLowerCase() === "true";
+        // Rollback compat stays in env, not a flag: a pre-fix scripts
+        // revision exits 2 on an unknown flag, while an unset
+        // SMOKE_ALLOW_UNCOMPRESSED_HTML simply keeps the gate on.
+        const allowUncompressedRaw = process.env.SMOKE_ALLOW_UNCOMPRESSED_HTML;
+        const allowUncompressedHtml =
+          allowUncompressedRaw === "1" || allowUncompressedRaw?.toLowerCase() === "true";
         const entries = [];
         const ok = await smoke(baseUrl, {
           allowIndexable,
@@ -873,6 +897,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           failedBaseline: baseline,
           allowMissingBaseline: allowMissing,
           failOnReadyWaitCritical,
+          allowUncompressedHtml,
           onRoute:
             jsonVerdict || ledgerPath !== undefined
               ? (path, failedAssertions) => {

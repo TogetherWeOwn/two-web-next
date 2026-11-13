@@ -258,6 +258,35 @@ describe("deploy public-route smoke (offline)", () => {
     expect(rollbackBlock).not.toContain("--fail-on-ready-wait-critical");
   });
 
+  it("scopes the uncompressed-HTML opt-out to the rollback smoke only", () => {
+    // TWO-7591: every current-version smoke requires compressed HTML; the
+    // post-rollback smoke proves a restored (possibly pre-fix) version
+    // serves, so it alone opts out. The opt-out travels by env, never a
+    // flag: a pre-fix scripts revision exits 2 on an unknown flag but
+    // ignores an env it does not read, so the same workflow can smoke a
+    // rollback target on either side of the gate.
+    const staging = readFileSync(".github/workflows/deploy.yml", "utf8");
+    expect(staging).not.toContain("SMOKE_ALLOW_UNCOMPRESSED_HTML");
+    const deployProd = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+    expect(deployProd).not.toContain("SMOKE_ALLOW_UNCOMPRESSED_HTML");
+    const e2eStaging = readFileSync(".github/workflows/e2e-staging.yml", "utf8");
+    expect(e2eStaging).not.toContain("SMOKE_ALLOW_UNCOMPRESSED_HTML");
+    for (const file of [
+      ".github/actions/gradual-promote/action.yml",
+      ".github/workflows/gradual-promote-proof.yml",
+    ]) {
+      const content = readFileSync(file, "utf8");
+      expect(content).not.toContain("SMOKE_ALLOW_UNCOMPRESSED_HTML");
+      expect(content).not.toContain("--allow-uncompressed-html");
+    }
+    const rollback = readFileSync(".github/workflows/rollback-production.yml", "utf8");
+    const rollbackBlock = rollback.match(
+      /      - name: Smoke test public routes on the rolled-back version\n[\s\S]*?        env:\n([\s\S]*?)        run: \|/,
+    )?.[1];
+    expect(rollbackBlock).toBeDefined();
+    expect(rollbackBlock).toContain('SMOKE_ALLOW_UNCOMPRESSED_HTML: "1"');
+  });
+
   it("hands the pre-deploy dead-letter baseline to staging smoke after capture", () => {
     // S7: staging /up serves retained queue.failed rows today, so the smoke
     // fails only on growth past this baseline. Dropping the env handoff
