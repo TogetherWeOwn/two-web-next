@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Generate the events stylesheet bundle in its existing cascade order.
-// The generated module is preparation only; no route consumes it yet.
+// The current events screen consumes the generated module inline.
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

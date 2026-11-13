@@ -158,7 +158,7 @@ test("CLI --static-only prints one pure-JSON summary with version 1", () => {
   assert.equal(report.check, "security-pins");
   assert.equal(report.version, 1);
   assert.equal(report.ok, true);
-  assert.equal(report.static.checks.length, 4);
+  assert.equal(report.static.checks.length, 6);
 });
 
 test("CLI usage errors are JSON with a fixed code and next_action", () => {

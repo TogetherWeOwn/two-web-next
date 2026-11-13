@@ -42,6 +42,13 @@ function assertShell(html: string) {
     expect(html).toContain("<style>");
     expect(html).toContain(".content-page");
     expect(html).not.toContain('rel="stylesheet"');
+  } else if (
+    html.includes('<body class="base-theme schedule-theme">') &&
+    html.includes("<style>")
+  ) {
+    expect(html).toContain(".schedule-heading");
+    expect(html).toContain(".events-page");
+    expect(html).not.toContain('rel="stylesheet"');
   } else if (html.includes("<style>")) {
     // Only "/" inlines among the homepage-theme shells (recovery/error shells
     // keep theme="home" without the flag and stay external). The inlined
@@ -156,8 +163,13 @@ it.each([
   const html = await (await pageShellFixture().request(path)).text();
   assertShell(html);
   expect(html).toContain('<body class="base-theme schedule-theme">');
-  expect(html).toContain('rel="stylesheet" href="/theme.css"');
-  expect(html).toContain('rel="stylesheet" href="/schedule-theme.css"');
+  if (path === "/events/past") {
+    expect(html).toContain('rel="stylesheet" href="/theme.css"');
+    expect(html).toContain('rel="stylesheet" href="/schedule-theme.css"');
+  } else {
+    expect(html).toContain(".events-page");
+    expect(html).not.toContain('rel="stylesheet"');
+  }
   expect(html).toContain('class="bar site-header"');
   expect(html).toContain('<a href="/events" aria-current="page">Events</a>');
   expect(html).toContain('<nav aria-label="Site">');

@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 import rawApp from "../src/index";
 import type { Env } from "../src/env";
 import { LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
+import { EVENTS_CRITICAL_CSS, EVENTS_CRITICAL_CSS_SHA256 } from "../src/events-critical-css";
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -70,7 +71,9 @@ async function classifyResponse(
     const earlyCsp = res.headers.get("content-security-policy") ?? "";
     if (earlyCsp && !ctx.allowlist.has(path)) {
       const earlyStyleSrc = cspDirective(earlyCsp, "style-src");
-      if (earlyStyleSrc !== "'self'") {
+      const expected =
+        path === "/events" ? `'self' 'sha256-${EVENTS_CRITICAL_CSS_SHA256}'` : "'self'";
+      if (earlyStyleSrc !== expected) {
         return {
           kind: "violation",
           path,
@@ -84,6 +87,20 @@ async function classifyResponse(
   const csp = res.headers.get("content-security-policy") ?? "";
   if (csp.includes("unsafe-inline")) {
     return { kind: "violation", path, detail: "CSP contains unsafe-inline" };
+  }
+  if (path === "/events") {
+    const styleSrc = cspDirective(csp, "style-src");
+    if (styleSrc !== `'self' 'sha256-${EVENTS_CRITICAL_CSS_SHA256}'`) {
+      return { kind: "violation", path, detail: `events style-src is ${styleSrc ?? "missing"}` };
+    }
+    const block = `<style>${EVENTS_CRITICAL_CSS}</style>`;
+    if (res.status === 200 && !body.includes(block)) {
+      return { kind: "violation", path, detail: "events is missing the exact inlined block" };
+    }
+    if (INLINE_STYLE_OPEN.test(body.replace(block, ""))) {
+      return { kind: "violation", path, detail: "events emits an unexpected inline style" };
+    }
+    return { kind: "clean", path };
   }
   if (ctx.allowlist.has(path)) {
     if (!body.includes(ctx.expectedBlock)) {
@@ -259,6 +276,41 @@ describe("inline-style route sweep", () => {
     expect(
       await classifyResponse("/skipped-clean", await fixture.request("/skipped-clean"), ctx),
     ).toMatchObject({ kind: "skipped" });
+  });
+
+  it("canary: events requires its exact hash and block without extra styles", async () => {
+    const block = `<style>${EVENTS_CRITICAL_CSS}</style>`;
+    const csp = `default-src 'self'; style-src 'self' 'sha256-${EVENTS_CRITICAL_CSS_SHA256}'`;
+    const response = (body: string, policy = csp, status = 200) =>
+      new Response(body, {
+        status,
+        headers: { "content-type": "text/html", "content-security-policy": policy },
+      });
+    expect(await classifyResponse("/events", response(block), SWEEP_CTX)).toMatchObject({
+      kind: "clean",
+    });
+    expect(
+      await classifyResponse("/events", response("<style>wrong</style>"), SWEEP_CTX),
+    ).toMatchObject({ kind: "violation" });
+    expect(
+      await classifyResponse("/events", response(`${block}<style>extra</style>`), SWEEP_CTX),
+    ).toMatchObject({ kind: "violation" });
+    expect(
+      await classifyResponse("/events", response(block, "style-src 'self'"), SWEEP_CTX),
+    ).toMatchObject({ kind: "violation" });
+    expect(await classifyResponse("/events/past", response(block), SWEEP_CTX)).toMatchObject({
+      kind: "violation",
+    });
+    expect(await classifyResponse("/events", response("error", csp, 500), SWEEP_CTX)).toMatchObject(
+      { kind: "clean" },
+    );
+    const redirect = new Response(null, {
+      status: 302,
+      headers: { "content-security-policy": "style-src 'self' 'unsafe-inline'" },
+    });
+    expect(await classifyResponse("/events", redirect, SWEEP_CTX)).toMatchObject({
+      kind: "violation",
+    });
   });
 
   it.each(concretePaths())("route %s carries no unallowlisted inline style", async (path) => {

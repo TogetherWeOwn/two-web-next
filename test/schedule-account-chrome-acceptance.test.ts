@@ -17,6 +17,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
+import { EVENTS_CRITICAL_CSS, EVENTS_CRITICAL_CSS_SHA256 } from "../src/events-critical-css";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
 import type { DiscordEventsSource } from "../src/events/discord-transients";
 import {
@@ -227,6 +228,20 @@ describe("schedule header account chrome", () => {
     const res = await app.request("/events", {}, envFor());
     expect(res.status).toBe(200);
     expect(headerAccount(await res.text())).toBe(GUEST_HEADER);
+  });
+
+  it("inlines the events bundle on a successful calendar response", async () => {
+    const res = await app.request("/events", {}, envFor());
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain(UPCOMING.title);
+    expect(html).toContain(`<style>${EVENTS_CRITICAL_CSS}</style>`);
+    expect(res.headers.get("content-security-policy")).toContain(
+      `'sha256-${EVENTS_CRITICAL_CSS_SHA256}'`,
+    );
+    for (const name of ["styles.css", "theme-tokens.css", "theme.css", "schedule-theme.css"]) {
+      expect(html).not.toContain(`rel="stylesheet" href="/${name}"`);
+    }
   });
 
   it("keeps Open Discord for members", async () => {

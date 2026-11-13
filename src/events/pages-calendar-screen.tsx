@@ -183,6 +183,7 @@ export const EventsCalendarPage: FC<{
   return (
     <ScheduleShell
       title="Events"
+      inlineEventsCss
       canonical={canonicalUrl(appUrl, "/events")}
       description="Game nights, tournaments and whatever else the community puts on."
       robots={robots}

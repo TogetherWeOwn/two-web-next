@@ -63,6 +63,11 @@ describe("performance CI", () => {
           expect(html, path).toContain("<style>");
           expect(html, path).toContain(path === "/" ? ".hero h1" : ".content-page");
           expect(html, path).not.toContain('rel="stylesheet"');
+        } else if (path === "/events") {
+          expect(html, path).toContain("<style>");
+          expect(html, path).toContain(".hero h1");
+          expect(html, path).toContain(".events-page .schedule-heading");
+          expect(html, path).not.toContain('rel="stylesheet"');
         } else {
           expect(html, path).toContain("/styles.css");
         }
@@ -375,6 +380,12 @@ describe("performance CI", () => {
       (html: string) => html.replace(/datetime="[^"]+"/g, 'datetime="1970-01-08T00:00:00.000Z"'),
     ],
     ["missing real app CSS", "/", (html: string) => html.replace(/<style>[\s\S]*?<\/style>/, "")],
+    [
+      "missing calendar CSS",
+      "/events",
+      (html: string) =>
+        html.replaceAll(".events-page .schedule-heading", ".missing-calendar-style"),
+    ],
     [
       "missing inlined leaf CSS",
       "/rules",

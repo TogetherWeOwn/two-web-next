@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath, URL } from "node:url";
@@ -66,6 +67,21 @@ describe("brand token layer (Logo/Icon 1 ramp)", () => {
         { cwd: repoRoot, encoding: "utf8" },
       ),
     );
+    // The events bundle is generated from served CSS. Verify its exact bytes
+    // rather than exempting a filename that could hide authored literals.
+    const sources = [
+      "public/styles.css",
+      "public/theme-tokens.css",
+      "public/theme.css",
+      "public/schedule-theme.css",
+    ];
+    const css = sources.map((path) => readFileSync(join(repoRoot, path), "utf8")).join("\n");
+    const hash = createHash("sha256").update(css, "utf8").digest("base64");
+    generated["src/events-critical-css.ts"] =
+      `// GENERATED from ${sources.join(", ")} — do not hand-edit.\n` +
+      `// Regen: node ci/build-events-css.mjs.\n` +
+      `export const EVENTS_CRITICAL_CSS: string =\n  ${JSON.stringify(css)};\n` +
+      `export const EVENTS_CRITICAL_CSS_SHA256: string = ${JSON.stringify(hash)};\n`;
     const offenders: string[] = [];
     for (const root of SCAN_ROOTS) {
       for (const rel of collect(join(repoRoot, root))) {

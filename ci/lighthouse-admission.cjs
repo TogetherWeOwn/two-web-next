@@ -31,6 +31,12 @@ function assertFixtureContent(path, response, html, before, after) {
         : /<style>[\s\S]*\.content-page[\s\S]*<\/style>/,
       `${path}: real app stylesheet`,
     );
+  } else if (path === "/events") {
+    assert.match(
+      html,
+      /<style>[\s\S]*\.hero h1[\s\S]*\.events-page \.schedule-heading[\s\S]*<\/style>/,
+      `${path}: real app and calendar stylesheets`,
+    );
   } else {
     assert.match(
       html,

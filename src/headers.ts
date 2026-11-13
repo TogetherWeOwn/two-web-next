@@ -3,6 +3,7 @@ import { KIT_FALLBACK_INLINE_STYLE, KIT_FALLBACK_STYLE_SHA256 } from "./ember-fa
 import type { Env } from "./env";
 import { operatorImageHosts } from "./config-warn";
 import { LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";
+import { EVENTS_CRITICAL_CSS_SHA256 } from "./events-critical-css";
 
 export { KIT_FALLBACK_INLINE_STYLE, KIT_FALLBACK_STYLE_SHA256 };
 
@@ -126,12 +127,18 @@ export function isInlineCriticalCssPath(path: string): boolean {
 // registered. String replacement keeps the directive order byte-identical to
 // securityHeadersFor for the same path.
 export function leafInlineStyleCsp(c: Context): void {
-  if (!isInlineCriticalCssPath(c.req.path)) return;
+  const hash =
+    c.req.path === "/events"
+      ? EVENTS_CRITICAL_CSS_SHA256
+      : isInlineCriticalCssPath(c.req.path)
+        ? LEAF_CRITICAL_CSS_SHA256
+        : null;
+  if (!hash) return;
   const csp = c.res.headers.get("Content-Security-Policy");
   if (!csp || !csp.includes("style-src 'self'")) return;
   c.res.headers.set(
     "Content-Security-Policy",
-    csp.replace("style-src 'self'", `style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`),
+    csp.replace("style-src 'self'", `style-src 'self' 'sha256-${hash}'`),
   );
 }
 
@@ -183,9 +190,12 @@ export function securityHeadersFor(
   // inlined <style> block, so only they carry its hash allowlist. Every other
   // path keeps the exact documented policy byte-identical, which the adapter
   // _headers parity and Kit parity tests pin.
-  const leafStyle = isInlineCriticalCssPath(request.path)
-    ? [`'sha256-${LEAF_CRITICAL_CSS_SHA256}'`]
-    : [];
+  const leafStyle =
+    request.path === "/events"
+      ? [`'sha256-${EVENTS_CRITICAL_CSS_SHA256}'`]
+      : isInlineCriticalCssPath(request.path)
+        ? [`'sha256-${LEAF_CRITICAL_CSS_SHA256}'`]
+        : [];
   const csp = [
     ["default-src", "'self'"],
     ["base-uri", "'self'"],

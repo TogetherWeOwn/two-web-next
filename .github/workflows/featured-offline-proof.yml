@@ -97,6 +97,8 @@ jobs:
             "src/home-copy.ts" \
             "src/image-policy.ts" \
             "ci/build-leaf-css.mjs" \
+            "ci/build-events-css.mjs" \
+            "public/schedule-theme.css" \
             "src/page-shell.tsx" \
             "src/pages.tsx" \
             "src/screens/featured-item.tsx" \
@@ -218,6 +220,7 @@ jobs:
           # critical-CSS bundles explicitly: the fixture bundle imports them
           # transitively through src/pages.
           node ci/build-leaf-css.mjs
+          node ci/build-events-css.mjs
           ./node_modules/.bin/esbuild ci/featured-proof/current-fixtures.ts --bundle --platform=node --format=cjs --outfile="$RUNNER_TEMP/featured-fixtures.cjs"
           node "$RUNNER_TEMP/featured-fixtures.cjs" "$RUNNER_TEMP/featured-current-fixtures"
       - name: Capture twelve current-source views with no app, database or network
