@@ -273,6 +273,7 @@ jobs:
             npm run build --prefix web
             AUTHORED_BREAKS_PHASE="$phase" AUTHORED_BREAKS_DIR="$CAPTURE_ROOT/$phase" \
               npx playwright test --config playwright.authored-breaks-capture.config.ts
+
           done
       - name: Upload schedule and archive evidence
         if: always() && github.event_name == 'workflow_dispatch' && inputs.authored_breaks_capture_base != ''
