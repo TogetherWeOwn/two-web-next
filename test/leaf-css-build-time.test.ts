@@ -100,6 +100,7 @@ describe("critical CSS is a build output, not a source", () => {
         ]) {
           writeFileSync(join(fixture, "public", source), ":root { color: red; }");
         }
+        writeFileSync(join(fixture, "public/schedule-theme.css"), ".schedule { color: blue; }");
         writeFileSync(
           join(fixture, "web/package.json"),
           readFileSync(join(root, "web/package.json")),
@@ -112,8 +113,12 @@ describe("critical CSS is a build output, not a source", () => {
           });
         }
         const output = join(fixture, "src/leaf-critical-css.ts");
+        const eventsOutput = join(fixture, "src/events-critical-css.ts");
         for (const initial of [null, "stale CSS"]) {
-          if (initial !== null) writeFileSync(output, initial);
+          if (initial !== null) {
+            writeFileSync(output, initial);
+            writeFileSync(eventsOutput, initial);
+          }
           const result = spawnSync("npm", ["run", command, "--prefix", join(fixture, "web")], {
             cwd: fixture,
             encoding: "utf8",
@@ -124,6 +129,8 @@ describe("critical CSS is a build output, not a source", () => {
           expect(readFileSync(join(fixture, "ember-tokens-checked.txt"), "utf8")).toBe("checked");
           expect(readFileSync(output, "utf8")).toContain(":root { color: red; }");
           expect(readFileSync(output, "utf8")).not.toContain("stale CSS");
+          expect(readFileSync(eventsOutput, "utf8")).toContain(".schedule { color: blue; }");
+          expect(readFileSync(eventsOutput, "utf8")).not.toContain("stale CSS");
         }
       } finally {
         rmSync(fixture, { recursive: true, force: true });
