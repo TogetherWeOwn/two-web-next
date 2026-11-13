@@ -4,7 +4,16 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
+import { registerPackageResolutionCases } from "./join-package-resolution-cases.mjs";
 import { appGit, srcImport } from "./join-state-evidence-source.mjs";
+
+registerPackageResolutionCases("native Node", async (root, specifier) => {
+  const probe = join(root, "probe.mjs");
+  await writeFile(probe, "export const load = (specifier) => import(specifier);\n");
+  const { load } = await import(pathToFileURL(probe).href);
+  return load(specifier);
+});
 
 test("imports only an explicit file contained in the target", async (t) => {
   const parent = await mkdtemp(join(tmpdir(), "join-source-"));
