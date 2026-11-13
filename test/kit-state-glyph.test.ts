@@ -18,6 +18,13 @@ const { compile } = webRequire("svelte/compiler") as {
 };
 
 describe("state glyph server rendering", () => {
+  it("hides the glyph at the compact layout breakpoint", () => {
+    const source = readFileSync(join(root, "web/src/lib/StateGlyph.svelte"), "utf8");
+    expect(source).toMatch(
+      /@media\s*\(max-width:\s*820px\)\s*\{\s*\.state-glyph\s*\{\s*display:\s*none/,
+    );
+  });
+
   it("renders distinct decorative shapes for all four states", async () => {
     const scratch = mkdtempSync(join(tmpdir(), "kit-state-glyph-"));
     try {
@@ -65,7 +72,7 @@ export const states = Object.fromEntries(["upcoming", "live", "mine", "past"].ma
       expect(states.upcoming).not.toContain("<path");
       expect(states.live).toContain("<path");
       expect(states.mine).toContain('r="3"');
-      expect(states.past).toContain('fill="currentColor"');
+      expect(states.past).toContain('r="8" fill="currentColor"');
       expect(states.past).not.toContain('fill="none"');
     } finally {
       rmSync(scratch, { recursive: true, force: true });

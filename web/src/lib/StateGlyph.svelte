@@ -5,7 +5,7 @@ let { state }: { state: "upcoming" | "live" | "mine" | "past" } = $props();
 <!-- The containing row must also express the state in text. -->
 <svg class:live={state === "live"} class:mine={state === "mine"} class="state-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
   {#if state === "past"}
-    <circle cx="8" cy="8" r="7" fill="currentColor" />
+    <circle cx="8" cy="8" r="8" fill="currentColor" />
   {:else}
     {#if state === "live"}
       <path d="M8 1a7 7 0 0 0 0 14Z" fill="currentColor" />
@@ -28,7 +28,7 @@ let { state }: { state: "upcoming" | "live" | "mine" | "past" } = $props();
   .live { color: var(--live); }
   .mine { color: var(--ember); }
 
-  @media (max-width: 390px) {
+  @media (max-width: 820px) {
     .state-glyph { display: none; }
   }
 </style>
