@@ -3,10 +3,11 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-const rumModulePath = ["..", "ci", "rum-check.mjs"].join("/");
-const { runRumCheck, runRumCheckWithRateLimitRetry } = await import(rumModulePath);
+// @ts-expect-error Standalone tooling has no declaration file.
+import { runRumCheck, runRumCheckWithRateLimitRetry } from "../ci/rum-check.mjs";
 
 const root = resolve(__dirname, "..");
+
 const budget = { lcpMs: 2500, cls: 0.1, inpMs: 200, minSamples: 50 };
 const env = {
   CF_ANALYTICS_READ_TOKEN: "token-marker-abc123",
@@ -47,12 +48,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("required collection health", () => {
-  it("treats missing configuration as code 2 without calling fetch", async () => {
+describe.each([false, true])("collection health (required: %s)", (requireCollection) => {
+  const check = (response: unknown, opts: { env?: Record<string, string>; extra?: object } = {}) =>
+    run(response, { ...opts, requireCollection });
+  it("reports missing configuration without calling fetch", async () => {
     const fetchImpl = vi.fn();
-    const r = await run(fetchImpl, { requireCollection: true, env: {} });
+    const r = await check(fetchImpl, { env: {} });
     expect(r).toMatchObject({
-      code: 2,
+      code: requireCollection ? 2 : 0,
       kind: "skipped",
       collectionHealth: "not-configured",
       metricVerdict: "not-evaluated",
@@ -62,12 +65,10 @@ describe("required collection health", () => {
     expect(r.summary).toContain("Metric verdict: **not-evaluated**");
   });
 
-  it.each([0, 19, 49])("treats %i samples as code 2 insufficient", async (count) => {
-    const r = await run(json(bodyFor(count, count === 0 ? null : goodQuantiles)), {
-      requireCollection: true,
-    });
+  it.each([0, 19, 49])("reports %i samples as insufficient", async (count) => {
+    const r = await check(json(bodyFor(count, count === 0 ? null : goodQuantiles)));
     expect(r).toMatchObject({
-      code: 2,
+      code: requireCollection ? 2 : 0,
       kind: "insufficient",
       collectionHealth: "insufficient",
       metricVerdict: "not-evaluated",
@@ -78,7 +79,7 @@ describe("required collection health", () => {
   });
 
   it("reports the observed 19-sample production window as missing evidence", async () => {
-    const r = await run(
+    const r = await check(
       json(
         bodyFor(19, {
           largestContentfulPaintP75: 1_288_000,
@@ -86,10 +87,9 @@ describe("required collection health", () => {
           interactionToNextPaintP75: -1,
         }),
       ),
-      { requireCollection: true },
     );
     expect(r).toMatchObject({
-      code: 2,
+      code: requireCollection ? 2 : 0,
       kind: "insufficient",
       collectionHealth: "insufficient",
       metricVerdict: "not-evaluated",
@@ -99,13 +99,30 @@ describe("required collection health", () => {
     expect(r.summary).not.toContain("| ok |");
   });
 
-  it("fails collection health for an admitted empty group list", async () => {
-    const r = await run(
-      json({ data: { viewer: { accounts: [{ rumWebVitalsEventsAdaptiveGroups: [] }] } } }),
-      { requireCollection: true },
+  it("does not evaluate an over-budget value below the configured sample floor", async () => {
+    const onSummary = vi.fn();
+    const r = await check(
+      json(bodyFor(50, { ...goodQuantiles, largestContentfulPaintP75: 3_100_000 })),
+      { extra: { budget: { ...budget, minSamples: 100 }, onSummary } },
     );
     expect(r).toMatchObject({
-      code: 2,
+      code: requireCollection ? 2 : 0,
+      kind: "insufficient",
+      collectionHealth: "insufficient",
+      metricVerdict: "not-evaluated",
+    });
+    expect(r.summary).toContain("| LCP p75 (ms) | 3100 | 2500 | not evaluated |");
+    expect(r.summary).not.toContain("**over**");
+    expect(onSummary).toHaveBeenCalledTimes(1);
+    expect(onSummary).toHaveBeenCalledWith(r.summary);
+  });
+
+  it("reports an admitted empty group list as insufficient", async () => {
+    const r = await check(
+      json({ data: { viewer: { accounts: [{ rumWebVitalsEventsAdaptiveGroups: [] }] } } }),
+    );
+    expect(r).toMatchObject({
+      code: requireCollection ? 2 : 0,
       kind: "insufficient",
       collectionHealth: "insufficient",
       metricVerdict: "not-evaluated",
@@ -114,7 +131,7 @@ describe("required collection health", () => {
   });
 
   it("passes 50 healthy in-budget samples", async () => {
-    const r = await run(json(bodyFor(50)), { requireCollection: true });
+    const r = await check(json(bodyFor(50)));
     expect(r).toMatchObject({
       code: 0,
       kind: "pass",
@@ -126,9 +143,8 @@ describe("required collection health", () => {
   });
 
   it("fails a threshold breach with healthy collection", async () => {
-    const r = await run(
+    const r = await check(
       json(bodyFor(500, { ...goodQuantiles, largestContentfulPaintP75: 3_100_000 })),
-      { requireCollection: true },
     );
     expect(r).toMatchObject({
       code: 1,
@@ -140,13 +156,32 @@ describe("required collection health", () => {
     expect(r.summary).toContain("Metric verdict: **over-budget**");
   });
 
+  it("reports partial metric coverage alongside an over-budget verdict", async () => {
+    const r = await check(
+      json(
+        bodyFor(500, {
+          ...goodQuantiles,
+          largestContentfulPaintP75: 3_100_000,
+          cumulativeLayoutShiftP75: -1,
+        }),
+      ),
+    );
+    expect(r).toMatchObject({
+      code: 1,
+      kind: "over-budget",
+      metricVerdict: "over-budget (partial)",
+    });
+    expect(r.summary).toContain("Metric verdict: **over-budget (partial)**");
+    expect(r.summary).toContain("| CLS p75 | n/a | 0.1 | unavailable |");
+  });
+
   it("keeps negative API quantiles as n/a: all unavailable", async () => {
     const all = {
       largestContentfulPaintP75: -1,
       cumulativeLayoutShiftP75: -1,
       interactionToNextPaintP75: -1,
     };
-    const r = await run(json(bodyFor(500, all)), { requireCollection: true });
+    const r = await check(json(bodyFor(500, all)));
     expect(r).toMatchObject({ code: 0, collectionHealth: "healthy", metricVerdict: "unavailable" });
     expect(r.summary).toContain("Metric verdict: **unavailable**");
     expect(r.summary).toContain("n/a");
@@ -154,9 +189,7 @@ describe("required collection health", () => {
   });
 
   it("keeps negative API quantiles as n/a: some unavailable", async () => {
-    const r = await run(json(bodyFor(500, { ...goodQuantiles, cumulativeLayoutShiftP75: -1 })), {
-      requireCollection: true,
-    });
+    const r = await check(json(bodyFor(500, { ...goodQuantiles, cumulativeLayoutShiftP75: -1 })));
     expect(r).toMatchObject({ code: 0, collectionHealth: "healthy", metricVerdict: "partial" });
     expect(r.summary).toContain("Metric verdict: **partial**");
     expect(r.summary).toMatch(/\| CLS p75 \| n\/a \| [\d.]+ \| (?!ok)/);
@@ -171,7 +204,7 @@ describe("required collection health", () => {
       json(bodyFor(500, null)),
     ];
     for (const response of responses) {
-      const r = await run(response, { requireCollection: true });
+      const r = await check(response);
       expect(r).toMatchObject({
         code: 1,
         kind: "invalid-response",
@@ -193,7 +226,7 @@ describe("required collection health", () => {
       ["timeout", () => new Promise(() => {}), { timeoutMs: 20 }],
     ];
     for (const [kind, response, extra] of cases) {
-      const r = await run(response, { requireCollection: true, extra });
+      const r = await check(response, { extra });
       expect(r, kind).toMatchObject({
         code: 1,
         kind,

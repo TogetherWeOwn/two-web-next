@@ -875,7 +875,7 @@ jobs:
           retention-days: 14
       - name: Kit performance budgets (worker + generated assets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: node ci/check-kit-perf.mjs
+        run: node ci/check-kit-perf.mjs --format json
       - name: Kit route performance budgets (complete immutable dependency closure)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/check-kit-route-perf.mjs

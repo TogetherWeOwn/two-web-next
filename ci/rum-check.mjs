@@ -339,10 +339,14 @@ export async function runRumCheck({
       "insufficient",
     );
   }
-  if (failed.length) {
-    return finish({ code: 1, kind: "over-budget", summary }, "healthy", "over-budget");
-  }
   const unavailable = rows.filter((row) => row.value === null).length;
+  if (failed.length) {
+    return finish(
+      { code: 1, kind: "over-budget", summary },
+      "healthy",
+      unavailable ? "over-budget (partial)" : "over-budget",
+    );
+  }
   return finish(
     { code: 0, kind: "pass", summary },
     "healthy",

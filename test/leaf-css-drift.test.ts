@@ -1,5 +1,8 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { URL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Layout } from "../src/pages";
@@ -36,6 +39,71 @@ afterEach(() => {
 });
 
 describe("content-leaf inlined CSS", () => {
+  it.each([
+    [
+      "repeated tokens and escaped text",
+      ['.base-theme .base-theme { content: "雪\\\\path"; }\n', "a {}", "b {}\n"],
+      true,
+    ],
+    ["no tokens", ["a {}", "b {}", "c {}"], true],
+    ["sentinel collision", [".base-theme ~ p {}", "b {}", "c {}"], false],
+  ])("executes generated initializer for %s", (_name, sources, packed) => {
+    const dir = mkdtempSync(join(tmpdir(), "leaf-css-generator-"));
+    try {
+      for (const sub of ["ci", "public", "src"]) mkdirSync(join(dir, sub));
+      writeFileSync(
+        join(dir, "ci/build-leaf-css.mjs"),
+        readFileSync(new URL("../ci/build-leaf-css.mjs", import.meta.url)),
+      );
+      SOURCES.forEach((entry, i) => writeFileSync(join(dir, "public", entry), sources[i]!));
+      execFileSync(process.execPath, [join(dir, "ci/build-leaf-css.mjs")], { timeout: 10000 });
+      const generated = readFileSync(join(dir, "src/leaf-critical-css.ts"), "utf8");
+      expect(generated.includes('.split("~").join(".base-theme")')).toBe(packed);
+      // This fixture runs only generator-produced code; security readers never evaluate it.
+      const js = generated.replaceAll(": string =", " =");
+      const modulePath = join(dir, "src/fixture.mjs");
+      writeFileSync(modulePath, js);
+      const output = execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256 } from ${JSON.stringify(new URL(`file://${modulePath}`).href)}; console.log(JSON.stringify([LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256]));`,
+        ],
+        { encoding: "utf8", timeout: 10000 },
+      );
+      const css = sources.join("\n");
+      expect(JSON.parse(output)).toEqual([
+        css,
+        createHash("sha256").update(css, "utf8").digest("base64"),
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a closing style tag in generator input", () => {
+    const dir = mkdtempSync(join(tmpdir(), "leaf-css-generator-"));
+    try {
+      for (const sub of ["ci", "public", "src"]) mkdirSync(join(dir, sub));
+      writeFileSync(
+        join(dir, "ci/build-leaf-css.mjs"),
+        readFileSync(new URL("../ci/build-leaf-css.mjs", import.meta.url)),
+      );
+      SOURCES.forEach((entry, i) =>
+        writeFileSync(join(dir, "public", entry), i === 1 ? "</StYlE>" : "a {}"),
+      );
+      const result = spawnSync(process.execPath, [join(dir, "ci/build-leaf-css.mjs")], {
+        encoding: "utf8",
+        timeout: 10000,
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("refusing to inline CSS");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("matches the three concatenated stylesheets byte for byte", () => {
     const concatenated = SOURCES.map(cssPath).join("\n");
     expect(LEAF_CRITICAL_CSS).toBe(concatenated);

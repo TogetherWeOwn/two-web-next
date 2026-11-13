@@ -28,7 +28,7 @@ existing `kind`, `code` and bounded summary:
 | Any required setting absent | `not-configured` | `not-evaluated` | 2 |
 | Valid empty group list or 0–49 samples | `insufficient` | `not-evaluated` | 2 |
 | At least 50, all metrics observed and within budget | `healthy` | `pass` | 0 |
-| At least 50, one or more observed p75 values over budget | `healthy` | `over-budget` | 1 |
+| At least 50, one or more observed p75 values over budget | `healthy` | `over-budget` / `over-budget (partial)` | 1 |
 | At least 50, no breach, some/all metrics explicitly unavailable | `healthy` | `partial` / `unavailable` | 0 |
 | Invalid JSON, malformed GraphQL data or missing/non-finite required quantiles | `invalid-response` | `not-evaluated` | 1 |
 | HTTP/GraphQL/network failure, deadline or body ceiling | `unavailable` | `not-evaluated` | 1 |

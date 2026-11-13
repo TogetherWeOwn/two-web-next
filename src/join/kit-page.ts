@@ -5,8 +5,8 @@
 // Hono joinPage render in src/index.tsx exactly: carrying the join-result
 // flash makes the response viewer-specific (a guest must never read another
 // member's banner from a shared cache), a rendered presence snapshot says
-// "now" (60 s shared TTL matching DISCORD_WIDGET_VERDICT_TTL_MS), and the
-// static page without presence keeps 3600 s. Vary: Cookie is set by the load
+// "now" and can already be old at render time (no-store), and the static
+// page without presence keeps 3600 s. Vary: Cookie is set by the load
 // on every variant (the representation depends on the flash cookie even when
 // the view has nothing to consume); only the max-age/no-store selection is
 // a pure function, so only it lives here.
@@ -15,10 +15,7 @@ import { readReturnJourney } from "../kit-session";
 import type { JOIN_START_FAILED_NOTICE } from "./route-shared";
 import { JOIN_RESULT_COOKIE, type JoinResult } from "../return-journey";
 
-export type JoinPageCacheControl =
-  | "private, no-store"
-  | "public, max-age=60"
-  | "public, max-age=3600";
+export type JoinPageCacheControl = "private, no-store" | "no-store" | "public, max-age=3600";
 
 /**
  * The `?notice=` value Kit accepts: exactly the store-down bounce value, else
@@ -37,7 +34,7 @@ export function joinPageCacheControl(
   snapshot: DiscordWidgetSnapshot | null | undefined,
 ): JoinPageCacheControl {
   if (joinResult) return "private, no-store";
-  if (snapshot) return "public, max-age=60";
+  if (snapshot) return "no-store";
   return "public, max-age=3600";
 }
 

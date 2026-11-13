@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ciOkNeeds, expectedCiOkNeeds } from "./helpers/ci-ok-needs";
 
 // ci/change-scope.sh decides whether the required `check` may fast-pass a PR
 // (TOG-11811) and whether the browser/staging smoke may skip it. Every doubt
@@ -717,9 +718,7 @@ describe("ci heavy-job scope gates", () => {
 
   it("ci-ok aggregates every gated job and fails closed on scope", () => {
     const block = jobBlock("ci-ok");
-    expect(block).toMatch(
-      /\n    needs:\s+\[\s*a11y,\s*lighthouse,\s*bundle-budget,\s*docs-links,\s*queue-syntax-smoke,\s*check,\s*node22-compat,\s*scope,\s*bot-contract-drift,?\s*\]\n/,
-    );
+    expect(ciOkNeeds(block)).toEqual(expectedCiOkNeeds());
     expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
     expect(block).toContain("CHECK_RESULT: ${{ needs.check.result }}");
