@@ -29,7 +29,7 @@ jobs:
       - name: Check out the pinned application stack
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: b492421e51215ec7b6781afe05017d3229da306e
+          ref: c5fc4d991f87485ac2a1a06e0a1aa9486a355a4f
           path: app
           persist-credentials: false
       - name: Check out the pinned glyph source
@@ -52,16 +52,15 @@ jobs:
           remote=https://github.com/TogetherWeOwn/two-web-next.git
           pin=$(git ls-remote "$remote" refs/heads/main)
           glyph=$(git ls-remote "$remote" refs/pull/2181/head)
-          test "${pin%%[[:space:]]*}" = b492421e51215ec7b6781afe05017d3229da306e
+          test "${pin%%[[:space:]]*}" = c5fc4d991f87485ac2a1a06e0a1aa9486a355a4f
           test "${glyph%%[[:space:]]*}" = b952cc5888ff1e91a4095c3d7edce2ebbda92e83
       - name: Assemble the allowlisted integration tree
         run: node tooling/ci/state-glyph-assemble.mjs app glyph
-      - name: Install locked dependencies and prepare first-party assets
+      - name: Install locked dependencies
         working-directory: app
         run: |
           npm ci --include=dev --ignore-scripts --no-audit --no-fund
           npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
-          npm run generate:first-party
       - name: Capture the Kit gallery
         env:
           TOOLING_SHA: ${{ github.event.pull_request.head.sha }}

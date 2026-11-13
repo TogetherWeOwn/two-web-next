@@ -20,9 +20,9 @@ import { afterEach, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const script = fileURLToPath(new URL("./state-glyph-assemble.mjs", import.meta.url));
-const PIN = "b492421e51215ec7b6781afe05017d3229da306e";
+const PIN = "c5fc4d991f87485ac2a1a06e0a1aa9486a355a4f";
 const GLYPH = "b952cc5888ff1e91a4095c3d7edce2ebbda92e83";
-const TREE = "56d0e1037f4df6d0dc896ee62dc16476d33991de";
+const TREE = "c6b391c683b3ca5c61a3ad8263a7d088bbd7bbb3";
 const FILES = ["web/src/lib/StateGlyph.svelte", "test/kit-state-glyph.test.ts"];
 
 const FAKE_GIT = `const fs = require("node:fs");
