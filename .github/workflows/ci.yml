@@ -203,9 +203,6 @@ jobs:
       - name: Verify script-disabled esbuild proof
         if: github.event_name == 'pull_request'
         run: node --test ci/verify-esbuild.test.mjs
-      - name: Join state fixture foundation (including drafts)
-        if: github.event_name == 'pull_request'
-        run: env -u DATABASE_URL -u BOT_DATABASE_URL node --test ci/join-state-fixtures.test.mjs
       - name: Lint workflows (actionlint and queue contract)
         if: github.event_name == 'pull_request'
         run: |
@@ -529,6 +526,19 @@ jobs:
           path: artifacts/a11y/
           if-no-files-found: error
           retention-days: 14
+  join-evidence-fixtures:
+    name: join-evidence-fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Join state fixture foundation
+        run: env -u DATABASE_URL -u BOT_DATABASE_URL node --test ci/join-state-fixtures.test.mjs
   # Name pinned equal to the id. `check` feeds the required `ci-ok` gate.
   # It needs only `scope`, so it starts alongside a11y, lighthouse and
   # bundle-budget instead of after them; the steps that gated those jobs'
@@ -739,9 +749,6 @@ jobs:
       - name: Admin waitlist DB-free regression
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: env -u DATABASE_URL node node_modules/vitest/vitest.mjs run test/admin.test.ts test/admin-waitlist-order-postgres-acceptance.test.ts test/admin-waitlist-classifier.test.ts
-      - name: Join state fixture foundation
-        if: github.event_name != 'pull_request' && needs.scope.outputs.docs_only != 'true'
-        run: env -u DATABASE_URL -u BOT_DATABASE_URL node --test ci/join-state-fixtures.test.mjs
       - name: Kit public payload contract (hostile fixtures, no network or DB)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:kit-payloads
@@ -1355,6 +1362,7 @@ jobs:
         node22-compat,
         scope,
         bot-contract-drift,
+        join-evidence-fixtures,
       ]
     if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
@@ -1374,6 +1382,10 @@ jobs:
         env:
           BOT_CONTRACT_RESULT: ${{ needs.bot-contract-drift.result }}
         run: test "$BOT_CONTRACT_RESULT" = success
+      - name: Require join evidence fixture tests
+        env:
+          JOIN_FIXTURES_RESULT: ${{ needs.join-evidence-fixtures.result }}
+        run: test "$JOIN_FIXTURES_RESULT" = success
       - name: Require successful docs-links
         env:
           DOCS_LINKS_RESULT: ${{ needs.docs-links.result }}
