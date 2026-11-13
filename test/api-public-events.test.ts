@@ -226,10 +226,14 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
 
   it.each(UNKNOWN_PATHS)("GET %s answers JSON with a database present", async (path) => {
     await seed(21);
-    const res = await app.request(path, { headers: { "cf-connecting-ip": "192.0.2.97" } }, {
-      ...env,
-      DATABASE_URL: process.env.DATABASE_URL as string,
-    });
+    const res = await app.request(
+      path,
+      { headers: { "cf-connecting-ip": "192.0.2.97" } },
+      {
+        ...env,
+        DATABASE_URL: process.env.DATABASE_URL as string,
+      },
+    );
     expect(res.status, path).toBe(404);
     expect(res.headers.get("content-type"), path).toContain("application/json");
     expect(res.headers.get("cache-control"), path).toBe("no-store, private");
