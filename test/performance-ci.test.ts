@@ -752,7 +752,8 @@ describe("performance CI", () => {
       uuid: "11.1.1",
     });
     // GHSA-c475-qrg2-pj4r: LHCI's real proxy chain still needs patched FTP.
-    expect(pkg.overrides["basic-ftp"]).toBe("6.2.1");
+    expect(pkg.overrides["get-uri"]).toEqual({ "basic-ftp": "6.2.4" });
+    expect(pkg.overrides).not.toHaveProperty("basic-ftp");
     // The verified Node floor supports the browser helper's ESM entry point.
     expect(pkg.engines.node).toBe("^22.23.0 || >=24");
     expect(pkg.overrides["lighthouse"]).toEqual({ "puppeteer-core": "25.16.0" });
@@ -778,6 +779,7 @@ describe("performance CI", () => {
       import assert from "node:assert/strict";
       import { createRequire } from "node:module";
       import { existsSync, writeFileSync } from "node:fs";
+      import { dirname, join } from "node:path";
       import { pathToFileURL } from "node:url";
       const require = createRequire(import.meta.url);
       const lhciRequire = createRequire(require.resolve("@lhci/cli/package.json"));
@@ -833,8 +835,22 @@ describe("performance CI", () => {
         assert.equal(typeof req("./package.json").dependencies[name], "string");
         req = createRequire(req.resolve(name + "/package.json"));
       }
+      assert.equal(req("./package.json").version, "6.0.5");
       assert.equal(typeof req("./package.json").dependencies["basic-ftp"], "string");
-      assert.equal(req("basic-ftp/package.json").version, "6.2.1");
+      assert.equal(req("basic-ftp/package.json").version, "6.2.4");
+      assert.equal(typeof req("basic-ftp").Client, "function");
+      // The browser helper declares proxy-agent as a peer, not a dependency.
+      req = createRequire(puppeteerRequire.resolve("@puppeteer/browsers/package.json"));
+      assert.equal(typeof req("./package.json").peerDependencies["proxy-agent"], "string");
+      req = createRequire(req.resolve("proxy-agent/package.json"));
+      assert.equal(typeof req("./package.json").dependencies["pac-proxy-agent"], "string");
+      req = createRequire(req.resolve("pac-proxy-agent/package.json"));
+      assert.equal(typeof req("./package.json").dependencies["get-uri"], "string");
+      // get-uri 8 exposes its entry point but not its package.json subpath.
+      req = createRequire(join(dirname(dirname(req.resolve("get-uri"))), "package.json"));
+      assert.equal(req("./package.json").version, "8.0.1");
+      assert.equal(typeof req("./package.json").dependencies["basic-ftp"], "string");
+      assert.equal(req("basic-ftp/package.json").version, "6.2.4");
       assert.equal(typeof req("basic-ftp").Client, "function");
     `,
       ],
