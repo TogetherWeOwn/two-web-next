@@ -1,5 +1,5 @@
 <script lang="ts">
-  import TextLink from "../../web/src/lib/TextLink.svelte";
+import TextLink from "../../web/src/lib/TextLink.svelte";
 </script>
 
 <TextLink href="/events">Events</TextLink>
