@@ -879,6 +879,9 @@ jobs:
             artifacts/worker-startup-local/summary.md
           if-no-files-found: error
           retention-days: 14
+      - name: Kit disposable browser fixture
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
       - name: Kit admin contrast (built runtime, intercepted fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         env:
