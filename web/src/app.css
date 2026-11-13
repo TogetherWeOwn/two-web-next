@@ -15,9 +15,9 @@
  * Head-only metadata has no utility classes and also stays out of detection. */
 @source "./**/*.svelte";
 @source not "./lib/SiteMetadata.svelte";
-/* Prose, attributes and the relative leaderboard scope produce these false
+/* Prose, attributes, styles and the relative leaderboard scope produce these false
  * candidates, never classes. kit-tailwind-sources.test.ts guards that boundary. */
-@source not inline("visible relative static block hidden table");
+@source not inline("visible relative static block hidden table flex inline-flex font-ui font-data text-small");
 
 /* The join-attempts audit page keeps the Hono viewer's `filters` form class
  * for markup parity, but Tailwind v4 lifts a `filter` candidate from that

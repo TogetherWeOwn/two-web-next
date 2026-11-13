@@ -12,7 +12,10 @@ describe("Kit utility source boundary", () => {
   });
 
   it("excludes only prose candidates, not literal component classes", () => {
-    const excluded = ["visible", "relative", "static", "block", "hidden", "table"];
+    const excluded =
+      "visible relative static block hidden table flex inline-flex font-ui font-data text-small".split(
+        " ",
+      );
     expect(css).toContain(`@source not inline("${excluded.join(" ")}");`);
     for (const path of globSync("web/src/**/*.svelte")) {
       const source = readFileSync(path, "utf8");

@@ -83,10 +83,7 @@ const style = (page: Page, selector: string, props: string[]) =>
   }, props);
 
 test.describe("filter links: semantics and zero counts", () => {
-  test("marks the current page and selected chip and keeps zero counts", async ({
-    page,
-    context,
-  }) => {
+  test("marks selection and zero counts", async ({ page, context }) => {
     await mount(context);
     await open(page);
 
@@ -129,10 +126,7 @@ test.describe("filter links: native navigation and keyboard", () => {
     await expect(page).toHaveURL(`${origin}/events?game=other`);
   });
 
-  test("Tab reaches every link in order, shows focus, and Enter navigates", async ({
-    page,
-    context,
-  }) => {
+  test("Tab focuses each link and Enter navigates", async ({ page, context }) => {
     await mount(context);
     await open(page);
     const hrefs = ["/events", "/events/past", "/events?game=all", "/events?game=other"];
@@ -215,10 +209,7 @@ test.describe("filter links: responsive", () => {
 test.describe("filter links: forced colors", () => {
   test.use({ forcedColors: "active" });
 
-  test("keeps borders and the current marker without relying on fills", async ({
-    page,
-    context,
-  }) => {
+  test("keeps borders and current marker in forced colors", async ({ page, context }) => {
     await mount(context);
     await open(page);
     expect(
