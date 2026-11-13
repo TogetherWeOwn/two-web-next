@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { build } from "esbuild";
 import { request as httpRequest } from "node:http";
+import { gunzipSync } from "node:zlib";
 import {
   convertV4MiniflareOptions,
   Miniflare,
@@ -47,8 +48,16 @@ describe("W15 auth/join in Miniflare", () => {
             const headers: [string, string][] = [];
             for (let i = 0; i < res.rawHeaders.length; i += 2)
               headers.push([res.rawHeaders[i]!, res.rawHeaders[i + 1]!]);
+            // workerd injects Accept-Encoding: br, gzip on its loopback and
+            // the Worker now gzips HTML itself (TWO-8089); this raw client
+            // does not, so decode the wire body for assertions.
+            let payload = chunks.length ? Buffer.concat(chunks) : null;
+            const encoding = headers.find(
+              ([name]) => name.toLowerCase() === "content-encoding",
+            )?.[1];
+            if (payload && encoding === "gzip") payload = gunzipSync(payload);
             resolve(
-              new WorkerResponse(chunks.length ? Buffer.concat(chunks) : null, {
+              new WorkerResponse(payload, {
                 status: res.statusCode!,
                 headers,
               }),

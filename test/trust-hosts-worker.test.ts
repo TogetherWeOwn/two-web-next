@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
+import { gunzipSync } from "node:zlib";
 import { resolve } from "node:path";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
@@ -34,8 +35,16 @@ describe.each(["wrangler.jsonc", "wrangler.local.jsonc"])(
               for (let i = 0; i < res.rawHeaders.length; i += 2) {
                 responseHeaders.push([res.rawHeaders[i]!, res.rawHeaders[i + 1]!]);
               }
+              // workerd injects Accept-Encoding: br, gzip on its loopback and
+              // the Worker now gzips HTML itself (TWO-8089); this raw client
+              // does not, so decode the wire body for assertions.
+              let payload = chunks.length ? Buffer.concat(chunks) : null;
+              const encoding = responseHeaders.find(
+                ([name]) => name.toLowerCase() === "content-encoding",
+              )?.[1];
+              if (payload && encoding === "gzip") payload = gunzipSync(payload);
               resolve(
-                new Response(chunks.length ? Buffer.concat(chunks) : null, {
+                new Response(payload, {
                   status: res.statusCode!,
                   headers: responseHeaders,
                 }),
