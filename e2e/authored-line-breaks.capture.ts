@@ -158,7 +158,7 @@ for (const target of parityTargets()) {
         await expect(page.locator("b", { hasText: "Doors" })).toHaveCount(0);
         await expect(page.locator("mark")).toHaveText(["Doors"]);
         if (phase === "after")
-          await expect(page.locator(".schedule-text", { hasText: "Doors" }).first()).toHaveCSS(
+          await expect(page.locator(".archive-passage", { hasText: "Doors" }).first()).toHaveCSS(
             "white-space",
             "pre-line",
           );

@@ -66,7 +66,7 @@ const Card: FC<{ e: PublicEvent; q: string; archive: ArchiveContext }> = ({ e, q
         {e.game ? <p>{e.game}</p> : null}
         {host !== "" ? <p data-testid={EVENT_CARD_HOST_TESTID}>Hosted by {host}</p> : null}
         {q && e.description ? (
-          <p class="archive-passage schedule-text">
+          <p class="archive-passage">
             {searchContext(e.description, q, true).map((part) =>
               part.match ? <mark>{part.text}</mark> : part.text,
             )}

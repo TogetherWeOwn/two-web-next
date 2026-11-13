@@ -192,7 +192,7 @@ for (const twin of ["Hono", "Kit"] as const) {
 it("turns authored newlines into breaks only through schedule-theme.css", () => {
   // Hono and Kit both serve this sheet on the list and archive pages.
   const css = readFileSync(new URL("../public/schedule-theme.css", import.meta.url), "utf8");
-  expect(css).toContain(".events-page .schedule-text{white-space:pre-line}");
+  expect(css).toContain(".events-page :is(.schedule-text,.archive-passage){white-space:pre-line}");
 });
 
 it.each([false, true])(

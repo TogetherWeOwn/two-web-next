@@ -100,7 +100,7 @@ describe.each(archiveTwins)("%s archive search acceptance", (twin) => {
       (attribute(element, "class") ?? "").split(" ").includes("archive-passage"),
     );
     expect(passages).toHaveLength(1);
-    expect(attribute(passages[0]!, "class")?.split(" ")).toContain("schedule-text");
+    expect(attribute(passages[0]!, "class")).toBe("archive-passage");
     expect(text(passages[0]!)).toBe(description);
     expect(tag(passages[0]!, "mark").map(text)).toEqual(["Doors"]);
     expect(tag(passages[0]!, "b")).toHaveLength(0);

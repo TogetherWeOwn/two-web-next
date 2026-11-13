@@ -56,7 +56,7 @@ const zone = $derived(effectiveZone(e.timezone));
     </h2>
     <p><time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, zone)}</time>{" "}<span>{zone}</span>{#if e.location}{" · "}<span>{e.location}</span>{/if}</p>
     {#if e.game}<p>{e.game}</p>{/if}
-    {#if host}<p data-testid="event-card-host">Hosted by {host}</p>{/if}{#if q && e.passage}<p class="archive-passage schedule-text">{#each e.passage as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</p>{/if}
+    {#if host}<p data-testid="event-card-host">Hosted by {host}</p>{/if}{#if q && e.passage}<p class="archive-passage">{#each e.passage as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</p>{/if}
   </div>
   <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
 </li>
