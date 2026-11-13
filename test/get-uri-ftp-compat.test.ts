@@ -2,8 +2,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const fixture = fileURLToPath(new URL("./helpers/get-uri-ftp-fixture.mjs", import.meta.url));
-const root = fileURLToPath(new URL("..", import.meta.url));
+const fixture = fileURLToPath(new URL("./helpers/get-uri-ftp-fixture.mjs", import.meta.url).href);
+const root = fileURLToPath(new URL("..", import.meta.url).href);
 
 // The patched basic-ftp override must keep both real get-uri copies working:
 // 6.0.5 under LHCI's proxy chain and 8.0.1 under the browser helper's.
