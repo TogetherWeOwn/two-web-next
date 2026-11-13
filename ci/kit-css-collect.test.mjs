@@ -148,6 +148,43 @@ describe("kit css collector", () => {
     assert.throws(() => run({ root: nested.root, out: join(nested.root, "out") }), /disjoint/);
   });
 
+  it("encodes refused filenames as one Actions annotation", () => {
+    const paths = fixture();
+    const name = "bad%0A\r\n::warning::injected.css";
+    symlinkSync("missing", join(paths.root, CLIENT_DIR, name));
+    const script = new URL("./kit-css-collect.mjs", import.meta.url).pathname;
+    const result = spawnSync(
+      process.execPath,
+      [
+        script,
+        "--root",
+        paths.root,
+        "--out",
+        paths.out,
+        "--leg",
+        "base",
+        "--source-sha",
+        sha,
+        "--workflow-sha",
+        sha,
+        "--run-id",
+        "1",
+        "--run-attempt",
+        "1",
+        "--repository",
+        "o/r",
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 1);
+    assert.equal(
+      result.stderr,
+      "::error::kit-css-collect: symbolic link refused: bad%250A%0D%0A::warning::injected.css\n",
+    );
+    assert.equal(result.stdout, "");
+    assert.equal(existsSync(join(paths.out, "manifest.json")), false);
+  });
+
   it("exits non-zero with an annotation on bad input and zero on success", () => {
     const script = new URL("./kit-css-collect.mjs", import.meta.url).pathname;
     const paths = fixture();

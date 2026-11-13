@@ -173,7 +173,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       `${m.leg} ${m.sourceSha}: ${t.files} CSS files, ${t.rawBytes} raw, ${t.gzipBytes} gzip (summed per file)`,
     );
   } catch (error) {
-    console.error(`::error::kit-css-collect: ${error.message}`);
+    const message = String(error.message)
+      .replaceAll("%", "%25")
+      .replaceAll("\r", "%0D")
+      .replaceAll("\n", "%0A");
+    console.error(`::error::kit-css-collect: ${message}`);
     process.exit(1);
   }
 }
