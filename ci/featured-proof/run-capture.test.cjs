@@ -207,7 +207,7 @@ function isCoveredByScopes(relPosix, globs) {
 const GENERATED_LEAF_CSS = {
   output: 'src/leaf-critical-css.ts',
   generator: 'ci/build-leaf-css.mjs',
-  generatorSha256: '452197b4e4bb0be78edea09dcf63881d7015c8769e48e06c6fa9b9f97bc80af9',
+  generatorSha256: '7f1cad59758032693b20ea9a817d11757844664688900a9b155777377818f715',
   inputs: ['public/styles.css', 'public/theme-tokens.css', 'public/theme.css'],
 };
 const { createHash } = require('node:crypto');
