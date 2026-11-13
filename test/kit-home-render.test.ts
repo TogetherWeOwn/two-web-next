@@ -4,27 +4,12 @@
 // source cannot catch a wrong branch — these renders fail the three mutants
 // the source-grep suite missed: a hardcoded sessionUnavailable, a skipped
 // flash precedence, and `{:else if session}` in the hero.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "../src/home-copy";
-
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const webRequire = createRequire(join(root, "web/package.json"));
-// svelte lives in the web workspace only; the root workspace never sees it,
-// so the compiler type is structural (no svelte types in the root tsconfig).
-const { compile } = webRequire("svelte/compiler") as {
-  compile: (source: string, options: Record<string, unknown>) => { js: { code: string } };
-};
-
-type RenderPage = (data: Record<string, unknown>) => string;
+import { createKitSsrRenderer, type RenderPage } from "./helpers/kit-ssr-render";
 
 let renderPage: RenderPage;
-let scratch = "";
+let cleanup: (() => void) | undefined;
 
 const INVITE_URL = "https://discord.gg/invite";
 const APP_URL = "https://example.test";
@@ -65,55 +50,11 @@ const nonMemberSession = {
 };
 
 beforeAll(async () => {
-  scratch = mkdtempSync(join(tmpdir(), "kit-home-render-"));
-  const entry = join(scratch, "kit-home-render-entry.mjs");
-  writeFileSync(
-    entry,
-    `
-import { render } from "svelte/server";
-import Page from ${JSON.stringify(join(root, "web/src/routes/+page.svelte"))};
-export function renderPage(data) {
-  const { head, body } = render(Page, { props: { data } });
-  return "<head>" + head + "</head><body>" + body + "</body>";
-}
-`,
-  );
-  const outfile = join(scratch, "kit-home-render-bundle.mjs");
-  await build({
-    entryPoints: [entry],
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    outfile,
-    logLevel: "warning",
-    absWorkingDir: root,
-    nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
-    alias: { "#lib": join(root, "web/src/lib/") },
-    plugins: [
-      {
-        name: "kit-home-render-svelte-ssr",
-        setup(plugin) {
-          plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
-            const source = readFileSync(args.path, "utf8");
-            const { js } = compile(source, {
-              generate: "server",
-              dev: false,
-              filename: args.path,
-            });
-            return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
-          });
-        },
-      },
-    ],
-  });
-  const mod = (await import(pathToFileURL(outfile).href)) as unknown as {
-    renderPage: RenderPage;
-  };
-  renderPage = mod.renderPage;
+  ({ renderPage, cleanup } = await createKitSsrRenderer("web/src/routes/+page.svelte"));
 }, 60000);
 
 afterAll(() => {
-  if (scratch) rmSync(scratch, { recursive: true, force: true });
+  cleanup?.();
 });
 
 describe("Kit home SSR render: session-aware header and hero", () => {
