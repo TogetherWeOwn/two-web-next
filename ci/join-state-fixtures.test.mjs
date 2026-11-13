@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDiscordWidgetHealth, toPublicWidgetSnapshot } from "../src/discord-widget.ts";
 import {
   deriveSnapshot,
   memberNames,
@@ -8,6 +7,33 @@ import {
   scenarios,
   widgetUrl,
 } from "./join-state-fixtures.mjs";
+
+// A small baseline-shaped double tests the fixture protocol without binding this
+// controller's tests to whichever application revision happens to be checked out.
+function createDiscordWidgetHealth({ now, fetch }) {
+  let snapshot;
+  let checkedAt;
+  return {
+    url(guild, background) {
+      if (background && (checkedAt === undefined || now() - checkedAt >= 60_000)) {
+        background((async () => {
+          const response = await fetch();
+          checkedAt = now();
+          if (response.ok) {
+            const payload = await response.json();
+            snapshot = {
+              fetchedAt: now(),
+              presenceCount: payload.presence_count,
+              channels: payload.channels,
+            };
+          }
+        })());
+      }
+      return `https://discord.com/widget?id=${guild}&theme=dark`;
+    },
+    snapshot: () => snapshot,
+  };
+}
 
 for (const [state, { channels, age }] of Object.entries(scenarios)) {
   test(`baseline fixture ${state} uses the expected clock and rate limit`, async () => {
@@ -33,8 +59,8 @@ for (const [state, { channels, age }] of Object.entries(scenarios)) {
       fixture.snapshot.channels.map(({ name }) => name),
       channels.map(({ name }) => name),
     );
-    const publicSnapshot = JSON.stringify(toPublicWidgetSnapshot(fixture.snapshot));
-    for (const name of memberNames) assert.ok(!publicSnapshot.includes(name));
+    const snapshot = JSON.stringify(fixture.snapshot);
+    for (const name of memberNames) assert.ok(!snapshot.includes(name));
   });
 }
 

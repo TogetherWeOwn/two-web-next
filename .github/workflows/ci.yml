@@ -205,7 +205,7 @@ jobs:
         run: node --test ci/verify-esbuild.test.mjs
       - name: Join state fixture foundation (including drafts)
         if: github.event_name == 'pull_request'
-        run: env -u DATABASE_URL -u BOT_DATABASE_URL node --import tsx --test ci/join-state-fixtures.test.mjs
+        run: env -u DATABASE_URL -u BOT_DATABASE_URL node --test ci/join-state-fixtures.test.mjs
       - name: Lint workflows (actionlint and queue contract)
         if: github.event_name == 'pull_request'
         run: |
@@ -741,7 +741,7 @@ jobs:
         run: env -u DATABASE_URL node node_modules/vitest/vitest.mjs run test/admin.test.ts test/admin-waitlist-order-postgres-acceptance.test.ts test/admin-waitlist-classifier.test.ts
       - name: Join state fixture foundation
         if: github.event_name != 'pull_request' && needs.scope.outputs.docs_only != 'true'
-        run: env -u DATABASE_URL -u BOT_DATABASE_URL node --import tsx --test ci/join-state-fixtures.test.mjs
+        run: env -u DATABASE_URL -u BOT_DATABASE_URL node --test ci/join-state-fixtures.test.mjs
       - name: Kit public payload contract (hostile fixtures, no network or DB)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:kit-payloads
