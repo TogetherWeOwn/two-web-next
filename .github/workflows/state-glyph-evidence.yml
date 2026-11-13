@@ -29,13 +29,13 @@ jobs:
       - name: Check out the pinned application stack
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ae1b51ef2560ef85f3dbd1d912e7f9edbaee2d66
+          ref: b492421e51215ec7b6781afe05017d3229da306e
           path: app
           persist-credentials: false
       - name: Check out the pinned glyph source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 6d3b36f0c8675405d9bf22494c379682cedbe847
+          ref: b952cc5888ff1e91a4095c3d7edce2ebbda92e83
           path: glyph
           persist-credentials: false
       - name: Use the hosted runner's Node 24 runtime
@@ -50,10 +50,10 @@ jobs:
         run: |
           set -eu
           remote=https://github.com/TogetherWeOwn/two-web-next.git
-          pin=$(git ls-remote "$remote" refs/pull/2168/head)
+          pin=$(git ls-remote "$remote" refs/heads/main)
           glyph=$(git ls-remote "$remote" refs/pull/2181/head)
-          test "${pin%%[[:space:]]*}" = ae1b51ef2560ef85f3dbd1d912e7f9edbaee2d66
-          test "${glyph%%[[:space:]]*}" = 6d3b36f0c8675405d9bf22494c379682cedbe847
+          test "${pin%%[[:space:]]*}" = b492421e51215ec7b6781afe05017d3229da306e
+          test "${glyph%%[[:space:]]*}" = b952cc5888ff1e91a4095c3d7edce2ebbda92e83
       - name: Assemble the allowlisted integration tree
         run: node tooling/ci/state-glyph-assemble.mjs app glyph
       - name: Install locked dependencies and prepare first-party assets
@@ -72,6 +72,14 @@ jobs:
         with:
           name: state-glyph-desktop
           path: artifacts/state-glyph-desktop.png
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload compact capture
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: state-glyph-compact
+          path: artifacts/state-glyph-compact.png
           if-no-files-found: error
           retention-days: 14
       - name: Upload mobile capture

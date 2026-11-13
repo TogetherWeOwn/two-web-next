@@ -3,9 +3,9 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 
-const PIN = "ae1b51ef2560ef85f3dbd1d912e7f9edbaee2d66";
-const GLYPH = "6d3b36f0c8675405d9bf22494c379682cedbe847";
-const EXPECTED_TREE = "cd7110adee0a6fe3055a7897faf633f39bb5926f";
+const PIN = "b492421e51215ec7b6781afe05017d3229da306e";
+const GLYPH = "b952cc5888ff1e91a4095c3d7edce2ebbda92e83";
+const EXPECTED_TREE = "56d0e1037f4df6d0dc896ee62dc16476d33991de";
 const FILES = ["web/src/lib/StateGlyph.svelte", "test/kit-state-glyph.test.ts"];
 
 function git(directory, ...args) {
