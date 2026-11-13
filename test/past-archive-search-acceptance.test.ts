@@ -19,6 +19,13 @@ import {
   requestArchive,
   requestCalendar,
 } from "./helpers/past-archive-search-acceptance";
+import {
+  attribute,
+  document,
+  elements,
+  tag,
+  text,
+} from "./helpers/schedule-search-context-acceptance";
 
 vi.mock("../src/events/search-log", async (original) => ({
   ...(await original<typeof import("../src/events/search-log")>()),
@@ -82,6 +89,24 @@ describe("archive link label extraction", () => {
 });
 
 describe.each(archiveTwins)("%s archive search acceptance", (twin) => {
+  it("keeps authored passage breaks and literal markup around search highlights", async () => {
+    const description = "Bring a game.\n<b>Doors</b> at 7.\n\nEveryone welcome.";
+    const source = archiveReadFixture();
+    source.replaceRows([archiveRow(200, { description })]);
+    const response = await requestArchive(twin, searchPath("Doors"), source.env, kit);
+    expect(response.status).toBe(200);
+    const page = document(await response.text());
+    const passages = elements(page, (element) =>
+      (attribute(element, "class") ?? "").split(" ").includes("archive-passage"),
+    );
+    expect(passages).toHaveLength(1);
+    expect(attribute(passages[0]!, "class")).toBe("archive-passage");
+    expect(text(passages[0]!)).toBe(description);
+    expect(tag(passages[0]!, "mark").map(text)).toEqual(["Doors"]);
+    expect(tag(passages[0]!, "b")).toHaveLength(0);
+    expect(tag(passages[0]!, "br")).toHaveLength(0);
+  });
+
   it("preserves the ordinary 20-row archive and reuses its anonymous cache", async () => {
     const source = archiveReadFixture();
     const first = await requestArchive(twin, "/events/past", source.env, kit);

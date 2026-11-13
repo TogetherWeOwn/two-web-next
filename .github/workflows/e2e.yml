@@ -37,6 +37,10 @@ on:
         description: "Optional 40-character base SHA for featured before/after evidence"
         required: false
         type: string
+      authored_breaks_capture_base:
+        description: "Optional 40-character base SHA for schedule and archive evidence"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -247,6 +251,38 @@ jobs:
         run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Build Kit worker
         run: npm run build --prefix web
+      - name: Schedule and archive before/after evidence
+        if: github.event_name == 'workflow_dispatch' && inputs.authored_breaks_capture_base != ''
+        env:
+          CAPTURE_BASE: ${{ inputs.authored_breaks_capture_base }}
+          CAPTURE_ROOT: ${{ runner.temp }}/authored-breaks-evidence
+        run: |
+          set -euo pipefail
+          [[ "$CAPTURE_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git fetch --no-tags --depth=1 origin "$CAPTURE_BASE"
+          files=(public/schedule-theme.css src/events/pages-calendar-card.tsx src/events/pages-past.tsx web/src/lib/EventCard.svelte)
+          trap 'git restore --source=HEAD -- "${files[@]}"' EXIT
+          for phase in before after; do
+            if [ "$phase" = before ]; then
+              for file in "${files[@]}"; do git show "$CAPTURE_BASE:$file" > "$file"; done
+            else
+              git restore --source=HEAD -- "${files[@]}"
+            fi
+            mkdir -p "$CAPTURE_ROOT/$phase"
+            sha256sum "${files[@]}" > "$CAPTURE_ROOT/$phase/runtime-sha256.txt"
+            npm run build --prefix web
+            AUTHORED_BREAKS_PHASE="$phase" AUTHORED_BREAKS_DIR="$CAPTURE_ROOT/$phase" \
+              npx playwright test --config playwright.authored-breaks-capture.config.ts
+
+          done
+      - name: Upload schedule and archive evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.authored_breaks_capture_base != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: authored-breaks-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/authored-breaks-evidence/
+          if-no-files-found: error
+          retention-days: 7
       - name: Ember token viewport evidence
         id: ember-evidence
         run: >-
