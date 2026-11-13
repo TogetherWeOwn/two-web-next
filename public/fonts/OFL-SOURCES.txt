@@ -11,10 +11,6 @@ Reproduce: bash bin/fetch-ember-fonts.sh (needs fonttools 4.68.0 + brotli 1.2.1)
    it covers only U+2191/U+2193 (up/down); left/right arrows keep system
    rendering.
    Glyph outlines and advances match the previous wght+wdth file at width 100.
-   Retiring: mona-sans-latin-var.woff2 (98124 B, sha256
-   5ea3740633e5ac7af56c13d7e8ec32bcae12e7723e53d34284469a8947ccb2f3; the same
-   family with the unused wdth 75-125 axis) is no longer referenced and is
-   removed in a follow-up change once cached pages have expired.
    Copyright: 2022 The Mona Sans Project Authors
    (https://github.com/github/mona-sans), Reserved Font Name "Mona".
    Served with font-display: swap, preloaded once on themed pages.

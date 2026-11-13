@@ -115,7 +115,7 @@ describe("review-tiers.yml", () => {
     expect(classify("public/icons/diagram.svg")).toBe("sensitive");
     expect(classify("public/fonts/display.svg")).toBe("sensitive");
     expect(classify("public/favicon.ico")).toBe("low");
-    expect(classify("public/fonts/mona-sans-latin-var.woff2")).toBe("low");
+    expect(classify("public/fonts/mona-sans-latin-wght.woff2")).toBe("low");
     expect(classify("public/icons/icon-192.png")).toBe("low");
   });
 

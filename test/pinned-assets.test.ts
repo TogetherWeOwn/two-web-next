@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,7 +32,6 @@ const IMMUTABLE = "public, max-age=31536000, immutable";
 // Provenance, subset ranges and reproduction live in
 // public/fonts/OFL-SOURCES.txt; full license texts in public/fonts/LICENSE.txt.
 const FONT_PINS = {
-  "mona-sans-latin-var.woff2": "5ea3740633e5ac7af56c13d7e8ec32bcae12e7723e53d34284469a8947ccb2f3",
   "mona-sans-latin-wght.woff2": "a59061e38c5e7e6a00aaa6b6645a220c7d9c530991167f058cc0f8575f5d5844",
   "instrument-serif-latin-400-italic.woff2":
     "2ea8887dec935b5a45ba939c463d9733fc3f6c465c30ae6881b8c331a9a1dece",
@@ -99,8 +98,8 @@ describe("pinned font cache", () => {
       "/fonts/OFL-SOURCES.txt",
       "/fonts/mona-sans-latin-wght.woff2.bak",
       "/fonts/nested/mona-sans-latin-wght.woff2",
-      "/fonts/mona-sans-latin-var.WOFF2",
-      "/fonts/mona-sans-latin-var.woff",
+      "/fonts/mona-sans-latin-wght.WOFF2",
+      "/fonts/mona-sans-latin-wght.woff",
       "/fontsx/mona-sans-latin-wght.woff2",
       "/fonts/",
     ]) {
@@ -160,6 +159,10 @@ describe("pinned font cache", () => {
 });
 
 describe("font byte pins", () => {
+  it("does not ship the retired Mona Sans variant", () => {
+    expect(existsSync(resolve(root, "public/fonts/mona-sans-latin-var.woff2"))).toBe(false);
+  });
+
   it.each(Object.entries(FONT_PINS))("%s matches its pinned sha256", (name, pinned) => {
     const actual = createHash("sha256").update(fontBytes(name)).digest("hex");
     expect(actual).toBe(pinned);
