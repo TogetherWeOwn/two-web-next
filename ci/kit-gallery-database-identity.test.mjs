@@ -23,6 +23,16 @@ test("accepts matching service metadata without connecting", () => {
   assert.equal(validateGalleryDatabaseIdentity(fixture()), true);
 });
 
+test("accepts valid port boundaries", () => {
+  for (const port of ["1", "65535"]) {
+    const input = fixture();
+    input.port = port;
+    input.databaseUrl = `postgres://postgres:ci@127.0.0.1:${port}/postgres`;
+    input.inspect[0].NetworkSettings.Ports["5432/tcp"][0].HostPort = port;
+    assert.equal(validateGalleryDatabaseIdentity(input), true);
+  }
+});
+
 test("rejects mismatched endpoints and service metadata", () => {
   const changes = [
     (x) => {
@@ -30,6 +40,30 @@ test("rejects mismatched endpoints and service metadata", () => {
     },
     (x) => {
       x.port = "65536";
+    },
+    (x) => {
+      x.port = "0";
+    },
+    (x) => {
+      x.databaseUrl = "not a URL";
+    },
+    (x) => {
+      x.databaseUrl = "https://postgres:ci@127.0.0.1:32769/postgres";
+    },
+    (x) => {
+      x.databaseUrl = "postgres://other:ci@127.0.0.1:32769/postgres";
+    },
+    (x) => {
+      x.databaseUrl = "postgres://postgres:wrong@127.0.0.1:32769/postgres";
+    },
+    (x) => {
+      x.databaseUrl = "postgres://postgres:ci@127.0.0.1:32769/other";
+    },
+    (x) => {
+      x.databaseUrl += "#fragment";
+    },
+    (x) => {
+      x.inspect = null;
     },
     (x) => {
       x.databaseUrl = "postgres://postgres:ci@localhost:32769/postgres";

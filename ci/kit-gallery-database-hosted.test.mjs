@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { validateGalleryDatabaseIdentity } from "./kit-gallery-database-identity.mjs";
 
-test("hosted service metadata and negative controls", () => {
+test("hosted service metadata and negative controls", (t) => {
   const serviceId = process.env.GALLERY_SERVICE_ID;
   const port = process.env.GALLERY_SERVICE_PORT;
   assert.match(serviceId ?? "", /^[a-f0-9]{64}$/);
@@ -16,6 +16,23 @@ test("hosted service metadata and negative controls", () => {
     }),
   );
   const input = { serviceId, port, databaseUrl: process.env.DATABASE_URL, inspect };
+  const container = inspect[0];
+  const bindings = container?.NetworkSettings?.Ports?.["5432/tcp"];
+  t.diagnostic(
+    JSON.stringify({
+      idMatches: container?.Id === serviceId,
+      running: container?.State?.Running === true,
+      imageMatches: container?.Config?.Image === "postgres:17",
+      bindingCount: Array.isArray(bindings) ? bindings.length : null,
+      bindings: Array.isArray(bindings)
+        ? bindings.map((binding) => ({
+            ipv4: ["0.0.0.0", "127.0.0.1"].includes(binding?.HostIp),
+            ipv6: binding?.HostIp === "::",
+            portMatches: binding?.HostPort === port,
+          }))
+        : [],
+    }),
+  );
   assert.equal(validateGalleryDatabaseIdentity(input), true);
 
   for (const mutate of [
