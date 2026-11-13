@@ -24,10 +24,11 @@ const workflows = readdirSync(dir)
   .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
 
 const hosted = "ubuntu-latest";
-// The recovery proof needs the same fixed GitHub-hosted OS as its qualification run.
+// Visual captures and recovery proof use a fixed GitHub-hosted OS for consistent evidence.
 const pinnedHostedJob = (name: string, id: string) =>
   (name === "e2e.yml" && id === "browser-smoke") ||
-  (name === "admin-stale-save-ubuntu24-proof.yml" && id === "recovery-proof");
+  (name === "admin-stale-save-ubuntu24-proof.yml" && id === "recovery-proof") ||
+  (name === "event-form-capture.yml" && id === "capture");
 const byVisibility = `\${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
 const byVisibilityPrGuarded = `\${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
 const publicGuard = `!github.event.repository.private && '["${hosted}"]'`;
