@@ -32,9 +32,12 @@ export function validateGalleryDatabaseIdentity({ serviceId, port, databaseUrl, 
     container?.State?.Running !== true ||
     container?.Config?.Image !== "postgres:17" ||
     !Array.isArray(bindings) ||
-    bindings.length !== 1 ||
-    bindings[0]?.HostPort !== port ||
-    !["0.0.0.0", "127.0.0.1"].includes(bindings[0]?.HostIp)
+    bindings.filter((binding) => ["0.0.0.0", "127.0.0.1"].includes(binding?.HostIp)).length !== 1 ||
+    bindings.filter((binding) => binding?.HostIp === "::").length > 1 ||
+    bindings.some(
+      (binding) =>
+        binding?.HostPort !== port || !["0.0.0.0", "127.0.0.1", "::"].includes(binding?.HostIp),
+    )
   )
     throw new Error("container metadata does not match the service endpoint");
   return true;

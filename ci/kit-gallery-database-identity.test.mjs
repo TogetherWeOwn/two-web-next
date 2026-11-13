@@ -23,6 +23,16 @@ test("accepts matching service metadata without connecting", () => {
   assert.equal(validateGalleryDatabaseIdentity(fixture()), true);
 });
 
+test("accepts matching IPv4 and IPv6 bindings in either order", () => {
+  for (const reverse of [false, true]) {
+    const input = fixture();
+    const bindings = input.inspect[0].NetworkSettings.Ports["5432/tcp"];
+    bindings.push({ HostIp: "::", HostPort: input.port });
+    if (reverse) bindings.reverse();
+    assert.equal(validateGalleryDatabaseIdentity(input), true);
+  }
+});
+
 test("accepts valid port boundaries", () => {
   for (const port of ["1", "65535"]) {
     const input = fixture();
@@ -88,6 +98,25 @@ test("rejects mismatched endpoints and service metadata", () => {
     },
     (x) => {
       x.inspect[0].NetworkSettings.Ports["5432/tcp"][0].HostIp = "192.0.2.1";
+    },
+    (x) => {
+      x.inspect[0].NetworkSettings.Ports["5432/tcp"].push({ HostIp: "::", HostPort: "32770" });
+    },
+    (x) => {
+      x.inspect[0].NetworkSettings.Ports["5432/tcp"].push({ HostIp: "::1", HostPort: x.port });
+    },
+    (x) => {
+      x.inspect[0].NetworkSettings.Ports["5432/tcp"].push({ HostIp: "::", HostPort: x.port });
+      x.inspect[0].NetworkSettings.Ports["5432/tcp"].push({ HostIp: "::", HostPort: x.port });
+    },
+    (x) => {
+      x.inspect[0].NetworkSettings.Ports["5432/tcp"].push({
+        HostIp: "127.0.0.1",
+        HostPort: x.port,
+      });
+    },
+    (x) => {
+      x.inspect[0].NetworkSettings.Ports["5432/tcp"] = [{ HostIp: "::", HostPort: x.port }];
     },
     (x) => {
       x.inspect.push(x.inspect[0]);
