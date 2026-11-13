@@ -1,12 +1,45 @@
 // Resolve evidence inputs from the application checkout, never the controller.
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { createRequire } from "node:module";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export function appGit(appRoot, ...args) {
-  return execFileSync("git", args, { cwd: appRoot, encoding: "utf8" }).trim();
+  const root = realpathSync(appRoot);
+  const gitRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
+  if (realpathSync(gitRoot) !== root) throw new Error(`git root does not match target: ${appRoot}`);
+  return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+}
+
+// The parent argument to import.meta.resolve requires this Node flag. Resolve in
+// a separate process so package exports use import conditions before containment.
+function resolveImport(base, specifier) {
+  const script = `
+    try {
+      console.log(JSON.stringify({ url: import.meta.resolve(process.argv[1], process.argv[2]) }));
+    } catch (error) {
+      console.log(JSON.stringify({ code: error.code, message: error.message }));
+    }
+  `;
+  const result = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        "--experimental-import-meta-resolve",
+        "--input-type=module",
+        "-e",
+        script,
+        specifier,
+        pathToFileURL(join(base, "noop.mjs")).href,
+      ],
+      { encoding: "utf8" },
+    ),
+  );
+  if (result.code) throw Object.assign(new Error(result.message), { code: result.code });
+  return result.url;
 }
 
 function withinRoot(root, file) {
@@ -33,11 +66,13 @@ export function appImport(appRoot, specifier, explicitFile) {
   const root = realpathSync(appRoot);
   for (const base of [root, join(root, "web")]) {
     try {
-      const file = createRequire(join(base, "noop.js")).resolve(specifier);
-      if (!isAbsolute(file) || !withinRoot(root, realpathSync(file))) continue;
+      const url = resolveImport(base, specifier);
+      if (!url.startsWith("file:")) continue;
+      const file = fileURLToPath(url);
+      if (!existsSync(file) || !withinRoot(root, realpathSync(file))) continue;
       return import(pathToFileURL(file).href);
     } catch (error) {
-      if (error.code !== "MODULE_NOT_FOUND") throw error;
+      if (error.code !== "ERR_MODULE_NOT_FOUND") throw error;
     }
   }
   throw new Error(`cannot resolve ${specifier} from ${appRoot}`);

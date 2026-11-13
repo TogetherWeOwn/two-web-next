@@ -26,6 +26,30 @@ test("resolves target root before web, with explicit runtime taking precedence",
   assert.equal((await srcImport(root, "runtime.mjs")).default, "explicit");
 });
 
+test("uses import conditions for import-only and dual-mode packages", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "join-source-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const name of ["import-only", "dual-mode"]) {
+    const dir = join(root, "node_modules", name);
+    await mkdir(dir, { recursive: true });
+    const conditions = { import: "./import.mjs" };
+    if (name === "dual-mode") conditions.require = "./require.cjs";
+    await writeFile(join(dir, "package.json"), JSON.stringify({ exports: conditions }));
+    await writeFile(join(dir, "import.mjs"), `export default ${JSON.stringify(name)};`);
+    await writeFile(join(dir, "require.cjs"), 'module.exports = "require";');
+    assert.equal((await appImport(root, name)).default, name);
+  }
+});
+
+test("rejects a target nested in a different git checkout", async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), "join-source-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  execFileSync("git", ["init", "-q"], { cwd: parent });
+  const root = join(parent, "target");
+  await mkdir(root);
+  assert.throws(() => appGit(root, "status", "--porcelain"), /git root.*target/i);
+});
+
 test("rejects missing packages and does not fall back outside the target", async (t) => {
   const parent = await mkdtemp(join(tmpdir(), "join-source-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
@@ -84,6 +108,9 @@ test("reads identity and status from the requested git checkout", async (t) => {
   await writeFile(join(root, "tracked.txt"), "changed\n");
   assert.equal(appGit(root, "status", "--porcelain"), "M tracked.txt");
   assert.equal(appGit(root, "rev-parse", "HEAD"), sha);
+  const worktree = join(root, "worktree");
+  git("worktree", "add", "--detach", worktree, "HEAD");
+  assert.equal(appGit(worktree, "rev-parse", "HEAD"), sha);
 });
 
 test("propagates package resolution errors other than missing modules", async (t) => {
