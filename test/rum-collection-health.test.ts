@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 // @ts-expect-error Standalone tooling has no declaration file.
 import { runRumCheck, runRumCheckWithRateLimitRetry } from "../ci/rum-check.mjs";
 
@@ -322,5 +324,27 @@ describe("CLI --require-collection", () => {
     });
     expect(r.status).toBe(2);
     expect(r.stdout).toContain("Collection health: **not-configured**");
+  });
+});
+
+describe("rum-web-vitals workflow", () => {
+  const workflow = parse(
+    readFileSync(resolve(root, ".github/workflows/rum-web-vitals.yml"), "utf8"),
+  );
+  const job = workflow.jobs["web-vitals"];
+
+  it("runs the exact required-collection command without continue-on-error", () => {
+    const runSteps = job.steps.filter((s: { run?: string }) => s.run?.includes("rum-check"));
+    expect(runSteps).toHaveLength(1);
+    expect(runSteps[0].run.trim()).toBe("node ci/rum-check.mjs --require-collection");
+    for (const step of job.steps) expect(step["continue-on-error"]).toBeUndefined();
+    expect(job["continue-on-error"]).toBeUndefined();
+  });
+
+  it("keeps the schedule, timeout and read-only permissions", () => {
+    expect(workflow.on.schedule).toEqual([{ cron: "23 4 * * *" }]);
+    expect(job["timeout-minutes"]).toBe(8);
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(job.permissions).toBeUndefined();
   });
 });

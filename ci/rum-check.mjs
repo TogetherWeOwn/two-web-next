@@ -3,9 +3,9 @@
 // Cloudflare Web Analytics (RUM) for the production site via the GraphQL
 // Analytics API and fails when a p75 exceeds its budget in ci/rum-budget.json.
 // Needs a READ-ONLY token (Account Analytics: Read) in CF_ANALYTICS_READ_TOKEN
-// plus the repo variables CF_RUM_ACCOUNT_ID and CF_RUM_SITE_TAG. Optional
-// --require-collection fails missing configuration or too few samples separately
-// from a metric breach. Default runs are diagnostic.
+// plus the repo variables CF_RUM_ACCOUNT_ID and CF_RUM_SITE_TAG. The production
+// workflow uses --require-collection: missing config or too few samples fails
+// collection health separately from a metric breach. Default runs are diagnostic.
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
