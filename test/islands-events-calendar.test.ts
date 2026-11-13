@@ -822,7 +822,7 @@ describe("EventsCalendar SSR drift", () => {
     const source = calendar([eventRow()], [pastRow], okSource());
     const closed = await (await source.request("/events")).text();
     expect(closed).toContain(`href="/events?past=1" data-testid="${EVENTS_PAST_TOGGLE_TESTID}"`);
-    expect(closed).not.toContain(EVENTS_PAST_LIST_TESTID);
+    expect(closed).not.toContain(`data-testid="${EVENTS_PAST_LIST_TESTID}"`);
     const open = await (await source.request("/events?past=1")).text();
     expect(open).toContain(`data-testid="${EVENTS_PAST_LIST_TESTID}"`);
     expect(open).toContain(`data-testid="${EVENTS_PAST_STATUS_TESTID}">${EVENTS_PAST_STATUS_COPY}`);

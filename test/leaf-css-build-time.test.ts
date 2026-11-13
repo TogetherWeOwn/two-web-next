@@ -85,10 +85,19 @@ describe("critical CSS is a build output, not a source", () => {
           readFileSync(join(root, "ci/build-leaf-css.mjs")),
         );
         writeFileSync(
+          join(fixture, "ci/build-events-css.mjs"),
+          readFileSync(join(root, "ci/build-events-css.mjs")),
+        );
+        writeFileSync(
           join(fixture, "ci/build-ember-tokens.mjs"),
           `import { writeFileSync } from "node:fs";\nimport { dirname, join } from "node:path";\nimport { fileURLToPath } from "node:url";\nconst dir = dirname(fileURLToPath(import.meta.url));\nwriteFileSync(join(dir, "..", "ember-tokens-checked.txt"), "checked");\n`,
         );
-        for (const source of ["styles.css", "theme-tokens.css", "theme.css"]) {
+        for (const source of [
+          "styles.css",
+          "theme-tokens.css",
+          "theme.css",
+          "schedule-theme.css",
+        ]) {
           writeFileSync(join(fixture, "public", source), ":root { color: red; }");
         }
         writeFileSync(
@@ -103,8 +112,12 @@ describe("critical CSS is a build output, not a source", () => {
           });
         }
         const output = join(fixture, "src/leaf-critical-css.ts");
+        const eventsOutput = join(fixture, "src/events-critical-css.ts");
         for (const initial of [null, "stale CSS"]) {
-          if (initial !== null) writeFileSync(output, initial);
+          if (initial !== null) {
+            writeFileSync(output, initial);
+            writeFileSync(eventsOutput, initial);
+          }
           const result = spawnSync("npm", ["run", command, "--prefix", join(fixture, "web")], {
             cwd: fixture,
             encoding: "utf8",
@@ -115,6 +128,8 @@ describe("critical CSS is a build output, not a source", () => {
           expect(readFileSync(join(fixture, "ember-tokens-checked.txt"), "utf8")).toBe("checked");
           expect(readFileSync(output, "utf8")).toContain(":root { color: red; }");
           expect(readFileSync(output, "utf8")).not.toContain("stale CSS");
+          expect(readFileSync(eventsOutput, "utf8")).toContain(":root { color: red; }");
+          expect(readFileSync(eventsOutput, "utf8")).not.toContain("stale CSS");
         }
       } finally {
         rmSync(fixture, { recursive: true, force: true });
