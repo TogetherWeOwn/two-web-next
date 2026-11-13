@@ -51,6 +51,26 @@ test("requires exactly the twenty regular captures and the TAP report", () => {
   );
 });
 
+test("keeps baseline and target inventory and receipts distinct", () => {
+  const targetNames = expectedCaptureNames("target");
+  assert.equal(targetNames.length, 20);
+  assert.ok(targetNames.includes("hono-stale-populated-1280.png"));
+  assert.ok(targetNames.includes("kit-stale-empty-390.png"));
+  assert.ok(targetNames.includes("kit-expired-390.png"));
+  const entries = [...targetNames, "test-report.tap"].map((name) => entry(name));
+  const names = targetNames.map((name) => {
+    const match = /^(hono|kit)-(.+)-(1280|390)\.png$/.exec(name);
+    return `${match[1]} ${match[2]} at ${match[3]}`;
+  });
+  const tap = captureTap(names);
+  validateCaptureFiles(entries, "target");
+  validateCaptureTap(tap, "target");
+  assert.throws(() => validateCaptureFiles(entries, "baseline"));
+  assert.throws(() => validateCaptureTap(tap, "baseline"));
+  assert.throws(() => expectedCaptureNames("unknown"), /unknown capture profile/);
+  assert.throws(() => expectedCaptureNames("toString"), /unknown capture profile/);
+});
+
 test("requires exact pinned clean application and controller identities", () => {
   validateSourceIdentities(clean, expected);
   assert.throws(
