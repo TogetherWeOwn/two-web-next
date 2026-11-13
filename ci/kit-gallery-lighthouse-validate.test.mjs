@@ -102,6 +102,13 @@ for (const mode of ["mobile", "desktop"]) {
     const wrongProfile = structuredClone(reports);
     wrongProfile[0].configSettings.formFactor = mode === "mobile" ? "desktop" : "mobile";
     assert.throws(() => validate(wrongProfile), /identity or profile/);
+    if (mode === "mobile") {
+      for (const value of [undefined, null, "0", Number.NaN]) {
+        const malformed = structuredClone(reports);
+        malformed[0].audits["largest-contentful-paint"].numericValue = value;
+        assert.throws(() => validate(malformed), /missing Lighthouse audit/);
+      }
+    }
     const failed = structuredClone(reports);
     if (mode === "mobile") {
       for (const item of failed) item.audits["largest-contentful-paint"].numericValue = 10000;
