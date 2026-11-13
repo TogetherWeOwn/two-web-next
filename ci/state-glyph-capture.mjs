@@ -45,7 +45,7 @@ try {
     {
       cwd: join(app, "web"),
       env: { PATH: process.env.PATH, HOME: process.env.HOME, NODE_ENV: "development" },
-      stdio: "ignore",
+      stdio: "inherit",
     },
   );
   const deadline = Date.now() + 30000;
