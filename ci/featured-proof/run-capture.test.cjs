@@ -207,7 +207,7 @@ function isCoveredByScopes(relPosix, globs) {
 const GENERATED_LEAF_CSS = {
   output: 'src/leaf-critical-css.ts',
   generator: 'ci/build-leaf-css.mjs',
-  generatorSha256: '452197b4e4bb0be78edea09dcf63881d7015c8769e48e06c6fa9b9f97bc80af9',
+  generatorSha256: 'dd97d365dd57fda4e57e889158ad3b88f9ac851b097ddd0f50d5c584dc44e143',
   inputs: ['public/styles.css', 'public/theme-tokens.css', 'public/theme.css'],
 };
 const { createHash } = require('node:crypto');
@@ -220,9 +220,12 @@ function generatedLeafScopeInputs(repoRoot) {
   const css = inputs.map(input => fsSync.readFileSync(path.join(repoRoot, input), 'utf8')).join('\n');
   assert.doesNotMatch(css, /<\/style/i, 'Generated CSS source cannot contain a closing style tag');
   const sha256 = createHash('sha256').update(css, 'utf8').digest('base64');
+  const packed = !css.includes('~');
+  const literal = JSON.stringify(packed ? css.replaceAll('.base-theme', '~') : css);
+  const initializer = packed ? `${literal}.split("~").join(".base-theme")` : literal;
   const expected = `// GENERATED from ${inputs.join(', ')} — do not hand-edit.\n` +
     `// Regen: node ${generator} (drift is pinned by test/leaf-css-drift.test.ts).\n` +
-    `export const LEAF_CRITICAL_CSS: string =\n  ${JSON.stringify(css)};\n` +
+    `export const LEAF_CRITICAL_CSS: string =\n  ${initializer};\n` +
     `export const LEAF_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n`;
   let actual;
   try {
@@ -404,7 +407,7 @@ const LEAF_SCOPE_INPUTS = [
 // Independent tiny generated fixture, not output assembled by the guard.
 const LEAF_OUTPUT_FIXTURE = '// GENERATED from public/styles.css, public/theme-tokens.css, public/theme.css — do not hand-edit.\n' +
   '// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-drift.test.ts).\n' +
-  'export const LEAF_CRITICAL_CSS: string =\n  "body {}\\n:root {}\\nhtml {}";\n' +
+  'export const LEAF_CRITICAL_CSS: string =\n  "body {}\\n:root {}\\nhtml {}".split("~").join(".base-theme");\n' +
   'export const LEAF_CRITICAL_CSS_SHA256: string = "t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=";\n';
 
 async function leafScopeFixture(t, generated = false) {
@@ -439,6 +442,20 @@ for (const generated of [false, true]) {
     });
   }
 }
+
+test('generated CSS provenance accepts the collision fallback and rejects a packed forgery', async t => {
+  const dir = await leafScopeFixture(t);
+  const css = 'body ~ p {}\n:root {}\nhtml {}';
+  await fs.writeFile(path.join(dir, 'public/styles.css'), 'body ~ p {}');
+  const hash = createHash('sha256').update(css).digest('base64');
+  const literal = LEAF_OUTPUT_FIXTURE
+    .replace('"body {}\\n:root {}\\nhtml {}".split("~").join(".base-theme")', JSON.stringify(css))
+    .replace('t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=', hash);
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), literal);
+  assert.deepEqual(findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), []);
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), literal.replace(JSON.stringify(css), `${JSON.stringify(css)}.split("~").join(".base-theme")`));
+  assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
+});
 
 test('generated CSS provenance does not exempt unrelated generated-looking runtime modules', async t => {
   const dir = await leafScopeFixture(t, true);
