@@ -30,10 +30,14 @@ describe("kit css diagnostic workflow", () => {
     assert.doesNotMatch(text, /secrets\.|id-token|environment:|self-hosted|GITHUB_TOKEN/);
     assert.match(text, /leg: \[base, head\]/);
     assert.match(text, /--ignore-scripts --min-release-age=3/);
-    assert.equal((text.match(/WORKFLOW_SHA: \$\{\{ job\.workflow_sha \}\}/g) ?? []).length, 2);
-    assert.match(text, /DEFINITION_REPOSITORY: \$\{\{ job\.workflow_repository \}\}/);
+    assert.equal(
+      (text.match(/WORKFLOW_SHA: \$\{\{ needs\.resolve\.outputs\.workflow \}\}/g) ?? []).length,
+      2,
+    );
+    assert.match(text, /JOB_CONTEXT: \$\{\{ toJSON\(job\) \}\}/);
     assert.match(text, /workflow_call:/);
     assert.match(text, /include-hidden-files: true/);
+    assert.match(text, /--tmpfs \/tmp:rw,exec,nosuid,nodev,size=64m/);
   });
 
   it("retains hidden CSS paths in the inventory and artifact directory", () => {
@@ -55,7 +59,6 @@ describe("kit css diagnostic workflow", () => {
       });
       assert.equal(manifest.files[0].path, ".hidden/.file.css");
       assert.equal(readFileSync(join(out, "css", ".hidden", ".file.css"), "utf8"), "a{b:c}");
-      assert.match(text, /include-hidden-files: true/);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -75,6 +78,7 @@ describe("kit css diagnostic workflow", () => {
       );
       chmodSync(git, 0o755);
       const sha = "a".repeat(40);
+      const definition = "TogetherWeOwn/two-web-next/.github/workflows/kit-css-diagnostic.yml@";
       for (const [input, unreachable, status, event, repository] of [
         ["bad;exit 0", false, 1, "workflow_dispatch", "TogetherWeOwn/two-web-next"],
         [sha, true, 1, "workflow_dispatch", "TogetherWeOwn/two-web-next"],
@@ -83,22 +87,27 @@ describe("kit css diagnostic workflow", () => {
         [sha, false, 0, "pull_request", "TogetherWeOwn/two-web-next"],
         ["ignored", "direct", 0, "pull_request", "TogetherWeOwn/two-web-next"],
         [sha, false, 1, "pull_request", "other/repo"],
+        [sha, "missing", 1, "workflow_dispatch", "TogetherWeOwn/two-web-next"],
+        [sha, "bad-sha", 1, "workflow_dispatch", "TogetherWeOwn/two-web-next"],
+        [sha, "bad-repo", 1, "workflow_dispatch", "TogetherWeOwn/two-web-next"],
       ]) {
-        const output = join(
-          tmp,
-          `output-${input.length}-${unreachable}-${event}-${repository.replace("/", "-")}`,
-        );
+        const output = join(tmp, `out-${unreachable}-${event}-${repository.split("/")[0]}`);
         const result = spawnSync("bash", ["-c", script], {
           encoding: "utf8",
           env: {
-            PATH: `${bin}:/usr/bin:/bin`,
+            PATH: `${bin}:${process.env.PATH}`,
             RUNNER_TEMP: tmp,
             GITHUB_OUTPUT: output,
             GITHUB_EVENT_NAME: event,
             GITHUB_REPOSITORY: repository,
-            DEFINITION_REPOSITORY: "TogetherWeOwn/two-web-next",
-            CALLER_REF: "caller",
-            DEFINITION_REF: unreachable === "direct" ? "caller" : "definition",
+            JOB_CONTEXT: JSON.stringify({
+              workflow_ref: `${definition}ref`,
+              workflow_repository:
+                unreachable === "bad-repo" ? "other/repo" : "TogetherWeOwn/two-web-next",
+              workflow_sha:
+                unreachable === "missing" ? undefined : unreachable === "bad-sha" ? "bad" : sha,
+            }),
+            CALLER_REF: unreachable === "direct" ? `${definition}ref` : "caller",
             PR_SHA: unreachable === "direct" ? sha : "",
             BASE_SHA: input,
             HEAD_SHA: sha,
@@ -112,7 +121,8 @@ describe("kit css diagnostic workflow", () => {
           [],
         );
         assert.equal(existsSync(output), status === 0);
-        if (status === 0) assert.equal(readFileSync(output, "utf8"), `base=${sha}\nhead=${sha}\n`);
+        if (status === 0)
+          assert.equal(readFileSync(output, "utf8"), `base=${sha}\nhead=${sha}\nworkflow=${sha}\n`);
       }
     } finally {
       rmSync(tmp, { recursive: true, force: true });
@@ -178,9 +188,12 @@ describe("kit css diagnostic workflow", () => {
         assert.equal(result.status, fail ? 1 : 0, result.stderr);
         assert.equal(existsSync(work), fail);
         assert.equal(existsSync(state), fail);
-        if (fail) chmodSync(join(work, "export", "restricted"), 0o700);
       }
     } finally {
+      for (const fail of [false, true]) {
+        const restricted = join(tmp, `kit-css.${fail}`, "export", "restricted");
+        if (existsSync(restricted)) chmodSync(restricted, 0o700);
+      }
       rmSync(tmp, { recursive: true, force: true });
     }
   });

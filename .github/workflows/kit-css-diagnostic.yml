@@ -1,9 +1,7 @@
 name: Kit CSS diagnostic
-
 # Manual, diagnostic-only comparison of the Kit client CSS for two commits of
 # this repository. It never gates, deploys or overrides a budget verdict.
-# Dispatch accepts a branch or tag; record the workflow SHA in the manifest.
-# For immutable workflow pinning, call from a workflow in this repository:
+# Dispatch accepts a branch or tag; pin the workflow immutably with:
 #   jobs:
 #     css:
 #       uses: TogetherWeOwn/two-web-next/.github/workflows/kit-css-diagnostic.yml@<merged-40-hex-sha>
@@ -37,35 +35,29 @@ on:
       - ci/kit-css-collect.mjs
       - ci/kit-css-collect.test.mjs
       - ci/kit-css-diagnostic.test.mjs
-
 permissions: {}
-
 concurrency:
   group: kit-css-diagnostic-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   validate:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && startsWith(github.workflow_ref, 'TogetherWeOwn/two-web-next/.github/workflows/kit-css-diagnostic.yml@')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: job.workflow_ref == github.workflow_ref
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Collector, error paths and workflow invariants
-        if: job.workflow_ref == github.workflow_ref
         run: |
           docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
             --user "$(id -u):$(id -g)" --pids-limit 128 --memory 512m --cpus 1 \
-            --tmpfs /tmp:rw,nosuid,nodev,size=64m --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
             --workdir /src node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413 \
             node --test ci/kit-css-collect.test.mjs ci/kit-css-diagnostic.test.mjs
-
   resolve:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -73,6 +65,7 @@ jobs:
     outputs:
       base: ${{ steps.bind.outputs.base }}
       head: ${{ steps.bind.outputs.head }}
+      workflow: ${{ steps.bind.outputs.workflow }}
     steps:
       - name: Validate SHAs and bind them to this repository's branches
         id: bind
@@ -81,10 +74,12 @@ jobs:
           HEAD_SHA: ${{ inputs.head_sha }}
           PR_SHA: ${{ github.event.pull_request.head.sha }}
           CALLER_REF: ${{ github.workflow_ref }}
-          DEFINITION_REF: ${{ job.workflow_ref }}
-          DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
         run: |
           set -euo pipefail
+          readarray -t definition < <(node -e 'const j=JSON.parse(process.env.JOB_CONTEXT); for(const k of ["workflow_ref","workflow_repository","workflow_sha"]) console.log(typeof j[k] === "string" && !/[\r\n]/.test(j[k]) ? j[k] : "")')
+          DEFINITION_REF=${definition[0]:-}; DEFINITION_REPOSITORY=${definition[1]:-}; WORKFLOW_SHA=${definition[2]:-}
+          [[ "$DEFINITION_REF" = "$GITHUB_REPOSITORY/.github/workflows/kit-css-diagnostic.yml@"?* && "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::invalid workflow provenance'; exit 1; }
           [ "$GITHUB_REPOSITORY" = TogetherWeOwn/two-web-next ] && [ "$DEFINITION_REPOSITORY" = "$GITHUB_REPOSITORY" ] || { echo '::error::repository mismatch'; exit 1; }
           direct_pr=false
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$CALLER_REF" = "$DEFINITION_REF" ]; then
@@ -103,11 +98,10 @@ jobs:
               [ "$(git -C "$src" cat-file -t "$sha^{commit}" 2>/dev/null)" = commit ] || { echo "::error::$sha is not a commit of this repository"; exit 1; }
               [ -n "$(git -C "$src" branch -r --contains "$sha")" ] || { echo "::error::$sha is not reachable from a branch of this repository"; exit 1; }
             done
-            rm -rf "$src"
           fi
           echo "base=$BASE_SHA" >> "$GITHUB_OUTPUT"
           echo "head=$HEAD_SHA" >> "$GITHUB_OUTPUT"
-
+          echo "workflow=$WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
   leg:
     needs: resolve
     runs-on: ubuntu-latest
@@ -127,7 +121,7 @@ jobs:
           package-manager-cache: false
       - name: Export the pinned collector and the leg's source, without git or credentials
         env:
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_SHA: ${{ needs.resolve.outputs.workflow }}
         run: |
           set -euo pipefail
           work=$(mktemp -d "$RUNNER_TEMP/kit-css.XXXXXX")
@@ -161,7 +155,7 @@ jobs:
             npm run build --prefix web'
       - name: Collect bounded client CSS and manifest
         env:
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_SHA: ${{ needs.resolve.outputs.workflow }}
         run: |
           set -euo pipefail
           mkdir "$KIT_CSS_WORK/out"
