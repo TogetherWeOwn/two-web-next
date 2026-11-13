@@ -233,7 +233,8 @@ async function open(
       expect(styles).toEqual({
         views: "flex",
         border: "1px solid rgb(133, 118, 107)",
-        filter: "inline-flex",
+        // The inline-flex filter is blockified as a child of the flex search form.
+        filter: "flex",
         alignment: "center",
       });
       // The unrelated public island must still fulfil, never abort.
