@@ -75,8 +75,10 @@ try {
   const results = [];
   for (const [name, width, height] of [
     ["desktop", 1280, 800],
+    ["compact", 800, 800],
     ["mobile", 390, 844],
   ]) {
+    const expectedGlyphVisible = width > 820;
     const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
     await page.route("**/*", (request) => {
       const target = new URL(request.request().url());
@@ -87,24 +89,29 @@ try {
     await page.evaluate(() => document.fonts.ready);
     for (const state of ["upcoming", "live", "mine", "past"]) {
       const row = page.locator(`[data-state="${state}"]`);
-      if ((await row.count()) !== 1 || !(await row.locator("span").isVisible()))
+      const label = row.locator("span");
+      if (
+        (await row.count()) !== 1 ||
+        !(await label.isVisible()) ||
+        (await label.textContent()) !== state
+      )
         throw new Error(`Missing state text: ${state}`);
       const glyph = row.locator("svg");
-      if ((await glyph.count()) !== 1 || (await glyph.isVisible()) !== width > 390)
+      if ((await glyph.count()) !== 1 || (await glyph.isVisible()) !== expectedGlyphVisible)
         throw new Error(`Unexpected glyph visibility: ${name}/${state}`);
     }
     await page.screenshot({ path: join(output, `state-glyph-${name}.png`) });
     results.push({
       viewport: { width, height },
       states: ["upcoming", "live", "mine", "past"],
-      glyphsVisible: width > 390,
+      glyphsVisible: expectedGlyphVisible,
     });
     await page.close();
   }
   const provenance = {
     toolingSha: process.env.TOOLING_SHA,
     pin: git("rev-parse", "HEAD"),
-    glyph: "6d3b36f0c8675405d9bf22494c379682cedbe847",
+    glyph: "b952cc5888ff1e91a4095c3d7edce2ebbda92e83",
     integrationTree: git("write-tree"),
     overlaid: true,
     fixture: "Ephemeral Kit route and root layout; production server hook replaced for capture",

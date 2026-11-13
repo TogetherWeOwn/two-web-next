@@ -29,13 +29,13 @@ jobs:
       - name: Check out the pinned application stack
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ae1b51ef2560ef85f3dbd1d912e7f9edbaee2d66
+          ref: c5fc4d991f87485ac2a1a06e0a1aa9486a355a4f
           path: app
           persist-credentials: false
       - name: Check out the pinned glyph source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 6d3b36f0c8675405d9bf22494c379682cedbe847
+          ref: b952cc5888ff1e91a4095c3d7edce2ebbda92e83
           path: glyph
           persist-credentials: false
       - name: Use the hosted runner's Node 24 runtime
@@ -50,18 +50,17 @@ jobs:
         run: |
           set -eu
           remote=https://github.com/TogetherWeOwn/two-web-next.git
-          pin=$(git ls-remote "$remote" refs/pull/2168/head)
+          pin=$(git ls-remote "$remote" refs/heads/main)
           glyph=$(git ls-remote "$remote" refs/pull/2181/head)
-          test "${pin%%[[:space:]]*}" = ae1b51ef2560ef85f3dbd1d912e7f9edbaee2d66
-          test "${glyph%%[[:space:]]*}" = 6d3b36f0c8675405d9bf22494c379682cedbe847
+          test "${pin%%[[:space:]]*}" = c5fc4d991f87485ac2a1a06e0a1aa9486a355a4f
+          test "${glyph%%[[:space:]]*}" = b952cc5888ff1e91a4095c3d7edce2ebbda92e83
       - name: Assemble the allowlisted integration tree
         run: node tooling/ci/state-glyph-assemble.mjs app glyph
-      - name: Install locked dependencies and prepare first-party assets
+      - name: Install locked dependencies
         working-directory: app
         run: |
           npm ci --include=dev --ignore-scripts --no-audit --no-fund
           npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
-          npm run generate:first-party
       - name: Capture the Kit gallery
         env:
           TOOLING_SHA: ${{ github.event.pull_request.head.sha }}
@@ -72,6 +71,14 @@ jobs:
         with:
           name: state-glyph-desktop
           path: artifacts/state-glyph-desktop.png
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload compact capture
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: state-glyph-compact
+          path: artifacts/state-glyph-compact.png
           if-no-files-found: error
           retention-days: 14
       - name: Upload mobile capture
