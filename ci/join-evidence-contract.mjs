@@ -2,25 +2,36 @@ import assert from "node:assert/strict";
 import { caseIdFor } from "./execution-receipt-authority.mjs";
 import { admitTap, parseTapSummary } from "./rsvp-focus-require-executed.mjs";
 
-const states = [
-  "fresh-populated",
-  "age61s-populated",
-  "age61s-empty",
-  "age180s-populated",
-  "fresh-empty",
-];
+const profiles = {
+  baseline: [
+    "fresh-populated",
+    "age61s-populated",
+    "age61s-empty",
+    "age180s-populated",
+    "fresh-empty",
+  ],
+  target: ["fresh-populated", "stale-populated", "stale-empty", "expired", "fresh-empty"],
+};
 
-export function expectedCaptureNames() {
+function captureStates(profile) {
+  assert.ok(Object.hasOwn(profiles, profile), "unknown capture profile");
+  return profiles[profile];
+}
+
+export function expectedCaptureNames(profile = "baseline") {
+  const states = captureStates(profile);
   return ["hono", "kit"].flatMap((renderer) =>
     [1280, 390].flatMap((width) => states.map((state) => `${renderer}-${state}-${width}.png`)),
   );
 }
 
-export function validateCaptureTap(tap) {
+export function validateCaptureTap(tap, profile = "baseline") {
   const suite = "Join presence state evidence";
   const expected = ["hono", "kit"].flatMap((renderer) =>
     [1280, 390].flatMap((width) =>
-      states.map((state) => caseIdFor("tap", [suite, `${renderer} ${state} at ${width}`])),
+      captureStates(profile).map((state) =>
+        caseIdFor("tap", [suite, `${renderer} ${state} at ${width}`]),
+      ),
     ),
   );
   const receipt = admitTap(tap, suite, expected.length);
@@ -28,8 +39,8 @@ export function validateCaptureTap(tap) {
   assert.deepEqual(receipt.caseIds.sort(), expected.sort(), "unexpected TAP scenario identities");
 }
 
-export function validateCaptureFiles(entries) {
-  const expected = [...expectedCaptureNames(), "test-report.tap"].sort();
+export function validateCaptureFiles(entries, profile = "baseline") {
+  const expected = [...expectedCaptureNames(profile), "test-report.tap"].sort();
   assert.ok(
     entries.every((entry) => entry.isFile()),
     "evidence entries must be regular files",
