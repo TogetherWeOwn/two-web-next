@@ -15,6 +15,27 @@ import { buildEventCreateView } from "../src/admin/kit-event-create.ts";
 import { resolveKitEventEdit } from "../src/admin/kit-event-edit.ts";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit.ts";
 import { EventFormPage, FeaturedFormPage } from "../src/admin/pages.tsx";
+import { parseEventForm } from "../src/admin/validation-event-form.ts";
+import { ValidationError } from "../src/admin/validation-shared.ts";
+
+// Field errors from the real validator for one invalid submission, so the
+// errors captures carry the copy and summary targets moderators actually see.
+const invalidEvent = {
+  title: "",
+  starts_at: "not a date",
+  timezone: "Europe/London",
+  capacity: "-3",
+};
+function eventErrors() {
+  try {
+    parseEventForm(invalidEvent);
+  } catch (error) {
+    if (error instanceof ValidationError) return error.fields;
+    throw error;
+  }
+  throw new Error("fixture submission must be invalid");
+}
+const errorFixtures = new Set(["event-new-errors", "event-edit-invalid", "event-edit-errors"]);
 
 const output = resolve("web/.svelte-kit/output");
 const evidence = process.env.KIT_ADMIN_CONTRAST_EVIDENCE_DIR;
@@ -84,7 +105,26 @@ before(async () => {
         },
       },
     },
+    {
+      name: "event-new-errors",
+      path: "/admin/events/new",
+      data: buildEventCreateView(invalidEvent, eventErrors()),
+    },
     { name: "event-edit", path: `/admin/events/${eventRow.eventKey}`, data: { view: event.view } },
+    {
+      name: "event-edit-invalid",
+      path: `/admin/events/${eventRow.eventKey}`,
+      // A rejected POST re-renders the submitted input beside its errors. The
+      // submission left Ends blank, so the saved end time must not show.
+      data: {
+        view: {
+          ...event.view,
+          values: { ...event.view.values, ...invalidEvent, ends_at: "" },
+          hasErrors: true,
+          errors: eventErrors(),
+        },
+      },
+    },
     { name: "featured-new", path: "/admin/featured/new", data: {} },
     { name: "featured-edit", path: "/admin/featured/7", data: { view: featured.view } },
     // Degraded-widget dashboard: no database, both analytics sections omitted.
@@ -166,7 +206,9 @@ describe("Kit admin contrast", () => {
   for (const width of [1280, 390]) {
     for (const name of [
       "event-new",
+      "event-new-errors",
       "event-edit",
+      "event-edit-invalid",
       "event-edit-populated",
       "event-edit-errors",
       "featured-new",
@@ -229,6 +271,13 @@ describe("Kit admin contrast", () => {
             );
           }
           if (name === "event-new") assert.equal(await page.locator("fieldset label").count(), 3);
+          if (errorFixtures.has(name)) {
+            assert.equal(
+              (await page.locator("[data-admin-validation-summary] a").count()) > 0,
+              true,
+            );
+            assert.equal((await page.locator(".field .error").count()) > 0, true);
+          }
           const axe = new AxeBuilder({ page });
           if (isDashboard) {
             // Card descriptions and footer only: the card heading links carry
@@ -238,12 +287,19 @@ describe("Kit admin contrast", () => {
             // guarded here; this suite owns the surfaces the slice restyles.
             axe.include(".card p").include("footer");
           } else {
-            axe.include(".hint").include("footer").include("fieldset");
+            axe
+              .include(".hint")
+              .include("footer")
+              .include("fieldset")
+              .include(".notice")
+              .include(".field .error");
           }
           const result = await axe.withRules(["color-contrast"]).analyze();
           const measured = await page
             .locator(
-              isDashboard ? ".card p, footer" : ".hint, footer, fieldset label, fieldset legend",
+              isDashboard
+                ? ".card p, footer"
+                : ".hint, footer, fieldset label, fieldset legend, .notice p, .notice a, .field .error",
             )
             .evaluateAll(
               (elements, cardContainer) =>
@@ -253,7 +309,7 @@ describe("Kit admin contrast", () => {
                   background: getComputedStyle(el.closest(cardContainer) ?? document.body)
                     .backgroundColor,
                 })),
-              isDashboard ? ".card" : "fieldset",
+              isDashboard ? ".card" : "fieldset, .notice",
             );
           if (evidence) {
             await page.screenshot({ path: join(evidence, `${name}-${width}.png`), fullPage: true });
@@ -264,6 +320,19 @@ describe("Kit admin contrast", () => {
                 null,
                 2,
               ),
+            );
+          }
+          if (errorFixtures.has(name)) {
+            const link = page.locator("[data-admin-validation-summary] a").first();
+            await link.focus();
+            assert.deepEqual(
+              await link.evaluate((el) => [
+                el.matches(":focus-visible"),
+                getComputedStyle(el).outlineColor,
+              ]),
+              // --color-lobby-focus (#ff9c36): a dark --ink outline would be 1.24:1 here.
+              [true, "rgb(255, 156, 54)"],
+              "summary link focus ring stays visible on the raised surface",
             );
           }
           assert.deepEqual(unexpected, [], "no live or mutating requests");
@@ -293,6 +362,11 @@ describe("Kit admin contrast", () => {
       const pages = [
         await EventFormPage({ mode: "new", values: {}, errors: {} }).toString(),
         await FeaturedFormPage({ mode: "new", values: {}, errors: {} }).toString(),
+        await EventFormPage({
+          mode: "new",
+          values: invalidEvent,
+          errors: eventErrors(),
+        }).toString(),
       ];
       const page = await context.newPage();
       let html;
@@ -336,6 +410,22 @@ describe("Kit admin contrast", () => {
                 background: getComputedStyle(el).backgroundColor,
               })),
             { color: "rgb(22, 19, 15)", background: "rgb(255, 253, 248)" },
+          );
+        }
+        if (await page.locator(".notice").count()) {
+          assert.equal(
+            await page
+              .locator(".notice")
+              .first()
+              .evaluate((el) => getComputedStyle(el).backgroundColor),
+            "rgb(255, 247, 237)",
+          );
+          assert.equal(
+            await page
+              .locator(".field .error")
+              .first()
+              .evaluate((el) => getComputedStyle(el).color),
+            "rgb(154, 52, 18)",
           );
         }
       }
