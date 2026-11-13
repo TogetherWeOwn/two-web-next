@@ -152,14 +152,32 @@ test.describe("watch guest journeys", () => {
     expect(problems).toEqual([]);
   });
 
-  test("sitemap_index.xml is a well-formed urlset", async ({ page }) => {
-    const problems = observe(page);
-    const response = await visit(page, "/sitemap_index.xml", 200);
+  test("sitemap_index.xml is a well-formed urlset", async ({ request }) => {
+    // Fetch XML as data, not in Chromium's CSP-restricted built-in XML viewer.
+    // Disable automatic redirects so a redirect cannot escape the watch allowlist.
+    const path = "/sitemap_index.xml";
+    const origin = requireWatchOrigin(process.env.WATCH_ORIGIN);
+    let response = await request.get(`${origin}${path}`, { maxRedirects: 0 });
+    if (response.status() >= 300 && response.status() < 400) {
+      const location = response.headers().location;
+      if (!location) throw new Error(`${path} redirect has no location`);
+      const finalUrl = new URL(location, origin);
+      expect(finalUrl.username, `${path} redirect username`).toBe("");
+      expect(finalUrl.password, `${path} redirect password`).toBe("");
+      expect(WATCH_ORIGINS, `${path} final origin`).toContain(finalUrl.origin);
+      expect(finalUrl.pathname, `${path} redirect keeps the path`).toBe(path);
+      response = await request.get(finalUrl.href, { maxRedirects: 0 });
+      test
+        .info()
+        .annotations.push({ type: "redirect", description: `${path} -> ${finalUrl.origin}` });
+    }
+    expect(response.status(), `${path} status`).toBe(200);
+    const marker = response.headers()["x-two-origin"];
+    if (marker !== undefined) expect(marker, `${path} X-TWO-Origin`).toBe(ORIGIN_MARKER);
     expect(response.headers()["content-type"]).toMatch(/^application\/xml\b/);
     const body = await response.text();
     expect(body).toContain('<?xml version="1.0" encoding="UTF-8"?>');
     expect(body).toContain("<urlset");
     expect(body).toContain("</urlset>");
-    expect(problems).toEqual([]);
   });
 });
