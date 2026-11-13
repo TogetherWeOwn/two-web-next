@@ -109,6 +109,12 @@ for (const mode of ["mobile", "desktop"]) {
         assert.throws(() => validate(malformed), /missing Lighthouse audit/);
       }
     }
+    for (const [key, [, options]] of Object.entries(config.ci.assert.assertions)) {
+      if (options.maxNumericValue === undefined) continue;
+      const negative = structuredClone(reports);
+      negative[0].audits[key].numericValue = -1;
+      assert.throws(() => validate(negative), /missing Lighthouse audit/);
+    }
     const failed = structuredClone(reports);
     if (mode === "mobile") {
       for (const item of failed) item.audits["largest-contentful-paint"].numericValue = 10000;

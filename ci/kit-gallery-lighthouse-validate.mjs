@@ -65,7 +65,8 @@ export function validateGalleryReports(reports, config, getAllAssertionResults) 
         const audit = report.audits?.[key];
         if (
           !audit ||
-          (options.maxNumericValue !== undefined && !Number.isFinite(audit.numericValue)) ||
+          (options.maxNumericValue !== undefined &&
+            (!Number.isFinite(audit.numericValue) || audit.numericValue < 0)) ||
           (options.minScore !== undefined &&
             (!Number.isFinite(audit.score) || audit.score < 0 || audit.score > 1))
         )
