@@ -472,9 +472,13 @@ test("a consumed UI stack does not depend on an omitted display alias", () => {
   withScratch((root) => {
     for (const path of HONO_CONSUMERS) {
       const file = join(root, path);
+      // No-display simulation: the authored content-theme override declares
+      // the alias itself, so neutralize it alongside the var() reads.
       writeFileSync(
         file,
-        readFileSync(file, "utf8").replaceAll("var(--font-display)", "system-ui"),
+        readFileSync(file, "utf8")
+          .replaceAll("var(--font-display)", "system-ui")
+          .replace(/\.base-theme\.content-theme\s*\{[^}]*\}/, ""),
       );
     }
     const css = generate(root).get("public/theme.css");
