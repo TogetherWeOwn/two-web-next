@@ -13,15 +13,23 @@ const unguardedUiRules = (css: string): string[] =>
         rule.body
           .split(";")
           .some((declaration) =>
-            /^\s*font(?:-family)?\s*:[^;{}]*var\(--font-ui\)/.test(declaration),
+            /^\s*font(?:-family)?\s*:[^;{}]*var\(\s*--font-ui\s*[,)]/.test(declaration),
           ) &&
-        rule.selector.split(/,(?![^(]*\))/).some((part) => !part.includes(":not(.content-theme)")),
+        rule.selector
+          .split(/,(?![^(]*\))/)
+          .some((part) => !/(?:^|[\s>+~])\.base-theme:not\(\.content-theme\)/.test(part)),
     )
     .map((rule) => rule.selector);
 
 describe("content UI font guard", () => {
   it("keeps the swap-based UI token away from content pages", () => {
     expect(unguardedUiRules(LEAF_CRITICAL_CSS)).toEqual([]);
+    expect(unguardedUiRules(".base-theme h1{font-family:var(--font-ui, sans-serif)}")).toEqual([
+      ".base-theme h1",
+    ]);
+    expect(
+      unguardedUiRules(".base-theme h1:not(.content-theme){font-family:var(--font-ui)}"),
+    ).toEqual([".base-theme h1:not(.content-theme)"]);
     expect(unguardedUiRules(".base-theme h1{font:700 1rem var(--font-ui)}")).toEqual([
       ".base-theme h1",
     ]);
