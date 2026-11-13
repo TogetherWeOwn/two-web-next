@@ -33,6 +33,7 @@ const IMMUTABLE = "public, max-age=31536000, immutable";
 // public/fonts/OFL-SOURCES.txt; full license texts in public/fonts/LICENSE.txt.
 const FONT_PINS = {
   "mona-sans-latin-var.woff2": "5ea3740633e5ac7af56c13d7e8ec32bcae12e7723e53d34284469a8947ccb2f3",
+  "mona-sans-latin-wght.woff2": "a59061e38c5e7e6a00aaa6b6645a220c7d9c530991167f058cc0f8575f5d5844",
   "instrument-serif-latin-400-italic.woff2":
     "2ea8887dec935b5a45ba939c463d9733fc3f6c465c30ae6881b8c331a9a1dece",
   "fragment-mono-latin-400.woff2":
@@ -84,7 +85,7 @@ function sizesOf(view: DataView, count: number): number {
 
 describe("pinned font cache", () => {
   it("stamps the immutable header on /fonts/*.woff2 only", () => {
-    expect(isPinnedAssetPath("/fonts/mona-sans-latin-var.woff2")).toBe(true);
+    expect(isPinnedAssetPath("/fonts/mona-sans-latin-wght.woff2")).toBe(true);
     expect(isPinnedAssetPath("/fonts/instrument-serif-latin-400-italic.woff2")).toBe(true);
     expect(isPinnedAssetPath("/fonts/fragment-mono-latin-400.woff2")).toBe(true);
     for (const notPinned of [
@@ -96,11 +97,11 @@ describe("pinned font cache", () => {
       "/islands/rsvp-button.js",
       "/fonts/LICENSE.txt",
       "/fonts/OFL-SOURCES.txt",
-      "/fonts/mona-sans-latin-var.woff2.bak",
-      "/fonts/nested/mona-sans-latin-var.woff2",
+      "/fonts/mona-sans-latin-wght.woff2.bak",
+      "/fonts/nested/mona-sans-latin-wght.woff2",
       "/fonts/mona-sans-latin-var.WOFF2",
       "/fonts/mona-sans-latin-var.woff",
-      "/fontsx/mona-sans-latin-var.woff2",
+      "/fontsx/mona-sans-latin-wght.woff2",
       "/fonts/",
     ]) {
       expect(isPinnedAssetPath(notPinned), notPinned).toBe(false);
@@ -110,18 +111,18 @@ describe("pinned font cache", () => {
   it("font responses carry the immutable header, other assets pass through unchanged", async () => {
     const url = (path: string) => `https://next.example.test${path}`;
     const font = withPinnedAssetCache(
-      url("/fonts/mona-sans-latin-var.woff2"),
-      new Response(fontBytes("mona-sans-latin-var.woff2"), {
+      url("/fonts/mona-sans-latin-wght.woff2"),
+      new Response(fontBytes("mona-sans-latin-wght.woff2"), {
         headers: { "content-type": "font/woff2" },
       }),
     );
     expect(font.headers.get("cache-control")).toBe(IMMUTABLE);
     expect(font.headers.get("content-type")).toContain("font/woff2");
     expect(await font.arrayBuffer()).toEqual(
-      fontBytes("mona-sans-latin-var.woff2").buffer.slice(
-        fontBytes("mona-sans-latin-var.woff2").byteOffset,
-        fontBytes("mona-sans-latin-var.woff2").byteOffset +
-          fontBytes("mona-sans-latin-var.woff2").byteLength,
+      fontBytes("mona-sans-latin-wght.woff2").buffer.slice(
+        fontBytes("mona-sans-latin-wght.woff2").byteOffset,
+        fontBytes("mona-sans-latin-wght.woff2").byteOffset +
+          fontBytes("mona-sans-latin-wght.woff2").byteLength,
       ),
     );
 

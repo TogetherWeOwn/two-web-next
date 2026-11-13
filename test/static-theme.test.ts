@@ -70,7 +70,7 @@ it.each(paths)(
     // Only the join shell still preloads Mona Sans; content
     // leaves render no display text so they preload no font.
     if (path === "/join") {
-      expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
+      expect(html).toContain('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
     } else {
       expect(html).not.toContain('.woff2" as="font"');
     }
