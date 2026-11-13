@@ -61,7 +61,6 @@ import { trustHosts } from "./trust-hosts";
 import { authStatusScript, enableAuthStatus } from "./auth-status";
 import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
-import { withStreamedBody } from "./html-stream";
 import { webmcpPilot } from "./webmcp-pilot";
 
 export { faqLastReviewed } from "./faq-last-reviewed";
@@ -74,22 +73,18 @@ export const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
 
-// Wire encoding, outermost (TWO-7591/TWO-8089): the deployed remote-placement
-// lane marks text/html responses `cache-control: no-transform` for every body
-// shape — fixed length (#2174's trigger) and unknown-length streams alike —
-// and the same lane still encodes JSON/CSS. With the platform's HTML pass out
-// of the picture, the Worker encodes the document itself: withStreamedBody
-// gzip-streams HTML when the client accepts gzip and answers the plain
-// unknown-length stream otherwise. Registered before requestLog so its
-// post-next wrap sees the fully settled response; Hono's header-merge copy
-// preserves the wrapped body and the manual encodeBody flag. Same seam
-// serves the Kit worker's Hono fallback via honoFetch; Kit-resolved pages
-// encode in route-ownership's decorateKitResponse so hooks.server.ts stays a
-// pure env binding.
-app.use("*", async (c, next) => {
-  await next();
-  c.res = withStreamedBody(c.res, c.req.raw);
-});
+// Wire encoding (TWO-7591/TWO-8089): the deployed remote-placement lane marks
+// text/html `cache-control: no-transform` for every body shape, so the
+// platform's own br/gzip pass never runs on HTML while JSON/CSS compress.
+// The Worker encodes the document itself — but the wrap must sit at the
+// outermost return of each served lane, never inside Hono's dispatch:
+// assigning a rebuilt Response onto c.res drops encodeBody "manual", and the
+// platform then re-encodes the already-gzipped stream into a double-encoded
+// body the client cannot read. The seams live in src/worker.ts (the served
+// app.fetch) and inside dispatchHookRequest's honoFetch/fallback returns in
+// src/route-ownership.ts (the Kit worker's Hono answers), plus
+// decorateKitResponse for Kit pages so hooks.server.ts stays a pure env
+// binding.
 
 // The violation sink (TOG-10107): the CSP report-to directive selects the
 // Reporting-Endpoints group. No report-uri: it is deprecated (ZAP 10055

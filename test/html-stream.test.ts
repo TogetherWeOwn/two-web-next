@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import app from "./app";
+import worker from "../src/worker";
 import { withStreamedBody } from "../src/html-stream";
 import {
   dispatchHookRequest,
@@ -7,7 +8,7 @@ import {
   ROUTE_MANIFEST,
   type HookEventLike,
 } from "../src/route-ownership";
-import type { Env } from "../src/env";
+import type { Env, JobsEnv } from "../src/env";
 
 // TWO-7591/TWO-8089: the deployed remote-placement lane marks text/html
 // `cache-control: no-transform` for every body shape, so the platform's own
@@ -146,11 +147,25 @@ describe("withStreamedBody", () => {
   });
 });
 
-describe("HTML wire shape through the app", () => {
+describe("HTML wire shape through the served worker", () => {
+  const context = {
+    waitUntil: vi.fn(),
+    passThroughOnException: vi.fn(),
+  } as unknown as ExecutionContext;
+
+  const serve = (path: string, acceptEncoding?: string) =>
+    worker.fetch(
+      new Request(`https://next.example.test${path}`, {
+        headers: acceptEncoding === undefined ? {} : { "accept-encoding": acceptEncoding },
+      }),
+      env as unknown as JobsEnv,
+      context,
+    );
+
   it.each(["/about", "/faq", "/rules", "/privacy"])(
     "%s answers gzip-encoded HTML for a gzip client",
     async (path) => {
-      const res = await app.request(path, { headers: { "accept-encoding": "gzip" } }, env);
+      const res = await serve(path, "gzip");
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("text/html");
       expect(res.headers.get("content-length")).toBeNull();
@@ -161,7 +176,7 @@ describe("HTML wire shape through the app", () => {
   );
 
   it("branded 404s also encode without a declared Content-Length", async () => {
-    const res = await app.request("/__missing__", { headers: { "accept-encoding": "gzip" } }, env);
+    const res = await serve("/__missing__", "gzip");
     expect(res.status).toBe(404);
     expect(res.headers.get("content-type")).toContain("text/html");
     expect(res.headers.get("content-length")).toBeNull();
@@ -170,7 +185,7 @@ describe("HTML wire shape through the app", () => {
   });
 
   it("a client without gzip support gets the plain stream", async () => {
-    const res = await app.request("/about", { headers: { "accept-encoding": "br" } }, env);
+    const res = await serve("/about", "br");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-encoding")).toBeNull();
     expect(res.headers.get("content-length")).toBeNull();
@@ -178,9 +193,10 @@ describe("HTML wire shape through the app", () => {
   });
 
   it("JSON routes keep their existing shape", async () => {
-    const res = await app.request("/version", {}, env);
+    const res = await serve("/version");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("application/json");
+    expect(res.headers.get("content-encoding")).toBeNull();
   });
 });
 
@@ -247,9 +263,10 @@ describe("Kit dispatch HTML wire shape", () => {
     expect(await res.text()).toBe(body);
   });
 
-  it("leaves a Hono-owned response's declared Content-Length untouched", async () => {
+  it("encodes a Hono-owned fallback response at the dispatch return", async () => {
     // GET / is enabled:false in the shipped manifest, so dispatch answers
-    // through honoFetch and never reaches the encode seam.
+    // through honoFetch; the wrap sits on its return so Hono HTML on this
+    // worker carries the same wire encoding as decorated pages.
     const res = await dispatchHookRequest(kitEventFor("/", "/[...path]", "gzip"), {
       appUrl: KIT_APP_URL,
       honoFetch: vi.fn(
@@ -261,8 +278,9 @@ describe("Kit dispatch HTML wire shape", () => {
       ),
       resolve: vi.fn(async () => new Response("kit")),
     });
-    expect(res.headers.get("content-length")).toBe("4");
-    expect(res.headers.get("content-encoding")).toBeNull();
-    expect(await res.text()).toBe("hono");
+    expect(res.headers.get("content-length")).toBeNull();
+    expect(res.headers.get("content-encoding")).toBe("gzip");
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+    expect(await gunzip(res)).toBe("hono");
   });
 });

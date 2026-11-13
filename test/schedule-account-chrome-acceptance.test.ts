@@ -310,13 +310,11 @@ describe("schedule cache matrix", () => {
     expect(res.headers.get("vary")).toBe("Cookie");
   });
 
-  it("keeps past-archive searches private with no client-driven variance", async () => {
+  it("keeps past-archive searches private with no variance", async () => {
     const res = await app.request("/events/past?q=chess", {}, envFor());
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
-    // Vary is exactly the wire-encoding axis the HTML encoder negotiates
-    // (TWO-8089); no Cookie or client-input key ever lands on it.
-    expect(res.headers.get("vary")).toBe("accept-encoding");
+    expect(res.headers.get("vary")).toBeNull();
   });
 });
 

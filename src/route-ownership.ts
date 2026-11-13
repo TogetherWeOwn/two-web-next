@@ -606,9 +606,11 @@ export interface HookDispatchDeps {
 // platform's own encoding pass never runs on decorated Kit pages while JSON
 // and CSS still compress. The Worker therefore encodes the document itself:
 // gzip when the client accepts it, a plain unknown-length stream otherwise.
-// Hono answers already encode inside app.fetch (the identical middleware in
-// src/index.tsx) and the undecorated Hono-fallback path never reaches this
-// function.
+// The wrap must sit on a response that reaches the runtime directly — never
+// inside Hono's dispatch, where a rebuilt Response drops encodeBody "manual"
+// and the platform double-encodes the gzip body. Hono answers that came
+// through honoFetch are wrapped at their returns in dispatchHookRequest;
+// the served Hono app gets the identical wrap in src/worker.ts.
 function decorateKitResponse(
   response: Response,
   event: HookEventLike,
@@ -853,7 +855,7 @@ export async function dispatchHookRequest(
   deps: HookDispatchDeps,
 ): Promise<Response> {
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
-    return deps.honoFetch(event.request);
+    return deps.honoFetch(event.request).then((res) => withStreamedBody(res, event.request));
   }
   // Single Request-to-decision path: decideOwner is the production call, so
   // its method/path/query/decode coverage guards the dispatch too. Inlining
@@ -875,7 +877,7 @@ export async function dispatchHookRequest(
       ROUTE_MANIFEST,
   );
   if (!route) {
-    return deps.honoFetch(event.request);
+    return deps.honoFetch(event.request).then((res) => withStreamedBody(res, event.request));
   }
   // Kit request correlation (Hono requestLog parity): admit the validated
   // edge id (cf-ray) or mint a ULID, ignoring any client-sent x-request-id.
@@ -980,7 +982,9 @@ export async function dispatchHookRequest(
   } else {
     response = await deps.resolve(event);
   }
-  if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return response;
+  // The Hono fallback answers through resolve() untouched by decoration but
+  // still needs the wire encoding; withStreamedBody is a no-op on non-HTML.
+  if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return withStreamedBody(response, event.request);
   const locals = event.locals as Partial<KitLocals> | undefined;
   if (
     deps.authStatusCookieFor &&
