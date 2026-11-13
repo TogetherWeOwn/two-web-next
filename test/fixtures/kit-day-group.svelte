@@ -1,5 +1,5 @@
 <script lang="ts">
-  import DayGroup from "../../web/src/lib/DayGroup.svelte";
+import DayGroup from "../../web/src/lib/DayGroup.svelte";
 </script>
 
 <DayGroup label="Monday, 1 December">
