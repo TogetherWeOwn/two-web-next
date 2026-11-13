@@ -81,7 +81,16 @@ export default {
     if (url.pathname !== "/events/past" && url.pathname !== "/events") return response;
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.includes("text/html")) return response;
-    const body = (await response.text()).replaceAll(STAGING_APP_URL, localOrigin);
+    // The served wire now gzips HTML at the outermost seam; the translation
+    // needs the document bytes, so decode before the URL rewrite. The
+    // response headers below already drop the content-encoding marker, so
+    // the rewritten body always answers identity.
+    const raw = response.body;
+    const document =
+      raw && response.headers.get("content-encoding") === "gzip"
+        ? await new Response(raw.pipeThrough(new DecompressionStream("gzip"))).text()
+        : await response.text();
+    const body = document.replaceAll(STAGING_APP_URL, localOrigin);
     const responseHeaders = new Headers(response.headers);
     responseHeaders.delete("content-encoding");
     responseHeaders.delete("content-length");
