@@ -119,6 +119,10 @@ for (const target of parityTargets()) {
           expect(await nodes.count()).toBeGreaterThan(0);
           for (const node of await nodes.all())
             await expect(node).toHaveCSS("white-space", "pre-line");
+          await expect(page.locator(`[data-event-key="${KEYS.long}"] .schedule-excerpt`)).toHaveCSS(
+            "white-space",
+            "pre-line",
+          );
         }
         await page.screenshot({
           path: shot("schedule-collapsed"),
@@ -132,8 +136,7 @@ for (const target of parityTargets()) {
         await details.locator("summary").first().click();
         await expect(details).toHaveAttribute("open", "");
         if (phase === "after")
-          for (const node of await details.locator(".schedule-text").all())
-            await expect(node).toHaveCSS("white-space", "pre-line");
+          await expect(details.locator("p")).toHaveCSS("white-space", "pre-line");
         await page.screenshot({
           path: shot("schedule-expanded"),
           fullPage: true,

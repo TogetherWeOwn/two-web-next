@@ -144,8 +144,9 @@ for (const twin of ["Hono", "Kit"] as const) {
           view: "list",
         }),
       );
-      expect(long).toContain(`<p class="schedule-text">${escaped}\n${FULL_DESCRIPTION}</p>`);
-      expect(long).toContain(`<span class="schedule-excerpt schedule-text">${escaped}\n`);
+      expect(long).toContain('<details class="schedule-text">');
+      expect(long).toContain(`<p>${escaped}\n${FULL_DESCRIPTION}</p>`);
+      expect(long).toContain(`<span class="schedule-excerpt">${escaped}\n`);
       expect(long).not.toMatch(/<b>|<br\s*\/?>\s*Doors/);
     });
 

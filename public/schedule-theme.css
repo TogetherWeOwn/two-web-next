@@ -21,7 +21,7 @@
 .events-page .schedule-info :is(h2, h3){font-size:1.6rem;margin:0}
 .events-page .schedule-info p{margin:.4rem 0 0}
 .events-page :is(.schedule-text,.archive-passage){white-space:pre-line}
-.events-page .schedule-description[open] .schedule-excerpt{display:none;}
+.events-page .schedule-text[open] .schedule-excerpt{display:none;}
 .events-page .schedule-actions{display:grid;justify-items:end;gap:.5rem;max-width:14rem;}
 .events-page .schedule-attendance{color:var(--muted);font-variant-numeric:tabular-nums;}
 .events-page .schedule-badge{display:inline-block;border:1px solid var(--line);padding:.1rem .5rem;margin-top:.5rem;}
