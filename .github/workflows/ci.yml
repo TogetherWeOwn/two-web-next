@@ -876,7 +876,7 @@ jobs:
       - name: Kit performance budgets (worker + generated assets)
         id: kit_perf
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: node ci/check-kit-perf.mjs
+        run: node ci/check-kit-perf.mjs --format json
       - name: Kit generated CSS on budget failure
         if: failure() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && steps.kit_perf.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

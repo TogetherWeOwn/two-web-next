@@ -22,6 +22,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parseLeafModule } from "./leaf-css-parser.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const TRUST_HOSTS_PATH = "src/trust-hosts.ts";
@@ -124,18 +125,18 @@ export function checkHostSourcePin(source = file(TRUST_HOSTS_PATH)) {
 /** The recorded bytes and hash must match a fresh regeneration. */
 export function verifyBundleBytes(sources, moduleSource) {
   const regenerated = sources.join("\n");
-  const cssMatch = /export const LEAF_CRITICAL_CSS: string =\n {2}("(?:[^"\\]|\\.)*");/.exec(
-    moduleSource,
-  );
-  const hashMatch = /export const LEAF_CRITICAL_CSS_SHA256: string = "([^"]+)";/.exec(moduleSource);
-  if (!cssMatch || !hashMatch) {
+  const parsed = parseLeafModule(moduleSource);
+  if (!parsed) {
     return { ok: false, detail: "recorded bundle or hash does not parse" };
   }
-  if (JSON.parse(cssMatch[1]) !== regenerated) {
-    return { ok: false, detail: "recorded bundle bytes differ from regenerated sources" };
+  if (parsed.css !== regenerated || /<\/style/i.test(parsed.css)) {
+    return {
+      ok: false,
+      detail: "recorded bundle bytes differ from regenerated sources or are unsafe",
+    };
   }
   const actual = createHash("sha256").update(regenerated, "utf8").digest("base64");
-  if (actual !== hashMatch[1]) {
+  if (actual !== parsed.sha256) {
     return { ok: false, detail: "recorded hash differs from the regenerated bundle hash" };
   }
   return { ok: true };
@@ -468,6 +469,20 @@ function selftest() {
     ).ok === false,
     "wrong hash fails",
   );
+  const packedCss = ".base-theme x\n.base-theme y";
+  const packedHash = createHash("sha256").update(packedCss).digest("base64");
+  const packedModule = `export const LEAF_CRITICAL_CSS: string =\n  "~ x\\n~ y".split("~").join(".base-theme");\nexport const LEAF_CRITICAL_CSS_SHA256: string = "${packedHash}";\n`;
+  assert(verifyBundleBytes([packedCss], packedModule).ok, "packed bytes pass");
+  for (const altered of [
+    packedModule.replace('split("~")', 'split("!")'),
+    packedModule.replace('join(".base-theme")', 'join(".other")'),
+    packedModule.replace("~ x", "~ z"),
+    packedModule.replace(packedHash, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+    packedModule.replace(";\nexport", ".trim();\nexport"),
+    `${packedModule}sideEffect();\n`,
+  ]) {
+    assert(!verifyBundleBytes([packedCss], altered).ok, "altered packed module fails");
+  }
   assert(verifyBundleBytes(["a"], "not a module").ok === false, "unparseable module fails");
   assert(
     checkLeafLifecycleStatic(["x"], "// GENERATED from other.css\nrest").status === "fail",
