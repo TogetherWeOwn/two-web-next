@@ -10,7 +10,7 @@ export function appGit(appRoot, ...args) {
     Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
   );
   const options = { cwd: root, encoding: "utf8", env };
-  const gitRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], options).trim();
+  const gitRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], options).replace(/\n$/, "");
   if (realpathSync(gitRoot) !== root) throw new Error(`git root does not match target: ${appRoot}`);
   return execFileSync("git", args, options).trim();
 }

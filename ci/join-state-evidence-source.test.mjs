@@ -30,9 +30,11 @@ test("rejects a target nested in a different git checkout", async (t) => {
   assert.throws(() => appGit(root, "status", "--porcelain"), /git root.*target/i);
 });
 
-test("reads target identity and status including a linked worktree", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "join-source-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+test("reads target identity and status for a trailing-space root and linked worktree", async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), "join-source-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const root = join(parent, "target ");
+  await mkdir(root);
   const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
   git("init", "-q");
   await writeFile(join(root, "tracked.txt"), "initial\n");
