@@ -842,9 +842,9 @@ describe("performance CI", () => {
       // The browser helper declares proxy-agent as a peer, not a dependency.
       req = createRequire(puppeteerRequire.resolve("@puppeteer/browsers/package.json"));
       assert.equal(typeof req("./package.json").peerDependencies["proxy-agent"], "string");
-      req = createRequire(req.resolve("proxy-agent/package.json"));
+      req = createRequire(join(dirname(dirname(req.resolve("proxy-agent"))), "package.json"));
       assert.equal(typeof req("./package.json").dependencies["pac-proxy-agent"], "string");
-      req = createRequire(req.resolve("pac-proxy-agent/package.json"));
+      req = createRequire(join(dirname(dirname(req.resolve("pac-proxy-agent"))), "package.json"));
       assert.equal(typeof req("./package.json").dependencies["get-uri"], "string");
       // get-uri 8 exposes its entry point but not its package.json subpath.
       req = createRequire(join(dirname(dirname(req.resolve("get-uri"))), "package.json"));

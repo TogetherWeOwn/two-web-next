@@ -32,7 +32,7 @@ if (chain === "lhci") {
   expected = "8.0.1";
 }
 for (const name of ["proxy-agent", "pac-proxy-agent"]) {
-  req = createRequire(req.resolve(`${name}/package.json`));
+  req = createRequire(join(dirname(dirname(req.resolve(name))), "package.json"));
 }
 // get-uri 8 exports its entry point but not package.json.
 req = createRequire(join(dirname(dirname(req.resolve("get-uri"))), "package.json"));
@@ -92,7 +92,7 @@ const server = net.createServer((control) => {
       log.push(verb);
       switch (verb) {
         case "FEAT":
-          reply("211-Features:\r\n UTF8\r\n211 End");
+          reply("211-Features:\r\n UTF8\r\n MLST type*;size*;modify*;\r\n211 End");
           break;
         case "USER":
           reply("331 Password required");
@@ -122,8 +122,8 @@ const server = net.createServer((control) => {
             )
             .catch((error) => control.destroy(error));
           break;
-        case "LIST":
-          send("-rw-r--r--   1 owner group       33 Jan 02  2024 file.txt\r\n").catch((error) =>
+        case "MLSD":
+          send(`type=file;size=33;modify=${mdtmDate}; file.txt\r\n`).catch((error) =>
             control.destroy(error),
           );
           break;
@@ -168,7 +168,7 @@ try {
 
   assert.ok(log.indexOf("USER") >= 0 && log.indexOf("PASS") > log.indexOf("USER"), "access");
   const mdtm = log.indexOf("MDTM");
-  const list = log.indexOf("LIST");
+  const list = log.indexOf("MLSD");
   const retr = log.indexOf("RETR");
   assert.ok(mdtm >= 0, "lastMod sent MDTM");
   assert.ok(retr > mdtm, "downloadTo sent RETR after MDTM");
