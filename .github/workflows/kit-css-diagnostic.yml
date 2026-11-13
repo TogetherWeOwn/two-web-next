@@ -1,0 +1,199 @@
+name: Kit CSS diagnostic
+# Manual, diagnostic-only comparison of the Kit client CSS for two commits of
+# this repository. It never gates, deploys or overrides a budget verdict.
+# Dispatch accepts a branch or tag; pin the workflow immutably with:
+#   jobs:
+#     css:
+#       uses: TogetherWeOwn/two-web-next/.github/workflows/kit-css-diagnostic.yml@<merged-40-hex-sha>
+#       with:
+#         base_sha: <40-hex-sha>
+#         head_sha: <40-hex-sha>
+# A direct pull_request run validates and builds its exact head in both legs.
+# npm ci --min-release-age does not audit the age of locked packages.
+on:
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: Full 40-character base commit SHA on a branch of this repository
+        required: true
+        type: string
+      head_sha:
+        description: Full 40-character head commit SHA on a branch of this repository
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      base_sha:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/kit-css-diagnostic.yml
+      - ci/kit-css-collect.mjs
+      - ci/kit-css-collect.test.mjs
+      - ci/kit-css-diagnostic.test.mjs
+permissions: {}
+concurrency:
+  group: kit-css-diagnostic-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  validate:
+    if: github.event_name == 'pull_request' && startsWith(github.workflow_ref, 'TogetherWeOwn/two-web-next/.github/workflows/kit-css-diagnostic.yml@')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Fetch the public PR head without credentials
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git init -q && git fetch -q --depth=1 https://github.com/TogetherWeOwn/two-web-next.git "$PR_SHA" && git checkout -q --detach FETCH_HEAD
+      - name: Collector, error paths and workflow invariants
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
+            --workdir /src node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413 \
+            node --test ci/kit-css-collect.test.mjs ci/kit-css-diagnostic.test.mjs
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      base: ${{ steps.bind.outputs.base }}
+      head: ${{ steps.bind.outputs.head }}
+      workflow: ${{ steps.bind.outputs.workflow }}
+    steps:
+      - name: Validate SHAs and bind them to this repository's branches
+        id: bind
+        env:
+          BASE_SHA: ${{ inputs.base_sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          CALLER_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          readarray -t definition < <(node -e 'const j=JSON.parse(process.env.JOB_CONTEXT); for(const k of ["workflow_ref","workflow_repository","workflow_sha"]) console.log(typeof j[k] === "string" && !/[\r\n]/.test(j[k]) ? j[k] : "")')
+          DEFINITION_REF=${definition[0]:-}; DEFINITION_REPOSITORY=${definition[1]:-}; WORKFLOW_SHA=${definition[2]:-}
+          [[ "$DEFINITION_REF" = "$GITHUB_REPOSITORY/.github/workflows/kit-css-diagnostic.yml@"?* && "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::invalid workflow provenance'; exit 1; }
+          [ "$GITHUB_REPOSITORY" = TogetherWeOwn/two-web-next ] && [ "$DEFINITION_REPOSITORY" = "$GITHUB_REPOSITORY" ] || { echo '::error::repository mismatch'; exit 1; }
+          direct_pr=false
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$CALLER_REF" = "$DEFINITION_REF" ]; then
+            direct_pr=true; BASE_SHA="$PR_SHA"; HEAD_SHA="$PR_SHA"
+          fi
+          for sha in "$BASE_SHA" "$HEAD_SHA"; do
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::inputs must be full lowercase 40-hex SHAs"; exit 1; }
+          done
+          if [ "$direct_pr" = false ]; then
+            src=$(mktemp -d "$RUNNER_TEMP/bind.XXXXXX")
+            trap 'rm -rf -- "$src"' EXIT
+            git -C "$src" init -q
+            git -C "$src" remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+            git -C "$src" -c protocol.version=2 fetch -q --no-tags --filter=blob:none origin '+refs/heads/*:refs/remotes/origin/*'
+            for sha in "$BASE_SHA" "$HEAD_SHA"; do
+              [ "$(git -C "$src" cat-file -t "$sha^{commit}" 2>/dev/null)" = commit ] || { echo "::error::$sha is not a commit of this repository"; exit 1; }
+              [ -n "$(git -C "$src" branch -r --contains "$sha")" ] || { echo "::error::$sha is not reachable from a branch of this repository"; exit 1; }
+            done
+          fi
+          echo "base=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "workflow=$WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
+  leg:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [base, head]
+    env:
+      LEG: ${{ matrix.leg }}
+      SOURCE_SHA: ${{ matrix.leg == 'base' && needs.resolve.outputs.base || needs.resolve.outputs.head }}
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Export the pinned collector and the leg's source, without git or credentials
+        env:
+          WORKFLOW_SHA: ${{ needs.resolve.outputs.workflow }}
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d "$RUNNER_TEMP/kit-css.XXXXXX")
+          mkdir "$work/tools" "$work/export" "$work/git"
+          echo "KIT_CSS_WORK=$work" >> "$GITHUB_ENV"
+          git -C "$work/git" init -q
+          git -C "$work/git" remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git -C "$work/git" fetch -q --no-tags --depth=1 origin "$WORKFLOW_SHA" "$SOURCE_SHA"
+          git -C "$work/git" show "$WORKFLOW_SHA:ci/kit-css-collect.mjs" > "$work/tools/collect.mjs"
+          git -C "$work/git" archive --format=tar "$SOURCE_SHA" | tar -x -C "$work/export"
+          rm -rf "$work/git"
+          test -f "$work/export/package-lock.json" && test -f "$work/export/web/package-lock.json"
+      - name: Install and build in separate constrained containers
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          image=node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
+          name="kit-css-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${LEG}"
+          echo "KIT_CSS_CONTAINER=$name" >> "$GITHUB_ENV"
+          common=(--name "$name" --rm --user "$(id -u):$(id -g)" --cap-drop ALL
+            --security-opt no-new-privileges --pids-limit 256 --memory 3g --cpus 2
+            --read-only --tmpfs /tmp:rw,exec,nosuid,nodev,size=1g
+            --mount "type=bind,src=$KIT_CSS_WORK/export,dst=/src" --workdir /src
+            --env HOME=/tmp --env CI=true --env npm_config_cache=/tmp/npm-cache)
+          docker run "${common[@]}" "$image" sh -eu -c '
+            npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+            npm ci --prefix web --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund'
+          docker run "${common[@]}" --network none "$image" sh -eu -c '
+            node ci/build-ember-tokens.mjs --check
+            node ci/build-leaf-css.mjs
+            npm run build --prefix web'
+      - name: Collect bounded client CSS and manifest
+        env:
+          WORKFLOW_SHA: ${{ needs.resolve.outputs.workflow }}
+        run: |
+          set -euo pipefail
+          mkdir "$KIT_CSS_WORK/out"
+          docker run --name "$KIT_CSS_CONTAINER" --rm --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges --user "$(id -u):$(id -g)" \
+            --pids-limit 128 --memory 512m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --mount "type=bind,src=$KIT_CSS_WORK/export,dst=/src,readonly" \
+            --mount "type=bind,src=$KIT_CSS_WORK/tools,dst=/tools,readonly" \
+            --mount "type=bind,src=$KIT_CSS_WORK/out,dst=/out" \
+            node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413 \
+            node /tools/collect.mjs --root /src --out /out --leg "$LEG" \
+            --source-sha "$SOURCE_SHA" --workflow-sha "$WORKFLOW_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --repository "$GITHUB_REPOSITORY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-css-${{ matrix.leg }}
+          path: ${{ env.KIT_CSS_WORK }}/out
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+      - name: Remove the isolated export, caches and output
+        if: always()
+        run: |
+          set -uo pipefail
+          failed=0
+          if [ -n "${KIT_CSS_CONTAINER:-}" ]; then
+            containers=$(timeout 30s docker ps -aq --filter "name=^/${KIT_CSS_CONTAINER}$") || failed=1
+            if [ -n "${containers:-}" ]; then timeout 30s docker rm -f "$KIT_CSS_CONTAINER" || failed=1; fi
+            containers=$(timeout 30s docker ps -aq --filter "name=^/${KIT_CSS_CONTAINER}$") || failed=1
+            [ -z "${containers:-}" ] || failed=1
+          fi
+          if [ "$failed" -eq 0 ]; then
+            case "${KIT_CSS_WORK:-}" in
+              "$RUNNER_TEMP"/kit-css.*)
+                timeout 30s chmod -R u+rwX -- "$KIT_CSS_WORK" || failed=1
+                timeout 30s rm -rf -- "$KIT_CSS_WORK" || failed=1
+                [ ! -e "$KIT_CSS_WORK" ] || failed=1
+                ;;
+            esac
+          fi
+          exit "$failed"
