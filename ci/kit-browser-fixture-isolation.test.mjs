@@ -59,6 +59,24 @@ test("Kit browser fixture copies safely and cleans up on success and failure", a
     assert.deepEqual(await readdir(scratch), [], "invalid link removes scratch copy");
     assert.ok(fixtureRoot.startsWith(`${scratch}/`));
     assert.equal(await readFile(join(source, "tracked.txt"), "utf8"), "original");
+
+    const linkedSource = join(sandbox, "linked-source");
+    const external = join(scratch, "shared-web");
+    await mkdir(join(linkedSource, "node_modules"), { recursive: true });
+    await mkdir(join(sandbox, "shared-web/node_modules"), { recursive: true });
+    await mkdir(external);
+    await writeFile(join(sandbox, "shared-web/node_modules/payload"), "do not copy");
+    await writeFile(join(external, "sentinel"), "untouched");
+    await symlink("../shared-web", join(linkedSource, "web"));
+    execFileSync("git", ["init", "-q", linkedSource]);
+    execFileSync("git", ["add", "web"], { cwd: linkedSource });
+    await assert.rejects(
+      withKitBrowserFixture({ source: linkedSource, page: "test" }, async () => {}),
+      /symlink in destination/,
+    );
+    assert.deepEqual(await readdir(external), ["sentinel"], "external target is untouched");
+    assert.equal(await readFile(join(external, "sentinel"), "utf8"), "untouched");
+    assert.deepEqual(await readdir(scratch), ["shared-web"], "rejected copy removes its root");
   } finally {
     process.env.PATH = oldPath;
     if (oldScratch === undefined) delete process.env.PAPERCLIP_RUN_SCRATCH_DIR;

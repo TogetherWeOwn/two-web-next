@@ -19,6 +19,23 @@ function inside(root, path) {
   return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
+// Never traverse a copied link while creating a destination.
+async function rejectLinkAncestors(root, path) {
+  let current = root;
+  for (const part of relative(root, path).split(sep)) {
+    current = join(current, part);
+    let stat;
+    try {
+      stat = await lstat(current);
+    } catch (error) {
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+    if (stat.isSymbolicLink())
+      throw new Error(`Fixture symlink in destination: ${relative(root, current)}`);
+  }
+}
+
 // Reject absolute, escaping, and dangling links before any copied code executes.
 async function validateLinks(root, path = root) {
   const stat = await lstat(path);
@@ -47,11 +64,14 @@ export async function withKitBrowserFixture({ source = process.cwd(), page }, ca
     for (const file of files) {
       const dest = resolve(root, file);
       if (!inside(root, dest)) throw new Error(`Invalid tracked path: ${file}`);
+      await rejectLinkAncestors(root, dirname(dest));
       await mkdir(dirname(dest), { recursive: true });
       await cp(join(source, file), dest, { verbatimSymlinks: true });
     }
     for (const dir of ["node_modules", "web/node_modules"]) {
-      await cp(join(source, dir), join(root, dir), { recursive: true, verbatimSymlinks: true });
+      const dest = join(root, dir);
+      await rejectLinkAncestors(root, dest);
+      await cp(join(source, dir), dest, { recursive: true, verbatimSymlinks: true });
     }
     await validateLinks(root);
     const route = join(root, "web/src/routes/__browser_fixture__");
