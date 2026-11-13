@@ -577,6 +577,9 @@ jobs:
           # workspaces lack it, unlike reused self-hosted ones.
           fetch-depth: 0
           persist-credentials: false
+      - name: State glyph assembler fixtures
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/state-glyph-assemble.test.mjs
       - name: Job-private localhost:5432 forward to the Postgres service
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
