@@ -32,7 +32,6 @@ jobs:
     env:
       DATABASE_URL: postgres://agent_test@127.0.0.1:5432/two_web_next
       WRANGLER_SEND_METRICS: "false"
-      EVENT_FORM_CAPTURE_DIR: ${{ runner.temp }}/event-form-capture
       REQUESTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,6 +59,7 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Capture native event form round trip
         env:
+          EVENT_FORM_CAPTURE_DIR: ${{ runner.temp }}/event-form-capture
           NODE_OPTIONS: --import=tsx
         run: npx playwright test --config playwright.event-form-capture.config.ts
       - name: Upload event form evidence
