@@ -1,11 +1,11 @@
 <script lang="ts">
-  let {
-    label,
-    items,
-  }: {
-    label: string;
-    items: { href: string; label: string; current?: boolean; count?: number }[];
-  } = $props();
+let {
+  label,
+  items,
+}: {
+  label: string;
+  items: { href: string; label: string; current?: boolean; count?: number }[];
+} = $props();
 </script>
 
 <nav aria-label={label} class="segments">
