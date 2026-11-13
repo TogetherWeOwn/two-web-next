@@ -44,7 +44,14 @@ try {
     ],
     {
       cwd: join(app, "web"),
-      env: { PATH: process.env.PATH, HOME: process.env.HOME, NODE_ENV: "development" },
+      // Wrangler requires a local Hyperdrive URL even though this fixture never reads the DB.
+      // An unreachable loopback endpoint fails closed if a database read is introduced.
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        NODE_ENV: "development",
+        CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB: "postgres://127.0.0.1:1/evidence",
+      },
       stdio: "inherit",
     },
   );
