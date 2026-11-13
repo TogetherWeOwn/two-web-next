@@ -1,0 +1,88 @@
+name: State glyph evidence
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/state-glyph-evidence.yml
+      - ci/state-glyph-*
+permissions:
+  contents: read
+concurrency:
+  group: state-glyph-evidence-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  capture:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # Microsoft's Playwright 1.64.1 Noble image supplies the locked browser;
+    # the OCI digest verifies the image layers rather than a runtime download.
+    container:
+      image: mcr.microsoft.com/playwright@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f
+    timeout-minutes: 15
+    steps:
+      - name: Check out the exact tooling head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Check out the pinned application stack
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ae1b51ef2560ef85f3dbd1d912e7f9edbaee2d66
+          path: app
+          persist-credentials: false
+      - name: Check out the pinned glyph source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 6d3b36f0c8675405d9bf22494c379682cedbe847
+          path: glyph
+          persist-credentials: false
+      - name: Verify the image Node major version
+        run: node -e 'if (Number(process.versions.node.split(".")[0]) !== 24) process.exit(1)'
+      - name: Test assembly failure paths
+        run: node --test tooling/ci/state-glyph-assemble.test.mjs
+      - name: Verify the source pull requests still match the pins
+        run: |
+          set -eu
+          remote=https://github.com/TogetherWeOwn/two-web-next.git
+          pin=$(git ls-remote "$remote" refs/pull/2168/head)
+          glyph=$(git ls-remote "$remote" refs/pull/2181/head)
+          test "${pin%%[[:space:]]*}" = ae1b51ef2560ef85f3dbd1d912e7f9edbaee2d66
+          test "${glyph%%[[:space:]]*}" = 6d3b36f0c8675405d9bf22494c379682cedbe847
+      - name: Assemble the allowlisted integration tree
+        run: node tooling/ci/state-glyph-assemble.mjs app glyph
+      - name: Install locked dependencies and prepare first-party assets
+        working-directory: app
+        run: |
+          npm ci --include=dev --ignore-scripts --no-audit --no-fund
+          npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
+          npm run generate:first-party
+      - name: Capture the Kit gallery
+        env:
+          TOOLING_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node tooling/ci/state-glyph-capture.mjs app artifacts
+      - name: Upload desktop capture
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: state-glyph-desktop
+          path: artifacts/state-glyph-desktop.png
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload mobile capture
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: state-glyph-mobile
+          path: artifacts/state-glyph-mobile.png
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload provenance
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: state-glyph-provenance
+          path: artifacts/state-glyph-provenance.json
+          if-no-files-found: error
+          retention-days: 14
