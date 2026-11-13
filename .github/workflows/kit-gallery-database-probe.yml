@@ -24,12 +24,6 @@ jobs:
           POSTGRES_PASSWORD: ci
         ports:
           - 5432/tcp
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      DATABASE_URL: postgres://postgres:ci@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
-      GALLERY_SERVICE_ID: ${{ job.services.postgres.id }}
-      GALLERY_SERVICE_PORT: ${{ job.services.postgres.ports[5432] }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,3 +34,7 @@ jobs:
           package-manager-cache: false
       # Metadata only: success does not authorize a database connection or migration.
       - run: node --test ci/kit-gallery-database-identity.test.mjs ci/kit-gallery-database-hosted.test.mjs
+        env:
+          DATABASE_URL: postgres://postgres:ci@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
+          GALLERY_SERVICE_ID: ${{ job.services.postgres.id }}
+          GALLERY_SERVICE_PORT: ${{ job.services.postgres.ports['5432'] }}
