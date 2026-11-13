@@ -2120,7 +2120,7 @@ test("CLI --allow-indexable reaches the apex posture", async (t) => {
   assert.match(result.output, /24 routes, 0 failed assertions/);
 });
 
-// TWO-7591: the compressed-HTML gate runs only on https origins, which no
+// The compressed-HTML gate runs only on https origins, which no
 // loopback stub can be. Serve the same fixtures through a fetch stub against
 // a synthetic https origin so removing or inverting the gate fails here.
 const HTTPS_ORIGIN = "https://next-stub.test";

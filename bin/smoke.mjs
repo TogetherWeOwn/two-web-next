@@ -334,7 +334,7 @@ export async function smoke(
       if (route.type) {
         check(contentType === route.type, `Content-Type ${route.type}`, contentType ?? "missing");
       }
-      // TWO-7591: HTML must reach the client compressed. A regression that
+      // HTML must reach the client compressed. A regression that
       // declares a fixed Content-Length on text/html gets marked
       // no-transform by the edge and skips br/gzip entirely (the
       // Lighthouse-flagged staging defect). The probe runs only on https

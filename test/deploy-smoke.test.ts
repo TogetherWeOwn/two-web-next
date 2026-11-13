@@ -259,7 +259,7 @@ describe("deploy public-route smoke (offline)", () => {
   });
 
   it("scopes the uncompressed-HTML opt-out to the rollback smoke only", () => {
-    // TWO-7591: every current-version smoke requires compressed HTML; the
+    // Every current-version smoke requires compressed HTML; the
     // post-rollback smoke proves a restored (possibly pre-fix) version
     // serves, so it alone opts out. The opt-out travels by env, never a
     // flag: a pre-fix scripts revision exits 2 on an unknown flag but
