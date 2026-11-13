@@ -37,7 +37,9 @@ for (const name of ["proxy-agent", "pac-proxy-agent"]) {
 // get-uri 8 exports its entry point but not package.json.
 req = createRequire(join(dirname(dirname(req.resolve("get-uri"))), "package.json"));
 assert.equal(req("./package.json").version, expected);
-const mod = await import(pathToFileURL(join(dirname(req.resolve("./package.json")), "dist/index.js")).href);
+const mod = await import(
+  pathToFileURL(join(dirname(req.resolve("./package.json")), "dist/index.js")).href
+);
 const getUri = mod.getUri ?? mod.default?.getUri;
 assert.equal(typeof getUri, "function");
 
@@ -109,19 +111,25 @@ const server = net.createServer((control) => {
           else reply("500 MDTM not understood"); // deliberately not 550
           break;
         case "EPSV":
-          openData().then((port) => reply(`229 Entering Extended Passive Mode (|||${port}|)`));
+          openData()
+            .then((port) => reply(`229 Entering Extended Passive Mode (|||${port}|)`))
+            .catch((error) => control.destroy(error));
           break;
         case "PASV":
-          openData().then((port) =>
-            reply(`227 Entering Passive Mode (127,0,0,1,${port >> 8},${port & 255})`),
-          );
+          openData()
+            .then((port) =>
+              reply(`227 Entering Passive Mode (127,0,0,1,${port >> 8},${port & 255})`),
+            )
+            .catch((error) => control.destroy(error));
           break;
         case "LIST":
-          send("-rw-r--r--   1 owner group       33 Jan 02  2024 file.txt\r\n");
+          send("-rw-r--r--   1 owner group       33 Jan 02  2024 file.txt\r\n").catch((error) =>
+            control.destroy(error),
+          );
           break;
         case "RETR":
           assert.equal(rest.join(" "), "/pub/file.txt");
-          send(body);
+          send(body).catch((error) => control.destroy(error));
           break;
         case "QUIT":
           reply("221 Bye");
