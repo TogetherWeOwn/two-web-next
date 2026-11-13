@@ -874,8 +874,18 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Kit performance budgets (worker + generated assets)
+        id: kit_perf
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/check-kit-perf.mjs
+      - name: Kit generated CSS on budget failure
+        if: failure() && steps.kit_perf.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-css-budget-${{ github.sha }}
+          path: web/.svelte-kit/output/client/_app/immutable/**/*.css
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 3
       - name: Kit route performance budgets (complete immutable dependency closure)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/check-kit-route-perf.mjs
