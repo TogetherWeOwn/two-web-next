@@ -24,6 +24,7 @@ import {
 } from "./headers";
 import { STAGING_APP_URL } from "./qa";
 import { newRequestId, safeRequestId } from "./request-log";
+import { withStreamedBody } from "./html-stream";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { isKitNoticeDocument, readKitRestoredWrite } from "./kit-restored-write";
@@ -600,12 +601,19 @@ export interface HookDispatchDeps {
 // security headers, the text/html charset fix and the staging X-Robots-Tag.
 // web/src/hooks.server.ts is a pure env binding that supplies appUrl and
 // featuredImageHosts; no test needs to import SvelteKit code to pin this.
+// Wire encoding (TWO-7591): the staged edge marks fixed-length HTML
+// untransformable (`cache-control: no-transform` plus Content-Length), so
+// decorated Kit pages left uncompressed while other types were encoded.
+// The returned body streams at unknown length so the platform's own br/gzip
+// negotiation applies; Hono answers already stream inside app.fetch (the
+// identical middleware in src/index.tsx) and the undecorated Hono-fallback
+// path never reaches this function.
 function decorateKitResponse(
   response: Response,
   event: HookEventLike,
   appUrl: string,
   featuredImageHosts?: string,
-): void {
+): Response {
   response.headers.set(KIT_RENDERER_HEADER, KIT_RENDERER_VALUE);
   for (const [name, value] of securityHeadersFor(
     { path: event.url.pathname, method: event.request.method },
@@ -620,6 +628,7 @@ function decorateKitResponse(
     const tag = robotsTagFor(appUrl, event.url.hostname);
     if (tag) response.headers.set("X-Robots-Tag", tag);
   }
+  return withStreamedBody(response);
 }
 
 // Catastrophic-fallback CSP widening, async twin of the leaf allowlist: the
@@ -724,8 +733,7 @@ function sameOriginRefusal(
       "cache-control": "no-store, private",
     },
   });
-  decorateKitResponse(response, event, appUrl, featuredImageHosts);
-  return response;
+  return decorateKitResponse(response, event, appUrl, featuredImageHosts);
 }
 
 // A member-read route renders inside the boundary. The manifest supplies the
@@ -1130,7 +1138,7 @@ export async function dispatchHookRequest(
   // refusals never reach a boundary, so the wrappers above received this same
   // id and their 429 pages render it as the Hono support reference.
   response.headers.set("x-request-id", requestId);
-  decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
+  response = decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   await allowlistKitFallbackStyle(response);
   return response;
 }

@@ -435,7 +435,9 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // rejects by 369 and 370), and the QA-token throttle 341248 ceiling on
 // top of that (two builds, both 341055; 340736 rejects by 319), and the
 // explicitly bounded Ember 342272 ceiling (frozen builds 341996/341995;
-// 341248 rejects by 748/747). See the dated decision for build identities.
+// 341248 rejects by 748/747), and the HTML wire-streaming 344320 ceiling
+// (exact-head CI 344075, run 43343222288; the 256-step 344064 rejects by 11).
+// See the dated decision for build identities.
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
@@ -471,10 +473,11 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   340736: { intervalBytes: 340594, exactBytes: 340736, overBytes: 340737 },
   341248: { intervalBytes: 341055, exactBytes: 341248, overBytes: 341249 },
   342272: { intervalBytes: 341996, exactBytes: 342272, overBytes: 342273 },
+  344320: { intervalBytes: 344075, exactBytes: 344320, overBytes: 344321 },
 };
 const SHIPPING_SERVER_GZIP_UNSUPPORTED =
   `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
-  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688, 339200, 339456, 339968, 340224, 340736, 341248, 342272`;
+  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688, 339200, 339456, 339968, 340224, 340736, 341248, 342272, 344320`;
 
 test("shipping budget: server gzip allocation is explicitly approved", () => {
   assert.ok(
@@ -565,6 +568,8 @@ const SHIPPING_SERVER_RAW_CAP = JSON.parse(SHIPPING_BUDGET_BYTES.toString("utf8"
 // sizing: main-tip CI measured 1233211 raw (run 42954334978); 1232896 rejects by 315.
 // 1233920 admits the content display face leaf growth (#2120): exact-head
 // CI measured 1233453 raw (run 42985471999); the 1233408 step rejects by 45.
+// 1234944 admits the HTML wire-streaming helper: exact-head CI `d020bf0e1`
+// measured 1234582 raw (run 43343222288); the 1234432 step rejects by 150.
 const SHIPPING_SERVER_RAW_ALLOCATIONS = {
   1212416: { intervalBytes: 1212373, exactBytes: 1212416, overBytes: 1212417 },
   1213440: { intervalBytes: 1213135, exactBytes: 1213440, overBytes: 1213441 },
@@ -575,10 +580,11 @@ const SHIPPING_SERVER_RAW_ALLOCATIONS = {
   1232896: { intervalBytes: 1232399, exactBytes: 1232896, overBytes: 1232897 },
   1233408: { intervalBytes: 1233211, exactBytes: 1233408, overBytes: 1233409 },
   1233920: { intervalBytes: 1233453, exactBytes: 1233920, overBytes: 1233921 },
+  1234944: { intervalBytes: 1234582, exactBytes: 1234944, overBytes: 1234945 },
 };
 const SHIPPING_SERVER_RAW_UNSUPPORTED =
   `unsupported server raw allocation ${String(SHIPPING_SERVER_RAW_CAP)}: ` +
-  `expected one of 1212416, 1213440, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408, 1233920`;
+  `expected one of 1212416, 1213440, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408, 1233920, 1234944`;
 
 test("shipping budget: server raw allocation is explicitly approved", () => {
   assert.ok(
@@ -1189,6 +1195,25 @@ function shippingServerGzipCases() {
         axis: "gzip",
         bytes: 342273,
         ceiling: 342272,
+        breach: true,
+      },
+    ];
+  }
+  if (SHIPPING_SERVER_GZIP_CAP === 344320) {
+    return [
+      {
+        name: "server gzip newly allowed interval",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 344075,
+      },
+      { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 344320 },
+      {
+        name: "server gzip one byte over",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 344321,
+        ceiling: 344320,
         breach: true,
       },
     ];
