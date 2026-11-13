@@ -157,6 +157,7 @@ const checkSteps = checkJob
   .slice(1)
   .map((entry) => ({
     label: entry.match(/^name: (.+)$/m)?.[1] ?? entry.split("\n", 1)[0],
+    id: entry.match(/^(?:id: |        id: )([\w-]+)$/m)?.[1],
     guard: entry.match(/^        if: (.+)$/m)?.[1] ?? "success()",
   }));
 const AUDIT = "Dependency audit (lockfile, including dev dependencies)";
@@ -167,7 +168,7 @@ const PATCH = "Patch coverage (WARN)";
 const SUMMARY = "Coverage job summary";
 const UPLOAD = "Upload coverage report";
 
-function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
+function evaluateGuard(guard, { jobFailed, scope, reportPresent, stepOutcomes = new Map() }) {
   const expression = guard.replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, "$1");
   const tokens = expression.match(/'[^']*'|[A-Za-z_][\w.]*\(?|!=|==|&&|\|\||[()!]|\)/g) ?? [];
   assert.equal(tokens.join(""), expression.replace(/\s+/g, ""), `unsupported guard: ${guard}`);
@@ -197,6 +198,8 @@ function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
       );
       return close(reportPresent ? "present-hash" : "");
     }
+    const step = token.match(/^steps\.([\w-]+)\.outcome$/);
+    if (step) return stepOutcomes.get(step[1]) ?? "";
     const output = token.match(/^needs\.scope\.outputs\.(\w+)$/);
     assert(output, `unsupported guard token ${token}: ${guard}`);
     return scope[output[1]] ?? "";
@@ -243,21 +246,38 @@ function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
 // when it runs; a step whose guard is false is skipped without failing the job.
 function simulateCheckJob({ failing, scope, reportPresent = true }) {
   const outcomes = new Map();
+  const stepOutcomes = new Map();
   let jobFailed = false;
-  for (const { label, guard } of checkSteps) {
-    if (!evaluateGuard(guard, { jobFailed, scope, reportPresent })) {
-      outcomes.set(label, "skipped");
-      continue;
-    }
-    const failed = label === failing;
-    outcomes.set(label, failed ? "failure" : "success");
-    if (failed) jobFailed = true;
+  for (const { label, id, guard } of checkSteps) {
+    const runs = evaluateGuard(guard, { jobFailed, scope, reportPresent, stepOutcomes });
+    const outcome = !runs ? "skipped" : label === failing ? "failure" : "success";
+    outcomes.set(label, outcome);
+    if (id) stepOutcomes.set(id, outcome);
+    if (outcome === "failure") jobFailed = true;
   }
   if (failing) assert.equal(outcomes.get(failing), "failure", `${failing} must run to fail`);
   return outcomes;
 }
 
 const codeScope = { docs_only: "false", draft: "false", full: "true", app: "true" };
+
+test("the CSS diagnostic runs only when the performance step fails", () => {
+  const perf = "Kit performance budgets (worker + generated assets)";
+  const diagnostic = "Kit generated CSS on budget failure";
+  assert.equal(checkSteps.find((step) => step.label === perf)?.id, "kit_perf");
+  assert.equal(simulateCheckJob({ failing: perf, scope: codeScope }).get(diagnostic), "success");
+  assert.equal(
+    simulateCheckJob({ failing: COVERAGE, scope: codeScope }).get(diagnostic),
+    "skipped",
+  );
+  assert.equal(simulateCheckJob({ scope: codeScope }).get(diagnostic), "skipped");
+  for (const scopeName of ["docs_only", "draft"]) {
+    assert.equal(
+      simulateCheckJob({ scope: { ...codeScope, [scopeName]: "true" } }).get(diagnostic),
+      "skipped",
+    );
+  }
+});
 
 test("the check job models the guarded steps the simulation relies on", () => {
   const labels = checkSteps.map((step) => step.label);
