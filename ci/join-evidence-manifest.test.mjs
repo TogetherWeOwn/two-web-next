@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mkdtemp, rm, symlink, truncate, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { deflateSync } from "node:zlib";
 import { expectedCaptureNames } from "./join-evidence-contract.mjs";
-import { createCaptureManifest } from "./join-evidence-manifest.mjs";
+import { readCaptureFiles } from "./join-evidence-files.mjs";
+import { createCaptureManifest, createTargetCaptureManifest } from "./join-evidence-manifest.mjs";
+import { collectSourceIdentities } from "./join-evidence-source.mjs";
 
 function chunk(type, data) {
   const name = Buffer.from(type);
@@ -35,8 +41,8 @@ function image(width, height, marker) {
   ]);
 }
 
-function fixture() {
-  const names = expectedCaptureNames();
+function fixture(profile = "baseline") {
+  const names = expectedCaptureNames(profile);
   const cases = names
     .map((file, index) => {
       const [, renderer, state, width] = /^(hono|kit)-(.+)-(1280|390)\.png$/.exec(file);
@@ -69,6 +75,46 @@ function fixture() {
   };
 }
 
+test("collects actual checkout identities and detects untracked changes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "join-evidence-source-"));
+  try {
+    const git = (...args) =>
+      execFileSync("git", ["-C", directory, ...args], {
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          HOME: directory,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_AUTHOR_NAME: "Fixture",
+          GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+          GIT_COMMITTER_NAME: "Fixture",
+          GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+        },
+      }).trim();
+    git("init", "--quiet");
+    await writeFile(join(directory, "tracked"), "original");
+    git("add", "tracked");
+    git("commit", "--quiet", "-m", "fixture");
+    const sha = git("rev-parse", "HEAD");
+    assert.deepEqual(collectSourceIdentities(directory, directory), {
+      application: sha,
+      applicationClean: true,
+      controller: sha,
+      controllerClean: true,
+    });
+    await writeFile(join(directory, "tracked"), "modified");
+    assert.equal(collectSourceIdentities(directory, directory).applicationClean, false);
+    git("add", "tracked");
+    assert.equal(collectSourceIdentities(directory, directory).controllerClean, false);
+    git("reset", "--hard", "--quiet", "HEAD");
+    await writeFile(join(directory, "untracked"), "change");
+    assert.equal(collectSourceIdentities(directory, directory).applicationClean, false);
+    assert.throws(() => collectSourceIdentities("relative", directory), /absolute/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("manifest hashes the validated captures and receipt", () => {
   const input = fixture();
   const manifest = createCaptureManifest(input);
@@ -97,6 +143,78 @@ test("manifest hashes the validated captures and receipt", () => {
       width,
       height: height + (item.file === expectedCaptureNames()[0] ? 10 : 0),
     });
+  }
+});
+
+test("validates target receipts and images using the selected profile", () => {
+  const input = fixture("target");
+  const manifest = createCaptureManifest({ ...input, profile: "target" });
+  assert.equal(manifest.images.length, 20);
+  assert.equal(manifest.profile, "target");
+  assert.ok(manifest.images.some((item) => item.state === "expired"));
+  assert.throws(() => createCaptureManifest(input), /file set/);
+});
+
+test("reads target evidence only with the target profile", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "join-evidence-target-"));
+  try {
+    const input = fixture("target");
+    for (const [name, bytes] of input.files) await writeFile(join(directory, name), bytes);
+    await assert.rejects(readCaptureFiles(directory), /unexpected evidence file set/);
+    const controller = "94e2a41941e5c0779120ce997dbbd815e9bb0874";
+    const actual = { ...input.actual, controller };
+    const expected = { ...input.expected, controller };
+    const args = { directory, actual, expected, runId: input.runId, runAttempt: input.runAttempt };
+    await assert.rejects(
+      createTargetCaptureManifest({ ...args, actual: input.actual }),
+      /SHA mismatch/,
+    );
+    await assert.rejects(
+      createTargetCaptureManifest({ ...args, actual: { ...actual, controllerClean: false } }),
+      /not clean/,
+    );
+    await assert.rejects(
+      createTargetCaptureManifest({ ...args, actual: input.actual, expected: input.expected }),
+      /unsupported target controller SHA/,
+    );
+    const manifest = await createTargetCaptureManifest(args);
+    assert.equal(manifest.profile, "target");
+    assert.equal(manifest.images.length, 20);
+    assert.ok(manifest.images.some((item) => item.state === "stale-populated"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("reads only bounded regular evidence files", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "join-evidence-files-"));
+  try {
+    const names = [...expectedCaptureNames(), "test-report.tap"];
+    for (const name of names) await writeFile(join(directory, name), name);
+    const result = await readCaptureFiles(directory);
+    for (const name of names) assert.equal(result.files.get(name).toString(), name);
+
+    const first = join(directory, names[0]);
+    await unlink(first);
+    await symlink(join(directory, names[1]), first);
+    await assert.rejects(readCaptureFiles(directory));
+    await unlink(first);
+    await writeFile(first, "image");
+    const report = join(directory, "test-report.tap");
+    for (const [path, limit] of [
+      [report, 1024 * 1024],
+      [first, 32 * 1024 * 1024],
+    ]) {
+      await truncate(path, limit);
+      await readCaptureFiles(directory);
+      await truncate(path, limit + 1);
+      await assert.rejects(readCaptureFiles(directory), /invalid evidence file/);
+      await writeFile(path, "reset");
+    }
+    await writeFile(join(directory, "unexpected"), "extra");
+    await assert.rejects(readCaptureFiles(directory), /unexpected evidence file set/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
