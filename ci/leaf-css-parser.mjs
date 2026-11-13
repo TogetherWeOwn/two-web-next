@@ -1,7 +1,7 @@
 // Parse only the generator's literal or fixed-token initializer, never code.
 export function parseLeafModule(source) {
   const match =
-    /^(?:\/\/[^\n]*\n)*export const LEAF_CRITICAL_CSS: string =\n {2}("(?:[^"\\\n\r]|\\.)*")(\.split\("~"\)\.join\("\.base-theme"\))?;\nexport const LEAF_CRITICAL_CSS_SHA256: string = "([A-Za-z0-9+/]{43}=)";\n$/.exec(
+    /^(?:\/\/[^\n\r\u2028\u2029]*\n)*export const LEAF_CRITICAL_CSS: string =\n {2}("(?:[^"\\\n\r]|\\.)*")(\.split\("~"\)\.join\("\.base-theme"\))?;\nexport const LEAF_CRITICAL_CSS_SHA256: string = "([A-Za-z0-9+/]{43}=)";\n$/.exec(
       source,
     );
   if (!match) return null;

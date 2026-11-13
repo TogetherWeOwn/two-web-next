@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const root = resolve(import.meta.dirname, "..");
 const script = join(root, "ci/leaf-css-review.mjs");
 const scratch: string[] = [];
+const failure = { ok: false, error_code: "leaf_css_review_failed" };
 afterEach(() => {
   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -78,7 +79,6 @@ describe("generated leaf CSS review evidence", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, changed: false });
   });
-
   it.each([
     ["altered decoder", "text.replace('.join(\".base-theme\")', '.join(\".other\")')"],
     [
@@ -98,13 +98,28 @@ describe("generated leaf CSS review evidence", () => {
     const altered = commit();
     for (const result of [run(altered, base), run(base, altered)]) {
       expect(result.status).toBe(1);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        ok: false,
-        error_code: "leaf_css_review_failed",
-      });
+      expect(JSON.parse(result.stdout)).toMatchObject(failure);
     }
   });
-
+  it.each(["\r", " ", " "])("rejects statements after comment terminator %j", (terminator) => {
+    const { dir, base, commit, run } = fixture();
+    const generator = join(dir, "ci/build-leaf-css.mjs");
+    const source = readFileSync(generator, "utf8");
+    for (const literal of [false, true]) {
+      const initializer =
+        'const initializer = packed ? `${literal}.split("~").join(".base-theme")` : literal;';
+      const prefix = JSON.stringify(`// comment${terminator}extra();\n`);
+      let modified = source.replace(
+        "writeFileSync(join(repoRoot, OUT), text);",
+        `writeFileSync(join(repoRoot, OUT), ${prefix} + text);`,
+      );
+      if (literal)
+        modified = modified.replace(initializer, "const initializer = JSON.stringify(css);");
+      writeFileSync(generator, modified);
+      const altered = commit();
+      for (const result of [run(altered, base), run(base, altered)]) expect(result.status).toBe(1);
+    }
+  });
   it.each(["base", "head"])("rejects coherent scratch-input mutation on the %s side", (side) => {
     const { dir, base, commit, run } = fixture();
     const generator = join(dir, "ci/build-leaf-css.mjs");
@@ -145,26 +160,21 @@ describe("generated leaf CSS review evidence", () => {
     }
   });
 
-  it.each(["base", "head"])("rejects a missing mandatory blob on the %s side", (side) => {
+  it.each(["missing", "optional", "utf8"])("rejects %s source on either side", (kind) => {
     const { dir, base, commit, run } = fixture();
-    rmSync(join(dir, "public/theme.css"));
-    const missing = commit();
-    const result = side === "base" ? run(base, missing) : run(missing, base);
-    expect(result.status).toBe(1);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      ok: false,
-      error_code: "leaf_css_review_failed",
-    });
-  });
-
-  it.each(["base", "head"])("rejects an invalid optional entry on the %s side", (side) => {
-    const { dir, base, commit, run } = fixture();
-    mkdirSync(join(dir, "assets/leaf-only.css"), { recursive: true });
-    writeFileSync(join(dir, "assets/leaf-only.css/nested"), "not a blob");
+    if (kind === "missing") rmSync(join(dir, "public/theme.css"));
+    if (kind === "utf8") writeFileSync(join(dir, "public/theme.css"), Buffer.from([0xff]));
+    if (kind === "optional") {
+      mkdirSync(join(dir, "assets/leaf-only.css"), { recursive: true });
+      writeFileSync(join(dir, "assets/leaf-only.css/nested"), "not a blob");
+    }
     const invalid = commit();
-    const result = side === "base" ? run(base, invalid) : run(invalid, base);
-    expect(result.status).toBe(1);
-    expect(JSON.parse(result.stdout).detail).toContain("invalid optional source entry");
+    for (const result of [run(base, invalid), run(invalid, base)]) {
+      expect(result.status).toBe(1);
+      const report = JSON.parse(result.stdout);
+      if (kind === "optional") expect(report.detail).toContain("invalid optional source entry");
+      else expect(report).toMatchObject(failure);
+    }
   });
 
   it.each(["ls-tree", "show"])(
@@ -183,9 +193,7 @@ describe("generated leaf CSS review evidence", () => {
       writeFileSync(
         wrapper,
         `#!/bin/sh
-if [ "$1" = "$FAIL_COMMAND" ]; then
-  case "$*" in *"$FAIL_SHA"*"assets/leaf-only.css"*) exit 1 ;; esac
-fi
+[ "$1" != "$FAIL_COMMAND" ] || case "$*" in *"$FAIL_SHA"*"assets/leaf-only.css"*) exit 1 ;; esac
 exec "$REAL_GIT" "$@"
 `,
       );
@@ -198,25 +206,10 @@ exec "$REAL_GIT" "$@"
           FAIL_SHA: sha,
         });
         expect(result.status).toBe(1);
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          ok: false,
-          error_code: "leaf_css_review_failed",
-        });
+        expect(JSON.parse(result.stdout)).toMatchObject(failure);
       }
     },
   );
-
-  it.each(["base", "head"])("rejects invalid UTF-8 source bytes on the %s side", (side) => {
-    const { dir, base, commit, run } = fixture();
-    writeFileSync(join(dir, "public/theme.css"), Buffer.from([0xff]));
-    const invalid = commit();
-    const result = side === "base" ? run(base, invalid) : run(invalid, base);
-    expect(result.status).toBe(1);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      ok: false,
-      error_code: "leaf_css_review_failed",
-    });
-  });
 
   it("reports every matching recipe when an optional seam is empty and unused", () => {
     const { dir, commit, run } = fixture();
@@ -275,10 +268,7 @@ exec "$REAL_GIT" "$@"
     writeFileSync(join(dir, "public/theme.css"), "</style><script>unsafe</script>");
     const result = run(commit());
     expect(result.status).toBe(1);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      ok: false,
-      error_code: "leaf_css_review_failed",
-    });
+    expect(JSON.parse(result.stdout)).toMatchObject(failure);
   });
 
   it("snapshots each revision with its own generator, not the head's", () => {
@@ -320,6 +310,13 @@ exec "$REAL_GIT" "$@"
     writeFileSync(join(dir, "assets/leaf-only.css"), "uncommitted");
     const result = run(head);
     expect(result.status, result.stdout + result.stderr).toBe(0);
+    const subdirectory = spawnSync(process.execPath, [script, base, head], {
+      cwd: join(dir, "public"),
+      encoding: "utf8",
+      timeout: 15000,
+    });
+    expect(subdirectory.status, subdirectory.stdout + subdirectory.stderr).toBe(0);
+    expect(JSON.parse(subdirectory.stdout)).toEqual(JSON.parse(result.stdout));
     const report = JSON.parse(result.stdout);
     expect(report.changed).toBe(true);
     const hash = (parts: string[]) =>

@@ -49,7 +49,11 @@ function snapshot(sha) {
     for (const input of inputs) copyBlob(input);
     for (const input of optionalInputs) {
       // A successful tree lookup distinguishes a genuinely absent seam from a Git failure.
-      const entry = execFileSync("git", ["ls-tree", "-z", sha, "--", input], options);
+      const entry = execFileSync(
+        "git",
+        ["ls-tree", "--full-tree", "-z", sha, "--", input],
+        options,
+      );
       if (!entry) continue;
       if (!/^\d+ blob [a-f0-9]+\tassets\/leaf-only\.css\0$/.test(entry)) {
         throw new Error("invalid optional source entry");
