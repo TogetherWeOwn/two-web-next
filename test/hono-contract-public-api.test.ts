@@ -128,6 +128,54 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("mounted public API: namespace boundary controls", () => {
+  it.each([
+    "/api/publicity",
+    "/api/publicity/",
+    "/api/publicity/foo",
+    "/api/public-ev",
+    "/api/public2",
+  ])("%s remains a branded HTML 404", async (path) => {
+    const res = await request(path);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toMatch(/We cannot find that page|error-heading/);
+    expect(() => JSON.parse(body)).toThrow();
+    noReads();
+  });
+
+  it.each([200, 404])("keeps asset lookup outside the namespace (asset %i)", async (status) => {
+    const fetch = vi.fn(
+      async () => new Response(status === 200 ? "asset-canary" : null, { status }),
+    );
+    const res = await request("/api/publicity", "GET", {}, { ...env, ASSETS: { fetch } } as Env);
+    expect(res.status).toBe(status);
+    expect(fetch).toHaveBeenCalledOnce();
+    if (status === 200) expect(await res.text()).toContain("asset-canary");
+    else expect(res.headers.get("content-type")).toContain("text/html");
+    noReads();
+  });
+
+  it.each(["not-a-key!!!", "%00"])("keeps malformed event key %s inert", async (key) => {
+    const res = await request(`/api/public/events/${key}`);
+    expect(res.status).toBe(422);
+    const raw = await res.text();
+    expect(raw).not.toContain(key);
+    const body = JSON.parse(raw);
+    expect(body.error.code).toBe("invalid_request");
+    expect(validatePublicSchema(body, "PublicDataError")).toEqual([]);
+    noReads();
+  });
+
+  it("keeps the community route under a hostile query without reflection", async () => {
+    const res = await request("/api/public/community?x=../etc/passwd");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.text()).not.toContain("etc/passwd");
+  });
+});
+
 describe("mounted public API: methods and conditional HEAD", () => {
   it.each(PATHS)(
     "HEAD reaches the GET handler and shares its cached representation: %s",
