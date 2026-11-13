@@ -1,0 +1,42 @@
+name: Kit gallery database metadata probe
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kit-gallery-database-probe-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:ci@127.0.0.1:${{ job.services.postgres.ports[5432] }}/postgres
+      GALLERY_SERVICE_ID: ${{ job.services.postgres.id }}
+      GALLERY_SERVICE_PORT: ${{ job.services.postgres.ports[5432] }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      # Metadata only: success does not authorize a database connection or migration.
+      - run: node --test ci/kit-gallery-database-identity.test.mjs ci/kit-gallery-database-hosted.test.mjs
