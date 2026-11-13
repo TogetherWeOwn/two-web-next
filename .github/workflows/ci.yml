@@ -336,6 +336,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: Prepare first-party generated inputs
+        run: npm run generate:first-party
       - name: Cache Playwright Chromium
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1311,6 +1313,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --include=dev --no-audit --no-fund
+      - name: Prepare first-party generated inputs
+        run: npm run generate:first-party
       - name: Cache Playwright Chromium
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

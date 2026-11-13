@@ -90,11 +90,12 @@ describe("generated leaf CSS review evidence", () => {
   ])("rejects %s in generated snapshots", (_name, mutation) => {
     const { dir, base, commit, run } = fixture();
     const generator = join(dir, "ci/build-leaf-css.mjs");
-    const source = readFileSync(generator, "utf8").replace(
-      "writeFileSync(join(repoRoot, OUT), text);",
-      `writeFileSync(join(repoRoot, OUT), ${mutation});`,
-    );
-    writeFileSync(generator, source);
+    const source = readFileSync(generator, "utf8");
+    const target = "writeFileSync(fd, text);";
+    expect(source.split(target)).toHaveLength(2);
+    const modified = source.replace(target, `writeFileSync(fd, ${mutation});`);
+    expect(modified).not.toBe(source);
+    writeFileSync(generator, modified);
     const altered = commit();
     for (const result of [run(altered, base), run(base, altered)]) {
       expect(result.status).toBe(1);
@@ -109,12 +110,14 @@ describe("generated leaf CSS review evidence", () => {
       const initializer =
         'const initializer = packed ? `${literal}.split("~").join(".base-theme")` : literal;';
       const prefix = JSON.stringify(`// comment${terminator}extra();\n`);
-      let modified = source.replace(
-        "writeFileSync(join(repoRoot, OUT), text);",
-        `writeFileSync(join(repoRoot, OUT), ${prefix} + text);`,
-      );
-      if (literal)
+      const target = "writeFileSync(fd, text);";
+      expect(source.split(target)).toHaveLength(2);
+      let modified = source.replace(target, `writeFileSync(fd, ${prefix} + text);`);
+      expect(modified).not.toBe(source);
+      if (literal) {
+        expect(modified.split(initializer)).toHaveLength(2);
         modified = modified.replace(initializer, "const initializer = JSON.stringify(css);");
+      }
       writeFileSync(generator, modified);
       const altered = commit();
       for (const result of [run(altered, base), run(base, altered)]) expect(result.status).toBe(1);

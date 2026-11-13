@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -391,6 +392,66 @@ for (const [directory, hooks] of [
       });
     });
   }
+}
+
+for (const [bundle, constant] of [
+  ["leaf", "LEAF"],
+  ["events", "EVENTS"],
+]) {
+  test(`${bundle} CSS publication preserves the old module until atomic rename and cleans up on failure`, () => {
+    withScratch((root) => {
+      mkdirSync(join(root, "ci"));
+      cpSync(join(ROOT, `ci/build-${bundle}-css.mjs`), join(root, `ci/build-${bundle}-css.mjs`));
+      for (const name of ["styles.css", "theme-tokens.css", "theme.css", "schedule-theme.css"]) {
+        writeFileSync(join(root, "public", name), `/* ${name} */`);
+      }
+      const output = join(root, `src/${bundle}-critical-css.ts`);
+      const preload = join(root, "observe.mjs");
+      writeFileSync(
+        preload,
+        `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const output = ${JSON.stringify(output)};
+const originalWrite = fs.writeFileSync;
+const originalRename = fs.renameSync;
+fs.writeFileSync = (target, ...args) => {
+  if (target === output) throw new Error("in-place publication");
+  return originalWrite(target, ...args);
+};
+fs.renameSync = (source, target) => {
+  if (target !== output || fs.readFileSync(output, "utf8") !== "old module") throw new Error("old module changed before rename");
+  if (!fs.readFileSync(source, "utf8").includes(${JSON.stringify(`${constant}_CRITICAL_CSS_SHA256`)})) throw new Error("incomplete temporary module");
+  if (process.env.FAIL_RENAME === "1") throw new Error("injected rename failure");
+  return originalRename(source, target);
+};
+syncBuiltinESMExports();
+`,
+      );
+      const run = (fail) =>
+        execFileSync(
+          process.execPath,
+          ["--import", preload, join(root, `ci/build-${bundle}-css.mjs`)],
+          {
+            env: { ...process.env, FAIL_RENAME: fail ? "1" : "0" },
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+      writeFileSync(output, "old module");
+      assert.throws(() => run(true), /injected rename failure/);
+      assert.equal(readFileSync(output, "utf8"), "old module");
+      assert.deepEqual(
+        readdirSync(join(root, "src")).filter((name) => name.startsWith(`${bundle}-critical-css`)),
+        [`${bundle}-critical-css.ts`],
+      );
+      run(false);
+      assert.match(readFileSync(output, "utf8"), new RegExp(`${constant}_CRITICAL_CSS_SHA256`));
+      assert.deepEqual(
+        readdirSync(join(root, "src")).filter((name) => name.startsWith(`${bundle}-critical-css`)),
+        [`${bundle}-critical-css.ts`],
+      );
+    });
+  });
 }
 
 test("ember token sync selftest passes on the wired sheets", () => {
