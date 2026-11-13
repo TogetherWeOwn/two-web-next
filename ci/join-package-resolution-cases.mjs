@@ -78,6 +78,65 @@ export function registerPackageResolutionCases(label, load) {
     assert.equal(await value(root, "ranked-pkg/other"), "general");
   });
 
+  test(`${label}: ordered conditions in export patterns`, async (t) => {
+    const root = await fixture(t);
+    const dir = join(root, "node_modules", "pattern-pkg");
+    await manifest(dir, {
+      exports: {
+        "./default/*": { default: "./default/*.mjs", import: "./wrong/*.mjs" },
+        "./import/*": { import: "./import/*.mjs", default: "./wrong/*.mjs" },
+      },
+    });
+    await moduleFile(dir, "default/part.mjs", "default-first");
+    await moduleFile(dir, "import/part.mjs", "import-first");
+    assert.equal(await value(root, "pattern-pkg/default/part"), "default-first");
+    assert.equal(await value(root, "pattern-pkg/import/part"), "import-first");
+  });
+
+  test(`${label}: module execution failures propagate with a competing web package`, async (t) => {
+    const root = await fixture(t);
+    const dir = join(root, "node_modules", "execution-pkg");
+    await manifest(dir, { exports: "./index.mjs" });
+    await writeFile(join(dir, "index.mjs"), 'throw new Error("fixture execution failed");');
+    const web = join(root, "web", "node_modules", "execution-pkg");
+    await manifest(web, { exports: "./index.mjs" });
+    await moduleFile(web, "index.mjs", "web");
+    await assert.rejects(
+      Promise.resolve().then(() => load(root, "execution-pkg")),
+      {
+        message: "fixture execution failed",
+      },
+    );
+  });
+
+  test(`${label}: self-reference takes precedence over installed packages`, async (t) => {
+    const root = await fixture(t);
+    await manifest(root, { name: "self-pkg", exports: { ".": "./self.mjs" } });
+    await moduleFile(root, "self.mjs", "self");
+    for (const base of [root, join(root, "web")]) {
+      const dir = join(base, "node_modules", "self-pkg");
+      await manifest(dir, { exports: { ".": "./index.mjs", "./private": "./index.mjs" } });
+      await moduleFile(dir, "index.mjs", "installed");
+    }
+    assert.equal(await value(root, "self-pkg"), "self");
+    await rejects(root, "self-pkg/private", "ERR_PACKAGE_PATH_NOT_EXPORTED");
+  });
+
+  test(`${label}: bare-package import aliases`, async (t) => {
+    const root = await fixture(t);
+    await manifest(root, {
+      imports: { "#package": "alias-pkg", "#scoped": "@fixture/alias/part" },
+    });
+    const bare = join(root, "node_modules", "alias-pkg");
+    await manifest(bare, { exports: "./index.mjs" });
+    await moduleFile(bare, "index.mjs", "bare");
+    const scoped = join(root, "node_modules", "@fixture", "alias");
+    await manifest(scoped, { exports: { "./part": "./part.mjs" } });
+    await moduleFile(scoped, "part.mjs", "scoped");
+    assert.equal(await value(root, "#package"), "bare");
+    assert.equal(await value(root, "#scoped"), "scoped");
+  });
+
   test(`${label}: aliases and literal wildcard replacement`, async (t) => {
     const root = await fixture(t);
     await manifest(root, {

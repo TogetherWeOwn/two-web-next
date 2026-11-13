@@ -8,6 +8,8 @@ import { pathToFileURL } from "node:url";
 import { registerPackageResolutionCases } from "./join-package-resolution-cases.mjs";
 import { appGit, srcImport } from "./join-state-evidence-source.mjs";
 
+// The probe imports from the fixture root; native import failures remain asynchronous.
+// Resolver consumers must separately assert synchronous failures and target containment.
 registerPackageResolutionCases("native Node", async (root, specifier) => {
   const probe = join(root, "probe.mjs");
   await writeFile(probe, "export const load = (specifier) => import(specifier);\n");
