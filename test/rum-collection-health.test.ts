@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+// @ts-expect-error Standalone tooling has no declaration file.
 import { runRumCheck } from "../ci/rum-check.mjs";
 
 const budget = { lcpMs: 2500, cls: 0.1, inpMs: 200, minSamples: 50 };
