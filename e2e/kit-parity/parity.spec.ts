@@ -434,10 +434,11 @@ for (const target of targets) {
       expect(hasLoad !== hasFallback, `${target.name} join shows exactly one widget zone`).toBe(
         true,
       );
-      if (body.includes('data-testid="join-widget-presence"')) expect(hasLoad).toBe(true);
-      // Public without a flash: no cookies are sent on this journey.
-      expect(["public, max-age=60", "public, max-age=3600"]).toContain(
-        response.headers()["cache-control"],
+      const hasPresence = body.includes('data-testid="join-widget-presence"');
+      if (hasPresence) expect(hasLoad).toBe(true);
+      // No flash cookies are sent on this journey; presence must not be stored.
+      expect(response.headers()["cache-control"]).toBe(
+        hasPresence ? "no-store" : "public, max-age=3600",
       );
       expect(response.headers()["vary"] ?? "").toMatch(/cookie/i);
     });

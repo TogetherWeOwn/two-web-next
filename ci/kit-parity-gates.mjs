@@ -59,7 +59,7 @@ export const PARITY_ROUTES = [
     expectStatus: 200,
     expectMarker: "manifest",
     contract: "join",
-    cache: ["public, max-age=60", "public, max-age=3600"],
+    cache: ["no-store", "public, max-age=3600"],
     compareSection: null,
   },
   // GET /auth/recover only: the one-use journey writes stay Hono-owned, so
@@ -700,8 +700,10 @@ function assertJoinContract(label, html, get, expected) {
   const hasFlash = html.includes('data-testid="join-result"');
   if (hasFlash && cacheActual !== "private, no-store")
     failures.push(`${label}: flash view answers private, no-store`);
-  if (!hasFlash && cacheActual === "private, no-store")
-    failures.push(`${label}: flash-free view keeps its shared-cache TTL`);
+  if (!hasFlash && hasPresence && cacheActual !== "no-store")
+    failures.push(`${label}: presence view answers no-store`);
+  if (!hasFlash && !hasPresence && cacheActual !== "public, max-age=3600")
+    failures.push(`${label}: static view keeps its shared-cache TTL`);
   return failures;
 }
 
@@ -1310,7 +1312,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     `unavailable — the join button above still works.</p>`;
   const joinCases = [
     ["unit/join cold facade", joinShell(joinFacade), "public, max-age=3600"],
-    ["unit/join warm presence", joinShell(joinPresence), "public, max-age=60"],
+    ["unit/join warm presence", joinShell(joinPresence), "no-store"],
     ["unit/join fallback", joinShell(joinFallback), "public, max-age=3600"],
   ];
   for (const [name, html, cache] of joinCases) {
