@@ -2,6 +2,8 @@
   let count = $state(0);
 </script>
 
+<svelte:head><title>Café fixture</title></svelte:head>
+
 <button onclick={() => count++}>Count: {count}</button>
 
 <style>

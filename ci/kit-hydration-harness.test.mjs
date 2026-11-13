@@ -12,7 +12,10 @@ test("fixture serves SSR, hydrates, styles and closes", { timeout: 120000 }, asy
   let browser;
   try {
     const response = await fetch(server.url);
-    assert.match(await response.text(), /Count: 0/);
+    assert.match(response.headers.get("content-type"), /charset=utf-8/);
+    const html = await response.text();
+    assert.match(html, /Count: 0/);
+    assert.match(html, /<title>Café fixture<\/title>/);
     assert.equal((await fetch(`${server.url}/missing`)).status, 404);
     browser = await chromium.launch();
     for (const javaScriptEnabled of [false, true]) {
@@ -22,6 +25,7 @@ test("fixture serves SSR, hydrates, styles and closes", { timeout: 120000 }, asy
         const errors = [];
         page.on("pageerror", (error) => errors.push(error.message));
         await page.goto(server.url);
+        assert.equal(await page.title(), "Café fixture");
         if (javaScriptEnabled) await page.waitForSelector('html[data-hydrated="true"]');
         const button = page.getByRole("button", { name: "Count: 0" });
         assert.equal(

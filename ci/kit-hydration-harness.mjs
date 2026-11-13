@@ -40,9 +40,9 @@ export async function serveKitFixture({ fixture, styles = "", bodyClass = "", ro
   const modulePath = JSON.stringify(fixture);
   const ssr = await bundle(
     "server",
-    `import { render } from 'svelte/server'; import Fixture from ${modulePath}; export const html = render(Fixture).body;`,
+    `import { render } from 'svelte/server'; import Fixture from ${modulePath}; export const { body, head } = render(Fixture);`,
   );
-  const { html } = await import(
+  const { body, head } = await import(
     `data:text/javascript;base64,${Buffer.from(ssr).toString("base64")}`
   );
   const js = await bundle(
@@ -58,9 +58,9 @@ export async function serveKitFixture({ fixture, styles = "", bodyClass = "", ro
       routes[request.url](request, response);
     } else if (request.url === "/") {
       response
-        .writeHead(200, { "content-type": "text/html" })
+        .writeHead(200, { "content-type": "text/html; charset=utf-8" })
         .end(
-          `<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body class="${bodyClass}"><div id="fixture">${html}</div><script src="/fixture.js"></script></body></html>`,
+          `<!doctype html><html><head><meta charset="utf-8">${head}<link rel="stylesheet" href="/style.css"></head><body class="${bodyClass}"><div id="fixture">${body}</div><script src="/fixture.js"></script></body></html>`,
         );
     } else {
       response.writeHead(404).end();
