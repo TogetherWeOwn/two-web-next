@@ -13,7 +13,7 @@ let {
 </script>
 
 <span class="tag" class:live={variant === "live"} class:you={variant === "you"} class:echo={variant === "echo"} class:ok={variant === "ok"} class:warn={variant === "warn"}>
-  {#if dot}<span class="dot" aria-hidden="true"></span>{/if}
+  {#if dot || variant === "echo"}<span class="dot" aria-hidden="true"></span>{/if}
   {@render children()}
 </span>
 
@@ -41,8 +41,8 @@ let {
   .ok { color: var(--ok); }
   .warn { color: var(--warn); }
   .echo {
-    color: var(--echo);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 50%, transparent);
+    color: var(--t2);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--echo) 50%, transparent);
   }
 
   .dot {
@@ -52,6 +52,8 @@ let {
     border-radius: 50%;
     background: currentColor;
   }
+
+  .echo .dot { background: var(--echo); }
 
   @media (forced-colors: active) {
     .tag { outline: 1px solid CanvasText; outline-offset: -1px; }

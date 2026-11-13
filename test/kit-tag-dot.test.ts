@@ -63,16 +63,23 @@ export const body = render(Fixture).body;`,
     expect(hasClass(dots[0], "presence")).toBe(false);
     expect(hasClass(dots[1], "presence")).toBe(true);
     const tags = spans.filter((span) => hasClass(span, "tag"));
-    expect(tags).toHaveLength(6);
-    for (const [index, variant] of ["live", "you", "echo", "ok", "warn"].entries()) {
+    expect(tags).toHaveLength(7);
+    for (const [index, variant] of ["live", "you", "echo", "echo", "ok", "warn"].entries()) {
       expect(hasClass(tags[index + 1], variant)).toBe(true);
     }
     for (const label of ["Neutral", "Live", "You", "Echo", "OK", "Warning"]) {
       expect(body).toContain(label);
     }
     const tagDots = spans.filter((span) => hasClass(span, "dot"));
-    expect(tagDots).toHaveLength(1);
-    expect(tagDots[0]).toContain('aria-hidden="true"');
+    expect(tagDots).toHaveLength(3);
+    expect(tagDots.every((dot) => dot.includes('aria-hidden="true"'))).toBe(true);
+    for (const label of ["Echo", "Echo explicitly without dot"]) {
+      expect(body.replace(/<!--.*?-->/g, "")).toMatch(
+        new RegExp(
+          `<span\\b[^>]*class="[^"]*\\becho\\b[^"]*"[^>]*>\\s*<span\\b[^>]*class="[^"]*\\bdot\\b[^"]*"[^>]*></span>\\s*${label}</span>`,
+        ),
+      );
+    }
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
