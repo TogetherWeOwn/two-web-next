@@ -285,6 +285,7 @@ exactly once.
 | `src/bot/` | bot |
 | `src/config-warn.ts` | observability |
 | `src/counts.ts` | content |
+| `src/css-dictionary.ts` | content |
 | `src/csp-report-body.ts` | http-guard |
 | `src/csp-report-uri.ts` | http-guard |
 | `src/csp-reports.ts` | http-guard |
