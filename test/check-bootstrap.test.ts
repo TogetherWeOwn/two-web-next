@@ -17,7 +17,6 @@ const root = resolve(import.meta.dirname, "..");
 const owned: string[] = [];
 const scripts = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")).scripts;
 const generated = "src/leaf-critical-css.ts";
-const eventsGenerated = "src/events-critical-css.ts";
 
 function fixture() {
   const cwd = mkdtempSync(resolve(tmpdir(), "check-bootstrap-"));
@@ -45,7 +44,7 @@ function fixture() {
   writeFileSync(resolve(cwd, "ci/tsconfig.json"), JSON.stringify({ extends: "../tsconfig.json" }));
   writeFileSync(
     resolve(cwd, "src/consumer.ts"),
-    'import { LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";\nimport { EVENTS_CRITICAL_CSS, EVENTS_CRITICAL_CSS_SHA256 } from "./events-critical-css";\nexport const css: string = LEAF_CRITICAL_CSS + EVENTS_CRITICAL_CSS;\nexport const hash: string = LEAF_CRITICAL_CSS_SHA256 + EVENTS_CRITICAL_CSS_SHA256;\n',
+    'import { LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";\nexport const css: string = LEAF_CRITICAL_CSS;\nexport const hash: string = LEAF_CRITICAL_CSS_SHA256;\n',
   );
   writeFileSync(
     resolve(cwd, "vitest.config.ts"),
@@ -92,7 +91,7 @@ describe("fresh-checkout critical CSS bootstrap", () => {
     expect(readFileSync(resolve(cwd, generated), "utf8")).toContain(
       "export const LEAF_CRITICAL_CSS: string",
     );
-    expect(readFileSync(resolve(cwd, eventsGenerated), "utf8")).toContain(
+    expect(readFileSync(resolve(cwd, "src/events-critical-css.ts"), "utf8")).toContain(
       "export const EVENTS_CRITICAL_CSS: string",
     );
   });
@@ -113,16 +112,20 @@ describe("fresh-checkout critical CSS bootstrap", () => {
     expect(result.output).toContain("refusing to inline CSS");
   });
 
-  it("fails closed on unsafe schedule CSS despite a stale events artifact", () => {
+  it("rejects unsafe or missing events CSS even with a stale generated artifact", () => {
     const cwd = fixture();
+    const events = resolve(cwd, "src/events-critical-css.ts");
+    const schedule = resolve(cwd, "public/schedule-theme.css");
     expect(npm(cwd, "typecheck").status).toBe(0);
-    writeFileSync(
-      resolve(cwd, "public/schedule-theme.css"),
-      "</STYLE><script>not allowed</script>",
-    );
-    const result = npm(cwd, "typecheck");
-    expect(result.status).not.toBe(0);
-    expect(result.output).toContain("refusing to inline CSS");
+    writeFileSync(schedule, "</STYLE><script>not allowed</script>");
+    const unsafe = npm(cwd, "typecheck");
+    expect(unsafe.status).not.toBe(0);
+    expect(unsafe.output).toContain("refusing to inline CSS");
+    expect(existsSync(events)).toBe(true);
+    rmSync(schedule);
+    const missing = npm(cwd, "typecheck");
+    expect(missing.status).not.toBe(0);
+    expect(missing.output).toContain("schedule-theme.css");
   });
 
   it("does not hide invalid generator exports behind a declaration", () => {
@@ -156,7 +159,7 @@ describe("bounded unit-test selection", () => {
     const cwd = fixture();
     writeFileSync(
       resolve(cwd, "test/chosen.test.ts"),
-      'import { it, expect } from "vitest"; import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css"; import { EVENTS_CRITICAL_CSS } from "../src/events-critical-css"; it("chosen", () => { expect(LEAF_CRITICAL_CSS).toContain("styles.css"); expect(EVENTS_CRITICAL_CSS).toContain("schedule-theme.css"); });',
+      'import { it, expect } from "vitest"; import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css"; it("chosen", () => expect(LEAF_CRITICAL_CSS).toContain("styles.css"));',
     );
     writeFileSync(
       resolve(cwd, "test/chosen.test.ts.extra.test.ts"),

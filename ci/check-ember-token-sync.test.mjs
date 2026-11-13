@@ -288,6 +288,20 @@ test("missing, stale and edited artifacts each fail the check", () => {
   });
 });
 
+test("a version-only pin change detects both stale versioned adapters", () => {
+  withScratch((root) => {
+    build(root);
+    const version = join(root, "vendor/design-kit/VERSION");
+    writeFileSync(version, "v999.0.0\n");
+    assert.throws(() => check(root), /generated token drift: web\/src\/ember-theme\.css/);
+    const outputs = generate(root);
+    writeFileSync(join(root, "web/src/ember-theme.css"), outputs.get("web/src/ember-theme.css"));
+    assert.throws(() => check(root), /generated token drift: src\/ember-fallback-style\.ts/);
+    build(root);
+    assert.equal(check(root).ok, true);
+  });
+});
+
 test("stale artifacts after a kit or theme source change fail the check", () => {
   withScratch((root) => {
     build(root);
@@ -319,7 +333,9 @@ for (const [directory, hooks] of [
           "web/package.json",
           "ci/build-ember-tokens.mjs",
           "ci/build-leaf-css.mjs",
+          "ci/build-events-css.mjs",
           "public/styles.css",
+          "public/schedule-theme.css",
         ]) {
           cpSync(join(ROOT, path), join(root, path));
         }

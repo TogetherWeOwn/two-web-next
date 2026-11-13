@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// Generate the current events page's stylesheet bundle in cascade order.
-// Keep its bytes in sync with the served files so its CSP hash authorizes only
-// the exact styles that would otherwise be loaded as blocking stylesheets.
+// Generate the events stylesheet bundle in its existing cascade order.
+// The current events screen consumes the generated module inline.
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -16,20 +15,22 @@ const SOURCES = [
 ];
 const OUT = "src/events-critical-css.ts";
 
-export function build() {
+export function generate() {
   const css = SOURCES.map((entry) => readFileSync(join(repoRoot, entry), "utf8")).join("\n");
   if (/<\/style/i.test(css)) {
     throw new Error("refusing to inline CSS containing a closing style tag");
   }
   const sha256 = createHash("sha256").update(css, "utf8").digest("base64");
-  const text =
+  return (
     `// GENERATED from ${SOURCES.join(", ")} — do not hand-edit.\n` +
     `// Regen: node ci/build-events-css.mjs.\n` +
     `export const EVENTS_CRITICAL_CSS: string =\n  ${JSON.stringify(css)};\n` +
-    `export const EVENTS_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n`;
-  return { text, sha256 };
+    `export const EVENTS_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n`
+  );
 }
 
-const { text, sha256 } = build();
-writeFileSync(join(repoRoot, OUT), text);
-console.log(`${OUT}: ${text.length} chars, sha256 ${sha256}`);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const text = generate();
+  writeFileSync(join(repoRoot, OUT), text);
+  console.log(`${OUT}: ${text.length} chars`);
+}
