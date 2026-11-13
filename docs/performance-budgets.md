@@ -119,7 +119,7 @@ CHROME_PATH=/path/to/chrome WRANGLER_SEND_METRICS=false npm run lighthouse
 ```
 
 Use [`package.json`](../package.json) for the LHCI pin and security overrides
-(`tmp`, `@puppeteer/browsers`, global `basic-ftp` and Lighthouse's
+(`tmp`, `@puppeteer/browsers`, `get-uri`-scoped `basic-ftp` and Lighthouse's
 `puppeteer-core`), and [`package-lock.json`](../package-lock.json) for the
 resolved dependency versions. Override declarations and hoisted resolutions
 are not interchangeable. The browser helper's own Node minimum is not the
