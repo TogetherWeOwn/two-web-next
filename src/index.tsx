@@ -74,19 +74,21 @@ export const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
 
-// Wire encoding, outermost (TWO-7591): staged edge probes showed every HTML
-// response leaving with a fixed Content-Length plus `cache-control:
-// no-transform`, the platform's untransformable-body marker, so Lighthouse
-// saw raw HTML while CSS/JSON compressed. Streaming the final response body
-// drops the declared length so the edge applies its own br/gzip negotiation.
-// Registered before requestLog so its post-next wrap sees the fully settled
-// response; Hono's header-merge copy preserves the streamed body and the
-// automatic encodeBody default. Same seam serves the Kit worker's Hono
-// fallback via honoFetch; Kit-resolved pages stream in route-ownership's
-// decorateKitResponse so hooks.server.ts stays a pure env binding.
+// Wire encoding, outermost (TWO-7591/TWO-8089): the deployed remote-placement
+// lane marks text/html responses `cache-control: no-transform` for every body
+// shape — fixed length (#2174's trigger) and unknown-length streams alike —
+// and the same lane still encodes JSON/CSS. With the platform's HTML pass out
+// of the picture, the Worker encodes the document itself: withStreamedBody
+// gzip-streams HTML when the client accepts gzip and answers the plain
+// unknown-length stream otherwise. Registered before requestLog so its
+// post-next wrap sees the fully settled response; Hono's header-merge copy
+// preserves the wrapped body and the manual encodeBody flag. Same seam
+// serves the Kit worker's Hono fallback via honoFetch; Kit-resolved pages
+// encode in route-ownership's decorateKitResponse so hooks.server.ts stays a
+// pure env binding.
 app.use("*", async (c, next) => {
   await next();
-  c.res = withStreamedBody(c.res);
+  c.res = withStreamedBody(c.res, c.req.raw);
 });
 
 // The violation sink (TOG-10107): the CSP report-to directive selects the

@@ -601,13 +601,14 @@ export interface HookDispatchDeps {
 // security headers, the text/html charset fix and the staging X-Robots-Tag.
 // web/src/hooks.server.ts is a pure env binding that supplies appUrl and
 // featuredImageHosts; no test needs to import SvelteKit code to pin this.
-// Wire encoding (TWO-7591): the staged edge marks fixed-length HTML
-// untransformable (`cache-control: no-transform` plus Content-Length), so
-// decorated Kit pages left uncompressed while other types were encoded.
-// The returned body streams at unknown length so the platform's own br/gzip
-// negotiation applies; Hono answers already stream inside app.fetch (the
-// identical middleware in src/index.tsx) and the undecorated Hono-fallback
-// path never reaches this function.
+// Wire encoding (TWO-7591/TWO-8089): the deployed remote-placement lane
+// marks text/html `cache-control: no-transform` for every body shape, so the
+// platform's own encoding pass never runs on decorated Kit pages while JSON
+// and CSS still compress. The Worker therefore encodes the document itself:
+// gzip when the client accepts it, a plain unknown-length stream otherwise.
+// Hono answers already encode inside app.fetch (the identical middleware in
+// src/index.tsx) and the undecorated Hono-fallback path never reaches this
+// function.
 function decorateKitResponse(
   response: Response,
   event: HookEventLike,
@@ -628,7 +629,7 @@ function decorateKitResponse(
     const tag = robotsTagFor(appUrl, event.url.hostname);
     if (tag) response.headers.set("X-Robots-Tag", tag);
   }
-  return withStreamedBody(response);
+  return withStreamedBody(response, event.request);
 }
 
 // Catastrophic-fallback CSP widening, async twin of the leaf allowlist: the
