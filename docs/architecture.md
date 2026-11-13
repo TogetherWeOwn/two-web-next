@@ -299,6 +299,7 @@ exactly once.
 | `src/error-responses.tsx` | entry |
 | `src/errors.tsx` | entry |
 | `src/events/` | events |
+| `src/events-critical-css.ts` | events |
 | `src/exception-class.ts` | observability |
 | `src/featured-eligibility.ts` | content |
 | `src/featured-image.ts` | content |

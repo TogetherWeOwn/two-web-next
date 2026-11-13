@@ -28,6 +28,7 @@ function withSourceTree(run: (dir: string) => void) {
       "web/src",
       "ci/build-ember-tokens.mjs",
       "ci/build-leaf-css.mjs",
+      "ci/build-events-css.mjs",
       "package.json",
       ".npmrc",
       "web/package.json",
@@ -87,12 +88,16 @@ describe("first-party preparation in a fresh source tree", () => {
     it(`generates missing critical CSS from ${workspace} and refuses token drift`, () => {
       withSourceTree((dir) => {
         const generated = join(dir, "src/leaf-critical-css.ts");
+        const eventsGenerated = join(dir, "src/events-critical-css.ts");
         expect(existsSync(generated)).toBe(false);
+        expect(existsSync(eventsGenerated)).toBe(false);
         const cwd = join(dir, workspace);
         execFileSync("npm", ["run", "generate:first-party"], { cwd, stdio: "pipe" });
         expect(existsSync(generated)).toBe(true);
+        expect(existsSync(eventsGenerated)).toBe(true);
 
         rmSync(generated);
+        rmSync(eventsGenerated);
         writeFileSync(join(dir, "public/theme-tokens.css"), "/* deliberate drift */\n");
         const failed = spawnSync("npm", ["run", "generate:first-party"], {
           cwd,
@@ -102,6 +107,7 @@ describe("first-party preparation in a fresh source tree", () => {
         expect(failed.status).not.toBe(0);
         expect(`${failed.stdout}\n${failed.stderr}`).toMatch(/drift|out.of.date|generated/i);
         expect(existsSync(generated)).toBe(false);
+        expect(existsSync(eventsGenerated)).toBe(false);
       });
     });
   }

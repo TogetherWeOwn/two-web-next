@@ -23,11 +23,13 @@ const LIFECYCLE = [
   "postpublish",
 ];
 export const REVIEWED_ROOT_HOOKS = {
-  postinstall: "node ci/build-ember-tokens.mjs --check && node ci/build-leaf-css.mjs",
+  postinstall:
+    "node ci/build-ember-tokens.mjs --check && node ci/build-leaf-css.mjs && node ci/build-events-css.mjs",
 };
 export const REVIEWED_FIRST_PARTY_GENERATORS = [
   "ci/build-ember-tokens.mjs",
   "ci/build-leaf-css.mjs",
+  "ci/build-events-css.mjs",
 ];
 const REGISTRY_PREFIX = "https://registry.npmjs.org/";
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");

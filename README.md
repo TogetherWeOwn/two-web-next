@@ -133,8 +133,9 @@ bootstrap critical CSS themselves (see "Verify a change before opening a PR" in
 [CONTRIBUTING.md](CONTRIBUTING.md)). Raw `tsc`, direct `vitest`, Wrangler and
 bundlers do not: run the named preparation command explicitly first.
 
-`ci/build-leaf-css.mjs` uses only Node builtins and concatenates the three
-checked sheets, so it runs in dependency-free scratch snapshots. The separate
+`ci/build-leaf-css.mjs` and `ci/build-events-css.mjs` use only Node builtins.
+They concatenate checked sheets in cascade order and run in dependency-free scratch
+snapshots. The events module is preparatory and is not used by any served page. The separate
 `ci/build-ember-tokens.mjs` adapter builds the Hono and Kit token sheets from
 the pinned vendored design-kit CSS and needs the locked esbuild installed to
 compact served sheets. It composes scoped roles with `assets/styles.css` and

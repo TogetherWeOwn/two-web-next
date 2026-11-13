@@ -22,11 +22,11 @@ function fixture() {
   const cwd = mkdtempSync(resolve(tmpdir(), "check-bootstrap-"));
   owned.push(cwd);
   for (const dir of ["ci", "src", "public", "test"]) mkdirSync(resolve(cwd, dir));
-  for (const file of ["ci/build-leaf-css.mjs", "ci/test-unit.mjs"])
+  for (const file of ["ci/build-leaf-css.mjs", "ci/build-events-css.mjs", "ci/test-unit.mjs"])
     cpSync(resolve(root, file), resolve(cwd, file));
   symlinkSync(resolve(root, "node_modules"), resolve(cwd, "node_modules"), "dir");
   writeFileSync(resolve(cwd, "package.json"), JSON.stringify({ type: "module", scripts }));
-  for (const file of ["styles.css", "theme-tokens.css", "theme.css"])
+  for (const file of ["styles.css", "theme-tokens.css", "theme.css", "schedule-theme.css"])
     writeFileSync(resolve(cwd, "public", file), `/* ${file} */`);
   writeFileSync(
     resolve(cwd, "tsconfig.json"),
@@ -91,6 +91,9 @@ describe("fresh-checkout critical CSS bootstrap", () => {
     expect(readFileSync(resolve(cwd, generated), "utf8")).toContain(
       "export const LEAF_CRITICAL_CSS: string",
     );
+    expect(readFileSync(resolve(cwd, "src/events-critical-css.ts"), "utf8")).toContain(
+      "export const EVENTS_CRITICAL_CSS: string",
+    );
   });
 
   it("replaces an ignored stale artifact rather than trusting it", () => {
@@ -107,6 +110,22 @@ describe("fresh-checkout critical CSS bootstrap", () => {
     const result = npm(cwd, "typecheck");
     expect(result.status).not.toBe(0);
     expect(result.output).toContain("refusing to inline CSS");
+  });
+
+  it("rejects unsafe or missing events CSS even with a stale generated artifact", () => {
+    const cwd = fixture();
+    const events = resolve(cwd, "src/events-critical-css.ts");
+    const schedule = resolve(cwd, "public/schedule-theme.css");
+    expect(npm(cwd, "typecheck").status).toBe(0);
+    writeFileSync(schedule, "</STYLE><script>not allowed</script>");
+    const unsafe = npm(cwd, "typecheck");
+    expect(unsafe.status).not.toBe(0);
+    expect(unsafe.output).toContain("refusing to inline CSS");
+    expect(existsSync(events)).toBe(true);
+    rmSync(schedule);
+    const missing = npm(cwd, "typecheck");
+    expect(missing.status).not.toBe(0);
+    expect(missing.output).toContain("schedule-theme.css");
   });
 
   it("does not hide invalid generator exports behind a declaration", () => {

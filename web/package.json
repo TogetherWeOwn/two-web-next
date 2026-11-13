@@ -7,9 +7,9 @@
     "#lib/*": "./src/lib/*"
   },
   "scripts": {
-    "postinstall": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs",
-    "generate:first-party": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs",
-    "prebuild": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs",
+    "postinstall": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs && node ../ci/build-events-css.mjs",
+    "generate:first-party": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs && node ../ci/build-events-css.mjs",
+    "prebuild": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs && node ../ci/build-events-css.mjs",
     "build": "npm run generate:first-party && vite build && node scripts/copy-public.mjs && node ../ci/kit-route-evidence.mjs",
     "check": "npm run generate:first-party && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "preview:deploy": "wrangler deploy"

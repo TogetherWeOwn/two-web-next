@@ -4,13 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "postinstall": "node ci/build-ember-tokens.mjs --check && node ci/build-leaf-css.mjs",
-    "generate:first-party": "node ci/build-ember-tokens.mjs --check && node ci/build-leaf-css.mjs",
-    "build:leaf-css": "node ci/build-ember-tokens.mjs && node ci/build-leaf-css.mjs",
-    "predev": "node ci/build-ember-tokens.mjs --check && node ci/build-leaf-css.mjs",
+    "postinstall": "node ci/build-ember-tokens.mjs --check && node ci/build-leaf-css.mjs && node ci/build-events-css.mjs",
+    "generate:first-party": "node ci/build-ember-tokens.mjs --check && node ci/build-leaf-css.mjs && node ci/build-events-css.mjs",
+    "build:leaf-css": "node ci/build-ember-tokens.mjs && node ci/build-leaf-css.mjs && node ci/build-events-css.mjs",
+    "predev": "node ci/build-ember-tokens.mjs --check && node ci/build-leaf-css.mjs && node ci/build-events-css.mjs",
     "dev": "npm run generate:first-party && wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "node ci/build-leaf-css.mjs && tsc --noEmit && tsc --noEmit -p ci/tsconfig.json",
+    "typecheck": "node ci/build-leaf-css.mjs && node ci/build-events-css.mjs && tsc --noEmit && tsc --noEmit -p ci/tsconfig.json",
     "test": "npm run generate:first-party && vitest run",
     "test:unit": "node ci/test-unit.mjs",
     "e2e": "NODE_OPTIONS=--import=tsx playwright test",
@@ -153,7 +153,9 @@
     "@esbuild-kit/core-utils": {
       "esbuild": "0.28.2"
     },
-    "basic-ftp": "6.2.1",
+    "get-uri": {
+      "basic-ftp": "6.2.4"
+    },
     "sharp": "0.35.5",
     "lighthouse": {
       "puppeteer-core": "25.16.0"

@@ -784,6 +784,7 @@ describe("ci heavy-job scope gates", () => {
     const draftSafeSteps = [
       "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
       "name: Incident issue lifecycle fixtures",
+      "name: State glyph assembler fixtures",
     ];
     for (const name of draftSafeSteps) {
       const matches = steps.filter((step) => step.split("\n")[0] === name);
