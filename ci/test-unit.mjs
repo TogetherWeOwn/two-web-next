@@ -32,6 +32,10 @@ export async function run(args) {
     cwd: root,
     stdio: "inherit",
   });
+  execFileSync(process.execPath, [resolve(root, "ci/build-events-css.mjs")], {
+    cwd: root,
+    stdio: "inherit",
+  });
   const { startVitest } = await import("vitest/node");
   // CLI positional filters are substring matches. Override include as well so
   // an exact file selection cannot grow to similarly named files or a suite.

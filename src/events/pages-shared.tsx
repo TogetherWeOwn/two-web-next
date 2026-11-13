@@ -19,6 +19,7 @@ const ScheduleShell: FC<
     session?: Session | HeaderSession | null;
     loginReturnTo?: string | null;
     markdownAlternate?: string;
+    inlineEventsCss?: boolean;
   }>
 > = ({
   title,
@@ -29,6 +30,7 @@ const ScheduleShell: FC<
   session,
   loginReturnTo,
   markdownAlternate,
+  inlineEventsCss,
   children,
 }) => (
   <Layout
@@ -37,6 +39,7 @@ const ScheduleShell: FC<
     shareDescription={description}
     robots={robots}
     theme="schedule"
+    inlineEventsCss={inlineEventsCss}
     markdownAlternate={markdownAlternate}
   >
     <SiteHeader

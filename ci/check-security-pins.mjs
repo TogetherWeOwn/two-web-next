@@ -122,12 +122,14 @@ export function checkHostSourcePin(source = file(TRUST_HOSTS_PATH)) {
 }
 
 /** The recorded bytes and hash must match a fresh regeneration. */
-export function verifyBundleBytes(sources, moduleSource) {
+export function verifyBundleBytes(sources, moduleSource, prefix = "LEAF") {
   const regenerated = sources.join("\n");
-  const cssMatch = /export const LEAF_CRITICAL_CSS: string =\n {2}("(?:[^"\\]|\\.)*");/.exec(
-    moduleSource,
-  );
-  const hashMatch = /export const LEAF_CRITICAL_CSS_SHA256: string = "([^"]+)";/.exec(moduleSource);
+  const cssMatch = new RegExp(
+    `export const ${prefix}_CRITICAL_CSS: string =\\n {2}("(?:[^"\\\\]|\\\\.)*");`,
+  ).exec(moduleSource);
+  const hashMatch = new RegExp(
+    `export const ${prefix}_CRITICAL_CSS_SHA256: string = "([^"]+)";`,
+  ).exec(moduleSource);
   if (!cssMatch || !hashMatch) {
     return { ok: false, detail: "recorded bundle or hash does not parse" };
   }
@@ -158,6 +160,22 @@ export function checkLeafLifecycleStatic(
     return { id: "leaf-lifecycle-static", status: "fail", detail: verdict.detail };
   }
   return { id: "leaf-lifecycle-static", status: "pass" };
+}
+
+export function checkEventsLifecycleStatic() {
+  const sources = [...LEAF_SOURCES, "public/schedule-theme.css"];
+  const moduleSource = file("src/events-critical-css.ts");
+  if (!moduleSource.startsWith(`// GENERATED from ${sources.join(", ")}`)) {
+    return {
+      id: "events-lifecycle-static",
+      status: "fail",
+      detail: "generated input list differs",
+    };
+  }
+  const verdict = verifyBundleBytes(sources.map(file), moduleSource, "EVENTS");
+  return verdict.ok
+    ? { id: "events-lifecycle-static", status: "pass" }
+    : { id: "events-lifecycle-static", status: "fail", detail: verdict.detail };
 }
 
 /** The allowlist is exactly the five documented inline-critical paths. */
@@ -204,6 +222,31 @@ export function checkInlineAllowlist(source = file(HEADERS_PATH)) {
     };
   }
   return { id: "inline-allowlist", status: "pass" };
+}
+
+// The events hash has two deliberately separate header paths. Fail closed if
+// either selector changes or the hash gains another use outside its import.
+export function checkEventsPathPin(source = file(HEADERS_PATH)) {
+  const code = stripComments(source);
+  const withoutImport = code.replace(
+    /import\s*\{\s*EVENTS_CRITICAL_CSS_SHA256\s*\}\s*from\s*["'][^"']+["'];/,
+    " ",
+  );
+  const selectors = [
+    /c\.req\.path\s*===\s*"\/events"\s*\?\s*EVENTS_CRITICAL_CSS_SHA256/g,
+    /request\.path\s*===\s*"\/events"\s*\?\s*\[`'sha256-\$\{EVENTS_CRITICAL_CSS_SHA256\}'`\]/g,
+  ];
+  let remainder = withoutImport;
+  for (const selector of selectors) {
+    const matches = [...remainder.matchAll(selector)];
+    if (matches.length !== 1) {
+      return { id: "events-path-pin", status: "fail", detail: "events hash selector differs" };
+    }
+    remainder = remainder.replace(selector, " ");
+  }
+  return remainder.includes("EVENTS_CRITICAL_CSS_SHA256") || withoutImport === code
+    ? { id: "events-path-pin", status: "fail", detail: "events hash has an unpinned use" }
+    : { id: "events-path-pin", status: "pass" };
 }
 
 // Row locators use stable row text, never line numbers.
@@ -342,7 +385,9 @@ function run(staticOnly) {
   const staticChecks = [
     checkHostSourcePin(),
     checkLeafLifecycleStatic(),
+    checkEventsLifecycleStatic(),
     checkInlineAllowlist(),
+    checkEventsPathPin(),
     checkThreatEvidence(),
   ];
   const staticOk = staticChecks.every((c) => c.status === "pass");
@@ -525,6 +570,18 @@ function selftest() {
     "post-definition .add widening fails",
   );
   assert(checkInlineAllowlist("no set here").status === "fail", "unparseable allowlist fails");
+  const headers = file(HEADERS_PATH);
+  assert(checkEventsPathPin(headers).status === "pass", "events selectors pass");
+  assert(
+    checkEventsPathPin(
+      headers.replace('c.req.path === "/events"', 'c.req.path.startsWith("/events")'),
+    ).status === "fail",
+    "widened events selector fails",
+  );
+  assert(
+    checkEventsPathPin(`${headers}\nconst extra = EVENTS_CRITICAL_CSS_SHA256;`).status === "fail",
+    "extra events hash use fails",
+  );
   // Threat evidence: both rows with both pointers pass; a missing row or a
   // dropped pointer fails.
   const evidenceModel = (forwardRow, styleRow) => ["# model", forwardRow, styleRow, ""].join("\n");

@@ -39,6 +39,7 @@ describe("hook inventory", () => {
     });
     put(root, "ci/build-ember-tokens.mjs", "first");
     put(root, "ci/build-leaf-css.mjs", "second");
+    put(root, "ci/build-events-css.mjs", "third");
     put(
       root,
       "web/package.json",
@@ -58,6 +59,7 @@ describe("hook inventory", () => {
       [
         ["postinstall", "ci/build-ember-tokens.mjs", true, sha256("first")],
         ["postinstall", "ci/build-leaf-css.mjs", true, sha256("second")],
+        ["postinstall", "ci/build-events-css.mjs", true, sha256("third")],
       ],
     );
     assert.deepEqual(inv.kitHooks, { prepare: "kit sync" });
