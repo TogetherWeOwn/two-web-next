@@ -13,6 +13,10 @@ Analytics API and fails when a 75th percentile exceeds its budget in
 | Interaction to Next Paint | 200 ms |
 
 Budgets are enforced only when the day has at least `minSamples` (50) samples.
+Summaries distinguish collection health from metric verdicts. Missing configuration
+or insufficient samples remain diagnostic (exit 0), not a performance pass.
+Unavailable or partial metrics are labeled explicitly; healthy collection alone
+does not establish complete metric measurements or regional coverage.
 A configured query that returns invalid JSON, a malformed GraphQL shape, or a
 day with at least `minSamples` samples whose p75 quantiles are missing or not
 numeric fails instead of reporting insufficient data. A non-2xx response fails
