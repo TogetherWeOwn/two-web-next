@@ -45,8 +45,45 @@ before(async () => {
   });
   assert.equal(event.kind, "ok");
   assert.equal(featured.kind, "ok");
+  const populatedEvent = await resolveKitEventEdit(
+    eventRow.eventKey,
+    {},
+    {
+      db: {},
+      get: async () => ({
+        ...eventRow,
+        accessibilityNotes: "Step-free side door; hearing loop fitted",
+        organizer_name: "Jordan",
+        join_url: "https://example.com/lobby",
+        join_instructions: "Ask for the community table on level two",
+      }),
+      list: async () => ({ rows: [], total: 0 }),
+    },
+  );
+  assert.equal(populatedEvent.kind, "ok");
   fixtures = [
     { name: "event-new", path: "/admin/events/new", data: buildEventCreateView() },
+    {
+      name: "event-edit-populated",
+      path: `/admin/events/${eventRow.eventKey}`,
+      data: { view: populatedEvent.view },
+    },
+    {
+      name: "event-edit-errors",
+      path: `/admin/events/${eventRow.eventKey}`,
+      data: {
+        view: {
+          ...populatedEvent.view,
+          hasErrors: true,
+          errors: {
+            accessibility_notes: "Keep accessibility notes to 1000 characters.",
+            organizer_name: "Keep the organizer name to 500 characters.",
+            join_url: "Enter a valid public HTTP or HTTPS link without sign-in credentials.",
+            join_instructions: "Keep joining instructions to 5000 characters.",
+          },
+        },
+      },
+    },
     { name: "event-edit", path: `/admin/events/${eventRow.eventKey}`, data: { view: event.view } },
     { name: "featured-new", path: "/admin/featured/new", data: {} },
     { name: "featured-edit", path: "/admin/featured/7", data: { view: featured.view } },
@@ -127,7 +164,15 @@ after(async () => {
 // Named suite: the executed-count verifier admits only cases under this title.
 describe("Kit admin contrast", () => {
   for (const width of [1280, 390]) {
-    for (const name of ["event-new", "event-edit", "featured-new", "featured-edit", "dashboard"]) {
+    for (const name of [
+      "event-new",
+      "event-edit",
+      "event-edit-populated",
+      "event-edit-errors",
+      "featured-new",
+      "featured-edit",
+      "dashboard",
+    ]) {
       test(`Kit admin contrast: ${name} at ${width}`, async () => {
         const f = fixtures.find((fixture) => fixture.name === name);
         const isDashboard = name === "dashboard";

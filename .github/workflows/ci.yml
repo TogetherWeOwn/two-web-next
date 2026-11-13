@@ -42,6 +42,35 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
 
 jobs:
+  bot-contract-drift:
+    name: bot-contract-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare canonical bot fixture with site mirror
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl --fail --silent --show-error --location --max-time 30 \
+            https://raw.githubusercontent.com/TogetherWeOwn/two-bot-next/refs/heads/main/crates/core/tests/fixtures/bot-site-contract-v2.json \
+            -o "$tmp/canonical.json"
+          mirror=test/fixtures/bot-site-contract-v2.json
+          cmp "$tmp/canonical.json" "$mirror"
+          # Exercise both mismatch directions as well as the matching case.
+          cp "$tmp/canonical.json" "$tmp/changed-canonical.json"
+          cp "$mirror" "$tmp/changed-mirror.json"
+          printf '\n' >> "$tmp/changed-canonical.json"
+          printf '\n' >> "$tmp/changed-mirror.json"
+          if cmp -s "$tmp/changed-canonical.json" "$mirror" ||
+             cmp -s "$tmp/canonical.json" "$tmp/changed-mirror.json"; then
+            echo '::error::Fixture comparison mismatch controls failed.'
+            exit 1
+          fi
+
   # Cheap change-scope gate (TOG-11811): a PR that only touches prose
   # (`docs/**`, root `*.md`) that no gate, test or build reads fast-passes the
   # heavy jobs below instead of occupying two runner slots for 20 minutes.
@@ -52,7 +81,8 @@ jobs:
     name: scope
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'scope') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
-    timeout-minutes: 5
+    # Includes the pinned stock source build and upstream test inventory.
+    timeout-minutes: 15
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
       app: ${{ steps.scope.outputs.app }}
@@ -164,9 +194,15 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - name: Install-hook inventory and asset boundary tests
+        if: github.event_name == 'pull_request'
+        run: node --test ci/install-hook-inventory.test.mjs ci/asset-output-boundary.test.mjs
       - name: Install locked workflow parser without hooks
         if: github.event_name == 'pull_request'
         run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - name: Verify script-disabled esbuild proof
+        if: github.event_name == 'pull_request'
+        run: node --test ci/verify-esbuild.test.mjs
       - name: Lint workflows (actionlint and queue contract)
         if: github.event_name == 'pull_request'
         run: |
@@ -177,8 +213,26 @@ jobs:
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $lint_dir/actionlint.tgz" | sha256sum -c -
           tar -xzf "$lint_dir/actionlint.tgz" -C "$lint_dir" actionlint
           export ACTIONLINT="$lint_dir/actionlint"
-          node --test ci/workflow-lint.test.mjs
+          node --test ci/workflow-lint.test.mjs ci/actionlint-wiring.test.mjs
           node ci/workflow-lint.mjs "$ACTIONLINT"
+      - name: Verify stock actionlint inventory
+        if: github.event_name == 'pull_request'
+        run: bash ci/actionlint/build.sh
+
+  # Native syntax and scheduling proof on every event, including main pushes.
+  # This does not exercise queue behavior or touch staging.
+  queue-syntax-smoke:
+    name: queue-syntax-smoke
+    needs: scope
+    concurrency:
+      group: queue-syntax-${{ github.run_id }}-${{ github.run_attempt }}
+      cancel-in-progress: false
+      queue: max
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: "true"
 
   # Doc links run on every PR, including the docs-only ones the scope job fast-passes.
   docs-links:
@@ -207,6 +261,8 @@ jobs:
       # resolution and explicit selection without an app build or database.
       - name: Fresh-worktree check bootstrap
         run: env -u DATABASE_URL -u BOT_DATABASE_URL npm --ignore-scripts run test:unit -- test/check-bootstrap.test.ts test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
+      - name: Incident staging observation selftests (fixtures, no network)
+        run: node --test ci/incident-staging-observation.test.mjs
       - name: Timeout ledger ratchet (HARD)
         run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
@@ -517,7 +573,7 @@ jobs:
         if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
         run: echo "Docs-only or draft change per the scope job; required check passes without the heavy suite."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        if: needs.scope.outputs.docs_only != 'true'
         with:
           # Migration history needs the base commit; fresh (hosted/overflow)
           # workspaces lack it, unlike reused self-hosted ones.
@@ -566,9 +622,18 @@ jobs:
       - name: Security-pin contracts selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:security-pins:selftest && node ci/check-security-pins.mjs --static-only
+      - name: Incident issue lifecycle fixtures
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/incident-issue-lifecycle.test.mjs
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit:selftest
+      - name: npm policy enforcement fixtures
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        env:
+          npm_config_ignore_scripts: "true"
+          npm_config_min_release_age: "3"
+        run: node ci/npm-policy-fixtures.mjs "$RUNNER_TEMP/npm-policy-fixtures.json"
       - name: Dependency audit (lockfile, including dev dependencies)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit
@@ -1277,7 +1342,18 @@ jobs:
   # ci-ok succeeds. test/ci-concurrency.test.ts pins both outcomes.
   ci-ok:
     name: ci-ok
-    needs: [a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope]
+    needs:
+      [
+        a11y,
+        lighthouse,
+        bundle-budget,
+        docs-links,
+        queue-syntax-smoke,
+        check,
+        node22-compat,
+        scope,
+        bot-contract-drift,
+      ]
     if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'ci-ok') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
@@ -1288,6 +1364,14 @@ jobs:
       # check. They moved here so `check` can start in parallel with those
       # jobs; the aggregate step below still re-checks the scope, check,
       # audit and performance verdicts.
+      - name: Require successful queue syntax smoke
+        env:
+          QUEUE_SMOKE_RESULT: ${{ needs.queue-syntax-smoke.result }}
+        run: test "$QUEUE_SMOKE_RESULT" = success
+      - name: Require matching bot contract fixture
+        env:
+          BOT_CONTRACT_RESULT: ${{ needs.bot-contract-drift.result }}
+        run: test "$BOT_CONTRACT_RESULT" = success
       - name: Require successful docs-links
         env:
           DOCS_LINKS_RESULT: ${{ needs.docs-links.result }}

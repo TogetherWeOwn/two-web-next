@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ciOkNeeds, expectedCiOkNeeds } from "./helpers/ci-ok-needs";
 
 // ci/change-scope.sh decides whether the required `check` may fast-pass a PR
 // (TOG-11811) and whether the browser/staging smoke may skip it. Every doubt
@@ -717,9 +718,7 @@ describe("ci heavy-job scope gates", () => {
 
   it("ci-ok aggregates every gated job and fails closed on scope", () => {
     const block = jobBlock("ci-ok");
-    expect(block).toMatch(
-      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
-    );
+    expect(ciOkNeeds(block)).toEqual(expectedCiOkNeeds());
     expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
     expect(block).toContain("CHECK_RESULT: ${{ needs.check.result }}");
@@ -782,8 +781,20 @@ describe("ci heavy-job scope gates", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
     const steps = check.split("\n    steps:\n")[1]?.split(/\n      - /) ?? [];
+    const draftSafeSteps = [
+      "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+      "name: Incident issue lifecycle fixtures",
+    ];
+    for (const name of draftSafeSteps) {
+      const matches = steps.filter((step) => step.split("\n")[0] === name);
+      expect(matches, `expected exactly one draft-safe step: ${name}`).toHaveLength(1);
+      expect(matches[0]?.split("\n").filter((line) => /^        if:/.test(line))).toEqual([
+        "        if: needs.scope.outputs.docs_only != 'true'",
+      ]);
+    }
     const heavyIfs = steps
       .filter((step) => !step.includes("Docs-only fast pass"))
+      .filter((step) => !draftSafeSteps.includes(step.split("\n")[0] ?? ""))
       .flatMap((step) => step.split("\n").filter((line) => /^        if:/.test(line)));
     expect(heavyIfs.length).toBeGreaterThan(10);
     for (const line of heavyIfs) {

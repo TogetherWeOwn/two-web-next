@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { URL } from "node:url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { ciOkNeeds, expectedCiOkNeeds } from "./helpers/ci-ok-needs";
 import { sql } from "drizzle-orm";
 import worker, { fixtureEnvForRequest } from "../ci/lighthouse-worker";
 import type { Db } from "../src/db/index";
@@ -866,9 +867,7 @@ describe("performance CI", () => {
 
     expect(performanceGateIndex).toBeGreaterThan(-1);
     expect(ciOk).toContain("name: ci-ok");
-    expect(ciOk).toContain(
-      "needs: [a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope]",
-    );
+    expect(ciOkNeeds(ciOk)).toEqual(expectedCiOkNeeds());
     expect(ciOk).toContain("\n    if: ${{ !cancelled() }}\n");
     expect(performanceGate).toContain(`if: ${performanceGateCondition}`);
     expect(performanceGate).toContain(

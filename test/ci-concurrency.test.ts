@@ -84,6 +84,15 @@ describe("workflow concurrency", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("isolates recovery proof dispatches while cancelling superseded PR runs", () => {
+    const proof =
+      workflows.find(({ name }) => name === "admin-stale-save-ubuntu24-proof.yml")?.text ?? "";
+    expect(proof).toContain(
+      "group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}",
+    );
+    expect(proof).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
+  });
+
   it("keys e2e dispatch runs apart from main push runs", () => {
     const e2e = workflows.find(({ name }) => name === "e2e.yml")?.text ?? "";
     expect(e2e).toMatch(

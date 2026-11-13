@@ -60,7 +60,7 @@ function errors() {
 function assertTheme(html: string) {
   expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
   expect(html).toContain('href="/theme.css"');
-  expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2"');
+  expect(html).toContain('href="/fonts/mona-sans-latin-wght.woff2"');
   expect(html).toContain('<header class="bar site-header">');
   expect(html).toContain('src="/logo.svg"');
   expect(html).toContain('class="hero recovery-hero"');

@@ -100,7 +100,7 @@ describe("Kit content shell preloads no Mona Sans webfont", () => {
   it("keeps the Mona Sans preload on every other theme", () => {
     for (const theme of ["home", "event", "join", "profile", "schedule"] as const) {
       const html = renderMeta({ title: "Fixture", theme });
-      expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
+      expect(html).toContain('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
       expect(html).toContain('crossorigin="anonymous"');
     }
   });

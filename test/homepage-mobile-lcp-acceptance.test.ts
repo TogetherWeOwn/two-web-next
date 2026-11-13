@@ -121,7 +121,7 @@ describe("homepage mobile LCP acceptance", () => {
     const { html } = await homepageHtml();
     const preloads = [...html.matchAll(/<link[^>]*as="font"[^>]*>/g)].map((m) => m[0]);
     expect(preloads).toHaveLength(1);
-    expect(preloads[0]).toContain("/fonts/mona-sans-latin-var.woff2");
+    expect(preloads[0]).toContain("/fonts/mona-sans-latin-wght.woff2");
   });
 
   it("retains the Mona Sans Fallback swap chain for delayed font swaps", async () => {
@@ -161,7 +161,7 @@ describe("homepage mobile LCP acceptance", () => {
     // static second face may return: one critical font fetch instead of two.
     const { html } = await homepageHtml();
     expect(inlineCss(html)).not.toContain("display-latin-500");
-    expect(inlineCss(html)).toContain("mona-sans-latin-var.woff2");
+    expect(inlineCss(html)).toContain("mona-sans-latin-wght.woff2");
   });
 
   it("sets no exact 500 weight on the homepage", async () => {
