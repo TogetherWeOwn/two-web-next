@@ -339,10 +339,12 @@ describe("Kit gone alternatives acceptance", () => {
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const bytes = new Uint8Array(await response.arrayBuffer());
     // Re-captured after combining the Ember Hours font/theme chrome with
-    // Logo/Icon 1's header lockup, favicon and og:image card. The gone-page
+    // Logo/Icon 1's header lockup, favicon and og:image card, then after the
+    // Mona Sans preload moved to mona-sans-latin-wght.woff2 (the only byte
+    // change: renaming it back reproduces the previous pin). The gone-page
     // content and response headers retain their existing contract.
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(
-      "7e28057541da30169b345bc703590961439daf421bbf771eee354999d64ea92c",
+      "f8b21e6394dd0a8ed4d494d6b055995d9162f5e041d7ed9d9bce7ef120c028cc",
     );
   });
 

@@ -1,8 +1,17 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { baseCiOkNeeds, ciOkNeeds, evidenceJobs, expectedCiOkNeeds } from "./helpers/ci-ok-needs";
 
 // A required check whose workflow never starts leaves the PR pending forever,
 // and a skipped job counts as passing. These pins keep CONTRIBUTING, the job
@@ -19,6 +28,18 @@ const pullRequestBlock = (text: string) =>
   triggers(text).match(/(?:^|\n)  pull_request:[^\n]*((?:\n {4,}[^\n]*)*)/)?.[1] ?? "";
 const job = (text: string, id: string) =>
   text.split(new RegExp(`\\n  ${id}:\\n`))[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";
+const evidenceGuard = (block: string, id: string, variable: string) => {
+  const pattern = new RegExp(
+    `^name: [^\\n]+\\n        env:\\n          ${variable}: \\$\\{\\{ needs\\.${id}\\.result \\}\\}\\n        run: ([^\\n]+)\\n*$`,
+  );
+  return block
+    .split(/\n      - /)
+    .slice(1)
+    .map((step) => step.split(/\n    \S/)[0]?.match(pattern)?.[1])
+    .find((guard) => guard !== undefined);
+};
+const guardStatus = (guard: string, variable: string, result: string) =>
+  spawnSync("bash", ["-c", guard], { env: { [variable]: result } }).status;
 
 describe("required checks always report", () => {
   it("CONTRIBUTING names exactly the checks the rulesets require", () => {
@@ -95,14 +116,71 @@ describe("required checks always report", () => {
   it("ci-ok aggregates the gated jobs", () => {
     const ci = readFileSync(join(dir, "ci.yml"), "utf8");
     const ok = job(ci, "ci-ok");
-    expect(ok).toMatch(
-      /\n    needs:\s+\[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope, bot-contract-drift\]\n/,
-    );
+    expect(ciOkNeeds(ok)).toEqual(expectedCiOkNeeds());
     expect(ok).toContain("BOT_CONTRACT_RESULT: ${{ needs.bot-contract-drift.result }}");
     expect(ok).toContain('run: test "$BOT_CONTRACT_RESULT" = success');
     expect(ok).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     // ci-ok is required (ruleset protect-main); the change-gating section documents what it aggregates.
     expect(readFileSync("CONTRIBUTING.md", "utf8")).toContain("### Change-gated CI and `ci-ok`");
+  });
+
+  it("recognizes multiline dependency lists without dropping any required job", () => {
+    const expected = [...baseCiOkNeeds, ...evidenceJobs.map(({ job }) => job)];
+    const block = `\n    needs:\n      [\n        ${expected.join(",\n        ")},\n      ]\n`;
+    expect(ciOkNeeds(block)).toEqual(expected);
+    for (const missing of expected) {
+      expect(ciOkNeeds(block.replace(`        ${missing},\n`, ""))).not.toEqual(expected);
+    }
+  });
+
+  it("rejects missing or conditional evidence guards and non-success results", () => {
+    for (const { job: id, variable } of evidenceJobs) {
+      const block = `\n      - name: Require evidence\n        env:\n          ${variable}: \${{ needs.${id}.result }}\n        run: test "$${variable}" = success\n`;
+      const guard = evidenceGuard(block, id, variable);
+      expect(guard).toBeDefined();
+      expect(evidenceGuard("", id, variable)).toBeUndefined();
+      expect(
+        evidenceGuard(
+          block.replace("        env:", "        if: false\n        env:"),
+          id,
+          variable,
+        ),
+      ).toBeUndefined();
+      expect(evidenceGuard(`${block}        if: false\n`, id, variable)).toBeUndefined();
+      expect(
+        evidenceGuard(`${block}        continue-on-error: true\n`, id, variable),
+      ).toBeUndefined();
+      for (const [result, status] of [
+        ["success", 0],
+        ["failure", 1],
+        ["skipped", 1],
+        ["cancelled", 1],
+        ["", 1],
+      ] as const) {
+        expect(guardStatus(guard ?? "exit 99", variable, result)).toBe(status);
+      }
+    }
+  });
+
+  it("requires unconditional, fail-closed evidence result guards when evidence exists", () => {
+    const ok = job(readFileSync(join(dir, "ci.yml"), "utf8"), "ci-ok");
+    for (const { file, job: id, variable } of evidenceJobs) {
+      if (!existsSync(file)) continue;
+      const guard = evidenceGuard(ok, id, variable);
+      expect(guard, `${id} needs an unconditional result guard`).toBeDefined();
+      for (const [result, status] of [
+        ["success", 0],
+        ["failure", 1],
+        ["skipped", 1],
+        ["cancelled", 1],
+        ["", 1],
+      ] as const) {
+        expect(
+          guardStatus(guard ?? "exit 99", variable, result),
+          `${id}: ${result || "missing"}`,
+        ).toBe(status);
+      }
+    }
   });
 
   it("runs the production fixture comparison against matching and mismatched bytes", () => {

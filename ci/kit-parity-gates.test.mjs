@@ -1191,7 +1191,7 @@ test("join contract proves every widget state, the flash view and hostile next",
     `unavailable — the join button above still works.</p>`;
   const goodCases = [
     ["cold facade", shell(facade), "public, max-age=3600"],
-    ["warm presence", shell(presence), "public, max-age=60"],
+    ["warm presence", shell(presence), "no-store"],
     ["fallback", shell(fallback), "public, max-age=3600"],
   ];
   for (const [name, html, cache] of goodCases) {
@@ -1227,6 +1227,14 @@ test("join contract proves every widget state, the flash view and hostile next",
     expected: { status: 200, marker: null, contract: "join", cache: "private, no-store" },
   });
   assert.ok(sharedFlash.length > 0, "shared-cache flash must fail");
+  const sharedPresence = assertRouteContract({
+    label: "join/presence-shared-cache",
+    html: shell(presence),
+    headers: headers("public, max-age=60"),
+    status: 200,
+    expected: { status: 200, marker: null, contract: "join", cache: "public, max-age=60" },
+  });
+  assert.ok(sharedPresence.length > 0, "shared-cache presence must fail independently of the pin");
   const mutants = [
     ["no-oneclick", (html) => html.replace('data-testid="join-oneclick"', 'data-testid="x"')],
     // Facade and fallback together: the page shows exactly one widget zone.
