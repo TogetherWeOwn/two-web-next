@@ -1,17 +1,18 @@
 // Resolve evidence inputs from the application checkout, never the controller.
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export function appGit(appRoot, ...args) {
   const root = realpathSync(appRoot);
-  const gitRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-    cwd: root,
-    encoding: "utf8",
-  }).trim();
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+  );
+  const options = { cwd: root, encoding: "utf8", env };
+  const gitRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], options).trim();
   if (realpathSync(gitRoot) !== root) throw new Error(`git root does not match target: ${appRoot}`);
-  return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  return execFileSync("git", args, options).trim();
 }
 
 // The parent argument to import.meta.resolve requires this Node flag. Resolve in
@@ -72,7 +73,38 @@ export function appImport(appRoot, specifier, explicitFile) {
       if (!existsSync(file) || !withinRoot(root, realpathSync(file))) continue;
       return import(pathToFileURL(file).href);
     } catch (error) {
-      if (error.code !== "ERR_MODULE_NOT_FOUND") throw error;
+      if (error.code !== "ERR_MODULE_NOT_FOUND") {
+        if (error.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") throw error;
+        const parts = specifier.split("/");
+        const name = specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+        let scope = base;
+        while (true) {
+          const manifest = join(scope, "package.json");
+          if (existsSync(manifest)) {
+            const pkg = JSON.parse(readFileSync(manifest, "utf8"));
+            if (pkg.name === name && pkg.exports != null) {
+              if (withinRoot(root, realpathSync(manifest))) throw error;
+              break;
+            }
+            scope = "";
+            break;
+          }
+          const parent = dirname(scope);
+          if (parent === scope || scope.endsWith(`${sep}node_modules`)) {
+            scope = "";
+            break;
+          }
+          scope = parent;
+        }
+        if (scope) continue;
+        for (const directory of base === root ? [root] : [base, root]) {
+          const candidate = join(directory, "node_modules", name);
+          if (existsSync(candidate)) {
+            if (withinRoot(root, realpathSync(candidate))) throw error;
+            break;
+          }
+        }
+      }
     }
   }
   throw new Error(`cannot resolve ${specifier} from ${appRoot}`);

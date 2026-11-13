@@ -50,6 +50,34 @@ test("rejects a target nested in a different git checkout", async (t) => {
   assert.throws(() => appGit(root, "status", "--porcelain"), /git root.*target/i);
 });
 
+test("ignores enclosing package errors before trying the target web package", async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), "join-source-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const root = join(parent, "target");
+  const outside = join(parent, "node_modules", "fallback-pkg");
+  await mkdir(outside, { recursive: true });
+  await writeFile(
+    join(outside, "package.json"),
+    JSON.stringify({ exports: { "./other": "./index.js" } }),
+  );
+  await packageAt(join(root, "web"), "fallback-pkg", "web");
+  assert.equal((await appImport(root, "fallback-pkg")).default, "web");
+});
+
+test("ignores enclosing self-reference errors before trying the target web package", async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), "join-source-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const root = join(parent, "target");
+  await writeFile(
+    join(parent, "package.json"),
+    JSON.stringify({ name: "fallback-pkg", exports: { "./other": "./index.js" } }),
+  );
+  await packageAt(root, "fallback-pkg", "root");
+  await packageAt(join(root, "web"), "fallback-pkg", "web");
+  await writeFile(join(root, "web", "package.json"), JSON.stringify({ name: "web" }));
+  assert.equal((await appImport(root, "fallback-pkg")).default, "web");
+});
+
 test("rejects missing packages and does not fall back outside the target", async (t) => {
   const parent = await mkdtemp(join(tmpdir(), "join-source-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
@@ -113,6 +141,49 @@ test("reads identity and status from the requested git checkout", async (t) => {
   assert.equal(appGit(worktree, "rev-parse", "HEAD"), sha);
 });
 
+test("ignores inherited git repository and index routing", async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), "join-source-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const root = join(parent, "target");
+  const controller = join(parent, "controller");
+  for (const dir of [root, controller]) {
+    await mkdir(dir);
+    const git = (...args) => execFileSync("git", args, { cwd: dir, stdio: "pipe" });
+    git("init", "-q");
+    await writeFile(join(dir, "tracked.txt"), dir);
+    git("add", "tracked.txt");
+    git(
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-qm",
+      "fixture",
+    );
+  }
+  const sha = appGit(root, "rev-parse", "HEAD");
+  const old = {
+    GIT_DIR: process.env.GIT_DIR,
+    GIT_WORK_TREE: process.env.GIT_WORK_TREE,
+    GIT_INDEX_FILE: process.env.GIT_INDEX_FILE,
+  };
+  try {
+    process.env.GIT_DIR = join(controller, ".git");
+    process.env.GIT_WORK_TREE = root;
+    assert.equal(appGit(root, "rev-parse", "HEAD"), sha);
+    delete process.env.GIT_DIR;
+    delete process.env.GIT_WORK_TREE;
+    process.env.GIT_INDEX_FILE = join(parent, "other-index");
+    assert.equal(appGit(root, "status", "--porcelain"), "");
+  } finally {
+    for (const [key, value] of Object.entries(old)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test("propagates package resolution errors other than missing modules", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "join-source-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -123,4 +194,22 @@ test("propagates package resolution errors other than missing modules", async (t
     JSON.stringify({ exports: { "./other": "./index.js" } }),
   );
   assert.throws(() => appImport(root, "bad-pkg"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
+  const webDir = join(root, "web", "node_modules", "bad-web-pkg");
+  await mkdir(webDir, { recursive: true });
+  await writeFile(
+    join(webDir, "package.json"),
+    JSON.stringify({ exports: { "./other": "./index.js" } }),
+  );
+  assert.throws(() => appImport(root, "bad-web-pkg"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
+});
+
+test("propagates target package self-reference export errors", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "join-source-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(
+    join(root, "package.json"),
+    JSON.stringify({ name: "self-pkg", exports: { "./other": "./index.js" } }),
+  );
+  await packageAt(join(root, "web"), "self-pkg", "web");
+  assert.throws(() => appImport(root, "self-pkg"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
 });
