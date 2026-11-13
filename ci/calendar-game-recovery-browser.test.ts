@@ -46,6 +46,7 @@ async function open(
   bundle: (typeof GAME_BUNDLES)[number],
   entry = GAME_ENTRY,
   javaScriptEnabled = true,
+  abortCopyLink = false,
 ) {
   const fixture = gameRecoveryFixture();
   const context = await browser.newContext({
@@ -81,6 +82,10 @@ async function open(
         body: await response.text(),
         contentType: "text/html; charset=utf-8",
       });
+    }
+    if (abortCopyLink && url.pathname === "/islands/copy-link.js") {
+      publicAborted.push(url.pathname);
+      return route.abort();
     }
     if (url.pathname === "/islands/events-calendar.js") {
       calendarLoads++;
@@ -207,15 +212,33 @@ async function open(
       ),
     ).toBe(true);
   }
-  function clean() {
+  async function clean() {
     expect(errors).toEqual([]);
     expect(forbidden).toEqual([]);
     expect(reads.every((read) => read.method === "GET")).toBe(true);
     if (javaScriptEnabled) {
       expect(calendarLoads).toBe(1);
-      // Styled suite: a non-calendar public asset must fulfil, never abort.
+      // Both route twins render the shared calendar shell. It may deliver the
+      // schedule rules externally or inline; check their actual cascade instead.
+      const styles = await page.locator(".events-page").evaluate((root) => {
+        const views = root.querySelector(".schedule-views")!;
+        const filter = root.querySelector(".schedule-game-filter")!;
+        return {
+          views: getComputedStyle(views).display,
+          border: getComputedStyle(views).borderTop,
+          filter: getComputedStyle(filter).display,
+          alignment: getComputedStyle(filter).alignItems,
+        };
+      });
+      expect(styles).toEqual({
+        views: "flex",
+        border: "1px solid rgb(133, 118, 107)",
+        // The inline-flex filter is blockified as a child of the flex search form.
+        filter: "flex",
+        alignment: "center",
+      });
+      // The unrelated public island must still fulfil, never abort.
       expect(publicFulfilled).toContain("/islands/copy-link.js");
-      expect(publicFulfilled.some((p) => p.endsWith(".css"))).toBe(true);
       expect(publicAborted.filter((p) => p.endsWith(".css") || p.startsWith("/islands/"))).toEqual(
         [],
       );
@@ -243,6 +266,24 @@ async function open(
   };
 }
 
+for (const twin of GAME_TWINS) {
+  describe(`${twin} asset proof negative controls`, () => {
+    it("rejects a calendar with stylesheets disabled", async () => {
+      const h = await open(twin, "shipped");
+      await h.clean();
+      await h.page.evaluate(() => {
+        for (const sheet of Array.from(document.styleSheets)) sheet.disabled = true;
+      });
+      await expect(h.clean()).rejects.toThrow();
+    });
+
+    it("rejects an aborted required non-calendar island", async () => {
+      const h = await open(twin, "shipped", GAME_ENTRY, true, true);
+      await expect(h.clean()).rejects.toThrow(/copy-link/);
+    });
+  });
+}
+
 for (const twin of GAME_TWINS)
   for (const bundle of GAME_BUNDLES) {
     describe(`${twin} ${bundle} real game recovery`, () => {
@@ -257,7 +298,7 @@ for (const twin of GAME_TWINS)
         expect.soft(text, "attempted game must be named").toContain("Go");
         expect.soft(text, "last-good game must be named separately").toContain("Chess");
         expect(text).toMatch(/still|kept|showing|retain/i);
-        h.clean();
+        await h.clean();
       });
 
       it("A1.1 combined q+game failure names both attempted and retained scopes", async () => {
@@ -269,7 +310,7 @@ for (const twin of GAME_TWINS)
         const text = await h.status.innerText();
         for (const scope of ["Go", "Chess", "absent words", "fixture"])
           expect(text).toContain(scope);
-        h.clean();
+        await h.clean();
       });
 
       it("A1.2 Dismiss restores committed q AND game, without GET, history or DOM work", async () => {
@@ -285,7 +326,7 @@ for (const twin of GAME_TWINS)
         await h.page.clock.runFor(1000);
         expect(h.reads).toHaveLength(1);
         await h.retained();
-        h.clean();
+        await h.clean();
       });
 
       it("A1.3 CONTROL newer unsent q/select edits revoke an older pending failure", async () => {
@@ -303,7 +344,7 @@ for (const twin of GAME_TWINS)
         expect(await h.dismiss.isVisible()).toBe(false);
         expect(h.reads).toHaveLength(1);
         await h.retained();
-        h.clean();
+        await h.clean();
       });
 
       it("A1.3 newer edits after failure survive any still-available Dismiss", async () => {
@@ -320,7 +361,7 @@ for (const twin of GAME_TWINS)
         expect(await h.game.inputValue()).toBe("");
         expect(h.reads).toHaveLength(1);
         await h.retained();
-        h.clean();
+        await h.clean();
       });
 
       it("A1.3 CONTROL an older successful retry cannot overwrite newer unsent game/query edits", async () => {
@@ -343,7 +384,7 @@ for (const twin of GAME_TWINS)
         expect(["Chess", "Go"]).toContain(committed);
         expect(await h.content.innerText()).toMatch(new RegExp(`${committed} fixture night`, "i"));
         expect(h.reads).toHaveLength(2);
-        h.clean();
+        await h.clean();
       });
 
       it("A1.4 CONTROL superseded late failure cannot replace a newer successful game intent", async () => {
@@ -359,7 +400,7 @@ for (const twin of GAME_TWINS)
         await h.page.clock.runFor(1);
         expect(await h.retry.isVisible()).toBe(false);
         expect(await h.game.inputValue()).toBe("");
-        h.clean();
+        await h.clean();
       });
 
       it("A1.5 CONTROL 429 cooldown is manual, bounded, GET-only and retries exact q+game", async () => {
@@ -389,7 +430,7 @@ for (const twin of GAME_TWINS)
         expect(await h.retry.isVisible()).toBe(false);
         await h.page.clock.runFor(60_000);
         expect(h.reads).toHaveLength(2);
-        h.clean();
+        await h.clean();
       });
 
       it("A1.6 CONTROL header deadline retains last-good Chess without automatic retry", async () => {
@@ -403,7 +444,7 @@ for (const twin of GAME_TWINS)
         await h.retained();
         await h.page.clock.runFor(60_000);
         expect(h.reads).toHaveLength(1);
-        h.clean();
+        await h.clean();
       });
 
       it.each(["malformed", "crossOrigin"] as const)(
@@ -414,7 +455,7 @@ for (const twin of GAME_TWINS)
           await h.reply(0, 200, { [invalid]: true });
           await h.failed();
           await h.retained();
-          h.clean();
+          await h.clean();
         },
       );
 
@@ -433,7 +474,7 @@ for (const twin of GAME_TWINS)
         await h.reply(2, 200);
         await expect.poll(() => h.game.inputValue()).toBe("Go");
         expect(await h.content.innerText()).toMatch(/Go fixture night/i);
-        h.clean();
+        await h.clean();
       });
 
       it("A1.1 unknown game recovery names effective All games, never an invented scope", async () => {
@@ -446,7 +487,7 @@ for (const twin of GAME_TWINS)
         await h.failed();
         expect(await h.status.innerText()).toMatch(/all games/i);
         expect(await h.status.innerText()).not.toMatch(/for [“"']?Unrecognized/);
-        h.clean();
+        await h.clean();
       });
 
       it("A1.3 pending navigation with newer game-only draft suppresses recovery and keeps the draft", async () => {
@@ -461,7 +502,7 @@ for (const twin of GAME_TWINS)
         expect(await h.game.inputValue()).toBe("Go");
         expect(h.reads).toHaveLength(1);
         await h.retained();
-        h.clean();
+        await h.clean();
       });
 
       it("A1.1 navigation from unknown game names effective All games, never the raw URL scope", async () => {
@@ -474,7 +515,7 @@ for (const twin of GAME_TWINS)
         const text = await h.status.innerText();
         expect(text).toMatch(/all games/i);
         expect(text).not.toMatch(/Unrecognized/);
-        h.clean();
+        await h.clean();
       });
 
       it("A1.10 CONTROL no-JS native GET select is labeled and submits the real game", async () => {
