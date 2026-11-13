@@ -5,19 +5,24 @@
 // Hyperdrive binding. This dev fixture also stubs Discord fetches for callback
 // coverage, then serves until killed. Runs only in CI; refuses non-loopback databases.
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { requireCaptureArtifact } from "./kit-capture-build.mjs";
+import { workerShutdown } from "./kit-worker-shutdown.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = join(repo, "web");
 const worker = join(web, ".svelte-kit/cloudflare/_worker.js");
 const assets = join(web, ".svelte-kit/cloudflare");
 const databaseUrl = process.env.KIT_WORKER_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
-const port = Number(process.env.KIT_WORKER_PORT ?? "8788");
+const portSetting = process.env.KIT_WORKER_PORT ?? "8788";
+const port = Number(portSetting);
+if (!/^[0-9]+$/.test(portSetting) || !Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error("kit-worker-dev: KIT_WORKER_PORT must be a TCP port between 1 and 65535");
+}
 
 let db;
 try {
@@ -48,7 +53,15 @@ const scratch = mkdtempSync(
 );
 const config = join(scratch, "wrangler.jsonc");
 const testWorker = join(scratch, "kit-worker.mjs");
-writeFileSync(
+function writeScratch(...args) {
+  try {
+    writeFileSync(...args);
+  } catch (error) {
+    rmSync(scratch, { recursive: true, force: true });
+    throw error;
+  }
+}
+writeScratch(
   testWorker,
   [
     `import worker from ${JSON.stringify(worker)};`,
@@ -98,7 +111,7 @@ writeFileSync(
     "export default entry;",
   ].join("\n"),
 );
-writeFileSync(
+writeScratch(
   config,
   JSON.stringify({
     name: "two-web-kit-parity-fixture",
@@ -141,35 +154,51 @@ writeFileSync(
   }),
 );
 
-const child = spawn(
-  join(web, "node_modules/.bin/wrangler"),
-  [
-    "dev",
-    "--config",
-    config,
-    "--local",
-    "--ip",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--inspector-port",
-    "0",
-    "--log-level",
-    "error",
-  ],
-  {
-    cwd: repo,
-    env: {
-      ...process.env,
-      WRANGLER_SEND_METRICS: "false",
-      CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
-      CLOUDFLARE_INCLUDE_PROCESS_ENV: "false",
+let child;
+try {
+  child = spawn(
+    join(web, "node_modules/.bin/wrangler"),
+    [
+      "dev",
+      "--config",
+      config,
+      "--local",
+      "--ip",
+      "127.0.0.1",
+      "--port",
+      String(port),
+      "--inspector-port",
+      "0",
+      "--log-level",
+      "error",
+    ],
+    {
+      cwd: repo,
+      env: {
+        ...process.env,
+        WRANGLER_SEND_METRICS: "false",
+        CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
+        CLOUDFLARE_INCLUDE_PROCESS_ENV: "false",
+      },
+      stdio: "inherit",
     },
-    stdio: "inherit",
-  },
-);
-
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => child.kill("SIGTERM"));
+  );
+} catch (error) {
+  rmSync(scratch, { recursive: true, force: true });
+  throw error;
 }
-child.once("exit", (code) => process.exit(code ?? 1));
+
+const stopWorker = workerShutdown(child);
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, stopWorker);
+}
+let childFailed = false;
+child.on("error", (error) => {
+  childFailed = true;
+  console.error(`kit-worker-dev: Wrangler process error: ${error.message}`);
+  if (child.pid !== undefined) stopWorker();
+});
+child.once("close", (code) => {
+  rmSync(scratch, { recursive: true, force: true });
+  process.exitCode = childFailed ? 1 : (code ?? 1);
+});
