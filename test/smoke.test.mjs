@@ -386,6 +386,7 @@ test("CLI --help prints the single flag reference without probing", async () => 
   for (const flag of [
     "--allow-indexable",
     "--fail-on-ready-wait-critical",
+    "--allow-uncompressed-html",
     "--version-override",
     "--expected-version-id",
     "--failed-baseline",
@@ -2117,5 +2118,84 @@ test("CLI --allow-indexable reaches the apex posture", async (t) => {
   });
   const result = await cli([url, "--allow-indexable"]);
   assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /24 routes, 0 failed assertions/);
+});
+
+// TWO-7591: the compressed-HTML gate runs only on https origins, which no
+// loopback stub can be. Serve the same fixtures through a fetch stub against
+// a synthetic https origin so removing or inverting the gate fails here.
+const HTTPS_ORIGIN = "https://next-stub.test";
+
+async function httpsRun(t, change = () => {}, options = {}) {
+  const buildSecurityTxt = await securityTxtBuilder();
+  const realFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  globalThis.fetch = async (input) => {
+    const requestUrl =
+      input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+    const fixture = fixtures[requestUrl.pathname];
+    if (!fixture) return new Response("Unexpected request", { status: 500 });
+    const [status, type, body, location] = fixture;
+    const resolved =
+      requestUrl.pathname === "/.well-known/security.txt"
+        ? buildSecurityTxt(HTTPS_ORIGIN)
+        : typeof body === "function"
+          ? body(HTTPS_ORIGIN)
+          : body;
+    const result = {
+      status,
+      body: resolved,
+      headers: {
+        "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "x-frame-options": "DENY",
+        ...(type ? { "content-type": `${type}; charset=UTF-8` } : {}),
+        ...(type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
+        ...(requestUrl.pathname === "/up"
+          ? { "x-two-origin": "two-web-next", "cache-control": "no-store" }
+          : {}),
+        ...(location ? { location } : {}),
+        "set-cookie": "fixture=not-a-session; Path=/",
+      },
+    };
+    change(requestUrl.pathname, result);
+    return new Response(result.body ?? "", {
+      status: result.status,
+      headers: result.headers,
+    });
+  };
+  return run(HTTPS_ORIGIN, options);
+}
+
+test("https origin passes when HTML carries an edge Content-Encoding", async (t) => {
+  const result = await httpsRun(t, (route, result) => {
+    if (result.headers["content-type"]?.startsWith("text/html")) {
+      result.headers["content-encoding"] = "br";
+    }
+  });
+  assert.equal(result.ok, true, result.output);
+  assert.match(result.output, /24 routes, 0 failed assertions/);
+});
+
+test("https origin fails uncompressed HTML and names the defect", async (t) => {
+  const result = await httpsRun(t);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.output.includes(
+      "FAIL /events: expected Content-Encoding br/gzip/zstd on HTML; actual uncompressed",
+    ),
+    result.output,
+  );
+  // Ten HTML routes (the eight leaves plus the 404 branded/missing probes)
+  // each fail the encoding gate; non-HTML routes stay green.
+  assert.match(result.output, /24 routes, 10 failed assertions/);
+});
+
+test("--allow-uncompressed-html keeps the rollback smoke green on an older version", async (t) => {
+  const result = await httpsRun(t, () => {}, { allowUncompressedHtml: true });
+  assert.equal(result.ok, true, result.output);
   assert.match(result.output, /24 routes, 0 failed assertions/);
 });

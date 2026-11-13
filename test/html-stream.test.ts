@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { withStreamedBody } from "../src/html-stream";
+import {
+  dispatchHookRequest,
+  KIT_RENDERER_HEADER,
+  ROUTE_MANIFEST,
+  type HookEventLike,
+} from "../src/route-ownership";
 import type { Env } from "../src/env";
 
 // TWO-7591: HTML responses must leave the Worker as unknown-length streams so
@@ -59,6 +65,15 @@ describe("withStreamedBody", () => {
     });
     expect(withStreamedBody(empty)).toBe(empty);
   });
+
+  it("returns an already-consumed HTML response unchanged (locked stream)", async () => {
+    const consumed = new Response("<p>read already</p>", {
+      status: 500,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+    await consumed.text();
+    expect(withStreamedBody(consumed)).toBe(consumed);
+  });
 });
 
 describe("HTML wire shape through the app", () => {
@@ -84,5 +99,69 @@ describe("HTML wire shape through the app", () => {
     const res = await app.request("/version", {}, env);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("application/json");
+  });
+});
+
+// Kit dispatch path (TWO-7591 review): withStreamedBody runs inside
+// decorateKitResponse, so a Kit-rendered HTML response must leave the
+// dispatch without a declared Content-Length and a Hono-owned response must
+// pass through untouched — deleting the seam must fail this file.
+const KIT_APP_URL = "https://next.example.test";
+
+const kitEventFor = (path: string, routeId: string): HookEventLike => {
+  const request = new Request(`${KIT_APP_URL}${path}`, {
+    method: "GET",
+    headers: { host: "next.example.test" },
+  });
+  return { request, url: new URL(request.url), route: { id: routeId } };
+};
+
+const kitManifestFor = (path: string) => {
+  const shipped = ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === path);
+  if (!shipped) throw new Error(`shipped GET ${path} manifest entry missing`);
+  expect(shipped.enabled).toBe(true);
+  return [{ ...shipped }];
+};
+
+describe("Kit dispatch HTML wire shape", () => {
+  it("streams a decorated Kit HTML response with no declared Content-Length", async () => {
+    const body = "<main><h1>Events</h1></main>";
+    const res = await dispatchHookRequest(kitEventFor("/events", "/events"), {
+      appUrl: KIT_APP_URL,
+      honoFetch: vi.fn(async () => new Response("hono")),
+      resolve: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: {
+              "content-type": "text/html; charset=UTF-8",
+              "content-length": String(body.length),
+            },
+          }),
+      ),
+      manifest: kitManifestFor("/events"),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBe("kit");
+    expect(res.headers.get("content-length")).toBeNull();
+    expect(await res.text()).toBe(body);
+  });
+
+  it("leaves a Hono-owned response's declared Content-Length untouched", async () => {
+    // GET / is enabled:false in the shipped manifest, so dispatch answers
+    // through honoFetch and never reaches the stream wrap.
+    const res = await dispatchHookRequest(kitEventFor("/", "/[...path]"), {
+      appUrl: KIT_APP_URL,
+      honoFetch: vi.fn(
+        async () =>
+          new Response("hono", {
+            status: 200,
+            headers: { "content-type": "text/html", "content-length": "4" },
+          }),
+      ),
+      resolve: vi.fn(async () => new Response("kit")),
+    });
+    expect(res.headers.get("content-length")).toBe("4");
+    expect(await res.text()).toBe("hono");
   });
 });

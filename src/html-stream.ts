@@ -18,6 +18,9 @@ function needsStreamedBody(response: Response): boolean {
   if (!(response.headers.get("content-type") ?? "").includes("text/html")) return false;
   if (response.headers.get("content-encoding")) return false;
   if (!response.body) return false;
+  // An already-consumed or reader-locked body cannot be piped into the wrap;
+  // serve it as-is rather than throw on the dispatch path.
+  if (response.bodyUsed || response.body.locked) return false;
   // WebSocket upgrade responses own their frame stream; never wrap them.
   if ((response as { webSocket?: unknown }).webSocket) return false;
   return true;

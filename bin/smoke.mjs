@@ -233,6 +233,7 @@ export async function smoke(
     failedBaseline,
     allowMissingBaseline = false,
     failOnReadyWaitCritical = false,
+    allowUncompressedHtml = false,
     onRoute,
   } = {},
 ) {
@@ -339,8 +340,11 @@ export async function smoke(
       // Lighthouse-flagged staging defect). The probe runs only on https
       // origins: loopback fixtures never encode. Node fetch negotiates
       // Accept-Encoding itself, so a compressed wire body surfaces as the
-      // Content-Encoding header the platform appends.
-      if (contentType === "text/html" && base.protocol === "https:") {
+      // Content-Encoding header the platform appends. The post-rollback
+      // smoke passes --allow-uncompressed-html: a restored version predates
+      // this wire requirement, and the rollback gate proves the restored
+      // version serves, not that it is newer.
+      if (contentType === "text/html" && base.protocol === "https:" && !allowUncompressedHtml) {
         check(
           ["br", "gzip", "zstd"].includes(headers.get("content-encoding") ?? ""),
           "Content-Encoding br/gzip/zstd on HTML",
@@ -752,7 +756,7 @@ export async function smoke(
 // The single flag reference for this tool: --help prints it to stdout,
 // usage errors print it to stderr. Every flag the parser accepts is named.
 export const SMOKE_USAGE =
-  'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--fail-on-ready-wait-critical] [--version-override worker-name="<version-uuid>"] [--expected-version-id <lowercase-uuid>] [--failed-baseline <n>] [--allow-missing-baseline] [--json] [--ledger <path>]';
+  'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--fail-on-ready-wait-critical] [--allow-uncompressed-html] [--version-override worker-name="<version-uuid>"] [--expected-version-id <lowercase-uuid>] [--failed-baseline <n>] [--allow-missing-baseline] [--json] [--ledger <path>]';
 
 // Deploy-evidence ledger mirroring bin/json-smoke.mjs writeLedgerFile: one
 // entry per route plus a summary. The --json stdout verdict stays minimal
@@ -807,6 +811,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     let failedBaseline;
     let allowMissingBaseline = false;
     let failOnReadyWaitCritical = false;
+    let allowUncompressedHtml = false;
     let jsonVerdict = false;
     let ledgerPath;
     let usage = false;
@@ -817,6 +822,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         allowMissingBaseline = true;
       } else if (flags[i] === "--fail-on-ready-wait-critical") {
         failOnReadyWaitCritical = true;
+      } else if (flags[i] === "--allow-uncompressed-html") {
+        allowUncompressedHtml = true;
       } else if (flags[i] === "--json") {
         jsonVerdict = true;
       } else if (flags[i] === "--ledger") {
@@ -887,6 +894,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           failedBaseline: baseline,
           allowMissingBaseline: allowMissing,
           failOnReadyWaitCritical,
+          allowUncompressedHtml,
           onRoute:
             jsonVerdict || ledgerPath !== undefined
               ? (path, failedAssertions) => {
