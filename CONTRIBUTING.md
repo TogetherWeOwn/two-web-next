@@ -53,8 +53,8 @@ The repository rulesets enforce the following on `main`:
 - `protect-main`: changes arrive through a pull request, the branch cannot be
   deleted or force-pushed, only squash merges are allowed, and `ci-ok`,
   `gitleaks`, `e2e-ok` and `pr-size-gate / gate` must pass on the exact head,
-  and so must the Devin Review check and the organization rulesets
-  (`pr-standards`, CodeQL). CodeRabbit is advisory, not a required check;
+  and so must the `Devin Review` check and the organization rulesets
+  (`pr-standards`, `CodeQL`). CodeRabbit is advisory, not a required check;
   answer every finding, but its check does not gate the merge. No approving
   review is required.
 
@@ -65,8 +65,8 @@ The repository rulesets enforce the following on `main`:
 
 - `pr-conventions`: `pr-lint` must pass.
 
-The `pr-size-gate` job's check, `pr-size-gate / gate`, joins this list after
-the caller has reported on the default branch (two-step ship; STANDARD.md).
+The `pr-size-gate` job's check, `pr-size-gate / gate`, is the required size
+gate named in the `protect-main` bullet above.
 
 Who merges: when native review stages apply, the final-stage reviewer
 squash-merges the exact reviewed head before closing the task; without a review
@@ -94,9 +94,10 @@ requirement. Do not demand paired artifact hashes or a comparison to current
 
 Before merge, require:
 
-1. **Exact-head checks and review.** All required checks listed above (`ci-ok`,
-   `gitleaks`, `e2e-ok`, `pr-lint`, `Devin Review`, the organization
-   `pr-standards` workflow and CodeQL) pass on the exact PR head. CodeRabbit is
+1. **Exact-head checks and review.** All required checks listed above
+   (`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `pr-size-gate / gate`,
+   `Devin Review`, the organization `pr-standards` workflow and `CodeQL`)
+   pass on the exact PR head. CodeRabbit is
    advisory: answer every finding, but it is not a required check. Every finding is fixed or answered with evidence, and applicable
    security reviews, rulesets and native review stages are complete.
    Record exact-head GitHub Actions run/job links and conclusions; local output
@@ -159,9 +160,9 @@ and fixtures. The labeller lives once in the org
 (`CI-STANDARD.md`, "Advisory PR-size labels"); the workflow here is a thin
 caller pinned to a central SHA and passes only this repo's generated paths.
 The labeller is advisory only: it is not a required check and never blocks a
-merge. The same workflow's `pr-size-gate` job is the required size gate
-(reported as `pr-size-gate / gate` once the ruleset requires it; see Branch
-protection and required checks above). A Monday run of the same workflow
+merge. The same workflow's `pr-size-gate` job is the required size gate,
+reported as `pr-size-gate / gate` (see Branch protection and required checks
+above). A Monday run of the same workflow
 prints the weekly tally of merged pull requests per size; the labels are the
 durable record behind it.
 
