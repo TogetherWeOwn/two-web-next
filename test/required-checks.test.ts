@@ -69,6 +69,8 @@ describe("required checks always report", () => {
       );
     expect(named).toEqual(documented);
     expect(named).not.toContain("CodeRabbit");
+    expect(section).toContain("CodeRabbit is advisory");
+    expect(section).not.toMatch(/CodeRabbit is(?![^.]*\badvisory\b)[^.]*\brequired\b/);
   });
 
   it("AGENTS.md and README.md name the live required set, not the retired check triple", () => {
