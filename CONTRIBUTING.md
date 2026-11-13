@@ -235,9 +235,12 @@ below-cutoff branch rows need `PR_STANDARDS_MODE`.
 
 GitHub does not enforce an approval count here, and neither does team policy.
 Independent review comes from Devin Review, a required check that runs on the
-head SHA and re-runs on a new push, plus CodeRabbit's advisory findings, which
-must each be fixed or answered with evidence but never block the merge. The
-merge rule is the one in "Who merges" above.
+head SHA and re-runs on a new push, plus CodeRabbit, whose check is advisory:
+its findings must each be fixed or answered with evidence, but the check never
+blocks the merge. Review conversations still follow the required thread
+resolution in "Branch protection and required checks", so resolve each
+conversation once it is fixed or answered. The merge rule is the one in
+"Who merges" above.
 
 `pr-lint` lives in `.github/workflows/pr-gates.yml` and runs through
 `ci/pr-lint-output.py check`: first `ci/check-pr-conventions.py` (it fails on a
