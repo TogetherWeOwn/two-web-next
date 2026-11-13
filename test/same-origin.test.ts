@@ -30,11 +30,13 @@ function assertGuarded(router: typeof app) {
   const guardIndex = router.routes.indexOf(guards[0]!);
   // Only the security-header wrapper and TrustHosts may precede it (the
   // wire-encoding wrapper moved out of Hono's dispatch to the served seams:
-  // a rebuilt Response drops encodeBody "manual" inside the app). Pin both
-  // registrations: do not filter away an extra wildcard handler.
+  // a rebuilt Response drops encodeBody "manual" inside the app); the guard's
+  // own slot is the third wildcard. Pin all three registrations: do not
+  // filter away an extra wildcard handler.
   expect(guardIndex).toBe(2);
   expect(router.routes[0]).toMatchObject({ method: "ALL", path: "/*" });
   expect(router.routes[1]).toMatchObject({ method: "ALL", path: "/*" });
+  expect(router.routes[2]).toMatchObject({ method: "ALL", path: "/*" });
   const unsafe = router.routes.filter((r) => UNSAFE_METHODS.some((m) => m === r.method));
   expect(unsafe.length).toBeGreaterThan(0);
   for (const exemption of SAME_ORIGIN_EXEMPTIONS) {
