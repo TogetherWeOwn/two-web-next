@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Tag from "$lib/Tag.svelte";
+  import Tag from "#lib/Tag.svelte";
 </script>
 
 <div data-tag-fixture="neutral"><Tag>Neutral</Tag></div>

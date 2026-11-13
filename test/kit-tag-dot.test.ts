@@ -74,9 +74,9 @@ export const body = render(Fixture).body;`,
     expect(tagDots).toHaveLength(3);
     expect(tagDots.every((dot) => dot.includes('aria-hidden="true"'))).toBe(true);
     for (const label of ["Echo", "Echo explicitly without dot"]) {
-      expect(body.replace(/<!--.*?-->/g, "")).toMatch(
+      expect(body).toMatch(
         new RegExp(
-          `<span\\b[^>]*class="[^"]*\\becho\\b[^"]*"[^>]*>\\s*<span\\b[^>]*class="[^"]*\\bdot\\b[^"]*"[^>]*></span>\\s*${label}</span>`,
+          `<span\\b[^>]*class="[^"]*\\becho\\b[^"]*"[^>]*>(?:\\s|<!--[\\s\\S]*?-->)*<span\\b[^>]*class="[^"]*\\bdot\\b[^"]*"[^>]*></span>(?:\\s|<!--[\\s\\S]*?-->)*${label}</span>`,
         ),
       );
     }
