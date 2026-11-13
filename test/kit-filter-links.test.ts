@@ -7,7 +7,7 @@ it("renders filter links with their destinations, selection and zero counts", as
     const body = renderer.renderPage({});
     expect(body).toContain('aria-label="Event views"');
     const links = Array.from(
-      body.replace(/<!--.*?-->/gs, "").matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/g),
+      body.replace(/<!---->/g, "").matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/g),
       (match) => match[0],
     );
     expect(links).toHaveLength(4);
