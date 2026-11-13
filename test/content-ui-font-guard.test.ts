@@ -10,12 +10,12 @@ const unguardedUiRules = (css: string): string[] =>
     }))
     .filter(
       (rule) =>
-        rule.body.split(";").some((declaration) =>
-          /^\s*font(?:-family)?\s*:[^;{}]*var\(--font-ui\)/.test(declaration),
-        ) &&
-        rule.selector
-          .split(/,(?![^(]*\))/)
-          .some((part) => !part.includes(":not(.content-theme)")),
+        rule.body
+          .split(";")
+          .some((declaration) =>
+            /^\s*font(?:-family)?\s*:[^;{}]*var\(--font-ui\)/.test(declaration),
+          ) &&
+        rule.selector.split(/,(?![^(]*\))/).some((part) => !part.includes(":not(.content-theme)")),
     )
     .map((rule) => rule.selector);
 
@@ -30,8 +30,8 @@ describe("content UI font guard", () => {
         ".base-theme:not(.content-theme) h1,.base-theme h2{font-family:var(--font-ui)}",
       ),
     ).toHaveLength(1);
-    expect(
-      unguardedUiRules(".base-theme:not(.content-theme){font-family:var(--font-ui)}"),
-    ).toEqual([]);
+    expect(unguardedUiRules(".base-theme:not(.content-theme){font-family:var(--font-ui)}")).toEqual(
+      [],
+    );
   });
 });
