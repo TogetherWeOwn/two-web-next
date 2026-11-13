@@ -94,14 +94,40 @@ const resolve = (raw: unknown): string[] | null => {
   }
 };
 
+// Preserve independent finite class values when another branch is unresolved.
+const knownClasses = (raw: unknown, uses: Uses): void => {
+  const node = raw as Node | undefined;
+  const values = resolve(node);
+  if (values) {
+    for (const value of values) split(value, uses);
+  } else if (node?.type === "ArrayExpression") {
+    for (const item of (node.elements as Node[]) ?? []) knownClasses(item, uses);
+  } else if (node?.type === "ConditionalExpression") {
+    knownClasses(node.consequent, uses);
+    knownClasses(node.alternate, uses);
+  } else if (node?.type === "LogicalExpression") {
+    if (node.operator !== "&&") knownClasses(node.left, uses);
+    knownClasses(node.right, uses);
+  } else if (node?.type === "ObjectExpression") {
+    for (const prop of (node.properties as Node[]) ?? []) {
+      if (prop.type !== "Property") continue;
+      const key = prop.key as Node;
+      if (!prop.computed && key.type === "Identifier") split(String(key.name), uses);
+      else knownClasses(key, uses);
+    }
+  }
+};
+
 const classValue = (parts: Node[], uses: Uses) => {
   let out: string[] | null = [""];
   for (const part of parts) {
     if (part.type === "Text") out = concat(out, [String(part.data)]);
     else out = concat(out, resolve(part.expression));
   }
-  if (!out) uses.unknown.push("unresolved class value");
-  else for (const value of out) split(value, uses);
+  if (!out) {
+    uses.unknown.push("unresolved class value");
+    if (parts.length === 1) knownClasses(parts[0]?.expression, uses);
+  } else for (const value of out) split(value, uses);
 };
 
 const walk = (node: unknown, uses: Uses): void => {
@@ -184,6 +210,15 @@ describe("Kit utility source boundary", () => {
     ]) {
       expect(globalViolations(markup), markup).not.toEqual([]);
     }
+    for (const markup of [
+      "<p class={['hidden', extra]}>x</p>",
+      "<p class={cond ? 'hidden' : extra}>x</p>",
+      "<p class={cond && (other ? 'hidden' : extra)}>x</p>",
+      "<p class={{ hidden: cond, [name]: cond }}>x</p>",
+    ])
+      expect(globalViolations(markup), markup).toContain("hidden");
+    const choices = Array.from({ length: 9 }, (_, i) => `c${i} ? 'a' : 'b'`).join(", ");
+    expect(globalViolations(`<p class={['hidden', ${choices}]}>x</p>`)).toContain("hidden");
     expect(globalViolations('<p class="hint">x</p>')).toEqual([]);
     expect(globalViolations("<p class={`hid${'x'}`}>x</p>")).toEqual([]);
   });
