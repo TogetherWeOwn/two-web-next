@@ -98,6 +98,27 @@ describe("kit css collector", () => {
     }
   });
 
+  it("rejects a wide directory at the entry limit on repeated attempts", () => {
+    const paths = fixture({ "a.css": "x{}" });
+    for (let i = 0; i < 100; i++) put(paths.root, `extra${i}.js`, "x");
+    const limits = { files: 9, fileBytes: 99, totalBytes: 99, entries: 2, depth: 9 };
+    for (let i = 0; i < 10; i++) assert.throws(() => run(paths, {}, limits), /entries/);
+    assert.equal(existsSync(paths.out), false);
+  });
+
+  it("refuses linked ancestors of either path", () => {
+    const paths = fixture();
+    const alias = join(tmp, `alias${n}`);
+    symlinkSync(paths.root, alias);
+    assert.throws(
+      () => run({ root: paths.root, out: join(alias, "output") }),
+      /linked path ancestor/,
+    );
+    assert.equal(existsSync(join(paths.root, "output")), false);
+    assert.throws(() => run({ root: alias, out: paths.out }), /linked path ancestor/);
+    assert.equal(existsSync(paths.out), false);
+  });
+
   it("refuses special entries without opening them", () => {
     for (const name of ["pipe.css", "pipe.txt"]) {
       const paths = fixture();

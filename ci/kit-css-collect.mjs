@@ -4,7 +4,7 @@
 // those files plus a manifest, and fails closed on anything incomplete,
 // oversized, linked or unexpected. Diagnostic only: it never judges budgets.
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, opendirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -42,15 +42,22 @@ function walk(dir, limits) {
   let seen = 0;
   const visit = (current, depth) => {
     if (depth > limits.depth) fail(`CSS tree deeper than ${limits.depth}: ${current}`);
-    for (const name of readdirSync(current)) {
-      seen += 1;
-      if (seen > limits.entries) fail(`more than ${limits.entries} directory entries`);
-      const full = join(current, name);
-      const stat = lstatSync(full);
-      if (stat.isSymbolicLink()) fail(`symbolic link refused: ${relative(dir, full)}`);
-      if (stat.isDirectory()) visit(full, depth + 1);
-      else if (!stat.isFile()) fail(`special filesystem entry refused: ${relative(dir, full)}`);
-      else if (name.endsWith(".css")) found.push({ full, size: stat.size });
+    const dirHandle = opendirSync(current);
+    try {
+      let entry;
+      while ((entry = dirHandle.readSync()) !== null) {
+        const name = entry.name;
+        seen += 1;
+        if (seen > limits.entries) fail(`more than ${limits.entries} directory entries`);
+        const full = join(current, name);
+        const stat = lstatSync(full);
+        if (stat.isSymbolicLink()) fail(`symbolic link refused: ${relative(dir, full)}`);
+        if (stat.isDirectory()) visit(full, depth + 1);
+        else if (!stat.isFile()) fail(`special filesystem entry refused: ${relative(dir, full)}`);
+        else if (name.endsWith(".css")) found.push({ full, size: stat.size });
+      }
+    } finally {
+      dirHandle.closeSync();
     }
   };
   visit(dir, 0);
@@ -68,6 +75,13 @@ export function collect(opts, limits = LIMITS) {
   const root = resolve(opts.root ?? "");
   const out = resolve(opts.out ?? "");
   if (inside(root, out) || inside(out, root)) fail("export root and output must be disjoint");
+  for (const path of [root, out]) {
+    for (let current = path; ; current = dirname(current)) {
+      if (lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink())
+        fail(`linked path ancestor refused: ${current}`);
+      if (dirname(current) === current) break;
+    }
+  }
   let clientDir = root;
   for (const part of ["", ...CLIENT_DIR.split("/")]) {
     clientDir = join(clientDir, part);
@@ -75,8 +89,15 @@ export function collect(opts, limits = LIMITS) {
       fail(`missing or linked client directory: ${clientDir}`);
   }
   const outStat = lstatSync(out, { throwIfNoEntry: false });
-  if (outStat && (!outStat.isDirectory() || readdirSync(out).length > 0))
-    fail("output must be a fresh directory");
+  if (outStat) {
+    if (!outStat.isDirectory()) fail("output must be a fresh directory");
+    const dirHandle = opendirSync(out);
+    try {
+      if (dirHandle.readSync() !== null) fail("output must be a fresh directory");
+    } finally {
+      dirHandle.closeSync();
+    }
+  }
 
   const found = walk(clientDir, limits);
   if (found.length === 0) fail("no client CSS found: build output is incomplete");
