@@ -1,6 +1,14 @@
 import { globSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
+import {
+  budget,
+  matches,
+  opaque,
+  sequence,
+  targetMatcher,
+  text,
+} from "./support/class-output-matcher";
 
 const css = readFileSync("web/src/app.css", "utf8");
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url).href);
@@ -17,8 +25,10 @@ const localClasses = new Set([
 ]);
 
 type Node = { type?: string; [key: string]: unknown };
-type Limits = { bytes: number; nodes: number; depth: number };
-const defaults: Limits = { bytes: 1024 * 1024, nodes: 10000, depth: 128 };
+type Limits = { bytes: number; nodes: number; depth: number; work: number };
+const defaults: Limits = { bytes: 1024 * 1024, nodes: 10000, depth: 128, work: 2_000_000 };
+const excluded = ["visible", "relative", "static", "block", "hidden", "table"];
+const targets = excluded.map((name) => [name, targetMatcher(name)] as const);
 
 // Only literal attributes are certified here. Dynamic output and forwarding
 // remain unresolved until the symbolic analysis supports them.
@@ -27,6 +37,8 @@ const classUses = (source: string, limits = defaults, allowMetadataStyle = false
   if (Buffer.byteLength(source, "utf8") > limits.bytes) throw new Error("source byte limit");
   const tokens = new Set<string>();
   const unknown: string[] = [];
+  const matched = new Set<string>();
+  const charge = budget(limits.work);
   let nodes = 0;
   const add = (text: string) => {
     for (const token of text.split(/\s+/)) if (token) tokens.add(token);
@@ -51,6 +63,18 @@ const classUses = (source: string, limits = defaults, allowMetadataStyle = false
       } else {
         unknown.push("dynamic class");
       }
+      const output = sequence(
+        ...parts.map((part) => {
+          const piece = part as Node;
+          if (piece?.type === "Text") return text(String(piece.data));
+          const expression = piece?.expression as Node | undefined;
+          return expression?.type === "Literal" && typeof expression.value === "string"
+            ? text(expression.value)
+            : opaque;
+        }),
+      );
+      for (const [name, matcher] of targets)
+        if (matches(output, matcher, charge)) matched.add(name);
     } else if (node.type === "ClassDirective") {
       add(String(node.name));
     } else if (node.type === "SpreadAttribute") {
@@ -71,7 +95,7 @@ const classUses = (source: string, limits = defaults, allowMetadataStyle = false
     }
   };
   walk(parse(source, { modern: true }).fragment, 0);
-  return { tokens, unknown };
+  return { tokens, unknown, matched };
 };
 
 const localViolations = (source: string, limits = defaults, allowMetadataStyle = false) => {
@@ -88,18 +112,18 @@ describe("Kit utility source boundary", () => {
   });
 
   it("excludes only prose candidates, not literal component classes", () => {
-    const excluded = ["visible", "relative", "static", "block", "hidden", "table"];
     expect(css).toContain(`@source not inline("${excluded.join(" ")}");`);
     for (const path of globSync("web/src/**/*.svelte")) {
       const source = readFileSync(path, "utf8");
       const attributes = [...source.matchAll(/\bclass\s*=\s*(["'`])([^]*?)\1/g)];
-      const { tokens } = classUses(source);
+      const { tokens, matched } = classUses(source);
       for (const name of excluded) {
         expect(source, `${path}: class directive ${name}`).not.toContain(`class:${name}`);
         for (const [, , value] of attributes) {
           expect((value ?? "").split(/\s+/), `${path}: class ${name}`).not.toContain(name);
         }
         expect(tokens.has(name), `${path}: AST class ${name}`).toBe(false);
+        expect(matched.has(name), `${path}: known class output ${name}`).toBe(false);
       }
     }
   });
@@ -172,6 +196,30 @@ describe("Kit utility source boundary", () => {
         '<script>const text = "class=flex";</script><!-- class=flex --><p title="flex">x</p>',
       ),
     ).toEqual([]);
+  });
+
+  it("matches known class output while keeping unknown producers unresolved", () => {
+    for (const markup of [
+      '<p class={"hidden"}></p>',
+      "<p class=\"hid{'den'}\"></p>",
+      '<p class="{value} hidden"></p>',
+    ]) {
+      expect(classUses(markup).matched.has("hidden"), markup).toBe(true);
+    }
+    for (const markup of [
+      '<p class="hiddenx"></p>',
+      '<p class="hidden{value}"></p>',
+      '<p class="{value}hidden"></p>',
+    ]) {
+      expect(classUses(markup).matched.has("hidden"), markup).toBe(false);
+    }
+    expect(localViolations('<p class="hint {value}"></p>')).toContain("dynamic class");
+    for (const analyze of [classUses, localViolations]) {
+      expect(() => analyze('<p class="hint"></p>', { ...defaults, work: 1 })).toThrow(
+        "class output work limit",
+      );
+      expect(() => analyze('<p class="hint"></p>')).not.toThrow();
+    }
   });
 
   it("fails closed on parse or traversal limits", () => {
