@@ -214,7 +214,7 @@ function matchedLeaves(suite, roots) {
   return matched;
 }
 
-function admitTap(tap, suite, min) {
+export function admitTap(tap, suite, min) {
   validateSuiteName(suite);
   validateMinimum(min);
   const summary = parseTapSummary(tap);
