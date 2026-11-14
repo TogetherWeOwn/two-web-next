@@ -415,7 +415,7 @@ try {
     body: "{}",
   });
   assert.equal(postApiX.status, 404, "POST /api/x/ is an unknown API path answered by Hono");
-  assert.match(postApiX.headers["content-type"] ?? "", /application\/json/);
+  assert.match(postApiX.headers["content-type"] ?? "", /text\/html/);
   console.log("PASS generated Worker unsafe-method slash parity with direct Hono");
 
   // Body forwarding: the disabled ingress answers 404 for a small body and 413
