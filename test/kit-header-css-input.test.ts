@@ -25,7 +25,10 @@ describe("Kit header leaf stylesheet input", () => {
     try {
       mkdirSync(join(dir, "ci"), { recursive: true });
       mkdirSync(join(dir, "src"));
-      writeFileSync(join(dir, "ci/build-leaf-css.mjs"), readFileSync(join(root, "ci/build-leaf-css.mjs")));
+      writeFileSync(
+        join(dir, "ci/build-leaf-css.mjs"),
+        readFileSync(join(root, "ci/build-leaf-css.mjs")),
+      );
       const contents = ["a {}", "b {}", "c {}", state === "unsafe" ? "</StYlE>" : "d {}"];
       inputs.forEach((input, index) => {
         if (index === 3 && state === "missing") return;

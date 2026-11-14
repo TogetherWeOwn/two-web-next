@@ -55,7 +55,10 @@ function snapshot(sha) {
         options,
       );
       if (!entry) continue;
-      if (!/^\d+ blob [a-f0-9]+$/.test(entry.split("\t")[0]) || entry.split("\t")[1] !== `${input}\0`) {
+      if (
+        !/^\d+ blob [a-f0-9]+$/.test(entry.split("\t")[0]) ||
+        entry.split("\t")[1] !== `${input}\0`
+      ) {
         throw new Error("invalid optional source entry");
       }
       copyBlob(input);
@@ -65,7 +68,9 @@ function snapshot(sha) {
     for (const [name, parts] of [
       ["three", sources],
       ...optionalInputs.flatMap((input, index) =>
-        blobs.has(input) ? [[index === 0 ? "four" : "four-header", [...sources, blobs.get(input)]]] : [],
+        blobs.has(input)
+          ? [[index === 0 ? "four" : "four-header", [...sources, blobs.get(input)]]]
+          : [],
       ),
     ]) {
       for (const [suffix, separator] of [

@@ -54,7 +54,8 @@ describe("content-leaf inlined CSS", () => {
   ])("executes generated initializer for %s", (_name, sources, packed) => {
     const dir = mkdtempSync(join(tmpdir(), "leaf-css-generator-"));
     try {
-      for (const sub of ["ci", "public", "src", "web/src/lib"]) mkdirSync(join(dir, sub), { recursive: true });
+      for (const sub of ["ci", "public", "src", "web/src/lib"])
+        mkdirSync(join(dir, sub), { recursive: true });
       writeFileSync(
         join(dir, "ci/build-leaf-css.mjs"),
         readFileSync(new URL("../ci/build-leaf-css.mjs", import.meta.url)),
@@ -89,14 +90,13 @@ describe("content-leaf inlined CSS", () => {
   it("rejects a closing style tag in generator input", () => {
     const dir = mkdtempSync(join(tmpdir(), "leaf-css-generator-"));
     try {
-      for (const sub of ["ci", "public", "src", "web/src/lib"]) mkdirSync(join(dir, sub), { recursive: true });
+      for (const sub of ["ci", "public", "src", "web/src/lib"])
+        mkdirSync(join(dir, sub), { recursive: true });
       writeFileSync(
         join(dir, "ci/build-leaf-css.mjs"),
         readFileSync(new URL("../ci/build-leaf-css.mjs", import.meta.url)),
       );
-      SOURCES.forEach((entry, i) =>
-        writeFileSync(join(dir, entry), i === 1 ? "</StYlE>" : "a {}"),
-      );
+      SOURCES.forEach((entry, i) => writeFileSync(join(dir, entry), i === 1 ? "</StYlE>" : "a {}"));
       const result = spawnSync(process.execPath, [join(dir, "ci/build-leaf-css.mjs")], {
         encoding: "utf8",
         timeout: 10000,
