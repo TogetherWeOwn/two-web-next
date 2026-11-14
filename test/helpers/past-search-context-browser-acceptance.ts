@@ -59,7 +59,10 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
     type ReadNode = {
       textContent: string | null;
       outerHTML: string;
+      localName: string;
+      namespaceURI: string | null;
       getAttribute: (name: string) => string | null;
+      getAttributeNames: () => string[];
       querySelector: (selector: string) => ReadNode | null;
       querySelectorAll: (selector: string) => ArrayLike<ReadNode>;
     };
@@ -69,6 +72,36 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
       return page.locator('[data-testid="event-card"]').evaluateAll((nodes) =>
         nodes.map((node) => {
           const card = node as unknown as ReadNode;
+          // Only the fixed past glyph in its chrome slot is trusted, not its subtree.
+          const glyphs = Array.from(
+            card.querySelectorAll(":scope > .schedule-info > .event-title > svg.state-glyph"),
+          );
+          const glyph = glyphs[0];
+          const descendants = glyph ? Array.from(glyph.querySelectorAll("*")) : [];
+          const circle = descendants[0];
+          const classes = (glyph?.getAttribute("class") ?? "").split(/\s+/).filter(Boolean);
+          const attributesAre = (element: ReadNode, expected: Record<string, string>) =>
+            element.getAttributeNames().length === Object.keys(expected).length &&
+            Object.entries(expected).every(([name, value]) => element.getAttribute(name) === value);
+          const trustedGlyph =
+            glyphs.length === 1 &&
+            glyph?.namespaceURI === "http://www.w3.org/2000/svg" &&
+            classes.filter((name) => name === "state-glyph").length === 1 &&
+            classes.length <= 2 &&
+            classes.every((name) => name === "state-glyph" || /^svelte-[a-z0-9]+$/.test(name)) &&
+            attributesAre(glyph, {
+              class: glyph.getAttribute("class") ?? "",
+              viewBox: "0 0 16 16",
+              "aria-hidden": "true",
+              focusable: "false",
+            }) &&
+            descendants.length === 1 &&
+            circle?.localName === "circle" &&
+            circle.namespaceURI === "http://www.w3.org/2000/svg" &&
+            attributesAre(circle, { cx: "8", cy: "8", r: "8", fill: "currentColor" }) &&
+            (glyph.textContent ?? "").trim() === ""
+              ? glyph
+              : undefined;
           return {
             key: card.getAttribute("data-event-key"),
             html: card.outerHTML,
@@ -81,11 +114,49 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
                 text: p.textContent ?? "",
                 marks: Array.from(p.querySelectorAll("mark"), (mark) => mark.textContent),
               })),
-            injected: card.querySelectorAll("script, img, svg, iframe, [onerror], [onload]").length,
+            injected:
+              Array.from(card.querySelectorAll("script, img, svg, iframe")).filter(
+                (element) => element !== trustedGlyph,
+              ).length +
+              [card, ...Array.from(card.querySelectorAll("*"))].filter((element) =>
+                element.getAttributeNames().some((name) => /^on/i.test(name)),
+              ).length,
           };
         }),
       );
     }
+
+    it("PSC-015 observer permits only the fixed past glyph and rejects hostile card DOM", async () => {
+      context = await getBrowser().newContext({ javaScriptEnabled: false, serviceWorkers: "block" });
+      await context.route("**/*", (route) => route.abort("blockedbyclient"));
+      const page = await context.newPage();
+      const glyph =
+        '<svg class="state-glyph svelte-fixture" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="8" fill="currentColor"></circle></svg>';
+      const snapshot = async (icon: string, title = "Notes", excerpt = "Context", extra = "") => {
+        await page.setContent(
+          `<ul><li data-testid="event-card" ${extra}><div class="schedule-info"><div class="event-title">${icon}<h2><a href="/e/notes">${title}</a></h2></div><p class="archive-passage">${excerpt}</p></div></li></ul>`,
+        );
+        return (await cards(page))[0]!.injected;
+      };
+      expect(await snapshot("")).toBe(0);
+      expect(await snapshot(glyph)).toBe(0);
+      expect(await snapshot(glyph.replace(" svelte-fixture", ""))).toBe(0);
+      expect(await snapshot(glyph + glyph)).toBeGreaterThan(0);
+      expect(await snapshot(glyph.replace('r="8"', 'r="7"'))).toBeGreaterThan(0);
+      expect(await snapshot(glyph.replace("</svg>", "<svg></svg></svg>"))).toBeGreaterThan(0);
+      for (const tag of ["script", "img", "svg", "iframe"]) {
+        const injected = tag === "svg" ? glyph : `<${tag}></${tag}>`;
+        expect(await snapshot(glyph, injected)).toBeGreaterThan(0);
+        expect(await snapshot(glyph, "Notes", injected)).toBeGreaterThan(0);
+        expect(await snapshot(`${glyph}${injected}`)).toBeGreaterThan(0);
+      }
+      for (const handler of ["onerror", "onload", "onclick", "onfocus"]) {
+        const attribute = `${handler}="alert(1)"`;
+        expect(await snapshot(glyph, "Notes", "Context", attribute)).toBeGreaterThan(0);
+        expect(await snapshot(glyph.replace("<svg ", `<svg ${attribute} `))).toBeGreaterThan(0);
+        expect(await snapshot(glyph.replace("<circle ", `<circle ${attribute} `))).toBeGreaterThan(0);
+      }
+    });
 
     async function documentFor(twin: ArchiveTwin, rows: PublicEvent[], q: string) {
       const source = archiveReadFixture();

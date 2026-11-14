@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 describe("Kit archive event row", () => {
-  it.each(["", "Raid"])('keeps the title and archive link in SSR for query %j', async (q) => {
+  it.each(["", "Raid"])("keeps the title and archive link in SSR for query %j", async (q) => {
     const source = archiveReadFixture();
     source.replaceRows([archiveRow(701, { title: "Raid night", eventKey: "raid-night" })]);
     const path = `/events/past?${new URLSearchParams({ q })}`;
