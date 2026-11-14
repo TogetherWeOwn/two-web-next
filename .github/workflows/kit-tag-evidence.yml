@@ -1,0 +1,58 @@
+name: Kit Tag evidence
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/kit-tag-evidence.yml
+      - ci/kit-tag-capture*
+      - ci/kit-tag-gallery.svelte
+permissions:
+  contents: read
+concurrency:
+  group: kit-tag-evidence-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+jobs:
+  capture:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f
+    timeout-minutes: 20
+    steps:
+      - name: Check out tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Check out pinned Tag source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 6178285a1da1fbb3acc34707216990bc619cbb2d
+          path: app
+          persist-credentials: false
+      - name: Use Node 24
+        run: |
+          set -eu
+          /__e/node24/bin/node -e 'if (Number(process.versions.node.split(".")[0]) !== 24) process.exit(1)'
+          printf '%s\n' /__e/node24/bin >> "$GITHUB_PATH"
+      - name: Test capture guards
+        run: node --test tooling/ci/kit-tag-capture-guards.test.mjs
+      - name: Install locked dependencies
+        working-directory: app
+        run: |
+          npm ci --include=dev --ignore-scripts --no-audit --no-fund
+          npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Capture and measure the gallery
+        env:
+          TOOLING_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node tooling/ci/kit-tag-capture.mjs app artifacts
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-tag-evidence
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
