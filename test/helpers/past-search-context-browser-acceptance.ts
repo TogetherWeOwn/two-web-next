@@ -127,7 +127,10 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
     }
 
     it("PSC-015 observer permits only the fixed past glyph and rejects hostile card DOM", async () => {
-      context = await getBrowser().newContext({ javaScriptEnabled: false, serviceWorkers: "block" });
+      context = await getBrowser().newContext({
+        javaScriptEnabled: false,
+        serviceWorkers: "block",
+      });
       await context.route("**/*", (route) => route.abort("blockedbyclient"));
       const page = await context.newPage();
       const glyph =
@@ -154,7 +157,9 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
         const attribute = `${handler}="alert(1)"`;
         expect(await snapshot(glyph, "Notes", "Context", attribute)).toBeGreaterThan(0);
         expect(await snapshot(glyph.replace("<svg ", `<svg ${attribute} `))).toBeGreaterThan(0);
-        expect(await snapshot(glyph.replace("<circle ", `<circle ${attribute} `))).toBeGreaterThan(0);
+        expect(await snapshot(glyph.replace("<circle ", `<circle ${attribute} `))).toBeGreaterThan(
+          0,
+        );
       }
     });
 
