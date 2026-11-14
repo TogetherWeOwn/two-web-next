@@ -80,6 +80,21 @@ describe("Kit Tailwind scanner projection core", () => {
     expect(() => assertProjection(input, projected)).not.toThrow();
   });
 
+  it("maps style offsets back to BOM-prefixed source", () => {
+    const input =
+      String.fromCharCode(0xfeff) +
+      '<div class="flex">before</div><style>.tag { color: red }</style><p>after</p>';
+    const start = input.indexOf("<style>");
+    const end = input.indexOf("</style>") + "</style>".length;
+    const projected = projectSvelte(input);
+    expect(styleRanges(input)).toEqual([[start, end]]);
+    expect(projected.slice(0, start)).toBe(input.slice(0, start));
+    expect(projected.slice(start, end)).toBe(" ".repeat(end - start));
+    expect(projected.slice(end).startsWith(input.slice(end))).toBe(true);
+    expect(scan(projected)).toContain("flex");
+    expect(() => assertProjection(input, projected)).not.toThrow();
+  });
+
   it("preserves real utilities without emitting style-only candidates", () => {
     expect(scan(projectSvelte(source))).toEqual(expect.arrayContaining(["outline", "flex"]));
     const negative = scan(

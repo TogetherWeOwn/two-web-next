@@ -15,7 +15,9 @@ export function styleRanges(source) {
     throw new Error("tailwind-projection: source byte limit");
   }
   const ast = parse(source, { modern: true });
-  return ast.css ? [[ast.css.start, ast.css.end]] : [];
+  // Svelte strips a leading BOM before parsing; offsets must address the original source.
+  const offset = source.charCodeAt(0) === 0xfeff ? 1 : 0;
+  return ast.css ? [[ast.css.start + offset, ast.css.end + offset]] : [];
 }
 
 let oxide;
