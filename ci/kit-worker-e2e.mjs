@@ -234,6 +234,56 @@ try {
   }
   console.log("PASS generated Worker content-leaf zero-stylesheet contract");
 
+  // Exercise the post-hook Kit ETag rewrite in the built Worker, not only the
+  // framework-free dispatch. Every security header must survive revalidation.
+  const ray = "0123456789abcdef";
+  const baseline = await fetch(`${origin}/about`, { headers: { "cf-ray": ray } });
+  const etag = baseline.headers.get("etag");
+  assert.ok(etag, "Kit leaf has an ETag");
+  for (const validator of [etag, `W/${etag}`]) {
+    const conditional = await fetch(`${origin}/about`, {
+      headers: { "cf-ray": ray, "if-none-match": validator },
+    });
+    assert.equal(conditional.status, 304, `${validator}: Kit returns 304`);
+    assert.equal(await conditional.text(), "", "304 has no body");
+    for (const name of [
+      "etag",
+      "cache-control",
+      "content-security-policy",
+      "x-content-type-options",
+      "x-frame-options",
+      "referrer-policy",
+      "permissions-policy",
+      "cross-origin-opener-policy",
+      "cross-origin-resource-policy",
+      "x-two-renderer",
+    ]) {
+      assert.ok(baseline.headers.get(name), `baseline includes ${name}`);
+      assert.equal(
+        conditional.headers.get(name),
+        baseline.headers.get(name),
+        `${name} survives 304`,
+      );
+    }
+    assert.ok(conditional.headers.get("x-request-id"), "304 retains its request id");
+  }
+  const miss = await fetch(`${origin}/about`, { headers: { "if-none-match": '"not-the-tag"' } });
+  assert.equal(miss.status, 200, "nonmatching validator keeps the representation");
+  for (const validator of [null, '"not-the-tag"']) {
+    const init = validator ? { headers: { "if-none-match": validator } } : {};
+    const [direct, fallback] = await Promise.all([
+      fetch(`${hono.origin}/llms.txt`, init),
+      fetch(`${origin}/llms.txt`, init),
+    ]);
+    assert.equal(fallback.status, direct.status, "Hono fallback status is unchanged");
+    assert.equal(await fallback.text(), await direct.text(), "Hono fallback body is unchanged");
+    assert.equal(
+      fallback.headers.get("content-security-policy"),
+      direct.headers.get("content-security-policy"),
+    );
+  }
+  console.log("PASS generated Worker conditional header preservation");
+
   const api = await fetch(`${origin}/api/agent-events`, {
     method: "POST",
     headers: { "content-type": "application/json" },
