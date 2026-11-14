@@ -78,6 +78,7 @@ jobs:
           INPUT_SHA: ${{ inputs.sha }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PRODUCTION_AUTO_PROMOTE_DISABLED: ${{ vars.PRODUCTION_AUTO_PROMOTE_DISABLED }}
       # Clean skip when automatic promotion has nothing soaked and green to
       # promote: the resolver exits 0 with an empty sha, and every step below
       # stands down so the run stays green without deploying.
