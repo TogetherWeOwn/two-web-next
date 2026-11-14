@@ -41,7 +41,6 @@ export const render = (props) => r(C, { props }).body;`,
     absWorkingDir: root,
     tsconfigRaw: {},
     nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
-    alias: { "#lib": join(root, "web/src/lib") },
     plugins: [
       {
         name: "svelte-ssr",
@@ -142,7 +141,7 @@ describe("StructuredTime.svelte SSR", () => {
     const html = render(base);
     expect(html).toContain(`<time datetime="${START}">Sat 19:30</time>`);
     expect(html).toContain("Europe/London");
-    expect(html).not.toMatch(/Cancelled|<s>|<script|Time to be confirmed/);
+    expect(html).not.toMatch(/Cancelled|<s>|<script|Time to be confirmed/i);
   });
 
   it("renders past with ended, and cancelled struck with the visible word", () => {

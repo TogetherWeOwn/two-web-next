@@ -1,5 +1,5 @@
 <script lang="ts">
-import { rowTimeModel, type RowTimeInput } from "#lib/structured-time";
+import { rowTimeModel, type RowTimeInput } from "./structured-time";
 
 // Row presentation of structured time (Kit C1 time column). Pure and static:
 // SSR and hydration render identical text in the stored zone, so there is no
