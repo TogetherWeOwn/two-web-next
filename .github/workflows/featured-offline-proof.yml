@@ -97,6 +97,7 @@ jobs:
             "src/home-copy.ts" \
             "src/image-policy.ts" \
             "ci/build-leaf-css.mjs" \
+            "web/src/lib/site-header.css" \
             "src/page-shell.tsx" \
             "src/pages.tsx" \
             "src/screens/featured-item.tsx" \
