@@ -11,6 +11,7 @@ Guidance for human and AI contributors.
 1. [CONTRIBUTING.md](CONTRIBUTING.md) for the pull request contract and the release flow.
 2. [README.md](README.md) for the stack, local setup, and the safe-test rules.
 3. [.github/pull_request_template.md](.github/pull_request_template.md) for the PR body you must fill in.
+4. [ROADMAP.md](ROADMAP.md), [docs/plans/](docs/plans/README.md), [docs/specs/](docs/specs/README.md), [docs/decisions/](docs/decisions/README.md), [docs/runbooks/](docs/runbooks/README.md) and [docs/handoff.md](docs/handoff.md) for direction, approaches, requirements, decisions, procedures and current source state. Reading these files is enough to understand and resume the work from this repository alone.
 
 ## The contract
 
