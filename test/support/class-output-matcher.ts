@@ -24,7 +24,7 @@ export function targetMatcher(target: string): Matcher {
     step: (s, ch) =>
       s === hit
         ? hit
-        : /\s/.test(ch)
+        : /[\t\n\f\r ]/.test(ch)
           ? s === target.length
             ? hit
             : 0

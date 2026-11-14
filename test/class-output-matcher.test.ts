@@ -18,6 +18,15 @@ describe("bounded class output matching", () => {
     }
   });
 
+  it("uses HTML class-token whitespace, not Unicode whitespace", () => {
+    for (const separator of [" ", "\t", "\n", "\f", "\r"]) {
+      expect(matches(text(`hidden${separator}x`), hidden)).toBe(true);
+    }
+    for (const separator of [" ", " ", " "]) {
+      expect(matches(text(`hidden${separator}x`), hidden)).toBe(false);
+    }
+  });
+
   it("keeps unknown output as a barrier", () => {
     expect(matches(sequence(text("hid"), opaque, text("den")), hidden)).toBe(false);
     expect(matches(sequence(text("hidden"), opaque), hidden)).toBe(false);
