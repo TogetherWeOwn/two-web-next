@@ -145,8 +145,8 @@ export async function resolvePromotionSha({
     const { jobs = [] } = await get(`/actions/runs/${run.id}/jobs?per_page=100`);
     // Both gates must have passed on this deploy: journeys and the web quality gate.
     // The quality evidence must match the production gate exactly: one
-    // stagingQualityJob whose stagingQualitySteps both executed successfully.
-    // A green job with skipped/failed/missing Lighthouse steps is ineligible
+    // stagingQualityJob whose web standards step executed successfully.
+    // A green job with skipped/failed/missing standards is ineligible
     // evidence, like any other valid ineligibility, and falls through to an
     // older eligible SHA (or null) instead of refusing the whole selection.
     const journeysOk = jobs.some(

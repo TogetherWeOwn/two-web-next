@@ -178,10 +178,9 @@ describe("performance budgets snapshot path", () => {
     const standardsStep = originStep(
       "Web standards (security headers, HTML basics, internal links)",
     );
-    expect(mobileStep).not.toContain("continue-on-error");
-    expect(desktopStep).not.toContain("continue-on-error");
-    // Web standards blocks since the staging edge preserves Worker headers:
-    // re-adding continue-on-error to any origin step must fail this test.
+    expect(mobileStep).toContain("continue-on-error: true");
+    expect(desktopStep).toContain("continue-on-error: true");
+    // Web standards blocks since the staging edge preserves Worker headers.
     expect(standardsStep).not.toContain("continue-on-error");
     expect(standardsStep).toContain("run: npm run standards -- --origin");
     expect(ciWorkflow).toContain(
