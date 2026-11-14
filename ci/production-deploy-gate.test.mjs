@@ -1467,7 +1467,10 @@ test("auto-approve permits Lighthouse failures when web standards pass", async (
     qualityJob({
       steps: [
         ...qualitySteps(),
-        { name: "Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)", conclusion: "failure" },
+        {
+          name: "Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)",
+          conclusion: "failure",
+        },
         {
           name: "Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)",
           conclusion: "failure",
@@ -1521,7 +1524,9 @@ test("auto-approve's staging quality job and steps are the ones the workflows ru
   ]) {
     assert.match(
       quality,
-      new RegExp(`- name: ${name}[^\\n]*\\n(?:        [^\\n]*\\n)*?        continue-on-error: true\\n`),
+      new RegExp(
+        `- name: ${name}[^\\n]*\\n(?:        [^\\n]*\\n)*?        continue-on-error: true\\n`,
+      ),
     );
   }
   assert.match(
