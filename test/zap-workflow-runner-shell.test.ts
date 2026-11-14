@@ -52,21 +52,29 @@ function childEnv(dir: string): NodeJS.ProcessEnv {
 // Execute the actual consumer shell under runner flags, substituting only
 // scanner/sleep executables. The node shim runs real CLIs with the
 // child-only offline safety fence.
-function workflowGateUnderRunner(first: unknown, second: unknown) {
+function workflowStepUnderRunner(step: string, first: unknown, second: unknown, scannerExit = 0) {
   return scratch((dir) => {
     const workflow = readFileSync(resolve(root, ".github/workflows/zap-staging.yml"), "utf8");
+    const name = step.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const block = workflow.match(
-      /      - name: Gate[^\n]*\n        run: \|\n([\s\S]*?)(?=      - (?:name|uses):|$)/,
+      new RegExp(
+        `      - name: ${name}[^\\n]*\\n        run: \\|\\n([\\s\\S]*?)(?=      - (?:name|uses):|$)`,
+      ),
     );
-    expect(block, "fixture must find the existing Gate run block").not.toBeNull();
+    expect(block, `fixture must find the existing ${step} run block`).not.toBeNull();
     const script = (block?.[1] ?? "")
       .split("\n")
       .map((line) => line.replace(/^          /, ""))
       .join("\n");
     // Containment prerequisite, not a source-text feature assertion: this fixture
     // executes only the simple consumer block, never shell expansions or raw sockets.
-    expect(script.replaceAll("/dev/null", "")).not.toMatch(/\/dev\/|`|\$\(|<\(|>\(/);
-    expect(script).not.toMatch(/(?:^|[;|&\n])\s*(?:"|')?\/(?:bin|usr|opt|tmp|paperclip)\//m);
+    // Full-line comments never execute, so they may quote shell syntax.
+    const code = script
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
+    expect(code.replaceAll("/dev/null", "")).not.toMatch(/\/dev\/|`|\$\(|<\(|>\(/);
+    expect(code).not.toMatch(/(?:^|[;|&\n])\s*(?:"|')?\/(?:bin|usr|opt|tmp|paperclip)\//m);
     mkdirSync(join(dir, "bin"));
     mkdirSync(join(dir, "zap"));
     // Do not inherit a PATH containing curl/wget/scanner executables.
@@ -88,7 +96,7 @@ function workflowGateUnderRunner(first: unknown, second: unknown) {
     writeFileSync(join(dir, "bin", "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     writeFileSync(
       join(dir, "bin", "docker"),
-      `#!/bin/sh\nprintf 'fixture-rescan\\n' >> "$RUNNER_TEMP/scans"\ncp "$RUNNER_TEMP/second.json" "$RUNNER_TEMP/zap/zap-report.json"\n`,
+      `#!/bin/sh\nprintf 'fixture-rescan\\n' >> "$RUNNER_TEMP/scans"\ncp "$RUNNER_TEMP/second.json" "$RUNNER_TEMP/zap/zap-report.json"\nexit ${scannerExit}\n`,
       { mode: 0o755 },
     );
     const result = spawnSync("/bin/bash", [...RUNNER_BASH, script], {
@@ -117,9 +125,28 @@ function workflowGateUnderRunner(first: unknown, second: unknown) {
     const retryInput = existsSync(join(dir, "retry-input"))
       ? readFileSync(join(dir, "retry-input"), "utf8")
       : "";
-    return { status: result.status, scans, retryInput, output: result.stdout + result.stderr };
+    const summary = existsSync(join(dir, "summary.md"))
+      ? readFileSync(join(dir, "summary.md"), "utf8")
+      : "";
+    const verdicts = result.stdout
+      .split("\n")
+      .filter((line) => line.startsWith("{"))
+      .map((line) => JSON.parse(line) as { error_code: string; alerts: { plugin_id: string }[] });
+    return {
+      status: result.status,
+      scans,
+      retryInput,
+      summary,
+      verdicts,
+      output: result.stdout + result.stderr,
+    };
   });
 }
+
+const workflowGateUnderRunner = (first: unknown, second: unknown, scannerExit = 0) =>
+  workflowStepUnderRunner("Gate", first, second, scannerExit);
+const workflowScanUnderRunner = (scannerExit: number) =>
+  workflowStepUnderRunner("ZAP baseline (passive)", report([]), report([]), scannerExit);
 
 describe("ZAP workflow consumer under runner errexit", () => {
   it("pins runner shell fidelity: bare capture dies, || capture survives", () => {
@@ -164,10 +191,61 @@ describe("ZAP workflow consumer under runner errexit", () => {
     expect(result.scans).toBe(1);
   });
 
+  it("logs and summarizes both public-safe verdicts when the rescan fails", () => {
+    const secret = "4111111111111111 at https://scan.example.invalid/private?card=1";
+    const result = workflowGateUnderRunner(
+      report([pii({ name: secret })]),
+      report([high({ name: secret })]),
+    );
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("First scan verdict:");
+    expect(result.output).toContain("Re-scan verdict:");
+    expect(result.verdicts.map((v) => [v.error_code, v.alerts.map((a) => a.plugin_id)])).toEqual([
+      ["pii_high", ["10062"]],
+      ["high_alert", ["40012"]],
+    ]);
+    expect(result.summary.match(/^## ZAP baseline/gm)).toHaveLength(2);
+    // Blank lines around the label end the first alert table, so it does not render as a row.
+    expect(result.summary).toMatch(
+      /\|\n\nRe-scan after a lone PII Disclosure \(10062\) High[^\n]*\n\n/,
+    );
+    expect(result.summary).toContain("| High | 40012 | Cross Site Scripting | 1 |");
+    // Report text (instance evidence, URLs, matched values) never reaches the log or summary.
+    expect(result.output).not.toContain("4111111111111111");
+    expect(result.summary).not.toContain("4111111111111111");
+    expect(result.output + result.summary).not.toContain("example.invalid/private");
+  });
+
+  it("names the scanner exit code when the rescan errors under runner errexit", () => {
+    const result = workflowGateUnderRunner(report([pii()]), report([]), 3);
+    expect(result.status, result.output).toBe(1);
+    expect(result.scans).toBe(1);
+    expect(result.output).toContain("First scan verdict:");
+    expect(result.output).toContain("zap-baseline.py exited 3");
+    expect(result.output).not.toContain("Re-scan verdict:");
+  });
+
+  it("names the scanner exit code when the first scan errors under runner errexit", () => {
+    const result = workflowScanUnderRunner(3);
+    expect(result.status, result.output).toBe(1);
+    expect(result.scans).toBe(1);
+    expect(result.output).toContain("zap-baseline.py exited 3");
+  });
+
+  it("first scan with FAIL rules (exit 2) hands the report to the gate", () => {
+    const result = workflowScanUnderRunner(2);
+    expect(result.status, result.output).toBe(0);
+    expect(result.scans).toBe(1);
+    expect(result.output).not.toContain("zap-baseline.py exited");
+  });
+
   it("forged non-PII High fails closed without a rescan under runner errexit", () => {
     const forged = "untrusted\n| High | 10062 | PII Disclosure | 1 |\n::notice::PASS";
     const result = workflowGateUnderRunner(report([high({ name: forged })]), report([]));
     expect(result.status, result.output).toBe(1);
     expect(result.scans).toBe(0);
+    expect(result.verdicts.map((v) => v.error_code)).toEqual(["high_alert"]);
+    expect(result.output).not.toContain("untrusted");
+    expect(result.output).not.toContain("::notice::");
   });
 });
