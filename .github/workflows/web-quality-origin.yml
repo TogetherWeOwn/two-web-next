@@ -1,9 +1,8 @@
 name: web-quality-origin
 
-# Web quality gate against a deployed origin (owner policy 2026-10-10): called by e2e-staging after every staging
-# deploy, where a failure fails that run and so blocks promote-to-production (ci/resolve-promotion-sha.mjs), and
-# nightly against staging to catch drift that no PR changes (third-party scripts, CDN, content). GET only: no
-# sign-in, no write, no secret; the origin must be on ci/lighthouse-origin-lib.cjs's allowlist.
+# Deployed-origin quality checks run after staging deploy and nightly. The owner decision of 2026-11-14
+# makes Lighthouse budgets report-only until the Ember and SvelteKit migration is complete; web standards
+# remain blocking. GET only: no sign-in, no write, no secret; the origin must be allowlisted.
 on:
   workflow_call:
     inputs:
@@ -61,9 +60,11 @@ jobs:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: node ci/staging-provenance.mjs observe "$CANDIDATE_SHA" before staging-identity/quality
       - name: Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)
+        continue-on-error: true
         run: npm run lighthouse:origin -- "$ORIGIN"
       - name: Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)
         if: ${{ !cancelled() }}
+        continue-on-error: true
         env:
           QUALITY_ORIGIN: ${{ env.ORIGIN }}
         run: npm run lighthouse:quality
@@ -77,6 +78,7 @@ jobs:
         run: node ci/staging-provenance.mjs observe "$CANDIDATE_SHA" after staging-identity/quality
       - name: Quality summary (what to fix)
         if: ${{ !cancelled() }}
+        continue-on-error: true
         env:
           QUALITY_ORIGIN: ${{ env.ORIGIN }}
         run: |
