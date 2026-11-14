@@ -245,6 +245,18 @@ test("Lighthouse budget failures do not block a standards-passing candidate", as
     },
   ];
   assert.equal(await resolve([run(2, A)], { 2: { journeys: "success", qualitySteps } }), A);
+  assert.equal(
+    await resolve([run(2, A)], {
+      2: {
+        journeys: "success",
+        qualitySteps: qualitySteps.map((step) => ({
+          ...step,
+          conclusion: step.name.startsWith("Lighthouse") ? "skipped" : step.conclusion,
+        })),
+      },
+    }),
+    A,
+  );
 });
 
 test("ambiguous staging-quality evidence (two quality jobs) falls through to the older eligible SHA", async () => {
