@@ -75,7 +75,12 @@ async function cleanUpFixture(
 // Moderator drives the admin form. Split from publishing so the caller holds the
 // key before the publish step: a failed publish still leaves the draft for the
 // `finally` cleanup to cancel.
-async function createDraft(admin: Page, stem: string, capacity: number): Promise<string> {
+async function createDraft(
+  admin: Page,
+  stem: string,
+  capacity: number,
+  window: ReturnType<typeof eventFixtureWindow>,
+): Promise<string> {
   await admin.goto("/admin/events");
   await admin.getByRole("link", { name: "New event", exact: true }).click();
   await admin.getByLabel("Title", { exact: true }).fill(stem);
@@ -83,7 +88,6 @@ async function createDraft(admin: Page, stem: string, capacity: number): Promise
   await admin
     .getByLabel("Description", { exact: true })
     .fill("Created by the post-deploy staging suite; cancelled after the run.");
-  const window = eventFixtureWindow();
   await admin.getByLabel("Starts (local wall time, YYYY-MM-DD HH:mm)").fill(window.startsAt);
   await admin.getByLabel("Ends (local wall time, YYYY-MM-DD HH:mm)").fill(window.endsAt);
   await admin.getByLabel("Timezone", { exact: true }).fill(window.timezone);
@@ -95,6 +99,14 @@ async function createDraft(admin: Page, stem: string, capacity: number): Promise
   const eventKey = new URL(admin.url()).pathname.split("/").at(-1);
   expect(eventKey).toBeDefined();
   expect(eventKey).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+  return eventKey as string;
+}
+
+async function assertSavedDraft(
+  admin: Page,
+  eventKey: string,
+  window: ReturnType<typeof eventFixtureWindow>,
+): Promise<void> {
   await expect(admin.getByRole("heading", { name: "Status: draft", exact: true })).toBeVisible();
   await expect(admin.getByLabel("Starts (local wall time, YYYY-MM-DD HH:mm)")).toHaveValue(
     window.startsAt,
@@ -111,7 +123,6 @@ async function createDraft(admin: Page, stem: string, capacity: number): Promise
   });
   await expect(review).toBeVisible();
   await expect(review).toHaveAttribute("href", `/e/${eventKey}?review=1`);
-  return eventKey as string;
 }
 
 async function publishDraft(admin: Page): Promise<void> {
@@ -137,7 +148,9 @@ test("staging member RSVPs going on a fixture, then withdraws", async ({ browser
   try {
     const admin = await moderator.newPage();
     const stem = `Staging E2E RSVP ${Date.now()}`;
-    eventKey = await createDraft(admin, stem, 10);
+    const window = eventFixtureWindow();
+    eventKey = await createDraft(admin, stem, 10, window);
+    await assertSavedDraft(admin, eventKey, window);
     await publishDraft(admin);
 
     // Standalone cookie storage cannot inherit either authenticated context.
@@ -245,7 +258,9 @@ test("staging member joins then leaves the waitlist on a capacity-1 fixture", as
   try {
     const admin = await moderator.newPage();
     const stem = `Staging E2E Waitlist ${Date.now()}`;
-    eventKey = await createDraft(admin, stem, 1);
+    const window = eventFixtureWindow();
+    eventKey = await createDraft(admin, stem, 1, window);
+    await assertSavedDraft(admin, eventKey, window);
     await publishDraft(admin);
 
     // The moderator fills the single seat through the JSON resource — both QA
@@ -329,7 +344,9 @@ test("staging waitlisted member is promoted when the seat holder withdraws", asy
   try {
     const admin = await moderator.newPage();
     const stem = `Staging E2E Promotion ${Date.now()}`;
-    eventKey = await createDraft(admin, stem, 1);
+    const window = eventFixtureWindow();
+    eventKey = await createDraft(admin, stem, 1, window);
+    await assertSavedDraft(admin, eventKey, window);
     await publishDraft(admin);
 
     // 201: the moderator's first answer creates the row, already holding the seat.
