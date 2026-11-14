@@ -16,10 +16,26 @@ export type DiscordWidgetSnapshot = {
   channels: DiscordWidgetChannel[];
   members: DiscordWidgetMember[];
   fetchedAt: number;
+  /**
+   * Read-time freshness set by `snapshot()`: true when the data is older
+   * than one verdict TTL yet within the servable bound, so the render must
+   * qualify ("as of") instead of saying "now". Absent means fresh (parser
+   * output and fixtures predate the read).
+   */
+  stale?: boolean;
 };
 
 // How long one widget verdict stands before a request schedules a re-probe.
 export const DISCORD_WIDGET_VERDICT_TTL_MS = 60_000;
+
+// How long a parsed presence snapshot stays servable: a bounded multiple of
+// the verdict TTL (3x; instances with an injected ttlMs scale the same way).
+// Keyed to the data's own fetchedAt clock, never the verdict's checkedAt: a
+// 429 refreshes checkedAt with no new information, so only fetchedAt bounds
+// how long presence may serve. Past this bound the snapshot drops (null)
+// instead of rendering as "now"; between one TTL and the bound it renders
+// with qualified "as of" copy (see the read-time `stale` flag).
+export const DISCORD_WIDGET_SNAPSHOT_MAX_AGE_MS = 3 * DISCORD_WIDGET_VERDICT_TTL_MS;
 
 // widget.json caps the member list at 100; enforce the same bound after
 // dropping invalid rows so one hostile payload cannot grow the HTML.
@@ -143,9 +159,11 @@ export type DiscordWidgetHealth = {
   url(guildId: string | undefined, background?: (probe: Promise<void>) => void): string | null;
   /**
    * The last parsed widget.json presence snapshot, or null when no probe has
-   * succeeded yet, the guild mismatches, or the widget is down/disabled.
+   * succeeded yet, the guild mismatches, the widget is down/disabled, or the
+   * data is older than the servable bound (fetchedAt age, not verdict age).
    * Synchronous like `url`: the single probe scheduled through `url` refreshes
-   * both, so this never fetches on its own.
+   * both, so this never fetches on its own. The returned copy carries the
+   * read-time `stale` flag; the stored verdict is never mutated.
    */
   snapshot(guildId: string | undefined): DiscordWidgetSnapshot | null;
 };
@@ -164,6 +182,9 @@ export type DiscordWidgetHealthDeps = { fetch?: typeof fetch; now?: () => number
 export function createDiscordWidgetHealth(deps: DiscordWidgetHealthDeps = {}): DiscordWidgetHealth {
   const now = deps.now ?? Date.now;
   const ttlMs = deps.ttlMs ?? DISCORD_WIDGET_VERDICT_TTL_MS;
+  // The multiplier lives in DISCORD_WIDGET_SNAPSHOT_MAX_AGE_MS alone; derive
+  // the instance bound from its ratio so injected TTLs scale the same way.
+  const maxAgeMs = (DISCORD_WIDGET_SNAPSHOT_MAX_AGE_MS / DISCORD_WIDGET_VERDICT_TTL_MS) * ttlMs;
   let verdict: {
     guildId: string;
     available: boolean;
@@ -236,7 +257,13 @@ export function createDiscordWidgetHealth(deps: DiscordWidgetHealthDeps = {}): D
     snapshot(guildId) {
       const current = currentFor(guildId);
       if (!current || current.available === false) return null;
-      return current.snapshot;
+      const snapshot = current.snapshot;
+      if (!snapshot) return null;
+      // Data age, not verdict age: a 429 refreshes checkedAt with no new
+      // information, so only fetchedAt can bound how long presence serves.
+      const age = now() - snapshot.fetchedAt;
+      if (age >= maxAgeMs) return null;
+      return { ...snapshot, stale: age >= ttlMs };
     },
   };
 }
