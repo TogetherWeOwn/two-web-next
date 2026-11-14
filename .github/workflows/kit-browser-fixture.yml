@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       profile_comparison_diagnostic:
-        description: Run the bounded profile comparison diagnostic with retained phase markers
+        description: Run bounded profile comparison and post-save diagnostics with retained phase markers
         type: boolean
         default: false
 
@@ -52,6 +52,15 @@ jobs:
           printf 'head=%s\n' "$GITHUB_SHA" > artifacts/a11y/profile-comparison-head.txt
           timeout --kill-after=10s 180s npx --no-install vitest run test/profile-local-time-comparison-acceptance.test.ts --reporter=verbose --reporter=json --outputFile.json=artifacts/a11y/profile-local-time-comparison-acceptance.json 2>&1 | tee artifacts/a11y/profile-comparison-phases.log
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-local-time-comparison-acceptance.json "profile local time comparison in Chromium" 72
+      - name: Profile post-save with synchronous phase evidence
+        shell: bash
+        env:
+          A11Y_BROWSER_TESTS: "true"
+          PROFILE_COMPARISON_DIAGNOSTICS: "true"
+        run: |
+          set -euo pipefail
+          timeout --kill-after=10s 180s npx --no-install vitest run test/profile-local-time-save.test.ts --reporter=verbose --reporter=json --outputFile.json=artifacts/a11y/profile-local-time-save.json 2>&1 | tee artifacts/a11y/profile-save-phases.log
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-local-time-save.json "profile local time after save in Chromium" 40
       - name: Retain partial evidence even when the process deadline fails
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
