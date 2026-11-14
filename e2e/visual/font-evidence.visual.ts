@@ -10,6 +10,7 @@ import {
 
 // Synthetic DOM only: no baselines or production font activation.
 const FONT_URL = `${localOrigin}/fonts/mona-sans-latin-wght.woff2`;
+const SERIF_URL = `${localOrigin}/fonts/instrument-serif-latin-400-italic.woff2`;
 async function fixturePage(page: Page) {
   await page.goto("/about");
   // Keep the inherited CSP: fixture styles use its permitted same-origin source.
@@ -53,6 +54,34 @@ for (const size of [
       const used = await renderedPlatformFonts(page, "#probe");
       expect(used.some((font) => font.isCustomFont && font.glyphCount > 0)).toBe(true);
       expect(used.every((font) => font.isCustomFont)).toBe(true);
+    });
+    test("distinguishes the shipped Mona Sans face from Instrument Serif", async ({
+      page,
+    }, testInfo) => {
+      const mona = await loadVisualFont(page, { url: FONT_URL, weight: "100 900" });
+      const sameMona = await loadVisualFont(page, { url: FONT_URL, weight: "100 900" });
+      const serif = await loadVisualFont(page, { url: SERIF_URL });
+      const observe = async (family: string) => {
+        await page.locator("#probe").evaluate((el, alias) => {
+          (el as HTMLElement).style.fontFamily = alias;
+        }, family);
+        return renderedPlatformFonts(page, "#probe");
+      };
+      const positive = await observe(mona.family);
+      const sameFace = await observe(sameMona.family);
+      const negative = await observe(serif.family);
+      await testInfo.attach("font-identity-observations.json", {
+        body: JSON.stringify({ positive, sameFace, negative }, null, 2),
+        contentType: "application/json",
+      });
+      for (const fonts of [positive, sameFace, negative]) {
+        expect(fonts).toHaveLength(1);
+        expect(fonts[0]?.isCustomFont).toBe(true);
+        expect(fonts[0]?.glyphCount).toBeGreaterThan(0);
+        expect(fonts[0]?.familyName).toBeTruthy();
+      }
+      expect(positive[0]?.familyName).toBe(sameFace[0]?.familyName);
+      expect(negative[0]?.familyName).not.toBe(positive[0]?.familyName);
     });
     test("rejects ambiguous/missing nodes and failed font loads", async ({ page }) => {
       await expect(renderedPlatformFonts(page, "#absent")).rejects.toThrow(/exactly one.*found 0/);
