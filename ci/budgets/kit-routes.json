@@ -64,7 +64,7 @@
     },
     "/admin/events": {
       "js": {
-        "maxRawBytes": 154112,
+        "maxRawBytes": 153088,
         "maxGzipBytes": 60416,
         "maxFiles": 23
       },
@@ -172,8 +172,8 @@
     },
     "/e/[key]": {
       "js": {
-        "maxRawBytes": 171008,
-        "maxGzipBytes": 65024,
+        "maxRawBytes": 157184,
+        "maxGzipBytes": 60928,
         "maxFiles": 21
       },
       "css": {
