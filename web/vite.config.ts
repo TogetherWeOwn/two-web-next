@@ -15,9 +15,16 @@ import { defineConfig } from "vite";
 // Sec-Fetch-Site fallback. The hook's isSameOriginAllowed enforces the same
 // rule for every content type (mirrors Hono's sameOrigin, exact exemptions
 // only, body unread), so the duplicate check only hid the hardened gate.
-// Remote-function origin checks ignore trustedOrigins and stay on.
+// Remote-function origin checks ignore trustedOrigins; keep that feature off.
 export default defineConfig({
-  plugins: [tailwindcss(), sveltekit({ adapter: adapter(), csrf: { trustedOrigins: ["*"] } })],
+  plugins: [
+    tailwindcss(),
+    sveltekit({
+      adapter: adapter(),
+      csrf: { trustedOrigins: ["*"] },
+      experimental: { remoteFunctions: false },
+    }),
+  ],
   environments: {
     ssr: {
       build: {

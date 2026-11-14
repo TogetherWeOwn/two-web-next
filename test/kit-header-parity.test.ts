@@ -6,7 +6,7 @@
 // of truth: every Kit assertion here mirrors a Hono behavior pinned elsewhere
 // (same-origin.test.ts, csp-policy.test.ts, trust-hosts.test.ts,
 // security-headers-builder.test.ts).
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -470,6 +470,22 @@ describe("Kit robots + asset admission parity", () => {
     const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
     const config = readFileSync(resolve(root, "web/vite.config.ts"), "utf8");
     expect(config).toMatch(/trustedOrigins:\s*\[\s*['"]\*['"]\s*\]/);
+  });
+
+  it("pins remote functions off and excludes remote modules", () => {
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const config = readFileSync(resolve(root, "web/vite.config.ts"), "utf8");
+    expect(config).toMatch(/experimental:\s*\{\s*remoteFunctions:\s*false\s*\}/);
+
+    function filesUnder(directory: string): string[] {
+      return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+        const path = resolve(directory, entry.name);
+        return entry.isDirectory() ? filesUnder(path) : [path];
+      });
+    }
+    expect(
+      filesUnder(resolve(root, "web/src")).filter((path) => /\.remote\.[jt]s$/.test(path)),
+    ).toEqual([]);
   });
 
   it("starts SSR-only: the archive page disables CSR and uses an external island", () => {
