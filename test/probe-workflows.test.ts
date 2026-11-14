@@ -528,7 +528,7 @@ describe("production deployment preserves configured triggers", () => {
       'npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"',
     );
     const gradual = workflow.indexOf(
-      "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@9907b4adaf8c06b0953d156b363db102886e0ef9",
     );
 
     expect(upload).toBeGreaterThan(-1);
@@ -538,14 +538,16 @@ describe("production deployment preserves configured triggers", () => {
     // from the action's own path, never caller-relative, so every repo runs
     // the same traffic math with no copy.
     expect(action).not.toContain("node ci/gradual-promote.mjs");
+    expect(action).toContain("ACTION_PATH: ${{ github.action_path }}");
+    expect(action).not.toContain('node "${{ github.action_path }}');
     for (const percentage of [5, 50]) {
       expect(action).toContain(
-        '"${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" ' +
+        '"$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" ' +
           `${percentage} "$PREV_VERSION"`,
       );
     }
     expect(action).toContain(
-      '"${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION"',
+      '"$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION"',
     );
     expect(action).toContain("npx wrangler versions deploy --env production");
     expect(workflow).not.toContain("wrangler triggers deploy");

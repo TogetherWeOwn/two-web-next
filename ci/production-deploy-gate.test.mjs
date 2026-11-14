@@ -767,7 +767,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
   const gradual = workflow.indexOf(
-    "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
+    "uses: TogetherWeOwn/.github/actions/gradual-promote@9907b4adaf8c06b0953d156b363db102886e0ef9",
   );
   assert.ok(
     credentialCheck > 0 &&
@@ -1659,10 +1659,7 @@ test("each gradual stage also judges the new version's live error rate before ro
   assert.equal((action.match(/id: error-rate-(5|50|100)\n/g) ?? []).length, 3);
   // End-of-line anchor: a trailing `|| true` on the run line would
   // neutralize the gate while an unanchored count stays green.
-  assert.equal(
-    (action.match(/node "\$\{\{ github\.action_path \}\}\/error-rate-gate\.mjs"$/gm) ?? []).length,
-    3,
-  );
+  assert.equal((action.match(/node "\$ACTION_PATH\/error-rate-gate\.mjs"$/gm) ?? []).length, 3);
   // The gate reads analytics with the same caller-supplied token/account
   // pair as the wrangler steps; the rehearsal-only fixture override must
   // never be reachable from the production promotion path.
@@ -1716,6 +1713,7 @@ test("each gradual stage also judges the new version's live error rate before ro
     const block = stepBlock(`Live error-rate gate at ${pct} percent`);
     assert.ok(block.includes("if: inputs.error-rate-gate == 'true'\n"), `gate ${pct} if guard`);
     for (const envLine of [
+      "ACTION_PATH: ${{ github.action_path }}",
       "WORKER_NAME: ${{ inputs.worker-name }}",
       "NEW_VERSION: ${{ steps.promoted-version.outputs.id }}",
       "CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}",

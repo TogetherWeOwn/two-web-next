@@ -9,19 +9,18 @@
 # promote.
 #
 # Other repos call it directly (durable by default):
-#   uses: TogetherWeOwn/two-web-next/.github/actions/gradual-promote@<sha>
+#   uses: TogetherWeOwn/.github/actions/gradual-promote@<sha>
 #   with: { worker-name, version-tag, domain, api-token, account-id }
 # Portable by construction: the traffic-math helper is resolved from this
 # action's own path (github.action_path), never from the caller. The smoke
 # checker is intentionally the CALLER's bin/smoke.mjs, because each repo
-# probes its own routes with the same retry contract (6 attempts, 10s
-# sleeps, fail closed). Repo-specific bits stay in the caller (build,
-# secrets preflight, upload). Only versions upload/promote/rollback run
-# here: nothing may re-sync custom domains or cron triggers as a side effect.
-# The stage gates call smoke WITHOUT --fail-on-ready-wait-critical (warn-only
-# on critical): the ready-wait age reflects shared queue_jobs state, not the
-# canary version, so a stuck queue must not block its own fix from promoting.
-# Staging deploy passes the flag; production promotion never does.
+# probes its own routes. Each caller's checker must accept
+# --version-override worker-name="<lowercase-version-uuid>" and
+# --allow-indexable; the action uses these flags for canary and apex probes.
+# Retry behavior is consistent across callers (6 attempts, 10s sleeps, fail
+# closed). Repo-specific bits stay in the caller (build, secrets preflight,
+# upload). Only versions upload/promote/rollback run here: nothing may
+# re-sync custom domains or cron triggers as a side effect.
 name: gradual-prod-promote
 description: Promote an uploaded Worker version 5-50-100 percent with per-stage health/SLO gates and automatic rollback
 
@@ -62,7 +61,7 @@ inputs:
     required: false
     default: "10"
   error-rate-soak-seconds:
-    description: Wait after the smoke gate before the first error-rate query
+    description: Aggregation allowance in the maximum query budget (first query is immediate after smoke exclusion when retries are available; a single attempt retains the allowance before its only query)
     required: false
     default: "60"
 
@@ -83,9 +82,10 @@ runs:
       run: |
         set -euo pipefail
         TARGET="$(npx wrangler deployments list --env production --name "$WORKER_NAME" --json \
-          | node "${{ github.action_path }}/gradual-promote.mjs" --capture-rollback-target)"
+          | node "$ACTION_PATH/gradual-promote.mjs" --capture-rollback-target)"
         echo "target=$TARGET" >> "$GITHUB_OUTPUT"
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
         CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
@@ -96,9 +96,10 @@ runs:
       run: |
         set -euo pipefail
         ID="$(npx wrangler versions list --env production --name "$WORKER_NAME" --json \
-          | node "${{ github.action_path }}/gradual-promote.mjs" --resolve-tag "$VERSION_TAG")"
+          | node "$ACTION_PATH/gradual-promote.mjs" --resolve-tag "$VERSION_TAG")"
         echo "id=$ID" >> "$GITHUB_OUTPUT"
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         VERSION_TAG: ${{ inputs.version-tag }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
@@ -109,10 +110,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        mapfile -t SPEC < <(node "${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 5 "$PREV_VERSION")
+        mapfile -t SPEC < <(node "$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 5 "$PREV_VERSION")
         npx wrangler versions deploy --env production --name "$WORKER_NAME" \
           "${SPEC[0]}" --version-tag "${SPEC[1]}" --yes
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         VERSION_TAG: ${{ inputs.version-tag }}
         PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
@@ -159,8 +161,9 @@ runs:
       # version exactly like a failed smoke gate.
       if: inputs.error-rate-gate == 'true'
       shell: bash
-      run: node "${{ github.action_path }}/error-rate-gate.mjs"
+      run: node "$ACTION_PATH/error-rate-gate.mjs"
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
@@ -198,10 +201,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        mapfile -t SPEC < <(node "${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 50 "$PREV_VERSION")
+        mapfile -t SPEC < <(node "$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 50 "$PREV_VERSION")
         npx wrangler versions deploy --env production --name "$WORKER_NAME" \
           "${SPEC[0]}" --version-tag "${SPEC[1]}" --yes
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         VERSION_TAG: ${{ inputs.version-tag }}
         PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
@@ -241,8 +245,9 @@ runs:
       id: error-rate-50
       if: inputs.error-rate-gate == 'true'
       shell: bash
-      run: node "${{ github.action_path }}/error-rate-gate.mjs"
+      run: node "$ACTION_PATH/error-rate-gate.mjs"
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
@@ -279,10 +284,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        mapfile -t SPEC < <(node "${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION")
+        mapfile -t SPEC < <(node "$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION")
         npx wrangler versions deploy --env production --name "$WORKER_NAME" \
           --version-tag "${SPEC[1]}" --yes
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         VERSION_TAG: ${{ inputs.version-tag }}
         PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
@@ -342,8 +348,9 @@ runs:
       id: error-rate-100
       if: inputs.error-rate-gate == 'true'
       shell: bash
-      run: node "${{ github.action_path }}/error-rate-gate.mjs"
+      run: node "$ACTION_PATH/error-rate-gate.mjs"
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
