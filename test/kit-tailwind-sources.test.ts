@@ -31,16 +31,20 @@ const classUses = (source: string, limits = defaults, allowMetadataStyle = false
   const add = (text: string) => {
     for (const token of text.split(/\s+/)) if (token) tokens.add(token);
   };
-  const walk = (value: unknown, depth: number): void => {
+  const walk = (value: unknown, depth: number, html = true, htmlAttribute = false): void => {
     if (depth > limits.depth) throw new Error("AST depth limit");
     if (Array.isArray(value)) {
-      for (const child of value) walk(child, depth + 1);
+      for (const child of value) walk(child, depth + 1, html, htmlAttribute);
       return;
     }
     if (!value || typeof value !== "object") return;
     if (++nodes > limits.nodes) throw new Error("AST node limit");
     const node = value as Node;
-    if (node.type === "Attribute" && node.name === "class") {
+    if (
+      node.type === "Attribute" &&
+      (node.name === "class" ||
+        (htmlAttribute && typeof node.name === "string" && node.name.toLowerCase() === "class"))
+    ) {
       const parts = Array.isArray(node.value) ? node.value : [node.value];
       if (parts.every((part) => (part as Node)?.type === "Text")) {
         add(parts.map((part) => String((part as Node).data)).join(""));
@@ -61,7 +65,18 @@ const classUses = (source: string, limits = defaults, allowMetadataStyle = false
         unknown.push("raw HTML");
       }
     }
-    for (const child of Object.values(node)) walk(child, depth + 1);
+    const regular = node.type === "RegularElement";
+    const foreignRoot = regular && (node.name === "svg" || node.name === "math");
+    const elementHtml = html && !foreignRoot;
+    const childrenHtml = elementHtml || (regular && node.name === "foreignObject");
+    for (const [key, child] of Object.entries(node)) {
+      walk(
+        child,
+        depth + 1,
+        key === "attributes" ? elementHtml : childrenHtml,
+        regular && key === "attributes" && elementHtml,
+      );
+    }
   };
   walk(parse(source, { modern: true }).fragment, 0);
   return { tokens, unknown };
@@ -121,6 +136,18 @@ describe("Kit utility source boundary", () => {
       "relative",
     ]);
     expect(localViolations('<p class="hint filters">x</p>')).toEqual([]);
+    expect([...classUses('<p CLASS="flex">x</p><p ClAsS="hidden">x</p>').tokens]).toEqual([
+      "flex",
+      "hidden",
+    ]);
+    expect(localViolations('<p CLASS="flex">x</p>')).toContain("flex");
+    expect(localViolations("<p ClAsS={classes}>x</p>")).toContain("dynamic class");
+    expect([...classUses('<Widget CLASS="hidden" /><svg><g CLASS="flex" /></svg>').tokens]).toEqual(
+      [],
+    );
+    expect([
+      ...classUses('<svg><foreignObject><p CLASS="hidden" /></foreignObject></svg>').tokens,
+    ]).toEqual(["hidden"]);
     expect(
       localViolations("<script>let { content } = $props();</script>{@render content()}"),
     ).toContain("rendered snippet");
