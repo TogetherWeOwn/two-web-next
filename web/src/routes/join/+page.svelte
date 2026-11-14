@@ -65,12 +65,12 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
     <p class="join-lede">{JOIN_INTRO}</p>
     <aside class="join-card" aria-labelledby="join-card-heading">
       <h2 id="join-card-heading">Join with one sign-in</h2>
-      <a class="btn join-primary" href={oneClickHref} data-testid="join-oneclick">Join with Discord</a>
+      <a class="btn join-primary" href={oneClickHref} data-testid="join-oneclick"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19.6 5.3A17 17 0 0 0 15.4 4l-.5 1.1a15.7 15.7 0 0 0-5.8 0L8.6 4a17 17 0 0 0-4.2 1.3C1.7 9.3 1 13.2 1.3 17a17 17 0 0 0 5.2 2.6l1.1-1.8a11 11 0 0 1-1.7-.8l.4-.3a12.2 12.2 0 0 0 11.4 0l.4.3-1.7.8 1.1 1.8a17 17 0 0 0 5.2-2.6c.4-4.4-.7-8.3-3.1-11.7ZM8.7 14.7c-1 0-1.9-1-1.9-2.1s.8-2.1 1.9-2.1 1.9 1 1.9 2.1-.8 2.1-1.9 2.1Zm6.6 0c-1 0-1.9-1-1.9-2.1s.8-2.1 1.9-2.1 1.9 1 1.9 2.1-.8 2.1-1.9 2.1Z"/></svg>Join with Discord</a>
       <p>Already in our server? The same button signs you in.</p>
       <a href={inviteUrl} data-testid="join-invite">Join with an invite link instead</a>
       <div class="join-privacy">
-        <p>We never post as you or read your messages.</p>
-        <p>Leave any time. Ask a moderator and we delete your data. <a href="/privacy">How deletion works</a></p>
+        <p><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>We never post as you or read your messages.</p>
+        <p><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>Leave any time. Ask a moderator and we delete your data. <a href="/privacy">How deletion works</a></p>
       </div>
     </aside>
     <section class="join-steps" aria-labelledby="join-steps-heading">
@@ -171,16 +171,18 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
   .join-lede { font-size: var(--text-lede); color: var(--t2); }
   .join-card { grid-column: 2; grid-row: 1 / span 6; position: sticky; top: var(--space-11); padding: var(--space-inset-card-lg); background: var(--g1); border: 1px solid var(--color-hair2); border-radius: var(--radius-l); }
   .join-card h2 { margin-top: 0; }
-  .join-primary { display: block; width: 100%; text-align: center; }
+  .join-primary { display: flex; align-items: center; justify-content: center; gap: var(--space-2); width: 100%; text-align: center; }
+  .join-primary svg, .join-privacy svg { width: 1em; height: 1em; flex: none; }
   .join-privacy { border-top: 1px solid var(--color-hair2); margin-top: var(--space-6); padding-top: var(--space-4); }
+  .join-privacy svg { fill: none; stroke: currentColor; stroke-width: 1.8; vertical-align: -0.1em; margin-right: var(--space-2); }
   .join-card p, .join-steps p { color: var(--t2); }
   .join-steps, .join-norms, .join-preview { margin-top: var(--space-7); }
   .join-steps ol, .join-norms ul { list-style: none; padding: 0; }
   .join-steps li { display: flex; gap: var(--space-4); margin-bottom: var(--space-5); }
   .join-steps li > span { color: var(--t3); font-family: var(--font-data); }
   .join-steps h3, .join-steps p { margin: 0; }
-  .join-norms li { display: flex; gap: var(--space-2); margin-bottom: var(--space-3); }
-  .join-norms li::before { content: '✓'; color: var(--ok); }
+  .join-norms li { margin-bottom: var(--space-3); }
+  .join-norms li::before { content: '✓'; color: var(--ok); margin-right: var(--space-2); }
   .join-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
   @media (max-width: 820px) {
     .ember-join { display: block; }
