@@ -76,7 +76,7 @@ export const body = render(Fixture).body;`,
     for (const label of ["Echo", "Echo explicitly without dot"]) {
       expect(body).toMatch(
         new RegExp(
-          `<span\\b[^>]*class="[^"]*\\becho\\b[^"]*"[^>]*>(?:\\s|<!--[\\s\\S]*?-->)*<span\\b[^>]*class="[^"]*\\bdot\\b[^"]*"[^>]*></span>(?:\\s|<!--[\\s\\S]*?-->)*${label}</span>`,
+          `<span\\b[^>]*class="[^"]*\\becho\\b[^"]*"[^>]*>(?:\\s|<!--[\\s\\S]*?-->)*<span\\b[^>]*class="[^"]*\\bdot\\b[^"]*"[^>]*></span>(?:\\s|<!--[\\s\\S]*?-->)*${label}(?:\\s|<!--[\\s\\S]*?-->)*</span>`,
         ),
       );
     }
