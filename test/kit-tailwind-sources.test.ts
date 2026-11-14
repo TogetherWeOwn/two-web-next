@@ -48,44 +48,67 @@ const union = (...sets: (string[] | null)[]) => {
   return all.length > maxAlternatives ? null : all;
 };
 
-const resolve = (raw: unknown): string[] | null => {
+const resolve = (raw: unknown, coercion = false, arrayItem = false): string[] | null => {
   const node = raw as Node | undefined;
   const list = (key: string) => (node?.[key] as Node[] | undefined) ?? [];
   const child = (key: string) => node?.[key] as Node | undefined;
   switch (node?.type) {
     case "Literal": {
       const value = node.value;
-      return [value === null || typeof value === "boolean" ? "" : String(value)];
+      return [
+        (arrayItem && value === null) ||
+        (!coercion && (value === null || typeof value === "boolean"))
+          ? ""
+          : String(value),
+      ];
     }
     case "Identifier":
-      return node.name === "undefined" ? [""] : null;
+      return node.name === "undefined" ? [coercion && !arrayItem ? "undefined" : ""] : null;
     case "TemplateLiteral": {
       let out: string[] | null = [(list("quasis")[0]?.value as { cooked: string }).cooked];
       list("expressions").forEach((inner, i) => {
-        out = concat(out, resolve(inner));
+        out = concat(out, resolve(inner, true));
         out = concat(out, [(list("quasis")[i + 1]?.value as { cooked: string }).cooked]);
       });
       return out;
     }
     case "BinaryExpression":
-      return node.operator === "+" ? concat(resolve(child("left")), resolve(child("right"))) : null;
+      return node.operator === "+"
+        ? concat(resolve(child("left"), true), resolve(child("right"), true))
+        : null;
     case "ConditionalExpression":
-      return union(resolve(child("consequent")), resolve(child("alternate")));
+      return union(
+        resolve(child("consequent"), coercion, arrayItem),
+        resolve(child("alternate"), coercion, arrayItem),
+      );
     case "LogicalExpression":
       return node.operator === "&&"
-        ? union(resolve(child("right")), [""])
-        : union(resolve(child("left")), resolve(child("right")));
+        ? union(
+            resolve(child("right"), coercion, arrayItem),
+            coercion ? ["false", "0", "", ...(arrayItem ? [] : ["null", "undefined"])] : [""],
+          )
+        : union(
+            resolve(child("left"), coercion, arrayItem),
+            resolve(child("right"), coercion, arrayItem),
+          );
     case "ArrayExpression": {
       let out: string[] | null = [""];
-      for (const item of list("elements")) out = concat(concat(out, [" "]), resolve(item));
+      for (const [index, item] of list("elements").entries()) {
+        const separator = coercion ? (index ? "," : "") : " ";
+        const value = !item ? [""] : resolve(item, coercion, coercion);
+        out = concat(concat(out, [separator]), value);
+      }
       return out;
     }
     case "ObjectExpression": {
+      if (coercion) return null;
       const keys: (string[] | null)[] = [[""]];
       for (const prop of list("properties")) {
         if (prop.type !== "Property") return null;
         const key = prop.key as Node;
-        keys.push(!prop.computed && key.type === "Identifier" ? [String(key.name)] : resolve(key));
+        keys.push(
+          !prop.computed && key.type === "Identifier" ? [String(key.name)] : resolve(key, true),
+        );
       }
       return union(...keys);
     }
@@ -94,12 +117,52 @@ const resolve = (raw: unknown): string[] | null => {
   }
 };
 
+// Include tokens where adjacent alternatives can provide whitespace boundaries.
+const boundedSegments = (segments: (string[] | null)[], uses: Uses) => {
+  const nonempty: (string[] | null)[] = [];
+  for (const segment of segments) {
+    if (segment?.every((value) => value === "")) continue;
+    const previous = nonempty.at(-1);
+    const combined = previous && segment && concat(previous, segment);
+    if (combined) nonempty[nonempty.length - 1] = combined;
+    else nonempty.push(segment);
+  }
+  for (const [index, alternatives] of nonempty.entries()) {
+    if (!alternatives) continue;
+    const previous = nonempty[index - 1];
+    const next = nonempty[index + 1];
+    const start = index === 0 || (previous?.length && previous.some((s) => /\s$/.test(s)));
+    const end = index === nonempty.length - 1 || (next?.length && next.some((s) => /^\s/.test(s)));
+    for (const value of alternatives) {
+      const bounded = `${start ? " " : ""}${value}${end ? " " : ""}`;
+      for (const match of bounded.matchAll(/(?<=\s)\S+(?=\s)/g)) split(match[0], uses);
+    }
+  }
+};
+
+const concatSegments = (node: Node): (string[] | null)[] =>
+  node.type === "BinaryExpression" && node.operator === "+"
+    ? [...concatSegments(node.left as Node), ...concatSegments(node.right as Node)]
+    : [resolve(node, true)];
+
 // Preserve independent finite class values when another branch is unresolved.
 const knownClasses = (raw: unknown, uses: Uses): void => {
   const node = raw as Node | undefined;
   const values = resolve(node);
   if (values) {
     for (const value of values) split(value, uses);
+  } else if (node?.type === "TemplateLiteral") {
+    const quasis = (node.quasis as Node[]) ?? [];
+    const expressions = (node.expressions as Node[]) ?? [];
+    boundedSegments(
+      quasis.flatMap((quasi, i) => [
+        [String((quasi.value as { cooked: string }).cooked)],
+        ...(i < expressions.length ? [resolve(expressions[i], true)] : []),
+      ]),
+      uses,
+    );
+  } else if (node?.type === "BinaryExpression" && node.operator === "+") {
+    boundedSegments(concatSegments(node), uses);
   } else if (node?.type === "ArrayExpression") {
     for (const item of (node.elements as Node[]) ?? []) knownClasses(item, uses);
   } else if (node?.type === "ConditionalExpression") {
@@ -118,15 +181,49 @@ const knownClasses = (raw: unknown, uses: Uses): void => {
   }
 };
 
+const unsafeObjectCoercion = (value: unknown, coercion = false): boolean => {
+  if (Array.isArray(value)) return value.some((item) => unsafeObjectCoercion(item, coercion));
+  if (!value || typeof value !== "object") return false;
+  const node = value as Node;
+  if (node.type === "ObjectExpression") return coercion;
+  if (node.type === "LogicalExpression" && node.operator === "&&")
+    return unsafeObjectCoercion(node.left) || unsafeObjectCoercion(node.right, coercion);
+  if (node.type === "ConditionalExpression")
+    return (
+      unsafeObjectCoercion(node.test) ||
+      unsafeObjectCoercion(node.consequent, coercion) ||
+      unsafeObjectCoercion(node.alternate, coercion)
+    );
+  if (node.type === "TemplateLiteral") return unsafeObjectCoercion(node.expressions, true);
+  if (node.type === "BinaryExpression")
+    return (
+      unsafeObjectCoercion(node.left, node.operator === "+") ||
+      unsafeObjectCoercion(node.right, node.operator === "+")
+    );
+  const valueCoercion = node.type === "LogicalExpression" || node.type === "ArrayExpression";
+  return Object.values(node).some((child) =>
+    unsafeObjectCoercion(child, valueCoercion && coercion),
+  );
+};
+
 const classValue = (parts: Node[], uses: Uses) => {
+  if (parts.some((part) => unsafeObjectCoercion(part.expression, parts.length > 1)))
+    uses.unknown.push("unsafe object coercion");
   let out: string[] | null = [""];
   for (const part of parts) {
     if (part.type === "Text") out = concat(out, [String(part.data)]);
-    else out = concat(out, resolve(part.expression));
+    else out = concat(out, resolve(part.expression, parts.length > 1));
   }
   if (!out) {
     uses.unknown.push("unresolved class value");
     if (parts.length === 1) knownClasses(parts[0]?.expression, uses);
+    else
+      boundedSegments(
+        parts.map((part) =>
+          part.type === "Text" ? [String(part.data)] : resolve(part.expression, true),
+        ),
+        uses,
+      );
   } else for (const value of out) split(value, uses);
 };
 
@@ -151,8 +248,11 @@ const classUses = (source: string): Uses => {
 };
 
 const globalViolations = (source: string) => {
-  const { tokens } = classUses(source);
-  return globalExcluded.filter((name) => tokens.has(name));
+  const { tokens, unknown } = classUses(source);
+  return [
+    ...globalExcluded.filter((name) => tokens.has(name)),
+    ...unknown.filter((kind) => kind === "unsafe object coercion"),
+  ];
 };
 
 const localViolations = (source: string) => {
@@ -204,7 +304,15 @@ describe("Kit utility source boundary", () => {
       "<p class:static={cond}>x</p>",
       "<p class={`hid${'den'}`}>x</p>",
       "<p class=\"hid{'den'}\">x</p>",
+      "<p class=\"hid{['den']}\">x</p>",
+      "<p class={`hidden ${a && 'hint'} ${b && 'hint'} ${c && 'hint'} ${d && 'hint'}`}>x</p>",
       "<p class={'hid' + 'den'}>x</p>",
+      "<p class={'hid' + ['den']}>x</p>",
+      "<p class={`hid${['den']}`}>x</p>",
+      "<p class={'hid' + [['den']]}>x</p>",
+      "<p class={'hidden' + [undefined]}>x</p>",
+      "<p class={'hidden' + [null]}>x</p>",
+      "<p class={'hidden' + [ok ? null : undefined]}>x</p>",
       "<p class={`${a ? 'hi' : 'bl'}${b ? 'dden' : 'ock'}`}>x</p>",
       "<p class={`${a ? 'ta' : 'x'}${b ? 'ble' : 'y'}`}>x</p>",
     ]) {
@@ -215,10 +323,35 @@ describe("Kit utility source boundary", () => {
       "<p class={cond ? 'hidden' : extra}>x</p>",
       "<p class={cond && (other ? 'hidden' : extra)}>x</p>",
       "<p class={{ hidden: cond, [name]: cond }}>x</p>",
+      "<p class={`${ok ? 'hidden' : 'hint'} ${extra}`}>x</p>",
+      "<p class={'hidden ' + extra}>x</p>",
+      "<p class={'hidden ' + extra + ' hint'}>x</p>",
+      '<p class="hidden {extra}">x</p>',
     ])
       expect(globalViolations(markup), markup).toContain("hidden");
     const choices = Array.from({ length: 9 }, (_, i) => `c${i} ? 'a' : 'b'`).join(", ");
     expect(globalViolations(`<p class={['hidden', ${choices}]}>x</p>`)).toContain("hidden");
+    const interpolations = Array.from({ length: 9 }, (_, i) => `\${c${i} ? 'a' : 'b'}`).join("");
+    expect(
+      globalViolations(`<p class={\`\${ok ? 'hidden' : 'hint'} ${interpolations}\`}>x</p>`),
+    ).toContain("hidden");
+    expect(
+      globalViolations(
+        "<p class={`${'hi'}${'dden'} ${a && 'hint'} ${b && 'hint'} ${c && 'hint'} ${d && 'hint'}`}>x</p>",
+      ),
+    ).toContain("hidden");
+    const boundaryChoices = Array.from({ length: 8 }, (_, i) => `\${c${i} ? 'a' : ' '}`).join("");
+    expect(
+      globalViolations(`<p class={\`${boundaryChoices}\${ok ? 'hidden' : 'hint'}\`}>x</p>`),
+    ).toContain("hidden");
+    expect(globalViolations("<p class={`${({}) && 'hint'}`}>x</p>")).toEqual([]);
+    expect(globalViolations("<p class={{ hint: '' + {} }}>x</p>")).toEqual([]);
+    expect(globalViolations("<p class={({}) === null ? 'hint' : 'field'}>x</p>")).toEqual([]);
+    expect(globalViolations("<p class={`${({}) ? 'hint' : 'field'}`}>x</p>")).toEqual([]);
+    expect(globalViolations("<p class={`hid${extra}`}>x</p>")).toEqual([]);
+    expect(globalViolations("<p class={`${{ toString: () => 'hidden' }}`}>x</p>")).toContain(
+      "unsafe object coercion",
+    );
     expect(globalViolations('<p class="hint">x</p>')).toEqual([]);
     expect(globalViolations("<p class={`hid${'x'}`}>x</p>")).toEqual([]);
   });
@@ -231,6 +364,10 @@ describe("Kit utility source boundary", () => {
       "<p class={classes}>x</p>",
       "<p class={fn('hint')}>x</p>",
       "<p class={{ [name]: cond }}>x</p>",
+      "<p class={{ [null]: cond }}>x</p>",
+      "<p class={{ [undefined]: cond }}>x</p>",
+      "<p class={{ [true]: cond }}>x</p>",
+      "<p class={{ [false]: cond }}>x</p>",
       "<p {...rest}>x</p>",
       "<p class={{ ...extra }}>x</p>",
       "<p class={`hid${name}`}>x</p>",
@@ -240,6 +377,7 @@ describe("Kit utility source boundary", () => {
     ]) {
       expect(localViolations(markup), markup).not.toEqual([]);
     }
+    expect(localViolations("<p class={{ hint: '' + {} }}>x</p>")).toEqual([]);
     expect(localViolations('<p class="hint filters">x</p>')).toEqual([]);
     expect(localViolations("<p class={cond ? 'hint' : 'field'}>x</p>")).toEqual([]);
     expect(localViolations("<p class={`hi${'nt'} fil${'ters'}`}>x</p>")).toEqual([]);
