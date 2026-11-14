@@ -9,14 +9,16 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
-import { rowTimeModel, type RowTimeInput } from "../web/src/lib/structured-time";
+import type { rowTimeModel as RowTimeModel, RowTimeInput } from "../web/src/lib/structured-time";
 
-const { compile } = createRequire(new URL("../web/package.json", import.meta.url))(
-  "svelte/compiler",
-) as { compile: (src: string, o: object) => { js: { code: string } } };
+const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
+const { compile } = webRequire("svelte/compiler") as {
+  compile: (src: string, o: object) => { js: { code: string } };
+};
 const root = fileURLToPath(new URL("../", import.meta.url));
 const component = join(root, "web/src/lib/StructuredTime.svelte");
 let render: (props: RowTimeInput) => string;
+let rowTimeModel: typeof RowTimeModel;
 
 beforeAll(async () => {
   const scratch = mkdtempSync(join(tmpdir(), "kit-structured-time-"));
@@ -25,6 +27,7 @@ beforeAll(async () => {
     entry,
     `import { render as r } from "svelte/server";
 import C from ${JSON.stringify(component)};
+export { rowTimeModel } from ${JSON.stringify(join(root, "web/src/lib/structured-time.ts"))};
 export const render = (props) => r(C, { props }).body;`,
   );
   const outfile = join(scratch, "out.mjs");
@@ -36,6 +39,7 @@ export const render = (props) => r(C, { props }).body;`,
     outfile,
     logLevel: "warning",
     absWorkingDir: root,
+    tsconfigRaw: {},
     nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
     alias: { "#lib": join(root, "web/src/lib") },
     plugins: [
@@ -54,7 +58,7 @@ export const render = (props) => r(C, { props }).body;`,
       },
     ],
   });
-  ({ render } = await import(pathToFileURL(outfile).href));
+  ({ render, rowTimeModel } = await import(pathToFileURL(outfile).href));
   rmSync(scratch, { recursive: true, force: true });
 }, 120000);
 
