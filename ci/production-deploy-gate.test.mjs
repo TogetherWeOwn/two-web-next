@@ -1403,7 +1403,7 @@ for (const [name, pattern, mutate] of [
     (s) => (s.jobs = withQuality(qualityJob({ conclusion: "failure" }))),
   ],
   [
-    "Lighthouse budget step skipped under a green quality job",
+    "web standards step skipped under a green quality job",
     /e2e-staging\.yml run 200 did not execute and pass the staging quality gate/,
     (s) =>
       (s.jobs = withQuality(
@@ -1411,11 +1411,11 @@ for (const [name, pattern, mutate] of [
       )),
   ],
   [
-    "Lighthouse quality step failing under a green quality job",
+    "web standards step failing under a green quality job",
     /e2e-staging\.yml run 200 did not execute and pass the staging quality gate/,
     (s) =>
       (s.jobs = withQuality(
-        qualityJob({ steps: qualitySteps({ [stagingQualitySteps[1]]: "failure" }) }),
+        qualityJob({ steps: qualitySteps({ [stagingQualitySteps[0]]: "failure" }) }),
       )),
   ],
   [
@@ -1461,6 +1461,24 @@ for (const [name, pattern, mutate] of [
   });
 }
 
+test("auto-approve permits Lighthouse failures when web standards pass", async () => {
+  const staging = stagingEvidence();
+  staging.jobs = withQuality(
+    qualityJob({
+      steps: [
+        ...qualitySteps(),
+        { name: "Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)", conclusion: "failure" },
+        {
+          name: "Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)",
+          conclusion: "failure",
+        },
+      ],
+    }),
+  );
+  const evidence = await checkAuto(staging);
+  assert.equal(evidence.sha, dispatchSha);
+});
+
 test("auto-approve still requires the main-only branch policy", async () => {
   for (const environment of [
     { ...autoEnvironment, deployment_branch_policy: null },
@@ -1496,6 +1514,20 @@ test("auto-approve's staging quality job and steps are the ones the workflows ru
   for (const step of stagingQualitySteps) {
     assert.ok(quality.includes(`      - name: ${step}\n`), `web-quality-origin.yml runs "${step}"`);
   }
+  for (const name of [
+    "Lighthouse performance budgets",
+    "Lighthouse quality scores",
+    "Quality summary",
+  ]) {
+    assert.match(
+      quality,
+      new RegExp(`- name: ${name}[^\\n]*\\n(?:        [^\\n]*\\n)*?        continue-on-error: true\\n`),
+    );
+  }
+  assert.match(
+    quality,
+    /- name: Web standards[^\n]*\n        if:[^\n]*\n        run: npm run standards/,
+  );
 });
 
 test("auto-approve keeps the enable flag and main-only dispatch checks before any API call", async () => {
