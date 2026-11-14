@@ -122,7 +122,7 @@ describe("Kit utility source boundary", () => {
     ]);
     expect(localViolations('<p class="hint filters">x</p>')).toEqual([]);
     expect(
-      localViolations('<script>let { content } = $props();</script>{@render content()}'),
+      localViolations("<script>let { content } = $props();</script>{@render content()}"),
     ).toContain("rendered snippet");
     for (const markup of [
       '<p class="flex">x</p>',
