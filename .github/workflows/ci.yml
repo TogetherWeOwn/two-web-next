@@ -904,7 +904,7 @@ jobs:
         run: node ci/check-kit-perf.mjs --format json
       - name: Collect bounded Kit CSS on budget failure
         id: kit_css
-        if: failure() && steps.kit_perf.outcome == 'failure'
+        if: failure() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && steps.kit_perf.outcome == 'failure'
         run: |
           set -eu
           out=$(mktemp -d "$RUNNER_TEMP/kit-css-failure.XXXXXX")
@@ -913,7 +913,7 @@ jobs:
             --source-sha "$GITHUB_SHA" --workflow-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" --repository "$GITHUB_REPOSITORY"
       - name: Upload bounded Kit CSS on budget failure
-        if: failure() && steps.kit_perf.outcome == 'failure' && steps.kit_css.outcome == 'success'
+        if: failure() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && steps.kit_perf.outcome == 'failure' && steps.kit_css.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kit-css-budget-${{ github.sha }}
@@ -922,7 +922,7 @@ jobs:
           include-hidden-files: true
           retention-days: 3
       - name: Remove Kit CSS failure diagnostic
-        if: always() && steps.kit_perf.outcome == 'failure' && env.KIT_CSS_FAILURE_DIR != ''
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && steps.kit_perf.outcome == 'failure' && env.KIT_CSS_FAILURE_DIR != ''
         run: |
           case "$KIT_CSS_FAILURE_DIR" in
             "$RUNNER_TEMP"/kit-css-failure.*) rm -rf -- "$KIT_CSS_FAILURE_DIR" ;;
