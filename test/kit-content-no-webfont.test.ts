@@ -85,6 +85,8 @@ export function renderMeta(props) {
   }
 }
 
+const stripComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, "");
+
 describe("Kit content shell preloads no Mona Sans webfont", () => {
   let renderMeta: (props: { title: string; theme: Theme; leafCss?: string }) => string;
 
@@ -118,5 +120,23 @@ describe("Kit content shell preloads no Mona Sans webfont", () => {
       expect(html).toContain('rel="stylesheet" href="/theme.css"');
       expect(html).not.toContain("<style>");
     }
+  });
+
+  it("ships the content face with font-display: optional over the same file as the main face", () => {
+    const faces = [...stripComments(LEAF_CRITICAL_CSS).matchAll(/@font-face\s*\{([^}]*)\}/g)].map(
+      (match) => match[1] ?? "",
+    );
+    const faceOf = (family: string) =>
+      faces.find((body) => new RegExp(`font-family\\s*:\\s*["']?${family}["']?\\s*;`).test(body));
+    const main = faceOf("Mona Sans");
+    const content = faceOf("Mona Sans Content");
+    expect(main).toBeDefined();
+    expect(content).toBeDefined();
+    const optional = /(?:^|;)\s*font-display\s*:\s*optional\s*(?:;|$)/;
+    expect(content).toMatch(optional);
+    expect("font-display:optionalfoo;").not.toMatch(optional);
+    const srcOf = (body: string) => /src\s*:\s*url\(["']?([^)'" ]+)["']?\)/.exec(body)?.[1];
+    expect(srcOf(content!)).toBe(srcOf(main!));
+    expect(srcOf(content!)).toBe("/fonts/mona-sans-latin-wght.woff2");
   });
 });
