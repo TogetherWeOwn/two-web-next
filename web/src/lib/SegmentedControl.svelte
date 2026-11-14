@@ -19,6 +19,7 @@
 
 <style>
   .segments {
+    box-sizing: border-box;
     display: inline-flex;
     padding: var(--space-1);
     border: 1px solid var(--color-hair1);
@@ -56,5 +57,6 @@
 
   @media (forced-colors: active) {
     a[aria-current="page"] { outline: 1px solid CanvasText; outline-offset: -1px; }
+    a[aria-current="page"]:focus-visible { outline: var(--focus-width) solid Highlight; outline-offset: var(--focus-offset); }
   }
 </style>
