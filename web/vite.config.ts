@@ -2,6 +2,16 @@ import adapter from "@sveltejs/adapter-cloudflare";
 import { sveltekit } from "@sveltejs/kit/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
+import { installHonoApiDispatch } from "./scripts/hono-api-worker.mjs";
+
+const cloudflare = adapter();
+const honoApiAdapter = {
+  ...cloudflare,
+  async adapt(builder: Parameters<NonNullable<typeof cloudflare.adapt>>[0]) {
+    await cloudflare.adapt?.(builder);
+    await installHonoApiDispatch(builder);
+  },
+};
 
 // Kit 3 takes its config here; svelte.config.js is gone. Static files are not
 // Kit's: public/ is copied into the asset directory after the build
@@ -17,7 +27,7 @@ import { defineConfig } from "vite";
 // only, body unread), so the duplicate check only hid the hardened gate.
 // Remote-function origin checks ignore trustedOrigins and stay on.
 export default defineConfig({
-  plugins: [tailwindcss(), sveltekit({ adapter: adapter(), csrf: { trustedOrigins: ["*"] } })],
+  plugins: [tailwindcss(), sveltekit({ adapter: honoApiAdapter, csrf: { trustedOrigins: ["*"] } })],
   environments: {
     ssr: {
       build: {
