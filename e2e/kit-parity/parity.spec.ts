@@ -1521,7 +1521,7 @@ test("cross-target: normalized archive sections match", async () => {
   // (hydration markers, boolean attributes, `>` escaping), so compare the
   // normalized contract after origin normalization, not the bytes.
   expect(
-    sectionOf(bodies.get("kit")!, "past-events", { kit: true }),
+    sectionOf(bodies.get("kit")!, "past-events"),
     "Kit section matches Hono section after origin normalization",
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });

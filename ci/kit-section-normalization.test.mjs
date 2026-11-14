@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { assertEmberArchive } from "./kit-archive-delta.mjs";
+import { assertEmberArchive, stripEmberDelta } from "./kit-archive-delta.mjs";
 import {
   normalizeSection as contractNormalize,
   sectionOf as contractSectionOf,
@@ -188,17 +188,11 @@ test("present section: contract and e2e pipelines agree byte-for-byte", () => {
 test("differently-testid sections: contract finds them, the fixed e2e copy throws", () => {
   const doc = '<section data-testid="other">x</section>';
   assert.equal(contractSectionOf(doc, "other"), '<section data-testid="other">x</section>');
-  const deltaLike = '<section data-testid="other"><svg class="state-glyph"></svg></section>';
-  assert.equal(
-    contractSectionOf(deltaLike, "other", { kit: true }),
-    contractSectionOf(deltaLike, "other"),
-  );
   assert.throws(() => e2eSectionOf(doc), /Archive section is missing/);
 });
 
 // Archive-only Ember delta: Kit raw markup is validated exactly, then the
 // glyph, label, and wrapper are removed; the residual must equal Hono's bytes.
-const KIT = { kit: true };
 const hash = " svelte-q1w2e3";
 const glyphHtml = (attrs = "") =>
   `<svg class="state-glyph${hash}" viewBox="0 0 16 16" aria-hidden="true" focusable="false"${attrs}>` +
@@ -217,7 +211,8 @@ const section = (cards, pager = "", q = "") =>
 const pagerHtml = (next = "/events/past?page=2") =>
   `<nav data-testid="pager"><a rel="next" href="${next}">Next</a></nav>`;
 const hono = (cards, ...rest) => contractSectionOf(section(cards, ...rest), "past-events");
-const kitOf = (cards, ...rest) => contractSectionOf(section(cards, ...rest), "past-events", KIT);
+const kitOf = (cards, ...rest) =>
+  contractSectionOf(stripEmberDelta(section(cards, ...rest)), "past-events");
 const keys = ["a", "b", "c"];
 const both = (build) => ({ h: keys.map((k) => build(k)), e: keys.map((k) => build(k, true)) });
 
@@ -236,6 +231,14 @@ test("Ember delta: legacy and Ember Kit sections equal Hono; Hono side stays str
     }),
   ];
   assert.equal(kitOf(search(true), pagerHtml(), "raid"), hono(search(false), pagerHtml(), "raid"));
+  const nestedHost = (ember) => [
+    card({
+      ember,
+      extra:
+        '<p data-testid="event-card-host">Hosted by <a href="/members/mara"><span>Mara</span></a></p>',
+    }),
+  ];
+  assert.equal(kitOf(nestedHost(true)), hono(nestedHost(false)), "nested host is retained");
   const odd = (ember) => [
     card({ ember, title: 'Sign-up record &lt;img onerror=x&gt; class="event-title" &amp;' }),
   ];
@@ -361,6 +364,13 @@ test("Ember delta: glyph, label, wrapper, and topology mutations fail closed", (
       '<div class="schedule-info">',
       '<div class="schedule-info"><p>x</p>',
     ),
+    "row test id": ember.replace('data-testid="event-card"', 'data-testid="other"'),
+    "schedule info attribute": ember.replace(
+      '<div class="schedule-info">',
+      '<div class="schedule-info" onclick="x">',
+    ),
+    "glyph after label": ember.replace(glyphHtml(), "").replace(labelHtml, labelHtml + glyphHtml()),
+    "label hydration comment": ember.replace("Sign-up record", "Sign-up <!--[-->record<!--]-->"),
     "unterminated heading": ember.replace("</h2>", ""),
     "wrapper unterminated": ember.replace(labelHtml + "</div>", labelHtml),
   };
@@ -369,7 +379,14 @@ test("Ember delta: glyph, label, wrapper, and topology mutations fail closed", (
     assert.throws(() => kitOf([bad]), /Ember archive delta/, name);
   }
   assert.throws(() => kitOf([card({ ember: true }), card({ key: "b" })]), /1 of 2 cards/);
-  assert.throws(() => contractSectionOf("<p>x</p>", "past-events", KIT), /is missing/);
+  for (const hidden of [glyphHtml(), labelHtml, card({ key: "hidden" })]) {
+    assert.throws(() => assertEmberArchive(section([ember], `<template>${hidden}</template>`)));
+  }
+  assert.throws(() => stripEmberDelta("<p>x</p>"), /exactly one archive section/);
+  assert.throws(
+    () => stripEmberDelta(section([ember]) + section([ember])),
+    /exactly one archive section/,
+  );
 });
 
 test("Ember delta: residual differences from Hono stay visible", () => {
@@ -408,36 +425,28 @@ test("Ember delta: residual differences from Hono stay visible", () => {
     "row dropped": kitOf(base().slice(0, 1), pagerHtml(), "x"),
   };
   for (const [name, got] of Object.entries(differs)) assert.notEqual(got, expected, name);
+  const host = '<p data-testid="event-card-host">Hosted by Mara</p>';
+  const passage = '<p class="archive-passage">raid text</p>';
+  const reference = hono([card({ key: "a", extra: host + passage })]);
+  for (const mutation of [
+    (host + passage).replace("Mara", "<img src=x onerror=x>"),
+    (host + passage).replace("raid", "<script>alert(1)</script>"),
+    (host + passage).replace("Mara", '<span onclick="x">Mara</span>'),
+  ]) {
+    const actual = kitOf([card({ key: "a", ember: true, extra: mutation })]);
+    assert.equal(actual, hono([card({ key: "a", extra: mutation })]));
+    assert.notEqual(actual, reference);
+  }
+  assert.notEqual(
+    kitOf([card({ key: "a", ember: true, title: "A &#38; B" })]),
+    hono([card({ key: "a", title: "A &amp; B" })]),
+  );
+  assert.notEqual(kitOf([], "<p>No results</p>"), hono([], "<p>No events</p>"));
 });
 
-test("Ember delta: every consumer applies it to the Kit side only, in agreement", async () => {
-  const consumers = {
-    "ci/kit-parity-gates.mjs": /sectionOf\(kitHtml, route\.compareSection, \{ kit: true \}\)/,
-    "e2e/kit-parity/parity.spec.ts":
-      /sectionOf\(bodies\.get\("kit"\)!, "past-events", \{ kit: true \}\)/,
-  };
-  for (const [file, pattern] of Object.entries(consumers)) {
-    assert.match(readFileSync(new URL(`../${file}`, import.meta.url), "utf8"), pattern, file);
-  }
-  assert.equal([...e2eSource.matchAll(/normalize\(kitSectionOf\(kitHtml\)\)/g)].length, 2);
-  assert.doesNotMatch(e2eSource, /normalize\(sectionOf\(kitHtml\)\)/);
-  const path = join(scratchDir, "e2e-kit-section.mjs");
-  const delta = pathToFileURL(new URL("./kit-archive-delta.mjs", import.meta.url).pathname).href;
-  writeFileSync(
-    path,
-    `import { stripEmberDelta } from ${JSON.stringify(delta)};\n` +
-      `${extractBlock(e2eSource, "const sectionOf = (html) => {")}\n` +
-      `${extractBlock(e2eSource, "const kitSectionOf = (html) => {")}\nexport { kitSectionOf };\n`,
-  );
-  const { kitSectionOf } = await import(pathToFileURL(path).href);
+test("Ember delta: existing parity remains strict until activation", () => {
   const { h, e } = both((key, ember) => card({ key, ember }));
-  for (const [cards, bad] of [[h], [e], [[e[0], h[1]], true]]) {
-    const html = section(cards, pagerHtml());
-    if (bad) {
-      assert.throws(() => kitSectionOf(html), /Ember archive delta/);
-      assert.throws(() => contractSectionOf(html, "past-events", KIT), /Ember archive delta/);
-    } else {
-      assert.equal(e2eNormalize(kitSectionOf(html)), contractSectionOf(html, "past-events", KIT));
-    }
-  }
+  assert.notEqual(contractSectionOf(section(e), "past-events"), hono(h));
+  assert.notEqual(e2eNormalize(e2eSectionOf(section(e))), hono(h));
+  assert.equal(kitOf(e), hono(h));
 });

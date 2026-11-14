@@ -2483,8 +2483,7 @@ async function runPreviewMode(
       let reason = "section HTML differs";
       try {
         same =
-          sectionOf(kitHtml, route.compareSection, { kit: true }) ===
-          sectionOf(honoHtml, route.compareSection);
+          sectionOf(kitHtml, route.compareSection) === sectionOf(honoHtml, route.compareSection);
         if (same) reason = null;
       } catch (error) {
         reason = String(error?.message ?? error).slice(0, 200);

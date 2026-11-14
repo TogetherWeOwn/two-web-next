@@ -1,13 +1,7 @@
-// Archive-only presentation delta between Kit (Ember) and Hono (legacy).
-//
-// The Kit row adds a decorative glyph and a "Sign-up record" label in an
-// `event-title` wrapper around the legacy <h2>; Hono has none. The raw Kit
-// section is parsed (source locations on, nothing normalized first); each
-// wrapper must be li[data-testid=event-card] > div.schedule-info > div.event-title
-// holding only glyph (SVG namespace, one circle), <h2>, label, and each cut's
-// raw source must match the exact shipped bytes. Only the wrapper tags, glyph
-// and label ranges are cut; all other bytes stay for the strict Hono compare.
-// Anything delta-like outside that, or partial Ember, throws.
+// Archive-only Kit/Hono presentation delta. Parse raw markup before normalization.
+// An event-card's schedule-info may contain the exact event-title wrapper with
+// SVG glyph, h2 and label. Cut only validated chrome ranges and retain residual
+// bytes for strict comparison. Partial or misplaced Ember markup is rejected.
 import { parseFragment } from "parse5";
 
 const SVG = "http://www.w3.org/2000/svg";
@@ -32,6 +26,7 @@ const isCard = (n) =>
 function walk(node, visit) {
   visit(node);
   for (const child of node.childNodes ?? []) walk(child, visit);
+  if (node.content) walk(node.content, visit);
 }
 
 const range = (n) => [n.sourceCodeLocation.startOffset, n.sourceCodeLocation.endOffset];
@@ -99,6 +94,12 @@ function strip(raw) {
   const root = parseFragment(raw, { sourceCodeLocationInfo: true });
   const all = [];
   walk(root, (n) => isEl(n) && all.push(n));
+  const sections = all.filter(
+    (n) =>
+      is(n, "section", HTML) &&
+      n.attrs.some((a) => a.name === "data-testid" && a.value === "past-events"),
+  );
+  if (sections.length !== 1) fail("expected exactly one archive section");
   const cards = all.filter(isCard).length;
   const claimed = new Set();
   const decoratedCards = new Set();

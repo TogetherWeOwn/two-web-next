@@ -1,5 +1,3 @@
-import { stripEmberDelta } from "./kit-archive-delta.mjs";
-
 // Shared Kit/Hono section comparison.
 //
 // The canonical treatment lives in ci/kit-preview-e2e.mjs
@@ -34,11 +32,9 @@ export function normalizeSection(html) {
   );
 }
 
-// `kit: true` marks the Kit side of a comparison; only its archive section may
-// shed the validated Ember delta (ci/kit-archive-delta.mjs) before normalizing.
-export function sectionOf(html, testid, { kit = false } = {}) {
+export function sectionOf(html, testid) {
   const pattern = new RegExp(`<section[^>]*data-testid="${testid}"[\\s\\S]*?<\\/section>`);
   const match = html.match(pattern);
   if (!match) throw new Error(`section ${testid} is missing`);
-  return normalizeSection(kit && testid === "past-events" ? stripEmberDelta(match[0]) : match[0]);
+  return normalizeSection(match[0]);
 }
