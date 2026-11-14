@@ -9,7 +9,10 @@ import { expect, it } from "vitest";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
 const { compile } = webRequire("svelte/compiler") as {
-  compile: (source: string, options: { generate: string; dev: boolean; filename: string }) => {
+  compile: (
+    source: string,
+    options: { generate: string; dev: boolean; filename: string },
+  ) => {
     js: { code: string };
   };
 };
@@ -19,28 +22,43 @@ it("renders filter links with their destinations, selection and zero counts", as
   try {
     const entry = join(scratch, "entry.mjs");
     const outfile = join(scratch, "bundle.mjs");
-    writeFileSync(entry, `import { render } from "svelte/server";
+    writeFileSync(
+      entry,
+      `import { render } from "svelte/server";
 import Fixture from ${JSON.stringify(join(root, "test/fixtures/kit-filter-links.svelte"))};
-export const body = render(Fixture).body;`);
+export const body = render(Fixture).body;`,
+    );
     await build({
-      entryPoints: [entry], outfile, bundle: true, platform: "node", format: "esm",
+      entryPoints: [entry],
+      outfile,
+      bundle: true,
+      platform: "node",
+      format: "esm",
       absWorkingDir: root,
       nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
-      plugins: [{
-        name: "filter-links-ssr",
-        setup(plugin) {
-          plugin.onLoad({ filter: /\.svelte$/ }, (args) => ({
-            contents: compile(readFileSync(args.path, "utf8"), {
-              generate: "server", dev: false, filename: args.path,
-            }).js.code,
-            loader: "js", resolveDir: dirname(args.path),
-          }));
+      plugins: [
+        {
+          name: "filter-links-ssr",
+          setup(plugin) {
+            plugin.onLoad({ filter: /\.svelte$/ }, (args) => ({
+              contents: compile(readFileSync(args.path, "utf8"), {
+                generate: "server",
+                dev: false,
+                filename: args.path,
+              }).js.code,
+              loader: "js",
+              resolveDir: dirname(args.path),
+            }));
+          },
         },
-      }],
+      ],
     });
     const { body } = (await import(pathToFileURL(outfile).href)) as { body: string };
     expect(body).toContain('aria-label="Event views"');
-    const links = Array.from(body.replace(/<!--.*?-->/gs, "").matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/g), (match) => match[0]);
+    const links = Array.from(
+      body.replace(/<!--.*?-->/gs, "").matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/g),
+      (match) => match[0],
+    );
     expect(links).toHaveLength(4);
     expect(links[0]).toContain('href="/events"');
     expect(links[0]).toContain('aria-current="page"');
