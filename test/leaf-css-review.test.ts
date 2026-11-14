@@ -20,7 +20,10 @@ function fixture() {
   for (const sub of ["ci", "public"]) mkdirSync(join(dir, sub));
   writeFileSync(
     join(dir, "ci/build-leaf-css.mjs"),
-    readFileSync(join(root, "ci/build-leaf-css.mjs")),
+    readFileSync(join(root, "ci/build-leaf-css.mjs"), "utf8").replace(
+      /const SOURCES = \[[\s\S]*?\];/,
+      'const SOURCES = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"];',
+    ),
   );
   writeFileSync(join(dir, "public/styles.css"), "body { color: black; }");
   writeFileSync(join(dir, "public/theme-tokens.css"), ":root { --accent: lime; }");
@@ -62,6 +65,26 @@ describe("generated leaf CSS review evidence", () => {
     expect(report.base.sha).toBe(base);
     expect(report.head.sha).toBe(base);
     expect(report.base.sha256).toBe(report.head.sha256);
+  });
+
+  it("compares historical and header-input revisions using committed bytes", () => {
+    const { dir, base, commit, run } = fixture();
+    const generator = join(dir, "ci/build-leaf-css.mjs");
+    writeFileSync(generator, readFileSync(join(root, "ci/build-leaf-css.mjs")));
+    mkdirSync(join(dir, "web/src/lib"), { recursive: true });
+    const input = join(dir, "web/src/lib/site-header.css");
+    writeFileSync(input, ".site-header { position: sticky; }");
+    const head = commit();
+    writeFileSync(input, "uncommitted change");
+    const result = run(head, base);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, changed: true });
+    rmSync(input);
+    const missing = commit();
+    for (const failed of [run(missing, base), run(base, missing)]) {
+      expect(failed.status).toBe(1);
+      expect(JSON.parse(failed.stdout)).toMatchObject(failure);
+    }
   });
 
   it("compares a historical literal with the packed representation", () => {

@@ -23,7 +23,7 @@ const inputs = [
 ];
 // Read by later generators (a revision's generator may or may not need them);
 // copied only when that revision has them, so every revision finds its inputs.
-const optionalInputs = ["assets/leaf-only.css"];
+const optionalInputs = ["assets/leaf-only.css", "web/src/lib/site-header.css"];
 const options = {
   encoding: "utf8",
   timeout: 10000,
@@ -55,7 +55,7 @@ function snapshot(sha) {
         options,
       );
       if (!entry) continue;
-      if (!/^\d+ blob [a-f0-9]+\tassets\/leaf-only\.css\0$/.test(entry)) {
+      if (!/^\d+ blob [a-f0-9]+$/.test(entry.split("\t")[0]) || entry.split("\t")[1] !== `${input}\0`) {
         throw new Error("invalid optional source entry");
       }
       copyBlob(input);
@@ -64,9 +64,9 @@ function snapshot(sha) {
     const candidates = [];
     for (const [name, parts] of [
       ["three", sources],
-      ...(blobs.has(optionalInputs[0])
-        ? [["four", [...sources, blobs.get(optionalInputs[0])]]]
-        : []),
+      ...optionalInputs.flatMap((input, index) =>
+        blobs.has(input) ? [[index === 0 ? "four" : "four-header", [...sources, blobs.get(input)]]] : [],
+      ),
     ]) {
       for (const [suffix, separator] of [
         ["lf", "\n"],

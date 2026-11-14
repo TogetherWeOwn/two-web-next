@@ -126,6 +126,8 @@ describe("critical CSS is a build output, not a source", () => {
           writeFileSync(join(fixture, "public", source), ":root { color: red; }");
         }
         writeFileSync(join(fixture, "public/schedule-theme.css"), ".schedule { color: blue; }");
+        mkdirSync(join(fixture, "web/src/lib"), { recursive: true });
+        writeFileSync(join(fixture, "web/src/lib/site-header.css"), ".header { position: sticky; }");
         writeFileSync(
           join(fixture, "web/package.json"),
           readFileSync(join(root, "web/package.json")),

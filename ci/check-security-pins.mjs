@@ -29,7 +29,12 @@ const TRUST_HOSTS_PATH = "src/trust-hosts.ts";
 const HEADERS_PATH = "src/headers.ts";
 const LEAF_MODULE_PATH = "src/leaf-critical-css.ts";
 // Same inputs, same order as ci/build-leaf-css.mjs SOURCES.
-const LEAF_SOURCES = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"];
+const LEAF_SOURCES = [
+  "public/styles.css",
+  "public/theme-tokens.css",
+  "public/theme.css",
+  "web/src/lib/site-header.css",
+];
 const THREAT_MODEL_PATH = "docs/threat-model.md";
 
 const INLINE_CRITICAL_PATHS = ["/", "/about", "/faq", "/rules", "/privacy"];
