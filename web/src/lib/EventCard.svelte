@@ -3,6 +3,7 @@ import { effectiveZone, fmt } from "../../../src/events/date-format";
 import type { PastArchiveEvent } from "../../../src/kit-past-events";
 import { archiveEventHref, type ArchiveContext } from "../../../src/events/attendee-paths";
 import { goingCountText } from "../../../src/islands/contracts";
+import StateGlyph from "./StateGlyph.svelte";
 
 // Same markup contract as Card in src/events/pages.tsx, including the
 // schedule-row chrome and the month/day date badge. The prop is the
@@ -51,12 +52,31 @@ const zone = $derived(effectiveZone(e.timezone));
 <li class="schedule-row" data-testid="event-card" data-event-key={e.eventKey}>
   <span class="schedule-date" aria-hidden="true"><span>{badge.month}</span><strong>{badge.day}</strong></span>
   <div class="schedule-info">
-    <h2>
-      <a href={archiveEventHref(e.eventKey, archive)}>{#if q && e.titleSpans}<span>{#each e.titleSpans as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>{:else}{e.title}{/if}</a>
-    </h2>
+    <div class="event-title">
+      <StateGlyph state="past" />
+      <h2>
+        <a href={archiveEventHref(e.eventKey, archive)}>{#if q && e.titleSpans}<span>{#each e.titleSpans as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>{:else}{e.title}{/if}</a>
+      </h2>
+      <span class="event-state">Sign-up record</span>
+    </div>
     <p><time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, zone)}</time>{" "}<span>{zone}</span>{#if e.location}{" · "}<span>{e.location}</span>{/if}</p>
     {#if e.game}<p>{e.game}</p>{/if}
     {#if host}<p data-testid="event-card-host">Hosted by {host}</p>{/if}{#if q && e.passage}<p class="archive-passage">{#each e.passage as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</p>{/if}
   </div>
   <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
 </li>
+
+<style>
+  .event-title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .event-state {
+    color: var(--t2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-s);
+  }
+</style>
