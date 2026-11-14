@@ -1,6 +1,11 @@
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-import { assertProjection, projectSvelte } from "../web/scripts/tailwind-projection-core.mjs";
+import {
+  assertProjection,
+  MAX_SOURCE_BYTES,
+  projectSvelte,
+  styleRanges,
+} from "../web/scripts/tailwind-projection-core.mjs";
 
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url).href);
 const { Scanner } = webRequire("@tailwindcss/oxide") as {
@@ -29,6 +34,17 @@ const source = `<script lang="ts">
 </style>`;
 
 describe("Kit Tailwind scanner projection core", () => {
+  it("enforces the source limit in UTF-8 bytes", () => {
+    expect(styleRanges("")).toEqual([]);
+    expect(styleRanges(" ".repeat(MAX_SOURCE_BYTES))).toEqual([]);
+    expect(() => styleRanges(" ".repeat(MAX_SOURCE_BYTES + 1))).toThrow(
+      "tailwind-projection: source byte limit",
+    );
+    expect(() => styleRanges("é".repeat(MAX_SOURCE_BYTES / 2 + 1))).toThrow(
+      "tailwind-projection: source byte limit",
+    );
+  });
+
   it("preserves scanner variables and non-style source characters", () => {
     const projected = projectSvelte(source);
     expect(projected.startsWith(source.slice(0, source.indexOf("<style>")))).toBe(true);
