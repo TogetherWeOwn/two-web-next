@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/lighthouse-timeout-contract.yml
       - .github/workflows/web-quality-origin.yml
+      - ci/lighthouse-preserve-mobile.sh
   workflow_dispatch:
 
 permissions:
@@ -16,11 +17,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Simulate a stalled advisory collection
         id: collect
         timeout-minutes: 1
         continue-on-error: true
-        run: sleep 90
+        run: |
+          mkdir -p .lighthouseci
+          printf 'partial mobile sample\n' > .lighthouseci/lhr-123.json
+          sleep 90
+      - name: Preserve interrupted mobile samples
+        if: ${{ !cancelled() && steps.collect.outcome == 'failure' }}
+        run: bash ci/lighthouse-preserve-mobile.sh
+      - name: Simulate desktop cleanup
+        if: ${{ !cancelled() }}
+        run: |
+          rm .lighthouseci/lhr-123.json
+          test "$(< .lighthouseci/mobile-interrupted/lhr-123.json)" = 'partial mobile sample'
       - name: Simulate the blocking standards step
         id: standards
         if: ${{ !cancelled() }}

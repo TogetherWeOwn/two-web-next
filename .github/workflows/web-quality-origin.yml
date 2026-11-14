@@ -63,8 +63,12 @@ jobs:
       # Each bound includes the existing retry; together they leave 30 minutes
       # of the job budget for setup, standards, provenance and evidence.
       - name: Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)
+        id: mobile
         timeout-minutes: 15
         run: npm run lighthouse:origin -- "$ORIGIN"
+      - name: Preserve interrupted mobile samples
+        if: ${{ !cancelled() && steps.mobile.outcome == 'failure' }}
+        run: bash ci/lighthouse-preserve-mobile.sh
       - name: Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)
         timeout-minutes: 15
         if: ${{ !cancelled() }}

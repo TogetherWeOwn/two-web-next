@@ -137,6 +137,16 @@ describe("performance budgets snapshot path", () => {
       expect(block, `Missing origin workflow step: ${name}`).toBeDefined();
       expect(block).toMatch(/(?:^|\n)        timeout-minutes: 15\n/);
     }
+    const preserve = originWorkflow.indexOf("      - name: Preserve interrupted mobile samples\n");
+    expect(preserve).toBeGreaterThan(
+      originWorkflow.indexOf("      - name: Lighthouse performance budgets"),
+    );
+    expect(preserve).toBeLessThan(
+      originWorkflow.indexOf("      - name: Lighthouse quality scores"),
+    );
+    const block = originWorkflow.slice(preserve).split(/\n      - /)[0];
+    expect(block).toContain("!cancelled() && steps.mobile.outcome == 'failure'");
+    expect(block).toContain("bash ci/lighthouse-preserve-mobile.sh");
   });
 
   it("distinguishes staging journeys from blocking quality and standards checks", () => {
