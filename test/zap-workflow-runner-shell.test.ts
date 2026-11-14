@@ -169,6 +169,41 @@ describe("ZAP workflow consumer under runner errexit", () => {
     expect(guarded.stdout).toContain("REACHED:1");
   });
 
+  it("drains a maximum-size real CLI verdict through a slow pipe without changing its exit", () => {
+    scratch((dir) => {
+      const input = join(dir, "report.json");
+      writeFileSync(
+        input,
+        JSON.stringify(report([pii(), ...Array.from({ length: 999 }, () => alert())])),
+      );
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          ...RUNNER_BASH,
+          '"$1" ci/zap-gate.mjs "$2" ci/zap-budget.json --format json | "$1" -e \'setTimeout(() => process.stdin.pipe(process.stdout), 100)\'',
+          "--",
+          process.execPath,
+          input,
+        ],
+        {
+          cwd: root,
+          env: childEnv(dir),
+          encoding: "utf8",
+          timeout: 10_000,
+          maxBuffer: 256 * 1024,
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.signal).toBeNull();
+      expect(result.status, result.stderr).toBe(1);
+      expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(64 * 1024);
+      const verdict = JSON.parse(result.stdout);
+      expect(verdict).toMatchObject({ error_code: "pii_high", retryable: true });
+      expect(verdict.alerts).toHaveLength(1000);
+      expect(existsSync(join(dir, "denied"))).toBe(false);
+    });
+  });
+
   it("lone PII reaches the retry consumer and rescans once under runner errexit", () => {
     const result = workflowGateUnderRunner(report([pii({ name: "PII Disclosure" })]), report([]));
     expect(result.status, result.output).toBe(0);
