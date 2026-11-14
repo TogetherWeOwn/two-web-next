@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL, URL as NodeURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  DISCORD_WIDGET_VERDICT_TTL_MS,
   parseDiscordWidgetJson,
   toPublicWidgetSnapshot,
   type DiscordWidgetSnapshot,
@@ -103,6 +104,10 @@ function shared(): SharedStub {
 }
 
 beforeAll(async () => {
+  // The bundled singleton captures Date.now at import. Install the controlled
+  // clock first; leave timers real so Discord probe deadlines still settle.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
   // Same bundle harness as the home featured-DTO suite: the real route load
   // with only the Worker env stubbed. The bundled discord-widget singleton
   // starts cold, so the first load schedules its probe through waitUntil.
@@ -167,6 +172,7 @@ beforeAll(async () => {
 }, 60000);
 
 afterAll(() => {
+  vi.useRealTimers();
   if (scratch) rmSync(scratch, { recursive: true, force: true });
   delete (globalThis as Record<string, unknown>)[ENV_KEY];
 });
@@ -198,23 +204,28 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
       ),
     );
 
+    const headers: Record<string, string>[] = [];
     const args = (): KitJoinLoadArgs => ({
       url: new URL("https://example.test/join"),
       request: new Request("https://example.test/join", { method: "GET" }),
       cookies: { delete: () => {} },
-      setHeaders: () => {},
+      setHeaders: (value) => headers.push(value),
     });
 
     // Cold isolate: the probe is scheduled, never awaited — no presence yet.
     const cold = await load(args());
+    expect(headers.at(-1)?.["cache-control"]).toBe("public, max-age=3600");
     expect(cold.widgetSnapshot).toBeNull();
+    expect(cold.widgetStale).toBe(false);
     expect(shared().pending).toHaveLength(1);
     await Promise.all(shared().pending);
 
     // Anonymous follow-up: presence renders from the warmed verdict with the
     // same four fields and values the view read before (no view change).
     const data = await load(args());
+    expect(headers.at(-1)?.["cache-control"]).toBe("no-store");
     expect(data.widgetSnapshot).not.toBeNull();
+    expect(data.widgetStale).toBe(false);
     expect(Object.keys(data.widgetSnapshot!).sort()).toEqual(AGGREGATE_KEYS);
     expect(data.widgetSnapshot).toEqual({
       name: "Together We Own",
@@ -238,6 +249,70 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
     ]) {
       expect(bytes, `anonymous payload leaked ${needle}`).not.toContain(needle);
     }
+
+    // Past one verdict TTL but within the three-TTL servable bound, the real
+    // load must carry freshness separately from the four-field projection.
+    vi.setSystemTime(Date.now() + DISCORD_WIDGET_VERDICT_TTL_MS + 1);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 429 })),
+    );
+    const aged = await load(args());
+    expect(headers.at(-1)?.["cache-control"]).toBe("no-store");
+    expect(aged.widgetSnapshot).toEqual(data.widgetSnapshot);
+    expect(aged.widgetStale).toBe(true);
+    expect(shared().pending).toHaveLength(2);
+    await Promise.all(shared().pending);
+
+    // A completed 429 probe refreshes the verdict, not the presence data:
+    // the same aggregates remain available and still need qualified copy.
+    const preserved = await load(args());
+    expect(headers.at(-1)?.["cache-control"]).toBe("no-store");
+    expect(preserved.widgetSnapshot).toEqual(data.widgetSnapshot);
+    expect(preserved.widgetStale).toBe(true);
+
+    vi.setSystemTime(Date.now() + DISCORD_WIDGET_VERDICT_TTL_MS);
+    const repeated = await load(args());
+    expect(headers.at(-1)?.["cache-control"]).toBe("no-store");
+    expect(repeated.widgetSnapshot).toEqual(data.widgetSnapshot);
+    expect(repeated.widgetStale).toBe(true);
+    await Promise.all(shared().pending);
+
+    vi.setSystemTime(Date.now() + DISCORD_WIDGET_VERDICT_TTL_MS);
+    const expired = await load(args());
+    expect(headers.at(-1)?.["cache-control"]).toBe("public, max-age=3600");
+    expect(expired.widgetSnapshot).toBeNull();
+    expect(expired.widgetStale).toBe(false);
+    await Promise.all(shared().pending);
+
+    // A refreshed empty-channel snapshot is still presence and must never
+    // become cacheable when it ages into qualified copy.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          id: GUILD,
+          name: "Together We Own",
+          presence_count: 0,
+          channels: [],
+          members: [],
+        }),
+      ),
+    );
+    vi.setSystemTime(Date.now() + DISCORD_WIDGET_VERDICT_TTL_MS);
+    await load(args());
+    await Promise.all(shared().pending);
+    const empty = await load(args());
+    expect(headers.at(-1)?.["cache-control"]).toBe("no-store");
+    expect(empty.widgetSnapshot?.channels).toEqual([]);
+    expect(empty.widgetStale).toBe(false);
+
+    vi.setSystemTime(Date.now() + DISCORD_WIDGET_VERDICT_TTL_MS);
+    const staleEmpty = await load(args());
+    expect(headers.at(-1)?.["cache-control"]).toBe("no-store");
+    expect(staleEmpty.widgetSnapshot?.channels).toEqual([]);
+    expect(staleEmpty.widgetStale).toBe(true);
+    await Promise.all(shared().pending);
   });
 });
 
