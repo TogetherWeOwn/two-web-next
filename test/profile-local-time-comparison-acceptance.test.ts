@@ -6,10 +6,10 @@
 // The combined implementation PR must add this file to the existing a11y browser
 // step and its a11y-require-executed verifier: ancestor below, minimum 72 cases.
 // The inventory gate already discovers this .test.ts. Do not merge RED alone.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Browser, BrowserContext, Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FIXED_NOW,
   ORIGIN,
@@ -170,17 +170,52 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
   () => {
     let browser: Browser;
     const contexts: BrowserContext[] = [];
+    let caseName = "beforeAll";
+    const diagnosticStart = process.hrtime.bigint();
+    function mark(phase: string, state: string) {
+      if (process.env.PROFILE_COMPARISON_DIAGNOSTICS !== "true") return;
+      // Write before awaiting: Vitest's buffered reporter may never flush a hung case.
+      // Monotonic time still advances while this fixture freezes Date.
+      writeSync(
+        2,
+        `[profile-comparison] ${JSON.stringify({
+          case: caseName,
+          phase,
+          state,
+          elapsedMs: Number((process.hrtime.bigint() - diagnosticStart) / 1_000_000n),
+        })}\n`,
+      );
+    }
+    async function trace<T>(phase: string, operation: () => Promise<T>): Promise<T> {
+      mark(phase, "start");
+      try {
+        const value = await operation();
+        mark(phase, "complete");
+        return value;
+      } catch (error) {
+        mark(phase, "error");
+        throw error;
+      }
+    }
     beforeAll(async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(FIXED_NOW);
-      const { chromium } = await import("playwright");
-      browser = await chromium.launch({ headless: true });
+      const { chromium } = await trace("playwright-import", () => import("playwright"));
+      browser = await trace("browser-launch", () => chromium.launch({ headless: true }));
+    });
+    beforeEach(({ task }) => {
+      caseName = task.name;
+      mark("case", "start");
     });
     afterEach(async () => {
-      await Promise.all(contexts.splice(0).map((context) => context.close()));
+      await trace("contexts-close", () =>
+        Promise.all(contexts.splice(0).map((context) => context.close())),
+      );
+      mark("case", "complete");
     });
     afterAll(async () => {
-      await browser?.close();
+      caseName = "afterAll";
+      await trace("browser-close", async () => browser?.close());
       vi.useRealTimers();
     });
 
@@ -196,19 +231,23 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
         javaScriptEnabled?: boolean;
       } = {},
     ) {
-      const fixture = await participationFixture(options.presentation ?? "other member");
+      const fixture = await trace("fixture-create", () =>
+        participationFixture(options.presentation ?? "other member"),
+      );
       fixture.store.rows.get(OWNER)!.timezone =
         options.zone === undefined ? "Europe/London" : options.zone;
-      const context = await browser.newContext({
-        javaScriptEnabled: options.javaScriptEnabled ?? true,
-        locale: "en-GB",
-        timezoneId: options.device ?? "America/New_York",
-        serviceWorkers: "block",
-        viewport: { width: 390, height: 844 },
-      });
+      const context = await trace("context-create", () =>
+        browser.newContext({
+          javaScriptEnabled: options.javaScriptEnabled ?? true,
+          locale: "en-GB",
+          timezoneId: options.device ?? "America/New_York",
+          serviceWorkers: "block",
+          viewport: { width: 390, height: 844 },
+        }),
+      );
       contexts.push(context);
-      const page = await context.newPage();
-      await page.clock.setFixedTime(new Date(options.instant ?? START));
+      const page = await trace("page-create", () => context.newPage());
+      await trace("clock-set", () => page.clock.setFixedTime(new Date(options.instant ?? START)));
       await context.addInitScript(`(() => {
         const failure = ${JSON.stringify(options.failure ?? "none")};
         if (failure === 'missing Intl') Object.defineProperty(globalThis, 'Intl', { value: undefined, configurable: true });
@@ -283,7 +322,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
           body,
         });
       });
-      await page.goto(ORIGIN + fixture.path);
+      await trace("page-goto", () => page.goto(ORIGIN + fixture.path));
       if (options.javaScriptEnabled !== false) await settle(page);
       expect(errors, "rendered islands must not throw during mount").toEqual([]);
       return {
@@ -300,8 +339,10 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       page.getByRole("button", { name: "Compare local times", exact: true });
     const result = (page: Page) => page.getByRole("status").filter({ hasText: /checked at/i });
     async function settle(page: Page) {
-      await page.evaluate(
-        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+      await trace("double-raf", () =>
+        page.evaluate(
+          "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+        ),
       );
     }
     async function activate(page: Page) {
@@ -311,7 +352,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       ).toBe(1);
       expect(await button(page).isVisible()).toBe(true);
       expect(await button(page).isEnabled()).toBe(true);
-      await button(page).click();
+      await trace("comparison-click", () => button(page).click());
       await settle(page);
       expect(
         await result(page).count(),
@@ -580,8 +621,8 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
             return route.fallback();
           });
           try {
-            await page.getByTestId("profile-save").click();
-            await seen;
+            await trace("save-click", () => page.getByTestId("profile-save").click());
+            await trace("patch-arrival", () => seen);
             await page.locator('[name="timezone"]').fill("Asia/Kathmandu");
             const before = await editorState(page);
             const beforeEffects = await page.evaluate("window.comparisonEffects");
