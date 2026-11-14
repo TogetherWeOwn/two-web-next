@@ -15,13 +15,12 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmdirSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import { assertProjection, projectSvelte } from "./tailwind-projection-core.mjs";
 
 export {
@@ -31,15 +30,15 @@ export {
   styleRanges,
 } from "./tailwind-projection-core.mjs";
 
-const web = fileURLToPath(new URL("..", import.meta.url));
 const MIRROR_SOURCE = "../.svelte-kit/tailwind-projection/";
 export const SOURCE_GLOB = `@source "${MIRROR_SOURCE}**/*.svelte";`;
 export const MIRROR_DIRNAME = "tailwind-projection";
 
-const posix = (path) => path.split(sep).join("/");
-
 /** Exclusions from app.css, resolved against its directory. Fails closed. */
 export function readSourceRules(css, cssDir) {
+  css = css.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\*[\s\S]*?\*\//g, (token) =>
+    token.startsWith("/*") ? " " : token,
+  );
   if (css.split(SOURCE_GLOB).length !== 2) {
     throw new Error(`tailwind-projection: app.css must contain exactly one ${SOURCE_GLOB}`);
   }
@@ -88,6 +87,18 @@ function prune(dir, keep, root) {
 
 export const projectSource = projectSvelte;
 
+function physicalPath(path) {
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    const parent = dirname(path);
+    if (parent === path) throw error;
+    return join(physicalPath(parent), relative(parent, path));
+  }
+  return realpathSync(path);
+}
+
 /**
  * Rebuilds the mirror from `sourceDir` into `outputDir`. All projections are computed before any
  * write; on error the mirror is removed and the error rethrown.
@@ -101,10 +112,12 @@ export function regenerateProjection({
   srcDir = resolve(srcDir);
   mirrorDir = resolve(mirrorDir);
   cssPath = resolve(cssPath);
+  const physicalSource = physicalPath(srcDir);
+  const physicalOutput = physicalPath(mirrorDir);
   if (
-    srcDir === mirrorDir ||
-    srcDir.startsWith(mirrorDir + sep) ||
-    mirrorDir.startsWith(srcDir + sep)
+    physicalSource === physicalOutput ||
+    physicalSource.startsWith(physicalOutput + sep) ||
+    physicalOutput.startsWith(physicalSource + sep)
   ) {
     throw new Error("tailwind-projection: source and output must not overlap");
   }
@@ -138,76 +151,4 @@ export function regenerateProjection({
     rmSync(mirrorDir, { recursive: true, force: true });
     throw error;
   }
-}
-
-/** Vite plugin: mirror at buildStart and on src .svelte changes in dev. */
-export function tailwindProjection({ root = web } = {}) {
-  root = resolve(root);
-  const srcDir = join(root, "src");
-  const cssPath = join(srcDir, "app.css");
-  const mirrorDir = join(root, ".svelte-kit", MIRROR_DIRNAME);
-  const options = { sourceDir: srcDir, outputDir: mirrorDir, cssPath };
-  let failure = null;
-
-  const run = () => {
-    try {
-      const result = regenerateProjection(options);
-      failure = null;
-      return result;
-    } catch (error) {
-      failure = error;
-      throw error;
-    }
-  };
-
-  return {
-    name: "two:tailwind-projection",
-    enforce: "pre",
-    config(config) {
-      // Preserve Vite's default sensitive-file denylist when adding the mirror.
-      const deny = config.server?.fs?.deny ?? [
-        ".env",
-        ".env.*",
-        "*.{crt,pem,key,p12,pfx,cer,der}",
-        ".npmrc",
-        ".yarnrc.yml",
-        "**/.git/**",
-      ];
-      return { server: { fs: { deny: [...deny, `${posix(mirrorDir)}/**`] } } };
-    },
-    buildStart() {
-      const { files } = run();
-      for (const file of listSvelte(srcDir)) this.addWatchFile(file);
-      for (const file of files) this.addWatchFile(file);
-      this.addWatchFile(cssPath);
-    },
-    configureServer(devServer) {
-      devServer.watcher.add(srcDir);
-      const onChange = (path) => {
-        const file = resolve(path);
-        // .svelte files, a removed directory, or app.css (exclusion rules).
-        if (!file.startsWith(srcDir + sep)) return;
-        if (file !== cssPath && !file.endsWith(".svelte") && /\.[^/\\]+$/.test(file)) return;
-        try {
-          run();
-        } catch (error) {
-          devServer.config.logger.error(String(error?.stack ?? error));
-        }
-        for (const mod of devServer.moduleGraph.getModulesByFile(cssPath) ?? []) {
-          void devServer.reloadModule(mod);
-        }
-      };
-      for (const event of ["add", "change", "unlink", "unlinkDir"]) {
-        devServer.watcher.on(event, onChange);
-      }
-    },
-    transform(_code, id) {
-      if (id.split("?")[0] !== cssPath) return null;
-      if (failure) throw failure; // fail closed: no CSS from a stale mirror
-      if (!existsSync(mirrorDir) || !statSync(mirrorDir).isDirectory()) {
-        throw new Error("tailwind-projection: mirror is missing");
-      }
-      return null;
-    },
-  };
 }

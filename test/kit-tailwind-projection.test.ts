@@ -82,10 +82,12 @@ describe("Kit Tailwind scanner projection", () => {
       const css = join(sourceDir, "app.css");
       const glob = '@source "../.svelte-kit/tailwind-projection/**/*.svelte";';
       mkdirSync(join(sourceDir, "excluded"), { recursive: true });
-      writeFileSync(css, glob);
+      writeFileSync(css, `${glob}\n/* @source not "../outside"; */`);
       writeFileSync(join(sourceDir, "excluded", "Card.svelte"), source);
       expect(regenerateProjection({ sourceDir, outputDir }).changed).toHaveLength(1);
       expect(regenerateProjection({ sourceDir, outputDir }).changed).toHaveLength(0);
+      writeFileSync(css, `/* ${glob} */`);
+      expect(() => regenerateProjection({ sourceDir, outputDir })).toThrow();
       writeFileSync(css, `${glob}\n@source not "../.svelte-kit/tailwind-projection/excluded";`);
       regenerateProjection({ sourceDir, outputDir });
       expect(existsSync(join(outputDir, "excluded", "Card.svelte"))).toBe(false);
@@ -113,6 +115,13 @@ describe("Kit Tailwind scanner projection", () => {
       writeFileSync(join(sourceDir, "Card.svelte"), source);
       writeFileSync(join(outside, "Card.svelte"), "untouched");
       expect(() => regenerateProjection({ sourceDir, outputDir: sourceDir })).toThrow();
+      const alias = join(root, "alias");
+      symlinkSync(root, alias);
+      expect(() => regenerateProjection({ sourceDir, outputDir: join(alias, "source") })).toThrow();
+      expect(() =>
+        regenerateProjection({ sourceDir, outputDir: join(alias, "source", "new") }),
+      ).toThrow();
+      expect(readFileSync(join(sourceDir, "Card.svelte"), "utf8")).toBe(source);
       symlinkSync(join(outside, "Card.svelte"), join(outputDir, "Card.svelte"));
       expect(() => regenerateProjection({ sourceDir, outputDir })).toThrow();
       expect(readFileSync(join(outside, "Card.svelte"), "utf8")).toBe("untouched");
