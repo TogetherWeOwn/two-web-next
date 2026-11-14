@@ -1,7 +1,15 @@
 // Capture an ephemeral Tag gallery route inside the exact pinned Kit app, never a deployed route.
 import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  rmdirSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -24,6 +32,10 @@ const app = resolve(args.app);
 const output = resolve(args.output);
 const route = join(app, "web/src/routes/__tag_gallery_evidence");
 const hooks = join(app, "web/src/hooks.server.ts");
+const staticRoot = join(app, "web/static");
+const fontDir = join(staticRoot, "__tag_evidence_fonts");
+const fontName = "fragment-mono-latin-400.woff2";
+const fontPath = `/__tag_evidence_fonts/${fontName}`;
 const require = createRequire(join(app, "package.json"));
 const { chromium } = require("playwright");
 const { default: AxeBuilder } = require("@axe-core/playwright");
@@ -41,11 +53,36 @@ const originalHooks = readFileSync(hooks);
 let server;
 let browser;
 let routeCreated = false;
+let staticRootCreated = false;
+let fontDirCreated = false;
+const fontLoaded = (page) =>
+  page.evaluate(async () => {
+    try {
+      const faces = await document.fonts.load('12px "Fragment Mono"', "Neutral");
+      const tag = document.querySelector('[data-tag="neutral"] > span');
+      return (
+        faces.length > 0 &&
+        faces.every((face) => face.status === "loaded" && face.family === "Fragment Mono") &&
+        !!tag &&
+        getComputedStyle(tag).fontFamily.split(",")[0].replaceAll('"', "").trim() ===
+          "Fragment Mono"
+      );
+    } catch {
+      return false;
+    }
+  });
 try {
   mkdirSync(output, { recursive: true });
   for (const script of ["build-ember-tokens.mjs", "build-leaf-css.mjs", "build-events-css.mjs"]) {
     execFileSync(process.execPath, [join(app, "ci", script)], { cwd: app, stdio: "inherit" });
   }
+  if (!existsSync(staticRoot)) {
+    mkdirSync(staticRoot);
+    staticRootCreated = true;
+  }
+  mkdirSync(fontDir); // Never overwrite an existing static asset.
+  fontDirCreated = true;
+  copyFileSync(join(app, "public/fonts", fontName), join(fontDir, fontName));
   mkdirSync(route); // Unique name: must not shadow any real app route.
   routeCreated = true;
   copyFileSync(join(tooling, "ci/kit-tag-capture-gallery.svelte"), join(route, "+page.svelte"));
@@ -99,6 +136,13 @@ try {
   const constants = await import(
     pathToFileURL(join(app, "node_modules/lighthouse/core/config/constants.js")).href
   );
+  // Regression: a missing font must fail the same assertion used for the capture.
+  const negativeContext = await browser.newContext();
+  const negativePage = await negativeContext.newPage();
+  await negativePage.route(`**${fontPath}`, (r) => r.abort());
+  await negativePage.goto(url, { waitUntil: "networkidle" });
+  if (await fontLoaded(negativePage)) throw new Error("Missing font was accepted");
+  await negativeContext.close();
   const results = [];
   for (const [name, width, height] of VIEWPORTS) {
     const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1 });
@@ -114,7 +158,7 @@ try {
     });
     const response = await page.goto(url, { waitUntil: "networkidle" });
     if (!response?.ok()) throw new Error(`Gallery request failed: ${name}`);
-    await page.evaluate(() => document.fonts.ready);
+    if (!(await fontLoaded(page))) throw new Error(`Fragment Mono did not load: ${name}`);
     for (const [attr, ids] of [
       ["data-tag", TAGS],
       ["data-dot", DOTS],
@@ -157,6 +201,7 @@ try {
       tags: TAGS,
       dots: DOTS,
       hydrated: true,
+      fragmentMonoLoaded: true,
       axe,
       lighthouse: lighthouseResult,
     });
@@ -175,6 +220,8 @@ try {
         "web/package-lock.json",
         "web/src/lib/Tag.svelte",
         "web/src/lib/LiveDot.svelte",
+        "assets/theme.css",
+        `public/fonts/${fontName}`,
       ].map((p) => [p, hash(join(app, p))]),
       ...[
         "ci/kit-tag-capture.mjs",
@@ -214,5 +261,7 @@ try {
       writeFileSync(hooks, originalHooks);
       rmSync(route, { recursive: true, force: true });
     }
+    if (fontDirCreated) rmSync(fontDir, { recursive: true, force: true });
+    if (staticRootCreated) rmdirSync(staticRoot);
   }
 }

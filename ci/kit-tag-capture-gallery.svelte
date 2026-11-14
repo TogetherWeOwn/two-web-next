@@ -14,6 +14,16 @@ onMount(() => {
   <title>Tag gallery evidence</title>
 </svelte:head>
 
+<style>
+  @font-face {
+    font-family: 'Fragment Mono';
+    /* Capture waits for the face instead of accepting optional-display fallback. */
+    font-display: block;
+    src: url('/__tag_evidence_fonts/fragment-mono-latin-400.woff2') format('woff2');
+    unicode-range: U+20-7E, U+00A0, U+2013-2014, U+2018-2019, U+201C-201D, U+2026, U+20AC, U+2122;
+  }
+</style>
+
 <main class="base-theme" data-hydrated={hydrated ? "yes" : "no"}>
   <h1>Tag gallery evidence</h1>
   <p data-tag="neutral"><Tag>Neutral</Tag></p>
