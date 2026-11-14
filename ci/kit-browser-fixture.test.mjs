@@ -40,8 +40,9 @@ import SiteFooter from '#lib/SiteFooter.svelte';
         assert.notEqual(resolved.value, "");
         assert.notEqual(resolved.color, "rgba(0, 0, 0, 0)");
         assert.equal(resolved.actual, resolved.color);
+        return resolved.actual;
       };
-      await assertFooterTheme();
+      const originalBackground = await assertFooterTheme();
       const removed = await page.evaluate(() => {
         let count = 0;
         function remove(rules) {
@@ -58,6 +59,11 @@ import SiteFooter from '#lib/SiteFooter.svelte';
       });
       assert.ok(removed > 0, "negative control removed a compiled declaration");
       await assert.rejects(assertFooterTheme(), assert.AssertionError);
+      assert.notEqual(
+        await footer.evaluate((el) => getComputedStyle(el).backgroundColor),
+        originalBackground,
+        "footer background changes when its theme declaration is removed",
+      );
       assert.deepEqual(unexpected, []);
     },
   );
