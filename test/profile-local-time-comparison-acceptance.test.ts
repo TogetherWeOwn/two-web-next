@@ -219,6 +219,17 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       vi.useRealTimers();
     });
 
+    async function setBrowserTime(page: Page, instant: Date) {
+      // Playwright timestamps clock replay with Node's Date.now(). Keep that near
+      // browser wall time so the frozen fixture date cannot overflow timer delays.
+      vi.setSystemTime(vi.getRealSystemTime());
+      try {
+        await trace("clock-set", () => page.clock.setFixedTime(instant));
+      } finally {
+        vi.setSystemTime(FIXED_NOW);
+      }
+    }
+
     async function open(
       renderer: Renderer,
       options: {
@@ -247,7 +258,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       );
       contexts.push(context);
       const page = await trace("page-create", () => context.newPage());
-      await trace("clock-set", () => page.clock.setFixedTime(new Date(options.instant ?? START)));
+      await setBrowserTime(page, new Date(options.instant ?? START));
       await context.addInitScript(`(() => {
         const failure = ${JSON.stringify(options.failure ?? "none")};
         if (failure === 'missing Intl') Object.defineProperty(globalThis, 'Intl', { value: undefined, configurable: true });
@@ -461,7 +472,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
           const { page } = fixture;
           await activate(page);
           const initial = await result(page).innerText();
-          await page.clock.setFixedTime(new Date("2026-07-16T20:45:00.000Z"));
+          await setBrowserTime(page, new Date("2026-07-16T20:45:00.000Z"));
           await settle(page);
           expect(await result(page).innerText()).toBe(initial);
           await activate(page);
@@ -532,7 +543,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
             ),
           ).toBe(true);
           const first = await result(page).innerText();
-          await page.clock.setFixedTime(new Date("2026-07-15T20:00:00.000Z"));
+          await setBrowserTime(page, new Date("2026-07-15T20:00:00.000Z"));
           await page.keyboard.press("Space");
           await settle(page);
           expect(await result(page).innerText()).not.toBe(first);
