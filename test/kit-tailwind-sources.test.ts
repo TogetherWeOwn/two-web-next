@@ -22,7 +22,8 @@ const defaults: Limits = { bytes: 1024 * 1024, nodes: 10000, depth: 128 };
 
 // Only literal attributes are certified here. Dynamic output and forwarding
 // remain unresolved until the symbolic analysis supports them.
-const classUses = (source: string, limits = defaults) => {
+const metadataStyle = '{@html leafCss ? `<style>${leafCss}</style>` : ""}';
+const classUses = (source: string, limits = defaults, allowMetadataStyle = false) => {
   if (Buffer.byteLength(source, "utf8") > limits.bytes) throw new Error("source byte limit");
   const tokens = new Set<string>();
   const unknown: string[] = [];
@@ -50,6 +51,13 @@ const classUses = (source: string, limits = defaults) => {
       add(String(node.name));
     } else if (node.type === "SpreadAttribute") {
       unknown.push("spread attribute");
+    } else if (node.type === "HtmlTag") {
+      if (
+        !allowMetadataStyle ||
+        source.slice(Number(node.start), Number(node.end)) !== metadataStyle
+      ) {
+        unknown.push("raw HTML");
+      }
     }
     for (const child of Object.values(node)) walk(child, depth + 1);
   };
@@ -57,8 +65,8 @@ const classUses = (source: string, limits = defaults) => {
   return { tokens, unknown };
 };
 
-const localViolations = (source: string, limits = defaults) => {
-  const { tokens, unknown } = classUses(source, limits);
+const localViolations = (source: string, limits = defaults, allowMetadataStyle = false) => {
+  const { tokens, unknown } = classUses(source, limits, allowMetadataStyle);
   return [...[...tokens].filter((token) => !localClasses.has(token)), ...unknown];
 };
 
@@ -93,7 +101,15 @@ describe("Kit utility source boundary", () => {
       ...globSync("web/src/routes/admin/join-attempts/**/*.svelte"),
     ];
     expect(files.length).toBeGreaterThan(3);
-    for (const path of files) expect(localViolations(readFileSync(path, "utf8")), path).toEqual([]);
+    for (const path of files) {
+      const source = readFileSync(path, "utf8");
+      const metadata = path === "web/src/lib/SiteMetadata.svelte";
+      if (metadata) {
+        expect(source.split(metadataStyle)).toHaveLength(2);
+        expect(source.indexOf(metadataStyle)).toBeGreaterThan(source.indexOf("<svelte:head>"));
+      }
+      expect(localViolations(source, defaults, metadata), path).toEqual([]);
+    }
   });
 
   it("recognizes literal classes and rejects local unknowns", () => {
@@ -109,6 +125,8 @@ describe("Kit utility source boundary", () => {
       "<p class={classes}>x</p>",
       '<p class="hint {value}">x</p>',
       "<p {...rest}>x</p>",
+      "{@html content}",
+      metadataStyle,
     ])
       expect(localViolations(markup), markup).not.toEqual([]);
     expect(
@@ -124,6 +142,34 @@ describe("Kit utility source boundary", () => {
     expect(() => classUses(source, { ...defaults, bytes: 1 })).toThrow("source byte limit");
     expect(() => localViolations(source, { ...defaults, nodes: 1 })).toThrow("AST node limit");
     expect(() => localViolations(source, { ...defaults, depth: 1 })).toThrow("AST depth limit");
+    expect(classUses("", { ...defaults, bytes: 0 }).tokens.size).toBe(0);
+    const unicode = "<p>é</p>";
+    const bytes = Buffer.byteLength(unicode, "utf8");
+    expect(() => classUses(unicode, { ...defaults, bytes })).not.toThrow();
+    expect(() => classUses(unicode, { ...defaults, bytes: bytes - 1 })).toThrow(
+      "source byte limit",
+    );
+    for (const limit of ["nodes", "depth"] as const) {
+      let boundary = 0;
+      while (boundary < 100) {
+        try {
+          classUses(source, { ...defaults, [limit]: boundary });
+          break;
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            !error.message.includes(`AST ${limit === "nodes" ? "node" : "depth"} limit`)
+          )
+            throw error;
+          boundary++;
+        }
+      }
+      expect(boundary).toBeLessThan(100);
+      expect(() => classUses(source, { ...defaults, [limit]: boundary })).not.toThrow();
+      expect(() => classUses(source, { ...defaults, [limit]: boundary - 1 })).toThrow();
+    }
+    expect(localViolations(metadataStyle, defaults, true)).toEqual([]);
+    expect(localViolations("{@html content}", defaults, true)).toContain("raw HTML");
   });
 
   it("keeps the metadata exclusion limited to class-free head content", () => {
