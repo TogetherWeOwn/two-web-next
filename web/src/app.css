@@ -49,12 +49,29 @@ html body {
  * The light ink is set directly on those elements: overriding --muted on the
  * shell would also recolor the dashboard's light resource cards
  * (.card p uses var(--muted) on #fffdf8), dropping them to 1.81:1. */
-.kit-admin :is(.field .hint, .hint) {
+.kit-admin :is(.field .hint, .hint, footer) {
   color: var(--color-lobby-muted);
 }
-.kit-admin footer {
-  color: var(--color-lobby-muted);
-}
-.kit-admin fieldset {
+/* Validation states. The shared sheet paints the summary cream (#fff7ed) and
+ * field errors rust (#9a3412), so on this canvas the inherited ink measured
+ * ~1.0:1, the UA dark-scheme summary links ~2.3:1 and the errors ~2.5:1. The
+ * summary takes the raised surface (keeping the inherited lobby ink) with
+ * accent links; field errors inherit the lobby ink from .field (inherit, not
+ * the token, keeps the client CSS budget) with weight and the summary's
+ * existing --brand rail (3.49:1 on the canvas), so they read as errors
+ * without relying on text color alone. Summary links pin the lobby focus
+ * color so their ring never falls back to a dark --ink outline (1.24:1 on the
+ * raised surface). */
+.kit-admin :is(fieldset, .notice) {
   background: var(--color-lobby-raised);
+}
+.kit-admin .notice a {
+  color: var(--color-lobby-accent);
+  outline-color: var(--color-lobby-focus);
+}
+.kit-admin .field .error {
+  color: inherit;
+  font-weight: 600;
+  border-left: 3px solid var(--brand);
+  padding-left: 0.5rem;
 }
