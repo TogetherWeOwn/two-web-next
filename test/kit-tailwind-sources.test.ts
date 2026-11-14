@@ -51,6 +51,8 @@ const classUses = (source: string, limits = defaults, allowMetadataStyle = false
       add(String(node.name));
     } else if (node.type === "SpreadAttribute") {
       unknown.push("spread attribute");
+    } else if (node.type === "RenderTag") {
+      unknown.push("rendered snippet");
     } else if (node.type === "HtmlTag") {
       if (
         !allowMetadataStyle ||
@@ -119,6 +121,9 @@ describe("Kit utility source boundary", () => {
       "relative",
     ]);
     expect(localViolations('<p class="hint filters">x</p>')).toEqual([]);
+    expect(
+      localViolations('<script>let { content } = $props();</script>{@render content()}'),
+    ).toContain("rendered snippet");
     for (const markup of [
       '<p class="flex">x</p>',
       "<p class:flex={ok}>x</p>",
