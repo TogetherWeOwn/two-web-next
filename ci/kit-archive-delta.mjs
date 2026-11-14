@@ -101,10 +101,14 @@ function strip(raw) {
   walk(root, (n) => isEl(n) && all.push(n));
   const cards = all.filter(isCard).length;
   const claimed = new Set();
+  const decoratedCards = new Set();
   const cuts = [];
   const wrappers = all.filter((n) => classTokens(n).includes("event-title"));
   for (const wrapper of wrappers) {
     const found = validate(wrapper, raw);
+    const card = wrapper.parentNode.parentNode;
+    if (decoratedCards.has(card)) fail("multiple wrappers on one card");
+    decoratedCards.add(card);
     for (const node of found.claimed) claimed.add(node);
     cuts.push(...found.cuts);
   }

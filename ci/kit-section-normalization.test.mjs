@@ -188,6 +188,11 @@ test("present section: contract and e2e pipelines agree byte-for-byte", () => {
 test("differently-testid sections: contract finds them, the fixed e2e copy throws", () => {
   const doc = '<section data-testid="other">x</section>';
   assert.equal(contractSectionOf(doc, "other"), '<section data-testid="other">x</section>');
+  const deltaLike = '<section data-testid="other"><svg class="state-glyph"></svg></section>';
+  assert.equal(
+    contractSectionOf(deltaLike, "other", { kit: true }),
+    contractSectionOf(deltaLike, "other"),
+  );
   assert.throws(() => e2eSectionOf(doc), /Archive section is missing/);
 });
 
@@ -245,6 +250,16 @@ test("Ember delta: feature assertions require glyph and label on every card", ()
   }
   assert.throws(() => assertEmberArchive(section([e[0].replace(glyphHtml(), "")])));
   assert.throws(() => assertEmberArchive(section([e[0].replace(labelHtml, "")])));
+  const secondInfo = e[1].match(/<div class="schedule-info">[\s\S]*?<\/h2>[^]*?<\/div>/)[0];
+  const redistributed = [
+    e[0].replace(
+      '<span class="schedule-attendance">',
+      `${secondInfo}<span class="schedule-attendance">`,
+    ),
+    h[1],
+  ];
+  assert.throws(() => assertEmberArchive(section(redistributed)), /multiple wrappers on one card/);
+  assert.throws(() => kitOf(redistributed), /multiple wrappers on one card/);
 });
 
 test("Ember delta: glyph, label, wrapper, and topology mutations fail closed", () => {
@@ -370,6 +385,19 @@ test("Ember delta: residual differences from Hono stay visible", () => {
     ),
     title: kitOf(base({ title: "Raid  night" }), pagerHtml(), "x"),
     date: kitOf(base({ date: "03 Jan 2026" }), pagerHtml(), "x"),
+    datetime: kitOf(
+      base().map((row) => row.replace('datetime="2026-01-02', 'datetime="2026-01-03')),
+      pagerHtml(),
+      "x",
+    ),
+    host: kitOf(
+      base({ extra: '<p data-testid="event-card-host">Hosted by Mara</p>' }),
+      pagerHtml(),
+      "x",
+    ),
+    location: kitOf(base({ extra: "<p>Location: Online</p>" }), pagerHtml(), "x"),
+    game: kitOf(base({ extra: "<p>Game: Chess</p>" }), pagerHtml(), "x"),
+    escaping: kitOf(base({ title: "Raid &lt;night&gt;" }), pagerHtml(), "x"),
     attendance: kitOf(base({ going: "4 going" }), pagerHtml(), "x"),
     "injected tag": kitOf(base({ title: "<img src=x onerror=y>" }), pagerHtml(), "x"),
     "extra node": kitOf(base({ extra: "<p>more</p>" }), pagerHtml(), "x"),
