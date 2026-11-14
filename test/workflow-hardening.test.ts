@@ -1,6 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 // Supply-chain hardening for every workflow (grep-level, no YAML parser):
 //  - each `uses:` is pinned to a full commit SHA, so a moved tag cannot swap code
@@ -13,6 +15,32 @@ const dir = ".github/workflows";
 const workflows = readdirSync(dir)
   .filter((name) => /\.ya?ml$/.test(name))
   .map((name) => ({ name, lines: readFileSync(join(dir, name), "utf8").split("\n") }));
+
+type LaneStep = {
+  name?: string;
+  id?: string;
+  uses?: string;
+  run?: string;
+  shell?: string;
+  if?: string;
+  env?: Record<string, string>;
+  with?: Record<string, unknown>;
+};
+
+const laneSource = readFileSync(join(dir, "db-free-lane.yml"), "utf8");
+const lane = parse(laneSource) as {
+  on: Record<string, { inputs: Record<string, unknown> }>;
+  permissions: Record<string, string>;
+  jobs: Record<
+    string,
+    { steps: LaneStep[]; "runs-on": string; "timeout-minutes": number; "cache-mode": string }
+  >;
+};
+const laneJob = lane.jobs["db-free"];
+const laneSteps = laneJob?.steps ?? [];
+const laneStep = (id: string) => laneSteps.find((step) => step.id === id);
+const vitestCommand =
+  "env -u DATABASE_URL -u AUDIT_IMPORT_TEST_DATABASE_URL -u LEGACY_DATABASE_URL -u BOT_DATABASE_URL -u MIGRATION_TEST_DATABASE_URL npx vitest run --reporter=default --reporter=json --outputFile.json=artifacts/db-free/vitest.json";
 
 const indent = (line: string) => line.length - line.trimStart().length;
 const isComment = (line: string) => /^\s*#/.test(line);
@@ -123,5 +151,138 @@ describe("workflow supply-chain hardening", () => {
     }
     expect(missing).toEqual([]);
     expect(writable).toEqual([]);
+  });
+});
+
+describe("dispatch-only DB-free lane", () => {
+  it("accepts only a required SHA input and no automatic triggers", () => {
+    expect(Object.keys(lane.on)).toEqual(["workflow_dispatch"]);
+    expect(lane.on.workflow_dispatch?.inputs).toEqual({
+      sha: {
+        description: "Full lowercase commit SHA to test without database configuration",
+        required: true,
+        type: "string",
+      },
+    });
+    expect(Object.keys(lane.jobs)).toEqual(["db-free"]);
+    expect(readFileSync(join(dir, "ci.yml"), "utf8")).not.toContain("db-free-lane");
+  });
+
+  it("uses a bounded hosted runner with read-only contents and no secrets or services", () => {
+    expect(Object.keys(lane).sort()).toEqual(["jobs", "name", "on", "permissions"]);
+    expect(lane.permissions).toEqual({ contents: "read" });
+    expect(Object.keys(laneJob ?? {}).sort()).toEqual([
+      "cache-mode",
+      "runs-on",
+      "steps",
+      "timeout-minutes",
+    ]);
+    expect(laneJob?.["runs-on"]).toBe("ubuntu-latest");
+    expect(laneJob?.["timeout-minutes"]).toBe(45);
+    expect(laneSource).not.toMatch(/secrets\s*[.[]|github\.token|continue-on-error/);
+    expect(laneSteps.filter((step) => step.uses).map((step) => step.uses?.split("@")[0])).toEqual([
+      "actions/checkout",
+      "actions/setup-node",
+      "actions/upload-artifact",
+    ]);
+    for (const step of laneSteps) expect(step.run ?? "").not.toContain("${{");
+  });
+
+  it("denies cache restore and save capability for the entire arbitrary-SHA job", () => {
+    expect(laneJob?.["cache-mode"]).toBe("none");
+  });
+
+  it("rejects malformed SHA values in the actual pre-checkout shell", () => {
+    const validation = laneStep("validate");
+    expect(validation?.env).toEqual({ TARGET_SHA: "${{ inputs.sha }}" });
+    expect(validation?.shell).toBe("bash");
+    expect(laneSteps.indexOf(validation as LaneStep)).toBe(0);
+    const valid = "0123456789abcdef".repeat(2) + "01234567";
+    for (const [sha, status] of [
+      [valid, 0],
+      ["", 1],
+      [valid.slice(1), 1],
+      [`${valid}0`, 1],
+      [valid.toUpperCase(), 1],
+      ["main", 1],
+      [`${valid}\n`, 1],
+      [` ${valid}`, 1],
+      ["a".repeat(39) + "ａ", 1],
+      ["$(exit 0)", 1],
+    ] as const) {
+      const result = spawnSync(
+        "bash",
+        ["--noprofile", "--norc", "-e", "-c", validation?.run ?? "exit 99"],
+        {
+          env: { TARGET_SHA: sha, GITHUB_OUTPUT: "/dev/null" },
+          encoding: "utf8",
+          timeout: 5000,
+        },
+      );
+      expect(result.status, JSON.stringify(sha)).toBe(status);
+    }
+  });
+
+  it("checks out and prints exactly the requested head before installing", () => {
+    const checkout = laneStep("checkout");
+    const ciCheckout = usesRefs(readFileSync(join(dir, "ci.yml"), "utf8").split("\n")).find(
+      ({ ref }) => ref.startsWith("actions/checkout@"),
+    );
+    expect(checkout?.uses).toBe(ciCheckout?.ref);
+    expect(checkout?.with).toEqual({ ref: "${{ inputs.sha }}", "persist-credentials": false });
+    expect(laneSteps.indexOf(checkout as LaneStep)).toBe(1);
+    const head = laneStep("head");
+    expect(laneSteps.indexOf(head as LaneStep)).toBe(2);
+    expect(head?.env).toEqual({ TARGET_SHA: "${{ inputs.sha }}" });
+    expect(head?.run).toContain("head=$(git rev-parse HEAD)");
+    expect(head?.run).toContain('test "$head" = "$TARGET_SHA"');
+    expect(head?.run).toContain("printf 'HEAD=%s\\n'");
+    expect(head?.run).toContain('"$head" > artifacts/db-free/head.txt');
+    const node = laneSteps.find((step) => step.uses?.startsWith("actions/setup-node@"));
+    expect(node?.with).toEqual({ "node-version": 24, "package-manager-cache": false });
+    expect(laneStep("install")?.run).toBe("npm ci --include=dev");
+  });
+
+  it("refuses even empty database variables without logging values, then runs the full config", () => {
+    const script = laneStep("vitest")?.run ?? "";
+    expect(script).toContain(vitestCommand);
+    expect(script.trim().endsWith(vitestCommand)).toBe(true);
+    const guard = script.slice(0, script.indexOf(vitestCommand));
+    for (const name of [
+      "DATABASE_URL",
+      "AUDIT_IMPORT_TEST_DATABASE_URL",
+      "OTHER_DATABASE_URL_X",
+      "PGHOST",
+      "PGPASSWORD",
+    ]) {
+      for (const value of ["", "private-value-marker"]) {
+        const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", guard], {
+          env: { [name]: value },
+          encoding: "utf8",
+          timeout: 5000,
+        });
+        expect(result.status, name).toBe(1);
+        expect(result.stdout + result.stderr).not.toContain("private-value-marker");
+      }
+    }
+    expect(spawnSync("bash", ["-e", "-c", guard], { env: {}, timeout: 5000 }).status).toBe(0);
+  });
+
+  it("always retains SHA-named evidence for fourteen days without hiding failures", () => {
+    const receipt = laneSteps.find(
+      (step) => step.name === "Record workflow outcomes even on failure",
+    );
+    expect(receipt?.if).toBe("always()");
+    expect(receipt?.run).toContain("artifacts/db-free/workflow-status.json");
+    expect(receipt?.env?.VITEST_OUTCOME).toBe("${{ steps.vitest.outcome }}");
+    const upload = laneSteps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+    expect(upload?.if).toBe("always()");
+    expect(upload?.with).toEqual({
+      name: "db-free-${{ steps.validate.outputs.sha || github.run_id }}",
+      path: "artifacts/db-free/",
+      "if-no-files-found": "error",
+      "retention-days": 14,
+    });
+    expect(laneSteps.at(-1)).toBe(upload);
   });
 });

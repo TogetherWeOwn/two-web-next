@@ -1,0 +1,89 @@
+name: db-free-lane
+
+# Report-only, dispatch-only: not a required check or a ci-ok dependency.
+# Use a disposable hosted runner for arbitrary repository SHAs; no shared cache.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full lowercase commit SHA to test without database configuration
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  db-free:
+    # Deny runtime cache authority, including to lifecycle scripts and later actions.
+    cache-mode: none
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Validate SHA before checkout
+        id: validate
+        env:
+          TARGET_SHA: ${{ inputs.sha }}
+        shell: bash
+        run: |
+          if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '::error::sha must be exactly 40 lowercase hexadecimal characters\n'
+            exit 1
+          fi
+          printf 'sha=%s\n' "$TARGET_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - name: Assert and record checked-out HEAD
+        id: head
+        env:
+          TARGET_SHA: ${{ inputs.sha }}
+        shell: bash
+        run: |
+          head=$(git rev-parse HEAD)
+          printf 'HEAD=%s\n' "$head"
+          test "$head" = "$TARGET_SHA"
+          mkdir -p artifacts/db-free
+          printf '%s\n' "$head" > artifacts/db-free/head.txt
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install dependencies
+        id: install
+        run: npm ci --include=dev
+      - name: Assert DB-free environment and run full Vitest config
+        id: vitest
+        shell: bash
+        run: |
+          while IFS= read -r name; do
+            case "$name" in
+              *DATABASE_URL*|PG*)
+                printf '::error::Database configuration is set; refusing DB-free tests\n'
+                exit 1
+                ;;
+            esac
+          done < <(compgen -e)
+          env -u DATABASE_URL -u AUDIT_IMPORT_TEST_DATABASE_URL -u LEGACY_DATABASE_URL -u BOT_DATABASE_URL -u MIGRATION_TEST_DATABASE_URL npx vitest run --reporter=default --reporter=json --outputFile.json=artifacts/db-free/vitest.json
+      - name: Record workflow outcomes even on failure
+        if: always()
+        env:
+          TARGET_SHA: ${{ steps.validate.outputs.sha }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          HEAD_OUTCOME: ${{ steps.head.outcome }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          VITEST_OUTCOME: ${{ steps.vitest.outcome }}
+        shell: bash
+        run: |
+          mkdir -p artifacts/db-free
+          printf '{"sha":"%s","checkout":"%s","head":"%s","install":"%s","vitest":"%s"}\n' "$TARGET_SHA" "$CHECKOUT_OUTCOME" "$HEAD_OUTCOME" "$INSTALL_OUTCOME" "$VITEST_OUTCOME" > artifacts/db-free/workflow-status.json
+      - name: Upload DB-free evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: db-free-${{ steps.validate.outputs.sha || github.run_id }}
+          path: artifacts/db-free/
+          if-no-files-found: error
+          retention-days: 14
