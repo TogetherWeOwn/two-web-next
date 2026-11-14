@@ -28,6 +28,7 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
+import { stripEmberDelta } from "./kit-archive-delta.mjs";
 import { chromium } from "playwright";
 
 const root = new URL("../", import.meta.url);
@@ -166,6 +167,11 @@ const sectionOf = (html) => {
   const match = html.match(/<section[^>]*data-testid="past-events"[\s\S]*?<\/section>/);
   if (!match) throw new Error("Archive section is missing");
   return match[0];
+};
+// Kit side only: sheds the validated Ember delta from raw source (see
+// ci/kit-archive-delta.mjs) so Hono's section still compares byte-for-byte.
+const kitSectionOf = (html) => {
+  return stripEmberDelta(sectionOf(html));
 };
 
 // Svelte SSR hydration markers have no Hono counterpart. Stripped to a fixed
@@ -473,7 +479,7 @@ async function unitParity() {
         browserFixturesRun = true;
       }
 
-      const same = normalize(sectionOf(honoHtml)) === normalize(sectionOf(kitHtml));
+      const same = normalize(sectionOf(honoHtml)) === normalize(kitSectionOf(kitHtml));
       check(
         `${path}: archive section is byte-identical (modulo boolean serialization)`,
         same,
@@ -482,7 +488,7 @@ async function unitParity() {
       if (!same && process.env.KIT_E2E_DUMP) {
         const { writeFileSync } = await import("node:fs");
         writeFileSync(process.env.KIT_E2E_DUMP + "-hono.html", sectionOf(honoHtml));
-        writeFileSync(process.env.KIT_E2E_DUMP + "-kit.html", sectionOf(kitHtml));
+        writeFileSync(process.env.KIT_E2E_DUMP + "-kit.html", kitSectionOf(kitHtml));
       }
     }
   } finally {
@@ -552,7 +558,7 @@ async function previewParity(kitBase, honoBase) {
     console.log(`--- Kit ${path} ---`);
     expectArchive(kitHtml, { keys, pager: [] });
     expectShell(kitHtml);
-    const same = normalize(sectionOf(kitHtml)) === normalize(sectionOf(honoHtml));
+    const same = normalize(kitSectionOf(kitHtml)) === normalize(sectionOf(honoHtml));
     check(`${path}: preview sections match staging`, same, "section HTML differs");
   }
   // /api/* still reaches the unchanged Hono app through the Kit catch-all.
