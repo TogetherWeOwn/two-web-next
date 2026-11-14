@@ -12,8 +12,17 @@ import {
 const FONT_URL = `${localOrigin}/fonts/mona-sans-latin-wght.woff2`;
 async function fixturePage(page: Page) {
   await page.goto("/about");
-  await page.setContent(`<body style="margin:0"><p id="probe" style="font:32px sans-serif">Together We Own</p>
-    <p class="twin">a</p><p class="twin">b</p><div id="tall" style="height:3000px">tall</div></body>`);
+  // Keep the inherited CSP: fixture styles use its permitted same-origin source.
+  await page.route("**/font-evidence.css", (route) =>
+    route.fulfill({
+      contentType: "text/css",
+      body: `body { margin: 0; } #probe { font: 32px sans-serif; } #tall { height: 3000px; }
+        @font-face { font-family: Held; src: url("${FONT_URL}?held=1"); font-display: swap; }`,
+    }),
+  );
+  await page.setContent(`<body><p id="probe">Together We Own</p>
+    <p class="twin">a</p><p class="twin">b</p><div id="tall">tall</div></body>`);
+  await page.addStyleTag({ url: `${localOrigin}/font-evidence.css` });
 }
 for (const size of [
   { width: 1280, height: 800 },
@@ -75,9 +84,8 @@ for (const size of [
         await route.continue();
       });
       try {
-        await page.addStyleTag({
-          content: `@font-face { font-family: Held; src: url("${FONT_URL}?held=1");
-          font-display: swap; } #probe { font-family: Held, sans-serif !important; }`,
+        await page.locator("#probe").evaluate((el) => {
+          (el as HTMLElement).style.fontFamily = "Held, sans-serif";
         });
         await held;
         expect(await page.evaluate(() => document.fonts.status)).toBe("loading");
