@@ -31,8 +31,7 @@ vi.mock("../e2e/staging/fixtures", () => {
 });
 
 beforeAll(async () => {
-  const journeySpec = "../e2e/staging/event-rsvp.spec";
-  await import(journeySpec);
+  await import("../e2e/staging/event-rsvp.spec");
 });
 
 test("a saved-form failure cancels the exact created draft key", async () => {
