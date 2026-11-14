@@ -79,6 +79,9 @@ describe("Kit event URL boundaries", () => {
     expect(isSameOriginAllowed(request("/write"), origin, new URL("/csp-reports", origin))).toBe(
       false,
     );
+    expect(isSameOriginAllowed(request("/csp-reports"), origin, new URL("/write", origin))).toBe(
+      false,
+    );
     expect(
       isSameOriginAllowed(
         request("/csp-reports", "PATCH"),
