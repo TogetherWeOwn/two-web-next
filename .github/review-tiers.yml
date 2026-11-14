@@ -10,6 +10,16 @@
 # isolation or personal data; SQL, schema or migrations; dependency or
 # lockfile changes; CI or workflow changes; weakened test assertions, deleted
 # tests or snapshots, or lowered gates in test files.
+# Any .svelte file containing raw HTML, a fetch call, a form action, or a
+# load function is sensitive regardless of path. Reviewers inspect content
+# manually; path classification does not automatically enforce these triggers.
+# Examples (including whitespace, multiline, and equivalent syntax variants):
+# - `{@html content}` or `{@html\n  content}`
+# - `fetch(url)`, `fetch (url)`, or `globalThis.fetch(url)`
+# - `<form action="?/save">` or `<form\n  action={target}>`
+# - `export function load(...)` or `export const load = async (...) => ...`
+# These examples are illustrative, not an exhaustive pattern matcher. When in
+# doubt, route to sensitive review.
 #
 # Review per tier: low -> QA. ordinary -> QA. sensitive/unclassified ->
 # Security, then QA. QA verifies the author's `risk_tier` attestation and may
@@ -60,6 +70,9 @@ tiers:
     - "src/about-content.ts"
     - "src/faq-content.ts"
     - "src/rules-content.ts"
+    # Pure presentation only; server paths and content triggers override these.
+    - "web/src/lib/**/*.svelte"
+    - "web/src/lib/**/*.css"
   sensitive:
     # Review policy and CI, always sensitive (this file included).
     - ".github/review-tiers.yml"
@@ -135,7 +148,16 @@ tiers:
     - "src/body-limit.ts"
     - "src/up-body.ts"
     - "src/media-type.ts"
-    - "web/**"
+    - "web/src/routes/**"
+    - "web/src/lib/server/**"
+    - "web/src/hooks*"
+    - "web/**/*.server.ts"
+    - "web/vite.config.ts"
+    - "web/svelte.config.*"
+    - "web/wrangler*.jsonc"
+    - "web/package*.json"
+    - "web/_headers"
+    - "web/tsconfig.json"
     # Tenant isolation, personal data, access auditing, and erasure. The
     # versioned privacy policies under content/ and their generated copy are
     # the member-facing personal-data commitment, so they stay with the
