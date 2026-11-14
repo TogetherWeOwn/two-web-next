@@ -1,6 +1,8 @@
 import { safeRequestId } from "../../../src/request-log";
 import type { LayoutServerLoad } from "./$types";
 
+export const trailingSlash = "ignore";
+
 // Forward only the dispatch's validated support reference and verified display
 // bit. No session, signed destination, cookie or DB read belongs in layout data.
 // The hook keeps data requests and fragments notice-free and consumes only the
