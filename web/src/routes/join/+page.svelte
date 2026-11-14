@@ -56,16 +56,39 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
       The Discord approval failed to start — try again below.
     </p>
   {/if}
-  <section class="join-layout" aria-labelledby="join-heading">
-    <div class="join-panel">
-      <h1 id="join-heading">Join Together We Own</h1>
-      <p class="lead">{JOIN_INTRO}</p>
-      <p>One click with Discord and we'll add you to the server — no invite link, no waiting.</p>
-      <p class="join-actions">
-        <a class="btn" href={oneClickHref} data-testid="join-oneclick">Join with Discord</a>{" "}
-        <a href={inviteUrl} data-testid="join-invite">Join with an invite link instead</a>
-      </p>
+  <div class="ember-join">
+    <div class="join-identity">
+      <img src="/icons/icon-192.png" alt="" />
+      <div><strong>Together We Own</strong><p>A Discord gaming community · founded 1998 · English</p></div>
     </div>
+    <h1 id="join-heading">Play with people <em>who show up.</em></h1>
+    <p class="join-lede">{JOIN_INTRO}</p>
+    <aside class="join-card" aria-labelledby="join-card-heading">
+      <h2 id="join-card-heading">Join with one sign-in</h2>
+      <a class="btn join-primary" href={oneClickHref} data-testid="join-oneclick">Join with Discord</a>
+      <p>Already in our server? The same button signs you in.</p>
+      <a href={inviteUrl} data-testid="join-invite">Join with an invite link instead</a>
+      <div class="join-privacy">
+        <p>We never post as you or read your messages.</p>
+        <p>Leave any time. Ask a moderator and we delete your data. <a href="/privacy">How deletion works</a></p>
+      </div>
+    </aside>
+    <section class="join-steps" aria-labelledby="join-steps-heading">
+      <h2 class="join-visually-hidden" id="join-steps-heading">What happens when you join</h2>
+      <ol role="list">
+        <li><span aria-hidden="true">01</span><div><h3>Discord asks you to say yes</h3><p>We ask for your name, your avatar and permission to add you to our server. Nothing else.</p></div></li>
+        <li><span aria-hidden="true">02</span><div><h3>The bot lets you in and makes you a Prospect</h3><p>It takes a few seconds. Then finish Discord's rules screening and you can post.</p></div></li>
+        <li><span aria-hidden="true">03</span><div><h3>You land back here, signed in</h3><p>Pick an event and say you're in. Show up a few times and you become a Member.</p></div></li>
+      </ol>
+    </section>
+    <section class="join-norms" aria-labelledby="join-norms-heading">
+      <h2 id="join-norms-heading">What we ask of you</h2>
+      <ul role="list">
+        <li>Be kind on voice. Newcomers get patience, not tests.</li>
+        <li>If you said you're in, come, or drop out before it starts.</li>
+        <li>You must be 18 or older. <a href="/rules">Read the full rules</a></li>
+      </ul>
+    </section>
     <div class="join-preview">
       {#if widgetSnapshot}
         <section aria-labelledby="discord-presence-heading" data-testid="join-widget-presence">
@@ -126,5 +149,41 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
         </p>
       {/if}
     </div>
-  </section>
+  </div>
 </Shell>
+
+<style>
+  .ember-join {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 420px;
+    column-gap: var(--space-8);
+    align-items: start;
+    margin-block: var(--space-8);
+  }
+  .ember-join > :not(.join-card) { grid-column: 1; min-width: 0; }
+  .ember-join :is(h1, h2, h3) { text-transform: none; }
+  .join-steps, .join-norms { padding: 0; }
+  .join-identity { display: flex; align-items: center; gap: var(--space-3); }
+  .join-identity img { width: var(--space-8); height: var(--space-8); border-radius: var(--radius-s); }
+  .join-identity p { margin: 0; font: var(--text-label) / var(--leading-label) var(--font-data); color: var(--t3); }
+  .ember-join h1 { margin: var(--space-6) 0; font: var(--font-weight-display) var(--text-hero) / var(--leading-display) var(--font-display); letter-spacing: var(--tracking-display); }
+  .ember-join h1 em { font-family: var(--font-accent); font-weight: var(--font-weight-regular); }
+  .join-lede { font-size: var(--text-lede); color: var(--t2); }
+  .join-card { grid-column: 2; grid-row: 1 / span 6; position: sticky; top: var(--space-11); padding: var(--space-inset-card-lg); background: var(--g1); border: 1px solid var(--color-hair2); border-radius: var(--radius-l); }
+  .join-card h2 { margin-top: 0; }
+  .join-primary { display: block; width: 100%; text-align: center; }
+  .join-privacy { border-top: 1px solid var(--color-hair2); margin-top: var(--space-6); padding-top: var(--space-4); }
+  .join-card p, .join-steps p { color: var(--t2); }
+  .join-steps, .join-norms, .join-preview { margin-top: var(--space-7); }
+  .join-steps ol, .join-norms ul { list-style: none; padding: 0; }
+  .join-steps li { display: flex; gap: var(--space-4); margin-bottom: var(--space-5); }
+  .join-steps li > span { color: var(--t3); font-family: var(--font-data); }
+  .join-steps h3, .join-steps p { margin: 0; }
+  .join-norms li { display: flex; gap: var(--space-2); margin-bottom: var(--space-3); }
+  .join-norms li::before { content: '✓'; color: var(--ok); }
+  .join-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+  @media (max-width: 820px) {
+    .ember-join { display: block; }
+    .join-card { position: static; padding: var(--space-inset-card); margin-top: var(--space-7); }
+  }
+</style>
