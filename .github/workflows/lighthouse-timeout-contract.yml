@@ -1,0 +1,37 @@
+name: lighthouse-timeout-contract
+
+# Exercise the runner's step-timeout semantics without contacting staging.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/lighthouse-timeout-contract.yml
+      - .github/workflows/web-quality-origin.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  timeout-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Simulate a stalled advisory collection
+        id: collect
+        timeout-minutes: 1
+        continue-on-error: true
+        run: sleep 90
+      - name: Simulate the blocking standards step
+        id: standards
+        if: ${{ !cancelled() }}
+        run: test '${{ steps.collect.outcome }}' = failure
+      - name: Verify timeout and standards outcomes
+        if: ${{ !cancelled() }}
+        env:
+          COLLECT_OUTCOME: ${{ steps.collect.outcome }}
+          COLLECT_CONCLUSION: ${{ steps.collect.conclusion }}
+          STANDARDS_OUTCOME: ${{ steps.standards.outcome }}
+        run: |
+          test "$COLLECT_OUTCOME" = failure
+          test "$COLLECT_CONCLUSION" = success
+          test "$STANDARDS_OUTCOME" = success
