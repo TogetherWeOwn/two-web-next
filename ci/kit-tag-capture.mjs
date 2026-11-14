@@ -43,6 +43,9 @@ let browser;
 let routeCreated = false;
 try {
   mkdirSync(output, { recursive: true });
+  for (const script of ["build-ember-tokens.mjs", "build-leaf-css.mjs", "build-events-css.mjs"]) {
+    execFileSync(process.execPath, [join(app, "ci", script)], { cwd: app, stdio: "inherit" });
+  }
   mkdirSync(route); // Unique name: must not shadow any real app route.
   routeCreated = true;
   copyFileSync(join(tooling, "ci/kit-tag-capture-gallery.svelte"), join(route, "+page.svelte"));
@@ -93,9 +96,13 @@ try {
   const lhPath = join(app, "node_modules/lighthouse/core/index.js");
   if (!existsSync(lhPath)) throw new Error("Locked lighthouse dependency is missing");
   const { default: lighthouse } = await import(pathToFileURL(lhPath).href);
+  const constants = await import(
+    pathToFileURL(join(app, "node_modules/lighthouse/core/config/constants.js")).href
+  );
   const results = [];
   for (const [name, width, height] of VIEWPORTS) {
-    const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
+    const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
     const problems = [];
     const blocked = [];
     page.on("pageerror", (e) => problems.push(String(e)));
@@ -122,8 +129,10 @@ try {
     await page.getByRole("button").click();
     if ((await page.getByRole("button").textContent())?.trim() !== "Clicked 1")
       throw new Error(`Hydration interaction failed: ${name}`);
-    const axe = assertNoAxeViolations(await new AxeBuilder({ page }).analyze());
     await page.screenshot({ path: join(output, `tag-gallery-${name}.png`) });
+    const axeResult = await new AxeBuilder({ page }).analyze();
+    writeFileSync(join(output, `tag-gallery-${name}-axe.json`), JSON.stringify(axeResult));
+    const axe = assertNoAxeViolations(axeResult);
     if (problems.length) throw new Error(`Page errors: ${problems.join("; ")}`);
     if (blocked.length) throw new Error(`Blocked external requests: ${blocked.join(", ")}`);
     const mobile = width < 800;
@@ -131,6 +140,12 @@ try {
       port: debugPort,
       output: "json",
       onlyCategories: ["performance", "accessibility"],
+      ...(mobile
+        ? {}
+        : {
+            throttling: constants.throttling.desktopDense4G,
+            emulatedUserAgent: constants.userAgents.desktop,
+          }),
       formFactor: mobile ? "mobile" : "desktop",
       screenEmulation: { mobile, width, height, deviceScaleFactor: 1, disabled: false },
     });
@@ -138,13 +153,14 @@ try {
     writeFileSync(join(output, `tag-gallery-${name}-lighthouse.json`), JSON.stringify(run.lhr));
     results.push({
       viewport: { width, height },
+      lighthouseProfile: mobile ? "mobile" : "desktop",
       tags: TAGS,
       dots: DOTS,
       hydrated: true,
       axe,
       lighthouse: lighthouseResult,
     });
-    await page.close();
+    await context.close();
   }
   const provenance = {
     toolingSha: process.env.TOOLING_SHA,

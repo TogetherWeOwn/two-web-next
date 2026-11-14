@@ -49,6 +49,7 @@ jobs:
           TOOLING_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node tooling/ci/kit-tag-capture.mjs app artifacts
       - name: Upload evidence
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kit-tag-evidence
