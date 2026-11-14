@@ -84,4 +84,4 @@ jobs:
       - run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
         working-directory: web
       - run: npx playwright install --with-deps chromium
-      - run: node --test ci/kit-hydration-harness.test.mjs ci/kit-browser-fixture.test.mjs ci/kit-browser-fixture-isolation.test.mjs
+      - run: node --test ci/kit-hydration-harness.test.mjs ci/kit-browser-fixture.test.mjs ci/kit-browser-fixture-isolation.test.mjs ci/kit-tag-browser.test.mjs
