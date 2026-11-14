@@ -1,0 +1,6 @@
+@media (max-width: 820px) {
+  [data-kit-site-header] {
+    position: sticky;
+    top: 0;
+  }
+}

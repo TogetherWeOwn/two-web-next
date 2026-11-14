@@ -28,6 +28,8 @@ function fixture() {
   writeFileSync(resolve(cwd, "package.json"), JSON.stringify({ type: "module", scripts }));
   for (const file of ["styles.css", "theme-tokens.css", "theme.css", "schedule-theme.css"])
     writeFileSync(resolve(cwd, "public", file), `/* ${file} */`);
+  mkdirSync(resolve(cwd, "web/src/lib"), { recursive: true });
+  writeFileSync(resolve(cwd, "web/src/lib/site-header.css"), "/* site-header.css */");
   writeFileSync(
     resolve(cwd, "tsconfig.json"),
     JSON.stringify({

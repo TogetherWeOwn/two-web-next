@@ -207,8 +207,8 @@ function isCoveredByScopes(relPosix, globs) {
 const GENERATED_LEAF_CSS = {
   output: 'src/leaf-critical-css.ts',
   generator: 'ci/build-leaf-css.mjs',
-  generatorSha256: 'e2101052d110d2523cd0f24fcd7354a701ba3f352b7bf494b3feef730f75fce1',
-  inputs: ['public/styles.css', 'public/theme-tokens.css', 'public/theme.css'],
+  generatorSha256: '507d62db2b410218c885c5fc81a15e9e11448aefa3d140836a8be086912b9cb0',
+  inputs: ['public/styles.css', 'public/theme-tokens.css', 'public/theme.css', 'web/src/lib/site-header.css'],
 };
 const { createHash } = require('node:crypto');
 
@@ -433,18 +433,19 @@ const LEAF_SCOPE_INPUTS = [
   'public/styles.css',
   'public/theme-tokens.css',
   'public/theme.css',
+  'web/src/lib/site-header.css',
 ];
 // Independent tiny generated fixture, not output assembled by the guard.
-const LEAF_OUTPUT_FIXTURE = '// GENERATED from public/styles.css, public/theme-tokens.css, public/theme.css — do not hand-edit.\n' +
+const LEAF_OUTPUT_FIXTURE = '// GENERATED from public/styles.css, public/theme-tokens.css, public/theme.css, web/src/lib/site-header.css — do not hand-edit.\n' +
   '// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-drift.test.ts).\n' +
-  'export const LEAF_CRITICAL_CSS: string =\n  "body {}\\n:root {}\\nhtml {}".split("~").join(".base-theme");\n' +
-  'export const LEAF_CRITICAL_CSS_SHA256: string = "t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=";\n';
+  'export const LEAF_CRITICAL_CSS: string =\n  "body {}\\n:root {}\\nhtml {}\\nheader {}".split("~").join(".base-theme");\n' +
+  'export const LEAF_CRITICAL_CSS_SHA256: string = "y7hxp1IHgVDU09O8x3ZLpw4fS1A2jUc42J/ECDHmhjU=";\n';
 
 async function leafScopeFixture(t, generated = false) {
   const dir = await scratch(t);
-  for (const subdir of ['src', 'ci', 'public']) await fs.mkdir(path.join(dir, subdir));
+  for (const subdir of ['src', 'ci', 'public', 'web/src/lib']) await fs.mkdir(path.join(dir, subdir), { recursive: true });
   await fs.copyFile(path.join(REPO_ROOT, LEAF_SCOPE_INPUTS[0]), path.join(dir, LEAF_SCOPE_INPUTS[0]));
-  for (const [index, css] of ['body {}', ':root {}', 'html {}'].entries()) {
+  for (const [index, css] of ['body {}', ':root {}', 'html {}', 'header {}'].entries()) {
     await fs.writeFile(path.join(dir, LEAF_SCOPE_INPUTS[index + 1]), css);
   }
   await fs.writeFile(path.join(dir, 'entry.ts'), 'import { LEAF_CRITICAL_CSS } from "./src/leaf-critical-css";\n');
@@ -475,12 +476,12 @@ for (const generated of [false, true]) {
 
 test('generated CSS provenance accepts the collision fallback and rejects a packed forgery', async t => {
   const dir = await leafScopeFixture(t);
-  const css = 'body ~ p {}\n:root {}\nhtml {}';
+  const css = 'body ~ p {}\n:root {}\nhtml {}\nheader {}';
   await fs.writeFile(path.join(dir, 'public/styles.css'), 'body ~ p {}');
   const hash = createHash('sha256').update(css).digest('base64');
   const literal = LEAF_OUTPUT_FIXTURE
-    .replace('"body {}\\n:root {}\\nhtml {}".split("~").join(".base-theme")', JSON.stringify(css))
-    .replace('t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=', hash);
+    .replace('"body {}\\n:root {}\\nhtml {}\\nheader {}".split("~").join(".base-theme")', JSON.stringify(css))
+    .replace('y7hxp1IHgVDU09O8x3ZLpw4fS1A2jUc42J/ECDHmhjU=', hash);
   await fs.writeFile(path.join(dir, LEAF_OUTPUT), literal);
   assert.deepEqual(findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), []);
   await fs.writeFile(path.join(dir, LEAF_OUTPUT), literal.replace(JSON.stringify(css), `${JSON.stringify(css)}.split("~").join(".base-theme")`));
@@ -500,11 +501,11 @@ test('generated CSS provenance does not exempt unrelated generated-looking runti
 });
 
 for (const [name, mutate] of [
-  ['stale source list', text => text.replace('public/theme.css —', 'public/old-theme.css —')],
+  ['stale source list', text => text.replace('web/src/lib/site-header.css —', 'web/src/lib/old-header.css —')],
   ['malformed header', text => text.replace('// GENERATED', '// malformed')],
   ['wrong generator provenance', text => text.replace('node ci/build-leaf-css.mjs', 'node ci/other.mjs')],
   ['stale CSS bytes', text => text.replace('body {}', 'body {color:red}')],
-  ['malformed hash', text => text.replace('t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=', 'stale')],
+  ['malformed hash', text => text.replace('y7hxp1IHgVDU09O8x3ZLpw4fS1A2jUc42J/ECDHmhjU=', 'stale')],
   ['extra runtime import', text => `${text}import "./uncovered";\n`],
 ]) {
   test(`generated CSS rejects ${name} rather than granting an exemption`, async t => {
@@ -546,12 +547,24 @@ test('generated CSS rejects stale output after a covered input changes', async t
   assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
 });
 
+test('generated CSS rejects stale output when the header source changes', async t => {
+  const dir = await leafScopeFixture(t, true);
+  await fs.appendFile(path.join(dir, 'web/src/lib/site-header.css'), '\n.changed {}');
+  assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
+});
+
+test('generated CSS rejects a closing style tag in the header source', async t => {
+  const dir = await leafScopeFixture(t);
+  await fs.appendFile(path.join(dir, 'web/src/lib/site-header.css'), '</style>');
+  assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /closing style tag/);
+});
+
 test('generated CSS accepts valid replacement-character bytes but rejects identically decoded malformed UTF-8', async t => {
   const dir = await leafScopeFixture(t, true);
   await fs.writeFile(path.join(dir, 'public', 'styles.css'), 'body � {}');
   const valid = Buffer.from(LEAF_OUTPUT_FIXTURE
     .replace('body {}', 'body � {}')
-    .replace('t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=', 'eDPS7mHegXY3W7fmCCWLYeSQzHINIE/jG1bBbpqMTZM='), 'utf8');
+    .replace('y7hxp1IHgVDU09O8x3ZLpw4fS1A2jUc42J/ECDHmhjU=', 'CR2QA9vfoyr0PMHNUv89EuVvFqtPTu7BUB20J6wVYb0='), 'utf8');
   await fs.writeFile(path.join(dir, LEAF_OUTPUT), valid);
   assert.deepEqual(findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), []);
 
