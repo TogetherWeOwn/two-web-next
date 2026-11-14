@@ -276,7 +276,11 @@ try {
       fetch(`${origin}/llms.txt`, init),
     ]);
     assert.equal(fallback.status, direct.status, "Hono fallback status is unchanged");
-    assert.equal(await fallback.text(), await direct.text(), "Hono fallback body is unchanged");
+    assert.equal(
+      (await fallback.text()).replaceAll(origin, "ORIGIN"),
+      (await direct.text()).replaceAll(hono.origin, "ORIGIN"),
+      "Hono fallback body is unchanged apart from its configured origin",
+    );
     assert.equal(
       fallback.headers.get("content-security-policy"),
       direct.headers.get("content-security-policy"),
