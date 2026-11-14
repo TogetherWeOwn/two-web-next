@@ -64,6 +64,22 @@ describe("Kit Tailwind scanner projection core", () => {
     expect(() => projectSvelte("<div><style>broken")).toThrow();
   });
 
+  it("masks only compiler style ranges after non-BMP text and preserves line endings", () => {
+    const input =
+      '<div>🎮</div>\r\n<style>\r\n.tag { color: var(--tag-color) }\r\n</style>\r\n<p class="flex">after</p>';
+    const ranges = styleRanges(input);
+    expect(ranges).toHaveLength(1);
+    const start = ranges[0]?.[0] ?? -1;
+    const end = ranges[0]?.[1] ?? -1;
+    const projected = projectSvelte(input);
+    expect(input.slice(start, end).startsWith("<style>")).toBe(true);
+    expect(input.slice(start, end).endsWith("</style>")).toBe(true);
+    expect(projected.slice(0, start)).toBe(input.slice(0, start));
+    expect(projected.slice(start, end)).toBe(input.slice(start, end).replace(/[^\r\n]/g, " "));
+    expect(projected.slice(end).startsWith(input.slice(end))).toBe(true);
+    expect(() => assertProjection(input, projected)).not.toThrow();
+  });
+
   it("preserves real utilities without emitting style-only candidates", () => {
     expect(scan(projectSvelte(source))).toEqual(expect.arrayContaining(["outline", "flex"]));
     const negative = scan(
