@@ -31,10 +31,10 @@ const classUses = (source: string, limits = defaults, allowMetadataStyle = false
   const add = (text: string) => {
     for (const token of text.split(/\s+/)) if (token) tokens.add(token);
   };
-  const walk = (value: unknown, depth: number, html = true, htmlAttribute = false): void => {
+  const walk = (value: unknown, depth: number, nativeAttribute = false): void => {
     if (depth > limits.depth) throw new Error("AST depth limit");
     if (Array.isArray(value)) {
-      for (const child of value) walk(child, depth + 1, html, htmlAttribute);
+      for (const child of value) walk(child, depth + 1, nativeAttribute);
       return;
     }
     if (!value || typeof value !== "object") return;
@@ -43,7 +43,7 @@ const classUses = (source: string, limits = defaults, allowMetadataStyle = false
     if (
       node.type === "Attribute" &&
       (node.name === "class" ||
-        (htmlAttribute && typeof node.name === "string" && node.name.toLowerCase() === "class"))
+        (nativeAttribute && typeof node.name === "string" && node.name.toLowerCase() === "class"))
     ) {
       const parts = Array.isArray(node.value) ? node.value : [node.value];
       if (parts.every((part) => (part as Node)?.type === "Text")) {
@@ -65,17 +65,9 @@ const classUses = (source: string, limits = defaults, allowMetadataStyle = false
         unknown.push("raw HTML");
       }
     }
-    const regular = node.type === "RegularElement";
-    const foreignRoot = regular && (node.name === "svg" || node.name === "math");
-    const elementHtml = html && !foreignRoot;
-    const childrenHtml = elementHtml || (regular && node.name === "foreignObject");
+    const native = node.type === "RegularElement" || node.type === "SvelteElement";
     for (const [key, child] of Object.entries(node)) {
-      walk(
-        child,
-        depth + 1,
-        key === "attributes" ? elementHtml : childrenHtml,
-        regular && key === "attributes" && elementHtml,
-      );
+      walk(child, depth + 1, native && key === "attributes");
     }
   };
   walk(parse(source, { modern: true }).fragment, 0);
@@ -142,9 +134,23 @@ describe("Kit utility source boundary", () => {
     ]);
     expect(localViolations('<p CLASS="flex">x</p>')).toContain("flex");
     expect(localViolations("<p ClAsS={classes}>x</p>")).toContain("dynamic class");
-    expect([...classUses('<Widget CLASS="hidden" /><svg><g CLASS="flex" /></svg>').tokens]).toEqual(
-      [],
-    );
+    expect([...classUses('<Widget CLASS="hidden" />').tokens]).toEqual([]);
+    for (const markup of [
+      '<svg><g CLASS="flex" /></svg>',
+      '<math><mi ClAsS="flex">x</mi></math>',
+      '<svelte:element this={"p"} CLASS="flex" />',
+      '<svelte:element this={tag} ClAsS="flex" />',
+    ]) {
+      expect(localViolations(markup), markup).toContain("flex");
+    }
+    for (const markup of [
+      "<svg><g CLASS={classes} /></svg>",
+      "<math><mi ClAsS={classes}>x</mi></math>",
+      '<svelte:element this={"p"} CLASS={classes} />',
+      "<svelte:element this={tag} ClAsS={classes} />",
+    ]) {
+      expect(localViolations(markup), markup).toContain("dynamic class");
+    }
     expect([
       ...classUses('<svg><foreignObject><p CLASS="hidden" /></foreignObject></svg>').tokens,
     ]).toEqual(["hidden"]);
