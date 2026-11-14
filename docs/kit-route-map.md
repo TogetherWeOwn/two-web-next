@@ -62,6 +62,13 @@ is only a completeness signal: it does not prove that a hook implements every
 mapped gate or that a shared endpoint implements each method. Migration parity
 and matcher precedence require separate behavioral tests.
 
+The `/e/:file{.+\\.md}` and `/events/:file{.+\\.ics}` targets remain
+unresolved. Terminal matched-rest routes rank below the required `[key]` routes,
+so they would misroute ordinary single-segment suffix requests. A future route
+set must prove precedence and preserve single- and multi-segment behavior, auth,
+responses and URL semantics before either affected slice can be completed. The
+snapshot test does not enforce this prerequisite or validate the selected design.
+
 ## Ownership overlaps
 
 Consult `src/route-ownership.ts` for the current method-aware manifest and
