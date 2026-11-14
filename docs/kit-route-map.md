@@ -2,8 +2,10 @@
 
 Baseline: `origin/main` at `8fd5a826f999214f435fdd8abc87484b25666f4d`.
 The existing mounted-router inventory fixture has 116 distinct method/path entries;
-`test/route-inventory.test.ts` checks it against the mounted app in CI. That check
-has not yet run on this baseline. The earlier shared-control source audit was pinned
+`test/route-inventory.test.ts` checks it against the mounted app in CI. The
+snapshot test also compares its method, path and auth labels with mounted
+registrations; it does not validate proposed targets or migration behavior.
+The earlier shared-control source audit was pinned
 to `0b867c1842c6b516846d3fc28242d9c29ae0c7b9`; refresh its evidence for this
 baseline. The subsequent public API unknown-path JSON fallback is a global error
 handler, not a mounted registration, and must also be covered at cutover. The
@@ -16,9 +18,10 @@ classifications. API rows use the closed API slice and family allocation; page
 cutovers and cross-family controls instead identify their responsible source and
 owner without inventing a dispatch family. Middleware registrations are separate from endpoints. The RSVP
 `ALL` registration and explicit admin 405 handlers are method fallbacks, not
-middleware. This snapshot does not yet have a mapping guard. A follow-up must
-compare it with the mounted router, reject stale or missing rows, and check target
-files for attempted completion. Completed page sources also need their server-load
+middleware. The snapshot test checks registration drift and auth labels, but does
+not validate classifications or completed targets. A follow-up must enforce those
+mapping and completion rules, including target files for attempted completion.
+Completed page sources also need their server-load
 files; `/events` is an HTML-rendering endpoint rather than a Kit page. No slice
 is certified complete by this snapshot, even if its target files exist.
 Target paths for unfinished slices are proposals, not promises that a route
