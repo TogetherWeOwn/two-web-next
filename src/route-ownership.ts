@@ -850,6 +850,21 @@ export async function dispatchHookRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
 ): Promise<Response> {
+  const response = await dispatchOwnedRequest(event, deps);
+  // Match Kit's post-hook ETag check before it can discard response headers.
+  const etag = response.headers.get("etag");
+  let validator = event.request.headers.get("if-none-match");
+  if (validator?.startsWith('W/"')) validator = validator.slice(2);
+  if (response.status === 200 && etag !== null && validator === etag) {
+    return new Response(null, { status: 304, headers: response.headers });
+  }
+  return response;
+}
+
+async function dispatchOwnedRequest(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+): Promise<Response> {
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }

@@ -739,6 +739,37 @@ function cliJobs(runId) {
 
 const cliBase = { GITHUB_REPOSITORY: "o/r", GITHUB_TOKEN: "t", INPUT_SHA: "" };
 
+test("resolver CLI disables only automatic promotion when the switch is true", () => {
+  for (const event of ["workflow_run", "schedule"]) {
+    const result = spawnResolverCli(
+      {
+        ...cliBase,
+        GITHUB_EVENT_NAME: event,
+        PRODUCTION_AUTO_PROMOTE_DISABLED: "true",
+        INPUT_SHA: A,
+      },
+      [],
+    );
+    assert.equal(result.status, 0, event);
+    assert.equal(result.written, "sha=\n", event);
+    assert.match(result.stdout, /Automatic production promotion is disabled/);
+  }
+});
+
+test("resolver CLI allows manual dispatch with the automatic switch enabled", () => {
+  const result = spawnResolverCli(
+    {
+      ...cliBase,
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      PRODUCTION_AUTO_PROMOTE_DISABLED: "true",
+      INPUT_SHA: A,
+    },
+    [],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.written, `sha=${A}\n`);
+});
+
 test("resolver CLI promotes a soaked green on automatic triggers", () => {
   const oldAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const result = spawnResolverCli({ ...cliBase, GITHUB_EVENT_NAME: "schedule" }, [
