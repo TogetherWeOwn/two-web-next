@@ -24,8 +24,7 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
   });
   let browser;
   try {
-    const url = server.url;
-    assert.ok((await (await fetch(`${url}/style.css`)).text()).slice(styles.length).trim());
+    assert.ok((await (await fetch(`${server.url}/style.css`)).text()).slice(styles.length).trim());
     browser = await chromium.launch();
     for (const viewport of [
       { width: 390, height: 844 },
@@ -41,7 +40,7 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
             await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
             await page.clock.pauseAt(new Date("2026-01-01T00:00:00Z"));
           }
-          await page.goto(url);
+          await page.goto(server.url);
           if (javaScriptEnabled) await page.waitForSelector('html[data-hydrated="true"]');
           const loading = page.getByRole("button", { name: "Saving…" });
           assert.equal(await loading.locator(".spinner").count(), 0);
@@ -50,6 +49,7 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
             assert.equal(await loading.locator(".spinner").count(), 0);
             await page.clock.fastForward(1);
             assert.equal(await loading.locator(".spinner").count(), 1);
+            await page.clock.resume();
           }
           async function expectFocused(locator, visible = false) {
             assert.equal(await locator.evaluate((el) => el === document.activeElement), true);
@@ -78,7 +78,7 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
             await action.focus();
             await page.keyboard.press("Enter");
             await page.keyboard.press("Space");
-            assert.equal(page.url(), `${url}/`);
+            assert.equal(page.url(), `${server.url}/`);
           }
           assert.equal(await page.getByTestId("activations").textContent(), "0");
           assert.equal(await page.getByTestId("submissions").textContent(), "0");
@@ -89,7 +89,7 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
             if (name === "Opening…") await expectFocused(link);
             await page.keyboard.press("Enter");
             await link.click({ force: true });
-            assert.equal(page.url(), `${url}/`);
+            assert.equal(page.url(), `${server.url}/`);
           }
           const saved = page.locator("button.saved");
           await page.mouse.move(0, 0);
@@ -121,7 +121,7 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
             await page.getByRole("button", { name: "Save event" }).click();
             await page.waitForURL((destination) => destination.pathname === "/submitted");
           }
-          await page.goto(url);
+          await page.goto(server.url);
           await page.getByRole("link", { name: "Details for Raid Night" }).click();
           await page.waitForURL("**/e/raid");
           assert.deepEqual(errors, []);
