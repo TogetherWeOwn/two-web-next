@@ -72,6 +72,29 @@ import SiteFooter from '#lib/SiteFooter.svelte';
   );
 });
 
+test("Kit fixture opts into compiled JavaScript hydration", async () => {
+  const fixture = `<script>let count = $state(0);</script>
+<button onclick={() => count++}>{count}</button>`;
+  await withKitOfflineBrowser({ page: fixture }, async ({ page }) => {
+    await page.locator("button").click();
+    assert.equal(await page.locator("button").textContent(), "0");
+  });
+  await withKitOfflineBrowser({ page: fixture, javaScriptEnabled: true }, async ({ page }) => {
+    await page.waitForLoadState("networkidle");
+    await page.locator("button").click();
+    await page.waitForFunction(() => document.querySelector("button")?.textContent === "1");
+  });
+});
+
+test("Kit fixture denies public JavaScript even with hydration enabled", async () => {
+  await assert.rejects(
+    withKitOfflineBrowser({ page: "<p>Fixture</p>", javaScriptEnabled: true }, async ({ page }) => {
+      await page.evaluate(() => fetch("/islands/events-calendar.js").catch(() => null));
+    }),
+    /events-calendar\.js/,
+  );
+});
+
 test("Kit fixture renders query data and same-origin static assets", async () => {
   await withKitOfflineBrowser(
     {
@@ -112,8 +135,17 @@ test("asset reads reject escapes, symlinks, and unsupported files", async () => 
     await writeFile(join(root, "safe.js"), "unsupported");
     await writeFile(join(dir, "outside.css"), "outside");
     await symlink(join(dir, "outside.css"), join(root, "link.css"));
+    await symlink(join(dir, "outside.css"), join(root, "link.js"));
+    await writeFile(join(dir, "outside.js"), "outside");
     await symlink(dir, join(root, "linked-dir"));
     assert.equal((await readFixtureAsset(root, "/safe.css")).body.toString(), "safe");
+    assert.equal(
+      (await readFixtureAsset(root, "/safe.js", { allowJavaScript: true })).contentType,
+      "text/javascript",
+    );
+    for (const path of ["/link.js", "/linked-dir/outside.js", "/%2e%2e/outside.js"]) {
+      assert.equal(await readFixtureAsset(root, path, { allowJavaScript: true }), null, path);
+    }
     for (const path of [
       "/../outside.css",
       "/%2e%2e/outside.css",

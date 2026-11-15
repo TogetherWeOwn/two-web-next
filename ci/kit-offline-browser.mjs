@@ -19,14 +19,16 @@ const assetTypes = new Map([
 ]);
 
 // Resolve both the requested file and its root, so symlinks cannot escape.
-export async function readFixtureAsset(directory, pathname) {
+export async function readFixtureAsset(directory, pathname, { allowJavaScript = false } = {}) {
   let decoded;
   try {
     decoded = decodeURIComponent(pathname);
   } catch {
     return null;
   }
-  const type = assetTypes.get(extname(decoded).toLowerCase());
+  const extension = extname(decoded).toLowerCase();
+  const type =
+    allowJavaScript && extension === ".js" ? "text/javascript" : assetTypes.get(extension);
   if (!type || !decoded.startsWith("/") || decoded.includes("\\") || decoded.includes("\0"))
     return null;
   if (decoded.split("/").some((part) => part === "." || part === "..")) return null;
@@ -43,7 +45,10 @@ export async function readFixtureAsset(directory, pathname) {
 }
 
 // Build and render the supplied page without allowing browser network access.
-export async function withKitOfflineBrowser({ source, page: fixture, search = "" }, callback) {
+export async function withKitOfflineBrowser(
+  { source, page: fixture, search = "", javaScriptEnabled = false },
+  callback,
+) {
   if (typeof search !== "string" || (search && !search.startsWith("?")) || search.includes("#")) {
     throw new Error("Fixture search must be a query string");
   }
@@ -91,17 +96,18 @@ export async function withKitOfflineBrowser({ source, page: fixture, search = ""
     const html = await response.text();
     const browser = await chromium.launch({ headless: true });
     try {
-      const context = await browser.newContext({ javaScriptEnabled: false });
+      const context = await browser.newContext({ javaScriptEnabled });
       const unexpected = [];
       await context.route("**/*", async (route) => {
         const url = new URL(route.request().url());
         if (url.origin === origin && route.request().method() === "GET") {
           if (url.href === fixtureUrl)
             return route.fulfill({ contentType: "text/html", body: html });
-          const directory = url.pathname.startsWith("/_app/")
-            ? join(output, "client")
-            : join(root, "public");
-          const asset = await readFixtureAsset(directory, url.pathname);
+          const isAppAsset = url.pathname.startsWith("/_app/");
+          const directory = isAppAsset ? join(output, "client") : join(root, "public");
+          const asset = await readFixtureAsset(directory, url.pathname, {
+            allowJavaScript: isAppAsset && javaScriptEnabled,
+          });
           if (asset) return route.fulfill(asset);
         }
         unexpected.push(route.request().url());
