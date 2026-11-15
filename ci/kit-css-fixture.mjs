@@ -136,6 +136,10 @@ export function routeCssFiles(manifest, routeEvidence, routeId, { dynamic = fals
 
 /** Builds the evidence object handed to callers; pure over its inputs. */
 export function createEvidence({ root, output, client, server, manifest, routeEvidence }) {
+  const matches = (text, needle) =>
+    needle instanceof RegExp
+      ? new RegExp(needle.source, needle.flags).test(text)
+      : text.includes(needle);
   const textOf = new Map(client.map((f) => [f.file, f.text]));
   const routeCss = (routeId, options) => routeCssFiles(manifest, routeEvidence, routeId, options);
   return {
@@ -146,10 +150,7 @@ export function createEvidence({ root, output, client, server, manifest, routeEv
     clientCss: client,
     serverCss: server,
     /** Client CSS file paths whose text includes `needle` (string or RegExp). */
-    cssContaining: (needle) =>
-      client
-        .filter((f) => (needle instanceof RegExp ? needle.test(f.text) : f.text.includes(needle)))
-        .map((f) => f.file),
+    cssContaining: (needle) => client.filter((f) => matches(f.text, needle)).map((f) => f.file),
     cssText: (file) => {
       if (!textOf.has(file)) throw new Error(`No compiled client CSS: ${file}`);
       return textOf.get(file);
@@ -159,7 +160,7 @@ export function createEvidence({ root, output, client, server, manifest, routeEv
     routeCssContains: (routeId, needle, options) =>
       routeCss(routeId, options).some((file) => {
         const text = textOf.get(file) ?? "";
-        return needle instanceof RegExp ? needle.test(text) : text.includes(needle);
+        return matches(text, needle);
       }),
   };
 }

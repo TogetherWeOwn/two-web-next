@@ -64,6 +64,11 @@ test("evidence queries match strings and patterns without crossing routes", () =
   });
   assert.deepEqual(e.cssContaining("--m:"), ["a0.css", "other.css"]);
   assert.deepEqual(e.cssContaining(/--m:2/), ["other.css"]);
+  const global = /--m:/g;
+  assert.deepEqual(e.cssContaining(global), ["a0.css", "other.css"]);
+  assert.equal(e.routeCssContains("/x", global), true);
+  assert.equal(e.routeCssContains("/x", global), true);
+  assert.equal(global.lastIndex, 0);
   assert.equal(e.routeCssContains("/x", "--m:1"), true);
   assert.equal(e.routeCssContains("/x", "--m:2"), false);
   assert.throws(() => e.cssText("nope.css"), /No compiled client CSS/);
