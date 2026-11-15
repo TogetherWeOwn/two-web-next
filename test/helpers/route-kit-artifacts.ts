@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 export function assertTargetArtifacts(root: string, target: unknown) {
   if (
     typeof target !== "string" ||
-    !/^web\/src\/(?:hooks\.server\.ts|routes\/(?:[^\r\n]+\/)?\+(?:page\.svelte|server\.ts))$/.test(
+    !/^web\/src\/(?:hooks\.server\.ts|routes\/(?:[^\r\n]+\/)?\+(?:page\.svelte|server\.ts))(?![\s\S])/.test(
       target,
     ) ||
     target.split("/").some((part) => part === "." || part === ".." || part === "")
@@ -29,7 +29,8 @@ export function assertTargetArtifacts(root: string, target: unknown) {
   if (target.endsWith("/+page.svelte")) {
     requireFile(`${dirname(target)}/+page.server.ts`);
   }
-  if (/\[(?:\.\.\.)?[\w-]+=[\w-]+\]/.test(target)) {
+  const routeSegments = target.split("/").filter((segment) => !/^\(.*\)$/.test(segment));
+  if (routeSegments.some((segment) => /\[(?:\.\.\.)?[\w-]+=[\w-]+\]/.test(segment))) {
     // Kit 3 resolves one params module; registry exports are not inspected here.
     const entries = [
       "web/src/params",

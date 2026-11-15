@@ -125,7 +125,16 @@ describe("completed target artifact prerequisites", () => {
       add(endpoint);
       expect(() => assertTargetArtifacts(root, endpoint)).not.toThrow();
       rmSync(join(root, matcher));
+      const newlineTarget = "web/src/routes/+server.ts\n";
+      add(newlineTarget);
+      expect(() => assertTargetArtifacts(root, newlineTarget)).toThrow(
+        "Unresolved or invalid target",
+      );
+      const grouped = "web/src/routes/(legacy-[id=number])/about/+server.ts";
+      add(grouped);
+      expect(() => assertTargetArtifacts(root, grouped)).not.toThrow();
       const namedTargets = [
+        "web/src/routes/(legacy-[ignored=number])/[id=number]/+server.ts",
         "web/src/routes/[id=event-key]/+server.ts",
         "web/src/routes/[id=123]/+server.ts",
         "web/src/routes/[[id=event-key]]/+server.ts",
