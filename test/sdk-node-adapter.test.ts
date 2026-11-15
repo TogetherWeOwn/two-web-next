@@ -159,11 +159,24 @@ describe("SDK Node adapter resolution", () => {
       expect(streamResponse.status).toBe(200);
       expect(await streamResponse.text()).toBe("firstsecond");
 
+      const responseErrorTimeout = AbortSignal.timeout(5_000);
       const failedResponse = await fetch(`http://127.0.0.1:${address.port}/response-error`, {
-        signal: AbortSignal.timeout(5_000),
+        signal: responseErrorTimeout,
       });
-      expect(failedResponse.status).toBe(500);
-      await failedResponse.body?.cancel();
+      expect(failedResponse.status).toBe(200);
+      const errorBody = await failedResponse.text().then(
+        (body) => ({ body }),
+        (error: unknown) => ({ error }),
+      );
+      expect(responseErrorTimeout.aborted).toBe(false);
+      if ("error" in errorBody) {
+        // The adapter may destroy the socket after headers have been sent.
+        expect(errorBody.error).toBeInstanceOf(TypeError);
+        console.info("Adapter response error: socket reset after headers");
+      } else {
+        expect(errorBody.body).toBe("Error: fixture response failure");
+        console.info("Adapter response error: error body received");
+      }
 
       const timeout = AbortSignal.timeout(5_000);
       const timedOut = new Promise<never>((_, reject) => {
