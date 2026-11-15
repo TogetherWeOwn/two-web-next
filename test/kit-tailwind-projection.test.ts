@@ -108,6 +108,28 @@ describe("Kit Tailwind scanner projection", () => {
     }
   });
 
+  it("maps exclusions to sources when the stylesheet is in another directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "kit-projection-"));
+    try {
+      const sourceDir = join(root, "src");
+      const outputDir = join(root, ".svelte-kit", "tailwind-projection");
+      const cssPath = join(root, "styles", "app.css");
+      const mirror = join(outputDir, "excluded", "Card.svelte");
+      const glob = '@source "../.svelte-kit/tailwind-projection/**/*.svelte";';
+      mkdirSync(join(sourceDir, "excluded"), { recursive: true });
+      mkdirSync(join(root, "styles"));
+      writeFileSync(join(sourceDir, "excluded", "Card.svelte"), source);
+      writeFileSync(cssPath, glob);
+      regenerateProjection({ sourceDir, outputDir, cssPath });
+      expect(existsSync(mirror)).toBe(true);
+      writeFileSync(cssPath, `${glob}\n@source not "../.svelte-kit/tailwind-projection/excluded";`);
+      regenerateProjection({ sourceDir, outputDir, cssPath });
+      expect(existsSync(mirror)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("refuses overlapping paths and symlinks without modifying source or link targets", () => {
     const root = mkdtempSync(join(tmpdir(), "kit-projection-"));
     try {

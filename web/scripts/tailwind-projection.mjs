@@ -34,8 +34,8 @@ const MIRROR_SOURCE = "../.svelte-kit/tailwind-projection/";
 export const SOURCE_GLOB = `@source "${MIRROR_SOURCE}**/*.svelte";`;
 export const MIRROR_DIRNAME = "tailwind-projection";
 
-/** Exclusions from app.css, resolved against its directory. Fails closed. */
-export function readSourceRules(css, cssDir) {
+/** Exclusions from app.css, mapped from the mirror to the source directory. Fails closed. */
+export function readSourceRules(css, sourceDir) {
   const tokens = /\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|@source\b/g;
   const excluded = [];
   let globCount = 0;
@@ -53,8 +53,8 @@ export function readSourceRules(css, cssDir) {
       throw new Error(`tailwind-projection: exclusion outside mirror ${arg}`);
     }
     const suffix = literal[1].slice(MIRROR_SOURCE.length);
-    const original = resolve(cssDir, suffix);
-    if (!original.startsWith(resolve(cssDir) + sep)) {
+    const original = resolve(sourceDir, suffix);
+    if (!original.startsWith(resolve(sourceDir) + sep)) {
       throw new Error(`tailwind-projection: invalid exclusion ${arg}`);
     }
     excluded.push(original);
@@ -129,7 +129,7 @@ export function regenerateProjection({
     if (existsSync(mirrorDir) && lstatSync(mirrorDir).isSymbolicLink()) {
       throw new Error("tailwind-projection: output is a symbolic link");
     }
-    const excluded = readSourceRules(readFileSync(cssPath, "utf8"), dirname(cssPath));
+    const excluded = readSourceRules(readFileSync(cssPath, "utf8"), srcDir);
     const planned = new Map();
     for (const file of listSvelte(srcDir)) {
       if (isExcluded(file, excluded)) continue;
