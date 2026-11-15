@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
+
+/** Avoid installing a screenshot mask overlay when no targets exist. */
+export async function nonemptyMask(locator: Locator) {
+  return (await locator.count()) > 0 ? [locator] : undefined;
+}
 
 /** Load this exact face before registration; never rewrite styles or tokens. */
 export async function loadVisualFont(page: Page, options: { url: string; weight?: string }) {

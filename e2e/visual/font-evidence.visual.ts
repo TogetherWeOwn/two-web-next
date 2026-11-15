@@ -4,6 +4,7 @@ import {
   captureWithGeometry,
   captureWithoutFontWait,
   loadVisualFont,
+  nonemptyMask,
   readCaptureGeometry,
   renderedPlatformFonts,
 } from "./font-evidence";
@@ -108,7 +109,12 @@ for (const size of [
     });
     test("masks the first capture without mutating its buffer", async ({ page }) => {
       const nodes = { probe: "#probe" };
-      const options = { mask: [page.locator("#probe")], maskColor: "#123456" };
+      expect(await nonemptyMask(page.locator("#absent"))).toBeUndefined();
+      const probe = page.locator("#probe");
+      await probe.evaluate((el) => ((el as HTMLElement).style.visibility = "hidden"));
+      expect(await nonemptyMask(probe)).toEqual([probe]);
+      await probe.evaluate((el) => (el as HTMLElement).style.removeProperty("visibility"));
+      const options = { mask: await nonemptyMask(probe), maskColor: "#123456" };
       const first = await captureWithGeometry(page, nodes, options);
       const saved = Buffer.from(first.png);
       await page.locator("#probe").evaluate((el) => {

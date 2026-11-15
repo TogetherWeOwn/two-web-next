@@ -6,6 +6,7 @@ import {
   captureWithGeometry,
   captureWithoutFontWait,
   loadVisualFont,
+  nonemptyMask,
   readCaptureGeometry,
   renderedPlatformFonts,
 } from "./font-evidence";
@@ -81,9 +82,9 @@ for (const [viewport, size] of VIEWPORTS) {
         ).toBe(true);
         const snapshot = `${name}-${viewport}.png`;
         expect(existsSync(testInfo.snapshotPath(snapshot))).toBe(true);
-        const nodes = { heading: ".content-theme h1" };
+        const nodes = { heading: ".content-theme h1", main: "main", footer: "footer" };
         const options = {
-          mask: [page.locator("time")],
+          mask: await nonemptyMask(page.locator("time")),
           animations: "disabled" as const,
           caret: "hide" as const,
           scale: "css" as const,
@@ -91,7 +92,11 @@ for (const [viewport, size] of VIEWPORTS) {
         const first = await captureWithGeometry(page, nodes, options);
         await testInfo.attach("first-capture", { body: first.png, contentType: "image/png" });
         await testInfo.attach("first-geometry", {
-          body: JSON.stringify({ before: first.before, after: first.after, dimensions: first.dimensions }),
+          body: JSON.stringify({
+            before: first.before,
+            after: first.after,
+            dimensions: first.dimensions,
+          }),
           contentType: "application/json",
         });
         expect.soft(first.after).toEqual(first.before);
@@ -128,17 +133,25 @@ for (const [viewport, size] of VIEWPORTS) {
       expect((await page.goto("/about", { waitUntil: "domcontentloaded" }))?.status()).toBe(200);
       await request;
       const heading = ".content-theme h1";
-      await expect.poll(async () => {
-        const fonts = await renderedPlatformFonts(page, heading);
-        return fonts.length > 0 && fonts.every((font) =>
-          font.glyphCount > 0 && !/^MonaSansExtraLight/.test(font.postScriptName),
-        );
-      }).toBe(true);
+      await expect
+        .poll(async () => {
+          const fonts = await renderedPlatformFonts(page, heading);
+          return (
+            fonts.length > 0 &&
+            fonts.every(
+              (font) => font.glyphCount > 0 && !/^MonaSansExtraLight/.test(font.postScriptName),
+            )
+          );
+        })
+        .toBe(true);
       expect(await page.evaluate(() => document.fonts.status)).toBe("loading");
       const before = await readCaptureGeometry(page, { heading });
       const fonts = await renderedPlatformFonts(page, heading);
       const painted = await captureWithoutFontWait(page);
-      expect([painted.readUInt32BE(16), painted.readUInt32BE(20)]).toEqual([size.width, size.height]);
+      expect([painted.readUInt32BE(16), painted.readUInt32BE(20)]).toEqual([
+        size.width,
+        size.height,
+      ]);
       await testInfo.attach("cold-fallback", { body: painted, contentType: "image/png" });
       // Keep layout unchanged and prove the visible heading contributed pixels.
       await page.locator(heading).evaluate((el) => {
@@ -151,7 +164,12 @@ for (const [viewport, size] of VIEWPORTS) {
       });
       release();
       await page.evaluate(() => document.fonts.ready);
-      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
       expect(await renderedPlatformFonts(page, heading)).toEqual(fonts);
       expect(await readCaptureGeometry(page, { heading })).toEqual(before);
     } finally {
