@@ -1,8 +1,8 @@
 // Post-save regressions kept separate from the independent acceptance contract.
-import { mkdirSync, readFileSync, writeSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, BrowserContext, Page } from "playwright";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   FIXED_NOW,
   ORIGIN,
@@ -21,57 +21,25 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
   () => {
     let browser: Browser;
     const contexts: BrowserContext[] = [];
-    let caseName = "beforeAll";
-    const diagnosticStart = process.hrtime.bigint();
-    async function trace<T>(phase: string, operation: () => Promise<T>): Promise<T> {
-      function mark(state: string) {
-        if (process.env.PROFILE_COMPARISON_DIAGNOSTICS !== "true") return;
-        // Flush before awaiting even if Vitest never finishes the case.
-        writeSync(
-          2,
-          `[profile-save] ${JSON.stringify({
-            case: caseName,
-            phase,
-            state,
-            elapsedMs: Number((process.hrtime.bigint() - diagnosticStart) / 1_000_000n),
-          })}\n`,
-        );
-      }
-      mark("start");
-      try {
-        const value = await operation();
-        mark("complete");
-        return value;
-      } catch (error) {
-        mark("error");
-        throw error;
-      }
-    }
     beforeAll(async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(FIXED_NOW);
-      const { chromium } = await trace("playwright-import", () => import("playwright"));
-      browser = await trace("browser-launch", () => chromium.launch({ headless: true }));
-    });
-    beforeEach(({ task }) => {
-      caseName = task.name;
+      const { chromium } = await import("playwright");
+      browser = await chromium.launch({ headless: true });
     });
     afterEach(async () => {
-      await trace("contexts-close", () =>
-        Promise.all(contexts.splice(0).map((context) => context.close())),
-      );
+      await Promise.all(contexts.splice(0).map((context) => context.close()));
     });
     afterAll(async () => {
-      caseName = "afterAll";
-      await trace("browser-close", async () => browser?.close());
+      await browser?.close();
       vi.useRealTimers();
     });
 
     async function setBrowserTime(page: Page, instant: Date) {
-      // Keep Playwright's replay timestamp near browser wall time, not fixture time.
+      // Playwright replay needs a wall-clock timestamp while the fixture freezes Date.
       vi.setSystemTime(vi.getRealSystemTime());
       try {
-        await trace("clock-set", () => page.clock.setFixedTime(instant));
+        await page.clock.setFixedTime(instant);
       } finally {
         vi.setSystemTime(FIXED_NOW);
       }
@@ -141,16 +109,14 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
           body,
         });
       });
-      await trace("page-goto", () => page.goto(ORIGIN + fixture.path));
+      await page.goto(ORIGIN + fixture.path);
       await settle(page);
       expect(errors).toEqual([]);
       return { ...fixture, page, errors, writes, requests };
     }
     async function settle(page: Page) {
-      await trace("double-raf", () =>
-        page.evaluate(
-          "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
-        ),
+      await page.evaluate(
+        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
       );
     }
     async function edit(page: Page, zone: string) {
