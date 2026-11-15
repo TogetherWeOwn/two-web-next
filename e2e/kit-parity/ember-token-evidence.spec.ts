@@ -82,6 +82,23 @@ for (const target of targets) {
             const bounds = await header.boundingBox();
             expect(bounds).not.toBeNull();
             expect(Math.abs(bounds?.y ?? Infinity)).toBeLessThanOrEqual(1);
+            const surface = await header.evaluate((element) => {
+              const style = getComputedStyle(element);
+              const rect = element.getBoundingClientRect();
+              const topmost = document.elementFromPoint(rect.left + rect.width / 2, rect.top + 5);
+              return {
+                background: style.backgroundColor,
+                opacity: style.opacity,
+                coversContent: topmost !== null && element.contains(topmost),
+              };
+            });
+            const pageBackground = await page
+              .locator(".base-theme")
+              .evaluate((element) => getComputedStyle(element).backgroundColor);
+            expect(surface.background).toBe(pageBackground);
+            expect(surface.background).not.toBe("rgba(0, 0, 0, 0)");
+            expect(surface.opacity).toBe("1");
+            expect(surface.coversContent).toBe(true);
             await page.screenshot({
               path: testInfo.outputPath(`${name}-scrolled.png`),
               fullPage: false,
