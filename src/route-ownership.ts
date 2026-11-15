@@ -367,22 +367,23 @@ function decodeKitPath(path: string): string | null {
   }
 }
 
-function normalizePath(path: string): string | null {
-  const withoutData = path.endsWith(DATA_SUFFIX) ? path.slice(0, -DATA_SUFFIX.length) : path;
+function normalizePath(path: string, stripData = true): string | null {
+  const withoutData =
+    stripData && path.endsWith(DATA_SUFFIX) ? path.slice(0, -DATA_SUFFIX.length) : path;
   const decoded = decodeKitPath(withoutData);
   if (decoded === null) return null;
   // An encoded data suffix (%5F is "_") decodes into the suffix; strip again
   // so /events/past/%5F%5Fdata.json follows its page like the literal form.
-  const base = decoded.endsWith(DATA_SUFFIX) ? decoded.slice(0, -DATA_SUFFIX.length) : decoded;
-  let out = base;
-  while (out.length > 1 && out.endsWith("/")) out = out.slice(0, -1);
-  return out || "/";
+  const base =
+    stripData && decoded.endsWith(DATA_SUFFIX) ? decoded.slice(0, -DATA_SUFFIX.length) : decoded;
+  // Hono treats non-root trailing-slash variants as distinct paths.
+  if (base.length > 1 && base.endsWith("/")) return null;
+  return base || "/";
 }
 
 function isReserved(path: string): boolean {
   if (RESERVED_EXACT.has(path)) return true;
-  // The bare prefix counts too: trailing-slash normalization turns "/api/"
-  // into "/api", which must not escape the reservation.
+  // The bare prefix counts too: "/api" must not escape the reservation.
   return RESERVED_PREFIXES.some(
     (prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix),
   );
@@ -400,7 +401,14 @@ function matchPattern(pattern: string, path: string): boolean {
 function bestMatch(path: string, manifest: OwnedRoute[]): OwnedRoute | undefined {
   let best: OwnedRoute | undefined;
   let bestStatic = -1;
-  let bestExact = false;
+  // Exact matches use the maximum score below.
+  // Pattern scores count path segments, so they cannot equal it.
+  // This puts an exact match above every matching pattern,
+  // regardless of manifest order. The strict comparison keeps
+  // the first entry when two scores tie, including exact ties.
+  // A disabled winner still prevents a lower-scored route
+  // from taking ownership: enabledRouteFor checks it only
+  // after this selection completes.
   for (const entry of manifest) {
     const pattern = entry.path;
     const exact = !pattern.includes(":");
@@ -408,13 +416,6 @@ function bestMatch(path: string, manifest: OwnedRoute[]): OwnedRoute | undefined
     const statics = exact
       ? Number.MAX_SAFE_INTEGER
       : pattern.split("/").filter((p) => !p.startsWith(":")).length;
-    if (bestExact && !exact) continue;
-    if (exact && !bestExact) {
-      best = entry;
-      bestExact = true;
-      bestStatic = Number.MAX_SAFE_INTEGER;
-      continue;
-    }
     if (statics > bestStatic) {
       best = entry;
       bestStatic = statics;
@@ -423,8 +424,12 @@ function bestMatch(path: string, manifest: OwnedRoute[]): OwnedRoute | undefined
   return best;
 }
 
-function enabledRouteFor(decision: RouteDecision, manifest: OwnedRoute[]): OwnedRoute | undefined {
-  const normalized = normalizePath(decision.path);
+function enabledRouteFor(
+  decision: RouteDecision,
+  manifest: OwnedRoute[],
+  stripData = true,
+): OwnedRoute | undefined {
+  const normalized = normalizePath(decision.path, stripData);
   if (normalized === null) return undefined;
   if (isReserved(normalized)) return undefined;
   const upper = decision.method.toUpperCase();
@@ -443,8 +448,14 @@ export function resolveRouteOwner(
 
 // Hook entry point: pure function of method + path. Reads nothing else, so the
 // body is still unread and the URL (query included) is intact for the owner.
-export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST) {
-  return enabledRouteFor({ method: request.method, path: new URL(request.url).pathname }, manifest);
+export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST, url?: URL) {
+  // Kit has already stripped a literal data suffix from event.url. Do not
+  // strip again: an encoded suffix is not a Kit data request.
+  return enabledRouteFor(
+    { method: request.method, path: (url ?? new URL(request.url)).pathname },
+    manifest,
+    !url,
+  );
 }
 
 export function decideOwner(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST): RouteOwner {
@@ -688,7 +699,7 @@ function decodeTwinPath(path: string): string {
   }
 }
 
-export function isSameOriginAllowed(request: Request, appUrl: string): boolean {
+export function isSameOriginAllowed(request: Request, appUrl: string, url?: URL): boolean {
   const method = request.method.toUpperCase();
   let path: string;
   try {
@@ -697,7 +708,14 @@ export function isSameOriginAllowed(request: Request, appUrl: string): boolean {
     return false;
   }
   if (!UNSAFE_METHODS.some((m) => m === method)) return true;
-  if (SAME_ORIGIN_EXEMPTIONS.some(({ method: em, path: ep }) => em === method && ep === path)) {
+  // A normalized data URL must not grant an exemption absent from the actual
+  // request, or vice versa. The request origin remains authoritative below.
+  const eventPath = url ? decodeTwinPath(url.pathname) : path;
+  if (
+    SAME_ORIGIN_EXEMPTIONS.some(
+      ({ method: em, path: ep }) => em === method && ep === path && ep === eventPath,
+    )
+  ) {
     return true;
   }
   let expected: string | undefined;
@@ -851,6 +869,21 @@ export async function dispatchHookRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
 ): Promise<Response> {
+  const response = await dispatchOwnedRequest(event, deps);
+  // Match Kit's post-hook ETag check before it can discard response headers.
+  const etag = response.headers.get("etag");
+  let validator = event.request.headers.get("if-none-match");
+  if (validator?.startsWith('W/"')) validator = validator.slice(2);
+  if (response.status === 200 && etag !== null && validator === etag) {
+    return new Response(null, { status: 304, headers: response.headers });
+  }
+  return response;
+}
+
+async function dispatchOwnedRequest(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+): Promise<Response> {
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }
@@ -872,6 +905,7 @@ export async function dispatchHookRequest(
         KIT_ROUTE_STATIC: deps.kitRouteStatic,
       }) ??
       ROUTE_MANIFEST,
+    event.url,
   );
   if (!route) {
     return deps.honoFetch(event.request);
@@ -889,7 +923,7 @@ export async function dispatchHookRequest(
   // exact APP_URL Origin (or the Sec-Fetch-Site fallback when Origin is
   // absent), with only the documented machine exemptions. Refused before the
   // session bridge and before resolve, body unread, hardened like Hono.
-  if (!isSameOriginAllowed(event.request, deps.appUrl)) {
+  if (!isSameOriginAllowed(event.request, deps.appUrl, event.url)) {
     const refused = sameOriginRefusal(event, deps.appUrl, deps.featuredImageHosts);
     refused.headers.set("x-request-id", requestId);
     return refused;

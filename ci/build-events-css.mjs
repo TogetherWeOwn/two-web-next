@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Generate the events stylesheet bundle in its existing cascade order.
 // The generated module is preparation only; no route consumes it yet.
-import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,6 +31,17 @@ export function generate() {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const text = generate();
-  writeFileSync(join(repoRoot, OUT), text);
+  const output = join(repoRoot, OUT);
+  const temporary = `${output}.${randomUUID()}.tmp`;
+  let fd = openSync(temporary, "wx");
+  try {
+    writeFileSync(fd, text);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(temporary, output);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    rmSync(temporary, { force: true });
+  }
   console.log(`${OUT}: ${text.length} chars`);
 }

@@ -2,6 +2,7 @@ import worker from "../src/worker";
 import { discordFixtureResponse } from "./discord-stub";
 import type { JobsEnv } from "../src/env";
 import { STAGING_APP_URL } from "../src/qa";
+import { rewriteFixtureHtml } from "./rewrite-fixture-html";
 
 const localOrigin = "https://localhost:8787";
 const outbound: string[] = [];
@@ -81,15 +82,6 @@ export default {
     if (url.pathname !== "/events/past" && url.pathname !== "/events") return response;
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.includes("text/html")) return response;
-    const body = (await response.text()).replaceAll(STAGING_APP_URL, localOrigin);
-    const responseHeaders = new Headers(response.headers);
-    responseHeaders.delete("content-encoding");
-    responseHeaders.delete("content-length");
-    responseHeaders.delete("etag");
-    return new Response(body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders,
-    });
+    return rewriteFixtureHtml(response, STAGING_APP_URL, localOrigin);
   },
 };
