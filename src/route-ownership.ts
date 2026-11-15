@@ -401,7 +401,14 @@ function matchPattern(pattern: string, path: string): boolean {
 function bestMatch(path: string, manifest: OwnedRoute[]): OwnedRoute | undefined {
   let best: OwnedRoute | undefined;
   let bestStatic = -1;
-  let bestExact = false;
+  // Exact matches use the maximum score below.
+  // Pattern scores count path segments, so they cannot equal it.
+  // This puts an exact match above every matching pattern,
+  // regardless of manifest order. The strict comparison keeps
+  // the first entry when two scores tie, including exact ties.
+  // A disabled winner still prevents a lower-scored route
+  // from taking ownership: enabledRouteFor checks it only
+  // after this selection completes.
   for (const entry of manifest) {
     const pattern = entry.path;
     const exact = !pattern.includes(":");
@@ -409,13 +416,6 @@ function bestMatch(path: string, manifest: OwnedRoute[]): OwnedRoute | undefined
     const statics = exact
       ? Number.MAX_SAFE_INTEGER
       : pattern.split("/").filter((p) => !p.startsWith(":")).length;
-    if (bestExact && !exact) continue;
-    if (exact && !bestExact) {
-      best = entry;
-      bestExact = true;
-      bestStatic = Number.MAX_SAFE_INTEGER;
-      continue;
-    }
     if (statics > bestStatic) {
       best = entry;
       bestStatic = statics;

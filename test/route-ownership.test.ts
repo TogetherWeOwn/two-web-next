@@ -57,7 +57,21 @@ describe("route ownership", () => {
       { method: "GET", path: "/events/past", enabled: false },
     ];
     expect(resolveRouteOwner({ method: "GET", path: "/events/past" }, manifest)).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/events/past" }, [...manifest].reverse())).toBe(
+      "hono",
+    );
     expect(resolveRouteOwner({ method: "GET", path: "/events/spring-fete" }, manifest)).toBe("kit");
+  });
+
+  it("breaks duplicate exact matches by manifest order", () => {
+    const manifest = [
+      { method: "GET", path: "/events/past", enabled: false },
+      { method: "GET", path: "/events/past", enabled: true },
+    ];
+    expect(resolveRouteOwner({ method: "GET", path: "/events/past" }, manifest)).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/events/past" }, [...manifest].reverse())).toBe(
+      "kit",
+    );
   });
 
   it("prefers the more specific dynamic pattern", () => {
