@@ -415,9 +415,9 @@ for (const target of targets) {
       const response = await api(target).get("/join");
       expect(response.status()).toBe(200);
       expect(response.headers()["content-type"]).toContain("text/html");
-      // Renderer ownership is per target: Kit answers with the
-      // manifest-derived marker once enabled, Hono never carries one.
-      const expectedMarker = target.name === "kit" ? expectedKitMarker("/join") : null;
+      // The loopback fixture enables Kit for join even while the shipped
+      // manifest leaves it disabled; Hono must never carry the Kit marker.
+      const expectedMarker = target.name === "kit" ? "kit" : null;
       expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
       const body = await response.text();
       expect(scrubSecrets(body)).toEqual([]);
@@ -1295,7 +1295,9 @@ for (const target of targets) {
           await expect(
             page.getByText("A Discord gaming community · founded 1998 · English"),
           ).toBeVisible();
-          await expect(page.locator("#join-steps-heading")).toHaveText("What happens when you join");
+          await expect(page.locator("#join-steps-heading")).toHaveText(
+            "What happens when you join",
+          );
           await expect(
             page.getByRole("heading", { name: "The bot lets you in and makes you a Prospect" }),
           ).toBeVisible();
