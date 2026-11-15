@@ -23,8 +23,8 @@
 // lives here so shipped bytes stay minimal, and the gradient stops live baked
 // in the logo, icon and favicon artwork. A component that needs the gradient
 // re-adds the token with its own budget.
-import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,5 +50,16 @@ export function build() {
 }
 
 const { text, sha256 } = build();
-writeFileSync(join(repoRoot, OUT), text);
+const output = join(repoRoot, OUT);
+const temporary = `${output}.${randomUUID()}.tmp`;
+let fd = openSync(temporary, "wx");
+try {
+  writeFileSync(fd, text);
+  closeSync(fd);
+  fd = undefined;
+  renameSync(temporary, output);
+} finally {
+  if (fd !== undefined) closeSync(fd);
+  rmSync(temporary, { force: true });
+}
 console.log(`${OUT}: ${text.length} chars, sha256 ${sha256}`);

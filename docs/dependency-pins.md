@@ -27,7 +27,7 @@ one-liner goes to stderr. Exit 0 is pass, 1 is pin drift, 2 is usage.
 | Source | Example | `npm update` behavior |
 | --- | --- | --- |
 | Installed-version test assertion | wrangler pinned by `test/remote-runner-isolation.test.ts` while the manifest range allows newer | Floats: hold back with `--updatable` |
-| `package.json` range / overrides assertion | `test/performance-ci.test.ts` asserts `devDependencies["@lhci/cli"]`, `overrides["basic-ftp"]`, and the absence of `overrides["zod"]` | Never rewrites the manifest: verify-only |
+| `package.json` range / overrides assertion | `test/performance-ci.test.ts` asserts `devDependencies["@lhci/cli"]`, `overrides["get-uri"]["basic-ftp"]`, and the absence of `overrides["zod"]` | Never rewrites the manifest: verify-only |
 | Exact range in `package.json` | `zod` 4.6.7, `esbuild` 0.28.2 | Cannot float, but the lockfile copy is still checked against the exact version |
 | String `overrides` entry | `undici` 7.30.1 | Exact specs (after `$ref` resolution): every installed copy must agree; ranges, tags and unresolvable `$ref`s are informational |
 | Nested `overrides` entry | `overrides["@lhci/cli"]["tmp"]` 0.2.7 | The copy the scope package resolves must agree; reported as informational when the scope declares no such dependency edge |

@@ -171,9 +171,12 @@ function kitFixture(t, fragments) {
 // 341055; 340736 rejects by 319).
 // 342272 is the bounded Ember allocation (frozen builds 341996 and 341995;
 // 341248 rejects by 748 and 747), not automatic 25% headroom.
+// 344320 admits the HTML wire-streaming helper on top of that (exact-head
+// CI `d020bf0e1` measured 344075, run 43343222288; the 256-step 344064
+// rejects by 11, so one further step is the least cover).
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
   335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176,
-  338432, 338688, 339200, 339456, 339968, 340224, 340736, 341248, 342272,
+  338432, 338688, 339200, 339456, 339968, 340224, 340736, 341248, 342272, 344320,
 ];
 // Admitted server.js maxRawBytes allocations. The SHIPPING_KIT_BUDGET pin
 // above (1203200) is the historical baseline; 1203968 admits the
@@ -223,9 +226,12 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // 1233920 admits the content display face leaf growth on top of that
 // (exact-head CI 1233453 raw, run 42985471999; the 1233408 step rejects
 // by 45, so one further 512 step is the least cover).
+// 1234944 admits the HTML wire-streaming helper on top of that (exact-head
+// CI `d020bf0e1` measured 1234582 raw, run 43343222288; the 1234432 step
+// rejects by 150, so one further 512 step is the least cover).
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
   1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440,
-  1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408, 1233920,
+  1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408, 1233920, 1234944,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step

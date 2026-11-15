@@ -27,7 +27,7 @@ describe("local capture request integration", () => {
   it("registers the extra capture middleware only in the opted-in build", () => {
     expect(
       app.routes.filter((route) => route.method === "ALL" && route.path === "/*"),
-    ).toHaveLength(8);
+    ).toHaveLength(9);
   });
 
   it("certifies real Hono static HTML and refuses uncovered document rows", async () => {

@@ -36,6 +36,18 @@ for (const javaScriptEnabled of [true, false]) {
         await page.keyboard.press("Tab");
         await expect(link).toBeFocused();
         await expect(link).toBeInViewport();
+        if (javaScriptEnabled) {
+          for (const [name, viewport] of [
+            ["desktop", { width: 1280, height: 800 }],
+            ["mobile", { width: 390, height: 844 }],
+          ] as const) {
+            await page.setViewportSize(viewport);
+            await test.info().attach(`kit-review-skip-link-${name}`, {
+              body: await page.screenshot(),
+              contentType: "image/png",
+            });
+          }
+        }
         await page.keyboard.press("Enter");
         await expect(page).toHaveURL(/#main$/);
         await expect(page.locator("main")).toBeFocused();
@@ -45,6 +57,18 @@ for (const javaScriptEnabled of [true, false]) {
         await expect(link).toBeFocused();
         const border = await link.evaluate((element) => getComputedStyle(element).borderTopWidth);
         expect(border).toBe("1px");
+        if (javaScriptEnabled) {
+          for (const [name, viewport] of [
+            ["desktop", { width: 1280, height: 800 }],
+            ["mobile", { width: 390, height: 844 }],
+          ] as const) {
+            await page.setViewportSize(viewport);
+            await test.info().attach(`kit-review-skip-link-forced-colors-${name}`, {
+              body: await page.screenshot(),
+              contentType: "image/png",
+            });
+          }
+        }
       } finally {
         renderer.cleanup();
       }
