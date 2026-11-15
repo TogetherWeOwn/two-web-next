@@ -13,7 +13,7 @@ const fixture = join(root, "test/fixtures/kit-button-isolated.svelte");
 test("button states work with hydration and without JavaScript", { timeout: 120000 }, async () => {
   const styles = ["vendor/design-kit/tokens.css", "web/src/ember-theme.css"]
     .map((path) => readFileSync(join(root, path), "utf8"))
-    .join("\n");
+    .join("\nbody { background: var(--g0); color: var(--t1); }\n");
   const destination = (_request, response) =>
     response.writeHead(200, { "content-type": "text/plain" }).end("Destination");
   const server = await serveKitFixture({
