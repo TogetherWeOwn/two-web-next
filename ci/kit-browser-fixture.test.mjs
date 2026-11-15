@@ -94,12 +94,22 @@ p { font-family: proof; }</style>`,
   );
 });
 
+test("Kit fixture rejects invalid query strings", async () => {
+  for (const search of ["name=fixture", "?name=fixture#fragment", 123]) {
+    await assert.rejects(
+      withKitOfflineBrowser({ search }, async () => {}),
+      { message: "Fixture search must be a query string" },
+    );
+  }
+});
+
 test("asset reads reject escapes, symlinks, and unsupported files", async () => {
   const dir = await mkdtemp(join(tmpdir(), "kit-asset-test-"));
   try {
     const root = join(dir, "root");
     await mkdir(root);
     await writeFile(join(root, "safe.css"), "safe");
+    await writeFile(join(root, "safe.js"), "unsupported");
     await writeFile(join(dir, "outside.css"), "outside");
     await symlink(join(dir, "outside.css"), join(root, "link.css"));
     await symlink(dir, join(root, "linked-dir"));
