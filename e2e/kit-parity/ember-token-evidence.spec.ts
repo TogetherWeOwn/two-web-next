@@ -27,21 +27,30 @@ test("captures structured-time row states in Kit without JavaScript", async ({},
     { width: 1280, height: 800 },
     { width: 390, height: 844 },
   ];
-  await withKitOfflineBrowser({ page: fixture }, async ({ page }: { page: any }) => {
-    await expect(page.locator(".row-time")).toHaveCount(4);
-    await expect(page.locator(".row-time .line1").first()).toHaveCSS("color", "rgb(246, 241, 234)");
-    await expect(page.locator(".row-time .line2").first()).toHaveCSS("color", "rgb(168, 154, 142)");
-    for (const viewport of viewports) {
-      await page.setViewportSize(viewport);
-      await page.screenshot({
-        path: testInfo.outputPath(`ember-structured-time-${viewport.width}.png`),
-        fullPage: false,
-      });
-    }
-  });
+  await withKitOfflineBrowser(
+    { source: process.cwd(), page: fixture },
+    async ({ page }: { page: any }) => {
+      await expect(page.locator(".row-time")).toHaveCount(4);
+      await expect(page.locator(".row-time .line1").first()).toHaveCSS(
+        "color",
+        "rgb(246, 241, 234)",
+      );
+      await expect(page.locator(".row-time .line2").first()).toHaveCSS(
+        "color",
+        "rgb(168, 154, 142)",
+      );
+      for (const viewport of viewports) {
+        await page.setViewportSize(viewport);
+        await page.screenshot({
+          path: testInfo.outputPath(`ember-structured-time-${viewport.width}.png`),
+          fullPage: false,
+        });
+      }
+    },
+  );
   // Axe injects scripts, so run it in a separate JavaScript-enabled context.
   await withKitOfflineBrowser(
-    { page: fixture, javaScriptEnabled: true },
+    { source: process.cwd(), page: fixture, javaScriptEnabled: true },
     async ({ page }: { page: any }) => {
       await expect(page.locator(".row-time")).toHaveCount(4);
       for (const viewport of viewports) {
