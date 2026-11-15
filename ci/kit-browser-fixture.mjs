@@ -14,13 +14,13 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-function inside(root, path) {
+export function inside(root, path) {
   const rel = relative(root, path);
   return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
 // Never traverse a copied link while creating a destination.
-async function rejectLinkAncestors(root, path) {
+export async function rejectLinkAncestors(root, path) {
   let current = root;
   for (const part of relative(root, path).split(sep)) {
     current = join(current, part);
@@ -37,7 +37,7 @@ async function rejectLinkAncestors(root, path) {
 }
 
 // Reject absolute, escaping, and dangling links before any copied code executes.
-async function validateLinks(root, path = root) {
+export async function validateLinks(root, path = root) {
   const stat = await lstat(path);
   if (stat.isSymbolicLink()) {
     const target = await readlink(path);
