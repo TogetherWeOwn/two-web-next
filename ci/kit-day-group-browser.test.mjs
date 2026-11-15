@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import AxeBuilder from "@axe-core/playwright";
 import { build } from "esbuild";
 import { chromium } from "playwright";
 
@@ -154,6 +155,21 @@ test("day groups retain their kit layout and list semantics at both widths", {
         }
       } finally {
         await context.close();
+      }
+      const auditContext = await browser.newContext({ viewport });
+      try {
+        const page = await auditContext.newPage();
+        await page.goto(`http://127.0.0.1:${server.address().port}`);
+        const audit = await new AxeBuilder({ page }).include("section.day-group").analyze();
+        assert.deepEqual(
+          audit.violations.filter((violation) =>
+            ["critical", "serious"].includes(violation.impact),
+          ),
+          [],
+          `day-group accessibility violations at ${viewport.width}px`,
+        );
+      } finally {
+        await auditContext.close();
       }
     }
   } finally {
