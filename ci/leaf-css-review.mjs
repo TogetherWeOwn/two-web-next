@@ -23,7 +23,7 @@ const inputs = [
 ];
 // Read by later generators (a revision's generator may or may not need them);
 // copied only when that revision has them, so every revision finds its inputs.
-const optionalInputs = ["assets/leaf-only.css"];
+const optionalInputs = ["assets/leaf-only.css", "ci/css-dictionary.mjs"];
 const options = {
   encoding: "utf8",
   timeout: 10000,
@@ -55,7 +55,7 @@ function snapshot(sha) {
         options,
       );
       if (!entry) continue;
-      if (!/^\d+ blob [a-f0-9]+\tassets\/leaf-only\.css\0$/.test(entry)) {
+      if (!/^\d+ blob [a-f0-9]+\t/.test(entry) || !entry.endsWith(`\t${input}\0`)) {
         throw new Error("invalid optional source entry");
       }
       copyBlob(input);
