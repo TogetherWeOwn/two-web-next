@@ -1026,13 +1026,14 @@ function normalizeFilterRef(ref, source) {
 // unfiltered invocation runs every match; otherwise only the union runs.
 function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
   const found = new Map();
-  const record = (config, files, source) => {
+  const record = (config, files, source, grepFiltered) => {
     const entry = found.get(config) ?? { unfiltered: false, files: new Set(), dirs: new Set() };
-    if (files === null) entry.unfiltered = true;
-    else {
+    if (files === null && !grepFiltered) entry.unfiltered = true;
+    else if (files !== null) {
       for (const f of files) {
         const abs = join(root, f);
         assert.ok(existsSync(abs), `${source} filters a missing playwright path (${f})`);
+        if (grepFiltered) continue;
         if (statSync(abs).isDirectory()) entry.dirs.add(f.endsWith("/") ? f : `${f}/`);
         else entry.files.add(f);
       }
@@ -1041,6 +1042,7 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
   };
   const parseTokens = (tokens, source) => {
     let config = null;
+    let grepFiltered = false;
     const positionals = [];
     for (let i = 0; i < tokens.length; i += 1) {
       const t = tokens[i];
@@ -1049,6 +1051,14 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
         assert.ok(config === null, `${source} names two playwright configs`);
         config = normalizeConfigRef(tokens[i + 1], source);
         i += 1;
+      } else if (t === "--grep" || t.startsWith("--grep=")) {
+        assert.ok(!grepFiltered, `${source} names two playwright grep filters`);
+        const value = t === "--grep" ? tokens[++i] : t.slice("--grep=".length);
+        assert.ok(
+          typeof value === "string" && /^[A-Za-z0-9_@. -]+$/.test(value) && !value.startsWith("-"),
+          `${source} has a non-literal or missing playwright --grep value`,
+        );
+        grepFiltered = true;
       } else if (t.startsWith("-")) {
         assert.fail(
           `${source} passes a playwright flag this gate cannot expand (${t}): use --config and file paths only, or teach ci/test-inventory.mjs the new flag`,
@@ -1062,7 +1072,9 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
       existsSync(join(root, config)),
       `${source} references a missing playwright config (${config})`,
     );
-    record(config, positionals.length ? positionals : null, source);
+    // A title filter can select only part of a file, including imported suites.
+    // Validate it, but never use that invocation as whole-spec evidence.
+    record(config, positionals.length ? positionals : null, source, grepFiltered);
   };
   // Workflow steps: `playwright test` plus YAML `>-` continuation lines (the
   // kit-parity file filters live on the next line). Continuation stops at the
@@ -2422,6 +2434,56 @@ function selftest() {
         reachable.map((r) => r.file),
         ["e2e/a.spec.ts"],
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright grep runs never credit specs or imported visuals", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      writeFileSync(
+        join(dir, "playwright.config.ts"),
+        'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      writeFileSync(join(dir, "e2e", "a.spec.ts"), 'import "./suite.visual";\n');
+      writeFileSync(join(dir, "e2e", "suite.visual.ts"), 'test("not selected", () => {});\n');
+      const workflow = join(dir, ".github", "workflows", "ci.yml");
+      const run = (command) =>
+        writeFileSync(workflow, `name: ci\njobs:\n  t:\n    steps:\n      - run: ${command}\n`);
+      for (const args of ["--grep smoke", '--grep "smoke test"', "--grep=smoke"]) {
+        for (const path of ["", " e2e/a.spec.ts"]) {
+          run(`npx playwright test ${args}${path}`);
+          assert.deepEqual(playwrightInventory(dir).orphans, [
+            "e2e/a.spec.ts",
+            "e2e/suite.visual.ts",
+          ]);
+        }
+      }
+      for (const args of [
+        "--grep",
+        "--grep=",
+        "--grep $PATTERN",
+        "--grep smoke --grep other",
+        "--grep smoke --unknown",
+      ]) {
+        run(`npx playwright test ${args}`);
+        assert.throws(() => playwrightInventory(dir));
+      }
+      run("npx playwright test --grep smoke e2e/missing.spec.ts");
+      assert.throws(() => playwrightInventory(dir), /missing playwright path/);
+      run("npx playwright test --config missing.config.ts --grep smoke");
+      assert.throws(() => playwrightInventory(dir), /missing playwright config/);
+      run("cd e2e && npx playwright test --grep smoke");
+      assert.throws(() => playwrightInventory(dir), /directory change/);
+      writeFileSync(
+        workflow,
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --grep smoke\n      - run: npx playwright test\n",
+      );
+      assert.deepEqual(playwrightInventory(dir).orphans, []);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
