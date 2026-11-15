@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "@playwright/test";
 import { HONO_ORIGIN, KIT_ORIGIN, PARITY_VIEWPORTS } from "../kit-parity";
 import { withKitOfflineBrowser } from "../../ci/kit-offline-browser.mjs";
@@ -31,6 +32,8 @@ test("captures structured-time row states in Kit without JavaScript", async ({},
         { width: 390, height: 844 },
       ]) {
         await page.setViewportSize(viewport);
+        const accessibility = await new AxeBuilder({ page }).include(".row-time").analyze();
+        expect(accessibility.violations).toEqual([]);
         await page.screenshot({
           path: testInfo.outputPath(`ember-structured-time-${viewport.width}.png`),
           fullPage: false,
