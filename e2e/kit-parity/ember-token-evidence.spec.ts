@@ -17,16 +17,20 @@ const states = ["default", "reduced-motion", "forced-colors", "keyboard-focus"] 
 test("captures structured-time row states in Kit without JavaScript", async ({}, testInfo) => {
   test.setTimeout(180_000);
   const fixture = `<script>import StructuredTime from '#lib/StructuredTime.svelte';</script>
+<div class="base-theme">
 <StructuredTime state="upcoming" startsAt="2026-12-01T19:00:00Z" zone="America/New_York" />
 <StructuredTime state="past" startsAt="2026-12-01T19:00:00Z" endsAt="2026-12-01T20:00:00Z" zone="UTC" />
 <StructuredTime state="cancelled" startsAt="2026-12-01T19:00:00Z" zone="UTC" />
-<StructuredTime state="upcoming" startsAt={null} />`;
+<StructuredTime state="upcoming" startsAt={null} />
+</div>`;
   const viewports = [
     { width: 1280, height: 800 },
     { width: 390, height: 844 },
   ];
   await withKitOfflineBrowser({ page: fixture }, async ({ page }: { page: any }) => {
     await expect(page.locator(".row-time")).toHaveCount(4);
+    await expect(page.locator(".row-time .line1").first()).toHaveCSS("color", "rgb(246, 241, 234)");
+    await expect(page.locator(".row-time .line2").first()).toHaveCSS("color", "rgb(168, 154, 142)");
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
       await page.screenshot({
