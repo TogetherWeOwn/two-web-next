@@ -221,6 +221,7 @@ test("Ember delta: legacy and Ember Kit sections equal Hono; Hono side stays str
   assert.equal(kitOf(e), hono(h), "Ember Kit equals Hono after delta removal");
   const withBoundary = e.map((row) => row.replace(glyphHtml(), `${glyphHtml()}<!---->`));
   assertEmberArchive(section(withBoundary));
+  assert.equal(stripEmberDelta(section(withBoundary)), stripEmberDelta(section(e)));
   assert.equal(kitOf(withBoundary), hono(h), "Svelte component boundary preserves parity");
   assert.notEqual(hono(e), hono(h), "no stripping without the kit side flag");
   assert.equal(kitOf([], pagerHtml()), hono([], pagerHtml()), "empty list and pager");

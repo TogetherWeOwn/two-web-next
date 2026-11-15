@@ -39,12 +39,13 @@ function validate(wrapper, raw) {
   if (!is(wrapper, "div", HTML)) fail("wrapper tag");
   const kids = wrapper.childNodes.filter((n) => !blank(n));
   // Svelte emits an empty component boundary immediately after StateGlyph.
+  let boundary;
   if (
     kids.length === 4 &&
     kids[1].nodeName === "#comment" &&
     raw.slice(...range(kids[1])) === "<!---->"
   ) {
-    kids.splice(1, 1);
+    [boundary] = kids.splice(1, 1);
   }
   if (kids.length !== 3) fail("wrapper children");
   const [glyph, heading, label] = kids;
@@ -87,6 +88,7 @@ function validate(wrapper, raw) {
     cuts: [
       [startTag.startOffset, startTag.endOffset],
       range(glyph),
+      ...(boundary ? [range(boundary)] : []),
       range(label),
       [endTag.startOffset, endTag.endOffset],
     ],
