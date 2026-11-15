@@ -78,5 +78,5 @@ describe("SDK Node adapter resolution", () => {
         expect(await post.text()).toBe("received:stream fixture");
       },
     );
-  }, 15_000);
+  });
 });
