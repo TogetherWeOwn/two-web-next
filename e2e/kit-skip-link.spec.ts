@@ -42,10 +42,10 @@ for (const javaScriptEnabled of [true, false]) {
             ["mobile", { width: 390, height: 844 }],
           ] as const) {
             await page.setViewportSize(viewport);
-            await test.info().attach(`kit-review-skip-link-${name}`, {
-              body: await page.screenshot(),
-              contentType: "image/png",
-            });
+            const screenshot = `kit-review-skip-link-${name}`;
+            const path = test.info().outputPath(`${screenshot}.png`);
+            await page.screenshot({ path });
+            await test.info().attach(screenshot, { path, contentType: "image/png" });
           }
         }
         await page.keyboard.press("Enter");
@@ -63,10 +63,10 @@ for (const javaScriptEnabled of [true, false]) {
             ["mobile", { width: 390, height: 844 }],
           ] as const) {
             await page.setViewportSize(viewport);
-            await test.info().attach(`kit-review-skip-link-forced-colors-${name}`, {
-              body: await page.screenshot(),
-              contentType: "image/png",
-            });
+            const screenshot = `kit-review-skip-link-forced-colors-${name}`;
+            const path = test.info().outputPath(`${screenshot}.png`);
+            await page.screenshot({ path });
+            await test.info().attach(screenshot, { path, contentType: "image/png" });
           }
         }
       } finally {
