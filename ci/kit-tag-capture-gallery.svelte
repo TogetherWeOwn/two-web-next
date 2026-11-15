@@ -26,13 +26,18 @@ onMount(() => {
 
 <main class="base-theme" data-hydrated={_hydrated ? "yes" : "no"}>
   <h1>Tag gallery evidence</h1>
-  <p data-tag="neutral"><Tag>Neutral</Tag></p>
-  <p data-tag="live"><Tag variant="live" dot>Live</Tag></p>
-  <p data-tag="you"><Tag variant="you">You</Tag></p>
-  <p data-tag="echo"><Tag variant="echo">Echo</Tag></p>
-  <p data-tag="ok"><Tag variant="ok">OK</Tag></p>
-  <p data-tag="warn"><Tag variant="warn">Warning</Tag></p>
-  <p data-dot="live"><LiveDot /> Live now</p>
-  <p data-dot="presence"><LiveDot kind="presence" /> Present</p>
+  {#each [0, 1, 2, 3] as ground}
+    <section data-ground={ground} style={`background: var(--g${ground})`}>
+      <h2>Ground {ground}</h2>
+      <p data-tag="neutral"><Tag>Neutral</Tag></p>
+      <p data-tag="live"><Tag variant="live" dot>Live</Tag></p>
+      <p data-tag="you"><Tag variant="you">You</Tag></p>
+      <p data-tag="echo"><Tag variant="echo">Echo</Tag></p>
+      <p data-tag="ok"><Tag variant="ok">OK</Tag></p>
+      <p data-tag="warn"><Tag variant="warn">Warning</Tag></p>
+      <p data-dot="live"><LiveDot /> Live now</p>
+      <p data-dot="presence"><LiveDot kind="presence" /> Present</p>
+    </section>
+  {/each}
   <button type="button" onclick={() => (_count += 1)}>Clicked {_count}</button>
 </main>
