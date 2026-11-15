@@ -86,6 +86,8 @@ jobs:
           done
           npx --no-install playwright install --with-deps chromium
           node --test ci/discovery-title-evidence.test.mjs
+      - name: Prepare disposable runtime role
+        run: psql -h 127.0.0.1 -U agent_test -d two_web_next -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Seed only the disposable service
         run: |
           set -euo pipefail

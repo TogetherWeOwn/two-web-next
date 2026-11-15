@@ -61,6 +61,8 @@ jobs:
           npm ci --include=dev --no-audit --no-fund
           npm ci --prefix web --include=dev --no-audit --no-fund
           node ci/build-leaf-css.mjs
+      - name: Prepare disposable runtime role
+        run: PGPASSWORD=ci psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Prepare only the disposable service
         run: npm run db:migrate
       - name: Prove corrected persistence and historical data loss
