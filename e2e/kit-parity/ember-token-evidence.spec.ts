@@ -7,6 +7,7 @@ import { HONO_ORIGIN, KIT_ORIGIN, PARITY_VIEWPORTS } from "../kit-parity";
 const targets = [
   { name: "hono", origin: HONO_ORIGIN, path: "/" },
   { name: "kit", origin: KIT_ORIGIN, path: "/events/past" },
+  { name: "kit-join", origin: KIT_ORIGIN, path: "/join" },
 ] as const;
 const states = ["default", "reduced-motion", "forced-colors", "keyboard-focus"] as const;
 
@@ -35,6 +36,12 @@ for (const target of targets) {
             expect(response?.headers()["x-two-renderer"]).toBe("kit");
             await expect(page.getByTestId("past-events")).toBeVisible();
             await expect(page.getByText("E2E Past Night", { exact: true })).toBeVisible();
+          } else if (target.name === "kit-join") {
+            expect(response?.headers()["x-two-renderer"]).toBe("kit");
+            await expect(
+              page.getByRole("heading", { level: 1, name: "Play with people who show up." }),
+            ).toBeVisible();
+            await expect(page.getByTestId("join-oneclick")).toBeVisible();
           } else {
             await expect(page.locator("#home-heading")).toBeVisible();
           }
@@ -73,7 +80,10 @@ for (const target of targets) {
           expect(pageErrors).toEqual([]);
 
           const name = `ember-${target.name}-${viewport.size.width}-${state}`;
-          await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: false });
+          await page.screenshot({
+            path: testInfo.outputPath(`${name}.png`),
+            fullPage: target.name === "kit-join",
+          });
           const receipt = {
             sha: process.env.GITHUB_SHA,
             path: target.path,
