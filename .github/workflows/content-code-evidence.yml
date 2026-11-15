@@ -55,6 +55,7 @@ jobs:
         with:
           node-version: 24
       - name: Prepare exact app and disposable fixtures
+        id: prepare
         env:
           APP_SHA: ${{ matrix.sha }}
         run: |
@@ -75,13 +76,26 @@ jobs:
           (cd .capture-app && node ci/build-leaf-css.mjs && node e2e/prepare.mjs)
           cp ci/content-code-diagnostic.playwright.config.ts .capture-app/ci/
           cp -R e2e/content-code-diagnostic .capture-app/e2e/
-      - name: Capture first and second images
+      - name: Capture normal path
         working-directory: .capture-app
         env:
           CONTENT_CODE_DIAG_REVISION: ${{ matrix.revision }}
           CONTENT_CODE_DIAG_EXPECT_WARM_FRAGMENT: ${{ matrix.fragment }}
-          CONTENT_CODE_DIAG_OUT: ${{ github.workspace }}/content-code-evidence
-        run: timeout --kill-after=10s 20m npx --no-install playwright test --config ci/content-code-diagnostic.playwright.config.ts
+          CONTENT_CODE_DIAG_OUT: ${{ github.workspace }}/content-code-evidence/normal
+          CONTENT_CODE_DIAG_ARM: normal
+        run: |
+          unset PW_TEST_SCREENSHOT_NO_FONTS_READY
+          timeout --kill-after=10s 20m npx --no-install playwright test --config ci/content-code-diagnostic.playwright.config.ts
+      - name: Capture held-font diagnostic path
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        working-directory: .capture-app
+        env:
+          CONTENT_CODE_DIAG_REVISION: ${{ matrix.revision }}
+          CONTENT_CODE_DIAG_EXPECT_WARM_FRAGMENT: ${{ matrix.fragment }}
+          CONTENT_CODE_DIAG_OUT: ${{ github.workspace }}/content-code-evidence/held-font-playwright-no-font-ready-diagnostic
+          CONTENT_CODE_DIAG_ARM: held-font-playwright-no-font-ready-diagnostic
+          PW_TEST_SCREENSHOT_NO_FONTS_READY: "1"
+        run: timeout --kill-after=10s 20m npx --no-install playwright test --config ci/content-code-diagnostic.playwright.config.ts --grep 'cold delayed'
       - name: Retain evidence on success or failure
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

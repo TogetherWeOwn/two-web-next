@@ -14,6 +14,8 @@ const OUT = join(
   REVISION.replace(/[^A-Za-z0-9._-]/g, "_"),
 );
 const REPEATS = Math.max(1, Number(process.env.CONTENT_CODE_DIAG_REPEATS ?? "3"));
+const ARM = process.env.CONTENT_CODE_DIAG_ARM ?? "normal";
+const NO_FONT_READY = process.env.PW_TEST_SCREENSHOT_NO_FONTS_READY ?? "";
 // Head tree only: a warm Fragment Mono glyph is then required, not just observed.
 const WARM: Frag =
   process.env.CONTENT_CODE_DIAG_EXPECT_WARM_FRAGMENT === "1" ? "required" : "observe";
@@ -114,11 +116,26 @@ async function observe(page: Page, rec: Rec, label: string, frag: Frag) {
 type Capture = { before: unknown; after: unknown; png: Buffer };
 
 /** One capture: measure, screenshot (PNG persisted at once), measure, record fonts. */
-async function capture(page: Page, rec: Rec, label: string, viewport: boolean, frag: Frag) {
+async function capture(
+  page: Page,
+  rec: Rec,
+  label: string,
+  viewport: boolean,
+  frag: Frag,
+  bounded = false,
+) {
   const before = await readGeometry(page);
   rec.step(`${label}-before`, { geometry: before });
   const t0 = now();
-  const png = viewport ? await viewportPng(page) : await page.screenshot({ fullPage: true });
+  let png: Buffer;
+  try {
+    png = viewport
+      ? await viewportPng(page)
+      : await page.screenshot({ fullPage: true, ...(bounded ? { timeout: BOUND_MS } : {}) });
+  } catch (error) {
+    rec.step(`${label}-failed`, { error: String(error), captureMs: now() - t0, image: null });
+    throw error;
+  }
   rec.png(label, png);
   const after = await readGeometry(page);
   rec.step(`${label}-geometry`, { captureMs: now() - t0, before, after });
@@ -141,9 +158,15 @@ async function viewportPng(page: Page) {
 }
 
 /** First and second capture; geometry equalities and exact PNG bytes only. */
-async function pair(page: Page, rec: Rec, frag: Frag, viewport = false) {
-  const a = await capture(page, rec, "first", viewport, frag);
-  const b = await capture(page, rec, "second", viewport, frag);
+async function pair(page: Page, rec: Rec, frag: Frag, viewport = false, bounded = false) {
+  let a: Capture;
+  try {
+    a = await capture(page, rec, "first", viewport, frag, bounded);
+  } catch (error) {
+    rec.step("second-not-reached", { image: null });
+    throw error;
+  }
+  const b = await capture(page, rec, "second", viewport, frag, bounded);
   expect.soft(a.after, "geometry stable across first capture").toEqual(a.before);
   expect.soft(b.before, "geometry between captures").toEqual(a.after);
   expect.soft(b.after, "geometry stable across second capture").toEqual(b.before);
@@ -163,6 +186,10 @@ const firstPaint = (page: Page) =>
 async function run(name: string, body: (rec: Rec) => Promise<void>) {
   const rec = recorder(name);
   try {
+    rec.step("protocol", { arm: ARM, diagnosticOnly: true, noFontReady: NO_FONT_READY });
+    expect(["normal", "held-font-playwright-no-font-ready-diagnostic"]).toContain(ARM);
+    expect(NO_FONT_READY).toBe(ARM === "normal" ? "" : "1");
+    if (ARM !== "normal") expect(name.startsWith("cold-delayed-")).toBe(true);
     await body(rec);
   } catch (error) {
     rec.data.error = String((error as Error)?.stack ?? error);
@@ -176,7 +203,14 @@ async function run(name: string, body: (rec: Rec) => Promise<void>) {
 async function holdFont(page: Page, bytes: Buffer | null) {
   let release!: () => void;
   const gate = new Promise<void>((r) => (release = r));
-  const state = { requested: false, release };
+  const state = {
+    requested: false,
+    released: false,
+    release: () => {
+      state.released = true;
+      release();
+    },
+  };
   await page.route(FONT_GLOB, async (route) => {
     state.requested = true;
     await gate;
@@ -216,7 +250,14 @@ for (const size of SIZES) {
           if (WARM === "required")
             expect.soft(hold.requested, "Fragment Mono request held").toBe(true);
           await observe(page, rec, "held", "none");
-          await pair(page, rec, "none");
+          rec.step("screenshot-options", { fullPage: true, timeoutMs: BOUND_MS });
+          await pair(page, rec, "none", false, true);
+          rec.step("captures-complete", {
+            requested: hold.requested,
+            released: hold.released,
+            log,
+          });
+          if (hold.requested) expect.soft(hold.released, "font held through captures").toBe(false);
         } finally {
           hold.release();
           rec.step("released", { log });
