@@ -300,6 +300,87 @@ function expectNoMarker(headers: Record<string, string>, label: string) {
   ).toBeNull();
 }
 
+test("kit: capture synthetic non-member and account-hidden headers", async ({ browser }) => {
+  test.setTimeout(120_000);
+  requireGithubRunner();
+  for (const state of ["non-member", "account-hidden"] as const) {
+    for (const width of [1280, 390]) {
+      const bearer = `two_${randomBytes(32).toString("base64url")}`;
+      const tokenHash = createHash("sha256").update(bearer).digest("hex");
+      const userId = `9${BigInt(`0x${randomBytes(7).toString("hex")}`)
+        .toString()
+        .padStart(17, "0")}`;
+      const signature = createHmac("sha256", kitFixtureSessionSecret())
+        .update(bearer)
+        .digest("base64");
+      const context = await browser.newContext({
+        baseURL: KIT_ORIGIN,
+        viewport: { width, height: width === 1280 ? 800 : 844 },
+        storageState: {
+          cookies: [
+            {
+              name: "__Host-two_session",
+              value: `${bearer}.${signature}`,
+              domain: new URL(KIT_ORIGIN).hostname,
+              path: "/",
+              expires: -1,
+              httpOnly: true,
+              secure: true,
+              sameSite: "Lax",
+            },
+          ],
+          origins: [],
+        },
+      });
+      try {
+        await withSessionDb(async (sql) => {
+          await sql`
+            insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at)
+            values (${tokenHash}, ${tokenHash}, ${userId}, 'Synthetic Viewer', null, ${state === "account-hidden"}, false, ${new Date(Date.now() + 120 * 60 * 1000)})`;
+        });
+        await context.route("**/*", (route) =>
+          new URL(route.request().url()).origin === KIT_ORIGIN
+            ? route.continue()
+            : route.abort("blockedbyclient"),
+        );
+        const page = await context.newPage();
+        const path =
+          state === "non-member" ? `/e/${SEEDED_EVENT_KEY}` : "/leaderboards/members?season=bogus";
+        const response = await page.goto(path);
+        expect(response?.status()).toBe(state === "non-member" ? 200 : 400);
+        expect(response?.headers()["x-two-renderer"]).toBe("kit");
+        if (state === "non-member") {
+          await expect(page.locator(".header-account .who")).toHaveText("Synthetic Viewer");
+          await expect(page.locator('.header-account button[type="submit"]')).toHaveText(
+            "Sign out",
+          );
+          await expect(page.locator('.main-nav a[href="/leaderboards/members"]')).toHaveCount(0);
+        } else {
+          await expect(page.locator(".header-account")).toHaveCount(0);
+          await expect(
+            page.getByRole("heading", { name: "Check the board filters" }),
+          ).toBeVisible();
+        }
+        await page.evaluate(() => (globalThis as any).document.fonts.ready);
+        await page.screenshot({
+          path: test.info().outputPath(`brand-kit-${state}-${width}.png`),
+          animations: "disabled",
+          caret: "hide",
+        });
+      } finally {
+        try {
+          await context.close();
+        } finally {
+          await withSessionDb(async (sql) => {
+            await sql`delete from web_session_grace where user_id = ${userId}`;
+            await sql`delete from web_sessions where user_id = ${userId}`;
+          });
+        }
+      }
+    }
+  }
+});
+
 for (const target of targets) {
   test.describe(`${target.name}: past archive renders the seeded row`, () => {
     test("page one renders the list with the seeded row", async () => {
