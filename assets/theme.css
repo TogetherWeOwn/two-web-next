@@ -43,12 +43,8 @@
 .base-theme :is(h1, h2, h3) {
   font-weight: 700; text-transform: uppercase; letter-spacing: -.03em; line-height: 1.1;
 }
-.base-theme:not(.content-theme) .main-nav a, .base-theme:not(.content-theme) .header-account {
-  font-family: var(--font-display);
-}
-.base-theme:not(.content-theme) .btn {
-  font-family: var(--font-display);
-}
+.base-theme:not(.content-theme) .main-nav a,
+.base-theme:not(.content-theme) :is(.header-account, .btn),
 .base-theme:not(.content-theme) :is(h1, h2, h3) {
   font-family: var(--font-display);
 }
