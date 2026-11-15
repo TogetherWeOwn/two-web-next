@@ -103,6 +103,19 @@ for (const target of targets) {
               path: testInfo.outputPath(`${name}-scrolled.png`),
               fullPage: false,
             });
+            const scrollPadding = await page.evaluate(() =>
+              Number.parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop),
+            );
+            expect(scrollPadding).toBeGreaterThanOrEqual(bounds?.height ?? Infinity);
+            const contentLink = page.locator("main a:visible").first();
+            await contentLink.focus();
+            await expect(contentLink).toBeFocused();
+            const targetBounds = await contentLink.boundingBox();
+            const headerBounds = await header.boundingBox();
+            expect(targetBounds).not.toBeNull();
+            expect(targetBounds?.y ?? -Infinity).toBeGreaterThanOrEqual(
+              (headerBounds?.y ?? Infinity) + (headerBounds?.height ?? Infinity),
+            );
           }
           const receipt = {
             sha: process.env.GITHUB_SHA,
