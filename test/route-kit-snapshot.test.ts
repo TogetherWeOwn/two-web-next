@@ -42,7 +42,7 @@ function assertMapCoverage(actual: RouteInventoryEntry[], map: unknown) {
       /[\r\n]/.test(row.path) ||
       !("auth" in row) ||
       typeof row.auth !== "string" ||
-      !/^[a-z]+(?:-[a-z]+)*$/.test(row.auth)
+      !/^[a-z]+(?:-[a-z0-9]+)*$/.test(row.auth)
     ) {
       throw new Error(`Invalid route map row: ${index}`);
     }
@@ -54,6 +54,11 @@ function assertMapCoverage(actual: RouteInventoryEntry[], map: unknown) {
 describe("proposed Kit route snapshot", () => {
   it("matches mounted registration methods, paths and reviewed auth labels", () => {
     assertMapCoverage(routeInventory(app), snapshot);
+  });
+
+  it("accepts reviewed auth labels with numeric segments", () => {
+    const row = { method: "GET", path: "/fixture", auth: "public-draft-403" };
+    expect(() => assertMapCoverage([row], { ...snapshotObject(), rows: [row] })).not.toThrow();
   });
 
   it("rejects a newly mounted registration absent from the map", () => {
