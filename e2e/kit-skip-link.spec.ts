@@ -21,13 +21,23 @@ for (const javaScriptEnabled of [true, false]) {
           generate: "server",
           filename: resolve(component),
         }).css.code;
+        // Tailwind normally expands the generated @theme block into root variables.
+        const theme = readFileSync("web/src/ember-theme.css", "utf8").replace("@theme{", ":root{");
         const html = renderer
           .renderPage({})
           .replace(
             "</head>",
-            `<style>:root { --space-3: 12px; --focus-width: 2px; --focus-offset: 3px; --focus-ring: black; } ${css}</style></head>`,
+            `<style>${theme}
+              html, body { background: var(--color-lobby-surface); color: var(--color-lobby-ink); }
+              body { font-family: var(--font-ui); }
+              main { padding: var(--space-10) var(--space-6); }
+              ${css}</style></head>`,
           )
-          .replace("</body>", '<main id="main" tabindex="-1">Main content</main></body>');
+          .replace("<body>", '<body class="base-theme">')
+          .replace(
+            "</body>",
+            '<main id="main" tabindex="-1"><h1>Community events</h1><p>Find a gathering and join in.</p></main></body>',
+          );
         await page.route("**/skip-link-fixture", (route) =>
           route.fulfill({ status: 200, contentType: "text/html", body: html }),
         );
@@ -36,6 +46,16 @@ for (const javaScriptEnabled of [true, false]) {
         await page.keyboard.press("Tab");
         await expect(link).toBeFocused();
         await expect(link).toBeInViewport();
+        await expect(link).toHaveCSS("background-color", "rgb(255, 156, 54)");
+        await expect(link).toHaveCSS("color", "rgb(29, 11, 0)");
+        await expect(page.locator("body")).toHaveCSS("background-color", "rgb(28, 22, 20)");
+        const linkBox = await link.boundingBox();
+        const headingBox = await page
+          .getByRole("heading", { name: "Community events" })
+          .boundingBox();
+        expect(linkBox).not.toBeNull();
+        expect(headingBox).not.toBeNull();
+        expect(linkBox!.y + linkBox!.height).toBeLessThan(headingBox!.y);
         if (javaScriptEnabled) {
           for (const [name, viewport] of [
             ["desktop", { width: 1280, height: 800 }],
