@@ -145,8 +145,8 @@ export async function resolvePromotionSha({
     const { jobs = [] } = await get(`/actions/runs/${run.id}/jobs?per_page=100`);
     // Both gates must have passed on this deploy: journeys and the web quality gate.
     // The quality evidence must match the production gate exactly: one
-    // stagingQualityJob whose stagingQualitySteps both executed successfully.
-    // A green job with skipped/failed/missing Lighthouse steps is ineligible
+    // stagingQualityJob whose web standards step executed successfully.
+    // A green job with skipped/failed/missing standards is ineligible
     // evidence, like any other valid ineligibility, and falls through to an
     // older eligible SHA (or null) instead of refusing the whole selection.
     const journeysOk = jobs.some(
@@ -174,6 +174,14 @@ export async function resolvePromotionSha({
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
+    if (
+      process.env.PRODUCTION_AUTO_PROMOTE_DISABLED === "true" &&
+      process.env.GITHUB_EVENT_NAME !== "workflow_dispatch"
+    ) {
+      console.log("Automatic production promotion is disabled; skipping");
+      appendFileSync(process.env.GITHUB_OUTPUT, "sha=\n");
+      process.exit(0);
+    }
     const input = (process.env.INPUT_SHA ?? "").replace(/\s+/g, "").toLowerCase();
     if (input) console.warn(STAGING_COVERAGE_NOTICE);
     const sha =

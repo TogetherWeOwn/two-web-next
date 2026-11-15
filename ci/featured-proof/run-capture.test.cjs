@@ -365,6 +365,36 @@ function findUncoveredModules(reachableRels, globs, repoRoot = REPO_ROOT) {
   return [...new Set(required)].filter((rel) => !isCoveredByScopes(rel, globs));
 }
 
+test('featured scope classifies the header and retains prior paths', async t => {
+  const { execFileSync } = require('node:child_process');
+  const globs = extractScopeGlobs(await fs.readFile(FEATURED_WORKFLOW_PATH, 'utf8'));
+  const prior = [
+    'ci/path-scope.sh', '.github/workflows/featured-offline-proof.yml', 'ci/featured-proof/**',
+    'src/admin/pages.tsx', 'src/admin/pages/**', 'src/admin/form-errors.ts',
+    'src/admin/routes.tsx', 'src/admin/rsvp-review.ts', 'src/admin/save-status.ts',
+    'src/admin/save-baseline.ts', 'src/bot/signer.ts', 'src/admin/table-list.ts',
+    'src/admin/event-list.ts', 'src/admin/featured-list-query.ts', 'src/db/admin-schema.ts',
+    'src/db/schema.ts', 'src/featured.ts', 'src/featured-eligibility.ts',
+    'src/featured-image.ts', 'src/featured-status.tsx', 'src/home-copy.ts',
+    'src/image-policy.ts', 'ci/build-leaf-css.mjs', 'src/page-shell.tsx', 'src/pages.tsx',
+    'src/screens/featured-item.tsx', 'src/seo-slots.ts', 'src/seo.ts', 'public/styles.css',
+    'public/theme.css', 'public/theme-tokens.css',
+  ];
+  for (const glob of [...prior, 'web/src/lib/site-header.css']) {
+    assert.ok(globs.includes(glob), `missing literal scope ${glob}`);
+  }
+  const dir = await scratch(t);
+  const files = path.join(dir, 'files.tsv');
+  for (const [changed, verdict] of [
+    ['web/src/lib/site-header.css', 'relevant=true'],
+    ['web/src/lib/unrelated.css', 'relevant=false'],
+  ]) {
+    await fs.writeFile(files, `${changed}\t\n`);
+    const actual = execFileSync('bash', [path.join(REPO_ROOT, 'ci/path-scope.sh'), files, '1', '--', ...globs], { encoding: 'utf8' });
+    assert.equal(actual.trim(), verdict, changed);
+  }
+});
+
 test('featured scope covers every runtime src module the current-source proof renders', async () => {
   const workflow = await fs.readFile(FEATURED_WORKFLOW_PATH, 'utf8');
   const globs = extractScopeGlobs(workflow);
