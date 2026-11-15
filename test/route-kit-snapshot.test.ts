@@ -96,8 +96,8 @@ describe("proposed Kit route snapshot", () => {
 describe("completed target artifact prerequisites", () => {
   it("distinguishes unresolved targets and each missing artifact", () => {
     const root = mkdtempSync(join(tmpdir(), "route-artifacts-"));
-    const page = "web/src/routes/[id=number]/+page.svelte";
-    const load = "web/src/routes/[id=number]/+page.server.ts";
+    const page = "web/src/routes/[id]/+page.svelte";
+    const load = "web/src/routes/[id]/+page.server.ts";
     const matcher = "web/src/params.ts";
     const add = (path: string) => {
       mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -117,14 +117,10 @@ describe("completed target artifact prerequisites", () => {
       add(page);
       expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${load}`);
       add(load);
-      add("web/src/params/number.ts");
-      expect(() => assertTargetArtifacts(root, page)).toThrow("Missing regular params entry");
-      add(matcher);
       expect(() => assertTargetArtifacts(root, page)).not.toThrow();
       const endpoint = "web/src/routes/+server.ts";
       add(endpoint);
       expect(() => assertTargetArtifacts(root, endpoint)).not.toThrow();
-      rmSync(join(root, matcher));
       const newlineTarget = "web/src/routes/+server.ts\n";
       add(newlineTarget);
       expect(() => assertTargetArtifacts(root, newlineTarget)).toThrow(
@@ -142,11 +138,16 @@ describe("completed target artifact prerequisites", () => {
       ];
       for (const target of namedTargets) {
         add(target);
-        expect(() => assertTargetArtifacts(root, target)).toThrow("Missing regular params entry");
+        expect(() => assertTargetArtifacts(root, target)).toThrow(
+          "Named matcher targets are unsupported",
+        );
       }
-      add("web/src/params/index.js");
+      add(matcher);
+      mkdirSync(join(root, "web/src/params/index.ts"), { recursive: true });
       for (const target of namedTargets) {
-        expect(() => assertTargetArtifacts(root, target)).not.toThrow();
+        expect(() => assertTargetArtifacts(root, target)).toThrow(
+          "Named matcher targets are unsupported",
+        );
       }
     } finally {
       rmSync(root, { recursive: true, force: true });

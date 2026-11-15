@@ -31,14 +31,7 @@ export function assertTargetArtifacts(root: string, target: unknown) {
   }
   const routeSegments = target.split("/").filter((segment) => !/^\(.*\)$/.test(segment));
   if (routeSegments.some((segment) => /\[(?:\.\.\.)?[\w-]+=[\w-]+\]/.test(segment))) {
-    // Kit 3 resolves one params module; registry exports are not inspected here.
-    const entries = [
-      "web/src/params",
-      "web/src/params.ts",
-      "web/src/params.js",
-      "web/src/params/index.ts",
-      "web/src/params/index.js",
-    ];
-    if (!entries.some(isFile)) throw new Error("Missing regular params entry");
+    // Matcher registry resolution is outside this structural check's supported subset.
+    throw new Error("Named matcher targets are unsupported");
   }
 }
