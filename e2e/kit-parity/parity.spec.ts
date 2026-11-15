@@ -849,6 +849,11 @@ for (const target of targets) {
         expect(body).not.toContain('data-testid="event-attendees"');
         expect(body).not.toContain("Sign out");
         expect(body).toContain("Welcome, guest");
+        if (target.name === "kit") {
+          expect(body).toContain('data-testid="kit-seat-card"');
+          expect(body).toContain("Log in to RSVP");
+          expect(body).toContain("come straight back here.");
+        }
       } finally {
         await guest.dispose();
       }
@@ -909,6 +914,11 @@ for (const target of targets) {
       // controller, the islands only enhance it.
       expect(body).toContain(`action="/e/${EVENT_KEY}/rsvp"`);
       expect(body).toContain("/islands/rsvp-button.js");
+      if (target.name === "kit") {
+        expect(body).toContain('data-testid="kit-seat-card"');
+        expect(body).toContain("Your RSVP");
+        expect(body).not.toContain("Log in to RSVP");
+      }
       expect(body).toContain("Sign out");
       expect(body).not.toContain("Welcome, guest");
       // Both renderers rotate the active bearer and renew its 120-minute
@@ -1508,6 +1518,47 @@ for (const target of targets) {
     });
   }
 }
+
+test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", async ({
+  browser,
+}) => {
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const eventPath = "/e/01J00000000000000000000001";
+  for (const viewport of [
+    { width: 1280, height: 800 },
+    { width: 390, height: 844 },
+  ]) {
+    const context = await browser.newContext({ viewport, javaScriptEnabled: false });
+    try {
+      const page = await context.newPage();
+      const response = await page.goto(`${KIT_ORIGIN}${eventPath}`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      const card = page.getByTestId("kit-seat-card");
+      await expect(card.getByRole("heading", { name: "Log in to RSVP" })).toBeVisible();
+      await expect(card.getByRole("link", { name: "Log in with Discord" })).toHaveAttribute(
+        "href",
+        `/join/discord?next=${encodeURIComponent(eventPath)}`,
+      );
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+      await test.info().attach(`kit-review-seat-card-guest-${viewport.width}`, {
+        body: await page.screenshot({ animations: "disabled", caret: "hide" }),
+        contentType: "image/png",
+      });
+      if (viewport.width === 1280) {
+        const rail = card.locator("..");
+        await expect(rail).toHaveCSS("position", "sticky");
+        const bounds = await rail.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.height).toBeLessThanOrEqual(viewport.height - 92);
+      }
+    } finally {
+      await context.close();
+    }
+  }
+});
 
 test("cross-target: normalized archive sections match", async () => {
   const bodies = new Map<string, string>();
