@@ -82,7 +82,10 @@ export async function assertHomeEvidence(page, state) {
   );
   if (session?.member)
     assert.equal(
-      await page.getByRole("link", { name: "Open Discord" }).getAttribute("href"),
+      await page
+        .getByRole("region", { name: "The lobby is open." })
+        .getByRole("link", { name: "Open Discord" })
+        .getAttribute("href"),
       "https://discord.gg/invite",
     );
   if (state === "joinFailed")
