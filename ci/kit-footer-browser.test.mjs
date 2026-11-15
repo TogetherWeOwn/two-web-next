@@ -62,7 +62,7 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
       response.end(styles);
     } else {
       response.writeHead(200, {
-        "content-type": "text/html",
+        "content-type": "text/html; charset=utf-8",
         "content-security-policy": "default-src 'none'; style-src 'self'",
       });
       response.end(
@@ -89,6 +89,10 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
             "rgb(28, 22, 20)",
           );
           const footer = page.getByRole("contentinfo");
+          assert.equal(
+            await footer.locator("p").textContent(),
+            "Together We Own · adult gaming community · founded 1998",
+          );
           const nav = footer.getByRole("navigation", { name: "Footer" });
           const evidence = `artifacts/kit-footer/${viewport.width}-${javaScriptEnabled ? "js" : "no-js"}`;
           await page.screenshot({ path: `${evidence}.png` });
