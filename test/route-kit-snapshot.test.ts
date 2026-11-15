@@ -61,9 +61,9 @@ describe("proposed Kit route snapshot", () => {
     const child = new Hono();
     child.get("/fake-mounted-route", (c) => c.text("fixture"));
     router.route("/fixture", child);
-    expect(() => assertMapCoverage(routeInventory(router), { ...snapshotObject(), rows: [] })).toThrow(
-      "Added route: GET /fixture/fake-mounted-route",
-    );
+    expect(() =>
+      assertMapCoverage(routeInventory(router), { ...snapshotObject(), rows: [] }),
+    ).toThrow("Added route: GET /fixture/fake-mounted-route");
   });
 
   it("rejects stale, duplicate, invalid and auth-mismatched rows", () => {
@@ -71,7 +71,8 @@ describe("proposed Kit route snapshot", () => {
     router.get("/fixture", (c) => c.text("fixture"));
     const actual = routeInventory(router);
     const row = { method: "GET", path: "/fixture", auth: "public" };
-    const check = (rows: unknown[]) => () => assertMapCoverage(actual, { ...snapshotObject(), rows });
+    const check = (rows: unknown[]) => () =>
+      assertMapCoverage(actual, { ...snapshotObject(), rows });
     expect(check([{ ...row, path: "/stale" }])).toThrow("Removed route: GET /stale");
     expect(check([row, row])).toThrow("Duplicate method/path");
     expect(check([{ ...row, method: "get" }])).toThrow("Invalid route map row: 0");
