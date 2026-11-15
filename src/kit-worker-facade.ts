@@ -13,6 +13,13 @@ export type KitWorkerProtector = (
   env: Env,
 ) => Promise<Response>;
 type Fn = (...args: unknown[]) => unknown;
+type Facade<T> = {
+  [K in keyof T]: K extends "fetch"
+    ? T[K] extends (...args: infer A) => unknown
+      ? (...args: A) => Promise<Response>
+      : T[K]
+    : OmitThisParameter<T[K]>;
+};
 
 // Wraps a generated adapter default export. Own properties and the prototype are
 // copied as written. Every function handler, fetch included, runs with the real
@@ -23,7 +30,7 @@ type Fn = (...args: unknown[]) => unknown;
 export function createKitWorkerFacade<T extends object>(
   adapter: T,
   protect: KitWorkerProtector = protectKitWorkerResponse,
-): T {
+): Facade<T> {
   if (adapter === null || typeof adapter !== "object") {
     throw new TypeError("kit worker facade: adapter must be an object");
   }
@@ -84,5 +91,5 @@ export function createKitWorkerFacade<T extends object>(
     },
   };
   descriptors[KIT_WORKER_FACADE as unknown as string] = { value: true };
-  return Object.create(Object.getPrototypeOf(adapter), descriptors) as T;
+  return Object.create(Object.getPrototypeOf(adapter), descriptors) as Facade<T>;
 }

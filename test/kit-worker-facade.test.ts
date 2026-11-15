@@ -1,5 +1,5 @@
 // Runtime design credit: Rick7C2, draft #2092 at eb1ba5d47e6d5a35a0a6deb2b7532b4c045865f3.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createKitWorkerFacade, KIT_WORKER_FACADE } from "../src/kit-worker-facade";
 
 const env = { APP_URL: "https://togetherweown.com" };
@@ -80,6 +80,18 @@ describe("createKitWorkerFacade", () => {
     }
     const facade = createKitWorkerFacade(new Adapter(), passthrough);
     expect(facade.scheduled()).toBe("adapter");
+  });
+
+  it("returns a promise for a synchronous adapter with its arguments preserved", async () => {
+    const adapter = {
+      fetch(request: Request, _env: typeof env, label: string) {
+        return new Response(`${request.method}:${label}`);
+      },
+    };
+    const result = createKitWorkerFacade(adapter, passthrough).fetch(req(), env, "ok");
+    expectTypeOf(result).toEqualTypeOf<Promise<Response>>();
+    expect(result).toBeInstanceOf(Promise);
+    expect(await (await result).text()).toBe("GET:ok");
   });
 
   it("does not consume or lock the returned stream", async () => {
