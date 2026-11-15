@@ -57,6 +57,18 @@ export async function withKitOfflineBrowser({ source, page: fixture }, callback)
         const url = new URL(route.request().url());
         if (url.origin === origin && route.request().method() === "GET") {
           if (url.pathname === path) return route.fulfill({ contentType: "text/html", body: html });
+          if (url.pathname === "/fonts/mona-sans-latin-wght.woff2") {
+            return route.fulfill({
+              contentType: "font/woff2",
+              body: await readFile(join(root, "public", url.pathname.slice(1))),
+            });
+          }
+          if (["/theme-tokens.css", "/theme.css", "/schedule-theme.css"].includes(url.pathname)) {
+            return route.fulfill({
+              contentType: "text/css",
+              body: await readFile(join(root, "public", url.pathname.slice(1))),
+            });
+          }
           const directory = join(output, "client");
           const asset = resolve(directory, url.pathname.slice(1));
           if (
