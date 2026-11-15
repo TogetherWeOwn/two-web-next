@@ -264,6 +264,10 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
 // worker can enable the member board, live event detail, and join entries for
 // their Kit journeys. Flags are honoured only for an HTTP loopback APP_URL;
 // deployed Workers retain the shipped manifest. No flag mutates that manifest.
+// The fixture exercises the actual Kit dispatcher rather than a second render
+// implementation. Each override is restricted to its exact method and path;
+// absent flags leave the manifest unchanged, including the disabled join route.
+// An invalid or non-loopback APP_URL also leaves production ownership unchanged.
 export function fixtureManifestFor(env: {
   APP_URL?: string;
   KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
@@ -904,9 +908,8 @@ export async function dispatchHookRequest(
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
   // closed to guest-equivalent locals, exactly as if no bridge were wired.
   // It runs outside the member-read boundary: its session read is not member data.
-  // Deferred as a closure because the live detail wrapper runs before it (see
-  // below): the bridge still precedes every render, but a throttled detail
-  // client never reaches it.
+  // Deferred for the live detail wrapper: the bridge still precedes every
+  // render, but a throttled detail client never reaches it.
   const bridgeSession = async (): Promise<void> => {
     if (!deps.sessionFor) return;
     try {
