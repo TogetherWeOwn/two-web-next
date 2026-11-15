@@ -108,6 +108,10 @@ export async function request({ env, path, actor, audit }) {
               "let current; export const setEnv = (value) => { current = value; }; export const env = new Proxy({}, { get: (_, key) => Reflect.get(current, key) });",
             loader: "js",
           }));
+          plugin.onLoad({ filter: /\.css$/ }, ({ path }) => {
+            styles.push(readFileSync(path, "utf8"));
+            return { contents: "", loader: "js" };
+          });
           plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
             const { js, css } = compile(readFileSync(path, "utf8"), {
               generate: "server",
