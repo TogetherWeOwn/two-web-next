@@ -17,7 +17,7 @@ security or no-JavaScript requirements.
 
 The [route map](../kit-route-map.md) is a planning snapshot, not proof of
 behavioral parity, final classification, or completed migration. The merged
-[`fetchApp` seam](../../test/http-seam.ts) supports testing dispatch; it does
+[`fetchApp` seam](../../test/helpers/fetch-app.ts) supports testing dispatch; it does
 not establish built-Worker parity. A post-Ember inventory, map and pure-Hono
 golden refresh and revalidation remain mandatory before shared-dispatch
 integration or any production family flip. Later production flips also require verification
