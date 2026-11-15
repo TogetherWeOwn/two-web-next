@@ -52,7 +52,8 @@ export async function withKitOfflineBrowser(
   if (typeof search !== "string" || (search && !search.startsWith("?")) || search.includes("#")) {
     throw new Error("Fixture search must be a query string");
   }
-  return withKitBrowserFixture({ source, page: fixture }, async ({ root, output }) => {
+  const options = { source, page: fixture, csr: javaScriptEnabled };
+  return withKitBrowserFixture(options, async ({ root, output }) => {
     const entry = join(root, "fixture-server.mjs");
     await build({
       stdin: {
