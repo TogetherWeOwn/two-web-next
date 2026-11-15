@@ -1,6 +1,14 @@
+import { existsSync } from "node:fs";
 import postgres from "postgres";
 import { requireTestDatabase } from "../ci-only.mjs";
 import { expect, localOrigin, test } from "../fixtures";
+import {
+  captureWithGeometry,
+  captureWithoutFontWait,
+  loadVisualFont,
+  readCaptureGeometry,
+  renderedPlatformFonts,
+} from "./font-evidence";
 
 // Public pages only: no session, no writes. Server-rendered times depend on the
 // wall clock, so every <time> element is masked; everything else must match the
@@ -23,20 +31,13 @@ const VIEWPORTS: Array<[name: string, size: { width: number; height: number }]> 
 
 for (const [viewport, size] of VIEWPORTS) {
   for (const [name, path] of ROUTES) {
-    test(`${name} @ ${viewport}`, async ({ page }) => {
+    test(`${name} @ ${viewport}`, async ({ page }, testInfo) => {
       await page.setViewportSize(size);
-      // The content face is font-display: optional, so once fallback paints a
-      // late face never swaps in and load-timing settles raced first paint
-      // (privacy-mobile, five flakes). On content pages register the same
-      // woff2 with display: swap via the FontFace API (in-test only; the
-      // served document and its CSP hash stay untouched) so text settles on
-      // brand metrics before capture. The anchor fails loudly if the shipped
-      // face signature ever changes.
+      // Normalize content screenshots with a separately named, explicitly
+      // loaded face; it must not compete with the shipped optional face.
       const OPTIONAL_FACE =
         "font-family:Mona Sans Content;font-weight:200 900;font-display:optional;";
       expect(OPTIONAL_FACE.replace("optional;", "optionalfoo;")).not.toContain(OPTIONAL_FACE);
-      const LATIN_RANGE =
-        "U+0-FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD";
       const response = await page.goto(path);
       expect(response?.status()).toBe(200);
       await page.waitForLoadState("networkidle");
@@ -50,41 +51,103 @@ for (const [viewport, size] of VIEWPORTS) {
         );
         expect(saw).toBe(true);
       }
-      await page.evaluate(
-        async (args: { range: string }) => {
-          if (document.querySelector(".content-theme")) {
-            document.fonts.add(
-              new FontFace(
-                "Mona Sans Content",
-                'url("/fonts/mona-sans-latin-wght.woff2") format("woff2")',
-                {
-                  weight: "200 900",
-                  display: "swap",
-                  unicodeRange: args.range,
-                },
-              ),
-            );
-            await Promise.all([
-              document.fonts.load('700 16px "Mona Sans Content"', "Privacy"),
-              document.fonts.load('400 16px "Mona Sans Content"', "Privacy"),
-            ]);
-            const deadline = Date.now() + 10000;
-            while (!document.fonts.check('700 16px "Mona Sans Content"')) {
-              if (Date.now() > deadline)
-                throw new Error("Mona Sans Content face never became available");
-              await new Promise((resolve) => setTimeout(resolve, 50));
-            }
+      if (isContentPage) {
+        const font = await loadVisualFont(page, {
+          url: "/fonts/mona-sans-latin-wght.woff2",
+          weight: "200 900",
+        });
+        expect(font.status).toBe("loaded");
+        await page.evaluate((family) => {
+          const root = document.querySelector<HTMLElement>(".content-theme")!;
+          const stack = getComputedStyle(root).getPropertyValue("--font-display");
+          if (!/^\s*['"]?Mona Sans Content['"]?\s*,/.test(stack)) {
+            throw new Error("Unexpected content display font stack");
           }
-          await document.fonts.ready;
-        },
-        { range: LATIN_RANGE },
-      );
-      await expect(page).toHaveScreenshot(`${name}-${viewport}.png`, {
-        fullPage: true,
-        mask: [page.locator("time")],
-      });
+          root.style.setProperty(
+            "--font-display",
+            stack.replace(/^\s*['"]?Mona Sans Content['"]?\s*,/, `"${family}",`),
+          );
+        }, font.family);
+        await page.evaluate(() => document.fonts.ready);
+        const fonts = await renderedPlatformFonts(page, ".content-theme h1");
+        expect(fonts.length).toBeGreaterThan(0);
+        expect(
+          fonts.every(
+            (used) =>
+              used.isCustomFont &&
+              used.glyphCount > 0 &&
+              used.postScriptName === "MonaSansExtraLight-Regular",
+          ),
+        ).toBe(true);
+        const snapshot = `${name}-${viewport}.png`;
+        expect(existsSync(testInfo.snapshotPath(snapshot))).toBe(true);
+        const nodes = { heading: ".content-theme h1" };
+        const options = {
+          mask: [page.locator("time")],
+          animations: "disabled" as const,
+          caret: "hide" as const,
+          scale: "css" as const,
+        };
+        const first = await captureWithGeometry(page, nodes, options);
+        await testInfo.attach("first-capture", { body: first.png, contentType: "image/png" });
+        await testInfo.attach("first-geometry", {
+          body: JSON.stringify({ before: first.before, after: first.after, dimensions: first.dimensions }),
+          contentType: "application/json",
+        });
+        expect.soft(first.after).toEqual(first.before);
+        expect.soft(first.dimensions.width).toBe(size.width);
+        expect.soft(first.dimensions.height).toBe(first.before.document.scrollHeight);
+        expect.soft(first.png).toMatchSnapshot(snapshot, { maxDiffPixels: 300 });
+        const second = await captureWithGeometry(page, nodes, options);
+        await testInfo.attach("second-capture", { body: second.png, contentType: "image/png" });
+        expect.soft(second.before).toEqual(first.after);
+        expect.soft(second.after).toEqual(first.after);
+        expect.soft(second.dimensions).toEqual(first.dimensions);
+        expect.soft(second.png.equals(first.png)).toBe(true);
+      } else {
+        await expect(page).toHaveScreenshot(`${name}-${viewport}.png`, {
+          fullPage: true,
+          mask: [page.locator("time")],
+        });
+      }
     });
   }
+}
+
+for (const [viewport, size] of VIEWPORTS) {
+  test(`cold optional fallback does not swap @ ${viewport}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const request = page.waitForRequest((req) => req.url().includes("mona-sans-latin-wght.woff2"));
+    await page.route("**/fonts/mona-sans-latin-wght.woff2", async (route) => {
+      await gate;
+      await route.continue();
+    });
+    try {
+      expect((await page.goto("/about", { waitUntil: "domcontentloaded" }))?.status()).toBe(200);
+      await request;
+      const heading = ".content-theme h1";
+      await expect.poll(async () => {
+        const fonts = await renderedPlatformFonts(page, heading);
+        return fonts.length > 0 && fonts.every((font) =>
+          font.glyphCount > 0 && !/^MonaSansExtraLight/.test(font.postScriptName),
+        );
+      }).toBe(true);
+      expect(await page.evaluate(() => document.fonts.status)).toBe("loading");
+      const before = await readCaptureGeometry(page, { heading });
+      const fonts = await renderedPlatformFonts(page, heading);
+      const painted = await captureWithoutFontWait(page);
+      expect([painted.readUInt32BE(16), painted.readUInt32BE(20)]).toEqual([size.width, size.height]);
+      release();
+      await page.evaluate(() => document.fonts.ready);
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      expect(await renderedPlatformFonts(page, heading)).toEqual(fonts);
+      expect(await readCaptureGeometry(page, { heading })).toEqual(before);
+    } finally {
+      release();
+    }
+  });
 }
 
 // Event member states. Both fixtures are inserted AFTER the public routes
