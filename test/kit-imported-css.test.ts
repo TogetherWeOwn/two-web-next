@@ -8,7 +8,8 @@ import { collectImportedCss } from "./helpers/kit-imported-css";
 
 it("retains imported CSS alongside Svelte-emitted styles in SSR fixtures", async () => {
   const root = resolve(import.meta.dirname, "..");
-  const { compile } = createRequire(join(root, "web/package.json"))("svelte/compiler");
+  const webRequire = createRequire(join(root, "web/package.json"));
+  const { compile } = webRequire("svelte/compiler");
   const dir = mkdtempSync(join(tmpdir(), "kit-css-fixture-"));
   try {
     writeFileSync(join(dir, "imported.css"), ".imported-sentinel { color: red; }");
