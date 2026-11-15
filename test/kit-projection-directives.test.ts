@@ -30,9 +30,15 @@ describe("Kit projection source directives", () => {
     );
   });
 
-  it("rejects an unterminated exclusion at EOF", () => {
-    const css = `${SOURCE_GLOB}\n@source not "${mirror}excluded"`;
-    expect(() => readSourceRules(css, sourceDir)).toThrow(/unsupported @source not/);
+  it("rejects incomplete or comment-separated exclusions", () => {
+    for (const directive of [
+      `@source not "${mirror}excluded"`,
+      `@source /* reason */ not "${mirror}excluded";`,
+    ]) {
+      expect(() => readSourceRules(`${SOURCE_GLOB}\n${directive}`, sourceDir)).toThrow(
+        /unsupported @source not/,
+      );
+    }
   });
 
   it("rejects unsupported, outside and escaping exclusions", () => {
