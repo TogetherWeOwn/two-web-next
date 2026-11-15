@@ -54,8 +54,12 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
     bundle: true,
     write: false,
   });
-  // Match the Kit shell's lobby canvas; generated theme variables alone do not paint it.
-  const styles = `${bundledCss.outputFiles[0].text}\n${readFileSync(join(root, "web/src/ember-theme.css"), "utf8")}\n.base-theme { background-color: var(--g1); color: var(--t1); font-family: var(--font-ui); }`;
+  // The synthetic fixture does not process Tailwind's @theme block into CSS variables.
+  const theme = readFileSync(join(root, "web/src/ember-theme.css"), "utf8");
+  const fontUi = theme.match(/--font-ui:([^;]+);/)?.[1];
+  assert.ok(fontUi, "generated Kit UI font token must exist");
+  // Match the Kit shell's lobby canvas and use the generated UI font stack.
+  const styles = `${bundledCss.outputFiles[0].text}\n${theme}\n.base-theme { background-color: var(--g1); color: var(--t1); font-family: ${fontUi}; }`;
   const server = createServer((request, response) => {
     if (request.url === "/styles.css") {
       response.writeHead(200, { "content-type": "text/css" });
@@ -89,6 +93,10 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
             "rgb(28, 22, 20)",
           );
           const footer = page.getByRole("contentinfo");
+          assert.equal(
+            await footer.evaluate((element) => getComputedStyle(element).fontFamily),
+            '"Mona Sans", "Mona Sans Fallback", system-ui, sans-serif',
+          );
           assert.equal(
             await footer.locator("p").textContent(),
             "Together We Own · adult gaming community · founded 1998",
