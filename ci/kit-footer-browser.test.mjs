@@ -87,11 +87,22 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
           const nav = footer.getByRole("navigation", { name: "Footer" });
           const evidence = `artifacts/kit-footer/${viewport.width}-${javaScriptEnabled ? "js" : "no-js"}`;
           await page.screenshot({ path: `${evidence}.png` });
-          const results = await new AxeBuilder({ page })
-            .include("footer")
-            .withTags(WCAG_AA_TAGS)
-            .analyze();
-          assertNoViolations(results, `footer ${viewport.width} js=${javaScriptEnabled}`);
+          // Axe injects JavaScript, so audit an equivalent SSR page when scripts are disabled.
+          const auditContext = javaScriptEnabled ? context : await browser.newContext({ viewport });
+          try {
+            const auditPage = javaScriptEnabled ? page : await auditContext.newPage();
+            if (!javaScriptEnabled) {
+              await auditPage.goto(origin);
+              assert.equal(await auditPage.locator("footer").innerHTML(), await footer.innerHTML());
+            }
+            const results = await new AxeBuilder({ page: auditPage })
+              .include("footer")
+              .withTags(WCAG_AA_TAGS)
+              .analyze();
+            assertNoViolations(results, `footer ${viewport.width} js=${javaScriptEnabled}`);
+          } finally {
+            if (!javaScriptEnabled) await auditContext.close();
+          }
           const links = [
             ["About", "/about"],
             ["FAQ", "/faq"],
