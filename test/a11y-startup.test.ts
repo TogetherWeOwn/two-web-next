@@ -3,6 +3,7 @@ import { URL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import type { Env } from "../src/env";
+import { fetchApp } from "./helpers/fetch-app";
 
 const env: Env = {
   APP_URL: "https://127.0.0.1:8787",
@@ -28,7 +29,11 @@ describe("local accessibility worker startup", () => {
     for (const key of ["DB", "DATABASE_URL", "ADMIN_DB", "SESSION_STORE"]) {
       Object.defineProperty(bindings, key, { get: read });
     }
-    const response = await app.request(`${env.APP_URL}${path}`, {}, bindings);
+    const ctx = {
+      waitUntil: vi.fn(),
+      passThroughOnException: vi.fn(),
+    } as unknown as ExecutionContext;
+    const response = await fetchApp(new Request(`${env.APP_URL}${path}`), bindings, ctx);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/plain");
     expect(await response.text()).toContain("User-agent:");

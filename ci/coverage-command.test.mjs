@@ -160,6 +160,7 @@ const checkSteps = checkJob
   .slice(1)
   .map((entry) => ({
     label: entry.match(/^name: (.+)$/m)?.[1] ?? entry.split("\n", 1)[0],
+    id: entry.match(/^        id: ([\w-]+)$/m)?.[1],
     guard: entry.match(/^        if: (.+)$/m)?.[1] ?? "success()",
   }));
 const AUDIT = "Dependency audit (lockfile, including dev dependencies)";
@@ -170,7 +171,7 @@ const PATCH = "Patch coverage (WARN)";
 const SUMMARY = "Coverage job summary";
 const UPLOAD = "Upload coverage report";
 
-function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
+function evaluateGuard(guard, { jobFailed, scope, reportPresent, stepOutcomes }) {
   const expression = guard.replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, "$1");
   const tokens = expression.match(/'[^']*'|[A-Za-z_][\w.]*\(?|!=|==|&&|\|\||[()!]|\)/g) ?? [];
   assert.equal(tokens.join(""), expression.replace(/\s+/g, ""), `unsupported guard: ${guard}`);
@@ -200,6 +201,9 @@ function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
       );
       return close(reportPresent ? "present-hash" : "");
     }
+    const step = token.match(/^steps\.([\w-]+)\.outcome$/);
+    if (step) return stepOutcomes.get(step[1]) ?? "";
+    if (token === "env.KIT_CSS_FAILURE_DIR") return stepOutcomes.get("kit_css") ? "present" : "";
     const output = token.match(/^needs\.scope\.outputs\.(\w+)$/);
     assert(output, `unsupported guard token ${token}: ${guard}`);
     return scope[output[1]] ?? "";
@@ -244,23 +248,58 @@ function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
 
 // Walk the check job's steps in order. `failing` names the one step that fails
 // when it runs; a step whose guard is false is skipped without failing the job.
-function simulateCheckJob({ failing, scope, reportPresent = true }) {
+function simulateCheckJob({ failing, alsoFailing, scope, reportPresent = true }) {
   const outcomes = new Map();
+  const stepOutcomes = new Map();
   let jobFailed = false;
-  for (const { label, guard } of checkSteps) {
-    if (!evaluateGuard(guard, { jobFailed, scope, reportPresent })) {
-      outcomes.set(label, "skipped");
-      continue;
-    }
-    const failed = label === failing;
-    outcomes.set(label, failed ? "failure" : "success");
-    if (failed) jobFailed = true;
+  for (const { label, id, guard } of checkSteps) {
+    const runs = evaluateGuard(guard, { jobFailed, scope, reportPresent, stepOutcomes });
+    const outcome = !runs
+      ? "skipped"
+      : label === failing || label === alsoFailing
+        ? "failure"
+        : "success";
+    outcomes.set(label, outcome);
+    if (id) stepOutcomes.set(id, outcome);
+    if (outcome === "failure") jobFailed = true;
   }
   if (failing) assert.equal(outcomes.get(failing), "failure", `${failing} must run to fail`);
   return outcomes;
 }
 
 const codeScope = { docs_only: "false", draft: "false", full: "true", app: "true" };
+
+test("bounded CSS evidence is collected only after the Kit budget fails", () => {
+  const perf = "Kit performance budgets (worker + generated assets)";
+  const collect = "Collect bounded Kit CSS on budget failure";
+  const upload = "Upload bounded Kit CSS on budget failure";
+  const cleanup = "Remove Kit CSS failure diagnostic";
+  assert.equal(checkSteps.find((step) => step.label === perf)?.id, "kit_perf");
+  const failed = simulateCheckJob({ failing: perf, scope: codeScope });
+  for (const label of [collect, upload, cleanup]) assert.equal(failed.get(label), "success");
+  const partial = simulateCheckJob({ failing: perf, alsoFailing: collect, scope: codeScope });
+  assert.equal(partial.get(upload), "skipped");
+  assert.equal(partial.get(cleanup), "success");
+  for (const scenario of [
+    { scope: codeScope },
+    { failing: COVERAGE, scope: codeScope },
+    { scope: { ...codeScope, draft: "true" } },
+    { scope: { ...codeScope, docs_only: "true" } },
+    { scope: { ...codeScope, full: "false", app: "false", worker: "false" } },
+  ]) {
+    const outcomes = simulateCheckJob(scenario);
+    for (const label of [collect, upload, cleanup]) assert.equal(outcomes.get(label), "skipped");
+  }
+  const collectStep = checkJob
+    .split(/\n      - /)
+    .find((entry) => entry.startsWith(`name: ${collect}\n`));
+  const uploadStep = checkJob
+    .split(/\n      - /)
+    .find((entry) => entry.startsWith(`name: ${upload}\n`));
+  assert.match(collectStep, /env -i PATH="\$PATH" node ci\/kit-css-collect\.mjs/);
+  assert.match(uploadStep, /retention-days: 3/);
+  assert.match(uploadStep, /if-no-files-found: error/);
+});
 
 test("the check job models the guarded steps the simulation relies on", () => {
   const labels = checkSteps.map((step) => step.label);

@@ -510,8 +510,10 @@ Environment `production` protection and rejects the placeholder Hyperdrive id.
 By default, protection requires nonempty reviewers with self-review prevented;
 with `PRODUCTION_AUTO_APPROVE=true`, it instead requires a main-only deployment
 policy and successful staging deploy and `e2e-staging` runs on the exact SHA,
-whose `staging-quality` job (Lighthouse budgets and quality scores) must also
-have executed and passed.
+whose `staging-quality` job must also pass with origin web standards executed.
+Deployed-origin Lighthouse budgets and scores are report-only until the Ember
+and SvelteKit migration is complete (owner decision 2026-11-14). The separate
+PR quality gate remains unchanged.
 Both modes require successful exact-SHA CI. Admin bypass explicitly remains
 enabled by the owner's provisioning exception; neither the workflow nor
 the preflight claims to prevent an authorized administrator from bypassing review.
