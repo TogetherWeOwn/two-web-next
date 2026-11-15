@@ -98,7 +98,7 @@ describe("completed target artifact prerequisites", () => {
     const root = mkdtempSync(join(tmpdir(), "route-artifacts-"));
     const page = "web/src/routes/[id=number]/+page.svelte";
     const load = "web/src/routes/[id=number]/+page.server.ts";
-    const matcher = "web/src/params/number.ts";
+    const matcher = "web/src/params.ts";
     const add = (path: string) => {
       mkdirSync(dirname(join(root, path)), { recursive: true });
       writeFileSync(join(root, path), "fixture");
@@ -117,12 +117,28 @@ describe("completed target artifact prerequisites", () => {
       add(page);
       expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${load}`);
       add(load);
-      expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${matcher}`);
+      add("web/src/params/number.ts");
+      expect(() => assertTargetArtifacts(root, page)).toThrow("Missing regular params entry");
       add(matcher);
       expect(() => assertTargetArtifacts(root, page)).not.toThrow();
       const endpoint = "web/src/routes/+server.ts";
       add(endpoint);
       expect(() => assertTargetArtifacts(root, endpoint)).not.toThrow();
+      rmSync(join(root, matcher));
+      const namedTargets = [
+        "web/src/routes/[id=event-key]/+server.ts",
+        "web/src/routes/[id=123]/+server.ts",
+        "web/src/routes/[[id=event-key]]/+server.ts",
+        "web/src/routes/[...id=123]/+server.ts",
+      ];
+      for (const target of namedTargets) {
+        add(target);
+        expect(() => assertTargetArtifacts(root, target)).toThrow("Missing regular params entry");
+      }
+      add("web/src/params/index.js");
+      for (const target of namedTargets) {
+        expect(() => assertTargetArtifacts(root, target)).not.toThrow();
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -13,20 +13,31 @@ export function assertTargetArtifacts(root: string, target: unknown) {
     throw new Error("Unresolved or invalid target");
   }
 
-  const requireFile = (path: string) => {
+  const isFile = (path: string) => {
     try {
-      if (lstatSync(join(root, path)).isFile()) return;
+      return lstatSync(join(root, path)).isFile();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return false;
     }
-    throw new Error(`Missing regular file: ${path}`);
+  };
+  const requireFile = (path: string) => {
+    if (!isFile(path)) throw new Error(`Missing regular file: ${path}`);
   };
 
   requireFile(target);
   if (target.endsWith("/+page.svelte")) {
     requireFile(`${dirname(target)}/+page.server.ts`);
   }
-  for (const match of target.matchAll(/\[(?:\.\.\.)?[^\]/=]+=([a-zA-Z_][a-zA-Z0-9_]*)\]/g)) {
-    requireFile(`web/src/params/${match[1]}.ts`);
+  if (/\[(?:\.\.\.)?[\w-]+=[\w-]+\]/.test(target)) {
+    // Kit 3 resolves one params module; registry exports are not inspected here.
+    const entries = [
+      "web/src/params",
+      "web/src/params.ts",
+      "web/src/params.js",
+      "web/src/params/index.ts",
+      "web/src/params/index.js",
+    ];
+    if (!entries.some(isFile)) throw new Error("Missing regular params entry");
   }
 }
