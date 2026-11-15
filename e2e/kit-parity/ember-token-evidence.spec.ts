@@ -74,6 +74,19 @@ for (const target of targets) {
 
           const name = `ember-${target.name}-${viewport.size.width}-${state}`;
           await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: false });
+          if (target.name === "kit" && viewport.size.width === 390 && state === "default") {
+            await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+            const header = page.locator("[data-kit-site-header]");
+            await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+            await expect(header).toBeVisible();
+            const bounds = await header.boundingBox();
+            expect(bounds).not.toBeNull();
+            expect(Math.abs(bounds?.y ?? Infinity)).toBeLessThanOrEqual(1);
+            await page.screenshot({
+              path: testInfo.outputPath(`${name}-scrolled.png`),
+              fullPage: false,
+            });
+          }
           const receipt = {
             sha: process.env.GITHUB_SHA,
             path: target.path,
