@@ -115,7 +115,7 @@ for (const [viewport, size] of VIEWPORTS) {
 }
 
 for (const [viewport, size] of VIEWPORTS) {
-  test(`cold optional fallback does not swap @ ${viewport}`, async ({ page }) => {
+  test(`cold optional fallback does not swap @ ${viewport}`, async ({ page }, testInfo) => {
     await page.setViewportSize(size);
     let release = () => {};
     const gate = new Promise<void>((resolve) => (release = resolve));
@@ -139,6 +139,16 @@ for (const [viewport, size] of VIEWPORTS) {
       const fonts = await renderedPlatformFonts(page, heading);
       const painted = await captureWithoutFontWait(page);
       expect([painted.readUInt32BE(16), painted.readUInt32BE(20)]).toEqual([size.width, size.height]);
+      await testInfo.attach("cold-fallback", { body: painted, contentType: "image/png" });
+      // Keep layout unchanged and prove the visible heading contributed pixels.
+      await page.locator(heading).evaluate((el) => {
+        (el as HTMLElement).style.visibility = "hidden";
+      });
+      const hidden = await captureWithoutFontWait(page);
+      expect(hidden.equals(painted)).toBe(false);
+      await page.locator(heading).evaluate((el) => {
+        (el as HTMLElement).style.removeProperty("visibility");
+      });
       release();
       await page.evaluate(() => document.fonts.ready);
       await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
