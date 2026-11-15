@@ -5,6 +5,7 @@ import base from "../playwright.config";
 // base webServer and runner guard; evidence goes to CONTENT_CODE_DIAG_OUT.
 export default defineConfig({
   ...base,
+  webServer: { ...base.webServer, cwd: process.cwd() },
   globalTeardown: undefined,
   testDir: "../e2e/content-code-diagnostic",
   testMatch: "**/*.diagnostic.ts",
