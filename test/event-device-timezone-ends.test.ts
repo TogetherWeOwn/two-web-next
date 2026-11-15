@@ -197,6 +197,7 @@ let kitPromise:
   | Promise<{
       renderDetail(model: unknown): { head: string; body: string };
       client: string;
+      css: string;
     }>
   | undefined;
 function kitBundle() {
@@ -220,6 +221,7 @@ function kitBundle() {
         clientEntry,
         `import {hydrate} from 'svelte'; import Detail from ${component}; hydrate(Detail, {target:document.getElementById('detail-root'),props:{model:window.__detailModel}});`,
       );
+      const styles = { server: [] as string[], client: [] as string[] };
       const options = (generate: "server" | "client") => ({
         bundle: true,
         logLevel: "warning" as const,
@@ -231,6 +233,10 @@ function kitBundle() {
           {
             name: `device-timezone-ends-${generate}`,
             setup(plugin: import("esbuild").PluginBuild) {
+              plugin.onLoad({ filter: /\.css$/ }, (args) => {
+                styles[generate].push(readFileSync(args.path, "utf8"));
+                return { contents: "", loader: "js" };
+              });
               plugin.onLoad({ filter: /\.svelte$/ }, (args) => ({
                 contents: compile(readFileSync(args.path, "utf8"), {
                   generate,
@@ -251,6 +257,9 @@ function kitBundle() {
         format: "esm",
         outfile,
       });
+      expect(styles.server.join("\n")).toContain(
+        readFileSync(join(WORKTREE, "web/src/lib/site-header.css"), "utf8"),
+      );
       const server = await import(pathToFileURL(outfile).href);
       const client = await build({
         ...options("client"),
@@ -263,6 +272,7 @@ function kitBundle() {
       return {
         renderDetail: server.renderDetail as (model: unknown) => { head: string; body: string },
         client: client.outputFiles[0]!.text,
+        css: styles.server.join("\n"),
       };
     } finally {
       rmSync(scratch, { recursive: true, force: true });
@@ -321,10 +331,11 @@ async function renderFixture(view: View, clock: ClockCase) {
   const bundle = await kitBundle();
   const { head, body } = bundle.renderDetail(outcome.model);
   const model = JSON.stringify(outcome.model).replace(/</g, "\\u003c");
-  return {
-    html: `<!doctype html><html lang="en"><head>${head}</head><body><div id="detail-root">${body}</div><script>window.__detailModel=${model}</script></body></html>`,
-    client: bundle.client,
-  };
+  const html = `<!doctype html><html lang="en"><head>${head}<style data-kit-imported-css>${bundle.css}</style></head><body><div id="detail-root">${body}</div><script>window.__detailModel=${model}</script></body></html>`;
+  expect(html, "imported Kit CSS must reach the rendered fixture").toContain(
+    readFileSync(join(WORKTREE, "web/src/lib/site-header.css"), "utf8"),
+  );
+  return { html, client: bundle.client };
 }
 
 type ParsedNode = DefaultTreeAdapterMap["node"];

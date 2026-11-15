@@ -62,8 +62,10 @@ const { compile } = webRequire("svelte/compiler") as {
 };
 type RenderKit = (signal: string | null, data: Record<string, unknown>) => string;
 let renderKit: RenderKit;
+let kitCss = "";
 
 beforeAll(async () => {
+  const styles: string[] = [];
   const { outputFiles } = await build({
     stdin: {
       contents: `
@@ -89,6 +91,10 @@ beforeAll(async () => {
       {
         name: "kit-season-continuity-ssr",
         setup(plugin) {
+          plugin.onLoad({ filter: /\.css$/ }, ({ path }) => {
+            styles.push(readFileSync(path, "utf8"));
+            return { contents: "", loader: "js" };
+          });
           plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
             const { js } = compile(readFileSync(path, "utf8"), {
               generate: "server",
@@ -101,9 +107,13 @@ beforeAll(async () => {
       },
     ],
   });
-  ({ renderKit } = (await import(
+  kitCss = styles.join("\n");
+  expect(kitCss).toContain(readFileSync(join(root, "web/src/lib/site-header.css"), "utf8"));
+  const kit = (await import(
     `data:text/javascript;base64,${Buffer.from(outputFiles[0]!.text).toString("base64")}`
-  )) as { renderKit: RenderKit });
+  )) as { renderKit: RenderKit };
+  renderKit = (signal, data) =>
+    `<style data-kit-imported-css>${kitCss}</style>${kit.renderKit(signal, data)}`;
 });
 
 // Available-reads Hono fixture: joins grids render genuine-empty through a
@@ -300,6 +310,11 @@ describe("hot-zone season continuity (Hono signal links)", () => {
 });
 
 describe("hot-zone season continuity (Kit index + signal links)", () => {
+  it("applies the imported Kit CSS to the rendered fixture", () => {
+    const html = renderKit(null, kitFixture(null, "2026"));
+    expect(html).toContain(readFileSync(join(root, "web/src/lib/site-header.css"), "utf8"));
+  });
+
   it.each([...SEASONS])("Kit index keeps ?season=%s on nav and heading links", (season) => {
     const html = renderKit(null, kitFixture(null, season));
     for (const signal of SIGNALS) {
