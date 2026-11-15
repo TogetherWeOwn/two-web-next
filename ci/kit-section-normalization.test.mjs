@@ -215,7 +215,6 @@ const kitOf = (cards, ...rest) =>
   contractSectionOf(stripEmberDelta(section(cards, ...rest)), "past-events");
 const keys = ["a", "b", "c"];
 const both = (build) => ({ h: keys.map((k) => build(k)), e: keys.map((k) => build(k, true)) });
-
 test("Ember delta: legacy and Ember Kit sections equal Hono; Hono side stays strict", () => {
   const { h, e } = both((key, ember) => card({ key, ember }));
   assert.equal(kitOf(h), hono(h), "legacy Kit passes unchanged");
@@ -244,7 +243,6 @@ test("Ember delta: legacy and Ember Kit sections equal Hono; Hono side stays str
   ];
   assert.equal(kitOf(odd(true)), hono(odd(false)), "escaped text that mimics the delta is content");
 });
-
 test("Ember delta: feature assertions require glyph and label on every card", () => {
   const { h, e } = both((key, ember) => card({ key, ember }));
   assertEmberArchive(section(e));
@@ -264,7 +262,6 @@ test("Ember delta: feature assertions require glyph and label on every card", ()
   assert.throws(() => assertEmberArchive(section(redistributed)), /multiple wrappers on one card/);
   assert.throws(() => kitOf(redistributed), /multiple wrappers on one card/);
 });
-
 test("Ember delta: glyph, label, wrapper, and topology mutations fail closed", () => {
   const ember = card({ ember: true });
   const mutants = {
@@ -382,13 +379,20 @@ test("Ember delta: glyph, label, wrapper, and topology mutations fail closed", (
   for (const hidden of [glyphHtml(), labelHtml, card({ key: "hidden" })]) {
     assert.throws(() => assertEmberArchive(section([ember], `<template>${hidden}</template>`)));
   }
+  for (const bad of [
+    section([], `<template>${ember}</template>`),
+    section([]) + ember,
+    `<template>${section([ember])}</template>`,
+  ]) {
+    assert.throws(() => assertEmberArchive(bad), /Ember archive delta/);
+    assert.throws(() => stripEmberDelta(bad), /Ember archive delta/);
+  }
   assert.throws(() => stripEmberDelta("<p>x</p>"), /exactly one archive section/);
   assert.throws(
     () => stripEmberDelta(section([ember]) + section([ember])),
     /exactly one archive section/,
   );
 });
-
 test("Ember delta: residual differences from Hono stay visible", () => {
   const base = (o) => [card({ key: "a", ember: true, ...o }), card({ key: "b", ember: true })];
   const expected = hono([card({ key: "a" }), card({ key: "b" })], pagerHtml(), "x");
@@ -443,7 +447,6 @@ test("Ember delta: residual differences from Hono stay visible", () => {
   );
   assert.notEqual(kitOf([], "<p>No results</p>"), hono([], "<p>No events</p>"));
 });
-
 test("Ember delta: existing parity remains strict until activation", () => {
   const { h, e } = both((key, ember) => card({ key, ember }));
   assert.notEqual(contractSectionOf(section(e), "past-events"), hono(h));

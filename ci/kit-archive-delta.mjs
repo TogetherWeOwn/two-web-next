@@ -3,7 +3,6 @@
 // SVG glyph, h2 and label. Cut only validated chrome ranges and retain residual
 // bytes for strict comparison. Partial or misplaced Ember markup is rejected.
 import { parseFragment } from "parse5";
-
 const SVG = "http://www.w3.org/2000/svg";
 const HTML = "http://www.w3.org/1999/xhtml";
 const HASH = "(?: svelte-[a-z0-9]+)?";
@@ -19,22 +18,18 @@ const flagged = (el) =>
   isEl(el) &&
   (["svg", "circle"].includes(el.tagName) ||
     classTokens(el).some((t) => ["state-glyph", "event-title", "event-state"].includes(t)));
-
 const isCard = (n) =>
   n?.tagName === "li" && n.attrs.some((a) => a.name === "data-testid" && a.value === "event-card");
-
 function walk(node, visit) {
   visit(node);
   for (const child of node.childNodes ?? []) walk(child, visit);
   if (node.content) walk(node.content, visit);
 }
-
 const range = (n) => [n.sourceCodeLocation.startOffset, n.sourceCodeLocation.endOffset];
 const tagRange = (n) => [
   n.sourceCodeLocation.startTag.startOffset,
   n.sourceCodeLocation.startTag.endOffset,
 ];
-
 function validate(wrapper, raw) {
   const row = wrapper.parentNode;
   const info = row && isEl(row) ? row : fail("wrapper has no parent");
@@ -89,7 +84,6 @@ function validate(wrapper, raw) {
     ],
   };
 }
-
 function strip(raw) {
   const root = parseFragment(raw, { sourceCodeLocationInfo: true });
   const all = [];
@@ -100,7 +94,14 @@ function strip(raw) {
       n.attrs.some((a) => a.name === "data-testid" && a.value === "past-events"),
   );
   if (sections.length !== 1) fail("expected exactly one archive section");
-  const cards = all.filter(isCard).length;
+  const within = (node, ancestor) => {
+    for (let n = node.parentNode; n; n = n.parentNode) if (n === ancestor) return true;
+    return false;
+  };
+  if (!within(sections[0], root)) fail("archive section is inert");
+  const cardNodes = all.filter(isCard);
+  if (cardNodes.some((card) => !within(card, sections[0]))) fail("card outside active archive");
+  const cards = cardNodes.length;
   const claimed = new Set();
   const decoratedCards = new Set();
   const cuts = [];
@@ -123,11 +124,9 @@ function strip(raw) {
     html = html.slice(0, start) + html.slice(end);
   return { html, cards, ember: wrappers.length };
 }
-
 export function stripEmberDelta(raw) {
   return strip(raw).html;
 }
-
 // Independent feature assertion: every card carries the glyph and the label.
 export function assertEmberArchive(raw) {
   const { cards, ember } = strip(raw);
