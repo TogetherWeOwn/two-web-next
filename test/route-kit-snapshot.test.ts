@@ -156,10 +156,14 @@ describe("completion declarations", () => {
         "docs/adr/0001-sveltekit-page-renderer.md#page-families-move-to-kit-before-m0",
       ]) {
         expect(() =>
-          assertCompletionDeclarations(root, [{ scope: "page-cutover", source: sourceName, target }], {
-            ...declarations,
-            sources: [sourceName],
-          }),
+          assertCompletionDeclarations(
+            root,
+            [{ scope: "page-cutover", source: sourceName, target }],
+            {
+              ...declarations,
+              sources: [sourceName],
+            },
+          ),
         ).toThrow("Completion requires audited case-level evidence");
       }
       const namedTarget = "web/src/routes/[id=number]/+server.ts";
