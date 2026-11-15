@@ -1,8 +1,11 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { URL } from "node:url";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import app from "../src/index";
+import { assertTargetArtifacts } from "./helpers/route-kit-artifacts";
 import {
   assertRouteInventory,
   routeInventory,
@@ -87,6 +90,68 @@ describe("proposed Kit route snapshot", () => {
     expect(() => assertMapCoverage(actual, { ...snapshotObject(), live: true })).toThrow(
       "Invalid planning route map",
     );
+  });
+});
+
+describe("completed target artifact prerequisites", () => {
+  it("distinguishes unresolved targets and each missing artifact", () => {
+    const root = mkdtempSync(join(tmpdir(), "route-artifacts-"));
+    const page = "web/src/routes/[id]/+page.svelte";
+    const load = "web/src/routes/[id]/+page.server.ts";
+    const matcher = "web/src/params.ts";
+    const add = (path: string) => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), "fixture");
+    };
+    try {
+      expect(() => assertTargetArtifacts(root, { state: "unresolved" })).toThrow(
+        "Unresolved or invalid target",
+      );
+      expect(() => assertTargetArtifacts(root, "web/src/routes/../+server.ts")).toThrow(
+        "Unresolved or invalid target",
+      );
+      expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${page}`);
+      mkdirSync(join(root, page), { recursive: true });
+      expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${page}`);
+      rmSync(join(root, page), { recursive: true });
+      add(page);
+      expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${load}`);
+      add(load);
+      expect(() => assertTargetArtifacts(root, page)).not.toThrow();
+      const endpoint = "web/src/routes/+server.ts";
+      add(endpoint);
+      expect(() => assertTargetArtifacts(root, endpoint)).not.toThrow();
+      const newlineTarget = "web/src/routes/+server.ts\n";
+      add(newlineTarget);
+      expect(() => assertTargetArtifacts(root, newlineTarget)).toThrow(
+        "Unresolved or invalid target",
+      );
+      const grouped = "web/src/routes/(legacy-[id=number])/about/+server.ts";
+      add(grouped);
+      expect(() => assertTargetArtifacts(root, grouped)).not.toThrow();
+      const namedTargets = [
+        "web/src/routes/(legacy-[ignored=number])/[id=number]/+server.ts",
+        "web/src/routes/[id=event-key]/+server.ts",
+        "web/src/routes/[id=123]/+server.ts",
+        "web/src/routes/[[id=event-key]]/+server.ts",
+        "web/src/routes/[...id=123]/+server.ts",
+      ];
+      for (const target of namedTargets) {
+        add(target);
+        expect(() => assertTargetArtifacts(root, target)).toThrow(
+          "Named matcher targets are unsupported",
+        );
+      }
+      add(matcher);
+      mkdirSync(join(root, "web/src/params/index.ts"), { recursive: true });
+      for (const target of namedTargets) {
+        expect(() => assertTargetArtifacts(root, target)).toThrow(
+          "Named matcher targets are unsupported",
+        );
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
