@@ -70,8 +70,10 @@ for (const size of [
       const positive = await observe(mona.family);
       const sameFace = await observe(sameMona.family);
       const negative = await observe(serif.family);
+      const observations = { positive, sameFace, negative };
+      console.log(`font-identity-observations @ ${size.width}: ${JSON.stringify(observations)}`);
       await testInfo.attach("font-identity-observations.json", {
-        body: JSON.stringify({ positive, sameFace, negative }, null, 2),
+        body: JSON.stringify(observations, null, 2),
         contentType: "application/json",
       });
       for (const fonts of [positive, sameFace, negative]) {
