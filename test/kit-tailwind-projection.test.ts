@@ -1,5 +1,6 @@
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -134,6 +135,29 @@ describe("Kit Tailwind scanner projection", () => {
       expect(() => regenerateProjection({ sourceDir, outputDir })).toThrow();
       expect(readFileSync(join(outside, "Card.svelte"), "utf8")).toBe("untouched");
       expect(readFileSync(join(sourceDir, "Card.svelte"), "utf8")).toBe(source);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not overwrite source through a hard-linked mirror file", () => {
+    const root = mkdtempSync(join(tmpdir(), "kit-projection-"));
+    try {
+      const sourceDir = join(root, "source");
+      const outputDir = join(root, "output");
+      mkdirSync(sourceDir);
+      mkdirSync(outputDir);
+      writeFileSync(
+        join(sourceDir, "app.css"),
+        '@source "../.svelte-kit/tailwind-projection/**/*.svelte";',
+      );
+      const original = join(sourceDir, "Card.svelte");
+      const mirror = join(outputDir, "Card.svelte");
+      writeFileSync(original, source);
+      linkSync(original, mirror);
+      regenerateProjection({ sourceDir, outputDir });
+      expect(readFileSync(original, "utf8")).toBe(source);
+      expect(readFileSync(mirror, "utf8")).toBe(projectSvelte(source));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -143,7 +143,8 @@ export function regenerateProjection({
     for (const [target, content] of planned) {
       if (existsSync(target) && readFileSync(target, "utf8") === content) continue;
       mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, content);
+      rmSync(target, { force: true });
+      writeFileSync(target, content, { flag: "wx" });
       changed.push(target);
     }
     if (existsSync(mirrorDir)) {
