@@ -1,0 +1,56 @@
+name: lighthouse-timeout-contract
+
+# Exercise the runner's step-timeout semantics without contacting staging.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/lighthouse-timeout-contract.yml
+      - .github/workflows/web-quality-origin.yml
+      - ci/lighthouse-preserve-mobile.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  timeout-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Simulate a stalled advisory collection
+        id: collect
+        timeout-minutes: 1
+        continue-on-error: true
+        run: |
+          mkdir -p .lighthouseci
+          printf 'partial mobile sample\n' > .lighthouseci/lhr-123.json
+          sleep 90
+      - name: Preserve interrupted mobile samples
+        if: ${{ !cancelled() && steps.collect.outcome == 'failure' }}
+        run: bash ci/lighthouse-preserve-mobile.sh
+      - name: Simulate desktop cleanup
+        if: ${{ !cancelled() }}
+        run: |
+          rm .lighthouseci/lhr-123.json
+          test "$(< .lighthouseci/mobile-interrupted/lhr-123.json)" = 'partial mobile sample'
+      - name: Simulate the blocking standards step
+        id: standards
+        if: ${{ !cancelled() }}
+        run: test '${{ steps.collect.outcome }}' = failure
+      - name: Verify timeout and standards outcomes
+        if: ${{ !cancelled() }}
+        env:
+          COLLECT_OUTCOME: ${{ steps.collect.outcome }}
+          COLLECT_CONCLUSION: ${{ steps.collect.conclusion }}
+          STANDARDS_OUTCOME: ${{ steps.standards.outcome }}
+        run: |
+          test "$COLLECT_OUTCOME" = failure
+          test "$COLLECT_CONCLUSION" = success
+          test "$STANDARDS_OUTCOME" = success

@@ -290,5 +290,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const jsonRequested =
     format === "json" || args.some((arg, i) => arg === "--format" && args[i + 1] === "json");
   console.log(jsonRequested ? JSON.stringify(publicVerdict(result)) : md);
-  process.exit(exit);
+  // Let asynchronous pipe writes drain before preserving the gate's exit status.
+  process.exitCode = exit;
 }

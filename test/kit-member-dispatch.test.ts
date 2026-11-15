@@ -40,7 +40,10 @@ const eventFor = (path: string, method = "GET"): HookEventLike => {
     method,
     headers: { host: "next.example.test" },
   });
-  return { request, url: new URL(request.url), route: { id: "/members/[id]" } };
+  const url = new URL(request.url);
+  const isDataRequest = url.pathname.endsWith("/__data.json");
+  if (isDataRequest) url.pathname = url.pathname.slice(0, -"/__data.json".length);
+  return { request, url, isDataRequest, route: { id: "/members/[id]" } };
 };
 
 const authenticated = (userId: string): KitLocals => ({

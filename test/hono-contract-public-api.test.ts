@@ -128,6 +128,54 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("mounted public API: namespace boundary controls", () => {
+  it.each([
+    "/api/publicity",
+    "/api/publicity/",
+    "/api/publicity/foo",
+    "/api/public-ev",
+    "/api/public2",
+  ])("%s remains a branded HTML 404", async (path) => {
+    const res = await request(path);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toMatch(/We cannot find that page|error-heading/);
+    expect(() => JSON.parse(body)).toThrow();
+    noReads();
+  });
+
+  it.each([200, 404])("keeps asset lookup outside the namespace (asset %i)", async (status) => {
+    const fetch = vi.fn(
+      async () => new Response(status === 200 ? "asset-canary" : null, { status }),
+    );
+    const res = await request("/api/publicity", "GET", {}, { ...env, ASSETS: { fetch } } as Env);
+    expect(res.status).toBe(status);
+    expect(fetch).toHaveBeenCalledOnce();
+    if (status === 200) expect(await res.text()).toContain("asset-canary");
+    else expect(res.headers.get("content-type")).toContain("text/html");
+    noReads();
+  });
+
+  it.each(["not-a-key!!!", "%00"])("keeps malformed event key %s inert", async (key) => {
+    const res = await request(`/api/public/events/${key}`);
+    expect(res.status).toBe(422);
+    const raw = await res.text();
+    expect(raw).not.toContain(key);
+    const body = JSON.parse(raw);
+    expect(body.error.code).toBe("invalid_request");
+    expect(validatePublicSchema(body, "PublicDataError")).toEqual([]);
+    noReads();
+  });
+
+  it("keeps the community route under a hostile query without reflection", async () => {
+    const res = await request("/api/public/community?x=../etc/passwd");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.text()).not.toContain("etc/passwd");
+  });
+});
+
 describe("mounted public API: methods and conditional HEAD", () => {
   it.each(PATHS)(
     "HEAD reaches the GET handler and shares its cached representation: %s",
@@ -200,15 +248,27 @@ describe("mounted public API: methods and conditional HEAD", () => {
   );
 
   it.each(PATHS)(
-    "unsupported verbs reach the branded fallback, not a public read: %s",
+    "unsupported verbs reach the namespace fallback, not a public read: %s",
     async (path) => {
       for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
         const res = await request(path, method, { origin: ORIGIN });
         expect(res.status, method).toBe(404);
-        expect(res.headers.get("content-type")).toContain("text/html");
         expect(res.headers.get("cache-control")).toBe("no-store, private");
         expect(res.headers.has("allow")).toBe(false);
-        expect(await res.text()).toContain("We cannot find that page");
+        if (path.startsWith("/api/public/")) {
+          expect(res.headers.get("content-type")).toContain("application/json");
+          expect(await res.json()).toEqual({
+            error: {
+              code: "not_found",
+              message: "No such API path.",
+              request_id: res.headers.get("x-request-id"),
+              next: "Check the API path and retry.",
+            },
+          });
+        } else {
+          expect(res.headers.get("content-type")).toContain("text/html");
+          expect(await res.text()).toContain("We cannot find that page");
+        }
         noCorsOrCookie(res);
       }
       expect(publicReadGuard).not.toHaveBeenCalled();
@@ -273,9 +333,18 @@ describe("mounted public API: literal paths and decoded event keys", () => {
       expect(res.status).toBe(404);
       expect(res.headers.has("location")).toBe(false);
       expect(res.headers.get("cache-control")).toBe("no-store, private");
-      expect(await res.text()).toEqual(
-        method === "HEAD" ? "" : expect.stringContaining("We cannot find that page"),
-      );
+      if (method === "HEAD") expect(await res.text()).toBe("");
+      else if (path.startsWith("/api/public/")) {
+        expect(res.headers.get("content-type")).toContain("application/json");
+        expect(await res.json()).toEqual({
+          error: {
+            code: "not_found",
+            message: "No such API path.",
+            request_id: res.headers.get("x-request-id"),
+            next: "Check the API path and retry.",
+          },
+        });
+      } else expect(await res.text()).toContain("We cannot find that page");
     }
     expect(publicReadGuard).not.toHaveBeenCalled();
     noReads();

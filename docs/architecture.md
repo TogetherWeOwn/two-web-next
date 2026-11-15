@@ -285,6 +285,7 @@ exactly once.
 | `src/bot/` | bot |
 | `src/config-warn.ts` | observability |
 | `src/counts.ts` | content |
+| `src/css-dictionary.ts` | content |
 | `src/csp-report-body.ts` | http-guard |
 | `src/csp-report-uri.ts` | http-guard |
 | `src/csp-reports.ts` | http-guard |
@@ -299,6 +300,7 @@ exactly once.
 | `src/error-responses.tsx` | entry |
 | `src/errors.tsx` | entry |
 | `src/events/` | events |
+| `src/events-critical-css.ts` | events |
 | `src/exception-class.ts` | observability |
 | `src/featured-eligibility.ts` | content |
 | `src/featured-image.ts` | content |
@@ -314,6 +316,7 @@ exactly once.
 | `src/home-copy.ts` | content |
 | `src/hotzones/` | events |
 | `src/html-outcome.ts` | entry |
+| `src/html-stream.ts` | http-guard |
 | `src/image-policy.ts` | content |
 | `src/index.tsx` | entry |
 | `src/invite-fallback.ts` | join |
@@ -334,6 +337,7 @@ exactly once.
 | `src/kit-past-events.ts` | events |
 | `src/kit-restored-write.ts` | entry |
 | `src/kit-session.ts` | auth |
+| `src/kit-worker-response.ts` | http-guard |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
 | `src/log-budget.ts` | observability |
