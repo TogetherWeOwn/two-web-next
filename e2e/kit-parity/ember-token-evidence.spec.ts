@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { test, expect } from "@playwright/test";
 import { HONO_ORIGIN, KIT_ORIGIN, PARITY_VIEWPORTS } from "../kit-parity";
+import { withKitOfflineBrowser } from "../../ci/kit-offline-browser.mjs";
 
 // Real-app viewport evidence, not visual-regression baseline acceptance.
 // CI runs this read-only capture before journeys mutate the disposable seed.
@@ -9,6 +10,35 @@ const targets = [
   { name: "kit", origin: KIT_ORIGIN, path: "/events/past" },
 ] as const;
 const states = ["default", "reduced-motion", "forced-colors", "keyboard-focus"] as const;
+
+// The row has no production consumer yet. Render the actual component in a
+// disposable Kit route; this capture does not claim consumer-page parity.
+test("captures structured-time row states in Kit without JavaScript", async ({}, testInfo) => {
+  test.setTimeout(180_000);
+  await withKitOfflineBrowser(
+    {
+      page: `<script>import StructuredTime from '#lib/StructuredTime.svelte';</script>
+<StructuredTime state="upcoming" startsAt="2026-12-01T19:00:00Z" zone="America/New_York" />
+<StructuredTime state="past" startsAt="2026-12-01T19:00:00Z" endsAt="2026-12-01T20:00:00Z" zone="UTC" />
+<StructuredTime state="cancelled" startsAt="2026-12-01T19:00:00Z" zone="UTC" />
+<StructuredTime state="upcoming" startsAt={null} />`,
+    },
+    async ({ page }: { page: any }) => {
+      const rows = page.locator(".row-time");
+      await expect(rows).toHaveCount(4);
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await page.screenshot({
+          path: testInfo.outputPath(`ember-structured-time-${viewport.width}.png`),
+          fullPage: false,
+        });
+      }
+    },
+  );
+});
 
 for (const target of targets) {
   for (const viewport of PARITY_VIEWPORTS) {
