@@ -16,28 +16,34 @@ const states = ["default", "reduced-motion", "forced-colors", "keyboard-focus"] 
 // disposable Kit route; this capture does not claim consumer-page parity.
 test("captures structured-time row states in Kit without JavaScript", async ({}, testInfo) => {
   test.setTimeout(180_000);
-  await withKitOfflineBrowser(
-    {
-      page: `<script>import StructuredTime from '#lib/StructuredTime.svelte';</script>
+  const fixture = `<script>import StructuredTime from '#lib/StructuredTime.svelte';</script>
 <StructuredTime state="upcoming" startsAt="2026-12-01T19:00:00Z" zone="America/New_York" />
 <StructuredTime state="past" startsAt="2026-12-01T19:00:00Z" endsAt="2026-12-01T20:00:00Z" zone="UTC" />
 <StructuredTime state="cancelled" startsAt="2026-12-01T19:00:00Z" zone="UTC" />
-<StructuredTime state="upcoming" startsAt={null} />`,
-    },
+<StructuredTime state="upcoming" startsAt={null} />`;
+  const viewports = [
+    { width: 1280, height: 800 },
+    { width: 390, height: 844 },
+  ];
+  await withKitOfflineBrowser({ page: fixture }, async ({ page }: { page: any }) => {
+    await expect(page.locator(".row-time")).toHaveCount(4);
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport);
+      await page.screenshot({
+        path: testInfo.outputPath(`ember-structured-time-${viewport.width}.png`),
+        fullPage: false,
+      });
+    }
+  });
+  // Axe injects scripts, so run it in a separate JavaScript-enabled context.
+  await withKitOfflineBrowser(
+    { page: fixture, javaScriptEnabled: true },
     async ({ page }: { page: any }) => {
-      const rows = page.locator(".row-time");
-      await expect(rows).toHaveCount(4);
-      for (const viewport of [
-        { width: 1280, height: 800 },
-        { width: 390, height: 844 },
-      ]) {
+      await expect(page.locator(".row-time")).toHaveCount(4);
+      for (const viewport of viewports) {
         await page.setViewportSize(viewport);
         const accessibility = await new AxeBuilder({ page }).include(".row-time").analyze();
         expect(accessibility.violations).toEqual([]);
-        await page.screenshot({
-          path: testInfo.outputPath(`ember-structured-time-${viewport.width}.png`),
-          fullPage: false,
-        });
       }
     },
   );

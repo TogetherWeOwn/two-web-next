@@ -7,7 +7,10 @@ import { chromium } from "playwright";
 import { withKitBrowserFixture } from "./kit-browser-fixture.mjs";
 
 // Build and render the supplied page without allowing browser network access.
-export async function withKitOfflineBrowser({ source, page: fixture }, callback) {
+export async function withKitOfflineBrowser(
+  { source, page: fixture, javaScriptEnabled = false },
+  callback,
+) {
   return withKitBrowserFixture({ source, page: fixture }, async ({ root, output }) => {
     const entry = join(root, "fixture-server.mjs");
     await build({
@@ -51,7 +54,7 @@ export async function withKitOfflineBrowser({ source, page: fixture }, callback)
     const html = await response.text();
     const browser = await chromium.launch({ headless: true });
     try {
-      const context = await browser.newContext({ javaScriptEnabled: false });
+      const context = await browser.newContext({ javaScriptEnabled });
       const unexpected = [];
       await context.route("**/*", async (route) => {
         const url = new URL(route.request().url());
@@ -62,9 +65,12 @@ export async function withKitOfflineBrowser({ source, page: fixture }, callback)
           if (
             asset.startsWith(`${directory}/`) &&
             url.pathname.startsWith("/_app/") &&
-            asset.endsWith(".css")
+            (asset.endsWith(".css") || (javaScriptEnabled && asset.endsWith(".js")))
           ) {
-            return route.fulfill({ contentType: "text/css", body: await readFile(asset) });
+            return route.fulfill({
+              contentType: asset.endsWith(".css") ? "text/css" : "text/javascript",
+              body: await readFile(asset),
+            });
           }
         }
         unexpected.push(route.request().url());
