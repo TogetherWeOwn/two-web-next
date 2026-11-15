@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "@playwright/test";
 import { HONO_ORIGIN, KIT_ORIGIN, PARITY_VIEWPORTS } from "../kit-parity";
 
@@ -10,6 +11,23 @@ const targets = [
   { name: "kit-join", origin: KIT_ORIGIN, path: "/join" },
 ] as const;
 const states = ["default", "reduced-motion", "forced-colors", "keyboard-focus"] as const;
+
+test("Kit join reflows at 320px and has no accessibility violations", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.route("**/*", (route) =>
+    new URL(route.request().url()).origin === KIT_ORIGIN
+      ? route.continue()
+      : route.abort("blockedbyclient"),
+  );
+  const response = await page.goto(`${KIT_ORIGIN}/join`);
+  expect(response?.status()).toBe(200);
+  expect(response?.headers()["x-two-renderer"]).toBe("kit");
+  await expect(page.getByTestId("join-oneclick")).toBeVisible();
+  const overflow = await page.evaluate("document.documentElement.scrollWidth > window.innerWidth");
+  expect(overflow).toBe(false);
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
 
 for (const target of targets) {
   for (const viewport of PARITY_VIEWPORTS) {
