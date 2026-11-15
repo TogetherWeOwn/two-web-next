@@ -13,7 +13,7 @@ let {
 </script>
 
 <span class="tag" class:live={variant === "live"} class:you={variant === "you"} class:echo={variant === "echo"} class:ok={variant === "ok"} class:warn={variant === "warn"}>
-  {#if dot || variant === "echo"}<span class="dot" aria-hidden="true"></span>{/if}
+  {#if dot}<span class="dot" aria-hidden="true"></span>{/if}
   {@render children()}
 </span>
 
@@ -41,7 +41,7 @@ let {
   .ok { color: var(--ok); }
   .warn { color: var(--warn); }
   .echo {
-    color: var(--t2);
+    color: var(--echo);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--echo) 50%, transparent);
   }
 

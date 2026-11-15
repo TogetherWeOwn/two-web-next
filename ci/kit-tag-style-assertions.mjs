@@ -17,7 +17,7 @@ export async function assertTagStyles(page) {
       neutral: "--t2",
       live: "--live",
       you: "--ember",
-      echo: "--t2",
+      echo: "--echo",
       ok: "--ok",
       warn: "--warn",
     };
@@ -66,7 +66,7 @@ export async function assertTagStyles(page) {
         }
       }
       const dot = tag.querySelector(".dot");
-      if (Boolean(dot) !== (variant === "live" || variant === "echo")) {
+      if (Boolean(dot) !== (variant === "live")) {
         failures.push(`${variant}: unexpected dot presence`);
       } else if (dot) {
         if (dot.getAttribute("aria-hidden") !== "true")
