@@ -4,7 +4,8 @@ Baseline: `origin/main` at `8fd5a826f999214f435fdd8abc87484b25666f4d`.
 The existing mounted-router inventory fixture has 116 distinct method/path entries;
 `test/route-inventory.test.ts` checks it against the mounted app in CI. The
 snapshot test also compares its method, path and auth labels with mounted
-registrations; it does not validate proposed targets or migration behavior.
+registrations and rejects malformed registration fields, duplicates and stale rows;
+it does not validate proposed targets or migration behavior.
 The earlier shared-control source audit was pinned
 to `0b867c1842c6b516846d3fc28242d9c29ae0c7b9`; refresh its evidence for this
 baseline. The subsequent public API unknown-path JSON fallback is a global error
