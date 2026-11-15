@@ -5,8 +5,10 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import AxeBuilder from "@axe-core/playwright";
 import { build } from "esbuild";
 import { chromium } from "playwright";
+import { assertNoViolations, WCAG_AA_TAGS } from "./a11y-policy.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const { compile } = createRequire(new URL("../web/package.json", import.meta.url))(
@@ -83,6 +85,13 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
           await page.goto(origin);
           const footer = page.getByRole("contentinfo");
           const nav = footer.getByRole("navigation", { name: "Footer" });
+          const evidence = `artifacts/kit-footer/${viewport.width}-${javaScriptEnabled ? "js" : "no-js"}`;
+          await page.screenshot({ path: `${evidence}.png` });
+          const results = await new AxeBuilder({ page })
+            .include("footer")
+            .withTags(WCAG_AA_TAGS)
+            .analyze();
+          assertNoViolations(results, `footer ${viewport.width} js=${javaScriptEnabled}`);
           const links = [
             ["About", "/about"],
             ["FAQ", "/faq"],
@@ -138,7 +147,9 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
               "none",
             );
           }
+          await page.screenshot({ path: `${evidence}-focus.png` });
           await page.emulateMedia({ forcedColors: "active" });
+          await page.screenshot({ path: `${evidence}-forced-colors.png` });
           const focused = nav.getByRole("link", { name: "Privacy", exact: true });
           assert.notEqual(
             await focused.evaluate((element) => getComputedStyle(element).outlineStyle),
