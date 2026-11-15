@@ -197,6 +197,10 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
               await link.evaluate((element) => getComputedStyle(element).outlineStyle),
               "none",
             );
+            assert.equal(
+              await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
+              "underline",
+            );
           }
           await page.screenshot({ path: `${evidence}-focus.png` });
           await page.emulateMedia({ forcedColors: "active" });

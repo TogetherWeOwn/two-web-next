@@ -32,7 +32,7 @@
   p { margin: 0; }
   nav { display: flex; flex-wrap: wrap; gap: var(--two-space-5); }
   a { color: var(--two-color-text-link); text-decoration: none; }
-  a:hover { text-decoration: underline; }
+  a:hover, a:focus-visible { text-decoration: underline; }
   a:focus-visible { outline: 2px solid var(--two-color-focus-ring); outline-offset: 3px; }
 
   @media (max-width: 820px) {
