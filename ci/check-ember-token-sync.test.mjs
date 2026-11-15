@@ -572,7 +572,7 @@ test("Kit exposes every utility role and Hono keeps only consumed author aliases
   const served = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"]
     .map((path) => outputs.get(path))
     .join("\n");
-  assert.ok(!css.includes("@theme static"), "unused utilities are not forced into the bundle");
+  assert.ok(css.includes("@theme static"), "theme variables survive without utility references");
   for (const [alias] of ROLES) {
     const utility =
       /^(g\d|hair\d|t\d|ember|on-accent|accent-hi|border|live|echo|ok|danger|warn|focus-ring)/.test(
