@@ -41,6 +41,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Prepare disposable runtime role
+        run: psql -h 127.0.0.1 -U agent_test -d two_web_next -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: b04aa9823e1a87c04284ea8fc20c63099338ac79
@@ -86,8 +88,6 @@ jobs:
           done
           npx --no-install playwright install --with-deps chromium
           node --test ci/discovery-title-evidence.test.mjs
-      - name: Prepare disposable runtime role
-        run: psql -h 127.0.0.1 -U agent_test -d two_web_next -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Seed only the disposable service
         run: |
           set -euo pipefail
