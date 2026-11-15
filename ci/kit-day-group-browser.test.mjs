@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -142,6 +142,16 @@ test("day groups retain their kit layout and list semantics at both widths", {
           await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
           true,
         );
+        if (process.env.DAY_GROUP_SCREENSHOT_DIR) {
+          mkdirSync(process.env.DAY_GROUP_SCREENSHOT_DIR, { recursive: true });
+          await page.screenshot({
+            path: join(
+              process.env.DAY_GROUP_SCREENSHOT_DIR,
+              `day-group-${viewport.width}x${viewport.height}.png`,
+            ),
+            fullPage: true,
+          });
+        }
       } finally {
         await context.close();
       }
