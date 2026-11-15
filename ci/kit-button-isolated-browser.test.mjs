@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import AxeBuilder from "@axe-core/playwright";
 import { chromium } from "playwright";
 import { serveKitFixture } from "./kit-hydration-harness.mjs";
 
@@ -51,17 +52,20 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
             assert.equal(await loading.locator(".spinner").count(), 1);
           }
           async function expectFocused(locator, visible = false) {
-            assert.equal(
-              await locator.evaluate(
-                (el, checkVisible) =>
-                  el === document.activeElement && (!checkVisible || el.matches(":focus-visible")),
-                visible,
-              ),
-              true,
-            );
+            assert.equal(await locator.evaluate((el) => el === document.activeElement), true);
+            if (visible)
+              assert.equal(await locator.evaluate((el) => el.matches(":focus-visible")), true);
           }
           await page.keyboard.press("Tab");
           await expectFocused(page.getByRole("button", { name: "Save event" }), true);
+          if (javaScriptEnabled) {
+            await page.screenshot({ path: `artifacts/kit-button/${viewport.width}-focus.png` });
+            const { violations } = await new AxeBuilder({ page }).include("body").analyze();
+            assert.deepEqual(
+              violations.filter(({ impact }) => ["critical", "serious"].includes(impact)),
+              [],
+            );
+          }
           await page.keyboard.press("Tab");
           await expectFocused(
             page.getByRole("button", { name: "Join Raid Night · Event is full" }),
@@ -97,16 +101,15 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
           assert.equal(await saved.locator(".undo").isVisible(), false);
           await saved.hover();
           assert.equal(await saved.locator(".undo").isVisible(), true);
+          if (javaScriptEnabled)
+            await page.screenshot({ path: `artifacts/kit-button/${viewport.width}-hover.png` });
           const accent = page.getByRole("button", { name: "Continue" });
-          assert.equal(
-            await accent.evaluate(
-              (el) =>
-                el.classList.contains("on-accent") &&
-                el.classList.contains("lg") &&
-                el.classList.contains("full-width"),
-            ),
-            true,
-          );
+          for (const name of ["on-accent", "lg", "full-width"]) {
+            assert.equal(
+              await accent.evaluate((el, cls) => el.classList.contains(cls), name),
+              true,
+            );
+          }
           assert.ok((await accent.boundingBox()).height >= 56);
           await saved.focus();
           await page.keyboard.press("Tab");
