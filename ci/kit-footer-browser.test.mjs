@@ -55,7 +55,7 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
     write: false,
   });
   // Match the Kit shell's lobby canvas; generated theme variables alone do not paint it.
-  const styles = `${bundledCss.outputFiles[0].text}\n${readFileSync(join(root, "web/src/ember-theme.css"), "utf8")}\n.base-theme { background-color: var(--g1); color: var(--t1); }`;
+  const styles = `${bundledCss.outputFiles[0].text}\n${readFileSync(join(root, "web/src/ember-theme.css"), "utf8")}\n.base-theme { background-color: var(--g1); color: var(--t1); font-family: var(--font-ui); }`;
   const server = createServer((request, response) => {
     if (request.url === "/styles.css") {
       response.writeHead(200, { "content-type": "text/css" });
@@ -132,6 +132,7 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
                 .trim();
               return [
                 style.paddingTop,
+                style.paddingBottom,
                 style.paddingLeft,
                 style.fontSize,
                 style.color,
@@ -139,7 +140,15 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
                 matchesToken,
               ];
             }),
-            ["32px", "44px", "14px", "rgb(168, 154, 142)", "#a89a8e", true],
+            [
+              "32px",
+              "44px",
+              viewport.width === 390 ? "20px" : "40px",
+              "14px",
+              "rgb(168, 154, 142)",
+              "#a89a8e",
+              true,
+            ],
           );
           assert.equal(
             await footer
@@ -147,6 +156,28 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
               .evaluate((element) => getComputedStyle(element).flexDirection),
             viewport.width === 390 ? "column" : "row",
           );
+          assert.equal(
+            await footer
+              .locator(".footer-content")
+              .evaluate((element) => getComputedStyle(element).gap),
+            viewport.width === 390 ? "12px" : "24px",
+          );
+          assert.equal(await nav.evaluate((element) => getComputedStyle(element).gap), "20px");
+          const firstLink = nav.getByRole("link", { name: "About", exact: true });
+          assert.deepEqual(
+            await firstLink.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return [style.color, style.textDecorationLine];
+            }),
+            ["rgb(255, 156, 54)", "none"],
+          );
+          await firstLink.hover();
+          assert.equal(
+            await firstLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
+            "underline",
+          );
+          await page.mouse.move(0, 0);
+          await footer.evaluate((element) => element.style.setProperty("--ember", "initial"));
           assert.equal(
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
             true,
