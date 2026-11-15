@@ -1593,7 +1593,15 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
       { name: "full", cookie: `${bearer}.${signature}` },
     ]) {
       await context.addCookies([
-        { name: "__Host-two_session", value: state.cookie, url: target.origin },
+        {
+          name: "__Host-two_session",
+          value: state.cookie,
+          domain: new URL(target.origin).hostname,
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        },
       ]);
       for (const viewport of [
         { width: 1280, height: 800 },
