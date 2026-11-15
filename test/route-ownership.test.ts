@@ -68,9 +68,13 @@ describe("route ownership", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/events/spring-fete" }, manifest)).toBe("kit");
   });
 
-  it("ignores trailing slashes when matching", () => {
+  it("leaves trailing-slash variants with Hono", () => {
     const manifest = [{ method: "GET", path: "/events/past", enabled: true }];
-    expect(resolveRouteOwner({ method: "GET", path: "/events/past/" }, manifest)).toBe("kit");
+    for (const method of ["GET", "HEAD", "POST"]) {
+      expect(resolveRouteOwner({ method, path: "/events/past/" }, manifest)).toBe("hono");
+    }
+    expect(decideOwner(get("/events/past/?page=2"), manifest)).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/events/past" }, manifest)).toBe("kit");
   });
 
   it("never lets a manifest entry shadow a reserved API", () => {
@@ -82,7 +86,7 @@ describe("route ownership", () => {
     ];
     expect(resolveRouteOwner({ method: "POST", path: "/api/agent-events" }, manifest)).toBe("hono");
     expect(resolveRouteOwner({ method: "POST", path: "/api/anything-new" }, manifest)).toBe("hono");
-    // The bare prefix stays reserved after trailing-slash normalization.
+    // Both the bare prefix and its slash variant remain Hono-owned.
     expect(resolveRouteOwner({ method: "GET", path: "/api" }, manifest)).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: "/api/" }, manifest)).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: "/up" }, manifest)).toBe("hono");

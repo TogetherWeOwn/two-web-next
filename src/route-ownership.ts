@@ -374,15 +374,14 @@ function normalizePath(path: string): string | null {
   // An encoded data suffix (%5F is "_") decodes into the suffix; strip again
   // so /events/past/%5F%5Fdata.json follows its page like the literal form.
   const base = decoded.endsWith(DATA_SUFFIX) ? decoded.slice(0, -DATA_SUFFIX.length) : decoded;
-  let out = base;
-  while (out.length > 1 && out.endsWith("/")) out = out.slice(0, -1);
-  return out || "/";
+  // Hono treats non-root trailing-slash variants as distinct paths.
+  if (base.length > 1 && base.endsWith("/")) return null;
+  return base || "/";
 }
 
 function isReserved(path: string): boolean {
   if (RESERVED_EXACT.has(path)) return true;
-  // The bare prefix counts too: trailing-slash normalization turns "/api/"
-  // into "/api", which must not escape the reservation.
+  // The bare prefix counts too: "/api" must not escape the reservation.
   return RESERVED_PREFIXES.some(
     (prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix),
   );

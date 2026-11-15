@@ -75,6 +75,26 @@ not exercise Kit routes. Kit-specific execution needs its own reports, and
 neither fixture screenshots nor CI parity prove a live release. Use the
 [release contract](releases.md) for exact-revision deployed evidence.
 
+## Font evidence primitives
+
+[`font-evidence.ts`](../e2e/visual/font-evidence.ts) exports Chromium helpers:
+- `loadVisualFont(page, { url, weight? })` loads a unique FontFace before adding it;
+  returns its family/status/weight without changing CSS or selecting it for any node.
+- `renderedPlatformFonts(page, selector)` reports actual glyph usage via CDP.
+  Select exactly one light-DOM element; `familyName` is the font's internal name,
+  not necessarily the unique CSS alias. Check `isCustomFont` and `glyphCount`.
+- `readCaptureGeometry(page, namedSelectors)` returns CSS-pixel viewport, scroll,
+  body/document scroll/offset/client sizes and named bounding rects.
+- `captureWithGeometry(page, namedSelectors)` retains the first full-page PNG,
+  its pixel dimensions, and before/after geometry; it never warms up or retries.
+- `captureWithoutFontWait(page)` returns a viewport PNG through direct CDP.
+  It does not wait for fonts or prove text painted; callers must prove paint.
+
+[`font-evidence.visual.ts`](../e2e/visual/font-evidence.visual.ts) tests these primitives
+at both widths through the existing config, with synthetic DOM and no baselines.
+Brand callers select the alias only on the content root and verify glyphs/stability.
+Cold scenarios stay unmodified: hold the font response, prove painted fallback, then verify no late swap or geometry shift.
+
 ## When a diff is intentional
 
 1. Download `e2e-failure-<run_id>-<run_attempt>` from the failed `browser-smoke`

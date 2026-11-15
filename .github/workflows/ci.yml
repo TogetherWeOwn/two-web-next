@@ -601,6 +601,9 @@ jobs:
       - name: State glyph assembler fixtures
         if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/state-glyph-assemble.test.mjs
+      - name: Tag capture guard fixtures
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/kit-tag-capture-guards.test.mjs
       - name: Job-private localhost:5432 forward to the Postgres service
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |

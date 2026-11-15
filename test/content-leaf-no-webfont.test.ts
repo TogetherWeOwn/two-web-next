@@ -49,6 +49,29 @@ function fontFaces(css: string): FontFace[] {
   });
 }
 
+function inspectWebfontRules(css: string) {
+  const offenders: string[] = [];
+  let inspected = 0;
+  // Definitions alone never paint text. Inspect actual font declarations,
+  // including variable references, without counting custom-property values.
+  const rules = css.replace(/\/\*[\s\S]*?\*\//g, "").match(/[^{}]+{[^{}]*}/g) ?? [];
+  for (const rule of rules) {
+    const selector = rule.slice(0, rule.indexOf("{")).trim();
+    if (/^@font-face/.test(selector)) continue;
+    const declarations = rule.slice(rule.indexOf("{") + 1, -1).split(";");
+    if (
+      !declarations.some((declaration) =>
+        /^\s*font(?:-family)?\s*:[^;]*(?:Mona Sans|var\(--font-(?:display|ui)\))/.test(declaration),
+      )
+    )
+      continue;
+    inspected += 1;
+    if (selector.split(/,(?![^(]*\))/).some((part) => !/:not\(\.content-theme\)/.test(part)))
+      offenders.push(selector);
+  }
+  return { offenders, inspected };
+}
+
 function contentTokenValue(css: string): string | null {
   const rule = rulesOf(css).find((rule) => /\.base-theme\.content-theme/.test(rule.selector));
   return /--font-display\s*:\s*([^;{}]+)/.exec(rule?.body ?? "")?.[1]?.trim() ?? null;
@@ -66,11 +89,47 @@ describe("content leaves use the optional display face", () => {
     expect(guardsOf(LEAF_CRITICAL_CSS)).toEqual([]);
   });
 
+  it("detects unscoped family, alias and shorthand mutations", () => {
+    for (const font of [
+      "font-family:Mona Sans",
+      'font-family:"Mona Sans"',
+      "font-family:var(--font-display)",
+      "font:16px/1.55 var(--font-ui)",
+    ]) {
+      const css = `${LEAF_CRITICAL_CSS}.base-theme h1{${font}}`;
+      expect(inspectWebfontRules(css).offenders).toContain(".base-theme h1");
+    }
+    expect(
+      inspectWebfontRules(
+        ".base-theme:not(.content-theme) h1,.base-theme h2{font-family:var(--font-ui)}",
+      ).offenders,
+    ).toHaveLength(1);
+  });
+
+  it("ignores font registrations and unused custom-property definitions", () => {
+    expect(
+      inspectWebfontRules(
+        '@font-face{font-family:"Mona Sans";src:url(font.woff2)}.base-theme{--font-ui:Mona Sans;}',
+      ),
+    ).toEqual({ offenders: [], inspected: 0 });
+  });
+
+  it("points the content theme at the content face with the fallback second", () => {
+    const value = contentTokenValue(LEAF_CRITICAL_CSS);
+    expect(value).not.toBeNull();
+    const families = (value ?? "").split(",").map(normalizeFamily);
+    expect(families.slice(0, 2)).toEqual(["Mona Sans Content", "Mona Sans Fallback"]);
+    expect(families.slice(2)).toContain("system-ui");
+  });
+
   it("flags a guarded display rule as a mutation", () => {
     expect(
       guardsOf(".base-theme:not(.content-theme) h1{font-family:var(--font-display)}"),
     ).toContain(".base-theme:not(.content-theme) h1");
     expect(guardsOf(".base-theme h1{font-family:var(--font-display)}")).toEqual([]);
+    expect(
+      displayTargets(".base-theme h1,.base-theme h2{font-family:var(--font-display)}"),
+    ).toEqual([".base-theme h1", ".base-theme h2"]);
   });
 
   it("ships the content face with font-display: optional over the same file as the main face", () => {
@@ -110,14 +169,6 @@ describe("content leaves use the optional display face", () => {
       expect(declaration).not.toMatch(/Mona Sans(?! Fallback)/);
       expect(declaration).not.toContain("Mona Sans Content");
     }
-  });
-
-  it("points the content theme at the content face with the fallback second", () => {
-    const value = contentTokenValue(LEAF_CRITICAL_CSS);
-    expect(value).not.toBeNull();
-    const families = (value ?? "").split(",").map(normalizeFamily);
-    expect(families.slice(0, 2)).toEqual(["Mona Sans Content", "Mona Sans Fallback"]);
-    expect(families.slice(2)).toContain("system-ui");
   });
 
   it("ships no new woff2 beyond the Ember set", () => {
