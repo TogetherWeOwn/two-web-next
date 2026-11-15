@@ -1,6 +1,6 @@
 <script lang="ts">
-import Chip from "$lib/Chip.svelte";
-import SegmentedControl from "$lib/SegmentedControl.svelte";
+import Chip from "#lib/Chip.svelte";
+import SegmentedControl from "#lib/SegmentedControl.svelte";
 </script>
 
 <SegmentedControl label="Event views" items={[
