@@ -1102,13 +1102,15 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
   // runs to the next shell chain separator, never into a following command.
   for (const name of invoked) {
     const body = scripts[name] ?? "";
-    for (const m of body.matchAll(/\bplaywright\s+test\b/g)) {
-      const tail = body.slice(m.index + m[0].length);
+    const occurrences = /\bplaywright\s+test\b/g;
+    let m;
+    while ((m = occurrences.exec(body)) !== null) {
+      const tail = body.slice(occurrences.lastIndex);
       const end = tail.search(/&&|\|\||;/);
-      parseTokens(
-        tokenizeArgs(end === -1 ? tail : tail.slice(0, end), `script ${name}`),
-        `script ${name}`,
-      );
+      const args = end === -1 ? tail : tail.slice(0, end);
+      parseTokens(tokenizeArgs(args, `script ${name}`), `script ${name}`);
+      // Arguments already consumed are not independent command invocations.
+      occurrences.lastIndex += args.length;
     }
   }
   return found;
@@ -2484,6 +2486,21 @@ function selftest() {
         "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --grep smoke\n      - run: npx playwright test\n",
       );
       assert.deepEqual(playwrightInventory(dir).orphans, []);
+      mkdirSync(join(dir, "test"));
+      run("npm run browser");
+      for (const args of ["--grep playwright test", "--grep=playwright test"]) {
+        const script = `playwright test ${args}`;
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { browser: script } }));
+        assert.deepEqual(playwrightInventory(dir).orphans, [
+          "e2e/a.spec.ts",
+          "e2e/suite.visual.ts",
+        ]);
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({ scripts: { browser: `${script} && playwright test` } }),
+        );
+        assert.deepEqual(playwrightInventory(dir).orphans, []);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
