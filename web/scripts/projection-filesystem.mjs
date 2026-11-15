@@ -21,7 +21,7 @@ function physicalOutput(path) {
     }
     const parent = dirname(current);
     if (parent === current) throw new Error("projection filesystem: no existing ancestor");
-    missing.push(current.slice(parent.length).replace(/^[/\\]+/, ""));
+    missing.push(relative(parent, current));
     current = parent;
   }
 }

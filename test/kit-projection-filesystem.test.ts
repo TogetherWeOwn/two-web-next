@@ -73,6 +73,16 @@ describe("projection filesystem safety", () => {
     expect(readFileSync(join(source, "style.css"), "utf8")).toBe("keep");
   });
 
+  it("preserves backslashes in missing POSIX path components", () => {
+    const root = fixture();
+    const source = join(root, "source");
+    const output = join(source, "\\..", "generated");
+    expect(() => assertSafeProjectionOutput(output, [source])).toThrow(
+      "output overlaps protected path",
+    );
+    expect(readFileSync(join(source, "style.css"), "utf8")).toBe("keep");
+  });
+
   it("permits fixture cleanup only after a successful safety check", () => {
     const root = fixture();
     const source = join(root, "source");
