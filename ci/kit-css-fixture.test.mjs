@@ -101,6 +101,21 @@ test("overlays write, replace, transform and delete only inside the copy", async
   }
 });
 
+test("overlays reject terminal symlinks before reading or writing outside the copy", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "kit-css-terminal-link-"));
+  const root = join(parent, "copy");
+  try {
+    await mkdir(root);
+    const outside = join(parent, "outside.txt");
+    await writeFile(outside, "unchanged");
+    await symlink(outside, join(root, "link.txt"));
+    await assert.rejects(applyOverlays(root, { "link.txt": "changed" }), /symlink in destination/);
+    assert.equal(await readFile(outside, "utf8"), "unchanged");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 const R = FIXTURE_ROUTE_ROOT;
 const marker = (name) => `--fx-${name}:1`;
 const css = (cls, name) => `.${cls}{${marker(name)}}`;

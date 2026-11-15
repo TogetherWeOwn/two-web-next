@@ -56,7 +56,7 @@ export function overlayPath(root, file) {
 export async function applyOverlays(root, overlays) {
   for (const [file, value] of Object.entries(overlays)) {
     const dest = overlayPath(root, file);
-    await rejectLinkAncestors(root, dirname(dest));
+    await rejectLinkAncestors(root, dest);
     let existing = null;
     try {
       existing = await readFile(dest);
