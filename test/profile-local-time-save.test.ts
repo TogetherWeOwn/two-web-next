@@ -35,6 +35,16 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       vi.useRealTimers();
     });
 
+    async function setBrowserTime(page: Page, instant: Date) {
+      // Keep Playwright's replay timestamp near browser wall time, not fixture time.
+      vi.setSystemTime(vi.getRealSystemTime());
+      try {
+        await page.clock.setFixedTime(instant);
+      } finally {
+        vi.setSystemTime(FIXED_NOW);
+      }
+    }
+
     async function open(
       renderer: Renderer,
       artifact: "source" | "shipped",
@@ -51,7 +61,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       });
       contexts.push(context);
       const page = await context.newPage();
-      await page.clock.setFixedTime(START);
+      await setBrowserTime(page, START);
       const errors: string[] = [];
       const writes: number[] = [];
       const requests: string[] = [];
@@ -281,7 +291,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       }
     }
     async function pageAdvance(page: Page) {
-      await page.clock.setFixedTime(new Date("2026-07-15T20:00:00.000Z"));
+      await setBrowserTime(page, new Date("2026-07-15T20:00:00.000Z"));
     }
   },
 );
