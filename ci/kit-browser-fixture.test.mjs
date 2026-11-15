@@ -3,7 +3,30 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { homeEvidencePage, homeEvidenceStates, withKitHomeEvidence } from "./kit-home-evidence.mjs";
 import { readFixtureAsset, withKitOfflineBrowser } from "./kit-offline-browser.mjs";
+import "./kit-offline-browser-time.test.mjs";
+
+test("Kit home evidence rejects unknown fixture states", () => {
+  assert.throws(() => homeEvidencePage("__proto__"), /Unknown home evidence state/);
+});
+
+test("Kit home evidence renders each real home state offline", async () => {
+  for (const state of homeEvidenceStates) {
+    await withKitHomeEvidence(state, async ({ page }) => {
+      assert.equal(await page.getByRole("heading", { level: 1 }).count(), 1, state);
+    });
+  }
+});
+
+test("Kit offline fixture fixes the server render clock", async () => {
+  await withKitOfflineBrowser(
+    { now: Date.UTC(2030, 0, 2), page: "<p>{new Date().toISOString()}</p>" },
+    async ({ page }) => {
+      assert.equal(await page.locator("p").textContent(), "2030-01-02T00:00:00.000Z");
+    },
+  );
+});
 
 test("Kit browser fixture renders SSR and loads its CSS offline", async () => {
   await withKitOfflineBrowser(
