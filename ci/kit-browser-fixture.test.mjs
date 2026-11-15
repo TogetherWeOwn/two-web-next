@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { withKitOfflineBrowser } from "./kit-offline-browser.mjs";
+import { readFixtureAsset, withKitOfflineBrowser } from "./kit-offline-browser.mjs";
 
 test("Kit browser fixture renders SSR and loads its CSS offline", async () => {
   await withKitOfflineBrowser(
@@ -67,6 +70,65 @@ import SiteFooter from '#lib/SiteFooter.svelte';
       assert.deepEqual(unexpected, []);
     },
   );
+});
+
+test("Kit fixture renders query data and same-origin static assets", async () => {
+  await withKitOfflineBrowser(
+    {
+      search: "?name=fixture%20name",
+      page: `<script>import { page } from '$app/state';</script>
+<p>{page.url.searchParams.get('name')}</p>
+<img src="/logo.svg" alt="Logo">
+<style>@font-face { font-family: proof; src: url('/fonts/mona-sans-latin-var.woff2'); }
+p { font-family: proof; }</style>`,
+    },
+    async ({ page, html }) => {
+      assert.match(html, /fixture name/);
+      assert.equal(await page.locator("p").textContent(), "fixture name");
+      assert.equal(await page.locator("img").evaluate((image) => image.naturalWidth > 0), true);
+      assert.equal(
+        await page.evaluate(async () => (await document.fonts.load("16px proof")).length),
+        1,
+      );
+    },
+  );
+});
+
+test("Kit fixture rejects invalid query strings", async () => {
+  for (const search of ["name=fixture", "?name=fixture#fragment", 123]) {
+    await assert.rejects(
+      withKitOfflineBrowser({ search }, async () => {}),
+      { message: "Fixture search must be a query string" },
+    );
+  }
+});
+
+test("asset reads reject escapes, symlinks, and unsupported files", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "kit-asset-test-"));
+  try {
+    const root = join(dir, "root");
+    await mkdir(root);
+    await writeFile(join(root, "safe.css"), "safe");
+    await writeFile(join(root, "safe.js"), "unsupported");
+    await writeFile(join(dir, "outside.css"), "outside");
+    await symlink(join(dir, "outside.css"), join(root, "link.css"));
+    await symlink(dir, join(root, "linked-dir"));
+    assert.equal((await readFixtureAsset(root, "/safe.css")).body.toString(), "safe");
+    for (const path of [
+      "/../outside.css",
+      "/%2e%2e/outside.css",
+      "/link.css",
+      "/linked-dir/outside.css",
+      "/safe.js",
+      "/missing.css",
+      "/%zz.css",
+      "/..%5coutside.css",
+    ]) {
+      assert.equal(await readFixtureAsset(root, path), null, path);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("Kit offline browser rejects unexpected external requests", async () => {
