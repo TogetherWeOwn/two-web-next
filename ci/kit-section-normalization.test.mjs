@@ -219,6 +219,9 @@ test("Ember delta: legacy and Ember Kit sections equal Hono; Hono side stays str
   const { h, e } = both((key, ember) => card({ key, ember }));
   assert.equal(kitOf(h), hono(h), "legacy Kit passes unchanged");
   assert.equal(kitOf(e), hono(h), "Ember Kit equals Hono after delta removal");
+  const withBoundary = e.map((row) => row.replace(glyphHtml(), `${glyphHtml()}<!---->`));
+  assertEmberArchive(section(withBoundary));
+  assert.equal(kitOf(withBoundary), hono(h), "Svelte component boundary preserves parity");
   assert.notEqual(hono(e), hono(h), "no stripping without the kit side flag");
   assert.equal(kitOf([], pagerHtml()), hono([], pagerHtml()), "empty list and pager");
   const search = (ember) => [
@@ -267,6 +270,9 @@ test("Ember delta: glyph, label, wrapper, and topology mutations fail closed", (
   const mutants = {
     "marker-spliced glyph tag": ember.replace("<svg ", "<sv<!--[-->g "),
     "marker spliced into wrapper": ember.replace(glyphHtml(), "<!---->" + glyphHtml()),
+    "duplicate component marker": ember.replace(glyphHtml(), glyphHtml() + "<!----><!---->"),
+    "nonempty component marker": ember.replace(glyphHtml(), glyphHtml() + "<!--extra-->"),
+    "misplaced component marker": ember.replace(labelHtml, "<!---->" + labelHtml),
     "glyph duplicate attribute": ember.replace(
       'class="state-glyph',
       'class="evil" class="state-glyph',

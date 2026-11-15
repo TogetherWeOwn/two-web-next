@@ -38,6 +38,14 @@ function validate(wrapper, raw) {
   if (info.childNodes.find((n) => !blank(n)) !== wrapper) fail("wrapper is not first");
   if (!is(wrapper, "div", HTML)) fail("wrapper tag");
   const kids = wrapper.childNodes.filter((n) => !blank(n));
+  // Svelte emits an empty component boundary immediately after StateGlyph.
+  if (
+    kids.length === 4 &&
+    kids[1].nodeName === "#comment" &&
+    raw.slice(...range(kids[1])) === "<!---->"
+  ) {
+    kids.splice(1, 1);
+  }
   if (kids.length !== 3) fail("wrapper children");
   const [glyph, heading, label] = kids;
   if (!is(glyph, "svg", SVG)) fail("glyph");
