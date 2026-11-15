@@ -34,6 +34,12 @@ test("disposable migration workflows prepare the role before migrations", () => 
       );
     }
   }
+  const workflow = read(".github/workflows/ci.yml");
+  assert.match(workflow, /catalog-postgres:\n\s+image: postgres:17/);
+  assert.match(
+    workflow,
+    /CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres:\/\/postgres:ci@catalog-postgres:5432\/postgres/,
+  );
   const local = read("bin/local-ci.sh");
   assert.ok(
     local.indexOf("< ci/disposable-runtime-role.sql") <
