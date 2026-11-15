@@ -14,7 +14,13 @@ export function readSourceRules(css, sourceDir) {
     if (directive.startsWith(SOURCE_GLOB)) globCount++;
     const match = /^@source\s+not\s+([^;]*);/.exec(directive);
     if (!match) {
-      if (/^@source(?:\s|\/\*[\s\S]*?\*\/)+not\b/.test(directive)) {
+      let rest = directive.slice("@source".length).trimStart();
+      while (rest.startsWith("/*")) {
+        const end = rest.indexOf("*/", 2);
+        if (end === -1) break;
+        rest = rest.slice(end + 2).trimStart();
+      }
+      if (/^not\b/.test(rest)) {
         throw new Error("tailwind-projection: unsupported @source not directive");
       }
       continue;

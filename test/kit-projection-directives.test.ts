@@ -34,6 +34,7 @@ describe("Kit projection source directives", () => {
     for (const directive of [
       `@source not "${mirror}excluded"`,
       `@source /* reason */ not "${mirror}excluded";`,
+      `@source${"/**/".repeat(1000)} not "${mirror}excluded";`,
     ]) {
       expect(() => readSourceRules(`${SOURCE_GLOB}\n${directive}`, sourceDir)).toThrow(
         /unsupported @source not/,
