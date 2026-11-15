@@ -188,9 +188,9 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
       {/each}
     </dl>
   </section>
-  <section aria-labelledby="home-events-heading">
+  <section class="event-band" aria-labelledby="home-events-heading">
     <p class="strap">Next up</p>
-    <h2 id="home-events-heading">Game nights, when they land.</h2>
+    <h2 id="home-events-heading">What’s on. <span>Come along.</span></h2>
     {#if upcomingEvents.length > 0}
       <ul class="facts home-events" data-testid="home-events-list">
         <!-- csr=false: omit this server-rendered list from the unused client asset.
@@ -213,6 +213,7 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
                       : "UTC"})
                   </time>
                 </p>
+                <div class="event-meta">
                 <h3>{event.title}</h3>
                 {#if event.location}<p>{event.location}</p>{/if}
                 {#if event.source === "discord"}
@@ -226,6 +227,7 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
                     {/if}
                   </p>
                 {/if}
+                </div>
               </a>
             </li>
           {/each}
@@ -270,3 +272,52 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
   </section>
   <JsonLd testid="site-jsonld" json={siteGraph} />
 </Shell>
+
+<style>
+  .event-band h2 {
+    text-transform: none;
+    font-weight: 560;
+    letter-spacing: -0.035em;
+  }
+  .event-band h2 span { color: var(--t3); }
+  .event-band .home-events { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .event-band .home-events-group { padding: 28px 16px 10px; }
+  .event-band .home-events-group h3 {
+    margin: 0;
+    color: var(--t3);
+    font: 400 12px/1 var(--font-data, monospace);
+    letter-spacing: 0.04em;
+  }
+  .event-band .home-events .card {
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+  }
+  .event-band .home-event-link {
+    display: grid;
+    grid-template-columns: minmax(118px, 1fr) minmax(0, 4fr);
+    align-items: center;
+    gap: 16px;
+    min-height: 72px;
+    padding: 10px 16px;
+    border-radius: 10px;
+  }
+  .event-band .home-event-link:hover { background: var(--surface); }
+  .event-band .home-event-link > p { margin: 0; }
+  .event-band .home-event-link time {
+    color: var(--t2);
+    font: 400 13px/1.35 var(--font-data, monospace);
+  }
+  .event-band .home-event-link h3 {
+    margin: 0;
+    font: 600 17px/1.3 var(--font-display);
+    letter-spacing: normal;
+    text-transform: none;
+  }
+  .event-band .home-event-link .event-meta p { margin: 4px 0 0; font-size: 14px; }
+  @media (max-width: 820px) {
+    .event-band .home-event-link { grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 14px 12px; }
+    .event-band .home-events-group { padding-left: 12px; }
+  }
+</style>
