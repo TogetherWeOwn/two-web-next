@@ -105,3 +105,31 @@ const islands =
   </section>
   {@html islands}
 </Shell>
+
+<!-- The archive cards are server-only; include their presentation in the
+     route stylesheet so it is available to the browser. -->
+<style>
+  :global([data-testid="past-events"] .event-title) {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  :global([data-testid="past-events"] .event-state) {
+    color: var(--t2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-s);
+  }
+
+  :global([data-testid="past-events"] .state-glyph) {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    color: var(--t3);
+  }
+
+  @media (max-width: 820px) {
+    :global([data-testid="past-events"] .state-glyph) { display: none; }
+  }
+</style>

@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
 import postgres from "postgres";
+import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
@@ -1520,9 +1521,14 @@ test("cross-target: normalized archive sections match", async () => {
   // treatment as ci/kit-preview-e2e.mjs): raw section bytes always differ
   // (hydration markers, boolean attributes, `>` escaping), so compare the
   // normalized contract after origin normalization, not the bytes.
+  const kitSection = bodies
+    .get("kit")!
+    .match(/<section[^>]*data-testid="past-events"[\s\S]*?<\/section>/)?.[0];
+  expect(kitSection, "Kit archive section exists").toBeDefined();
+  assertEmberArchive(kitSection!);
   expect(
-    sectionOf(bodies.get("kit")!, "past-events"),
-    "Kit section matches Hono section after origin normalization",
+    normalizeSection(stripEmberDelta(kitSection!)),
+    "Kit section matches Hono after validating the presentation delta",
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
@@ -1643,6 +1649,21 @@ test.describe("kit: archive visuals", () => {
           expect(response?.status(), `kit ${view.path} @ ${viewport.name}`).toBe(200);
           await expect(page.getByTestId(view.testid)).toBeVisible();
           await page.waitForLoadState("networkidle");
+          if (view.name === "populated") {
+            const card = page.getByTestId("event-card").first();
+            await expect.soft(card.locator(".event-title")).toHaveCSS("display", "flex");
+            const state = card.getByText("Sign-up record");
+            await expect.soft(state).toBeVisible();
+            await expect.soft(state).toHaveCSS("border-top-style", "solid");
+            const glyph = card.locator(".state-glyph");
+            if (viewport.name === "desktop") {
+              await expect.soft(glyph).toBeVisible();
+              await expect.soft(glyph).toHaveCSS("width", "16px");
+              await expect.soft(glyph).toHaveCSS("height", "16px");
+            } else {
+              await expect.soft(glyph).toBeHidden();
+            }
+          }
           await expect
             .soft(page)
             .toHaveScreenshot(`kit-archive-${view.name}-${viewport.name}.png`, {
