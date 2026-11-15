@@ -30,3 +30,10 @@ jobs:
         working-directory: web
       - run: npx playwright install --with-deps chromium
       - run: node --test ci/kit-text-links-browser.test.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: kit-text-links-screenshots
+          path: evidence/kit-text-links/
+          if-no-files-found: error
+          retention-days: 14

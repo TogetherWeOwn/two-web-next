@@ -55,9 +55,9 @@ export const body = render(Fixture).body;`,
     });
     const { body } = (await import(pathToFileURL(outfile).href)) as { body: string };
     const links = Array.from(
-      body.replace(/<!--.*?-->/gs, "").matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/g),
+      body.matchAll(/<!--[\s\S]*?-->|<a\b[^>]*>[\s\S]*?<\/a>/g),
       (match) => match[0],
-    );
+    ).filter((match) => match.startsWith("<a"));
     expect(links).toHaveLength(3);
     expect(links[0]).toContain('href="/events"');
     expect(links[0]).toContain("Events");

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -74,12 +74,16 @@ test("text links retain native keyboard navigation and a visible focus treatment
       { width: 1280, height: 800, javaScriptEnabled: false },
       { width: 1280, height: 800, javaScriptEnabled: true },
     ];
+    const evidence = join(root, "evidence/kit-text-links");
+    mkdirSync(evidence, { recursive: true });
     for (const { width, height, javaScriptEnabled } of scenarios) {
       const context = await browser.newContext({ javaScriptEnabled, viewport: { width, height } });
       try {
         const page = await context.newPage();
         const origin = `http://127.0.0.1:${server.address().port}`;
         await page.goto(origin);
+        const prefix = `${width}-${javaScriptEnabled ? "js" : "no-js"}`;
+        await page.screenshot({ path: join(evidence, `${prefix}-default.png`) });
         const links = page.locator("a");
         assert.equal(await links.count(), 3);
         for (let index = 0; index < 3; index++) {
@@ -99,6 +103,7 @@ test("text links retain native keyboard navigation and a visible focus treatment
           }));
           assert.notEqual(outline.style, "none");
           assert.ok(outline.width > 0);
+          await page.screenshot({ path: join(evidence, `${prefix}-focus-${index + 1}.png`) });
         }
         const buttonStyle = await links.nth(2).evaluate((element) => {
           const style = getComputedStyle(element);
@@ -115,6 +120,7 @@ test("text links retain native keyboard navigation and a visible focus treatment
         assert.match(buttonStyle.fontFamily, /Mona Sans/i);
         assert.ok((await links.nth(2).boundingBox()).height >= 36);
         await page.emulateMedia({ forcedColors: "active" });
+        await page.screenshot({ path: join(evidence, `${prefix}-forced-colors.png`) });
         assert.notEqual(
           await links.nth(2).evaluate((element) => getComputedStyle(element).outlineStyle),
           "none",
