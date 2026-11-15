@@ -1544,6 +1544,7 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
         viewport.width,
       );
       const screenshot = test.info().outputPath(`kit-review-seat-card-guest-${viewport.width}.png`);
+      if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
       await page.screenshot({ path: screenshot, animations: "disabled", caret: "hide" });
       await test.info().attach(`kit-review-seat-card-guest-${viewport.width}`, {
         path: screenshot,
@@ -1564,38 +1565,37 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
 
 test("Kit member seat card captures saved and full states", async ({ browser }) => {
   const target = targets.find((item) => item.name === "kit")!;
-  const hono = targets.find((item) => item.name === "hono")!;
   const key = "01J00000000000000000000991";
-  const userId = "900000000000000845";
-  const bearer = `two_${randomBytes(32).toString("base64url")}`;
-  const hash = createHash("sha256").update(bearer).digest("hex");
-  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
+  const savedUserId = "900000000000000846";
+  const fullUserId = "900000000000000845";
+  const states = [
+    { name: "saved", userId: savedUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
+    { name: "full", userId: fullUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
+  ];
   const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
   try {
     await withSessionDb(async (sql) => {
-      await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
-        values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(Date.now() + 7_200_000)})`;
+      for (const state of states) {
+        const hash = createHash("sha256").update(state.bearer).digest("hex");
+        await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+          values (${hash}, ${hash}, ${state.userId}, 'Seat fixture', true, false, ${new Date(Date.now() + 7_200_000)})`;
+      }
+      await sql`insert into users (id, username, member) values (${savedUserId}, 'Seat fixture', true)`;
       await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, capacity, rsvp_open)
         values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
           '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true)`;
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, ${savedUserId}, 'going' from events where event_key = ${key}`;
     });
-    const rsvp = await api(hono).put(`/events/${key}/rsvp`, {
-      headers: { cookie: await memberCookie(hono), Origin: "https://localhost:8787" },
-      data: { status: "going" },
-    });
-    expect([200, 201]).toContain(rsvp.status());
-    expect((await rsvp.json()).data.status).toBe("going");
-    const saved = await memberCookie(target);
-    const cookieValue = saved.slice(saved.indexOf("=") + 1);
     const page = await context.newPage();
-    for (const state of [
-      { name: "saved", cookie: cookieValue },
-      { name: "full", cookie: `${bearer}.${signature}` },
-    ]) {
+    for (const state of states) {
+      const signature = createHmac("sha256", kitFixtureSessionSecret())
+        .update(state.bearer)
+        .digest("base64");
       await context.addCookies([
         {
           name: "__Host-two_session",
-          value: state.cookie,
+          value: `${state.bearer}.${signature}`,
           domain: new URL(target.origin).hostname,
           path: "/",
           secure: true,
@@ -1620,6 +1620,7 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
         ).toBeVisible();
         const name = `kit-review-seat-card-${state.name}-${viewport.width}`;
         const path = test.info().outputPath(`${name}.png`);
+        if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
         await page.screenshot({ path, animations: "disabled", caret: "hide" });
         await test.info().attach(name, { path, contentType: "image/png" });
       }
@@ -1628,8 +1629,11 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
     await context.close();
     await withSessionDb(async (sql) => {
       await sql`delete from events where event_key = ${key}`;
-      await sql`delete from web_session_grace where user_id = ${userId}`;
-      await sql`delete from web_sessions where user_id = ${userId}`;
+      for (const state of states) {
+        await sql`delete from web_session_grace where user_id = ${state.userId}`;
+        await sql`delete from web_sessions where user_id = ${state.userId}`;
+      }
+      await sql`delete from users where id = ${savedUserId}`;
     });
   }
 });
