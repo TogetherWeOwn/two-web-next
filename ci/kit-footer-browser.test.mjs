@@ -54,7 +54,8 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
     bundle: true,
     write: false,
   });
-  const styles = `${bundledCss.outputFiles[0].text}\n${readFileSync(join(root, "web/src/ember-theme.css"), "utf8")}`;
+  // Match the Kit shell's lobby canvas; generated theme variables alone do not paint it.
+  const styles = `${bundledCss.outputFiles[0].text}\n${readFileSync(join(root, "web/src/ember-theme.css"), "utf8")}\n.base-theme { background-color: var(--g1); color: var(--t1); }`;
   const server = createServer((request, response) => {
     if (request.url === "/styles.css") {
       response.writeHead(200, { "content-type": "text/css" });
@@ -83,6 +84,10 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
           const page = await context.newPage();
           const origin = `http://127.0.0.1:${server.address().port}`;
           await page.goto(origin);
+          assert.equal(
+            await page.locator("body").evaluate((body) => getComputedStyle(body).backgroundColor),
+            "rgb(28, 22, 20)",
+          );
           const footer = page.getByRole("contentinfo");
           const nav = footer.getByRole("navigation", { name: "Footer" });
           const evidence = `artifacts/kit-footer/${viewport.width}-${javaScriptEnabled ? "js" : "no-js"}`;
