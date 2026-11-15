@@ -903,6 +903,26 @@ jobs:
           path: artifacts/kit-admin-contrast/
           if-no-files-found: error
           retention-days: 14
+      - name: Kit built Worker fatal path (observational, loopback fixture, no deploy)
+        id: kit_worker_fatal
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        env:
+          KIT_WORKER_FATAL_EVIDENCE_DIR: artifacts/kit-worker-fatal
+          KIT_WORKER_FATAL_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p artifacts/kit-worker-fatal
+          node --import tsx --test --test-timeout=240000 --test-reporter=tap --test-reporter-destination=artifacts/kit-worker-fatal/report.tap ci/kit-worker-fatal.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/kit-worker-fatal/report.tap "Kit built Worker fatal path" 3
+      # Runs when the step above ran (pass or fail); skipped when an earlier
+      # unrelated failure kept it from running, so no empty-artifact error masks it.
+      - name: Kit built Worker fatal path evidence
+        if: always() && steps.kit_worker_fatal.outcome != 'skipped' && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-worker-fatal-${{ github.sha }}
+          path: artifacts/kit-worker-fatal/
+          if-no-files-found: error
+          retention-days: 14
       - name: Kit performance budgets (worker + generated assets)
         id: kit_perf
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
