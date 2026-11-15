@@ -1,8 +1,11 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { URL } from "node:url";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import app from "../src/index";
+import { assertTargetArtifacts } from "./helpers/route-kit-artifacts";
 import {
   assertRouteInventory,
   routeInventory,
@@ -87,6 +90,42 @@ describe("proposed Kit route snapshot", () => {
     expect(() => assertMapCoverage(actual, { ...snapshotObject(), live: true })).toThrow(
       "Invalid planning route map",
     );
+  });
+});
+
+describe("completed target artifact prerequisites", () => {
+  it("distinguishes unresolved targets and each missing artifact", () => {
+    const root = mkdtempSync(join(tmpdir(), "route-artifacts-"));
+    const page = "web/src/routes/[id=number]/+page.svelte";
+    const load = "web/src/routes/[id=number]/+page.server.ts";
+    const matcher = "web/src/params/number.ts";
+    const add = (path: string) => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), "fixture");
+    };
+    try {
+      expect(() => assertTargetArtifacts(root, { state: "unresolved" })).toThrow(
+        "Unresolved or invalid target",
+      );
+      expect(() => assertTargetArtifacts(root, "web/src/routes/../+server.ts")).toThrow(
+        "Unresolved or invalid target",
+      );
+      expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${page}`);
+      mkdirSync(join(root, page), { recursive: true });
+      expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${page}`);
+      rmSync(join(root, page), { recursive: true });
+      add(page);
+      expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${load}`);
+      add(load);
+      expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${matcher}`);
+      add(matcher);
+      expect(() => assertTargetArtifacts(root, page)).not.toThrow();
+      const endpoint = "web/src/routes/+server.ts";
+      add(endpoint);
+      expect(() => assertTargetArtifacts(root, endpoint)).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
