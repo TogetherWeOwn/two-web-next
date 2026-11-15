@@ -19,9 +19,9 @@ classifications. API rows use the closed API slice and family allocation; page
 cutovers and cross-family controls instead identify their responsible source and
 owner without inventing a dispatch family. Middleware registrations are separate from endpoints. The RSVP
 `ALL` registration and explicit admin 405 handlers are method fallbacks, not
-middleware. The snapshot test checks registration drift and auth labels, but does
-not validate classifications or completed targets. A follow-up must enforce those
-mapping and completion rules, including target files for attempted completion.
+middleware. The snapshot test checks registration drift and auth labels, but
+does not validate classifications. The completion declaration guard checks mapped
+target files for attempted completion; classification validation remains follow-up work.
 Completed page sources also need their server-load
 files; `/events` is an HTML-rendering endpoint rather than a Kit page. No slice
 is certified complete by this snapshot, even if its target files exist.
@@ -43,10 +43,11 @@ per-route shared budgets, body limits or fragment session/cache controls. Before
 using that list to certify a checkpoint, join the source audit's route, method
 and response-branch evidence matrix to this map and exact-head passing tests; a
 single cited test or hook file cannot establish every applicable behavior. The
-follow-up completion guard must reject every completed slice and page/shared
-source until case-level evidence is integrated, even when target files exist.
-API-10 is a retirement checkpoint rather than an ordinary mapped slice and also
-requires evidence before completion. This snapshot does not enforce those rules.
+completion declarations in the fixture remain empty: the guard rejects every claimed
+API slice and page/shared source until case-level evidence is integrated, even when
+target files exist. API-10 is a retirement checkpoint rather than an ordinary
+mapped slice; its completion declaration is also rejected until evidence is integrated.
+Named matcher targets remain unsupported by the structural artifact check.
 
 When expanding the shared-control audit, assign `POST /csp-reports` to API-3's
 operations family, not API-9: the operations retirement register names the CSP

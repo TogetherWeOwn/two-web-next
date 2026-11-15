@@ -2,6 +2,7 @@
   "schema": 1,
   "status": "planning-only",
   "live": false,
+  "completion": { "apiSlices": [], "sources": [], "api10": false },
   "note": "Proposed Kit targets for a source-preparation snapshot; target files do not establish traffic ownership. Middleware and method fallbacks are classified separately.",
   "rows": [
     {
