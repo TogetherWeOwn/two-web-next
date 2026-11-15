@@ -1,0 +1,93 @@
+name: Content code capture evidence
+on:
+  pull_request:
+    paths:
+      - .github/workflows/content-code-evidence.yml
+      - ci/content-code-diagnostic.playwright.config.ts
+      - e2e/content-code-diagnostic/**
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - revision: base
+            sha: 0439e11ebbef779421b1285706fc8b8fd9f75b2e
+            fragment: "0"
+          - revision: head
+            sha: 3620228f9a3417db58cb09b1b98dfb1707fb4807
+            fragment: "1"
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: agent_test
+          POSTGRES_DB: two_web_next
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_test -d two_web_next"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://agent_test@127.0.0.1:5432/two_web_next
+      WRANGLER_SEND_METRICS: "false"
+      CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false"
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "false"
+      npm_config_ignore_scripts: "true"
+      npm_config_min_release_age: "3"
+      TZ: America/Los_Angeles
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.sha }}
+          path: .capture-app
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Prepare exact app and disposable fixtures
+        env:
+          APP_SHA: ${{ matrix.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p content-code-evidence
+          git rev-parse HEAD > content-code-evidence/harness-commit.txt
+          sha256sum ci/content-code-diagnostic.playwright.config.ts e2e/content-code-diagnostic/* > content-code-evidence/harness-sha256.txt
+          printf 'runner=%s/%s run=%s attempt=%s job=%s app=%s\n' "$ImageOS" "$ImageVersion" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_JOB" "$APP_SHA" > content-code-evidence/runner.txt
+          test "$(git -C .capture-app rev-parse HEAD)" = "$APP_SHA"
+          npm ci --include=dev --no-audit --no-fund
+          npx --no-install playwright --version >> content-code-evidence/runner.txt
+          npx --no-install playwright install --with-deps chromium
+          "$(node -p 'require("playwright").chromium.executablePath()')" --version >> content-code-evidence/runner.txt
+          sha256sum .capture-app/package-lock.json .capture-app/playwright.config.ts .capture-app/e2e/fixtures.ts >> content-code-evidence/runner.txt
+          npm run db:migrate
+          node e2e/seed.mjs
+          npm ci --prefix .capture-app --include=dev --no-audit --no-fund
+          (cd .capture-app && node ci/build-leaf-css.mjs && node e2e/prepare.mjs)
+          cp ci/content-code-diagnostic.playwright.config.ts .capture-app/ci/
+          cp -R e2e/content-code-diagnostic .capture-app/e2e/
+      - name: Capture first and second images
+        working-directory: .capture-app
+        env:
+          CONTENT_CODE_DIAG_REVISION: ${{ matrix.revision }}
+          CONTENT_CODE_DIAG_EXPECT_WARM_FRAGMENT: ${{ matrix.fragment }}
+          CONTENT_CODE_DIAG_OUT: ${{ github.workspace }}/content-code-evidence
+        run: timeout --kill-after=10s 20m npx --no-install playwright test --config ci/content-code-diagnostic.playwright.config.ts
+      - name: Retain evidence on success or failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: content-code-${{ matrix.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: content-code-evidence/
+          if-no-files-found: error
+          retention-days: 14
