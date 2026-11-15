@@ -92,6 +92,10 @@ neither fixture screenshots nor CI parity prove a live release. Use the
 
 [`font-evidence.visual.ts`](../e2e/visual/font-evidence.visual.ts) tests these primitives
 at both widths through the existing config, with synthetic DOM and no baselines.
+The identity control compares two independently loaded aliases of the shipped Mona
+Sans weight file with the shipped Instrument Serif italic file. It attaches the
+exact CDP font records as `font-identity-observations.json`; names are observations,
+not fixed assumptions about Chromium's internal font names.
 Brand callers select the alias only on the content root and verify glyphs/stability.
 Cold scenarios stay unmodified: hold the font response, prove painted fallback, then verify no late swap or geometry shift.
 
