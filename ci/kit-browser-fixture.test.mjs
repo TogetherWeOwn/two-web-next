@@ -84,7 +84,7 @@ const active = { key: 'active', title: 'Game night', startsAt: new Date('2026-06
 const cancelled = { key: 'cancelled', title: 'Cancelled night', startsAt: new Date('2026-06-16T18:00:00Z'), zone: 'UTC', cancelled: true, ongoing: false, availability: null };
 const weeks = monthGrid(state.month, '2026-06-15', new Map<string, CalendarGridEntry[]>([['2026-06-15', [active]], ['2026-06-16', [active, cancelled]]]));
 </script>
-<svelte:head><link rel="stylesheet" href="/theme-tokens.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
+<svelte:head><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
 <div class="base-theme schedule-theme"><main class="events-page"><CalendarGrid {state} {weeks} zone="UTC" {now} /></main></div>`,
     },
     async ({ page, html }) => {

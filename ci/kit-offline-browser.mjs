@@ -63,7 +63,11 @@ export async function withKitOfflineBrowser({ source, page: fixture }, callback)
               body: await readFile(join(root, "public", url.pathname.slice(1))),
             });
           }
-          if (["/theme-tokens.css", "/theme.css", "/schedule-theme.css"].includes(url.pathname)) {
+          if (
+            ["/styles.css", "/theme-tokens.css", "/theme.css", "/schedule-theme.css"].includes(
+              url.pathname,
+            )
+          ) {
             return route.fulfill({
               contentType: "text/css",
               body: await readFile(join(root, "public", url.pathname.slice(1))),
