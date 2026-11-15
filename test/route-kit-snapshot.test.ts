@@ -192,6 +192,61 @@ describe("completion declarations", () => {
   });
 });
 
+describe("synthetic case admission (not route parity)", () => {
+  it("joins each reviewed candidate to exactly one passed case in the expected context", () => {
+    const root = mkdtempSync(join(tmpdir(), "route-evidence-"));
+    const target = "web/src/routes/example/+server.ts";
+    const rows = [{ scope: "api", slice: "API-3", target }];
+    const claim = { apiSlices: ["API-3"], sources: [], api10: false };
+    const context = { sha: "synthetic-sha", run: "run-1", attempt: "1", inputs: "digest" };
+    const candidate = { claim: "API-3", row: 0, id: "GET /example:ok", branch: "ok" };
+    const obligation = { ...candidate, state: "required" as const, selectors: ["test:ok"] };
+    const result = {
+      selector: "test:ok",
+      obligation: candidate.id,
+      branch: "ok",
+      status: "passed",
+    };
+    const fixture = {
+      expected: context,
+      execution: { ...context },
+      candidates: [candidate],
+      obligations: [obligation],
+      cases: [result],
+    };
+    try {
+      mkdirSync(dirname(join(root, target)), { recursive: true });
+      writeFileSync(join(root, target), "fixture");
+      expect(() => assertCompletionDeclarations(root, rows, claim, fixture)).not.toThrow();
+      const variants = [
+        { ...fixture, candidates: [] },
+        { ...fixture, obligations: [] },
+        { ...fixture, obligations: [{ ...obligation, state: "unresolved" as const }] },
+        { ...fixture, obligations: [{ ...obligation, selectors: [] }] },
+        { ...fixture, cases: [] },
+        { ...fixture, cases: [{ ...result, status: "skipped" }] },
+        { ...fixture, cases: [{ ...result, status: "failed" }] },
+        { ...fixture, cases: [result, result] },
+        { ...fixture, cases: [{ ...result, branch: "error" }] },
+        { ...fixture, execution: { ...context, sha: "other" } },
+        { ...fixture, execution: { ...context, attempt: "2" } },
+        { ...fixture, execution: { ...context, run: "run-2" } },
+        { ...fixture, execution: { ...context, inputs: "other" } },
+      ];
+      for (const evidence of variants) {
+        expect(() => assertCompletionDeclarations(root, rows, claim, evidence)).toThrow(
+          "Completion requires audited case-level evidence",
+        );
+      }
+      expect(() =>
+        assertCompletionDeclarations(root, rows, { ...claim, api10: true }, fixture),
+      ).toThrow("Completion requires audited case-level evidence");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("completed target artifact prerequisites", () => {
   it("distinguishes unresolved targets and each missing artifact", () => {
     const root = mkdtempSync(join(tmpdir(), "route-artifacts-"));
