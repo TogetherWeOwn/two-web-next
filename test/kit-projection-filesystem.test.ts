@@ -57,6 +57,22 @@ describe("projection filesystem safety", () => {
     expect(() => assertSafeProjectionOutput(join(root, "dangling"), [source])).toThrow();
   });
 
+  it("rejects parent components before normalizing symlink paths", () => {
+    const root = fixture();
+    const source = join(root, "source");
+    const nested = join(source, "nested");
+    mkdirSync(nested);
+    symlinkSync(nested, join(root, "alias"));
+    const ambiguous = `${root}/alias/../style.css`;
+    expect(() => assertSafeProjectionOutput(ambiguous, [source])).toThrow(
+      "parent path component refused",
+    );
+    expect(() => assertSafeProjectionOutput(join(root, "output"), [ambiguous])).toThrow(
+      "parent path component refused",
+    );
+    expect(readFileSync(join(source, "style.css"), "utf8")).toBe("keep");
+  });
+
   it("permits fixture cleanup only after a successful safety check", () => {
     const root = fixture();
     const source = join(root, "source");

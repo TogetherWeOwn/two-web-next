@@ -43,10 +43,17 @@ function assertOrdinaryTree(path) {
  * Validate before cleanup or writing. Callers must prevent concurrent filesystem
  * mutation between validation and use; this check is not a directory lock.
  * Every protected path must exist and resolve, including source-root symlinks.
+ * Paths containing parent components are refused: lexical normalization can
+ * otherwise change their meaning when an earlier component is a symlink.
  */
 export function assertSafeProjectionOutput(output, protectedPaths) {
   if (!Array.isArray(protectedPaths) || protectedPaths.length === 0) {
     throw new Error("projection filesystem: protected paths required");
+  }
+  for (const path of [output, ...protectedPaths]) {
+    if (path.split(sep).includes("..")) {
+      throw new Error("projection filesystem: parent path component refused");
+    }
   }
   const physical = physicalOutput(output);
   if (physical === parse(physical).root)
