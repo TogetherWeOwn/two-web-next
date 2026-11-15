@@ -86,6 +86,14 @@ describe("Kit Tailwind scanner projection", () => {
       writeFileSync(join(sourceDir, "excluded", "Card.svelte"), source);
       expect(regenerateProjection({ sourceDir, outputDir }).changed).toHaveLength(1);
       expect(regenerateProjection({ sourceDir, outputDir }).changed).toHaveLength(0);
+      writeFileSync(
+        css,
+        `${glob}\n.message { content: '@source not "../.svelte-kit/tailwind-projection/excluded";'; }`,
+      );
+      regenerateProjection({ sourceDir, outputDir });
+      expect(existsSync(join(outputDir, "excluded", "Card.svelte"))).toBe(true);
+      writeFileSync(css, `.message { content: '${glob}'; }`);
+      expect(() => regenerateProjection({ sourceDir, outputDir })).toThrow();
       writeFileSync(css, `/* ${glob} */`);
       expect(() => regenerateProjection({ sourceDir, outputDir })).toThrow();
       writeFileSync(css, `${glob}\n@source not "../.svelte-kit/tailwind-projection/excluded";`);

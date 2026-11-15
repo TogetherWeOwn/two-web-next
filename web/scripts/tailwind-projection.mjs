@@ -36,14 +36,15 @@ export const MIRROR_DIRNAME = "tailwind-projection";
 
 /** Exclusions from app.css, resolved against its directory. Fails closed. */
 export function readSourceRules(css, cssDir) {
-  css = css.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\*[\s\S]*?\*\//g, (token) =>
-    token.startsWith("/*") ? " " : token,
-  );
-  if (css.split(SOURCE_GLOB).length !== 2) {
-    throw new Error(`tailwind-projection: app.css must contain exactly one ${SOURCE_GLOB}`);
-  }
+  const tokens = /\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|@source\b/g;
   const excluded = [];
-  for (const match of css.matchAll(/@source\s+not\s+([^;]*);/g)) {
+  let globCount = 0;
+  for (const token of css.matchAll(tokens)) {
+    if (token[0] !== "@source") continue;
+    const directive = css.slice(token.index);
+    if (directive.startsWith(SOURCE_GLOB)) globCount++;
+    const match = /^@source\s+not\s+([^;]*);/.exec(directive);
+    if (!match) continue;
     const arg = match[1].trim();
     if (/^inline\(/.test(arg)) continue; // stays in app.css as is
     const literal = /^"([^"*?{}[\]!]+)"$/.exec(arg);
@@ -57,6 +58,9 @@ export function readSourceRules(css, cssDir) {
       throw new Error(`tailwind-projection: invalid exclusion ${arg}`);
     }
     excluded.push(original);
+  }
+  if (globCount !== 1) {
+    throw new Error(`tailwind-projection: app.css must contain exactly one ${SOURCE_GLOB}`);
   }
   return excluded;
 }
