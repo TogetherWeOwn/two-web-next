@@ -1543,8 +1543,10 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         viewport.width,
       );
+      const screenshot = test.info().outputPath(`kit-review-seat-card-guest-${viewport.width}.png`);
+      await page.screenshot({ path: screenshot, animations: "disabled", caret: "hide" });
       await test.info().attach(`kit-review-seat-card-guest-${viewport.width}`, {
-        body: await page.screenshot({ animations: "disabled", caret: "hide" }),
+        path: screenshot,
         contentType: "image/png",
       });
       if (viewport.width === 1280) {
@@ -1557,6 +1559,70 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
     } finally {
       await context.close();
     }
+  }
+});
+
+test("Kit member seat card captures saved and full states", async ({ browser }) => {
+  const target = targets.find((item) => item.name === "kit")!;
+  const hono = targets.find((item) => item.name === "hono")!;
+  const key = "01J00000000000000000000991";
+  const userId = "900000000000000845";
+  const bearer = `two_${randomBytes(32).toString("base64url")}`;
+  const hash = createHash("sha256").update(bearer).digest("hex");
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
+  const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+        values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(Date.now() + 7_200_000)})`;
+      await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, capacity, rsvp_open)
+        values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
+          '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true)`;
+    });
+    const rsvp = await api(hono).put(`/events/${key}/rsvp`, {
+      headers: { cookie: await memberCookie(hono), Origin: "https://localhost:8787" },
+      data: { status: "going" },
+    });
+    expect([200, 201]).toContain(rsvp.status());
+    expect((await rsvp.json()).data.status).toBe("going");
+    const saved = await memberCookie(target);
+    const cookieValue = saved.slice(saved.indexOf("=") + 1);
+    const page = await context.newPage();
+    for (const state of [
+      { name: "saved", cookie: cookieValue },
+      { name: "full", cookie: `${bearer}.${signature}` },
+    ]) {
+      await context.addCookies([
+        { name: "__Host-two_session", value: state.cookie, url: target.origin },
+      ]);
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        const response = await page.goto(`/e/${key}`);
+        expect(response?.status()).toBe(200);
+        expect(response?.headers()["x-two-renderer"]).toBe("kit");
+        const card = page.getByTestId("kit-seat-card");
+        await expect(card.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+        await expect(
+          card.getByRole("button", {
+            name: state.name === "saved" ? /can't make it/i : /join the waitlist/i,
+          }),
+        ).toBeVisible();
+        const name = `kit-review-seat-card-${state.name}-${viewport.width}`;
+        const path = test.info().outputPath(`${name}.png`);
+        await page.screenshot({ path, animations: "disabled", caret: "hide" });
+        await test.info().attach(name, { path, contentType: "image/png" });
+      }
+    }
+  } finally {
+    await context.close();
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key = ${key}`;
+      await sql`delete from web_session_grace where user_id = ${userId}`;
+      await sql`delete from web_sessions where user_id = ${userId}`;
+    });
   }
 });
 
