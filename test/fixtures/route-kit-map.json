@@ -2,6 +2,7 @@
   "schema": 1,
   "status": "planning-only",
   "live": false,
+  "completion": { "apiSlices": [], "sources": [], "api10": false },
   "note": "Proposed Kit targets for a source-preparation snapshot; target files do not establish traffic ownership. Middleware and method fallbacks are classified separately.",
   "rows": [
     {
@@ -653,7 +654,11 @@
       "auth": "public-draft-403",
       "kind": "endpoint",
       "scope": "api",
-      "target": "web/src/routes/e/[...file=md]/+server.ts",
+      "target": {
+        "state": "unresolved",
+        "decisionSource": "suffix route precedence and parity validation",
+        "alternatives": ["priority-safe suffix dispatch preserving single- and multi-segment paths"]
+      },
       "slice": "API-3",
       "family": "ops",
       "hono405": false,
@@ -755,7 +760,11 @@
       "auth": "public-draft-moderator",
       "kind": "endpoint",
       "scope": "api",
-      "target": "web/src/routes/events/[...file=ics]/+server.ts",
+      "target": {
+        "state": "unresolved",
+        "decisionSource": "suffix route precedence and parity validation",
+        "alternatives": ["priority-safe suffix dispatch preserving single- and multi-segment paths"]
+      },
       "slice": "API-4",
       "family": "feeds",
       "hono405": false,

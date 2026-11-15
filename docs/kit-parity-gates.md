@@ -437,6 +437,10 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
 
 ## Performance gates (`ci/check-kit-perf.mjs`, `ci/budgets/kit/`)
 
+The owner decision of 2026-11-14 makes deployed-origin Lighthouse budgets
+report-only until the Ember and SvelteKit migration is complete. Staging still
+requires the origin web-standards check, and the byte budgets below remain blocking.
+
 Measured baseline 2026-10-12, ceilings at measured ×1.25 (raw to 512B, gzip
 to 256B — the repository rule in `ci/budgets/README.md`):
 

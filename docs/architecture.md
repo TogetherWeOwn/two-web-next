@@ -337,6 +337,7 @@ exactly once.
 | `src/kit-past-events.ts` | events |
 | `src/kit-restored-write.ts` | entry |
 | `src/kit-session.ts` | auth |
+| `src/kit-worker-response.ts` | http-guard |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
 | `src/log-budget.ts` | observability |

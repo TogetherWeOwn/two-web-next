@@ -8,6 +8,8 @@ import { renderEventsHtml } from "../../../../src/kit-events-html";
 import { kitEventsJourneyFor, kitEventsSessionFor } from "../../../../src/kit-session";
 import { JOIN_RESULT_COOKIE } from "../../../../src/return-journey";
 
+export const trailingSlash = "ignore";
+
 // Endpoint rendering, not a Svelte page: the HTML comes from the Hono
 // calendar screen through renderEventsHtml, so this route emits no client
 // entries/node while the hook dispatch keeps the Hono guard/cache/422/503
