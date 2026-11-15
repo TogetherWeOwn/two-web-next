@@ -48,6 +48,19 @@ export async function assertTagStyles(page) {
           );
         }
       }
+      if (style.lineHeight !== style.fontSize || style.whiteSpace !== "nowrap") {
+        failures.push(`${variant}: line height or wrapping differs`);
+      }
+      if (variant === "echo") {
+        probe.style.backgroundColor = "var(--echo-bg)";
+        if (
+          style.color !== "rgb(157, 106, 255)" ||
+          style.backgroundColor !== "rgb(38, 28, 60)" ||
+          style.backgroundColor !== getComputedStyle(probe).backgroundColor
+        ) {
+          failures.push("echo: foreground or opaque background differs");
+        }
+      }
       const outlineToken =
         variant === "neutral" ? "--color-hair2" : variant === "echo" ? "--echo" : color;
       if (!style.getPropertyValue(outlineToken).trim()) {

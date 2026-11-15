@@ -29,7 +29,9 @@ let {
     font-family: var(--font-data);
     font-size: var(--text-label);
     letter-spacing: var(--tracking-label);
+    line-height: 1;
     text-transform: uppercase;
+    white-space: nowrap;
   }
 
   .live, .you, .ok, .warn {
@@ -42,6 +44,7 @@ let {
   .warn { color: var(--warn); }
   .echo {
     color: var(--echo);
+    background: var(--echo-bg);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--echo) 50%, transparent);
   }
 
