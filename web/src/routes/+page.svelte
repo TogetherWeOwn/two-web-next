@@ -91,26 +91,18 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
     {/if}
   {/if}
   <section class="hero" aria-labelledby="home-heading">
-    <div class="hero-detail hero-detail-left" aria-hidden="true">
-      <span></span>
-      <span></span>
-      <span></span>
-    </div>
-    <div class="hero-detail hero-detail-right" aria-hidden="true">
-      <span></span>
-      <span></span>
-      <span></span>
-    </div>
     <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
     <h1 id="home-heading">The lobby is open.</h1>
-    <p class="lead">We spent most of our life private. Now you can just turn up.</p>
-    {#if sessionUnavailable}
-      <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
-    {:else if session?.member}
-      <a class="btn" href={inviteUrl}>Open Discord</a>
-    {:else}
-      <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
-    {/if}
+    <div class="hero-action">
+      {#if sessionUnavailable}
+        <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
+      {:else if session?.member}
+        <a class="btn" href={inviteUrl}>Open Discord</a>
+      {:else}
+        <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
+      {/if}
+      <p class="lead">We spent most of our life private. Now you can just turn up.</p>
+    </div>
     {#if !session && !sessionUnavailable && eventsUnavailable}
       <p>
         <a href="/discord" data-testid="discord-join">Join with an invite link instead</a>
@@ -270,3 +262,57 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
   </section>
   <JsonLd testid="site-jsonld" json={siteGraph} />
 </Shell>
+
+<style>
+  :global(.base-theme) .hero {
+    display: block;
+    min-height: 0;
+    padding: var(--space-10) 0 var(--space-11);
+    text-align: left;
+  }
+
+  :global(.base-theme) .hero h1 {
+    max-width: 16ch;
+    margin: var(--space-inset-card-lg) 0 0;
+    font: var(--font-weight-display) var(--text-hero) / var(--leading-display) var(--font-display);
+    font-stretch: var(--font-width-display);
+    letter-spacing: var(--tracking-display);
+    text-wrap: balance;
+  }
+
+  .hero-action {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-5);
+    margin-top: var(--space-8);
+  }
+
+  :global(.base-theme) .hero-action .btn {
+    border-radius: var(--radius-pill);
+    text-transform: none;
+    letter-spacing: normal;
+  }
+
+  :global(.base-theme) .hero-action .lead {
+    max-width: 34ch;
+    margin: 0;
+    font-size: var(--text-ui);
+    line-height: var(--leading-body);
+  }
+
+  @media (max-width: 820px) {
+    :global(.base-theme) .hero {
+      padding: 36px 0 48px;
+    }
+
+    .hero-action {
+      gap: var(--space-inset-room);
+      margin-top: var(--space-inset-card-lg);
+    }
+
+    :global(.base-theme) .hero-action .btn {
+      width: 100%;
+    }
+  }
+</style>
