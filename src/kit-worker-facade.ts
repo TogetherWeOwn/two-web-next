@@ -52,7 +52,13 @@ export function createKitWorkerFacade<T extends object>(
   }
   for (const key of Reflect.ownKeys(descriptors)) {
     const descriptor = descriptors[key as string]!;
-    if (descriptor.get) descriptor.get = descriptor.get.bind(adapter);
+    if (descriptor.get) {
+      const get = descriptor.get;
+      descriptor.get = () => {
+        const value: unknown = Reflect.apply(get, adapter, []);
+        return typeof value === "function" ? value.bind(adapter) : value;
+      };
+    }
     if (descriptor.set) descriptor.set = descriptor.set.bind(adapter);
     if (key === "fetch" || typeof descriptor.value !== "function") continue;
     const handler = descriptor.value as Fn;

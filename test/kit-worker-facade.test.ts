@@ -66,6 +66,22 @@ describe("createKitWorkerFacade", () => {
     expect(protect).toHaveBeenCalledTimes(1);
   });
 
+  it("binds getter-provided handlers to the adapter", () => {
+    class Adapter {
+      #name = "adapter";
+      get scheduled() {
+        return function (this: Adapter) {
+          return this.#name;
+        };
+      }
+      fetch() {
+        return new Response("x");
+      }
+    }
+    const facade = createKitWorkerFacade(new Adapter(), passthrough);
+    expect(facade.scheduled()).toBe("adapter");
+  });
+
   it("does not consume or lock the returned stream", async () => {
     const response = new Response("streamed");
     const facade = createKitWorkerFacade(
