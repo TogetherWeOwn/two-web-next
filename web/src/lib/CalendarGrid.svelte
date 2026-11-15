@@ -1,8 +1,19 @@
 <script lang="ts">
 import {
-  CALENDAR_MONTH_MAX, CALENDAR_MONTH_MIN, WEEKDAY_HEADINGS, addCalendarMonth,
-  calendarJumpUrl, calendarMonthLabel, calendarUrl, gridAccessibleName,
-  gridContinuationAccessibleName, gridTitle, isValidZone, wallDateIso, wallMonth, wallTimeHm,
+  CALENDAR_MONTH_MAX,
+  CALENDAR_MONTH_MIN,
+  WEEKDAY_HEADINGS,
+  addCalendarMonth,
+  calendarJumpUrl,
+  calendarMonthLabel,
+  calendarUrl,
+  gridAccessibleName,
+  gridContinuationAccessibleName,
+  gridTitle,
+  isValidZone,
+  wallDateIso,
+  wallMonth,
+  wallTimeHm,
 } from "../../../src/islands/contracts";
 import { ONGOING_COPY } from "../../../src/events/ongoing";
 import type { CalendarGridProps } from "./calendar-grid";
