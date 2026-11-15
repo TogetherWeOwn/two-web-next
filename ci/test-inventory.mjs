@@ -327,10 +327,7 @@ function workflowShellView(text, name, evidenceOnly = false) {
       // Chomping does not affect command arguments; retain internal newlines,
       // including blank lines and more-indented folded content, exactly.
       let script = node.value.replace(/\n+$/, "");
-      if (evidenceOnly && hasUnsupportedShellFlow(script))
-        script = script.replace(/\b(playwright|npm)(?=\s+(?:test|run(?:-script)?\b))/g, (word) =>
-          "_".repeat(word.length),
-        );
+      if (evidenceOnly && hasUnsupportedShellFlow(script)) script = "_";
       // Explicit indentation prevents a more-indented first shell command
       // from setting the YAML block threshold above subsequent commands.
       const replacement = `|2\n${script
@@ -1161,7 +1158,9 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked, evide
     const body = scripts[name] ?? "";
     if (evidenceOnly && hasUnsupportedShellFlow(body)) continue;
     for (const m of body.matchAll(/\bplaywright\s+test\b/g)) {
-      if (evidenceOnly && !isExecutablePosition(body, m.index, true)) continue;
+      const lineStart = body.lastIndexOf("\n", m.index - 1) + 1;
+      if (evidenceOnly && !isExecutablePosition(body.slice(lineStart), m.index - lineStart, true))
+        continue;
       const tail = body.slice(m.index + m[0].length);
       const end = tail.search(/&&|\|\||;/);
       parseTokens(
@@ -2025,6 +2024,18 @@ function selftest() {
         name: "failure before command",
         run: "false\nnpx playwright test --config playwright.fixture.config.ts",
         orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "exit before continued npm command",
+        run: "exit 0\nnpm \\\n  run e2e",
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "apostrophe in script comment",
+        run: "npm run e2e",
+        scripts: { e2e: "# don't skip\nplaywright test --config playwright.fixture.config.ts" },
+        orphans: [],
       },
       {
         name: "failure before nested script",
