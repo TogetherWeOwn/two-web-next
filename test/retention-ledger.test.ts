@@ -441,6 +441,7 @@ describe("retention ledger doc rows", () => {
       "mirrored_at",
       "state",
       "request_attempts",
+      "claim_started_at",
       "next_attempt_at",
       "terminal_reason",
     ]);
@@ -464,6 +465,7 @@ describe("retention ledger doc rows", () => {
       "`failSync`",
       "`noteTerminalIntent`",
       "`terminal_reason`",
+      "`claim_started_at`",
       "`event_sync_attempts_pending_idx`",
       "`obsolete`",
       "`needsSync`",
