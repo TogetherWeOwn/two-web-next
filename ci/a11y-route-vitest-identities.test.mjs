@@ -35,7 +35,27 @@ test("synthetic identities are checkout-relative and retain exact case selectors
     });
     assert.equal(new Set(first.cases.map((entry) => entry.id)).size, 3);
 
-    assert.throws(() => routeVitestIdentities(reports[0], suite, 3, roots[1]));
+    for (const invalidRoot of ["relative", null]) {
+      assert.throws(
+        () => routeVitestIdentities(reports[0], suite, 3, invalidRoot),
+        /route identity refused: invalid checkout root/,
+      );
+    }
+    for (const invalidFile of [
+      "test/control.test.mjs",
+      `${roots[0]}/test/../test/control.test.mjs`,
+    ]) {
+      const noncanonical = structuredClone(reports[0]);
+      noncanonical.testResults[0].name = invalidFile;
+      assert.throws(
+        () => routeVitestIdentities(noncanonical, suite, 3, roots[0]),
+        /route identity refused: noncanonical file/,
+      );
+    }
+    assert.throws(
+      () => routeVitestIdentities(reports[0], suite, 3, roots[1]),
+      /route identity refused: file outside checkout or aliased/,
+    );
     const alias = join(roots[0], "alias.test.mjs");
     symlinkSync(reports[0].testResults[0].name, alias);
     const aliased = structuredClone(reports[0]);
