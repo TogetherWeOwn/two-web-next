@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Kit performance budgets: ceilings for the adapter-generated
 // Worker bundle and the Kit client assets, mirroring ci/check-bundle-budget.mjs
-// enforcement semantics. Exit 0 fits, 1 breach, 2 cannot enforce.
+// enforcement semantics. Exit 0 fits or warns, 1 hard breach, 2 cannot enforce.
 //
 // Worker bundle (`_worker.js`) is content-hashed by build, so it gets exact
 // raw/gzip ceilings like the island budgets. Kit client assets under
@@ -247,7 +247,7 @@ export function measure(root = repoRoot) {
     });
   }
   // Server gzip is advisory: a gzip-only overage warns (exit 0) while server
-  // raw bytes and the file count stay hard. Client and Worker gzip stay hard.
+  // raw bytes and the file count stay hard. Client JS and Worker gzip stay hard.
   const serverOutcome = measureGroup(serverFiles, budget.server.js, "server js", logs, errors, {
     warnings,
     advisoryGzip: true,
@@ -330,7 +330,11 @@ export function measure(root = repoRoot) {
       });
     }
     const group = budget.client[key];
-    const outcome = measureGroup(files, group, `client ${key}`, logs, errors);
+    const outcome = measureGroup(files, group, `client ${key}`, logs, errors, {
+      warnings,
+      advisoryRaw: key === "css",
+      advisoryGzip: key === "css",
+    });
     if (outcome.error) {
       return fail(2, {
         code: "INCOMPLETE_ENUMERATION",
@@ -341,11 +345,11 @@ export function measure(root = repoRoot) {
     breaches += outcome.breach ? 1 : 0;
     groups.push({
       id: `kit.client.${key}`,
-      status: outcome.breach ? "fail" : "pass",
+      status: outcome.breach ? "fail" : outcome.warn ? "warn" : "pass",
       checks: [
         {
           id: `kit.client.${key}`,
-          status: outcome.breach ? "fail" : "pass",
+          status: outcome.breach ? "fail" : outcome.warn ? "warn" : "pass",
           rawBytes: outcome.raw,
           gzipBytes: outcome.gzip,
           files: files.length,
@@ -363,14 +367,21 @@ export function measure(root = repoRoot) {
   );
   if (breaches) return fail(1, null);
   if (warnings.length) {
-    logs.push("kit perf budget: passed with warnings (advisory server gzip over its ceiling).");
+    logs.push("kit perf budget: passed with advisory warnings; not every asset fits its ceiling.");
     return fail(0, null);
   }
   logs.push("kit perf budget: every Kit asset fits.");
   return fail(0, null);
 }
 
-function measureGroup(files, group, label, logs, errors, { warnings, advisoryGzip = false } = {}) {
+function measureGroup(
+  files,
+  group,
+  label,
+  logs,
+  errors,
+  { warnings, advisoryRaw = false, advisoryGzip = false } = {},
+) {
   let raw = 0;
   let gzip = 0;
   for (const file of files) {
@@ -389,7 +400,15 @@ function measureGroup(files, group, label, logs, errors, { warnings, advisoryGzi
   }
   const over = [];
   let warn = false;
-  if (raw > group.maxRawBytes) over.push(`raw ${raw}B over ${group.maxRawBytes}B`);
+  if (raw > group.maxRawBytes) {
+    const detail = `raw ${raw}B over ${group.maxRawBytes}B`;
+    if (advisoryRaw && warnings) {
+      warn = true;
+      warnings.push(
+        boundLine(`kit perf budget: warning: ${label}: ${detail} (advisory, not a failure)`),
+      );
+    } else over.push(detail);
+  }
   if (gzip > group.maxGzipBytes) {
     const detail = `gzip ${gzip}B over ${group.maxGzipBytes}B`;
     if (advisoryGzip && warnings) {

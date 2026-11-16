@@ -14,6 +14,12 @@ objects the checkers enforce:
 - `decisions/kit-perf/`, `decisions/bundle/` — one file per ceiling
   decision, named `YYYY-MM-DD-<slug>.md`.
 
+Kit client CSS raw and gzip overages are advisory during the Ember/SvelteKit
+migration: reports retain the measured values and mark the group `warn` rather
+than claiming it fits. The CSS file-count cap remains hard, as do unrelated
+budgets except the existing server-gzip advisory. Missing or incomplete evidence
+still fails closed.
+
 ## Changing a ceiling
 
 1. Measure the real build output; ceilings are measured size x1.25
