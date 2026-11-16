@@ -608,7 +608,7 @@ function scriptRunsPlaywright(scripts, name, seen = new Set()) {
   return { runs: false, unknown };
 }
 
-function invokedScriptNames(scripts, workflowText) {
+function invokedScriptNames(scripts, workflowRuns) {
   const invoked = new Set();
   const queue = [];
   const scan = (text, where) => {
@@ -628,14 +628,14 @@ function invokedScriptNames(scripts, workflowText) {
       }
     }
   };
-  const stripped = workflowText.split("\n").map(stripYamlComment).join("\n");
-  scan(stripped, "a workflow step");
+  const stripped = workflowRuns.map((run) => run.split("\n").map(stripYamlComment).join("\n"));
+  for (const run of stripped) scan(run, "a workflow step");
   while (queue.length) {
     const next = queue.shift();
     scan(scripts[next] ?? "", `script "${next}"`);
   }
   const forwardSources = [
-    [stripped, "a workflow step"],
+    ...stripped.map((run) => [run, "a workflow step"]),
     ...[...invoked].map((n) => [scripts[n] ?? "", `script "${n}"`]),
   ];
   for (const [text, where] of forwardSources) {
@@ -1014,6 +1014,7 @@ function auditWorkflowNpmRunCwd(workflowFiles, scripts) {
     if (!lines.some((l) => l.includes("npm") && l.includes("run"))) continue;
     const ctx = { file: name, lines, content: literalScriptLines(lines) };
     lines.forEach((line, idx) => {
+      if (!ctx.content.has(idx)) return;
       for (const occ of parseNpmRunOccurrences(line)) {
         if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
         const target = scriptRunsPlaywright(scripts, occ.name);
@@ -1151,6 +1152,7 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
     const stripped = lines.map(stripYamlComment);
     const ctx = { file: name, lines: stripped, content: literalScriptLines(stripped) };
     for (let i = 0; i < lines.length; i += 1) {
+      if (!ctx.content.has(i)) continue;
       const line = stripped[i];
       const at = line.search(/\bplaywright\s+test\b/);
       if (at === -1) continue;
@@ -1880,8 +1882,17 @@ export function playwrightInventory(root = repoRoot) {
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const scripts = pkg.scripts ?? {};
   const workflowFiles = collectWorkflowFiles(root);
-  const workflowText = workflowFiles.map((w) => w.text).join("\n");
-  const invoked = invokedScriptNames(scripts, workflowText);
+  const workflowRuns = [];
+  for (const { text } of workflowFiles) {
+    visit(parseDocument(text), {
+      Pair(_, pair) {
+        if (isScalar(pair.key) && pair.key.value === "run" && isScalar(pair.value)) {
+          if (typeof pair.value.value === "string") workflowRuns.push(pair.value.value);
+        }
+      },
+    });
+  }
+  const invoked = invokedScriptNames(scripts, workflowRuns);
   auditWorkflowNpmRunCwd(workflowFiles, scripts);
   auditScriptCwd(scripts, invoked);
   const refs = parsePlaywrightInvocations(root, workflowFiles, scripts, invoked);
@@ -2526,6 +2537,19 @@ function selftest() {
           : command;
         writeFileSync(workflow, `name: ci\njobs:\n  t:\n    steps:\n      - run: ${scalar}\n`);
       };
+      writeFileSync(
+        workflow,
+        'name: ci\njobs:\n  t:\n    steps:\n      - name: "Browser tests --grep"\n        run: npx playwright test\n',
+      );
+      assert.deepEqual(playwrightInventory(dir).orphans, []);
+      assert.equal(playwrightJsonSummary(dir).reachable, 2);
+      assert.deepEqual(playwrightJsonSummary(dir).orphans, []);
+      writeFileSync(
+        workflow,
+        'name: ci\njobs:\n  t:\n    steps:\n      - name: "Browser tests --grep"\n        run: npx playwright test --grep smoke\n',
+      );
+      assert.deepEqual(playwrightInventory(dir).orphans, ["e2e/a.spec.ts", "e2e/suite.visual.ts"]);
+      assert.equal(playwrightJsonSummary(dir).reachable, 0);
       for (const args of ["--grep smoke", '--grep "smoke test"', "--grep=smoke"]) {
         for (const path of ["", " e2e/a.spec.ts"]) {
           run(`npx playwright test ${args}${path}`);
