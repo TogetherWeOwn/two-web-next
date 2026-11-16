@@ -442,7 +442,6 @@ describe("retention ledger doc rows", () => {
       "state",
       "request_attempts",
       "next_attempt_at",
-      "claim_started_at",
       "terminal_reason",
     ]);
     const rows = read("docs/retention-ledger.md")
