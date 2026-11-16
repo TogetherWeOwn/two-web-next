@@ -25,6 +25,7 @@ export const TABLE_RIGHTS = Object.freeze({
   "public.board_view_logs": ["DELETE", "INSERT", "SELECT"],
   "public.events": ["INSERT", "SELECT", "UPDATE"],
   "public.event_sync_attempts": ["INSERT", "SELECT", "UPDATE"],
+  "public.bot_reconciliation_intents": ["INSERT", "SELECT", "UPDATE"],
   "public.queue_failed_jobs": ["DELETE", "INSERT", "SELECT"],
   "public.activity_log": ["INSERT", "SELECT"],
   "public.agent_event_grants": ["SELECT", "UPDATE(updated_at)"],

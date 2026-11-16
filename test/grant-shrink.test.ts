@@ -81,6 +81,26 @@ describe.skipIf(!process.env.DATABASE_URL)(
     afterAll(async () => {
       await fixture?.dispose();
     });
+    it("grants only reviewed reconciliation rights inside the owned fixture schema", async () => {
+      const rows = await fixture.client`
+        SELECT privilege_type, is_grantable
+          FROM information_schema.role_table_grants
+         WHERE table_schema = ${fixture.schemaName}
+           AND table_name = 'bot_reconciliation_intents'
+           AND grantee = 'two_web_app'
+         ORDER BY privilege_type
+      `;
+      expect(rows).toEqual([
+        { privilege_type: "INSERT", is_grantable: "NO" },
+        { privilege_type: "SELECT", is_grantable: "NO" },
+        { privilege_type: "UPDATE", is_grantable: "NO" },
+      ]);
+      const [rights] = await fixture.client`
+        SELECT has_table_privilege('two_web_app',
+          format('%I.bot_reconciliation_intents', ${fixture.schemaName}), 'DELETE') AS can_delete
+      `;
+      expect(rights!.can_delete).toBe(false);
+    });
     beforeEach(async () => {
       await fixture.reset();
       await fixture.client`DELETE FROM agent_event_idempotency_keys`;

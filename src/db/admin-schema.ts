@@ -2,6 +2,7 @@ import { isNull, sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -130,6 +131,7 @@ export const eventSyncAttempts = pgTable(
     state: text("state").notNull().default("pending"),
     requestAttempts: integer("request_attempts").notNull().default(0),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow(),
+    claimStartedAt: timestamp("claim_started_at", { withTimezone: true }).notNull().defaultNow(),
     // Terminal-intent marker: a definitive refusal records its redacted reason
     // here while state stays pending, so the pending-slot unique index keeps
     // blocking successors until failSync commits the failed stamp.
@@ -137,6 +139,41 @@ export const eventSyncAttempts = pgTable(
   },
   (t) => [
     uniqueIndex("event_sync_attempts_pending_idx").on(t.eventId).where(sql`${t.state} = 'pending'`),
+  ],
+);
+
+// Scalar-only, durable evidence for keyed bot mutations requiring reconciliation.
+export const botReconciliationIntents = pgTable(
+  "bot_reconciliation_intents",
+  {
+    idempotencyKey: uuid("idempotency_key").primaryKey(),
+    verb: text("verb").notNull(),
+    subject: text("subject").notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    attempts: integer("attempts").notNull(),
+    lastCode: text("last_code"),
+    lastStatus: integer("last_status"),
+    lastRequestId: text("last_request_id"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: text("resolved_by"),
+    resolution: text("resolution"),
+  },
+  (t) => [
+    index("bot_reconciliation_open_idx").on(t.firstSeenAt).where(sql`${t.resolvedAt} is null`),
+    index("bot_reconciliation_resolved_idx")
+      .on(t.resolvedAt)
+      .where(sql`${t.resolvedAt} is not null`),
+    check(
+      "bot_reconciliation_verb_known",
+      sql`${t.verb} in ('announcement.post', 'event.upsert', 'event.cancel', 'reminder.send', 'place_offer.send')`,
+    ),
+    check("bot_reconciliation_subject_bound", sql`char_length(${t.subject}) <= 200`),
+    check("bot_reconciliation_attempts_positive", sql`${t.attempts} >= 1`),
+    check(
+      "bot_reconciliation_resolution_bound",
+      sql`${t.resolution} is null or char_length(${t.resolution}) <= 500`,
+    ),
   ],
 );
 

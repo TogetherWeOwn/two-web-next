@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,6 +13,26 @@ import {
 } from "./migration-runtime-rights.mjs";
 
 const migration = (sql) => validateMigrationSql("1025_runtime-rights.sql", sql);
+
+test("reconciliation migration requires the precise reviewed runtime rights", () => {
+  const sql = readFileSync(
+    new URL("../drizzle/1038_bot-reconciliation.sql", import.meta.url),
+    "utf8",
+  );
+  assert.deepEqual(migration(sql), []);
+  assert.match(
+    migration(
+      sql.replace("GRANT UPDATE ON TABLE public.bot_reconciliation_intents TO two_web_app;", ""),
+    ).join("\n"),
+    /missing reviewed runtime grant/i,
+  );
+  assert.match(
+    migration(
+      `${sql}\nGRANT DELETE ON TABLE public.bot_reconciliation_intents TO two_web_app;`,
+    ).join("\n"),
+    /unreviewed runtime privilege/i,
+  );
+});
 const tableGrants = `
   GRANT SELECT ON TABLE public.events TO two_web_app;
   GRANT INSERT ON TABLE public.events TO two_web_app;
