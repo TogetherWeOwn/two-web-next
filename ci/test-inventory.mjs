@@ -327,7 +327,10 @@ function workflowShellView(text, name, evidenceOnly = false) {
       // Chomping does not affect command arguments; retain internal newlines,
       // including blank lines and more-indented folded content, exactly.
       let script = node.value.replace(/\n+$/, "");
-      if (evidenceOnly && hasUnsupportedShellFlow(script)) script = "_";
+      if (evidenceOnly) {
+        if (hasUnsupportedShellFlow(script)) script = "_";
+        else script = script.replace(/\\\r?\n/g, " ");
+      }
       // Explicit indentation prevents a more-indented first shell command
       // from setting the YAML block threshold above subsequent commands.
       const replacement = `|2\n${script
@@ -1155,8 +1158,11 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked, evide
   // Invoked scripts only (see invokedScriptNames): each `playwright test`
   // runs to the next shell chain separator, never into a following command.
   for (const name of invoked) {
-    const body = scripts[name] ?? "";
-    if (evidenceOnly && hasUnsupportedShellFlow(body)) continue;
+    let body = scripts[name] ?? "";
+    if (evidenceOnly) {
+      if (hasUnsupportedShellFlow(body)) continue;
+      body = body.replace(/\\\r?\n/g, " ");
+    }
     for (const m of body.matchAll(/\bplaywright\s+test\b/g)) {
       const lineStart = body.lastIndexOf("\n", m.index - 1) + 1;
       if (evidenceOnly && !isExecutablePosition(body.slice(lineStart), m.index - lineStart, true))
@@ -2003,6 +2009,22 @@ function selftest() {
         name: "echo direct",
         run: "echo npx playwright test --config playwright.fixture.config.ts",
         orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "continued echo direct",
+        run: "echo \\\n npx playwright test --config playwright.fixture.config.ts",
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "continued echo in script",
+        run: "npm run e2e",
+        scripts: { e2e: "echo \\\n npx playwright test --config playwright.fixture.config.ts" },
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "continued executable command",
+        run: "npx \\\n playwright test --config playwright.fixture.config.ts",
+        orphans: [],
       },
       {
         name: "echo npm",
