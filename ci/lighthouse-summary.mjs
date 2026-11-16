@@ -256,7 +256,7 @@ if (process.argv.includes("--selftest")) {
     lhrs,
     collectedLhrs: loadCollectedLhrs(),
     hasReportFiles: [
-      [".lighthouseci", /^lhr-\d+\.json$/],
+      [".lighthouseci", /^lhr-\d+(?:-\d+)?\.json$/],
       [".lighthouseci/quality", /^(?!manifest\.json$).*\.json$/],
     ].some(
       ([dir, pattern]) => existsSync(dir) && readdirSync(dir).some((name) => pattern.test(name)),

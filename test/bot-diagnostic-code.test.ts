@@ -41,6 +41,7 @@ const MEMBERS = [
   "internal",
   "discord_unavailable",
   "upstream_timeout",
+  "needs_reconciliation",
 ];
 
 const CANARY = "CANARY-DIAGNOSTIC-CODE-7q2m8z4t";
@@ -89,6 +90,11 @@ const NEAR_MISSES = [
   "upstreamTimeout",
   "discord-unavailable",
   "discordunavailable",
+  "needs-reconciliation",
+  "needs reconciliation",
+  "needsReconciliation",
+  "needs_reconciliatio",
+  "xneeds_reconciliation",
   // Lookalikes.
   "unauthorised",
   "re-played",
@@ -158,11 +164,11 @@ const NON_STRINGS: unknown[] = [
   () => "internal",
 ];
 
-describe("diagnosticCode round-trips the closed 11-member vocabulary", () => {
-  it("pins MEMBERS to the production vocabulary of exactly 11 distinct codes", () => {
+describe("diagnosticCode round-trips the closed 12-member vocabulary", () => {
+  it("pins MEMBERS to the production vocabulary of exactly 12 distinct codes", () => {
     const production = productionVocabulary();
-    expect(production).toHaveLength(11);
-    expect(new Set(production).size).toBe(11);
+    expect(production).toHaveLength(12);
+    expect(new Set(production).size).toBe(12);
     expect([...production].sort()).toEqual([...MEMBERS].sort());
   });
 
