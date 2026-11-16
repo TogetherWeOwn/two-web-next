@@ -11,7 +11,9 @@ const fixture = JSON.parse(
 const suite = "RSVP outcome focus in Chromium";
 
 test("synthetic identities are checkout-relative and retain exact case selectors", () => {
-  const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "route-identities-"));
+  const dir = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "route-identities-"),
+  );
   try {
     const roots = [join(dir, "one"), join(dir, "two")];
     const reports = roots.map((root) => {
@@ -27,7 +29,9 @@ test("synthetic identities are checkout-relative and retain exact case selectors
     assert.equal(first.version, 1);
     assert.equal(first.cases.length, 3);
     assert.deepEqual(first.cases[0].selector, {
-      file: "test/control.test.mjs", ancestors: [suite], title: "alpha",
+      file: "test/control.test.mjs",
+      ancestors: [suite],
+      title: "alpha",
     });
     assert.equal(new Set(first.cases.map((entry) => entry.id)).size, 3);
 
@@ -41,7 +45,9 @@ test("synthetic identities are checkout-relative and retain exact case selectors
     failed.testResults[0].assertionResults[0].status = "failed";
     assert.throws(() => routeVitestIdentities(failed, suite, 3, roots[0]));
     const duplicate = structuredClone(reports[0]);
-    duplicate.testResults[0].assertionResults[1] = structuredClone(duplicate.testResults[0].assertionResults[0]);
+    duplicate.testResults[0].assertionResults[1] = structuredClone(
+      duplicate.testResults[0].assertionResults[0],
+    );
     assert.throws(() => routeVitestIdentities(duplicate, suite, 3, roots[0]));
   } finally {
     rmSync(dir, { recursive: true, force: true });
