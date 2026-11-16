@@ -6,6 +6,7 @@ import type { Env } from "../src/env";
 import { memberReadBoundary } from "../src/member-reads";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
 import { newRequestId, requestLog, safeRequestId } from "../src/request-log";
+import { selectRequestId } from "../src/http/request-log";
 
 // Lets one test make the real app's outer post-processing throw.
 const post = vi.hoisted(() => ({ fail: false }));
@@ -263,6 +264,9 @@ describe("structured request logs (local fixtures only)", () => {
       const res = await fixture().request("/denied", { headers: { "cf-ray": ray } }, env);
       expect(res.headers.get("x-request-id")).not.toBe(ray);
       expect(res.headers.get("x-request-id")).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+      expect(logs(log)).toEqual([
+        expect.objectContaining({ request_id: res.headers.get("x-request-id"), status: 403 }),
+      ]);
       expect(JSON.stringify(log.mock.calls)).not.toContain(ray);
     },
   );
@@ -283,6 +287,20 @@ describe("structured request logs (local fixtures only)", () => {
     ]);
     expect(JSON.stringify(log.mock.calls)).not.toContain("198.51.100.42");
   });
+
+  it.each([RAY, "0123456789abcdef", "01ARYZ6S41TSV4RRFFQ69G5FAV"])(
+    "preserves a valid correlation ID %s",
+    (value) => {
+      expect(selectRequestId(value)).toBe(value);
+    },
+  );
+
+  it.each([undefined, null, "", "cookie-secret", "0123456789abcdef-lhr"])(
+    "generates a ULID for an invalid or missing cf-ray %s",
+    (value) => {
+      expect(selectRequestId(value)).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+    },
+  );
 
   it("generates unique ULIDs with the timestamp encoded in the first ten characters", () => {
     vi.spyOn(Date, "now").mockReturnValue(1469918176385);
