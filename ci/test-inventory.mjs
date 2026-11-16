@@ -957,8 +957,17 @@ function assertRootStepCwd(ctx, idx, at, what) {
   const step = stepBlockBounds(lines, idx, content);
   assert.ok(step, `${where} outside any run step: ${tail}`);
   let stepValue = null;
+  const keyIndent =
+    /^\s*-\s+\S/.exec(lines[step.start])?.[0].length - 1 ||
+    Math.min(
+      ...lines
+        .slice(step.start + 1, step.end)
+        .flatMap((line, offset) =>
+          line.trim() && !content.has(step.start + 1 + offset) ? [indentOf(line)] : [],
+        ),
+    );
   for (let k = step.start; k < step.end; k++) {
-    if (content.has(k)) continue;
+    if (content.has(k) || (k !== step.start && indentOf(lines[k]) !== keyIndent)) continue;
     const m = /^\s*(?:-\s+)?working-directory\s*:\s*(.+?)\s*(#.*)?$/.exec(lines[k]);
     if (m) stepValue = m[1];
   }
@@ -2580,6 +2589,29 @@ function selftest() {
         );
         assert.throws(() => playwrightInventory(dir), /cannot resolve/);
         assert.throws(() => playwrightJsonSummary(dir), /cannot resolve/);
+        for (const command of ["npx playwright test", "npm run browser"]) {
+          for (const marker of ["- ", "-\n        "]) {
+            const prefix = `name: ci\ndefaults:\n  run:\n    working-directory: web\njobs:\n  t:\n    steps:\n      ${marker}${quote}run${quote}: ${command}\n`;
+            for (const [stepCwd, metadataCwd, rejects] of [
+              ["web", ".", true],
+              [".", "web", false],
+              [null, ".", true],
+            ]) {
+              const stepLine = stepCwd ? `        working-directory: ${stepCwd}\n` : "";
+              writeFileSync(
+                workflow,
+                `${prefix}${stepLine}        env:\n          ${quote}working-directory${quote}: ${metadataCwd}\n`,
+              );
+              if (rejects) {
+                assert.throws(() => playwrightInventory(dir), /cannot resolve/);
+                assert.throws(() => playwrightJsonSummary(dir), /cannot resolve/);
+              } else {
+                assert.deepEqual(playwrightInventory(dir).orphans, []);
+                assert.deepEqual(playwrightJsonSummary(dir).orphans, []);
+              }
+            }
+          }
+        }
       }
       writeFileSync(
         workflow,
