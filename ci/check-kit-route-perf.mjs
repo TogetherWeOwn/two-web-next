@@ -318,7 +318,13 @@ export function checkRoutes(root = resolve(import.meta.dirname, "..")) {
           headroomShortfalls.push(`${id} ${kind}`);
       }
     }
-    return { ...measurement, exitCode: breaches.length ? 1 : 0, breaches, warnings, headroomShortfalls };
+    return {
+      ...measurement,
+      exitCode: breaches.length ? 1 : 0,
+      breaches,
+      warnings,
+      headroomShortfalls,
+    };
   } catch (error) {
     return {
       version: 1,
