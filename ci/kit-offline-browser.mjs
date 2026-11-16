@@ -42,11 +42,26 @@ export async function readFixtureAsset(directory, pathname) {
   }
 }
 
+// Module-scope `Date` for the bundled server only; the process global is untouched.
+export function fixedDateBanner(now) {
+  if (!Number.isSafeInteger(now) || Number.isNaN(new Date(now).getTime())) {
+    throw new Error("Fixture now must be epoch milliseconds");
+  }
+  return `const Date = new Proxy(globalThis.Date, {
+  construct: (target, args, newTarget) =>
+    Reflect.construct(target, args.length ? args : [${now}], newTarget === Date ? target : newTarget),
+  apply: (target) => new target(${now}).toString(),
+  get: (target, key) => (key === "now" ? () => ${now} : Reflect.get(target, key, target)),
+});`;
+}
+
 // Build and render the supplied page without allowing browser network access.
-export async function withKitOfflineBrowser({ source, page: fixture, search = "" }, callback) {
+// `now` (epoch ms) fixes the clock seen by the bundled server render only.
+export async function withKitOfflineBrowser({ source, page: fixture, search = "", now }, callback) {
   if (typeof search !== "string" || (search && !search.startsWith("?")) || search.includes("#")) {
     throw new Error("Fixture search must be a query string");
   }
+  const banner = now === undefined ? undefined : fixedDateBanner(now);
   return withKitBrowserFixture({ source, page: fixture }, async ({ root, output }) => {
     const entry = join(root, "fixture-server.mjs");
     await build({
@@ -59,6 +74,7 @@ export async function withKitOfflineBrowser({ source, page: fixture, search = ""
       bundle: true,
       platform: "node",
       format: "esm",
+      ...(banner && { banner: { js: banner } }),
       plugins: [
         {
           name: "offline-fixture",
