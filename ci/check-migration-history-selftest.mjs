@@ -412,10 +412,56 @@ for (const defaultBranch of ["main", "master"]) {
     const env = { GITHUB_ACTIONS: "true", GITHUB_EVENT_PATH: eventPath };
     assert.equal(resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: "pull_request" }), f.base);
     assert.deepEqual(checkMigrations(clone, f.base), { total: 5, historical: 4 });
+    // Dispatch needs the candidate's ancestry, not only the fetched base object.
+    git(clone, "fetch", "--unshallow", "origin");
     // The nightly schedule has no event base either (the full-run cron in ci.yml).
     for (const name of ["workflow_dispatch", "schedule"]) {
       assert.equal(resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: name }), f.base);
     }
+  });
+}
+
+for (const name of ["workflow_dispatch", "schedule"]) {
+  test(`${name} uses branch point when main gains a migration`, (t) => {
+    const f = fixture(t);
+    git(f.root, "branch", "main", f.base);
+    git(f.root, "remote", "add", "origin", f.root);
+    git(f.root, "checkout", "-q", "main");
+    put(f.root, "drizzle/1003_main.sql", "SELECT 3;\n");
+    lock(f.root);
+    git(f.root, "add", ".");
+    git(f.root, "commit", "-qm", "main migration");
+    const main = git(f.root, "rev-parse", "HEAD");
+    const eventPath = join(f.root, "event.json");
+    put(f.root, "event.json", "{}");
+    const env = { GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: name, GITHUB_EVENT_PATH: eventPath };
+    assert.equal(resolveBaseline(f.root, env), main);
+    git(f.root, "checkout", "-q", "fixture");
+    const baseline = resolveBaseline(f.root, env);
+    assert.equal(baseline, f.base);
+    assert.deepEqual(checkMigrations(f.root, baseline), { total: 4, historical: 4 });
+    rmSync(join(f.root, "drizzle/1000_original.sql"));
+    lock(f.root);
+    assert.throws(() => checkMigrations(f.root, baseline), /historical migration deleted\/renamed/);
+  });
+
+  test(`${name} fails closed without a merge base`, (t) => {
+    const f = fixture(t);
+    git(f.root, "remote", "add", "origin", f.root);
+    git(f.root, "checkout", "-q", "--orphan", "main");
+    git(f.root, "commit", "--allow-empty", "-qm", "unrelated main");
+    git(f.root, "checkout", "-q", "fixture");
+    const eventPath = join(f.root, "event.json");
+    put(f.root, "event.json", "{}");
+    assert.throws(
+      () =>
+        resolveBaseline(f.root, {
+          GITHUB_ACTIONS: "true",
+          GITHUB_EVENT_NAME: name,
+          GITHUB_EVENT_PATH: eventPath,
+        }),
+      /cannot read Git baseline \(merge-base\)/,
+    );
   });
 }
 

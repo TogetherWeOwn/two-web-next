@@ -189,15 +189,15 @@ export function resolveBaseline(root, env = process.env) {
     // A queue commit is unmerged: baseline it against the exact parent the
     // queue will merge onto, same role as the PR base SHA above.
     else if (env.GITHUB_EVENT_NAME === "merge_group") base = event.merge_group?.base_sha;
-    // Dispatch and the nightly schedule have no event base: both check main's tip.
+    // Dispatch and the nightly schedule have no event base: use main's merge base.
     else if (env.GITHUB_EVENT_NAME !== "workflow_dispatch" && env.GITHUB_EVENT_NAME !== "schedule")
       throw new Error("unsupported CI event for historical baseline");
     if (base !== "origin/main" && !/^[0-9a-f]{40}$/.test(base ?? ""))
       throw new Error("missing/invalid CI base SHA");
     if (base === "origin/main") {
-      // Dispatch checks against the current target branch, not a stale local ref.
+      // Fetch the target branch, then fail closed if its ancestry is unavailable.
       git(root, ["fetch", "--no-tags", "origin", "main"]);
-      base = "FETCH_HEAD";
+      base = git(root, ["merge-base", "FETCH_HEAD", "HEAD"]).toString("utf8").trim();
     } else {
       try {
         git(root, ["cat-file", "-e", `${base}^{commit}`]);
