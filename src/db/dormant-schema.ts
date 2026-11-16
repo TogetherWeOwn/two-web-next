@@ -9,9 +9,36 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { events } from "./admin-schema";
+import { events, rsvps } from "./admin-schema";
+
+// Offers remain dormant until the RSVP lifecycle is integrated. The RSVP owns
+// each row, so withdrawal and erasure cascade without storing another member ID.
+export const waitlistOffers = pgTable(
+  "waitlist_offers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    rsvpId: integer("rsvp_id")
+      .notNull()
+      .references(() => rsvps.id, { onDelete: "cascade" }),
+    state: text("state").notNull().default("held"),
+    offeredAt: timestamp("offered_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    notificationKey: uuid("notification_key").notNull().defaultRandom().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      "waitlist_offers_state_check",
+      sql`${t.state} IN ('held', 'accepted', 'declined', 'expired')`,
+    ),
+    check("waitlist_offers_window_check", sql`${t.expiresAt} > ${t.offeredAt}`),
+    uniqueIndex("waitlist_offers_held_rsvp_idx").on(t.rsvpId).where(sql`${t.state} = 'held'`),
+  ],
+);
 
 export const eventEchoes = pgTable(
   "event_echoes",

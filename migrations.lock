@@ -148,6 +148,10 @@
     {
       "path": "drizzle/1036_event-sync-claim-started.sql",
       "sha256": "cc2993bd6cd66dadcc69acbb1ab4732941e975f423b2e2ebd632f11d59118573"
+    },
+    {
+      "path": "drizzle/1037_waitlist-offers.sql",
+      "sha256": "4b7c07db0f11ee89a392c7bf4b02e791087a18f0692d46b49f2aafedfe958c7b"
     }
   ]
 }
