@@ -61,7 +61,14 @@ describe("Kit lock admission failures", () => {
         cause,
       }),
     );
-    expect(() => refuse("denied")).toThrow(expect.objectContaining({ cause: undefined }));
+    let thrown: unknown;
+    try {
+      refuse("denied");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(KitLockAdmissionError);
+    expect((thrown as KitLockAdmissionError).cause).toBeUndefined();
   });
 
   it("returns successful results and wraps failures without double wrapping", () => {
