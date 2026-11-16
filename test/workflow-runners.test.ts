@@ -29,7 +29,8 @@ const pinnedHostedJob = (name: string, id: string) =>
   (name === "e2e.yml" && id === "browser-smoke") ||
   (name === "kit-home-evidence.yml" && id === "capture") ||
   (name === "admin-stale-save-ubuntu24-proof.yml" && id === "recovery-proof") ||
-  (name === "kit-footer-browser.yml" && id === "footer-browser");
+  (name === "kit-footer-browser.yml" && id === "footer-browser") ||
+  (name === "xfs-qualification.yml" && id === "fixture");
 const byVisibility = `\${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
 const byVisibilityPrGuarded = `\${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
 const publicGuard = `!github.event.repository.private && '["${hosted}"]'`;
@@ -57,6 +58,12 @@ function jobs(text: string) {
 }
 
 describe("workflow runner labels", () => {
+  it("keeps the XFS fixture on a disposable hosted runner for every event", () => {
+    const workflow = workflows.find(({ name }) => name === "xfs-qualification.yml");
+    expect(workflow).toBeDefined();
+    expect(jobs(workflow!.text).find(({ id }) => id === "fixture")?.runsOn).toBe("ubuntu-24.04");
+  });
+
   it("finds every workflow job", () => {
     expect(workflows.length).toBeGreaterThan(0);
     for (const { name, text } of workflows) expect(jobs(text).length, name).toBeGreaterThan(0);

@@ -7,6 +7,7 @@ export const baseCiOkNeeds = [
   "docs-links",
   "queue-syntax-smoke",
   "check",
+  "kit-browser-fixture",
   "node22-compat",
   "scope",
   "bot-contract-drift",
