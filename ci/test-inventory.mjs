@@ -2519,8 +2519,12 @@ function selftest() {
       writeFileSync(join(dir, "e2e", "a.spec.ts"), 'import "./suite.visual";\n');
       writeFileSync(join(dir, "e2e", "suite.visual.ts"), 'test("not selected", () => {});\n');
       const workflow = join(dir, ".github", "workflows", "ci.yml");
-      const run = (command) =>
-        writeFileSync(workflow, `name: ci\njobs:\n  t:\n    steps:\n      - run: ${command}\n`);
+      const run = (command) => {
+        const scalar = command.includes("\n")
+          ? `|\n          ${command.replaceAll("\n", "\n          ")}`
+          : command;
+        writeFileSync(workflow, `name: ci\njobs:\n  t:\n    steps:\n      - run: ${scalar}\n`);
+      };
       for (const args of ["--grep smoke", '--grep "smoke test"', "--grep=smoke"]) {
         for (const path of ["", " e2e/a.spec.ts"]) {
           run(`npx playwright test ${args}${path}`);
