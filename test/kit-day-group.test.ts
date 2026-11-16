@@ -57,6 +57,9 @@ export const html = render(Fixture).body;`,
       const { html } = (await import(pathToFileURL(outfile).href)) as { html: string };
       const sections = html.match(/<section\b[^>]*>[\s\S]*?<\/section>/g) ?? [];
       expect(sections).toHaveLength(2);
+      for (const section of sections) {
+        expect(section).toMatch(/<ul\b[^>]*\brole="list"[^>]*>/);
+      }
       expect(sections[0]).toMatch(/<h2[^>]*>Monday, 1 December<\/h2>/);
       expect(sections[0]).toMatch(
         /<ul[^>]*>[\s\S]*<li>Community night<\/li>[\s\S]*<li>Practice session<\/li>[\s\S]*<\/ul>/,

@@ -18,7 +18,7 @@ let {
   {:else}
     <h3>{label}</h3>
   {/if}
-  <ul>{@render children()}</ul>
+  <ul role="list">{@render children()}</ul>
 </section>
 
 <style>
