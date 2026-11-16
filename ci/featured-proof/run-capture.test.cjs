@@ -201,43 +201,104 @@ function isCoveredByScopes(relPosix, globs) {
 }
 
 // One reviewed generated module has tracked scope inputs instead of a tracked
-// output. Pin the generator recipe without importing/evaluating it; any recipe
-// change requires reviewing this provenance contract again. Never infer an
-// exemption from a GENERATED comment, an ignored path, or a failed read.
+// output. Pin the generator and packer recipes without importing/evaluating
+// either, and validate the output independently: this guard parses only the two
+// known initializer shapes as data and decodes them with its own decoder, never
+// the generated module, packer or runtime decoder. A recipe change requires
+// reviewing this provenance contract again. Never infer an exemption from a
+// GENERATED comment, an ignored path, or a failed read.
 const GENERATED_LEAF_CSS = {
   output: 'src/leaf-critical-css.ts',
   generator: 'ci/build-leaf-css.mjs',
-  generatorSha256: 'e2101052d110d2523cd0f24fcd7354a701ba3f352b7bf494b3feef730f75fce1',
+  generatorSha256: 'f5d4e5c62c9103e524f6607887fc13d0db2a62e8de80195bac84fe01fc0f2c98',
+  packer: 'ci/css-dictionary.mjs',
+  packerSha256: 'cb6dfb9f732825e3e6cb2ed347695e5c41939cbaf0325883011a97513d77a60e',
+  // Tracked runtime decoder imported by the packed output; scope is required
+  // (and the file must exist), its behavior is re-implemented below.
+  decoder: 'src/css-dictionary.ts',
   inputs: ['public/styles.css', 'public/theme-tokens.css', 'public/theme.css'],
 };
 const { createHash } = require('node:crypto');
 
+const DICTIONARY_FIRST_MARKER = 0x80;
+const DICTIONARY_MAX_ENTRIES = 80;
+const DICTIONARY_MAX_CSS_LENGTH = 100_000;
+
+// Independent decoder for the guard's data-only validation; null when invalid.
+function decodeDictionaryForGuard(packed, dictionary) {
+  if (typeof packed !== 'string' || !Array.isArray(dictionary) ||
+      packed.length > DICTIONARY_MAX_CSS_LENGTH || dictionary.length > DICTIONARY_MAX_ENTRIES ||
+      dictionary.some(entry => typeof entry !== 'string' || !/^[\x20-\x7e]{4,24}$/u.test(entry))) return null;
+  let css = '';
+  for (let i = 0; i < packed.length; i++) {
+    const marker = packed.charCodeAt(i) - DICTIONARY_FIRST_MARKER;
+    const piece = marker >= 0 && marker < DICTIONARY_MAX_ENTRIES ? dictionary[marker] : packed[i];
+    if (piece === undefined || css.length + piece.length > DICTIONARY_MAX_CSS_LENGTH) return null;
+    css += piece;
+  }
+  return css;
+}
+
+// Canonical output bytes for these inputs, or undefined when the actual output
+// is not a valid encoding of them.
+function expectedLeafOutput(css, sha256, actualText) {
+  const { generator, inputs } = GENERATED_LEAF_CSS;
+  const header = `// GENERATED from ${inputs.join(', ')} — do not hand-edit.\n` +
+    `// Regen: node ${generator} (drift is pinned by test/leaf-css-drift.test.ts).\n`;
+  const footer = `export const LEAF_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n`;
+  // The generator packs unless the CSS is too large or contains marker bytes.
+  const mustFallBack = css.length > DICTIONARY_MAX_CSS_LENGTH || /[\u0080-Ï]/u.test(css);
+  if (mustFallBack) {
+    return `${header}export const LEAF_CRITICAL_CSS: string =\n  ${JSON.stringify(css)};\n${footer}`;
+  }
+  const prefix = `${header}import { decodeCssDictionary } from "./css-dictionary";\n` +
+    'export const LEAF_CRITICAL_CSS: string =\n  decodeCssDictionary(';
+  const suffix = `);\n${footer}`;
+  if (actualText === undefined || !actualText.startsWith(prefix) || !actualText.endsWith(suffix) ||
+      actualText.length < prefix.length + suffix.length) return undefined;
+  const args = /^("(?:[^"\\\n\r]|\\.)*"), (\[.*\])$/s.exec(actualText.slice(prefix.length, actualText.length - suffix.length));
+  if (!args) return undefined;
+  let packed;
+  let dictionary;
+  try {
+    packed = JSON.parse(args[1]);
+    dictionary = JSON.parse(args[2]);
+  } catch {
+    return undefined;
+  }
+  // Any dictionary the pinned packer chose is accepted, but only if it decodes
+  // to exactly the covered inputs.
+  if (decodeDictionaryForGuard(packed, dictionary) !== css) return undefined;
+  return `${prefix}${JSON.stringify(packed)}, ${JSON.stringify(dictionary)}${suffix}`;
+}
+
 function generatedLeafScopeInputs(repoRoot) {
-  const { output, generator, generatorSha256, inputs } = GENERATED_LEAF_CSS;
+  const { output, generator, generatorSha256, packer, packerSha256, decoder, inputs } = GENERATED_LEAF_CSS;
   const recipe = fsSync.readFileSync(path.join(repoRoot, generator));
   assert.equal(createHash('sha256').update(recipe).digest('hex'), generatorSha256,
     'Generated CSS generator drift: review the output/input scope contract');
+  const packerRecipe = fsSync.readFileSync(path.join(repoRoot, packer));
+  assert.equal(createHash('sha256').update(packerRecipe).digest('hex'), packerSha256,
+    'Generated CSS packer drift: review the output/input scope contract');
+  fsSync.readFileSync(path.join(repoRoot, decoder));
   const css = inputs.map(input => fsSync.readFileSync(path.join(repoRoot, input), 'utf8')).join('\n');
   assert.doesNotMatch(css, /<\/style/i, 'Generated CSS source cannot contain a closing style tag');
   const sha256 = createHash('sha256').update(css, 'utf8').digest('base64');
-  const packed = !css.includes('~');
-  const literal = JSON.stringify(packed ? css.replaceAll('.base-theme', '~') : css);
-  const initializer = packed ? `${literal}.split("~").join(".base-theme")` : literal;
-  const expected = `// GENERATED from ${inputs.join(', ')} — do not hand-edit.\n` +
-    `// Regen: node ${generator} (drift is pinned by test/leaf-css-drift.test.ts).\n` +
-    `export const LEAF_CRITICAL_CSS: string =\n  ${initializer};\n` +
-    `export const LEAF_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n`;
   let actual;
   try {
     actual = fsSync.readFileSync(path.join(repoRoot, output));
   } catch (error) {
     // The workflow runs this guard before generation. Only this exact output
-    // may be absent; generator and input reads above must all succeed.
+    // may be absent; generator, packer, decoder and input reads must succeed.
     if (error.code !== 'ENOENT') throw error;
   }
-  if (actual !== undefined) assert.deepEqual(actual, Buffer.from(expected, 'utf8'),
-    'Generated CSS output drift: regenerate with node ci/build-leaf-css.mjs');
-  return [generator, ...inputs];
+  if (actual !== undefined) {
+    const expected = expectedLeafOutput(css, sha256, actual.toString('utf8'));
+    assert.ok(expected !== undefined, 'Generated CSS output drift: regenerate with node ci/build-leaf-css.mjs');
+    assert.deepEqual(actual, Buffer.from(expected, 'utf8'),
+      'Generated CSS output drift: regenerate with node ci/build-leaf-css.mjs');
+  }
+  return [generator, packer, decoder, ...inputs];
 }
 
 function resolveRelativeImport(fromAbs, spec, repoRoot) {
@@ -376,7 +437,8 @@ test('featured scope classifies the header and retains prior paths', async t => 
     'src/admin/event-list.ts', 'src/admin/featured-list-query.ts', 'src/db/admin-schema.ts',
     'src/db/schema.ts', 'src/featured.ts', 'src/featured-eligibility.ts',
     'src/featured-image.ts', 'src/featured-status.tsx', 'src/home-copy.ts',
-    'src/image-policy.ts', 'ci/build-leaf-css.mjs', 'src/page-shell.tsx', 'src/pages.tsx',
+    'src/image-policy.ts', 'ci/build-leaf-css.mjs', 'ci/css-dictionary.mjs', 'src/css-dictionary.ts',
+    'src/page-shell.tsx', 'src/pages.tsx',
     'src/screens/featured-item.tsx', 'src/seo-slots.ts', 'src/seo.ts', 'public/styles.css',
     'public/theme.css', 'public/theme-tokens.css',
   ];
@@ -428,8 +490,10 @@ test('scope check names an uncovered module and passes once it is added (synthet
 });
 
 const LEAF_OUTPUT = 'src/leaf-critical-css.ts';
+const LEAF_DECODER = 'src/css-dictionary.ts';
+const LEAF_RECIPE_FILES = ['ci/build-leaf-css.mjs', 'ci/css-dictionary.mjs', 'src/css-dictionary.ts'];
 const LEAF_SCOPE_INPUTS = [
-  'ci/build-leaf-css.mjs',
+  ...LEAF_RECIPE_FILES,
   'public/styles.css',
   'public/theme-tokens.css',
   'public/theme.css',
@@ -437,15 +501,16 @@ const LEAF_SCOPE_INPUTS = [
 // Independent tiny generated fixture, not output assembled by the guard.
 const LEAF_OUTPUT_FIXTURE = '// GENERATED from public/styles.css, public/theme-tokens.css, public/theme.css — do not hand-edit.\n' +
   '// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-drift.test.ts).\n' +
-  'export const LEAF_CRITICAL_CSS: string =\n  "body {}\\n:root {}\\nhtml {}".split("~").join(".base-theme");\n' +
+  'import { decodeCssDictionary } from "./css-dictionary";\n' +
+  'export const LEAF_CRITICAL_CSS: string =\n  decodeCssDictionary("body {}\\n:root {}\\nhtml {}", []);\n' +
   'export const LEAF_CRITICAL_CSS_SHA256: string = "t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=";\n';
 
 async function leafScopeFixture(t, generated = false) {
   const dir = await scratch(t);
   for (const subdir of ['src', 'ci', 'public']) await fs.mkdir(path.join(dir, subdir));
-  await fs.copyFile(path.join(REPO_ROOT, LEAF_SCOPE_INPUTS[0]), path.join(dir, LEAF_SCOPE_INPUTS[0]));
+  for (const file of LEAF_RECIPE_FILES) await fs.copyFile(path.join(REPO_ROOT, file), path.join(dir, file));
   for (const [index, css] of ['body {}', ':root {}', 'html {}'].entries()) {
-    await fs.writeFile(path.join(dir, LEAF_SCOPE_INPUTS[index + 1]), css);
+    await fs.writeFile(path.join(dir, LEAF_SCOPE_INPUTS[index + LEAF_RECIPE_FILES.length]), css);
   }
   await fs.writeFile(path.join(dir, 'entry.ts'), 'import { LEAF_CRITICAL_CSS } from "./src/leaf-critical-css";\n');
   if (generated) await fs.writeFile(path.join(dir, LEAF_OUTPUT), LEAF_OUTPUT_FIXTURE);
@@ -459,7 +524,8 @@ for (const generated of [false, true]) {
     const reachable = collectReachableModules(path.join(dir, 'entry.ts'), dir)
       .map(file => path.relative(dir, file).replace(/\\/g, '/'))
       .filter(rel => rel.startsWith('src/'));
-    assert.deepEqual(reachable, [LEAF_OUTPUT], 'the output stays in the graph even before generation');
+    assert.deepEqual(reachable, generated ? [LEAF_OUTPUT, LEAF_DECODER] : [LEAF_OUTPUT],
+      'the output stays in the graph even before generation; the packed output also reaches the decoder');
     assert.deepEqual(findUncoveredModules(reachable, LEAF_SCOPE_INPUTS, dir), []);
   });
 
@@ -473,18 +539,63 @@ for (const generated of [false, true]) {
   }
 }
 
-test('generated CSS provenance accepts the collision fallback and rejects a packed forgery', async t => {
+test('generated CSS provenance accepts the marker-collision fallback and rejects a packed forgery', async t => {
   const dir = await leafScopeFixture(t);
-  const css = 'body ~ p {}\n:root {}\nhtml {}';
-  await fs.writeFile(path.join(dir, 'public/styles.css'), 'body ~ p {}');
+  // U+0080 is a dictionary marker, so the generator falls back to a literal.
+  const css = 'body \u0080 {}\n:root {}\nhtml {}';
+  await fs.writeFile(path.join(dir, 'public/styles.css'), 'body \u0080 {}');
   const hash = createHash('sha256').update(css).digest('base64');
-  const literal = LEAF_OUTPUT_FIXTURE
-    .replace('"body {}\\n:root {}\\nhtml {}".split("~").join(".base-theme")', JSON.stringify(css))
+  const packed = LEAF_OUTPUT_FIXTURE
+    .replace('"body {}\\n:root {}\\nhtml {}", []', `${JSON.stringify(css)}, []`)
     .replace('t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=', hash);
+  const literal = packed
+    .replace('import { decodeCssDictionary } from "./css-dictionary";\n', '')
+    .replace(`decodeCssDictionary(${JSON.stringify(css)}, [])`, JSON.stringify(css));
+  assert.notEqual(literal, packed, 'the literal fallback differs from the packed form');
   await fs.writeFile(path.join(dir, LEAF_OUTPUT), literal);
   assert.deepEqual(findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), []);
-  await fs.writeFile(path.join(dir, LEAF_OUTPUT), literal.replace(JSON.stringify(css), `${JSON.stringify(css)}.split("~").join(".base-theme")`));
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), packed);
   assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
+});
+
+test('generated CSS provenance rejects the legacy tilde initializer and a literal where packing applies', async t => {
+  const dir = await leafScopeFixture(t, true);
+  const legacy = LEAF_OUTPUT_FIXTURE
+    .replace('import { decodeCssDictionary } from "./css-dictionary";\n', '')
+    .replace('decodeCssDictionary("body {}\\n:root {}\\nhtml {}", [])', '"body {}\\n:root {}\\nhtml {}".split("~").join(".base-theme")');
+  const literal = legacy.replace('.split("~").join(".base-theme")', '');
+  for (const text of [legacy, literal]) {
+    assert.notEqual(text, LEAF_OUTPUT_FIXTURE);
+    await fs.writeFile(path.join(dir, LEAF_OUTPUT), text);
+    assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
+  }
+});
+
+test('generated CSS provenance validates dictionary output independently of the packer', async t => {
+  const dir = await leafScopeFixture(t, true);
+  await fs.writeFile(path.join(dir, 'public/styles.css'), 'a.base-theme b.base-theme');
+  const hash = 'tUfY1bYu+yLF64PrC34iEKpeuxCqhzUm5sFtlAK36Fg=';
+  const make = (packed, dictionary, sha = hash) => LEAF_OUTPUT_FIXTURE
+    .replace('"body {}\\n:root {}\\nhtml {}", []', `${JSON.stringify(packed)}, ${JSON.stringify(dictionary)}`)
+    .replace('t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=', sha);
+  const verify = () => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir);
+  const packed = 'a\u0080 b\u0080\n:root {}\nhtml {}';
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), make(packed, ['.base-theme']));
+  assert.deepEqual(verify(), [], 'a hand-built valid dictionary decoding to the inputs is accepted');
+  for (const [name, text] of [
+    ['wrong expansion', make(packed, ['.other-theme'])],
+    ['marker beyond the dictionary', make(packed.replace('b\u0080', 'b\u0081'), ['.base-theme'])],
+    ['short dictionary entry', make(packed, ['.ba'])],
+    ['non-ASCII dictionary entry', make(packed, ['.base-théme'])],
+    ['oversized dictionary', make(packed, Array.from({ length: 81 }, (_, i) => `.entry-${String(i).padStart(3, '0')}`))],
+    ['wrong hash', make(packed, ['.base-theme'], 't6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=')],
+    ['non-canonical spacing', make(packed, ['.base-theme']).replace('", [".base', '",[".base')],
+    ['code instead of data', make(packed, ['.base-theme']).replace('["', '[(()=>"x")(), "')],
+    ['extra statement', `${make(packed, ['.base-theme'])}globalThis.x = 1;\n`],
+  ]) {
+    await fs.writeFile(path.join(dir, LEAF_OUTPUT), text);
+    assert.throws(verify, /Generated CSS output drift/, name);
+  }
 });
 
 test('generated CSS provenance does not exempt unrelated generated-looking runtime modules', async t => {
@@ -494,7 +605,7 @@ test('generated CSS provenance does not exempt unrelated generated-looking runti
   const reachable = collectReachableModules(path.join(dir, 'entry.ts'), dir)
     .map(file => path.relative(dir, file).replace(/\\/g, '/'))
     .filter(rel => rel.startsWith('src/')).sort();
-  assert.deepEqual(reachable, [LEAF_OUTPUT, 'src/uncovered.ts']);
+  assert.deepEqual(reachable, [LEAF_DECODER, LEAF_OUTPUT, 'src/uncovered.ts']);
   assert.deepEqual(findUncoveredModules(reachable, LEAF_SCOPE_INPUTS, dir), ['src/uncovered.ts']);
   assert.deepEqual(findUncoveredModules(reachable, [...LEAF_SCOPE_INPUTS, 'src/uncovered.ts'], dir), []);
 });
@@ -528,6 +639,23 @@ for (const generated of [false, true]) {
       assert.notEqual(changed, original, 'mutation actually changes the generator');
       await fs.writeFile(generatorPath, changed);
       assert.throws(() => findUncoveredModules([LEAF_OUTPUT], [LEAF_OUTPUT, ...LEAF_SCOPE_INPUTS], dir), /Generated CSS generator drift/);
+    });
+  }
+}
+
+for (const generated of [false, true]) {
+  for (const [name, mutate] of [
+    ['entry limit', text => text.replace('MAX_ENTRIES = 80', 'MAX_ENTRIES = 90')],
+    ['selection recipe', text => text.replace('const LENGTHS = [4,', 'const LENGTHS = [5,')],
+  ]) {
+    test(`generated CSS rejects packer ${name} drift with output ${generated ? 'present' : 'absent'}`, async t => {
+      const dir = await leafScopeFixture(t, generated);
+      const packerPath = path.join(dir, 'ci/css-dictionary.mjs');
+      const original = await fs.readFile(packerPath, 'utf8');
+      const changed = mutate(original);
+      assert.notEqual(changed, original, 'mutation actually changes the packer');
+      await fs.writeFile(packerPath, changed);
+      assert.throws(() => findUncoveredModules([LEAF_OUTPUT], [LEAF_OUTPUT, ...LEAF_SCOPE_INPUTS], dir), /Generated CSS packer drift/);
     });
   }
 }

@@ -110,6 +110,10 @@ describe("critical CSS is a build output, not a source", () => {
           readFileSync(join(root, "ci/build-leaf-css.mjs")),
         );
         writeFileSync(
+          join(fixture, "ci/css-dictionary.mjs"),
+          readFileSync(join(root, "ci/css-dictionary.mjs")),
+        );
+        writeFileSync(
           join(fixture, "ci/build-events-css.mjs"),
           readFileSync(join(root, "ci/build-events-css.mjs")),
         );
