@@ -115,7 +115,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
       };
       await store.record(intent);
       await store.record({ ...intent, attempts: 1, lastCode: "provider secret" });
-      const [open] = await fixture.client`select * from bot_reconciliation_intents where idempotency_key = ${key}`;
+      const [open] =
+        await fixture.client`select * from bot_reconciliation_intents where idempotency_key = ${key}`;
       expect(open).toMatchObject({ idempotency_key: key, attempts: 2, last_code: "unknown" });
       await expect(store.record({ ...intent, subject: "other" })).rejects.toThrow();
       await expect(
@@ -123,7 +124,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
           throw new Error("receipt failed");
         }),
       ).rejects.toThrow("receipt failed");
-      const [rolledBack] = await fixture.client`select resolved_at from bot_reconciliation_intents where idempotency_key = ${key}`;
+      const [rolledBack] =
+        await fixture.client`select resolved_at from bot_reconciliation_intents where idempotency_key = ${key}`;
       expect(rolledBack!.resolved_at).toBeNull();
       let receipts = 0;
       const resolve = () =>
@@ -133,7 +135,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect((await Promise.all([resolve(), resolve()])).sort()).toEqual([false, true]);
       expect(receipts).toBe(1);
       await expect(store.record(intent)).rejects.toThrow();
-      const [resolved] = await fixture.client`select resolved_by, resolution from bot_reconciliation_intents where idempotency_key = ${key}`;
+      const [resolved] =
+        await fixture.client`select resolved_by, resolution from bot_reconciliation_intents where idempotency_key = ${key}`;
       expect(resolved).toMatchObject({ resolved_by: "123", resolution: "confirmed" });
     });
     it("enforces reconciliation intent constraints at their boundaries", async () => {

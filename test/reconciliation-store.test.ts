@@ -35,10 +35,12 @@ describe("dormant reconciliation persistence", () => {
     const sql = { begin: vi.fn().mockRejectedValue(failure) };
     const store = pgReconciliationStore(sql as never);
     await expect(store.record(intent)).rejects.toBe(failure);
-    await expect(store.resolve(intent.idempotencyKey, "123", "confirmed", undefined as never)).rejects.toThrow(
-      "receipt is required",
-    );
-    await expect(store.resolve(intent.idempotencyKey, "123", "free text", async () => {})).rejects.toThrow();
+    await expect(
+      store.resolve(intent.idempotencyKey, "123", "confirmed", undefined as never),
+    ).rejects.toThrow("receipt is required");
+    await expect(
+      store.resolve(intent.idempotencyKey, "123", "free text", async () => {}),
+    ).rejects.toThrow();
     expect(sql.begin).toHaveBeenCalledTimes(1);
   });
 });
