@@ -1251,7 +1251,7 @@ function parseConfigImports(text, configPath) {
 // non-selection keys (`"name"`) are known-safe and stay ignored; any
 // computed `[...]` key fails because its runtime name is unknowable.
 function failOnUnsupportedProperty(entryClean, configPath) {
-  const property = entryClean.trim().replace(/^(?:get|set)\s+/, "");
+  const property = entryClean.trim().replace(/^(?:get|set)(?:\s+|(?=[\['"`]))/, "");
   assert.ok(
     !property.startsWith("["),
     `${configPath} has a computed selection key this gate cannot parse`,
@@ -2476,6 +2476,10 @@ function selftest() {
           { key: `'${name}': ${value}`, error: new RegExp(`quoted ${name} key`) },
           { key: `\`${name}\`: ${value}`, error: new RegExp(`quoted ${name} key`) },
           { key: `get "${name}"() { return ${value}; }`, error: /cannot parse|title selector/ },
+          { key: `get"${name}"() { return ${value}; }`, error: /cannot parse|title selector/ },
+          { key: `set'${name}'(v) {}`, error: /cannot parse|title selector/ },
+          { key: `get["${name}"]() { return ${value}; }`, error: /computed selection key/ },
+          { key: `set["${name}"](v) {}`, error: /computed selection key/ },
           {
             key: `get '${name}'(): RegExp { return ${value}; }`,
             error: /cannot parse|title selector/,
