@@ -213,9 +213,9 @@ jobs:
       - name: Install-hook inventory and asset boundary tests
         if: github.event_name == 'pull_request'
         run: node --test ci/install-hook-inventory.test.mjs ci/asset-output-boundary.test.mjs
-      - name: Kit CSS collector selftests
+      - name: Kit CSS collector and evidence selftests
         if: github.event_name == 'pull_request'
-        run: node --test ci/kit-css-collect.test.mjs
+        run: node --test ci/kit-css-collect.test.mjs ci/kit-css-evidence.test.mjs
       - name: Install locked workflow parser without hooks
         if: github.event_name == 'pull_request'
         run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
@@ -331,6 +331,8 @@ jobs:
           nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
+      - name: Prepare disposable runtime role
+        run: PGPASSWORD=ci psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -583,6 +585,12 @@ jobs:
           POSTGRES_PASSWORD: ci
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+      catalog-postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - name: Require successful scope
         env:
@@ -604,6 +612,9 @@ jobs:
       - name: Tag capture guard fixtures
         if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/kit-tag-capture-guards.test.mjs
+      - name: Disposable migration role wiring fixtures
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/disposable-runtime-role.test.mjs
       - name: Job-private localhost:5432 forward to the Postgres service
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
@@ -688,6 +699,9 @@ jobs:
       - name: Public-route smoke selftest (loopback fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:smoke
+      - name: Prepare disposable runtime role
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: PGPASSWORD=ci psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Apply migrations
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate
@@ -966,7 +980,7 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:catalog-preflight
         env:
-          CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@catalog-postgres:5432/postgres
       # Changed-lines WARN gate (quality-gates.md): added TS lines should be
       # executed (80%). Reads the coverage this job just produced; a missing
       # report after successful coverage fails the step (fail closed). Earlier
@@ -1265,6 +1279,9 @@ jobs:
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Prepare disposable runtime role
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: PGPASSWORD=ci psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Apply migrations
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate
