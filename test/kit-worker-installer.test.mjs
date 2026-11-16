@@ -168,6 +168,18 @@ describe("installWorkerFacade", () => {
     expect(read(staged, STAGED)).toBe("keep");
   });
 
+  it("rejects overlapping installations without replacing the adapter", async () => {
+    const dir = scratch(ADAPTER);
+    const results = await Promise.allSettled([
+      installWorkerFacade({ dir }),
+      installWorkerFacade({ dir }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(read(dir, COMPANION_NAME)).toBe(ADAPTER);
+    expect(read(dir, ENTRY_NAME).startsWith(FACADE_MARKER)).toBe(true);
+  });
+
   it("rolls every completed step back when a later step fails", async () => {
     const cases = [
       { renameSync: failing("renameSync", COMPANION_NAME, "injected one") },

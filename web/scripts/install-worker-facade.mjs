@@ -57,9 +57,8 @@ export async function installWorkerFacade({ dir = DEFAULT_DIR, io = {} } = {}) {
   const ignoreStat = stat(ignoreFile);
   if (ignoreStat && !ignoreStat.isFile()) fail(".assetsignore is not a regular file");
 
-  const compiled = await compileKitFacade(text);
   const adapterSha = sha256(adapter);
-  const output = `${FACADE_MARKER} companion=${COMPANION_NAME} sha256=${adapterSha}\n${compiled.output}\nexport * from "./${COMPANION_NAME}";\n`;
+  let output;
 
   // Exact bytes: latin1 round-trips any byte sequence, so non-UTF-8 survives.
   const previous = ignoreStat ? fs.readFileSync(ignoreFile) : null;
@@ -80,6 +79,11 @@ export async function installWorkerFacade({ dir = DEFAULT_DIR, io = {} } = {}) {
       throw error;
     }
     undo.push(rmStaged);
+    // A previous installer may have completed while this call was preparing.
+    if (stat(companion) || !fs.readFileSync(entry).equals(adapter))
+      fail("adapter changed or companion exists (duplicate installation?)");
+    const compiled = await compileKitFacade(text);
+    output = `${FACADE_MARKER} companion=${COMPANION_NAME} sha256=${adapterSha}\n${compiled.output}\nexport * from "./${COMPANION_NAME}";\n`;
     writeFileSync(staged, output);
     renameSync(entry, companion);
     undo.push(() => undoFs.renameSync(companion, entry));
