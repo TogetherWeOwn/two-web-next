@@ -205,7 +205,12 @@ try {
                 async () => {
                   const clip = await band.boundingBox();
                   assert.ok(clip && clip.width > 0 && clip.height > 0, "band has no bounds");
-                  return page.screenshot({ clip, animations: "disabled", caret: "hide" });
+                  return page.screenshot({
+                    fullPage: true,
+                    clip,
+                    animations: "disabled",
+                    caret: "hide",
+                  });
                 },
               ],
             ]) {
