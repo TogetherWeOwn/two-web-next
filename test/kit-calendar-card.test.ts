@@ -79,8 +79,8 @@ it("renders calendar card actions and escapes search spans", async () => {
     expect(b.cancelled).not.toContain('data-testid="signin"');
     expect(b.discord).toContain('href="https://discord.test/invite"');
     expect(b.discord).not.toContain('href="/e/a"');
-    expect((b.marks ?? "").replace(/<!--.*?-->/g, "")).toMatch(
-      /&lt;b(?:>|&gt;)<mark>Tom &amp; <\/mark>x/,
+    expect(b.marks).toMatch(
+      /&lt;b(?:>|&gt;)(?:<!--[\s\S]*?-->)*<mark>Tom &amp; <\/mark>(?:<!--[\s\S]*?-->)*x/,
     );
     expect(b.marks).not.toContain("<b>");
   } finally {
