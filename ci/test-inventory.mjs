@@ -559,6 +559,32 @@ function parseNpmRunOccurrences(text) {
     }
     out.push({ name, forwarding, redirect, unknown, index: m.index });
   }
+  // Check shell-word boundaries before returning any discovered scripts. A
+  // continuation disappears in the shell; replacing it with a space here
+  // would hide adjacent fragments of the same operand.
+  const words = text.replace(/\\\r?\n/g, "");
+  for (const match of words.matchAll(/--grep(?==|\s|$)/g)) {
+    let i = match.index + match[0].length;
+    if (words[i] === "=") i++;
+    else while (words[i] === " " || words[i] === "\t") i++;
+    const quote = words[i] === '"' || words[i] === "'" ? words[i++] : null;
+    if (quote) {
+      const end = words.indexOf(quote, i);
+      assert.ok(
+        end !== -1 &&
+          /^[A-Za-z0-9_@. -]*$/.test(words.slice(i, end)) &&
+          (end + 1 === words.length || /[\s;&|]/.test(words[end + 1])),
+        "CI has a composed playwright --grep operand; this gate cannot model it",
+      );
+    } else {
+      const end = words.slice(i).search(/[\s;&|]/);
+      const operand = words.slice(i, end === -1 ? undefined : i + end);
+      assert.ok(
+        /^[A-Za-z0-9_@.-]*$/.test(operand),
+        "CI has a composed playwright --grep operand; this gate cannot model it",
+      );
+    }
+  }
   return out;
 }
 
@@ -2553,6 +2579,32 @@ function selftest() {
         assert.throws(() => playwrightInventory(dir), /non-bare playwright --grep option name/);
         run("npm run nested");
         assert.throws(() => playwrightInventory(dir), /non-bare playwright --grep option name/);
+      }
+      mkdirSync(join(dir, "npm run browser"));
+      for (const operand of [
+        `'smoke '"npm run browser"`,
+        `"smoke "'npm run browser'`,
+        `'smoke'"test"`,
+        `"smoke"'test'`,
+        `'smoke'test`,
+        `smoke'test'`,
+        `'smoke'""`,
+        `smoke\\ test`,
+        `'smoke'\\\n"test"`,
+      ]) {
+        for (const separator of [" ", "="]) {
+          const filtered = `playwright test --grep${separator}${operand}`;
+          writeFileSync(
+            join(dir, "package.json"),
+            JSON.stringify({
+              scripts: { browser: "playwright test", nested: filtered, outer: "npm run nested" },
+            }),
+          );
+          for (const command of [`npx ${filtered}`, "npm run nested", "npm run outer"]) {
+            run(command);
+            assert.throws(() => playwrightInventory(dir), /composed playwright --grep operand/);
+          }
+        }
       }
       for (const args of ['--grep "npm run browser"', '--grep="npm run browser"']) {
         const filtered = `playwright test ${args}`;
