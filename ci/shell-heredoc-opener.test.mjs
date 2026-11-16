@@ -54,7 +54,10 @@ test("delimiter boundaries follow shell whitespace and reject process substituti
     assert.equal(parsed.end, marker.length + 2);
   }
   for (const operator of ["<", ">", "<\\\n", ">\\\n"]) {
-    assert.throws(() => parseHeredocOpener(`<<EOF${operator}(true)\n`), /Unsupported shell heredoc syntax/);
+    assert.throws(
+      () => parseHeredocOpener(`<<EOF${operator}(true)\n`),
+      /Unsupported shell heredoc syntax/,
+    );
   }
   assert.equal(parseHeredocOpener("<<EOF>output\n").marker, "EOF");
 });
