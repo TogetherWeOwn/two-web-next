@@ -39,7 +39,7 @@ import { spawnSync } from "node:child_process";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
-import { parseDocument, visit, isScalar } from "yaml";
+import { parseDocument, visit, isScalar, isMap, isSeq } from "yaml";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -306,11 +306,67 @@ function workflowShellView(text, name) {
   const doc = parseDocument(text);
   assert.equal(doc.errors.length, 0, `${name} is not valid YAML: ${doc.errors[0]?.message}`);
   const edits = [];
+  const stepRuns = new Set();
+  const collectSteps = (steps) => {
+    if (!isSeq(steps)) return;
+    for (const step of steps.items) {
+      if (!isMap(step)) continue;
+      for (const pair of step.items) {
+        if (isScalar(pair.key) && pair.key.value === "run") stepRuns.add(pair);
+      }
+    }
+  };
+  const jobs = isMap(doc.contents) ? doc.contents.get("jobs", true) : null;
+  if (isMap(jobs)) {
+    for (const job of jobs.items) {
+      if (isMap(job.value)) collectSteps(job.value.get("steps", true));
+    }
+  }
+  // Preserve the existing fail-closed diagnostic for a step outside a job.
+  if (isSeq(doc.contents)) collectSteps(doc.contents);
   visit(doc, {
     Pair(_, pair) {
-      if (!isScalar(pair.key) || pair.key.value !== "run" || !isScalar(pair.value)) return;
+      if (!isScalar(pair.key)) return;
+      // The structural cwd audit must see decoded control keys too, including
+      // a mapping-valued `run` under workflow or job defaults.
+      if (
+        ["defaults", "working-directory"].includes(pair.key.value) ||
+        (pair.key.value === "run" && isMap(pair.value))
+      ) {
+        edits.push({
+          start: pair.key.range[0],
+          end: pair.key.range[1],
+          replacement: pair.key.value,
+        });
+      }
+      if (pair.key.value !== "run" || !isScalar(pair.value)) return;
       const node = pair.value;
       if (typeof node.value !== "string") return;
+      if (!stepRuns.has(pair)) {
+        // A metadata key named run is not a step's executable field. Mask its
+        // value in the shared view before either discovery or attribution.
+        const newline = text.slice(node.range[0], node.range[1]).endsWith("\n") ? "\n" : "";
+        edits.push({ start: node.range[0], end: node.range[1], replacement: `""${newline}` });
+        return;
+      }
+      // Quoted keys newly expose their bodies to the substring-based scanners.
+      // Only a single literal command with a proven head may supply credit:
+      // reject data, shell syntax and additional candidate text before either
+      // direct Playwright or npm discovery sees the normalized key.
+      const key = text.slice(pair.key.range[0], pair.key.range[1]);
+      const body = node.value.trim();
+      const candidate = /\b(?:playwright\s+test|npm\s+run(?:-script)?)\b/;
+      if (/^["']/.test(key) && candidate.test(body)) {
+        const head = /^(?:(?:npx\s+)?playwright\s+test|npm\s+run(?:-script)?)(?=\s|$)/.exec(body);
+        const literalWords =
+          /^(?:[A-Za-z0-9_./@:=,%+\-]+|'[A-Za-z0-9_./@:=,%+ \-]*'|"[A-Za-z0-9_./@:=,%+ \-]*")(?:[ \t]+(?:[A-Za-z0-9_./@:=,%+\-]+|'[A-Za-z0-9_./@:=,%+ \-]*'|"[A-Za-z0-9_./@:=,%+ \-]*"))*$/;
+        assert.ok(
+          head && literalWords.test(body) && !candidate.test(body.slice(head[0].length)),
+          `${name} has an ambiguous quoted run command; this gate cannot model it`,
+        );
+      }
+      // Structural scanners consume the same decoded key as YAML discovery.
+      edits.push({ start: pair.key.range[0], end: pair.key.range[1], replacement: "run" });
       const lineStart = text.lastIndexOf("\n", pair.key.range[0] - 1) + 1;
       const indent = " ".repeat(pair.key.range[0] - lineStart + 2);
       // Chomping does not affect command arguments; retain internal newlines,
@@ -542,7 +598,7 @@ function scriptRunsPlaywright(scripts, name, seen = new Set()) {
   return { runs: false, unknown };
 }
 
-function invokedScriptNames(scripts, workflowText) {
+function invokedScriptNames(scripts, workflowRuns) {
   const invoked = new Set();
   const queue = [];
   const scan = (text, where) => {
@@ -562,14 +618,14 @@ function invokedScriptNames(scripts, workflowText) {
       }
     }
   };
-  const stripped = workflowText.split("\n").map(stripYamlComment).join("\n");
-  scan(stripped, "a workflow step");
+  const stripped = workflowRuns.map((run) => run.split("\n").map(stripYamlComment).join("\n"));
+  for (const run of stripped) scan(run, "a workflow step");
   while (queue.length) {
     const next = queue.shift();
     scan(scripts[next] ?? "", `script "${next}"`);
   }
   const forwardSources = [
-    [stripped, "a workflow step"],
+    ...stripped.map((run) => [run, "a workflow step"]),
     ...[...invoked].map((n) => [scripts[n] ?? "", `script "${n}"`]),
   ];
   for (const [text, where] of forwardSources) {
@@ -903,7 +959,7 @@ function assertRootStepCwd(ctx, idx, at, what) {
   let stepValue = null;
   for (let k = step.start; k < step.end; k++) {
     if (content.has(k)) continue;
-    const m = /^\s*working-directory\s*:\s*(.+?)\s*(#.*)?$/.exec(lines[k]);
+    const m = /^\s*(?:-\s+)?working-directory\s*:\s*(.+?)\s*(#.*)?$/.exec(lines[k]);
     if (m) stepValue = m[1];
   }
   if (stepValue !== null) {
@@ -948,6 +1004,7 @@ function auditWorkflowNpmRunCwd(workflowFiles, scripts) {
     if (!lines.some((l) => l.includes("npm") && l.includes("run"))) continue;
     const ctx = { file: name, lines, content: literalScriptLines(lines) };
     lines.forEach((line, idx) => {
+      if (!ctx.content.has(idx)) return;
       for (const occ of parseNpmRunOccurrences(line)) {
         if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
         const target = scriptRunsPlaywright(scripts, occ.name);
@@ -1073,6 +1130,7 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
     const stripped = lines.map(stripYamlComment);
     const ctx = { file: name, lines: stripped, content: literalScriptLines(stripped) };
     for (let i = 0; i < lines.length; i += 1) {
+      if (!ctx.content.has(i)) continue;
       const line = stripped[i];
       const at = line.search(/\bplaywright\s+test\b/);
       if (at === -1) continue;
@@ -1800,8 +1858,18 @@ export function playwrightInventory(root = repoRoot) {
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const scripts = pkg.scripts ?? {};
   const workflowFiles = collectWorkflowFiles(root);
-  const workflowText = workflowFiles.map((w) => w.text).join("\n");
-  const invoked = invokedScriptNames(scripts, workflowText);
+  const workflowRuns = [];
+  for (const { text } of workflowFiles) {
+    visit(parseDocument(text), {
+      Pair(_, pair) {
+        if (isScalar(pair.key) && pair.key.value === "run" && isScalar(pair.value)) {
+          if (typeof pair.value.value === "string") workflowRuns.push(pair.value.value);
+        }
+      },
+    });
+  }
+  const invoked = invokedScriptNames(scripts, workflowRuns);
+
   auditWorkflowNpmRunCwd(workflowFiles, scripts);
   auditScriptCwd(scripts, invoked);
   const refs = parsePlaywrightInvocations(root, workflowFiles, scripts, invoked);
@@ -2422,6 +2490,112 @@ function selftest() {
         reachable.map((r) => r.file),
         ["e2e/a.spec.ts"],
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright workflow attribution ignores metadata and audits decoded directories", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      writeFileSync(
+        join(dir, "playwright.config.ts"),
+        'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      writeFileSync(join(dir, "e2e", "a.spec.ts"), 'import "./suite.visual";\n');
+      writeFileSync(join(dir, "e2e", "suite.visual.ts"), 'test("not selected", () => {});\n');
+      const workflow = join(dir, ".github", "workflows", "ci.yml");
+      for (const quote of ["'", '"']) {
+        for (const command of [
+          "echo playwright test",
+          'echo "npx playwright test"',
+          'printf "%s" "npx playwright test"',
+          'echo "npm run browser"',
+          "npx playwright test; echo done",
+        ]) {
+          writeFileSync(
+            workflow,
+            `name: ci\njobs:\n  t:\n    steps:\n      - ${quote}run${quote}: |\n          ${command}\n`,
+          );
+          assert.throws(() => playwrightInventory(dir), /ambiguous quoted run command/);
+          assert.throws(() => playwrightJsonSummary(dir), /ambiguous quoted run command/);
+        }
+        writeFileSync(
+          workflow,
+          `name: ci\njobs:\n  t:\n    steps:\n      - name: metadata\n        run: echo hello\n        env:\n          ${quote}run${quote}: npx playwright test\n`,
+        );
+        assert.deepEqual(playwrightInventory(dir).orphans, [
+          "e2e/a.spec.ts",
+          "e2e/suite.visual.ts",
+        ]);
+        assert.deepEqual(playwrightJsonSummary(dir).orphans, [
+          "e2e/a.spec.ts",
+          "e2e/suite.visual.ts",
+        ]);
+        writeFileSync(
+          workflow,
+          `name: ci\njobs:\n  t:\n    steps:\n      - ${quote}run${quote}: npx playwright test\n`,
+        );
+        assert.deepEqual(playwrightInventory(dir).orphans, []);
+        assert.equal(playwrightJsonSummary(dir).reachable, 2);
+        assert.deepEqual(playwrightJsonSummary(dir).orphans, []);
+        for (const scope of ["workflow", "job", "step"]) {
+          const defaults = `${quote}defaults${quote}:\n  ${quote}run${quote}:\n    ${quote}working-directory${quote}: web\n`;
+          const workflowDefaults = scope === "workflow" ? defaults : "";
+          const jobDefaults = scope === "job" ? defaults.replace(/^(?=.)/gm, "    ") : "";
+          const stepCwd =
+            scope === "step" ? `        ${quote}working-directory${quote}: web\n` : "";
+          const prefix = `name: ci\n${workflowDefaults}jobs:\n  t:\n${jobDefaults}    steps:\n      - ${quote}run${quote}: npx playwright test\n`;
+          writeFileSync(workflow, prefix + stepCwd);
+          assert.throws(() => playwrightInventory(dir), /cannot resolve/);
+          assert.throws(() => playwrightJsonSummary(dir), /cannot resolve/);
+          if (scope !== "step") {
+            writeFileSync(workflow, prefix + `        ${quote}working-directory${quote}: .\n`);
+            assert.deepEqual(playwrightInventory(dir).orphans, []);
+            assert.deepEqual(playwrightJsonSummary(dir).orphans, []);
+          }
+        }
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({ scripts: { browser: "playwright test" } }),
+        );
+        writeFileSync(
+          workflow,
+          `name: ci\njobs:\n  t:\n    steps:\n      - ${quote}run${quote}: npm run browser\n        working-directory: web\n`,
+        );
+        assert.throws(() => playwrightInventory(dir), /cannot resolve/);
+        assert.throws(() => playwrightJsonSummary(dir), /cannot resolve/);
+        writeFileSync(
+          workflow,
+          `name: ci\njobs:\n  t:\n    steps:\n      - ${quote}run${quote}: npm run browser\n`,
+        );
+        assert.deepEqual(playwrightInventory(dir).orphans, []);
+        assert.deepEqual(playwrightJsonSummary(dir).orphans, []);
+        writeFileSync(
+          workflow,
+          `name: ci\njobs:\n  t:\n    steps:\n      - ${quote}working-directory${quote}: web\n        ${quote}run${quote}: npm run browser\n`,
+        );
+        assert.throws(() => playwrightInventory(dir), /cannot resolve/);
+        assert.throws(() => playwrightJsonSummary(dir), /cannot resolve/);
+      }
+      writeFileSync(
+        workflow,
+        'name: ci\njobs:\n  t:\n    steps:\n      - name: "playwright test"\n        run: echo hello\n',
+      );
+      assert.deepEqual(playwrightInventory(dir).orphans, ["e2e/a.spec.ts", "e2e/suite.visual.ts"]);
+      assert.deepEqual(playwrightJsonSummary(dir).orphans, [
+        "e2e/a.spec.ts",
+        "e2e/suite.visual.ts",
+      ]);
+      writeFileSync(
+        workflow,
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --grep smoke\n",
+      );
+      assert.throws(() => playwrightInventory(dir), /flag this gate cannot expand/);
+      assert.throws(() => playwrightJsonSummary(dir), /flag this gate cannot expand/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3555,9 +3729,9 @@ function selftest() {
         throws: /cannot resolve/,
       },
       {
-        name: "npm run outside any step",
+        name: "npm run in metadata is not executable",
         workflow: "name: ci\nenv:\n  X: npm run e2e\n",
-        throws: /cannot resolve/,
+        orphans: ["e2e/x.spec.ts", "e2e/y.spec.ts"],
       },
       // Controls: explicit roots, overrides, and precise attribution.
       {
