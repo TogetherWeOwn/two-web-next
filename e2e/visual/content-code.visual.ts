@@ -15,6 +15,7 @@ for (const size of [
     expect((await page.goto(`${localOrigin}/privacy`))?.status()).toBe(200);
     const code = page.locator(codeSelector).first();
     await expect(code).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
     const fallback = await code.evaluate((node) => {
       const style = getComputedStyle(node);
       const parent = node.parentElement!;
@@ -65,15 +66,59 @@ for (const size of [
       .first()
       .evaluate((node) => getComputedStyle(node.parentElement!).lineHeight);
     await page.unroute(fontUrl);
+    const primer = await context.newPage();
     const warmPage = await context.newPage();
+    const primerSession = await context.newCDPSession(primer);
+    const warmSession = await context.newCDPSession(warmPage);
+    const fontPath = "/fonts/fragment-mono-latin-400.woff2";
+    const primerHeaders: string[] = [];
+    const returnRequests = new Set<string>();
+    const cachedRequests = new Set<string>();
+    const cachedResponses = new Set<string>();
+    primerSession.on("Network.responseReceived", ({ response }) => {
+      if (new URL(response.url).pathname === fontPath) {
+        primerHeaders.push(
+          String(response.headers["cache-control"] ?? response.headers["Cache-Control"] ?? ""),
+        );
+      }
+    });
+    warmSession.on("Network.requestWillBeSent", ({ requestId, request }) => {
+      if (new URL(request.url).pathname === fontPath) returnRequests.add(requestId);
+    });
+    warmSession.on("Network.requestServedFromCache", ({ requestId }) =>
+      cachedRequests.add(requestId),
+    );
+    warmSession.on("Network.responseReceived", ({ requestId, response }) => {
+      if (response.fromDiskCache) cachedResponses.add(requestId);
+    });
     try {
-      await warmPage.setViewportSize(size);
-      expect((await warmPage.goto(`${localOrigin}/privacy`))?.status()).toBe(200);
-      await warmPage.evaluate(async () => {
+      await primerSession.send("Network.enable");
+      await warmSession.send("Network.enable");
+      await primerSession.send("Network.setCacheDisabled", { cacheDisabled: false });
+      await warmSession.send("Network.setCacheDisabled", { cacheDisabled: false });
+      await primer.setViewportSize(size);
+      expect((await primer.goto(`${localOrigin}/privacy`))?.status()).toBe(200);
+      await primer.evaluate(async () => {
         await document.fonts.load('14px "Fragment Mono"', "__Host-two_session");
       });
-      expect((await warmPage.reload())?.status()).toBe(200);
+      await warmPage.setViewportSize(size);
+      expect((await warmPage.goto(`${localOrigin}/privacy`))?.status()).toBe(200);
       await warmPage.evaluate(() => document.fonts.ready);
+      const cacheEvidence = {
+        primerHeaders,
+        returnRequests: [...returnRequests],
+        cachedRequests: [...cachedRequests],
+        cachedResponses: [...cachedResponses],
+      };
+      await testInfo.attach(`privacy-${size.width}-font-cache.json`, {
+        body: JSON.stringify(cacheEvidence, null, 2),
+        contentType: "application/json",
+      });
+      expect(primerHeaders).toContain("public, max-age=31536000, immutable");
+      expect(
+        [...returnRequests].some((id) => cachedRequests.has(id) || cachedResponses.has(id)),
+        "Return navigation must reuse the exact font from Chromium's cache",
+      ).toBe(true);
       const warmCode = warmPage.locator(codeSelector).first();
       await warmCode.evaluate((node) => node.setAttribute("data-font-evidence", ""));
       const warmFonts = await renderedPlatformFonts(warmPage, evidenceSelector);
@@ -101,6 +146,9 @@ for (const size of [
       expect(first.dimensions).toEqual(second.dimensions);
       expect(first.png.equals(second.png)).toBe(true);
     } finally {
+      await primerSession.detach();
+      await warmSession.detach();
+      await primer.close();
       await warmPage.close();
     }
   });
