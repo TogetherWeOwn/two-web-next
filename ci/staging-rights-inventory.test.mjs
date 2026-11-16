@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -568,6 +576,30 @@ test("policy scope pins exact proposal names against schema declarations", async
     POLICY_TABLES.filter((name) => !declared.includes(name)),
     [],
   );
+});
+
+test("schema discovery requires canonical direct files and excludes other entries", () => {
+  const dir = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "schema-discovery-"),
+  );
+  try {
+    const missing = (name) => ({ name: "Error", message: `Missing canonical schema: ${name}` });
+    assert.throws(() => schemaFiles(dir), missing("schema.ts"));
+    writeFileSync(join(dir, "admin-schema.ts"), "");
+    assert.throws(() => schemaFiles(dir), missing("schema.ts"));
+    rmSync(join(dir, "admin-schema.ts"));
+    writeFileSync(join(dir, "schema.ts"), "");
+    assert.throws(() => schemaFiles(dir), missing("admin-schema.ts"));
+    writeFileSync(join(dir, "admin-schema.ts"), "");
+    writeFileSync(join(dir, "dormant-schema.ts"), "");
+    writeFileSync(join(dir, "schema.test.ts"), "");
+    writeFileSync(join(dir, "notes.ts"), "");
+    mkdirSync(join(dir, "nested-schema.ts"));
+    writeFileSync(join(dir, "nested-schema.ts", "hidden-schema.ts"), "");
+    assert.deepEqual(schemaFiles(dir), ["schema.ts", "admin-schema.ts", "dormant-schema.ts"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("schema census surfaces a third canonical module as policy drift", async () => {
