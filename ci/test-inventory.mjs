@@ -635,7 +635,7 @@ function scriptRunsPlaywright(scripts, name, seen = new Set()) {
   if (seen.has(name)) return { runs: false, unknown: false };
   seen.add(name);
   const body = scripts[name] ?? "";
-  if (/\bplaywright\s+test\b/.test(normalizeShell(body))) {
+  if (/\bplaywright\s+test\b/.test(normalizeShell(body, { mask: true }))) {
     return { runs: true, unknown: false };
   }
   let unknown = false;
@@ -1094,7 +1094,7 @@ function auditScriptCwd(scripts, invoked) {
   for (const name of invoked) {
     const body = normalizeShell(scripts[name] ?? "", { strict: true });
     const masked = normalizeShell(body, { mask: true });
-    for (const match of body.matchAll(/\bplaywright\s+test\b/g))
+    for (const match of masked.matchAll(/\bplaywright\s+test\b/g))
       assertRootShellCwd(body.slice(0, match.index), `script "${name}" runs playwright test`);
     for (const occ of parseNpmRunOccurrences(masked, { shell: false })) {
       if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
@@ -1201,14 +1201,17 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
     const lines = text.split("\n");
     const stripped = stripYamlComments(lines);
     const ctx = { file: name, lines: stripped, content: literalScriptLines(stripped) };
+    // Discovery and argument continuation read masked heredoc data; the
+    // structural ctx above keeps step attribution.
+    const masked = maskYamlHeredocs(stripped);
     for (let i = 0; i < lines.length; i += 1) {
-      const line = stripped[i];
+      const line = masked[i];
       const at = line.search(/\bplaywright\s+test\b/);
       if (at === -1) continue;
       assertRootStepCwd(ctx, i, at, "playwright test");
       let rest = line.slice(at).replace(/^\bplaywright\s+test\b/, "");
       for (let j = i + 1; j < lines.length; j += 1) {
-        const next = stripped[j];
+        const next = masked[j];
         if (!next.trim() || /^\s*(-\s|[A-Za-z0-9_-]+\s*:)/.test(next)) break;
         rest += ` ${next.trim()}`;
       }
@@ -1218,7 +1221,7 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
   // Invoked scripts only (see invokedScriptNames): each `playwright test`
   // runs to the next shell chain separator, never into a following command.
   for (const name of invoked) {
-    const body = scripts[name] ?? "";
+    const body = normalizeShell(scripts[name] ?? "", { mask: true });
     for (const m of body.matchAll(/\bplaywright\s+test\b/g)) {
       const tail = body.slice(m.index + m[0].length);
       const end = tail.search(/&&|\|\||;/);
@@ -2035,6 +2038,8 @@ function selftest() {
       ["package continuation evidence", "npm run e2e", "@PW \\\n e2e/a.spec.ts", ["e2e/b.spec.ts"]],
       ["unquoted heredoc joins delimiter", "cat <<EOF\nbody \\\nEOF\ncd web\nEOF\n@NPX", {}, []],
       ["heredoc comment, workflow", "@HC", PW, BOTH],
+      ["heredoc playwright comment, workflow", "@HP", {}, BOTH],
+      ["heredoc playwright comment, script", "npm run e2e", "cat <<'EOF'\n@CP\n\nEOF", BOTH],
       ["heredoc comment, script", "npm run outer", { outer: "@HC", e2e: PW }, BOTH],
       ["heredoc delimiter cd, workflow", "cat <<cd\nx\ncd\nnpm run e2e", PW, []],
       ["heredoc delimiter cd, script", "npm run e2e", "cat <<cd\nx\ncd\n@PW", []],
@@ -2048,6 +2053,8 @@ function selftest() {
       "@NPX": `npx ${PW}`,
       "@CW": `cd web\nnpx ${PW}`,
       "@HC": "cat <<'EOF'\n# npm run e2e\nEOF",
+      "@CP": `# npx ${PW}`,
+      "@HP": `cat <<'EOF'\n# npx ${PW}\n\nEOF`,
     };
     const fill = (t) => t.replace(/@[A-Z]+/g, (k) => TOK[k]);
     const scriptsOf = (v) => (typeof v === "string" ? { e2e: v } : v);
