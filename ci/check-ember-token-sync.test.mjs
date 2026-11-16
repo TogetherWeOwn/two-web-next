@@ -45,7 +45,8 @@ function withScratch(fn) {
       cpSync(join(ROOT, path), join(root, path));
     }
     mkdirSync(join(root, "public"), { recursive: true });
-    mkdirSync(join(root, "web/src"), { recursive: true });
+    mkdirSync(join(root, "web/src/lib"), { recursive: true });
+    cpSync(join(ROOT, "web/src/lib/site-header.css"), join(root, "web/src/lib/site-header.css"));
     mkdirSync(join(root, "src"), { recursive: true });
     for (const path of CHROME_CONSUMERS) cpSync(join(ROOT, path), join(root, path));
     return fn(root);
@@ -334,6 +335,7 @@ for (const [directory, hooks] of [
           "web/package.json",
           "ci/build-ember-tokens.mjs",
           "ci/build-leaf-css.mjs",
+          "ci/css-dictionary.mjs",
           "ci/build-events-css.mjs",
           "public/styles.css",
           "public/schedule-theme.css",
@@ -402,6 +404,7 @@ for (const [bundle, constant] of [
     withScratch((root) => {
       mkdirSync(join(root, "ci"));
       cpSync(join(ROOT, `ci/build-${bundle}-css.mjs`), join(root, `ci/build-${bundle}-css.mjs`));
+      cpSync(join(ROOT, "ci/css-dictionary.mjs"), join(root, "ci/css-dictionary.mjs"));
       for (const name of ["styles.css", "theme-tokens.css", "theme.css", "schedule-theme.css"]) {
         writeFileSync(join(root, "public", name), `/* ${name} */`);
       }

@@ -31,6 +31,7 @@ import type { Env } from "../src/env";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
 import { createMemorySessionStore } from "../src/sessions";
 import app from "./app";
+import { collectImportedCss } from "./helpers/kit-imported-css";
 
 // Browser callbacks run in Chromium; keep their DOM surface local to this module.
 interface BrowserElement {
@@ -255,12 +256,13 @@ const { compile } = webRequire("svelte/compiler") as {
   compile(
     source: string,
     options: { generate: string; dev: boolean; filename: string },
-  ): { js: { code: string } };
+  ): { js: { code: string }; css: { code: string } | null };
 };
 let kitPromise:
   | Promise<{
       renderDetail(model: unknown): { head: string; body: string };
       client: string;
+      css: string;
     }>
   | undefined;
 function kitBundle() {
@@ -284,6 +286,7 @@ function kitBundle() {
         clientEntry,
         `import {hydrate} from 'svelte'; import Detail from ${component}; hydrate(Detail, {target:document.getElementById('detail-root'),props:{model:window.__detailModel}});`,
       );
+      const styles = { server: [] as string[], client: [] as string[] };
       const options = (generate: "server" | "client") => ({
         bundle: true,
         logLevel: "warning" as const,
@@ -295,15 +298,16 @@ function kitBundle() {
           {
             name: `chosen-timezone-${generate}`,
             setup(plugin: import("esbuild").PluginBuild) {
-              plugin.onLoad({ filter: /\.svelte$/ }, (args) => ({
-                contents: compile(readFileSync(args.path, "utf8"), {
+              collectImportedCss(plugin, styles[generate]);
+              plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
+                const { js, css } = compile(readFileSync(args.path, "utf8"), {
                   generate,
                   dev: false,
                   filename: args.path,
-                }).js.code,
-                loader: "js",
-                resolveDir: dirname(args.path),
-              }));
+                });
+                if (css?.code) styles[generate].push(css.code);
+                return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
+              });
             },
           },
         ],
@@ -327,6 +331,7 @@ function kitBundle() {
       return {
         renderDetail: server.renderDetail as (model: unknown) => { head: string; body: string },
         client: client.outputFiles[0]!.text,
+        css: styles.server.join("\n"),
       };
     } finally {
       rmSync(scratch, { recursive: true, force: true });
@@ -386,7 +391,7 @@ async function renderFixture(view: View, range: RangeCase) {
   const { head, body } = bundle.renderDetail(outcome.model);
   const model = JSON.stringify(outcome.model).replace(/</g, "\\u003c");
   return {
-    html: `<!doctype html><html lang="en"><head>${head}</head><body><div id="detail-root">${body}</div><script>window.__detailModel=${model}</script></body></html>`,
+    html: `<!doctype html><html lang="en"><head>${head}<style data-kit-imported-css>${bundle.css}</style></head><body><div id="detail-root">${body}</div><script>window.__detailModel=${model}</script></body></html>`,
     client: bundle.client,
   };
 }

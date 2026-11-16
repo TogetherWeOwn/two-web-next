@@ -9,9 +9,9 @@
 // read, so no DATABASE_URL, no Discord, no database. A swapped-branch
 // negative control (expect 302 on the mixed Accept) must fail here.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
 import type { Env } from "../src/env";
 import { createMemorySessionStore } from "../src/sessions";
+import { fetchApp } from "./helpers/fetch-app";
 
 // Canonical uppercase ULID shape: the detail route's canonical-301 check
 // passes it through to the session gate instead of redirecting first.
@@ -39,7 +39,12 @@ async function get(path: string, accept: string): Promise<Response> {
       throw new Error("fetch must not be called on the negotiation paths");
     }),
   );
-  return app.request(path, { headers: { accept } }, env());
+  const bindings = env();
+  // Default fetchApp dispatches the mounted Hono app, not a built Kit Worker.
+  return fetchApp(new Request(new URL(path, bindings.APP_URL), { headers: { accept } }), bindings, {
+    waitUntil: vi.fn(),
+    passThroughOnException: vi.fn(),
+  } as unknown as ExecutionContext);
 }
 
 function expectNegotiationHeaders(res: Response) {

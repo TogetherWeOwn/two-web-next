@@ -199,6 +199,7 @@ test("the required ci-ok gate runs after a non-green audit and rejects every non
     "docs-links",
     "queue-syntax-smoke",
     "check",
+    "kit-browser-fixture",
     "node22-compat",
     "scope",
     "bot-contract-drift",
@@ -274,7 +275,7 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
     "bash ci/db-backup-selftest.sh",
     "bash ci/check-migration-numbers.sh",
     "node --test ci/production-deploy-gate.test.mjs",
-    "npx wrangler deploy --dry-run --outdir dist",
+    "npx wrangler deploy --dry-run --outdir dist --metafile dist/bundle-meta.json",
     "npx wrangler deploy --dry-run --env production --outdir dist-production --metafile dist-production/bundle-meta.json",
     "npm run test:inventory:selftest && npm run test:inventory -- --strict",
   ]) {
