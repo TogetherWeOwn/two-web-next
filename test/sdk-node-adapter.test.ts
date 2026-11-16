@@ -91,7 +91,7 @@ describe("SDK Node adapter resolution", () => {
         }),
       ]);
     }
-  }, 15_000);
+  });
 
   it("loads the SDK's adapter and serves ordinary requests and a finite response stream", async () => {
     const rootRequire = createRequire(import.meta.url);
