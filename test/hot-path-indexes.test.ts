@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { PgDialect, getTableConfig } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { events, rsvps } from "../src/db/admin-schema";
+import { waitlistOffers } from "../src/db/dormant-schema";
 import { joinAttempts } from "../src/db/schema";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../src/jobs/constants";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
@@ -32,6 +33,27 @@ it("declares the five legacy-named indexes in the Drizzle schema", () => {
       expect(declared!.config.where).toBeUndefined();
     }
   }
+});
+
+it("declares dormant waitlist offers owned by the RSVP with no member or event column", async () => {
+  const cfg = getTableConfig(waitlistOffers);
+  const columnNames = cfg.columns.map((c) => c.name);
+  expect(columnNames).not.toContain("user_id");
+  expect(columnNames).not.toContain("event_id");
+  expect(cfg.foreignKeys.map((fk) => fk.reference().foreignTable)).toEqual([rsvps]);
+  expect(cfg.foreignKeys[0]!.onDelete).toBe("cascade");
+  expect(cfg.indexes.map((i) => [i.config.name, i.config.unique])).toEqual([
+    ["waitlist_offers_held_rsvp_idx", true],
+  ]);
+  const sql = await readFile(
+    fileURLToPath(new URL("../drizzle/1037_waitlist-offers.sql", import.meta.url).href),
+    "utf8",
+  );
+  expect(sql.match(/^GRANT (\w+) ON TABLE/gm)).toEqual([
+    "GRANT SELECT ON TABLE",
+    "GRANT INSERT ON TABLE",
+    "GRANT UPDATE ON TABLE",
+  ]);
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", () => {
@@ -133,6 +155,38 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
         expect(await rowCounts()).toEqual(counts);
       }
     });
+  });
+
+  it("stores waitlist offers per RSVP: one held, kept history, unique keys, cascade", async () => {
+    const [rsvp] = await client<{ id: number }[]>`
+      insert into rsvps (event_id, user_id, status)
+      values (${eventId}, 'offer-fixture', 'waitlisted') returning id`;
+    const rsvpId = rsvp!.id;
+    const offer = (state: string, hours = 1) => client`
+      insert into waitlist_offers (rsvp_id, state, offered_at, expires_at)
+      values (${rsvpId!}, ${state}, now(), now() + make_interval(hours => ${hours}::int)) returning id, notification_key`;
+    const [first] = await offer("held");
+    await expect(offer("held")).rejects.toThrow(/waitlist_offers_held_rsvp_idx/);
+    await client`update waitlist_offers set state = 'expired' where id = ${first!.id}`;
+    const [second] = await offer("held");
+    expect(second!.notification_key).not.toBe(first!.notification_key);
+    const history = await client<{ state: string; notification_key: string }[]>`
+      select state, notification_key from waitlist_offers where rsvp_id = ${rsvpId!}`;
+    expect(history).toHaveLength(2);
+    expect(history).toEqual(
+      expect.arrayContaining([
+        { state: "expired", notification_key: first!.notification_key },
+        { state: "held", notification_key: second!.notification_key },
+      ]),
+    );
+    await expect(offer("bogus")).rejects.toThrow(/waitlist_offers_state_check/);
+    await expect(offer("accepted", 0)).rejects.toThrow(/waitlist_offers_window_check/);
+    await expect(
+      client`insert into waitlist_offers (rsvp_id, offered_at, expires_at, notification_key)
+        values (${rsvpId!}, now(), now() + interval '1 hour', ${first!.notification_key})`,
+    ).rejects.toThrow(/waitlist_offers_notification_key_unique/);
+    await client`delete from rsvps where id = ${rsvpId!}`;
+    expect(await client`select 1 from waitlist_offers`).toHaveLength(0);
   });
 
   async function plan(statement: string, params: (string | number)[] = []): Promise<string> {

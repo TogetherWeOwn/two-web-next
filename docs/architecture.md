@@ -317,6 +317,7 @@ exactly once.
 | `src/hotzones/` | events |
 | `src/html-outcome.ts` | entry |
 | `src/html-stream.ts` | http-guard |
+| `src/http/` | observability |
 | `src/image-policy.ts` | content |
 | `src/index.tsx` | entry |
 | `src/invite-fallback.ts` | join |
