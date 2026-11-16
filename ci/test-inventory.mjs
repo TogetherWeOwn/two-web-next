@@ -320,9 +320,29 @@ function normalizeShell(text, { strict = false, mask = false } = {}) {
   let out = "";
   let quote = null;
   let tokenStart = true;
+  let arithmetic = 0;
   const pending = [];
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
+    if (arithmetic) {
+      assert.ok(!/[\n\\'"`$#]/.test(c), "unsupported arithmetic shell syntax");
+      out += c;
+      if (c === "(") arithmetic++;
+      else if (c === ")") arithmetic--;
+      continue;
+    }
+    if (quote !== "'" && text.startsWith("$((", i)) {
+      out += "$(" + "(";
+      i += 2;
+      arithmetic = 2;
+      continue;
+    }
+    if (!quote && text.startsWith("((", i)) {
+      out += "((";
+      i++;
+      arithmetic = 2;
+      continue;
+    }
     if (!quote && c === "#" && tokenStart) {
       const end = text.indexOf("\n", i);
       if (end === -1) break;
@@ -372,14 +392,23 @@ function normalizeShell(text, { strict = false, mask = false } = {}) {
       continue;
     }
     if (!quote && c === "<" && text[i + 1] === "<" && text[i + 2] !== "<" && text[i - 1] !== "<") {
-      const m = /^<<(-?)[ \t]*(\\?)(['"]?)([A-Za-z_][A-Za-z0-9_]*)\3/.exec(text.slice(i));
-      if (m) {
-        pending.push({ marker: m[4], strip: m[1] === "-", quoted: m[2] !== "" || m[3] !== "" });
-        out += m[0];
-        i += m[0].length - 1;
-        tokenStart = false;
-        continue;
-      }
+      const m = /^<<(-?)[ \t]*((?:[^\s;&|()<>\\'"`$]+|\\[^\n]|'[^']*'|"(?:\\.|[^"\\])*")+)/.exec(
+        text.slice(i),
+      );
+      assert.ok(
+        m && (!text[i + m[0].length] || /[\s;&|()<>]/.test(text[i + m[0].length])),
+        "unsupported heredoc delimiter",
+      );
+      const word = m[2];
+      const marker = word.replace(
+        /\\(.)|'([^']*)'|"((?:\\.|[^"\\])*)"/g,
+        (_m, escaped, single, double) => escaped ?? single ?? double.replace(/\\([$`"\\])/g, "$1"),
+      );
+      pending.push({ marker, strip: m[1] === "-", quoted: /[\\'"]/.test(word) });
+      out += m[0];
+      i += m[0].length - 1;
+      tokenStart = false;
+      continue;
     }
     out += c;
     if (c === "\\" && quote !== "'" && i + 1 < text.length) {
@@ -392,6 +421,7 @@ function normalizeShell(text, { strict = false, mask = false } = {}) {
     } else if (!quote) tokenStart = /[\s;|&()<>]/.test(c);
     else tokenStart = false;
   }
+  assert.equal(arithmetic, 0, "unterminated arithmetic shell syntax");
   return out;
 }
 
@@ -719,7 +749,7 @@ function maskYamlHeredocs(lines) {
   const out = [...lines];
   for (let i = 0; i < lines.length; i++) {
     if (!content.has(i)) continue;
-    // Blank lines are payload inside the block; literalScriptLines skips them.
+    // Keep blank payload lines inside the same block.
     let j = i;
     for (let k = i + 1; k < lines.length && (content.has(k) || !lines[k].trim()); k++)
       if (content.has(k)) j = k;
@@ -729,6 +759,10 @@ function maskYamlHeredocs(lines) {
         .filter((l) => l.trim())
         .map(indentOf),
     );
+    if (base === Infinity) {
+      i = j;
+      continue;
+    }
     const pad = " ".repeat(base);
     const block = lines.slice(i, j + 1).map((l) => l.slice(pad.length));
     const masked = normalizeShell(block.join("\n"), { mask: true }).split("\n");
@@ -766,7 +800,10 @@ function literalScriptLines(lines) {
     // content line. A more-indented first command must not hide later lines.
     let threshold = m[3] ? indent + Number(m[3]) : null;
     for (let j = i + 1; j < lines.length; j++) {
-      if (lines[j].trim() === "") continue;
+      if (lines[j].trim() === "") {
+        content.add(j);
+        continue;
+      }
       if (threshold === null) {
         if (indentOf(lines[j]) <= indent) break; // empty block
         threshold = indentOf(lines[j]);
@@ -2046,6 +2083,31 @@ function selftest() {
       ["blank heredoc payload line", "cat <<'EOF'\n\nnpm run e2e\nEOF", PW, BOTH],
       ["blank then heredoc comment", "cat <<'EOF'\nfirst\n\n# note\nEOF", PW, BOTH],
       ["apostrophe in script comment", "npm run e2e", "# don't skip\n@PW", []],
+      ["blank continuation workflow direct", "cat <<EOF\nE\\\n\nOF\ncd web\nEOF\n@NPX", {}, []],
+      ["blank continuation workflow npm", "cat <<EOF\nE\\\n\nOF\ncd web\nEOF\nnpm run e2e", PW, []],
+      ["compound delimiter workflow", "cat <<EOF-TEXT\ndata\nEOF-TEXT\nnpm run e2e", PW, []],
+      ["compound delimiter script", "npm run e2e", "cat <<EOF-TEXT\ndata\nEOF-TEXT\n@PW", []],
+      [
+        "multiple delimiters workflow cwd",
+        "EOF() { :; }\ncat <<FIRST <<EOF-X\nfirst\nFIRST\nsecond\nEOF-X\ncd web\nEOF\nnpm run e2e",
+        PW,
+        CD,
+      ],
+      [
+        "multiple delimiters script cwd",
+        "npm run e2e",
+        "EOF() { :; }\ncat <<FIRST <<EOF-X\nfirst\nFIRST\nsecond\nEOF-X\ncd web\nEOF\n@PW",
+        CD,
+      ],
+      ["arithmetic workflow", "count=1; shift=2; value=$((count << shift))\nnpm run e2e", PW, []],
+      ["arithmetic script", "npm run e2e", "count=1; shift=2; value=$((count << shift))\n@PW", []],
+      [
+        "unsupported nested arithmetic",
+        "value=$((1 + $(: '('; printf 1)))\ncat <<EOF\nnpm run e2e\nEOF",
+        PW,
+        /unsupported arithmetic/,
+      ],
+      ["empty workflow shell", "# no-op", PW, BOTH],
     ];
     const TOK = {
       "@CFG": CFG,
