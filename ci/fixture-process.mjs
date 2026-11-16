@@ -59,7 +59,14 @@ export function runFixtureCommand(
       else {
         try {
           if (child.pid) process.kill(-child.pid, 0);
-          if (child.pid) return finish(uncertain("Fixture process group still exists", undefined));
+          if (child.pid) {
+            try {
+              signalGroup(-child.pid, "SIGKILL");
+            } catch (error) {
+              return finish(uncertain("Fixture process signal failed", error));
+            }
+            return finish(uncertain("Fixture process group still exists", undefined));
+          }
         } catch (error) {
           if (error.code !== "ESRCH")
             return finish(uncertain("Fixture process group check failed", error));

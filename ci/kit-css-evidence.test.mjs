@@ -74,6 +74,34 @@ function killFixture(pid) {
   }
 }
 
+test("leader exit signals surviving owned descendants", { timeout: 10000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "fixture-leader-"));
+  try {
+    const worker = `require('fs').writeFileSync('child.pid', String(process.pid)); setTimeout(() => {}, 8000)`;
+    const parent = `const fs = require('fs'); require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(worker)}], {stdio:'ignore'}).unref(); const timer = setInterval(() => { if (fs.existsSync('child.pid')) { clearInterval(timer); } }, 10)`;
+    const signals = [];
+    await assert.rejects(
+      runFixtureCommand(process.execPath, ["-e", parent], {
+        cwd: root,
+        env: { PATH: process.env.PATH },
+        timeoutMs: 5000,
+        signalGroup: (pid, signal) => {
+          signals.push([pid, signal]);
+          return process.kill(pid, signal);
+        },
+      }),
+      (error) => error.retainFixture === true && /group still exists/.test(error.message),
+    );
+    assert.equal(signals.length, 1);
+    assert.ok(signals[0][0] < 0);
+    assert.equal(signals[0][1], "SIGKILL");
+  } finally {
+    const pid = Number(await readFile(join(root, "child.pid"), "utf8").catch(() => 0));
+    if (pid) killFixture(pid);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("escaped pipe holder cannot keep the runner alive", { timeout: 15000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "fixture-escaped-"));
   try {
