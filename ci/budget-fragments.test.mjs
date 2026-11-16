@@ -3,8 +3,8 @@
 // every open PR conflict with every merge. Ceilings now live one unit per
 // file under ci/budgets/<kind>/, and the checkers aggregate them at CI time
 // (ci/budget-fragments.mjs). These tests prove the aggregation reproduces
-// the exact pre-split ceilings, keeps the checkers' exit semantics
-// (0 fits, 1 breach, 2 cannot enforce), fails closed on ambiguous or broken
+// the exact pre-split ceilings, keeps checker exit semantics (Kit overages
+// warn; bundle breaches exit 1; cannot-enforce exits 2), fails closed on broken
 // fragments, and preserves the legacy $comment history byte-for-byte.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -747,11 +747,19 @@ test("kit checker fits a fragment tree exactly at its ceilings", (t) => {
   assert.equal(runKit(kitFixture(t, {}), sink), 0);
 });
 
-test("kit checker breach against a fragment ceiling exits 1", (t) => {
+test("kit checker reports a fragment ceiling overage as advisory", (t) => {
   const root = kitFixture(t, {
     "server.json": { server: { js: { maxRawBytes: 1, maxGzipBytes: 999999, maxFiles: 4 } } },
   });
-  assert.equal(runKit(root, sink), 1);
+  const logs = [];
+  const warnings = [];
+  assert.equal(
+    runKit(root, { log: (line) => logs.push(line), error: (line) => warnings.push(line) }),
+    0,
+  );
+  assert.ok(warnings.some((line) => /server.*raw 819B over 1B.*advisory/.test(line)));
+  assert.ok(logs.some((line) => line.includes("not every asset fits")));
+  assert.ok(!logs.some((line) => line.includes("every Kit asset fits")));
 });
 
 test("duplicate kit unit across fragments cannot enforce (2)", (t) => {
