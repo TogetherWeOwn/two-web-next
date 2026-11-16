@@ -1,5 +1,6 @@
 // Pure fail-closed guards for ci/kit-tag-capture.mjs; no I/O so they test offline.
-export const SOURCE_SHA = "6178285a1da1fbb3acc34707216990bc619cbb2d";
+export const SOURCE_SHA = "373eccf2ce9019556cbc49b71fc7067893007102";
+export const GROUNDS = [0, 1, 2, 3];
 export const TAGS = ["neutral", "live", "you", "echo", "ok", "warn"];
 export const DOTS = ["live", "presence"];
 export const VIEWPORTS = [
