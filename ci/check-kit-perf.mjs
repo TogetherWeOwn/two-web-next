@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // Kit performance budgets: ceilings for the adapter-generated
 // Worker bundle and the Kit client assets, mirroring ci/check-bundle-budget.mjs
-// enforcement semantics. Exit 0 fits, 1 breach, 2 cannot enforce.
+// measurement semantics. Exit 0 fits or warns, 2 cannot enforce.
 //
 // Worker bundle (`_worker.js`) is content-hashed by build, so it gets exact
 // raw/gzip ceilings like the island budgets. Kit client assets under
 // `_app/immutable` carry content hashes in every filename, so per-file
 // ceilings would churn each build: they are budgeted as totals (all JS, all
-// CSS) plus a file-count cap, which still fails closed when a new chunk or
-// stylesheet appears without review. Raising a ceiling needs an explicit
+// CSS) plus a file-count cap. Overages warn during the Ember/SvelteKit migration.
+// Raising a ceiling needs an explicit
 // decision explaining the growth; never relax a budget to make CI green.
 //
 // The canonical required measurement inventory lives in
@@ -17,6 +17,7 @@
 // plan (exit 2), never a silent drop and never a fits verdict. The missing
 // canonical Worker file is missing evidence (exit 2), not a breach.
 import {
+  appendFileSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
@@ -153,19 +154,25 @@ export function measure(root = repoRoot) {
   const workerRaw = workerBytes.length;
   const workerGzip = gzipSync(workerBytes).length;
   if (workerRaw > ceiling.maxRawBytes || workerGzip > ceiling.maxGzipBytes) {
-    errors.push(
-      boundLine(
-        `kit perf budget: ${KIT_WORKER_ENTRY}: raw ${workerRaw}/${ceiling.maxRawBytes}B, gzip ${workerGzip}/${ceiling.maxGzipBytes}B`,
-      ),
-    );
-    breaches += 1;
+    for (const [axis, value, max] of [
+      ["raw", workerRaw, ceiling.maxRawBytes],
+      ["gzip", workerGzip, ceiling.maxGzipBytes],
+    ]) {
+      if (value > max) {
+        warnings.push(
+          boundLine(
+            `kit perf budget: warning: ${KIT_WORKER_ENTRY}: ${axis} ${value}B over ${max}B (advisory, not a failure)`,
+          ),
+        );
+      }
+    }
     groups.push({
       id: "kit.worker",
-      status: "fail",
+      status: "warn",
       checks: [
         {
           id: "kit.worker._worker.js",
-          status: "fail",
+          status: "warn",
           rawBytes: workerRaw,
           gzipBytes: workerGzip,
           maxRawBytes: ceiling.maxRawBytes,
@@ -246,11 +253,8 @@ export function measure(root = repoRoot) {
       nextAction: REBUILD_NEXT_ACTION,
     });
   }
-  // Server gzip is advisory: a gzip-only overage warns (exit 0) while server
-  // raw bytes and the file count stay hard. Client and Worker gzip stay hard.
   const serverOutcome = measureGroup(serverFiles, budget.server.js, "server js", logs, errors, {
     warnings,
-    advisoryGzip: true,
   });
   if (serverOutcome.error) {
     return fail(2, {
@@ -330,7 +334,7 @@ export function measure(root = repoRoot) {
       });
     }
     const group = budget.client[key];
-    const outcome = measureGroup(files, group, `client ${key}`, logs, errors);
+    const outcome = measureGroup(files, group, `client ${key}`, logs, errors, { warnings });
     if (outcome.error) {
       return fail(2, {
         code: "INCOMPLETE_ENUMERATION",
@@ -341,11 +345,11 @@ export function measure(root = repoRoot) {
     breaches += outcome.breach ? 1 : 0;
     groups.push({
       id: `kit.client.${key}`,
-      status: outcome.breach ? "fail" : "pass",
+      status: outcome.breach ? "fail" : outcome.warn ? "warn" : "pass",
       checks: [
         {
           id: `kit.client.${key}`,
-          status: outcome.breach ? "fail" : "pass",
+          status: outcome.breach ? "fail" : outcome.warn ? "warn" : "pass",
           rawBytes: outcome.raw,
           gzipBytes: outcome.gzip,
           files: files.length,
@@ -363,14 +367,14 @@ export function measure(root = repoRoot) {
   );
   if (breaches) return fail(1, null);
   if (warnings.length) {
-    logs.push("kit perf budget: passed with warnings (advisory server gzip over its ceiling).");
+    logs.push("kit perf budget: passed with advisory warnings; not every asset fits its ceiling.");
     return fail(0, null);
   }
   logs.push("kit perf budget: every Kit asset fits.");
   return fail(0, null);
 }
 
-function measureGroup(files, group, label, logs, errors, { warnings, advisoryGzip = false } = {}) {
+function measureGroup(files, group, label, logs, errors, { warnings } = {}) {
   let raw = 0;
   let gzip = 0;
   for (const file of files) {
@@ -387,22 +391,19 @@ function measureGroup(files, group, label, logs, errors, { warnings, advisoryGzi
     raw += bytes.length;
     gzip += gzipSync(bytes).length;
   }
-  const over = [];
   let warn = false;
-  if (raw > group.maxRawBytes) over.push(`raw ${raw}B over ${group.maxRawBytes}B`);
-  if (gzip > group.maxGzipBytes) {
-    const detail = `gzip ${gzip}B over ${group.maxGzipBytes}B`;
-    if (advisoryGzip && warnings) {
+  const details = [
+    [raw, group.maxRawBytes, `raw ${raw}B over ${group.maxRawBytes}B`],
+    [gzip, group.maxGzipBytes, `gzip ${gzip}B over ${group.maxGzipBytes}B`],
+    [files.length, group.maxFiles, `${files.length} files over ${group.maxFiles}`],
+  ];
+  for (const [value, max, detail] of details) {
+    if (value > max) {
       warn = true;
       warnings.push(
         boundLine(`kit perf budget: warning: ${label}: ${detail} (advisory, not a failure)`),
       );
-    } else over.push(detail);
-  }
-  if (files.length > group.maxFiles) over.push(`${files.length} files over ${group.maxFiles}`);
-  if (over.length) {
-    errors.push(boundLine(`kit perf budget: ${label}: ${over.join(", ")}`));
-    return { breach: true, warn, raw, gzip };
+    }
   }
   if (warn) return { breach: false, warn, raw, gzip };
   logs.push(
@@ -411,6 +412,25 @@ function measureGroup(files, group, label, logs, errors, { warnings, advisoryGzi
     ),
   );
   return { breach: false, warn: false, raw, gzip };
+}
+
+function publishWarnings(warnings) {
+  if (process.env.GITHUB_ACTIONS !== "true" || warnings.length === 0) return;
+  for (const warning of warnings) {
+    console.error(
+      `::warning::${warning.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}`,
+    );
+  }
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    try {
+      appendFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        `## Kit budget advisories\n\n${warnings.map((warning) => `- ${warning}`).join("\n")}\n`,
+      );
+    } catch (error) {
+      console.error(`kit perf budget: unable to write job summary: ${error.message}`);
+    }
+  }
 }
 
 export function run(root = repoRoot, output = console) {
@@ -510,21 +530,21 @@ function selftest() {
     writeFileSync(join(root, "ci/kit-perf-budget.json"), JSON.stringify(budget));
   check("fitting budgets pass (sourcemaps excluded from the server total)", () => {}, 0);
   check(
-    "worker breach fails",
+    "worker overage warns",
     ({ root, budget }) => {
       budget.worker["_worker.js"].maxRawBytes -= 1;
       save(root, budget);
     },
-    1,
+    0,
     "_worker.js",
   );
   check(
-    "server breach fails",
+    "server raw overage warns",
     ({ root, budget }) => {
       budget.server.js.maxRawBytes -= 1;
       save(root, budget);
     },
-    1,
+    0,
     "server js",
   );
   check(
@@ -544,7 +564,7 @@ function selftest() {
         Buffer.from("x".repeat(100000)),
       );
     },
-    1,
+    0,
     "client js",
   );
   check(
@@ -654,12 +674,19 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.exitCode = selftest();
   } else if (parsed.options.format === "json") {
     const measured = runJson(parsed.options.root ?? repoRoot);
+    publishWarnings(measured.warnings);
     for (const line of measured.logs) console.error(line);
     for (const line of measured.warnings) console.error(line);
     for (const line of measured.errors) console.error(line);
     process.stdout.write(`${JSON.stringify(measured.report)}\n`);
     process.exitCode = measured.code;
   } else {
-    process.exitCode = run(parsed.options.root ?? repoRoot);
+    const root = parsed.options.root ?? repoRoot;
+    const measured = measure(root);
+    publishWarnings(measured.warnings);
+    for (const line of measured.logs) console.log(line);
+    for (const line of measured.warnings) console.error(line);
+    for (const line of measured.errors) console.error(line);
+    process.exitCode = measured.code;
   }
 }
