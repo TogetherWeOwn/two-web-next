@@ -898,9 +898,6 @@ jobs:
             artifacts/worker-startup-local/summary.md
           if-no-files-found: error
           retention-days: 14
-      - name: Kit disposable browser fixture
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
       - name: Kit filter links (Vite and browser fixture)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node --test --test-timeout=120000 ci/kit-filter-links-browser.test.mjs
@@ -1409,6 +1406,33 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  kit-browser-fixture:
+    name: kit-browser-fixture
+    needs: [scope]
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Install Kit parity Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Kit disposable browser fixture
+        run: node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
+
   # Change-gated aggregator (TOG-14880, TOG-14877 CI standard): the single
   # merge-gate check. Reports success when the scope verdict is clean and every
   # selected job succeeded; a job that the scope skipped counts only when it
@@ -1433,6 +1457,7 @@ jobs:
         docs-links,
         queue-syntax-smoke,
         check,
+        kit-browser-fixture,
         node22-compat,
         scope,
         bot-contract-drift,
@@ -1494,11 +1519,13 @@ jobs:
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}
           DRAFT: ${{ needs.scope.outputs.draft }}
+          DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
           FULL: ${{ needs.scope.outputs.full }}
           APP: ${{ needs.scope.outputs.app }}
           WORKER: ${{ needs.scope.outputs.worker }}
           DB: ${{ needs.scope.outputs.db }}
           CHECK_RESULT: ${{ needs.check.result }}
+          KIT_BROWSER_RESULT: ${{ needs.kit-browser-fixture.result }}
           A11Y_RESULT: ${{ needs.a11y.result }}
           LIGHTHOUSE_RESULT: ${{ needs.lighthouse.result }}
           BUDGET_RESULT: ${{ needs.bundle-budget.result }}
@@ -1508,7 +1535,7 @@ jobs:
           [ "$SCOPE_RESULT" = success ] || fail "scope did not succeed; failing closed."
           # Empty or unexpected outputs would read as unselected areas and let a
           # skipped job pass, so every verdict must be exactly true or false.
-          for pair in "FULL=$FULL" "APP=$APP" "WORKER=$WORKER" "DB=$DB" "DRAFT=$DRAFT"; do
+          for pair in "FULL=$FULL" "APP=$APP" "WORKER=$WORKER" "DB=$DB" "DRAFT=$DRAFT" "DOCS_ONLY=$DOCS_ONLY"; do
             case "${pair#*=}" in
               true|false) ;;
               *) fail "scope output ${pair%%=*} is '${pair#*=}', expected true or false; failing closed." ;;
@@ -1531,6 +1558,8 @@ jobs:
           }
           if selected_app_db; then A11Y_SEL=true; else A11Y_SEL=false; fi
           if selected_app; then PERF_SEL=true; else PERF_SEL=false; fi
+          if [ "$DOCS_ONLY" != true ] && { selected_app || [ "$WORKER" = true ]; }; then KIT_BROWSER_SEL=true; else KIT_BROWSER_SEL=false; fi
+          check_job "$KIT_BROWSER_RESULT" "$KIT_BROWSER_SEL" kit-browser-fixture
           check_job "$A11Y_RESULT" "$A11Y_SEL" a11y
           check_job "$LIGHTHOUSE_RESULT" "$PERF_SEL" lighthouse
           check_job "$BUDGET_RESULT" "$PERF_SEL" bundle-budget
