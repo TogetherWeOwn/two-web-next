@@ -200,7 +200,14 @@ try {
                 "page",
                 () => page.screenshot({ fullPage: true, animations: "disabled", caret: "hide" }),
               ],
-              ["band", () => band.screenshot({ animations: "disabled", caret: "hide" })],
+              [
+                "band",
+                async () => {
+                  const clip = await band.boundingBox();
+                  assert.ok(clip && clip.width > 0 && clip.height > 0, "band has no bounds");
+                  return page.screenshot({ clip, animations: "disabled", caret: "hide" });
+                },
+              ],
             ]) {
               const beforeCapture = await captureState();
               const bytes = await capture();
