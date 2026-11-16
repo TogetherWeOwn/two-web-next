@@ -125,6 +125,7 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
     if (quote !== "'" && c === "$") {
       const next = skipContinuations(text, i + 1);
       assert.ok(text[next] !== "'" || quote, "unsupported ANSI-C shell quote");
+      assert.ok(text[next] !== "{", "unsupported parameter expansion");
       if (text[next] === "(") {
         const after = skipContinuations(text, next + 1);
         if (text[after] === "(") {

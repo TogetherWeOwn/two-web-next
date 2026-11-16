@@ -153,6 +153,8 @@ test("malformed openers and unsupported arithmetic fail closed", () => {
     'cat <<"EOF\n',
     "cat <<$EOF\n",
     "echo $((1 + $x))\n",
+    "echo ${value:-a #b}\n",
+    'echo "$\\\n{value:-a #b}"\n',
   ]) {
     assert.throws(() => normalizeShell(text, { strict: true }), /unsupported|unterminated/i, text);
   }
