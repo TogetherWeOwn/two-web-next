@@ -23,7 +23,17 @@ const inputs = [
 ];
 // Read by later generators (a revision's generator may or may not need them);
 // copied only when that revision has them, so every revision finds its inputs.
-const optionalInputs = ["assets/leaf-only.css", "web/src/lib/site-header.css"];
+const optionalInputs = [
+  "assets/leaf-only.css",
+  "web/src/lib/site-header.css",
+  "ci/css-dictionary.mjs",
+];
+// Only these optional inputs are CSS; the dictionary module is generator code
+// that must be copied for a revision to run, never a candidate source.
+const optionalCssInputs = new Map([
+  ["assets/leaf-only.css", "four"],
+  ["web/src/lib/site-header.css", "four-header"],
+]);
 const options = {
   encoding: "utf8",
   timeout: 10000,
@@ -67,10 +77,8 @@ function snapshot(sha) {
     const candidates = [];
     for (const [name, parts] of [
       ["three", sources],
-      ...optionalInputs.flatMap((input, index) =>
-        blobs.has(input)
-          ? [[index === 0 ? "four" : "four-header", [...sources, blobs.get(input)]]]
-          : [],
+      ...[...optionalCssInputs].flatMap(([input, label]) =>
+        blobs.has(input) ? [[label, [...sources, blobs.get(input)]]] : [],
       ),
     ]) {
       for (const [suffix, separator] of [
