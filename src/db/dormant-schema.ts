@@ -9,6 +9,7 @@ import {
   text,
   timestamp,
   unique,
+  uuid,
 } from "drizzle-orm/pg-core";
 import { events } from "./admin-schema";
 
@@ -51,6 +52,40 @@ export const eventEchoes = pgTable(
       sql`${t.peakConcurrent} >= 0 AND ${t.attendedCount} >= 0`,
     ),
     check("event_echoes_window_ordered", sql`${t.windowEndsAt} > ${t.windowStartsAt}`),
+  ],
+);
+
+export const botReconciliationIntents = pgTable(
+  "bot_reconciliation_intents",
+  {
+    idempotencyKey: uuid("idempotency_key").primaryKey(),
+    verb: text("verb").notNull(),
+    subject: text("subject").notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    attempts: integer("attempts").notNull(),
+    lastCode: text("last_code"),
+    lastStatus: integer("last_status"),
+    lastRequestId: text("last_request_id"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: text("resolved_by"),
+    resolution: text("resolution"),
+  },
+  (t) => [
+    index("bot_reconciliation_open_idx").on(t.firstSeenAt).where(sql`${t.resolvedAt} is null`),
+    index("bot_reconciliation_resolved_idx")
+      .on(t.resolvedAt)
+      .where(sql`${t.resolvedAt} is not null`),
+    check(
+      "bot_reconciliation_verb_known",
+      sql`${t.verb} in ('announcement.post', 'event.upsert', 'event.cancel', 'reminder.send', 'place_offer.send')`,
+    ),
+    check("bot_reconciliation_subject_bound", sql`char_length(${t.subject}) <= 200`),
+    check("bot_reconciliation_attempts_positive", sql`${t.attempts} >= 1`),
+    check(
+      "bot_reconciliation_resolution_bound",
+      sql`${t.resolution} is null or char_length(${t.resolution}) <= 500`,
+    ),
   ],
 );
 
