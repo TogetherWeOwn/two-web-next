@@ -15,6 +15,7 @@ import {
   FIXTURE_ROUTE_ROOT,
   applyOverlays,
   overlayPath,
+  runFixtureCommand,
   withKitCssFixture,
 } from "./kit-css-fixture.mjs";
 
@@ -37,6 +38,19 @@ test("overlays write, replace, transform and delete only inside the copy", async
     assert.throws(() => overlayPath(root, "/abs"), /Invalid overlay path/);
     assert.throws(() => overlayPath(root, "web/src/app.css"), /generated or token-checked/);
     assert.throws(() => overlayPath(root, "web/../web/src/ember-theme.css"), /generated or token/);
+    for (const file of [
+      "public/theme-tokens.css",
+      "public/theme.css",
+      "public/styles.css",
+      "src/ember-fallback-style.ts",
+      "src/leaf-critical-css.ts",
+      "src/events-critical-css.ts",
+    ]) {
+      await assert.rejects(
+        applyOverlays(root, { [file]: "invalid" }),
+        /generated or token-checked/,
+      );
+    }
     await mkdir(join(root, "real"));
     await symlink(join(root, "real"), join(root, "link"));
     await assert.rejects(applyOverlays(root, { "link/f.txt": "x" }), /symlink in destination/);
@@ -57,6 +71,33 @@ test("overlays reject terminal symlinks before reading or writing outside the co
     assert.equal(await readFile(outside, "utf8"), "unchanged");
   } finally {
     await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("timeout terminates a descendant that ignores SIGTERM before returning", async () => {
+  const root = await mkdtemp(join(tmpdir(), "kit-css-timeout-"));
+  try {
+    const childScript = `require('fs').writeFileSync('child.pid', String(process.pid));
+      process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`;
+    const parentScript = `require('child_process').spawn(process.execPath,
+      ['-e', ${JSON.stringify(childScript)}], { stdio: 'inherit' });
+      setInterval(() => {}, 1000);`;
+    await assert.rejects(
+      runFixtureCommand(process.execPath, ["-e", parentScript], {
+        cwd: root,
+        env: { PATH: process.env.PATH },
+        timeoutMs: 3000,
+      }),
+      /timed out/,
+    );
+    const pid = Number(await readFile(join(root, "child.pid"), "utf8"));
+    const state = await readFile(`/proc/${pid}/status`, "utf8").catch((error) => {
+      if (error.code === "ENOENT") return "";
+      throw error;
+    });
+    assert.ok(!state || /^State:\s+Z/m.test(state), "descendant is no longer running");
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

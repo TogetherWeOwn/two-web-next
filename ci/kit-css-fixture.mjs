@@ -13,7 +13,7 @@
 //
 // Overlay values: string or Buffer (write), null (delete a tracked file), or a
 // function (existing Buffer | null) => string | Buffer | null.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
@@ -41,6 +41,12 @@ export const GENERATED_INPUTS = new Set([
   "public/event-theme.css",
   "public/profile-theme.css",
   "public/schedule-theme.css",
+  "public/theme-tokens.css",
+  "public/theme.css",
+  "public/styles.css",
+  "src/ember-fallback-style.ts",
+  "src/leaf-critical-css.ts",
+  "src/events-critical-css.ts",
 ]);
 
 /** Repo-relative, forward-slash, non-escaping path or a thrown error. */
@@ -118,11 +124,57 @@ async function copySource(source, root) {
   await validateLinks(root);
 }
 
+// The output pipes keep `close` pending until descendants have closed them too.
+// On uncertain cleanup, retain the scratch directory rather than deleting it
+// underneath a process that may still be running.
+export function runFixtureCommand(command, args, { cwd, env, timeoutMs = BUILD_TIMEOUT_MS }) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stdout.pipe(process.stdout, { end: false });
+    child.stderr.pipe(process.stderr, { end: false });
+    let timedOut = false;
+    let cleanupTimer;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        if (child.pid) process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") {
+          error.retainFixture = true;
+          reject(error);
+          return;
+        }
+      }
+      cleanupTimer = setTimeout(() => {
+        const error = new Error(`Build process cleanup exceeded bound; retained ${cwd}`);
+        error.retainFixture = true;
+        reject(error);
+      }, 5000);
+    }, timeoutMs);
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      clearTimeout(cleanupTimer);
+      reject(error);
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      clearTimeout(cleanupTimer);
+      if (timedOut || code !== 0 || signal) reject(new Error("Fixture build failed or timed out"));
+      else resolvePromise();
+    });
+  });
+}
+
 /**
  * Runs the real Kit build in a disposable copy of `source` with `overlays`
  * applied, then calls `callback(evidence)`. The copy is removed afterwards,
- * including on build or callback failure. `buildArgs` exists so a self-test
- * can substitute a stub; production callers leave it unset.
+ * unless build process cleanup cannot be confirmed. `buildArgs` exists so a
+ * self-test can substitute a stub; production callers leave it unset.
  */
 export async function withKitCssFixture(
   { source = process.cwd(), overlays = {}, buildArgs = ["run", "build", "--prefix", "web"] },
@@ -133,6 +185,7 @@ export async function withKitCssFixture(
   if (scratch === source || inside(source, scratch))
     throw new Error("Fixture scratch must be outside source");
   const root = await mkdtemp(join(scratch, "kit-css-"));
+  let retainFixture = false;
   try {
     await copySource(source, root);
     await applyOverlays(root, overlays);
@@ -143,12 +196,7 @@ export async function withKitCssFixture(
       XDG_CACHE_HOME: join(root, ".cache"),
       npm_config_cache: join(root, ".npm-cache"),
     };
-    execFileSync("npm", buildArgs, {
-      cwd: root,
-      env,
-      stdio: "inherit",
-      timeout: BUILD_TIMEOUT_MS,
-    });
+    await runFixtureCommand("npm", buildArgs, { cwd: root, env });
     const output = join(root, "web/.svelte-kit/output");
     const client = await cssFiles(join(root, CLIENT_OUTPUT), join(root, CLIENT_OUTPUT));
     const server = await cssFiles(join(output, "server"), join(output, "server"));
@@ -157,7 +205,10 @@ export async function withKitCssFixture(
     return await callback(
       createEvidence({ root, output, client, server, manifest, routeEvidence }),
     );
+  } catch (error) {
+    retainFixture = error?.retainFixture === true;
+    throw error;
   } finally {
-    await rm(root, { recursive: true, force: true });
+    if (!retainFixture) await rm(root, { recursive: true, force: true });
   }
 }
