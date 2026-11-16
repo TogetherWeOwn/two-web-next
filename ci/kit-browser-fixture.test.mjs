@@ -60,7 +60,10 @@ export async function assertHomeEvidence() {
       });
       assert.equal(result.error, undefined);
       assert.equal(result.signal, null);
-      return { result, manifest: JSON.parse(await readFile(join(output, "manifest.json"), "utf8")) };
+      return {
+        result,
+        manifest: JSON.parse(await readFile(join(output, "manifest.json"), "utf8")),
+      };
     };
     const success = await run("success");
     assert.equal(success.result.status, 0, success.result.stderr);
