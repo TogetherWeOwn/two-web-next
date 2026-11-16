@@ -39,6 +39,10 @@ test("captures structured-time row states in Kit without JavaScript", async ({},
         "color",
         "rgb(168, 154, 142)",
       );
+      await expect(page.locator(".row-time").first()).toHaveCSS("row-gap", "4px");
+      await expect(page.locator(".row-time .line1").first()).toHaveCSS("font-size", "15px");
+      await expect(page.locator(".row-time .word")).toHaveCSS("font-weight", "600");
+      await expect(page.locator(".row-time .word")).toHaveCSS("margin-left", "8px");
       for (const viewport of viewports) {
         await page.setViewportSize(viewport);
         await page.screenshot({

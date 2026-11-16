@@ -21,10 +21,12 @@ const m = $derived(rowTimeModel(input));
 </div>
 
 <style>
+  @import "../ember-theme.css" reference;
+
   /* Kit C1 time column: keep the two lines at every width. */
-  .row-time { display: flex; flex-direction: column; gap: var(--space-1); }
+  .row-time { display: flex; flex-direction: column; gap: --theme(--space-1); }
   p { margin: 0; }
-  .line1 { font-family: var(--font-ui); font-size: var(--text-ui); color: var(--t1); }
-  .word { margin-left: var(--space-2); font-weight: var(--font-weight-semibold); }
-  .line2 { font-family: var(--font-data); font-size: var(--text-label); color: var(--t3); }
+  .line1 { font-family: --theme(--font-ui); font-size: --theme(--text-ui); color: var(--t1); }
+  .word { margin-left: --theme(--space-2); font-weight: --theme(--font-weight-semibold); }
+  .line2 { font-family: --theme(--font-data); font-size: --theme(--text-label); color: var(--t3); }
 </style>
