@@ -1,6 +1,5 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
-import "./site-header.css";
 
 // Default sign-in is the ordinary login round trip (/auth/discord), mirroring
 // the Hono shell (src/page-shell.tsx signInUrl). The RSVP and join entries
