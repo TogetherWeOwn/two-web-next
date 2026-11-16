@@ -3,7 +3,10 @@ import { linkSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { assertRouteEvidenceInputHashes, routeEvidenceInputHashes } from "./route-evidence-input-hashes.mjs";
+import {
+  assertRouteEvidenceInputHashes,
+  routeEvidenceInputHashes,
+} from "./route-evidence-input-hashes.mjs";
 
 test("synthetic reviewed input hashes bind file bytes and sort by path", () => {
   const root = mkdtempSync(join(tmpdir(), "route-inputs-"));
@@ -12,9 +15,17 @@ test("synthetic reviewed input hashes bind file bytes and sort by path", () => {
     writeFileSync(join(root, "src", "a"), "a");
     writeFileSync(join(root, "src", "b"), "b");
     const hashes = routeEvidenceInputHashes(root, ["src/b", "src/a"]);
-    assert.deepEqual(hashes.map((entry) => entry.path), ["src/a", "src/b"]);
-    assert.equal(hashes[0].sha256, "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb");
-    assert.doesNotThrow(() => assertRouteEvidenceInputHashes(root, ["src/b", "src/a"], hashes.toReversed()));
+    assert.deepEqual(
+      hashes.map((entry) => entry.path),
+      ["src/a", "src/b"],
+    );
+    assert.equal(
+      hashes[0].sha256,
+      "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+    );
+    assert.doesNotThrow(() =>
+      assertRouteEvidenceInputHashes(root, ["src/b", "src/a"], hashes.toReversed()),
+    );
     writeFileSync(join(root, "src", "a"), "changed");
     assert.throws(() => assertRouteEvidenceInputHashes(root, ["src/a", "src/b"], hashes));
   } finally {

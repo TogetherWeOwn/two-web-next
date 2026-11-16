@@ -26,7 +26,10 @@ export function routeEvidenceInputHashes(checkoutRoot, inputs) {
     const stat = statSync(absolute);
     if (!stat.isFile() || stat.nlink !== 1)
       throw new Error("route evidence inputs refused: aliased or non-file input");
-    hashes.push({ path, sha256: createHash("sha256").update(readFileSync(absolute)).digest("hex") });
+    hashes.push({
+      path,
+      sha256: createHash("sha256").update(readFileSync(absolute)).digest("hex"),
+    });
   }
   return hashes.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
