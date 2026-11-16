@@ -114,6 +114,17 @@ test("here-strings and arithmetic shifts are not heredocs", () => {
   }
 });
 
+test("shell boundaries do not expose heredoc bodies or remove literal text", () => {
+  const escaped = "printf \\< <<EOF\nnpm run decoy\nEOF\nnpm run real\n";
+  assert.doesNotMatch(check(escaped, escaped), /decoy/);
+  const nonbreaking = "cat <<EOF suffix\nbody\nEOF suffix\nnpm run real\n";
+  assert.match(check(nonbreaking, nonbreaking), /npm run real/);
+  assert.equal(normalizeShell("echo word #literal\n"), "echo word #literal\n");
+  assert.equal(check("echo $(\\\n(8 << 1))\n", "echo $((8 << 1))\n"), "echo $((8 << 1))\n");
+  assert.throws(() => normalizeShell("echo \"$(cat <<EOF\nbody\nEOF\n)\"\n"), /unsupported/);
+  assert.throws(() => normalizeShell("echo $'x\\' #literal'\n"), /unsupported/);
+});
+
 test("body and comment command decoys are masked or removed", () => {
   for (const newline of ["\n", "\r\n"]) {
     const source = [

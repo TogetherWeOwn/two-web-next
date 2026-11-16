@@ -42,7 +42,7 @@ function readHeredocOpener(input, i) {
   for (;;) {
     p = skip(p);
     const c = input[p];
-    if (c === undefined || /[\s;&|()<>]/.test(c)) break;
+    if (c === undefined || /[ \t\r\n;&|()<>]/.test(c)) break;
     if (c === "'") {
       const close = input.indexOf("'", p + 1);
       assert.ok(close !== -1, UNSUPPORTED);
@@ -121,15 +121,24 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
       else if (c === ")") arithmetic--;
       continue;
     }
-    if (quote !== "'" && text.startsWith("$((", i)) {
-      out += "$((";
-      i += 2;
-      arithmetic = 2;
-      continue;
+    assert.ok(c !== "`" || quote === "'", "unsupported command substitution");
+    if (quote !== "'" && c === "$") {
+      const next = skipContinuations(text, i + 1);
+      assert.ok(text[next] !== "'" || quote, "unsupported ANSI-C shell quote");
+      if (text[next] === "(") {
+        const after = skipContinuations(text, next + 1);
+        if (text[after] === "(") {
+          out += "$((";
+          i = after;
+          arithmetic = 2;
+          continue;
+        }
+        assert.fail("unsupported command substitution");
+      }
     }
-    if (!quote && text.startsWith("((", i)) {
+    if (!quote && c === "(" && text[skipContinuations(text, i + 1)] === "(") {
       out += "((";
-      i++;
+      i = skipContinuations(text, i + 1);
       arithmetic = 2;
       continue;
     }
@@ -181,7 +190,15 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
       i++;
       continue;
     }
-    if (!quote && c === "<" && !out.endsWith("<")) {
+    if (!quote && c === "<") {
+      const second = skipContinuations(text, i + 1);
+      const third = skipContinuations(text, second + 1);
+      if (text[second] === "<" && text[third] === "<") {
+        out += "<<<";
+        i = third;
+        tokenStart = true;
+        continue;
+      }
       const opener = readHeredocOpener(text, i);
       if (opener) {
         pending.push(opener);
@@ -199,7 +216,7 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
     else if (!quote && (c === "'" || c === '"' || c === "`")) {
       quote = c;
       tokenStart = false;
-    } else if (!quote) tokenStart = /[\s;|&()<>]/.test(c);
+    } else if (!quote) tokenStart = /[ \t\r\n;|&()<>]/.test(c);
     else tokenStart = false;
   }
   assert.equal(arithmetic, 0, "unterminated arithmetic shell syntax");
