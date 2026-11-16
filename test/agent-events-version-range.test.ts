@@ -5,7 +5,7 @@
 // Synthetic rows only, in an owned schema on the guarded test container.
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
+import { fetchApp } from "./helpers/fetch-app";
 import { DEFAULT_CONFIG, INT4_MAX, INT4_MIN, isAgentVersion } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
 import {
@@ -108,13 +108,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
     async function call(body: Record<string, unknown>) {
       const pending: Promise<unknown>[] = [];
       try {
-        const response = await app.request(
-          "/api/agent-events",
-          {
+        // Default dispatch is the mounted Hono app, not a built Kit Worker.
+        const response = await fetchApp(
+          new Request("https://next.example.test/api/agent-events", {
             method: "POST",
             headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
             body: JSON.stringify(body),
-          },
+          }),
           {
             APP_URL: "https://next.example.test",
             DATABASE_URL: url,
