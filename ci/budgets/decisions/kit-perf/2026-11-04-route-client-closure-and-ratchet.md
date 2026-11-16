@@ -58,7 +58,14 @@ client cost; zero is not a claim about Hono responses or islands. Legacy
 this metric and under the independent existing served-asset, payload and page
 quality gates. Missing/extra source, built or budget routes; unowned JS/CSS;
 missing chunks; symlinks; malformed lists/indexes and orphan graph chunks refuse
-enforcement (exit 2), rather than returning pass. A measured breach exits 1.
+enforcement (exit 2), rather than returning pass. The original policy made every
+measured breach exit 1. During the migration, per-route CSS raw and gzip byte
+overages instead appear individually in `warnings` with route, metric, measured
+bytes and ceiling; they do not by themselves change exit 0. CSS file-count and
+all JS overages remain hard breaches (exit 1), including when warnings coexist.
+Headroom shortfalls remain diagnostic. The lower-only ratchet still refuses a
+measurement exceeding an existing ceiling; a warning is not a fit or permission
+to raise a budget.
 
 Aggregate ratchet input is a different scope: every `.js` and `.css` file under
 `KIT_CLIENT_DIR` (`web/.svelte-kit/output/client/_app`), exactly the inventory
