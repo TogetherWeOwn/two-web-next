@@ -540,6 +540,40 @@ for (const generated of [false, true]) {
   }
 }
 
+test('guard dictionary decoder enforces encoded and expanded size boundaries', () => {
+  const limit = 100_000;
+  const entry = 'x'.repeat(24);
+  assert.equal(decodeDictionaryForGuard('', []), '');
+  assert.equal(decodeDictionaryForGuard('x'.repeat(limit), []), 'x'.repeat(limit));
+  assert.equal(decodeDictionaryForGuard('x'.repeat(limit + 1), []), null);
+  const exactExpansion = '\u0080'.repeat(4166) + 'x'.repeat(16);
+  assert.equal(decodeDictionaryForGuard(exactExpansion, [entry]), 'x'.repeat(limit));
+  assert.equal(decodeDictionaryForGuard('\u0080'.repeat(4166) + 'x'.repeat(17), [entry]), null);
+  assert.equal(decodeDictionaryForGuard('\u0080'.repeat(4167), [entry]), null);
+  assert.equal(decodeDictionaryForGuard('\u0080', []), null);
+  assert.equal(decodeDictionaryForGuard('x', ['abc']), null);
+  assert.equal(decodeDictionaryForGuard('x', null), null);
+});
+
+test('generated CSS provenance enforces the source-size literal fallback', async t => {
+  const dir = await leafScopeFixture(t);
+  const source = 'x'.repeat(100_001);
+  await fs.writeFile(path.join(dir, 'public/styles.css'), source);
+  const css = `${source}\n:root {}\nhtml {}\nheader {}`;
+  const hash = createHash('sha256').update(css).digest('base64');
+  const packed = LEAF_OUTPUT_FIXTURE
+    .replace('"body {}\\n:root {}\\nhtml {}\\nheader {}", []', `${JSON.stringify(css)}, []`)
+    .replace('y7hxp1IHgVDU09O8x3ZLpw4fS1A2jUc42J/ECDHmhjU=', hash);
+  const literal = packed
+    .replace('import { decodeCssDictionary } from "./css-dictionary";\n', '')
+    .replace(`decodeCssDictionary(${JSON.stringify(css)}, [])`, JSON.stringify(css));
+  assert.notEqual(literal, packed);
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), literal);
+  assert.deepEqual(findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), []);
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), packed);
+  assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
+});
+
 test('generated CSS provenance accepts the marker-collision fallback and rejects a packed forgery', async t => {
   const dir = await leafScopeFixture(t);
   // U+0080 is a dictionary marker, so the generator falls back to a literal.
