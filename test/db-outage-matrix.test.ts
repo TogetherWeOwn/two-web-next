@@ -17,7 +17,7 @@ const OUTAGE_URL = "postgres://outage_fixture@127.0.0.1:1/outage_fixture";
 // Keep the real postgres driver/socket failure. Track its per-request clients
 // so migration/read failures cannot leave reconnect timers behind after a test.
 vi.mock("postgres", async (importOriginal) => {
-  const original = await importOriginal<{ default: typeof import("postgres") }>();
+  const original = await importOriginal<{ default: typeof postgres }>();
   return {
     default: (url: string, options?: object) => {
       if (url !== "postgres://outage_fixture@127.0.0.1:1/outage_fixture") {
