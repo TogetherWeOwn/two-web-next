@@ -570,7 +570,13 @@ test("policy scope pins exact proposal names against schema declarations", async
   // drift in either direction fails loudly here.
   assert.deepEqual(
     declared.filter((name) => !POLICY_TABLES.includes(name)),
-    ["web_session_grace", "event_echoes", "bot_reconciliation_intents", "event_echo_members"],
+    [
+      "web_session_grace",
+      "waitlist_offers",
+      "event_echoes",
+      "bot_reconciliation_intents",
+      "event_echo_members",
+    ],
   );
   assert.deepEqual(
     POLICY_TABLES.filter((name) => !declared.includes(name)),

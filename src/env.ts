@@ -92,6 +92,8 @@ export type Env = AgentEventsEnv & {
   // stays disabled until the companion passes; honoured only for an http
   // loopback APP_URL (src/route-ownership.ts fixtureManifestFor).
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
+  // Loopback Kit parity fixture only; the shipped join entry stays disabled.
+  KIT_PARITY_FIXTURE_JOIN?: string;
   // Generated local capture build only; no deployed config defines the build gate.
   SSR_CAPTURE_FIXTURE?: string;
   // Staging Kit rollout controls (web/wrangler.staging.jsonc only). The exact
