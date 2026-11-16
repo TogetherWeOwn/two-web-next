@@ -124,7 +124,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
         ["event.upsert", "subject", -1, null],
         ["event.upsert", "subject", 1, "r".repeat(501)],
       ] as const) {
-        await expect(insert(...values)).rejects.toMatchObject({ code: "23514" });
+        await expect(insert(values[0], values[1], values[2], values[3])).rejects.toMatchObject({
+          code: "23514",
+        });
       }
     });
     beforeEach(async () => {
