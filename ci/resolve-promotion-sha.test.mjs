@@ -737,7 +737,51 @@ function cliJobs(runId) {
   };
 }
 
-const cliBase = { GITHUB_REPOSITORY: "o/r", GITHUB_TOKEN: "t", INPUT_SHA: "" };
+const cliBase = {
+  GITHUB_REPOSITORY: "o/r",
+  GITHUB_TOKEN: "t",
+  INPUT_SHA: "",
+  PRODUCTION_ACCEPTED_SHA: A,
+};
+
+test("automatic promotion requires an exact accepted SHA", () => {
+  const oldAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const stub = [
+    {
+      match: "/actions/workflows/e2e-staging.yml/runs",
+      body: { workflow_runs: [cliRun(7, A, oldAt)] },
+    },
+    cliJobs(7),
+    { match: `/commits/${A}`, body: { commit: { committer: { date: oldAt } } } },
+  ];
+  for (const event of ["workflow_run", "schedule"]) {
+    for (const accepted of [A, B, "", undefined]) {
+      const result = spawnResolverCli(
+        { ...cliBase, GITHUB_EVENT_NAME: event, PRODUCTION_ACCEPTED_SHA: accepted },
+        stub,
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.written, `sha=${accepted === A ? A : ""}\n`, `${event}: ${accepted}`);
+      if (accepted !== A) assert.match(result.stdout, /does not match.*skipping/);
+    }
+  }
+});
+
+test("manual dispatch ignores the accepted SHA", () => {
+  for (const accepted of [B, "", undefined]) {
+    const result = spawnResolverCli(
+      {
+        ...cliBase,
+        GITHUB_EVENT_NAME: "workflow_dispatch",
+        INPUT_SHA: A,
+        PRODUCTION_ACCEPTED_SHA: accepted,
+      },
+      [],
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.written, `sha=${A}\n`);
+  }
+});
 
 test("resolver CLI disables only automatic promotion when the switch is true", () => {
   for (const event of ["workflow_run", "schedule"]) {

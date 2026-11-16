@@ -22,12 +22,20 @@ function fixture() {
   const cwd = mkdtempSync(resolve(tmpdir(), "check-bootstrap-"));
   owned.push(cwd);
   for (const dir of ["ci", "src", "public", "test"]) mkdirSync(resolve(cwd, dir));
-  for (const file of ["ci/build-leaf-css.mjs", "ci/build-events-css.mjs", "ci/test-unit.mjs"])
+  for (const file of [
+    "ci/build-leaf-css.mjs",
+    "ci/css-dictionary.mjs",
+    "src/css-dictionary.ts",
+    "ci/build-events-css.mjs",
+    "ci/test-unit.mjs",
+  ])
     cpSync(resolve(root, file), resolve(cwd, file));
   symlinkSync(resolve(root, "node_modules"), resolve(cwd, "node_modules"), "dir");
   writeFileSync(resolve(cwd, "package.json"), JSON.stringify({ type: "module", scripts }));
   for (const file of ["styles.css", "theme-tokens.css", "theme.css", "schedule-theme.css"])
     writeFileSync(resolve(cwd, "public", file), `/* ${file} */`);
+  mkdirSync(resolve(cwd, "web/src/lib"), { recursive: true });
+  writeFileSync(resolve(cwd, "web/src/lib/site-header.css"), "/* site-header.css */");
   writeFileSync(
     resolve(cwd, "tsconfig.json"),
     JSON.stringify({

@@ -198,8 +198,8 @@ executed gates. For screenshot/spec discovery, see the
 | `kit.worker`, `kit.server.js`, `kit.client.js`, `kit.client.css` | `node ci/check-kit-perf.mjs --dry-run --format json` | Existing `web/.svelte-kit/` build outputs plus the `ci/budgets/kit/` fragments; the same versioned budget-report shape |
 | Web standards route/check IDs | `node ci/web-standards.mjs --dry-run --format json` | Planned routes and stable check IDs only, not an execution verdict; real local Hono Lighthouse reports use `lighthouse-<sha>` from `ci.yml` |
 
-The bundle checkers exit 0 for a measured fit, 1 for a breach, 2 when enforcement
-is impossible. `--dry-run` reads the same existing bytes as normal measurement;
+The Hono Worker checker exits 0 for a fit and 1 for a breach. Kit exits 0 for a fit or
+advisory byte/count overages with measurements and ceilings; both exit 2 if unable to enforce. `--dry-run` reads the same existing bytes as normal measurement;
 it does not create missing evidence or prove that a build belongs to HEAD. If
 outputs are missing or stale, build the checked-out revision using the existing
 [Hono bundle command](#local-verification) or

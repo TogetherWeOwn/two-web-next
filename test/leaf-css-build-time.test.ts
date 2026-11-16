@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parseLeafModule } from "../ci/leaf-css-parser.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const git = (args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
@@ -110,6 +111,10 @@ describe("critical CSS is a build output, not a source", () => {
           readFileSync(join(root, "ci/build-leaf-css.mjs")),
         );
         writeFileSync(
+          join(fixture, "ci/css-dictionary.mjs"),
+          readFileSync(join(root, "ci/css-dictionary.mjs")),
+        );
+        writeFileSync(
           join(fixture, "ci/build-events-css.mjs"),
           readFileSync(join(root, "ci/build-events-css.mjs")),
         );
@@ -126,6 +131,11 @@ describe("critical CSS is a build output, not a source", () => {
           writeFileSync(join(fixture, "public", source), ":root { color: red; }");
         }
         writeFileSync(join(fixture, "public/schedule-theme.css"), ".schedule { color: blue; }");
+        mkdirSync(join(fixture, "web/src/lib"), { recursive: true });
+        writeFileSync(
+          join(fixture, "web/src/lib/site-header.css"),
+          ".header { position: sticky; }",
+        );
         writeFileSync(
           join(fixture, "web/package.json"),
           readFileSync(join(root, "web/package.json")),
@@ -152,7 +162,9 @@ describe("critical CSS is a build output, not a source", () => {
           });
           expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(42);
           expect(readFileSync(join(fixture, "ember-tokens-checked.txt"), "utf8")).toBe("checked");
-          expect(readFileSync(output, "utf8")).toContain(":root { color: red; }");
+          expect(parseLeafModule(readFileSync(output, "utf8"))?.css).toBe(
+            [...Array(3).fill(":root { color: red; }"), ".header { position: sticky; }"].join("\n"),
+          );
           expect(readFileSync(output, "utf8")).not.toContain("stale CSS");
           expect(readFileSync(eventsOutput, "utf8")).toContain(".schedule { color: blue; }");
           expect(readFileSync(eventsOutput, "utf8")).not.toContain("stale CSS");

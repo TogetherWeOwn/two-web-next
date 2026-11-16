@@ -55,16 +55,24 @@ Only supplied saved static SSR states are covered. Not auth, save interactions, 
 
 The current-source guard follows runtime imports, including the exact ignored
 `src/leaf-critical-css.ts` output before it exists. That module requires scope
-coverage for its tracked generator, `ci/build-leaf-css.mjs`, and all three inputs:
-`public/styles.css`, `public/theme-tokens.css` and `public/theme.css`. Listing the
+coverage for its tracked generator, `ci/build-leaf-css.mjs`, its tracked dictionary
+packer, `ci/css-dictionary.mjs`, the tracked runtime decoder, `src/css-dictionary.ts`,
+and all four inputs: `public/styles.css`, `public/theme-tokens.css`,
+`public/theme.css` and `web/src/lib/site-header.css`, in that order. Listing the
 output itself does not replace those requirements. Other runtime source modules
 still require ordinary direct or glob coverage.
 
-The guard pins the generator's SHA-256 without executing it and reads every input.
-Only the exact generated output may be absent before generation; when present,
-its complete bytes, provenance header and CSS hash must match the inputs and
-reviewed recipe. Generator changes require deliberate review of the provenance
-contract in `run-capture.test.cjs`; stale output requires regeneration. No browser
+The guard pins the SHA-256 of both the generator and the packer without executing
+either, requires the decoder file to exist, and reads every input. Only the exact
+generated output may be absent before generation. When present, its complete bytes
+must match the reviewed header, the known `decodeCssDictionary(...)` initializer
+(or the literal fallback for marker-colliding or oversized CSS), the CSS hash and
+the inputs. The guard parses the packed text and dictionary as data and decodes
+them with its own decoder, so it never imports or runs the generated module, the
+packer or the runtime decoder. Any dictionary that decodes to exactly the inputs
+is accepted; the canonical packer choice is covered by the pinned packer hash.
+Generator or packer changes require deliberate review of the provenance contract
+in `run-capture.test.cjs`; stale output requires regeneration. No browser
 container, fixture, capture driver or network-containment setting changes.
 
 Credential-free local guard regression command (no browser/module/server/DB):

@@ -1,8 +1,12 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { URL } from "node:url";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import app from "../src/index";
+import { assertTargetArtifacts } from "./helpers/route-kit-artifacts";
+import { assertCompletionDeclarations } from "./helpers/route-kit-completion";
 import {
   assertRouteInventory,
   routeInventory,
@@ -87,6 +91,222 @@ describe("proposed Kit route snapshot", () => {
     expect(() => assertMapCoverage(actual, { ...snapshotObject(), live: true })).toThrow(
       "Invalid planning route map",
     );
+  });
+});
+
+describe("completion declarations", () => {
+  it("keeps the planning map free of completion claims", () => {
+    assertMapCoverage(routeInventory(app), snapshot);
+    if (
+      !snapshot ||
+      typeof snapshot !== "object" ||
+      !("rows" in snapshot) ||
+      !Array.isArray(snapshot.rows) ||
+      !("completion" in snapshot)
+    ) {
+      throw new Error("Invalid planning route map");
+    }
+    assertCompletionDeclarations(process.cwd(), snapshot.rows, snapshot.completion);
+  });
+
+  it("rejects claims until audited case-level evidence is integrated", () => {
+    const root = mkdtempSync(join(tmpdir(), "route-completion-"));
+    const target = "web/src/routes/example/+server.ts";
+    const source = "src/index.tsx global middleware chain; API-0b";
+    const rows = [
+      { scope: "api", slice: "API-3", target },
+      { scope: "cross-family", source, target },
+      { scope: "page-cutover", source, target },
+    ];
+    const declarations = { apiSlices: [], sources: [], api10: false };
+    try {
+      expect(() => assertCompletionDeclarations(root, rows, declarations)).not.toThrow();
+      expect(() =>
+        assertCompletionDeclarations(root, rows, { ...declarations, apiSlices: [""] }),
+      ).toThrow("Unknown, empty or duplicate");
+      expect(() =>
+        assertCompletionDeclarations(root, rows, { ...declarations, sources: ["unknown"] }),
+      ).toThrow("Unknown, empty or duplicate");
+      expect(() =>
+        assertCompletionDeclarations(root, rows, { ...declarations, apiSlices: ["API-4"] }),
+      ).toThrow("Empty slice claim");
+      expect(() =>
+        assertCompletionDeclarations(root, rows, { ...declarations, apiSlices: ["API-3"] }),
+      ).toThrow("Missing regular file");
+      expect(() =>
+        assertCompletionDeclarations(root, [{ ...rows[0], target: null }], {
+          ...declarations,
+          apiSlices: ["API-3"],
+        }),
+      ).toThrow("Unresolved or invalid target");
+      mkdirSync(dirname(join(root, target)), { recursive: true });
+      writeFileSync(join(root, target), "fixture");
+      for (const claim of [
+        { ...declarations, apiSlices: ["API-3"] },
+        { ...declarations, sources: [source] },
+        { ...declarations, api10: true },
+      ]) {
+        expect(() => assertCompletionDeclarations(root, rows, claim)).toThrow(
+          "Completion requires audited case-level evidence",
+        );
+      }
+      for (const sourceName of [
+        source,
+        "src/index.tsx admin middleware chain; API-0b",
+        "docs/adr/0001-sveltekit-page-renderer.md#page-families-move-to-kit-before-m0",
+      ]) {
+        expect(() =>
+          assertCompletionDeclarations(
+            root,
+            [{ scope: "page-cutover", source: sourceName, target }],
+            {
+              ...declarations,
+              sources: [sourceName],
+            },
+          ),
+        ).toThrow("Completion requires audited case-level evidence");
+      }
+      const namedTarget = "web/src/routes/[id=number]/+server.ts";
+      mkdirSync(dirname(join(root, namedTarget)), { recursive: true });
+      writeFileSync(join(root, namedTarget), "fixture");
+      expect(() =>
+        assertCompletionDeclarations(root, [{ ...rows[0], target: namedTarget }], {
+          ...declarations,
+          apiSlices: ["API-3"],
+        }),
+      ).toThrow("Named matcher targets are unsupported");
+      for (const slice of ["API-3", "API-4", "API-5", "API-6", "API-7", "API-8", "API-9"]) {
+        expect(() =>
+          assertCompletionDeclarations(root, [{ scope: "api", slice, target }], {
+            ...declarations,
+            apiSlices: [slice],
+          }),
+        ).toThrow("Completion requires audited case-level evidence");
+      }
+      expect(() =>
+        assertCompletionDeclarations(root, rows, { ...declarations, api10: "yes" }),
+      ).toThrow("Invalid completion declarations");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("synthetic case admission (not route parity)", () => {
+  it("joins each reviewed candidate to exactly one passed case in the expected context", () => {
+    const root = mkdtempSync(join(tmpdir(), "route-evidence-"));
+    const target = "web/src/routes/example/+server.ts";
+    const rows = [{ scope: "api", slice: "API-3", target }];
+    const claim = { apiSlices: ["API-3"], sources: [], api10: false };
+    const context = { sha: "synthetic-sha", run: "run-1", attempt: "1", inputs: "digest" };
+    const candidate = { claim: "API-3", row: 0, id: "GET /example:ok", branch: "ok" };
+    const obligation = { ...candidate, state: "required" as const, selectors: ["test:ok"] };
+    const result = {
+      selector: "test:ok",
+      obligation: candidate.id,
+      branch: "ok",
+      status: "passed",
+    };
+    const fixture = {
+      expected: context,
+      execution: { ...context },
+      candidates: [candidate],
+      obligations: [obligation],
+      cases: [result],
+    };
+    try {
+      mkdirSync(dirname(join(root, target)), { recursive: true });
+      writeFileSync(join(root, target), "fixture");
+      expect(() => assertCompletionDeclarations(root, rows, claim, fixture)).not.toThrow();
+      const variants = [
+        { ...fixture, candidates: [] },
+        { ...fixture, obligations: [] },
+        { ...fixture, obligations: [{ ...obligation, state: "unresolved" as const }] },
+        { ...fixture, obligations: [{ ...obligation, selectors: [] }] },
+        { ...fixture, cases: [] },
+        { ...fixture, cases: [{ ...result, status: "skipped" }] },
+        { ...fixture, cases: [{ ...result, status: "failed" }] },
+        { ...fixture, cases: [result, result] },
+        { ...fixture, cases: [{ ...result, branch: "error" }] },
+        { ...fixture, cases: [{ ...result, obligation: "GET /other:ok" }] },
+        { ...fixture, execution: { ...context, sha: "other" } },
+        { ...fixture, execution: { ...context, attempt: "2" } },
+        { ...fixture, execution: { ...context, run: "run-2" } },
+        { ...fixture, execution: { ...context, inputs: "other" } },
+      ];
+      for (const evidence of variants) {
+        expect(() => assertCompletionDeclarations(root, rows, claim, evidence)).toThrow(
+          "Completion requires audited case-level evidence",
+        );
+      }
+      expect(() =>
+        assertCompletionDeclarations(root, rows, { ...claim, api10: true }, fixture),
+      ).toThrow("Completion requires audited case-level evidence");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("completed target artifact prerequisites", () => {
+  it("distinguishes unresolved targets and each missing artifact", () => {
+    const root = mkdtempSync(join(tmpdir(), "route-artifacts-"));
+    const page = "web/src/routes/[id]/+page.svelte";
+    const load = "web/src/routes/[id]/+page.server.ts";
+    const matcher = "web/src/params.ts";
+    const add = (path: string) => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), "fixture");
+    };
+    try {
+      expect(() => assertTargetArtifacts(root, { state: "unresolved" })).toThrow(
+        "Unresolved or invalid target",
+      );
+      expect(() => assertTargetArtifacts(root, "web/src/routes/../+server.ts")).toThrow(
+        "Unresolved or invalid target",
+      );
+      expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${page}`);
+      mkdirSync(join(root, page), { recursive: true });
+      expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${page}`);
+      rmSync(join(root, page), { recursive: true });
+      add(page);
+      expect(() => assertTargetArtifacts(root, page)).toThrow(`Missing regular file: ${load}`);
+      add(load);
+      expect(() => assertTargetArtifacts(root, page)).not.toThrow();
+      const endpoint = "web/src/routes/+server.ts";
+      add(endpoint);
+      expect(() => assertTargetArtifacts(root, endpoint)).not.toThrow();
+      const newlineTarget = "web/src/routes/+server.ts\n";
+      add(newlineTarget);
+      expect(() => assertTargetArtifacts(root, newlineTarget)).toThrow(
+        "Unresolved or invalid target",
+      );
+      const grouped = "web/src/routes/(legacy-[id=number])/about/+server.ts";
+      add(grouped);
+      expect(() => assertTargetArtifacts(root, grouped)).not.toThrow();
+      const namedTargets = [
+        "web/src/routes/(legacy-[ignored=number])/[id=number]/+server.ts",
+        "web/src/routes/[id=event-key]/+server.ts",
+        "web/src/routes/[id=123]/+server.ts",
+        "web/src/routes/[[id=event-key]]/+server.ts",
+        "web/src/routes/[...id=123]/+server.ts",
+      ];
+      for (const target of namedTargets) {
+        add(target);
+        expect(() => assertTargetArtifacts(root, target)).toThrow(
+          "Named matcher targets are unsupported",
+        );
+      }
+      add(matcher);
+      mkdirSync(join(root, "web/src/params/index.ts"), { recursive: true });
+      for (const target of namedTargets) {
+        expect(() => assertTargetArtifacts(root, target)).toThrow(
+          "Named matcher targets are unsupported",
+        );
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

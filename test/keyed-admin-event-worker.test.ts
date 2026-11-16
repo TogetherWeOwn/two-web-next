@@ -1,4 +1,5 @@
 import { build } from "esbuild";
+import { workerNodeBuiltins } from "../ci/worker-node-builtins.mjs";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -18,6 +19,7 @@ describe("keyed admin/event handlers in workerd", () => {
       target: "es2022",
       conditions: ["workerd", "worker", "browser"],
       external: ["node:*", "cloudflare:*"],
+      plugins: [workerNodeBuiltins],
     });
     mf = new Miniflare(
       convertV4MiniflareOptions({

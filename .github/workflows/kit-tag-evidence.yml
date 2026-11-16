@@ -29,7 +29,7 @@ jobs:
       - name: Check out pinned Tag source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 6178285a1da1fbb3acc34707216990bc619cbb2d
+          ref: 373eccf2ce9019556cbc49b71fc7067893007102
           path: app
           persist-credentials: false
       - name: Use Node 24
