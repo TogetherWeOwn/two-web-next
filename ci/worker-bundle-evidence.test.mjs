@@ -729,6 +729,15 @@ describe("workflow evidence wiring", () => {
 
   test("CI creates build-only evidence and checks pinned no-bundle equivalence", () => {
     const steps = workflow("ci").jobs.check.steps;
+    const mainBuild = steps.find((step) => step.name === "Build (wrangler dry run)");
+    const mainArchive = steps.find((step) => step.name === "Archive main Worker build graph");
+    assert.ok(mainBuild && mainArchive);
+    assert.match(mainBuild.run, /--outdir dist --metafile dist\/bundle-meta\.json/);
+    assert.equal(mainArchive.if, mainBuild.if);
+    assert.ok(steps.indexOf(mainBuild) < steps.indexOf(mainArchive));
+    assert.equal(mainArchive.uses, artifactPin);
+    assert.equal(mainArchive.with.path, "dist/bundle-meta.json");
+    assert.equal(mainArchive.with["if-no-files-found"], "error");
     const pilot = steps.find((step) => step.name?.startsWith("Verify production build inventory"));
     assert.ok(pilot);
     assert.equal(pilot.env.BUILD_SHA, "${{ github.sha }}");

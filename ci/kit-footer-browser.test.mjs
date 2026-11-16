@@ -1,0 +1,242 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import AxeBuilder from "@axe-core/playwright";
+import { build } from "esbuild";
+import { chromium } from "playwright";
+import { assertNoViolations, WCAG_AA_TAGS } from "./a11y-policy.mjs";
+
+const root = fileURLToPath(new URL("../", import.meta.url));
+const { compile } = createRequire(new URL("../web/package.json", import.meta.url))(
+  "svelte/compiler",
+);
+
+test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, async () => {
+  let css = "";
+  const result = await build({
+    stdin: {
+      contents: `import { render } from 'svelte/server'; import Fixture from ${JSON.stringify(join(root, "test/fixtures/kit-footer.svelte"))}; export const html = render(Fixture).body;`,
+      resolveDir: root,
+      loader: "js",
+    },
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+    nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
+    plugins: [
+      {
+        name: "footer-ssr",
+        setup(plugin) {
+          plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
+            const compiled = compile(readFileSync(path, "utf8"), {
+              generate: "server",
+              filename: path,
+            });
+            css += `${compiled.css?.code ?? ""}\n`;
+            return { contents: compiled.js.code, loader: "js", resolveDir: dirname(path) };
+          });
+        },
+      },
+    ],
+  });
+  const { html } = await import(
+    `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`
+  );
+  assert.ok(css.trim());
+  // Resolve the component's own CSS import, rather than injecting raw tokens separately.
+  const bundledCss = await build({
+    stdin: { contents: css, resolveDir: join(root, "web/src/lib"), loader: "css" },
+    bundle: true,
+    write: false,
+  });
+  // The synthetic fixture does not process Tailwind's @theme block into CSS variables.
+  const theme = readFileSync(join(root, "web/src/ember-theme.css"), "utf8");
+  const fontUi = theme.match(/--font-ui:([^;]+);/)?.[1];
+  assert.ok(fontUi, "generated Kit UI font token must exist");
+  // Match the Kit shell's lobby canvas and use the generated UI font stack.
+  const styles = `${bundledCss.outputFiles[0].text}\n${theme}\n.base-theme { background-color: var(--g1); color: var(--t1); font-family: ${fontUi}; }`;
+  const server = createServer((request, response) => {
+    if (request.url === "/styles.css") {
+      response.writeHead(200, { "content-type": "text/css" });
+      response.end(styles);
+    } else {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy": "default-src 'none'; style-src 'self'",
+      });
+      response.end(
+        `<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head><body class="base-theme">${html}</body></html>`,
+      );
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    for (const viewport of [
+      { width: 390, height: 844 },
+      { width: 1280, height: 800 },
+    ]) {
+      for (const javaScriptEnabled of [false, true]) {
+        const context = await browser.newContext({ javaScriptEnabled, viewport });
+        try {
+          const page = await context.newPage();
+          const origin = `http://127.0.0.1:${server.address().port}`;
+          await page.goto(origin);
+          assert.equal(
+            await page.locator("body").evaluate((body) => getComputedStyle(body).backgroundColor),
+            "rgb(28, 22, 20)",
+          );
+          const footer = page.getByRole("contentinfo");
+          assert.equal(
+            await footer.evaluate((element) => getComputedStyle(element).fontFamily),
+            '"Mona Sans", "Mona Sans Fallback", system-ui, sans-serif',
+          );
+          assert.equal(
+            await footer.locator("p").textContent(),
+            "Together We Own · adult gaming community · founded 1998",
+          );
+          const nav = footer.getByRole("navigation", { name: "Footer" });
+          const evidence = `artifacts/kit-footer/${viewport.width}-${javaScriptEnabled ? "js" : "no-js"}`;
+          await page.screenshot({ path: `${evidence}.png` });
+          // Axe injects JavaScript, so audit an equivalent SSR page when scripts are disabled.
+          const auditContext = javaScriptEnabled ? context : await browser.newContext({ viewport });
+          try {
+            const auditPage = javaScriptEnabled ? page : await auditContext.newPage();
+            if (!javaScriptEnabled) {
+              await auditPage.goto(origin);
+              assert.equal(await auditPage.locator("footer").innerHTML(), await footer.innerHTML());
+            }
+            const results = await new AxeBuilder({ page: auditPage })
+              .include("footer")
+              .withTags(WCAG_AA_TAGS)
+              .analyze();
+            assertNoViolations(results, `footer ${viewport.width} js=${javaScriptEnabled}`);
+          } finally {
+            if (!javaScriptEnabled) await auditContext.close();
+          }
+          const links = [
+            ["About", "/about"],
+            ["FAQ", "/faq"],
+            ["House rules", "/rules"],
+            ["Privacy", "/privacy"],
+          ];
+          assert.equal(await nav.getByRole("link").count(), links.length);
+          assert.deepEqual(
+            await footer.evaluate((element) => {
+              const style = getComputedStyle(element);
+              const probe = document.createElement("span");
+              probe.style.color = "var(--two-color-text-tertiary)";
+              element.append(probe);
+              const matchesToken = style.color === getComputedStyle(probe).color;
+              probe.remove();
+              const token = getComputedStyle(element)
+                .getPropertyValue("--two-color-text-tertiary")
+                .trim();
+              return [
+                style.paddingTop,
+                style.paddingBottom,
+                style.paddingLeft,
+                style.fontSize,
+                style.color,
+                token,
+                matchesToken,
+              ];
+            }),
+            [
+              "32px",
+              "44px",
+              viewport.width === 390 ? "20px" : "40px",
+              "14px",
+              "rgb(168, 154, 142)",
+              "#a89a8e",
+              true,
+            ],
+          );
+          assert.equal(
+            await footer
+              .locator(".footer-content")
+              .evaluate((element) => getComputedStyle(element).flexDirection),
+            viewport.width === 390 ? "column" : "row",
+          );
+          assert.equal(
+            await footer
+              .locator(".footer-content")
+              .evaluate((element) => getComputedStyle(element).gap),
+            viewport.width === 390 ? "12px" : "24px",
+          );
+          assert.equal(await nav.evaluate((element) => getComputedStyle(element).gap), "20px");
+          const firstLink = nav.getByRole("link", { name: "About", exact: true });
+          assert.deepEqual(
+            await firstLink.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return [style.color, style.textDecorationLine];
+            }),
+            ["rgb(255, 156, 54)", "none"],
+          );
+          await firstLink.hover();
+          assert.equal(
+            await firstLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
+            "underline",
+          );
+          await page.mouse.move(0, 0);
+          await footer.evaluate((element) => element.style.setProperty("--ember", "initial"));
+          assert.equal(
+            await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+            true,
+          );
+          for (const [name, href] of links) {
+            const link = nav.getByRole("link", { name, exact: true });
+            assert.equal(await link.getAttribute("href"), href);
+            await page.keyboard.press("Tab");
+            assert.equal(
+              await link.evaluate(
+                (element) =>
+                  element === document.activeElement && element.matches(":focus-visible"),
+              ),
+              true,
+            );
+            assert.notEqual(
+              await link.evaluate((element) => getComputedStyle(element).outlineStyle),
+              "none",
+            );
+            assert.equal(
+              await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
+              "underline",
+            );
+          }
+          await page.screenshot({ path: `${evidence}-focus.png` });
+          await page.emulateMedia({ forcedColors: "active" });
+          await page.screenshot({ path: `${evidence}-forced-colors.png` });
+          const focused = nav.getByRole("link", { name: "Privacy", exact: true });
+          assert.notEqual(
+            await focused.evaluate((element) => getComputedStyle(element).outlineStyle),
+            "none",
+          );
+          await page.keyboard.press("Enter");
+          await page.waitForURL(`${origin}/privacy`);
+          for (const [name, href] of links.slice(0, -1)) {
+            await page.goto(origin);
+            await page
+              .getByRole("navigation", { name: "Footer" })
+              .getByRole("link", { name, exact: true })
+              .click();
+            await page.waitForURL(`${origin}${href}`);
+          }
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    if (browser) await browser.close();
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});

@@ -11,6 +11,7 @@ import {
   shouldSampleReport,
 } from "../src/csp-reports";
 import type { Env } from "../src/env";
+import { fetchApp } from "./helpers/fetch-app";
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -47,8 +48,12 @@ const noDbEnv = {
   ),
 } as unknown as Env;
 
+// The default seam exercises the mounted Hono app, not a built Kit Worker.
 const post = (body: BodyInit | null | undefined, e: Env = env, headers: HeadersInit = {}) =>
-  app.request("/csp-reports", { method: "POST", body, headers }, e);
+  fetchApp(new Request(new URL("/csp-reports", e.APP_URL), { method: "POST", body, headers }), e, {
+    waitUntil: vi.fn(),
+    passThroughOnException: vi.fn(),
+  } as unknown as ExecutionContext);
 
 const classicBody = () =>
   JSON.stringify({
