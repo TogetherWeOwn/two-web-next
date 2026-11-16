@@ -301,7 +301,10 @@ function listPlaywrightSpecs(root) {
 // failure, function definition, redirection or shell expansion can otherwise
 // make a later apparent invocation unreachable or turn it into data.
 function hasUnsupportedShellFlow(text) {
-  const joined = text.replace(/\\\r?\n/g, " ");
+  // A backslash in a shell comment does not continue the comment. Reject
+  // ambiguous comment continuations instead of hiding the next command.
+  if (/#.*\\\r?\n/.test(text)) return true;
+  const joined = text.replace(/\\\r?\n/g, "");
   const lines = joined
     .split("\n")
     .filter((line) => line.trim() && !line.trimStart().startsWith("#"));
@@ -329,7 +332,7 @@ function workflowShellView(text, name, evidenceOnly = false) {
       let script = node.value.replace(/\n+$/, "");
       if (evidenceOnly) {
         if (hasUnsupportedShellFlow(script)) script = "_";
-        else script = script.replace(/\\\r?\n/g, " ");
+        else script = script.replace(/\\\r?\n/g, "");
       }
       // Explicit indentation prevents a more-indented first shell command
       // from setting the YAML block threshold above subsequent commands.
@@ -493,7 +496,7 @@ function isExecutablePosition(text, index, playwright = false) {
 
 function parseNpmRunOccurrences(text, evidenceOnly = false) {
   const out = [];
-  const joined = text.replace(/\\\r?\n/g, " ");
+  const joined = text.replace(/\\\r?\n/g, "");
   for (const m of joined.matchAll(/\bnpm\s+run(?:-script)?\b/g)) {
     const lineStart = joined.lastIndexOf("\n", m.index - 1) + 1;
     if (evidenceOnly && !isExecutablePosition(joined.slice(lineStart), m.index - lineStart))
@@ -576,7 +579,7 @@ function scriptRunsPlaywright(scripts, name, seen = new Set()) {
   if (seen.has(name)) return { runs: false, unknown: false };
   seen.add(name);
   const body = scripts[name] ?? "";
-  if (/\bplaywright\s+test\b/.test(body.replace(/\\\r?\n/g, " "))) {
+  if (/\bplaywright\s+test\b/.test(body.replace(/\\\r?\n/g, ""))) {
     return { runs: true, unknown: false };
   }
   let unknown = false;
@@ -941,7 +944,7 @@ function heredocMarker(line) {
 // do not move the caller; directory-stack builtins do, just like cd.
 function assertRootShellCwd(prefix, where) {
   let heredoc = null;
-  for (const line of prefix.replace(/\\\r?\n/g, " ").split("\n")) {
+  for (const line of prefix.replace(/\\\r?\n/g, "").split("\n")) {
     if (heredoc !== null) {
       if (line.trim() === heredoc) heredoc = null;
       continue;
@@ -1032,7 +1035,7 @@ function auditWorkflowNpmRunCwd(workflowFiles, scripts) {
 // CI invokes and only prefixes of commands that can reach Playwright.
 function auditScriptCwd(scripts, invoked) {
   for (const name of invoked) {
-    const body = (scripts[name] ?? "").replace(/\\\r?\n/g, " ");
+    const body = (scripts[name] ?? "").replace(/\\\r?\n/g, "");
     for (const match of body.matchAll(/\bplaywright\s+test\b/g))
       assertRootShellCwd(body.slice(0, match.index), `script "${name}" runs playwright test`);
     for (const occ of parseNpmRunOccurrences(body)) {
@@ -1160,7 +1163,7 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked, evide
     let body = scripts[name] ?? "";
     if (evidenceOnly) {
       if (hasUnsupportedShellFlow(body)) continue;
-      body = body.replace(/\\\r?\n/g, " ");
+      body = body.replace(/\\\r?\n/g, "");
     }
     for (const m of body.matchAll(/\bplaywright\s+test\b/g)) {
       const lineStart = body.lastIndexOf("\n", m.index - 1) + 1;
@@ -1976,6 +1979,17 @@ function selftest() {
         name: "continued executable command",
         run: "npx \\\n playwright test --config playwright.fixture.config.ts",
         orphans: [],
+      },
+      {
+        name: "continuation does not add a word boundary",
+        run: "npm run e2e",
+        scripts: { e2e: "playwright\\\ntest --config playwright.fixture.config.ts" },
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "comment backslash does not hide exit",
+        run: "# explanatory comment \\\nexit 0\nnpx playwright test --config playwright.fixture.config.ts",
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
       },
       {
         name: "echo npm",

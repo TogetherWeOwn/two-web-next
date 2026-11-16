@@ -60,6 +60,9 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   prefixes, quoted/empty assignment values, repeated `command`/`builtin`
   wrappers and nested npm runs). The cwd scan consumes whole shell words;
   whitespace or separators inside quotes cannot hide a following cwd change.
+  Coverage evidence requires a modeled simple executable command through each
+  invoked script; echoed text and unsupported shell control flow do not count.
+  Use separate simple steps when a compound command must establish coverage.
   `--json` prints the Playwright
   summary (`playwright-spec-reachability`, `OK`/`PLAYWRIGHT_SPEC_ORPHAN`,
   `next_action`). The step runs `npm run test:inventory -- --strict` with
