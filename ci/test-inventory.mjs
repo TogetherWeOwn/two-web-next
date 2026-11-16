@@ -2036,7 +2036,7 @@ function selftest() {
       {
         name: "function definition",
         run: "f() {\nnpx playwright test --config playwright.fixture.config.ts\n}",
-        throws: /filter.*cannot expand/,
+        throws: /missing playwright path/,
       },
       {
         name: "exit before nested script",
