@@ -57,6 +57,6 @@ let {
   }
 
   @media (forced-colors: active) {
-    a[aria-current="page"] { outline: 1px solid CanvasText; outline-offset: -1px; }
+    a[aria-current="page"]:not(:focus-visible) { outline: 1px solid CanvasText; outline-offset: -1px; }
   }
 </style>

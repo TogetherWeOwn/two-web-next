@@ -100,6 +100,27 @@ test("imported filter links retain their theme-backed styles", { timeout: 120000
     assert.equal(focus.width, "2px");
     assert.equal(focus.offset, "3px");
     assert.equal(focus.style, "solid");
+
+    await page.emulateMedia({ forcedColors: "active" });
+    await page.keyboard.press("Tab");
+    const segments = page.getByRole("navigation", { name: "Event views" }).locator("a");
+    const outline = (element) => {
+      const style = getComputedStyle(element);
+      return { width: style.outlineWidth, offset: style.outlineOffset, style: style.outlineStyle };
+    };
+    const selectedUnfocused = await segments.first().evaluate(outline);
+    assert.deepEqual(selectedUnfocused, { width: "1px", offset: "-1px", style: "solid" });
+    assert.equal(
+      await segments.nth(1).evaluate((element) => element.matches(":focus-visible")),
+      true,
+    );
+    assert.deepEqual(await segments.nth(1).evaluate(outline), focus);
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(
+      await segments.first().evaluate((element) => element.matches(":focus-visible")),
+      true,
+    );
+    assert.deepEqual(await segments.first().evaluate(outline), focus);
   } finally {
     if (browser) await browser.close();
     if (server)
