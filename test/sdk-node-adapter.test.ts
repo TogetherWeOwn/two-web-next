@@ -4,8 +4,43 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function withListener(
+  listener: Parameters<typeof createServer>[0],
+  run: (url: string) => Promise<void>,
+) {
+  const server = createServer(listener);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected a TCP listener");
+    await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    server.closeAllConnections();
+    const timeout = AbortSignal.timeout(5_000);
+    await Promise.race([
+      new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
+      new Promise<never>((_, reject) => {
+        timeout.addEventListener("abort", () => reject(timeout.reason), { once: true });
+      }),
+    ]);
+  }
+}
+
 describe("SDK Node adapter resolution", () => {
-  it("loads the patched adapter through the SDK and serves a request", async () => {
+  it("loads the SDK's adapter and serves ordinary requests and a finite response stream", async () => {
     const rootRequire = createRequire(import.meta.url);
     const sdkEntry = rootRequire.resolve("@modelcontextprotocol/sdk/server/streamableHttp.js");
     const sdkRequire = createRequire(sdkEntry);
@@ -13,40 +48,68 @@ describe("SDK Node adapter resolution", () => {
       readFileSync(join(dirname(sdkEntry), "..", "..", "..", "package.json"), "utf8"),
     );
     expect(sdkPackage.name).toBe("@modelcontextprotocol/sdk");
+    expect(
+      typeof sdkRequire("@modelcontextprotocol/sdk/server/streamableHttp.js")
+        .StreamableHTTPServerTransport,
+    ).toBe("function");
+    const { getRequestListener } = sdkRequire("@hono/node-server");
+    expect(typeof getRequestListener).toBe("function");
+
+    await withListener(
+      getRequestListener(async (request: Request) => {
+        if (request.method === "POST") {
+          const body = await request.text();
+          const encoder = new TextEncoder();
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(encoder.encode("received:"));
+                controller.enqueue(encoder.encode(body));
+                controller.close();
+              },
+            }),
+          );
+        }
+        return Response.json({ method: request.method, path: new URL(request.url).pathname });
+      }),
+      async (url) => {
+        const get = await fetch(`${url}/adapter-fixture`, { signal: AbortSignal.timeout(5_000) });
+        expect(get.status).toBe(200);
+        expect(await get.json()).toEqual({ method: "GET", path: "/adapter-fixture" });
+
+        const post = await fetch(`${url}/adapter-fixture`, {
+          method: "POST",
+          body: "stream fixture",
+          signal: AbortSignal.timeout(5_000),
+        });
+        expect(post.status).toBe(200);
+        expect(await post.text()).toBe("received:stream fixture");
+      },
+    );
+  });
+});
+
+describe("SDK Node adapter candidate", () => {
+  it("loads the patched adapter through the SDK and serves a request", async () => {
+    const rootRequire = createRequire(import.meta.url);
+    const sdkEntry = rootRequire.resolve("@modelcontextprotocol/sdk/server/streamableHttp.js");
+    const sdkRequire = createRequire(sdkEntry);
+    const sdkPackage = JSON.parse(
+      readFileSync(join(dirname(sdkEntry), "..", "..", "..", "package.json"), "utf8"),
+    );
     expect(sdkPackage.version).toBe("1.32.1");
     const adapterEntry = sdkRequire.resolve("@hono/node-server");
     const adapterPackage = JSON.parse(
       readFileSync(join(dirname(adapterEntry), "..", "package.json"), "utf8"),
     );
     expect(adapterPackage.version).toBe("2.1.8");
-    expect(
-      typeof sdkRequire("@modelcontextprotocol/sdk/server/streamableHttp.js")
-        .StreamableHTTPServerTransport,
-    ).toBe("function");
-
     const { getRequestListener } = sdkRequire("@hono/node-server");
-    expect(typeof getRequestListener).toBe("function");
-    let receivedFirstChunk!: () => void;
-    const firstChunkReceived = new Promise<void>((resolve) => {
-      receivedFirstChunk = resolve;
-    });
-    let releaseResponse!: () => void;
-    const responseReleased = new Promise<void>((resolve) => {
-      releaseResponse = resolve;
-    });
-    let responseCancelled!: () => void;
-    const responseCancellation = new Promise<void>((resolve) => {
-      responseCancelled = resolve;
-    });
-    let earlyBodyStarted!: () => void;
-    const earlyBodyStart = new Promise<void>((resolve) => {
-      earlyBodyStarted = resolve;
-    });
-    let earlyBodyFailed!: (failed: boolean) => void;
-    const earlyBodyFailure = new Promise<boolean>((resolve) => {
-      earlyBodyFailed = resolve;
-    });
-    const server = createServer(
+    const firstChunk = deferred<void>();
+    const responseRelease = deferred<void>();
+    const responseCancellation = deferred<void>();
+    const earlyBodyStart = deferred<void>();
+    const earlyBodyFailure = deferred<boolean>();
+    await withListener(
       getRequestListener(async (request: Request) => {
         const path = new URL(request.url).pathname;
         if (path === "/response-error") {
@@ -65,7 +128,7 @@ describe("SDK Node adapter resolution", () => {
                 controller.enqueue(new TextEncoder().encode("first"));
               },
               cancel() {
-                responseCancelled();
+                responseCancellation.resolve();
               },
             }),
           );
@@ -74,12 +137,12 @@ describe("SDK Node adapter resolution", () => {
           if (!request.body) throw new Error("Expected a request body");
           const reader = request.body.getReader();
           await reader.read();
-          earlyBodyStarted();
+          earlyBodyStart.resolve();
           try {
             await reader.read();
-            earlyBodyFailed(false);
+            earlyBodyFailure.resolve(false);
           } catch {
-            earlyBodyFailed(true);
+            earlyBodyFailure.resolve(true);
           }
           return new Response("finished");
         }
@@ -87,7 +150,7 @@ describe("SDK Node adapter resolution", () => {
           if (!request.body) throw new Error("Expected a request body");
           const reader = request.body.getReader();
           const first = await reader.read();
-          receivedFirstChunk();
+          firstChunk.resolve();
           const decoder = new TextDecoder();
           let body = decoder.decode(first.value, { stream: true });
           for (;;) {
@@ -104,7 +167,7 @@ describe("SDK Node adapter resolution", () => {
             new ReadableStream({
               async start(controller) {
                 controller.enqueue(encoder.encode("received:"));
-                await responseReleased;
+                await responseRelease.promise;
                 controller.enqueue(encoder.encode(body));
                 controller.close();
               },
@@ -113,121 +176,102 @@ describe("SDK Node adapter resolution", () => {
         }
         return Response.json({ method: request.method, path: new URL(request.url).pathname });
       }),
+      async (url) => {
+        try {
+          const post = await fetch(`${url}/adapter-fixture`, {
+            method: "POST",
+            body: "stream fixture",
+            signal: AbortSignal.timeout(5_000),
+          });
+          expect(post.status).toBe(200);
+          if (!post.body) throw new Error("Expected a response body");
+          const responseReader = post.body.getReader();
+          const firstResponse = await responseReader.read();
+          expect(new TextDecoder().decode(firstResponse.value)).toBe("received:");
+          responseRelease.resolve();
+          const secondResponse = await responseReader.read();
+          expect(new TextDecoder().decode(secondResponse.value)).toBe("stream fixture");
+          expect((await responseReader.read()).done).toBe(true);
+
+          const encoder = new TextEncoder();
+          const streamingBody = new ReadableStream({
+            async start(controller) {
+              controller.enqueue(encoder.encode("first"));
+              await firstChunk.promise;
+              controller.enqueue(encoder.encode("second"));
+              controller.close();
+            },
+          });
+          const streamResponse = await fetch(`${url}/stream`, {
+            method: "POST",
+            body: streamingBody,
+            duplex: "half",
+            signal: AbortSignal.timeout(5_000),
+          } as RequestInit & { duplex: "half" });
+          expect(streamResponse.status).toBe(200);
+          expect(await streamResponse.text()).toBe("firstsecond");
+
+          const responseErrorTimeout = AbortSignal.timeout(5_000);
+          const failedResponse = await fetch(`${url}/response-error`, {
+            signal: responseErrorTimeout,
+          });
+          expect(failedResponse.status).toBe(200);
+          const errorBody = await failedResponse.text().then(
+            (body) => ({ body }),
+            (error: unknown) => ({ error }),
+          );
+          expect(responseErrorTimeout.aborted).toBe(false);
+          if ("error" in errorBody) {
+            // The adapter may destroy the socket after headers have been sent.
+            expect(errorBody.error).toBeInstanceOf(TypeError);
+            console.info("Adapter response error: socket reset after headers");
+          } else {
+            expect(errorBody.body).toBe("Error: fixture response failure");
+            console.info("Adapter response error: error body received");
+          }
+
+          const timeout = AbortSignal.timeout(5_000);
+          const timedOut = new Promise<never>((_, reject) => {
+            timeout.addEventListener("abort", () => reject(timeout.reason), { once: true });
+          });
+          const cancelController = new AbortController();
+          const cancelled = await fetch(`${url}/cancel`, {
+            signal: AbortSignal.any([cancelController.signal, timeout]),
+          });
+          if (!cancelled.body) throw new Error("Expected a cancellable response body");
+          const cancelReader = cancelled.body.getReader();
+          expect(new TextDecoder().decode((await cancelReader.read()).value)).toBe("first");
+          cancelController.abort();
+          await Promise.race([responseCancellation.promise, timedOut]);
+
+          const interruptedTimeout = AbortSignal.timeout(5_000);
+          const interruptedTimedOut = new Promise<never>((_, reject) => {
+            interruptedTimeout.addEventListener("abort", () => reject(interruptedTimeout.reason), {
+              once: true,
+            });
+          });
+          const interrupted = httpRequest({
+            hostname: "127.0.0.1",
+            port: Number(new URL(url).port),
+            path: "/early-read",
+            method: "POST",
+            headers: { "content-length": "100" },
+          });
+          const clientError = new Promise<Error>((resolve) => interrupted.once("error", resolve));
+          try {
+            interrupted.write("first");
+            await Promise.race([earlyBodyStart.promise, interruptedTimedOut]);
+            interrupted.destroy();
+            expect(await Promise.race([earlyBodyFailure.promise, interruptedTimedOut])).toBe(true);
+            expect(await Promise.race([clientError, interruptedTimedOut])).toBeInstanceOf(Error);
+          } finally {
+            interrupted.destroy();
+          }
+        } finally {
+          firstChunk.resolve();
+          responseRelease.resolve();
+        }
+      },
     );
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") throw new Error("Expected a TCP listener");
-      const response = await fetch(`http://127.0.0.1:${address.port}/adapter-fixture`, {
-        signal: AbortSignal.timeout(5_000),
-      });
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ method: "GET", path: "/adapter-fixture" });
-      const post = await fetch(`http://127.0.0.1:${address.port}/adapter-fixture`, {
-        method: "POST",
-        body: "stream fixture",
-        signal: AbortSignal.timeout(5_000),
-      });
-      expect(post.status).toBe(200);
-      if (!post.body) throw new Error("Expected a response body");
-      const responseReader = post.body.getReader();
-      const firstResponse = await responseReader.read();
-      expect(new TextDecoder().decode(firstResponse.value)).toBe("received:");
-      releaseResponse();
-      const secondResponse = await responseReader.read();
-      expect(new TextDecoder().decode(secondResponse.value)).toBe("stream fixture");
-      expect((await responseReader.read()).done).toBe(true);
-
-      const encoder = new TextEncoder();
-      const streamingBody = new ReadableStream({
-        async start(controller) {
-          controller.enqueue(encoder.encode("first"));
-          await firstChunkReceived;
-          controller.enqueue(encoder.encode("second"));
-          controller.close();
-        },
-      });
-      const streamResponse = await fetch(`http://127.0.0.1:${address.port}/stream`, {
-        method: "POST",
-        body: streamingBody,
-        duplex: "half",
-        signal: AbortSignal.timeout(5_000),
-      } as RequestInit & { duplex: "half" });
-      expect(streamResponse.status).toBe(200);
-      expect(await streamResponse.text()).toBe("firstsecond");
-
-      const responseErrorTimeout = AbortSignal.timeout(5_000);
-      const failedResponse = await fetch(`http://127.0.0.1:${address.port}/response-error`, {
-        signal: responseErrorTimeout,
-      });
-      expect(failedResponse.status).toBe(200);
-      const errorBody = await failedResponse.text().then(
-        (body) => ({ body }),
-        (error: unknown) => ({ error }),
-      );
-      expect(responseErrorTimeout.aborted).toBe(false);
-      if ("error" in errorBody) {
-        // The adapter may destroy the socket after headers have been sent.
-        expect(errorBody.error).toBeInstanceOf(TypeError);
-        console.info("Adapter response error: socket reset after headers");
-      } else {
-        expect(errorBody.body).toBe("Error: fixture response failure");
-        console.info("Adapter response error: error body received");
-      }
-
-      const timeout = AbortSignal.timeout(5_000);
-      const timedOut = new Promise<never>((_, reject) => {
-        timeout.addEventListener("abort", () => reject(timeout.reason), { once: true });
-      });
-      const cancelController = new AbortController();
-      const cancelled = await fetch(`http://127.0.0.1:${address.port}/cancel`, {
-        signal: AbortSignal.any([cancelController.signal, timeout]),
-      });
-      if (!cancelled.body) throw new Error("Expected a cancellable response body");
-      const cancelReader = cancelled.body.getReader();
-      expect(new TextDecoder().decode((await cancelReader.read()).value)).toBe("first");
-      cancelController.abort();
-      await Promise.race([responseCancellation, timedOut]);
-
-      const interruptedTimeout = AbortSignal.timeout(5_000);
-      const interruptedTimedOut = new Promise<never>((_, reject) => {
-        interruptedTimeout.addEventListener("abort", () => reject(interruptedTimeout.reason), {
-          once: true,
-        });
-      });
-      const interrupted = httpRequest({
-        hostname: "127.0.0.1",
-        port: address.port,
-        path: "/early-read",
-        method: "POST",
-        headers: { "content-length": "100" },
-      });
-      const clientError = new Promise<Error>((resolve) => interrupted.once("error", resolve));
-      try {
-        interrupted.write("first");
-        await Promise.race([earlyBodyStart, interruptedTimedOut]);
-        interrupted.destroy();
-        expect(await Promise.race([earlyBodyFailure, interruptedTimedOut])).toBe(true);
-        expect(await Promise.race([clientError, interruptedTimedOut])).toBeInstanceOf(Error);
-      } finally {
-        interrupted.destroy();
-      }
-    } finally {
-      receivedFirstChunk();
-      releaseResponse();
-      server.closeAllConnections();
-      const closeTimeout = AbortSignal.timeout(5_000);
-      await Promise.race([
-        new Promise<void>((resolve, reject) =>
-          server.close((error) => (error ? reject(error) : resolve())),
-        ),
-        new Promise<never>((_, reject) => {
-          closeTimeout.addEventListener("abort", () => reject(closeTimeout.reason), { once: true });
-        }),
-      ]);
-    }
   }, 35_000);
 });

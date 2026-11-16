@@ -9,6 +9,7 @@ import {
 } from "miniflare";
 import { QA_HEADER, STAGING_APP_URL } from "../src/qa";
 import { loginUrl } from "../src/islands/contracts";
+import { decodeWireBody } from "./fixtures/decode-wire-body";
 
 // Workers runtime parity: no remote binding, deployment secrets or live HTTP.
 // Discord is intercepted; unmatched network access is forbidden.
@@ -47,12 +48,16 @@ describe("W15 auth/join in Miniflare", () => {
             const headers: [string, string][] = [];
             for (let i = 0; i < res.rawHeaders.length; i += 2)
               headers.push([res.rawHeaders[i]!, res.rawHeaders[i + 1]!]);
-            resolve(
-              new WorkerResponse(chunks.length ? Buffer.concat(chunks) : null, {
-                status: res.statusCode!,
-                headers,
-              }),
-            );
+            try {
+              resolve(
+                new WorkerResponse(decodeWireBody(chunks, headers), {
+                  status: res.statusCode!,
+                  headers,
+                }),
+              );
+            } catch (error) {
+              reject(error);
+            }
           });
         },
       );

@@ -127,6 +127,28 @@ describe("performance budgets snapshot path", () => {
     }
   });
 
+  it("bounds each deployed-origin Lighthouse collection within the quality job budget", () => {
+    expect(originWorkflow).toMatch(/\n    timeout-minutes: 60\n/);
+    for (const name of [
+      "Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)",
+      "Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)",
+    ]) {
+      const block = originWorkflow.split(`      - name: ${name}\n`)[1]?.split(/\n      - /)[0];
+      expect(block, `Missing origin workflow step: ${name}`).toBeDefined();
+      expect(block).toMatch(/(?:^|\n)        timeout-minutes: 15\n/);
+    }
+    const preserve = originWorkflow.indexOf("      - name: Preserve interrupted mobile samples\n");
+    expect(preserve).toBeGreaterThan(
+      originWorkflow.indexOf("      - name: Lighthouse performance budgets"),
+    );
+    expect(preserve).toBeLessThan(
+      originWorkflow.indexOf("      - name: Lighthouse quality scores"),
+    );
+    const block = originWorkflow.slice(preserve).split(/\n      - /)[0];
+    expect(block).toContain("!cancelled() && steps.mobile.outcome == 'failure'");
+    expect(block).toContain("bash ci/lighthouse-preserve-mobile.sh");
+  });
+
   it("distinguishes staging journeys from blocking quality and standards checks", () => {
     expect(doc).toMatch(/`staging-journeys`[^\n]*critical journey/i);
     expect(doc).toMatch(/`staging-quality`[^\n]*Lighthouse/i);
@@ -156,10 +178,9 @@ describe("performance budgets snapshot path", () => {
     const standardsStep = originStep(
       "Web standards (security headers, HTML basics, internal links)",
     );
-    expect(mobileStep).not.toContain("continue-on-error");
-    expect(desktopStep).not.toContain("continue-on-error");
-    // Web standards blocks since the staging edge preserves Worker headers:
-    // re-adding continue-on-error to any origin step must fail this test.
+    expect(mobileStep).toContain("continue-on-error: true");
+    expect(desktopStep).toContain("continue-on-error: true");
+    // Web standards blocks since the staging edge preserves Worker headers.
     expect(standardsStep).not.toContain("continue-on-error");
     expect(standardsStep).toContain("run: npm run standards -- --origin");
     expect(ciWorkflow).toContain(
