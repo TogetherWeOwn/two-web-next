@@ -54,6 +54,16 @@ describe.skipIf(!process.env.DATABASE_URL)("pg EventStore adapter", () => {
       returning id`) as { id: number }[];
     return { id: row!.id, eventKey };
   }
+  it("restores caller timeouts after a bounded read in a real transaction", async () => {
+    await sql.begin(async (tx) => {
+      await tx`select set_config('lock_timeout', '17s', true), set_config('statement_timeout', '23s', true)`;
+      await pgEventStore(tx).needsSync(key("timeout"));
+      const [settings] =
+        await tx`select current_setting('lock_timeout') as lock_timeout, current_setting('statement_timeout') as statement_timeout`;
+      expect(settings).toMatchObject({ lock_timeout: "17s", statement_timeout: "23s" });
+    });
+  });
+
   describe("closeFinished", () => {
     it("closes only finished published rows and returns rows changed", async () => {
       const finished = await seedEvent({

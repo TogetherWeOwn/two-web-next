@@ -125,11 +125,14 @@ export function pgEventStore(
         return result;
       });
     };
-    const pool = sql as unknown as {
+    const client = sql as unknown as {
       begin?: (fn: (tx: TxClient) => Promise<T>) => Promise<T>;
+      savepoint?: unknown;
     };
     try {
-      return await (typeof pool.begin === "function" ? pool.begin(bounded) : boundedExisting(sql));
+      return await (typeof client.savepoint === "function" || typeof client.begin !== "function"
+        ? boundedExisting(sql)
+        : client.begin(bounded));
     } catch (error) {
       // SQL diagnostics can contain credentials or member data. Preserve the
       // rejection for the caller's per-message disposition, not its message.
