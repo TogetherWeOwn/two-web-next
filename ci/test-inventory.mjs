@@ -342,6 +342,12 @@ function workflowShellView(text, name) {
       if (pair.key.value !== "run" || !isScalar(pair.value)) return;
       const node = pair.value;
       if (typeof node.value !== "string") return;
+      // YAML properties precede the scalar range and would survive rewriting,
+      // hiding its block header from the cwd auditor while discovery sees it.
+      assert.ok(
+        !stepRuns.has(pair) || (!node.anchor && !node.tag),
+        `${name} has an anchored or tagged run command this gate cannot model`,
+      );
       if (!stepRuns.has(pair)) {
         // A metadata key named run is not a step's executable field. Mask its
         // value in the shared view before either discovery or attribution.
@@ -2610,6 +2616,18 @@ function selftest() {
                 assert.deepEqual(playwrightJsonSummary(dir).orphans, []);
               }
             }
+          }
+        }
+      }
+      for (const property of ["&command", "!!str"]) {
+        for (const command of ["npm run browser", "npx playwright test"]) {
+          for (const cwd of [".", "web"]) {
+            writeFileSync(
+              workflow,
+              `name: ci\njobs:\n  t:\n    steps:\n      - run: ${property} ${command}\n        working-directory: ${cwd}\n`,
+            );
+            assert.throws(() => playwrightInventory(dir), /anchored or tagged run command/);
+            assert.throws(() => playwrightJsonSummary(dir), /anchored or tagged run command/);
           }
         }
       }
