@@ -26,7 +26,7 @@ import {
 import { alertRequestError, exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import type { Env } from "../env";
-import type { RsvpClosedReason } from "../islands/contracts";
+import { RSVP_COPY, type RsvpClosedReason } from "../islands/contracts";
 import type { KitRequestSession } from "../kit-session";
 import type {
   EventGoneModel,
@@ -142,7 +142,32 @@ export interface KitEventDetailSeries {
   next: KitEventDetailLink | null;
 }
 
+export interface KitSeatCard {
+  heading: string | null;
+  tag: { tone: "warn"; text: string } | null;
+  note: string | null;
+}
+
+/** Only event-level gates belong here; the RSVP island owns viewer state. */
+export function kitSeatCard(
+  closed: RsvpClosedReason | null,
+  member: boolean,
+  open: boolean,
+  review: boolean,
+): KitSeatCard {
+  if (review) return { heading: null, tag: null, note: null };
+  if (closed) return { heading: "RSVPs closed", tag: null, note: null };
+  const tag = open ? null : { tone: "warn" as const, text: "Paused" };
+  if (member) return { heading: "Your RSVP", tag, note: null };
+  return {
+    heading: "Log in to RSVP",
+    tag,
+    note: open ? "You'll come straight back here." : RSVP_COPY.paused,
+  };
+}
+
 export interface KitEventDetailModel {
+  seatCard: KitSeatCard;
   /** Escaped server-only member presentation; created after disclosure declaration. */
   detailHtml: EventDetailHtml;
   /** Moderator-only escaped leaves; the member rendering is shared unchanged. */
@@ -610,6 +635,7 @@ export async function resolveKitEventDetail(
           capacity: event.capacity,
           rsvpOpen: event.rsvpOpen,
           rsvpClosed,
+          seatCard: kitSeatCard(rsvpClosed, member, event.rsvpOpen, Boolean(review)),
           canonical: pageCanonical,
           path: pagePath,
           // Keep validated roster/archive state only, never raw query text.

@@ -40,6 +40,7 @@ import {
   type KitEventDetailStore,
 } from "../src/events/kit-detail";
 import { withEventDetailHtml } from "../src/events/detail-leaves";
+import { RSVP_COPY } from "../src/islands/contracts";
 import { ROUTE_MANIFEST, resolveRouteOwner } from "../src/route-ownership";
 
 const APP_URL = "https://next.example.test";
@@ -1726,5 +1727,99 @@ describe("event-detail read throttle", () => {
     expect(res.headers.get("cache-control")).toBe("no-store, private");
     expect(await res.text()).toBe("slow down");
     expect(render).not.toHaveBeenCalled();
+  });
+});
+
+describe("Kit seat card derivation", () => {
+  const PAUSED = { tone: "warn", text: "Paused" };
+  const seatCard = async (
+    over: Partial<typeof events.$inferSelect>,
+    session: KitRequestSession,
+    store: Partial<Parameters<typeof fakeStore>[0]> = {},
+    search = "",
+  ) => {
+    const event = { ...row(over), goingCount: 3, goingOccupancy: 3 } as PublicEvent;
+    const { outcome } = await resolve(KEY, fakeStore({ event, ...store }), session, null, search);
+    if (outcome.kind !== "ok") throw new Error(outcome.kind);
+    return outcome.model.seatCard;
+  };
+
+  it.each([
+    ["open guest", {}, GUEST, "Log in to RSVP", null, "You'll come straight back here."],
+    ["paused guest", { rsvpOpen: false }, GUEST, "Log in to RSVP", PAUSED, RSVP_COPY.paused],
+    ["open member", {}, memberSession(), "Your RSVP", null, null],
+    ["paused member", { rsvpOpen: false }, memberSession(), "Your RSVP", PAUSED, null],
+  ] as const)("%s", async (_name, over, session, heading, tag, note) => {
+    expect(await seatCard(over, session)).toEqual({ heading, tag, note });
+  });
+
+  it.each([
+    ["past status", { status: "past" }],
+    ["ended published", { endsAt: new Date("2020-01-01T00:00:00Z") }],
+  ] as const)("closed %s hides the pause tag and note for guests and members", async (_n, over) => {
+    for (const rsvpOpen of [true, false]) {
+      for (const session of [GUEST, memberSession()]) {
+        expect(await seatCard({ ...over, rsvpOpen }, session)).toEqual({
+          heading: "RSVPs closed",
+          tag: null,
+          note: null,
+        });
+      }
+    }
+  });
+
+  it("shows a closed card for a draft visible to a moderator", async () => {
+    for (const rsvpOpen of [true, false]) {
+      expect(await seatCard({ status: "draft", rsvpOpen }, memberSession(MOD_ID, true))).toEqual({
+        heading: "RSVPs closed",
+        tag: null,
+        note: null,
+      });
+    }
+  });
+
+  it.each(["draft", "published"])("review mode clears every field for %s", async (status) => {
+    for (const rsvpOpen of [true, false]) {
+      expect(
+        await seatCard({ status, rsvpOpen }, memberSession(MOD_ID, true), {}, "?review=1"),
+      ).toEqual({ heading: null, tag: null, note: null });
+    }
+  });
+
+  it("ignores answer, position, occupancy and capacity", async () => {
+    const answers: (ViewerRsvp | null)[] = [
+      null,
+      { status: "going", syncedToDiscordAt: null },
+      { status: "maybe", syncedToDiscordAt: null },
+      { status: "waitlisted", syncedToDiscordAt: null },
+    ];
+    for (const rsvpOpen of [true, false]) {
+      for (const session of [GUEST, memberSession()]) {
+        const baseline = await seatCard({ rsvpOpen }, session, { answer: null });
+        for (const answer of answers) {
+          for (const waitlist of [null, 1, 5]) {
+            for (const [goingOccupancy, capacity] of [
+              [0, 10],
+              [10, 10],
+              [99, 10],
+              [3, null],
+            ] as const) {
+              const event = {
+                ...row({ rsvpOpen, capacity }),
+                goingCount: goingOccupancy,
+                goingOccupancy,
+              } as PublicEvent;
+              const { outcome } = await resolve(
+                KEY,
+                fakeStore({ event, answer, waitlist }),
+                session,
+              );
+              if (outcome.kind !== "ok") throw new Error(outcome.kind);
+              expect(outcome.model.seatCard).toEqual(baseline);
+            }
+          }
+        }
+      }
+    }
   });
 });

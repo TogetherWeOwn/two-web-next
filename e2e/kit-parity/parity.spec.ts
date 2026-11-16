@@ -416,9 +416,9 @@ for (const target of targets) {
       const response = await api(target).get("/join");
       expect(response.status()).toBe(200);
       expect(response.headers()["content-type"]).toContain("text/html");
-      // Renderer ownership is per target: Kit answers with the
-      // manifest-derived marker once enabled, Hono never carries one.
-      const expectedMarker = target.name === "kit" ? expectedKitMarker("/join") : null;
+      // The loopback fixture enables Kit for join even while the shipped
+      // manifest leaves it disabled; Hono must never carry the Kit marker.
+      const expectedMarker = target.name === "kit" ? "kit" : null;
       expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
       const body = await response.text();
       expect(scrubSecrets(body)).toEqual([]);
@@ -1268,6 +1268,60 @@ for (const target of targets) {
         await context.close();
       }
     });
+  }
+
+  if (target.name === "kit") {
+    for (const viewport of PARITY_VIEWPORTS) {
+      test(`kit: join ${viewport.name} shows the heading and action without JavaScript`, async ({
+        browser,
+      }) => {
+        const context = await browser.newContext({
+          baseURL: target.origin,
+          ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+          viewport: viewport.size,
+          javaScriptEnabled: false,
+        });
+        try {
+          await context.route("**/*", (route) => {
+            const url = new URL(route.request().url());
+            return url.origin === target.origin ? route.continue() : route.abort("blockedbyclient");
+          });
+          const page = await context.newPage();
+          const response = await page.goto("/join?next=%2Fevents");
+          expect(response?.headers()["x-two-renderer"]).toBe("kit");
+          expect(response?.status()).toBe(200);
+          await expect(
+            page.getByRole("heading", { level: 1, name: "Play with people who show up." }),
+          ).toBeVisible();
+          await expect(
+            page.getByText("A Discord gaming community · founded 1998 · English"),
+          ).toBeVisible();
+          await expect(page.locator("#join-steps-heading")).toHaveText(
+            "What happens when you join",
+          );
+          await expect(
+            page.getByRole("heading", { name: "The bot lets you in and makes you a Prospect" }),
+          ).toBeVisible();
+          await expect(
+            page.getByRole("heading", { name: "You land back here, signed in" }),
+          ).toBeVisible();
+          await expect(page.getByRole("heading", { name: "What we ask of you" })).toBeVisible();
+          await expect(page.getByText("You must be 18 or older.")).toBeVisible();
+          await expect(page.getByRole("link", { name: "How deletion works" })).toHaveAttribute(
+            "href",
+            "/privacy",
+          );
+          await expect(
+            page.getByRole("complementary", { name: "Join with one sign-in" }),
+          ).toBeVisible();
+          await expect(
+            page.getByRole("link", { name: "Join with Discord", exact: true }),
+          ).toHaveAttribute("href", "/join/discord?next=%2Fevents");
+        } finally {
+          await context.close();
+        }
+      });
+    }
   }
 
   // Two-width hot-zone journey: the index shows the grids and the signal nav
