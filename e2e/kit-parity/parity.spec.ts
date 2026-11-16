@@ -1674,6 +1674,12 @@ test.describe("kit: archive visuals", () => {
               fullPage: true,
               mask: [page.locator("time")],
             });
+          if (view.name === "populated") {
+            const name = `kit-review-archive-default-${viewport.name}`;
+            const path = test.info().outputPath(`${name}.png`);
+            await page.screenshot({ path, fullPage: true, mask: [page.locator("time")] });
+            await test.info().attach(name, { path, contentType: "image/png" });
+          }
         }
         expect(pageErrors, "no uncaught page errors").toEqual([]);
       } finally {
