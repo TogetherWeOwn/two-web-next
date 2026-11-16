@@ -10,6 +10,16 @@ requireGithubRunner();
 // the port ci/kit-worker-dev.mjs listens on.
 const kitOrigin =
   process.env.KIT_WORKER_ORIGIN ?? `http://127.0.0.1:${process.env.KIT_WORKER_PORT ?? "8788"}`;
+const kitUrl = new URL(kitOrigin);
+if (
+  kitUrl.origin !== kitOrigin ||
+  kitUrl.protocol !== "http:" ||
+  kitUrl.hostname !== "127.0.0.1" ||
+  !kitUrl.port
+) {
+  // An omitted port in Chromium's bypass rule matches every port, not just 80.
+  throw new Error("Kit parity requires an exact local fixture origin with a non-default port");
+}
 
 // Kit journey parity (docs/kit-parity-gates.md): the journeys in
 // e2e/kit-parity/ run against BOTH the Hono worker
@@ -29,6 +39,15 @@ const kitOrigin =
 export default defineConfig({
   ...base,
   globalTeardown: undefined,
+  use: {
+    ...base.use,
+    launchOptions: {
+      args: [
+        "--proxy-server=http://127.0.0.1:9",
+        `--proxy-bypass-list=<-loopback>;https://localhost:8787;${kitOrigin}`,
+      ],
+    },
+  },
   testDir: "./e2e/kit-parity",
   testMatch: "**/*.spec.ts",
   testIgnore: [],

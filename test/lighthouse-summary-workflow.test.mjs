@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+import { parse } from "yaml";
+import originLib from "../ci/lighthouse-origin-lib.cjs";
 import { expectedLhrs } from "../ci/lighthouse-quality-run.mjs";
 import { navigationMetadata } from "./lighthouse-navigation-fixtures.mjs";
 
@@ -12,6 +14,39 @@ const workflowPath = fileURLToPath(
   new URL("../.github/workflows/web-quality-origin.yml", import.meta.url),
 );
 const summaryScript = fileURLToPath(new URL("../ci/lighthouse-summary.mjs", import.meta.url));
+
+it("queues same-origin calls and standalone runs without taking the caller's lock", () => {
+  const workflow = parse(readFileSync(workflowPath, "utf8"));
+  const caller = parse(readFileSync(".github/workflows/e2e-staging.yml", "utf8"));
+  const originExpression = "${{ inputs.origin || 'https://next.togetherweown.com' }}";
+
+  expect(workflow.concurrency).toEqual({
+    group: "web-quality-origin-all",
+    "cancel-in-progress": false,
+    queue: "max",
+  });
+  expect(caller.concurrency.group).not.toContain("web-quality-origin-");
+  expect(caller.jobs["staging-quality"].uses).toBe("./.github/workflows/web-quality-origin.yml");
+  expect(caller.jobs["staging-quality"].with.origin).toBe(ORIGIN);
+  expect(workflow.on.workflow_call.inputs.origin).toEqual({ type: "string", required: true });
+  expect(workflow.on.workflow_dispatch.inputs.origin.default).toBe(ORIGIN);
+  expect(workflow.on.workflow_dispatch.inputs.origin.options).toEqual([ORIGIN]);
+  expect(workflow.on.schedule).toBeDefined();
+  expect(workflow.jobs.quality.env.ORIGIN).toBe(originExpression);
+});
+
+it("shares the queue across accepted aliases and the scheduled default", () => {
+  const workflow = parse(readFileSync(workflowPath, "utf8"));
+  const { requireAllowedOrigin } = originLib;
+  const scheduledOrigin = workflow.on.workflow_dispatch.inputs.origin.default;
+
+  for (const origin of [ORIGIN, `${ORIGIN}/`, scheduledOrigin]) {
+    expect(requireAllowedOrigin(origin)).toBe(ORIGIN);
+    // A literal group cannot vary with workflow_call, dispatch, or schedule inputs.
+    expect(workflow.concurrency.group).toBe("web-quality-origin-all");
+  }
+  expect(() => requireAllowedOrigin(`${ORIGIN}/unexpected`)).toThrow();
+});
 
 it("runs the deployed summary with the origin configured by its workflow step", () => {
   const workflow = readFileSync(workflowPath, "utf8");

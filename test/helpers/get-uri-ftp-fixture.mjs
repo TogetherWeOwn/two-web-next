@@ -24,7 +24,7 @@ let req;
 let expected;
 if (chain === "lhci") {
   req = lhci;
-  expected = "6.0.5";
+  expected = "8.0.1";
 } else {
   const lighthouse = createRequire(lhci.resolve("lighthouse/package.json"));
   const puppeteer = createRequire(lighthouse.resolve("puppeteer-core/package.json"));
