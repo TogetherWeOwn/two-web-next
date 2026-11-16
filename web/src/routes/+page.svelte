@@ -90,7 +90,7 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
       </p>
     {/if}
   {/if}
-  <section class="hero" aria-labelledby="home-heading">
+  <section class="hero kit-home" aria-labelledby="home-heading">
     <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
     <h1 id="home-heading">The lobby is open.</h1>
     <div class="hero-action">
@@ -262,57 +262,3 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
   </section>
   <JsonLd testid="site-jsonld" json={siteGraph} />
 </Shell>
-
-<style>
-  :global(.base-theme) .hero {
-    display: block;
-    min-height: 0;
-    padding: var(--space-10) 0 var(--space-11);
-    text-align: left;
-  }
-
-  :global(.base-theme) .hero h1 {
-    max-width: 16ch;
-    margin: var(--space-inset-card-lg) 0 0;
-    font: var(--font-weight-display) var(--text-hero) / var(--leading-display) var(--font-display);
-    font-stretch: var(--font-width-display);
-    letter-spacing: var(--tracking-display);
-    text-wrap: balance;
-  }
-
-  .hero-action {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--space-5);
-    margin-top: var(--space-8);
-  }
-
-  :global(.base-theme) .hero-action .btn {
-    border-radius: var(--radius-pill);
-    text-transform: none;
-    letter-spacing: normal;
-  }
-
-  :global(.base-theme) .hero-action .lead {
-    max-width: 34ch;
-    margin: 0;
-    font-size: var(--text-ui);
-    line-height: var(--leading-body);
-  }
-
-  @media (max-width: 820px) {
-    :global(.base-theme) .hero {
-      padding: 36px 0 48px;
-    }
-
-    .hero-action {
-      gap: var(--space-inset-room);
-      margin-top: var(--space-inset-card-lg);
-    }
-
-    :global(.base-theme) .hero-action .btn {
-      width: 100%;
-    }
-  }
-</style>

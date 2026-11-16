@@ -266,6 +266,30 @@ export function generate(root = ROOT) {
     if (alias.startsWith("line-height-")) return alias.replace("line-height-", "leading-");
     return alias;
   };
+  // These aliases formerly came from the component's generated Tailwind theme.
+  // Preserve its layer and scope without expanding the shared Hono role set.
+  const heroAliases = new Set([
+    "space-5",
+    "space-8",
+    "space-10",
+    "space-11",
+    "space-inset-room",
+    "space-inset-card-lg",
+    "radius-pill",
+    "text-hero",
+    "text-ui",
+    "tracking-display",
+    "font-weight-display",
+    "font-width-display",
+    "leading-display",
+    "leading-body",
+  ]);
+  const heroTokens = roles
+    .filter(([alias]) => heroAliases.has(utility(alias)))
+    .map(([alias, , value]) => `--${utility(alias)}:${value};`)
+    .join("");
+  const heroSource = readFileSync(join(root, "assets/kit-home-hero.css"), "utf8");
+  const heroCss = `@layer theme{:root,:host{${heroTokens}}}${heroSource}`;
   // Tailwind emits the full utility set on demand. Shared author sheets supply
   // only aliases read by authored rules; keep Kit's foundation bridge intact.
   // Forcing every utility plus a second alias bridge duplicates those bytes.
@@ -280,7 +304,7 @@ export function generate(root = ROOT) {
   const fallbackHtml = `<!doctype html>\n<html lang="en">\n<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">\n<title>Error — Together We Own</title>\n<style>${fallbackStyle}</style>\n<main><b>Together We Own</b><h1>%sveltekit.status%: Page unavailable</h1><p>Please try again later.</p><p><a href="/">Home</a> <a href="/events">Events</a></p></main>\n</html>\n`;
   return new Map([
     [ARTIFACTS[0], compact(facade)],
-    [ARTIFACTS[1], compact(roleCss + source)],
+    [ARTIFACTS[1], compact(roleCss + source + heroCss)],
     [ARTIFACTS[2], kitCss],
     [ARTIFACTS[3], compact(sharedSource + sharedCss)],
     [ARTIFACTS[4], fallbackModule],
