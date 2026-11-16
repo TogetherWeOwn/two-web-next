@@ -73,6 +73,7 @@ for (const size of [
         await document.fonts.load('14px "Fragment Mono"', "__Host-two_session");
       });
       expect((await warmPage.reload())?.status()).toBe(200);
+      await warmPage.evaluate(() => document.fonts.ready);
       const warmCode = warmPage.locator(codeSelector).first();
       await warmCode.evaluate((node) => node.setAttribute("data-font-evidence", ""));
       const warmFonts = await renderedPlatformFonts(warmPage, evidenceSelector);
