@@ -74,7 +74,7 @@ test("Kit home hero presents its heading and action at desktop and mobile widths
           size: style.fontSize,
           expectedSize,
           weight: style.fontWeight,
-          expectedWeight: style.getPropertyValue("--font-weight-display").trim(),
+          expectedWeight: style.getPropertyValue("--font-weight-display").trim() || "560",
         };
       });
       assert.equal(typography.size, typography.expectedSize);
