@@ -9,6 +9,7 @@ import type { Env } from "../src/env";
 import * as previews from "../src/jobs/preview";
 import type { FailedJobReplayCandidate } from "../src/jobs/preview";
 import { QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
+import { fetchApp } from "./helpers/fetch-app";
 import {
   createMemorySessionStore,
   hashToken,
@@ -97,10 +98,16 @@ function request(
   },
 ) {
   const app = new Hono().route("/admin", adminApp(store));
-  return app.request(
-    `${origin}${path}`,
-    { method: "POST", ...init, headers: { origin: bindings.APP_URL, ...init.headers } },
+  // Exercise this injected admin router, not the mounted app or a built Kit Worker.
+  return fetchApp(
+    new Request(`${origin}${path}`, {
+      method: "POST",
+      ...init,
+      headers: { origin: bindings.APP_URL, ...init.headers },
+    }),
     { ...bindings, REDISPATCH_DEPS: deps, THROTTLE_STORE: throttleStore } as Env,
+    { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext,
+    app.fetch,
   );
 }
 
