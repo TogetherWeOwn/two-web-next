@@ -140,7 +140,9 @@ try {
                 row: style(row),
                 title: style(row.querySelector("h3")),
                 time: style(row.querySelector("time")),
-                metadata: [...row.querySelectorAll(".event-meta p")].map(style),
+                metadata: [
+                  ...row.querySelectorAll(".event-meta p, :scope > p:not(:has(time))"),
+                ].map(style),
               }));
               return {
                 width: document.documentElement.clientWidth,
