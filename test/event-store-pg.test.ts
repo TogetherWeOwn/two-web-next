@@ -143,6 +143,29 @@ describe.skipIf(!process.env.DATABASE_URL)("pg EventStore adapter", () => {
       expect(await store.materializeSeries()).toBe(0); // re-run creates nothing
     });
 
+    it("materializes the repeat-until boundary with native parsing in a non-UTC session", async () => {
+      await sql.begin(async (tx) => {
+        await tx`set local time zone 'America/Los_Angeles'`;
+        const [session] = await tx`select current_setting('TimeZone') as timezone`;
+        expect(session!.timezone).toBe("America/Los_Angeles");
+        await tx`insert into events
+          (event_key, title, starts_at, ends_at, timezone, location, status,
+            recurrence_frequency, recurrence_ends_on, recurrence_index)
+          values (${key("until")}, 'Sunday Squad', ${seriesStarts}, ${seriesEnds},
+            'Europe/London', 'hall', 'published', 'weekly', timestamp '2026-10-18 00:00:00', 1)`;
+        const store = pgEventStore(tx);
+        expect(await store.materializeSeries()).toBe(2);
+        const rows =
+          await tx`select recurrence_index, starts_at from events order by recurrence_index`;
+        expect(rows.map((row) => [row.recurrence_index, row.starts_at.toISOString()])).toEqual([
+          [1, "2026-10-04T19:00:00.000Z"],
+          [2, "2026-10-11T19:00:00.000Z"],
+          [3, "2026-10-18T19:00:00.000Z"],
+        ]);
+        expect(await store.materializeSeries()).toBe(0);
+      });
+    });
+
     it("never grows a cancelled series and never resurrects a skipped week", async () => {
       const { id } = await seedParent("cancelled-series", "cancelled");
       const live = await seedParent("live-series");
