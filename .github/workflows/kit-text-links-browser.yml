@@ -30,10 +30,15 @@ jobs:
         working-directory: web
       - run: npx playwright install --with-deps chromium
       - run: node --test ci/kit-text-links-browser.test.mjs
+      - run: node --test ci/kit-calendar-controls-browser.test.mjs
+        env:
+          KIT_CALENDAR_CONTROLS_EVIDENCE_DIR: evidence/kit-calendar-controls
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: kit-text-links-screenshots
-          path: evidence/kit-text-links/
+          path: |
+            evidence/kit-text-links/
+            evidence/kit-calendar-controls/
           if-no-files-found: error
           retention-days: 14
