@@ -3,12 +3,21 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
-import { eventEchoes, eventEchoMembers } from "../src/db/dormant-schema";
+import { eventSyncAttempts } from "../src/db/admin-schema";
+import { botReconciliationIntents, eventEchoes, eventEchoMembers } from "../src/db/dormant-schema";
 
 const read = (path: string) =>
   readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url).href), "utf8");
 const prefix = [
   ["1034_event-echoes", "5b35e192433f369990f96b14c681fc77179e15df9dd73c2f84a7446e4220fada"],
+  [
+    "1035_bot-reconciliation-intents",
+    "0322c376fb923eb09833b0a7e0dca1635f25a1d79025f456dea0d87cce7ba583",
+  ],
+  [
+    "1036_event-sync-claim-started",
+    "cc2993bd6cd66dadcc69acbb1ab4732941e975f423b2e2ebd632f11d59118573",
+  ],
 ] as const;
 
 describe("dormant migration prefix", () => {
@@ -40,8 +49,8 @@ describe("dormant migration prefix", () => {
     }
   });
 
-  it("retains the Echo tables in the cumulative schema", () => {
-    const snapshot = JSON.parse(read("drizzle/meta/1034_snapshot.json")) as {
+  it("retains the declarations in the cumulative schema", () => {
+    const snapshot = JSON.parse(read("drizzle/meta/1036_snapshot.json")) as {
       tables: Record<
         string,
         {
@@ -53,7 +62,12 @@ describe("dormant migration prefix", () => {
         }
       >;
     };
-    for (const table of [eventEchoes, eventEchoMembers]) {
+    for (const table of [
+      eventEchoes,
+      eventEchoMembers,
+      botReconciliationIntents,
+      eventSyncAttempts,
+    ]) {
       const config = getTableConfig(table);
       const saved = snapshot.tables[`public.${config.name}`]!;
       expect(Object.keys(saved.columns).sort()).toEqual(

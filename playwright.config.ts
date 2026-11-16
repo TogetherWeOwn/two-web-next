@@ -27,9 +27,12 @@ export default defineConfig({
     ignoreHTTPSErrors: true,
     serviceWorkers: "block",
     // Browser routing doesn't re-intercept server-side redirect hops. A dead
-    // proxy makes every non-loopback destination fail closed, even on redirects.
+    // proxy is intended to confine browser URL traffic to the fixture origin.
     launchOptions: {
-      args: ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=localhost;127.0.0.1;[::1]"],
+      args: [
+        "--proxy-server=http://127.0.0.1:9",
+        "--proxy-bypass-list=<-loopback>;https://localhost:8787",
+      ],
     },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
