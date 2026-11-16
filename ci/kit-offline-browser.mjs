@@ -97,13 +97,21 @@ export async function withKitOfflineBrowser(
     const html = await response.text();
     const browser = await chromium.launch({ headless: true });
     try {
-      const context = await browser.newContext({ javaScriptEnabled });
+      const context = await browser.newContext({ javaScriptEnabled, serviceWorkers: "block" });
       const unexpected = [];
+      await context.routeWebSocket("**/*", (socket) => {
+        unexpected.push(socket.url());
+        socket.close();
+      });
       await context.route("**/*", async (route) => {
         const url = new URL(route.request().url());
         if (url.origin === origin && route.request().method() === "GET") {
           if (url.href === fixtureUrl)
-            return route.fulfill({ contentType: "text/html", body: html });
+            return route.fulfill({
+              contentType: "text/html",
+              headers: { "content-security-policy": "worker-src 'none'; frame-src 'none'" },
+              body: html,
+            });
           const isAppAsset = url.pathname.startsWith("/_app/");
           const directory = isAppAsset ? join(output, "client") : join(root, "public");
           const asset = await readFixtureAsset(directory, url.pathname, {

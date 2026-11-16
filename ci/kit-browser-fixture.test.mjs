@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -84,6 +85,52 @@ test("Kit fixture opts into compiled JavaScript hydration", async () => {
     await page.locator("button").click();
     await page.waitForFunction(() => document.querySelector("button")?.textContent === "1");
   });
+});
+
+test("Kit fixture denies WebSocket connections and workers", async () => {
+  let connections = 0;
+  const listener = createServer((socket) => {
+    connections++;
+    socket.destroy();
+  });
+  await new Promise((resolve) => listener.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = listener.address().port;
+    const fixture = `<script>
+let closed = $state(0);
+function connect() {
+  for (const scheme of ['ws', 'wss']) {
+    const socket = new WebSocket(scheme + '://127.0.0.1:${port}/fixture');
+    socket.onclose = () => closed++;
+  }
+}
+</script><button onclick={connect}>{closed}</button>`;
+    await assert.rejects(
+      withKitOfflineBrowser({ page: fixture, javaScriptEnabled: true }, async ({ page }) => {
+        await page.waitForLoadState("networkidle");
+        await page.locator("button").click();
+        await page.waitForFunction(() => document.querySelector("button")?.textContent === "2");
+        const directive = await page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              document.addEventListener(
+                "securitypolicyviolation",
+                (event) => resolve(event.effectiveDirective),
+                { once: true },
+              );
+              new Worker(URL.createObjectURL(new Blob([""], { type: "text/javascript" })));
+            }),
+        );
+        assert.equal(directive, "worker-src");
+      }),
+      /ws(?:s)?:\/\/127\.0\.0\.1/,
+    );
+    assert.equal(connections, 0);
+  } finally {
+    await new Promise((resolve, reject) =>
+      listener.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
 });
 
 test("Kit fixture denies public JavaScript even with hydration enabled", async () => {
