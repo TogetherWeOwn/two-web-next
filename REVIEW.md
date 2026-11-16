@@ -156,7 +156,7 @@ For dependency version-bump PRs (including Dependabot-style updates):
 
 - Evaluate the bump against the dependency's own changelog and this repository's actual usage.
 - For Dependabot/Renovate PRs, generated-body omissions alone are not code defects. Cite the applicable repository or adoption requirement when reporting missing Verification/Attestation evidence; do not assume a bot-wide exemption.
-- The adopting agent must supply real Verification, truthful Attestation, Model Used and `risk_tier: sensitive`, preserving bot authorship and provenance. Missing required adoption evidence remains a review/gate finding even if the checker returns early; never attest to unperformed work.
+- The adopting agent must supply real Verification, truthful Attestation with the applicable repository `risk_tier` (T0/T1/T2), and Model Used, preserving bot authorship and provenance. Route dependency changes for sensitive review; missing required adoption evidence remains a review/gate finding even if the checker returns early. Never attest to unperformed work.
 - The current PR-standards checker returns early for Dependabot/Renovate; this describes checker behavior, not a waiver of adopter evidence or review requirements.
 - For a version bump, compare the changelog with actual repository call sites. Request a new behavior-regression test only for a named affected call site and a concrete adverse behavior change; existing mandatory testing, security and regression-evidence obligations remain unchanged.
 - Read the repository’s actual `.github/dependabot.yml`: a deliberately excluded lockfile is not a missed update. Do not infer exclusions from another repository or assume all standalone lockfiles are excluded.
