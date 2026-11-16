@@ -11,8 +11,14 @@ requireGithubRunner();
 const kitOrigin =
   process.env.KIT_WORKER_ORIGIN ?? `http://127.0.0.1:${process.env.KIT_WORKER_PORT ?? "8788"}`;
 const kitUrl = new URL(kitOrigin);
-if (kitUrl.origin !== kitOrigin || kitUrl.protocol !== "http:" || kitUrl.hostname !== "127.0.0.1") {
-  throw new Error("Kit parity requires an exact local fixture origin");
+if (
+  kitUrl.origin !== kitOrigin ||
+  kitUrl.protocol !== "http:" ||
+  kitUrl.hostname !== "127.0.0.1" ||
+  !kitUrl.port
+) {
+  // An omitted port in Chromium's bypass rule matches every port, not just 80.
+  throw new Error("Kit parity requires an exact local fixture origin with a non-default port");
 }
 
 // Kit journey parity (docs/kit-parity-gates.md): the journeys in

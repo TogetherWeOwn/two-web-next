@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
@@ -119,6 +120,32 @@ function lookalikes() {
     `https://[::1]:${v6Port}/neg`,
   ];
 }
+
+test("Kit config rejects a default-port origin but accepts a scoped port", () => {
+  const list = (kitOrigin: string) =>
+    spawnSync(
+      process.execPath,
+      [
+        "node_modules/@playwright/test/cli.js",
+        "test",
+        "--config=playwright.kit-parity.config.ts",
+        "--list",
+      ],
+      {
+        env: { ...process.env, KIT_WORKER_ORIGIN: kitOrigin },
+        encoding: "utf8",
+        timeout: 15_000,
+      },
+    );
+  const defaultPort = list("http://127.0.0.1");
+  expect(defaultPort.status).not.toBe(0);
+  expect(defaultPort.stderr).toContain(
+    "Kit parity requires an exact local fixture origin with a non-default port",
+  );
+  const scopedPort = list("http://127.0.0.1:8788");
+  expect(scopedPort.status, scopedPort.stderr).toBe(0);
+  expect(scopedPort.stdout).toContain("Total:");
+});
 
 test("controls: sinks live, proxy dead, exact origin loads", async ({ page }) => {
   // Independent of the browser: plain TCP reaches each sink and nothing
