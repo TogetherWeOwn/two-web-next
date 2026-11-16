@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { build } from "esbuild";
 import type { Env } from "../../src/env";
+import { collectImportedCss } from "./kit-imported-css";
 
 export const historyRoot = fileURLToPath(new URL("../../", import.meta.url));
 export const historyOrigin = "https://privacy.example.test";
@@ -85,10 +86,7 @@ export const renderKit = (data) => render(Page, { props: { data } });
               "let current; export const setEnv = (value) => { current = value; }; export const env = new Proxy({}, { get: (_, key) => Reflect.get(current, key) });",
             loader: "js",
           }));
-          plugin.onLoad({ filter: /\.css$/ }, ({ path }) => {
-            styles.push(readFileSync(path, "utf8"));
-            return { contents: "", loader: "js" };
-          });
+          collectImportedCss(plugin, styles);
           plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
             const { js, css } = compile(readFileSync(path, "utf8"), {
               generate: "server",

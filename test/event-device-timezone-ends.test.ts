@@ -24,6 +24,7 @@ import type { Env } from "../src/env";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
 import { createMemorySessionStore } from "../src/sessions";
 import app from "./app";
+import { collectImportedCss } from "./helpers/kit-imported-css";
 
 // Browser callbacks run in Chromium; keep their DOM surface local to this module.
 interface BrowserElement {
@@ -191,7 +192,7 @@ const { compile } = webRequire("svelte/compiler") as {
   compile(
     source: string,
     options: { generate: string; dev: boolean; filename: string },
-  ): { js: { code: string } };
+  ): { js: { code: string }; css: { code: string } | null };
 };
 let kitPromise:
   | Promise<{
@@ -233,19 +234,16 @@ function kitBundle() {
           {
             name: `device-timezone-ends-${generate}`,
             setup(plugin: import("esbuild").PluginBuild) {
-              plugin.onLoad({ filter: /\.css$/ }, (args) => {
-                styles[generate].push(readFileSync(args.path, "utf8"));
-                return { contents: "", loader: "js" };
-              });
-              plugin.onLoad({ filter: /\.svelte$/ }, (args) => ({
-                contents: compile(readFileSync(args.path, "utf8"), {
+              collectImportedCss(plugin, styles[generate]);
+              plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
+                const { js, css } = compile(readFileSync(args.path, "utf8"), {
                   generate,
                   dev: false,
                   filename: args.path,
-                }).js.code,
-                loader: "js",
-                resolveDir: dirname(args.path),
-              }));
+                });
+                if (css?.code) styles[generate].push(css.code);
+                return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
+              });
             },
           },
         ],

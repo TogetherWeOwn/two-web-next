@@ -361,11 +361,10 @@ export const stagingEvidenceWorkflows = ["deploy.yml", "e2e-staging.yml"];
 // The web quality gate is a reusable-workflow call, so its job is "<caller> / <called job>".
 export const stagingQualityJob = "staging-quality / quality";
 export const stagingQualitySteps = [
-  "Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)",
-  "Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)",
+  "Web standards (security headers, HTML basics, internal links)",
 ];
 
-// A green quality job with a skipped or failed Lighthouse step has not executed the gate.
+// A green quality job with skipped or failed web standards has not executed the gate.
 function requireExecutedStagingQuality(jobs, runId) {
   const quality = jobs.filter((job) => job.name === stagingQualityJob);
   if (quality.length !== 1) {

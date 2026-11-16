@@ -7,6 +7,7 @@ import { build } from "esbuild";
 import { Hono } from "hono";
 import type { Env } from "../../src/env";
 import { registerHotzoneRoutes } from "../../src/hotzones/routes";
+import { collectImportedCss } from "./kit-imported-css";
 
 export const periodOrigin = "https://period.example.test";
 export type PeriodTwin = "Hono" | "Kit";
@@ -85,10 +86,7 @@ export const error = (status) => { page.status = status; return render(ErrorPage
                 : "let current; export const setEnv = (value) => { current = value; }; export const env = new Proxy({}, { get: (_, key) => Reflect.get(current, key) });",
             loader: "js",
           }));
-          plugin.onLoad({ filter: /\.css$/ }, ({ path }) => {
-            styles.push(readFileSync(path, "utf8"));
-            return { contents: "", loader: "js" };
-          });
+          collectImportedCss(plugin, styles);
           plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
             const { js, css } = compile(readFileSync(path, "utf8"), {
               generate: "server",
