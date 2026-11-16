@@ -1,11 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
+import originLib from "../ci/lighthouse-origin-lib.cjs";
 import { expectedLhrs } from "../ci/lighthouse-quality-run.mjs";
 import { navigationMetadata } from "./lighthouse-navigation-fixtures.mjs";
 
@@ -37,9 +37,7 @@ it("queues same-origin calls and standalone runs without taking the caller's loc
 
 it("shares the queue across accepted aliases and the scheduled default", () => {
   const workflow = parse(readFileSync(workflowPath, "utf8"));
-  const { requireAllowedOrigin } = createRequire(import.meta.url)(
-    "../ci/lighthouse-origin-lib.cjs",
-  );
+  const { requireAllowedOrigin } = originLib;
   const scheduledOrigin = workflow.on.workflow_dispatch.inputs.origin.default;
 
   for (const origin of [ORIGIN, `${ORIGIN}/`, scheduledOrigin]) {
