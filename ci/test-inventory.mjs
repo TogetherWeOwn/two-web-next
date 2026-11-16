@@ -1186,10 +1186,14 @@ function findDefineConfigBody(text, configPath) {
   const { clean, code } = splitCodeViews(text, configPath);
   const calls = [...code.matchAll(/defineConfig\s*\(\s*\{/g)];
   assert.equal(calls.length, 1, `${configPath} must call defineConfig once with an object literal`);
+  assert.ok(
+    /\bexport\s+default\s+$/.test(code.slice(0, calls[0].index)),
+    `${configPath} must directly export defineConfig`,
+  );
   const open = calls[0].index + calls[0][0].length - 1;
   const end = matchBracket(code, open, `${configPath} defineConfig object`);
   assert.ok(
-    /^\s*,?\s*\)/.test(code.slice(end + 1)),
+    /^\s*,?\s*\)\s*;?\s*$/.test(code.slice(end + 1)),
     `${configPath} has defineConfig arguments this gate cannot parse`,
   );
   return { clean: clean.slice(open + 1, end), code: code.slice(open + 1, end) };
@@ -1254,17 +1258,12 @@ function parseTestMatchValue(valueClean, valueCode, configPath, what) {
 }
 
 function parseConfigImports(text, configPath) {
-  const { clean } = splitCodeViews(text, configPath);
+  const { clean, code } = splitCodeViews(text, configPath);
   const imports = new Map();
   for (const m of clean.matchAll(
     /import\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s*(['"])([^'"]+)\2/g,
   )) {
-    imports.set(m[1], m[3]);
-  }
-  for (const m of clean.matchAll(
-    /import\s+\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s*(['"])([^'"]+)\2/g,
-  )) {
-    imports.set(m[1], m[3]);
+    if (code.slice(m.index, m.index + 6) === "import") imports.set(m[1], m[3]);
   }
   return imports;
 }
@@ -1277,6 +1276,10 @@ function parseConfigImports(text, configPath) {
 // computed `[...]` key fails because its runtime name is unknowable.
 function failOnUnsupportedProperty(entryClean, configPath) {
   const property = entryClean.trim().replace(/^(?:get|set)(?:\s+|(?=[\['"`]))/, "");
+  assert.ok(
+    !/^(?:__proto__|['"]__proto__['"])\s*:/.test(property),
+    `${configPath} has a prototype setter this gate cannot parse`,
+  );
   assert.ok(
     !property.startsWith("["),
     `${configPath} has a computed selection key this gate cannot parse`,
@@ -1378,6 +1381,13 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
     if (spread) {
       const id = spread[1];
       assert.ok(imports.has(id), `${configPath} spreads ...${id} without importing it`);
+      const sourceCode = splitCodeViews(text, configPath).code;
+      const escaped = id.replace(/[$]/g, "\\$");
+      assert.equal(
+        [...sourceCode.matchAll(new RegExp(`(?<![\\w$])${escaped}(?![\\w$])`, "g"))].length,
+        2,
+        `${configPath} uses imported config ${id} outside its declaration and spread`,
+      );
       const rel = imports.get(id);
       assert.ok(
         rel.startsWith("."),
@@ -2441,6 +2451,38 @@ function selftest() {
       { selector: "...base", inherited: true, filtered: true },
       { selector: "grep: /selected/", control: true, filtered: false },
     ];
+    for (const name of ["grep", "grepInvert"]) {
+      for (const key of ["__proto__", "'__proto__'", '"__proto__"']) {
+        for (const selector of [
+          `${key}: { ${name}: /chosen$/ }`,
+          `projects: [{ name: 'p', ${key}: { ${name}: /chosen$/ } }]`,
+        ]) cases.push({ selector, error: /prototype setter/ });
+      }
+      cases.push(
+        {
+          selector: "",
+          source: `const config = defineConfig({ testDir: './e2e', testMatch: 'entry.spec.ts' }); config.${name} = /chosen$/; export default config;`,
+          error: /directly export/,
+        },
+        {
+          selector: "...base",
+          inherited: true,
+          prefix: `base.${name} = /chosen$/;`,
+          error: /outside its declaration and spread/,
+        },
+        {
+          selector: "...base",
+          inherited: true,
+          baseSelector: name,
+          prefix: `const note = 'import base from "./playwright.control.config"';`,
+          filtered: true,
+        },
+      );
+    }
+    cases.push(
+      { selector: "...base", inherited: true, unfilteredBase: true, filtered: false },
+      { selector: "", source: "export default wrap(defineConfig({}));", error: /directly export/ },
+    );
     for (const entry of cases) {
       const dir = mkdtempSync(join(tmpdir(), "test-inventory-title-"));
       try {
@@ -2450,7 +2492,7 @@ function selftest() {
           join(dir, ".github", "workflows", "ci.yml"),
           `name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.fixture.config.ts\n${entry.control ? "      - run: npx playwright test --config playwright.control.config.ts\n" : ""}`,
         );
-        if (entry.control)
+        if (entry.control || entry.baseSelector)
           writeFileSync(
             join(dir, "playwright.control.config.ts"),
             'export default defineConfig({ testDir: "./e2e", testMatch: "entry.spec.ts" });\n',
@@ -2458,20 +2500,20 @@ function selftest() {
         if (entry.inherited)
           writeFileSync(
             join(dir, "playwright.base.config.ts"),
-            "export default defineConfig({ grepInvert: /excluded/ });\n",
+            `export default defineConfig({ ${entry.unfilteredBase ? "" : `${entry.baseSelector || "grepInvert"}: /chosen$/`} });\n`,
           );
         writeFileSync(
           join(dir, "playwright.fixture.config.ts"),
-          `${entry.inherited ? 'import base from "./playwright.base.config";\n' : ""}export default defineConfig({ testDir: "./e2e", testMatch: "entry.spec.ts", ${entry.selector} });\n`,
+          entry.source || `${entry.inherited ? 'import base from "./playwright.base.config";\n' : ""}${entry.prefix || ""}\nexport default defineConfig({ testDir: "./e2e", testMatch: "entry.spec.ts", ${entry.selector} });\n`,
         );
         mkdirSync(join(dir, "e2e"), { recursive: true });
         writeFileSync(
           join(dir, "e2e", "entry.spec.ts"),
-          'import "./suite.visual";\nimport { test } from "@playwright/test";\ntest("entry", async () => {});\n',
+          'import "./suite.visual";\nimport { test } from "@playwright/test";\ntest("chosen", async () => {});\ntest("other", async () => {});\n',
         );
         writeFileSync(
           join(dir, "e2e", "suite.visual.ts"),
-          'import { test } from "@playwright/test";\ntest("suite", async () => {});\n',
+          'import { test } from "@playwright/test";\ntest("other suite", async () => {});\n',
         );
         if (entry.error) {
           assert.throws(() => playwrightInventory(dir), entry.error, entry.selector);
