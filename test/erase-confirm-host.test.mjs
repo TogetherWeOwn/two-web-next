@@ -107,7 +107,7 @@ describe("erase-member exact dry-run host and copy-to-confirm flow", () => {
         });
         expect(body.confirmHint).toContain("--confirm");
         expect(driver.factory).toHaveBeenCalledTimes(1);
-        expect(sql).toHaveBeenCalledTimes(6);
+        expect(sql).toHaveBeenCalledTimes(7);
         expect(sql.begin).not.toHaveBeenCalled();
         expect(sql.end).toHaveBeenCalledTimes(1);
         for (const privateValue of [databaseUrl, "synthetic-password", ID, "postgres://"])
