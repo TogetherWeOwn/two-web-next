@@ -118,6 +118,8 @@ describe("Kit utility source boundary", () => {
     expect(css).toMatch(/@import "tailwindcss\/utilities\.css" layer\(utilities\) source\(none\);/);
     expect(css).toContain('@source "./**/*.svelte";');
     expect(css).toContain('@source not "./lib/SiteMetadata.svelte";');
+    expect(css).toContain('@source not "./lib/Chip.svelte";');
+    expect(css).toContain('@source not "./lib/SegmentedControl.svelte";');
     expect(css).toContain('@source not "./routes/admin/join-attempts";');
   });
 
@@ -153,6 +155,16 @@ describe("Kit utility source boundary", () => {
       }
       expect(localViolations(source, defaults, metadata), path).toEqual([]);
     }
+  });
+
+  it("keeps excluded filter primitives free of utility classes and class forwarding", () => {
+    const chip = readFileSync("web/src/lib/Chip.svelte", "utf8");
+    const segments = readFileSync("web/src/lib/SegmentedControl.svelte", "utf8");
+    expect([...classUses(chip).tokens]).toEqual(["count"]);
+    expect(classUses(chip).unknown).toEqual(["rendered snippet"]);
+    expect(chip).toContain("{@render children()}");
+    expect([...classUses(segments).tokens]).toEqual(["segments", "count"]);
+    expect(classUses(segments).unknown).toEqual([]);
   });
 
   it("recognizes literal classes and rejects local unknowns", () => {
