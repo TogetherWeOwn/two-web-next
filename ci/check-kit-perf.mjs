@@ -669,6 +669,12 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.stdout.write(`${JSON.stringify(measured.report)}\n`);
     process.exitCode = measured.code;
   } else {
-    process.exitCode = run(parsed.options.root ?? repoRoot);
+    const root = parsed.options.root ?? repoRoot;
+    const measured = measure(root);
+    publishWarnings(measured.warnings);
+    for (const line of measured.logs) console.log(line);
+    for (const line of measured.warnings) console.error(line);
+    for (const line of measured.errors) console.error(line);
+    process.exitCode = measured.code;
   }
 }

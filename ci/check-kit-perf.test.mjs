@@ -314,6 +314,17 @@ test("CI publishes every advisory in annotations and the job summary", (t) => {
     assert.ok(result.stderr.includes(`::warning::${warning}`));
     assert.ok(readFileSync(summary, "utf8").includes(`- ${warning}`));
   }
+  writeFileSync(summary, "");
+  const human = spawnSync(process.execPath, [scriptPath, "--root", fx.root], {
+    encoding: "utf8",
+    timeout: 30_000,
+    env: { ...process.env, GITHUB_ACTIONS: "true", GITHUB_STEP_SUMMARY: summary },
+  });
+  assert.equal(human.status, 0, human.stderr);
+  for (const warning of report.warnings) {
+    assert.ok(human.stderr.includes(`::warning::${warning}`));
+    assert.ok(readFileSync(summary, "utf8").includes(`- ${warning}`));
+  }
 });
 
 test("acceptance: a client size overage warns without claiming a fit", (t) => {

@@ -601,7 +601,7 @@ test("kit JSON contract: gzip-only warning retains measured fields and exits 0",
 });
 
 for (const dimension of ["raw", "files", "client gzip", "entry gzip"]) {
-  test(`kit JSON contract: server gzip warning cannot mask ${dimension} failure`, (t) => {
+  test(`kit JSON contract: server gzip and ${dimension} overages both warn`, (t) => {
     const fx = makeKitFixture({
       server: [
         { name: "chunks/server.js", body: SERVER_BODY },
@@ -617,13 +617,13 @@ for (const dimension of ["raw", "files", "client gzip", "entry gzip"]) {
     });
     t.after(() => cleanup(fx.root));
     const result = runCli(kitScript, ["--root", fx.root, "--format", "json"]);
-    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.status, 0, result.stderr);
     const parsed = parseCliJson(result, `kit json warning + ${dimension}`);
     assertJsonReport({
       parsed,
       stdout: result.stdout,
       stderr: result.stderr,
-      status: 1,
+      status: 0,
       check: "kit-perf",
       groupIds: KIT_GROUP_IDS,
       checkIds: KIT_CHECK_IDS,
@@ -635,10 +635,12 @@ for (const dimension of ["raw", "files", "client gzip", "entry gzip"]) {
         : dimension === "entry gzip"
           ? "kit.worker._worker.js"
           : "kit.server.js";
-    assert.equal(checkById(parsed, failingId, dimension).status, "fail");
-    assert.equal(parsed.warnings.length, 1);
-    assert.match(parsed.warnings[0], /warning: server js.*advisory/i);
-    assert.ok(parsed.warnings[0].length <= 500);
+    assert.equal(checkById(parsed, failingId, dimension).status, "warn");
+    assert.equal(parsed.warnings.length, 2);
+    assert.ok(
+      parsed.warnings.some((warning) => /warning: server js.*gzip.*advisory/i.test(warning)),
+    );
+    assert.ok(parsed.warnings.every((warning) => warning.length <= 500));
   });
 }
 
@@ -665,7 +667,7 @@ test("RED kit: --format json on invalid plan carries INVALID_PLAN + next_action 
   });
 });
 
-test("RED kit: --format json on breach reports failing check with bytes (1)", (t) => {
+test("kit JSON contract: client byte overage reports warning with bytes (0)", (t) => {
   const fx = makeKitFixture({
     budgetMutate: (b) => {
       b.client.js.maxRawBytes = JS_BODY.length - 1;
@@ -673,20 +675,22 @@ test("RED kit: --format json on breach reports failing check with bytes (1)", (t
   });
   t.after(() => cleanup(fx.root));
   const result = runCli(kitScript, ["--root", fx.root, "--format", "json"]);
-  assert.equal(result.status, 1, `expected exit 1, got ${result.status}\nstderr: ${result.stderr}`);
+  assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
   const parsed = parseCliJson(result, "kit json breach");
   assertJsonReport({
     parsed,
     stdout: result.stdout,
     stderr: result.stderr,
-    status: 1,
+    status: 0,
     check: "kit-perf",
     groupIds: KIT_GROUP_IDS,
     checkIds: KIT_CHECK_IDS,
     label: "kit json breach",
   });
-  const failing = parsed.groups.flatMap((g) => g.checks).filter((c) => c.status === "fail");
-  assert.ok(failing.length >= 1, "breach JSON must mark at least one check fail");
+  const client = checkById(parsed, "kit.client.js", "client overage");
+  assert.equal(client.status, "warn");
+  assert.equal(client.rawBytes, JS_BODY.length);
+  assert.match(parsed.warnings[0], /warning: client js.*raw.*advisory/i);
 });
 
 test("RED worker: --format json emits versioned report with stable IDs (exit 0)", (t) => {
@@ -1070,7 +1074,7 @@ test("CONTROL kit: nested assets counted, sourcemaps excluded (exit 0)", (t) => 
   assert.ok(result.logs.some((l) => l.includes("ok client css: 2/2 files")));
 });
 
-test("CONTROL kit: exact fit passes (0), one-byte breach fails (1)", (t) => {
+test("CONTROL kit: exact fit passes (0), one-byte overage warns (0)", (t) => {
   const fx = makeKitFixture();
   t.after(() => cleanup(fx.root));
   const fit = runCaptured(runKit, fx.root);
@@ -1081,8 +1085,8 @@ test("CONTROL kit: exact fit passes (0), one-byte breach fails (1)", (t) => {
     Buffer.concat([JS_BODY, Buffer.from("x")]),
   );
   const breach = runCaptured(runKit, fx.root);
-  assert.equal(breach.code, 1, `one-byte breach must exit 1, got ${breach.code}`);
-  assert.ok(breach.errors.some((l) => /client js/i.test(l)));
+  assert.equal(breach.code, 0, `one-byte overage must exit 0, got ${breach.code}`);
+  assert.ok(breach.errors.some((l) => /warning: client js.*advisory/i.test(l)));
 });
 
 test("CONTROL kit: malformed ceilings stay invalid plan (2)", (t) => {
