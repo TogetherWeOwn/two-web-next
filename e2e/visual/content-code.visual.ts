@@ -107,7 +107,7 @@ for (const size of [
       .evaluate((node) => getComputedStyle(node.parentElement!).lineHeight);
     await page.unroute(fontUrl);
     const primer = await context.newPage();
-    const warmPage = await context.newPage();
+    const warmPage = primer;
     const primerSession = await context.newCDPSession(primer);
     const warmSession = await context.newCDPSession(warmPage);
     const fontPath = "/fonts/fragment-mono-latin-400.woff2";
@@ -115,21 +115,22 @@ for (const size of [
     const returnRequests = new Set<string>();
     const cachedRequests = new Set<string>();
     const cachedResponses = new Set<string>();
+    let returning = false;
     primerSession.on("Network.responseReceived", ({ response }) => {
-      if (new URL(response.url).pathname === fontPath) {
+      if (!returning && new URL(response.url).pathname === fontPath) {
         primerHeaders.push(
           String(response.headers["cache-control"] ?? response.headers["Cache-Control"] ?? ""),
         );
       }
     });
     warmSession.on("Network.requestWillBeSent", ({ requestId, request }) => {
-      if (new URL(request.url).pathname === fontPath) returnRequests.add(requestId);
+      if (returning && new URL(request.url).pathname === fontPath) returnRequests.add(requestId);
     });
-    warmSession.on("Network.requestServedFromCache", ({ requestId }) =>
-      cachedRequests.add(requestId),
-    );
+    warmSession.on("Network.requestServedFromCache", ({ requestId }) => {
+      if (returning) cachedRequests.add(requestId);
+    });
     warmSession.on("Network.responseReceived", ({ requestId, response }) => {
-      if (response.fromDiskCache) cachedResponses.add(requestId);
+      if (returning && response.fromDiskCache) cachedResponses.add(requestId);
     });
     try {
       await primerSession.send("Network.enable");
@@ -141,7 +142,8 @@ for (const size of [
       await primer.evaluate(async () => {
         await document.fonts.load('14px "Fragment Mono"', "__Host-two_session");
       });
-      await warmPage.setViewportSize(size);
+      // Navigate the primed page again so its renderer can reuse the loaded resource.
+      returning = true;
       expect((await warmPage.goto(`${localOrigin}/privacy`))?.status()).toBe(200);
       await warmPage.evaluate(() => document.fonts.ready);
       const cacheEvidence = {
@@ -149,9 +151,9 @@ for (const size of [
         returnRequests: [...returnRequests],
         cachedRequests: [...cachedRequests],
         cachedResponses: [...cachedResponses],
-        reuseObserved:
-          returnRequests.size === 0 ||
-          [...returnRequests].some((id) => cachedRequests.has(id) || cachedResponses.has(id)),
+        reuseObserved: [...returnRequests].some(
+          (id) => cachedRequests.has(id) || cachedResponses.has(id),
+        ),
       };
       await testInfo.attach(`privacy-${size.width}-font-cache.json`, {
         body: JSON.stringify(cacheEvidence, null, 2),
@@ -188,7 +190,6 @@ for (const size of [
       await primerSession.detach();
       await warmSession.detach();
       await primer.close();
-      await warmPage.close();
     }
   });
 }
