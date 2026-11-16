@@ -206,6 +206,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         "No commit to promote: set the sha input, or wait for a deploy whose staging-journeys and staging-quality pass",
       );
     }
+    if (
+      process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" &&
+      sha !== process.env.PRODUCTION_ACCEPTED_SHA
+    ) {
+      console.log("The soaked staging commit does not match the accepted production SHA; skipping");
+      appendFileSync(process.env.GITHUB_OUTPUT, "sha=\n");
+      process.exit(0);
+    }
     console.log(
       input
         ? `Deploying the requested commit ${sha}`

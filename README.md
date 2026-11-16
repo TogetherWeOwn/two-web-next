@@ -483,6 +483,16 @@ matching dispatch SHA selects the existing separately authorized recovery
 route; `migrations_applied` never bypasses default ancestry admission. See the
 [ancestry contract](docs/runbook.md#default-promotion-ancestry-admission).
 
+For automatic promotion, the Release Manager accepts the exact release SHA and
+asks the authorized Operator to set the repository Actions variable
+`PRODUCTION_ACCEPTED_SHA` to that full lowercase SHA; the Release Manager can
+ask the Operator to clear it. The resolver first selects the eligible candidate,
+then requires exact equality with the variable: absent, empty or unequal values
+skip cleanly, without searching for an older accepted candidate. The variable is
+a job-time snapshot; clearing it does not revoke a run that already started.
+Manual dispatch is unchanged, and all existing promotion and release gates remain
+in force. See the [deployment procedure](docs/runbook.md#deploy-and-record-the-rollback-pointer).
+
 Automatic runs promote only a first-attempt staging green that soaked 30
 minutes, with no red or re-run staging run on that commit or a newer one
 (a red staging gate is fixed forward on a new commit, never re-run until

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { fetchApp } from "./helpers/fetch-app";
 import type { Env } from "../src/env";
 import { QA_HEADER, QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
 import { AUTH_STATUS_COOKIE } from "../src/auth-status";
@@ -39,14 +40,15 @@ function isolated() {
   const store = createMemorySessionStore(() => Date.now());
   return { store, env: { ...env, SESSION_STORE: store } as Env };
 }
+// Default dispatch is the mounted Hono app, not a built Kit Worker.
 const qaLogin = (e: Env, identity = "qa-member", headers: Record<string, string> = {}) =>
-  app.request(
-    `/auth/qa/${identity}`,
-    {
+  fetchApp(
+    new Request(new URL(`/auth/qa/${identity}`, e.APP_URL), {
       method: "POST",
       headers: { origin: new URL(e.APP_URL).origin, [QA_HEADER]: env.QA_AUTH_TOKEN!, ...headers },
-    },
+    }),
     e,
+    { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext,
   );
 
 function mockDiscord(

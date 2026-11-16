@@ -311,6 +311,17 @@ binding isolation before any remote mutation.
    exact reviewed and confirmed head before closing the task; otherwise the
    author merges. Pin the merge to that SHA. Record the confirmation, pinned
    squash SHA and intended target in the release log.
+
+   For automatic promotion, the Release Manager accepts the exact release SHA
+   and asks the authorized Operator to set the repository Actions variable
+   `PRODUCTION_ACCEPTED_SHA` to that full lowercase SHA; the Release Manager can
+   ask the Operator to clear it. The resolver checks exact equality against the
+   already-selected eligible candidate, rather than searching for an older
+   accepted candidate. An absent, empty or unequal value skips cleanly. Clearing
+   the variable does not revoke a run that already started: it uses a job-time
+   snapshot. Manual dispatch and all existing promotion and release gates are
+   unchanged. Setting this variable is not permission to enable a held workflow
+   or deploy production.
 2. Before release, capture the current deployment and its **version ID** (not
    its deployment ID) as the known-good rollback pointer. The following are
    remote metadata reads, not database probes; approved Cloudflare credentials
