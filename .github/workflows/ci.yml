@@ -764,7 +764,7 @@ jobs:
         run: npm run floor-guard:selftest && npm run floor-guard
       - name: Test data config recognizer
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/inventory-data-config.test.mjs
+        run: node --test ci/inventory-data-config.test.mjs ci/invocation-certificates.test.mjs
       # Test-inventory HARD gate (quality-gates.md): every test file runs
       # somewhere. Filesystem-only; --strict fails the job on any orphan.
       - name: Test inventory (HARD)

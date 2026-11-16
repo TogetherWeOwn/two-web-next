@@ -1,0 +1,177 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { validateInvocationCertificates } from "./invocation-certificates.mjs";
+
+const pin = (path, digit = "a") => ({ path, sha256: digit.repeat(64) });
+function fixture() {
+  const identity = {
+    workflow: ".github/workflows/example.yml",
+    job: 1,
+    step: 2,
+    run: 3,
+    edges: [{ root: ".", script: "test", offset: 4 }],
+    terminal: 5,
+  };
+  const context = {
+    templateInputs: [pin(".github/workflows/example.yml")],
+    install: {
+      job: "job-1",
+      root: ".",
+      checkout: "checkout-1",
+      method: "npm-ci",
+      outcome: "success",
+      dependency: "required-success",
+      scriptsPolicy: "ignore-scripts=true",
+      argv: ["ci"],
+      inputs: [pin("package-lock.json")],
+    },
+    loader: {
+      route: "local-playwright",
+      root: ".",
+      checkout: "checkout-1",
+      entrypoint: "node_modules/playwright/cli.js",
+      argv: ["test"],
+      nodeOptions: "",
+      nodePath: "",
+      tsconfigOverride: "",
+      resolutionOverride: "",
+      unknownSettings: [],
+      inputs: [pin("playwright.config.ts")],
+    },
+    effects: [
+      {
+        name: "prepare",
+        audit: "reviewed fixture",
+        writes: ["application-output"],
+        inputs: [pin("prepare.mjs")],
+      },
+    ],
+  };
+  return { identity, context };
+}
+const copy = (value) => structuredClone(value);
+
+test("matches every occurrence once, including repeated script paths", () => {
+  const first = fixture();
+  const second = copy(first);
+  second.identity.edges[0].offset++;
+  validateInvocationCertificates([first, second], [copy(second), copy(first)]);
+  for (const [observed, reviewed] of [
+    [[first, first], [first]],
+    [[first], [first, first]],
+    [[first], [first, second]],
+    [[first, second], [first]],
+  ]) {
+    assert.throws(
+      () => validateInvocationCertificates(observed, reviewed),
+      /Invocation certificate/,
+    );
+  }
+});
+
+test("rejects invalid install and loader context regardless of sibling order", () => {
+  const good = fixture();
+  const cases = [
+    (c) => {
+      c.install.outcome = "failure";
+    },
+    (c) => {
+      c.install.dependency = "ignored-failure";
+    },
+    (c) => {
+      c.install.job = "other-job";
+    },
+    (c) => {
+      c.install.root = "other-root";
+    },
+    (c) => {
+      c.install.scriptsPolicy = "ignore-scripts=false";
+    },
+    (c) => {
+      c.install.inputs[0].sha256 = "b".repeat(64);
+    },
+    (c) => {
+      c.loader.nodeOptions = "--require unexpected";
+    },
+    (c) => {
+      c.loader.nodePath = "elsewhere";
+    },
+    (c) => {
+      c.loader.tsconfigOverride = "other.json";
+    },
+    (c) => {
+      c.loader.resolutionOverride = "global";
+    },
+    (c) => {
+      c.loader.argv.push("--loader=other");
+    },
+    (c) => {
+      c.loader.route = "global-playwright";
+    },
+  ];
+  for (const mutate of cases) {
+    const bad = copy(good);
+    bad.identity.job++;
+    const reviewed = [copy(good), copy(bad)];
+    mutate(bad.context);
+    for (const observed of [
+      [good, bad],
+      [bad, good],
+    ]) {
+      assert.throws(
+        () => validateInvocationCertificates(observed, reviewed),
+        /Invocation certificate/,
+      );
+    }
+  }
+});
+
+test("rejects matching malformed install commands and unreviewed loader context", () => {
+  for (const argv of [[], ["install"], ["ci", null], ["ci", 1]]) {
+    const record = fixture();
+    record.context.install.argv = argv;
+    assert.throws(
+      () => validateInvocationCertificates([copy(record)], [record]),
+      /invalid install/,
+    );
+  }
+  for (const field of ["root", "checkout"]) {
+    for (const value of [undefined, "other"]) {
+      const observed = fixture();
+      const reviewed = copy(observed);
+      reviewed.context.loader[field] = value;
+      assert.throws(() => validateInvocationCertificates([observed], [reviewed]), /invalid loader/);
+    }
+  }
+});
+
+test("rejects changed or incomplete ordered effect evidence", () => {
+  const reviewed = fixture();
+  for (const mutate of [
+    (c) => {
+      c.effects = null;
+    },
+    (c) => {
+      c.effects.push(copy(c.effects[0]));
+    },
+    (c) => {
+      c.effects[0].inputs[0].sha256 = "c".repeat(64);
+    },
+    (c) => {
+      c.effects[0].writes.push("NODE_OPTIONS");
+    },
+    (c) => {
+      c.effects[0].audit = "";
+    },
+    (c) => {
+      c.effects[0].inputs = [];
+    },
+  ]) {
+    const observed = copy(reviewed);
+    mutate(observed.context);
+    assert.throws(
+      () => validateInvocationCertificates([observed], [reviewed]),
+      /Invocation certificate/,
+    );
+  }
+});
