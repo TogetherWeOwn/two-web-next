@@ -2511,7 +2511,10 @@ function selftest() {
         join(dir, "package.json"),
         JSON.stringify({ scripts: { browser: "playwright test" } }),
       );
-      run("npx playwright test --grep smoke && npm run browser");
+      writeFileSync(
+        workflow,
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --grep smoke\n      - run: npm run browser\n",
+      );
       assert.deepEqual(playwrightInventory(dir).orphans, []);
       mkdirSync(join(dir, "test"));
       run("npm run browser");
