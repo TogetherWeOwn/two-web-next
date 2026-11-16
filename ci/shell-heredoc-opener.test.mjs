@@ -20,7 +20,11 @@ test("opener joins continuations while retaining physical end and shell quoting"
     ];
     for (const [input, spelling, marker, stripTabs, quoted] of examples) {
       const parsed = parseHeredocOpener(input);
-      assert.deepEqual({ ...parsed, end: undefined }, { end: undefined, spelling, marker, stripTabs, quoted }, input);
+      assert.deepEqual(
+        { ...parsed, end: undefined },
+        { end: undefined, spelling, marker, stripTabs, quoted },
+        input,
+      );
       assert.match(input.slice(parsed.end), /^[\s;]/);
       assert.deepEqual(parseHeredocOpener(`${spelling} `), { ...parsed, end: spelling.length });
     }
@@ -30,10 +34,29 @@ test("opener joins continuations while retaining physical end and shell quoting"
 test("opener consumes complete delimiter words and stops at shell boundaries", () => {
   const input = "prefix <<EOF-X <<'O'\\'Brien; rest";
   const first = parseHeredocOpener(input, 7);
-  assert.deepEqual(first, { end: 14, spelling: "<<EOF-X", marker: "EOF-X", stripTabs: false, quoted: false });
+  assert.deepEqual(first, {
+    end: 14,
+    spelling: "<<EOF-X",
+    marker: "EOF-X",
+    stripTabs: false,
+    quoted: false,
+  });
   const second = parseHeredocOpener(input, first.end + 1);
   assert.equal(second.marker, "O'Brien");
   assert.equal(input[second.end], ";");
+});
+
+test("delimiter boundaries follow shell whitespace and reject process substitution", () => {
+  for (const separator of [" ", "\v", "\f", "\r"]) {
+    const marker = `EOF${separator}suffix`;
+    const parsed = parseHeredocOpener(`<<${marker}\n`);
+    assert.equal(parsed.marker, marker);
+    assert.equal(parsed.end, marker.length + 2);
+  }
+  for (const operator of ["<", ">", "<\\\n", ">\\\n"]) {
+    assert.throws(() => parseHeredocOpener(`<<EOF${operator}(true)\n`), /Unsupported shell heredoc syntax/);
+  }
+  assert.equal(parseHeredocOpener("<<EOF>output\n").marker, "EOF");
 });
 
 test("logical cursor removes only unquoted or double-quoted continuations", () => {
@@ -45,7 +68,15 @@ test("logical cursor removes only unquoted or double-quoted continuations", () =
 });
 
 test("unsupported and incomplete words fail closed; non-openers stay distinct", () => {
-  for (const input of ["<<", "<< \\\n\n", "<<'unterminated", '<<"unterminated', "<<$value", "<<EOF\\", "<<{name}"]) {
+  for (const input of [
+    "<<",
+    "<< \\\n\n",
+    "<<'unterminated",
+    '<<"unterminated',
+    "<<$value",
+    "<<EOF\\",
+    "<<{name}",
+  ]) {
     assert.throws(() => parseHeredocOpener(input), /Unsupported shell heredoc syntax/, input);
   }
   assert.equal(parseHeredocOpener("< file"), null);

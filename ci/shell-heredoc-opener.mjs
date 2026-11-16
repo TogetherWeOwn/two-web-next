@@ -48,7 +48,13 @@ export function parseHeredocOpener(source, offset = 0) {
 
   while (true) {
     const ch = cursor.peek();
-    if (ch === undefined || /[\s;&|<>()]/.test(ch)) break;
+    if (ch === "<" || ch === ">") {
+      const lookahead = logicalCursor(source, cursor.position);
+      lookahead.take();
+      if (lookahead.peek() === "(") unsupported();
+    }
+    const crlf = ch === "\r" && source[cursor.position + 1] === "\n";
+    if (ch === undefined || /[ \t\n;&|<>()>]/.test(ch) || crlf) break;
     if (!hasWord && ch === "#") unsupported();
     hasWord = true;
     if (ch === "'" || ch === '"') {
