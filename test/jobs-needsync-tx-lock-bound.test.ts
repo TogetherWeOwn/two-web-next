@@ -90,7 +90,8 @@ function txDouble(events: Event[]) {
       }
     },
   });
-  return tx;
+  // Postgres.js v4 also exposes begin() on transaction clients.
+  return Object.assign(tx, { begin: tx.savepoint });
 }
 
 describe("needsSync TxClient lock-first budgets (offline pin)", () => {

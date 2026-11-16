@@ -35,8 +35,9 @@ const excluded = [
   "hidden",
   "table",
   "inline",
-  "flex-wrap",
   "outline",
+  "flex",
+  "flex-wrap",
 ];
 const targets = excluded.map((name) => [name, targetMatcher(name)] as const);
 
