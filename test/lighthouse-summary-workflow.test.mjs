@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +21,7 @@ it("queues same-origin calls and standalone runs without taking the caller's loc
   const originExpression = "${{ inputs.origin || 'https://next.togetherweown.com' }}";
 
   expect(workflow.concurrency).toEqual({
-    group: `web-quality-origin-${originExpression}`,
+    group: "web-quality-origin-all",
     "cancel-in-progress": false,
     queue: "max",
   });
@@ -32,6 +33,21 @@ it("queues same-origin calls and standalone runs without taking the caller's loc
   expect(workflow.on.workflow_dispatch.inputs.origin.options).toEqual([ORIGIN]);
   expect(workflow.on.schedule).toBeDefined();
   expect(workflow.jobs.quality.env.ORIGIN).toBe(originExpression);
+});
+
+it("shares the queue across accepted aliases and the scheduled default", () => {
+  const workflow = parse(readFileSync(workflowPath, "utf8"));
+  const { requireAllowedOrigin } = createRequire(import.meta.url)(
+    "../ci/lighthouse-origin-lib.cjs",
+  );
+  const scheduledOrigin = workflow.on.workflow_dispatch.inputs.origin.default;
+
+  for (const origin of [ORIGIN, `${ORIGIN}/`, scheduledOrigin]) {
+    expect(requireAllowedOrigin(origin)).toBe(ORIGIN);
+    // A literal group cannot vary with workflow_call, dispatch, or schedule inputs.
+    expect(workflow.concurrency.group).toBe("web-quality-origin-all");
+  }
+  expect(() => requireAllowedOrigin(`${ORIGIN}/unexpected`)).toThrow();
 });
 
 it("runs the deployed summary with the origin configured by its workflow step", () => {

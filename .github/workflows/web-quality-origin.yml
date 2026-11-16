@@ -27,10 +27,11 @@ on:
 permissions:
   contents: read
 
-# Keep this namespace distinct from callers' locks, including staging deploys.
+# Use one group for all origins: accepted URL aliases must not bypass the lock.
+# This namespace is distinct from callers' locks, including staging deploys.
 # GitHub queues at most 100 pending runs; further arrivals are cancelled.
 concurrency:
-  group: web-quality-origin-${{ inputs.origin || 'https://next.togetherweown.com' }}
+  group: web-quality-origin-all
   cancel-in-progress: false
   queue: max
 
