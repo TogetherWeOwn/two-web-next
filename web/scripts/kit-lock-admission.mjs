@@ -12,12 +12,13 @@ const flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW;
  * and mounts are a cooperative prerequisite: no ABA protection, no physical-media claim.
  * The handle retains an O_DIRECTORY|O_NOFOLLOW descriptor until close(); recheck()
  * re-verifies identity, ancestors, procfs and XFS and closes the handle if it fails.
+ * The effective UID must remain stable during admission and for the handle's lifetime.
  */
 export const admitKitLockRoot = createKitLockAdmission({
   platform: process.platform,
   nodeVersion: process.versions.node,
   pid: process.pid,
-  euid: typeof process.geteuid === "function" ? process.geteuid() : -1,
+  getEuid: () => (typeof process.geteuid === "function" ? process.geteuid() : -1),
   fs: {
     lstat: (path) => nodeFs.lstatSync(path, { bigint: true }),
     fstat: (fd) => nodeFs.fstatSync(fd, { bigint: true }),

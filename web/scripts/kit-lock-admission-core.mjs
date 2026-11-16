@@ -16,11 +16,11 @@ export function createKitLockAdmission(env) {
   const { fs } = env;
 
   // Any group or other writable ancestor is refused, sticky or not.
-  function checkAncestors(root) {
+  function checkAncestors(root, uid) {
     for (let path = dirname(root); ; path = dirname(path)) {
       const stat = guard(`lstat ${path}`, () => fs.lstat(path));
       if (!isDirectory(stat)) refuse(`ancestor ${path} is not a directory`);
-      if (stat.uid !== 0n && stat.uid !== BigInt(env.euid)) {
+      if (stat.uid !== 0n && stat.uid !== uid) {
         refuse(`ancestor ${path} has untrusted owner`);
       }
       if ((stat.mode & 0o022n) !== 0n) refuse(`ancestor ${path} is group or world writable`);
@@ -28,10 +28,9 @@ export function createKitLockAdmission(env) {
     }
   }
 
-  // The root must be an owned directory with exactly mode 0700, special bits included.
-  function checkRootStat(stat, label) {
+  function checkRootStat(stat, label, uid) {
     if (!isDirectory(stat)) refuse(`${label} is not a directory`);
-    if (stat.uid !== BigInt(env.euid)) refuse(`${label} is not owned by the current user`);
+    if (stat.uid !== uid) refuse(`${label} is not owned by the current user`);
     if ((stat.mode & 0o7777n) !== 0o700n) refuse(`${label} mode is not exactly 0700`);
   }
 
@@ -54,23 +53,25 @@ export function createKitLockAdmission(env) {
     return link;
   }
 
-  function verify(root, fd, expected) {
+  function verify(root, fd, expected, uid) {
+    if (BigInt(guard("geteuid", env.getEuid)) !== uid) refuse("effective uid changed");
     const opened = guard("fstat root", () => fs.fstat(fd));
-    checkRootStat(opened, "root descriptor");
+    checkRootStat(opened, "root descriptor", uid);
     const id = identity(opened);
     if (expected !== undefined && expected !== id) refuse("root identity changed");
     const link = checkProcfs(fd, root, id);
-    checkAncestors(root);
+    checkAncestors(root, uid);
     const before = guard("lstat root", () => fs.lstat(root));
-    checkRootStat(before, "root");
+    checkRootStat(before, "root", uid);
     if (identity(before) !== id) refuse("root identity changed");
     for (const target of [root, link]) {
       if (guard("statfs", () => fs.statfsType(target)) !== XFS_MAGIC) refuse("root is not on XFS");
     }
     const after = guard("lstat root", () => fs.lstat(root));
     const afterDescriptor = guard("fstat root", () => fs.fstat(fd));
-    checkRootStat(after, "root");
-    checkRootStat(afterDescriptor, "root descriptor");
+    checkRootStat(after, "root", uid);
+    checkRootStat(afterDescriptor, "root descriptor", uid);
+    if (BigInt(guard("geteuid", env.getEuid)) !== uid) refuse("effective uid changed");
     if (identity(after) !== id || identity(afterDescriptor) !== id) {
       refuse("root identity changed");
     }
@@ -79,10 +80,11 @@ export function createKitLockAdmission(env) {
 
   return function admit(path) {
     checkAdmissionInput(env, path);
+    const uid = BigInt(guard("geteuid", env.getEuid));
     // Validate ancestors and the root pathname before opening anything.
-    checkAncestors(path);
+    checkAncestors(path, uid);
     const initial = guard("lstat root", () => fs.lstat(path));
-    checkRootStat(initial, "root");
+    checkRootStat(initial, "root", uid);
     const fd = guard("open root", () => fs.open(path));
     let open = true;
     const close = () => {
@@ -105,12 +107,12 @@ export function createKitLockAdmission(env) {
       }
     };
     return closing(() => {
-      verify(path, fd, id);
+      verify(path, fd, id, uid);
       return {
         path,
         recheck() {
           if (!open) refuse("handle is closed");
-          closing(() => verify(path, fd, id));
+          closing(() => verify(path, fd, id, uid));
         },
         close,
       };

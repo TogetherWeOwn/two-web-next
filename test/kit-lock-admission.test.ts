@@ -1,16 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import { homedir } from "node:os";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { admitKitLockRoot, KitLockAdmissionError } from "../web/scripts/kit-lock-admission.mjs";
 import { createKitLockAdmission } from "../web/scripts/kit-lock-admission-core.mjs";
 
-const stat = (mode: bigint, ino = 1n, uid = 1000n) => ({
-  mode: 0o40000n | mode,
-  uid,
-  dev: 1n,
-  ino,
-});
+const stat = (mode: bigint, ino = 1n, uid = 1000n) =>
+  ({ mode: 0o40000n | mode, uid, dev: 1n, ino }) as const;
 const ROOT = "/a/lock";
 
 function setup(over: Record<string, unknown> = {}, env: Record<string, unknown> = {}) {
@@ -50,7 +46,7 @@ function setup(over: Record<string, unknown> = {}, env: Record<string, unknown> 
     platform: "linux",
     nodeVersion: "24.0.0",
     pid: 77,
-    euid: 1000,
+    getEuid: () => 1000,
     fs: { ...fs, ...(over.fs as object) },
     ...env,
   });
@@ -63,7 +59,7 @@ const refuses = (over: Record<string, unknown>, pattern: RegExp, env = {}) => {
 };
 
 describe("Kit lock admission with injected environment", () => {
-  it("admits, rechecks and closes idempotently", () => {
+  it("admits with the current effective identity, rechecks and closes idempotently", () => {
     const { admit, calls } = setup();
     const handle = admit(ROOT);
     handle.recheck();
@@ -71,6 +67,17 @@ describe("Kit lock admission with injected environment", () => {
     handle.close();
     expect(calls).toEqual(["open", "close"]);
     expect(() => handle.recheck()).toThrow(/closed/);
+    let uid = 0;
+    const dynamic = setup({}, { getEuid: () => uid });
+    uid = 1000;
+    const retained = dynamic.admit(ROOT);
+    uid = 0;
+    expect(() => retained.recheck()).toThrow(/effective uid changed/);
+    expect(dynamic.calls).toEqual(["open", "close"]);
+    let reads = 0;
+    const changed = setup({}, { getEuid: () => (++reads === 1 ? 1000 : 0) });
+    expect(() => changed.admit(ROOT)).toThrow(/effective uid changed/);
+    expect(changed.calls).toEqual(["open", "close"]);
   });
 
   it("validates pathname before opening", () => {
@@ -171,12 +178,12 @@ afterEach(() => {
 
 describe("Kit lock admission against the real filesystem", () => {
   it("refuses unusable roots before any XFS classification", () => {
-    const base = mkdtempSync(join(homedir(), ".kit-lock-admission-"));
+    const base = mkdtempSync(join(userInfo().homedir, ".kit-lock-admission-"));
     homes.push(base);
     mkdirSync(join(base, "open"), { mode: 0o755 });
+    chmodSync(join(base, "open"), 0o755);
     symlinkSync(base, join(base, "link"));
-    for (const name of ["open", "link"]) {
-      expect(() => admitKitLockRoot(join(base, name)), name).toThrow(KitLockAdmissionError);
-    }
+    expect(() => admitKitLockRoot(join(base, "open"))).toThrow(/mode is not exactly 0700/);
+    expect(() => admitKitLockRoot(join(base, "link"))).toThrow(KitLockAdmissionError);
   });
 });
