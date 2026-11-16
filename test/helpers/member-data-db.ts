@@ -102,7 +102,14 @@ export async function createMemberDataFixture(raw: string, opts: { max?: number 
       for (const migration of migrations)
         for (const statement of migration.sql) {
           if (statement.trim())
-            await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
+            await tx.unsafe(
+              statement
+                .replaceAll('"public".', `"${schemaName}".`)
+                .replace(
+                  /(GRANT\s+\w+\s+ON\s+(?:TABLE|SEQUENCE)\s+)public\./gi,
+                  `$1"${schemaName}".`,
+                ),
+            );
         }
     });
   } catch (error) {
