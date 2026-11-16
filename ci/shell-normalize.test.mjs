@@ -108,6 +108,8 @@ test("here-strings and arithmetic shifts are not heredocs", () => {
   for (const source of [
     "cat <<<word\nnpm run real\n",
     "echo $((8 << 1))\nnpm run real\n",
+    "echo $((1))#literal\n",
+    'echo "$((1))#literal"\n',
     "((8 << 1))\nnpm run real\n",
   ]) {
     assert.equal(check(source, source), source);
@@ -121,7 +123,7 @@ test("shell boundaries do not expose heredoc bodies or remove literal text", () 
   assert.match(check(nonbreaking, nonbreaking), /npm run real/);
   assert.equal(normalizeShell("echo word #literal\n"), "echo word #literal\n");
   assert.equal(check("echo $(\\\n(8 << 1))\n", "echo $((8 << 1))\n"), "echo $((8 << 1))\n");
-  assert.throws(() => normalizeShell("echo \"$(cat <<EOF\nbody\nEOF\n)\"\n"), /unsupported/);
+  assert.throws(() => normalizeShell('echo "$(cat <<EOF\nbody\nEOF\n)"\n'), /unsupported/);
   assert.throws(() => normalizeShell("echo $'x\\' #literal'\n"), /unsupported/);
 });
 

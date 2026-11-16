@@ -131,6 +131,7 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
           out += "$((";
           i = after;
           arithmetic = 2;
+          tokenStart = false;
           continue;
         }
         assert.fail("unsupported command substitution");
