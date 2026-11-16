@@ -1278,13 +1278,13 @@ function parseProjectObject(objClean, objCode, configPath) {
       !entryCode.trim().startsWith("..."),
       `${configPath} has a project spread this gate cannot expand: name testDir/testMatch/testIgnore explicitly`,
     );
+    assert.ok(
+      !/^(?:(?:get|set)\s+)?(?:grep|grepInvert)\s*\(/.test(entryCode.trim()),
+      `${configPath} has a title selector method this gate cannot parse`,
+    );
     const colon = entryCode.indexOf(":");
     if (colon === -1) {
       const shorthand = entryCode.trim();
-      assert.ok(
-        !/^(?:(?:get|set)\s+)?(?:grep|grepInvert)\s*\(/.test(shorthand),
-        `${configPath} has a title selector method this gate cannot parse`,
-      );
       if (shorthand === "grep" || shorthand === "grepInvert") out[shorthand] = true;
       if (shorthand === "testDir")
         assert.fail(
@@ -1351,13 +1351,13 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
       ops.push({ kind: "spread", parsed: parsePlaywrightConfig(root, candidate, seen) });
       continue;
     }
+    assert.ok(
+      !/^(?:(?:get|set)\s+)?(?:grep|grepInvert)\s*\(/.test(entryCode.trim()),
+      `${configPath} has a title selector method this gate cannot parse`,
+    );
     const colon = entryCode.indexOf(":");
     if (colon === -1) {
       const shorthand = entryCode.trim();
-      assert.ok(
-        !/^(?:(?:get|set)\s+)?(?:grep|grepInvert)\s*\(/.test(shorthand),
-        `${configPath} has a title selector method this gate cannot parse`,
-      );
       if (shorthand === "grep" || shorthand === "grepInvert")
         ops.push({ kind: "key", key: shorthand, value: true });
       if (shorthand === "testDir")
@@ -2358,6 +2358,19 @@ function selftest() {
       { selector: '"grepInvert": /excluded/', error: /quoted grepInvert key/ },
       { selector: "get grep() { return /selected/; }", error: /title selector method/ },
       { selector: "get grepInvert() { return /excluded/; }", error: /title selector method/ },
+      { selector: "get grep(): RegExp { return /selected/; }", error: /title selector method/ },
+      {
+        selector: "get grepInvert(): RegExp { return /excluded/; }",
+        error: /title selector method/,
+      },
+      {
+        selector: "projects: [{ get grep(): RegExp { return /selected/; } }]",
+        error: /title selector method/,
+      },
+      {
+        selector: "projects: [{ get grepInvert(): RegExp { return /excluded/; } }]",
+        error: /title selector method/,
+      },
       { selector: "projects: [{ name: 'selected', grep: /selected/ }]", filtered: true },
       { selector: "projects: [{ name: 'selected', grepInvert: /excluded/ }]", filtered: true },
       { selector: "projects: [{ grep }]", filtered: true },
