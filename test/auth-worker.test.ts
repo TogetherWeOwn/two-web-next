@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { build } from "esbuild";
+import { workerNodeBuiltins } from "../ci/worker-node-builtins.mjs";
 import { request as httpRequest } from "node:http";
 import {
   convertV4MiniflareOptions,
@@ -76,6 +77,7 @@ describe("W15 auth/join in Miniflare", () => {
       target: "es2022",
       conditions: ["workerd", "worker", "browser"],
       external: ["node:*", "cloudflare:*"],
+      plugins: [workerNodeBuiltins],
     });
     mf = new Miniflare(
       convertV4MiniflareOptions({
