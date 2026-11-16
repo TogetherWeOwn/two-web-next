@@ -19,14 +19,11 @@ describe("Kit lock admission input policy", () => {
     expect(() => checkAdmissionInput({ ...env, nodeVersion }, "/safe/lock")).not.toThrow();
   });
 
-  it.each(["20.99.0", "22.22.9", "23.99.0", "invalid", "22"])(
-    "refuses Node %s",
-    (nodeVersion) => {
-      expect(() => checkAdmissionInput({ ...env, nodeVersion }, "/safe/lock")).toThrow(
-        "kit lock admission: Node 22.23+ on 22, or 24+, is required",
-      );
-    },
-  );
+  it.each(["20.99.0", "22.22.9", "23.99.0", "invalid", "22"])("refuses Node %s", (nodeVersion) => {
+    expect(() => checkAdmissionInput({ ...env, nodeVersion }, "/safe/lock")).toThrow(
+      "kit lock admission: Node 22.23+ on 22, or 24+, is required",
+    );
+  });
 
   it.each([null, undefined, 42, {}, "", "relative/path", "/safe//lock", "/safe/../lock", "/safe/"])(
     "refuses malformed, relative or unnormalized path %s",

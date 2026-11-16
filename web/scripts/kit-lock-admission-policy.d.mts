@@ -4,4 +4,7 @@ export class KitLockAdmissionError extends Error {
 
 export function refuse(message: string, cause?: unknown): never;
 export function guard<T>(label: string, operation: () => T): T;
-export function checkAdmissionInput(env: { platform: string; nodeVersion: string }, path: unknown): void;
+export function checkAdmissionInput(
+  env: { platform: string; nodeVersion: string },
+  path: unknown,
+): void;
