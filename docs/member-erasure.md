@@ -115,6 +115,7 @@ For ONE Discord id, in one transaction:
 | `web_sessions` | `user_id` (this signs the member out everywhere) |
 | `web_session_grace` | `user_id` (retired predecessor identity and bearer hashes) |
 | `join_attempts` | `discord_id` |
+| `event_echo_members` | `user_id` (the aggregate event echo remains) |
 
 The output counts carry one key per table: `web_sessions` counts live
 session rows and `web_session_grace` counts retired predecessor records, so a
