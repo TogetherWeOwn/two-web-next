@@ -229,22 +229,22 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
     const create = (rsvpId: number) =>
       fixture.db.transaction((tx) => createWaitlistOffer(tx, rsvpId));
     const rows = (rsvpId: number) =>
-      client<{ state: string; offered_at: Date; expires_at: Date }[]>`
-        select state, offered_at, expires_at from waitlist_offers
+      client<{ state: string; offered_at: string; expires_at: string }[]>`
+        select state, offered_at::text, expires_at::text from waitlist_offers
         where rsvp_id = ${rsvpId} order by created_at, id`;
 
     it("creates a two-hour held offer stamped from the database clock", async () => {
       const eventId = await makeEvent();
       const rsvpId = await makeRsvp(eventId, "waitlisted");
-      const [before] = await client<{ t: Date }[]>`select clock_timestamp() as t`;
+      const [before] = await client<{ t: string }[]>`select clock_timestamp()::text as t`;
       const offer = await create(rsvpId);
-      const [after] = await client<{ t: Date }[]>`select clock_timestamp() as t`;
+      const [after] = await client<{ t: string }[]>`select clock_timestamp()::text as t`;
       expect(offer).not.toBeNull();
       const [row] = await rows(rsvpId);
       expect(row!.state).toBe("held");
-      expect(row!.offered_at.getTime()).toBeGreaterThanOrEqual(before!.t.getTime());
-      expect(row!.offered_at.getTime()).toBeLessThanOrEqual(after!.t.getTime());
-      expect(row!.expires_at.getTime() - row!.offered_at.getTime()).toBe(TWO_HOURS_MS);
+      expect(Date.parse(row!.offered_at)).toBeGreaterThanOrEqual(Date.parse(before!.t));
+      expect(Date.parse(row!.offered_at)).toBeLessThanOrEqual(Date.parse(after!.t));
+      expect(Date.parse(row!.expires_at) - Date.parse(row!.offered_at)).toBe(TWO_HOURS_MS);
     });
 
     it("takes the offer instant after waiting on the event lock, not before", async () => {
@@ -258,7 +258,7 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
         await tx`select id from events where id = ${eventId} for update`;
         lockedAt();
         await gate;
-        const [t] = await tx<{ t: Date }[]>`select clock_timestamp() as t`;
+        const [t] = await tx<{ t: string }[]>`select clock_timestamp()::text as t`;
         return t!.t;
       });
       await locked;
@@ -268,7 +268,7 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
       const releasedAt = await holder;
       expect(await pending).not.toBeNull();
       const [row] = await rows(rsvpId);
-      expect(row!.offered_at.getTime()).toBeGreaterThanOrEqual(releasedAt.getTime());
+      expect(Date.parse(row!.offered_at)).toBeGreaterThanOrEqual(Date.parse(releasedAt));
     });
 
     it("truncates the window at event start", async () => {
@@ -276,11 +276,11 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
       const rsvpId = await makeRsvp(eventId, "waitlisted");
       expect(await create(rsvpId)).not.toBeNull();
       const [ev] = await client<
-        { starts_at: Date }[]
-      >`select starts_at from events where id = ${eventId}`;
+        { starts_at: string }[]
+      >`select starts_at::text from events where id = ${eventId}`;
       const [row] = await rows(rsvpId);
-      expect(row!.expires_at.getTime()).toBe(ev!.starts_at.getTime());
-      expect(row!.expires_at.getTime()).toBeGreaterThan(row!.offered_at.getTime());
+      expect(Date.parse(row!.expires_at)).toBe(Date.parse(ev!.starts_at));
+      expect(Date.parse(row!.expires_at)).toBeGreaterThan(Date.parse(row!.offered_at));
     });
 
     it("refuses when the event start passes while waiting on the event lock", async () => {
@@ -342,10 +342,10 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
       expect(offer!.notificationKey).not.toBe(old!.notification_key);
       const history = await rows(rsvpId);
       expect(history.map((r) => r.state)).toEqual(["expired", "held"]);
-      expect(history[1]!.expires_at.getTime() - history[1]!.offered_at.getTime()).toBe(
+      expect(Date.parse(history[1]!.expires_at) - Date.parse(history[1]!.offered_at)).toBe(
         TWO_HOURS_MS,
       );
-      expect(history[1]!.offered_at.getTime()).toBeGreaterThan(history[0]!.expires_at.getTime());
+      expect(Date.parse(history[1]!.offered_at)).toBeGreaterThan(Date.parse(history[0]!.expires_at));
     });
 
     it.each(["going", "maybe", "not_going"])("refuses a %s RSVP", async (status) => {
