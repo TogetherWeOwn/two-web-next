@@ -155,6 +155,11 @@ Try to prove your own candidate wrong first:
 For dependency version-bump PRs (including Dependabot-style updates):
 
 - Evaluate the bump against the dependency's own changelog and this repository's actual usage.
+- For Dependabot/Renovate PRs, generated-body omissions alone are not code defects. Cite the applicable repository or adoption requirement when reporting missing Verification/Attestation evidence; do not assume a bot-wide exemption.
+- The adopting agent must supply real Verification, truthful Attestation with the applicable repository `risk_tier` (T0/T1/T2), and Model Used, preserving bot authorship and provenance. Route dependency changes for sensitive review; missing required adoption evidence remains a review/gate finding even if the checker returns early. Never attest to unperformed work.
+- The current PR-standards checker returns early for Dependabot/Renovate; this describes checker behavior, not a waiver of adopter evidence or review requirements.
+- For a version bump, compare the changelog with actual repository call sites. Request a new behavior-regression test only for a named affected call site and a concrete adverse behavior change; existing mandatory testing, security and regression-evidence obligations remain unchanged.
+- Read the repository’s actual `.github/dependabot.yml`: a deliberately excluded lockfile is not a missed update. Do not infer exclusions from another repository or assume all standalone lockfiles are excluded.
 - Do not flag lockfile or transitive-dependency churn by itself. A dependency-induced correctness, compatibility, installation, build, output, or reliability regression remains reportable under this repository's existing finding rules, whether or not it involves a changed API this repository calls. Identify the affected repository call site or path, concrete trigger and wrong outcome, and supporting evidence at the reviewed commit.
 - Report a known security advisory introduced or left unfixed with its concrete impact. Existing security-review rules take precedence over this churn guidance: do not suppress a plausible security issue merely because it has no published advisory; apply the existing exploit-path and evidence requirements and state any unverified step.
 - Follow this repository's existing dependency policy for pins versus ranges; do not substitute reviewer preference.
