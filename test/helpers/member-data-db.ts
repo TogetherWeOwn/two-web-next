@@ -106,7 +106,7 @@ export async function createMemberDataFixture(raw: string, opts: { max?: number 
               statement
                 .replaceAll('"public".', `"${schemaName}".`)
                 .replace(
-                  /(GRANT\s+\w+\s+ON\s+(?:TABLE|SEQUENCE)\s+)public\./gi,
+                  /(GRANT\s+\w+(?:\s*\([^;()]*\))?\s+ON\s+(?:TABLE|SEQUENCE)\s+)public\./gi,
                   `$1"${schemaName}".`,
                 ),
             );

@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { URL, fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+import { schemaFiles } from "../ci/schema-files.mjs";
 
 it.each([false, true])(
   "calendar snapshot chains and generation adds no duplicate column (later migration: %s)",
@@ -36,8 +37,13 @@ it.each([false, true])(
     );
     try {
       mkdirSync(join(scratch, "src/db"), { recursive: true });
-      for (const file of ["schema.ts", "admin-schema.ts"])
-        cpSync(join(root, "src/db", file), join(scratch, "src/db", file));
+      const schemas = schemaFiles(join(root, "src/db"));
+      const config = readFileSync(join(root, "drizzle.config.ts"), "utf8");
+      const configured = [...config.matchAll(/\.\/src\/db\/([^"']+\.ts)/g)].map(
+        (match) => match[1],
+      );
+      expect(configured.sort()).toEqual([...schemas].sort());
+      for (const file of schemas) cpSync(join(root, "src/db", file), join(scratch, "src/db", file));
       cpSync(join(root, "drizzle"), join(scratch, "drizzle"), { recursive: true });
       cpSync(join(root, "drizzle.config.ts"), join(scratch, "drizzle.config.ts"));
       symlinkSync(join(root, "node_modules"), join(scratch, "node_modules"), "dir");
