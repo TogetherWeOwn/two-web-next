@@ -14,7 +14,11 @@ export async function createWaitlistOffer(tx: Tx, rsvpId: number) {
     .from(rsvps)
     .where(eq(rsvps.id, rsvpId));
   if (!candidate) return null;
-  const [event] = await tx.select().from(events).where(eq(events.id, candidate.eventId)).for("update");
+  const [event] = await tx
+    .select()
+    .from(events)
+    .where(eq(events.id, candidate.eventId))
+    .for("update");
   if (!event) return null;
   const line = await tx
     .select({ id: rsvps.id, status: rsvps.status })
