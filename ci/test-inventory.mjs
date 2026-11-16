@@ -1251,7 +1251,9 @@ function parseConfigImports(text, configPath) {
 // non-selection keys (`"name"`) are known-safe and stay ignored; any
 // computed `[...]` key fails because its runtime name is unknowable.
 function failOnNonPlainSelectionKey(keyClean, configPath) {
-  const quoted = keyClean.match(/^(['"`])\s*(testDir|testMatch|testIgnore|projects)\s*\1$/);
+  const quoted = keyClean.match(
+    /^(['"`])\s*(testDir|testMatch|testIgnore|projects|grep|grepInvert)\s*\1$/,
+  );
   if (quoted) {
     assert.fail(
       `${configPath} has a quoted ${quoted[2]} key this gate cannot parse (${keyClean}): use a plain identifier, not a quoted or computed key`,
@@ -1279,6 +1281,11 @@ function parseProjectObject(objClean, objCode, configPath) {
     const colon = entryCode.indexOf(":");
     if (colon === -1) {
       const shorthand = entryCode.trim();
+      assert.ok(
+        !/^(?:(?:get|set)\s+)?(?:grep|grepInvert)\s*\(/.test(shorthand),
+        `${configPath} has a title selector method this gate cannot parse`,
+      );
+      if (shorthand === "grep" || shorthand === "grepInvert") out[shorthand] = true;
       if (shorthand === "testDir")
         assert.fail(
           `${configPath} has a project testDir this gate cannot parse: use a plain string literal`,
@@ -1290,6 +1297,10 @@ function parseProjectObject(objClean, objCode, configPath) {
       continue;
     }
     const key = entryCode.slice(0, colon).trim();
+    if (key === "grep" || key === "grepInvert") {
+      out[key] = true;
+      continue;
+    }
     if (key !== "testDir" && key !== "testMatch" && key !== "testIgnore") {
       failOnNonPlainSelectionKey(objClean.slice(start, end).slice(0, colon).trim(), configPath);
       continue;
@@ -1343,6 +1354,12 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
     const colon = entryCode.indexOf(":");
     if (colon === -1) {
       const shorthand = entryCode.trim();
+      assert.ok(
+        !/^(?:(?:get|set)\s+)?(?:grep|grepInvert)\s*\(/.test(shorthand),
+        `${configPath} has a title selector method this gate cannot parse`,
+      );
+      if (shorthand === "grep" || shorthand === "grepInvert")
+        ops.push({ kind: "key", key: shorthand, value: true });
       if (shorthand === "testDir")
         assert.fail(
           `${configPath} has a testDir this gate cannot parse: use a plain string literal`,
@@ -1356,6 +1373,10 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
       continue;
     }
     const key = entryCode.slice(0, colon).trim();
+    if (key === "grep" || key === "grepInvert") {
+      ops.push({ kind: "key", key, value: true });
+      continue;
+    }
     if (key !== "testDir" && key !== "testMatch" && key !== "testIgnore" && key !== "projects") {
       failOnNonPlainSelectionKey(clean.slice(start, end).slice(0, colon).trim(), configPath);
       continue;
@@ -1407,13 +1428,22 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
       });
     }
   }
-  const merged = { testDir: null, testMatch: null, testIgnore: null, projects: null };
+  const merged = {
+    testDir: null,
+    testMatch: null,
+    testIgnore: null,
+    projects: null,
+    grep: null,
+    grepInvert: null,
+  };
   for (const op of ops) {
     if (op.kind === "spread") {
       if (op.parsed.testDir !== null) merged.testDir = op.parsed.testDir;
       if (op.parsed.testMatch !== null) merged.testMatch = op.parsed.testMatch;
       if (op.parsed.testIgnore !== null) merged.testIgnore = op.parsed.testIgnore;
       if (op.parsed.projects !== null) merged.projects = op.parsed.projects;
+      if (op.parsed.grep !== null) merged.grep = op.parsed.grep;
+      if (op.parsed.grepInvert !== null) merged.grepInvert = op.parsed.grepInvert;
     } else {
       merged[op.key] = op.value;
     }
@@ -1540,6 +1570,8 @@ function patternMatchesFile(patterns, file) {
 function configMatchesFile(parsed, configRel, file) {
   const contexts = parsed.projects && parsed.projects.length ? parsed.projects : [{}];
   return contexts.some((project) => {
+    // A title selector does not establish whole-spec or transitive coverage.
+    if (project.grep || project.grepInvert || parsed.grep || parsed.grepInvert) return false;
     const testDir = normalizeTestDir(project.testDir ?? parsed.testDir ?? ".", configRel);
     if (!isFileUnderDir(file, testDir)) return false;
     const testMatch = project.testMatch ?? parsed.testMatch;
@@ -2313,6 +2345,64 @@ function selftest() {
       assert.match(warn.stdout, /never-wired/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright config title selectors do not establish whole-spec coverage", () => {
+    const cases = [
+      { selector: "grep: /selected/", filtered: true },
+      { selector: "grepInvert: /excluded/", filtered: true },
+      { selector: "projects: [{ name: 'selected', grep: /selected/ }]", filtered: true },
+      { selector: "projects: [{ name: 'selected', grepInvert: /excluded/ }]", filtered: true },
+      {
+        selector: "projects: [{ name: 'selected', grep: /selected/ }, { name: 'all' }]",
+        filtered: false,
+      },
+      { selector: "", filtered: false },
+      { selector: "...base", inherited: true, filtered: true },
+      { selector: "grep: /selected/", control: true, filtered: false },
+    ];
+    for (const entry of cases) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-title-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          `name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.fixture.config.ts\n${entry.control ? "      - run: npx playwright test --config playwright.control.config.ts\n" : ""}`,
+        );
+        if (entry.control)
+          writeFileSync(
+            join(dir, "playwright.control.config.ts"),
+            'export default defineConfig({ testDir: "./e2e", testMatch: "entry.spec.ts" });\n',
+          );
+        if (entry.inherited)
+          writeFileSync(
+            join(dir, "playwright.base.config.ts"),
+            "export default defineConfig({ grepInvert: /excluded/ });\n",
+          );
+        writeFileSync(
+          join(dir, "playwright.fixture.config.ts"),
+          `${entry.inherited ? 'import base from "./playwright.base.config";\n' : ""}export default defineConfig({ testDir: "./e2e", testMatch: "entry.spec.ts", ${entry.selector} });\n`,
+        );
+        mkdirSync(join(dir, "e2e"), { recursive: true });
+        writeFileSync(
+          join(dir, "e2e", "entry.spec.ts"),
+          'import "./suite.visual";\nimport { test } from "@playwright/test";\ntest("entry", async () => {});\n',
+        );
+        writeFileSync(
+          join(dir, "e2e", "suite.visual.ts"),
+          'import { test } from "@playwright/test";\ntest("suite", async () => {});\n',
+        );
+        const { orphans } = playwrightInventory(dir);
+        assert.deepEqual(
+          orphans,
+          entry.filtered ? ["e2e/entry.spec.ts", "e2e/suite.visual.ts"] : [],
+          entry.selector,
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 
