@@ -128,7 +128,8 @@ function runLhci(env) {
 async function clearOriginAttemptEvidence(dir) {
   const names = await readdir(dir).catch(() => []);
   for (const name of names) {
-    if (!/^lhr-\d+(?:-\d+)?\.(json|html)$/.test(name) && name !== "assertion-results.json") continue;
+    if (!/^lhr-\d+(?:-\d+)?\.(json|html)$/.test(name) && name !== "assertion-results.json")
+      continue;
     try {
       await rm(join(dir, name), { force: true });
     } catch {
@@ -268,7 +269,8 @@ async function archiveMarginalAttempt(
   );
   const names = await readdir(dir).catch(() => []);
   for (const name of names) {
-    if (!/^lhr-\d+(?:-\d+)?\.(json|html)$/.test(name) && name !== "assertion-results.json") continue;
+    if (!/^lhr-\d+(?:-\d+)?\.(json|html)$/.test(name) && name !== "assertion-results.json")
+      continue;
     try {
       await copyFile(join(dir, name), join(attemptDir, name));
     } catch {

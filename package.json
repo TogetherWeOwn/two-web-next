@@ -126,6 +126,7 @@
     "@biomejs/biome": "2.6.7",
     "@cloudflare/workers-types": "^5.20261113.1",
     "@lhci/cli": "0.16.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@playwright/test": "1.65.0",
     "@types/node": "^26.6.5",
     "@vitest/coverage-v8": "^5.1.0",

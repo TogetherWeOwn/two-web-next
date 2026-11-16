@@ -158,7 +158,7 @@ describe("SDK Node adapter candidate", () => {
     const sdkPackage = JSON.parse(
       readFileSync(join(dirname(sdkEntry), "..", "..", "..", "package.json"), "utf8"),
     );
-    expect(sdkPackage.version).toBe("1.32.1");
+    expect(sdkPackage.version).toBe("1.32.2");
     const adapterEntry = sdkRequire.resolve("@hono/node-server");
     const adapterPackage = JSON.parse(
       readFileSync(join(dirname(adapterEntry), "..", "package.json"), "utf8"),
