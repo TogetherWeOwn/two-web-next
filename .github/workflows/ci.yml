@@ -766,7 +766,7 @@ jobs:
       # somewhere. Filesystem-only; --strict fails the job on any orphan.
       - name: Test inventory (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run test:inventory:selftest && npm run test:inventory -- --strict
+        run: node --test ci/inventory-data-config.test.mjs && npm run test:inventory:selftest && npm run test:inventory -- --strict
       # SvelteKit workspaces (house-rules parity): unit coverage SSR-compiles
       # .svelte through web's svelte/compiler, so install before Check. Runs
       # whenever Check runs (docs/draft gate only): coverage runs every test
