@@ -2,6 +2,7 @@ import { isNull, sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -260,6 +261,38 @@ export const rsvps = pgTable(
     index("rsvps_user_id_idx").on(t.userId),
     index("rsvps_event_id_status_index").on(t.eventId, t.status),
     index("rsvps_unsynced_event_id_index").on(t.eventId).where(isNull(t.syncedToDiscordAt)),
+  ],
+);
+
+// Dormant (no app path reads or writes it yet): a site-owned hold on one seat for
+// the waitlisted RSVP it names. Deleting the RSVP (withdrawal, erasure) deletes the
+// offer, so there is deliberately no member id or event id here (the event is
+// reached through the RSVP and cannot disagree with it). Only one offer per RSVP may
+// be held at a time; settled rows stay, so a later lifecycle can issue a fresh offer
+// with a fresh notification key.
+export const waitlistOffers = pgTable(
+  "waitlist_offers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    rsvpId: integer("rsvp_id")
+      .notNull()
+      .references(() => rsvps.id, { onDelete: "cascade" }),
+    // held | accepted | declined | expired. Only a held, unexpired offer holds a seat.
+    state: text("state").notNull().default("held"),
+    offeredAt: timestamp("offered_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    // Persisted idempotency key for this offer's notification, fixed at creation.
+    notificationKey: uuid("notification_key").notNull().defaultRandom().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      "waitlist_offers_state_check",
+      sql`${t.state} IN ('held', 'accepted', 'declined', 'expired')`,
+    ),
+    check("waitlist_offers_window_check", sql`${t.expiresAt} > ${t.offeredAt}`),
+    uniqueIndex("waitlist_offers_held_rsvp_idx").on(t.rsvpId).where(sql`${t.state} = 'held'`),
   ],
 );
 

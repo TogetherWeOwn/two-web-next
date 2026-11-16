@@ -548,13 +548,14 @@ test("policy scope pins exact proposal names against schema declarations", async
     const text = readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
     for (const [, name] of text.matchAll(/pgTable\(\s*"([A-Za-z0-9_]+)"/g)) declared.push(name);
   }
+  // waitlist_offers (dormant storage) is the second post-proposal table.
   // web_session_grace postdates the frozen proposal scope: the census still
   // surfaces it as an extra-table finding, but the candidate policies read
   // covers only the exact proposal tables plus the separate ledger. Any other
   // drift in either direction fails loudly here.
   assert.deepEqual(
     declared.filter((name) => !POLICY_TABLES.includes(name)),
-    ["web_session_grace"],
+    ["web_session_grace", "waitlist_offers"],
   );
   assert.deepEqual(
     POLICY_TABLES.filter((name) => !declared.includes(name)),

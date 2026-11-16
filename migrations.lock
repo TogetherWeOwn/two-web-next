@@ -136,6 +136,10 @@
     {
       "path": "drizzle/1033_session-roles-checked-at.sql",
       "sha256": "352b2bce735e1bf57241df14d264ce0843d0300170e3e6763341f0000b615734"
+    },
+    {
+      "path": "drizzle/1037_waitlist-offers.sql",
+      "sha256": "b2e27ee13e6c9594b19f612b8f95cf7ff4dc1d219b4885d57461125f41b0987f"
     }
   ]
 }

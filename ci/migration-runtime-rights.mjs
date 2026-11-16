@@ -32,6 +32,9 @@ export const TABLE_RIGHTS = Object.freeze({
   "public.web_throttle_hits": ["DELETE", "INSERT", "SELECT", "UPDATE"],
   "public.web_sessions": ["DELETE", "INSERT", "SELECT", "UPDATE"],
   "public.web_oauth_journeys": ["DELETE", "INSERT", "SELECT", "UPDATE"],
+  // Dormant offers: rows leave only through the RSVP cascade (referential actions
+  // run as the table owner), so the runtime role gets no direct DELETE.
+  "public.waitlist_offers": ["INSERT", "SELECT", "UPDATE"],
 });
 
 export const SEQUENCE_RIGHTS = Object.freeze(
