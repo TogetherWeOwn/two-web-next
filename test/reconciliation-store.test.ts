@@ -17,13 +17,19 @@ describe("dormant reconciliation persistence", () => {
       lastCode: "unknown",
     });
     expect(reconciliationIntent(intent)).toEqual(intent);
+    for (const valid of [{ subject: "a".repeat(200) }, { lastStatus: 100 }, { lastStatus: 599 }]) {
+      expect(reconciliationIntent({ ...intent, ...valid })).toEqual({ ...intent, ...valid });
+    }
     for (const invalid of [
       { idempotencyKey: "bad" },
       { verb: "voice.move_member" },
       { subject: "message body" },
+      { subject: "" },
       { subject: "a".repeat(201) },
       { attempts: 0 },
+      { attempts: 1.5 },
       { attempts: 2147483648 },
+      { lastStatus: 99 },
       { lastStatus: 600 },
     ]) {
       expect(() => reconciliationIntent({ ...intent, ...invalid })).toThrow();
