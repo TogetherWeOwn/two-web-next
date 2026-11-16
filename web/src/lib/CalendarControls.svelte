@@ -34,7 +34,17 @@ import { feedUrl, webcalUrl } from "../../../src/events/feeds";
 import { SUBSCRIPTION_GUIDANCE } from "../../../src/events/subscription-copy";
 import SegmentedControl from "./SegmentedControl.svelte";
 
-let { state, appUrl, games, gameFilter, searching, pastCount, emptyState, hasVisibleResults, outOfRange }: {
+let {
+  state,
+  appUrl,
+  games,
+  gameFilter,
+  searching,
+  pastCount,
+  emptyState,
+  hasVisibleResults,
+  outOfRange,
+}: {
   state: CalendarState;
   appUrl: string;
   games: string[];
@@ -50,9 +60,15 @@ let url = $derived(feedUrl(appUrl, gameFilter));
 let searchStatus = $derived(
   searching && emptyState !== "error"
     ? hasVisibleResults || outOfRange
-      ? gameFilter !== null ? eventsSearchGameHitCopy(state.q, gameFilter) : eventsSearchHitCopy(state.q)
-      : gameFilter !== null ? eventsSearchGameMissCopy(state.q, gameFilter) : eventsSearchMissCopy(state.q)
-    : gameFilter !== null && emptyState !== "error" ? eventsGameFilterCopy(gameFilter) : "",
+      ? gameFilter !== null
+        ? eventsSearchGameHitCopy(state.q, gameFilter)
+        : eventsSearchHitCopy(state.q)
+      : gameFilter !== null
+        ? eventsSearchGameMissCopy(state.q, gameFilter)
+        : eventsSearchMissCopy(state.q)
+    : gameFilter !== null && emptyState !== "error"
+      ? eventsGameFilterCopy(gameFilter)
+      : "",
 );
 </script>
 

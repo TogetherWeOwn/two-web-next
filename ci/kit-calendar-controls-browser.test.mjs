@@ -48,12 +48,12 @@ for (const [scenario, page] of Object.entries(scenarios)) {
         const overflow = await page.evaluate(
           () => document.documentElement.scrollWidth - innerWidth,
         );
-        assert.ok(overflow <= 0, `no horizontal overflow at ${width}px`);
         if (evidence)
           await page.screenshot({
             path: join(evidence, `calendar-controls-${scenario}-${name}.png`),
             fullPage: true,
           });
+        assert.ok(overflow <= 0, `horizontal overflow at ${width}px: ${overflow}px`);
       }
       const box = await page.locator('p[role="status"].sr-only').first().boundingBox();
       assert.ok(box && box.width <= 1 && box.height <= 1, "status regions stay visually hidden");

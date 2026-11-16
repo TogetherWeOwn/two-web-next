@@ -22,6 +22,7 @@ let {
 
   .segments {
     display: inline-flex;
+    box-sizing: border-box;
     padding: --theme(--space-1);
     border: 1px solid --theme(--color-hair1);
     border-radius: --theme(--radius-pill);
