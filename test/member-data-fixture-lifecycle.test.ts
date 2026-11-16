@@ -16,7 +16,13 @@ const mocks = vi.hoisted(() => {
   const postgres = vi.fn();
   const migrations = vi.fn(() => [
     { sql: ["CREATE TABLE users (id text PRIMARY KEY)", "   "] },
-    { sql: ['CREATE TABLE profiles (id text REFERENCES "public".users(id))'] },
+    {
+      sql: [
+        'CREATE TABLE profiles (id text REFERENCES "public".users(id))',
+        "GRANT DELETE ON TABLE public.profiles TO two_web_app",
+        "GRANT USAGE ON SEQUENCE public.profiles_id_seq TO two_web_app",
+      ],
+    },
   ]);
   return { tx, admin, client, postgres, migrations };
 });
@@ -40,6 +46,8 @@ it("replays every nonempty canonical statement in order in one schema-scoped tra
     expect(mocks.tx.unsafe.mock.calls).toEqual([
       ["CREATE TABLE users (id text PRIMARY KEY)"],
       [`CREATE TABLE profiles (id text REFERENCES "${fixture.schemaName}".users(id))`],
+      [`GRANT DELETE ON TABLE "${fixture.schemaName}".profiles TO two_web_app`],
+      [`GRANT USAGE ON SEQUENCE "${fixture.schemaName}".profiles_id_seq TO two_web_app`],
     ]);
     const options = mocks.postgres.mock.calls[1]![1];
     expect(options.max).toBe(1);
