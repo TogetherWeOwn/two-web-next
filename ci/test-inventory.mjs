@@ -306,13 +306,17 @@ function listPlaywrightSpecs(root) {
 // below. `strict` fails closed when an unterminated heredoc swallows text
 // that names a Playwright run or an npm run: bash then treats it as data, but
 // this gate cannot tell a typo from intent. Prefix slices pass no `strict`
-// because an open heredoc there only means the slice was cut short.
+// because an open heredoc there only means the slice was cut short. An
+// unquoted delimiter lets bash join backslash-newline in the body before
+// matching, so `body \` + `EOF` is one data line; a quoted delimiter does
+// not. `mask` blanks heredoc data (offset-aligned, newlines kept) so command
+// discovery never reads it as an invocation.
 function heredocEnds(line, marker, strip) {
   const bare = line.replace(/\r$/, "");
   return (strip ? bare.replace(/^\t+/, "") : bare) === marker;
 }
 
-function normalizeShell(text, { strict = false } = {}) {
+function normalizeShell(text, { strict = false, mask = false } = {}) {
   let out = "";
   let quote = null;
   let tokenStart = true;
@@ -329,17 +333,26 @@ function normalizeShell(text, { strict = false } = {}) {
       out += c;
       let pos = i + 1;
       while (pending.length > 0) {
-        const { marker, strip } = pending.shift();
+        const { marker, strip, quoted } = pending.shift();
         let closed = false;
         let body = "";
         while (pos < text.length) {
-          const end = text.indexOf("\n", pos);
-          const stop = end === -1 ? text.length : end;
-          const line = text.slice(pos, stop);
-          out += text.slice(pos, end === -1 ? stop : end + 1);
+          const first = pos;
+          let end = text.indexOf("\n", pos);
+          let stop = end === -1 ? text.length : end;
+          let line = text.slice(pos, stop);
+          while (!quoted && end !== -1 && /(?:^|[^\\])(?:\\\\)*\\\r?$/.test(line)) {
+            pos = end + 1;
+            end = text.indexOf("\n", pos);
+            stop = end === -1 ? text.length : end;
+            line = `${line.replace(/\\\r?$/, "")}${text.slice(pos, stop)}`;
+          }
+          const raw = text.slice(first, end === -1 ? stop : end + 1);
+          out += mask ? raw.replace(/[^\n]/g, " ") : raw;
           pos = end === -1 ? stop : end + 1;
           if (heredocEnds(line, marker, strip)) {
             closed = true;
+            if (mask) out = out.slice(0, out.length - raw.length) + raw;
             break;
           }
           body += `${line}\n`;
@@ -360,9 +373,9 @@ function normalizeShell(text, { strict = false } = {}) {
       continue;
     }
     if (!quote && c === "<" && text[i + 1] === "<" && text[i + 2] !== "<" && text[i - 1] !== "<") {
-      const m = /^<<(-?)[ \t]*\\?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/.exec(text.slice(i));
+      const m = /^<<(-?)[ \t]*(\\?)(['"]?)([A-Za-z_][A-Za-z0-9_]*)\3/.exec(text.slice(i));
       if (m) {
-        pending.push({ marker: m[3], strip: m[1] === "-" });
+        pending.push({ marker: m[4], strip: m[1] === "-", quoted: m[2] !== "" || m[3] !== "" });
         out += m[0];
         i += m[0].length - 1;
         tokenStart = false;
@@ -543,7 +556,7 @@ function splitShellTokens(segment) {
 // normalized by workflowShellView); `index` then refers to `text` itself.
 function parseNpmRunOccurrences(text, { shell = true } = {}) {
   const out = [];
-  const joined = shell ? normalizeShell(text) : text;
+  const joined = shell ? normalizeShell(text, { mask: true }) : text;
   for (const m of joined.matchAll(/\bnpm\s+run(?:-script)?\b/g)) {
     const lineEnd = joined.indexOf("\n", m.index);
     const segment = joined.slice(m.index + m[0].length, lineEnd === -1 ? undefined : lineEnd);
@@ -656,7 +669,7 @@ function invokedScriptNames(scripts, workflowText) {
       }
     }
   };
-  const stripped = stripYamlComments(workflowText.split("\n")).join("\n");
+  const stripped = maskYamlHeredocs(stripYamlComments(workflowText.split("\n"))).join("\n");
   scan(stripped, "a workflow step", false);
   while (queue.length) {
     const next = queue.shift();
@@ -698,6 +711,35 @@ function invokedScriptNames(scripts, workflowText) {
 function stripYamlComments(lines) {
   const content = literalScriptLines(lines);
   return lines.map((l, i) => (content.has(i) ? l : stripYamlComment(l)));
+}
+
+// Blank heredoc data inside literal `run:` blocks for `npm run` discovery
+// only; fail closed if masking cannot retain the source offsets.
+function maskYamlHeredocs(lines) {
+  const content = literalScriptLines(lines);
+  const out = [...lines];
+  for (let i = 0; i < lines.length; i++) {
+    if (!content.has(i) || content.has(i - 1)) continue;
+    let j = i;
+    while (content.has(j + 1)) j++;
+    const base = Math.min(
+      ...lines
+        .slice(i, j + 1)
+        .filter((l) => l.trim())
+        .map(indentOf),
+    );
+    const pad = " ".repeat(Number.isFinite(base) ? base : 0);
+    const block = lines.slice(i, j + 1).map((l) => l.slice(pad.length));
+    const masked = normalizeShell(block.join("\n"), { mask: true }).split("\n");
+    assert.ok(
+      masked.length === block.length && masked.every((l, k) => l.length === block[k].length),
+      "cannot preserve workflow shell offsets while masking heredoc data",
+    );
+    masked.forEach((l, k) => {
+      out[i + k] = lines[i + k].slice(0, pad.length) + l;
+    });
+  }
+  return out;
 }
 
 function stripYamlComment(line) {
@@ -955,41 +997,17 @@ function shellChangesCwd(line) {
 const ROOT_CWD_REMEDIATION =
   "this gate cannot resolve playwright runs outside the repo root; run the step or script at the root or teach ci/test-inventory.mjs the new form";
 
-// Heredoc opener (`<<EOF`, `<<'EOF'`, `<<-EOF`): body lines up to the marker
-// are data, so a bare `cd` line inside one is not a directory change. The
-// `<<` must sit outside quotes (`<<<` herestrings are single-line and never
-// match); the marker itself may be quoted.
-function heredocMarker(line) {
-  let quote = null;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (quote) {
-      if (c === "\\" && quote !== "'") i++;
-      else if (c === quote) quote = null;
-    } else if (c === '"' || c === "'" || c === "`") quote = c;
-    else if (c === "<" && line[i + 1] === "<" && line[i + 2] !== "<") {
-      const m = /^<<(-?)[ \t]*\\?['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/.exec(line.slice(i));
-      return m ? { marker: m[2], strip: m[1] === "-" } : null;
-    }
-  }
-  return null;
-}
-
 // Apply the same cwd guard to workflow shells and package scripts. Only the
 // prefix before an invocation matters. Heredoc data and command substitutions
 // do not move the caller; directory-stack builtins do, just like cd.
 function assertRootShellCwd(prefix, where) {
-  let heredoc = null;
-  for (const line of normalizeShell(prefix).split("\n")) {
-    if (heredoc !== null) {
-      if (heredocEnds(line, heredoc.marker, heredoc.strip)) heredoc = null;
-      continue;
-    }
+  // Masked heredoc data is blank, so a data line can never read as `cd`; an
+  // open heredoc at the end of a cut-short prefix just masks to the end.
+  for (const line of normalizeShell(prefix, { mask: true }).split("\n")) {
     assert.ok(
       !shellChangesCwd(line),
       `${where} runs after a shell directory change: ${ROOT_CWD_REMEDIATION}`,
     );
-    heredoc = heredocMarker(line);
   }
 }
 
@@ -1054,8 +1072,9 @@ function auditWorkflowNpmRunCwd(workflowFiles, scripts) {
     const lines = stripYamlComments(text.split("\n"));
     if (!lines.some((l) => l.includes("npm") && l.includes("run"))) continue;
     const ctx = { file: name, lines, content: literalScriptLines(lines) };
-    lines.forEach((line, idx) => {
-      for (const occ of parseNpmRunOccurrences(line, { shell: false })) {
+    const maskedLines = maskYamlHeredocs(lines);
+    lines.forEach((_, idx) => {
+      for (const occ of parseNpmRunOccurrences(maskedLines[idx], { shell: false })) {
         if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
         const target = scriptRunsPlaywright(scripts, occ.name);
         if (!target.runs && !target.unknown) continue;
@@ -1072,9 +1091,10 @@ function auditWorkflowNpmRunCwd(workflowFiles, scripts) {
 function auditScriptCwd(scripts, invoked) {
   for (const name of invoked) {
     const body = normalizeShell(scripts[name] ?? "", { strict: true });
+    const masked = normalizeShell(body, { mask: true });
     for (const match of body.matchAll(/\bplaywright\s+test\b/g))
       assertRootShellCwd(body.slice(0, match.index), `script "${name}" runs playwright test`);
-    for (const occ of parseNpmRunOccurrences(body, { shell: false })) {
+    for (const occ of parseNpmRunOccurrences(masked, { shell: false })) {
       if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
       const target = scriptRunsPlaywright(scripts, occ.name);
       if (target.runs || target.unknown)
@@ -2042,7 +2062,7 @@ function selftest() {
       },
       {
         name: "heredoc trailing backslash does not join the marker",
-        run: "cat <<EOF\nbody \\\nEOF\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
+        run: "cat <<'EOF'\nbody \\\nEOF\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
         throws: /directory change/,
       },
       {
@@ -2062,7 +2082,7 @@ function selftest() {
         name: "package script heredoc apostrophe and continuation",
         run: "npm run e2e",
         scripts: {
-          e2e: "cat <<EOF\ndon't \\\nEOF\nplaywright test --config playwright.fixture.config.ts",
+          e2e: "cat <<'EOF'\ndon't \\\nEOF\nplaywright test --config playwright.fixture.config.ts",
         },
         orphans: [],
       },
@@ -2093,6 +2113,26 @@ function selftest() {
           e2e: "playwright test --config playwright.fixture.config.ts \\\n e2e/a.spec.ts",
         },
         orphans: ["e2e/b.spec.ts"],
+      },
+      {
+        name: "unquoted heredoc joins backslash newline before the delimiter",
+        run: "cat <<EOF\nbody \\\nEOF\ncd web\nEOF\nnpx playwright test --config playwright.fixture.config.ts",
+        orphans: [],
+      },
+      {
+        name: "heredoc comment npm run is data in a workflow",
+        run: "cat <<'EOF'\n# npm run e2e\nEOF",
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "heredoc comment npm run is data in a package script",
+        run: "npm run outer",
+        scripts: {
+          outer: "cat <<'EOF'\n# npm run e2e\nEOF",
+          e2e: "playwright test --config playwright.fixture.config.ts",
+        },
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
       },
       {
         name: "apostrophe in script comment",
