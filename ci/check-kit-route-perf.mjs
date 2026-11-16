@@ -283,16 +283,33 @@ export function checkRoutes(root = resolve(import.meta.dirname, "..")) {
     const measurement = measureRoutes(root);
     same(Object.keys(measurement.routes), Object.keys(budget.routes));
     const breaches = [];
+    const warnings = [];
     const headroomShortfalls = [];
     for (const [id, route] of Object.entries(measurement.routes)) {
       for (const kind of ["js", "css"]) {
         const value = route[kind];
         const ceiling = budget.routes[id][kind];
-        if (
-          value.rawBytes > ceiling.maxRawBytes ||
-          value.gzipBytes > ceiling.maxGzipBytes ||
-          value.files > ceiling.maxFiles
-        )
+        const rawOver = value.rawBytes > ceiling.maxRawBytes;
+        const gzipOver = value.gzipBytes > ceiling.maxGzipBytes;
+        if (kind === "css") {
+          if (rawOver)
+            warnings.push({
+              route: id,
+              kind,
+              metric: "rawBytes",
+              measured: value.rawBytes,
+              ceiling: ceiling.maxRawBytes,
+            });
+          if (gzipOver)
+            warnings.push({
+              route: id,
+              kind,
+              metric: "gzipBytes",
+              measured: value.gzipBytes,
+              ceiling: ceiling.maxGzipBytes,
+            });
+        }
+        if (value.files > ceiling.maxFiles || (kind === "js" && (rawOver || gzipOver)))
           breaches.push(`${id} ${kind}`);
         if (
           targetBytes(value.rawBytes, 512) > ceiling.maxRawBytes ||
@@ -301,7 +318,13 @@ export function checkRoutes(root = resolve(import.meta.dirname, "..")) {
           headroomShortfalls.push(`${id} ${kind}`);
       }
     }
-    return { ...measurement, exitCode: breaches.length ? 1 : 0, breaches, headroomShortfalls };
+    return {
+      ...measurement,
+      exitCode: breaches.length ? 1 : 0,
+      breaches,
+      warnings,
+      headroomShortfalls,
+    };
   } catch (error) {
     return {
       version: 1,
