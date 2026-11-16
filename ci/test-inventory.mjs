@@ -326,7 +326,20 @@ function workflowShellView(text, name) {
   if (isSeq(doc.contents)) collectSteps(doc.contents);
   visit(doc, {
     Pair(_, pair) {
-      if (!isScalar(pair.key) || pair.key.value !== "run" || !isScalar(pair.value)) return;
+      if (!isScalar(pair.key)) return;
+      // The structural cwd audit must see decoded control keys too, including
+      // a mapping-valued `run` under workflow or job defaults.
+      if (
+        ["defaults", "working-directory"].includes(pair.key.value) ||
+        (pair.key.value === "run" && isMap(pair.value))
+      ) {
+        edits.push({
+          start: pair.key.range[0],
+          end: pair.key.range[1],
+          replacement: pair.key.value,
+        });
+      }
+      if (pair.key.value !== "run" || !isScalar(pair.value)) return;
       const node = pair.value;
       if (typeof node.value !== "string") return;
       if (!stepRuns.has(pair)) {
@@ -1012,7 +1025,7 @@ function assertRootStepCwd(ctx, idx, at, what) {
   let stepValue = null;
   for (let k = step.start; k < step.end; k++) {
     if (content.has(k)) continue;
-    const m = /^\s*working-directory\s*:\s*(.+?)\s*(#.*)?$/.exec(lines[k]);
+    const m = /^\s*(?:-\s+)?working-directory\s*:\s*(.+?)\s*(#.*)?$/.exec(lines[k]);
     if (m) stepValue = m[1];
   }
   if (stepValue !== null) {
@@ -2627,6 +2640,22 @@ function selftest() {
         assert.deepEqual(playwrightInventory(dir).orphans, []);
         assert.equal(playwrightJsonSummary(dir).reachable, 2);
         assert.deepEqual(playwrightJsonSummary(dir).orphans, []);
+        for (const scope of ["workflow", "job", "step"]) {
+          const defaults = `${quote}defaults${quote}:\n  ${quote}run${quote}:\n    ${quote}working-directory${quote}: web\n`;
+          const workflowDefaults = scope === "workflow" ? defaults : "";
+          const jobDefaults = scope === "job" ? defaults.replace(/^/gm, "    ") : "";
+          const stepCwd =
+            scope === "step" ? `        ${quote}working-directory${quote}: web\n` : "";
+          const prefix = `name: ci\n${workflowDefaults}jobs:\n  t:\n${jobDefaults}    steps:\n      - ${quote}run${quote}: npx playwright test\n`;
+          writeFileSync(workflow, prefix + stepCwd);
+          assert.throws(() => playwrightInventory(dir), /cannot resolve/);
+          assert.throws(() => playwrightJsonSummary(dir), /cannot resolve/);
+          if (scope !== "step") {
+            writeFileSync(workflow, prefix + `        ${quote}working-directory${quote}: .\n`);
+            assert.deepEqual(playwrightInventory(dir).orphans, []);
+            assert.deepEqual(playwrightJsonSummary(dir).orphans, []);
+          }
+        }
         writeFileSync(
           join(dir, "package.json"),
           JSON.stringify({ scripts: { browser: "playwright test" } }),
