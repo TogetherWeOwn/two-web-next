@@ -345,7 +345,7 @@ function workflowShellView(text, name) {
       // YAML properties precede the scalar range and would survive rewriting,
       // hiding its block header from the cwd auditor while discovery sees it.
       assert.ok(
-        !stepRuns.has(pair) || (!node.anchor && !node.tag),
+        !stepRuns.has(pair) || (!pair.key.anchor && !pair.key.tag && !node.anchor && !node.tag),
         `${name} has an anchored or tagged run command this gate cannot model`,
       );
       if (!stepRuns.has(pair)) {
@@ -2622,12 +2622,14 @@ function selftest() {
       for (const property of ["&command", "!!str"]) {
         for (const command of ["npm run browser", "npx playwright test"]) {
           for (const cwd of [".", "web"]) {
-            writeFileSync(
-              workflow,
-              `name: ci\njobs:\n  t:\n    steps:\n      - run: ${property} ${command}\n        working-directory: ${cwd}\n`,
-            );
-            assert.throws(() => playwrightInventory(dir), /anchored or tagged run command/);
-            assert.throws(() => playwrightJsonSummary(dir), /anchored or tagged run command/);
+            for (const run of [`${property} run: ${command}`, `run: ${property} ${command}`]) {
+              writeFileSync(
+                workflow,
+                `name: ci\njobs:\n  t:\n    steps:\n      - name: browser\n        ${run}\n        working-directory: ${cwd}\n`,
+              );
+              assert.throws(() => playwrightInventory(dir), /anchored or tagged run command/);
+              assert.throws(() => playwrightJsonSummary(dir), /anchored or tagged run command/);
+            }
           }
         }
       }
