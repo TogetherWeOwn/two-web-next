@@ -451,6 +451,37 @@ function splitShellTokens(segment) {
 // `npm run -- b` still runs b.
 function parseNpmRunOccurrences(text) {
   const out = [];
+  // Discovery precedes argument validation. Reject non-bare selector names
+  // here, before quoted or composed tokens can create phantom npm calls.
+  // The argument tokenizer accepts whole quoted tokens as well as bare ones;
+  // this lexical cut also rejects shell-composed and escaped option names.
+  const lexical = text;
+  let normalized = "";
+  const offsets = [];
+  for (let i = 0; i < lexical.length; i++) {
+    if (lexical[i] === '"' || lexical[i] === "'") continue;
+    if (lexical[i] === "\\" && lexical[i + 1] === "\n") {
+      i++;
+      continue;
+    }
+    if (lexical[i] === "\\" && lexical[i + 1] === "\r" && lexical[i + 2] === "\n") {
+      i += 2;
+      continue;
+    }
+    if (lexical[i] === "\\" && i + 1 < lexical.length) i++;
+    normalized += lexical[i];
+    offsets.push(i);
+  }
+  for (const match of normalized.matchAll(/--grep(?==|\s|$)/g)) {
+    const start = offsets[match.index];
+    const end = offsets[match.index + match[0].length - 1] + 1;
+    assert.ok(
+      lexical.slice(start, end) === "--grep" &&
+        !/["'\\]/.test(lexical[start - 1] ?? "") &&
+        !/["'\\]/.test(lexical[end] ?? ""),
+      "CI has a non-bare playwright --grep option name; this gate cannot model it",
+    );
+  }
   const joined = text.replace(/\\\r?\n/g, " ");
   for (const m of joined.matchAll(/\bnpm\s+run(?:-script)?\b/g)) {
     // A grep operand can contain command-like text. Fail closed before npm
@@ -2494,6 +2525,35 @@ function selftest() {
         "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --grep smoke\n      - run: npx playwright test\n",
       );
       assert.deepEqual(playwrightInventory(dir).orphans, []);
+      for (const quote of ["'", '"']) {
+        for (const args of [
+          `${quote}--grep${quote} "npm run browser"`,
+          `${quote}--grep=npm run browser${quote}`,
+          `${quote}--grep${quote}="npm run browser"`,
+        ]) {
+          const filtered = `playwright test ${args}`;
+          writeFileSync(
+            join(dir, "package.json"),
+            JSON.stringify({ scripts: { browser: "playwright test", nested: filtered } }),
+          );
+          run(`npx ${filtered}`);
+          assert.throws(() => playwrightInventory(dir), /non-bare playwright --grep option name/);
+          run("npm run nested");
+          assert.throws(() => playwrightInventory(dir), /non-bare playwright --grep option name/);
+        }
+      }
+      for (const args of ['--g"re"p "npm run browser"', '--gr\\ep "npm run browser"']) {
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({
+            scripts: { browser: "playwright test", nested: `playwright test ${args}` },
+          }),
+        );
+        run(`npx playwright test ${args}`);
+        assert.throws(() => playwrightInventory(dir), /non-bare playwright --grep option name/);
+        run("npm run nested");
+        assert.throws(() => playwrightInventory(dir), /non-bare playwright --grep option name/);
+      }
       for (const args of ['--grep "npm run browser"', '--grep="npm run browser"']) {
         const filtered = `playwright test ${args}`;
         const scripts = { browser: "playwright test", nested: filtered };
