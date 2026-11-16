@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import rawApp from "../src/index";
-import app from "./app";
+import { fetchApp } from "./helpers/fetch-app";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import {
@@ -64,8 +64,16 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: openapi.json", () =
     await fixture?.dispose();
   });
 
+  // Default dispatch is the mounted Hono app, not a built Kit Worker.
   const get = async (path: string) =>
-    app.request(path, { headers: { "cf-connecting-ip": "192.0.2.76" } }, env);
+    fetchApp(
+      new Request(new URL(path, APP_URL), { headers: { "cf-connecting-ip": "192.0.2.76" } }),
+      env,
+      {
+        waitUntil: () => {},
+        passThroughOnException: () => {},
+      } as unknown as ExecutionContext,
+    );
 
   type PathItem = { get?: { responses?: Record<string, unknown> } };
 

@@ -55,9 +55,10 @@ Only supplied saved static SSR states are covered. Not auth, save interactions, 
 
 The current-source guard follows runtime imports, including the exact ignored
 `src/leaf-critical-css.ts` output before it exists. That module requires scope
-coverage for its tracked generator, `ci/build-leaf-css.mjs`, and all three inputs:
-`public/styles.css`, `public/theme-tokens.css` and `public/theme.css`. Listing the
-output itself does not replace those requirements. Other runtime source modules
+coverage for its tracked generator, `ci/build-leaf-css.mjs`, and all four inputs:
+`public/styles.css`, `public/theme-tokens.css`, `public/theme.css` and
+`web/src/lib/site-header.css`, in that order. Listing the output itself does not
+replace those requirements. Other runtime source modules
 still require ordinary direct or glob coverage.
 
 The guard pins the generator's SHA-256 without executing it and reads every input.
