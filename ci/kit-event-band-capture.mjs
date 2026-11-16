@@ -168,6 +168,33 @@ try {
               stylesheets.length && stylesheets.every((asset) => asset.bytes > 0),
               "compiled stylesheet missing",
             );
+            const captureState = () =>
+              page.evaluate(() => {
+                const active = document.activeElement;
+                const skip = document.querySelector('a[href="#main"]');
+                const rect = skip?.getBoundingClientRect();
+                const style = skip && getComputedStyle(skip);
+                return {
+                  scrollX: window.scrollX,
+                  scrollY: window.scrollY,
+                  activeElement: active && {
+                    tag: active.tagName,
+                    id: active.id,
+                    className: active.getAttribute("class"),
+                    href: active.getAttribute("href"),
+                  },
+                  skipLink: skip && {
+                    text: skip.textContent.trim(),
+                    focused: active === skip,
+                    top: rect.top,
+                    bottom: rect.bottom,
+                    position: style.position,
+                    transform: style.transform,
+                  },
+                };
+              });
+            const beforeReset = await captureState();
+            await page.evaluate(() => window.scrollTo(0, 0));
             for (const [kind, capture] of [
               [
                 "page",
@@ -175,7 +202,9 @@ try {
               ],
               ["band", () => band.screenshot({ animations: "disabled", caret: "hide" })],
             ]) {
+              const beforeCapture = await captureState();
               const bytes = await capture();
+              const afterCapture = await captureState();
               assert.ok(bytes.length > 0, "empty screenshot");
               const name = `${tree}-${state}-${viewport.name}-${kind}.png`;
               await writeFile(join(output, name), bytes);
@@ -188,6 +217,9 @@ try {
                 sha256: hash(bytes),
                 stylesheets: [...stylesheets],
                 metrics,
+                beforeReset,
+                beforeCapture,
+                afterCapture,
               });
             }
           }
