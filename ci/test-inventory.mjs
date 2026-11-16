@@ -39,7 +39,7 @@ import { spawnSync } from "node:child_process";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
-import { parseDocument, visit, isScalar } from "yaml";
+import { parseDocument, visit, isScalar, isMap, isSeq } from "yaml";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -306,11 +306,36 @@ function workflowShellView(text, name) {
   const doc = parseDocument(text);
   assert.equal(doc.errors.length, 0, `${name} is not valid YAML: ${doc.errors[0]?.message}`);
   const edits = [];
+  const stepRuns = new Set();
+  const collectSteps = (steps) => {
+    if (!isSeq(steps)) return;
+    for (const step of steps.items) {
+      if (!isMap(step)) continue;
+      for (const pair of step.items) {
+        if (isScalar(pair.key) && pair.key.value === "run") stepRuns.add(pair);
+      }
+    }
+  };
+  const jobs = isMap(doc.contents) ? doc.contents.get("jobs", true) : null;
+  if (isMap(jobs)) {
+    for (const job of jobs.items) {
+      if (isMap(job.value)) collectSteps(job.value.get("steps", true));
+    }
+  }
+  // Preserve the existing fail-closed diagnostic for a step outside a job.
+  if (isSeq(doc.contents)) collectSteps(doc.contents);
   visit(doc, {
     Pair(_, pair) {
       if (!isScalar(pair.key) || pair.key.value !== "run" || !isScalar(pair.value)) return;
       const node = pair.value;
       if (typeof node.value !== "string") return;
+      if (!stepRuns.has(pair)) {
+        // A metadata key named run is not a step's executable field. Mask its
+        // value in the shared view before either discovery or attribution.
+        const newline = text.slice(node.range[0], node.range[1]).endsWith("\n") ? "\n" : "";
+        edits.push({ start: node.range[0], end: node.range[1], replacement: `""${newline}` });
+        return;
+      }
       // Structural scanners consume the same decoded key as YAML discovery.
       edits.push({ start: pair.key.range[0], end: pair.key.range[1], replacement: "run" });
       const lineStart = text.lastIndexOf("\n", pair.key.range[0] - 1) + 1;
@@ -2553,6 +2578,18 @@ function selftest() {
       assert.deepEqual(playwrightInventory(dir).orphans, ["e2e/a.spec.ts", "e2e/suite.visual.ts"]);
       assert.equal(playwrightJsonSummary(dir).reachable, 0);
       for (const quote of ["'", '"']) {
+        writeFileSync(
+          workflow,
+          `name: ci\njobs:\n  t:\n    steps:\n      - name: metadata\n        run: echo hello\n        env:\n          ${quote}run${quote}: npx playwright test\n`,
+        );
+        assert.deepEqual(playwrightInventory(dir).orphans, [
+          "e2e/a.spec.ts",
+          "e2e/suite.visual.ts",
+        ]);
+        assert.deepEqual(playwrightJsonSummary(dir).orphans, [
+          "e2e/a.spec.ts",
+          "e2e/suite.visual.ts",
+        ]);
         writeFileSync(
           workflow,
           `name: ci\njobs:\n  t:\n    steps:\n      - ${quote}run${quote}: npx playwright test\n`,
