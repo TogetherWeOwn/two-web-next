@@ -1111,7 +1111,15 @@ function splitCodeViews(text, label) {
   let quote = null;
   for (let i = 0; i < text.length; i += 1) {
     const c = text[i];
-    if (quote) {
+    if (!quote && c === "/" && text[i + 1] !== "/" && text[i + 1] !== "*") {
+      // Ambiguous slash expressions are safe only when they cannot hide
+      // structural delimiters, comments, or string delimiters.
+      const safe = text.slice(i).match(/^\/[A-Za-z0-9_.^$*+?|!-]+\/[A-Za-z]*/);
+      assert.ok(safe, `${label} has a slash expression this gate cannot parse`);
+      clean += safe[0];
+      code += safe[0];
+      i += safe[0].length - 1;
+    } else if (quote) {
       clean += c;
       code += " ";
       if (c === "\\" && i + 1 < text.length) {
@@ -2466,6 +2474,11 @@ function selftest() {
       const failing = [];
       for (const name of ["grep", "grepInvert"]) {
         const value = name === "grep" ? "/selected/" : "/excluded/";
+        failing.push({
+          where: "root regex before selector",
+          config: `reporter: /[}]/.source && 'list', ${name}: ${value}`,
+          error: /slash expression/,
+        });
         const half = Math.ceil(name.length / 2);
         const escaped = `${name.slice(0, half - 1)}\\u${name
           .charCodeAt(half - 1)
