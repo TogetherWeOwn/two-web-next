@@ -38,10 +38,15 @@ for (const tree of ["before", "after"]) {
       async ({ page }) => {
         for (const viewport of viewports) {
           await page.setViewportSize({ width: viewport.width, height: viewport.height });
-          await page.evaluate(async () => {
-            await document.fonts.load('400 16px "Mona Sans"');
-            await document.fonts.load('700 48px "Mona Sans"');
+          const fontLoaded = await page.evaluate(async () => {
+            const regular = await document.fonts.load('400 16px "Mona Sans"');
+            const bold = await document.fonts.load('700 48px "Mona Sans"');
             await document.fonts.ready;
+            return [regular, bold].every(
+              (faces) =>
+                faces.length > 0 &&
+                faces.every((face) => face.status === "loaded" && face.family === "Mona Sans"),
+            );
           });
           const name = `${tree}-${state}-${viewport.name}.png`;
           const bytes = await page.screenshot({ animations: "disabled", caret: "hide" });
@@ -50,7 +55,7 @@ for (const tree of ["before", "after"]) {
             width: document.documentElement.clientWidth,
             scrollWidth: document.documentElement.scrollWidth,
             font: getComputedStyle(document.querySelector("#home-heading")).fontFamily,
-            fontLoaded: document.fonts.check('700 48px "Mona Sans"'),
+            fontAvailable: document.fonts.check('700 48px "Mona Sans"'),
           }));
           manifest.captures.push({
             tree,
@@ -58,13 +63,13 @@ for (const tree of ["before", "after"]) {
             viewport,
             name,
             sha256: createHash("sha256").update(bytes).digest("hex"),
-            metrics,
+            metrics: { ...metrics, fontLoaded },
           });
           if (tree === "after") {
             await assertHomeEvidence(page, state);
             assert.ok(metrics.scrollWidth <= metrics.width, `${state}: horizontal overflow`);
-            assert.match(metrics.font, /Mona Sans/);
-            assert.ok(metrics.fontLoaded, `${state}: heading font did not load`);
+            assert.equal(metrics.font.split(",")[0].replaceAll('"', "").trim(), "Mona Sans");
+            assert.ok(fontLoaded && metrics.fontAvailable, `${state}: heading font did not load`);
           }
         }
       },

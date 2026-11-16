@@ -37,9 +37,19 @@ export async function assertHomeEvidence() {
   const page = {
     setViewportSize: async () => {},
     screenshot: async () => Buffer.from("fixture image"),
-    evaluate: async (fn) => fn.toString().includes("scrollWidth")
-      ? { width: 390, scrollWidth: 390, font: "Mona Sans", fontLoaded: true }
-      : undefined,
+    evaluate: async (fn) => {
+      if (fn.toString().includes("scrollWidth")) return {
+        width: 390, scrollWidth: 390,
+        font: process.env.CAPTURE_CASE === "fallback-first" ? "serif, Mona Sans" : '"Mona Sans", sans-serif',
+        fontAvailable: true,
+      };
+      globalThis.document = { fonts: {
+        ready: Promise.resolve(),
+        load: async (spec) => process.env.CAPTURE_CASE === "missing-font" && spec.startsWith("700")
+          ? [] : [{ family: "Mona Sans", status: "loaded" }],
+      } };
+      try { return await fn(); } finally { delete globalThis.document; }
+    },
   };
   await capture({ page });
 }`,
@@ -82,6 +92,17 @@ export async function assertHomeEvidence() {
     assert.equal(failure.result.status, 1);
     assert.equal(failure.manifest.captures.length, 3);
     assert.match(failure.manifest.errors[0], /after: fixture assertion failed/);
+    for (const scenario of ["missing-font", "fallback-first"]) {
+      const failure = await run(scenario);
+      assert.equal(failure.result.status, 1);
+      assert.equal(failure.manifest.captures.length, 3);
+      assert.equal(failure.manifest.captures[2].tree, "after");
+      assert.match(failure.manifest.errors[0], /after:/);
+      if (scenario === "missing-font") {
+        assert.equal(failure.manifest.captures[2].metrics.fontLoaded, false);
+        assert.match(failure.manifest.errors[0], /heading font did not load/);
+      }
+    }
     const incomplete = await run("incomplete");
     assert.equal(incomplete.result.status, 1);
     assert.equal(incomplete.manifest.captures.length, 2);
