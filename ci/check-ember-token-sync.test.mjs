@@ -336,6 +336,7 @@ for (const [directory, hooks] of [
           "web/package.json",
           "ci/build-ember-tokens.mjs",
           "ci/build-leaf-css.mjs",
+          "ci/css-dictionary.mjs",
           "ci/build-events-css.mjs",
           "public/styles.css",
           "public/schedule-theme.css",
@@ -404,6 +405,7 @@ for (const [bundle, constant] of [
     withScratch((root) => {
       mkdirSync(join(root, "ci"));
       cpSync(join(ROOT, `ci/build-${bundle}-css.mjs`), join(root, `ci/build-${bundle}-css.mjs`));
+      cpSync(join(ROOT, "ci/css-dictionary.mjs"), join(root, "ci/css-dictionary.mjs"));
       for (const name of ["styles.css", "theme-tokens.css", "theme.css", "schedule-theme.css"]) {
         writeFileSync(join(root, "public", name), `/* ${name} */`);
       }
