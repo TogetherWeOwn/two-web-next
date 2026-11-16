@@ -345,7 +345,9 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
       expect(Date.parse(history[1]!.expires_at) - Date.parse(history[1]!.offered_at)).toBe(
         TWO_HOURS_MS,
       );
-      expect(Date.parse(history[1]!.offered_at)).toBeGreaterThan(Date.parse(history[0]!.expires_at));
+      expect(Date.parse(history[1]!.offered_at)).toBeGreaterThan(
+        Date.parse(history[0]!.expires_at),
+      );
     });
 
     it.each(["going", "maybe", "not_going"])("refuses a %s RSVP", async (status) => {
