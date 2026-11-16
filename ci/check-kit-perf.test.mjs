@@ -325,6 +325,18 @@ test("CI publishes every advisory in annotations and the job summary", (t) => {
     assert.ok(human.stderr.includes(`::warning::${warning}`));
     assert.ok(readFileSync(summary, "utf8").includes(`- ${warning}`));
   }
+  for (const format of [[], ["--format", "json"]]) {
+    const failedSummary = spawnSync(process.execPath, [scriptPath, ...format, "--root", fx.root], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, GITHUB_ACTIONS: "true", GITHUB_STEP_SUMMARY: fx.root },
+    });
+    assert.equal(failedSummary.status, 0, failedSummary.stderr);
+    assert.match(failedSummary.stderr, /unable to write.*summary/i);
+    assert.ok(failedSummary.stderr.includes(`::warning::${report.warnings[0]}`));
+    if (format.length) assert.equal(JSON.parse(failedSummary.stdout).warnings.length, 2);
+    else assert.ok(failedSummary.stdout.includes("kit perf"));
+  }
 });
 
 test("acceptance: a client size overage warns without claiming a fit", (t) => {
@@ -1842,16 +1854,17 @@ test("client CSS byte advisories retain measurements and do not mask missing evi
     assert.equal(human.errors.length, json.report.warnings.length);
     assert.ok(!human.logs.some((line) => line.includes("every Kit asset fits")));
   }
-  // A CSS advisory alongside missing client JS evidence must still exit 2.
+  // An earlier server advisory must not mask missing client JS evidence.
   const mixed = makeFixture({
     clientJs: [],
-    budgetOverrides: { clientCss: { maxRawBytes: CSS_BODY.length - 1 } },
+    budgetOverrides: { serverJs: { maxRawBytes: SERVER_BODY.length - 1 } },
   });
   t.after(mixed.cleanup);
   const result = runJson(mixed.root);
   assert.equal(result.code, 2);
   assert.equal(result.report.ok, false);
   assert.equal(result.report.exitCode, 2);
+  assert.ok(result.warnings.some((line) => /server js.*raw/i.test(line)));
   assert.ok(result.report.error, "missing evidence must report an error");
   assert.ok(
     result.errors.some((line) => /client js/i.test(line)),

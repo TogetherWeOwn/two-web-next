@@ -414,10 +414,14 @@ function publishWarnings(warnings) {
     );
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(
-      process.env.GITHUB_STEP_SUMMARY,
-      `## Kit budget advisories\n\n${warnings.map((warning) => `- ${warning}`).join("\n")}\n`,
-    );
+    try {
+      appendFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        `## Kit budget advisories\n\n${warnings.map((warning) => `- ${warning}`).join("\n")}\n`,
+      );
+    } catch (error) {
+      console.error(`kit perf budget: unable to write job summary: ${error.message}`);
+    }
   }
 }
 
