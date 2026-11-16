@@ -1,6 +1,97 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { runFixtureCommand } from "./fixture-process.mjs";
 import { createEvidence, routeCssFiles } from "./kit-css-evidence.mjs";
+
+test("fixture command reports success, failure and spawn errors", async () => {
+  const options = { cwd: process.cwd(), env: { PATH: process.env.PATH }, timeoutMs: 5000 };
+  await runFixtureCommand(process.execPath, ["-e", "process.exit(0)"], options);
+  await assert.rejects(
+    runFixtureCommand(process.execPath, ["-e", "process.exit(1)"], options),
+    /failed/,
+  );
+  await assert.rejects(runFixtureCommand("/missing-fixture-command", [], options), {
+    code: "ENOENT",
+  });
+});
+
+test("fixture timeout kills the owned process group", { timeout: 15000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "fixture-group-"));
+  try {
+    const child = `require('fs').writeFileSync('child.pid', String(process.pid)); setInterval(() => {}, 1000)`;
+    const parent = `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(child)}], {stdio:'inherit'}); setInterval(() => {}, 1000)`;
+    await assert.rejects(
+      runFixtureCommand(process.execPath, ["-e", parent], {
+        cwd: root,
+        env: { PATH: process.env.PATH },
+        timeoutMs: 2000,
+      }),
+      /timed out/,
+    );
+    const pid = Number(await readFile(join(root, "child.pid"), "utf8"));
+    const state = await readFile(`/proc/${pid}/status`, "utf8").catch((error) => {
+      if (error.code === "ENOENT") return "";
+      throw error;
+    });
+    assert.ok(!state || /^State:\s+Z/m.test(state));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("signal failure retains scratch even if the child closes", { timeout: 10000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "fixture-signal-"));
+  try {
+    const failure = Object.assign(new Error("signal denied"), { code: "EPERM" });
+    await assert.rejects(
+      runFixtureCommand(process.execPath, ["-e", "setTimeout(() => {}, 1000)"], {
+        cwd: root,
+        env: { PATH: process.env.PATH },
+        timeoutMs: 100,
+        cleanupMs: 3000,
+        signalGroup: () => {
+          throw failure;
+        },
+      }),
+      (error) => error.retainFixture === true && error.cause === failure,
+    );
+    assert.ok((await stat(root)).isDirectory());
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+function killFixture(pid) {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    if (error.code !== "ESRCH") throw error;
+  }
+}
+
+test("escaped pipe holder cannot keep the runner alive", { timeout: 15000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "fixture-escaped-"));
+  try {
+    const escaped = `require('fs').writeFileSync('escaped.pid', String(process.pid)); setTimeout(() => process.exit(), 10000)`;
+    const parent = `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(escaped)}], {detached:true,stdio:'inherit'}).unref(); setInterval(() => {}, 1000)`;
+    const runner = `import {runFixtureCommand} from ${JSON.stringify(new URL("./fixture-process.mjs", import.meta.url).href)};
+      try { await runFixtureCommand(process.execPath, ['-e', ${JSON.stringify(parent)}], {cwd:process.cwd(),env:{PATH:process.env.PATH},timeoutMs:2000,cleanupMs:500}); process.exitCode=1; }
+      catch (error) { if (!error.retainFixture) process.exitCode=1; }`;
+    await promisify(execFile)(process.execPath, ["--input-type=module", "-e", runner], {
+      cwd: root,
+      timeout: 7000,
+    });
+  } finally {
+    const pid = Number(await readFile(join(root, "escaped.pid"), "utf8").catch(() => 0));
+    if (pid) killFixture(pid);
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 const node = (n) => `.svelte-kit/generated/build/client-optimized/nodes/${n}.js`;
 const manifest = {
