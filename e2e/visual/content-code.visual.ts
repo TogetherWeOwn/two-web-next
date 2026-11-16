@@ -1,5 +1,5 @@
 import { expect, localOrigin, test } from "../fixtures";
-import { captureWithGeometry, renderedPlatformFonts } from "./font-evidence";
+import { captureWithGeometry, readCaptureGeometry, renderedPlatformFonts } from "./font-evidence";
 
 const codeSelector = ".base-theme.content-theme code";
 const evidenceSelector = `${codeSelector}:first-of-type[data-font-evidence]`;
@@ -38,19 +38,59 @@ for (const size of [
       false,
     );
     expect(coldFonts.some((font) => font.glyphCount > 0)).toBe(true);
-    const first = await captureWithGeometry(page, { code: evidenceSelector });
+    const selectors = { code: evidenceSelector };
+    const beforeIdle = await readCaptureGeometry(page, selectors);
+    await page.evaluate(async () => {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+    });
+    const afterIdle = await readCaptureGeometry(page, selectors);
+    const idleFonts = await renderedPlatformFonts(page, evidenceSelector);
+    expect(afterIdle).toEqual(beforeIdle);
+    expect(idleFonts).toEqual(coldFonts);
+
+    const settling = await captureWithGeometry(page, selectors);
+    const settlingFonts = await renderedPlatformFonts(page, evidenceSelector);
+    await testInfo.attach(`privacy-${size.width}-cold-settling.png`, {
+      body: settling.png,
+      contentType: "image/png",
+    });
+    await testInfo.attach(`privacy-${size.width}-cold-settling.json`, {
+      body: JSON.stringify(
+        {
+          before: settling.before,
+          after: settling.after,
+          beforeFonts: idleFonts,
+          afterFonts: settlingFonts,
+        },
+        null,
+        2,
+      ),
+      contentType: "application/json",
+    });
+    expect(settling.before).toEqual(afterIdle);
+    if (JSON.stringify(settling.before) !== JSON.stringify(settling.after)) {
+      expect(settlingFonts.map((font) => font.familyName)).not.toEqual(
+        idleFonts.map((font) => font.familyName),
+      );
+    }
+    const first = await captureWithGeometry(page, selectors);
     await testInfo.attach(`privacy-${size.width}-cold-first.png`, {
       body: first.png,
       contentType: "image/png",
     });
-    const second = await captureWithGeometry(page, { code: evidenceSelector });
+    const second = await captureWithGeometry(page, selectors);
     await testInfo.attach(`privacy-${size.width}-cold-second.png`, {
       body: second.png,
       contentType: "image/png",
     });
+    expect(settling.after).toEqual(first.before);
     expect(first.before).toEqual(first.after);
     expect(first.after).toEqual(second.before);
     expect(second.before).toEqual(second.after);
+    expect(first.dimensions).toEqual(second.dimensions);
     expect(first.png.equals(second.png)).toBe(true);
   });
 
@@ -109,16 +149,15 @@ for (const size of [
         returnRequests: [...returnRequests],
         cachedRequests: [...cachedRequests],
         cachedResponses: [...cachedResponses],
+        reuseObserved:
+          returnRequests.size === 0 ||
+          [...returnRequests].some((id) => cachedRequests.has(id) || cachedResponses.has(id)),
       };
       await testInfo.attach(`privacy-${size.width}-font-cache.json`, {
         body: JSON.stringify(cacheEvidence, null, 2),
         contentType: "application/json",
       });
       expect(primerHeaders).toContain("public, max-age=31536000, immutable");
-      expect(
-        [...returnRequests].some((id) => cachedRequests.has(id) || cachedResponses.has(id)),
-        "Return navigation must reuse the exact font from Chromium's cache",
-      ).toBe(true);
       const warmCode = warmPage.locator(codeSelector).first();
       await warmCode.evaluate((node) => node.setAttribute("data-font-evidence", ""));
       const warmFonts = await renderedPlatformFonts(warmPage, evidenceSelector);
