@@ -84,8 +84,15 @@ describe("Kit defensive patch pins", () => {
   });
 
   it("updates Tailwind CSS without advancing its held Vite integration", () => {
-    expect(manifest.devDependencies.tailwindcss).toBe("^4.3.4");
-    expect(lock.packages["node_modules/tailwindcss"].version).toBe("4.3.4");
+    expect(manifest.devDependencies.tailwindcss).toBe("4.3.5");
+    expect(lock.packages[""].devDependencies.tailwindcss).toBe("4.3.5");
+    expect(lock.packages["node_modules/tailwindcss"].version).toBe("4.3.5");
+    expect(lock.packages["node_modules/tailwindcss"].resolved).toBe(
+      "https://registry.npmjs.org/tailwindcss/-/tailwindcss-4.3.5.tgz",
+    );
+    expect(lock.packages["node_modules/tailwindcss"].integrity).toMatch(
+      /^sha512-[A-Za-z0-9+/]{86}==$/,
+    );
     for (const name of ["node", "vite"]) {
       const path = `node_modules/@tailwindcss/${name}`;
       expect(lock.packages[path].version).toBe("4.3.3");

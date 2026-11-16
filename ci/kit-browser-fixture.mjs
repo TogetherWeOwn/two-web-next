@@ -50,7 +50,10 @@ async function validateLinks(root, path = root) {
 }
 
 /** The callback receives { root, output }; its fixture route exists only in root. */
-export async function withKitBrowserFixture({ source = process.cwd(), page }, callback) {
+export async function withKitBrowserFixture(
+  { source = process.cwd(), page, csr = false },
+  callback,
+) {
   source = await realpath(source);
   const scratch = await realpath(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir());
   if (scratch === source || inside(source, scratch))
@@ -77,7 +80,7 @@ export async function withKitBrowserFixture({ source = process.cwd(), page }, ca
     const route = join(root, "web/src/routes/__browser_fixture__");
     await mkdir(route, { recursive: true });
     await writeFile(join(route, "+page.svelte"), page);
-    await writeFile(join(route, "+page.ts"), "export const csr = false;\n");
+    await writeFile(join(route, "+page.ts"), `export const csr = ${csr === true};\n`);
     const env = {
       PATH: process.env.PATH,
       HOME: root,

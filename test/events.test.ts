@@ -12,6 +12,7 @@
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { fetchApp } from "./helpers/fetch-app";
 import { events, rsvps } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
 import type { Db } from "../src/db/index";
@@ -213,8 +214,16 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       moderator: who === MOD,
     });
 
+  // Default dispatch is the mounted Hono app, not a built Kit Worker.
   const req = (path: string, init: RequestInit = {}) =>
-    app.request(path, init, { ...env, ADMIN_DB: db });
+    fetchApp(
+      new Request(new URL(path, APP_URL), init),
+      { ...env, ADMIN_DB: db } as Env,
+      {
+        waitUntil: () => {},
+        passThroughOnException: () => {},
+      } as unknown as ExecutionContext,
+    );
   const as = async (who: typeof MOD | typeof MEMBER, extra: Record<string, string> = {}) => ({
     headers: { cookie: await fresh(who), ...extra },
   });

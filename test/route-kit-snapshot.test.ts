@@ -228,6 +228,7 @@ describe("synthetic case admission (not route parity)", () => {
         { ...fixture, cases: [{ ...result, status: "failed" }] },
         { ...fixture, cases: [result, result] },
         { ...fixture, cases: [{ ...result, branch: "error" }] },
+        { ...fixture, cases: [{ ...result, obligation: "GET /other:ok" }] },
         { ...fixture, execution: { ...context, sha: "other" } },
         { ...fixture, execution: { ...context, attempt: "2" } },
         { ...fixture, execution: { ...context, run: "run-2" } },
