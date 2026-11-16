@@ -18,8 +18,10 @@ export async function compileKitFacade(adapterSource) {
     metafile: true,
     logLevel: "silent",
   });
+  const [adapterInput] = Object.values(parsed.metafile.inputs);
   const [adapterOutput] = Object.values(parsed.metafile.outputs);
-  if (!adapterOutput.exports.includes("default")) {
+  // CommonJS entries can acquire a synthetic default during ESM conversion.
+  if (adapterInput.format !== "esm" || !adapterOutput.exports.includes("default")) {
     throw new Error("kit facade compiler: adapter must export default");
   }
 

@@ -13,6 +13,9 @@ describe("inactive Kit facade compiler", () => {
     "// export default {}\nexport const value = 1",
     "export const defaultValue = {}",
     "const worker = {}; export { worker as notDefault }",
+    'module.exports = { fetch() { return new Response("ok"); } }',
+    'exports.default = { fetch() { return new Response("ok"); } }',
+    "exports.default = {}; export const other = 1",
   ])("rejects malformed JavaScript or a disguised default: %s", async (source) => {
     await expect(compileKitFacade(source)).rejects.toThrow();
   });
