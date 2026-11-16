@@ -15,8 +15,6 @@ export function runFixtureCommand(
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    child.stdout.pipe(process.stdout, { end: false });
-    child.stderr.pipe(process.stderr, { end: false });
     let timedOut = false;
     let signalError;
     let cleanupTimer;
@@ -43,16 +41,18 @@ export function runFixtureCommand(
       }
       cleanupTimer = setTimeout(() => {
         finish(uncertain("Fixture process cleanup exceeded bound", signalError));
-        child.stdout.unpipe(process.stdout);
-        child.stderr.unpipe(process.stderr);
-        child.stdout.destroy();
-        child.stderr.destroy();
+        child.stdout?.unpipe(process.stdout);
+        child.stderr?.unpipe(process.stderr);
+        child.stdout?.destroy();
+        child.stderr?.destroy();
         child.unref();
       }, cleanupMs);
     }, timeoutMs);
     child.on("error", (error) =>
       finish(timedOut ? uncertain("Fixture process cleanup failed", error) : error),
     );
+    child.stdout?.pipe(process.stdout, { end: false });
+    child.stderr?.pipe(process.stderr, { end: false });
     child.on("close", (code, signal) => {
       if (signalError) finish(uncertain("Fixture process signal failed", signalError));
       else if (timedOut) finish(uncertain("Fixture process timed out", undefined));

@@ -20,6 +20,26 @@ test("fixture command reports success, failure and spawn errors", async () => {
   });
 });
 
+test("fixture startup errors without pipes remain catchable", async () => {
+  const runner = `import childProcess from 'node:child_process';
+    import {syncBuiltinESMExports} from 'node:module';
+    import {EventEmitter} from 'node:events';
+    childProcess.spawn = () => {
+      const child = new EventEmitter();
+      child.stdout = null; child.stderr = null;
+      process.nextTick(() => child.emit('error', Object.assign(new Error('spawn failed'), {code:'EMFILE'})));
+      return child;
+    };
+    syncBuiltinESMExports();
+    const {runFixtureCommand} = await import(${JSON.stringify(new URL("./fixture-process.mjs", import.meta.url).href)});
+    try { await runFixtureCommand('fixture', [], {cwd:process.cwd(), timeoutMs:1000}); process.exitCode = 1; }
+    catch (error) { if (error.code !== 'EMFILE') process.exitCode = 1; }
+    await new Promise(resolve => setImmediate(resolve));`;
+  await promisify(execFile)(process.execPath, ["--input-type=module", "-e", runner], {
+    timeout: 5000,
+  });
+});
+
 test("fixture timeout kills the owned process group", { timeout: 15000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "fixture-group-"));
   try {
