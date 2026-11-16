@@ -73,6 +73,7 @@ const base: Handle = async ({ event, resolve }) => {
     // entry back restores Hono.
     fixtureMemberBoard: env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true",
     fixtureEventDetail: env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true",
+    fixtureJoin: env.KIT_PARITY_FIXTURE_JOIN === "true",
     // The member board's anonymous view log, written only after the
     // member-read boundary released a 200 (no-op for every other route).
     afterMemberRead: (event, response) =>
