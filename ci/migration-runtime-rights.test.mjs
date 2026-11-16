@@ -16,7 +16,7 @@ const migration = (sql) => validateMigrationSql("1025_runtime-rights.sql", sql);
 
 test("reconciliation migration requires the precise reviewed runtime rights", () => {
   const sql = readFileSync(
-    new URL("../drizzle/1038_bot-reconciliation.sql", import.meta.url),
+    new URL("../drizzle/1035_bot-reconciliation-intents.sql", import.meta.url),
     "utf8",
   );
   assert.deepEqual(migration(sql), []);

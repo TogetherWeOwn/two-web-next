@@ -22,6 +22,3 @@ CREATE INDEX "bot_reconciliation_resolved_idx" ON "bot_reconciliation_intents" U
 GRANT INSERT ON TABLE public.bot_reconciliation_intents TO two_web_app;--> statement-breakpoint
 GRANT SELECT ON TABLE public.bot_reconciliation_intents TO two_web_app;--> statement-breakpoint
 GRANT UPDATE ON TABLE public.bot_reconciliation_intents TO two_web_app;
-
---> statement-breakpoint
-ALTER TABLE "event_sync_attempts" ADD COLUMN "claim_started_at" timestamp with time zone DEFAULT now() NOT NULL;

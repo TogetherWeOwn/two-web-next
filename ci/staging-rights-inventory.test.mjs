@@ -570,7 +570,7 @@ test("policy scope pins exact proposal names against schema declarations", async
   // drift in either direction fails loudly here.
   assert.deepEqual(
     declared.filter((name) => !POLICY_TABLES.includes(name)),
-    ["web_session_grace", "bot_reconciliation_intents", "event_echoes", "event_echo_members"],
+    ["web_session_grace", "event_echoes", "bot_reconciliation_intents", "event_echo_members"],
   );
   assert.deepEqual(
     POLICY_TABLES.filter((name) => !declared.includes(name)),
@@ -613,7 +613,7 @@ test("schema census surfaces a third canonical module as policy drift", async ()
     writeFileSync(join(dir, "dormant-schema.ts"), 'pgTable("synthetic_members", {});');
     assert.deepEqual(
       declaredTables(dir).filter((name) => !POLICY_TABLES.includes(name)),
-      ["web_session_grace", "bot_reconciliation_intents", "synthetic_members"],
+      ["web_session_grace", "synthetic_members"],
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
