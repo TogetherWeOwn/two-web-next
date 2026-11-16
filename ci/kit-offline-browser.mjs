@@ -19,14 +19,16 @@ const assetTypes = new Map([
 ]);
 
 // Resolve both the requested file and its root, so symlinks cannot escape.
-export async function readFixtureAsset(directory, pathname) {
+export async function readFixtureAsset(directory, pathname, { allowJavaScript = false } = {}) {
   let decoded;
   try {
     decoded = decodeURIComponent(pathname);
   } catch {
     return null;
   }
-  const type = assetTypes.get(extname(decoded).toLowerCase());
+  const extension = extname(decoded).toLowerCase();
+  const type =
+    allowJavaScript && extension === ".js" ? "text/javascript" : assetTypes.get(extension);
   if (!type || !decoded.startsWith("/") || decoded.includes("\\") || decoded.includes("\0"))
     return null;
   if (decoded.split("/").some((part) => part === "." || part === "..")) return null;
@@ -55,14 +57,21 @@ export function fixedDateBanner(now) {
 });`;
 }
 
-// Build and render the supplied page without allowing browser network access.
+// Render trusted repository fixtures with in-memory assets and routed HTTP/WebSocket denial.
+// This is not a hostile-code sandbox: other transports, including WebRTC, are not
+// universally denied or observed by `unexpected`. Use disposable CI without
+// production credentials; an empty `unexpected` only covers routed requests.
 // `now` (epoch ms) fixes the clock seen by the bundled server render only.
-export async function withKitOfflineBrowser({ source, page: fixture, search = "", now }, callback) {
+export async function withKitOfflineBrowser(
+  { source, page: fixture, search = "", now, javaScriptEnabled = false },
+  callback,
+) {
   if (typeof search !== "string" || (search && !search.startsWith("?")) || search.includes("#")) {
     throw new Error("Fixture search must be a query string");
   }
   const banner = now === undefined ? undefined : fixedDateBanner(now);
-  return withKitBrowserFixture({ source, page: fixture }, async ({ root, output }) => {
+  const options = { source, page: fixture, csr: javaScriptEnabled };
+  return withKitBrowserFixture(options, async ({ root, output }) => {
     const entry = join(root, "fixture-server.mjs");
     await build({
       stdin: {
@@ -107,17 +116,26 @@ export async function withKitOfflineBrowser({ source, page: fixture, search = ""
     const html = await response.text();
     const browser = await chromium.launch({ headless: true });
     try {
-      const context = await browser.newContext({ javaScriptEnabled: false });
+      const context = await browser.newContext({ javaScriptEnabled, serviceWorkers: "block" });
       const unexpected = [];
+      await context.routeWebSocket("**/*", (socket) => {
+        unexpected.push(socket.url());
+        socket.close();
+      });
       await context.route("**/*", async (route) => {
         const url = new URL(route.request().url());
         if (url.origin === origin && route.request().method() === "GET") {
           if (url.href === fixtureUrl)
-            return route.fulfill({ contentType: "text/html", body: html });
-          const directory = url.pathname.startsWith("/_app/")
-            ? join(output, "client")
-            : join(root, "public");
-          const asset = await readFixtureAsset(directory, url.pathname);
+            return route.fulfill({
+              contentType: "text/html",
+              headers: { "content-security-policy": "worker-src 'none'; frame-src 'none'" },
+              body: html,
+            });
+          const isAppAsset = url.pathname.startsWith("/_app/");
+          const directory = isAppAsset ? join(output, "client") : join(root, "public");
+          const asset = await readFixtureAsset(directory, url.pathname, {
+            allowJavaScript: isAppAsset && javaScriptEnabled,
+          });
           if (asset) return route.fulfill(asset);
         }
         unexpected.push(route.request().url());

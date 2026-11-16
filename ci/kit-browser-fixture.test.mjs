@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -124,6 +125,94 @@ import SiteFooter from '#lib/SiteFooter.svelte';
   );
 });
 
+test("Kit fixture opts into compiled JavaScript hydration", async () => {
+  const fixture = `<script>let count = $state(0);</script>
+<button onclick={() => count++}>{count}</button>`;
+  await withKitOfflineBrowser({ page: fixture }, async ({ page }) => {
+    await page.locator("button").click();
+    assert.equal(await page.locator("button").textContent(), "0");
+  });
+  await withKitOfflineBrowser({ page: fixture, javaScriptEnabled: true }, async ({ page }) => {
+    await page.waitForLoadState("networkidle");
+    await page.locator("button").click();
+    await page.waitForFunction(() => document.querySelector("button")?.textContent === "1");
+  });
+});
+
+test("Kit fixture denies WebSocket connections and workers", async () => {
+  let connections = 0;
+  const listener = createServer((socket) => {
+    connections++;
+    socket.destroy();
+  });
+  await new Promise((resolve) => listener.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = listener.address().port;
+    const fixture = `<script>
+let closed = $state(0);
+function connect() {
+  for (const scheme of ['ws', 'wss']) {
+    const socket = new WebSocket(scheme + '://127.0.0.1:${port}/fixture');
+    socket.onclose = () => closed++;
+  }
+}
+</script><button onclick={connect}>{closed}</button>`;
+    let closed;
+    let directive;
+    await assert.rejects(
+      withKitOfflineBrowser({ page: fixture, javaScriptEnabled: true }, async ({ page }) => {
+        await page.waitForLoadState("networkidle");
+        await page.locator("button").click();
+        await page.waitForFunction(
+          () => document.querySelector("button")?.textContent === "2",
+          null,
+          {
+            timeout: 10_000,
+          },
+        );
+        closed = await page.locator("button").textContent();
+        directive = await page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              const timer = setTimeout(() => resolve("timeout"), 10_000);
+              document.addEventListener(
+                "securitypolicyviolation",
+                (event) => {
+                  clearTimeout(timer);
+                  resolve(event.effectiveDirective);
+                },
+                { once: true },
+              );
+              new Worker(URL.createObjectURL(new Blob([""], { type: "text/javascript" })));
+            }),
+        );
+      }),
+      /ws(?:s)?:\/\/127\.0\.0\.1/,
+    );
+    const assertObservations = (closedValue, workerDirective) => {
+      assert.equal(closedValue, "2");
+      assert.equal(workerDirective, "worker-src");
+    };
+    assertObservations(closed, directive);
+    assert.throws(() => assertObservations("1", directive), assert.AssertionError);
+    assert.throws(() => assertObservations(closed, "wrong-directive"), assert.AssertionError);
+    assert.equal(connections, 0);
+  } finally {
+    await new Promise((resolve, reject) =>
+      listener.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test("Kit fixture denies public JavaScript even with hydration enabled", async () => {
+  await assert.rejects(
+    withKitOfflineBrowser({ page: "<p>Fixture</p>", javaScriptEnabled: true }, async ({ page }) => {
+      await page.evaluate(() => fetch("/islands/events-calendar.js").catch(() => null));
+    }),
+    /events-calendar\.js/,
+  );
+});
+
 test("Kit fixture renders query data and same-origin static assets", async () => {
   await withKitOfflineBrowser(
     {
@@ -164,8 +253,17 @@ test("asset reads reject escapes, symlinks, and unsupported files", async () => 
     await writeFile(join(root, "safe.js"), "unsupported");
     await writeFile(join(dir, "outside.css"), "outside");
     await symlink(join(dir, "outside.css"), join(root, "link.css"));
+    await symlink(join(dir, "outside.css"), join(root, "link.js"));
+    await writeFile(join(dir, "outside.js"), "outside");
     await symlink(dir, join(root, "linked-dir"));
     assert.equal((await readFixtureAsset(root, "/safe.css")).body.toString(), "safe");
+    assert.equal(
+      (await readFixtureAsset(root, "/safe.js", { allowJavaScript: true })).contentType,
+      "text/javascript",
+    );
+    for (const path of ["/link.js", "/linked-dir/outside.js", "/%2e%2e/outside.js"]) {
+      assert.equal(await readFixtureAsset(root, path, { allowJavaScript: true }), null, path);
+    }
     for (const path of [
       "/../outside.css",
       "/%2e%2e/outside.css",
