@@ -40,13 +40,13 @@ test("Kit home evidence rejects unknown fixture states", () => {
   assert.throws(() => homeEvidencePage("__proto__"), /Unknown home evidence state/);
 });
 
-test("Kit home evidence renders each real home state offline", async () => {
-  for (const state of homeEvidenceStates) {
+for (const state of homeEvidenceStates) {
+  test(`Kit home evidence renders ${state} offline`, async () => {
     await withKitHomeEvidence(state, async ({ page }) => {
       assert.equal(await page.getByRole("heading", { level: 1 }).count(), 1, state);
     });
-  }
-});
+  });
+}
 
 test("Kit offline fixture fixes the server render clock", async () => {
   await withKitOfflineBrowser(
