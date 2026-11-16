@@ -57,9 +57,10 @@ The current-source guard follows runtime imports, including the exact ignored
 `src/leaf-critical-css.ts` output before it exists. That module requires scope
 coverage for its tracked generator, `ci/build-leaf-css.mjs`, its tracked dictionary
 packer, `ci/css-dictionary.mjs`, the tracked runtime decoder, `src/css-dictionary.ts`,
-and all three inputs: `public/styles.css`, `public/theme-tokens.css` and
-`public/theme.css`. Listing the output itself does not replace those requirements.
-Other runtime source modules still require ordinary direct or glob coverage.
+and all four inputs: `public/styles.css`, `public/theme-tokens.css`,
+`public/theme.css` and `web/src/lib/site-header.css`, in that order. Listing the
+output itself does not replace those requirements. Other runtime source modules
+still require ordinary direct or glob coverage.
 
 The guard pins the SHA-256 of both the generator and the packer without executing
 either, requires the decoder file to exist, and reads every input. Only the exact

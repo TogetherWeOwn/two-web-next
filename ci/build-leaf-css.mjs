@@ -30,7 +30,12 @@ import { fileURLToPath } from "node:url";
 import { packCss } from "./css-dictionary.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const SOURCES = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"];
+const SOURCES = [
+  "public/styles.css",
+  "public/theme-tokens.css",
+  "public/theme.css",
+  "web/src/lib/site-header.css",
+];
 const OUT = "src/leaf-critical-css.ts";
 
 export function build() {

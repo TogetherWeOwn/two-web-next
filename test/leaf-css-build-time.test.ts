@@ -131,6 +131,11 @@ describe("critical CSS is a build output, not a source", () => {
           writeFileSync(join(fixture, "public", source), ":root { color: red; }");
         }
         writeFileSync(join(fixture, "public/schedule-theme.css"), ".schedule { color: blue; }");
+        mkdirSync(join(fixture, "web/src/lib"), { recursive: true });
+        writeFileSync(
+          join(fixture, "web/src/lib/site-header.css"),
+          ".header { position: sticky; }",
+        );
         writeFileSync(
           join(fixture, "web/package.json"),
           readFileSync(join(root, "web/package.json")),
@@ -158,7 +163,7 @@ describe("critical CSS is a build output, not a source", () => {
           expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(42);
           expect(readFileSync(join(fixture, "ember-tokens-checked.txt"), "utf8")).toBe("checked");
           expect(parseLeafModule(readFileSync(output, "utf8"))?.css).toBe(
-            Array(3).fill(":root { color: red; }").join("\n"),
+            [...Array(3).fill(":root { color: red; }"), ".header { position: sticky; }"].join("\n"),
           );
           expect(readFileSync(output, "utf8")).not.toContain("stale CSS");
           expect(readFileSync(eventsOutput, "utf8")).toContain(".schedule { color: blue; }");

@@ -45,7 +45,8 @@ function withScratch(fn) {
       cpSync(join(ROOT, path), join(root, path));
     }
     mkdirSync(join(root, "public"), { recursive: true });
-    mkdirSync(join(root, "web/src"), { recursive: true });
+    mkdirSync(join(root, "web/src/lib"), { recursive: true });
+    cpSync(join(ROOT, "web/src/lib/site-header.css"), join(root, "web/src/lib/site-header.css"));
     mkdirSync(join(root, "src"), { recursive: true });
     for (const path of CHROME_CONSUMERS) cpSync(join(ROOT, path), join(root, path));
     return fn(root);
