@@ -189,9 +189,10 @@ afterAll(async () => {
 });
 
 // actions/checkout writes `origin` as `<server>/<owner>/<repo>` with no `.git`.
-async function fixture(event: string, suffix: "" | ".git" = "") {
+async function fixture(event: string, suffix: "" | ".git" = "", candidate = false) {
   const checkout = join(root, `checkout-${serial++}`);
-  await git(root, "clone", "--depth=1", `file://${source}`, checkout);
+  await git(root, "clone", ...(candidate ? [] : ["--depth=1"]), `file://${source}`, checkout);
+  if (candidate) await git(checkout, "checkout", "--detach", base);
   await git(checkout, "remote", "set-url", "origin", `${origin}/${repository}${suffix}`);
   const eventPath = join(checkout, "event.json");
   put(
@@ -278,6 +279,34 @@ describe("migration workflow fetch authentication", () => {
       await expectAuthenticatedBaseline(file, name, "workflow_dispatch", ".git");
     }, 45000);
   }
+
+  it("dispatches candidate mode through the workflow while strict mode and collisions fail", async () => {
+    const { checkout, env } = await fixture("workflow_dispatch", "", true);
+    const migration = migrationStep("ci.yml", "Migration numbering check");
+    const run = (ref: string) =>
+      exec(migration.shell, ["-e", "-c", migration.script], {
+        cwd: checkout,
+        env: { ...env, GITHUB_REF: ref, MIGRATION_GIT_TOKEN: token },
+      });
+    const candidateRef = "refs/heads/candidate";
+    expect((await run(candidateRef)).stdout).toContain("migration-history: ok");
+    const strict = await run("refs/heads/main").then(
+      () => "unexpected success",
+      (error: { stderr: string }) => error.stderr,
+    );
+    expect(strict).toContain("historical migration deleted/renamed");
+    const sql = "SELECT 3;\n";
+    const path = "drizzle/1001_collision.sql";
+    put(join(checkout, path), sql);
+    const lock = JSON.parse(readFileSync(join(checkout, "migrations.lock"), "utf8"));
+    lock.migrations.push({ path, sha256: createHash("sha256").update(sql).digest("hex") });
+    put(join(checkout, "migrations.lock"), `${JSON.stringify(lock, null, 2)}\n`);
+    const collision = await run(candidateRef).then(
+      () => "unexpected success",
+      (error: { stderr: string }) => error.stderr,
+    );
+    expect(collision).toContain("reserved number 1001");
+  }, 45000);
 
   for (const other of ["fixtures/other", "fixtures/other.git", "fixtures/private-sibling"]) {
     it(`does not send the command's header to ${other}`, async () => {

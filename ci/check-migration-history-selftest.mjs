@@ -560,6 +560,27 @@ test("candidate checks the target reservation maximum across directories", (t) =
   assert.equal(checkMigrations(f.root, f.base, target).total, 5);
 });
 
+test("candidate accepts identical target migration but rejects changed SQL and collisions", (t) => {
+  const f = fixture(t);
+  put(f.root, "drizzle/1003_target.sql", "SELECT 3;\n");
+  lock(f.root);
+  git(f.root, "add", ".");
+  git(f.root, "commit", "-qm", "target migration");
+  const target = git(f.root, "rev-parse", "HEAD");
+  assert.equal(checkMigrations(f.root, f.base, target).total, 5);
+  put(f.root, "drizzle/1003_target.sql", "SELECT 4;\n");
+  lock(f.root);
+  assert.throws(() => checkMigrations(f.root, f.base, target), /target migration.*immutable/);
+  rmSync(join(f.root, "drizzle/1003_target.sql"));
+  put(f.root, "db/migrations/1003_collision.sql", "SELECT 3;\n");
+  lock(f.root);
+  assert.throws(() => checkMigrations(f.root, f.base, target), /reserved number 1003/);
+  rmSync(join(f.root, "db/migrations/1003_collision.sql"));
+  put(f.root, "drizzle/1001_gap.sql", "SELECT 1;\n");
+  lock(f.root);
+  assert.throws(() => checkMigrations(f.root, f.base, target), /reserved number 1003/);
+});
+
 test("candidate rejects deleted target history and missing target lock", (t) => {
   const f = fixture(t);
   rmSync(join(f.root, "drizzle/1000_original.sql"));

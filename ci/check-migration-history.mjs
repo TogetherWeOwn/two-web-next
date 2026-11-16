@@ -184,6 +184,11 @@ export function checkMigrations(root, base, target = base) {
   );
   for (const path of Object.keys(current)) {
     if (path in previous) continue;
+    if (path in targetFiles) {
+      if (current[path] !== targetFiles[path])
+        throw new Error(`target migration SQL is immutable: ${path}`);
+      continue;
+    }
     const number = Number(path.split("/").at(-1).slice(0, 4));
     if (grandfathered.has(path) || number <= highest)
       throw new Error(`new migration must append above reserved number ${highest}: ${path}`);
