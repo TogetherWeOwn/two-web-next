@@ -97,9 +97,35 @@ describe.skipIf(!process.env.DATABASE_URL)(
       ]);
       const [rights] = await fixture.client`
         SELECT has_table_privilege('two_web_app',
-          format('%I.bot_reconciliation_intents', ${fixture.schemaName}), 'DELETE') AS can_delete
+          format('%I.bot_reconciliation_intents', ${fixture.schemaName}::text), 'DELETE') AS can_delete
       `;
       expect(rights!.can_delete).toBe(false);
+    });
+    it("enforces reconciliation intent constraints at their boundaries", async () => {
+      const insert = (verb: string, subject: string, attempts: number, resolution: string | null) =>
+        fixture.client`
+          INSERT INTO bot_reconciliation_intents (idempotency_key, verb, subject, attempts, resolution)
+          VALUES (${randomUUID()}, ${verb}, ${subject}, ${attempts}, ${resolution})
+        `;
+      for (const verb of [
+        "announcement.post",
+        "event.upsert",
+        "event.cancel",
+        "reminder.send",
+        "place_offer.send",
+      ]) {
+        await insert(verb, "s".repeat(200), 1, "r".repeat(500));
+      }
+      await insert("event.upsert", "", 1, null);
+      for (const values of [
+        ["unknown", "subject", 1, null],
+        ["event.upsert", "s".repeat(201), 1, null],
+        ["event.upsert", "subject", 0, null],
+        ["event.upsert", "subject", -1, null],
+        ["event.upsert", "subject", 1, "r".repeat(501)],
+      ] as const) {
+        await expect(insert(...values)).rejects.toMatchObject({ code: "23514" });
+      }
     });
     beforeEach(async () => {
       await fixture.reset();
