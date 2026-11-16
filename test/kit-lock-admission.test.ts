@@ -170,7 +170,6 @@ describe("Kit lock admission with injected environment", () => {
     }
   });
 });
-
 const homes: string[] = [];
 afterEach(() => {
   for (const dir of homes.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -183,7 +182,8 @@ describe("Kit lock admission against the real filesystem", () => {
     mkdirSync(join(base, "open"), { mode: 0o755 });
     chmodSync(join(base, "open"), 0o755);
     symlinkSync(base, join(base, "link"));
-    expect(() => admitKitLockRoot(join(base, "open"))).toThrow(/mode is not exactly 0700/);
+    const reason = process.platform === "linux" ? /mode is not exactly 0700/ : /Linux is required/;
+    expect(() => admitKitLockRoot(join(base, "open"))).toThrow(reason);
     expect(() => admitKitLockRoot(join(base, "link"))).toThrow(KitLockAdmissionError);
   });
 });
