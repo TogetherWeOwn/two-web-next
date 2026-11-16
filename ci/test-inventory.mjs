@@ -1382,9 +1382,9 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
       const id = spread[1];
       assert.ok(imports.has(id), `${configPath} spreads ...${id} without importing it`);
       const sourceCode = splitCodeViews(text, configPath).code;
-      const escaped = id.replace(/[$]/g, "\\$");
       assert.equal(
-        [...sourceCode.matchAll(new RegExp(`(?<![\\w$])${escaped}(?![\\w$])`, "g"))].length,
+        [...sourceCode.matchAll(/[A-Za-z_$][A-Za-z0-9_$]*/g)].filter((match) => match[0] === id)
+          .length,
         2,
         `${configPath} uses imported config ${id} outside its declaration and spread`,
       );
@@ -2456,7 +2456,8 @@ function selftest() {
         for (const selector of [
           `${key}: { ${name}: /chosen$/ }`,
           `projects: [{ name: 'p', ${key}: { ${name}: /chosen$/ } }]`,
-        ]) cases.push({ selector, error: /prototype setter/ });
+        ])
+          cases.push({ selector, error: /prototype setter/ });
       }
       cases.push(
         {
@@ -2481,6 +2482,14 @@ function selftest() {
     }
     cases.push(
       { selector: "...base", inherited: true, unfilteredBase: true, filtered: false },
+      {
+        selector: "...$base",
+        inherited: true,
+        unfilteredBase: true,
+        filtered: false,
+        source:
+          'import $base from "./playwright.base.config"; export default defineConfig({ ...$base, testDir: "./e2e", testMatch: "entry.spec.ts" });',
+      },
       { selector: "", source: "export default wrap(defineConfig({}));", error: /directly export/ },
     );
     for (const entry of cases) {
@@ -2504,7 +2513,8 @@ function selftest() {
           );
         writeFileSync(
           join(dir, "playwright.fixture.config.ts"),
-          entry.source || `${entry.inherited ? 'import base from "./playwright.base.config";\n' : ""}${entry.prefix || ""}\nexport default defineConfig({ testDir: "./e2e", testMatch: "entry.spec.ts", ${entry.selector} });\n`,
+          entry.source ||
+            `${entry.inherited ? 'import base from "./playwright.base.config";\n' : ""}${entry.prefix || ""}\nexport default defineConfig({ testDir: "./e2e", testMatch: "entry.spec.ts", ${entry.selector} });\n`,
         );
         mkdirSync(join(dir, "e2e"), { recursive: true });
         writeFileSync(
