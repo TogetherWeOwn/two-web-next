@@ -36,7 +36,7 @@
 // reason; CONTROL tests pass before and after.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
@@ -106,8 +106,9 @@ function assertNoOkLines(result, label) {
   );
 }
 
-function runCli(script, args) {
+function runCli(script, args, env = process.env) {
   return spawnSync(process.execPath, [script, ...args], {
+    env: { ...env, GITHUB_STEP_SUMMARY: "" },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -674,7 +675,14 @@ test("kit JSON contract: client byte overage reports warning with bytes (0)", (t
     },
   });
   t.after(() => cleanup(fx.root));
-  const result = runCli(kitScript, ["--root", fx.root, "--format", "json"]);
+  const summary = `${fx.root}/parent-summary`;
+  writeFileSync(summary, "sentinel\n");
+  const result = runCli(kitScript, ["--root", fx.root, "--format", "json"], {
+    ...process.env,
+    GITHUB_ACTIONS: "true",
+    GITHUB_STEP_SUMMARY: summary,
+  });
+  assert.equal(readFileSync(summary, "utf8"), "sentinel\n");
   assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
   const parsed = parseCliJson(result, "kit json breach");
   assertJsonReport({

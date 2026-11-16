@@ -1,7 +1,15 @@
 #!/usr/bin/env node
-// Kit performance budgets: report byte and file-count ceiling overages during
-// the Ember/SvelteKit migration. Exit 0 fits or warns, 1 hard breach, 2 cannot
-// enforce. Retain the measured ceilings for later re-enforcement.
+// Kit performance budgets: ceilings for the adapter-generated
+// Worker bundle and the Kit client assets, mirroring ci/check-bundle-budget.mjs
+// measurement semantics. Exit 0 fits or warns, 2 cannot enforce.
+//
+// Worker bundle (`_worker.js`) is content-hashed by build, so it gets exact
+// raw/gzip ceilings like the island budgets. Kit client assets under
+// `_app/immutable` carry content hashes in every filename, so per-file
+// ceilings would churn each build: they are budgeted as totals (all JS, all
+// CSS) plus a file-count cap. Overages warn during the Ember/SvelteKit migration.
+// Raising a ceiling needs an explicit
+// decision explaining the growth; never relax a budget to make CI green.
 //
 // The canonical required measurement inventory lives in
 // ci/bundle-inventory.mjs and is validated before any artifact is read: an

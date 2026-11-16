@@ -3,8 +3,8 @@
 // every open PR conflict with every merge. Ceilings now live one unit per
 // file under ci/budgets/<kind>/, and the checkers aggregate them at CI time
 // (ci/budget-fragments.mjs). These tests prove the aggregation reproduces
-// the exact pre-split ceilings, keeps checker exit semantics (Kit overages
-// warn; bundle breaches exit 1; cannot-enforce exits 2), fails closed on broken
+// the exact pre-split ceilings, keeps the checkers' exit semantics
+// (Kit overages warn; bundle breaches exit 1; cannot-enforce exits 2), fails closed on broken
 // fragments, and preserves the legacy $comment history byte-for-byte.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
