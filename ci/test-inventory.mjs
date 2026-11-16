@@ -453,6 +453,12 @@ function parseNpmRunOccurrences(text) {
   const out = [];
   const joined = text.replace(/\\\r?\n/g, " ");
   for (const m of joined.matchAll(/\bnpm\s+run(?:-script)?\b/g)) {
+    // A literal grep operand can contain command-like text. Do not let that
+    // text establish npm-script reachability, even before Playwright parsing.
+    assert.ok(
+      !/--grep(?:=|\s+)["']?[A-Za-z0-9_@. \t\r\n-]*$/.test(joined.slice(0, m.index)),
+      "CI has npm run text in a playwright --grep operand; this gate cannot model it",
+    );
     const lineEnd = joined.indexOf("\n", m.index);
     const segment = joined.slice(m.index + m[0].length, lineEnd === -1 ? undefined : lineEnd);
     const tokens = splitShellTokens(segment);
@@ -2485,6 +2491,27 @@ function selftest() {
         workflow,
         "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --grep smoke\n      - run: npx playwright test\n",
       );
+      assert.deepEqual(playwrightInventory(dir).orphans, []);
+      for (const args of ['--grep "npm run browser"', '--grep="npm run browser"']) {
+        const filtered = `playwright test ${args}`;
+        const scripts = { browser: "playwright test", nested: filtered };
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts }));
+        run(`npx ${filtered}`);
+        assert.throws(
+          () => playwrightInventory(dir),
+          /npm run text in a playwright --grep operand/,
+        );
+        run("npm run nested");
+        assert.throws(
+          () => playwrightInventory(dir),
+          /npm run text in a playwright --grep operand/,
+        );
+      }
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ scripts: { browser: "playwright test" } }),
+      );
+      run("npx playwright test --grep smoke && npm run browser");
       assert.deepEqual(playwrightInventory(dir).orphans, []);
       mkdirSync(join(dir, "test"));
       run("npm run browser");
