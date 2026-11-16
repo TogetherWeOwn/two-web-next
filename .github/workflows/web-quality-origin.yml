@@ -27,6 +27,13 @@ on:
 permissions:
   contents: read
 
+# Keep this namespace distinct from callers' locks, including staging deploys.
+# GitHub queues at most 100 pending runs; further arrivals are cancelled.
+concurrency:
+  group: web-quality-origin-${{ inputs.origin || 'https://next.togetherweown.com' }}
+  cancel-in-progress: false
+  queue: max
+
 jobs:
   quality:
     name: quality
