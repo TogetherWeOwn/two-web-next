@@ -326,18 +326,29 @@ function hasUnsupportedShellFlow(text) {
 function stripShellComments(text) {
   let out = "";
   let quote = null;
+  let tokenStart = true;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
-    if (!quote && c === "#" && (i === 0 || /\s/.test(text[i - 1]))) {
+    if (!quote && c === "#" && tokenStart) {
       const end = text.indexOf("\n", i);
       if (end === -1) break;
       i = end - 1;
       continue;
     }
+    if (c === "\\" && quote !== "'" && /^\r?\n/.test(text.slice(i + 1))) {
+      if (text[i + 1] === "\r") i++;
+      i++;
+      continue;
+    }
     out += c;
-    if (c === "\\" && quote !== "'" && i + 1 < text.length) out += text[++i];
-    else if (quote && c === quote) quote = null;
-    else if (!quote && (c === "'" || c === '"' || c === "`")) quote = c;
+    if (c === "\\" && quote !== "'" && i + 1 < text.length) {
+      out += text[++i];
+      tokenStart = false;
+    } else if (quote && c === quote) quote = null;
+    else if (!quote && (c === "'" || c === '"' || c === "`")) {
+      quote = c;
+      tokenStart = false;
+    } else if (!quote) tokenStart = /[\s;|&()<>]/.test(c);
   }
   return out;
 }
@@ -2051,6 +2062,18 @@ function selftest() {
           e2e: "playwright test --config playwright.fixture.config.ts",
         },
         orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "continued token hash is not a comment",
+        run: "npm run e2e\\\n#suffix",
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "comment after operator preserves cwd validation",
+        run: "echo ok;# note \\\\\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
+        extraRun: "npx playwright test --config playwright.fixture.config.ts",
+        throws: /directory change/,
       },
       {
         name: "comment double backslash preserves cwd validation",
