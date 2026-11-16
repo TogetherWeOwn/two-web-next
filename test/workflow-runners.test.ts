@@ -28,7 +28,8 @@ const hosted = "ubuntu-latest";
 const pinnedHostedJob = (name: string, id: string) =>
   (name === "e2e.yml" && id === "browser-smoke") ||
   (name === "kit-home-evidence.yml" && id === "capture") ||
-  (name === "admin-stale-save-ubuntu24-proof.yml" && id === "recovery-proof");
+  (name === "admin-stale-save-ubuntu24-proof.yml" && id === "recovery-proof") ||
+  (name === "kit-footer-browser.yml" && id === "footer-browser");
 const byVisibility = `\${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
 const byVisibilityPrGuarded = `\${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
 const publicGuard = `!github.event.repository.private && '["${hosted}"]'`;
