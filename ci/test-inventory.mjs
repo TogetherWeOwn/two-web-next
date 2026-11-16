@@ -1250,6 +1250,22 @@ function parseConfigImports(text, configPath) {
 // would otherwise skip silently and fall back to wider defaults. Quoted
 // non-selection keys (`"name"`) are known-safe and stay ignored; any
 // computed `[...]` key fails because its runtime name is unknowable.
+function failOnUnsupportedProperty(entryClean, configPath) {
+  const property = entryClean.trim().replace(/^(?:get|set)\s+/, "");
+  assert.ok(
+    !property.startsWith("["),
+    `${configPath} has a computed selection key this gate cannot parse`,
+  );
+  const quoted = property.match(/^(['"`])((?:\\.|(?!\1)[^\\])*)\1/);
+  if (quoted) {
+    assert.ok(!quoted[2].includes("\\"), `${configPath} has an escaped key this gate cannot parse`);
+    failOnNonPlainSelectionKey(quoted[0], configPath);
+  } else {
+    const key = property.match(/^[^\s:(]+/)?.[0] ?? "";
+    assert.ok(!key.includes("\\"), `${configPath} has an escaped key this gate cannot parse`);
+  }
+}
+
 function failOnNonPlainSelectionKey(keyClean, configPath) {
   const quoted = keyClean.match(
     /^(['"`])\s*(testDir|testMatch|testIgnore|projects|grep|grepInvert)\s*\1$/,
@@ -1274,6 +1290,7 @@ function parseProjectObject(objClean, objCode, configPath) {
   for (const { start, end } of splitTopLevel(objCode)) {
     const entryCode = objCode.slice(start, end);
     if (!entryCode.trim()) continue;
+    failOnUnsupportedProperty(objClean.slice(start, end), configPath);
     assert.ok(
       !entryCode.trim().startsWith("..."),
       `${configPath} has a project spread this gate cannot expand: name testDir/testMatch/testIgnore explicitly`,
@@ -1351,6 +1368,11 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
       ops.push({ kind: "spread", parsed: parsePlaywrightConfig(root, candidate, seen) });
       continue;
     }
+    assert.ok(
+      !entryCode.trim().startsWith("..."),
+      `${configPath} has a config spread this gate cannot expand`,
+    );
+    failOnUnsupportedProperty(clean.slice(start, end), configPath);
     assert.ok(
       !/^(?:(?:get|set)\s+)?(?:grep|grepInvert)\s*\(/.test(entryCode.trim()),
       `${configPath} has a title selector method this gate cannot parse`,
@@ -2437,6 +2459,127 @@ function selftest() {
       }
     }
   });
+
+  check(
+    "playwright title selectors fail closed for spread, quoted, computed and escaped forms",
+    () => {
+      const failing = [];
+      for (const name of ["grep", "grepInvert"]) {
+        const value = name === "grep" ? "/selected/" : "/excluded/";
+        const half = Math.ceil(name.length / 2);
+        const escaped = `${name.slice(0, half - 1)}\\u${name
+          .charCodeAt(half - 1)
+          .toString(16)
+          .padStart(4, "0")}${name.slice(half)}`;
+        const forms = [
+          // Quoted names, plain and accessor.
+          { key: `'${name}': ${value}`, error: new RegExp(`quoted ${name} key`) },
+          { key: `\`${name}\`: ${value}`, error: new RegExp(`quoted ${name} key`) },
+          { key: `get "${name}"() { return ${value}; }`, error: /cannot parse|title selector/ },
+          {
+            key: `get '${name}'(): RegExp { return ${value}; }`,
+            error: /cannot parse|title selector/,
+          },
+          { key: `set "${name}"(v) {}`, error: /cannot parse|title selector/ },
+          { key: `"${name}"() { return ${value}; }`, error: /cannot parse|title selector/ },
+          // Computed names, plain and accessor.
+          { key: `["${name}"]: ${value}`, error: /computed selection key/ },
+          { key: `[\`${name}\`]: ${value}`, error: /computed selection key/ },
+          {
+            key: `["${name.slice(0, half)}" + "${name.slice(half)}"]: ${value}`,
+            error: /computed selection key/,
+          },
+          {
+            key: `get ["${name}"]() { return ${value}; }`,
+            error: /cannot parse|title selector|computed/,
+          },
+          {
+            key: `get [\`${name}\`](): RegExp { return ${value}; }`,
+            error: /cannot parse|title selector|computed/,
+          },
+          // Unicode escaped property names.
+          { key: `${escaped}: ${value}`, error: /cannot parse|escape|title selector/ },
+          { key: `"${escaped}": ${value}`, error: /cannot parse|escape|title selector|quoted/ },
+          {
+            key: `get ${escaped}() { return ${value}; }`,
+            error: /cannot parse|escape|title selector/,
+          },
+          { key: `${escaped}`, error: /cannot parse|escape|title selector/ },
+          {
+            key: `\\u{${name.charCodeAt(0).toString(16)}}${name.slice(1)}: ${value}`,
+            error: /cannot parse|escape|title selector/,
+          },
+          // Multiline computed keys, plain and accessor.
+          { key: `[\n  "${name}"\n]: ${value}`, error: /computed selection key/ },
+          { key: `[\n  \`${name}\`,\n]: ${value}`, error: /computed selection key|cannot parse/ },
+          {
+            key: `get [\n  "${name}"\n]() {\n  return ${value};\n}`,
+            error: /cannot parse|title selector|computed/,
+          },
+          // Root object spread this gate cannot expand.
+          { key: `...{ ${name}: ${value} }`, root: true, error: /spread/ },
+          { key: `...{\n  ${name}: ${value},\n}`, root: true, error: /spread/ },
+          {
+            key: `...(${name === "grep" ? "{ grep: /selected/ }" : "{ grepInvert: /excluded/ }"})`,
+            root: true,
+            error: /spread/,
+          },
+        ];
+        for (const form of forms) {
+          failing.push({ ...form, where: "root", config: form.key });
+          if (!form.root)
+            failing.push({
+              ...form,
+              where: "project",
+              config: `projects: [{ name: 'selected', ${form.key} }]`,
+            });
+        }
+      }
+      const controls = [
+        // Genuinely unfiltered configs: no selector in any spelling.
+        { config: "", orphans: [] },
+        { config: "projects: [{ name: 'all' }]", orphans: [] },
+        { config: "projects: [{ \"name\": 'all' }]", orphans: [] },
+        { config: "grepInvertNot: /x/", orphans: [] },
+      ];
+      const run = (config) => {
+        const dir = mkdtempSync(join(tmpdir(), "test-inventory-title-forms-"));
+        try {
+          writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+          mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+          writeFileSync(
+            join(dir, ".github", "workflows", "ci.yml"),
+            "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.fixture.config.ts\n",
+          );
+          writeFileSync(
+            join(dir, "playwright.fixture.config.ts"),
+            `export default defineConfig({ testDir: "./e2e", testMatch: "entry.spec.ts", ${config} });\n`,
+          );
+          mkdirSync(join(dir, "e2e"), { recursive: true });
+          // entry.spec.ts is directly matched; suite.visual.ts is transitive.
+          writeFileSync(
+            join(dir, "e2e", "entry.spec.ts"),
+            'import "./suite.visual";\nimport { test } from "@playwright/test";\ntest("entry", async () => {});\n',
+          );
+          writeFileSync(
+            join(dir, "e2e", "suite.visual.ts"),
+            'import { test } from "@playwright/test";\ntest("suite", async () => {});\n',
+          );
+          return playwrightInventory(dir).orphans;
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      };
+      for (const entry of failing) {
+        // Fail closed (throw) rather than treat the spec and its transitive
+        // import as covered by an unfiltered run.
+        assert.throws(() => run(entry.config), entry.error, `${entry.where}: ${entry.config}`);
+      }
+      for (const entry of controls) {
+        assert.deepEqual(run(entry.config), entry.orphans, entry.config || "(no selector)");
+      }
+    },
+  );
 
   check("playwright matched spec reachable, ignored spec orphan", () => {
     const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
