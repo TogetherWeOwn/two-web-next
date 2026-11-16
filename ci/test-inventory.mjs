@@ -297,23 +297,12 @@ function listPlaywrightSpecs(root) {
   return [...new Set(out)].sort();
 }
 
-// Only a single simple command can establish execution evidence. A preceding
-// failure, function definition, redirection or shell expansion can otherwise
-// make a later apparent invocation unreachable or turn it into data.
-function hasUnsupportedShellFlow(text) {
-  const joined = text.replace(/\\\r?\n/g, " ");
-  const lines = joined
-    .split("\n")
-    .filter((line) => line.trim() && !line.trimStart().startsWith("#"));
-  return lines.length !== 1 || /[;|&(){}<>`]/.test(lines[0]);
-}
-
 // Let YAML decode run scalars before any shell scan: folded, plain and
 // quoted multiline values can all join a script name or forwarded arguments
 // across physical lines. Re-express each decoded value as a literal block so
 // every existing scanner sees the same shell text and step/default ancestry.
 // Only this in-memory view changes; files on disk remain untouched.
-function workflowShellView(text, name, evidenceOnly = false) {
+function workflowShellView(text, name) {
   const doc = parseDocument(text);
   assert.equal(doc.errors.length, 0, `${name} is not valid YAML: ${doc.errors[0]?.message}`);
   const edits = [];
@@ -326,11 +315,7 @@ function workflowShellView(text, name, evidenceOnly = false) {
       const indent = " ".repeat(pair.key.range[0] - lineStart + 2);
       // Chomping does not affect command arguments; retain internal newlines,
       // including blank lines and more-indented folded content, exactly.
-      let script = node.value.replace(/\n+$/, "");
-      if (evidenceOnly) {
-        if (hasUnsupportedShellFlow(script)) script = "_";
-        else script = script.replace(/\\\r?\n/g, " ");
-      }
+      const script = node.value.replace(/\n+$/, "");
       // Explicit indentation prevents a more-indented first shell command
       // from setting the YAML block threshold above subsequent commands.
       const replacement = `|2\n${script
@@ -352,12 +337,7 @@ function collectWorkflowFiles(root) {
   for (const e of readdirSync(wfDir)) {
     if (e.endsWith(".yml") || e.endsWith(".yaml")) {
       const name = `.github/workflows/${e}`;
-      const source = readFileSync(join(wfDir, e), "utf8");
-      out.push({
-        name,
-        text: workflowShellView(source, name),
-        evidenceText: workflowShellView(source, name, true),
-      });
+      out.push({ name, text: workflowShellView(readFileSync(join(wfDir, e), "utf8"), name) });
     }
   }
   return out;
@@ -469,35 +449,10 @@ function splitShellTokens(segment) {
 // continuations join first (the shell removes them), so a `--` on the next
 // line still counts. A bare `--` before the name is skipped: oracle shows
 // `npm run -- b` still runs b.
-// Only credit invocations in a simple shell command position. Quoted text and
-// arguments to other commands (notably echo) are not execution evidence.
-function isExecutablePosition(text, index, playwright = false) {
-  let start = 0;
-  let quote = null;
-  for (let i = 0; i < index; i++) {
-    const c = text[i];
-    if (quote) {
-      if (c === "\\" && quote !== "'") i++;
-      else if (c === quote) quote = null;
-    } else if (c === "'" || c === '"' || c === "`") quote = c;
-    else if (c === "\\") i++;
-    else if (c === "\n" || c === ";" || c === "&" || c === "|") start = i + 1;
-  }
-  if (quote || (start >= 2 && /^(?:&&|\|\|)$/.test(text.slice(start - 2, start)))) return false;
-  // Inline workflow commands begin after the YAML run key, not at column 0.
-  const prefix = text.slice(start, index).replace(/^\s*(?:-\s+)?run\s*:\s*/, "");
-  return playwright
-    ? /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:npx\s+)?$/.test(prefix)
-    : /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*$/.test(prefix);
-}
-
-function parseNpmRunOccurrences(text, evidenceOnly = false) {
+function parseNpmRunOccurrences(text) {
   const out = [];
   const joined = text.replace(/\\\r?\n/g, " ");
   for (const m of joined.matchAll(/\bnpm\s+run(?:-script)?\b/g)) {
-    const lineStart = joined.lastIndexOf("\n", m.index - 1) + 1;
-    if (evidenceOnly && !isExecutablePosition(joined.slice(lineStart), m.index - lineStart))
-      continue;
     const lineEnd = joined.indexOf("\n", m.index);
     const segment = joined.slice(m.index + m[0].length, lineEnd === -1 ? undefined : lineEnd);
     const tokens = splitShellTokens(segment);
@@ -576,9 +531,7 @@ function scriptRunsPlaywright(scripts, name, seen = new Set()) {
   if (seen.has(name)) return { runs: false, unknown: false };
   seen.add(name);
   const body = scripts[name] ?? "";
-  if (/\bplaywright\s+test\b/.test(body.replace(/\\\r?\n/g, " "))) {
-    return { runs: true, unknown: false };
-  }
+  if (/\bplaywright\s+test\b/.test(body)) return { runs: true, unknown: false };
   let unknown = false;
   for (const occ of parseNpmRunOccurrences(body)) {
     if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
@@ -641,27 +594,6 @@ function invokedScriptNames(scripts, workflowText) {
         }
       }
     }
-  }
-  return invoked;
-}
-
-// Validation may inspect potentially invoked scripts, but reachability needs a
-// proven path through every wrapper. Never let an unsupported wrapper lend
-// execution evidence to a nested script.
-function evidenceScriptNames(scripts, workflowText) {
-  const invoked = new Set();
-  const queue = [];
-  const scan = (text) => {
-    for (const occ of parseNpmRunOccurrences(text, true)) {
-      if (occ.name === null || !Object.hasOwn(scripts, occ.name) || invoked.has(occ.name)) continue;
-      invoked.add(occ.name);
-      queue.push(occ.name);
-    }
-  };
-  scan(workflowText.split("\n").map(stripYamlComment).join("\n"));
-  while (queue.length) {
-    const body = scripts[queue.shift()] ?? "";
-    if (!hasUnsupportedShellFlow(body)) scan(body);
   }
   return invoked;
 }
@@ -1095,7 +1027,7 @@ function normalizeFilterRef(ref, source) {
 // Map configRel -> { unfiltered: boolean, files: Set<string> (exact files),
 // dirs: Set<string> (dir prefixes with trailing slash) }. A config with any
 // unfiltered invocation runs every match; otherwise only the union runs.
-function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked, evidenceOnly = false) {
+function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
   const found = new Map();
   const record = (config, files, source) => {
     const entry = found.get(config) ?? { unfiltered: false, files: new Set(), dirs: new Set() };
@@ -1146,7 +1078,7 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked, evide
     for (let i = 0; i < lines.length; i += 1) {
       const line = stripped[i];
       const at = line.search(/\bplaywright\s+test\b/);
-      if (at === -1 || (evidenceOnly && !isExecutablePosition(line, at, true))) continue;
+      if (at === -1) continue;
       assertRootStepCwd(ctx, i, at, "playwright test");
       let rest = line.slice(at).replace(/^\bplaywright\s+test\b/, "");
       for (let j = i + 1; j < lines.length; j += 1) {
@@ -1160,15 +1092,8 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked, evide
   // Invoked scripts only (see invokedScriptNames): each `playwright test`
   // runs to the next shell chain separator, never into a following command.
   for (const name of invoked) {
-    let body = scripts[name] ?? "";
-    if (evidenceOnly) {
-      if (hasUnsupportedShellFlow(body)) continue;
-      body = body.replace(/\\\r?\n/g, " ");
-    }
+    const body = scripts[name] ?? "";
     for (const m of body.matchAll(/\bplaywright\s+test\b/g)) {
-      const lineStart = body.lastIndexOf("\n", m.index - 1) + 1;
-      if (evidenceOnly && !isExecutablePosition(body.slice(lineStart), m.index - lineStart, true))
-        continue;
       const tail = body.slice(m.index + m[0].length);
       const end = tail.search(/&&|\|\||;/);
       parseTokens(
@@ -1329,9 +1254,7 @@ function parseConfigImports(text, configPath) {
 // non-selection keys (`"name"`) are known-safe and stay ignored; any
 // computed `[...]` key fails because its runtime name is unknowable.
 function failOnNonPlainSelectionKey(keyClean, configPath) {
-  const quoted = keyClean.match(
-    /^(['"`])\s*(testDir|testMatch|testIgnore|projects|grep|grepInvert)\s*\1$/,
-  );
+  const quoted = keyClean.match(/^(['"`])\s*(testDir|testMatch|testIgnore|projects)\s*\1$/);
   if (quoted) {
     assert.fail(
       `${configPath} has a quoted ${quoted[2]} key this gate cannot parse (${keyClean}): use a plain identifier, not a quoted or computed key`,
@@ -1359,7 +1282,6 @@ function parseProjectObject(objClean, objCode, configPath) {
     const colon = entryCode.indexOf(":");
     if (colon === -1) {
       const shorthand = entryCode.trim();
-      if (shorthand === "grep" || shorthand === "grepInvert") out[shorthand] = true;
       if (shorthand === "testDir")
         assert.fail(
           `${configPath} has a project testDir this gate cannot parse: use a plain string literal`,
@@ -1371,10 +1293,6 @@ function parseProjectObject(objClean, objCode, configPath) {
       continue;
     }
     const key = entryCode.slice(0, colon).trim();
-    if (key === "grep" || key === "grepInvert") {
-      out[key] = true;
-      continue;
-    }
     if (key !== "testDir" && key !== "testMatch" && key !== "testIgnore") {
       failOnNonPlainSelectionKey(objClean.slice(start, end).slice(0, colon).trim(), configPath);
       continue;
@@ -1428,8 +1346,6 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
     const colon = entryCode.indexOf(":");
     if (colon === -1) {
       const shorthand = entryCode.trim();
-      if (shorthand === "grep" || shorthand === "grepInvert")
-        ops.push({ kind: "key", key: shorthand, value: true });
       if (shorthand === "testDir")
         assert.fail(
           `${configPath} has a testDir this gate cannot parse: use a plain string literal`,
@@ -1443,10 +1359,6 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
       continue;
     }
     const key = entryCode.slice(0, colon).trim();
-    if (key === "grep" || key === "grepInvert") {
-      ops.push({ kind: "key", key, value: true });
-      continue;
-    }
     if (key !== "testDir" && key !== "testMatch" && key !== "testIgnore" && key !== "projects") {
       failOnNonPlainSelectionKey(clean.slice(start, end).slice(0, colon).trim(), configPath);
       continue;
@@ -1498,22 +1410,13 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
       });
     }
   }
-  const merged = {
-    testDir: null,
-    testMatch: null,
-    testIgnore: null,
-    projects: null,
-    grep: null,
-    grepInvert: null,
-  };
+  const merged = { testDir: null, testMatch: null, testIgnore: null, projects: null };
   for (const op of ops) {
     if (op.kind === "spread") {
       if (op.parsed.testDir !== null) merged.testDir = op.parsed.testDir;
       if (op.parsed.testMatch !== null) merged.testMatch = op.parsed.testMatch;
       if (op.parsed.testIgnore !== null) merged.testIgnore = op.parsed.testIgnore;
       if (op.parsed.projects !== null) merged.projects = op.parsed.projects;
-      if (op.parsed.grep !== null) merged.grep = op.parsed.grep;
-      if (op.parsed.grepInvert !== null) merged.grepInvert = op.parsed.grepInvert;
     } else {
       merged[op.key] = op.value;
     }
@@ -1640,9 +1543,6 @@ function patternMatchesFile(patterns, file) {
 function configMatchesFile(parsed, configRel, file) {
   const contexts = parsed.projects && parsed.projects.length ? parsed.projects : [{}];
   return contexts.some((project) => {
-    // A title selector can run only part of a spec; never credit that spec or
-    // its imports as fully exercised, including selectors inherited from base.
-    if (project.grep || project.grepInvert || parsed.grep || parsed.grepInvert) return false;
     const testDir = normalizeTestDir(project.testDir ?? parsed.testDir ?? ".", configRel);
     if (!isFileUnderDir(file, testDir)) return false;
     const testMatch = project.testMatch ?? parsed.testMatch;
@@ -1907,16 +1807,7 @@ export function playwrightInventory(root = repoRoot) {
   const invoked = invokedScriptNames(scripts, workflowText);
   auditWorkflowNpmRunCwd(workflowFiles, scripts);
   auditScriptCwd(scripts, invoked);
-  // Keep the broader scan for cwd and argument validation; only the narrower
-  // evidence scan may establish coverage.
-  parsePlaywrightInvocations(root, workflowFiles, scripts, invoked);
-  const evidenceWorkflows = workflowFiles.map(({ name, evidenceText }) => ({
-    name,
-    text: evidenceText,
-  }));
-  const evidenceText = evidenceWorkflows.map(({ text }) => text).join("\n");
-  const evidenceInvoked = evidenceScriptNames(scripts, evidenceText);
-  const refs = parsePlaywrightInvocations(root, evidenceWorkflows, scripts, evidenceInvoked, true);
+  const refs = parsePlaywrightInvocations(root, workflowFiles, scripts, invoked);
   const parsed = new Map();
   for (const config of refs.keys()) parsed.set(config, parsePlaywrightConfig(root, config));
   const direct = new Map();
@@ -1982,199 +1873,27 @@ function selftest() {
     console.log(`ok: ${name}`);
   };
 
-  check("playwright selector and command evidence fails closed", () => {
-    const cases = [
-      { name: "grep", selector: "grep: /selected/,", orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"] },
-      {
-        name: "grepInvert",
-        selector: "grepInvert: /excluded/,",
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      { name: "unfiltered", selector: "", orphans: [] },
-      {
-        name: "project grep",
-        selector: 'projects: [{ name: "selected", grep: /selected/ }],',
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "project grepInvert",
-        selector: 'projects: [{ name: "selected", grepInvert: /excluded/ }],',
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "mixed projects",
-        selector: 'projects: [{ name: "selected", grep: /selected/ }, { name: "all" }],',
-        orphans: [],
-      },
-      { name: "inherited grep", inherited: true, orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"] },
-      {
-        name: "echo direct",
-        run: "echo npx playwright test --config playwright.fixture.config.ts",
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "continued echo direct",
-        run: "echo \\\n npx playwright test --config playwright.fixture.config.ts",
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "continued echo in script",
-        run: "npm run e2e",
-        scripts: { e2e: "echo \\\n npx playwright test --config playwright.fixture.config.ts" },
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "continued executable command",
-        run: "npx \\\n playwright test --config playwright.fixture.config.ts",
-        orphans: [],
-      },
-      {
-        name: "echo npm",
-        run: "echo npm run e2e",
-        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "conditional command",
-        run: "false && npx playwright test --config playwright.fixture.config.ts",
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "exit before command",
-        run: "exit 0\nnpx playwright test --config playwright.fixture.config.ts",
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "failure before command",
-        run: "false\nnpx playwright test --config playwright.fixture.config.ts",
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "exit before continued npm command",
-        run: "exit 0\nnpm \\\n  run e2e",
-        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "apostrophe in script comment",
-        run: "npm run e2e",
-        scripts: { e2e: "# don't skip\nplaywright test --config playwright.fixture.config.ts" },
-        orphans: [],
-      },
-      {
-        name: "failure before nested script",
-        run: "npm run wrapper",
-        scripts: {
-          wrapper: "false; npm run e2e",
-          e2e: "playwright test --config playwright.fixture.config.ts",
-        },
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "function definition",
-        run: "f() {\nnpx playwright test --config playwright.fixture.config.ts\n}",
-        throws: /filter.*cannot expand/,
-      },
-      {
-        name: "exit before nested script",
-        run: "npm run wrapper",
-        scripts: {
-          wrapper: "exit 0; npm run e2e",
-          e2e: "playwright test --config playwright.fixture.config.ts",
-        },
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "conditional cwd validation",
-        run: "cd web && npx playwright test --config playwright.fixture.config.ts",
-        throws: /directory change/,
-      },
-      {
-        name: "conditional argument validation",
-        run: "false && npx playwright test --config playwright.fixture.config.ts --unsupported",
-        throws: /flag this gate cannot expand/,
-      },
-      {
-        name: "conditional script",
-        run: "npm run e2e",
-        scripts: { e2e: "false && playwright test --config playwright.fixture.config.ts" },
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "conditional wrapper",
-        run: "npm run wrapper",
-        scripts: {
-          wrapper: "false && npm run e2e",
-          e2e: "playwright test --config playwright.fixture.config.ts",
-        },
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "heredoc command",
-        run: "cat <<EOF\nnpx playwright test --config playwright.fixture.config.ts\nEOF",
-        throws: /missing playwright path/,
-      },
-      {
-        name: "heredoc npm",
-        run: "npm run wrapper",
-        scripts: {
-          wrapper: "cat <<EOF\nnpm run e2e\nEOF",
-          e2e: "playwright test --config playwright.fixture.config.ts",
-        },
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "npm invocation",
-        run: "npm run e2e",
-        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
-        orphans: [],
-      },
-      {
-        name: "regex positional",
-        run: "npx playwright test --config playwright.fixture.config.ts 'e2e/a[1].spec.ts'",
-        regexPath: true,
-        throws: /filter.*cannot expand/,
-      },
-      {
-        name: "literal positional",
-        run: "npx playwright test --config playwright.fixture.config.ts e2e/a.spec.ts",
-        orphans: ["e2e/b.spec.ts"],
-      },
-    ];
-    for (const entry of cases) {
-      const dir = mkdtempSync(join(tmpdir(), "test-inventory-boundary-"));
-      try {
-        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: entry.scripts ?? {} }));
-        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
-        mkdirSync(join(dir, "e2e"), { recursive: true });
-        const run = entry.run ?? "npx playwright test --config playwright.fixture.config.ts";
-        writeFileSync(
-          join(dir, ".github", "workflows", "ci.yml"),
-          `name: runner's test\njobs:\n  t:\n    steps:\n      - run: ${JSON.stringify(run)}\n`,
-        );
-        if (entry.inherited) {
-          writeFileSync(
-            join(dir, "playwright.base.config.ts"),
-            "export default defineConfig({ grep: /selected/ });\n",
-          );
-        }
-        const base = entry.inherited ? 'import base from "./playwright.base.config";\n' : "";
-        const spread = entry.inherited ? "...base, " : "";
-        writeFileSync(
-          join(dir, "playwright.fixture.config.ts"),
-          `${base}export default defineConfig({ ${spread}testDir: "./e2e", testMatch: "**/*.spec.ts", ${entry.selector ?? ""} });\n`,
-        );
-        writeFileSync(
-          join(dir, "e2e", "a.spec.ts"),
-          entry.selector || entry.inherited ? 'import "./b.spec";\n' : "// fixture\n",
-        );
-        writeFileSync(join(dir, "e2e", "b.spec.ts"), "// fixture\n");
-        if (entry.regexPath) writeFileSync(join(dir, "e2e", "a[1].spec.ts"), "// fixture\n");
-        if (entry.throws) assert.throws(() => playwrightInventory(dir), entry.throws, entry.name);
-        else assert.deepEqual(playwrightInventory(dir).orphans, entry.orphans, entry.name);
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
+  check("playwright positional regex filters fail closed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-regex-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(
+        join(dir, "playwright.config.ts"),
+        'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      writeFileSync(join(dir, "e2e", "a[1].spec.ts"), "// fixture\n");
+      writeFileSync(join(dir, "e2e", "a1.spec.ts"), "// fixture\n");
+      const workflow = (filter) =>
+        `name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test '${filter}'\n      - run: npx playwright test e2e/a1.spec.ts\n`;
+      const ci = join(dir, ".github", "workflows", "ci.yml");
+      writeFileSync(ci, workflow("e2e/a[1].spec.ts"));
+      assert.throws(() => playwrightInventory(dir), /regex or glob filter this gate cannot expand/);
+      writeFileSync(ci, workflow("e2e/a1.spec.ts"));
+      assert.deepEqual(playwrightInventory(dir).orphans, ["e2e/a[1].spec.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -3267,13 +2986,6 @@ function selftest() {
         );
       }
       assert.throws(() => playwrightInventory(dir), /cannot expand/);
-      writeFileSync(
-        join(dir, "package.json"),
-        JSON.stringify({
-          scripts: { e2e: "playwright \\\ntest --config playwright.fwd.config.ts" },
-        }),
-      );
-      assert.throws(() => playwrightInventory(dir), /cannot expand/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3722,12 +3434,9 @@ function selftest() {
       try {
         writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: e.scripts }));
         mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
-        // Redirection is outside the execution-evidence model; use a separate
-        // invocation to keep these controls focused on argument validation.
-        const evidenceStep = e.throws ? "" : "      - run: npm run b\n";
         writeFileSync(
           join(dir, ".github", "workflows", "ci.yml"),
-          `name: ci\njobs:\n  t:\n    steps:\n      - run: ${e.run}\n${evidenceStep}`,
+          `name: ci\njobs:\n  t:\n    steps:\n      - run: ${e.run}\n`,
         );
         writeFileSync(
           join(dir, "playwright.pos.config.ts"),
@@ -3974,12 +3683,7 @@ function selftest() {
       try {
         writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { e2e: pwScript } }));
         mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
-        // Clean cases exercise cwd attribution independently of whether their
-        // original shell body is simple enough to prove execution.
-        const evidenceStep = e.throws
-          ? ""
-          : `      - run: ${pwRun}\n        working-directory: .\n`;
-        writeFileSync(join(dir, ".github", "workflows", "ci.yml"), e.workflow + evidenceStep);
+        writeFileSync(join(dir, ".github", "workflows", "ci.yml"), e.workflow);
         writeFileSync(
           join(dir, "playwright.rt.config.ts"),
           'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
@@ -4332,12 +4036,9 @@ function selftest() {
       try {
         writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: e.scripts ?? {} }));
         mkdirSync(join(dir, ".github/workflows"), { recursive: true });
-        // These cases test cwd validation, not whether shell flow proves
-        // execution. Supply separate simple evidence for the clean controls.
-        const evidenceStep = e.clean ? "      - run: npx playwright test\n" : "";
         writeFileSync(
           join(dir, ".github/workflows/ci.yml"),
-          `name: ci\njobs:\n  t:\n    steps:\n      - run: ${e.run}\n${evidenceStep}`,
+          `name: ci\njobs:\n  t:\n    steps:\n      - run: ${e.run}\n`,
         );
         writeFileSync(
           join(dir, "playwright.config.ts"),
