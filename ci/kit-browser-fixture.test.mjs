@@ -131,6 +131,88 @@ test("asset reads reject escapes, symlinks, and unsupported files", async () => 
   }
 });
 
+test("calendar grid renders navigation and event states without JavaScript", async () => {
+  await withKitOfflineBrowser(
+    {
+      page: `<script lang="ts">
+import CalendarGrid from '#lib/CalendarGrid.svelte';
+import type { CalendarGridEntry } from '#lib/calendar-grid';
+import { monthGrid } from '../../../../src/islands/contracts';
+const now = new Date('2026-06-15T12:00:00Z');
+const state = { view: 'calendar' as const, month: '2026-06', q: '', game: 'Chess', past: true, page: 1 };
+const active = { key: 'active', title: 'Game night', startsAt: new Date('2026-06-15T18:00:00Z'), zone: 'UTC', cancelled: false, ongoing: true, availability: '2 seats left' };
+const cancelled = { key: 'cancelled', title: 'Cancelled night', startsAt: new Date('2026-06-16T18:00:00Z'), zone: 'UTC', cancelled: true, ongoing: false, availability: null };
+const weeks = monthGrid(state.month, '2026-06-15', new Map<string, CalendarGridEntry[]>([['2026-06-15', [active]], ['2026-06-16', [active, cancelled]]]));
+</script>
+<svelte:head><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
+<div class="base-theme schedule-theme"><main class="events-page"><CalendarGrid {state} {weeks} zone="UTC" {now} /></main></div>`,
+    },
+    async ({ page, html }) => {
+      assert.match(html, /Game night/);
+      assert.equal(await page.getByTestId("calendar-month").textContent(), "June 2026");
+      assert.deepEqual(await page.locator("thead th").allTextContents(), [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun",
+      ]);
+      assert.equal(
+        await page.getByTestId("calendar-day").first().getAttribute("data-date"),
+        "2026-06-01",
+      );
+      assert.equal(
+        await page.locator('[data-date="2026-07-01"]').getAttribute("data-outside"),
+        "true",
+      );
+      assert.equal(
+        await page.locator('[data-date="2026-06-15"]').getAttribute("aria-current"),
+        "date",
+      );
+      assert.equal(await page.locator('[data-date="2026-06-01"] li').count(), 0);
+      const ongoing = page.locator('[data-date="2026-06-15"] a');
+      assert.match(
+        await ongoing.getAttribute("href"),
+        /event=active&past=1&game=Chess#event-active$/,
+      );
+      assert.match(
+        await ongoing.getAttribute("aria-label"),
+        /Game night Happening now 2 seats left/,
+      );
+      assert.match(
+        await page.locator('[data-date="2026-06-16"] a').first().getAttribute("aria-label"),
+        /^Continues Game night/,
+      );
+      assert.match(
+        await page.locator('[data-date="2026-06-16"] a').last().getAttribute("aria-label"),
+        /Cancelled night Cancelled/,
+      );
+      assert.match(await page.getByLabel("Previous month").getAttribute("href"), /month=2026-05/);
+      assert.match(await page.getByLabel("Next month").getAttribute("href"), /month=2026-07/);
+      const form = page.getByTestId("calendar-month-jump");
+      assert.equal(await form.getAttribute("method"), "get");
+      assert.equal(await form.getAttribute("action"), "/events");
+      assert.equal(await form.locator('[name="game"]').inputValue(), "Chess");
+      assert.equal(await form.locator('[name="past"]').inputValue(), "1");
+      assert.equal(await form.locator('[name="view"]').inputValue(), "calendar");
+      assert.equal(await page.getByTestId("events-calendar-scroll").getAttribute("tabindex"), "0");
+      if (process.env.KIT_CALENDAR_EVIDENCE_DIR) {
+        const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
+        await mkdir(directory, { recursive: true });
+        for (const [name, width, height] of [
+          ["desktop", 1280, 800],
+          ["mobile", 390, 844],
+        ]) {
+          await page.setViewportSize({ width, height });
+          await page.screenshot({ path: join(directory, `calendar-${name}.png`), fullPage: true });
+        }
+      }
+    },
+  );
+});
+
 test("Kit offline browser rejects unexpected external requests", async () => {
   await assert.rejects(
     withKitOfflineBrowser(
