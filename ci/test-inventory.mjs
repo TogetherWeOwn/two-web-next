@@ -3840,9 +3840,9 @@ function selftest() {
         throws: /cannot resolve/,
       },
       {
-        name: "npm run outside any step",
+        name: "npm run in metadata is not executable",
         workflow: "name: ci\nenv:\n  X: npm run e2e\n",
-        throws: /cannot resolve/,
+        orphans: ["e2e/x.spec.ts", "e2e/y.spec.ts"],
       },
       // Controls: explicit roots, overrides, and precise attribution.
       {
