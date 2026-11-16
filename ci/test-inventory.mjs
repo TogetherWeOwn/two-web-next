@@ -352,7 +352,6 @@ function normalizeShell(text, { strict = false, mask = false } = {}) {
           pos = end === -1 ? stop : end + 1;
           if (heredocEnds(line, marker, strip)) {
             closed = true;
-            if (mask) out = out.slice(0, out.length - raw.length) + raw;
             break;
           }
           body += `${line}\n`;
@@ -719,16 +718,18 @@ function maskYamlHeredocs(lines) {
   const content = literalScriptLines(lines);
   const out = [...lines];
   for (let i = 0; i < lines.length; i++) {
-    if (!content.has(i) || content.has(i - 1)) continue;
+    if (!content.has(i)) continue;
+    // Blank lines are payload inside the block; literalScriptLines skips them.
     let j = i;
-    while (content.has(j + 1)) j++;
+    for (let k = i + 1; k < lines.length && (content.has(k) || !lines[k].trim()); k++)
+      if (content.has(k)) j = k;
     const base = Math.min(
       ...lines
         .slice(i, j + 1)
         .filter((l) => l.trim())
         .map(indentOf),
     );
-    const pad = " ".repeat(Number.isFinite(base) ? base : 0);
+    const pad = " ".repeat(base);
     const block = lines.slice(i, j + 1).map((l) => l.slice(pad.length));
     const masked = normalizeShell(block.join("\n"), { mask: true }).split("\n");
     assert.ok(
@@ -738,6 +739,7 @@ function maskYamlHeredocs(lines) {
     masked.forEach((l, k) => {
       out[i + k] = lines[i + k].slice(0, pad.length) + l;
     });
+    i = j;
   }
   return out;
 }
@@ -2003,144 +2005,58 @@ function selftest() {
   };
 
   check("shell normalization preserves comment and continuation boundaries", () => {
-    const cases = [
-      {
-        name: "continued token hash is not a comment",
-        run: "npm run e2e\\\n#suffix",
-        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "comment after operator preserves cwd validation",
-        run: "echo ok;# note \\\\\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
-        throws: /directory change/,
-      },
-      {
-        name: "comment double backslash preserves cwd validation",
-        run: "# note \\\\\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
-        throws: /directory change/,
-      },
-      {
-        name: "comment double backslash preserves argument validation",
-        run: "# note \\\\\nnpx playwright test --config playwright.fixture.config.ts --unsupported",
-        throws: /flag this gate cannot expand/,
-      },
-      {
-        name: "double quoted continued npm script name",
-        run: 'npm run "e\\\n2e"',
-        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
-        orphans: [],
-      },
-      {
-        name: "continuation does not add a word boundary",
-        run: "npm run e2e",
-        scripts: { e2e: "playwright\\\ntest --config playwright.fixture.config.ts" },
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "split npm script name retains forwarded filter validation",
-        run: "npm run e\\\n2e -- e2e/a.spec.ts",
-        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
-        throws: /forwards arguments/,
-      },
-      {
-        name: "split npm script name retains directory validation",
-        run: "npm run e\\\n2e --prefix web",
-        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
-        throws: /cross-directory npm runs/,
-      },
-      {
-        name: "heredoc apostrophe does not leak quote state",
-        run: "cat <<EOF\ndon't\nEOF\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
-        throws: /directory change/,
-      },
-      {
-        name: "heredoc data hash and cd are not commands",
-        run: "cat <<'EOF'\n# don't\ncd web\nEOF\nnpm run e2e",
-        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
-        orphans: [],
-      },
-      {
-        name: "heredoc trailing backslash does not join the marker",
-        run: "cat <<'EOF'\nbody \\\nEOF\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
-        throws: /directory change/,
-      },
-      {
-        name: "single quoted backslash newline is literal",
-        run: "echo 'a\\\nb'\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
-        throws: /directory change/,
-      },
-      {
-        name: "single quoted continuation is not joined into the script",
-        run: "npm run e2e",
-        scripts: {
-          e2e: "echo 'x\\\ny' && playwright test --config playwright.fixture.config.ts",
-        },
-        orphans: [],
-      },
-      {
-        name: "package script heredoc apostrophe and continuation",
-        run: "npm run e2e",
-        scripts: {
-          e2e: "cat <<'EOF'\ndon't \\\nEOF\nplaywright test --config playwright.fixture.config.ts",
-        },
-        orphans: [],
-      },
-      {
-        name: "indented heredoc delimiter is data and fails closed",
-        run: "cat <<EOF\n  EOF\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
-        throws: /unterminated heredoc/,
-      },
-      {
-        name: "space indented dash heredoc delimiter is data and fails closed",
-        run: "cat <<-EOF\n  EOF\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
-        throws: /unterminated heredoc/,
-      },
-      {
-        name: "tab indented dash heredoc delimiter terminates",
-        run: "cat <<-EOF\n\tEOF\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
-        throws: /directory change/,
-      },
-      {
-        name: "workflow quoted hash is shell data not a YAML comment",
-        run: 'echo "a #b" && npx playwright test --config playwright.fixture.config.ts',
-        orphans: [],
-      },
-      {
-        name: "package script continuation feeds playwright evidence",
-        run: "npm run e2e",
-        scripts: {
-          e2e: "playwright test --config playwright.fixture.config.ts \\\n e2e/a.spec.ts",
-        },
-        orphans: ["e2e/b.spec.ts"],
-      },
-      {
-        name: "unquoted heredoc joins backslash newline before the delimiter",
-        run: "cat <<EOF\nbody \\\nEOF\ncd web\nEOF\nnpx playwright test --config playwright.fixture.config.ts",
-        orphans: [],
-      },
-      {
-        name: "heredoc comment npm run is data in a workflow",
-        run: "cat <<'EOF'\n# npm run e2e\nEOF",
-        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "heredoc comment npm run is data in a package script",
-        run: "npm run outer",
-        scripts: {
-          outer: "cat <<'EOF'\n# npm run e2e\nEOF",
-          e2e: "playwright test --config playwright.fixture.config.ts",
-        },
-        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
-      },
-      {
-        name: "apostrophe in script comment",
-        run: "npm run e2e",
-        scripts: { e2e: "# don't skip\nplaywright test --config playwright.fixture.config.ts" },
-        orphans: [],
-      },
+    const CFG = "--config playwright.fixture.config.ts";
+    const PW = `playwright test ${CFG}`;
+    const BOTH = ["e2e/a.spec.ts", "e2e/b.spec.ts"];
+    const CD = /directory change/;
+    const UNT = /unterminated heredoc/;
+    const FWD = /forwards arguments/;
+    const XDIR = /cross-directory npm runs/;
+    const FLAG = /flag this gate cannot expand/;
+    const rows = [
+      ["continued token hash", "npm run e2e\\\n#suffix", PW, BOTH],
+      ["comment after operator, cwd", "echo ok;# note \\\\\n@CW", {}, CD],
+      ["comment double backslash, cwd", "# note \\\\\n@CW", {}, CD],
+      ["comment double backslash, args", "# note \\\\\n@NPX --unsupported", {}, FLAG],
+      ["quoted continued script name", 'npm run "e\\\n2e"', PW, []],
+      ["continuation adds no word boundary", "npm run e2e", "playwright\\\ntest @CFG", BOTH],
+      ["split script name, forwarded filter", "npm run e\\\n2e -- e2e/a.spec.ts", PW, FWD],
+      ["split script name, directory", "npm run e\\\n2e --prefix web", PW, XDIR],
+      ["heredoc apostrophe quote state", "cat <<EOF\ndon't\nEOF\n@CW", {}, CD],
+      ["heredoc data hash and cd", "cat <<'EOF'\n# don't\ncd web\nEOF\nnpm run e2e", PW, []],
+      ["heredoc trailing backslash marker", "cat <<'EOF'\nbody \\\nEOF\n@CW", {}, CD],
+      ["single quoted backslash newline", "echo 'a\\\nb'\n@CW", {}, CD],
+      ["single quoted continuation script", "npm run e2e", "echo 'x\\\ny' && @PW", []],
+      ["package heredoc apostrophe join", "npm run e2e", "cat <<'EOF'\ndon't \\\nEOF\n@PW", []],
+      ["indented heredoc delimiter", "cat <<EOF\n  EOF\n@CW", {}, UNT],
+      ["space dash heredoc delimiter", "cat <<-EOF\n  EOF\n@CW", {}, UNT],
+      ["tab dash heredoc delimiter", "cat <<-EOF\n\tEOF\n@CW", {}, CD],
+      ["workflow quoted hash", 'echo "a #b" && @NPX', {}, []],
+      ["package continuation evidence", "npm run e2e", "@PW \\\n e2e/a.spec.ts", ["e2e/b.spec.ts"]],
+      ["unquoted heredoc joins delimiter", "cat <<EOF\nbody \\\nEOF\ncd web\nEOF\n@NPX", {}, []],
+      ["heredoc comment, workflow", "@HC", PW, BOTH],
+      ["heredoc comment, script", "npm run outer", { outer: "@HC", e2e: PW }, BOTH],
+      ["heredoc delimiter cd, workflow", "cat <<cd\nx\ncd\nnpm run e2e", PW, []],
+      ["heredoc delimiter cd, script", "npm run e2e", "cat <<cd\nx\ncd\n@PW", []],
+      ["blank heredoc payload line", "cat <<'EOF'\n\nnpm run e2e\nEOF", PW, BOTH],
+      ["blank then heredoc comment", "cat <<'EOF'\nfirst\n\n# note\nEOF", PW, BOTH],
+      ["apostrophe in script comment", "npm run e2e", "# don't skip\n@PW", []],
     ];
+    const TOK = {
+      "@CFG": CFG,
+      "@PW": PW,
+      "@NPX": `npx ${PW}`,
+      "@CW": `cd web\nnpx ${PW}`,
+      "@HC": "cat <<'EOF'\n# npm run e2e\nEOF",
+    };
+    const fill = (t) => t.replace(/@[A-Z]+/g, (k) => TOK[k]);
+    const scriptsOf = (v) => (typeof v === "string" ? { e2e: v } : v);
+    const cases = rows.map(([name, run, scripts, want]) => ({
+      name,
+      run: fill(run),
+      scripts: Object.fromEntries(Object.entries(scriptsOf(scripts)).map(([k, v]) => [k, fill(v)])),
+      ...(want instanceof RegExp ? { throws: want } : { orphans: want }),
+    }));
     for (const entry of cases) {
       const dir = mkdtempSync(join(tmpdir(), "test-inventory-shell-"));
       try {
