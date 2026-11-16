@@ -80,7 +80,7 @@ async function selftest() {
       const lhrs = step.urls.map((url) => lhr(url, step.lcp ?? 1200));
       lhrs.forEach((report, i) => {
         writeFileSync(
-          join(lhciDir, `lhr-${calls}${String(i).padStart(4, "0")}.json`),
+          join(lhciDir, `lhr-${calls}${String(i).padStart(4, "0")}-${i}.json`),
           JSON.stringify(report),
         );
       });
