@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmod, copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,54 @@ const manifest = JSON.parse(await readFile(new URL("../package.json", import.met
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const check = workflow.slice(workflow.indexOf("\n  check:\n"));
 const args = ["run", "--coverage", "--pool=threads"];
+
+test("the independent browser fixture remains selected and fail-closed in ci-ok", () => {
+  const job = workflow.split("\n  kit-browser-fixture:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
+  const checkJob = check.split(/\n  [\w-]+:\n/)[1];
+  const ok = workflow.split("\n  ci-ok:\n")[1];
+  assert(job && ok && checkJob);
+  assert.match(job, /needs: \[scope\]/);
+  assert.match(
+    job,
+    /if: \$\{\{ !cancelled\(\) && needs\.scope\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true' && \(needs\.scope\.outputs\.full == 'true' \|\| needs\.scope\.outputs\.app == 'true' \|\| needs\.scope\.outputs\.worker == 'true'\) \}\}/,
+  );
+  const command =
+    "node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs";
+  const fixtureStep = job.split("\n      - name: Kit disposable browser fixture\n")[1];
+  assert.equal(fixtureStep?.split(/\n\s*\n/)[0]?.trim(), `run: ${command}`);
+  assert.doesNotMatch(job, /continue-on-error:/);
+  assert(!checkJob.includes(command));
+  assert.match(ok, /KIT_BROWSER_RESULT: \$\{\{ needs\.kit-browser-fixture\.result \}\}/);
+  const script = ok.match(
+    /- name: Aggregate change-gated conclusions\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+  )?.[1];
+  assert(script);
+  const base = {
+    SCOPE_RESULT: "success",
+    DRAFT: "false",
+    DOCS_ONLY: "false",
+    FULL: "false",
+    APP: "false",
+    WORKER: "false",
+    DB: "false",
+    CHECK_RESULT: "success",
+    A11Y_RESULT: "success",
+    LIGHTHOUSE_RESULT: "success",
+    BUDGET_RESULT: "success",
+    KIT_BROWSER_RESULT: "success",
+  };
+  const run = (env) => spawnSync("bash", ["-c", script], { env: { ...base, ...env } }).status;
+  for (const area of ["FULL", "APP", "WORKER"]) {
+    assert.equal(run({ [area]: "true" }), 0);
+    for (const result of ["failure", "cancelled", "skipped", ""])
+      assert.notEqual(run({ [area]: "true", KIT_BROWSER_RESULT: result }), 0);
+  }
+  assert.equal(run({ KIT_BROWSER_RESULT: "skipped" }), 0);
+  assert.equal(run({ FULL: "true", DRAFT: "true", KIT_BROWSER_RESULT: "skipped" }), 0);
+  assert.equal(run({ DOCS_ONLY: "true", KIT_BROWSER_RESULT: "skipped" }), 0);
+  assert.notEqual(run({ DOCS_ONLY: "", KIT_BROWSER_RESULT: "skipped" }), 0);
+  assert.notEqual(run({ SCOPE_RESULT: "failure", KIT_BROWSER_RESULT: "skipped" }), 0);
+});
 
 test("the required check keeps full coverage in isolated serial threads inside main's job budget", async () => {
   assert.equal(
@@ -160,6 +208,7 @@ const checkSteps = checkJob
   .slice(1)
   .map((entry) => ({
     label: entry.match(/^name: (.+)$/m)?.[1] ?? entry.split("\n", 1)[0],
+    id: entry.match(/^        id: ([\w-]+)$/m)?.[1],
     guard: entry.match(/^        if: (.+)$/m)?.[1] ?? "success()",
   }));
 const AUDIT = "Dependency audit (lockfile, including dev dependencies)";
@@ -170,7 +219,7 @@ const PATCH = "Patch coverage (WARN)";
 const SUMMARY = "Coverage job summary";
 const UPLOAD = "Upload coverage report";
 
-function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
+function evaluateGuard(guard, { jobFailed, scope, reportPresent, stepOutcomes }) {
   const expression = guard.replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, "$1");
   const tokens = expression.match(/'[^']*'|[A-Za-z_][\w.]*\(?|!=|==|&&|\|\||[()!]|\)/g) ?? [];
   assert.equal(tokens.join(""), expression.replace(/\s+/g, ""), `unsupported guard: ${guard}`);
@@ -200,6 +249,9 @@ function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
       );
       return close(reportPresent ? "present-hash" : "");
     }
+    const step = token.match(/^steps\.([\w-]+)\.outcome$/);
+    if (step) return stepOutcomes.get(step[1]) ?? "";
+    if (token === "env.KIT_CSS_FAILURE_DIR") return stepOutcomes.get("kit_css") ? "present" : "";
     const output = token.match(/^needs\.scope\.outputs\.(\w+)$/);
     assert(output, `unsupported guard token ${token}: ${guard}`);
     return scope[output[1]] ?? "";
@@ -244,23 +296,58 @@ function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
 
 // Walk the check job's steps in order. `failing` names the one step that fails
 // when it runs; a step whose guard is false is skipped without failing the job.
-function simulateCheckJob({ failing, scope, reportPresent = true }) {
+function simulateCheckJob({ failing, alsoFailing, scope, reportPresent = true }) {
   const outcomes = new Map();
+  const stepOutcomes = new Map();
   let jobFailed = false;
-  for (const { label, guard } of checkSteps) {
-    if (!evaluateGuard(guard, { jobFailed, scope, reportPresent })) {
-      outcomes.set(label, "skipped");
-      continue;
-    }
-    const failed = label === failing;
-    outcomes.set(label, failed ? "failure" : "success");
-    if (failed) jobFailed = true;
+  for (const { label, id, guard } of checkSteps) {
+    const runs = evaluateGuard(guard, { jobFailed, scope, reportPresent, stepOutcomes });
+    const outcome = !runs
+      ? "skipped"
+      : label === failing || label === alsoFailing
+        ? "failure"
+        : "success";
+    outcomes.set(label, outcome);
+    if (id) stepOutcomes.set(id, outcome);
+    if (outcome === "failure") jobFailed = true;
   }
   if (failing) assert.equal(outcomes.get(failing), "failure", `${failing} must run to fail`);
   return outcomes;
 }
 
 const codeScope = { docs_only: "false", draft: "false", full: "true", app: "true" };
+
+test("bounded CSS evidence is collected only after the Kit budget fails", () => {
+  const perf = "Kit performance budgets (worker + generated assets)";
+  const collect = "Collect bounded Kit CSS on budget failure";
+  const upload = "Upload bounded Kit CSS on budget failure";
+  const cleanup = "Remove Kit CSS failure diagnostic";
+  assert.equal(checkSteps.find((step) => step.label === perf)?.id, "kit_perf");
+  const failed = simulateCheckJob({ failing: perf, scope: codeScope });
+  for (const label of [collect, upload, cleanup]) assert.equal(failed.get(label), "success");
+  const partial = simulateCheckJob({ failing: perf, alsoFailing: collect, scope: codeScope });
+  assert.equal(partial.get(upload), "skipped");
+  assert.equal(partial.get(cleanup), "success");
+  for (const scenario of [
+    { scope: codeScope },
+    { failing: COVERAGE, scope: codeScope },
+    { scope: { ...codeScope, draft: "true" } },
+    { scope: { ...codeScope, docs_only: "true" } },
+    { scope: { ...codeScope, full: "false", app: "false", worker: "false" } },
+  ]) {
+    const outcomes = simulateCheckJob(scenario);
+    for (const label of [collect, upload, cleanup]) assert.equal(outcomes.get(label), "skipped");
+  }
+  const collectStep = checkJob
+    .split(/\n      - /)
+    .find((entry) => entry.startsWith(`name: ${collect}\n`));
+  const uploadStep = checkJob
+    .split(/\n      - /)
+    .find((entry) => entry.startsWith(`name: ${upload}\n`));
+  assert.match(collectStep, /env -i PATH="\$PATH" node ci\/kit-css-collect\.mjs/);
+  assert.match(uploadStep, /retention-days: 3/);
+  assert.match(uploadStep, /if-no-files-found: error/);
+});
 
 test("the check job models the guarded steps the simulation relies on", () => {
   const labels = checkSteps.map((step) => step.label);

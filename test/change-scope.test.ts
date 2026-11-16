@@ -760,7 +760,9 @@ describe("ci heavy-job scope gates", () => {
       WORKER: "false",
       DB: "false",
       DRAFT: "false",
+      DOCS_ONLY: "false",
       CHECK_RESULT: "success",
+      KIT_BROWSER_RESULT: "skipped",
       A11Y_RESULT: "skipped",
       LIGHTHOUSE_RESULT: "skipped",
       BUDGET_RESULT: "skipped",
@@ -768,7 +770,7 @@ describe("ci heavy-job scope gates", () => {
     const status = (env: Record<string, string>) =>
       spawnSync("bash", ["-c", script], { env, encoding: "utf8" }).status;
     expect(status(ok)).toBe(0);
-    for (const key of ["FULL", "APP", "WORKER", "DB", "DRAFT"]) {
+    for (const key of ["FULL", "APP", "WORKER", "DB", "DRAFT", "DOCS_ONLY"]) {
       expect(status({ ...ok, [key]: "" }), `${key} empty`).toBe(1);
       expect(status({ ...ok, [key]: "maybe" }), `${key} not a boolean`).toBe(1);
     }
@@ -785,6 +787,7 @@ describe("ci heavy-job scope gates", () => {
       "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
       "name: Incident issue lifecycle fixtures",
       "name: State glyph assembler fixtures",
+      "name: Tag capture guard fixtures",
     ];
     for (const name of draftSafeSteps) {
       const matches = steps.filter((step) => step.split("\n")[0] === name);

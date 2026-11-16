@@ -165,7 +165,9 @@ const gates = [
     env: ({ scope, downstream }: Results) => ({
       SCOPE_RESULT: scope,
       ...{ FULL: "true", APP: "true", WORKER: "true", DB: "true", DRAFT: "false" },
+      DOCS_ONLY: "false",
       CHECK_RESULT: downstream,
+      KIT_BROWSER_RESULT: downstream,
       A11Y_RESULT: downstream,
       LIGHTHOUSE_RESULT: downstream,
       BUDGET_RESULT: downstream,
