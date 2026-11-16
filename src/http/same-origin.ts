@@ -20,7 +20,9 @@ export function isSameOriginAllowed(input: {
   const method = input.method.toUpperCase();
   if (
     !UNSAFE_METHODS.some((unsafe) => unsafe === method) ||
-    SAME_ORIGIN_EXEMPTIONS.some(({ method: exempt, path }) => exempt === method && path === input.path)
+    SAME_ORIGIN_EXEMPTIONS.some(
+      ({ method: exempt, path }) => exempt === method && path === input.path,
+    )
   ) {
     return true;
   }

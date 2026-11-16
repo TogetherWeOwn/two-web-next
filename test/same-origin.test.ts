@@ -166,7 +166,10 @@ describe("framework-neutral same-origin decision", () => {
     { changes: { origin: "", fetchSite: "same-origin" }, expected: false },
     { changes: { fetchSite: "same-origin" }, expected: true },
     { changes: { fetchSite: "Same-Origin" }, expected: false },
-    { changes: { requestUrl: "https://other.test/write", fetchSite: "same-origin" }, expected: false },
+    {
+      changes: { requestUrl: "https://other.test/write", fetchSite: "same-origin" },
+      expected: false,
+    },
     { changes: { appUrl: "file:///two", origin: "https://two.test" }, expected: false },
     { changes: { appUrl: "invalid", fetchSite: "same-origin" }, expected: false },
     { changes: { method: "get", appUrl: "invalid" }, expected: true },
