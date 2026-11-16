@@ -142,6 +142,7 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
       out += "((";
       i = skipContinuations(text, i + 1);
       arithmetic = 2;
+      tokenStart = true;
       continue;
     }
     if (!quote && c === "#" && tokenStart) {

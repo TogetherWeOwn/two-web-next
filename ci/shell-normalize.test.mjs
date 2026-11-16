@@ -105,6 +105,7 @@ test("comments and quote-specific continuation handling", () => {
 });
 
 test("here-strings and arithmetic shifts are not heredocs", () => {
+  check("if((1))# don't parse this comment\nthen\n:\nfi\n", "if((1))\nthen\n:\nfi\n");
   for (const source of [
     "cat <<<word\nnpm run real\n",
     "echo $((8 << 1))\nnpm run real\n",
