@@ -1,4 +1,5 @@
 import { build } from "esbuild";
+import { workerNodeBuiltins } from "../ci/worker-node-builtins.mjs";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { describe, expect, it } from "vitest";
 
@@ -19,6 +20,7 @@ describe("fixed SSR clock in a local Worker", () => {
         target: "es2022",
         conditions: ["workerd", "worker", "browser"],
         external: ["node:*", "cloudflare:*"],
+        plugins: [workerNodeBuiltins],
         ...(localBuild ? { define: { __TWO_LOCAL_CAPTURE__: "true" } } : {}),
       });
       const options = {

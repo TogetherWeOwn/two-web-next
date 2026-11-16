@@ -106,8 +106,29 @@ test("nested overrides verify the copy their scope resolves", () => {
   const result = verifyPins(pins);
   assert.equal(result.ok, true);
   assert.ok(
-    result.checks.some((c) => c.id === "override:@lhci/cli[tmp]" && c.status === "pass"),
-    "the tmp nested override verifies the copy @lhci/cli resolves",
+    result.checks.some((c) => c.id === "override:@lhci/cli[tmp]" && c.status === "info"),
+    "the retained tmp override is informational when LHCI declares no tmp edge",
+  );
+  const lhci = pins.lockfile.packages["node_modules/@lhci/cli"];
+  const withTmpEdge = {
+    ...pins,
+    lockfile: {
+      ...pins.lockfile,
+      packages: {
+        ...pins.lockfile.packages,
+        "node_modules/@lhci/cli": {
+          ...lhci,
+          dependencies: { ...lhci.dependencies, tmp: "^0.2.7" },
+        },
+        "node_modules/tmp": { version: "0.2.7" },
+      },
+    },
+  };
+  assert.ok(
+    verifyPins(withTmpEdge).checks.some(
+      (c) => c.id === "override:@lhci/cli[tmp]" && c.status === "pass",
+    ),
+    "the tmp nested override verifies the copy a declared LHCI edge resolves",
   );
   assert.ok(
     result.checks.some(

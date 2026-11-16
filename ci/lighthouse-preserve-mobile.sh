@@ -9,5 +9,5 @@ if [[ ! -d "$dir" ]]; then
 fi
 mkdir -p "$dir/mobile-interrupted"
 find "$dir" -maxdepth 1 -type f \
-  \( -regextype posix-extended -regex '.*/lhr-[0-9]+\.(json|html)' -o -name assertion-results.json \) \
+  \( -regextype posix-extended -regex '.*/lhr-[0-9]+(-[0-9]+)?\.(json|html)' -o -name assertion-results.json \) \
   -exec cp -- '{}' "$dir/mobile-interrupted/" \;
