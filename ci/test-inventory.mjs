@@ -560,9 +560,10 @@ function parseNpmRunOccurrences(text) {
     out.push({ name, forwarding, redirect, unknown, index: m.index });
   }
   // Check shell-word boundaries before returning any discovered scripts. A
-  // continuation disappears in the shell; replacing it with a space here
-  // would hide adjacent fragments of the same operand.
-  const words = text.replace(/\\\r?\n/g, "");
+  // continuation disappears in the shell. Workflow text still has YAML block
+  // indentation, so conservatively remove indentation after a continuation too;
+  // this can reject indented shell words rather than credit an ambiguous run.
+  const words = text.replace(/\\\r?\n[ \t]*/g, "");
   for (const match of words.matchAll(/--grep(?==|\s|$)/g)) {
     let i = match.index + match[0].length;
     if (words[i] === "=") i++;
