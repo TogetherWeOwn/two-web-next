@@ -1679,6 +1679,46 @@ test.describe("kit: archive visuals", () => {
   }
 });
 
+test("kit: archive search and keyboard focus evidence", async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: KIT_ORIGIN, ignoreHTTPSErrors: true });
+  try {
+    await context.route("**/*", (route) => {
+      const origin = new URL(route.request().url()).origin;
+      return origin === "https://localhost:8787" || origin === KIT_ORIGIN
+        ? route.continue()
+        : route.abort("blockedbyclient");
+    });
+    const page = await context.newPage();
+    for (const viewport of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport.size);
+      const response = await page.goto("/events/past?q=Past");
+      expect(response?.status()).toBe(200);
+      const card = page.getByTestId("event-card").first();
+      const title = card.getByRole("link", { name: "E2E Past Night" });
+      await expect(title.locator("mark")).toHaveText("Past");
+      await page.waitForLoadState("networkidle");
+      const save = async (state: string) => {
+        const name = `kit-review-archive-${state}-${viewport.name}`;
+        const path = test.info().outputPath(`${name}.png`);
+        await page.screenshot({ path, fullPage: true, mask: [page.locator("time")] });
+        await test.info().attach(name, { path, contentType: "image/png" });
+      };
+      await save("search");
+      for (
+        let i = 0;
+        i < 30 && !(await title.evaluate((el) => el === document.activeElement));
+        i++
+      ) {
+        await page.keyboard.press("Tab");
+      }
+      await expect(title).toBeFocused();
+      await save("focus");
+    }
+  } finally {
+    await context.close();
+  }
+});
+
 // Successful archive page turns with browser history restoration.
 //
 // Isolated deterministic fixture: 24 dated rows plus the seeded past night
