@@ -1065,12 +1065,16 @@ jobs:
           set -euo pipefail
           auth="$(printf 'x-access-token:%s' "${MIGRATION_GIT_TOKEN:?}" | base64 -w0)"
           echo "::add-mask::$auth"
+          migration_args=()
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/* && "$GITHUB_REF" != refs/heads/main ]]; then
+            migration_args+=(--candidate-ci)
+          fi
           GIT_CONFIG_COUNT=2 \
           GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.extraheader" \
           GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
           GIT_CONFIG_KEY_1="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git.extraheader" \
           GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
-            bash ci/check-migration-numbers.sh
+            bash ci/check-migration-numbers.sh "${migration_args[@]}"
       - name: Migration snapshot chain (local files, no credentials)
         shell: bash
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.db == 'true')
