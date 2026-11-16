@@ -330,10 +330,10 @@ function workflowShellView(text, name, evidenceOnly = false) {
       // Chomping does not affect command arguments; retain internal newlines,
       // including blank lines and more-indented folded content, exactly.
       let script = node.value.replace(/\n+$/, "");
-      if (evidenceOnly) {
-        if (hasUnsupportedShellFlow(script)) script = "_";
-        else script = script.replace(/\\\r?\n/g, "");
-      }
+      if (evidenceOnly && hasUnsupportedShellFlow(script)) script = "_";
+      // A backslash in a comment does not join the next shell line. Preserve
+      // that boundary in the broad validation view before joining continuations.
+      script = script.replace(/(#.*)\\\r?\n/g, "$1\n").replace(/\\\r?\n/g, "");
       // Explicit indentation prevents a more-indented first shell command
       // from setting the YAML block threshold above subsequent commands.
       const replacement = `|2\n${script
@@ -1985,6 +1985,18 @@ function selftest() {
         run: "npm run e2e",
         scripts: { e2e: "playwright\\\ntest --config playwright.fixture.config.ts" },
         orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "split npm script name retains forwarded filter validation",
+        run: "npm run e\\\n2e -- e2e/a.spec.ts",
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        throws: /forwards arguments/,
+      },
+      {
+        name: "split npm script name retains directory validation",
+        run: "npm run e\\\n2e --prefix web",
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        throws: /cross-directory npm runs/,
       },
       {
         name: "comment backslash does not hide exit",
