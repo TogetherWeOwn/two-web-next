@@ -1655,6 +1655,10 @@ test.describe("kit: archive visuals", () => {
             const state = card.getByText("Sign-up record");
             await expect.soft(state).toBeVisible();
             await expect.soft(state).toHaveCSS("border-top-style", "solid");
+            await expect.soft(state).toHaveCSS("font-size", "12px");
+            await expect.soft(state).toHaveCSS("text-transform", "uppercase");
+            await expect.soft(state).toHaveCSS("padding", "5px 7px");
+            await expect.soft(state).toHaveCSS("white-space", "nowrap");
             const glyph = card.locator(".state-glyph");
             if (viewport.name === "desktop") {
               await expect.soft(glyph).toBeVisible();

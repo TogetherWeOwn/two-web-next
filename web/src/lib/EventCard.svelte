@@ -65,18 +65,3 @@ const zone = $derived(effectiveZone(e.timezone));
   </div>
   <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
 </li>
-
-<style>
-  .event-title {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-  }
-
-  .event-state {
-    color: var(--t2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-s);
-  }
-</style>

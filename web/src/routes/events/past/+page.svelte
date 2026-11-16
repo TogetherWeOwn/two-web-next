@@ -111,21 +111,29 @@ const islands =
 <style>
   :global([data-testid="past-events"] .event-title) {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     flex-wrap: wrap;
     gap: var(--space-2);
   }
 
   :global([data-testid="past-events"] .event-state) {
-    color: var(--t2);
-    border: 1px solid var(--border);
+    font-family: var(--font-data);
+    font-size: var(--text-label);
+    line-height: var(--leading-label);
+    letter-spacing: var(--tracking-label);
+    text-transform: uppercase;
+    padding: var(--space-inset-tag-y) var(--space-inset-tag-x);
+    border: 1px solid var(--color-hair2);
     border-radius: var(--radius-s);
+    color: var(--t2);
+    white-space: nowrap;
   }
 
   :global([data-testid="past-events"] .state-glyph) {
     width: 16px;
     height: 16px;
     flex: none;
+    margin-block-start: calc((1lh - 16px) / 2);
     color: var(--t3);
   }
 
