@@ -336,6 +336,22 @@ function workflowShellView(text, name) {
         edits.push({ start: node.range[0], end: node.range[1], replacement: `""${newline}` });
         return;
       }
+      // Quoted keys newly expose their bodies to the substring-based scanners.
+      // Only a single literal command with a proven head may supply credit:
+      // reject data, shell syntax and additional candidate text before either
+      // direct Playwright or npm discovery sees the normalized key.
+      const key = text.slice(pair.key.range[0], pair.key.range[1]);
+      const body = node.value.trim();
+      const candidate = /\b(?:playwright\s+test|npm\s+run(?:-script)?)\b/;
+      if (/^["']/.test(key) && candidate.test(body)) {
+        const head = /^(?:(?:npx\s+)?playwright\s+test|npm\s+run(?:-script)?)(?=\s|$)/.exec(body);
+        const literalWords =
+          /^(?:[A-Za-z0-9_./@:=,%+\-]+|'[A-Za-z0-9_./@:=,%+ \-]*'|"[A-Za-z0-9_./@:=,%+ \-]*")(?:[ \t]+(?:[A-Za-z0-9_./@:=,%+\-]+|'[A-Za-z0-9_./@:=,%+ \-]*'|"[A-Za-z0-9_./@:=,%+ \-]*"))*$/;
+        assert.ok(
+          head && literalWords.test(body) && !candidate.test(body.slice(head[0].length)),
+          `${name} has an ambiguous quoted run command; this gate cannot model it`,
+        );
+      }
       // Structural scanners consume the same decoded key as YAML discovery.
       edits.push({ start: pair.key.range[0], end: pair.key.range[1], replacement: "run" });
       const lineStart = text.lastIndexOf("\n", pair.key.range[0] - 1) + 1;
@@ -2578,6 +2594,20 @@ function selftest() {
       assert.deepEqual(playwrightInventory(dir).orphans, ["e2e/a.spec.ts", "e2e/suite.visual.ts"]);
       assert.equal(playwrightJsonSummary(dir).reachable, 0);
       for (const quote of ["'", '"']) {
+        for (const command of [
+          "echo playwright test",
+          'echo "npx playwright test"',
+          'printf "%s" "npx playwright test"',
+          'echo "npm run browser"',
+          "npx playwright test; echo done",
+        ]) {
+          writeFileSync(
+            workflow,
+            `name: ci\njobs:\n  t:\n    steps:\n      - ${quote}run${quote}: |\n          ${command}\n`,
+          );
+          assert.throws(() => playwrightInventory(dir), /ambiguous quoted run command/);
+          assert.throws(() => playwrightJsonSummary(dir), /ambiguous quoted run command/);
+        }
         writeFileSync(
           workflow,
           `name: ci\njobs:\n  t:\n    steps:\n      - name: metadata\n        run: echo hello\n        env:\n          ${quote}run${quote}: npx playwright test\n`,
