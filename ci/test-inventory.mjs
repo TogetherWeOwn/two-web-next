@@ -39,7 +39,7 @@ import { spawnSync } from "node:child_process";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
-import { parseDocument, visit, isScalar } from "yaml";
+import { parseDocument, visit, isScalar, isMap, isSeq } from "yaml";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -304,11 +304,42 @@ function hasUnsupportedShellFlow(text) {
   // A backslash in a shell comment does not continue the comment. Reject
   // ambiguous comment continuations instead of hiding the next command.
   if (/#.*\\\r?\n/.test(text)) return true;
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (!quote && c === "#" && (i === 0 || /\s/.test(text[i - 1]))) {
+      const end = text.indexOf("\n", i);
+      i = end === -1 ? text.length : end;
+    } else if (c === "\\") {
+      if (quote === "'" && /^\r?\n/.test(text.slice(i + 1))) return true;
+      if (quote !== "'") i++;
+    } else if (quote && c === quote) quote = null;
+    else if (!quote && (c === "'" || c === '"' || c === "`")) quote = c;
+  }
   const joined = text.replace(/\\\r?\n/g, "");
   const lines = joined
     .split("\n")
     .filter((line) => line.trim() && !line.trimStart().startsWith("#"));
   return lines.length !== 1 || /[;|&(){}<>`]/.test(lines[0]);
+}
+
+function stripShellComments(text) {
+  let out = "";
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (!quote && c === "#" && (i === 0 || /\s/.test(text[i - 1]))) {
+      const end = text.indexOf("\n", i);
+      if (end === -1) break;
+      i = end - 1;
+      continue;
+    }
+    out += c;
+    if (c === "\\" && quote !== "'" && i + 1 < text.length) out += text[++i];
+    else if (quote && c === quote) quote = null;
+    else if (!quote && (c === "'" || c === '"' || c === "`")) quote = c;
+  }
+  return out;
 }
 
 // Let YAML decode run scalars before any shell scan: folded, plain and
@@ -320,11 +351,45 @@ function workflowShellView(text, name, evidenceOnly = false) {
   const doc = parseDocument(text);
   assert.equal(doc.errors.length, 0, `${name} is not valid YAML: ${doc.errors[0]?.message}`);
   const edits = [];
+  const stepRuns = new Set();
+  const jobs = doc.get("jobs", true);
+  if (isMap(jobs)) {
+    for (const job of jobs.items) {
+      if (!isMap(job.value)) continue;
+      const steps = job.value.get("steps", true);
+      if (!isSeq(steps)) continue;
+      for (const step of steps.items) {
+        if (isMap(step)) {
+          const run = step.get("run", true);
+          if (isScalar(run)) stepRuns.add(run);
+        }
+      }
+    }
+  }
   visit(doc, {
+    Scalar(_, node, path) {
+      if (!evidenceOnly || !isSeq(path[path.length - 1])) return;
+      const replacement = text.slice(node.range[0], node.range[2]).replace(/[^\r\n]/g, " ");
+      edits.push({ start: node.range[0], end: node.range[2], replacement });
+    },
     Pair(_, pair) {
-      if (!isScalar(pair.key) || pair.key.value !== "run" || !isScalar(pair.value)) return;
+      if (!isScalar(pair.key) || !isScalar(pair.value)) return;
       const node = pair.value;
-      if (typeof node.value !== "string") return;
+      if (evidenceOnly && !stepRuns.has(node)) {
+        let replacement = text.slice(node.range[0], node.range[2]).replace(/[^\r\n]/g, " ");
+        // Keep safe root cwd metadata for the evidence pass without exposing
+        // arbitrary YAML values to the command scanners.
+        if (
+          pair.key.value === "working-directory" &&
+          typeof node.value === "string" &&
+          isRootCwd(node.value)
+        ) {
+          replacement = `.${replacement.slice(1)}`;
+        }
+        edits.push({ start: node.range[0], end: node.range[2], replacement });
+        return;
+      }
+      if (pair.key.value !== "run" || typeof node.value !== "string") return;
       const lineStart = text.lastIndexOf("\n", pair.key.range[0] - 1) + 1;
       const indent = " ".repeat(pair.key.range[0] - lineStart + 2);
       // Chomping does not affect command arguments; retain internal newlines,
@@ -333,7 +398,7 @@ function workflowShellView(text, name, evidenceOnly = false) {
       if (evidenceOnly && hasUnsupportedShellFlow(script)) script = "_";
       // A backslash in a comment does not join the next shell line. Preserve
       // that boundary in the broad validation view before joining continuations.
-      script = script.replace(/(#.*)\\\r?\n/g, "$1\n").replace(/\\\r?\n/g, "");
+      script = stripShellComments(script).replace(/\\\r?\n/g, "");
       // Explicit indentation prevents a more-indented first shell command
       // from setting the YAML block threshold above subsequent commands.
       const replacement = `|2\n${script
@@ -1960,6 +2025,52 @@ function selftest() {
   check("playwright command evidence fails closed", () => {
     const cases = [
       {
+        name: "non-run direct block is data",
+        run: "echo ok",
+        env: "npx playwright test --config playwright.fixture.config.ts",
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "non-run npm block is data",
+        run: "echo ok",
+        env: "npm run e2e",
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "single quoted continued workflow script name",
+        run: "npm run 'e\\\n2e'",
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "single quoted continued nested script name",
+        run: "npm run wrapper",
+        scripts: {
+          wrapper: "npm run 'e\\\n2e'",
+          e2e: "playwright test --config playwright.fixture.config.ts",
+        },
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "comment double backslash preserves cwd validation",
+        run: "# note \\\\\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
+        extraRun: "npx playwright test --config playwright.fixture.config.ts",
+        throws: /directory change/,
+      },
+      {
+        name: "comment double backslash preserves argument validation",
+        run: "# note \\\\\nnpx playwright test --config playwright.fixture.config.ts --unsupported",
+        extraRun: "npx playwright test --config playwright.fixture.config.ts",
+        throws: /flag this gate cannot expand/,
+      },
+      {
+        name: "double quoted continued npm script name",
+        run: 'npm run "e\\\n2e"',
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        orphans: [],
+      },
+      {
         name: "echo direct",
         run: "echo npx playwright test --config playwright.fixture.config.ts",
         orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
@@ -2119,7 +2230,7 @@ function selftest() {
         const run = entry.run ?? "npx playwright test --config playwright.fixture.config.ts";
         writeFileSync(
           join(dir, ".github", "workflows", "ci.yml"),
-          `name: runner's test\njobs:\n  t:\n    steps:\n      - run: ${JSON.stringify(run)}\n`,
+          `name: runner's test\njobs:\n  t:\n    steps:\n      - run: ${JSON.stringify(run)}\n${entry.env ? `        env:\n          EXAMPLE: |\n            ${entry.env}\n` : ""}${entry.extraRun ? `      - run: ${JSON.stringify(entry.extraRun)}\n` : ""}`,
         );
         writeFileSync(
           join(dir, "playwright.fixture.config.ts"),
