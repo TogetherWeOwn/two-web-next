@@ -1,2 +1,5 @@
 export function containsPath(root: string, candidate: string): boolean;
-export function assertSafeProjectionOutput(output: string, protectedPaths: string[]): void;
+export function inspectProjectionPaths(
+  output: string,
+  protectedPaths: string[],
+): { output: string; protectedPaths: string[] };
