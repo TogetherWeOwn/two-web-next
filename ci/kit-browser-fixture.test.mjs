@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,88 @@ import {
 } from "./kit-offline-browser.mjs";
 
 const NOW = Date.UTC(2030, 0, 2, 3, 4, 5);
+
+test("home capture records success and fails closed with diagnostic evidence", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "kit-capture-test-"));
+  try {
+    await mkdir(join(dir, "tooling", "ci"), { recursive: true });
+    await mkdir(join(dir, "bin"));
+    await writeFile(join(dir, "bin", "git"), '#!/bin/sh\nprintf "fixture-sha\\n"\n', {
+      mode: 0o755,
+    });
+    await writeFile(
+      join(dir, "tooling", "ci", "kit-home-evidence.mjs"),
+      `export const homeEvidenceStates = ["guest"];
+export const homeEvidencePage = () => "fixture";
+export async function assertHomeEvidence() {
+  if (process.env.CAPTURE_CASE === "assertion") throw new Error("fixture assertion failed");
+}`,
+    );
+    await writeFile(
+      join(dir, "tooling", "ci", "kit-offline-browser.mjs"),
+      `export async function withKitOfflineBrowser({ source }, capture) {
+  if (process.env.CAPTURE_CASE === "incomplete" && source.endsWith("after")) return;
+  const page = {
+    setViewportSize: async () => {},
+    screenshot: async () => Buffer.from("fixture image"),
+    evaluate: async (fn) => fn.toString().includes("scrollWidth")
+      ? { width: 390, scrollWidth: 390, font: "Mona Sans", fontLoaded: true }
+      : undefined,
+  };
+  await capture({ page });
+}`,
+    );
+    const script = new URL("./kit-home-capture.mjs", import.meta.url);
+    const run = async (scenario, executable = script) => {
+      const output = join(dir, `output-${scenario}`);
+      const result = spawnSync(process.execPath, [executable.pathname, "guest", output], {
+        cwd: dir,
+        env: {
+          ...process.env,
+          PATH: `${join(dir, "bin")}:${process.env.PATH}`,
+          FINAL_SHA: "fixture-sha",
+          CAPTURE_CASE: scenario,
+        },
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      assert.equal(result.error, undefined);
+      assert.equal(result.signal, null);
+      return { result, manifest: JSON.parse(await readFile(join(output, "manifest.json"), "utf8")) };
+    };
+    const success = await run("success");
+    assert.equal(success.result.status, 0, success.result.stderr);
+    assert.equal(success.manifest.captures.length, 4);
+    assert.deepEqual(success.manifest.errors, []);
+    assert.deepEqual(
+      success.manifest.captures.map(({ name }) => name),
+      [
+        "before-guest-desktop.png",
+        "before-guest-mobile.png",
+        "after-guest-desktop.png",
+        "after-guest-mobile.png",
+      ],
+    );
+    const failure = await run("assertion");
+    assert.equal(failure.result.status, 1);
+    assert.equal(failure.manifest.captures.length, 3);
+    assert.match(failure.manifest.errors[0], /after: fixture assertion failed/);
+    const incomplete = await run("incomplete");
+    assert.equal(incomplete.result.status, 1);
+    assert.equal(incomplete.manifest.captures.length, 2);
+    assert.deepEqual(incomplete.manifest.errors, []);
+
+    const source = await readFile(script, "utf8");
+    assert.ok(source.includes("process.exitCode = 1;"));
+    const mutant = join(dir, "mutant.mjs");
+    await writeFile(mutant, source.replace("process.exitCode = 1;", ""));
+    const mutation = await run("assertion", new URL(`file://${mutant}`));
+    assert.throws(() => assert.equal(mutation.result.status, 1), assert.AssertionError);
+    assert.match(mutation.manifest.errors[0], /fixture assertion failed/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("fixed server clock is module-scoped and leaves the global Date alone", () => {
   const realNow = Date.now;
