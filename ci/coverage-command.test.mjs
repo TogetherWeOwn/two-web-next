@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmod, copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,54 @@ const manifest = JSON.parse(await readFile(new URL("../package.json", import.met
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const check = workflow.slice(workflow.indexOf("\n  check:\n"));
 const args = ["run", "--coverage", "--pool=threads"];
+
+test("the independent browser fixture remains selected and fail-closed in ci-ok", () => {
+  const job = workflow.split("\n  kit-browser-fixture:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
+  const checkJob = check.split(/\n  [\w-]+:\n/)[1];
+  const ok = workflow.split("\n  ci-ok:\n")[1];
+  assert(job && ok && checkJob);
+  assert.match(job, /needs: \[scope\]/);
+  assert.match(
+    job,
+    /if: \$\{\{ !cancelled\(\) && needs\.scope\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true' && \(needs\.scope\.outputs\.full == 'true' \|\| needs\.scope\.outputs\.app == 'true' \|\| needs\.scope\.outputs\.worker == 'true'\) \}\}/,
+  );
+  const command =
+    "node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs";
+  const fixtureStep = job.split("\n      - name: Kit disposable browser fixture\n")[1];
+  assert.equal(fixtureStep?.split(/\n\s*\n/)[0]?.trim(), `run: ${command}`);
+  assert.doesNotMatch(job, /continue-on-error:/);
+  assert(!checkJob.includes(command));
+  assert.match(ok, /KIT_BROWSER_RESULT: \$\{\{ needs\.kit-browser-fixture\.result \}\}/);
+  const script = ok.match(
+    /- name: Aggregate change-gated conclusions\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+  )?.[1];
+  assert(script);
+  const base = {
+    SCOPE_RESULT: "success",
+    DRAFT: "false",
+    DOCS_ONLY: "false",
+    FULL: "false",
+    APP: "false",
+    WORKER: "false",
+    DB: "false",
+    CHECK_RESULT: "success",
+    A11Y_RESULT: "success",
+    LIGHTHOUSE_RESULT: "success",
+    BUDGET_RESULT: "success",
+    KIT_BROWSER_RESULT: "success",
+  };
+  const run = (env) => spawnSync("bash", ["-c", script], { env: { ...base, ...env } }).status;
+  for (const area of ["FULL", "APP", "WORKER"]) {
+    assert.equal(run({ [area]: "true" }), 0);
+    for (const result of ["failure", "cancelled", "skipped", ""])
+      assert.notEqual(run({ [area]: "true", KIT_BROWSER_RESULT: result }), 0);
+  }
+  assert.equal(run({ KIT_BROWSER_RESULT: "skipped" }), 0);
+  assert.equal(run({ FULL: "true", DRAFT: "true", KIT_BROWSER_RESULT: "skipped" }), 0);
+  assert.equal(run({ DOCS_ONLY: "true", KIT_BROWSER_RESULT: "skipped" }), 0);
+  assert.notEqual(run({ DOCS_ONLY: "", KIT_BROWSER_RESULT: "skipped" }), 0);
+  assert.notEqual(run({ SCOPE_RESULT: "failure", KIT_BROWSER_RESULT: "skipped" }), 0);
+});
 
 test("the required check keeps full coverage in isolated serial threads inside main's job budget", async () => {
   assert.equal(

@@ -7,6 +7,7 @@ import { resolve } from "node:path";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare, Response } from "miniflare";
 import { AUTH_BROWSER_CHECK_IDS, AUTH_EVIDENCE_SCHEMA_VERSION } from "./auth-evidence-schema.mjs";
+import { workerNodeBuiltins } from "./worker-node-builtins.mjs";
 
 const require = createRequire(
   process.env.AUTH_BROWSER_TOOLS_DIR
@@ -56,6 +57,7 @@ try {
     target: "es2022",
     conditions: ["workerd", "worker", "browser"],
     external: ["node:*", "cloudflare:*"],
+    plugins: [workerNodeBuiltins],
   });
   mf = new Miniflare(
     convertV4MiniflareOptions({
