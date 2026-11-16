@@ -228,6 +228,14 @@ runner selftests use disposable Postgres only; this check does not authorize a
 staging or production connection or any live grant, revoke, role, or
 default-ACL change.
 
+The CI Postgres service is a fresh cluster per job. Before applying migrations,
+its workflows provision the cluster-wide `two_web_app` NOLOGIN role with
+`ci/disposable-runtime-role.sql`; the human local-CI tool does the same in each
+run-owned shard container. The SQL serializes role creation, verifies a test
+`GRANT`, and never drops the shared role: the disposable container owns its
+lifetime. GitHub jobs run it twice to exercise idempotence. This preparation is
+not part of the live migrator or a bootstrap instruction for shared databases.
+
 The runner also refuses at plan time while any reviewed object (the
 runtime-rights table/sequence census, plus the `drizzle` migration ledger and
 its sequence) is owned by a role the migrator cannot

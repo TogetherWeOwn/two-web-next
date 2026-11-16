@@ -549,12 +549,7 @@ test("another role's default ACL does not block this migration", async () => {
 
 test("runtime-role connection is refused while the reviewed sequence default passes", async () => {
   await fixture(async ({ client, run }) => {
-    const [existing] = await client`select 1 from pg_roles where rolname = 'two_web_app'`;
-    if (existing) {
-      console.log("SKIP: two_web_app already exists (another suite owns it); refusing to collide.");
-      return;
-    }
-    await client.unsafe("CREATE ROLE two_web_app NOLOGIN");
+    const created = await ensureRuntimeRole(client);
     try {
       await client.unsafe(
         "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO two_web_app",
@@ -582,7 +577,7 @@ test("runtime-role connection is refused while the reviewed sequence default pas
           "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM two_web_app",
         )
         .catch(() => {});
-      await client.unsafe("DROP ROLE two_web_app");
+      await dropRuntimeRoleIfCreated(client, created);
     }
   });
 });
