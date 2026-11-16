@@ -311,6 +311,8 @@ function workflowShellView(text, name) {
       if (!isScalar(pair.key) || pair.key.value !== "run" || !isScalar(pair.value)) return;
       const node = pair.value;
       if (typeof node.value !== "string") return;
+      // Structural scanners consume the same decoded key as YAML discovery.
+      edits.push({ start: pair.key.range[0], end: pair.key.range[1], replacement: "run" });
       const lineStart = text.lastIndexOf("\n", pair.key.range[0] - 1) + 1;
       const indent = " ".repeat(pair.key.range[0] - lineStart + 2);
       // Chomping does not affect command arguments; retain internal newlines,
@@ -2550,6 +2552,26 @@ function selftest() {
       );
       assert.deepEqual(playwrightInventory(dir).orphans, ["e2e/a.spec.ts", "e2e/suite.visual.ts"]);
       assert.equal(playwrightJsonSummary(dir).reachable, 0);
+      for (const quote of ["'", '"']) {
+        writeFileSync(
+          workflow,
+          `name: ci\njobs:\n  t:\n    steps:\n      - ${quote}run${quote}: npx playwright test\n`,
+        );
+        assert.deepEqual(playwrightInventory(dir).orphans, []);
+        assert.equal(playwrightJsonSummary(dir).reachable, 2);
+        assert.deepEqual(playwrightJsonSummary(dir).orphans, []);
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({ scripts: { browser: "playwright test" } }),
+        );
+        writeFileSync(
+          workflow,
+          `name: ci\njobs:\n  t:\n    steps:\n      - ${quote}run${quote}: npm run browser\n        working-directory: web\n`,
+        );
+        assert.throws(() => playwrightInventory(dir), /cannot resolve/);
+        assert.throws(() => playwrightJsonSummary(dir), /cannot resolve/);
+      }
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
       for (const args of ["--grep smoke", '--grep "smoke test"', "--grep=smoke"]) {
         for (const path of ["", " e2e/a.spec.ts"]) {
           run(`npx playwright test ${args}${path}`);
