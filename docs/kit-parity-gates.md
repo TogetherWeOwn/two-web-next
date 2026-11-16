@@ -439,7 +439,7 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
 
 The owner decision of 2026-11-14 makes deployed-origin Lighthouse budgets
 report-only until the Ember and SvelteKit migration is complete. Staging still
-requires the origin web-standards check, and the byte budgets below remain blocking.
+requires origin web-standards; Kit byte/count overages are advisory, not other gates.
 
 Measured baseline 2026-10-12, ceilings at measured ×1.25 (raw to 512B, gzip
 to 256B — the repository rule in `ci/budgets/README.md`):
@@ -451,7 +451,7 @@ to 256B — the repository rule in `ci/budgets/README.md`):
   bundle, which is exactly what should shrink as routes go native.
 - Client `_app/immutable` JS/CSS: totals plus file-count caps (hashed
   filenames would churn per-file ceilings).
-- A new chunk fails closed instead of escaping enforcement. Raising a
+- New chunks are counted; overages warn with measurements; incomplete inventory fails (exit 2). Raising a
   ceiling needs an explicit decision explaining the growth; never relax a
   budget to make CI green.
 - `startup.maxMs` (60s, the same cold-start bound as

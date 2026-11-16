@@ -16,6 +16,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import {
   DOTS,
+  GROUNDS,
   SOURCE_SHA,
   TAGS,
   VIEWPORTS,
@@ -159,21 +160,43 @@ try {
     const response = await page.goto(url, { waitUntil: "networkidle" });
     if (!response?.ok()) throw new Error(`Gallery request failed: ${name}`);
     if (!(await fontLoaded(page))) throw new Error(`Fragment Mono did not load: ${name}`);
-    for (const [attr, ids] of [
-      ["data-tag", TAGS],
-      ["data-dot", DOTS],
-    ])
-      for (const id of ids) {
-        const row = page.locator(`[${attr}="${id}"]`);
-        if ((await row.count()) !== 1 || !(await row.locator("span").first().isVisible()))
-          throw new Error(`Missing ${attr}: ${id}`);
-      }
+    for (const ground of GROUNDS) {
+      const section = page.locator(`[data-ground="${ground}"]`);
+      if ((await section.count()) !== 1) throw new Error(`Missing ground: ${ground}`);
+      const colorMatches = await section.evaluate((element, index) => {
+        const token = getComputedStyle(element).getPropertyValue(`--g${index}`).trim();
+        const probe = document.createElement("span");
+        probe.style.backgroundColor = token;
+        element.append(probe);
+        const expected = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return (
+          !!token &&
+          !!probe.style.backgroundColor &&
+          getComputedStyle(element).backgroundColor === expected
+        );
+      }, ground);
+      if (!colorMatches) throw new Error(`Ground token not applied: ${ground}`);
+      for (const [attr, ids] of [
+        ["data-tag", TAGS],
+        ["data-dot", DOTS],
+      ])
+        for (const id of ids) {
+          const row = section.locator(`[${attr}="${id}"]`);
+          if ((await row.count()) !== 1 || !(await row.locator("span").first().isVisible()))
+            throw new Error(`Missing ${attr}: ${id} on ground ${ground}`);
+        }
+    }
     // Hydration must be real: the click handler only exists after the client mounts.
     await page.waitForSelector('main[data-hydrated="yes"]', { timeout: 5000 });
     await page.getByRole("button").click();
     if ((await page.getByRole("button").textContent())?.trim() !== "Clicked 1")
       throw new Error(`Hydration interaction failed: ${name}`);
     await page.screenshot({ path: join(output, `tag-gallery-${name}.png`) });
+    for (const ground of GROUNDS)
+      await page.locator(`[data-ground="${ground}"]`).screenshot({
+        path: join(output, `tag-gallery-${name}-ground-${ground}.png`),
+      });
     const axeResult = await new AxeBuilder({ page }).analyze();
     writeFileSync(join(output, `tag-gallery-${name}-axe.json`), JSON.stringify(axeResult));
     const axe = assertNoAxeViolations(axeResult);
@@ -200,6 +223,7 @@ try {
       lighthouseProfile: mobile ? "mobile" : "desktop",
       tags: TAGS,
       dots: DOTS,
+      grounds: GROUNDS,
       hydrated: true,
       fragmentMonoLoaded: true,
       axe,

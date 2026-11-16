@@ -22,6 +22,7 @@ const COUNTS = {
   web_sessions: 4,
   web_session_grace: 5,
   join_attempts: 6,
+  event_echo_members: 7,
 };
 const CODES = [
   "E_MODE_CONFLICT",

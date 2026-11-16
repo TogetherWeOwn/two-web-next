@@ -191,14 +191,85 @@ for (const [metric, field] of [
   ["count", "maxFiles"],
 ]) {
   for (const kind of ["js", "css"])
-    test(`${kind} ${metric} breach is hard`, (t) => {
+    test(`${kind} ${metric} breach has the prescribed severity`, (t) => {
       const f = fixture(t);
       f.budget.routes["/"][kind][field] -= 1;
       f.saveBudget();
       f.approveBudget(); // Test the measured breach, not an unsupported policy edit.
-      assert.equal(checkRoutes(f.root).exitCode, 1);
+      const result = checkRoutes(f.root);
+      const advisory = kind === "css" && metric !== "count";
+      assert.equal(result.exitCode, advisory ? 0 : 1);
+      assert.deepEqual(result.breaches, advisory ? [] : [`/ ${kind}`]);
+      assert.equal(result.warnings.length, advisory ? 1 : 0);
+      if (advisory) {
+        const key = metric === "raw" ? "rawBytes" : "gzipBytes";
+        assert.deepEqual(result.warnings[0], {
+          route: "/",
+          kind: "css",
+          metric: key,
+          measured: result.routes["/"].css[key],
+          ceiling: f.budget.routes["/"].css[field],
+        });
+        assert.ok(result.headroomShortfalls.includes("/ css"));
+      }
     });
 }
+
+test("CSS warnings cover both bytes and multiple routes without labeling fits", (t) => {
+  const f = fixture(t);
+  assert.deepEqual(checkRoutes(f.root).warnings, []);
+  f.budget.routes["/"].css.maxRawBytes -= 1;
+  f.budget.routes["/"].css.maxGzipBytes -= 1;
+  f.budget.routes["/about"].css.maxGzipBytes -= 1;
+  f.saveBudget();
+  f.approveBudget();
+  const result = checkRoutes(f.root);
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.breaches, []);
+  assert.deepEqual(
+    result.warnings.map(({ route, metric }) => [route, metric]),
+    [
+      ["/", "rawBytes"],
+      ["/", "gzipBytes"],
+      ["/about", "gzipBytes"],
+    ],
+  );
+  const base = {
+    [CLIENT_FILES[0]]: { $comment: "fixture", client: { js: INITIAL_CLIENT_BUDGET.js } },
+    [CLIENT_FILES[1]]: { $comment: "fixture", client: { css: INITIAL_CLIENT_BUDGET.css } },
+    [ROUTE_BUDGET]: f.budget,
+  };
+  assert.throws(
+    () => propose({ version: 1, sha: "a".repeat(40), measurement: result }, base),
+    /measurement exceeds current main ceiling/,
+  );
+});
+
+for (const [kind, field] of [
+  ["js", "maxRawBytes"],
+  ["css", "maxFiles"],
+])
+  test(`CSS warning with ${kind} hard breach still fails`, (t) => {
+    const f = fixture(t);
+    f.budget.routes["/"].css.maxGzipBytes -= 1;
+    f.budget.routes["/"][kind][field] -= 1;
+    f.saveBudget();
+    f.approveBudget();
+    const result = checkRoutes(f.root);
+    assert.equal(result.exitCode, 1);
+    assert.deepEqual(result.breaches, [`/ ${kind}`]);
+    assert.equal(result.warnings.length, 1);
+  });
+
+test("integrity failure takes precedence over CSS byte warnings", (t) => {
+  const f = fixture(t);
+  f.budget.routes["/"].css.maxRawBytes -= 1;
+  f.saveBudget();
+  f.approveBudget();
+  assert.equal(checkRoutes(f.root).exitCode, 0);
+  rmSync(join(f.root, OUTPUT, "client/_app/immutable/shared.js"));
+  assert.equal(checkRoutes(f.root).exitCode, 2);
+});
 
 for (const kind of ["js", "css"])
   for (const metric of ["maxRawBytes", "maxGzipBytes", "maxFiles"])
