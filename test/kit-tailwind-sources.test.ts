@@ -27,7 +27,18 @@ const localClasses = new Set([
 type Node = { type?: string; [key: string]: unknown };
 type Limits = { bytes: number; nodes: number; depth: number; work: number };
 const defaults: Limits = { bytes: 1024 * 1024, nodes: 10000, depth: 128, work: 2_000_000 };
-const excluded = ["visible", "relative", "static", "block", "hidden", "table", "outline"];
+const excluded = [
+  "visible",
+  "relative",
+  "static",
+  "block",
+  "hidden",
+  "table",
+  "inline",
+  "outline",
+  "flex",
+  "flex-wrap",
+];
 const targets = excluded.map((name) => [name, targetMatcher(name)] as const);
 
 // Only literal attributes are certified here. Dynamic output and forwarding
