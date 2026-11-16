@@ -6,7 +6,7 @@
   text-align: left;
 }
 
-.base-theme .hero.kit-home h1 {
+.base-theme:not(.content-theme) .hero.kit-home h1 {
   max-width: 16ch;
   margin: var(--space-inset-card-lg) 0 0;
   font: var(--font-weight-display) var(--text-hero) / var(--leading-display) var(--font-display);
