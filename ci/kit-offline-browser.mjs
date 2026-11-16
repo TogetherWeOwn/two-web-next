@@ -44,7 +44,10 @@ export async function readFixtureAsset(directory, pathname, { allowJavaScript = 
   }
 }
 
-// Build and render the supplied page without allowing browser network access.
+// Render trusted repository fixtures with in-memory assets and routed HTTP/WebSocket denial.
+// This is not a hostile-code sandbox: other transports, including WebRTC, are not
+// universally denied or observed by `unexpected`. Use disposable CI without
+// production credentials; an empty `unexpected` only covers routed requests.
 export async function withKitOfflineBrowser(
   { source, page: fixture, search = "", javaScriptEnabled = false },
   callback,
