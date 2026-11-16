@@ -105,26 +105,45 @@ function connect() {
   }
 }
 </script><button onclick={connect}>{closed}</button>`;
+    let closed;
+    let directive;
     await assert.rejects(
       withKitOfflineBrowser({ page: fixture, javaScriptEnabled: true }, async ({ page }) => {
         await page.waitForLoadState("networkidle");
         await page.locator("button").click();
-        await page.waitForFunction(() => document.querySelector("button")?.textContent === "2");
-        const directive = await page.evaluate(
+        await page.waitForFunction(
+          () => document.querySelector("button")?.textContent === "2",
+          null,
+          {
+            timeout: 10_000,
+          },
+        );
+        closed = await page.locator("button").textContent();
+        directive = await page.evaluate(
           () =>
             new Promise((resolve) => {
+              const timer = setTimeout(() => resolve("timeout"), 10_000);
               document.addEventListener(
                 "securitypolicyviolation",
-                (event) => resolve(event.effectiveDirective),
+                (event) => {
+                  clearTimeout(timer);
+                  resolve(event.effectiveDirective);
+                },
                 { once: true },
               );
               new Worker(URL.createObjectURL(new Blob([""], { type: "text/javascript" })));
             }),
         );
-        assert.equal(directive, "worker-src");
       }),
       /ws(?:s)?:\/\/127\.0\.0\.1/,
     );
+    const assertObservations = (closedValue, workerDirective) => {
+      assert.equal(closedValue, "2");
+      assert.equal(workerDirective, "worker-src");
+    };
+    assertObservations(closed, directive);
+    assert.throws(() => assertObservations("1", directive), assert.AssertionError);
+    assert.throws(() => assertObservations(closed, "wrong-directive"), assert.AssertionError);
     assert.equal(connections, 0);
   } finally {
     await new Promise((resolve, reject) =>
