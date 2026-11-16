@@ -297,6 +297,92 @@ function listPlaywrightSpecs(root) {
   return [...new Set(out)].sort();
 }
 
+// Normalize shell text the way the shell reads it: drop comments (a `#` that
+// starts a token outside quotes) and remove backslash-newline continuations
+// outside single quotes (inside them the pair is literal). Heredoc bodies are
+// data: they are copied verbatim and never change comment, quote or
+// continuation state. A delimiter line must match exactly (`<<-` also strips
+// leading tabs, never spaces). The output is idempotent for the consumers
+// below. `strict` fails closed when an unterminated heredoc swallows text
+// that names a Playwright run or an npm run: bash then treats it as data, but
+// this gate cannot tell a typo from intent. Prefix slices pass no `strict`
+// because an open heredoc there only means the slice was cut short.
+function heredocEnds(line, marker, strip) {
+  const bare = line.replace(/\r$/, "");
+  return (strip ? bare.replace(/^\t+/, "") : bare) === marker;
+}
+
+function normalizeShell(text, { strict = false } = {}) {
+  let out = "";
+  let quote = null;
+  let tokenStart = true;
+  const pending = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (!quote && c === "#" && tokenStart) {
+      const end = text.indexOf("\n", i);
+      if (end === -1) break;
+      i = end - 1;
+      continue;
+    }
+    if (c === "\n" && !quote && pending.length > 0) {
+      out += c;
+      let pos = i + 1;
+      while (pending.length > 0) {
+        const { marker, strip } = pending.shift();
+        let closed = false;
+        let body = "";
+        while (pos < text.length) {
+          const end = text.indexOf("\n", pos);
+          const stop = end === -1 ? text.length : end;
+          const line = text.slice(pos, stop);
+          out += text.slice(pos, end === -1 ? stop : end + 1);
+          pos = end === -1 ? stop : end + 1;
+          if (heredocEnds(line, marker, strip)) {
+            closed = true;
+            break;
+          }
+          body += `${line}\n`;
+        }
+        if (strict && !closed && /\bplaywright\s+test\b|\bnpm\s+run/.test(body)) {
+          assert.fail(
+            `unterminated heredoc <<${marker} swallows a playwright or npm run command: ${ROOT_CWD_REMEDIATION}`,
+          );
+        }
+      }
+      i = pos - 1;
+      tokenStart = true;
+      continue;
+    }
+    if (c === "\\" && quote !== "'" && /^\r?\n/.test(text.slice(i + 1, i + 3))) {
+      if (text[i + 1] === "\r") i++;
+      i++;
+      continue;
+    }
+    if (!quote && c === "<" && text[i + 1] === "<" && text[i + 2] !== "<" && text[i - 1] !== "<") {
+      const m = /^<<(-?)[ \t]*\\?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/.exec(text.slice(i));
+      if (m) {
+        pending.push({ marker: m[3], strip: m[1] === "-" });
+        out += m[0];
+        i += m[0].length - 1;
+        tokenStart = false;
+        continue;
+      }
+    }
+    out += c;
+    if (c === "\\" && quote !== "'" && i + 1 < text.length) {
+      out += text[++i];
+      tokenStart = false;
+    } else if (quote && c === quote) quote = null;
+    else if (!quote && (c === "'" || c === '"' || c === "`")) {
+      quote = c;
+      tokenStart = false;
+    } else if (!quote) tokenStart = /[\s;|&()<>]/.test(c);
+    else tokenStart = false;
+  }
+  return out;
+}
+
 // Let YAML decode run scalars before any shell scan: folded, plain and
 // quoted multiline values can all join a script name or forwarded arguments
 // across physical lines. Re-express each decoded value as a literal block so
@@ -315,7 +401,10 @@ function workflowShellView(text, name) {
       const indent = " ".repeat(pair.key.range[0] - lineStart + 2);
       // Chomping does not affect command arguments; retain internal newlines,
       // including blank lines and more-indented folded content, exactly.
-      const script = node.value.replace(/\n+$/, "");
+      // A backslash in a comment does not join the next shell line. Preserve
+      // that boundary before joining continuations, which the shell removes
+      // without adding a word boundary.
+      const script = normalizeShell(node.value.replace(/\n+$/, ""), { strict: true });
       // Explicit indentation prevents a more-indented first shell command
       // from setting the YAML block threshold above subsequent commands.
       const replacement = `|2\n${script
@@ -449,9 +538,12 @@ function splitShellTokens(segment) {
 // continuations join first (the shell removes them), so a `--` on the next
 // line still counts. A bare `--` before the name is skipped: oracle shows
 // `npm run -- b` still runs b.
-function parseNpmRunOccurrences(text) {
+// Pass `{ shell: false }` for text that is already normalized or is workflow
+// YAML (its apostrophes and `#` are not shell syntax; `run:` scalars were
+// normalized by workflowShellView); `index` then refers to `text` itself.
+function parseNpmRunOccurrences(text, { shell = true } = {}) {
   const out = [];
-  const joined = text.replace(/\\\r?\n/g, " ");
+  const joined = shell ? normalizeShell(text) : text;
   for (const m of joined.matchAll(/\bnpm\s+run(?:-script)?\b/g)) {
     const lineEnd = joined.indexOf("\n", m.index);
     const segment = joined.slice(m.index + m[0].length, lineEnd === -1 ? undefined : lineEnd);
@@ -531,7 +623,9 @@ function scriptRunsPlaywright(scripts, name, seen = new Set()) {
   if (seen.has(name)) return { runs: false, unknown: false };
   seen.add(name);
   const body = scripts[name] ?? "";
-  if (/\bplaywright\s+test\b/.test(body)) return { runs: true, unknown: false };
+  if (/\bplaywright\s+test\b/.test(normalizeShell(body))) {
+    return { runs: true, unknown: false };
+  }
   let unknown = false;
   for (const occ of parseNpmRunOccurrences(body)) {
     if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
@@ -545,8 +639,8 @@ function scriptRunsPlaywright(scripts, name, seen = new Set()) {
 function invokedScriptNames(scripts, workflowText) {
   const invoked = new Set();
   const queue = [];
-  const scan = (text, where) => {
-    for (const occ of parseNpmRunOccurrences(text)) {
+  const scan = (text, where, shell = true) => {
+    for (const occ of parseNpmRunOccurrences(text, { shell })) {
       if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
       if (occ.unknown) {
         const target = scriptRunsPlaywright(scripts, occ.name);
@@ -562,18 +656,18 @@ function invokedScriptNames(scripts, workflowText) {
       }
     }
   };
-  const stripped = workflowText.split("\n").map(stripYamlComment).join("\n");
-  scan(stripped, "a workflow step");
+  const stripped = stripYamlComments(workflowText.split("\n")).join("\n");
+  scan(stripped, "a workflow step", false);
   while (queue.length) {
     const next = queue.shift();
     scan(scripts[next] ?? "", `script "${next}"`);
   }
   const forwardSources = [
-    [stripped, "a workflow step"],
-    ...[...invoked].map((n) => [scripts[n] ?? "", `script "${n}"`]),
+    [stripped, "a workflow step", false],
+    ...[...invoked].map((n) => [scripts[n] ?? "", `script "${n}"`, true]),
   ];
-  for (const [text, where] of forwardSources) {
-    for (const occ of parseNpmRunOccurrences(text)) {
+  for (const [text, where, shell] of forwardSources) {
+    for (const occ of parseNpmRunOccurrences(text, { shell })) {
       if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
       const target = scriptRunsPlaywright(scripts, occ.name);
       if (occ.redirect && (target.runs || target.unknown)) {
@@ -596,6 +690,14 @@ function invokedScriptNames(scripts, workflowText) {
     }
   }
   return invoked;
+}
+
+// Structural-only: lines inside a literal `run:` block are shell text whose
+// comments workflowShellView already removed, so a ` #` there (for example in
+// a quoted string) must survive.
+function stripYamlComments(lines) {
+  const content = literalScriptLines(lines);
+  return lines.map((l, i) => (content.has(i) ? l : stripYamlComment(l)));
 }
 
 function stripYamlComment(line) {
@@ -777,9 +879,14 @@ function defaultsCwdAt(lines, from, to, parentIdx, content, where, tail) {
 // content lines. Each slice is scanned from `from` (past the `run:` key).
 function stepScriptSlices(lines, start, end, content) {
   const slices = [];
+  // Literal block lines carry the YAML indentation; drop the block's base
+  // indent so exact heredoc delimiter matching sees the shell's own text.
+  let base = Infinity;
+  for (let i = start; i < end; i++)
+    if (content.has(i) && lines[i].trim() !== "") base = Math.min(base, indentOf(lines[i]));
   for (let i = start; i < end; i++) {
     if (content.has(i)) {
-      slices.push({ idx: i, from: 0 });
+      slices.push({ idx: i, from: Math.min(base === Infinity ? 0 : base, lines[i].length) });
       continue;
     }
     const m = /^\s*(?:-\s+)?run\s*:\s*(.*)$/.exec(lines[i]);
@@ -861,8 +968,8 @@ function heredocMarker(line) {
       else if (c === quote) quote = null;
     } else if (c === '"' || c === "'" || c === "`") quote = c;
     else if (c === "<" && line[i + 1] === "<" && line[i + 2] !== "<") {
-      const m = /^<<-?\s*\\?['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/.exec(line.slice(i));
-      return m ? m[1] : null;
+      const m = /^<<(-?)[ \t]*\\?['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/.exec(line.slice(i));
+      return m ? { marker: m[2], strip: m[1] === "-" } : null;
     }
   }
   return null;
@@ -873,9 +980,9 @@ function heredocMarker(line) {
 // do not move the caller; directory-stack builtins do, just like cd.
 function assertRootShellCwd(prefix, where) {
   let heredoc = null;
-  for (const line of prefix.replace(/\\\r?\n/g, " ").split("\n")) {
+  for (const line of normalizeShell(prefix).split("\n")) {
     if (heredoc !== null) {
-      if (line.trim() === heredoc) heredoc = null;
+      if (heredocEnds(line, heredoc.marker, heredoc.strip)) heredoc = null;
       continue;
     }
     assert.ok(
@@ -944,11 +1051,11 @@ function assertRootStepCwd(ctx, idx, at, what) {
 // add arguments, which the forwarding check already covers).
 function auditWorkflowNpmRunCwd(workflowFiles, scripts) {
   for (const { name, text } of workflowFiles) {
-    const lines = text.split("\n").map(stripYamlComment);
+    const lines = stripYamlComments(text.split("\n"));
     if (!lines.some((l) => l.includes("npm") && l.includes("run"))) continue;
     const ctx = { file: name, lines, content: literalScriptLines(lines) };
     lines.forEach((line, idx) => {
-      for (const occ of parseNpmRunOccurrences(line)) {
+      for (const occ of parseNpmRunOccurrences(line, { shell: false })) {
         if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
         const target = scriptRunsPlaywright(scripts, occ.name);
         if (!target.runs && !target.unknown) continue;
@@ -964,10 +1071,10 @@ function auditWorkflowNpmRunCwd(workflowFiles, scripts) {
 // CI invokes and only prefixes of commands that can reach Playwright.
 function auditScriptCwd(scripts, invoked) {
   for (const name of invoked) {
-    const body = (scripts[name] ?? "").replace(/\\\r?\n/g, " ");
+    const body = normalizeShell(scripts[name] ?? "", { strict: true });
     for (const match of body.matchAll(/\bplaywright\s+test\b/g))
       assertRootShellCwd(body.slice(0, match.index), `script "${name}" runs playwright test`);
-    for (const occ of parseNpmRunOccurrences(body)) {
+    for (const occ of parseNpmRunOccurrences(body, { shell: false })) {
       if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
       const target = scriptRunsPlaywright(scripts, occ.name);
       if (target.runs || target.unknown)
@@ -1070,7 +1177,7 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
   // Each occurrence must run at the repo root (see assertRootStepCwd).
   for (const { name, text } of workflowFiles) {
     const lines = text.split("\n");
-    const stripped = lines.map(stripYamlComment);
+    const stripped = stripYamlComments(lines);
     const ctx = { file: name, lines: stripped, content: literalScriptLines(stripped) };
     for (let i = 0; i < lines.length; i += 1) {
       const line = stripped[i];
@@ -1079,7 +1186,7 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
       assertRootStepCwd(ctx, i, at, "playwright test");
       let rest = line.slice(at).replace(/^\bplaywright\s+test\b/, "");
       for (let j = i + 1; j < lines.length; j += 1) {
-        const next = stripYamlComment(lines[j]);
+        const next = stripped[j];
         if (!next.trim() || /^\s*(-\s|[A-Za-z0-9_-]+\s*:)/.test(next)) break;
         rest += ` ${next.trim()}`;
       }
@@ -1798,12 +1905,17 @@ export function inventory(root = repoRoot) {
 export function playwrightInventory(root = repoRoot) {
   const files = listPlaywrightSpecs(root);
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-  const scripts = pkg.scripts ?? {};
+  const rawScripts = pkg.scripts ?? {};
+  // One normalized map feeds validation and evidence alike; strict heredoc
+  // checks run on the raw bodies of invoked scripts (auditScriptCwd).
+  const scripts = Object.fromEntries(
+    Object.entries(rawScripts).map(([k, v]) => [k, typeof v === "string" ? normalizeShell(v) : v]),
+  );
   const workflowFiles = collectWorkflowFiles(root);
   const workflowText = workflowFiles.map((w) => w.text).join("\n");
   const invoked = invokedScriptNames(scripts, workflowText);
   auditWorkflowNpmRunCwd(workflowFiles, scripts);
-  auditScriptCwd(scripts, invoked);
+  auditScriptCwd(rawScripts, invoked);
   const refs = parsePlaywrightInvocations(root, workflowFiles, scripts, invoked);
   const parsed = new Map();
   for (const config of refs.keys()) parsed.set(config, parsePlaywrightConfig(root, config));
@@ -1869,6 +1981,149 @@ function selftest() {
     cases += 1;
     console.log(`ok: ${name}`);
   };
+
+  check("shell normalization preserves comment and continuation boundaries", () => {
+    const cases = [
+      {
+        name: "continued token hash is not a comment",
+        run: "npm run e2e\\\n#suffix",
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "comment after operator preserves cwd validation",
+        run: "echo ok;# note \\\\\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
+        throws: /directory change/,
+      },
+      {
+        name: "comment double backslash preserves cwd validation",
+        run: "# note \\\\\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
+        throws: /directory change/,
+      },
+      {
+        name: "comment double backslash preserves argument validation",
+        run: "# note \\\\\nnpx playwright test --config playwright.fixture.config.ts --unsupported",
+        throws: /flag this gate cannot expand/,
+      },
+      {
+        name: "double quoted continued npm script name",
+        run: 'npm run "e\\\n2e"',
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        orphans: [],
+      },
+      {
+        name: "continuation does not add a word boundary",
+        run: "npm run e2e",
+        scripts: { e2e: "playwright\\\ntest --config playwright.fixture.config.ts" },
+        orphans: ["e2e/a.spec.ts", "e2e/b.spec.ts"],
+      },
+      {
+        name: "split npm script name retains forwarded filter validation",
+        run: "npm run e\\\n2e -- e2e/a.spec.ts",
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        throws: /forwards arguments/,
+      },
+      {
+        name: "split npm script name retains directory validation",
+        run: "npm run e\\\n2e --prefix web",
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        throws: /cross-directory npm runs/,
+      },
+      {
+        name: "heredoc apostrophe does not leak quote state",
+        run: "cat <<EOF\ndon't\nEOF\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
+        throws: /directory change/,
+      },
+      {
+        name: "heredoc data hash and cd are not commands",
+        run: "cat <<'EOF'\n# don't\ncd web\nEOF\nnpm run e2e",
+        scripts: { e2e: "playwright test --config playwright.fixture.config.ts" },
+        orphans: [],
+      },
+      {
+        name: "heredoc trailing backslash does not join the marker",
+        run: "cat <<EOF\nbody \\\nEOF\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
+        throws: /directory change/,
+      },
+      {
+        name: "single quoted backslash newline is literal",
+        run: "echo 'a\\\nb'\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
+        throws: /directory change/,
+      },
+      {
+        name: "single quoted continuation is not joined into the script",
+        run: "npm run e2e",
+        scripts: {
+          e2e: "echo 'x\\\ny' && playwright test --config playwright.fixture.config.ts",
+        },
+        orphans: [],
+      },
+      {
+        name: "package script heredoc apostrophe and continuation",
+        run: "npm run e2e",
+        scripts: {
+          e2e: "cat <<EOF\ndon't \\\nEOF\nplaywright test --config playwright.fixture.config.ts",
+        },
+        orphans: [],
+      },
+      {
+        name: "indented heredoc delimiter is data and fails closed",
+        run: "cat <<EOF\n  EOF\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
+        throws: /unterminated heredoc/,
+      },
+      {
+        name: "space indented dash heredoc delimiter is data and fails closed",
+        run: "cat <<-EOF\n  EOF\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
+        throws: /unterminated heredoc/,
+      },
+      {
+        name: "tab indented dash heredoc delimiter terminates",
+        run: "cat <<-EOF\n\tEOF\ncd web\nnpx playwright test --config playwright.fixture.config.ts",
+        throws: /directory change/,
+      },
+      {
+        name: "workflow quoted hash is shell data not a YAML comment",
+        run: 'echo "a #b" && npx playwright test --config playwright.fixture.config.ts',
+        orphans: [],
+      },
+      {
+        name: "package script continuation feeds playwright evidence",
+        run: "npm run e2e",
+        scripts: {
+          e2e: "playwright test --config playwright.fixture.config.ts \\\n e2e/a.spec.ts",
+        },
+        orphans: ["e2e/b.spec.ts"],
+      },
+      {
+        name: "apostrophe in script comment",
+        run: "npm run e2e",
+        scripts: { e2e: "# don't skip\nplaywright test --config playwright.fixture.config.ts" },
+        orphans: [],
+      },
+    ];
+    for (const entry of cases) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-shell-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: entry.scripts ?? {} }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        mkdirSync(join(dir, "e2e"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          `name: runner's test\njobs:\n  t:\n    steps:\n      - run: ${JSON.stringify(entry.run)}\n`,
+        );
+        writeFileSync(
+          join(dir, "playwright.fixture.config.ts"),
+          'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+        );
+        writeFileSync(join(dir, "e2e", "a.spec.ts"), "// fixture\n");
+        writeFileSync(join(dir, "e2e", "b.spec.ts"), "// fixture\n");
+        if (entry.throws) assert.throws(() => playwrightInventory(dir), entry.throws, entry.name);
+        else assert.deepEqual(playwrightInventory(dir).orphans, entry.orphans, entry.name);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
 
   // Hermetic by design: --selftest must pass on any tree, including one with
   // a genuinely orphaned file. The repoRoot cases below assert only that the
@@ -2958,6 +3213,13 @@ function selftest() {
           'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
         );
       }
+      assert.throws(() => playwrightInventory(dir), /cannot expand/);
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          scripts: { e2e: "playwright \\\ntest --config playwright.fwd.config.ts" },
+        }),
+      );
       assert.throws(() => playwrightInventory(dir), /cannot expand/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
