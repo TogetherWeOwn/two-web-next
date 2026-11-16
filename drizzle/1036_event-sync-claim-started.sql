@@ -1,1 +1,0 @@
-ALTER TABLE "event_sync_attempts" ADD COLUMN "claim_started_at" timestamp with time zone DEFAULT now() NOT NULL;
