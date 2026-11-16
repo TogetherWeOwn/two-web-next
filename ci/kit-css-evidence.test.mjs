@@ -51,6 +51,21 @@ test("route traversal handles cycles, shared CSS and missing graph entries", () 
   );
 });
 
+test("route queries reject missing or mismatched client CSS even after a match", () => {
+  for (const client of [
+    [{ file: "a0.css", text: "match" }],
+    [
+      { file: "a0.css", text: "match" },
+      { file: "/a1.css", text: "" },
+      { file: "a2.css", text: "" },
+    ],
+  ]) {
+    const e = createEvidence({ client, server: [], manifest, routeEvidence });
+    assert.throws(() => e.routeCssContains("/x", "absent"), /No compiled client CSS: a1.css/);
+    assert.throws(() => e.routeCssContains("/x", "match"), /No compiled client CSS: a1.css/);
+  }
+});
+
 test("evidence queries match strings and patterns without crossing routes", () => {
   const client = [
     { file: "a0.css", text: ".a{--m:1}" },

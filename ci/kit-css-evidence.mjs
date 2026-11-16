@@ -61,10 +61,12 @@ export function createEvidence({ root, output, client, server, manifest, routeEv
     },
     routeCss,
     /** True when a CSS file in the route's graph contains `needle`. */
-    routeCssContains: (routeId, needle, options) =>
-      routeCss(routeId, options).some((file) => {
-        const text = textOf.get(file) ?? "";
-        return matches(text, needle);
-      }),
+    routeCssContains: (routeId, needle, options) => {
+      const texts = routeCss(routeId, options).map((file) => {
+        if (!textOf.has(file)) throw new Error(`No compiled client CSS: ${file}`);
+        return textOf.get(file);
+      });
+      return texts.some((text) => matches(text, needle));
+    },
   };
 }
