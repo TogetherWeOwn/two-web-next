@@ -564,13 +564,13 @@ test("policy scope pins exact proposal names against schema declarations", async
     "web_oauth_journeys",
   ]);
   const declared = declaredTables(fileURLToPath(new URL("../src/db/", import.meta.url)));
-  // web_session_grace postdates the frozen proposal scope: the census still
-  // surfaces it as an extra-table finding, but the candidate policies read
+  // These tables postdate the frozen proposal scope: the census still
+  // surfaces them as extra-table findings, but the candidate policies read
   // covers only the exact proposal tables plus the separate ledger. Any other
   // drift in either direction fails loudly here.
   assert.deepEqual(
     declared.filter((name) => !POLICY_TABLES.includes(name)),
-    ["web_session_grace"],
+    ["web_session_grace", "event_echoes", "event_echo_members"],
   );
   assert.deepEqual(
     POLICY_TABLES.filter((name) => !declared.includes(name)),

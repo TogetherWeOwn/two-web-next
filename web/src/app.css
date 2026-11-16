@@ -15,6 +15,9 @@
  * Head-only metadata has no utility classes and also stays out of detection. */
 @source "./**/*.svelte";
 @source not "./lib/SiteMetadata.svelte";
+/* SkipLink uses scoped CSS, not utility classes. Its CSS declarations are
+ * otherwise scanned as utility candidates; restore detection if it uses any. */
+@source not "./lib/SkipLink.svelte";
 /* These primitives use scoped styles and reference-backed theme fallbacks, not
  * utilities. Revisit if they acquire utility classes or forward class names. */
 @source not "./lib/Chip.svelte";
