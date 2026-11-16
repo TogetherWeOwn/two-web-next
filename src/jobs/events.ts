@@ -345,13 +345,13 @@ export function pgEventStore(
       };
       if (typeof pool.begin === "function") {
         await pool.begin(async (tx) => {
-          await tx`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
+          await setSyncTimeouts(tx);
           await tx`update event_sync_attempts set state = 'failed'
             where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
         });
         return;
       }
-      await sql`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
+      await setSyncTimeouts(sql);
       await sql`update event_sync_attempts set state = 'failed'
         where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
     },
@@ -366,13 +366,13 @@ export function pgEventStore(
       };
       if (typeof pool.begin === "function") {
         await pool.begin(async (tx) => {
-          await tx`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
+          await setSyncTimeouts(tx);
           await tx`update event_sync_attempts set terminal_reason = ${reason}
             where idempotency_key = ${idempotencyKey}::uuid and state = 'pending' and terminal_reason is null`;
         });
         return;
       }
-      await sql`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
+      await setSyncTimeouts(sql);
       await sql`update event_sync_attempts set terminal_reason = ${reason}
         where idempotency_key = ${idempotencyKey}::uuid and state = 'pending' and terminal_reason is null`;
     },
