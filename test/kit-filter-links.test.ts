@@ -56,9 +56,9 @@ export const body = render(Fixture).body;`,
     const { body } = (await import(pathToFileURL(outfile).href)) as { body: string };
     expect(body).toContain('aria-label="Event views"');
     const links = Array.from(
-      body.replace(/<!--.*?-->/gs, "").matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/g),
+      body.matchAll(/<!--.*?-->|<a\b[^>]*>[\s\S]*?<\/a>/gs),
       (match) => match[0],
-    );
+    ).filter((match) => match.startsWith("<a"));
     expect(links).toHaveLength(4);
     expect(links[0]).toContain('href="/events"');
     expect(links[0]).toContain('aria-current="page"');

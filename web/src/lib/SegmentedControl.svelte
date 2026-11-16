@@ -18,11 +18,13 @@ let {
 </nav>
 
 <style>
+  @import "../ember-theme.css" reference;
+
   .segments {
     display: inline-flex;
-    padding: var(--space-1);
-    border: 1px solid var(--color-hair1);
-    border-radius: var(--radius-pill);
+    padding: --theme(--space-1);
+    border: 1px solid --theme(--color-hair1);
+    border-radius: --theme(--radius-pill);
     background: var(--g1);
   }
 
@@ -30,20 +32,20 @@ let {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: var(--space-2);
+    gap: --theme(--space-2);
     min-height: 36px;
-    padding: 0 var(--space-4);
-    border-radius: var(--radius-pill);
+    padding: 0 --theme(--space-4);
+    border-radius: --theme(--radius-pill);
     color: var(--t2);
-    font-family: var(--font-ui);
-    font-size: var(--text-small);
-    font-weight: var(--font-weight-medium);
+    font-family: --theme(--font-ui);
+    font-size: --theme(--text-small);
+    font-weight: --theme(--font-weight-medium);
     text-decoration: none;
   }
 
   a[aria-current="page"] { background: var(--g3); color: var(--t1); }
-  a:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
-  .count { font-family: var(--font-data); }
+  a:focus-visible { outline: --theme(--focus-width) solid var(--focus-ring); outline-offset: --theme(--focus-offset); }
+  .count { font-family: --theme(--font-data); }
 
   @media (hover: hover) {
     a:hover { color: var(--t1); }
