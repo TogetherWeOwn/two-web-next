@@ -9,6 +9,9 @@ describe("inactive Kit facade compiler", () => {
   it.each([
     "export default {",
     "const broken = ; export default broken",
+    "const broken = /(/; export default {}",
+    "const broken = /[z-a]/; export default {}",
+    "const broken = /a/gg; export default {}",
     "const text = 'export default {}'; export const value = text",
     "// export default {}\nexport const value = 1",
     "export const defaultValue = {}",
@@ -18,6 +21,13 @@ describe("inactive Kit facade compiler", () => {
     "exports.default = {}; export const other = 1",
   ])("rejects malformed JavaScript or a disguised default: %s", async (source) => {
     await expect(compileKitFacade(source)).rejects.toThrow();
+  });
+
+  it("accepts valid regex syntax without executing adapter code", async () => {
+    const source =
+      'throw new Error("must not run"); const pattern = /[a-z]+/gi; export default { pattern };';
+    const result = await compileKitFacade(source);
+    expect(result.adapterSha256).toBe(digest(source));
   });
 
   it("preserves an external companion and hashes the exact source and output", async () => {

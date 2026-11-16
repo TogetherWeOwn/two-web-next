@@ -1,5 +1,6 @@
 // Inactive compiler helper; the installer owns all filesystem changes.
 // Design credit: Rick7C2, draft #2092, eb1ba5d47e6d5a35a0a6deb2b7532b4c045865f3.
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -10,6 +11,24 @@ const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 // The companion name is fixed so the generated entry and adapter can be placed
 // together without rewriting either output. Adapter source is parsed, not run.
 export async function compileKitFacade(adapterSource) {
+  // esbuild does not fully validate regular-expression grammar. Node's syntax
+  // check parses the original module without evaluating it or loading imports.
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--check", "--input-type=module"], {
+      env: {},
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    child.on("error", reject);
+    child.stdin.on("error", (error) => {
+      if (error.code !== "EPIPE") reject(error);
+    });
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error("kit facade compiler: invalid adapter JavaScript"));
+    });
+    child.stdin.end(adapterSource);
+  });
+
   const parsed = await build({
     stdin: { contents: adapterSource, loader: "js", sourcefile: "adapter.js" },
     bundle: false,
