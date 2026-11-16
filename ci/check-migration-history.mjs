@@ -246,7 +246,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const isCandidate = args.length === 1 && args[0] === "--candidate-ci";
   const isCheck = args.length === 0;
   if (!isWriteLock && !isCheck && !isCandidate) {
-    console.error("migration-history: usage: node ci/check-migration-history.mjs [--write-lock|--candidate-ci]");
+    console.error(
+      "migration-history: usage: node ci/check-migration-history.mjs [--write-lock|--candidate-ci]",
+    );
     process.exitCode = 2;
   } else {
     try {

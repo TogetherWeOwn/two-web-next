@@ -493,9 +493,15 @@ test("candidate mode rejects strict callers", (t) => {
     ["workflow_dispatch", "refs/heads/main"],
     ["workflow_dispatch", "refs/tags/v1"],
   ]) {
-    assert.throws(() => resolveCandidateBaselines(f.root, {
-      GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: event, GITHUB_REF: ref,
-    }), /limited to dispatched branch CI/);
+    assert.throws(
+      () =>
+        resolveCandidateBaselines(f.root, {
+          GITHUB_ACTIONS: "true",
+          GITHUB_EVENT_NAME: event,
+          GITHUB_REF: ref,
+        }),
+      /limited to dispatched branch CI/,
+    );
   }
 });
 
@@ -505,13 +511,19 @@ test("candidate validates target lock and inherited history", (t) => {
   lock(f.root);
   git(f.root, "add", ".");
   git(f.root, "commit", "-qm", "target edits history");
-  assert.throws(() => checkMigrations(f.root, f.base, "HEAD"), /target changed inherited migration/);
+  assert.throws(
+    () => checkMigrations(f.root, f.base, "HEAD"),
+    /target changed inherited migration/,
+  );
   put(f.root, "migrations.lock", formatLock({}));
   git(f.root, "add", ".");
   git(f.root, "commit", "-qm", "target corrupt lock");
   put(f.root, "drizzle/1000_original.sql", initial["drizzle/1000_original.sql"]);
   lock(f.root);
-  assert.throws(() => checkMigrations(f.root, f.base, "HEAD"), /Git baseline lock: lock does not match/);
+  assert.throws(
+    () => checkMigrations(f.root, f.base, "HEAD"),
+    /Git baseline lock: lock does not match/,
+  );
 });
 
 test("candidate rejects inherited edits, renames, and missing locks", (t) => {
@@ -521,7 +533,10 @@ test("candidate rejects inherited edits, renames, and missing locks", (t) => {
   assert.throws(() => checkMigrations(f.root, f.base, f.base), /historical SQL is immutable/);
   renameSync(join(f.root, "drizzle/1000_original.sql"), join(f.root, "drizzle/1000_renamed.sql"));
   lock(f.root);
-  assert.throws(() => checkMigrations(f.root, f.base, f.base), /historical migration deleted\/renamed/);
+  assert.throws(
+    () => checkMigrations(f.root, f.base, f.base),
+    /historical migration deleted\/renamed/,
+  );
   rmSync(join(f.root, "migrations.lock"));
   assert.throws(() => checkMigrations(f.root, f.base, f.base), /missing\/unreadable/);
 });
@@ -537,7 +552,10 @@ test("candidate checks the target reservation maximum across directories", (t) =
   put(f.root, "db/migrations/1004_candidate.sql", "SELECT 4;\n");
   lock(f.root);
   assert.throws(() => checkMigrations(f.root, f.base, target), /reserved number 1005/);
-  renameSync(join(f.root, "db/migrations/1004_candidate.sql"), join(f.root, "db/migrations/1006_candidate.sql"));
+  renameSync(
+    join(f.root, "db/migrations/1004_candidate.sql"),
+    join(f.root, "db/migrations/1006_candidate.sql"),
+  );
   lock(f.root);
   assert.equal(checkMigrations(f.root, f.base, target).total, 5);
 });
@@ -550,12 +568,18 @@ test("candidate rejects deleted target history and missing target lock", (t) => 
   git(f.root, "commit", "-qm", "target deletes history");
   put(f.root, "drizzle/1000_original.sql", initial["drizzle/1000_original.sql"]);
   lock(f.root);
-  assert.throws(() => checkMigrations(f.root, f.base, "HEAD"), /target changed inherited migration/);
+  assert.throws(
+    () => checkMigrations(f.root, f.base, "HEAD"),
+    /target changed inherited migration/,
+  );
   rmSync(join(f.root, "migrations.lock"));
   git(f.root, "add", ".");
   git(f.root, "commit", "-qm", "target loses lock");
   lock(f.root);
-  assert.throws(() => checkMigrations(f.root, f.base, "HEAD"), /baseline lock is missing after guard adoption/);
+  assert.throws(
+    () => checkMigrations(f.root, f.base, "HEAD"),
+    /baseline lock is missing after guard adoption/,
+  );
 });
 
 test("CLI guard and regeneration cannot bless a historical edit", (t) => {

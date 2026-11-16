@@ -206,6 +206,7 @@ async function fixture(event: string, suffix: "" | ".git" = "") {
       ...gitEnv(),
       GITHUB_ACTIONS: "true",
       GITHUB_EVENT_NAME: event,
+      GITHUB_REF: "refs/heads/main",
       GITHUB_EVENT_PATH: eventPath,
       GITHUB_SERVER_URL: origin,
       GITHUB_REPOSITORY: repository,
