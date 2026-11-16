@@ -2352,8 +2352,23 @@ function selftest() {
     const cases = [
       { selector: "grep: /selected/", filtered: true },
       { selector: "grepInvert: /excluded/", filtered: true },
+      { selector: "grep", filtered: true },
+      { selector: "grepInvert", filtered: true },
+      { selector: '"grep": /selected/', error: /quoted grep key/ },
+      { selector: '"grepInvert": /excluded/', error: /quoted grepInvert key/ },
+      { selector: "get grep() { return /selected/; }", error: /title selector method/ },
+      { selector: "get grepInvert() { return /excluded/; }", error: /title selector method/ },
       { selector: "projects: [{ name: 'selected', grep: /selected/ }]", filtered: true },
       { selector: "projects: [{ name: 'selected', grepInvert: /excluded/ }]", filtered: true },
+      { selector: "projects: [{ grep }]", filtered: true },
+      { selector: "projects: [{ grepInvert }]", filtered: true },
+      { selector: `projects: [{ "grep": /selected/ }]`, error: /quoted grep key/ },
+      { selector: `projects: [{ "grepInvert": /excluded/ }]`, error: /quoted grepInvert key/ },
+      { selector: "projects: [{ grep() { return /selected/; } }]", error: /title selector method/ },
+      {
+        selector: "projects: [{ grepInvert() { return /excluded/; } }]",
+        error: /title selector method/,
+      },
       {
         selector: "projects: [{ name: 'selected', grep: /selected/ }, { name: 'all' }]",
         filtered: false,
@@ -2394,12 +2409,16 @@ function selftest() {
           join(dir, "e2e", "suite.visual.ts"),
           'import { test } from "@playwright/test";\ntest("suite", async () => {});\n',
         );
-        const { orphans } = playwrightInventory(dir);
-        assert.deepEqual(
-          orphans,
-          entry.filtered ? ["e2e/entry.spec.ts", "e2e/suite.visual.ts"] : [],
-          entry.selector,
-        );
+        if (entry.error) {
+          assert.throws(() => playwrightInventory(dir), entry.error, entry.selector);
+        } else {
+          const { orphans } = playwrightInventory(dir);
+          assert.deepEqual(
+            orphans,
+            entry.filtered ? ["e2e/entry.spec.ts", "e2e/suite.visual.ts"] : [],
+            entry.selector,
+          );
+        }
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
