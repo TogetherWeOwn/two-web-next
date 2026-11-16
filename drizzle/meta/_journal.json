@@ -243,6 +243,13 @@
     {
       "idx": 34,
       "version": "7",
+      "when": 1793703763186,
+      "tag": "1034_event-echoes",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
       "when": 1794843325583,
       "tag": "1038_bot-reconciliation",
       "breakpoints": true
