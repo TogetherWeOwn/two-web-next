@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -11,8 +19,8 @@ const fixture = JSON.parse(
 const suite = "RSVP outcome focus in Chromium";
 
 test("synthetic identities are checkout-relative and retain exact case selectors", () => {
-  const dir = mkdtempSync(
-    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "route-identities-"),
+  const dir = realpathSync(
+    mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "route-identities-")),
   );
   try {
     const roots = [join(dir, "one"), join(dir, "two")];
