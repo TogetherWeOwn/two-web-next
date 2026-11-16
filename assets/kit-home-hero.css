@@ -12,6 +12,7 @@
   font: var(--font-weight-display) var(--text-hero) / var(--leading-display) var(--font-display);
   font-stretch: var(--font-width-display);
   letter-spacing: var(--tracking-display);
+  text-transform: none;
   text-wrap: balance;
 }
 

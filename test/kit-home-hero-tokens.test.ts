@@ -42,7 +42,9 @@ describe("Kit home hero theme adapter", () => {
       }).code.match(/padding:([^}]*)/)?.[1];
       expect(css).toContain(expected);
     }
-    expect(css).toContain(".base-theme:not(.content-theme) .hero.kit-home h1");
+    expect(css).toMatch(
+      /\.base-theme:not\(\.content-theme\) \.hero\.kit-home h1\{[^}]*text-transform:none(?:;|})/,
+    );
     expect(css).toContain(".base-theme .hero.kit-home");
     expect(css).toContain(".kit-home .hero-action");
     const page = readFileSync("web/src/routes/+page.svelte", "utf8");
