@@ -1,0 +1,151 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { normalizeShell } from "./shell-normalize.mjs";
+
+function check(input, expected) {
+  const normalized = normalizeShell(input, { strict: true });
+  assert.equal(normalized, expected);
+  assert.equal(normalizeShell(normalized, { strict: true }), normalized);
+  const masked = normalizeShell(normalized, { mask: true, strict: true });
+  assert.equal(masked.length, normalized.length);
+  assert.deepEqual(
+    [...masked.matchAll(/\n/g)].map((m) => m.index),
+    [...normalized.matchAll(/\n/g)].map((m) => m.index),
+  );
+  assert.equal(normalizeShell(normalized, { mask: true, strict: true }), masked);
+  return masked;
+}
+
+test("logical heredoc openers retain quote semantics and mask aligned bodies", () => {
+  for (const newline of ["\n", "\r\n"]) {
+    const continuation = `\\${newline}`;
+    const rows = [
+      [`<<${continuation} EOF`, "<< EOF"],
+      [`<<E${continuation}OF`, "<<EOF"],
+      [`<<"E${continuation}OF"`, '<<"EOF"'],
+      [`<<E${continuation}'O'${continuation}F`, "<<E'O'F"],
+      [`<${continuation}<EOF`, "<<EOF"],
+      [`<<${continuation}-${continuation}EOF`, "<<-EOF"],
+      [`<<${continuation}${continuation}EOF`, "<<EOF"],
+    ];
+    for (const [opener, canonical] of rows) {
+      const body = `${newline}npm run decoy${newline}${newline}EOF${newline}cd web${newline}`;
+      const masked = check(`cat ${opener}${body}`, `cat ${canonical}${body}`);
+      assert.doesNotMatch(masked, /npm run decoy/);
+      assert.match(masked, /cd web/);
+    }
+  }
+});
+
+test("unquoted continuation joins body while actual quoting keeps it literal", () => {
+  for (const newline of ["\n", "\r\n"]) {
+    const join = `\\${newline}`;
+    const body = `${newline}body ${join}EOF${newline}cd web${newline}EOF${newline}npm run real${newline}`;
+    const unquoted = check(`cat <<E${join}OF${body}`, `cat <<EOF${body}`);
+    assert.doesNotMatch(unquoted, /cd web/);
+    assert.match(unquoted, /npm run real/);
+    for (const word of ["'EOF'", "E\\OF", "E''OF"]) {
+      const masked = check(`cat <<${word}${body}`, `cat <<${word}${body}`);
+      assert.match(masked, /cd web/);
+    }
+  }
+});
+
+test("multiple complete words, empty quotes and exact tab-stripped closers", () => {
+  const text = "cat <<A-b <<-'c'\\'d <<''\none\nA-b\n\tsecond\n\tc'd\n\ncd web\n";
+  const masked = check(text, text);
+  assert.doesNotMatch(masked.split("\n").slice(1).join("\n"), /one|second|A-b|c'd/);
+  assert.match(masked, /cd web/);
+  const spaces = "cat <<-EOF\n  EOF\ncd web\nEOF\nnpm run real\n";
+  assert.doesNotMatch(check(spaces, spaces), /cd web/);
+});
+
+test("marker named cd and exact closers preserve the following command", () => {
+  for (const newline of ["\n", "\r\n"]) {
+    const source = [
+      "cat <<cd",
+      "npm run decoy",
+      "cd extra",
+      "",
+      "cd",
+      "cd web",
+      "npm run real",
+      "",
+    ].join(newline);
+    const masked = check(source, source);
+    assert.doesNotMatch(masked, /decoy|cd extra/);
+    assert.match(masked, /cd web/);
+    assert.match(masked, /npm run real/);
+  }
+});
+
+test("single-quoted continuations and escaped-backslash parity remain literal", () => {
+  for (const newline of ["\n", "\r\n"]) {
+    const quoted = `echo 'a\\${newline}b'${newline}`;
+    check(quoted, quoted);
+    const even = `echo two\\\\${newline}npm run real${newline}`;
+    check(even, even);
+    const odd = `echo three\\\\\\${newline}continued${newline}`;
+    check(odd, `echo three\\\\continued${newline}`);
+  }
+});
+
+test("masked output is not reparsed as a closed heredoc", () => {
+  const source = "cat <<EOF\nx\nEOF\ncd web\n";
+  const masked = "cat <<EOF\n \n   \ncd web\n";
+  assert.equal(check(source, source), masked);
+  assert.equal(normalizeShell(masked, { mask: true }), "cat <<EOF\n \n   \n      \n");
+});
+
+test("comments and quote-specific continuation handling", () => {
+  const text = "echo 'a\\\nb' # comment \\\nnpm run real\necho x\\\\\necho end\n";
+  const expected = "echo 'a\\\nb' \nnpm run real\necho x\\\\\necho end\n";
+  assert.equal(normalizeShell(text), expected);
+  assert.equal(normalizeShell(expected), expected);
+});
+
+test("here-strings and arithmetic shifts are not heredocs", () => {
+  for (const source of [
+    "cat <<<word\nnpm run real\n",
+    "echo $((8 << 1))\nnpm run real\n",
+    "((8 << 1))\nnpm run real\n",
+  ]) {
+    assert.equal(check(source, source), source);
+  }
+});
+
+test("body and comment command decoys are masked or removed", () => {
+  for (const newline of ["\n", "\r\n"]) {
+    const source = [
+      "# npm run decoy",
+      "cat <<EOF",
+      "npx playwright test",
+      "npm run decoy",
+      "",
+      "EOF",
+      "npx playwright test real",
+      "",
+    ].join(newline);
+    const canonical = `\n${source.slice(source.indexOf(newline) + newline.length)}`;
+    const masked = check(source, canonical);
+    assert.doesNotMatch(masked, /decoy/);
+    assert.equal((masked.match(/playwright test/g) ?? []).length, 1);
+  }
+});
+
+test("malformed openers and unsupported arithmetic fail closed", () => {
+  for (const text of [
+    "cat <<\\\n\n",
+    "cat <<'EOF\n",
+    'cat <<"EOF\n',
+    "cat <<$EOF\n",
+    "echo $((1 + $x))\n",
+  ]) {
+    assert.throws(() => normalizeShell(text, { strict: true }), /unsupported|unterminated/i, text);
+  }
+  assert.throws(
+    () => normalizeShell("cat <<EOF\nnpm run e2e\n", { strict: true }),
+    /unterminated heredoc/,
+  );
+  assert.doesNotThrow(() => normalizeShell("cat <<EOF\nnpm run e2e\n", { mask: true }));
+});
