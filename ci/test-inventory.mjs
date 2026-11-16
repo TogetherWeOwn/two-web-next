@@ -1115,11 +1115,24 @@ function splitCodeViews(text, label) {
       // Ambiguous slash expressions are safe only when they cannot hide
       // structural delimiters, comments, or string delimiters.
       const safe = text.slice(i).match(/^\/[A-Za-z0-9_.^$*+?|!-]+\/[A-Za-z]*/);
-      assert.ok(safe, `${label} has a slash expression this gate cannot parse`);
+      const before = clean.trimEnd();
+      assert.ok(
+        safe &&
+          (!before || /[=(:,[!&|?;{}]$/.test(before) || /\breturn$/.test(before)) &&
+          !["/", "*"].includes(text[i + safe[0].lastIndexOf("/") + 1]),
+        `${label} has a slash expression this gate cannot parse`,
+      );
       clean += safe[0];
       code += safe[0];
       i += safe[0].length - 1;
     } else if (quote) {
+      assert.ok(
+        quote !== "`" ||
+          c !== "$" ||
+          text[i + 1] !== "{" ||
+          /^\$\{(?:[A-Za-z0-9_.$?\s-]|"[^"\\`{}]*"|'[^'\\`{}]*')+\}/.test(text.slice(i)),
+        `${label} has a template interpolation this gate cannot parse`,
+      );
       clean += c;
       code += " ";
       if (c === "\\" && i + 1 < text.length) {
@@ -1175,6 +1188,10 @@ function findDefineConfigBody(text, configPath) {
   assert.equal(calls.length, 1, `${configPath} must call defineConfig once with an object literal`);
   const open = calls[0].index + calls[0][0].length - 1;
   const end = matchBracket(code, open, `${configPath} defineConfig object`);
+  assert.ok(
+    /^\s*,?\s*\)/.test(code.slice(end + 1)),
+    `${configPath} has defineConfig arguments this gate cannot parse`,
+  );
   return { clean: clean.slice(open + 1, end), code: code.slice(open + 1, end) };
 }
 
@@ -1440,6 +1457,10 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
           `${configPath} has a project this gate cannot parse: use an object literal`,
         );
         const pClose = matchBracket(pCode, pOpen, `${configPath} project`);
+        assert.ok(
+          pCode.slice(pClose + 1).trim() === "",
+          `${configPath} has a project this gate cannot parse: trailing content after the object`,
+        );
         const pClean = valueClean.slice(open + 1, close).slice(part.start, part.end);
         parsedProjects.push(
           parseProjectObject(
@@ -2479,6 +2500,28 @@ function selftest() {
           config: `reporter: /[}]/.source && 'list', ${name}: ${value}`,
           error: /slash expression/,
         });
+        failing.push(
+          {
+            where: "division adjacent to comment",
+            config: `timeout: 1000/factor/*}*/+1/factor, ${name}: ${value}`,
+            error: /slash expression/,
+          },
+          {
+            where: "additional defineConfig argument",
+            config: `}, { ${name}: ${value}`,
+            error: /defineConfig arguments/,
+          },
+          {
+            where: "project expression suffix",
+            config: `projects: [{ name: 'p' } && { name: 'p', ${name}: ${value} }]`,
+            error: /trailing content after the object/,
+          },
+          {
+            where: "nested template",
+            config: "metadata: { note: `${`}`}` }, " + `${name}: ${value}`,
+            error: /template interpolation/,
+          },
+        );
         const half = Math.ceil(name.length / 2);
         const escaped = `${name.slice(0, half - 1)}\\u${name
           .charCodeAt(half - 1)
