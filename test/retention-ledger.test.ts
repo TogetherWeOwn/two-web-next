@@ -441,6 +441,7 @@ describe("retention ledger doc rows", () => {
       "mirrored_at",
       "state",
       "request_attempts",
+      "claim_started_at",
       "next_attempt_at",
       "terminal_reason",
     ]);
@@ -464,6 +465,7 @@ describe("retention ledger doc rows", () => {
       "`failSync`",
       "`noteTerminalIntent`",
       "`terminal_reason`",
+      "`claim_started_at`",
       "`event_sync_attempts_pending_idx`",
       "`obsolete`",
       "`needsSync`",
@@ -1533,6 +1535,7 @@ describe("retention ledger L8b core member tables", () => {
       "web_sessions",
       "web_session_grace",
       "join_attempts",
+      "event_echo_members",
     ]);
     const erasure = read("src/member-erasure.ts");
     expect(erasure).toContain("delete from users where id = ${discordId} returning 1");
