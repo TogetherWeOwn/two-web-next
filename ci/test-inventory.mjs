@@ -576,7 +576,9 @@ function scriptRunsPlaywright(scripts, name, seen = new Set()) {
   if (seen.has(name)) return { runs: false, unknown: false };
   seen.add(name);
   const body = scripts[name] ?? "";
-  if (/\bplaywright\s+test\b/.test(body)) return { runs: true, unknown: false };
+  if (/\bplaywright\s+test\b/.test(body.replace(/\\\r?\n/g, " "))) {
+    return { runs: true, unknown: false };
+  }
   let unknown = false;
   for (const occ of parseNpmRunOccurrences(body)) {
     if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
@@ -3264,6 +3266,13 @@ function selftest() {
           'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
         );
       }
+      assert.throws(() => playwrightInventory(dir), /cannot expand/);
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          scripts: { e2e: "playwright \\\ntest --config playwright.fwd.config.ts" },
+        }),
+      );
       assert.throws(() => playwrightInventory(dir), /cannot expand/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
