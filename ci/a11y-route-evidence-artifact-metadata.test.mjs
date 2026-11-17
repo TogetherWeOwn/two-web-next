@@ -11,8 +11,10 @@ function fixture() {
     runAttempt: 2,
     producerJobId: 56,
     producerJobName: "case-producer",
+    requiredSteps: ["Run cases", "Upload report"],
     sourceSha,
     orchestrationSha: "b".repeat(40),
+    runHeadSha: sourceSha,
     pullNumber: 7,
     artifactId: 78,
     artifactDigest: `sha256:${"c".repeat(64)}`,
@@ -37,6 +39,10 @@ function fixture() {
       name: "case-producer",
       status: "completed",
       conclusion: "success",
+      steps: [
+        { name: "Run cases", status: "completed", conclusion: "success" },
+        { name: "Upload report", status: "completed", conclusion: "success" },
+      ],
       started_at: "2026-01-01T00:00:00Z",
       completed_at: "2026-01-01T00:05:00Z",
     },
@@ -61,6 +67,16 @@ function check(f) {
 
 test("synthetic artifact metadata binds the producer run and attempt", () => {
   assert.equal(check(fixture()), 78);
+});
+
+test("synthetic artifact metadata refuses a merge run without independent binding", () => {
+  const f = fixture();
+  const mergeSha = "d".repeat(40);
+  f.expected.runHeadSha = mergeSha;
+  f.run.head_sha = f.attempt.head_sha = f.artifacts[0].workflow_run.head_sha = mergeSha;
+  assert.throws(() => check(f));
+  f.liveHead = mergeSha;
+  assert.throws(() => check(f));
 });
 
 test("synthetic artifact metadata accepts the maximum artifact size", () => {
