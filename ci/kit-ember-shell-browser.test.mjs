@@ -21,7 +21,7 @@ test("built Ember shell preserves its landmarks and account states without JavaS
           await page
             .locator("[data-kit-site-header]")
             .evaluate((header) => getComputedStyle(header).display),
-          "flex",
+          "grid",
         );
         assert.equal(await page.getByRole("main").count(), 1);
         assert.equal(await page.getByRole("contentinfo").count(), 1);
