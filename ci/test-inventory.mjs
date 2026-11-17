@@ -675,6 +675,20 @@ function parseNpmRunOccurrences(text) {
       );
     }
   }
+  // Raw discovery cannot distinguish an npm command from text inside a quoted
+  // path or config operand. Reject that ambiguity before granting any credit.
+  let quote = null;
+  let escaped = false;
+  for (let i = 0; i < joined.length; i++) {
+    const c = joined[i];
+    if ((quote || escaped) && out.some((occ) => occ.index === i)) {
+      assert.fail("CI has npm run text in a quoted shell word; this gate cannot model it");
+    }
+    if (escaped) escaped = false;
+    else if (c === "\\" && quote !== "'") escaped = true;
+    else if (quote && c === quote) quote = null;
+    else if (!quote && (c === "'" || c === '"')) quote = c;
+  }
   return out;
 }
 
@@ -2951,6 +2965,25 @@ function selftest() {
           () => playwrightInventory(dir),
           /npm run text in a playwright --grep operand/,
         );
+      }
+      mkdirSync(join(dir, "e2e/npm run browser"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e/npm run browser/path.spec.ts"),
+        'import "../suite.visual";\ntest("smoke", () => {});\n',
+      );
+      for (const quote of ["'", '"']) {
+        const filtered = `playwright test --grep smoke ${quote}e2e/npm run browser${quote}`;
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({
+            scripts: { browser: "playwright test", nested: filtered, outer: "npm run nested" },
+          }),
+        );
+        for (const command of [`npx ${filtered}`, "npm run nested", "npm run outer"]) {
+          run(command);
+          assert.throws(() => playwrightInventory(dir), /npm run text in a quoted shell word/);
+          assert.throws(() => playwrightJsonSummary(dir), /npm run text in a quoted shell word/);
+        }
       }
       writeFileSync(
         join(dir, "package.json"),
