@@ -1693,6 +1693,11 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
   }
 });
 
+function archiveSectionForComparison(section: string, kitOwnsArchive: boolean): string {
+  if (kitOwnsArchive) assertEmberArchive(section);
+  return normalizeSection(kitOwnsArchive ? stripEmberDelta(section) : section);
+}
+
 test("cross-target: normalized archive sections match", async () => {
   const bodies = new Map<string, string>();
   for (const target of targets) {
@@ -1708,10 +1713,26 @@ test("cross-target: normalized archive sections match", async () => {
     .get("kit")!
     .match(/<section[^>]*data-testid="past-events"[\s\S]*?<\/section>/)?.[0];
   expect(kitSection, "Kit archive section exists").toBeDefined();
-  assertEmberArchive(kitSection!);
+  const kitOwnsArchive = expectedKitMarker("/events/past") === "kit";
+  if (kitOwnsArchive) {
+    const fallback = stripEmberDelta(kitSection!);
+    expect(archiveSectionForComparison(kitSection!, true)).toBe(
+      archiveSectionForComparison(fallback, false),
+    );
+    expect(archiveSectionForComparison(kitSection!, false)).not.toBe(
+      archiveSectionForComparison(fallback, false),
+    );
+    expect(fallback).toContain("E2E Past Night");
+    expect(archiveSectionForComparison(kitSection!, true)).not.toBe(
+      archiveSectionForComparison(fallback.replace("E2E Past Night", "Different event"), false),
+    );
+    expect(() =>
+      archiveSectionForComparison(kitSection!.replace("Sign-up record", "Changed"), true),
+    ).toThrow();
+  }
   expect(
-    normalizeSection(stripEmberDelta(kitSection!)),
-    "Kit section matches Hono after validating the presentation delta",
+    archiveSectionForComparison(kitSection!, kitOwnsArchive),
+    "Archive section matches Hono under the configured ownership",
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
@@ -1832,7 +1853,8 @@ test.describe("kit: archive visuals", () => {
           expect(response?.status(), `kit ${view.path} @ ${viewport.name}`).toBe(200);
           await expect(page.getByTestId(view.testid)).toBeVisible();
           await page.waitForLoadState("networkidle");
-          if (view.name === "populated") {
+          const kitOwnsArchive = expectedKitMarker(view.path) === "kit";
+          if (view.name === "populated" && kitOwnsArchive) {
             const card = page.getByTestId("event-card").first();
             await expect.soft(card.locator(".event-title")).toHaveCSS("display", "flex");
             const state = card.getByText("Sign-up record");
@@ -1850,13 +1872,21 @@ test.describe("kit: archive visuals", () => {
             } else {
               await expect.soft(glyph).toBeHidden();
             }
+          } else if (view.name === "populated") {
+            const card = page.getByTestId("event-card").first();
+            await expect.soft(card.getByRole("link", { name: "E2E Past Night" })).toBeVisible();
+            await expect.soft(card.locator(".state-glyph, .event-title")).toHaveCount(0);
+            await expect.soft(card.getByText("Sign-up record")).toHaveCount(0);
           }
           await expect
             .soft(page)
-            .toHaveScreenshot(`kit-archive-${view.name}-${viewport.name}.png`, {
-              fullPage: true,
-              mask: [page.locator("time")],
-            });
+            .toHaveScreenshot(
+              `kit-archive-${view.name}${view.name === "populated" && !kitOwnsArchive ? "-hono" : ""}-${viewport.name}.png`,
+              {
+                fullPage: true,
+                mask: [page.locator("time")],
+              },
+            );
           if (view.name === "populated") {
             const name = `kit-review-archive-default-${viewport.name}`;
             const path = test.info().outputPath(`${name}.png`);
@@ -1869,6 +1899,40 @@ test.describe("kit: archive visuals", () => {
         await context.close();
       }
     });
+  }
+});
+
+test("hono: populated archive fallback baseline @ desktop and mobile", async ({ browser }) => {
+  const hono = targets.find((target) => target.name === "hono")!;
+  const context = await browser.newContext({
+    baseURL: hono.origin,
+    ignoreHTTPSErrors: hono.ignoreHTTPSErrors,
+  });
+  try {
+    await context.route("**/*", (route) => {
+      const origin = new URL(route.request().url()).origin;
+      return origin === hono.origin || origin === KIT_ORIGIN
+        ? route.continue()
+        : route.abort("blockedbyclient");
+    });
+    const page = await context.newPage();
+    for (const viewport of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport.size);
+      const response = await page.goto("/events/past");
+      expect(response?.status()).toBe(200);
+      await expect(page.getByTestId("past-events")).toBeVisible();
+      await page.waitForLoadState("networkidle");
+      await expect.soft(page).toHaveScreenshot(`kit-archive-populated-hono-${viewport.name}.png`, {
+        fullPage: true,
+        mask: [page.locator("time")],
+      });
+      const name = `kit-review-hono-archive-fallback-${viewport.name}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, mask: [page.locator("time")] });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    }
+  } finally {
+    await context.close();
   }
 });
 
