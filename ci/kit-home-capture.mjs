@@ -16,10 +16,10 @@ const { homeEvidencePage, homeEvidenceStates, assertHomeEvidence } = await impor
 const { withKitOfflineBrowser } = await import(
   pathToFileURL(join(tooling, "ci/kit-offline-browser.mjs"))
 );
-const { eventEvidencePage, eventEvidenceStates, assertEventEvidence } = await import(
-  pathToFileURL(resolve("after/ci/kit-event-evidence.mjs"))
-);
-const eventState = eventEvidenceStates.includes(state);
+const eventEvidence = homeEvidenceStates.includes(state)
+  ? null
+  : await import(pathToFileURL(resolve("after/ci/kit-event-evidence.mjs")));
+const eventState = eventEvidence?.eventEvidenceStates.includes(state) ?? false;
 if (!eventState && !homeEvidenceStates.includes(state)) throw new Error(`Unknown state: ${state}`);
 
 const output = resolve(destination);
@@ -41,7 +41,7 @@ for (const tree of ["before", "after"]) {
       {
         source,
         page: eventState
-          ? eventEvidencePage(homeEvidencePage("guest"), state)
+          ? eventEvidence.eventEvidencePage(homeEvidencePage("guest"), state)
           : homeEvidencePage(state),
         now: Date.UTC(2026, 9, 20, 12),
       },
@@ -77,7 +77,7 @@ for (const tree of ["before", "after"]) {
             metrics: { ...metrics, fontLoaded },
           });
           if (tree === "after") {
-            if (eventState) await assertEventEvidence(page, state, viewport.name);
+            if (eventState) await eventEvidence.assertEventEvidence(page, state, viewport.name);
             else await assertHomeEvidence(page, state);
             assert.ok(metrics.scrollWidth <= metrics.width, `${state}: horizontal overflow`);
             assert.equal(metrics.font.split(",")[0].replaceAll('"', "").trim(), "Mona Sans");
