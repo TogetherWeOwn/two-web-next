@@ -1,5 +1,6 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { pgReconciliationReads } from "../src/admin/reconciliation-reads";
 import { pgPruneStores, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 import { registerJobsServerTimeoutsAcceptance } from "./helpers/jobs-server-timeouts-acceptance";
@@ -16,6 +17,37 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
   });
   afterAll(async () => {
     await fixture?.dispose();
+  });
+
+  it("returns filtered, ordered reconciliation windows at both limits", async () => {
+    const reads = pgReconciliationReads(sql);
+    const key = (n: number) => `00000000-0000-0000-0000-${n.toString().padStart(12, "0")}`;
+    const keys = (start: number, count: number) =>
+      Array.from({ length: count }, (_, i) => key(start + i));
+    const resultKeys = (rows: Awaited<ReturnType<typeof reads.listOpen>>) =>
+      rows.map((row) => row.idempotencyKey);
+
+    expect(await reads.listOpen()).toEqual([]);
+    expect(await reads.listResolved()).toEqual([]);
+    await sql`insert into bot_reconciliation_intents
+      (idempotency_key, verb, subject, first_seen_at, resolved_at)
+      select ('00000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid,
+        'event.upsert', 'event:42', '2026-01-02'::timestamptz, null
+      from generate_series(1, 100) as n`;
+    await sql`insert into bot_reconciliation_intents
+      (idempotency_key, verb, subject, first_seen_at, resolved_at)
+      select ('00000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid,
+        'event.upsert', 'event:42', '2026-01-02'::timestamptz, '2026-01-02'::timestamptz
+      from generate_series(201, 250) as n`;
+    expect(resultKeys(await reads.listOpen())).toEqual(keys(1, 100));
+    expect(resultKeys(await reads.listResolved())).toEqual(keys(201, 50));
+
+    await sql`insert into bot_reconciliation_intents
+      (idempotency_key, verb, subject, first_seen_at, resolved_at) values
+      (${key(101)}::uuid, 'event.upsert', 'event:42', '2026-01-01'::timestamptz, null),
+      (${key(251)}::uuid, 'event.upsert', 'event:42', '2026-01-02'::timestamptz, '2026-01-03'::timestamptz)`;
+    expect(resultKeys(await reads.listOpen())).toEqual([key(101), ...keys(1, 99)]);
+    expect(resultKeys(await reads.listResolved())).toEqual([key(251), ...keys(201, 49)]);
   });
 
   // Observe the holder instead of guessing with a sleep: pg_try_advisory_xact_lock

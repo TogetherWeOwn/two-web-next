@@ -99,6 +99,28 @@ describe("dormant reconciliation reads", () => {
     });
   });
 
+  it("projects only statuses and subjects within their exact boundaries", async () => {
+    for (const [status, expected] of [
+      [99, null],
+      [100, 100],
+      [599, 599],
+      [600, null],
+      [409.5, null],
+    ] as const) {
+      const { reads } = fixture([{ ...row, last_status: status }]);
+      expect((await reads.get(key))?.lastStatus).toBe(expected);
+    }
+    for (const [subject, expected] of [
+      ["", null],
+      ["a".repeat(200), "a".repeat(200)],
+      ["a".repeat(201), null],
+      ["_event:42", null],
+    ] as const) {
+      const { reads } = fixture([{ ...row, subject }]);
+      expect((await reads.get(key))?.subject).toBe(expected);
+    }
+  });
+
   it("propagates database failures", async () => {
     const { reads } = fixture([], true);
     await expect(reads.listOpen()).rejects.toThrow("database unavailable");
