@@ -2687,7 +2687,9 @@ function selftest() {
       for (const scope of ["workflow", "job"]) {
         for (const level of ["defaults", "run"]) {
           const anchor =
-            level === "defaults" ? "{ run: { working-directory: web } }" : "{ working-directory: web }";
+            level === "defaults"
+              ? "{ run: { working-directory: web } }"
+              : "{ working-directory: web }";
           const defaults =
             level === "defaults" ? "defaults: *directory\n" : "defaults:\n  run: *directory\n";
           const top = scope === "workflow" ? defaults : "";
