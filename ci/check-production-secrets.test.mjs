@@ -643,14 +643,19 @@ function jobEnvironment(lines) {
 // `environment: production` (pinned by the rollback-workflow test).
 // Anything else — another callee, no environment input, or a non-production
 // one — still fails closed. Never exempted by job name.
-function delegatesToProduction(lines) {
-  const uses = lines.some((line) =>
-    /^\s*uses:\s*(?:\.\/\.github\/workflows\/rollback-production\.yml|TogetherWeOwn\/two-web-next\/\.github\/workflows\/rollback-production\.yml@38581ef492f5c972969f5dfada396a9f0e2ee989)\s*$/.test(
-      line,
-    ),
-  );
-  if (!uses) return false;
-  return lines.some((line) => /^\s+environment:\s*production\s*$/.test(line));
+const ROLLBACK_CALLEE =
+  /^ {4}uses:\s*(?:\.\/\.github\/workflows\/rollback-production\.yml|TogetherWeOwn\/two-web-next\/\.github\/workflows\/rollback-production\.yml@38581ef492f5c972969f5dfada396a9f0e2ee989)\s*$/;
+
+function delegatesToRollback(lines, environment) {
+  if (!lines.some((line) => ROLLBACK_CALLEE.test(line))) return false;
+  const at = lines.findIndex((line) => /^ {4}with:\s*$/.test(line));
+  if (at < 0) return false;
+  for (const line of lines.slice(at + 1)) {
+    if (/^ {4}\S/.test(line)) break;
+    const pin = /^ {6}environment:\s*(.+)$/.exec(line);
+    if (pin) return stripQuotes(pin[1]).toLowerCase() === environment;
+  }
+  return false;
 }
 
 export function productionSecretEnvironmentViolations(text, file) {
@@ -666,7 +671,7 @@ export function productionSecretEnvironmentViolations(text, file) {
     if (referencing.length === 0) continue;
     const environment = jobEnvironment(lines);
     if (environment === undefined) {
-      if (delegatesToProduction(lines)) continue;
+      if (delegatesToRollback(lines, "production")) continue;
       violations.push(`${file}: job ${id} reads a PRODUCTION_* secret without an environment`);
     } else if (/^production$/i.test(environment)) {
       // Bound to the protected Environment on every run.
@@ -1010,6 +1015,20 @@ ${withBlock}
   ]);
 });
 
+test("script data cannot stand in for a production delegation", () => {
+  const text = `${FIXTURE_HEAD}jobs:
+  ordinary:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          uses: ./.github/workflows/rollback-production.yml
+          environment: production
+        env:
+          TOKEN: \${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+`;
+  assert.equal(productionSecretEnvironmentViolations(text, "fixture.yml").length, 1);
+});
+
 // ---------------------------------------------------------------------------
 // Staging Cloudflare secrets are Environment-scoped too.
 //
@@ -1042,31 +1061,8 @@ const TARGET_GUARDED_STAGING_CLOUDFLARE =
 // (`uses:`): GitHub only allows name/uses/with/secrets/needs/if/permissions
 // there. A caller job runs no code of its own, so every staging secret it
 // names travels by declared name into the called workflow via its `secrets:`
-// block. It counts as staging-bound when it calls a workflow in this repo
-// (`uses: ./...`) with the callee's environment pinned to the literal
-// `staging` in `with:`: the pin fixes the callee's target-selected
-// Environment to staging on every run, and the callee's own secret reads are
-// gated independently. Only the verified immutable same-repository rollback
-// ref is accepted remotely; other remote callees and missing or expression-driven
-// environment pins fail closed.
-function isStagingPinnedCall(lines) {
-  if (
-    !lines.some((line) =>
-      /^ {4}uses:\s*(?:\.\/|TogetherWeOwn\/two-web-next\/\.github\/workflows\/rollback-production\.yml@38581ef492f5c972969f5dfada396a9f0e2ee989\s*$)/.test(
-        line,
-      ),
-    )
-  )
-    return false;
-  const at = lines.findIndex((line) => /^ {4}with:\s*$/.test(line));
-  if (at < 0) return false;
-  for (const line of lines.slice(at + 1)) {
-    if (/^ {4}\S/.test(line)) break;
-    const pin = /^ {6}environment:\s*(.+)$/.exec(line);
-    if (pin) return /^staging$/i.test(stripQuotes(pin[1]));
-  }
-  return false;
-}
+// block. Only the rollback workflow's verified contract permits a literal
+// staging pin; unrelated callees and opaque pins fail closed.
 
 export function stagingCloudflareEnvironmentViolations(text, file) {
   const { outside, jobs } = splitWorkflow(text);
@@ -1080,7 +1076,7 @@ export function stagingCloudflareEnvironmentViolations(text, file) {
     const referencing = lines.filter((line) => STAGING_CLOUDFLARE_SECRET.test(line));
     if (referencing.length === 0) continue;
     const environment = jobEnvironment(lines);
-    if (environment === undefined && !isStagingPinnedCall(lines)) {
+    if (environment === undefined && !delegatesToRollback(lines, "staging")) {
       violations.push(
         `${file}: job ${id} reads a staging Cloudflare secret without an environment`,
       );
@@ -1200,6 +1196,19 @@ ${block}
   }
 });
 
+test("rollback callee binds its credential-reading job to the selected environment", () => {
+  const text = readFileSync(new URL("rollback-production.yml", WORKFLOWS), "utf8");
+  const { jobs } = splitWorkflow(text);
+  const credentialJobs = jobs.filter(({ lines }) =>
+    lines.some((line) => STAGING_CLOUDFLARE_SECRET.test(line) || PRODUCTION_SECRET.test(line)),
+  );
+  assert.equal(credentialJobs.length, 1);
+  assert.equal(credentialJobs[0].id, "rollback-production");
+  assert.equal(jobEnvironment(credentialJobs[0].lines), "${{ inputs.environment }}");
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(text, "rollback-production.yml"), []);
+  assert.deepEqual(productionSecretEnvironmentViolations(text, "rollback-production.yml"), []);
+});
+
 test("staging-pinned reusable caller passes staging secrets through without a job environment", () => {
   // `environment:` is forbidden on caller jobs, so the drill's rollback and
   // restore legs cannot bind staging the way the plan job does. The literal
@@ -1228,6 +1237,8 @@ test("staging-pinned reusable caller passes staging secrets through without a jo
   }
   const quoted = pinned.replace("environment: staging", "environment: 'staging'");
   assert.deepEqual(stagingCloudflareEnvironmentViolations(quoted, "fixture.yml"), [], "quoted pin");
+  const uppercase = pinned.replace("environment: staging", "environment: STAGING");
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(uppercase, "fixture.yml"), [], "case");
   // A remote callee's `environment` input has unknown semantics: fail closed.
   const remote = pinned.replace(
     "uses: ./.github/workflows/rollback-production.yml",
@@ -1254,6 +1265,37 @@ test("staging-pinned reusable caller passes staging secrets through without a jo
   assert.deepEqual(stagingCloudflareEnvironmentViolations(unpinned, "fixture.yml"), [
     "fixture.yml: job rollback reads a staging Cloudflare secret without an environment",
   ]);
+});
+
+test("an unrelated staging callee cannot inherit the rollback contract", () => {
+  const caller = `${FIXTURE_HEAD}jobs:
+  caller:
+    uses: ./.github/workflows/other.yml
+    with:
+      environment: staging
+    secrets:
+      FORWARDED: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+`;
+  const callee = `name: fixture
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+    secrets:
+      FORWARDED:
+        required: true
+jobs:
+  other:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+        env:
+          VALUE: \${{ secrets.FORWARDED }}
+`;
+  assert.equal(stagingCloudflareEnvironmentViolations(caller, "caller.yml").length, 1);
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(callee, "callee.yml"), []);
 });
 
 test("staging Cloudflare secret outside any job, or via bracket syntax, is a violation", () => {
