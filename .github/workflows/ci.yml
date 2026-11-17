@@ -920,6 +920,9 @@ jobs:
           path: artifacts/kit-admin-contrast/
           if-no-files-found: error
           retention-days: 14
+      - name: Kit compiled theme token regression
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node --test ci/kit-theme-compiled.test.mjs
       - name: Kit performance budgets (worker + generated assets)
         id: kit_perf
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')

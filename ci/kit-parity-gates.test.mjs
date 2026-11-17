@@ -124,7 +124,7 @@ test("preview archive compares validated Kit chrome and rejects mutations", () =
   const glyph =
     '<svg class="state-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
     '<circle cx="8" cy="8" r="8" fill="currentColor"></circle></svg>';
-  const chrome = `<div class="event-title">${glyph}<!---->${heading}<span class="event-state">Sign-up record</span></div>`;
+  const chrome = `<div class="event-title">${glyph}${heading}<span class="event-state">Sign-up record</span></div>`;
   const page = (title) =>
     `<section data-testid="past-events"><ul><li data-testid="event-card">` +
     `<div class="schedule-info">${title}<p>Details</p></div></li></ul></section>`;

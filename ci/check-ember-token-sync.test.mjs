@@ -44,6 +44,7 @@ function withScratch(fn) {
       mkdirSync(dirname(join(root, path)), { recursive: true });
       cpSync(join(ROOT, path), join(root, path));
     }
+    cpSync(join(ROOT, "assets/kit-home-hero.css"), join(root, "assets/kit-home-hero.css"));
     mkdirSync(join(root, "public"), { recursive: true });
     mkdirSync(join(root, "web/src/lib"), { recursive: true });
     cpSync(join(ROOT, "web/src/lib/site-header.css"), join(root, "web/src/lib/site-header.css"));
@@ -575,7 +576,7 @@ test("Kit exposes every utility role and Hono keeps only consumed author aliases
   const served = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"]
     .map((path) => outputs.get(path))
     .join("\n");
-  assert.ok(!css.includes("@theme static"), "unused utilities are not forced into the bundle");
+  assert.ok(css.includes("@theme static"), "theme variables survive without utility references");
   for (const [alias] of ROLES) {
     const utility =
       /^(g\d|hair\d|t\d|ember|on-accent|accent-hi|border|live|echo|ok|danger|warn|focus-ring)/.test(
