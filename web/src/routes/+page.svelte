@@ -1,6 +1,7 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
+import { seatAvailability } from "../../../src/events/pages-calendar-row";
 import type { HomeUpcomingRow } from "../../../src/events/reads";
 import { groupTeaserEvents } from "../../../src/events/teaser-groups";
 import { featuredImageSrc } from "../../../src/featured-image";
@@ -44,7 +45,8 @@ const siteGraph = $derived(siteJsonLd(appUrl));
 // Same shared buckets as the Hono screen: group the capped rows at render.
 // The explicit row type recovers what $derived destructuring widens (see
 // noticeText above): without it the groups widen to the helper's input.
-const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, new Date()));
+const renderTime = new Date();
+const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, renderTime));
 </script>
 
 {#snippet guestChrome()}
@@ -207,16 +209,20 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
                 </p>
                 <div class="event-meta">
                 <h3>{event.title}</h3>
+                {#if event.source === "canonical" && event.game?.trim()}<p>{event.game.trim()}</p>{/if}
+                {#if event.source === "canonical" && event.organizer_name?.trim()}
+                  <p class="home-event-host" data-testid="event-card-host">Hosted by {event.organizer_name.trim()}</p>
+                {/if}
                 {#if event.location}<p>{event.location}</p>{/if}
                 {#if event.source === "discord"}
-                  <p>RSVP in Discord</p>
+                  <p>RSVP in Discord · <span data-testid="event-schedule-availability">Discord-managed</span></p>
                 {:else}
+                  {@const availability = event.endsAt && event.endsAt.getTime() <= renderTime.getTime()
+                    ? { state: "past", text: "Ended" }
+                    : seatAvailability(event)}
                   <p>
-                    {goingCountText(event.goingCount, event.capacity)}
-                    {#if event.capacity !== null && (event.goingOccupancy ?? event.goingCount) >= event.capacity}
-                      {" · "}
-                      <span data-testid={SPOTS_LEFT_TESTID}>Full</span>
-                    {/if}
+                    {goingCountText(event.goingCount, event.capacity)}{" · "}
+                    <span data-testid={availability.state === "full" ? SPOTS_LEFT_TESTID : "event-schedule-availability"}>{availability.text}</span>
                   </p>
                 {/if}
                 </div>
