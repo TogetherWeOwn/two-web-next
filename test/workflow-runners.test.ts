@@ -84,6 +84,32 @@ describe("workflow runner labels", () => {
     expect(release.match(/^          runs-on-json: '"ubuntu-latest"'$/gm)).toHaveLength(4);
   });
 
+  it("keeps every main CI job hosted for public and private branch dispatches", () => {
+    const workflow = workflows.find(({ name }) => name === "ci.yml");
+    expect(workflow).toBeDefined();
+    const ciJobs = jobs(workflow!.text);
+    expect(ciJobs.map(({ id }) => id)).toEqual([
+      "join-evidence-source",
+      "bot-contract-drift",
+      "scope",
+      "queue-syntax-smoke",
+      "docs-links",
+      "a11y",
+      "check",
+      "node22-compat",
+      "bundle-budget",
+      "lighthouse",
+      "kit-browser-fixture",
+      "ci-ok",
+    ]);
+    for (const { id, runsOn } of ciJobs) {
+      // An unconditional selector also covers private workflow_dispatch on a
+      // non-main branch, which the former PR-only guard did not cover.
+      expect(runsOn, `ci.yml job ${id}`).toBe(hosted);
+    }
+    expect(overflowSwitch("check")).not.toBe(hosted);
+  });
+
   it("keeps all featured proof jobs on standard hosted runners", () => {
     const workflow = workflows.find(({ name }) => name === "featured-offline-proof.yml");
     expect(workflow).toBeDefined();
