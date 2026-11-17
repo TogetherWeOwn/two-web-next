@@ -15,6 +15,7 @@ import { build } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
+import { jsx } from "hono/jsx";
 import { serializeSigned } from "hono/utils/cookie";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import app from "./app";
@@ -36,10 +37,11 @@ import {
   dispatchEventDetailRequest,
   eventDetailConsumesFlash,
   eventDetailErrorPayload,
+  kitEventFacts,
   resolveKitEventDetail,
   type KitEventDetailStore,
 } from "../src/events/kit-detail";
-import { withEventDetailHtml } from "../src/events/detail-leaves";
+import { EventMetadata, withEventDetailHtml } from "../src/events/detail-leaves";
 import { RSVP_COPY } from "../src/islands/contracts";
 import { ROUTE_MANIFEST, resolveRouteOwner } from "../src/route-ownership";
 
@@ -1263,7 +1265,7 @@ describe("Kit detail presentation", () => {
     expect(outcome.model.joinInstructions).toBeNull();
     const { renderDetail } = await buildKitEventDetailBundle();
     const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
-    expect(html).toContain('data-testid="event-organizer">Solo host');
+    expect(html).toMatch(/data-testid="event-organizer"[^>]*>Solo host/);
     expect(html).not.toContain('data-testid="event-join-details"');
   });
 
@@ -1821,5 +1823,124 @@ describe("Kit seat card derivation", () => {
         }
       }
     }
+  });
+});
+
+describe("Kit event facts list (C6)", () => {
+  it("lists Host then Game in kit order from real model data", () => {
+    expect(kitEventFacts({ organizerName: "Vexa", game: "Chess" })).toEqual([
+      { key: "Host", value: "Vexa" },
+      { key: "Game", value: "Chess" },
+    ]);
+  });
+
+  it.each([
+    [{ organizerName: null, game: "Chess" }, [{ key: "Game", value: "Chess" }]],
+    [{ organizerName: "Vexa", game: null }, [{ key: "Host", value: "Vexa" }]],
+    [{ organizerName: "  ", game: "" }, []],
+    [{ organizerName: null, game: null }, []],
+  ] as const)("omits unavailable data: %j", (input, expected) => {
+    expect(kitEventFacts({ ...input })).toEqual(expected);
+  });
+
+  it("never invents Room, Repeats, Talk or Share rows", async () => {
+    const facts = kitEventFacts({ organizerName: "Vexa", game: "Chess" });
+    expect(facts.map((fact) => fact.key)).not.toContain("Room");
+    expect(facts.map((fact) => fact.key)).not.toContain("Repeats");
+    expect(facts.map((fact) => fact.key)).not.toContain("Talk");
+    expect(facts.map((fact) => fact.key)).not.toContain("Share");
+  });
+
+  const hosted = (organizer_name: string | null, game: string | null) =>
+    fakeStore({
+      event: { ...row({ organizer_name, game }), goingCount: 3 } as PublicEvent,
+    });
+  const renderFor = async (store: KitEventDetailStore, session: KitRequestSession) => {
+    const { outcome } = await resolve(KEY, store, session);
+    if (outcome.kind !== "ok") throw new Error(outcome.kind);
+    const { renderDetail } = await buildKitEventDetailBundle();
+    return renderDetail(outcome.model as unknown as Record<string, unknown>);
+  };
+
+  it.each([
+    ["guest", GUEST],
+    ["member", memberSession()],
+  ] as const)(
+    "renders the facts box once in the rail for a %s, with Host not duplicated",
+    async (_n, session) => {
+      const html = await renderFor(hosted("Vexa", "Chess"), session);
+      const box =
+        html.match(/<section class="[^"]*event-facts[^"]*"[\s\S]*?<\/section>/)?.[0] ?? "";
+      expect(box).toContain('data-testid="kit-event-facts"');
+      expect(box).toContain('aria-label="Event facts"');
+      expect(box.match(/<dt\b[^>]*>Host<\/dt>/)?.index).toBeTypeOf("number");
+      expect(box.match(/<dt\b[^>]*>Host<\/dt>/)?.index ?? -1).toBeLessThan(
+        box.match(/<dt\b[^>]*>Game<\/dt>/)?.index ?? -1,
+      );
+      expect(box).toMatch(/data-testid="event-organizer"[^>]*>Vexa<\/p>/);
+      expect(box).toContain("Chess");
+      expect(box).not.toMatch(/<dt\b[^>]*>Room<\/dt>/);
+      expect(box).not.toMatch(/<dt\b[^>]*>Repeats<\/dt>/);
+      expect(box).not.toMatch(/<dt\b[^>]*>Talk<\/dt>/);
+      expect(box).not.toMatch(/<dt\b[^>]*>Share<\/dt>/);
+      // Host appears once: the metadata list no longer renders its own row.
+      expect(html.match(/data-testid="event-organizer"/g)).toHaveLength(1);
+      expect(html).not.toContain("<dt>Hosted by</dt>");
+      // The box sits in the rail ahead of the shared share leaf, which keeps the
+      // only copy-link/share hooks.
+      expect(html.indexOf('data-testid="kit-event-facts"')).toBeLessThan(
+        html.indexOf('data-testid="event-link-url"'),
+      );
+      expect(html.match(/data-testid="event-copy-link"/g)).toHaveLength(1);
+      expect(html).toContain("<dt>Where</dt>");
+    },
+  );
+
+  it("adds no member data to the facts for guests", async () => {
+    const html = await renderFor(hosted("Vexa", "Chess"), GUEST);
+    const box = html.match(/<section class="[^"]*event-facts[^"]*"[\s\S]*?<\/section>/)?.[0] ?? "";
+    expect(box).not.toContain("/members/");
+    expect(box).not.toContain("<a ");
+    expect(html).not.toContain('data-testid="event-attendees"');
+    expect(html).not.toContain(">ann<");
+  });
+
+  it("omits the box, and keeps the metadata untouched, when nothing is available", async () => {
+    const html = await renderFor(hosted(null, null), GUEST);
+    expect(html).not.toContain('data-testid="kit-event-facts"');
+    expect(html).not.toContain('data-testid="event-organizer"');
+    expect(html).toContain("<dt>Where</dt>");
+  });
+
+  it("renders only Game when there is no host", async () => {
+    const html = await renderFor(hosted(null, "Chess"), GUEST);
+    expect(html).toContain('data-testid="kit-event-facts"');
+    expect(html).toMatch(/<dt\b[^>]*>Game<\/dt>/);
+    expect(html).not.toMatch(/<dt\b[^>]*>Host<\/dt>/);
+  });
+
+  it("leaves the shared Hono metadata host row unchanged by default", () => {
+    const model = {
+      eventKey: KEY,
+      status: "published",
+      whenText: "w",
+      endsWhenText: "e",
+      timeDatetime: "",
+      endsAt: "",
+      zoneLabel: "UTC",
+      location: null,
+      directionsUrl: null,
+      organizerName: "Vexa",
+      goingCount: 0,
+      goingOccupancy: 0,
+      capacity: null,
+    };
+    const props = { model, showTimeFromNow: true, showSpotsLeft: true };
+    const hono = jsx(EventMetadata, props).toString();
+    expect(hono).toContain("<dt>Hosted by</dt>");
+    expect(hono).toContain('data-testid="event-organizer">Vexa</p>');
+    const kit = jsx(EventMetadata, { ...props, omitHost: true }).toString();
+    expect(kit).not.toContain("Hosted by");
+    expect(kit).not.toContain("event-organizer");
   });
 });

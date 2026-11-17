@@ -139,7 +139,12 @@ describe("shared event detail server leaves", () => {
       "?attendees=2&bad=secret",
     );
     expect(model.detailHtml.metadata).toContain("&lt;svg");
-    expect(model.detailHtml.metadata).toContain("&lt;script&gt;host&lt;/script&gt;");
+    const honoMetadata = jsx(EventMetadata, {
+      model,
+      showTimeFromNow: true,
+      showSpotsLeft: true,
+    }).toString();
+    expect(honoMetadata).toContain("&lt;script&gt;host&lt;/script&gt;");
     expect(model.detailHtml.roster).toContain("&lt;img src=x&gt;0");
     expect(model.detailHtml.roster).not.toMatch(/<(?:img|svg|script)\b/);
     expect(model.detailHtml.roster).toContain(`owner-${ATTENDEE_PAGE_SIZE - 1}`);
