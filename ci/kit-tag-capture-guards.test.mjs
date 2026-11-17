@@ -17,7 +17,12 @@ test("parseArgs requires exactly two plain paths", () => {
 });
 
 test("assertSource fails on wrong sha or dirty tree", () => {
+  assert.equal(SOURCE_SHA, "373eccf2ce9019556cbc49b71fc7067893007102");
   assertSource({ head: SOURCE_SHA, status: "" });
+  assert.throws(
+    () => assertSource({ head: "6178285a1da1fbb3acc34707216990bc619cbb2d", status: "" }),
+    /pinned/,
+  );
   assert.throws(() => assertSource({ head: "0".repeat(40), status: "" }), /pinned/);
   assert.throws(() => assertSource({ head: SOURCE_SHA, status: " M x" }), /overlays/);
 });

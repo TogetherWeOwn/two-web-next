@@ -19,17 +19,19 @@ classifications. API rows use the closed API slice and family allocation; page
 cutovers and cross-family controls instead identify their responsible source and
 owner without inventing a dispatch family. Middleware registrations are separate from endpoints. The RSVP
 `ALL` registration and explicit admin 405 handlers are method fallbacks, not
-middleware. The snapshot test checks registration drift and auth labels, but does
-not validate classifications or completed targets. A follow-up must enforce those
-mapping and completion rules, including target files for attempted completion.
+middleware. The snapshot test checks registration drift and auth labels, but
+does not validate classifications. The completion declaration guard checks mapped
+target files for attempted completion; classification validation remains follow-up work.
 Completed page sources also need their server-load
 files; `/events` is an HTML-rendering endpoint rather than a Kit page. No slice
 is certified complete by this snapshot, even if its target files exist.
 Target paths for unfinished slices are proposals, not promises that a route
-already exists. Unresolved form targets list alternatives for the pending API-0b
-ADR decision; they are not selected mechanisms, and prevent completion of the
-relevant API slice. They retain the legacy method, URL, auth, validation,
-entered values, errors and no-JavaScript response contract until that decision.
+already exists. [ADR 0002](adr/0002-api-migration-amendment.md) prefers
+endpoint-rendered Svelte for rejected native forms, subject to built-Worker
+proof; the map's alternative targets have not yet been reconciled with that
+direction and still prevent completion of the relevant slice. Legacy method,
+URL, auth, validation, applicable entered values, errors and no-JavaScript
+response contracts remain required.
 Publish and duplicate can also re-render the event editor on validation failure;
 RSVP instead returns a branded HTML refusal. Event API create/edit accept form
 media types as well as JSON despite returning JSON. These distinct contracts
@@ -43,10 +45,11 @@ per-route shared budgets, body limits or fragment session/cache controls. Before
 using that list to certify a checkpoint, join the source audit's route, method
 and response-branch evidence matrix to this map and exact-head passing tests; a
 single cited test or hook file cannot establish every applicable behavior. The
-follow-up completion guard must reject every completed slice and page/shared
-source until case-level evidence is integrated, even when target files exist.
-API-10 is a retirement checkpoint rather than an ordinary mapped slice and also
-requires evidence before completion. This snapshot does not enforce those rules.
+completion declarations in the fixture remain empty: the guard rejects every claimed
+API slice and page/shared source until case-level evidence is integrated, even when
+target files exist. API-10 is a retirement checkpoint rather than an ordinary
+mapped slice; its completion declaration is also rejected until evidence is integrated.
+Named matcher targets remain unsupported by the structural artifact check.
 
 When expanding the shared-control audit, assign `POST /csp-reports` to API-3's
 operations family, not API-9: the operations retirement register names the CSP
@@ -69,6 +72,30 @@ so they would misroute ordinary single-segment suffix requests. A future route
 set must prove precedence and preserve single- and multi-segment behavior, auth,
 responses and URL semantics before either affected slice can be completed. The
 snapshot test does not enforce this prerequisite or validate the selected design.
+
+## Current-main source checkpoint
+
+At `db46efed024e20b6bf823658767b8e3f8b4e04ac`, the tracked source delta
+since the map's introduction at `57f1abbc25d0b39a77d83b46eb8b803b0249bb66`
+contains only `src/route-ownership.ts` and the inactive Kit Worker facade and
+response modules under `src/`. The inventory fixture, inventory helper and Hono
+entry point are unchanged in that interval. The map currently has 116 rows:
+99 endpoints, 11 method fallbacks and six middleware registrations; 86 are
+allocated to API slices, 25 to page cutovers and five to cross-family controls.
+This is a source-delta checkpoint, not a fresh mounted-app execution or a
+classification validation. The existing inventory and snapshot tests must run
+on the exact candidate head; their passing results are not asserted here.
+
+The separate [case-evidence integration](https://github.com/TogetherWeOwn/two-web-next/pull/2310)
+is in flight. It must not be mistaken for executed route parity, and this map
+must remain incomplete until applicable case evidence is integrated and passes.
+Concurrent page work includes the [home hero](https://github.com/TogetherWeOwn/two-web-next/pull/2294),
+[home event band](https://github.com/TogetherWeOwn/two-web-next/pull/2295),
+[calendar grid](https://github.com/TogetherWeOwn/two-web-next/pull/2289) and
+[event seat card](https://github.com/TogetherWeOwn/two-web-next/pull/2291).
+These are in-flight work, not proof that the corresponding page ownership or
+response contract has changed. Reconcile their landed heads before any related
+cutover or completion claim.
 
 ## Ownership overlaps
 

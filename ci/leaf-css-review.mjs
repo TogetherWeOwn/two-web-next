@@ -23,7 +23,17 @@ const inputs = [
 ];
 // Read by later generators (a revision's generator may or may not need them);
 // copied only when that revision has them, so every revision finds its inputs.
-const optionalInputs = ["assets/leaf-only.css"];
+const optionalInputs = [
+  "assets/leaf-only.css",
+  "web/src/lib/site-header.css",
+  "ci/css-dictionary.mjs",
+];
+// Only these optional inputs are CSS; the dictionary module is generator code
+// that must be copied for a revision to run, never a candidate source.
+const optionalCssInputs = new Map([
+  ["assets/leaf-only.css", "four"],
+  ["web/src/lib/site-header.css", "four-header"],
+]);
 const options = {
   encoding: "utf8",
   timeout: 10000,
@@ -55,7 +65,10 @@ function snapshot(sha) {
         options,
       );
       if (!entry) continue;
-      if (!/^\d+ blob [a-f0-9]+\tassets\/leaf-only\.css\0$/.test(entry)) {
+      if (
+        !/^\d+ blob [a-f0-9]+$/.test(entry.split("\t")[0]) ||
+        entry.split("\t")[1] !== `${input}\0`
+      ) {
         throw new Error("invalid optional source entry");
       }
       copyBlob(input);
@@ -64,9 +77,9 @@ function snapshot(sha) {
     const candidates = [];
     for (const [name, parts] of [
       ["three", sources],
-      ...(blobs.has(optionalInputs[0])
-        ? [["four", [...sources, blobs.get(optionalInputs[0])]]]
-        : []),
+      ...[...optionalCssInputs].flatMap(([input, label]) =>
+        blobs.has(input) ? [[label, [...sources, blobs.get(input)]]] : [],
+      ),
     ]) {
       for (const [suffix, separator] of [
         ["lf", "\n"],
