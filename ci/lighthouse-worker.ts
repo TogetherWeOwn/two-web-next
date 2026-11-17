@@ -73,6 +73,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
     eventKey: fixtureKey,
     title: "Lighthouse fixture game night",
     game: "Community games",
+    organizer_name: "Community host",
     description: "A local-only community game night used to measure the real event page.",
     startsAt,
     endsAt: new Date(startsAt.getTime() + 7200_000),
@@ -208,7 +209,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         if (
           inTransaction &&
           sql ===
-            `${eventSelect} where ("events"."status" = $1 and "events"."ends_at" >= $2 and isfinite("events"."starts_at")) order by "events"."starts_at" asc, "events"."id" asc limit $3` &&
+            `${eventSelect} where ("events"."status" = $1 and "events"."ends_at" >= $2 and (isfinite("events"."starts_at") and isfinite("events"."ends_at"))) order by "events"."starts_at" asc, "events"."id" asc limit $3` &&
           params.length === 3 &&
           params[0] === "published" &&
           isInstant(params[1]) &&

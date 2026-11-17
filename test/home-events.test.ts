@@ -220,7 +220,7 @@ describe("homepage upcoming events", () => {
       event(4),
       event(3),
       event(2),
-      event(1),
+      event(1, { game: "Wingspan", organizer_name: "Riley", rsvpOpen: false }),
       event(5, { status: "draft" }),
       event(6, { status: "cancelled" }),
       event(7, { status: "past" }),
@@ -229,6 +229,12 @@ describe("homepage upcoming events", () => {
     const rows = await listHomeUpcoming(f.db, NOW);
     expect(rows.map((r) => r.eventKey)).toEqual(["event-1", "event-2", "event-3"]);
     expect(rows.map((r) => r.goingCount)).toEqual([2, 1, 0]);
+    expect(rows[0]).toMatchObject({
+      game: "Wingspan",
+      organizer_name: "Riley",
+      rsvpOpen: false,
+      endsAt: event(1).endsAt,
+    });
     expect(f.queries).toHaveLength(4);
     // Note: this pins listHomeUpcoming (the canonical teaser read) only, not
     // the merged homepage loader, which additionally reads past zones.
@@ -257,10 +263,14 @@ describe("homepage upcoming events", () => {
     expect(f.queries[3]!.sql).not.toContain('inner join "users"');
     expect(Object.keys(rows[0]!).sort()).toEqual([
       "capacity",
+      "endsAt",
       "eventKey",
+      "game",
       "goingCount",
       "goingOccupancy",
       "location",
+      "organizer_name",
+      "rsvpOpen",
       "startsAt",
       "timezone",
       "title",

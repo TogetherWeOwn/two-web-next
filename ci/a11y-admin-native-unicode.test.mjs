@@ -92,8 +92,8 @@ test("the a11y job runs the native admin browser suite with the opt-in and the e
 
 test("the a11y job runs for every input of the native admin suite and for main", () => {
   assert.match(
-    workflow,
-    /\n    if: needs\.scope\.outputs\.draft != 'true' && \(needs\.scope\.outputs\.full == 'true' \|\| needs\.scope\.outputs\.app == 'true' \|\| needs\.scope\.outputs\.db == 'true'\)\n    # Overflow switch/,
+    job,
+    /\n    if: needs\.scope\.outputs\.draft != 'true' && \(needs\.scope\.outputs\.full == 'true' \|\| needs\.scope\.outputs\.app == 'true' \|\| needs\.scope\.outputs\.db == 'true'\)\n/,
   );
   // Non-PR events (main pushes, nightly, dispatch) hardcode app and full.
   assert.match(

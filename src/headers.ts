@@ -3,8 +3,9 @@ import { KIT_FALLBACK_INLINE_STYLE, KIT_FALLBACK_STYLE_SHA256 } from "./ember-fa
 import type { Env } from "./env";
 import { operatorImageHosts } from "./config-warn";
 import { LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";
+import { robotsTagFor } from "./http/robots";
 
-export { KIT_FALLBACK_INLINE_STYLE, KIT_FALLBACK_STYLE_SHA256 };
+export { KIT_FALLBACK_INLINE_STYLE, KIT_FALLBACK_STYLE_SHA256, robotsTagFor };
 
 // Response-header parity (TOG-10118 ports two-web TOG-7328 + TOG-8729).
 // Two layers, same split as legacy:
@@ -31,37 +32,6 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "X-Frame-Options": "DENY",
   "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 };
-
-// Production apex. Anything else serving HTML is staging, a preview, or a
-// dev/test host — crawlers must not index it (ports the nginx
-// `map $host $robots_tag` staging-noindex half of TOG-8729; the Sitemap-host
-// half already lives in src/seo.ts per TOG-7071).
-const PRODUCTION_APEX = "togetherweown.com";
-
-const hostOf = (value: string): string | null => {
-  try {
-    return new URL(value).hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-};
-
-// The noindex decision reads BOTH the configured APP_URL and the host
-// actually serving the response (nginx `$host`-map parity):
-// - unparseable config → noindex (fail closed to the staging posture);
-// - non-apex config (staging/preview/dev) → noindex whatever serves it;
-// - apex config → noindex unless the serving host is the apex itself, so a
-//   preview or workers.dev alias serving an apex-configured build is never
-//   indexed. Unit callers without a serving host keep the config-only verdict.
-export function robotsTagFor(appUrl: string, servingHost?: string): string | null {
-  const configHost = hostOf(appUrl);
-  if (configHost === null) return "noindex, nofollow";
-  if (configHost !== PRODUCTION_APEX) return "noindex, nofollow";
-  if (servingHost !== undefined && servingHost.toLowerCase() !== PRODUCTION_APEX) {
-    return "noindex, nofollow";
-  }
-  return null;
-}
 
 /** Staging/preview/dev builds noindex every machine format (production apex only indexes). */
 export function stagingRobots(c: Context<{ Bindings: Env }>): string | null {
