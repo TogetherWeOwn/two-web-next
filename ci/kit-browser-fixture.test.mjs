@@ -509,6 +509,68 @@ test("asset reads reject escapes, symlinks, and unsupported files", async () => 
   }
 });
 
+for (const scenario of ["never", "gap", "error", "partial", "miss", "game", "both"]) {
+  test(`calendar empty ${scenario} renders recovery links without JavaScript`, async () => {
+    const kind = ["game", "both"].includes(scenario) ? "miss" : scenario;
+    const query = ["miss", "both"].includes(scenario) ? "night" : "";
+    const game = ["game", "both"].includes(scenario) ? "Chess" : null;
+    await withKitOfflineBrowser(
+      {
+        page: `<script lang="ts">
+import CalendarEmpty from '#lib/CalendarEmpty.svelte';
+const state = { view: 'list' as const, month: '2030-06', q: ${JSON.stringify(query)}, game: ${JSON.stringify(game || "")}, past: true, page: 2 };
+const past = Array.from({ length: 7 }, (_, i) => ({ eventKey: i === 1 ? 'game/night' : String(i), title: i === 0 ? 'Cancelled night' : 'Past night', status: i === 0 ? 'cancelled' : 'past', startsAt: new Date('2030-06-15T18:00:00Z'), timezone: 'UTC' }));
+</script>
+<CalendarEmpty kind="${kind}" {state} gameFilter={${JSON.stringify(game)}} {past} inviteUrl="https://discord.test/invite" />`,
+      },
+      async ({ page, html }) => {
+        if (scenario === "never" || scenario === "error" || scenario === "partial") {
+          assert.match(html, /https:\/\/discord\.test\/invite/);
+          assert.equal(
+            await page.getByTestId("discord-join").getAttribute("href"),
+            "https://discord.test/invite",
+          );
+        }
+        if (scenario === "error" || scenario === "partial") {
+          assert.equal(await page.getByRole(scenario === "error" ? "alert" : "status").count(), 1);
+          assert.match(await page.getByTestId("events-retry").getAttribute("href"), /page=2/);
+        }
+        if (scenario === "gap") {
+          assert.equal(await page.getByTestId("events-empty-gap-item").count(), 5);
+          assert.equal(
+            await page.getByTestId("events-empty-gap-item").first().locator("a").count(),
+            0,
+          );
+          assert.equal(
+            await page
+              .getByTestId("events-empty-gap-item")
+              .nth(1)
+              .locator("a")
+              .getAttribute("href"),
+            "/e/game%2Fnight",
+          );
+          assert.equal(
+            await page.getByRole("link", { name: "Past events" }).getAttribute("href"),
+            "/events/past",
+          );
+        }
+        if (query) {
+          const clear = await page.getByTestId("events-search-clear-empty").getAttribute("href");
+          assert.doesNotMatch(clear, /[?&]q=/);
+          if (game) assert.match(clear, /game=Chess/);
+        }
+        if (game) {
+          const all = await page
+            .getByRole("link", { name: query ? "Search all games" : "Show all games" })
+            .getAttribute("href");
+          assert.doesNotMatch(all, /[?&]game=/);
+          if (query) assert.match(all, /q=night/);
+        }
+      },
+    );
+  });
+}
+
 for (const scenario of ["closed", "open", "search", "empty"]) {
   test(`calendar past drawer renders ${scenario} without JavaScript`, async () => {
     await withKitOfflineBrowser(
