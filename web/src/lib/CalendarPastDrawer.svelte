@@ -11,11 +11,7 @@ import {
 import CalendarCard from "./CalendarCard.svelte";
 import type { CalendarPastDrawerProps } from "./calendar-list";
 
-// Mirrors PastDrawer in src/events/pages-calendar-list.tsx. Both views render
-// it, so a preview opened in one view closes in the other. Hide only closes a
-// manually opened preview: a non-blank search forces past matches open, and
-// clearing the manual flag there would leave cards behind a control claiming
-// to hide them, so search screens offer no Hide at all.
+// Search forces the preview open, so only a manual preview offers Hide.
 let { state, past, showPast, member, inviteUrl, loginReturnTo }: CalendarPastDrawerProps = $props();
 </script>
 

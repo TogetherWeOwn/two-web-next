@@ -156,6 +156,53 @@ for (const state of homeEvidenceStates) {
   });
 }
 
+test("Kit home hero presents its heading and action at desktop and mobile widths", async () => {
+  await withKitHomeEvidence("guest", async ({ page }) => {
+    for (const [width, height] of [
+      [1280, 800],
+      [390, 844],
+    ]) {
+      await page.setViewportSize({ width, height });
+      const hero = page.locator('section[aria-labelledby="home-heading"]');
+      const heading = hero.locator("h1");
+      const action = hero.locator(".hero-action");
+      const button = action.getByTestId("join");
+      const lead = action.locator(".lead");
+      assert.equal(await hero.evaluate((el) => getComputedStyle(el).textAlign), "left");
+      assert.equal(await action.evaluate((el) => getComputedStyle(el).display), "flex");
+      const typography = await heading.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const probe = document.createElement("span");
+        probe.style.fontSize = "var(--text-hero)";
+        el.append(probe);
+        const expectedSize = getComputedStyle(probe).fontSize;
+        probe.remove();
+        return {
+          size: style.fontSize,
+          expectedSize,
+          weight: style.fontWeight,
+          expectedWeight: style.getPropertyValue("--font-weight-display").trim() || "560",
+        };
+      });
+      assert.equal(typography.size, typography.expectedSize);
+      assert.notEqual(typography.expectedWeight, "");
+      assert.equal(typography.weight, typography.expectedWeight);
+      const [actionBox, buttonBox, leadBox] = await Promise.all([
+        action.boundingBox(),
+        button.boundingBox(),
+        lead.boundingBox(),
+      ]);
+      assert.ok(actionBox && buttonBox && leadBox, `hero boxes at ${width}px`);
+      if (width === 390) {
+        assert.ok(Math.abs(buttonBox.width - actionBox.width) < 1, "mobile action fills its row");
+        assert.ok(leadBox.y >= buttonBox.y + buttonBox.height, "mobile lead follows action");
+      } else {
+        assert.ok(leadBox.x >= buttonBox.x + buttonBox.width, "desktop lead follows action inline");
+      }
+    }
+  });
+});
+
 test("Kit offline fixture fixes the server render clock", async () => {
   await withKitOfflineBrowser(
     { now: Date.UTC(2030, 0, 2), page: "<p>{new Date().toISOString()}</p>" },
@@ -246,6 +293,57 @@ import SiteFooter from '#lib/SiteFooter.svelte';
         originalBackground,
         "footer background changes when its theme declaration is removed",
       );
+      assert.deepEqual(unexpected, []);
+    },
+  );
+});
+
+test("structured time renders its states without JavaScript in Kit", async () => {
+  await withKitOfflineBrowser(
+    {
+      page: `<script>import StructuredTime from '#lib/StructuredTime.svelte';</script>
+<div class="base-theme">
+<StructuredTime state="upcoming" startsAt="2026-12-01T19:00:00Z" zone="America/New_York" />
+<StructuredTime state="past" startsAt="2026-12-01T19:00:00Z" endsAt="2026-12-01T20:00:00Z" zone="UTC" />
+<StructuredTime state="cancelled" startsAt="2026-12-01T19:00:00Z" zone="UTC" />
+<StructuredTime state="upcoming" startsAt={null} />
+</div>`,
+    },
+    async ({ page, unexpected }) => {
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        const rows = page.locator(".row-time");
+        assert.equal(await rows.count(), 4);
+        assert.equal(
+          await rows
+            .nth(0)
+            .locator(".line1")
+            .evaluate((el) => getComputedStyle(el).color),
+          "rgb(246, 241, 234)",
+        );
+        assert.equal(
+          await rows
+            .nth(0)
+            .locator(".line2")
+            .evaluate((el) => getComputedStyle(el).color),
+          "rgb(168, 154, 142)",
+        );
+        assert.equal(await rows.nth(0).getAttribute("data-state"), "upcoming");
+        assert.equal(
+          await rows.nth(0).locator("time").getAttribute("datetime"),
+          "2026-12-01T19:00:00.000Z",
+        );
+        assert.match(await rows.nth(0).textContent(), /America\/New_York/);
+        assert.match(await rows.nth(1).textContent(), /ended/);
+        assert.equal(await rows.nth(2).locator("s time").count(), 1);
+        assert.match(await rows.nth(2).textContent(), /Cancelled/);
+        assert.equal(await rows.nth(3).getAttribute("data-state"), "unavailable");
+        assert.match(await rows.nth(3).textContent(), /Time to be confirmed/);
+        assert.equal(await rows.nth(3).locator("time").count(), 0);
+      }
       assert.deepEqual(unexpected, []);
     },
   );
@@ -406,6 +504,57 @@ test("asset reads reject escapes, symlinks, and unsupported files", async () => 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+for (const scenario of ["closed", "open", "search", "empty"]) {
+  test(`calendar past drawer renders ${scenario} without JavaScript`, async () => {
+    await withKitOfflineBrowser(
+      {
+        page: `<script lang="ts">
+import CalendarPastDrawer from '#lib/CalendarPastDrawer.svelte';
+import type { CalendarPersistedCard } from '#lib/calendar-list';
+const state = { view: 'list' as const, month: '2030-06', q: ${JSON.stringify(scenario === "search" ? "Game" : "")}, game: 'Chess', past: ${scenario !== "closed"}, page: 2 };
+const past: CalendarPersistedCard = { kind: 'event', key: 'past', eventKey: 'past', title: 'Past game night', titleSegments: null, zone: 'UTC', startsAt: new Date('2030-06-15T18:00:00Z'), endsAt: null, location: null, description: 'A past game night.', passage: null, availability: { state: 'past', text: 'Ended', ongoing: false }, status: 'past', game: null, host: '', goingCount: 1, goingOccupancy: 1, capacity: null };
+</script>
+<svelte:head><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
+<div class="base-theme schedule-theme"><main class="events-page"><CalendarPastDrawer {state} past={${scenario === "empty" ? "[]" : "[past]"}} showPast={${scenario !== "closed"}} member={false} inviteUrl="https://discord.test/invite" loginReturnTo="/events?page=2" /></main></div>`,
+      },
+      async ({ page }) => {
+        assert.equal(
+          await page.getByTestId("events-past-list").count(),
+          scenario === "closed" || scenario === "empty" ? 0 : 1,
+        );
+        assert.equal(
+          await page.getByTestId("events-past-toggle").count(),
+          scenario === "search" || scenario === "empty" ? 0 : 1,
+        );
+        if (scenario !== "search" && scenario !== "empty") {
+          assert.match(
+            await page.getByTestId("events-past-toggle").getAttribute("href"),
+            /game=Chess/,
+          );
+        }
+        if (scenario !== "closed" && scenario !== "empty") {
+          assert.match(await page.getByTestId("events-past-list").innerText(), /Past game night/i);
+          assert.equal(await page.getByTestId("signin").count(), 0);
+        }
+        if (process.env.KIT_CALENDAR_EVIDENCE_DIR) {
+          const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
+          await mkdir(directory, { recursive: true });
+          for (const [name, width, height] of [
+            ["desktop", 1280, 800],
+            ["mobile", 390, 844],
+          ]) {
+            await page.setViewportSize({ width, height });
+            await page.screenshot({
+              path: join(directory, `past-drawer-${scenario}-${name}.png`),
+              fullPage: true,
+            });
+          }
+        }
+      },
+    );
+  });
+}
 
 test("calendar grid renders navigation and event states without JavaScript", async () => {
   await withKitOfflineBrowser(

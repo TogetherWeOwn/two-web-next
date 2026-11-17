@@ -73,9 +73,11 @@ function canonicalEvent(overrides: Record<string, unknown> = {}): Record<string,
 
 /** The one teaser row linking `key`, so a sibling's marker cannot satisfy the pin. */
 function teaserRow(html: string, key: string): string {
-  const hit = html.split('<li class="card"').find((chunk) => chunk.includes(`/e/${key}"`));
+  const hit = [...html.matchAll(/<li class="card(?:\s[^"]*)?"[^>]*>[\s\S]*?<\/li>/g)].find(
+    ([row]) => row.includes(`/e/${key}"`),
+  )?.[0];
   if (!hit) throw new Error(`no teaser row for ${key}`);
-  return hit.split("</li>")[0]!;
+  return hit;
 }
 
 beforeAll(async () => {

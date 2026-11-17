@@ -122,6 +122,7 @@ describe("Kit utility source boundary", () => {
     expect(css).toContain('@source not "./lib/SkipLink.svelte";');
     expect(css).toContain('@source not "./lib/Chip.svelte";');
     expect(css).toContain('@source not "./lib/SegmentedControl.svelte";');
+    expect(css).toContain('@source not "./lib/StructuredTime.svelte";');
     expect(css).toContain('@source not "./routes/admin/join-attempts";');
   });
 
@@ -176,6 +177,9 @@ describe("Kit utility source boundary", () => {
     expect(chip).toContain("{@render children()}");
     expect([...classUses(segments).tokens]).toEqual(["segments", "count"]);
     expect(classUses(segments).unknown).toEqual([]);
+    const structuredTime = readFileSync("web/src/lib/StructuredTime.svelte", "utf8");
+    expect([...classUses(structuredTime).tokens]).toEqual(["row-time", "line1", "word", "line2"]);
+    expect(classUses(structuredTime).unknown).toEqual([]);
   });
 
   it("recognizes literal classes and rejects local unknowns", () => {

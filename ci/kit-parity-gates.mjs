@@ -17,6 +17,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripEmberDelta } from "./kit-archive-delta.mjs";
 import { sectionOf } from "./kit-section-contract.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 
@@ -2482,8 +2483,10 @@ async function runPreviewMode(
       let same = false;
       let reason = "section HTML differs";
       try {
+        const kitComparable = route.contract === "archive" ? stripEmberDelta(kitHtml) : kitHtml;
         same =
-          sectionOf(kitHtml, route.compareSection) === sectionOf(honoHtml, route.compareSection);
+          sectionOf(kitComparable, route.compareSection) ===
+          sectionOf(honoHtml, route.compareSection);
         if (same) reason = null;
       } catch (error) {
         reason = String(error?.message ?? error).slice(0, 200);

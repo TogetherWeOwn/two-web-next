@@ -1,20 +1,60 @@
+import { connect } from "node:net";
 import { test as base, expect, type BrowserContext } from "@playwright/test";
 import { parseRetryAfterSeconds, qaLoginThrottleError } from "./qa-login-retry.mjs";
 
 export const localOrigin = "https://localhost:8787";
 
-export const test = base.extend<{ networkIsolation: void }>({
+export const test = base.extend<{ networkIsolation: void; cachePreservingNetwork: boolean }>({
+  cachePreservingNetwork: [false, { option: true }],
   networkIsolation: [
-    async ({ context }, use) => {
+    async (
+      {
+        context,
+        cachePreservingNetwork,
+        serviceWorkers,
+        proxy,
+        httpCredentials,
+        clientCertificates,
+      },
+      use,
+    ) => {
       const blocked: string[] = [];
-      // Even links/iframes to Discord or staging are blocked before a packet is
-      // sent. A spec may intercept the OAuth authorize page with a local stub.
-      await context.route("**/*", async (route) => {
-        const url = new URL(route.request().url());
-        if (url.origin === localOrigin) return route.continue();
-        blocked.push(`${route.request().method()} ${url.origin}${url.pathname}`);
-        return route.abort("blockedbyclient");
-      });
+      if (cachePreservingNetwork) {
+        expect(serviceWorkers).toBe("block");
+        expect(proxy).toBeUndefined();
+        expect(httpCredentials).toBeUndefined();
+        expect(clientCertificates).toBeUndefined();
+        // A listening proxy could forward traffic; a timeout is not proof of refusal.
+        const proxyRefused = await new Promise<boolean>((resolve) => {
+          const socket = connect({ host: "127.0.0.1", port: 9 });
+          socket.setTimeout(1000);
+          socket.once("connect", () => {
+            socket.destroy();
+            resolve(false);
+          });
+          socket.once("timeout", () => {
+            socket.destroy();
+            resolve(false);
+          });
+          socket.once("error", (error: NodeJS.ErrnoException) =>
+            resolve(error.code === "ECONNREFUSED"),
+          );
+        });
+        expect(proxyRefused, "Dead proxy must refuse connections").toBe(true);
+        context.on("request", (request) => {
+          const url = new URL(request.url());
+          if (url.origin !== localOrigin)
+            blocked.push(`${request.method()} ${url.origin}${url.pathname}`);
+        });
+      } else {
+        // A spec may intercept the OAuth authorize page with a local stub.
+        await context.route("**/*", async (route) => {
+          const url = new URL(route.request().url());
+          if (url.origin === localOrigin) return route.continue();
+          blocked.push(`${route.request().method()} ${url.origin}${url.pathname}`);
+          return route.abort("blockedbyclient");
+        });
+      }
       await use();
       expect(blocked, "No real Discord, staging or other external browser traffic").toEqual([]);
       const response = await context.request.get("/__e2e/network", { maxRedirects: 0 });

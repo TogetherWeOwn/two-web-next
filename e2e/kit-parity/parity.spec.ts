@@ -300,6 +300,87 @@ function expectNoMarker(headers: Record<string, string>, label: string) {
   ).toBeNull();
 }
 
+test("kit: capture synthetic non-member and account-hidden headers", async ({ browser }) => {
+  test.setTimeout(120_000);
+  requireGithubRunner();
+  for (const state of ["non-member", "account-hidden"] as const) {
+    for (const width of [1280, 390]) {
+      const bearer = `two_${randomBytes(32).toString("base64url")}`;
+      const tokenHash = createHash("sha256").update(bearer).digest("hex");
+      const userId = `9${BigInt(`0x${randomBytes(7).toString("hex")}`)
+        .toString()
+        .padStart(17, "0")}`;
+      const signature = createHmac("sha256", kitFixtureSessionSecret())
+        .update(bearer)
+        .digest("base64");
+      const context = await browser.newContext({
+        baseURL: KIT_ORIGIN,
+        viewport: { width, height: width === 1280 ? 800 : 844 },
+        storageState: {
+          cookies: [
+            {
+              name: "__Host-two_session",
+              value: `${bearer}.${signature}`,
+              domain: new URL(KIT_ORIGIN).hostname,
+              path: "/",
+              expires: -1,
+              httpOnly: true,
+              secure: true,
+              sameSite: "Lax",
+            },
+          ],
+          origins: [],
+        },
+      });
+      try {
+        await withSessionDb(async (sql) => {
+          await sql`
+            insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at)
+            values (${tokenHash}, ${tokenHash}, ${userId}, 'Synthetic Viewer', null, ${state === "account-hidden"}, false, ${new Date(Date.now() + 120 * 60 * 1000)})`;
+        });
+        await context.route("**/*", (route) =>
+          new URL(route.request().url()).origin === KIT_ORIGIN
+            ? route.continue()
+            : route.abort("blockedbyclient"),
+        );
+        const page = await context.newPage();
+        const path =
+          state === "non-member" ? `/e/${SEEDED_EVENT_KEY}` : "/leaderboards/members?season=bogus";
+        const response = await page.goto(path);
+        expect(response?.status()).toBe(state === "non-member" ? 200 : 400);
+        expect(response?.headers()["x-two-renderer"]).toBe("kit");
+        if (state === "non-member") {
+          await expect(page.locator(".header-account .who")).toHaveText("Synthetic Viewer");
+          await expect(page.locator('.header-account button[type="submit"]')).toHaveText(
+            "Sign out",
+          );
+          await expect(page.locator('.main-nav a[href="/leaderboards/members"]')).toHaveCount(0);
+        } else {
+          await expect(page.locator(".header-account")).toHaveCount(0);
+          await expect(
+            page.getByRole("heading", { name: "Check the board filters" }),
+          ).toBeVisible();
+        }
+        await page.evaluate(() => (globalThis as any).document.fonts.ready);
+        await page.screenshot({
+          path: test.info().outputPath(`brand-kit-${state}-${width}.png`),
+          animations: "disabled",
+          caret: "hide",
+        });
+      } finally {
+        try {
+          await context.close();
+        } finally {
+          await withSessionDb(async (sql) => {
+            await sql`delete from web_session_grace where user_id = ${userId}`;
+            await sql`delete from web_sessions where user_id = ${userId}`;
+          });
+        }
+      }
+    }
+  }
+});
+
 for (const target of targets) {
   test.describe(`${target.name}: past archive renders the seeded row`, () => {
     test("page one renders the list with the seeded row", async () => {
@@ -849,6 +930,11 @@ for (const target of targets) {
         expect(body).not.toContain('data-testid="event-attendees"');
         expect(body).not.toContain("Sign out");
         expect(body).toContain("Welcome, guest");
+        if (target.name === "kit") {
+          expect(body).toContain('data-testid="kit-seat-card"');
+          expect(body).toContain("Log in to RSVP");
+          expect(body).toContain("come straight back here.");
+        }
       } finally {
         await guest.dispose();
       }
@@ -909,6 +995,11 @@ for (const target of targets) {
       // controller, the islands only enhance it.
       expect(body).toContain(`action="/e/${EVENT_KEY}/rsvp"`);
       expect(body).toContain("/islands/rsvp-button.js");
+      if (target.name === "kit") {
+        expect(body).toContain('data-testid="kit-seat-card"');
+        expect(body).toContain("Your RSVP");
+        expect(body).not.toContain("Log in to RSVP");
+      }
       expect(body).toContain("Sign out");
       expect(body).not.toContain("Welcome, guest");
       // Both renderers rotate the active bearer and renew its 120-minute
@@ -1562,6 +1653,125 @@ for (const target of targets) {
     });
   }
 }
+
+test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", async ({
+  browser,
+}) => {
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const eventPath = "/e/01J00000000000000000000001";
+  for (const viewport of [
+    { width: 1280, height: 800 },
+    { width: 390, height: 844 },
+  ]) {
+    const context = await browser.newContext({ viewport, javaScriptEnabled: false });
+    try {
+      const page = await context.newPage();
+      const response = await page.goto(`${KIT_ORIGIN}${eventPath}`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      const card = page.getByTestId("kit-seat-card");
+      await expect(card.getByRole("heading", { name: "Log in to RSVP" })).toBeVisible();
+      await expect(card.getByRole("link", { name: "Log in with Discord" })).toHaveAttribute(
+        "href",
+        `/join/discord?next=${encodeURIComponent(eventPath)}`,
+      );
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+      const screenshot = test.info().outputPath(`kit-review-seat-card-guest-${viewport.width}.png`);
+      if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: screenshot, animations: "disabled", caret: "hide" });
+      await test.info().attach(`kit-review-seat-card-guest-${viewport.width}`, {
+        path: screenshot,
+        contentType: "image/png",
+      });
+      if (viewport.width === 1280) {
+        const rail = card.locator("..");
+        await expect(rail).toHaveCSS("position", "sticky");
+        const bounds = await rail.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.height).toBeLessThanOrEqual(viewport.height - 92);
+      }
+    } finally {
+      await context.close();
+    }
+  }
+});
+
+test("Kit member seat card captures saved and full states", async ({ browser }) => {
+  const target = targets.find((item) => item.name === "kit")!;
+  const key = "01J00000000000000000000991";
+  const savedUserId = "900000000000000846";
+  const fullUserId = "900000000000000845";
+  const states = [
+    { name: "saved", userId: savedUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
+    { name: "full", userId: fullUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
+  ];
+  const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  try {
+    await withSessionDb(async (sql) => {
+      for (const state of states) {
+        const hash = createHash("sha256").update(state.bearer).digest("hex");
+        await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+          values (${hash}, ${hash}, ${state.userId}, 'Seat fixture', true, false, ${new Date(Date.now() + 7_200_000)})`;
+      }
+      await sql`insert into users (id, username, member) values (${savedUserId}, 'Seat fixture', true)`;
+      await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, capacity, rsvp_open)
+        values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
+          '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true)`;
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, ${savedUserId}, 'going' from events where event_key = ${key}`;
+    });
+    const page = await context.newPage();
+    for (const state of states) {
+      const signature = createHmac("sha256", kitFixtureSessionSecret())
+        .update(state.bearer)
+        .digest("base64");
+      await context.addCookies([
+        {
+          name: "__Host-two_session",
+          value: `${state.bearer}.${signature}`,
+          domain: new URL(target.origin).hostname,
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        },
+      ]);
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        const response = await page.goto(`/e/${key}`);
+        expect(response?.status()).toBe(200);
+        expect(response?.headers()["x-two-renderer"]).toBe("kit");
+        const card = page.getByTestId("kit-seat-card");
+        await expect(card.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+        await expect(
+          card.getByRole("button", {
+            name: state.name === "saved" ? /can't make it/i : /join the waitlist/i,
+          }),
+        ).toBeVisible();
+        const name = `kit-review-seat-card-${state.name}-${viewport.width}`;
+        const path = test.info().outputPath(`${name}.png`);
+        if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
+        await page.screenshot({ path, animations: "disabled", caret: "hide" });
+        await test.info().attach(name, { path, contentType: "image/png" });
+      }
+    }
+  } finally {
+    await context.close();
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key = ${key}`;
+      for (const state of states) {
+        await sql`delete from web_session_grace where user_id = ${state.userId}`;
+        await sql`delete from web_sessions where user_id = ${state.userId}`;
+      }
+      await sql`delete from users where id = ${savedUserId}`;
+    });
+  }
+});
 
 test("cross-target: normalized archive sections match", async () => {
   const bodies = new Map<string, string>();
