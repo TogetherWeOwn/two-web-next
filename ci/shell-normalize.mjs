@@ -154,7 +154,7 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
     else if (!quote && (c === "'" || c === '"' || c === "`")) {
       quote = c;
       tokenStart = false;
-    } else if (!quote) tokenStart = /[ \t\r\n;|&()<>]/.test(c);
+    } else if (!quote) tokenStart = /[ \t\n;|&()<>]/.test(c);
     else tokenStart = false;
   }
   assert.equal(arithmetic, 0, "unterminated arithmetic shell syntax");

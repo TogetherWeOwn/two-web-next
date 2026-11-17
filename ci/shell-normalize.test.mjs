@@ -123,6 +123,8 @@ test("shell boundaries do not expose heredoc bodies or remove literal text", () 
   const nonbreaking = "cat <<EOF suffix\nbody\nEOF suffix\nnpm run real\n";
   assert.match(check(nonbreaking, nonbreaking), /npm run real/);
   assert.equal(normalizeShell("echo word #literal\n"), "echo word #literal\n");
+  const bareCr = "echo word\r#literal; npm run real\n";
+  assert.equal(check(bareCr, bareCr), bareCr);
   assert.equal(check("echo $(\\\n(8 << 1))\n", "echo $((8 << 1))\n"), "echo $((8 << 1))\n");
   assert.throws(() => normalizeShell('echo "$(cat <<EOF\nbody\nEOF\n)"\n'), /unsupported/);
   assert.throws(() => normalizeShell("echo $'x\\' #literal'\n"), /unsupported/);
