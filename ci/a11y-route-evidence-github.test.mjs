@@ -34,12 +34,21 @@ test("metadata client rejects unsafe paths, invalid responses and oversized bodi
   for (const response of [
     new Response("bad", { status: 403 }),
     body("not json"),
-    body("x".repeat(1024 * 1024 + 1)),
+    body(""),
+    body(JSON.stringify({ padding: "x".repeat(1024 * 1024 - 13) })),
     body(new Uint8Array([255])),
   ]) {
     const rejected = createRouteEvidenceRequest("owner/repo", "test-token", async () => response);
     await assert.rejects(rejected("/pulls/1"), /GitHub metadata unavailable/);
   }
+});
+
+test("metadata client accepts valid JSON at the byte limit", async () => {
+  const value = { padding: "x".repeat(1024 * 1024 - 14) };
+  const json = JSON.stringify(value);
+  assert.equal(Buffer.byteLength(json), 1024 * 1024);
+  const request = createRouteEvidenceRequest("owner/repo", "test-token", async () => body(json));
+  assert.deepEqual(await request("/pulls/1"), value);
 });
 
 test("metadata client redacts errors from the transport", async () => {
