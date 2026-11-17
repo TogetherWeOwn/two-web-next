@@ -73,7 +73,9 @@ const queueCommand = step("Ensure queues exist");
 const tailCommand = `${step("Re-verify exact-SHA full CI before Tail Worker deploy")}\n${step("Deploy alert Tail Worker before attaching the app")}`;
 const deployGateCommand = step("Re-verify exact-SHA full CI before Worker deploy");
 const defaultRouteFlags = kitRouteFlagsForFamily("hono");
-const deployCommand = `${deployGateCommand}\n${step("Deploy to Cloudflare Workers")}`;
+const deployCommand = `${deployGateCommand}\n${step("Deploy to Cloudflare Workers")
+  .replaceAll("${{ steps.kit-route-flags.outputs.archive }}", defaultRouteFlags.archive)
+  .replaceAll("${{ steps.kit-route-flags.outputs.static }}", defaultRouteFlags.static)}`;
 
 function executeStaging(ctx, evidence, changes = {}) {
   const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "staging-gate-"));
@@ -143,8 +145,6 @@ function executeStaging(ctx, evidence, changes = {}) {
           GITHUB_REF: ctx.ref,
           GITHUB_SHA: ctx.sha,
           DEPLOY_SHA: ctx.checkoutSha,
-          KIT_ROUTE_ARCHIVE: defaultRouteFlags.archive,
-          KIT_ROUTE_STATIC: defaultRouteFlags.static,
           GITHUB_TOKEN: "offline-stub",
           TEST_CHECKOUT_SHA: ctx.checkoutSha,
           TEST_EVIDENCE: join(dir, "evidence.json"),
@@ -571,13 +571,6 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.match(workflow, /run: node ci\/kit-route-flags\.mjs/);
   assert.match(workflow, /run: npm run build --prefix web/);
   assert.match(workflow, /--config web\/wrangler\.staging\.jsonc/);
-  assert.match(
-    workflow,
-    /--var "KIT_ROUTE_ARCHIVE:\$KIT_ROUTE_ARCHIVE" --var "KIT_ROUTE_STATIC:\$KIT_ROUTE_STATIC"/,
-  );
-  assert.match(workflow, /KIT_ROUTE_ARCHIVE: \$\{\{ steps\.kit-route-flags\.outputs\.archive \}\}/);
-  assert.match(workflow, /KIT_ROUTE_STATIC: \$\{\{ steps\.kit-route-flags\.outputs\.static \}\}/);
-  assert.doesNotMatch(workflow, /--var "KIT_ROUTE_(?:ARCHIVE|STATIC):\$\{\{/);
   assert.doesNotMatch(workflow, /^  push:/m);
   assert.match(
     workflow,
