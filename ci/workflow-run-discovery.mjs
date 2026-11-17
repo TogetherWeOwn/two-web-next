@@ -14,12 +14,18 @@ export function discoverWorkflowRuns(name, text) {
       throw new Error(`${name}: invalid job`);
     }
     const steps = job.value.get("steps", true);
-    if (steps == null && job.value.has("uses")) continue;
+    if (!job.value.has("steps") && job.value.has("uses")) {
+      const uses = job.value.get("uses", true);
+      if (!isScalar(uses) || typeof uses.value !== "string") {
+        throw new Error(`${name}: invalid reusable job uses`);
+      }
+      continue;
+    }
     if (!isSeq(steps)) throw new Error(`${name}: invalid steps`);
     for (const [stepIndex, step] of steps.items.entries()) {
       if (!isMap(step)) throw new Error(`${name}: invalid step`);
       const run = step.get("run", true);
-      if (run == null) continue;
+      if (!step.has("run")) continue;
       if (!isScalar(run) || typeof run.value !== "string") {
         throw new Error(`${name}: invalid run`);
       }

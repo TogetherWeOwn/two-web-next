@@ -28,6 +28,7 @@ const hosted = "ubuntu-latest";
 const pinnedHostedJob = (name: string, id: string) =>
   (name === "e2e.yml" && id === "browser-smoke") ||
   (name === "kit-home-evidence.yml" && id === "capture") ||
+  (name === "kit-event-evidence.yml" && id === "capture") ||
   (name === "admin-stale-save-ubuntu24-proof.yml" && id === "recovery-proof") ||
   (name === "kit-footer-browser.yml" && id === "footer-browser") ||
   (name === "xfs-qualification.yml" && id === "fixture");
@@ -116,6 +117,12 @@ describe("workflow runner labels", () => {
     expect(jobs(workflow!.text).map(({ id, runsOn }) => [id, runsOn])).toEqual(
       ["scope", "capture", "current-source", "featured-proof"].map((id) => [id, hosted]),
     );
+  });
+
+  it("pins event evidence to the hosted visual runner", () => {
+    const workflow = workflows.find(({ name }) => name === "kit-event-evidence.yml");
+    expect(workflow).toBeDefined();
+    expect(jobs(workflow!.text).find(({ id }) => id === "capture")?.runsOn).toBe("ubuntu-24.04");
   });
 
   it("keeps backup and staging jobs on standard hosted runners for every event", () => {
@@ -240,13 +247,13 @@ describe("workflow runner labels", () => {
 
   // Org reusable workflows whose pinned ref was verified to run only on
   // GitHub-hosted runners with no caller-side runner input (checked at the
-  // pin on 2026-11-01; the three pr-size pins below re-verified on
+  // pin on 2026-11-17 for test-guard (runs-on-json); the three pr-size pins re-verified on
   // 2026-11-11: each defaults its `runs-on` input to '["ubuntu-latest"]' and
   // runs its job via fromJSON(inputs.runs-on)). A repin fails this test until
   // the new pin is re-verified and this list updated; any other org reusable
   // call from a PR-triggered workflow must pass an explicit hosted runner input.
   const verifiedHostedOrgReusables = [
-    "TogetherWeOwn/.github/.github/workflows/test-guard.yml@3fffeb9f9465f371763fcc3c789ed4baefe38f95",
+    "TogetherWeOwn/.github/.github/workflows/test-guard.yml@2ef8ad6447e11d019ac3098bcfd011193b75266a",
     "TogetherWeOwn/.github/.github/workflows/pr-size.yml@ac9ce8d63e0cebd19ede904ac79137190c329964",
     "TogetherWeOwn/.github/.github/workflows/pr-size-gate.yml@ac9ce8d63e0cebd19ede904ac79137190c329964",
     "TogetherWeOwn/.github/.github/workflows/pr-size-weekly.yml@ac9ce8d63e0cebd19ede904ac79137190c329964",

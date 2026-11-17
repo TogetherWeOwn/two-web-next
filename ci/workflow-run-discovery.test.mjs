@@ -41,7 +41,13 @@ jobs:
 test("workflow discovery refuses malformed or aliased executable structure", () => {
   for (const text of [
     "jobs: [unterminated",
+    "jobs: { build: { uses: [] } }",
+    "jobs: { build: { uses: 42 } }",
+    "jobs: { build: { steps, uses: ./.github/workflows/reuse.yml } }",
+    "jobs: { build: { steps: null, uses: ./.github/workflows/reuse.yml } }",
     "jobs: { build: { steps: { run: hi } } }",
+    "jobs: { build: { steps: [{ run }] } }",
+    "jobs: { build: { steps: [{ run: null }] } }",
     "jobs: { build: { steps: [{ run: [hi] }] } }",
     "jobs: { build: { steps: [&x { run: hi }, *x] } }",
   ]) {

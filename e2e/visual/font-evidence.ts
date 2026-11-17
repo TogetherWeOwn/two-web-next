@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
+
+/** Avoid installing a screenshot mask overlay when no targets exist. */
+export async function nonemptyMask(locator: Locator) {
+  return (await locator.count()) > 0 ? [locator] : undefined;
+}
 
 /** Load this exact face before registration; never rewrite styles or tokens. */
 export async function loadVisualFont(page: Page, options: { url: string; weight?: string }) {
@@ -77,9 +82,16 @@ export async function captureWithoutFontWait(page: Page) {
 }
 
 /** Retain the first full-page capture and both measurements: no warmup or retry. */
-export async function captureWithGeometry(page: Page, selectors: Record<string, string>) {
+export async function captureWithGeometry(
+  page: Page,
+  selectors: Record<string, string>,
+  options: Pick<
+    NonNullable<Parameters<Page["screenshot"]>[0]>,
+    "mask" | "maskColor" | "animations" | "caret" | "scale"
+  > = {},
+) {
   const before = await readCaptureGeometry(page, selectors);
-  const png = await page.screenshot({ fullPage: true });
+  const png = await page.screenshot({ ...options, fullPage: true });
   const after = await readCaptureGeometry(page, selectors);
   const dimensions = { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
   return { png, dimensions, before, after };
