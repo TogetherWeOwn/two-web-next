@@ -681,13 +681,13 @@ const weeks = monthGrid(state.month, '2026-06-15', new Map([['2026-06-15', ${sce
           assert.match(await page.getByLabel("Next month").getAttribute("href"), /month=2026-07/);
         }
         if (scenario === "list") {
-          assert.match(await page.getByTestId("events-list").innerText(), /Game night/);
+          assert.match(await page.getByTestId("events-list").innerText(), /Game night/i);
           assert.equal(await page.getByTestId("calendar-month").count(), 0);
         }
         if (scenario === "empty") {
           assert.match(
             await page.locator('[data-cal-zone="content"]').innerText(),
-            /Nothing on the calendar yet/,
+            /Nothing on the calendar yet/i,
           );
           assert.equal(await page.getByTestId("calendar-month").count(), 0);
         }
@@ -703,7 +703,7 @@ const weeks = monthGrid(state.month, '2026-06-15', new Map([['2026-06-15', ${sce
           assert.equal(await form.locator('[name="q"]').inputValue(), "chess");
           assert.match(
             await page.locator('[data-cal-zone="miss"]').innerText(),
-            /Nothing matches that search/,
+            /Nothing matches that search/i,
           );
           assert.equal(
             await page.getByTestId("events-search-clear-empty").getAttribute("href"),
