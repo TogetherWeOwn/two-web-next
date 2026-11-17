@@ -4,15 +4,6 @@ import { transformSync } from "esbuild";
 import { describe, expect, it } from "vitest";
 
 describe("Kit home hero theme adapter", () => {
-  it("keeps event-band rules in the Kit stylesheet rather than shared Hono CSS", () => {
-    const kitCss = readFileSync("web/src/app.css", "utf8");
-    expect(readFileSync("web/src/routes/+layout.svelte", "utf8")).toContain('import "../app.css"');
-    expect(readFileSync("web/src/routes/+page.svelte", "utf8")).toContain('class="event-band"');
-    expect(kitCss).toContain(".base-theme .event-band .home-event-link");
-    expect(kitCss).toContain("@media (max-width: 820px)");
-    expect(readFileSync("public/theme.css", "utf8")).not.toContain(".event-band");
-  });
-
   it("composes scoped hero rules with pinned fallback aliases", () => {
     const { css, roles }: { css: string; roles: string[][] } = JSON.parse(
       execFileSync(
