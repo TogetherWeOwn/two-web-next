@@ -5,6 +5,7 @@ import { drizzleOver } from "../db/proxy";
 import { materializeMissingInstances } from "../admin/store";
 import { LEDGER_DB_LOCK_TIMEOUT_MS, LEDGER_DB_TIMEOUT_MS, SYNC_EVENT } from "./constants";
 import { queueExceptionClass } from "./queue-error";
+import { SYNC_RECONCILIATION_MARKER } from "./reconciliation";
 import type { EventStore, EventUpsert, StaleEventKeysPage, SyncAttempt, TxClient } from "./types";
 
 type AttemptRow = {
@@ -14,6 +15,7 @@ type AttemptRow = {
   state: SyncAttempt["state"];
   request_attempts: number;
   next_attempt_at: Date | null;
+  claim_started_at?: Date;
   terminal_reason?: string | null;
   discord_event_id?: string | null;
 } & (
@@ -30,6 +32,7 @@ function attemptFrom(row: AttemptRow): SyncAttempt {
     state: row.state,
     requestAttempts: row.request_attempts,
     nextAttemptAt: row.next_attempt_at,
+    claimStartedAt: row.claim_started_at,
     // Terminal-intent marker; absent on pre-migration rows (null then).
     terminalReason: row.terminal_reason ?? null,
     // Absent on pre-mirror rows (hermetic doubles leave it undefined, which
@@ -285,6 +288,7 @@ export function pgEventStore(
         await sql`with settled as (
         update event_sync_attempts set state = 'succeeded'
         where idempotency_key = ${attempt.idempotencyKey}::uuid and state = 'pending'
+          and (terminal_reason is null or terminal_reason <> ${SYNC_RECONCILIATION_MARKER})
         returning event_id, revision, mirrored_at
       ), mirrored as (
         update events set discord_event_id = coalesce(${discordEventId}, discord_event_id),
@@ -314,11 +318,12 @@ export function pgEventStore(
         from event_sync_attempts a join events e on e.id = a.event_id
         where a.idempotency_key = ${attempt.idempotencyKey}::uuid and a.state = 'pending'
           and a.request_attempts < ${SYNC_EVENT.tries} and a.next_attempt_at <= ${now}
+          and a.terminal_reason is null
         for update of a, e
       ) update event_sync_attempts a
         set state = case when candidate.obsolete then 'obsolete' else a.state end,
           request_attempts = a.request_attempts + case when candidate.obsolete then 0 else 1 end,
-          next_attempt_at = null
+          next_attempt_at = null, claim_started_at = ${now}
         from candidate where a.idempotency_key = candidate.idempotency_key
         returning a.*, candidate.discord_event_id`;
         return row ? attemptFrom(row) : null;
@@ -329,7 +334,8 @@ export function pgEventStore(
         // The claim count fences a late result from an earlier claimed request.
         await sql`update event_sync_attempts set next_attempt_at = ${nextAttemptAt}
         where idempotency_key = ${attempt.idempotencyKey}::uuid and state = 'pending'
-          and request_attempts = ${attempt.requestAttempts}`;
+          and request_attempts = ${attempt.requestAttempts}
+          and (terminal_reason is null or terminal_reason <> ${SYNC_RECONCILIATION_MARKER})`;
       });
     },
     async failSync(idempotencyKey) {
@@ -347,13 +353,15 @@ export function pgEventStore(
         await pool.begin(async (tx) => {
           await setSyncTimeouts(tx);
           await tx`update event_sync_attempts set state = 'failed'
-            where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
+            where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'
+                and (terminal_reason is null or terminal_reason <> ${SYNC_RECONCILIATION_MARKER})`;
         });
         return;
       }
       await setSyncTimeouts(sql);
       await sql`update event_sync_attempts set state = 'failed'
-        where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
+        where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'
+                and (terminal_reason is null or terminal_reason <> ${SYNC_RECONCILIATION_MARKER})`;
     },
     async noteTerminalIntent(idempotencyKey, reason) {
       // Terminal-intent marker, not settlement: the live row stays pending so

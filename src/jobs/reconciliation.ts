@@ -1,8 +1,10 @@
-// Dormant persistence only: no handler or queue settlement is wired to this store.
+// Reconciliation records contain only bounded scalar context.
 import type postgres from "postgres";
 import { diagnosticCode } from "../bot/diagnostic-code";
 import { LEDGER_DB_TIMEOUT_MS } from "./constants";
 import type { TxClient } from "./types";
+
+export const SYNC_RECONCILIATION_MARKER = "request requires reconciliation";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const VERBS = new Set([
@@ -66,23 +68,41 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
     }) as Promise<T>;
   }
 
-  return {
-    async record(input: ReconciliationIntent): Promise<void> {
-      const intent = reconciliationIntent(input);
-      await bounded(async (tx) => {
-        const rows = await tx`insert into bot_reconciliation_intents
+  async function insert(tx: TxClient, intent: ReconciliationIntent): Promise<void> {
+    const rows = await tx`insert into bot_reconciliation_intents
           (idempotency_key, verb, subject, attempts, last_code, last_status)
           values (${intent.idempotencyKey}::uuid, ${intent.verb}, ${intent.subject},
             ${intent.attempts}, ${intent.lastCode}, ${intent.lastStatus})
           on conflict (idempotency_key) do update set
             last_attempt_at = now(),
             attempts = greatest(bot_reconciliation_intents.attempts, excluded.attempts),
-            last_code = excluded.last_code, last_status = excluded.last_status
+            last_code = coalesce(excluded.last_code, bot_reconciliation_intents.last_code),
+            last_status = coalesce(excluded.last_status, bot_reconciliation_intents.last_status)
           where bot_reconciliation_intents.resolved_at is null
             and bot_reconciliation_intents.verb = excluded.verb
             and bot_reconciliation_intents.subject = excluded.subject
           returning idempotency_key`;
-        if (rows.length !== 1) throw new Error("Reconciliation key is not an open matching intent");
+    if (rows.length !== 1) throw new Error("Reconciliation key is not an open matching intent");
+  }
+
+  return {
+    async record(input: ReconciliationIntent): Promise<void> {
+      const intent = reconciliationIntent(input);
+      await bounded((tx) => insert(tx, intent));
+    },
+    async recordSync(input: ReconciliationIntent): Promise<void> {
+      const intent = reconciliationIntent(input);
+      await bounded(async (tx) => {
+        const rows = await tx`update event_sync_attempts a
+          set terminal_reason = ${SYNC_RECONCILIATION_MARKER}
+          from events e where a.event_id = e.id and e.event_key = ${intent.subject}
+            and a.idempotency_key = ${intent.idempotencyKey}::uuid
+            and a.action = ${intent.verb} and a.state = 'pending'
+            and a.request_attempts = ${intent.attempts} and a.next_attempt_at is null
+            and (a.terminal_reason is null or a.terminal_reason = ${SYNC_RECONCILIATION_MARKER})
+          returning a.idempotency_key`;
+        if (rows.length !== 1) throw new Error("Sync claim changed before reconciliation");
+        await insert(tx, intent);
       });
     },
 
