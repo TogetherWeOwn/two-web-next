@@ -3,7 +3,9 @@ import EmberShell from "#lib/EmberShell.svelte";
 import SiteMetadata from "#lib/SiteMetadata.svelte";
 import TimeBlock from "#lib/TimeBlock.svelte";
 
+// biome-ignore lint/correctness/noUnusedVariables: referenced by the Svelte template.
 const start = "2026-11-07T19:30:00Z";
+// biome-ignore lint/correctness/noUnusedVariables: referenced by the Svelte template.
 const asOf = "2026-11-07T19:20:00Z";
 </script>
 
