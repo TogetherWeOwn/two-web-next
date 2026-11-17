@@ -67,7 +67,7 @@ writeFileSync(
     "export { stripHydrationMarkers as e2eStrip, normalize as e2eNormalize, sectionOf as e2eSectionOf, previewSectionsMatch };\n",
 );
 const { e2eStrip, e2eNormalize, e2eSectionOf, previewSectionsMatch } = await import(
-  pathToFileURL(scratchPath).href,
+  pathToFileURL(scratchPath).href
 );
 assert.equal(typeof e2eStrip, "function");
 assert.equal(typeof e2eNormalize, "function");
