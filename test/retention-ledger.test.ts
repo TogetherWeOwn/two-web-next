@@ -1027,15 +1027,18 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     ).toEqual([]);
   });
 
-  it("pins the sync-attempt writer, pending index, schema, and readers", () => {
-    // Sole writer: only the event store inserts or updates attempt rows, in
+  it("pins the sync-attempt writers, pending index, schema, and readers", () => {
+    // Only the event and reconciliation stores may write attempt rows, in
     // raw SQL today or the Drizzle table-object form tomorrow.
     const writers = listTsFiles(join(root, "src")).filter((file) =>
       writesSyncAttempts(readFileSync(file, "utf8")),
     );
     expect(writers.map((file) => file.replace(root, "").replace(/^\/+/, ""))).toEqual([
       "src/jobs/events.ts",
+      "src/jobs/reconciliation.ts",
     ]);
+    const reconciliation = read("src/jobs/reconciliation.ts");
+    expect(reconciliation).toContain("set terminal_reason = ${SYNC_RECONCILIATION_MARKER}");
     const store = read("src/jobs/events.ts");
     expect(store).toContain("insert into event_sync_attempts");
     expect(store).toContain("update event_sync_attempts set state = 'succeeded'");

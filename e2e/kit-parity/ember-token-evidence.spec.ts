@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "@playwright/test";
 import { HONO_ORIGIN, KIT_ORIGIN, PARITY_VIEWPORTS } from "../kit-parity";
+import { withKitOfflineBrowser } from "../../ci/kit-offline-browser.mjs";
 
 // Real-app viewport evidence, not visual-regression baseline acceptance.
 // CI runs this read-only capture before journeys mutate the disposable seed.
@@ -11,6 +12,60 @@ const targets = [
   { name: "kit-join", origin: KIT_ORIGIN, path: "/join" },
 ] as const;
 const states = ["default", "reduced-motion", "forced-colors", "keyboard-focus"] as const;
+
+// The row has no production consumer yet. Render the actual component in a
+// disposable Kit route; this capture does not claim consumer-page parity.
+test("captures structured-time row states in Kit without JavaScript", async ({}, testInfo) => {
+  test.setTimeout(180_000);
+  const fixture = `<script>import StructuredTime from '#lib/StructuredTime.svelte';</script>
+<div class="base-theme">
+<StructuredTime state="upcoming" startsAt="2026-12-01T19:00:00Z" zone="America/New_York" />
+<StructuredTime state="past" startsAt="2026-12-01T19:00:00Z" endsAt="2026-12-01T20:00:00Z" zone="UTC" />
+<StructuredTime state="cancelled" startsAt="2026-12-01T19:00:00Z" zone="UTC" />
+<StructuredTime state="upcoming" startsAt={null} />
+</div>`;
+  const viewports = [
+    { width: 1280, height: 800 },
+    { width: 390, height: 844 },
+  ];
+  await withKitOfflineBrowser(
+    { source: process.cwd(), page: fixture },
+    async ({ page }: { page: any }) => {
+      await expect(page.locator(".row-time")).toHaveCount(4);
+      await expect(page.locator(".row-time .line1").first()).toHaveCSS(
+        "color",
+        "rgb(246, 241, 234)",
+      );
+      await expect(page.locator(".row-time .line2").first()).toHaveCSS(
+        "color",
+        "rgb(168, 154, 142)",
+      );
+      await expect(page.locator(".row-time").first()).toHaveCSS("row-gap", "4px");
+      await expect(page.locator(".row-time .line1").first()).toHaveCSS("font-size", "15px");
+      await expect(page.locator(".row-time .word")).toHaveCSS("font-weight", "600");
+      await expect(page.locator(".row-time .word")).toHaveCSS("margin-left", "8px");
+      for (const viewport of viewports) {
+        await page.setViewportSize(viewport);
+        await page.screenshot({
+          path: testInfo.outputPath(`ember-structured-time-${viewport.width}.png`),
+          fullPage: false,
+        });
+      }
+    },
+  );
+  // Axe injects scripts, so run it in a separate JavaScript-enabled context.
+  await withKitOfflineBrowser(
+    { source: process.cwd(), page: fixture, javaScriptEnabled: true },
+    async ({ page }: { page: any }) => {
+      await expect(page.locator(".row-time")).toHaveCount(4);
+      for (const viewport of viewports) {
+        await page.setViewportSize(viewport);
+        const accessibility = await new AxeBuilder({ page }).include(".row-time").analyze();
+        expect(accessibility.violations).toEqual([]);
+      }
+    },
+  );
+});
 
 test("Kit join reflows at 320px and has no accessibility violations", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 844 });
@@ -102,6 +157,49 @@ for (const target of targets) {
             path: testInfo.outputPath(`${name}.png`),
             fullPage: target.name === "kit-join",
           });
+          if (target.name === "kit" && viewport.size.width === 390 && state === "default") {
+            await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+            const header = page.locator("[data-kit-site-header]");
+            await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+            await expect(header).toBeVisible();
+            const bounds = await header.boundingBox();
+            expect(bounds).not.toBeNull();
+            expect(Math.abs(bounds?.y ?? Infinity)).toBeLessThanOrEqual(1);
+            const surface = await header.evaluate((element) => {
+              const style = getComputedStyle(element);
+              const rect = element.getBoundingClientRect();
+              const topmost = document.elementFromPoint(rect.left + rect.width / 2, rect.top + 5);
+              return {
+                background: style.backgroundColor,
+                opacity: style.opacity,
+                coversContent: topmost !== null && element.contains(topmost),
+              };
+            });
+            const pageBackground = await page
+              .locator(".base-theme")
+              .evaluate((element) => getComputedStyle(element).backgroundColor);
+            expect(surface.background).toBe(pageBackground);
+            expect(surface.background).not.toBe("rgba(0, 0, 0, 0)");
+            expect(surface.opacity).toBe("1");
+            expect(surface.coversContent).toBe(true);
+            await page.screenshot({
+              path: testInfo.outputPath(`${name}-scrolled.png`),
+              fullPage: false,
+            });
+            const scrollPadding = await page.evaluate(() =>
+              Number.parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop),
+            );
+            expect(scrollPadding).toBeGreaterThanOrEqual(bounds?.height ?? Infinity);
+            const contentLink = page.locator("main a:visible").first();
+            await contentLink.focus();
+            await expect(contentLink).toBeFocused();
+            const targetBounds = await contentLink.boundingBox();
+            const headerBounds = await header.boundingBox();
+            expect(targetBounds).not.toBeNull();
+            expect(targetBounds?.y ?? -Infinity).toBeGreaterThanOrEqual(
+              (headerBounds?.y ?? Infinity) + (headerBounds?.height ?? Infinity),
+            );
+          }
           const receipt = {
             sha: process.env.GITHUB_SHA,
             path: target.path,

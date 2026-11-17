@@ -190,7 +190,7 @@ test("workflow retains the exact suite, scope gate, hosted runner, timeout and r
   );
   assert.doesNotMatch(step, /continue-on-error|timeout-minutes/);
   assert.match(job, /timeout-minutes: 45\n/);
-  assert.match(job, /!github.event.repository.private && '\["ubuntu-latest"\]'/);
+  assert.match(job, /^    runs-on: ubuntu-latest$/m);
   assert.match(job, /image: node:22\.23\.0-bookworm/);
   assert.match(job, /run: node --test ci\/node22-progress\.test\.mjs/);
   assert.match(workflow, /NODE22_COMPAT_RESULT: \$\{\{ needs\.node22-compat\.result }}/);

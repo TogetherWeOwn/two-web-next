@@ -41,7 +41,7 @@ const REVIEWED_PINS: Pin[] = [
     reason: "Comment documenting the STAGING_APP_URL gate.",
   },
   {
-    file: "src/headers.ts",
+    file: "src/http/robots.ts",
     line: 'const PRODUCTION_APEX = "togetherweown.com";',
     reason:
       "Only the production apex may be indexed; every other host gets noindex (fails closed).",
@@ -49,7 +49,7 @@ const REVIEWED_PINS: Pin[] = [
   {
     file: "src/probes/internal-action-drill.ts",
     line: 'const PRODUCTION_APEX = "togetherweown.com";',
-    reason: "Duplicates the src/headers.ts apex so the drill refuses a production APP_URL.",
+    reason: "Duplicates the src/http/robots.ts apex so the drill refuses a production APP_URL.",
   },
   {
     file: "src/probes/internal-action-drill.ts",

@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { requireTestDatabase } from "../ci-only.mjs";
 import { expect, localOrigin, test } from "../fixtures";
+import { captureWithGeometry, readCaptureGeometry, renderedPlatformFonts } from "./font-evidence";
 
 // Public pages only: no session, no writes. Server-rendered times depend on the
 // wall clock, so every <time> element is masked; everything else must match the
@@ -23,11 +24,57 @@ const VIEWPORTS: Array<[name: string, size: { width: number; height: number }]> 
 
 for (const [viewport, size] of VIEWPORTS) {
   for (const [name, path] of ROUTES) {
-    test(`${name} @ ${viewport}`, async ({ page }) => {
+    test(`${name} @ ${viewport}`, async ({ page }, testInfo) => {
       await page.setViewportSize(size);
+      if (name === "privacy") {
+        await page.route("**/fonts/fragment-mono-latin-400.woff2", (route) => route.abort());
+      }
       const response = await page.goto(path);
       expect(response?.status()).toBe(200);
       await page.waitForLoadState("networkidle");
+      if (name === "privacy") {
+        await page.evaluate(() => document.fonts.ready);
+        const code = page.locator(".base-theme.content-theme code").first();
+        await code.evaluate((node) => node.setAttribute("data-font-evidence", ""));
+        const selector = ".base-theme.content-theme code[data-font-evidence]";
+        const selectors = { code: selector };
+        const fonts = await renderedPlatformFonts(page, selector);
+        expect(fonts.some((font) => font.isCustomFont && font.familyName === "Fragment Mono")).toBe(
+          false,
+        );
+        expect(fonts.some((font) => font.glyphCount > 0)).toBe(true);
+        const beforeIdle = await readCaptureGeometry(page, selectors);
+        await page.evaluate(async () => {
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          );
+          await new Promise<void>((resolve) => setTimeout(resolve, 500));
+        });
+        const afterIdle = await readCaptureGeometry(page, selectors);
+        const idleFonts = await renderedPlatformFonts(page, selector);
+        expect(afterIdle).toEqual(beforeIdle);
+        expect(idleFonts).toEqual(fonts);
+        const settling = await captureWithGeometry(page, selectors);
+        const settlingFonts = await renderedPlatformFonts(page, selector);
+        await testInfo.attach(`privacy-${viewport}-baseline-settling.png`, {
+          body: settling.png,
+          contentType: "image/png",
+        });
+        await testInfo.attach(`privacy-${viewport}-baseline-settling.json`, {
+          body: JSON.stringify(
+            { before: settling.before, after: settling.after, idleFonts, settlingFonts },
+            null,
+            2,
+          ),
+          contentType: "application/json",
+        });
+        expect(settling.before).toEqual(afterIdle);
+        if (JSON.stringify(settling.before) !== JSON.stringify(settling.after)) {
+          expect(settlingFonts.map((font) => font.familyName)).not.toEqual(
+            idleFonts.map((font) => font.familyName),
+          );
+        }
+      }
       await expect(page).toHaveScreenshot(`${name}-${viewport}.png`, {
         fullPage: true,
         mask: [page.locator("time")],
