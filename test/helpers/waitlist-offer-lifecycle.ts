@@ -1,10 +1,11 @@
 import { eq, sql } from "drizzle-orm";
+import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { events, rsvps } from "../../src/db/admin-schema";
 import { waitlistOffers } from "../../src/db/dormant-schema";
 import { claimWaitlistOffer, createWaitlistOffer } from "../../src/events/waitlist-offers";
 import { pgEventStore } from "../../src/jobs/events";
-import { createMemberDataFixture, type MemberDataFixture } from "./member-data-db";
+import { createMemberDataFixture, type MemberDataFixture, testDatabaseUrl } from "./member-data-db";
 
 // Disposable-schema proof of the dormant offer lifecycle. No production caller
 // exists yet; each case drives the store through real transactions and locks.
@@ -141,19 +142,31 @@ export function registerWaitlistOfferLifecycle() {
         .update(rsvps)
         .set({ updatedAt: new Date("2019-01-01T00:00:00Z") })
         .where(eq(rsvps.id, rsvp.id));
-      const store = pgEventStore(fx.client);
-      const attempt = await store.prepareSync(
-        event.eventKey,
-        "00000000-0000-4000-8000-000000000001",
-        new Date("2020-01-01T00:00:00Z"),
-      );
-      if (!attempt || "waiting" in attempt) throw new Error("sync attempt not prepared");
-      expect((await claim(event, rsvp, "u1", offer.id)).ok).toBe(true);
-      await store.completeSync(attempt, "discord-event");
-      const [settled] = await fx.client`select state from event_sync_attempts
-        where idempotency_key = ${attempt.idempotencyKey}::uuid`;
-      expect(settled?.state).toBe("succeeded");
-      expect(await rsvpOf(rsvp.id)).toMatchObject({ status: "going", syncedToDiscordAt: null });
+      // Drizzle changes its client's timestamp serializers; the jobs store uses
+      // its own Postgres client in production. Keep this one schema-scoped too.
+      const url = testDatabaseUrl(process.env.DATABASE_URL!);
+      const client = postgres(url.href, {
+        max: 1,
+        password: () => url.password,
+        connection: { search_path: fx.schemaName },
+      });
+      try {
+        const store = pgEventStore(client);
+        const attempt = await store.prepareSync(
+          event.eventKey,
+          "00000000-0000-4000-8000-000000000001",
+          new Date("2020-01-01T00:00:00Z"),
+        );
+        if (!attempt || "waiting" in attempt) throw new Error("sync attempt not prepared");
+        expect((await claim(event, rsvp, "u1", offer.id)).ok).toBe(true);
+        await store.completeSync(attempt, "discord-event");
+        const [settled] = await fx.client`select state from event_sync_attempts
+          where idempotency_key = ${attempt.idempotencyKey}::uuid`;
+        expect(settled?.state).toBe("succeeded");
+        expect(await rsvpOf(rsvp.id)).toMatchObject({ status: "going", syncedToDiscordAt: null });
+      } finally {
+        await client.end({ timeout: 1 });
+      }
     });
 
     it("lets only one of two racing claims win the last seat", async () => {
