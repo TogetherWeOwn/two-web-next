@@ -37,6 +37,10 @@ export async function assertHomeEvidence() {
   if (process.env.CAPTURE_CASE === "incomplete" && source.endsWith("after")) return;
   const page = {
     setViewportSize: async () => {},
+    locator: () => ({
+      focus: async () => {},
+      evaluate: async () => process.env.CAPTURE_CASE !== "focus-hidden",
+    }),
     screenshot: async (options) => {
       if (options.fullPage !== true) throw new Error("full-page capture required");
       return Buffer.from("fixture image");
@@ -92,6 +96,9 @@ export async function assertHomeEvidence() {
         "after-guest-mobile.png",
       ],
     );
+    const hiddenFocus = await run("focus-hidden");
+    assert.equal(hiddenFocus.result.status, 1);
+    assert.match(hiddenFocus.manifest.errors[0], /after:/);
     const failure = await run("assertion");
     assert.equal(failure.result.status, 1);
     assert.equal(failure.manifest.captures.length, 3);
