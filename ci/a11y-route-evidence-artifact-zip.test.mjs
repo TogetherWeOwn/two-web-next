@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
+import { readRouteEvidenceArtifact } from "./route-evidence-artifact-bytes.mjs";
 import { crc32, deflateRawSync } from "node:zlib";
-import { extractRouteEvidenceZip } from "./route-evidence-artifact-zip.mjs";
+import {
+  extractRouteEvidenceZip,
+  ROUTE_EVIDENCE_ZIP_LIMITS,
+} from "./route-evidence-artifact-zip.mjs";
 
 // Minimal synthetic ZIP writer; `opts` mutates individual header fields.
 function zip(entries, opts = {}) {
@@ -64,6 +69,70 @@ const ok = [
   { name: "report.json", data: '{"a":1}' },
   { name: "notes.txt", data: "hello", method: 0 },
 ];
+
+const digest = (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+const response = (chunks, ok = true) => ({
+  ok,
+  body: (async function* () {
+    yield* chunks;
+  })(),
+});
+const refusedDownload = /route evidence refused: invalid artifact download/;
+
+test("verifies bounded streamed artifact bytes before extracting", async () => {
+  const archive = zip(ok);
+  const expected = digest(archive);
+  const files = await readRouteEvidenceArtifact(
+    response([archive.subarray(0, 10), archive.subarray(10)]),
+    expected,
+  );
+  assert.equal(files.get("report.json").toString(), '{"a":1}');
+  const tinyChunks = Array.from(archive, (byte) => Uint8Array.of(byte));
+  assert.equal((await readRouteEvidenceArtifact(response(tinyChunks), expected)).size, 2);
+  for (const [download, hash] of [
+    [response([archive]), `sha256:${"0".repeat(64)}`],
+    [response([archive], false), expected],
+    [response([archive]), "bad"],
+    [response([]), expected],
+    [response(["not bytes"]), expected],
+    [response([new Uint8Array(0), archive]), expected],
+  ])
+    await assert.rejects(readRouteEvidenceArtifact(download, hash), refusedDownload);
+  const interrupted = {
+    ok: true,
+    body: (async function* () {
+      yield archive.subarray(0, 10);
+      throw new Error("transport secret");
+    })(),
+  };
+  await assert.rejects(readRouteEvidenceArtifact(interrupted, expected), (error) => {
+    assert.match(error.message, refusedDownload);
+    assert.doesNotMatch(error.message, /transport secret/);
+    return true;
+  });
+  const badZip = Buffer.from("bad zip");
+  await assert.rejects(readRouteEvidenceArtifact(response([badZip]), digest(badZip)), refused);
+});
+
+test("accepts an exact-cap archive and refuses an independently valid one-byte-over archive", async () => {
+  const max = 10 * 1024 * 1024;
+  const size = (max - 186) / 2;
+  const makeArchive = (extra) =>
+    zip([
+      { name: "a.json", data: Buffer.alloc(size), method: 0 },
+      { name: "b.json", data: Buffer.alloc(size + extra), method: 0 },
+    ]);
+  const exact = makeArchive(0);
+  const over = makeArchive(1);
+  assert.equal(exact.length, max);
+  assert.equal(over.length, max + 1);
+  assert.equal(
+    extractRouteEvidenceZip(over, { ...ROUTE_EVIDENCE_ZIP_LIMITS, maxArchiveBytes: max + 1 }).size,
+    2,
+  );
+  assert.equal((await readRouteEvidenceArtifact(response([exact]), digest(exact))).size, 2);
+  await assert.rejects(readRouteEvidenceArtifact(response([over]), digest(over)), refusedDownload);
+});
 
 test("accepts each ZIP limit exactly and rejects one unit over", () => {
   const archive = zip([{ name: "a.json", data: "a".repeat(100) }]);
