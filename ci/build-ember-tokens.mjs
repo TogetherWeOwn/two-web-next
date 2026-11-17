@@ -300,10 +300,9 @@ export function generate(root = ROOT) {
     return `var(--${alias},${value})`;
   });
   if (usedHeroAliases.size !== heroAliases.size) throw new Error("unused hero alias");
-  // Tailwind emits the full utility set on demand. Shared author sheets supply
-  // only aliases read by authored rules; keep Kit's foundation bridge intact.
-  // Forcing every utility plus a second alias bridge duplicates those bytes.
-  const kitCss = `/* GENERATED from two-design-kit ${version}; run node ci/build-ember-tokens.mjs. */\n@theme{${kitColors.map(([alias, source]) => `--color-lobby-${alias}:${get(source)};`).join("")}${roles.map(([alias, , value]) => `--${utility(alias)}:${value};`).join("")}--font-sans:var(--font-ui);}\n.base-theme{${hooks("", true)}${aliases}${declarations(roles.filter(foundation))}}\n${schedule}{${hooks("schedule-", true)}}\n`;
+  // Component styles can read theme variables without using Tailwind utilities.
+  // Retain those variables even when Tailwind's utility scanner cannot see them.
+  const kitCss = `/* GENERATED from two-design-kit ${version}; run node ci/build-ember-tokens.mjs. */\n@theme static{${kitColors.map(([alias, source]) => `--color-lobby-${alias}:${get(source)};`).join("")}${roles.map(([alias, , value]) => `--${utility(alias)}:${value};`).join("")}--font-sans:var(--font-ui);}\n.base-theme{${hooks("", true)}${aliases}${declarations(roles.filter(foundation))}}\n${schedule}{${hooks("schedule-", true)}}\n`;
   const validation = transformSync(kitCss, { loader: "css", logLevel: "silent" });
   if (validation.warnings.length) throw new Error("invalid generated Kit stylesheet");
   // The catastrophic fallback must render without fonts or stylesheet fetches.

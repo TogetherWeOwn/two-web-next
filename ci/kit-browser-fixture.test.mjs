@@ -222,7 +222,15 @@ import SiteFooter from '#lib/SiteFooter.svelte';
 <JsonLd testid="site-jsonld" json={'{"fixture":true}'} />
 <SiteFooter />
 <p class="proof">Fixture rendered</p>
-<style>.proof { color: rgb(12, 34, 56); }</style>`,
+<span class="theme-pill">Theme token proof</span>
+<style>
+  .proof { color: rgb(12, 34, 56); }
+  .theme-pill {
+    border-radius: var(--radius-pill);
+    padding-inline: var(--space-inset-tag-x);
+    font-family: var(--font-data);
+  }
+</style>`,
     },
     async ({ page, html, unexpected }) => {
       assert.match(html, /Fixture rendered/);
@@ -233,6 +241,17 @@ import SiteFooter from '#lib/SiteFooter.svelte';
         await page.locator(".proof").evaluate((el) => getComputedStyle(el).color),
         "rgb(12, 34, 56)",
       );
+      const pill = await page.locator(".theme-pill").evaluate((el) => {
+        const style = getComputedStyle(el);
+        return {
+          radius: style.borderRadius,
+          padding: style.paddingInline,
+          font: style.fontFamily,
+        };
+      });
+      assert.equal(pill.radius, "999px");
+      assert.equal(pill.padding, "7px");
+      assert.equal(pill.font, '"Fragment Mono", ui-monospace, monospace');
       // The shipped footer consumes a generated Tailwind theme token. Compare
       // its computed background with the browser-resolved custom property, not
       // merely the presence of a token name in the emitted stylesheet.
