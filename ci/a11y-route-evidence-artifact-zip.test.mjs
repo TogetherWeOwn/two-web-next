@@ -25,12 +25,13 @@ function zip(entries, opts = {}) {
     lh.writeUInt32LE(body.length, 18);
     lh.writeUInt32LE(usize, 22);
     lh.writeUInt16LE(name.length, 26);
-    const descriptor = Buffer.alloc(flags & 8 ? 16 : 0);
+    const descriptor = Buffer.alloc(flags & 8 ? (e.unsigned ? 12 : 16) : 0);
     if (descriptor.length) {
-      descriptor.writeUInt32LE(0x08074b50, 0);
-      descriptor.writeUInt32LE(e.descriptorCrc ?? crc, 4);
-      descriptor.writeUInt32LE(body.length, 8);
-      descriptor.writeUInt32LE(usize, 12);
+      const at = e.unsigned ? 0 : 4;
+      if (at) descriptor.writeUInt32LE(0x08074b50, 0);
+      descriptor.writeUInt32LE(e.descriptorCrc ?? crc, at);
+      descriptor.writeUInt32LE(body.length, at + 4);
+      descriptor.writeUInt32LE(usize, at + 8);
     }
     locals.push(lh, name, body, descriptor);
     const cd = Buffer.alloc(46);
@@ -110,7 +111,15 @@ test("validates streaming data descriptors", () => {
       .toString(),
     "x",
   );
-  assert.throws(() => extractRouteEvidenceZip(zip([{ ...entry, descriptorCrc: 1 }])), refused);
+  for (const unsigned of [false, true]) {
+    const collision = { ...entry, data: Buffer.from("ac0a7ad5", "hex"), unsigned };
+    assert.equal(crc32(collision.data), 0x08074b50);
+    assert.deepEqual(extractRouteEvidenceZip(zip([collision])).get("a.json"), collision.data);
+    assert.throws(
+      () => extractRouteEvidenceZip(zip([{ ...entry, unsigned, descriptorCrc: 1 }])),
+      refused,
+    );
+  }
 });
 
 test("refuses contradictory local headers", () => {
@@ -141,6 +150,11 @@ test("refuses symlinks, directories, encryption and unknown methods", () => {
     () => extractRouteEvidenceZip(zip([{ ...e, madeBy: 0x314, attrs: (0o120777 << 16) >>> 0 }])),
     refused,
   );
+  assert.throws(
+    () => extractRouteEvidenceZip(zip([{ ...e, madeBy: 0x1314, attrs: (0o120777 << 16) >>> 0 }])),
+    refused,
+  );
+  assert.throws(() => extractRouteEvidenceZip(zip([{ ...e, madeBy: 0x1414 }])), refused);
   assert.throws(() => extractRouteEvidenceZip(zip([{ ...e, attrs: 0x10 }])), refused);
   assert.throws(() => extractRouteEvidenceZip(zip([{ ...e, flags: 1 }])), refused);
   assert.throws(() => extractRouteEvidenceZip(zip([{ ...e, method: 12 }])), refused);

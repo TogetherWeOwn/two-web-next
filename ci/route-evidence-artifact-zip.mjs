@@ -74,8 +74,10 @@ function parse(buf, limits) {
     need((flags & 0x2061) === 0);
     need(method === 0 || method === 8);
     need(disk === 0 && csize !== 0xffffffff && usize !== 0xffffffff);
-    // Refuse symlinks, devices, directories and other non-regular entries.
-    if (madeBy >> 8 === 3) need(((attrs >>> 16) & 0o170000) === 0o100000);
+    // Accept DOS attributes or Unix/macOS regular-file modes only.
+    const host = madeBy >> 8;
+    need(host === 0 || host === 3 || host === 19);
+    if (host !== 0) need(((attrs >>> 16) & 0o170000) === 0o100000);
     need((attrs & 0x10) === 0);
     need(!raw.includes(0x2f) && !raw.includes(0x5c)); // no separators at all
     const name = raw.toString("latin1");
@@ -102,15 +104,17 @@ function parse(buf, limits) {
     need(start + csize <= cdOffset);
     let end = start + csize;
     if (flags & 8) {
-      // A descriptor may carry the optional signature, but must match the directory.
-      if (end + 4 <= cdOffset && buf.readUInt32LE(end) === 0x08074b50) end += 4;
-      need(end + 12 <= cdOffset);
-      need(
-        buf.readUInt32LE(end) === crc &&
-          buf.readUInt32LE(end + 4) === csize &&
-          buf.readUInt32LE(end + 8) === usize,
-      );
-      end += 12;
+      // Match both complete layouts: the CRC itself may equal the signature.
+      const matches = (at) =>
+        at + 12 <= cdOffset &&
+        buf.readUInt32LE(at) === crc &&
+        buf.readUInt32LE(at + 4) === csize &&
+        buf.readUInt32LE(at + 8) === usize;
+      if (matches(end)) end += 12;
+      else {
+        need(end + 4 <= cdOffset && buf.readUInt32LE(end) === 0x08074b50 && matches(end + 4));
+        end += 16;
+      }
     }
     ranges.push([local, end]);
 
