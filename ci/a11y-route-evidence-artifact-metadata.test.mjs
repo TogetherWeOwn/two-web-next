@@ -41,15 +41,17 @@ function fixture() {
       completed_at: "2026-01-01T00:05:00Z",
     },
     liveHead: sourceSha,
-    artifacts: [{
-      id: 78,
-      name: "route-evidence-34-2",
-      digest: expected.artifactDigest,
-      expired: false,
-      size_in_bytes: 100,
-      created_at: "2026-01-01T00:03:00Z",
-      workflow_run: { id: 34, head_sha: sourceSha },
-    }],
+    artifacts: [
+      {
+        id: 78,
+        name: "route-evidence-34-2",
+        digest: expected.artifactDigest,
+        expired: false,
+        size_in_bytes: 100,
+        created_at: "2026-01-01T00:03:00Z",
+        workflow_run: { id: 34, head_sha: sourceSha },
+      },
+    ],
   };
 }
 
