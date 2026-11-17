@@ -328,6 +328,16 @@ const finiteEventStart = sql`isfinite(${events.startsAt})`;
 // `toISOString()`/formatting throws, so upcoming reads refuse either one.
 const finiteEventWindow = and(sql`isfinite(${events.startsAt})`, sql`isfinite(${events.endsAt})`);
 
+// PostgreSQL's BC output does not parse as a JS Date, and its upper range
+// exceeds Date's maximum. The driver truncates fractional milliseconds, so
+// values within the last representable millisecond remain decodable.
+const homeRenderableWindow = and(
+  sql`${events.startsAt} >= '0001-01-01 00:00:00+00'::timestamptz`,
+  sql`${events.startsAt} < '275760-09-13 00:00:00.001+00'::timestamptz`,
+  sql`${events.endsAt} >= '0001-01-01 00:00:00+00'::timestamptz`,
+  sql`${events.endsAt} < '275760-09-13 00:00:00.001+00'::timestamptz`,
+);
+
 // A row explicitly marked past is never upcoming, even with a future end:
 // without this the overlap read would grow a past archive. Cancelled rows
 // stay listed (legacy visibility); the month grid excludes them separately.
@@ -356,7 +366,14 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
     const rows = await tx
       .select()
       .from(events)
-      .where(and(eq(events.status, "published"), gte(events.endsAt, now), finiteEventWindow))
+      .where(
+        and(
+          eq(events.status, "published"),
+          gte(events.endsAt, now),
+          finiteEventWindow,
+          homeRenderableWindow,
+        ),
+      )
       .orderBy(asc(events.startsAt), asc(events.id))
       .limit(3);
     // The homepage gets public signposts and an aggregate, never creator or RSVP identities.

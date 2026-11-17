@@ -298,6 +298,64 @@ describe("Kit home SSR render: teaser fullness verdict (owned pins)", () => {
     expect(row).not.toContain("event-spots-left");
   });
 
+  it("renders trimmed details and one prioritized availability verdict", () => {
+    const cases = [
+      [{ endsAt: new Date(0), rsvpOpen: false, capacity: 1 }, "Ended"],
+      [{ rsvpOpen: false, capacity: 1 }, "RSVPs paused"],
+      [{ capacity: 1 }, "Full"],
+      [{ capacity: 2 }, "1 seat left"],
+      [{ capacity: 4 }, "3 seats left"],
+      [{ capacity: null }, "No seat limit"],
+    ] as const;
+    for (const [fields, verdict] of cases) {
+      const html = renderPage(
+        baseData({
+          upcomingEvents: [
+            fullnessEvent({
+              game: "  Wingspan  ",
+              organizer_name: "  Riley  ",
+              location: "Table 2",
+              ...fields,
+            }),
+          ],
+        }),
+      );
+      const row = fullnessRow(html, "game-night-1");
+      expect(row).toContain(">Wingspan</p>");
+      expect(row).toContain('data-testid="event-card-host">Hosted by Riley</p>');
+      expect(row.indexOf("Wingspan")).toBeLessThan(row.indexOf("Hosted by Riley"));
+      expect(row.indexOf("Hosted by Riley")).toBeLessThan(row.indexOf("Table 2"));
+      expect(row).toContain(`>${verdict}</span>`);
+      expect(
+        row.match(/data-testid="(?:event-schedule-availability|event-spots-left)"/g),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("omits blank details and keeps Discord availability separate from seat math", () => {
+    const html = renderPage(
+      baseData({
+        upcomingEvents: [
+          fullnessEvent({ game: "  ", organizer_name: "  " }),
+          {
+            source: "discord",
+            discordId: "123",
+            title: "Discord night",
+            startsAt: new Date(Date.UTC(2030, 6, 20, 19)),
+            timezone: "UTC",
+            location: null,
+          },
+        ],
+      }),
+    );
+    const row = fullnessRow(html, "game-night-1");
+    expect(row).not.toContain("event-card-host");
+    expect(row).not.toContain("Game TBA");
+    expect(html).toContain(
+      'RSVP in Discord · <span data-testid="event-schedule-availability">Discord-managed</span>',
+    );
+  });
+
   it("falls back to the named count for older fixtures without occupancy", () => {
     // The live load always projects occupancy; hand-built rows predating it
     // keep the old verdict instead of crashing (the GoingCountState
