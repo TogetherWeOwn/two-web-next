@@ -94,7 +94,9 @@ jobs:
           retention-days: 14
   fixture-browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The browser suite step alone takes 870-945 s; 15 minutes cancelled
+    # about half of the runs before they could pass or fail.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
