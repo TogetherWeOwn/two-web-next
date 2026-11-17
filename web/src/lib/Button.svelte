@@ -100,23 +100,14 @@ $effect(() => {
 
 <style>
   .pill {
-    display: inline-flex;
-    vertical-align: middle;
-    align-items: center;
-    justify-content: center;
-    min-height: 44px;
-    padding: 0 var(--space-5);
-    border: 0;
-    border-radius: var(--radius-pill);
-    background: transparent;
-    box-shadow: inset 0 0 0 1px var(--color-hair2);
-    color: var(--t1);
-    font-family: var(--font-ui);
-    font-size: var(--text-ui);
-    font-weight: var(--font-weight-semibold);
-    font-stretch: var(--font-width-button);
-    cursor: pointer;
-    text-decoration: none;
+    display: inline-flex; vertical-align: middle;
+    align-items: center; justify-content: center;
+    min-height: 44px; padding: 0 var(--space-5);
+    border: 0; border-radius: var(--radius-pill);
+    background: transparent; box-shadow: inset 0 0 0 1px var(--color-hair2); color: var(--t1);
+    font-family: var(--font-ui); font-size: var(--text-ui);
+    font-weight: var(--font-weight-semibold); font-stretch: var(--font-width-button);
+    cursor: pointer; text-decoration: none;
   }
 
   .sm { min-height: 36px; padding-inline: var(--space-inset-room); font-size: var(--text-small); }
@@ -124,14 +115,7 @@ $effect(() => {
   .full-width { width: 100%; }
   .undo { display: none; }
   .saved:focus-visible .undo { display: inline; }
-  .spinner {
-    width: 16px;
-    height: 16px;
-    margin-right: var(--space-2);
-    border: 2px solid currentColor;
-    border-right-color: transparent;
-    border-radius: 50%;
-  }
+  .spinner { width: 16px; height: 16px; margin-right: var(--space-2); border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; }
   @media (prefers-reduced-motion: no-preference) {
     .spinner { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
