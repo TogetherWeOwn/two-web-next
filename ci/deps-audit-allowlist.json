@@ -6,9 +6,7 @@
       "package": "@rolldown/plugin-babel",
       "range": "*",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -18,9 +16,7 @@
       "package": "@vitest/coverage-v8",
       "range": ">=3.2.0-beta.1",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -30,9 +26,7 @@
       "package": "agents",
       "range": "<=0.0.0-80a8fbd0 || >=0.8.4",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -42,9 +36,7 @@
       "package": "fdir",
       "range": ">=5.2.1",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -54,9 +46,7 @@
       "package": "picomatch",
       "range": "*",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -66,9 +56,7 @@
       "package": "tinyglobby",
       "range": "*",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -78,9 +66,7 @@
       "package": "vite",
       "range": ">=6.3.0-beta.0",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -90,9 +76,7 @@
       "package": "vitest",
       "range": ">=3.1.2",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -102,9 +86,7 @@
       "package": "@sveltejs/adapter-cloudflare",
       "range": ">=8.0.0-next.0",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -114,9 +96,7 @@
       "package": "@sveltejs/kit",
       "range": ">=3.0.0-next.0",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -126,9 +106,7 @@
       "package": "@sveltejs/vite-plugin-svelte",
       "range": ">=6.0.0-next.0",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -138,9 +116,7 @@
       "package": "fdir",
       "range": ">=5.2.1",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -150,9 +126,7 @@
       "package": "picomatch",
       "range": "*",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -162,9 +136,7 @@
       "package": "svelte-check",
       "range": ">=4.0.0",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -174,9 +146,7 @@
       "package": "tinyglobby",
       "range": "*",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
@@ -186,9 +156,7 @@
       "package": "vite",
       "range": ">=6.3.0-beta.0",
       "severity": "high",
-      "advisoryIds": [
-        1247710
-      ],
+      "advisoryIds": [1247710],
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
