@@ -82,6 +82,7 @@ $effect(() => {
   class={classes}
 >{@render content()}</a>
 {:else}
+{#if type === "submit" && (disabled || loading)}<button type="submit" disabled hidden></button>{/if}
 <button
   class={classes}
   type={disabled || loading ? "button" : type}

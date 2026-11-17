@@ -7,9 +7,11 @@ it("renders button and navigation states with safe native semantics", async () =
   );
   try {
     const html = renderPage({});
-    const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
+    const allButtons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
+    const buttons = allButtons.filter((button) => !button.includes(" hidden"));
     const links = html.match(/<a\b[^>]*>[\s\S]*?<\/a>/g) ?? [];
-    expect(buttons).toHaveLength(5);
+    expect(allButtons.filter((button) => button.includes(" hidden"))).toHaveLength(4);
+    expect(buttons).toHaveLength(7);
     expect(links).toHaveLength(3);
     expect(buttons[0]).toContain('type="submit"');
     expect(buttons[1]).toContain('type="button"');

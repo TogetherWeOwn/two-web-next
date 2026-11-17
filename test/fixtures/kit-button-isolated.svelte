@@ -16,3 +16,5 @@ let _submissions = $state(0);
 <Button href="/events" disabled disabledReason="Event is full" ariaLabel="Reserve Raid Night">Reserve Raid Night</Button>
 <Button href="/events" loading loadingLabel="Opening…">Browse</Button>
 <div style="background: var(--ember); padding: var(--space-4)"><Button variant="on-accent" size="lg" fullWidth>Continue</Button></div>
+<form action="/submitted"><label>Disabled input <input name="disabled" /></label><Button type="submit" disabled>Disabled submit</Button></form>
+<form action="/submitted"><label>Loading input <input name="loading" /></label><Button type="submit" loading>Loading submit</Button></form>

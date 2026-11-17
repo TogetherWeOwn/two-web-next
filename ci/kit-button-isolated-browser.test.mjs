@@ -14,7 +14,10 @@ const fixture = join(root, "test/fixtures/kit-button-isolated.svelte");
 test("button states work with hydration and without JavaScript", { timeout: 120000 }, async () => {
   const { compile } = createRequire(join(root, "web/package.json"))("@tailwindcss/node");
   const appCss = join(root, "web/src/app.css");
-  const compiled = await compile(readFileSync(appCss, "utf8"), { base: join(root, "web/src") });
+  const compiled = await compile(readFileSync(appCss, "utf8"), {
+    base: join(root, "web/src"),
+    onDependency: () => {},
+  });
   const styles = `${compiled.build([])}\nbody { background: var(--g0); color: var(--t1); }\n`;
   const destination = (_request, response) =>
     response.writeHead(200, { "content-type": "text/plain" }).end("Destination");
@@ -125,6 +128,17 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
           await saved.focus();
           await page.keyboard.press("Tab");
           await expectFocused(page.getByRole("link", { name: "Details for Raid Night" }));
+          for (const name of ["Disabled input", "Loading input"]) {
+            const input = page.getByLabel(name);
+            await input.evaluate((el) =>
+              el.form.addEventListener("submit", () => {
+                el.dataset.submitted = "true";
+              }),
+            );
+            await input.press("Enter");
+            assert.equal(await input.getAttribute("data-submitted"), null);
+            assert.equal(page.url(), `${server.url}/`);
+          }
           await primary.click();
           if (javaScriptEnabled) {
             assert.equal(await page.getByTestId("submissions").textContent(), "1");
