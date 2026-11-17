@@ -26,3 +26,14 @@ let {
   <main id="main" tabindex="-1">{@render children()}</main>
   <EmberFooter />
 </div>
+
+<style>
+  .base-theme main {
+    max-width: calc(var(--two-layout-container) + 2 * var(--two-layout-gutter-wide));
+    padding-inline: var(--two-layout-gutter-wide);
+  }
+
+  @media (max-width: 820px) {
+    .base-theme main { padding-inline: var(--two-layout-gutter-compact); }
+  }
+</style>

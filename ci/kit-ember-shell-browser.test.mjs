@@ -50,10 +50,39 @@ test("built Ember shell preserves its landmarks and account states without JavaS
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
             true,
           );
+          assert.equal(
+            await page
+              .getByRole("navigation", { name: "Footer" })
+              .evaluate((nav) => getComputedStyle(nav).marginTop),
+            "0px",
+          );
+          const edges = await page.evaluate(() => {
+            const main = document.querySelector("main");
+            const footerContent = document.querySelector(".footer-content");
+            return [
+              main.getBoundingClientRect().left + parseFloat(getComputedStyle(main).paddingLeft),
+              footerContent.getBoundingClientRect().left,
+            ];
+          });
+          assert.ok(Math.abs(edges[0] - edges[1]) < 1, `main and footer edges differ: ${edges}`);
           await page.screenshot({
             path: `artifacts/kit-ember-shell/${state}-${viewport.width}.png`,
             fullPage: true,
           });
+          if (state === "guest") {
+            await page.keyboard.press("Tab");
+            assert.equal(
+              await page
+                .locator('a[href="#main"]')
+                .evaluate((link) => link === document.activeElement),
+              true,
+            );
+            await page.screenshot({
+              path: `artifacts/kit-ember-shell/skip-focused-${viewport.width}.png`,
+              fullPage: true,
+            });
+            await page.reload();
+          }
         }
       },
     );
