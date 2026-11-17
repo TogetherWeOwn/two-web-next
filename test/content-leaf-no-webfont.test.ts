@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 import { Layout } from "../src/pages";
 
+// Content leaves use the existing brand font without a preload or late swap.
 const stripComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, "");
 
 const rulesOf = (css: string): Array<{ selector: string; body: string }> =>
@@ -71,13 +72,24 @@ function inspectWebfontRules(css: string) {
   return { offenders, inspected };
 }
 
-// A late webfont swap previously pushed content-leaf mobile LCP over 2000ms.
-// Content leaves retain system text, including body, headings and controls.
-describe("content leaves render without webfonts", () => {
-  it("scopes every UI/display text rule away from the content theme", () => {
-    const result = inspectWebfontRules(LEAF_CRITICAL_CSS);
-    expect(result.inspected).toBeGreaterThan(0);
-    expect(result.offenders).toEqual([]);
+function contentTokenValue(css: string): string | null {
+  const rule = rulesOf(css).find((rule) => /\.base-theme\.content-theme/.test(rule.selector));
+  return /--font-display\s*:\s*([^;{}]+)/.exec(rule?.body ?? "")?.[1]?.trim() ?? null;
+}
+
+const normalizeFamily = (value: string): string =>
+  value
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .replace(/\s+/g, " ");
+
+describe("content leaves use the optional display face", () => {
+  it("guards only the homepage-specific display rules", () => {
+    expect(displayTargets(LEAF_CRITICAL_CSS).length).toBeGreaterThanOrEqual(7);
+    expect(guardsOf(LEAF_CRITICAL_CSS)).toEqual([
+      ".base-theme:not(.content-theme) .hero.kit-home h1",
+      ".base-theme:not(.content-theme) .event-band .home-event-link h3",
+    ]);
   });
 
   it("detects unscoped family, alias and shorthand mutations", () => {
@@ -105,11 +117,26 @@ describe("content leaves render without webfonts", () => {
     ).toEqual({ offenders: [], inspected: 0 });
   });
 
+  it("points the content theme at the content face with the fallback second", () => {
+    const value = contentTokenValue(LEAF_CRITICAL_CSS);
+    expect(value).not.toBeNull();
+    const families = (value ?? "").split(",").map(normalizeFamily);
+    expect(families.slice(0, 2)).toEqual(["Mona Sans Content", "Mona Sans Fallback"]);
+    expect(families.slice(2)).toContain("system-ui");
+  });
+
   it("flags a guarded display rule as a mutation", () => {
     expect(
       guardsOf(".base-theme:not(.content-theme) h1{font-family:var(--font-display)}"),
     ).toContain(".base-theme:not(.content-theme) h1");
     expect(guardsOf(".base-theme h1{font-family:var(--font-display)}")).toEqual([]);
+    expect(
+      guardsOf(
+        ".base-theme:not(.content-theme) .hero.kit-home h1,.base-theme:not(.content-theme) h2{font-family:var(--font-display)}",
+      ),
+    ).toEqual([
+      ".base-theme:not(.content-theme) .hero.kit-home h1,.base-theme:not(.content-theme) h2",
+    ]);
     expect(
       displayTargets(".base-theme h1,.base-theme h2{font-family:var(--font-display)}"),
     ).toEqual([".base-theme h1", ".base-theme h2"]);

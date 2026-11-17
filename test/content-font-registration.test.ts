@@ -13,7 +13,7 @@ function contentFace(css: string) {
 }
 
 describe("optional content font registration", () => {
-  it("registers the same unused optional face in source and served CSS", () => {
+  it("registers and selects the same optional face in source and served CSS", () => {
     for (const css of [source, served]) {
       const faces = contentFace(css);
       expect(faces).toHaveLength(1);
@@ -27,7 +27,9 @@ describe("optional content font registration", () => {
       expect(range?.replace(/\s/g, "").toUpperCase()).toBe(
         latinRange.replace(/\s/g, "").toUpperCase(),
       );
-      expect(css.replace(face, "")).not.toContain("Mona Sans Content");
+      expect(css.replace(face, "")).toMatch(
+        /\.base-theme\.content-theme\s*\{\s*--font-display\s*:\s*['"]?Mona Sans Content['"]?\s*,/,
+      );
     }
   });
 
