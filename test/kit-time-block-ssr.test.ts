@@ -1,0 +1,65 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createKitSsrRenderer, type RenderPage } from "./helpers/kit-ssr-render";
+
+let render: RenderPage;
+let cleanup: () => void;
+
+beforeAll(async () => {
+  const renderer = await createKitSsrRenderer("test/fixtures/TimeBlockFixture.svelte");
+  render = renderer.renderPage;
+  cleanup = renderer.cleanup;
+}, 120_000);
+afterAll(() => cleanup?.());
+
+const base = {
+  start: "2026-11-07T19:30:00Z",
+  asOf: "2026-11-07T19:20:00Z",
+  viewerZone: "Europe/London",
+  state: "upcoming",
+  stale: false,
+  refreshHref: "/events?view=upcoming",
+};
+
+describe("TimeBlock server output", () => {
+  it("renders the absolute time and withdraws the countdown without hydration", () => {
+    const html = render(base);
+    expect(html).toContain('datetime="2026-11-07T19:30:00.000Z"');
+    expect(html).toContain("Europe/London");
+    expect(html).toContain("19:30 UTC");
+    expect(html).toContain("as of");
+    expect(html).toContain('href="/events?view=upcoming"');
+    expect(html).not.toMatch(/starts in|\bin 10 m/);
+  });
+
+  it("withdraws live and room count claims but retains the snapshot time", () => {
+    const html = render({ ...base, state: "live", roomCount: 8 });
+    expect(html).toContain("live as of");
+    expect(html).not.toContain("Live since");
+    expect(html).not.toContain("8 in the room");
+  });
+
+  it("offers recovery when a live snapshot time is invalid", () => {
+    const html = render({ ...base, state: "live", asOf: "invalid", roomCount: 8 });
+    expect(html).toContain("Live status unavailable");
+    expect(html).toContain('href="/events?view=upcoming"');
+    expect(html).not.toContain("Live since");
+    expect(html).not.toContain("8 in the room");
+  });
+
+  it("renders ended, cancelled and invalid states safely", () => {
+    expect(render({ ...base, state: "ended", end: "2026-11-07T21:00:00Z" })).toContain(
+      "Echo frozen",
+    );
+    expect(render({ ...base, state: "cancelled" })).toContain("Cancelled");
+    const invalid = render({ ...base, start: "invalid" });
+    expect(invalid).toContain("Time to be confirmed");
+    expect(invalid).not.toContain("<time");
+  });
+
+  it("rejects unsafe refresh destinations and falls back to UTC for invalid zones", () => {
+    for (const refreshHref of ["//evil.example", "/\\evil.example", "https://evil.example"]) {
+      expect(render({ ...base, refreshHref })).not.toContain("href=");
+    }
+    expect(render({ ...base, viewerZone: "Invalid/Zone" })).toContain("UTC");
+  });
+});
