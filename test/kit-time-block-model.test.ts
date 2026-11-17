@@ -1,5 +1,32 @@
-import { describe, expect, it } from "vitest";
-import { structuredTime } from "../web/src/lib/structured-time";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { build } from "esbuild";
+import { beforeAll, describe, expect, it } from "vitest";
+import type { structuredTime as StructuredTime } from "../web/src/lib/structured-time";
+
+let structuredTime: typeof StructuredTime;
+
+beforeAll(async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "kit-time-block-model-"));
+  try {
+    const outfile = join(scratch, "model.mjs");
+    await build({
+      entryPoints: [
+        fileURLToPath(new URL("../web/src/lib/structured-time.ts", import.meta.url).href),
+      ],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      outfile,
+      tsconfigRaw: {},
+    });
+    ({ structuredTime } = await import(pathToFileURL(outfile).href));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
 
 describe("structured time block model", () => {
   it("shows the viewer's date and time with an unambiguous UTC anchor", () => {
