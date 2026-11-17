@@ -78,18 +78,21 @@ test("isolates projected npm edges from later occurrences", () => {
 test("projection cannot remove or rewrite edges before traversal validates them", () => {
   for (const mutate of [
     (source) => source.npmEdges.splice(0),
-    (source) => { source.npmEdges[0].script = "valid"; },
+    (source) => {
+      source.npmEdges[0].script = "valid";
+    },
   ]) {
     for (const target of ["source", "root", "parent"]) {
       const root = { ...command(0, [edge("a", 1)]), origin };
       const nested = command(2, [edge("missing", 3)]);
       const scripts = { a: [nested], valid: [] };
       assert.throws(
-        () => enumerateInvocationOccurrences([root], scripts, (_, source, projectedRoot, parents) => {
-          if (target === "source" && source.location === 2) mutate(source);
-          if (target === "root" && source.location === 0) mutate(projectedRoot);
-          if (target === "parent" && source.location === 2) mutate(parents[0]);
-        }),
+        () =>
+          enumerateInvocationOccurrences([root], scripts, (_, source, projectedRoot, parents) => {
+            if (target === "source" && source.location === 2) mutate(source);
+            if (target === "root" && source.location === 0) mutate(projectedRoot);
+            if (target === "parent" && source.location === 2) mutate(parents[0]);
+          }),
         /Unknown npm script: missing/,
       );
       assert.deepEqual(root.npmEdges, [edge("a", 1)]);
@@ -102,15 +105,19 @@ test("detaches nested metadata for every projection", () => {
   const root = { ...command(0, [edge("a", 1), edge("a", 2)]), context: { install: "original" } };
   const nested = { ...command(3), context: { install: "original" } };
   let resultsSeen = 0;
-  const results = enumerateInvocationOccurrences([root], { a: [nested] }, (_, source, workflow, parents) => {
-    const snapshot = { source, workflow, parents };
-    if (source.location === 3 && resultsSeen++ === 0) {
-      source.context.install = "changed";
-      workflow.context.install = "changed";
-      parents[0].context.install = "changed";
-    }
-    return snapshot;
-  });
+  const results = enumerateInvocationOccurrences(
+    [root],
+    { a: [nested] },
+    (_, source, workflow, parents) => {
+      const snapshot = { source, workflow, parents };
+      if (source.location === 3 && resultsSeen++ === 0) {
+        source.context.install = "changed";
+        workflow.context.install = "changed";
+        parents[0].context.install = "changed";
+      }
+      return snapshot;
+    },
+  );
   assert.equal(root.context.install, "original");
   assert.equal(nested.context.install, "original");
   assert.equal(results[0].workflow.context.install, "original");
@@ -123,7 +130,10 @@ test("rejects non-cloneable metadata before invoking the projection", () => {
   const root = { ...command(0), origin, context: { callback: () => {} } };
   let projected = false;
   assert.throws(
-    () => enumerateInvocationOccurrences([root], {}, () => { projected = true; }),
+    () =>
+      enumerateInvocationOccurrences([root], {}, () => {
+        projected = true;
+      }),
     { name: "DataCloneError" },
   );
   assert.equal(projected, false);
