@@ -188,7 +188,7 @@ describe("debounce window (fake clock)", () => {
 });
 
 describe("retry count and backoff ladder", () => {
-  it("walks 10/60/300/900/3600 on transport failure, then fails on attempt 6", async () => {
+  it("walks 10/60/300/900/3600 on transport failure, then requires reconciliation", async () => {
     const bot = {
       upsertEvent: async () => {
         throw new BotTransportError("bot down");
@@ -216,8 +216,17 @@ describe("retry count and backoff ladder", () => {
     const s = store({ deferSync: async (_a, at) => void deferred.push(at) }, 5);
     await expect(
       handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 6, { bot, events: s.events }),
-    ).resolves.toEqual({ failed: "carrier exhausted; unresolved identity retained" });
-    expect(deferred).toEqual([null]); // exhausted: no further deadline
+    ).resolves.toEqual({
+      reconciliation: {
+        idempotencyKey: "k",
+        verb: "event.upsert",
+        subject: "e1",
+        attempts: 6,
+        lastCode: null,
+        lastStatus: null,
+      },
+    });
+    expect(deferred).toEqual([]); // the claim remains closed until the intent is persisted
     expect(s.stamped).toHaveLength(0);
   });
 
