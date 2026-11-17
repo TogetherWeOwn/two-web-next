@@ -89,6 +89,11 @@ export function parseHeredocOpener(source, offset = 0) {
       quoted = true;
     } else {
       if (ch === "$" || ch === "`" || ch === "{" || ch === "}") unsupported();
+      if ("?*+@!".includes(ch)) {
+        const lookahead = logicalCursor(source, cursor.position);
+        lookahead.take();
+        if (lookahead.peek() === "(") unsupported();
+      }
       spelling += cursor.take();
       marker += ch;
     }

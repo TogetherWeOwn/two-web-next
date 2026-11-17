@@ -62,6 +62,26 @@ test("delimiter boundaries follow shell whitespace and reject process substituti
   assert.equal(parseHeredocOpener("<<EOF>output\n").marker, "EOF");
 });
 
+test("unsupported pattern continuations fail closed without rejecting literals", () => {
+  for (const prefix of ["?", "*", "+", "@", "!"]) {
+    for (const join of ["", "\\\n", "\\\r\n"]) {
+      assert.throws(
+        () => parseHeredocOpener(`<<END${prefix}${join}(item)\n`),
+        /Unsupported shell heredoc syntax/,
+      );
+    }
+    for (const word of [`END'${prefix}'`, `END\\${prefix}`, `END${prefix}x`]) {
+      const parsed = parseHeredocOpener(`<<${word} `);
+      assert.equal(parsed.marker, word.endsWith("x") ? `END${prefix}x` : `END${prefix}`);
+    }
+    assert.equal(parseHeredocOpener(`<<END${prefix} `).marker, `END${prefix}`);
+    assert.equal(
+      parseHeredocOpener(`<<END${prefix}\\(literal\\) `).marker,
+      `END${prefix}(literal)`,
+    );
+  }
+});
+
 test("logical cursor removes only unquoted or double-quoted continuations", () => {
   const cursor = logicalCursor(`a\\\nb`);
   assert.equal(cursor.take(), "a");
