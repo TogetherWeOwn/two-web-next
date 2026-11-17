@@ -174,6 +174,11 @@ describe("homepage mobile LCP acceptance", () => {
     expect(inlineCss(html)).not.toContain("font-weight: 500;");
   });
 
+  it("keeps Kit-only event-band styles out of Hono's inline CSS", async () => {
+    const { html } = await homepageHtml();
+    expect(inlineCss(html)).not.toContain(".event-band");
+  });
+
   it("ratchets homepage HTML raw weight below current main", async () => {
     const { html } = await homepageHtml();
     const raw = Buffer.byteLength(html, "utf8");
