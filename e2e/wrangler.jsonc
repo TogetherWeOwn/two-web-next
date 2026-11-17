@@ -5,7 +5,11 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
-  "assets": { "directory": "../public" },
+  "assets": {
+    "directory": "../public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/fonts/fragment-mono-latin-400.woff2"]
+  },
   "vars": {
     "APP_URL": "https://next.togetherweown.com",
     "DISCORD_CLIENT_ID": "e2e-client",

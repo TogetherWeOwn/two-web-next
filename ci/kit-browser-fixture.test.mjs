@@ -156,6 +156,53 @@ for (const state of homeEvidenceStates) {
   });
 }
 
+test("Kit home hero presents its heading and action at desktop and mobile widths", async () => {
+  await withKitHomeEvidence("guest", async ({ page }) => {
+    for (const [width, height] of [
+      [1280, 800],
+      [390, 844],
+    ]) {
+      await page.setViewportSize({ width, height });
+      const hero = page.locator('section[aria-labelledby="home-heading"]');
+      const heading = hero.locator("h1");
+      const action = hero.locator(".hero-action");
+      const button = action.getByTestId("join");
+      const lead = action.locator(".lead");
+      assert.equal(await hero.evaluate((el) => getComputedStyle(el).textAlign), "left");
+      assert.equal(await action.evaluate((el) => getComputedStyle(el).display), "flex");
+      const typography = await heading.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const probe = document.createElement("span");
+        probe.style.fontSize = "var(--text-hero)";
+        el.append(probe);
+        const expectedSize = getComputedStyle(probe).fontSize;
+        probe.remove();
+        return {
+          size: style.fontSize,
+          expectedSize,
+          weight: style.fontWeight,
+          expectedWeight: style.getPropertyValue("--font-weight-display").trim() || "560",
+        };
+      });
+      assert.equal(typography.size, typography.expectedSize);
+      assert.notEqual(typography.expectedWeight, "");
+      assert.equal(typography.weight, typography.expectedWeight);
+      const [actionBox, buttonBox, leadBox] = await Promise.all([
+        action.boundingBox(),
+        button.boundingBox(),
+        lead.boundingBox(),
+      ]);
+      assert.ok(actionBox && buttonBox && leadBox, `hero boxes at ${width}px`);
+      if (width === 390) {
+        assert.ok(Math.abs(buttonBox.width - actionBox.width) < 1, "mobile action fills its row");
+        assert.ok(leadBox.y >= buttonBox.y + buttonBox.height, "mobile lead follows action");
+      } else {
+        assert.ok(leadBox.x >= buttonBox.x + buttonBox.width, "desktop lead follows action inline");
+      }
+    }
+  });
+});
+
 test("Kit offline fixture fixes the server render clock", async () => {
   await withKitOfflineBrowser(
     { now: Date.UTC(2030, 0, 2), page: "<p>{new Date().toISOString()}</p>" },
@@ -175,7 +222,15 @@ import SiteFooter from '#lib/SiteFooter.svelte';
 <JsonLd testid="site-jsonld" json={'{"fixture":true}'} />
 <SiteFooter />
 <p class="proof">Fixture rendered</p>
-<style>.proof { color: rgb(12, 34, 56); }</style>`,
+<span class="theme-pill">Theme token proof</span>
+<style>
+  .proof { color: rgb(12, 34, 56); }
+  .theme-pill {
+    border-radius: var(--radius-pill);
+    padding-inline: var(--space-inset-tag-x);
+    font-family: var(--font-data);
+  }
+</style>`,
     },
     async ({ page, html, unexpected }) => {
       assert.match(html, /Fixture rendered/);
@@ -186,6 +241,17 @@ import SiteFooter from '#lib/SiteFooter.svelte';
         await page.locator(".proof").evaluate((el) => getComputedStyle(el).color),
         "rgb(12, 34, 56)",
       );
+      const pill = await page.locator(".theme-pill").evaluate((el) => {
+        const style = getComputedStyle(el);
+        return {
+          radius: style.borderRadius,
+          padding: style.paddingInline,
+          font: style.fontFamily,
+        };
+      });
+      assert.equal(pill.radius, "999px");
+      assert.equal(pill.padding, "7px");
+      assert.equal(pill.font, '"Fragment Mono", ui-monospace, monospace');
       // The shipped footer consumes a generated Tailwind theme token. Compare
       // its computed background with the browser-resolved custom property, not
       // merely the presence of a token name in the emitted stylesheet.
