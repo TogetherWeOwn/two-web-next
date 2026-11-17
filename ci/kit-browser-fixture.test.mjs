@@ -505,7 +505,7 @@ const past: CalendarPersistedCard = { ...event, key: 'past', eventKey: 'past', t
 <svelte:head><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
 <div class="base-theme schedule-theme"><main class="events-page"><CalendarList {state} upcoming={${scenario === "out-of-range" ? "[]" : "[event, discord, cancelled]"}} past={[past]} totalPages={4} outOfRange={${scenario === "out-of-range"}} showPast={${scenario !== "closed"}} member={false} inviteUrl="https://discord.test/invite" loginReturnTo="/events?page=2" /></main></div>`,
       },
-      async ({ page, html }) => {
+      async ({ page }) => {
         assert.equal(
           await page.getByTestId("events-past-list").count(),
           scenario === "closed" ? 0 : 1,
@@ -521,7 +521,13 @@ const past: CalendarPersistedCard = { ...event, key: 'past', eventKey: 'past', t
         if (scenario === "out-of-range") {
           assert.equal(await page.getByTestId("events-out-of-range").count(), 1);
         } else {
-          assert.match(html, /Game night/);
+          assert.match(await page.getByTestId("events-list").innerText(), /Game night/);
+          if (scenario === "search") {
+            assert.equal(
+              await page.getByTestId("events-list").locator("mark").first().innerText(),
+              "Game",
+            );
+          }
           assert.match(await page.getByTestId("events-pager-next").getAttribute("href"), /page=3/);
           assert.equal(await page.getByTestId("event-cancelled").count(), 1);
           assert.equal(await page.getByTestId("event-discord-rsvp").count(), 1);
