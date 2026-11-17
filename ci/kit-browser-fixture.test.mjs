@@ -454,6 +454,57 @@ test("asset reads reject escapes, symlinks, and unsupported files", async () => 
   }
 });
 
+for (const scenario of ["closed", "open", "search"]) {
+  test(`calendar past drawer renders ${scenario} without JavaScript`, async () => {
+    await withKitOfflineBrowser(
+      {
+        page: `<script lang="ts">
+import CalendarPastDrawer from '#lib/CalendarPastDrawer.svelte';
+import type { CalendarPersistedCard } from '#lib/calendar-list';
+const state = { view: 'list' as const, month: '2030-06', q: ${JSON.stringify(scenario === "search" ? "Game" : "")}, game: 'Chess', past: ${scenario !== "closed"}, page: 2 };
+const past: CalendarPersistedCard = { kind: 'event', key: 'past', eventKey: 'past', title: 'Past game night', titleSegments: null, zone: 'UTC', startsAt: new Date('2030-06-15T18:00:00Z'), endsAt: null, location: null, description: 'A past game night.', passage: null, availability: { state: 'past', text: 'Ended', ongoing: false }, status: 'past', game: null, host: '', goingCount: 1, goingOccupancy: 1, capacity: null };
+</script>
+<svelte:head><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
+<div class="base-theme schedule-theme"><main class="events-page"><CalendarPastDrawer {state} past={[past]} showPast={${scenario !== "closed"}} member={false} inviteUrl="https://discord.test/invite" loginReturnTo="/events?page=2" /></main></div>`,
+      },
+      async ({ page }) => {
+        assert.equal(
+          await page.getByTestId("events-past-list").count(),
+          scenario === "closed" ? 0 : 1,
+        );
+        assert.equal(
+          await page.getByTestId("events-past-toggle").count(),
+          scenario === "search" ? 0 : 1,
+        );
+        if (scenario !== "search") {
+          assert.match(
+            await page.getByTestId("events-past-toggle").getAttribute("href"),
+            /game=Chess/,
+          );
+        }
+        if (scenario !== "closed") {
+          assert.match(await page.getByTestId("events-past-list").innerText(), /Past game night/i);
+          assert.equal(await page.getByTestId("signin").count(), 0);
+        }
+        if (process.env.KIT_CALENDAR_EVIDENCE_DIR) {
+          const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
+          await mkdir(directory, { recursive: true });
+          for (const [name, width, height] of [
+            ["desktop", 1280, 800],
+            ["mobile", 390, 844],
+          ]) {
+            await page.setViewportSize({ width, height });
+            await page.screenshot({
+              path: join(directory, `past-drawer-${scenario}-${name}.png`),
+              fullPage: true,
+            });
+          }
+        }
+      },
+    );
+  });
+}
+
 test("calendar grid renders navigation and event states without JavaScript", async () => {
   await withKitOfflineBrowser(
     {
