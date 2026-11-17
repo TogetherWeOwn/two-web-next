@@ -309,8 +309,7 @@ export function checkRoutes(root = resolve(import.meta.dirname, "..")) {
               ceiling: ceiling.maxGzipBytes,
             });
         }
-        if (value.files > ceiling.maxFiles || (kind === "js" && (rawOver || gzipOver)))
-          breaches.push(`${id} ${kind}`);
+        if (value.files > ceiling.maxFiles || rawOver || gzipOver) breaches.push(`${id} ${kind}`);
         if (
           targetBytes(value.rawBytes, 512) > ceiling.maxRawBytes ||
           targetBytes(value.gzipBytes, 256) > ceiling.maxGzipBytes

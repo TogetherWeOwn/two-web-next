@@ -198,8 +198,8 @@ for (const [metric, field] of [
       f.approveBudget(); // Test the measured breach, not an unsupported policy edit.
       const result = checkRoutes(f.root);
       const advisory = kind === "css" && metric !== "count";
-      assert.equal(result.exitCode, advisory ? 0 : 1);
-      assert.deepEqual(result.breaches, advisory ? [] : [`/ ${kind}`]);
+      assert.equal(result.exitCode, 1);
+      assert.deepEqual(result.breaches, [`/ ${kind}`]);
       assert.equal(result.warnings.length, advisory ? 1 : 0);
       if (advisory) {
         const key = metric === "raw" ? "rawBytes" : "gzipBytes";
@@ -224,8 +224,8 @@ test("CSS warnings cover both bytes and multiple routes without labeling fits", 
   f.saveBudget();
   f.approveBudget();
   const result = checkRoutes(f.root);
-  assert.equal(result.exitCode, 0);
-  assert.deepEqual(result.breaches, []);
+  assert.equal(result.exitCode, 1);
+  assert.deepEqual(result.breaches, ["/ css", "/about css"]);
   assert.deepEqual(
     result.warnings.map(({ route, metric }) => [route, metric]),
     [
@@ -257,7 +257,7 @@ for (const [kind, field] of [
     f.approveBudget();
     const result = checkRoutes(f.root);
     assert.equal(result.exitCode, 1);
-    assert.deepEqual(result.breaches, [`/ ${kind}`]);
+    assert.deepEqual(result.breaches, kind === "js" ? ["/ js", "/ css"] : ["/ css"]);
     assert.equal(result.warnings.length, 1);
   });
 
@@ -266,7 +266,7 @@ test("integrity failure takes precedence over CSS byte warnings", (t) => {
   f.budget.routes["/"].css.maxRawBytes -= 1;
   f.saveBudget();
   f.approveBudget();
-  assert.equal(checkRoutes(f.root).exitCode, 0);
+  assert.equal(checkRoutes(f.root).exitCode, 1);
   rmSync(join(f.root, OUTPUT, "client/_app/immutable/shared.js"));
   assert.equal(checkRoutes(f.root).exitCode, 2);
 });
