@@ -54,6 +54,7 @@
 .base-theme h2 { font-size: clamp(1.6rem, 3vw, 2.7rem); margin: 0 0 1rem; }
 .base-theme h3 { font-size: 1.5rem; }
 .base-theme p { color: var(--muted); }
+.base-theme.content-theme code { font-family: var(--font-data, "Fragment Mono", ui-monospace, monospace); font-size: .875em; overflow-wrap: anywhere; }
 .base-theme .hero {
   position: relative; isolation: isolate; overflow: hidden; text-align: center; min-height: 31rem;
   display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 4rem 1.5rem;
