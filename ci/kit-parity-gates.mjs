@@ -2485,7 +2485,8 @@ async function runPreviewMode(
       try {
         const kitComparable = route.contract === "archive" ? stripEmberDelta(kitHtml) : kitHtml;
         same =
-          sectionOf(kitComparable, route.compareSection) === sectionOf(honoHtml, route.compareSection);
+          sectionOf(kitComparable, route.compareSection) ===
+          sectionOf(honoHtml, route.compareSection);
         if (same) reason = null;
       } catch (error) {
         reason = String(error?.message ?? error).slice(0, 200);
