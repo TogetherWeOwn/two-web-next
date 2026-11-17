@@ -72,36 +72,16 @@ test("matches every occurrence once, including repeated script paths", () => {
 test("rejects invalid install and loader context regardless of sibling order", () => {
   const good = fixture();
   const cases = [
-    (c) => {
-      c.install.outcome = "failure";
-    },
-    (c) => {
-      c.install.dependency = "ignored-failure";
-    },
-    (c) => {
-      c.install.job = "other-job";
-    },
-    (c) => {
-      c.install.root = "other-root";
-    },
-    (c) => {
-      c.install.scriptsPolicy = "ignore-scripts=false";
-    },
-    (c) => {
-      c.install.inputs[0].sha256 = "b".repeat(64);
-    },
-    (c) => {
-      c.loader.nodeOptions = "--require unexpected";
-    },
-    (c) => {
-      c.loader.nodePath = "elsewhere";
-    },
-    (c) => {
-      c.loader.tsconfigOverride = "other.json";
-    },
-    (c) => {
-      c.loader.resolutionOverride = "global";
-    },
+    (c) => (c.install.outcome = "failure"),
+    (c) => (c.install.dependency = "ignored-failure"),
+    (c) => (c.install.job = "other-job"),
+    (c) => (c.install.root = "other-root"),
+    (c) => (c.install.scriptsPolicy = "ignore-scripts=false"),
+    (c) => (c.install.inputs[0].sha256 = "b".repeat(64)),
+    (c) => (c.loader.nodeOptions = "--require unexpected"),
+    (c) => (c.loader.nodePath = "elsewhere"),
+    (c) => (c.loader.tsconfigOverride = "other.json"),
+    (c) => (c.loader.resolutionOverride = "global"),
     (c) => {
       c.loader.argv.push("--loader=other");
     },
@@ -141,6 +121,26 @@ test("rejects matching malformed install commands and unreviewed loader context"
       const reviewed = copy(observed);
       reviewed.context.loader[field] = value;
       assert.throws(() => validateInvocationCertificates([observed], [reviewed]), /invalid loader/);
+    }
+  }
+});
+
+test("rejects invalid or missing reviewed prerequisites and loader settings", () => {
+  for (const [section, field, invalid] of [
+    ["install", "outcome", "failure"],
+    ["install", "dependency", "ignored-failure"],
+    ["loader", "nodeOptions", "--require hook"],
+    ["loader", "nodePath", "elsewhere"],
+    ["loader", "tsconfigOverride", "other.json"],
+    ["loader", "resolutionOverride", "global"],
+    ["loader", "unknownSettings", ["unknown"]],
+  ]) {
+    for (const value of [invalid, undefined]) {
+      const observed = fixture();
+      const reviewed = copy(observed);
+      if (value === undefined) delete reviewed.context[section][field];
+      else reviewed.context[section][field] = value;
+      assert.throws(() => validateInvocationCertificates([observed], [reviewed]), /invalid/);
     }
   }
 });

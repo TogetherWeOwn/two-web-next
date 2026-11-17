@@ -86,8 +86,9 @@ function validateContext(reviewed, observed) {
     install.checkout !== expectedInstall.checkout ||
     install.method !== "npm-ci" ||
     expectedInstall.method !== "npm-ci" ||
-    install.outcome !== "success" ||
-    install.dependency !== "required-success" ||
+    [install, expectedInstall].some(
+      (item) => item.outcome !== "success" || item.dependency !== "required-success",
+    ) ||
     !text(install.scriptsPolicy) ||
     install.scriptsPolicy !== expectedInstall.scriptsPolicy ||
     !stringArgv(install.argv) ||
@@ -98,7 +99,6 @@ function validateContext(reviewed, observed) {
     fail("invalid install evidence");
   }
   samePins(expectedInstall.inputs, install.inputs, "install");
-
   const loader = observed.loader;
   const expectedLoader = reviewed.loader;
   if (
@@ -115,12 +115,15 @@ function validateContext(reviewed, observed) {
     !stringArgv(loader.argv) ||
     !stringArgv(expectedLoader.argv) ||
     JSON.stringify(loader.argv) !== JSON.stringify(expectedLoader.argv) ||
-    loader.nodeOptions !== (loader.route === "local-playwright-tsx" ? "--import tsx" : "") ||
-    loader.nodePath !== "" ||
-    loader.tsconfigOverride !== "" ||
-    loader.resolutionOverride !== "" ||
-    !Array.isArray(loader.unknownSettings) ||
-    loader.unknownSettings.length !== 0
+    [loader, expectedLoader].some(
+      (item) =>
+        item.nodeOptions !== (loader.route === "local-playwright-tsx" ? "--import tsx" : "") ||
+        item.nodePath !== "" ||
+        item.tsconfigOverride !== "" ||
+        item.resolutionOverride !== "" ||
+        !Array.isArray(item.unknownSettings) ||
+        item.unknownSettings.length !== 0,
+    )
   ) {
     fail("invalid loader evidence");
   }
