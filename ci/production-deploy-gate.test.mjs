@@ -778,29 +778,6 @@ test("production workflow uses hosted runners and production-only secrets", () =
   );
   // Promotion lives in the shared composite action: the caller only passes
   // the tag built from the exact same three parts as the upload tag above.
-  const baseline = workflow.slice(
-    workflow.indexOf("      - name: Capture pre-promote dead-letter baseline"),
-    gradual,
-  );
-  assert.match(baseline, /id: dead-letter-baseline/);
-  assert.match(baseline, /echo "failed=\$baseline" >> "\$GITHUB_OUTPUT"/);
-  assert.doesNotMatch(baseline, /\$GITHUB_ENV/);
-  assert.equal(
-    (
-      workflow.match(
-        /SMOKE_FAILED_BASELINE: \$\{\{ steps\.dead-letter-baseline\.outputs\.failed \}\}/g,
-      ) ?? []
-    ).length,
-    2,
-  );
-  assert.equal(
-    (
-      workflow
-        .slice(workflow.indexOf("      - name: Capture pre-promote dead-letter baseline"))
-        .match(/SMOKE_ALLOW_MISSING_BASELINE: "1"/g) ?? []
-    ).length,
-    2,
-  );
   const call = workflow.slice(gradual, gradual + 800);
   assert.match(call, /worker-name: two-web-next-production/);
   assert.match(

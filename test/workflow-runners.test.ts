@@ -122,14 +122,7 @@ describe("workflow runner labels", () => {
     for (const [name, ids] of [
       [
         "deploy-production.yml",
-        [
-          "preflight",
-          "staging-soak",
-          "regression",
-          "deploy-production",
-          "post-deploy-watch",
-          "notify",
-        ],
+        "preflight staging-soak regression deploy-production post-deploy-watch notify".split(" "),
       ],
       ["deploy.yml", ["deploy-staging"]],
       ["gradual-promote-proof.yml", ["proof"]],
@@ -259,8 +252,7 @@ describe("workflow runner labels", () => {
       }
     }
     expect(overflowJobs).toBe(0);
-    // With a private repository, a branch dispatch and no overflow configured,
-    // both hosted guards are false and the old selector falls through to fleet.
+    // Private branch dispatch with no overflow fell through to the fleet.
     const repositoryPrivate = true;
     const eventName: string = "workflow_dispatch";
     const oldSelection =
