@@ -1,6 +1,5 @@
-// Model for the structured-time `row` presentation (Kit C1 time column, design
-// packet D-4/D-5). Formatting is date-format.ts in the stored zone; there is no
-// relative text, viewer zone or clock, so the same input renders the same bytes.
+// Shared structured-time models. The row presentation uses the stored zone and
+// no clock; the block model accepts a viewer zone and retains a UTC anchor.
 import { effectiveZone, instantIso, wallTimeHm } from "../../../src/events/date-format";
 
 export type RowTimeState = "upcoming" | "past" | "cancelled";
@@ -44,6 +43,20 @@ export function toInstant(value: Instant): Date | null {
 
 const fmt = (d: Date, zone: string, o: Intl.DateTimeFormatOptions): string =>
   new Intl.DateTimeFormat("en-GB", { timeZone: zone, ...o }).format(d);
+
+/** A stable wall-time and UTC pair for the block presentation. */
+export function structuredTime(value: Instant, viewerZone?: string | null) {
+  const instant = toInstant(value);
+  if (!instant) return null;
+  const zone = effectiveZone(viewerZone);
+  return {
+    datetime: instantIso(instant),
+    zone,
+    localTime: wallTimeHm(instant, zone),
+    utcTime: wallTimeHm(instant, "UTC"),
+    localDate: fmt(instant, zone, { weekday: "long", day: "numeric", month: "long" }),
+  };
+}
 
 export function rowTimeModel({ state, startsAt, endsAt, zone }: RowTimeInput): RowTimeModel {
   const start = toInstant(startsAt);
