@@ -18,12 +18,13 @@ test("home capture records success and fails closed with diagnostic evidence", a
   const dir = await mkdtemp(join(tmpdir(), "kit-capture-test-"));
   try {
     await mkdir(join(dir, "tooling", "ci"), { recursive: true });
+    await mkdir(join(dir, "after", "ci"), { recursive: true });
     await mkdir(join(dir, "bin"));
     await writeFile(join(dir, "bin", "git"), '#!/bin/sh\nprintf "fixture-sha\\n"\n', {
       mode: 0o755,
     });
     await writeFile(
-      join(dir, "tooling", "ci", "kit-home-evidence.mjs"),
+      join(dir, "after", "ci", "kit-home-evidence.mjs"),
       `export const homeEvidenceStates = ["guest"];
 export const homeEvidencePage = () => "fixture";
 export async function assertHomeEvidence() {

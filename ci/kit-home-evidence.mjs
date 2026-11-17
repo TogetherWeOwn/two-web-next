@@ -42,9 +42,9 @@ export function homeEvidencePage(state) {
   };
   return `<script>
 import Home from '../+page.svelte';
-import { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS } from '../../../../src/home-copy';
+import { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO } from '../../../../src/home-copy';
 const data = ${JSON.stringify(data)};
-data.homeCopy = { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS };
+data.homeCopy = { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO };
 </script>
 <Home {data} />`;
 }
@@ -61,6 +61,15 @@ export async function assertHomeEvidence(page, state) {
   );
   assert.equal(await count("member-count"), state === "missingCounts" ? 0 : 1, `${state}: counts`);
   assert.equal(await count("notice"), state === "joinFailed" ? 1 : 0, `${state}: notice`);
+  assert.equal(await page.getByTestId("home-highlights").locator("li").count(), 4);
+  assert.equal(await count("join-band"), session?.member ? 0 : 1, `${state}: join band`);
+  if (!session?.member) {
+    const fallback = state === "sessionOutage" || state === "joinFailed";
+    assert.equal(await count("join-band-invite"), fallback ? 1 : 0, `${state}: invite`);
+    assert.equal(await count("join-band-join"), fallback ? 0 : 1, `${state}: sign-in`);
+    if (!fallback)
+      assert.match(await page.getByTestId("join-band").innerText(), /Approve once with Discord/);
+  }
   assert.equal(
     await count("join-result"),
     ["joinAdded", "alreadyMember"].includes(state) ? 1 : 0,

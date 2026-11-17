@@ -11,7 +11,7 @@ const [state, destination] = process.argv.slice(2);
 if (!state || !destination) throw new Error("usage: kit-home-capture.mjs <state> <destination>");
 const tooling = resolve("tooling");
 const { homeEvidencePage, homeEvidenceStates, assertHomeEvidence } = await import(
-  pathToFileURL(join(tooling, "ci/kit-home-evidence.mjs"))
+  pathToFileURL(resolve("after/ci/kit-home-evidence.mjs"))
 );
 const { withKitOfflineBrowser } = await import(
   pathToFileURL(join(tooling, "ci/kit-offline-browser.mjs"))
