@@ -10,7 +10,7 @@ rule:
         - kind: string
           regex: '^["\x27]hono(?:/[^"\x27]*)?["\x27]$'
         - kind: template_string
-          regex: '^`hono(?:/[^`$]*)?`$'
+          regex: "^`hono(?:/[^`$]*)?`$"
   any:
     - inside:
         kind: import_statement
