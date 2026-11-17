@@ -59,18 +59,20 @@ try {
       String.raw`const load = () => import('h\x6fno');`,
       String.raw`const cors = require('hono\x2fcors');`,
       String.raw`const cors = require('\150\157\156\157\057cors');`,
+      String.raw`const cors = require('hono\57cors');`,
       String.raw`import 'ho\u{6e}o';`,
       "import 'ho\\\nno';",
       String.raw`const load = () => import(` + "`" + String.raw`h\x6fno` + "`" + `);`,
     ];
-    const extraFiles = ["ts", "tsx", "jsx"].flatMap((extension) =>
-      (extension === "jsx" ? escapedCases : [...extraCases, ...escapedCases]).map(
-        (source, index) => {
-          const file = join(directory, `case-${index}.${extension}`);
-          writeFileSync(file, `${source}\n`);
-          return file;
-        },
-      ),
+    const extraFiles = ["ts", "tsx", "jsx", "cjs"].flatMap((extension) =>
+      (extension === "jsx" || extension === "cjs"
+        ? escapedCases
+        : [...extraCases, ...escapedCases]
+      ).map((source, index) => {
+        const file = join(directory, `case-${index}.${extension}`);
+        writeFileSync(file, `${source}\n`);
+        return file;
+      }),
     );
     const denied = scan();
     const deniedOutput = `${denied.stdout ?? ""}\n${denied.stderr ?? ""}`;
