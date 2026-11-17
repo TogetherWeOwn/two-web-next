@@ -2649,7 +2649,10 @@ function selftest() {
       );
       assert.deepEqual(playwrightInventory(dir).orphans, ["e2e/a.spec.ts", "e2e/suite.visual.ts"]);
       assert.equal(playwrightJsonSummary(dir).reachable, 0);
-      assert.deepEqual(playwrightJsonSummary(dir).orphans, ["e2e/a.spec.ts", "e2e/suite.visual.ts"]);
+      assert.deepEqual(playwrightJsonSummary(dir).orphans, [
+        "e2e/a.spec.ts",
+        "e2e/suite.visual.ts",
+      ]);
       for (const quote of ["'", '"']) {
         for (const command of [
           "echo playwright test",
