@@ -2987,8 +2987,19 @@ function selftest() {
       }
       writeFileSync(
         join(dir, "package.json"),
-        JSON.stringify({ scripts: { browser: "playwright test" } }),
+        JSON.stringify({ scripts: { browser: "playwright test", build: "vite build" } }),
       );
+      run(`docker run "\${common[@]}" --network none "$image" sh -eu -c '
+  node ci/build-ember-tokens.mjs --check
+  node ci/build-leaf-css.mjs'
+docker run "\${common[@]}" --network none "$image" npm run build --prefix web`);
+      for (const result of [playwrightInventory(dir), playwrightJsonSummary(dir)]) {
+        assert.deepEqual(result.orphans, [
+          "e2e/a.spec.ts",
+          "e2e/npm run browser/path.spec.ts",
+          "e2e/suite.visual.ts",
+        ]);
+      }
       writeFileSync(
         workflow,
         "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --grep smoke\n      - run: npm run browser\n",
