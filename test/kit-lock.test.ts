@@ -8,19 +8,30 @@ function fixture() {
   let failCheck = 0;
   let failClose = false;
   let failRemove = false;
+  let replaceOnSecondStat = false;
+  let stats = 0;
   const events: string[] = [];
   const run = createKitLock({
-    admit: (path) => ({
-      path,
-      recheck() {
-        events.push("check");
-        if (++checks === failCheck) throw new Error("admission changed");
-      },
-      close() {
-        events.push("close");
-        if (failClose) throw new Error("close failed");
-      },
-    }),
+    admit: (path) => {
+      let closed = false;
+      return {
+        path,
+        recheck() {
+          events.push("check");
+          if (closed) throw new Error("handle closed");
+          if (++checks === failCheck) {
+            closed = true;
+            throw new Error("admission changed");
+          }
+        },
+        close() {
+          if (closed) return;
+          closed = true;
+          events.push("close");
+          if (failClose) throw new Error("close failed");
+        },
+      };
+    },
     mkdir: (_path, options) => {
       expect(options.mode).toBe(0o700);
       if (inode !== undefined) throw new Error("EEXIST");
@@ -28,6 +39,7 @@ function fixture() {
       events.push("acquire");
     },
     lstat: () => {
+      if (++stats === 2 && replaceOnSecondStat) inode = ++sequence;
       if (inode === undefined) throw new Error("ENOENT");
       return { dev: 1n, ino: inode, isDirectory: () => true, isSymbolicLink: () => false };
     },
@@ -44,6 +56,9 @@ function fixture() {
       inode = ++sequence;
     },
     present: () => inode !== undefined,
+    replaceBeforeOperation: () => {
+      replaceOnSecondStat = true;
+    },
     failCheck: (at: number) => {
       failCheck = at;
     },
@@ -90,6 +105,37 @@ describe("inactive Kit lock state machine", () => {
     await expect(f.run("/root", () => 3)).resolves.toBe(3);
   });
 
+  it("excludes a contender during a successful asynchronous operation", async () => {
+    const f = fixture();
+    const entered = deferred();
+    const resume = deferred();
+    const first = f.run("/root", async () => {
+      entered.resolve();
+      await resume.promise;
+      return 42;
+    });
+    await entered.promise;
+    await expect(f.run("/root", () => 0)).rejects.toThrow("EEXIST");
+    expect(f.present()).toBe(true);
+    resume.resolve();
+    await expect(first).resolves.toBe(42);
+    await expect(f.run("/root", () => 7)).resolves.toBe(7);
+  });
+
+  it("refuses a replacement before the operation", async () => {
+    const f = fixture();
+    f.replaceBeforeOperation();
+    let called = false;
+    await expect(
+      f.run("/root", () => {
+        called = true;
+      }),
+    ).rejects.toThrow("kit lock failed");
+    expect(called).toBe(false);
+    expect(f.present()).toBe(true);
+    expect(f.events).not.toContain("release");
+  });
+
   it("does not steal existing or stale locks", async () => {
     const f = fixture();
     f.replace();
@@ -114,12 +160,21 @@ describe("inactive Kit lock state machine", () => {
   it("fails closed on recheck failure and closes the admission handle", async () => {
     const f = fixture();
     f.failCheck(2);
-    await expect(
-      f.run("/root", () => {
+    let thrown: unknown;
+    try {
+      await f.run("/root", () => {
         throw new Error("must not run");
-      }),
-    ).rejects.toThrow("admission changed");
-    expect(f.events.at(-1)).toBe("close");
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect((thrown as AggregateError).errors.map((error: Error) => error.message)).toEqual([
+      "admission changed",
+      "handle closed",
+    ]);
+    expect(f.present()).toBe(true);
+    expect(f.events).not.toContain("release");
   });
 
   it("preserves operation, rollback, release and close errors in order", async () => {
