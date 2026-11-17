@@ -11,7 +11,7 @@ const [state, destination] = process.argv.slice(2);
 if (!state || !destination) throw new Error("usage: kit-home-capture.mjs <state> <destination>");
 const tooling = resolve("tooling");
 const { homeEvidencePage, homeEvidenceStates, assertHomeEvidence } = await import(
-  pathToFileURL(join(tooling, "ci/kit-home-evidence.mjs"))
+  pathToFileURL(resolve("after/ci/kit-home-evidence.mjs"))
 );
 const { withKitOfflineBrowser } = await import(
   pathToFileURL(join(tooling, "ci/kit-offline-browser.mjs"))
@@ -49,7 +49,11 @@ for (const tree of ["before", "after"]) {
             );
           });
           const name = `${tree}-${state}-${viewport.name}.png`;
-          const bytes = await page.screenshot({ animations: "disabled", caret: "hide" });
+          const bytes = await page.screenshot({
+            animations: "disabled",
+            caret: "hide",
+            fullPage: true,
+          });
           await writeFile(join(output, name), bytes);
           const metrics = await page.evaluate(() => ({
             width: document.documentElement.clientWidth,

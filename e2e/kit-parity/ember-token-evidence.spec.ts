@@ -157,6 +157,49 @@ for (const target of targets) {
             path: testInfo.outputPath(`${name}.png`),
             fullPage: target.name === "kit-join",
           });
+          if (target.name === "kit" && viewport.size.width === 390 && state === "default") {
+            await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+            const header = page.locator("[data-kit-site-header]");
+            await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+            await expect(header).toBeVisible();
+            const bounds = await header.boundingBox();
+            expect(bounds).not.toBeNull();
+            expect(Math.abs(bounds?.y ?? Infinity)).toBeLessThanOrEqual(1);
+            const surface = await header.evaluate((element) => {
+              const style = getComputedStyle(element);
+              const rect = element.getBoundingClientRect();
+              const topmost = document.elementFromPoint(rect.left + rect.width / 2, rect.top + 5);
+              return {
+                background: style.backgroundColor,
+                opacity: style.opacity,
+                coversContent: topmost !== null && element.contains(topmost),
+              };
+            });
+            const pageBackground = await page
+              .locator(".base-theme")
+              .evaluate((element) => getComputedStyle(element).backgroundColor);
+            expect(surface.background).toBe(pageBackground);
+            expect(surface.background).not.toBe("rgba(0, 0, 0, 0)");
+            expect(surface.opacity).toBe("1");
+            expect(surface.coversContent).toBe(true);
+            await page.screenshot({
+              path: testInfo.outputPath(`${name}-scrolled.png`),
+              fullPage: false,
+            });
+            const scrollPadding = await page.evaluate(() =>
+              Number.parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop),
+            );
+            expect(scrollPadding).toBeGreaterThanOrEqual(bounds?.height ?? Infinity);
+            const contentLink = page.locator("main a:visible").first();
+            await contentLink.focus();
+            await expect(contentLink).toBeFocused();
+            const targetBounds = await contentLink.boundingBox();
+            const headerBounds = await header.boundingBox();
+            expect(targetBounds).not.toBeNull();
+            expect(targetBounds?.y ?? -Infinity).toBeGreaterThanOrEqual(
+              (headerBounds?.y ?? Infinity) + (headerBounds?.height ?? Infinity),
+            );
+          }
           const receipt = {
             sha: process.env.GITHUB_SHA,
             path: target.path,
