@@ -147,7 +147,32 @@ for (const [viewport, size] of VIEWPORTS) {
           caret: "hide" as const,
           scale: "css" as const,
         };
+        const codeSelector = ".content-theme code[data-normalized-font-evidence]";
+        if (name === "privacy") {
+          await page
+            .locator(".content-theme code")
+            .first()
+            .evaluate((node) => {
+              node.setAttribute("data-normalized-font-evidence", "");
+            });
+        }
+        const codeFontsBefore =
+          name === "privacy" ? await renderedPlatformFonts(page, codeSelector) : [];
+        const fontStatusBefore =
+          name === "privacy" ? await page.evaluate(() => document.fonts.status) : null;
         const first = await captureWithGeometry(page, nodes, options);
+        if (name === "privacy") {
+          const codeFontsAfter = await renderedPlatformFonts(page, codeSelector);
+          const fontStatusAfter = await page.evaluate(() => document.fonts.status);
+          await testInfo.attach("normalized-code-fonts", {
+            body: JSON.stringify(
+              { before: codeFontsBefore, after: codeFontsAfter, fontStatusBefore, fontStatusAfter },
+              null,
+              2,
+            ),
+            contentType: "application/json",
+          });
+        }
         await testInfo.attach("first-capture", { body: first.png, contentType: "image/png" });
         await testInfo.attach("first-geometry", {
           body: JSON.stringify({
