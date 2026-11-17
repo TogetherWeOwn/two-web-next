@@ -247,7 +247,11 @@ export async function handleSyncEvent(
   // the 86400s ceiling. Both bounds are integers: remaining is ceiled above.
   if (remaining > 0) return waiting(Math.min(remaining, MAX_RETRY_DELAY_SECONDS));
   // Protection redeliveries may observe or settle, but never start another request.
-  if (attempts > SYNC_EVENT.tries) return waiting();
+  if (attempts > SYNC_EVENT.tries) {
+    const current = await deps.events.pendingSync(msg.eventKey);
+    if (current && activeOwner(current)) return { retryInSeconds: SYNC_EVENT.uniqueForSeconds };
+    return waiting();
+  }
   // A durable closed claim fences concurrent carriers until its result commits.
   const claimedAt = now();
   const attempt = await deps.events.claimSync(prepared, claimedAt);
