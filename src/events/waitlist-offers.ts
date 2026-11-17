@@ -3,6 +3,8 @@ import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { waitlistOffers } from "../db/dormant-schema";
 
+export { claimWaitlistOffer } from "./waitlist-offer-transitions";
+
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 /** Dormant helper; callers own a READ COMMITTED transaction. No notification is sent. */
