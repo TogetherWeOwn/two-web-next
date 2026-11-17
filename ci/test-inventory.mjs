@@ -3034,6 +3034,7 @@ function selftest() {
         writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { browser: script } }));
         assert.deepEqual(playwrightInventory(dir).orphans, [
           "e2e/a.spec.ts",
+          "e2e/npm run browser/path.spec.ts",
           "e2e/suite.visual.ts",
         ]);
         writeFileSync(
