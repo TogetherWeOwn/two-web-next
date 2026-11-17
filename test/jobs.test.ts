@@ -180,7 +180,7 @@ describe("SyncEventToDiscord", () => {
   });
 
   for (const exhausted of [false, true]) {
-    it(`retries a failed explicit deadline write unchanged, including the exhausted null deadline (${exhausted})`, async () => {
+    it(`retries a failed deadline write unchanged or reconciles an exhausted request (${exhausted})`, async () => {
       const start = 1_000_000;
       let clock = start;
       const error = new Error("retry deadline unavailable");
@@ -198,21 +198,29 @@ describe("SyncEventToDiscord", () => {
       const bot = {
         upsertEvent: vi.fn(async () => fail({ retryAfterSeconds: 42 })),
       } as unknown as BotClient;
-      await expect(
-        handleSyncEvent({ eventKey: "e1", idempotencyKey: "same-key" }, 1, {
-          bot,
-          events,
-          now: () => new Date(clock),
-        }),
-      ).rejects.toBe(error);
-      const deadline = exhausted ? null : new Date(start + 42_000);
-      expect(deferSync.mock.calls.map(([, at]) => at)).toEqual([deadline, deadline]);
+      const result = handleSyncEvent({ eventKey: "e1", idempotencyKey: "same-key" }, 1, {
+        bot,
+        events,
+        now: () => new Date(clock),
+      });
+      if (exhausted) {
+        await expect(result).resolves.toMatchObject({
+          reconciliation: { idempotencyKey: "same-key", attempts: 6 },
+        });
+        expect(deferSync).not.toHaveBeenCalled();
+      } else {
+        await expect(result).rejects.toBe(error);
+        expect(deferSync.mock.calls.map(([, at]) => at)).toEqual([
+          new Date(start + 42_000),
+          new Date(start + 42_000),
+        ]);
+      }
       expect(
         deferSync.mock.calls.map(([attempt]) => ({
           key: attempt.idempotencyKey,
           requests: attempt.requestAttempts,
         })),
-      ).toEqual(Array(2).fill({ key: "same-key", requests: exhausted ? 6 : 1 }));
+      ).toEqual(exhausted ? [] : Array(2).fill({ key: "same-key", requests: 1 }));
       expect(bot.upsertEvent).toHaveBeenCalledOnce();
       expect(events.mirrored).toEqual([]);
     });
@@ -245,19 +253,27 @@ describe("SyncEventToDiscord", () => {
         jobId: "job",
       });
       const ledger = memLedger();
+      const reconciliation = { recordSync: vi.fn(async () => {}) };
       await consume(
         { messages: [carrier] },
-        { bot, events, ledger, lock: memLock(), now: () => new Date(clock) },
+        { bot, events, ledger, reconciliation, lock: memLock(), now: () => new Date(clock) },
       );
       expect(deferSync.mock.calls.map(([, at]) => at)).toEqual(
-        Array(2).fill(exhausted ? null : new Date(start + 42_000)),
+        exhausted ? [] : Array(2).fill(new Date(start + 42_000)),
       );
+      if (exhausted) {
+        expect(reconciliation.recordSync).toHaveBeenCalledWith(
+          expect.objectContaining({ idempotencyKey: "same-key", attempts: 6 }),
+        );
+      } else {
+        expect(reconciliation.recordSync).not.toHaveBeenCalled();
+      }
       expect(
         deferSync.mock.calls.map(([attempt]) => ({
           key: attempt.idempotencyKey,
           requests: attempt.requestAttempts,
         })),
-      ).toEqual(Array(2).fill({ key: "same-key", requests: exhausted ? 6 : 1 }));
+      ).toEqual(exhausted ? [] : Array(2).fill({ key: "same-key", requests: 1 }));
       expect(carrier.retried).toBe(exhausted ? undefined : 32);
       expect(carrier.acked).toBe(exhausted);
       expect(ledger.rows.get("job")!.state).toBe(exhausted ? "failed" : "released");

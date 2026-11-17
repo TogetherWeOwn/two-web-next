@@ -1111,9 +1111,21 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
           now: () => new Date(clock),
         });
         expect(sent).toHaveLength(1);
-        expect(await handleSyncEvent(original, 1, dependencies)).toEqual({ retryInSeconds: 300 });
+        expect(await handleSyncEvent(original, 1, dependencies)).toEqual({
+          failed: "request requires reconciliation; unresolved identity retained",
+        });
         expect(bot.upsertEvent).toHaveBeenCalledOnce();
-        await events.deferSync(pending, new Date(start + 3600_000));
+        expect(
+          await pgReconciliationStore(sql).resolve(
+            original.idempotencyKey,
+            "123",
+            "not_applied",
+            async (tx) => {
+              await tx`update event_sync_attempts set terminal_reason = null, next_attempt_at = ${new Date(start + 3600_000)}
+                where idempotency_key = ${original.idempotencyKey}::uuid`;
+            },
+          ),
+        ).toBe(true);
       }
       await reconcileEvents({
         events,
