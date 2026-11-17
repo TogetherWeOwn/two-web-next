@@ -84,6 +84,14 @@ describe("workflow runner labels", () => {
     expect(release.match(/^          runs-on-json: '"ubuntu-latest"'$/gm)).toHaveLength(4);
   });
 
+  it("keeps all featured proof jobs on standard hosted runners", () => {
+    const workflow = workflows.find(({ name }) => name === "featured-offline-proof.yml");
+    expect(workflow).toBeDefined();
+    expect(jobs(workflow!.text).map(({ id, runsOn }) => [id, runsOn])).toEqual(
+      ["scope", "capture", "current-source", "featured-proof"].map((id) => [id, hosted]),
+    );
+  });
+
   it("keeps the XFS fixture on a disposable hosted runner for every event", () => {
     const workflow = workflows.find(({ name }) => name === "xfs-qualification.yml");
     expect(workflow).toBeDefined();
