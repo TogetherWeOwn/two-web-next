@@ -351,7 +351,7 @@ describe("queue carrier lease ownership", () => {
     },
   );
 
-  it("rechecks a lost claim before retiring the last carrier", async () => {
+  it.each([6, 7])("rechecks ownership before retiring carrier delivery %i", async (delivery) => {
     const { lock } = memoryLock();
     const depth = ledger();
     const leaseToken = await lock.acquire(key, 300);
@@ -393,7 +393,8 @@ describe("queue carrier lease ownership", () => {
       }),
     };
     const send = vi.fn(async () => success);
-    const loser = carrier(body, 6);
+    const claim = vi.spyOn(observed, "claimSync");
+    const loser = carrier(body, delivery);
     const run = consume(
       { messages: [loser] },
       { bot: { upsertEvent: send } as unknown as BotClient, events: observed, lock, ledger: depth },
@@ -408,6 +409,8 @@ describe("queue carrier lease ownership", () => {
     expect(depth.failed).not.toHaveBeenCalled();
     expect(lock.release).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+    if (delivery === 7) expect(claim).not.toHaveBeenCalled();
+    else expect(claim).toHaveBeenCalledOnce();
   });
 
   it("protection redelivery cannot claim after the owner commits a retry", async () => {
