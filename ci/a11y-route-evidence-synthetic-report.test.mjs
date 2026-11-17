@@ -23,6 +23,37 @@ test("synthetic report is revalidated against the reviewed fixture", () => {
   );
 });
 
+test("synthetic report enforces byte boundaries", () => {
+  const report = syntheticRouteReport(root);
+  const limit = 1024 * 1024;
+  const atLimit = Buffer.concat([report, Buffer.alloc(limit - report.length, 0x20)]);
+  assert.equal(atLimit.length, limit);
+  assert.equal(
+    validateSyntheticRouteReport(root, new Map([["report.json", atLimit]])).cases.length,
+    3,
+  );
+  for (const bytes of [Buffer.alloc(0), Buffer.concat([atLimit, Buffer.from(" ")])]) {
+    assert.throws(
+      () => validateSyntheticRouteReport(root, new Map([["report.json", bytes]])),
+      /invalid synthetic report/,
+    );
+  }
+});
+
+test("synthetic report refuses duplicate keys even when parsed data matches", () => {
+  const report = syntheticRouteReport(root);
+  const value = JSON.parse(report.toString("utf8"));
+  const key = Object.keys(value)[0];
+  const duplicate = Buffer.from(
+    `{${JSON.stringify(key)}:${JSON.stringify(value[key])},${report.toString("utf8").slice(1)}`,
+  );
+  assert.deepEqual(JSON.parse(duplicate.toString("utf8")), value);
+  assert.throws(
+    () => validateSyntheticRouteReport(root, new Map([["report.json", duplicate]])),
+    /invalid synthetic report/,
+  );
+});
+
 test("synthetic report refuses missing, extra, malformed, duplicate and changed data", () => {
   const report = syntheticRouteReport(root);
   const altered = (change) => {
