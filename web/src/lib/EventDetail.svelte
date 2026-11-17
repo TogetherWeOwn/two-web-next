@@ -248,10 +248,12 @@ const detailIslands = [
 
 <style>
   .event-layout-head { grid-area: head; min-width: 0; }
-  .event-layout-rail { grid-area: rail; min-width: 0; }
+  .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-6); }
+  .event-layout-rail :global(> section) { border: 0; }
   .event-layout-body { grid-area: body; min-width: 0; }
   .seat-card {
-    background: var(--color-g1);
+    background: var(--color-g2);
+    border: 0;
     border-radius: var(--radius-l);
     padding: var(--space-inset-card);
   }
