@@ -197,6 +197,12 @@ function normalize(html) {
   );
 }
 
+function previewSectionsMatch(kitSection, honoSection, kitOwnsArchive) {
+  return (
+    normalize(kitOwnsArchive ? stripEmberDelta(kitSection) : kitSection) === normalize(honoSection)
+  );
+}
+
 const failures = [];
 let browserFixturesRun = false;
 function check(label, condition, detail = "") {
@@ -557,7 +563,7 @@ async function previewParity(kitBase, honoBase) {
     expectShell(kitHtml);
     const kitSection = sectionOf(kitHtml);
     if (kitOwnsArchive && keys.length > 0) assertEmberArchive(kitSection);
-    const same = normalize(stripEmberDelta(kitSection)) === normalize(sectionOf(honoHtml));
+    const same = previewSectionsMatch(kitSection, sectionOf(honoHtml), kitOwnsArchive);
     check(`${path}: preview sections match staging`, same, "section HTML differs");
   }
   // /api/* still reaches the unchanged Hono app through the Kit catch-all.

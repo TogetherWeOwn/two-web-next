@@ -59,12 +59,16 @@ after(() => rmSync(scratchDir, { recursive: true, force: true }));
 const scratchPath = join(scratchDir, "e2e-normalization.mjs");
 writeFileSync(
   scratchPath,
-  `${extractBlock(e2eSource, "function stripHydrationMarkers(html) {")}\n` +
+  `import { stripEmberDelta } from ${JSON.stringify(new URL("./kit-archive-delta.mjs", import.meta.url).href)};\n` +
+    `${extractBlock(e2eSource, "function previewSectionsMatch(kitSection, honoSection, kitOwnsArchive) {")}\n` +
+    `${extractBlock(e2eSource, "function stripHydrationMarkers(html) {")}\n` +
     `${extractBlock(e2eSource, "function normalize(html) {")}\n` +
     `${extractBlock(e2eSource, "const sectionOf = (html) => {")}\n` +
-    "export { stripHydrationMarkers as e2eStrip, normalize as e2eNormalize, sectionOf as e2eSectionOf };\n",
+    "export { stripHydrationMarkers as e2eStrip, normalize as e2eNormalize, sectionOf as e2eSectionOf, previewSectionsMatch };\n",
 );
-const { e2eStrip, e2eNormalize, e2eSectionOf } = await import(pathToFileURL(scratchPath).href);
+const { e2eStrip, e2eNormalize, e2eSectionOf, previewSectionsMatch } = await import(
+  pathToFileURL(scratchPath).href,
+);
 assert.equal(typeof e2eStrip, "function");
 assert.equal(typeof e2eNormalize, "function");
 assert.equal(typeof e2eSectionOf, "function");
@@ -246,6 +250,15 @@ test("Ember delta: legacy and Ember Kit sections equal Hono; Hono side stays str
     card({ ember, title: 'Sign-up record &lt;img onerror=x&gt; class="event-title" &amp;' }),
   ];
   assert.equal(kitOf(odd(true)), hono(odd(false)), "escaped text that mimics the delta is content");
+});
+test("preview archive parity strips chrome only when Kit owns the route", () => {
+  const legacy = section([card()]);
+  const ember = section([card({ ember: true })]);
+  assert.equal(previewSectionsMatch(ember, legacy, true), true);
+  assert.equal(previewSectionsMatch(legacy, legacy, false), true);
+  assert.equal(previewSectionsMatch(ember, legacy, false), false);
+  assert.equal(previewSectionsMatch(ember, section([card({ title: "Different" })]), true), false);
+  assert.throws(() => previewSectionsMatch(ember.replace(labelHtml, ""), legacy, true));
 });
 test("Ember delta: feature assertions require glyph and label on every card", () => {
   const { h, e } = both((key, ember) => card({ key, ember }));
