@@ -714,21 +714,15 @@ test("preflight checkouts materialize ci and wrangler.jsonc for the production g
   }
 });
 
-test("manual production workflow routes runners by repo visibility and uses production-only secrets", () => {
+test("production workflow uses hosted runners and production-only secrets", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
   );
-  // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
-  const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
   // preflight, staging-soak, regression, deploy-production,
-  // post-deploy-watch and notify.
-  assert.equal(workflow.split(runsOn).length - 1, 6);
-  assert.equal(
-    workflow.split("ubuntu-latest").length - 1,
-    6,
-    "ubuntu-latest only as the public-repo branch",
-  );
+  // post-deploy-watch and notify use hosted runners in either visibility.
+  assert.equal((workflow.match(/^    runs-on: ubuntu-latest$/gm) ?? []).length, 6);
+  assert.equal((workflow.match(/^    runs-on:/gm) ?? []).length, 6);
   // Staging credentials appear only in the staging-soak job, which binds
   // the staging Environment, runs no wrangler and makes one gate call.
   const soak = workflow.slice(
@@ -784,6 +778,29 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   // Promotion lives in the shared composite action: the caller only passes
   // the tag built from the exact same three parts as the upload tag above.
+  const baseline = workflow.slice(
+    workflow.indexOf("      - name: Capture pre-promote dead-letter baseline"),
+    gradual,
+  );
+  assert.match(baseline, /id: dead-letter-baseline/);
+  assert.match(baseline, /echo "failed=\$baseline" >> "\$GITHUB_OUTPUT"/);
+  assert.doesNotMatch(baseline, /\$GITHUB_ENV/);
+  assert.equal(
+    (
+      workflow.match(
+        /SMOKE_FAILED_BASELINE: \$\{\{ steps\.dead-letter-baseline\.outputs\.failed \}\}/g,
+      ) ?? []
+    ).length,
+    2,
+  );
+  assert.equal(
+    (
+      workflow
+        .slice(workflow.indexOf("      - name: Capture pre-promote dead-letter baseline"))
+        .match(/SMOKE_ALLOW_MISSING_BASELINE: "1"/g) ?? []
+    ).length,
+    2,
+  );
   const call = workflow.slice(gradual, gradual + 800);
   assert.match(call, /worker-name: two-web-next-production/);
   assert.match(

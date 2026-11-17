@@ -1,33 +1,21 @@
 # Repository visibility flip checklist
 
 Run this list before changing this repository's visibility (public to private
-or back). Several workflows route jobs between GitHub-hosted runners and the
-org's self-hosted fleet based on `github.event.repository.private`, so a flip
-changes where jobs run with no code change. Nothing here requires a workflow
-edit at flip time; it is a verification pass, done by whoever flips the
-setting, before they flip it.
+or back). The checked-in workflow jobs use GitHub-hosted runners in either
+visibility. This is a verification pass for whoever changes the setting, not
+proof of the state of any private runner fleet.
 
 ## Runner separation (verify, already in code)
 
-- The current `ci.yml` selects GitHub-hosted runners for every event, including
-  manual dispatches on branches, in both visibilities. Other workflows retain
-  visibility-based selectors; review their event and ref restrictions before a
-  flip. A branch dispatch can select workflow YAML from that branch, so these
-  source assertions do not enforce historical or modified workflow definitions.
-- Pull-request and merge-queue events in the checked workflow definitions select
-  GitHub-hosted runners in both visibilities. Other events in some workflows can
-  select self-hosted runners while private.
-- `test/workflow-runners.test.ts` pins these source contracts for every workflow,
-  including reusable workflows (local or org-level) called from a
-  pull-request workflow: callers pass an explicit GitHub-hosted runner input
-  instead of accepting a visibility-based default. Run
-  it and confirm it passes on the current `main` before flipping:
+- Checked-in jobs select GitHub-hosted runners for all events and both
+  visibilities; reusable workflow calls are checked separately at their pinned
+  revisions or through their runner inputs. `test/workflow-runners.test.ts`
+  checks the current source contracts; run it on current `main` before flipping:
   `npx vitest run test/workflow-runners.test.ts`.
-- The `CI_OVERFLOW_*` repo variables cannot reroute pull-request or
-  merge-queue runs: the hosted guard for those events is evaluated before the
-  overflow switch. No variable change is needed at flip time, but confirm the
-  overflow runner value still names an approved runner for the non-PR events
-  it may serve.
+- A manual branch dispatch can load workflow YAML from that branch. Source tests
+  on `main` do not enforce historical or modified branch definitions, repository
+  settings, or the runtime behavior of external reusable workflows. Review the
+  actual ref and its callees before dispatching.
 
 ## Self-hosted fleet (confirm with the runner operator)
 
@@ -50,7 +38,7 @@ setting, before they flip it.
 ## After the flip
 
 - Open or re-run a pull request and confirm its jobs land on GitHub-hosted
-  runners; run one manual dispatch of a non-PR workflow and confirm it lands
-  where intended for the new visibility.
+  runners; if a safe non-mutating manual workflow is authorized, dispatch it
+  from a reviewed ref and confirm its runner.
 - Confirm the required checks still report under their existing names before
   merging anything.
