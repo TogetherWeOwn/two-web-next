@@ -150,8 +150,8 @@ jobs:
             npm ci --prefix web --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund'
           docker run "${common[@]}" --network none "$image" sh -eu -c '
             node ci/build-ember-tokens.mjs --check
-            node ci/build-leaf-css.mjs
-            npm run build --prefix web'
+            node ci/build-leaf-css.mjs'
+          docker run "${common[@]}" --network none "$image" npm run build --prefix web
       - name: Collect bounded client CSS and manifest
         env:
           WORKFLOW_SHA: ${{ needs.resolve.outputs.workflow }}

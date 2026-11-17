@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -767,7 +768,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
   const gradual = workflow.indexOf(
-    "uses: TogetherWeOwn/.github/actions/gradual-promote@d427f7212f478ea3823a605edb394b0722e152b5",
+    "uses: TogetherWeOwn/.github/actions/gradual-promote@2ef8ad6447e11d019ac3098bcfd011193b75266a",
   );
   assert.ok(
     credentialCheck > 0 &&
@@ -1508,7 +1509,13 @@ test("auto-approve's staging quality job and steps are the ones the workflows ru
   );
   assert.match(
     e2e,
-    /\n {2}staging-quality:\n {4}name: staging-quality\n[\s\S]*?uses: \.\/\.github\/workflows\/web-quality-origin\.yml\n/,
+    /\n {2}staging-quality:\n {4}name: staging-quality\n[\s\S]*?uses: TogetherWeOwn\/two-web-next\/\.github\/workflows\/web-quality-origin\.yml@38581ef492f5c972969f5dfada396a9f0e2ee989\n/,
+  );
+  // The caller runs the pinned definition, not necessarily this checkout's copy.
+  assert.equal(
+    createHash("sha256").update(quality).digest("hex"),
+    "ee636905e04598b8280f68626570a6f731a090814ff6fef0b09835b2eb097031",
+    "local quality workflow must match the pinned definition before checking its steps",
   );
   assert.match(quality, /\n {2}quality:\n {4}name: quality\n/);
   assert.equal(stagingQualityJob, "staging-quality / quality");

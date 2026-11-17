@@ -4,6 +4,7 @@ import {
   captureWithGeometry,
   captureWithoutFontWait,
   loadVisualFont,
+  nonemptyMask,
   readCaptureGeometry,
   renderedPlatformFonts,
 } from "./font-evidence";
@@ -105,6 +106,25 @@ for (const size of [
       expect(second.after).toEqual(first.after);
       expect(second.dimensions).toEqual(first.dimensions);
       expect(second.png.equals(first.png)).toBe(true);
+    });
+    test("masks the first capture without mutating its buffer", async ({ page }) => {
+      const nodes = { probe: "#probe" };
+      expect(await nonemptyMask(page.locator("#absent"))).toBeUndefined();
+      const probe = page.locator("#probe");
+      await probe.evaluate((el) => ((el as HTMLElement).style.visibility = "hidden"));
+      expect(await nonemptyMask(probe)).toEqual([probe]);
+      await probe.evaluate((el) => (el as HTMLElement).style.removeProperty("visibility"));
+      const options = { mask: await nonemptyMask(probe), maskColor: "#123456" };
+      const first = await captureWithGeometry(page, nodes, options);
+      const saved = Buffer.from(first.png);
+      await page.locator("#probe").evaluate((el) => {
+        el.textContent = "Different content";
+      });
+      const second = await captureWithGeometry(page, nodes, options);
+      expect(first.png.equals(saved)).toBe(true);
+      expect(second.png.equals(first.png)).toBe(true);
+      const unmasked = await captureWithGeometry(page, nodes);
+      expect(unmasked.png.equals(first.png)).toBe(false);
     });
     test("captures the viewport while document font readiness is pending", async ({ page }) => {
       let release: () => void = () => undefined;
