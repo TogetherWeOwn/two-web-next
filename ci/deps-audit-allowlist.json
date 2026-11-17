@@ -10,7 +10,7 @@
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "@vitest/coverage-v8",
@@ -20,7 +20,7 @@
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "agents",
@@ -30,7 +30,7 @@
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "fdir",
@@ -40,7 +40,7 @@
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "picomatch",
@@ -50,7 +50,7 @@
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "tinyglobby",
@@ -60,7 +60,7 @@
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "vite",
@@ -70,7 +70,7 @@
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "vitest",
@@ -80,7 +80,7 @@
       "lockfile": ".",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "@sveltejs/adapter-cloudflare",
@@ -90,7 +90,7 @@
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "@sveltejs/kit",
@@ -100,7 +100,7 @@
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "@sveltejs/vite-plugin-svelte",
@@ -110,7 +110,7 @@
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "fdir",
@@ -120,7 +120,7 @@
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "picomatch",
@@ -130,7 +130,7 @@
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "svelte-check",
@@ -140,7 +140,7 @@
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "tinyglobby",
@@ -150,7 +150,7 @@
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     },
     {
       "package": "vite",
@@ -160,7 +160,7 @@
       "lockfile": "web",
       "reviewed": "2026-11-17",
       "expires": "2026-12-01",
-      "reason": "GHSA-fc5q-39xc-vjpf (picomatch ReDoS via attacker-controlled extglob patterns). No patched picomatch release exists (4.0.7 is latest); this record is only the advisory inherited through picomatch. Reached through build/dev tooling (vite, vitest, tinyglobby, SvelteKit build); our code passes no untrusted glob patterns. Remove when a fixed picomatch release ships."
+      "reason": "Time-limited exception for advisory 1247710; review upon expiry or availability of a fixed release."
     }
   ]
 }
