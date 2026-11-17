@@ -5,8 +5,15 @@ import { waitlistOffers } from "../db/dormant-schema";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
-/** Dormant transaction helper. Callers own the transaction; no notification is sent. */
+/** Dormant helper; callers own a READ COMMITTED transaction. No notification is sent. */
 export async function createWaitlistOffer(tx: Tx, rsvpId: number) {
+  // A transaction-wide snapshot can miss a hold committed while acquiring locks.
+  const [isolation] = await tx.execute<{ level: string }>(
+    sql`select current_setting('transaction_isolation') as level`,
+  );
+  if (isolation?.level !== "read committed") {
+    throw new Error("Waitlist offers require a READ COMMITTED transaction");
+  }
   // Discover the event without holding a row lock, then follow the existing
   // event-before-RSVP order. Revalidate the RSVP after acquiring both locks.
   const [candidate] = await tx

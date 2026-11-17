@@ -1,6 +1,7 @@
 // Ports HotPathIndexTest.php; all DDL/data stays in the guarded disposable schema.
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { sql } from "drizzle-orm";
 import { PgDialect, getTableConfig } from "drizzle-orm/pg-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { events, rsvps } from "../src/db/admin-schema";
@@ -396,6 +397,27 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
       const rsvpId = await makeRsvp(eventId, "waitlisted");
       expect(await create(rsvpId)).not.toBeNull();
     });
+
+    it.each(["repeatable read", "serializable"] as const)(
+      "rejects a stale %s transaction before it can overbook",
+      async (isolationLevel) => {
+        const eventId = await makeEvent({ capacity: 1 });
+        const first = await makeRsvp(eventId, "waitlisted");
+        const second = await makeRsvp(eventId, "waitlisted");
+        await expect(
+          fixture.db.transaction(
+            async (tx) => {
+              await tx.select({ snapshot: sql`count(*)` }).from(waitlistOffers);
+              expect(await create(first)).not.toBeNull();
+              await createWaitlistOffer(tx, second);
+            },
+            { isolationLevel },
+          ),
+        ).rejects.toThrow(/read committed/i);
+        expect(await rows(first)).toHaveLength(1);
+        expect(await rows(second)).toHaveLength(0);
+      },
+    );
 
     it("serializes concurrent creators to one held offer for the last seat", async () => {
       const eventId = await makeEvent({ capacity: 1 });
