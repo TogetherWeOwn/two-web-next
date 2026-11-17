@@ -28,6 +28,7 @@ const hosted = "ubuntu-latest";
 const pinnedHostedJob = (name: string, id: string) =>
   (name === "e2e.yml" && id === "browser-smoke") ||
   (name === "kit-home-evidence.yml" && id === "capture") ||
+  (name === "kit-event-evidence.yml" && id === "capture") ||
   (name === "admin-stale-save-ubuntu24-proof.yml" && id === "recovery-proof") ||
   (name === "kit-footer-browser.yml" && id === "footer-browser") ||
   (name === "xfs-qualification.yml" && id === "fixture");
@@ -116,6 +117,12 @@ describe("workflow runner labels", () => {
     expect(jobs(workflow!.text).map(({ id, runsOn }) => [id, runsOn])).toEqual(
       ["scope", "capture", "current-source", "featured-proof"].map((id) => [id, hosted]),
     );
+  });
+
+  it("pins event evidence to the hosted visual runner", () => {
+    const workflow = workflows.find(({ name }) => name === "kit-event-evidence.yml");
+    expect(workflow).toBeDefined();
+    expect(jobs(workflow!.text).find(({ id }) => id === "capture")?.runsOn).toBe("ubuntu-24.04");
   });
 
   it("keeps backup and staging jobs on standard hosted runners for every event", () => {
