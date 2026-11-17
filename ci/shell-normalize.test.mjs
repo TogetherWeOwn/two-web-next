@@ -79,6 +79,17 @@ test("marker named cd and exact closers preserve the following command", () => {
   }
 });
 
+test("literal carriage returns in delimiters preserve following commands", () => {
+  for (const opener of ["<<EOF\r", "<<'EOF\r'", "<<-EOF\r"]) {
+    for (const newline of ["\n", "\r\n"]) {
+      const source = `cat ${opener} ;\nbody\n${opener.startsWith("<<-") ? "\t" : ""}EOF\r${newline}printf done\n`;
+      const masked = check(source, source);
+      assert.doesNotMatch(masked, /body/);
+      assert.match(masked, /printf done/);
+    }
+  }
+});
+
 test("single-quoted continuations and escaped-backslash parity remain literal", () => {
   for (const newline of ["\n", "\r\n"]) {
     const quoted = `echo 'a\\${newline}b'${newline}`;

@@ -17,8 +17,8 @@ function skipContinuations(text, p) {
 }
 
 function heredocEnds(line, marker, strip) {
-  const bare = line.replace(/\r$/, "");
-  return (strip ? bare.replace(/^\t+/, "") : bare) === marker;
+  const bare = strip ? line.replace(/^\t+/, "") : line;
+  return bare === marker || (bare.endsWith("\r") && bare.slice(0, -1) === marker);
 }
 
 // Normalize shell text the way the shell reads it: drop comments (a `#` that
