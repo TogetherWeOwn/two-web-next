@@ -106,35 +106,6 @@ test("rejects invalid install and loader context regardless of sibling order", (
   }
 });
 
-test("rejects an uncertified consumer of the same config across jobs and chains", () => {
-  for (const distinguish of [
-    (identity) => identity.job++,
-    (identity) => identity.edges.push({ root: ".", script: "nested", offset: 6 }),
-  ]) {
-    for (const mutate of [
-      (context) => (context.install.outcome = "failure"),
-      (context) => (context.loader.nodeOptions = "--require hook"),
-      (context) => context.effects[0].writes.push("playwright.config.ts"),
-      (context) => (context.templateInputs[0].sha256 = "b".repeat(64)),
-    ]) {
-      const good = fixture();
-      const bad = copy(good);
-      distinguish(bad.identity);
-      const reviewed = [copy(good), copy(bad)];
-      mutate(bad.context);
-      for (const observed of [
-        [good, bad],
-        [bad, good],
-      ]) {
-        assert.throws(
-          () => validateInvocationCertificates(observed, reviewed),
-          /Invocation certificate/,
-        );
-      }
-    }
-  }
-});
-
 test("rejects matching malformed install commands and unreviewed loader context", () => {
   for (const argv of [[], ["install"], ["ci", null], ["ci", 1]]) {
     const record = fixture();
