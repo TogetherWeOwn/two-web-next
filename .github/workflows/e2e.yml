@@ -332,7 +332,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: npx playwright test --config playwright.visual.config.ts
       - name: Retain visual report
-        if: ${{ always() && steps.visual.outcome != 'skipped' }}
+        if: ${{ always() && steps.visual.outcome != 'skipped' && !(github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'test/rsvp-pending-control-')) }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: visual-report-${{ github.run_id }}-${{ github.run_attempt }}
