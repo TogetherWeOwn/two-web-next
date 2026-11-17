@@ -90,27 +90,19 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
       </p>
     {/if}
   {/if}
-  <section class="hero" aria-labelledby="home-heading">
-    <div class="hero-detail hero-detail-left" aria-hidden="true">
-      <span></span>
-      <span></span>
-      <span></span>
-    </div>
-    <div class="hero-detail hero-detail-right" aria-hidden="true">
-      <span></span>
-      <span></span>
-      <span></span>
-    </div>
+  <section class="hero kit-home" aria-labelledby="home-heading">
     <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
     <h1 id="home-heading">The lobby is open.</h1>
-    <p class="lead">We spent most of our life private. Now you can just turn up.</p>
-    {#if sessionUnavailable}
-      <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
-    {:else if session?.member}
-      <a class="btn" href={inviteUrl}>Open Discord</a>
-    {:else}
-      <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
-    {/if}
+    <div class="hero-action">
+      {#if sessionUnavailable}
+        <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
+      {:else if session?.member}
+        <a class="btn" href={inviteUrl}>Open Discord</a>
+      {:else}
+        <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
+      {/if}
+      <p class="lead">We spent most of our life private. Now you can just turn up.</p>
+    </div>
     {#if !session && !sessionUnavailable && eventsUnavailable}
       <p>
         <a href="/discord" data-testid="discord-join">Join with an invite link instead</a>

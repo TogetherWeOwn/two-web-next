@@ -44,6 +44,7 @@ function withScratch(fn) {
       mkdirSync(dirname(join(root, path)), { recursive: true });
       cpSync(join(ROOT, path), join(root, path));
     }
+    cpSync(join(ROOT, "assets/kit-home-hero.css"), join(root, "assets/kit-home-hero.css"));
     mkdirSync(join(root, "public"), { recursive: true });
     mkdirSync(join(root, "web/src/lib"), { recursive: true });
     cpSync(join(ROOT, "web/src/lib/site-header.css"), join(root, "web/src/lib/site-header.css"));
