@@ -351,8 +351,11 @@ function workflowShellView(text, name) {
     Pair(_, pair) {
       if (!isScalar(pair.key)) return;
       assert.ok(
-        !directoryKeys.has(pair) || (!pair.key.anchor && !pair.key.tag),
-        `${name} has an anchored or tagged directory control key this gate cannot model`,
+        !directoryKeys.has(pair) ||
+          (!pair.key.anchor &&
+            !pair.key.tag &&
+            (!isMap(pair.value) || (!pair.value.anchor && !pair.value.tag))),
+        `${name} has an anchored or tagged directory control this gate cannot model`,
       );
       // The structural cwd audit must see decoded control keys too, including
       // a mapping-valued `run` under workflow or job defaults.
@@ -2658,24 +2661,27 @@ function selftest() {
             workflow,
             `name: ci\njobs:\n  t:\n    steps:\n      - ${property} working-directory: ${cwd}\n        run: npm run browser\n`,
           );
-          assert.throws(() => playwrightInventory(dir), /anchored or tagged directory control key/);
-          assert.throws(
-            () => playwrightJsonSummary(dir),
-            /anchored or tagged directory control key/,
-          );
+          assert.throws(() => playwrightInventory(dir), /anchored or tagged directory control/);
+          assert.throws(() => playwrightJsonSummary(dir), /anchored or tagged directory control/);
         }
       }
       for (const defaults of [
         "&d defaults:\n  run:\n    working-directory: web\n",
         "defaults:\n  &r run:\n    working-directory: web\n",
         "defaults:\n  run:\n    &w working-directory: web\n",
+        "defaults: &d\n  run:\n    working-directory: web\n",
+        "defaults:\n  run: &r\n    working-directory: web\n",
+        "defaults: !!map\n  run:\n    working-directory: web\n",
+        "defaults:\n  run: !!map\n    working-directory: web\n",
       ]) {
-        writeFileSync(
-          workflow,
-          `name: ci\n${defaults}jobs:\n  t:\n    steps:\n      - run: npm run browser\n`,
-        );
-        assert.throws(() => playwrightInventory(dir), /anchored or tagged directory control key/);
-        assert.throws(() => playwrightJsonSummary(dir), /anchored or tagged directory control key/);
+        for (const command of ["npm run browser", "npx playwright test"]) {
+          writeFileSync(
+            workflow,
+            `name: ci\n${defaults}jobs:\n  t:\n    steps:\n      - run:\n          ${command}\n`,
+          );
+          assert.throws(() => playwrightInventory(dir), /anchored or tagged directory control/);
+          assert.throws(() => playwrightJsonSummary(dir), /anchored or tagged directory control/);
+        }
       }
       for (const command of ["npm run browser", "npx playwright test"]) {
         for (const cwd of [".", "web"]) {
