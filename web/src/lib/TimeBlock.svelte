@@ -5,7 +5,16 @@ import TextLink from "./TextLink.svelte";
 
 // The page owns the snapshot, freshness watcher and cache policy. Start stale
 // on the server so a cached or no-JavaScript response never claims to be live.
-let { start, end, viewerZone, state: eventState, asOf, stale = true, roomCount, refreshHref }: {
+let {
+  start,
+  end,
+  viewerZone,
+  state: eventState,
+  asOf,
+  stale = true,
+  roomCount,
+  refreshHref,
+}: {
   start: Instant;
   end?: Instant;
   viewerZone?: string | null;
@@ -23,15 +32,29 @@ let endedTime = $derived(structuredTime(end, viewerZone || browserZone));
 let snapshot = $derived(structuredTime(asOf, viewerZone || browserZone));
 let startInstant = $derived(toInstant(start));
 let snapshotInstant = $derived(toInstant(asOf));
-let remaining = $derived(startInstant && snapshotInstant ? startInstant.getTime() - snapshotInstant.getTime() : NaN);
+let remaining = $derived(
+  startInstant && snapshotInstant ? startInstant.getTime() - snapshotInstant.getTime() : NaN,
+);
 let minutes = $derived(Math.ceil(remaining / 60000));
-let countdown = $derived(!Number.isFinite(remaining) || remaining <= 0 || remaining > 86400000 ? null : remaining < 900000
-  ? `starts in ${minutes} m`
-  : minutes < 60 ? `in ${minutes} m` : `in ${Math.floor(minutes / 60)} h ${minutes % 60} m`);
+let countdown = $derived(
+  !Number.isFinite(remaining) || remaining <= 0 || remaining > 86400000
+    ? null
+    : remaining < 900000
+      ? `starts in ${minutes} m`
+      : minutes < 60
+        ? `in ${minutes} m`
+        : `in ${Math.floor(minutes / 60)} h ${minutes % 60} m`,
+);
 let hasClaim = $derived(eventState === "live" || (eventState === "upcoming" && !!countdown));
 let withdrawn = $derived(!mounted || stale || !snapshot);
 // Restrict the recovery link to a same-origin path, without URL parser surprises.
-let refreshPath = $derived(refreshHref?.startsWith("/") && !refreshHref.startsWith("//") && !/[\\\u0000-\u001f\u007f]/.test(refreshHref) ? refreshHref.split("#", 1)[0] : undefined);
+let refreshPath = $derived(
+  refreshHref?.startsWith("/") &&
+    !refreshHref.startsWith("//") &&
+    !/[\\\u0000-\u001f\u007f]/.test(refreshHref)
+    ? refreshHref.split("#", 1)[0]
+    : undefined,
+);
 
 onMount(() => {
   if (!viewerZone) browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -43,7 +66,7 @@ onMount(() => {
   <div class="time-block" data-state={eventState}>
     <time datetime={time.datetime} class:cancelled={eventState === "cancelled"}>{time.localTime}</time>
     <div class="details">
-      <div>{time.localDate}, {time.zone}{#if browserZone && !viewerZone} (from your browser){/if}</div>
+      <div>{time.localDate}, {time.zone}{#if browserZone && !viewerZone}{" (from your browser)"}{/if}</div>
       <div class="anchor">
         {time.utcTime} UTC
         {#if eventState === "upcoming" && countdown && !withdrawn} · {countdown}
