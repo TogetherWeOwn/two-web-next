@@ -24,10 +24,15 @@ try {
     outsideDirectory = mkdtempSync(join("src", "ast-grep-boundary-outside-"));
     const outside = join(outsideDirectory, "boundary.ts");
     writeFileSync(outside, 'import "hono";\n');
-    const extensions = ["ts", "mts", "cts", "tsx", "js", "mjs", "cjs"];
+    const extensions = ["ts", "mts", "cts", "tsx", "jsx", "js", "mjs", "cjs"];
     const files = extensions.map((extension) => join(directory, `boundary.${extension}`));
     for (const file of files)
-      writeFileSync(file, 'import "other";\nconst load = () => import(`hono/${name}`);\n');
+      writeFileSync(
+        file,
+        String.raw`import 'oth\x65r'; import 'ho\n o'; const unrelated = require('other');` +
+          "\nconst load = () => import(`hono/${name}`);\n" +
+          "const other = () => import(`h\\x6fno/cors${name}`);\n",
+      );
     const scan = () =>
       spawnSync("npx", ["-y", "--package", "@ast-grep/cli@0.50.0", "ast-grep", "scan"], {
         encoding: "utf8",
@@ -43,15 +48,29 @@ try {
     const extraCases = [
       "import type Hono = require('hono');",
       "import Cors = require('hono/cors');",
+      String.raw`import type { Context } from 'h\x6fno';`,
       "const load = () => import(`hono`);",
       "const cors = require(`hono/cors`);",
+      "const dollar = require(`hono/$literal`);",
     ];
-    const extraFiles = ["ts", "tsx"].flatMap((extension) =>
-      extraCases.map((source, index) => {
-        const file = join(directory, `case-${index}.${extension}`);
-        writeFileSync(file, `${source}\n`);
-        return file;
-      }),
+    const escapedCases = [
+      String.raw`import 'hono';`,
+      String.raw`export * from 'hono\x2fcors';`,
+      String.raw`const load = () => import('h\x6fno');`,
+      String.raw`const cors = require('hono\x2fcors');`,
+      String.raw`const cors = require('\150\157\156\157\057cors');`,
+      String.raw`import 'ho\u{6e}o';`,
+      "import 'ho\\\nno';",
+      String.raw`const load = () => import(` + "`" + String.raw`h\x6fno` + "`" + `);`,
+    ];
+    const extraFiles = ["ts", "tsx", "jsx"].flatMap((extension) =>
+      (extension === "jsx" ? escapedCases : [...extraCases, ...escapedCases]).map(
+        (source, index) => {
+          const file = join(directory, `case-${index}.${extension}`);
+          writeFileSync(file, `${source}\n`);
+          return file;
+        },
+      ),
     );
     const denied = scan();
     const deniedOutput = `${denied.stdout ?? ""}\n${denied.stderr ?? ""}`;
