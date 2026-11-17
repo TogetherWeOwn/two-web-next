@@ -255,6 +255,35 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     await expect(store.recordSync({ ...intent, attempts: 2 })).rejects.toThrow();
   });
 
+  it("does not claim a reopened attempt from a stale snapshot after reconciliation", async () => {
+    await seed();
+    const key = crypto.randomUUID();
+    const events = pgEventStore(sql);
+    const prepared = await events.prepareSync(eventKey, key, new Date());
+    if (!prepared || "waiting" in prepared) throw new Error("missing sync snapshot");
+    const attempt = await events.claimSync(prepared, new Date());
+    if (!attempt) throw new Error("missing sync claim");
+    await pgReconciliationStore(sql).recordSync({
+      idempotencyKey: key,
+      verb: attempt.action,
+      subject: eventKey,
+      attempts: attempt.requestAttempts,
+      lastCode: "needs_reconciliation",
+      lastStatus: 409,
+    });
+    const due = new Date("2020-01-01T00:00:00Z");
+    await sql`update event_sync_attempts set next_attempt_at = ${due} where idempotency_key = ${key}::uuid`;
+    expect(await events.claimSync(prepared, new Date())).toBeNull();
+    const [row] = await sql`select state, request_attempts, next_attempt_at, terminal_reason
+      from event_sync_attempts where idempotency_key = ${key}::uuid`;
+    expect(row).toMatchObject({
+      state: "pending",
+      request_attempts: attempt.requestAttempts,
+      next_attempt_at: due,
+      terminal_reason: SYNC_RECONCILIATION_MARKER,
+    });
+  });
+
   it("rolls back the sync fence if the intent conflicts", async () => {
     await seed();
     const key = crypto.randomUUID();

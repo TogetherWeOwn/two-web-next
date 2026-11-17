@@ -44,6 +44,7 @@ export async function compileBoardPeriodKit(): Promise<BoardPeriodKit> {
     stdin: {
       contents: `
 import { render } from "svelte/server";
+import "./web/src/lib/site-header.css";
 import Page from "./web/src/routes/leaderboards/members/+page.svelte";
 import { load } from "./web/src/routes/leaderboards/members/+page.server.ts";
 import { memberReadResponse } from "./src/member-reads.ts";

@@ -192,6 +192,29 @@ describe("Kit home SSR render: independently degraded panels", () => {
     expect(html).toContain("3 going");
   });
 
+  it("renders the event band for guests and members without invented live or personal state", () => {
+    const upcomingEvents = [
+      {
+        source: "discord",
+        discordId: "123",
+        title: "Community night",
+        startsAt: new Date(Date.UTC(2030, 6, 20, 19)),
+        timezone: "UTC",
+        location: "Online",
+      },
+    ];
+    for (const session of [null, memberSession]) {
+      const html = renderPage(baseData({ session, upcomingEvents }));
+      expect(html).toContain("What’s on.");
+      expect(html).toContain("Come along.");
+      expect(html).toContain("Community night");
+      expect(html).toContain(`href="${INVITE_URL}" data-testid="home-event-discord"`);
+      expect(html).toContain("RSVP in Discord");
+      expect(html).not.toContain("You’re in");
+      expect(html).not.toContain("Pull me in");
+    }
+  });
+
   it("keeps the exact Hono title, canonical URL and JSON-LD marker", () => {
     const html = renderPage(baseData());
     expect(html).toContain("Together We Own — the lobby is open");
@@ -234,7 +257,9 @@ function fullnessEvent(overrides: Record<string, unknown> = {}): Record<string, 
 
 /** The one teaser row linking `key`, so a sibling's marker cannot satisfy the pin. */
 function fullnessRow(html: string, key: string): string {
-  const hit = html.split('<li class="card"').find((chunk) => chunk.includes(`/e/${key}"`));
+  const hit = [...html.matchAll(/<li class="card(?:\s[^"]*)?"[^>]*>[\s\S]*?<\/li>/g)].find(
+    ([row]) => row.includes(`/e/${key}"`),
+  )?.[0];
   if (!hit) throw new Error(`no teaser row for ${key}`);
   return hit.split("</li>")[0]!;
 }

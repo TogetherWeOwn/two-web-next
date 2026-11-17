@@ -41,6 +41,7 @@ export async function compilePeriodKit(): Promise<PeriodKit> {
     stdin: {
       contents: `
 import { render } from "svelte/server";
+import "./web/src/lib/site-header.css";
 import Index from "./web/src/routes/hotzones/+page.svelte";
 import Signal from "./web/src/routes/hotzones/[signal]/+page.svelte";
 import ErrorPage from "./web/src/routes/+error.svelte";

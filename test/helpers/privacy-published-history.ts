@@ -44,6 +44,7 @@ export async function compilePrivacyHistory(): Promise<PrivacyHistoryFixture> {
     stdin: {
       contents: `
 import { render } from "svelte/server";
+import "./web/src/lib/site-header.css";
 import { Hono } from "hono";
 import Page from "./web/src/routes/privacy/+page.svelte";
 import { registerSeoLeaves } from "./src/seo-leaves.tsx";

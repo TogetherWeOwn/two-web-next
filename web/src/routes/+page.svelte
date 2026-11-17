@@ -180,9 +180,9 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
       {/each}
     </dl>
   </section>
-  <section aria-labelledby="home-events-heading">
+  <section class="event-band" aria-labelledby="home-events-heading">
     <p class="strap">Next up</p>
-    <h2 id="home-events-heading">Game nights, when they land.</h2>
+    <h2 id="home-events-heading">What’s on. <span>Come along.</span></h2>
     {#if upcomingEvents.length > 0}
       <ul class="facts home-events" data-testid="home-events-list">
         <!-- csr=false: omit this server-rendered list from the unused client asset.
@@ -205,6 +205,7 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
                       : "UTC"})
                   </time>
                 </p>
+                <div class="event-meta">
                 <h3>{event.title}</h3>
                 {#if event.location}<p>{event.location}</p>{/if}
                 {#if event.source === "discord"}
@@ -218,6 +219,7 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
                     {/if}
                   </p>
                 {/if}
+                </div>
               </a>
             </li>
           {/each}
