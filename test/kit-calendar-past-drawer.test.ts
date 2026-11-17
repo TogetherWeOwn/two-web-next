@@ -19,6 +19,7 @@ const { compile } = webRequire("svelte/compiler") as {
 
 const ENTRY = `import { render } from "svelte/server";
 import Drawer from ${JSON.stringify(join(root, "web/src/lib/CalendarPastDrawer.svelte"))};
+import List from ${JSON.stringify(join(root, "web/src/lib/CalendarList.svelte"))};
 const state = { view: "list", month: "2030-06", q: "", game: "Rock & Roll", past: false, page: 2 };
 const card = { kind: "event", key: "old", eventKey: "old", title: "Old game",
   titleSegments: [{ text: "Old", match: true }], zone: "UTC", startsAt: new Date("2030-06-01T18:00:00Z"),
@@ -28,7 +29,12 @@ const card = { kind: "event", key: "old", eventKey: "old", title: "Old game",
 const base = { state, past: [card], showPast: false, member: false,
   inviteUrl: "https://discord.test/invite", loginReturnTo: "/events?page=2" };
 const run = (o) => render(Drawer, { props: { ...base, ...o } }).body;
+const list = (o) => render(List, { props: { ...base, upcoming: [], totalPages: 1, outOfRange: false, ...o } }).body;
 export const bodies = {
+  pager: list({ state: { ...state, q: 'Tom & "Jerry"', past: true }, totalPages: 4, showPast: true }),
+  oor: list({ state: { ...state, page: 9 }, totalPages: 3, outOfRange: true }),
+  single: list({ past: [] }),
+  listOpen: list({ state: { ...state, past: true }, showPast: true }),
   closed: run({}),
   open: run({ state: { ...state, past: true }, showPast: true }),
   search: run({ state: { ...state, q: "old", past: true }, showPast: true }),
@@ -71,6 +77,28 @@ it("renders standalone past drawer toggles and past cards", async () => {
     const { bodies: b } = (await import(pathToFileURL(outfile).href)) as {
       bodies: Record<string, string>;
     };
+    const tag = (html: string, id: string) =>
+      new RegExp(`<[^>]*data-testid="${id}"[^>]*>`).exec(html)?.[0] ?? "";
+    const href = (html: string, id: string) =>
+      /\shref="([^"]*)"/.exec(tag(html, id))?.[1]?.replaceAll("&amp;", "&");
+    const query = "q=Tom+%26+%22Jerry%22&game=Rock+%26+Roll&past=1";
+    expect(href(b.pager!, "events-pager-first")).toBe(`/events?${query}`);
+    expect(href(b.pager!, "events-pager-prev")).toBe(`/events?${query}`);
+    expect(href(b.pager!, "events-pager-next")).toBe(`/events?${query}&page=3`);
+    expect(href(b.pager!, "events-pager-last")).toBe(`/events?${query}&page=4`);
+    expect(tag(b.pager!, "events-pager-status")).toContain('role="status"');
+    expect(b.pager).not.toContain("events-out-of-range");
+    expect(tag(b.oor!, "events-out-of-range")).toContain('role="status"');
+    expect(b.oor).toContain("Page 9 is outside the schedule");
+    expect(href(b.oor!, "events-pager-first")).toBe("/events?game=Rock+%26+Roll");
+    expect(href(b.oor!, "events-pager-prev")).toBe("/events?game=Rock+%26+Roll&page=3");
+    expect(b.oor).not.toContain("events-pager-next");
+    expect(b.oor).not.toContain("events-pager-last");
+    expect(b.single).not.toContain("events-pager");
+    expect(b.single).not.toContain("events-past-toggle");
+    expect(href(b.listOpen!, "events-past-toggle")).toBe("/events?game=Rock+%26+Roll&page=2");
+    expect(b.listOpen).toContain('data-testid="events-past-list"');
+    expect(b.listOpen).not.toContain("<mark>");
     expect(b.closed).toContain('href="/events?game=Rock+%26+Roll&amp;past=1&amp;page=2"');
     expect(b.closed).not.toContain('data-testid="events-past-list"');
     expect(b.open).toContain('href="/events?game=Rock+%26+Roll&amp;page=2"');
