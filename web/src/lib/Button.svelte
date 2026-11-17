@@ -100,19 +100,15 @@ $effect(() => {
 
 <style>
   .pill {
-    display: inline-flex; vertical-align: middle;
-    align-items: center; justify-content: center;
-    min-height: 44px; padding: 0 var(--space-5);
-    border: 0; border-radius: var(--radius-pill);
+    display: inline-flex; vertical-align: middle; align-items: center; justify-content: center;
+    min-height: 44px; padding: 0 var(--space-5); border: 0; border-radius: var(--radius-pill);
     background: transparent; box-shadow: inset 0 0 0 1px var(--color-hair2); color: var(--t1);
-    font-family: var(--font-ui); font-size: var(--text-ui);
-    font-weight: var(--font-weight-semibold); font-stretch: var(--font-width-button);
-    cursor: pointer; text-decoration: none;
+    font-family: var(--font-ui); font-size: var(--text-ui); font-weight: var(--font-weight-semibold);
+    font-stretch: var(--font-width-button); cursor: pointer; text-decoration: none;
   }
-
   .sm { min-height: 36px; padding-inline: var(--space-inset-room); font-size: var(--text-small); }
   .lg { min-height: 56px; padding-inline: var(--space-inset-card-lg); font-size: var(--text-body); }
-  .full-width { width: 100%; }
+  .full-width { box-sizing: border-box; width: 100%; }
   .undo { display: none; }
   .saved:focus-visible .undo { display: inline; }
   .spinner { width: 16px; height: 16px; margin-right: var(--space-2); border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; }
@@ -127,7 +123,6 @@ $effect(() => {
   .pill:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
   .on-accent:focus-visible { outline-color: var(--focus-ring-on-accent); }
   .pill[aria-disabled="true"] { background: var(--g2); box-shadow: none; color: var(--t3); cursor: not-allowed; }
-
   @media (hover: hover) {
     .pill:not([aria-disabled="true"]):hover { background: var(--g2); }
     .primary:not([aria-disabled="true"]):hover { background: var(--accent-hi); }
@@ -135,7 +130,6 @@ $effect(() => {
     .saved:not([aria-disabled="true"]):hover .undo { display: inline; }
     .on-accent:not([aria-disabled="true"]):hover { background: var(--on-accent); }
   }
-
   @media (forced-colors: active) {
     .pill { border: 1px solid ButtonText; }
     .pill[aria-disabled="true"] { border-color: GrayText; }

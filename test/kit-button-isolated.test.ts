@@ -12,7 +12,7 @@ it("renders button and navigation states with safe native semantics", async () =
     const links = html.match(/<a\b[^>]*>[\s\S]*?<\/a>/g) ?? [];
     expect(allButtons.filter((button) => button.includes(" hidden"))).toHaveLength(4);
     expect(buttons).toHaveLength(7);
-    expect(links).toHaveLength(3);
+    expect(links).toHaveLength(4);
     expect(buttons[0]).toContain('type="submit"');
     expect(buttons[1]).toContain('type="button"');
     expect(buttons[1]).toContain('aria-disabled="true"');
@@ -28,7 +28,7 @@ it("renders button and navigation states with safe native semantics", async () =
     expect(buttons[4]).toContain("Continue");
     expect(links[0]).toContain('href="/e/raid"');
     expect(links[0]).toContain('aria-label="Details for Raid Night"');
-    for (const link of links.slice(1)) {
+    for (const link of links.slice(1, 3)) {
       expect(link).toContain('aria-disabled="true"');
       expect(link).not.toMatch(/\shref=/);
       expect(link).toContain('tabindex="0"');

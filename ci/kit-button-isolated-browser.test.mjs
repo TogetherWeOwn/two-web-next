@@ -63,6 +63,11 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
             if (visible)
               assert.equal(await locator.evaluate((el) => el.matches(":focus-visible")), true);
           }
+          const fits = await page.getByRole("link", { name: "Browse events" }).evaluate((el) => {
+            const width = el.getBoundingClientRect().width;
+            return width > 0 && width <= el.parentElement.getBoundingClientRect().width;
+          });
+          assert.ok(fits);
           const primary = page.getByRole("button", { name: "Save event" });
           const geometry = await primary.evaluate((el) => {
             const css = getComputedStyle(el);

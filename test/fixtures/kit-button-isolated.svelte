@@ -18,3 +18,4 @@ let _submissions = $state(0);
 <div style="background: var(--ember); padding: var(--space-4)"><Button variant="on-accent" size="lg" fullWidth>Continue</Button></div>
 <form action="/submitted"><label>Disabled input <input name="disabled" /></label><Button type="submit" disabled>Disabled submit</Button></form>
 <form action="/submitted"><label>Loading input <input name="loading" /></label><Button type="submit" loading>Loading submit</Button></form>
+<div style="width: 320px; max-width: 100%"><Button href="/events" fullWidth>Browse events</Button></div>
