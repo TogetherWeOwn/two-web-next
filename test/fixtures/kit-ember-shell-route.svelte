@@ -1,6 +1,7 @@
 <script lang="ts">
 import { page } from "$app/state";
 import EmberShell from "#lib/EmberShell.svelte";
+import SiteMetadata from "#lib/SiteMetadata.svelte";
 
 let state = $derived(page.url.searchParams.get("state"));
 </script>
@@ -9,6 +10,7 @@ let state = $derived(page.url.searchParams.get("state"));
   <a href="/profile">Your profile</a>
 {/snippet}
 
+<SiteMetadata title="Welcome" theme="home" />
 <EmberShell
   activeNav={state === "member" ? "events" : "home"}
   member={state === "member"}

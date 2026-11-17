@@ -17,6 +17,12 @@ test("built Ember shell preserves its landmarks and account states without JavaS
       async ({ page, html }) => {
         assert.match(html, /_app\/immutable\/assets\/[^" ]+\.css/);
         assert.equal(await page.locator('a[href="#main"]').count(), 1);
+        assert.equal(
+          await page
+            .locator("[data-kit-site-header]")
+            .evaluate((header) => getComputedStyle(header).display),
+          "flex",
+        );
         assert.equal(await page.getByRole("main").count(), 1);
         assert.equal(await page.getByRole("contentinfo").count(), 1);
         assert.equal(
