@@ -40,6 +40,22 @@ describe.skipIf(!url)(
       }
     });
 
+    it("does not let infinite ends displace a finite published homepage event", async () => {
+      const { client, db, dispose } = await createMemberDataFixture(url!);
+      try {
+        await client`insert into events (event_key, title, starts_at, ends_at, status) values
+          ('inf-end-1', 'Infinite end 1', '2069-01-02T00:00:00Z', 'infinity', 'published'),
+          ('inf-end-2', 'Infinite end 2', '2069-01-03T00:00:00Z', 'infinity', 'published'),
+          ('inf-end-3', 'Infinite end 3', '2069-01-04T00:00:00Z', 'infinity', 'published'),
+          ('draft', 'Draft', '2069-01-05T00:00:00Z', '2069-01-05T01:00:00Z', 'draft'),
+          ('finite', 'Finite', '2069-01-06T00:00:00Z', '2069-01-06T01:00:00Z', 'published')`;
+        const home = await listHomeUpcoming(db, now);
+        expect(home.map((event) => event.eventKey)).toEqual(["finite"]);
+      } finally {
+        await dispose();
+      }
+    });
+
     it("returns empty when every eligible row is nonfinite", async () => {
       const { client, db, dispose } = await createMemberDataFixture(url!);
       try {

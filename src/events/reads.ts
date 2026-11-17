@@ -351,12 +351,11 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
     const rows = await tx
       .select()
       .from(events)
-      .where(and(eq(events.status, "published"), gte(events.endsAt, now), finiteEventStart))
+      .where(and(eq(events.status, "published"), gte(events.endsAt, now), finiteEventWindow))
       .orderBy(asc(events.startsAt), asc(events.id))
       .limit(3);
     // The homepage gets public signposts and an aggregate, never creator or RSVP identities.
-    // The teaser renders `startsAt` unguarded, so unrenderable windows are
-    // refused here too (this read never had #232's `isfinite()` guard).
+    // Retain the renderability guard for finite dates outside JavaScript's range.
     return (await withGoing(tx, rows.filter(isRenderableEventWindow))).map(
       ({
         eventKey,
