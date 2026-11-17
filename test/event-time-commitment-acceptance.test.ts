@@ -31,7 +31,16 @@ function text(node: Node): string {
 }
 function metadata(html: string) {
   const document = parse(html);
-  return descendants(document)
+  const meta = descendants(document).find(
+    (node) =>
+      node.nodeName === "dl" &&
+      "attrs" in node &&
+      node.attrs.some(
+        (attr) => attr.name === "class" && attr.value.split(/\s+/).includes("event-meta"),
+      ),
+  );
+  if (!meta) throw new Error("Event metadata not found");
+  return descendants(meta)
     .filter((node) => node.nodeName === "dt")
     .map((term) => {
       const siblings = "parentNode" in term && term.parentNode ? term.parentNode.childNodes : [];

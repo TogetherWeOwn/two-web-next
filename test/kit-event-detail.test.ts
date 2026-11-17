@@ -1265,7 +1265,7 @@ describe("Kit detail presentation", () => {
     expect(outcome.model.joinInstructions).toBeNull();
     const { renderDetail } = await buildKitEventDetailBundle();
     const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
-    expect(html).toContain('data-testid="event-organizer">Solo host');
+    expect(html).toMatch(/data-testid="event-organizer"[^>]*>Solo host/);
     expect(html).not.toContain('data-testid="event-join-details"');
   });
 
@@ -1873,14 +1873,16 @@ describe("Kit event facts list (C6)", () => {
         html.match(/<section class="[^"]*event-facts[^"]*"[\s\S]*?<\/section>/)?.[0] ?? "";
       expect(box).toContain('data-testid="kit-event-facts"');
       expect(box).toContain('aria-label="Event facts"');
-      expect(box.indexOf("<dt>Host</dt>")).toBeGreaterThan(-1);
-      expect(box.indexOf("<dt>Host</dt>")).toBeLessThan(box.indexOf("<dt>Game</dt>"));
-      expect(box).toContain('data-testid="event-organizer">Vexa</p>');
+      expect(box.match(/<dt\b[^>]*>Host<\/dt>/)?.index).toBeTypeOf("number");
+      expect(box.match(/<dt\b[^>]*>Host<\/dt>/)?.index ?? -1).toBeLessThan(
+        box.match(/<dt\b[^>]*>Game<\/dt>/)?.index ?? -1,
+      );
+      expect(box).toMatch(/data-testid="event-organizer"[^>]*>Vexa<\/p>/);
       expect(box).toContain("Chess");
-      expect(box).not.toContain("<dt>Room</dt>");
-      expect(box).not.toContain("<dt>Repeats</dt>");
-      expect(box).not.toContain("<dt>Talk</dt>");
-      expect(box).not.toContain("<dt>Share</dt>");
+      expect(box).not.toMatch(/<dt\b[^>]*>Room<\/dt>/);
+      expect(box).not.toMatch(/<dt\b[^>]*>Repeats<\/dt>/);
+      expect(box).not.toMatch(/<dt\b[^>]*>Talk<\/dt>/);
+      expect(box).not.toMatch(/<dt\b[^>]*>Share<\/dt>/);
       // Host appears once: the metadata list no longer renders its own row.
       expect(html.match(/data-testid="event-organizer"/g)).toHaveLength(1);
       expect(html).not.toContain("<dt>Hosted by</dt>");
@@ -1913,8 +1915,8 @@ describe("Kit event facts list (C6)", () => {
   it("renders only Game when there is no host", async () => {
     const html = await renderFor(hosted(null, "Chess"), GUEST);
     expect(html).toContain('data-testid="kit-event-facts"');
-    expect(html).toContain("<dt>Game</dt>");
-    expect(html).not.toContain("<dt>Host</dt>");
+    expect(html).toMatch(/<dt\b[^>]*>Game<\/dt>/);
+    expect(html).not.toMatch(/<dt\b[^>]*>Host<\/dt>/);
   });
 
   it("leaves the shared Hono metadata host row unchanged by default", () => {

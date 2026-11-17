@@ -1,7 +1,8 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
-import { kitEventFacts, type KitEventDetailModel } from "../../../src/events/kit-detail";
+import type { KitEventDetailModel } from "../../../src/events/kit-detail";
+import { kitEventFacts } from "../../../src/events/kit-event-facts";
 import { ONGOING_COPY } from "../../../src/events/ongoing";
 import { isPublicJoinUrl } from "../../../src/events/public-join-url";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
@@ -267,7 +268,7 @@ const detailIslands = [
 
 <style>
   .event-layout-head { grid-area: head; min-width: 0; }
-  .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-6); }
+  .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
   .event-layout-rail :global(> section) { border: 0; }
   .event-layout-body { grid-area: body; min-width: 0; }
   .seat-card {
