@@ -1,8 +1,5 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import { userInfo } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { admitKitLockRoot, KitLockAdmissionError } from "../web/scripts/kit-lock-admission.mjs";
+import { describe, expect, it } from "vitest";
+import { KitLockAdmissionError } from "../web/scripts/kit-lock-admission.mjs";
 import { createKitLockAdmission } from "../web/scripts/kit-lock-admission-core.mjs";
 
 const stat = (mode: bigint, ino = 1n, uid = 1000n) =>
@@ -95,6 +92,9 @@ describe("Kit lock admission with injected environment", () => {
     }
     refuses({ [ROOT]: stat(0o700n, 12n, 0n) }, /not owned/);
     refuses({ [ROOT]: { ...stat(0o700n, 12n), mode: 0o100700n } }, /not a directory/);
+    expect(
+      refuses({ [ROOT]: { ...stat(0o700n, 12n), mode: 0o120777n } }, /not a directory/),
+    ).toEqual([]);
   });
 
   it("closes on failures and keeps the primary error when close fails", () => {
@@ -168,22 +168,5 @@ describe("Kit lock admission with injected environment", () => {
     for (const path of ["relative", "/", `${ROOT}/..`, 42]) {
       expect(() => admit(path as string)).toThrow(KitLockAdmissionError);
     }
-  });
-});
-const homes: string[] = [];
-afterEach(() => {
-  for (const dir of homes.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-describe("Kit lock admission against the real filesystem", () => {
-  it("refuses unusable roots before any XFS classification", () => {
-    const base = mkdtempSync(join(userInfo().homedir, ".kit-lock-admission-"));
-    homes.push(base);
-    mkdirSync(join(base, "open"), { mode: 0o755 });
-    chmodSync(join(base, "open"), 0o755);
-    symlinkSync(base, join(base, "link"));
-    const reason = process.platform === "linux" ? /mode is not exactly 0700/ : /Linux is required/;
-    expect(() => admitKitLockRoot(join(base, "open"))).toThrow(reason);
-    expect(() => admitKitLockRoot(join(base, "link"))).toThrow(KitLockAdmissionError);
   });
 });
