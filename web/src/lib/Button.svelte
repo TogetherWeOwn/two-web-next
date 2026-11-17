@@ -33,7 +33,10 @@ let {
 
 let appearance = $derived(disabled && variant === "primary" ? "quiet" : variant);
 let classes = $derived([
-  "pill", appearance !== "ghost" && appearance, size !== "md" && size, fullWidth && "full-width",
+  "pill",
+  appearance !== "ghost" && appearance,
+  size !== "md" && size,
+  fullWidth && "full-width",
 ]);
 let accessibleLabel = $derived(
   loading
