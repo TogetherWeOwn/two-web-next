@@ -2,9 +2,11 @@ id: http-no-hono-tsx
 valid:
   - import { value } from './hono'; const node = <div>{value}</div>
   - const node = <div>hono</div>
+  - const other = require('other')
 invalid:
   - import { Hono } from 'hono'; const node = <div />
   - import type { Context } from 'hono/context'; const node = <div />
   - export * from 'hono/cors'
   - export type { Context } from 'hono'
   - const load = () => import('hono/cors')
+  - const hono = require('hono')

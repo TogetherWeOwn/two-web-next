@@ -24,7 +24,7 @@ try {
     outsideDirectory = mkdtempSync(join("src", "ast-grep-boundary-outside-"));
     const outside = join(outsideDirectory, "boundary.ts");
     writeFileSync(outside, 'import "hono";\n');
-    const extensions = ["ts", "tsx", "js", "mjs", "cjs"];
+    const extensions = ["ts", "mts", "cts", "tsx", "js", "mjs", "cjs"];
     const files = extensions.map((extension) => join(directory, `boundary.${extension}`));
     for (const file of files) writeFileSync(file, 'import "other";\n');
     const scan = () =>
@@ -38,7 +38,7 @@ try {
         `allowed imports or outside path failed: ${allowedOutput || allowed.error?.message}`,
       );
     }
-    for (const file of files) writeFileSync(file, 'import "hono/cors";\n');
+    for (const file of files) writeFileSync(file, 'const cors = require("hono/cors");\n');
     const denied = scan();
     const deniedOutput = `${denied.stdout ?? ""}\n${denied.stderr ?? ""}`;
     if (denied.error || denied.status !== 1 || files.some((file) => !deniedOutput.includes(file))) {

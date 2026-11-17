@@ -3,7 +3,7 @@ language: TypeScript
 severity: error
 message: "The HTTP core must not import or re-export Hono"
 files:
-  - src/http/**/*.{ts,js,mjs,cjs}
+  - src/http/**/*.{ts,mts,cts,js,mjs,cjs}
 rule:
   kind: string
   regex: '^["\x27]hono(?:/[^"\x27]*)?["\x27]$'
@@ -18,4 +18,6 @@ rule:
         kind: arguments
         inside:
           kind: call_expression
-          pattern: import($$$)
+          any:
+            - pattern: import($$$)
+            - pattern: require($$$)
