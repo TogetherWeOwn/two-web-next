@@ -39,7 +39,7 @@ import { spawnSync } from "node:child_process";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
-import { parseDocument, visit, isScalar, isMap, isSeq } from "yaml";
+import { parseDocument, visit, isScalar, isMap, isSeq, isAlias } from "yaml";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -354,8 +354,9 @@ function workflowShellView(text, name) {
         !directoryKeys.has(pair) ||
           (!pair.key.anchor &&
             !pair.key.tag &&
+            !isAlias(pair.value) &&
             (!isMap(pair.value) || (!pair.value.anchor && !pair.value.tag))),
-        `${name} has an anchored or tagged directory control this gate cannot model`,
+        `${name} has an anchored or tagged directory control, or an alias, this gate cannot model`,
       );
       // The structural cwd audit must see decoded control keys too, including
       // a mapping-valued `run` under workflow or job defaults.
@@ -2681,6 +2682,34 @@ function selftest() {
           );
           assert.throws(() => playwrightInventory(dir), /anchored or tagged directory control/);
           assert.throws(() => playwrightJsonSummary(dir), /anchored or tagged directory control/);
+        }
+      }
+      for (const scope of ["workflow", "job"]) {
+        for (const level of ["defaults", "run"]) {
+          const anchor =
+            level === "defaults" ? "{ run: { working-directory: web } }" : "{ working-directory: web }";
+          const defaults =
+            level === "defaults" ? "defaults: *directory\n" : "defaults:\n  run: *directory\n";
+          const top = scope === "workflow" ? defaults : "";
+          const job = scope === "job" ? defaults.replace(/^(?=.)/gm, "    ") : "";
+          const metadata =
+            scope === "job"
+              ? `  metadata:\n    uses: ./.github/workflows/metadata.yml\n    with: &directory ${anchor}\n`
+              : "";
+          const topAnchor = scope === "workflow" ? `metadata: &directory ${anchor}\n` : "";
+          writeFileSync(
+            workflow,
+            `name: ci\n${topAnchor}${top}jobs:\n${metadata}  t:\n${job}    steps:\n      - "uses": actions/checkout@v4\n      - "run": npx playwright test\n`,
+          );
+          assert.throws(() => playwrightInventory(dir), /directory control, or an alias/);
+          assert.throws(() => playwrightJsonSummary(dir), /directory control, or an alias/);
+          const result = spawnSync(
+            process.execPath,
+            [fileURLToPath(import.meta.url), "--root", dir, "--json", "--strict"],
+            { encoding: "utf8" },
+          );
+          assert.notEqual(result.status, 0);
+          assert.match(result.stderr, /directory control, or an alias/);
         }
       }
       for (const command of ["npm run browser", "npx playwright test"]) {
