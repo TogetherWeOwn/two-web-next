@@ -185,6 +185,7 @@ for (const size of [
           contentType: "application/json",
         });
         expect(primerHeaders).toContain("public, max-age=31536000, immutable");
+        expect(cacheEvidence.reuseObserved).toBe(true);
         const warmCode = warmPage.locator(codeSelector).first();
         await warmCode.evaluate((node) => node.setAttribute("data-font-evidence", ""));
         const warmFonts = await renderedPlatformFonts(warmPage, evidenceSelector);
