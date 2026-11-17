@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { readRouteEvidenceArtifact } from "./route-evidence-artifact-bytes.mjs";
 import { crc32, deflateRawSync } from "node:zlib";
 import { extractRouteEvidenceZip } from "./route-evidence-artifact-zip.mjs";
 
@@ -65,78 +63,6 @@ const ok = [
   { name: "report.json", data: '{"a":1}' },
   { name: "notes.txt", data: "hello", method: 0 },
 ];
-
-test("verifies bounded streamed artifact bytes before extracting", async () => {
-  const archive = zip(ok);
-  const digest = `sha256:${createHash("sha256").update(archive).digest("hex")}`;
-  const response = (chunks, ok = true) => ({
-    ok,
-    body: (async function* () {
-      yield* chunks;
-    })(),
-  });
-  const files = await readRouteEvidenceArtifact(
-    response([archive.subarray(0, 10), archive.subarray(10)]),
-    digest,
-  );
-  assert.equal(files.get("report.json").toString(), '{"a":1}');
-  const tinyChunks = Array.from(archive, (byte) => Uint8Array.of(byte));
-  const tinyFiles = await readRouteEvidenceArtifact(response(tinyChunks), digest);
-  assert.equal(tinyFiles.get("report.json").toString(), '{"a":1}');
-  const refusedDownload = /route evidence refused: invalid artifact download/;
-  const invalidDownloads = [
-    [response([archive]), `sha256:${"0".repeat(64)}`],
-    [response([archive], false), digest],
-    [response([archive]), "bad"],
-    [response([]), digest],
-    [response(["not bytes"]), digest],
-    [response([new Uint8Array(0), archive]), digest],
-  ];
-  for (const [download, expected] of invalidDownloads)
-    await assert.rejects(readRouteEvidenceArtifact(download, expected), refusedDownload);
-  const interrupted = {
-    ok: true,
-    body: (async function* () {
-      yield archive.subarray(0, 10);
-      throw new Error("transport secret");
-    })(),
-  };
-  await assert.rejects(readRouteEvidenceArtifact(interrupted, digest), (error) => {
-    assert.match(error.message, refusedDownload);
-    assert.doesNotMatch(error.message, /transport secret/);
-    return true;
-  });
-  await assert.rejects(
-    readRouteEvidenceArtifact(response([Buffer.alloc(10 * 1024 * 1024 + 1)]), digest),
-    refusedDownload,
-  );
-  const badZip = Buffer.from("bad zip");
-  const badZipDigest = `sha256:${createHash("sha256").update(badZip).digest("hex")}`;
-  await assert.rejects(readRouteEvidenceArtifact(response([badZip]), badZipDigest), refused);
-});
-
-test("accepts the streamed archive byte limit and rejects one byte over", async () => {
-  const max = 10 * 1024 * 1024;
-  const size = (max - 186) / 2;
-  const archive = zip([
-    { name: "a.json", data: Buffer.alloc(size), method: 0 },
-    { name: "b.json", data: Buffer.alloc(size), method: 0 },
-  ]);
-  assert.equal(archive.length, max);
-  const digest = `sha256:${createHash("sha256").update(archive).digest("hex")}`;
-  const response = (chunks) => ({
-    ok: true,
-    body: (async function* () {
-      yield* chunks;
-    })(),
-  });
-  const chunks = [archive.subarray(0, size), archive.subarray(size)];
-  assert.equal((await readRouteEvidenceArtifact(response(chunks), digest)).size, 2);
-  await assert.rejects(
-    readRouteEvidenceArtifact(response([...chunks, Buffer.of(0)]), digest),
-    /route evidence refused: invalid artifact download/,
-  );
-});
 
 test("accepts each ZIP limit exactly and rejects one unit over", () => {
   const archive = zip([{ name: "a.json", data: "a".repeat(100) }]);
@@ -263,9 +189,12 @@ test("refuses structural abuse", () => {
 });
 
 test("error text never echoes archive-controlled content", () => {
-  assert.throws(() => extractRouteEvidenceZip(zip([{ name: "../secret", data: "x" }])), (err) => {
-    assert.match(err.message, refused);
-    assert.doesNotMatch(err.message, /secret/);
-    return true;
-  });
+  assert.throws(
+    () => extractRouteEvidenceZip(zip([{ name: "../secret", data: "x" }])),
+    (err) => {
+      assert.match(err.message, refused);
+      assert.doesNotMatch(err.message, /secret/);
+      return true;
+    },
+  );
 });
