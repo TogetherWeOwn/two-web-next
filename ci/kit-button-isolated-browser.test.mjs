@@ -85,6 +85,10 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
             );
           }
           const fullEvent = "Join Raid Night · Event is full";
+          assert.equal(
+            await page.getByRole("button", { name: fullEvent }).textContent(),
+            fullEvent,
+          );
           await page.keyboard.press("Tab");
           await expectFocused(page.getByRole("button", { name: fullEvent }));
           for (const name of [fullEvent, "Saving…"]) {
@@ -109,6 +113,7 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
             assert.equal(page.url(), `${server.url}/`);
           }
           const saved = page.locator("button.saved");
+          assert.equal(await saved.textContent(), "Going · leave");
           await page.mouse.move(0, 0);
           await loading.focus();
           await page.keyboard.press("Tab");

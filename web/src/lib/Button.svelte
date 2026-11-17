@@ -69,7 +69,7 @@ $effect(() => {
     {#if showSpinner}<span class="spinner" aria-hidden="true"></span>{/if}
     {loadingLabel}
   {:else}
-    {@render children()}{#if disabled && disabledReason} · {disabledReason}{:else if variant === "saved"}<span class="undo"> · {undoLabel}</span>{/if}
+    {@render children()}{#if disabled && disabledReason}{" · "}{disabledReason}{:else if variant === "saved"}<span class="undo">{" · "}{undoLabel}</span>{/if}
   {/if}
 {/snippet}
 
