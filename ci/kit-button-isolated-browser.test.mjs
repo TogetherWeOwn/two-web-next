@@ -113,7 +113,7 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
             assert.equal(page.url(), `${server.url}/`);
           }
           const saved = page.locator("button.saved");
-          assert.equal(await saved.textContent(), "Going · leave");
+          assert.equal(await saved.textContent(), "Going · leave");
           await page.mouse.move(0, 0);
           await loading.focus();
           await page.keyboard.press("Tab");
