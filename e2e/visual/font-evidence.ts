@@ -105,10 +105,26 @@ export async function captureNormalizedDisplayFont(
   const face = await loadVisualFont(page, options);
   const token = await page.locator(options.root).evaluate((element, family) => {
     const root = element as HTMLElement;
-    const original = getComputedStyle(root).getPropertyValue("--font-display").trim();
-    const match = original.match(/^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,]+)(,.*)?$/);
-    if (!match) throw new Error("Expected a nonempty --font-display stack");
-    const normalized = `"${family}"${match[1] ?? ""}`;
+    const original = getComputedStyle(root)
+      .getPropertyValue("--font-display")
+      .replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
+    if (!original) throw new Error("Expected a nonempty --font-display stack");
+    let quote = "";
+    let separator = original.length;
+    for (let i = 0; i < original.length; i++) {
+      const char = original[i];
+      if (char === "\\") {
+        i++;
+      } else if (quote) {
+        if (char === quote) quote = "";
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === ",") {
+        separator = i;
+        break;
+      }
+    }
+    const normalized = `"${family}"${original.slice(separator)}`;
     root.style.setProperty("--font-display", normalized);
     return { original, normalized };
   }, face.family);

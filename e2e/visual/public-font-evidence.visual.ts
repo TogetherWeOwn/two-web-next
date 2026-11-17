@@ -85,6 +85,10 @@ for (const [description, stack, fallback] of [
   ["single-quoted family", "'Original, Display', serif", ", serif"],
   ["no fallback", "Original Display", ""],
   ["escaped quote", '"Original\\" Display", Georgia, serif', ", Georgia, serif"],
+  ["space after quoted family", '"Original, Display" , Georgia, serif', ", Georgia, serif"],
+  ["escaped comma", "Original\\,Display, serif", ", serif"],
+  ["multiline fallback", "Original Display,\nGeorgia, serif", ",\nGeorgia, serif"],
+  ["non-CSS whitespace in fallback", "Original Display, Georgia ", ", Georgia "],
 ]) {
   test(`normalizes a display stack with ${description}`, async ({ page }) => {
     await page.goto("/rules");
