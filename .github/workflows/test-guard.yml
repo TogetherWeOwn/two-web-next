@@ -5,8 +5,7 @@ name: test-guard
 # acceptance tests written by the Test Author). Lands in warn mode:
 # it reports but never fails. Per-repo overrides go in
 # `.github/test-guard.json` (see TEST-GUARD.md in the .github repo).
-# Replace 3fffeb9f9465f371763fcc3c789ed4baefe38f95 with the merge SHA of the reusable workflow,
-# then repin the same way on later updates — never a moving tag.
+# Pin the reusable workflow to its reviewed merge SHA, never a moving tag.
 # Do NOT add this check to any ruleset until the repo flips to enforce.
 
 on:
