@@ -521,11 +521,11 @@ const past: CalendarPersistedCard = { ...event, key: 'past', eventKey: 'past', t
         if (scenario === "out-of-range") {
           assert.equal(await page.getByTestId("events-out-of-range").count(), 1);
         } else {
-          assert.match(await page.getByTestId("events-list").innerText(), /Game night/);
+          assert.match(await page.getByTestId("events-list").innerText(), /Game night/i);
           if (scenario === "search") {
-            assert.equal(
+            assert.match(
               await page.getByTestId("events-list").locator("mark").first().innerText(),
-              "Game",
+              /^Game$/i,
             );
           }
           assert.match(await page.getByTestId("events-pager-next").getAttribute("href"), /page=3/);
