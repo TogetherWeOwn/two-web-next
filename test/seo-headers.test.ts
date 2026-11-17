@@ -502,21 +502,29 @@ describe("security headers per route class", () => {
 
   it.each([
     ["https://togetherweown.com", "https://togetherweown.com/about", 200, null],
-    ["https://preview.example.test", "https://preview.example.test/about", 200, "noindex, nofollow"],
+    [
+      "https://preview.example.test",
+      "https://preview.example.test/about",
+      200,
+      "noindex, nofollow",
+    ],
     ["https://togetherweown.com", "https://preview.example.test/about", 404, "noindex, nofollow"],
     ["not-a-url", "https://togetherweown.com/about", 404, "noindex, nofollow"],
-  ])("matches the extracted decision at the HTML fetch boundary", async (appUrl, url, status, tag) => {
-    expect(robotsTagFor).toBe(robotsDecision);
-    expect(robotsDecision(appUrl, new URL(url).hostname)).toBe(tag);
-    const response = await fetchApp(
-      new Request(url),
-      { ...env, APP_URL: appUrl },
-      {} as ExecutionContext,
-    );
-    expect(response.status).toBe(status);
-    expect(response.headers.get("content-type")).toContain("text/html");
-    expect(response.headers.get("x-robots-tag")).toBe(tag);
-  });
+  ])(
+    "matches the extracted decision at the HTML fetch boundary",
+    async (appUrl, url, status, tag) => {
+      expect(robotsTagFor).toBe(robotsDecision);
+      expect(robotsDecision(appUrl, new URL(url).hostname)).toBe(tag);
+      const response = await fetchApp(
+        new Request(url),
+        { ...env, APP_URL: appUrl },
+        {} as ExecutionContext,
+      );
+      expect(response.status).toBe(status);
+      expect(response.headers.get("content-type")).toContain("text/html");
+      expect(response.headers.get("x-robots-tag")).toBe(tag);
+    },
+  );
 
   it("does not add the HTML robots header to preview JSON", async () => {
     const appUrl = "https://preview.example.test";
