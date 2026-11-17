@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -11,9 +12,10 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const fixture = join(root, "test/fixtures/kit-button-isolated.svelte");
 
 test("button states work with hydration and without JavaScript", { timeout: 120000 }, async () => {
-  const styles = ["vendor/design-kit/tokens.css", "web/src/ember-theme.css"]
-    .map((path) => readFileSync(join(root, path), "utf8"))
-    .join("\nbody { background: var(--g0); color: var(--t1); }\n");
+  const { compile } = createRequire(join(root, "web/package.json"))("@tailwindcss/node");
+  const appCss = join(root, "web/src/app.css");
+  const compiled = await compile(readFileSync(appCss, "utf8"), { base: join(root, "web/src") });
+  const styles = `${compiled.build([])}\nbody { background: var(--g0); color: var(--t1); }\n`;
   const destination = (_request, response) =>
     response.writeHead(200, { "content-type": "text/plain" }).end("Destination");
   const server = await serveKitFixture({
@@ -35,6 +37,8 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
         try {
           const page = await context.newPage();
           const errors = [];
+          const screenshot = (state) =>
+            page.screenshot({ path: `artifacts/kit-button/${viewport.width}-${state}.png` });
           page.on("pageerror", (error) => errors.push(error.message));
           if (javaScriptEnabled) {
             await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
@@ -56,21 +60,26 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
             if (visible)
               assert.equal(await locator.evaluate((el) => el.matches(":focus-visible")), true);
           }
+          const primary = page.getByRole("button", { name: "Save event" });
+          const geometry = await primary.evaluate((el) => {
+            const css = getComputedStyle(el);
+            return [css.borderRadius, css.paddingInlineStart];
+          });
+          assert.deepEqual(geometry, ["999px", "20px"]);
           await page.keyboard.press("Tab");
-          await expectFocused(page.getByRole("button", { name: "Save event" }), true);
+          await expectFocused(primary, true);
           if (javaScriptEnabled) {
-            await page.screenshot({ path: `artifacts/kit-button/${viewport.width}-focus.png` });
+            await screenshot("focus");
             const { violations } = await new AxeBuilder({ page }).include("body").analyze();
             assert.deepEqual(
               violations.filter(({ impact }) => ["critical", "serious"].includes(impact)),
               [],
             );
           }
+          const fullEvent = "Join Raid Night · Event is full";
           await page.keyboard.press("Tab");
-          await expectFocused(
-            page.getByRole("button", { name: "Join Raid Night · Event is full" }),
-          );
-          for (const name of ["Join Raid Night · Event is full", "Saving…"]) {
+          await expectFocused(page.getByRole("button", { name: fullEvent }));
+          for (const name of [fullEvent, "Saving…"]) {
             const action = page.getByRole("button", { name });
             assert.equal(await action.getAttribute("type"), "button");
             assert.equal(await action.getAttribute("aria-disabled"), "true");
@@ -101,24 +110,25 @@ test("button states work with hydration and without JavaScript", { timeout: 1200
           assert.equal(await saved.locator(".undo").isVisible(), false);
           await saved.hover();
           assert.equal(await saved.locator(".undo").isVisible(), true);
-          if (javaScriptEnabled)
-            await page.screenshot({ path: `artifacts/kit-button/${viewport.width}-hover.png` });
+          if (javaScriptEnabled) await screenshot("hover");
           const accent = page.getByRole("button", { name: "Continue" });
-          for (const name of ["on-accent", "lg", "full-width"]) {
-            assert.equal(
-              await accent.evaluate((el, cls) => el.classList.contains(cls), name),
-              true,
-            );
-          }
+          assert.equal(await accent.evaluate((el) => el.matches(".on-accent.lg.full-width")), true);
           assert.ok((await accent.boundingBox()).height >= 56);
+          await page.getByRole("link", { name: "Opening…" }).focus();
+          await page.keyboard.press("Tab");
+          await expectFocused(accent, true);
+          assert.equal(
+            await accent.evaluate((el) => getComputedStyle(el).outlineColor),
+            "rgb(29, 11, 0)",
+          );
+          if (javaScriptEnabled) await screenshot("accent-focus");
           await saved.focus();
           await page.keyboard.press("Tab");
           await expectFocused(page.getByRole("link", { name: "Details for Raid Night" }));
+          await primary.click();
           if (javaScriptEnabled) {
-            await page.getByRole("button", { name: "Save event" }).click();
             assert.equal(await page.getByTestId("submissions").textContent(), "1");
           } else {
-            await page.getByRole("button", { name: "Save event" }).click();
             await page.waitForURL((destination) => destination.pathname === "/submitted");
           }
           await page.goto(server.url);

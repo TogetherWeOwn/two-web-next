@@ -15,4 +15,4 @@ let _submissions = $state(0);
 <Button href="/e/raid" ariaLabel="Details for Raid Night" size="sm">Details</Button>
 <Button href="/events" disabled disabledReason="Event is full" ariaLabel="Reserve Raid Night">Reserve Raid Night</Button>
 <Button href="/events" loading loadingLabel="Opening…">Browse</Button>
-<Button variant="on-accent" size="lg" fullWidth>Continue</Button>
+<div style="background: var(--ember); padding: var(--space-4)"><Button variant="on-accent" size="lg" fullWidth>Continue</Button></div>

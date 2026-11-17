@@ -32,6 +32,9 @@ let {
 } = $props();
 
 let appearance = $derived(disabled && variant === "primary" ? "quiet" : variant);
+let classes = $derived([
+  "pill", appearance !== "ghost" && appearance, size !== "md" && size, fullWidth && "full-width",
+]);
 let accessibleLabel = $derived(
   loading
     ? undefined
@@ -40,6 +43,11 @@ let accessibleLabel = $derived(
       : ariaLabel,
 );
 let showSpinner = $state(false);
+
+function handleClick(event: MouseEvent) {
+  if (disabled || loading) event.preventDefault();
+  else onclick?.(event);
+}
 
 $effect(() => {
   if (!loading) {
@@ -70,37 +78,17 @@ $effect(() => {
   aria-disabled={disabled || loading || undefined}
   aria-busy={loading || undefined}
   aria-label={accessibleLabel}
-  onclick={(event) => { if (!disabled && !loading) onclick?.(event); }}
-  class="pill"
-  class:primary={appearance === "primary"}
-  class:quiet={appearance === "quiet"}
-  class:saved={appearance === "saved"}
-  class:on-accent={appearance === "on-accent"}
-  class:sm={size === "sm"}
-  class:lg={size === "lg"}
-  class:full-width={fullWidth}
+  onclick={handleClick}
+  class={classes}
 >{@render content()}</a>
 {:else}
 <button
-  class="pill"
+  class={classes}
   type={disabled || loading ? "button" : type}
-  onclick={(event) => {
-    if (disabled || loading) {
-      event.preventDefault();
-      return;
-    }
-    onclick?.(event);
-  }}
+  onclick={handleClick}
   aria-disabled={disabled || loading || undefined}
   aria-busy={loading || undefined}
   aria-label={accessibleLabel}
-  class:primary={appearance === "primary"}
-  class:quiet={appearance === "quiet"}
-  class:saved={appearance === "saved"}
-  class:on-accent={appearance === "on-accent"}
-  class:sm={size === "sm"}
-  class:lg={size === "lg"}
-  class:full-width={fullWidth}
 >
   {@render content()}
 </button>
@@ -109,6 +97,7 @@ $effect(() => {
 <style>
   .pill {
     display: inline-flex;
+    vertical-align: middle;
     align-items: center;
     justify-content: center;
     min-height: 44px;
@@ -148,6 +137,7 @@ $effect(() => {
   .saved { background: var(--ok-bg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 40%, transparent); color: var(--ok); }
   .on-accent { background: var(--on-accent); box-shadow: none; color: var(--t1); }
   .pill:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
+  .on-accent:focus-visible { outline-color: var(--focus-ring-on-accent); }
   .pill[aria-disabled="true"] { background: var(--g2); box-shadow: none; color: var(--t3); cursor: not-allowed; }
 
   @media (hover: hover) {
