@@ -24,6 +24,18 @@ test("retains each ordered path and its source locations", () => {
   assert.deepEqual(results.slice(9), results.slice(0, 9));
 });
 
+test("retains parser safety flags on every npm edge", () => {
+  const first = { ...edge("a", 4), forwarding: true, redirect: false, unknown: false };
+  const second = { ...edge("b", 7), forwarding: false, redirect: true, unknown: true };
+  const results = enumerateInvocationOccurrences([{ ...command(0, [first]), origin }], {
+    a: [command(1, [second])],
+    b: [command(2)],
+  });
+  assert.deepEqual(results[2].npmEdges, [first, second]);
+  assert.notEqual(results[2].npmEdges[0], first);
+  assert.notEqual(results[2].npmEdges[1], second);
+});
+
 test("keeps workflow contexts distinct for the same script", () => {
   const other = { workflow: "two.yml", job: "browser", step: 1 };
   const results = enumerateInvocationOccurrences(
@@ -37,6 +49,79 @@ test("keeps workflow contexts distinct for the same script", () => {
     results.map((item) => item.origin),
     [origin, origin, other, other],
   );
+});
+
+test("fails closed on excessive expansion and depth", () => {
+  const workflow = [{ ...command(0, [edge("s0", 0)]), origin }];
+  const expanding = Object.fromEntries(
+    Array.from({ length: 15 }, (_, i) => [
+      `s${i}`,
+      [command(i, i === 14 ? [] : [edge(`s${i + 1}`, 0), edge(`s${i + 1}`, 1)])],
+    ]),
+  );
+  assert.throws(() => enumerateInvocationOccurrences(workflow, expanding), /expansion limit/);
+  const deep = Object.fromEntries(
+    Array.from({ length: 130 }, (_, i) => [
+      `s${i}`,
+      [command(i, i === 129 ? [] : [edge(`s${i + 1}`, 0)])],
+    ]),
+  );
+  assert.throws(() => enumerateInvocationOccurrences(workflow, deep), /depth limit/);
+  const withinDepth = Object.fromEntries(
+    Array.from({ length: 128 }, (_, i) => [
+      `s${i}`,
+      [command(i, i === 127 ? [] : [edge(`s${i + 1}`, 0)])],
+    ]),
+  );
+  assert.equal(enumerateInvocationOccurrences(workflow, withinDepth).length, 129);
+  const emptyEdges = (count) => [{ ...command(0, Array(count).fill(edge("empty", 0))), origin }];
+  assert.equal(enumerateInvocationOccurrences(emptyEdges(9_999), { empty: [] }).length, 1);
+  assert.throws(
+    () => enumerateInvocationOccurrences(emptyEdges(10_000), { empty: [] }),
+    /expansion limit/,
+  );
+});
+
+test("counts work across workflow roots and resets the budget between scans", () => {
+  const root = { ...command(0, [edge("leaf", 0)]), origin };
+  const scripts = { leaf: [command(1)] };
+  // Each root consumes one workflow command, one edge and one script command.
+  assert.equal(enumerateInvocationOccurrences(Array(3_333).fill(root), scripts).length, 6_666);
+  assert.throws(
+    () => enumerateInvocationOccurrences(Array(3_334).fill(root), scripts),
+    /expansion limit/,
+  );
+  assert.equal(enumerateInvocationOccurrences([root], scripts).length, 2);
+});
+
+test("rejects a bad occurrence regardless of root or chain order", () => {
+  const good = { ...command(0, [edge("valid", 0)]), origin };
+  const bad = {
+    ...command(0, [edge("invalid", 0)]),
+    origin: { workflow: "two.yml", job: "other", step: 4 },
+  };
+  const scripts = {
+    valid: [command(1)],
+    invalid: [command(2, [edge("missing", 1)])],
+  };
+  for (const roots of [
+    [good, bad],
+    [bad, good],
+  ]) {
+    assert.throws(
+      () => enumerateInvocationOccurrences(roots, scripts),
+      /Unknown npm script: missing/,
+    );
+  }
+  for (const edges of [
+    [edge("valid", 0), edge("invalid", 1)],
+    [edge("invalid", 0), edge("valid", 1)],
+  ]) {
+    assert.throws(
+      () => enumerateInvocationOccurrences([{ ...command(0, edges), origin }], scripts),
+      /Unknown npm script: missing/,
+    );
+  }
 });
 
 test("rejects direct and indirect recursion but not repeated sibling paths", () => {
