@@ -50,9 +50,15 @@ describe("dormant reconciliation reads", () => {
     });
     expect(resolved).toEqual(open);
     expect(calls[1]?.values).toEqual([100]);
-    expect(calls[1]?.query).toContain("order by first_seen_at asc, idempotency_key asc");
+    expect(calls[1]?.query).toContain(
+      "where resolved_at is null order by first_seen_at asc, idempotency_key asc",
+    );
+    expect(calls[1]?.query).toMatch(/limit\s+\?\s*$/);
     expect(calls[3]?.values).toEqual([50]);
-    expect(calls[3]?.query).toContain("order by resolved_at desc, idempotency_key asc");
+    expect(calls[3]?.query).toContain(
+      "where resolved_at is not null order by resolved_at desc, idempotency_key asc",
+    );
+    expect(calls[3]?.query).toMatch(/limit\s+\?\s*$/);
     for (const call of [calls[1], calls[3]]) {
       expect(call?.query).not.toMatch(/select \*|last_request_id|resolved_by/i);
     }
