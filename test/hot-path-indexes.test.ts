@@ -1,6 +1,7 @@
 // Ports HotPathIndexTest.php; all DDL/data stays in the guarded disposable schema.
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { sql } from "drizzle-orm";
 import { PgDialect, getTableConfig } from "drizzle-orm/pg-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { events, rsvps } from "../src/db/admin-schema";
@@ -393,21 +394,33 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
     it("scopes offers for an event with more RSVPs than the driver parameter limit", async () => {
       const eventId = await makeEvent({ capacity: 1 });
       const rsvpId = await makeRsvp(eventId, "waitlisted");
-      await client`
-        insert into rsvps (event_id, user_id, status)
-        select ${eventId}, 'bulk-' || g, 'waitlisted' from generate_series(1, 70000) g`;
       const otherEvent = await makeEvent();
       const otherRsvp = await makeRsvp(otherEvent, "waitlisted");
-      await client`
-        insert into waitlist_offers (rsvp_id, offered_at, expires_at)
-        values (${rsvpId}, now() - interval '3 hours', now() - interval '1 hour'),
-               (${otherRsvp}, now() - interval '3 hours', now() - interval '1 hour')`;
-      expect(await create(rsvpId)).not.toBeNull();
-      expect((await rows(rsvpId)).map((row) => row.state)).toEqual(["expired", "held"]);
-      expect((await rows(otherRsvp)).map((row) => row.state)).toEqual(["held"]);
-      expect(await create(rsvpId)).not.toBeNull();
       const another = await makeRsvp(eventId, "waitlisted");
-      expect(await create(another)).toBeNull();
+      const rollback = new Error("roll back bulk fixture");
+      // Roll back the bulk rows rather than cascading 70,000 trigger-bearing deletes.
+      await expect(
+        fixture.db.transaction(async (tx) => {
+          await tx.execute(sql`
+            insert into rsvps (event_id, user_id, status)
+            select ${eventId}, 'bulk-' || g, 'waitlisted' from generate_series(1, 70000) g`);
+          await tx.execute(sql`
+            insert into waitlist_offers (rsvp_id, offered_at, expires_at)
+            values (${rsvpId}, now() - interval '3 hours', now() - interval '1 hour'),
+                   (${otherRsvp}, now() - interval '3 hours', now() - interval '1 hour')`);
+          const states = async (id: number) =>
+            (
+              await tx.execute<{ state: string }>(sql`
+              select state from waitlist_offers where rsvp_id = ${id} order by created_at, id`)
+            ).map((row) => row.state);
+          expect(await createWaitlistOffer(tx, rsvpId)).not.toBeNull();
+          expect(await states(rsvpId)).toEqual(["expired", "held"]);
+          expect(await states(otherRsvp)).toEqual(["held"]);
+          expect(await createWaitlistOffer(tx, rsvpId)).not.toBeNull();
+          expect(await createWaitlistOffer(tx, another)).toBeNull();
+          throw rollback;
+        }),
+      ).rejects.toBe(rollback);
     }, 60_000);
 
     it("offers while capacity is unlimited", async () => {
