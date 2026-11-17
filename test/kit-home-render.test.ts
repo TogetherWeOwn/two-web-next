@@ -58,6 +58,19 @@ afterAll(() => {
 });
 
 describe("Kit home SSR render: session-aware header and hero", () => {
+  it("keeps the hero truthful without voice or personal RSVP data", () => {
+    for (const session of [null, memberSession]) {
+      const html = renderPage(baseData({ session }));
+      const hero = html.split('<section class="hero')[1]!.split("</section>")[0]!;
+      expect(hero).toContain('id="home-heading"');
+      expect(hero).toContain("The lobby is open.");
+      expect(hero).toContain('data-testid="member-count"');
+      expect(hero).not.toContain("In voice now");
+      expect(hero).not.toContain("Pull me into");
+      expect(hero).not.toContain("You're in for");
+    }
+  });
+
   it("renders the guest header with the Discord join entry point", () => {
     const html = renderPage(baseData());
     expect(html).toContain('data-testid="signin"');

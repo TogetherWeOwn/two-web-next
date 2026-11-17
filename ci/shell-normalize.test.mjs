@@ -147,6 +147,28 @@ test("body and comment command decoys are masked or removed", () => {
   }
 });
 
+test("unsupported substitution boundaries and missing delimiters fail closed", () => {
+  for (const source of [
+    "echo $((true) )\n",
+    "echo <(true)#suffix\n",
+    "echo >\\\n(true)#suffix\n",
+    "cat << # comment\n",
+  ]) {
+    for (const mask of [false, true]) {
+      assert.throws(() => normalizeShell(source, { strict: true, mask }), /unsupported/i);
+    }
+  }
+  for (const source of [
+    "echo '<(literal)' \\>(literal)\n",
+    "cat <<'#'\nbody\n#\n",
+    "cat <<\\#\nbody\n#\n",
+    "cat <<x#y\nbody\nx#y\n",
+    "echo $(((1) + 2))\n",
+  ]) {
+    check(source, source);
+  }
+});
+
 test("malformed openers and unsupported arithmetic fail closed", () => {
   for (const text of [
     "cat <<\\\n\n",

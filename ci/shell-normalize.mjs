@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
+import { parseHeredocOpener } from "./shell-heredoc-opener.mjs";
 
 export const ROOT_CWD_REMEDIATION =
   "this gate cannot resolve playwright runs outside the repo root; run the step or script at the root or teach ci/test-inventory.mjs the new form";
 
-const UNSUPPORTED = "unsupported heredoc delimiter";
 const CONTINUATION = /\\\r?\n/y;
 
 // Skip escaped LF (or CRLF) pairs starting at `p`; returns the next logical
@@ -16,78 +16,6 @@ function skipContinuations(text, p) {
   }
 }
 
-// Read a heredoc opener at `i` through a logical cursor, so continuations may
-// split `<<`, the optional dash, the whitespace and the delimiter word. Returns
-// null for anything that is not a heredoc (single `<`, here-string `<<<`).
-// Unsupported or incomplete delimiter words throw before any body is read.
-// `text` is the continuation-free opener spelling that keeps real quoting, so
-// normalizing it again yields the same opener; `end` is the physical end.
-function readHeredocOpener(input, i) {
-  const skip = (p) => skipContinuations(input, p);
-  const first = skip(i);
-  const second = skip(first + 1);
-  if (input[first] !== "<" || input[second] !== "<") return null;
-  let p = skip(second + 1);
-  if (input[p] === "<") return null;
-  const strip = input[p] === "-";
-  if (strip) p = skip(p + 1);
-  let ws = "";
-  while (p < input.length && /[ \t]/.test(input[p])) {
-    ws += input[p];
-    p = skip(p + 1);
-  }
-  let spelled = "";
-  let marker = "";
-  let quoted = false;
-  for (;;) {
-    p = skip(p);
-    const c = input[p];
-    if (c === undefined || /[ \t\r\n;&|()<>]/.test(c)) break;
-    if (c === "'") {
-      const close = input.indexOf("'", p + 1);
-      assert.ok(close !== -1, UNSUPPORTED);
-      spelled += input.slice(p, close + 1);
-      marker += input.slice(p + 1, close);
-      quoted = true;
-      p = close + 1;
-    } else if (c === "\\") {
-      const next = input[p + 1];
-      assert.ok(next !== undefined && !/[\r\n]/.test(next), UNSUPPORTED);
-      spelled += c + next;
-      marker += next;
-      quoted = true;
-      p += 2;
-    } else if (c === '"') {
-      spelled += c;
-      quoted = true;
-      p++;
-      for (;;) {
-        p = skip(p);
-        const d = input[p];
-        assert.ok(d !== undefined, UNSUPPORTED);
-        p++;
-        if (d === '"') break;
-        if (d === "\\" && /[$`"\\]/.test(input[p] ?? "")) {
-          spelled += d + input[p];
-          marker += input[p++];
-        } else {
-          spelled += d;
-          marker += d;
-        }
-      }
-      spelled += '"';
-    } else {
-      assert.ok(!/[`$]/.test(c), UNSUPPORTED);
-      spelled += c;
-      marker += c;
-      p++;
-    }
-  }
-  // A continuation-only word is missing, not an empty quoted delimiter.
-  assert.ok(spelled !== "" && !/\n/.test(marker), UNSUPPORTED);
-  return { text: `<<${strip ? "-" : ""}${ws}${spelled}`, end: p, marker, strip, quoted };
-}
-
 function heredocEnds(line, marker, strip) {
   const bare = line.replace(/\r$/, "");
   return (strip ? bare.replace(/^\t+/, "") : bare) === marker;
@@ -96,7 +24,7 @@ function heredocEnds(line, marker, strip) {
 // Normalize shell text the way the shell reads it: drop comments (a `#` that
 // starts a token outside quotes; they end at their physical newline) and
 // remove backslash-newline continuations outside single quotes. Heredoc
-// openers are normalized through readHeredocOpener. Bodies are read from the
+// openers are normalized through parseHeredocOpener. Bodies are read from the
 // physical input and copied verbatim, or blanked with spaces (newlines kept,
 // delimiter line included) when `mask` is set, so offsets in the normalized
 // view stay aligned. An unquoted delimiter lets bash join backslash-newline
@@ -116,6 +44,10 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
     const c = text[i];
     if (arithmetic) {
       assert.ok(!/[\n\\'"`$#]/.test(c), "unsupported arithmetic shell syntax");
+      assert.ok(
+        c !== ")" || arithmetic !== 2 || text[i + 1] === ")",
+        "unsupported arithmetic shell syntax",
+      );
       out += c;
       if (c === "(") arithmetic++;
       else if (c === ")") arithmetic--;
@@ -193,6 +125,9 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
       i++;
       continue;
     }
+    if (!quote && (c === "<" || c === ">")) {
+      assert.ok(text[skipContinuations(text, i + 1)] !== "(", "unsupported process substitution");
+    }
     if (!quote && c === "<") {
       const second = skipContinuations(text, i + 1);
       const third = skipContinuations(text, second + 1);
@@ -202,10 +137,10 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
         tokenStart = true;
         continue;
       }
-      const opener = readHeredocOpener(text, i);
+      const opener = parseHeredocOpener(text, i);
       if (opener) {
-        pending.push(opener);
-        out += opener.text;
+        pending.push({ ...opener, strip: opener.stripTabs });
+        out += opener.spelling;
         i = opener.end - 1;
         tokenStart = false;
         continue;

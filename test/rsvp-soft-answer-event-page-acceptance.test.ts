@@ -164,6 +164,7 @@ function kitModel(over: Partial<KitEventDetailModel> = {}): KitEventDetailModel 
     capacity: 10,
     rsvpOpen: true,
     rsvpClosed: null,
+    seatCard: { heading: "Your RSVP", tag: null, note: null },
     canonical: `${APP_URL}${PATH}`,
     path: PATH,
     attendeesRefreshHref: PATH,

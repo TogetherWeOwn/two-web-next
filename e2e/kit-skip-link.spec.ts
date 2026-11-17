@@ -22,7 +22,10 @@ for (const javaScriptEnabled of [true, false]) {
           filename: resolve(component),
         }).css.code;
         // Tailwind normally expands the generated @theme block into root variables.
-        const theme = readFileSync("web/src/ember-theme.css", "utf8").replace("@theme{", ":root{");
+        const theme = readFileSync("web/src/ember-theme.css", "utf8").replace(
+          "@theme static{",
+          ":root{",
+        );
         const html = renderer
           .renderPage({})
           .replace(

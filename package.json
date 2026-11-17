@@ -65,7 +65,7 @@
     "patch:coverage": "node ci/patch-coverage.mjs",
     "patch:coverage:selftest": "node ci/patch-coverage.mjs --selftest && node --test ci/patch-coverage-acceptance.test.mjs ci/patch-coverage-edge.test.mjs",
     "test:inventory": "node ci/test-inventory.mjs",
-    "test:inventory:selftest": "node ci/test-inventory.mjs --selftest && node --test ci/shell-normalize.test.mjs",
+    "test:inventory:selftest": "node ci/test-inventory.mjs --selftest && node --test ci/invocation-occurrences.test.mjs ci/shell-heredoc-opener.test.mjs ci/shell-normalize.test.mjs",
     "a11y": "node ci/a11y.mjs",
     "test:auth-browser": "node ci/session-recovery-browser.mjs",
     "test:kit-member-auth-browser": "node --import tsx --test --test-timeout=60000 ci/kit-member-auth-browser.test.mjs",
