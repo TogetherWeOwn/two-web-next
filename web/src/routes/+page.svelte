@@ -275,10 +275,8 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
           <p>{JOIN_INTRO}</p>
         {/if}
       </div>
-      {#if sessionUnavailable}
-        <a class="join-band-btn" href="/discord" data-testid="join-band-invite">Join with an invite link</a>
-      {:else if notice === "join_failed"}
-        <a class="join-band-btn" href={inviteUrl} data-testid="join-band-invite">Join with an invite link</a>
+      {#if sessionUnavailable || notice === "join_failed"}
+        <a class="join-band-btn" href={sessionUnavailable ? "/discord" : inviteUrl} data-testid="join-band-invite">Join with an invite link</a>
       {:else}
         <a class="join-band-btn" href="/auth/discord" data-testid="join-band-join">Join with Discord</a>
       {/if}
