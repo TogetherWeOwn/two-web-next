@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import rawApp from "../src/index";
 import app from "./app";
 import { robotsTagFor, SECURITY_HEADERS } from "../src/headers";
+import { robotsTagFor as robotsDecision } from "../src/http/robots";
+import { fetchApp } from "./helpers/fetch-app";
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import type { Env } from "../src/env";
@@ -496,6 +498,45 @@ describe("security headers per route class", () => {
     expect(refused.status).toBe(404);
     expect(refused.headers.get("content-type")).toContain("text/html");
     expect(refused.headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
+  });
+
+  it.each([
+    ["https://togetherweown.com", "https://togetherweown.com/about", 200, null],
+    [
+      "https://preview.example.test",
+      "https://preview.example.test/about",
+      200,
+      "noindex, nofollow",
+    ],
+    ["https://togetherweown.com", "https://preview.example.test/about", 404, "noindex, nofollow"],
+    ["not-a-url", "https://togetherweown.com/about", 404, "noindex, nofollow"],
+  ])(
+    "matches the extracted decision at the HTML fetch boundary",
+    async (appUrl, url, status, tag) => {
+      expect(robotsTagFor).toBe(robotsDecision);
+      expect(robotsDecision(appUrl, new URL(url).hostname)).toBe(tag);
+      const response = await fetchApp(
+        new Request(url),
+        { ...env, APP_URL: appUrl },
+        {} as ExecutionContext,
+      );
+      expect(response.status).toBe(status);
+      expect(response.headers.get("content-type")).toContain("text/html");
+      expect(response.headers.get("x-robots-tag")).toBe(tag);
+    },
+  );
+
+  it("does not add the HTML robots header to preview JSON", async () => {
+    const appUrl = "https://preview.example.test";
+    expect(robotsDecision(appUrl, "preview.example.test")).toBe("noindex, nofollow");
+    const response = await fetchApp(
+      new Request(`${appUrl}/up`),
+      { ...env, APP_URL: appUrl },
+      {} as ExecutionContext,
+    );
+    expect(response.status).toBe(503);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(response.headers.get("x-robots-tag")).toBeNull();
   });
 
   it("never emits Strict-Transport-Security from the app: the edge owns HSTS (TOG-8729)", async () => {
