@@ -35,6 +35,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends xfsprogs
       - name: Prove mounts and successful cleanup
         run: bash ci/xfs-qualification-fixture.sh node ci/xfs-qualification-fixture.test.mjs
+      - name: Qualify public lock helper on real mounts
+        run: bash ci/xfs-qualification-fixture.sh node ci/kit-lock-xfs.test.mjs
       - name: Prove cleanup after command failure
         shell: bash
         run: |
