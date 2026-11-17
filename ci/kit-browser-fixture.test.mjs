@@ -156,6 +156,53 @@ for (const state of homeEvidenceStates) {
   });
 }
 
+test("Kit home hero presents its heading and action at desktop and mobile widths", async () => {
+  await withKitHomeEvidence("guest", async ({ page }) => {
+    for (const [width, height] of [
+      [1280, 800],
+      [390, 844],
+    ]) {
+      await page.setViewportSize({ width, height });
+      const hero = page.locator('section[aria-labelledby="home-heading"]');
+      const heading = hero.locator("h1");
+      const action = hero.locator(".hero-action");
+      const button = action.getByTestId("join");
+      const lead = action.locator(".lead");
+      assert.equal(await hero.evaluate((el) => getComputedStyle(el).textAlign), "left");
+      assert.equal(await action.evaluate((el) => getComputedStyle(el).display), "flex");
+      const typography = await heading.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const probe = document.createElement("span");
+        probe.style.fontSize = "var(--text-hero)";
+        el.append(probe);
+        const expectedSize = getComputedStyle(probe).fontSize;
+        probe.remove();
+        return {
+          size: style.fontSize,
+          expectedSize,
+          weight: style.fontWeight,
+          expectedWeight: style.getPropertyValue("--font-weight-display").trim() || "560",
+        };
+      });
+      assert.equal(typography.size, typography.expectedSize);
+      assert.notEqual(typography.expectedWeight, "");
+      assert.equal(typography.weight, typography.expectedWeight);
+      const [actionBox, buttonBox, leadBox] = await Promise.all([
+        action.boundingBox(),
+        button.boundingBox(),
+        lead.boundingBox(),
+      ]);
+      assert.ok(actionBox && buttonBox && leadBox, `hero boxes at ${width}px`);
+      if (width === 390) {
+        assert.ok(Math.abs(buttonBox.width - actionBox.width) < 1, "mobile action fills its row");
+        assert.ok(leadBox.y >= buttonBox.y + buttonBox.height, "mobile lead follows action");
+      } else {
+        assert.ok(leadBox.x >= buttonBox.x + buttonBox.width, "desktop lead follows action inline");
+      }
+    }
+  });
+});
+
 test("Kit offline fixture fixes the server render clock", async () => {
   await withKitOfflineBrowser(
     { now: Date.UTC(2030, 0, 2), page: "<p>{new Date().toISOString()}</p>" },
