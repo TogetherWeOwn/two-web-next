@@ -35,6 +35,7 @@ export function createRouteEvidenceRequest(repository, token, fetchImpl = fetch)
       if (!size) throw new Error("empty response");
       return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size)));
     } catch {
+      controller.abort();
       throw new Error("route evidence refused: GitHub metadata unavailable");
     } finally {
       clearTimeout(timer);

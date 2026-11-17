@@ -91,6 +91,27 @@ for (const stalledPart of ["headers", "body"]) {
   });
 }
 
+test("metadata client aborts a refused response before rejecting", async () => {
+  let signal;
+  let aborted = false;
+  const request = createRouteEvidenceRequest("owner/repo", "test-token", async (_url, options) => {
+    signal = options.signal;
+    signal.addEventListener(
+      "abort",
+      () => {
+        aborted = true;
+      },
+      { once: true },
+    );
+    return { ok: false, body: { secret: "test-token" } };
+  });
+  await assert.rejects(request("/pulls/1"), {
+    message: "route evidence refused: GitHub metadata unavailable",
+  });
+  assert.equal(signal.aborted, true);
+  assert.equal(aborted, true);
+});
+
 test("metadata client redacts errors from the transport", async () => {
   const request = createRouteEvidenceRequest("owner/repo", "test-token", async () => {
     throw new Error("test-token");
