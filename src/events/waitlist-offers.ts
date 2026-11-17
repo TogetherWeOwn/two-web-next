@@ -28,10 +28,11 @@ export async function createWaitlistOffer(tx: Tx, rsvpId: number) {
     .for("update");
   const ids = line.map((row) => row.id);
   if (!ids.includes(rsvpId)) return null;
+  const eventRsvps = tx.select({ id: rsvps.id }).from(rsvps).where(eq(rsvps.eventId, event.id));
   await tx
     .select({ id: waitlistOffers.id })
     .from(waitlistOffers)
-    .where(inArray(waitlistOffers.rsvpId, ids))
+    .where(inArray(waitlistOffers.rsvpId, eventRsvps))
     .orderBy(asc(waitlistOffers.id))
     .for("update");
   // Preserve the database's microseconds across every comparison and stamp.
@@ -46,7 +47,7 @@ export async function createWaitlistOffer(tx: Tx, rsvpId: number) {
     .set({ state: "expired", updatedAt: now })
     .where(
       and(
-        inArray(waitlistOffers.rsvpId, ids),
+        inArray(waitlistOffers.rsvpId, eventRsvps),
         eq(waitlistOffers.state, "held"),
         lte(waitlistOffers.expiresAt, now),
       ),
@@ -65,7 +66,7 @@ export async function createWaitlistOffer(tx: Tx, rsvpId: number) {
   const held = await tx
     .select()
     .from(waitlistOffers)
-    .where(and(inArray(waitlistOffers.rsvpId, ids), eq(waitlistOffers.state, "held")));
+    .where(and(inArray(waitlistOffers.rsvpId, eventRsvps), eq(waitlistOffers.state, "held")));
   const existing = held.find((offer) => offer.rsvpId === rsvpId);
   if (existing) return existing;
   if (

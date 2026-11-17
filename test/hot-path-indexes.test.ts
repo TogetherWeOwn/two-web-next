@@ -390,6 +390,26 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
       expect(await create(second)).not.toBeNull();
     });
 
+    it("scopes offers for an event with more RSVPs than the driver parameter limit", async () => {
+      const eventId = await makeEvent({ capacity: 1 });
+      const rsvpId = await makeRsvp(eventId, "waitlisted");
+      await client`
+        insert into rsvps (event_id, user_id, status)
+        select ${eventId}, 'bulk-' || g, 'waitlisted' from generate_series(1, 70000) g`;
+      const otherEvent = await makeEvent();
+      const otherRsvp = await makeRsvp(otherEvent, "waitlisted");
+      await client`
+        insert into waitlist_offers (rsvp_id, offered_at, expires_at)
+        values (${rsvpId}, now() - interval '3 hours', now() - interval '1 hour'),
+               (${otherRsvp}, now() - interval '3 hours', now() - interval '1 hour')`;
+      expect(await create(rsvpId)).not.toBeNull();
+      expect((await rows(rsvpId)).map((row) => row.state)).toEqual(["expired", "held"]);
+      expect((await rows(otherRsvp)).map((row) => row.state)).toEqual(["held"]);
+      expect(await create(rsvpId)).not.toBeNull();
+      const another = await makeRsvp(eventId, "waitlisted");
+      expect(await create(another)).toBeNull();
+    }, 60_000);
+
     it("offers while capacity is unlimited", async () => {
       const eventId = await makeEvent({ capacity: null });
       await makeRsvp(eventId, "going");
