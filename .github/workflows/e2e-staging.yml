@@ -105,7 +105,7 @@ jobs:
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    uses: ./.github/workflows/zap-staging.yml
+    uses: TogetherWeOwn/two-web-next/.github/workflows/zap-staging.yml@38581ef492f5c972969f5dfada396a9f0e2ee989
     with:
       candidate_sha: ${{ needs.scope.outputs.sha }}
 
@@ -284,7 +284,7 @@ jobs:
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    uses: ./.github/workflows/web-quality-origin.yml
+    uses: TogetherWeOwn/two-web-next/.github/workflows/web-quality-origin.yml@38581ef492f5c972969f5dfada396a9f0e2ee989
     with:
       origin: https://next.togetherweown.com
       candidate_sha: ${{ needs.scope.outputs.sha }}

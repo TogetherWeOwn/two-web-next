@@ -26,8 +26,14 @@ it("queues same-origin calls and standalone runs without taking the caller's loc
     queue: "max",
   });
   expect(caller.concurrency.group).not.toContain("web-quality-origin-");
-  expect(caller.jobs["staging-quality"].uses).toBe("./.github/workflows/web-quality-origin.yml");
+  expect(caller.jobs["staging-quality"].uses).toBe(
+    "TogetherWeOwn/two-web-next/.github/workflows/web-quality-origin.yml@38581ef492f5c972969f5dfada396a9f0e2ee989",
+  );
   expect(caller.jobs["staging-quality"].with.origin).toBe(ORIGIN);
+  expect(caller.jobs["zap-baseline"].uses).toBe(
+    "TogetherWeOwn/two-web-next/.github/workflows/zap-staging.yml@38581ef492f5c972969f5dfada396a9f0e2ee989",
+  );
+  expect(caller.jobs["zap-baseline"].with.candidate_sha).toBe("${{ needs.scope.outputs.sha }}");
   expect(workflow.on.workflow_call.inputs.origin).toEqual({ type: "string", required: true });
   expect(workflow.on.workflow_dispatch.inputs.origin.default).toBe(ORIGIN);
   expect(workflow.on.workflow_dispatch.inputs.origin.options).toEqual([ORIGIN]);

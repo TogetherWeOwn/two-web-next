@@ -39,6 +39,16 @@ const prGuard = `(github.event_name == 'pull_request' || github.event_name == 'm
 const overflowSwitch = (job: string) =>
   `\${{ fromJSON((${publicGuard}) || (${prGuard}) || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), '${job}') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}`;
 
+// These same-repository callees were checked at this immutable revision; their
+// job definitions matched the corresponding local workflows when pinned.
+const verifiedLocalRef = "38581ef492f5c972969f5dfada396a9f0e2ee989";
+const verifiedLocalWorkflows = [
+  "release.yml",
+  "rollback-production.yml",
+  "web-quality-origin.yml",
+  "zap-staging.yml",
+];
+
 function jobs(text: string) {
   const body = text.slice(text.search(/^jobs:\n/m));
   const found: { id: string; runsOn: string | undefined; orgReusable: boolean; block: string }[] =
@@ -47,6 +57,15 @@ function jobs(text: string) {
     const id = block.match(/^  ([A-Za-z0-9_-]+):\n/)?.[1] ?? "";
     // A reusable-workflow call has no runner; the called workflow's jobs are checked.
     if (/^    uses: \.\/\.github\/workflows\/[\w.-]+\.ya?ml$/m.test(block)) continue;
+    const localCall = block.match(
+      /^    uses: TogetherWeOwn\/two-web-next\/\.github\/workflows\/([\w.-]+\.ya?ml)@([0-9a-f]{40})$/m,
+    );
+    if (
+      localCall &&
+      verifiedLocalWorkflows.includes(localCall[1]!) &&
+      localCall[2] === verifiedLocalRef
+    )
+      continue;
     // Same for a pinned org reusable call (full-SHA pin, never a moving tag):
     // the org workflow pins its own runners, so there is no local label to check.
     const orgReusable =
@@ -174,6 +193,17 @@ describe("workflow runner labels", () => {
     expect(jobs(workflow!.text).find(({ id }) => id === "fixture")?.runsOn).toBe("ubuntu-24.04");
   });
 
+  it("recognizes only verified pinned same-repository calls", () => {
+    const caller = (target: string, ref: string) =>
+      `jobs:\n  call:\n    uses: TogetherWeOwn/two-web-next/.github/workflows/${target}@${ref}\n`;
+    for (const target of verifiedLocalWorkflows) {
+      expect(jobs(caller(target, verifiedLocalRef))).toEqual([]);
+    }
+    expect(jobs(caller("release.yml", "0".repeat(40)))).toHaveLength(1);
+    expect(jobs(caller("unknown.yml", verifiedLocalRef))).toHaveLength(1);
+    expect(jobs(caller("release.yml", "main"))).toHaveLength(1);
+  });
+
   it("finds every workflow job", () => {
     expect(workflows.length).toBeGreaterThan(0);
     for (const { name, text } of workflows) expect(jobs(text).length, name).toBeGreaterThan(0);
@@ -275,6 +305,11 @@ describe("workflow runner labels", () => {
     // A local reusable-workflow call inherits the caller's event, so a
     // workflow a PR-triggered workflow calls must meet the same rule.
     const checkJobs = (name: string, text: string) => {
+      // Frozen callees need a separate PR-event runner assessment, including
+      // when reached through a relative reusable-workflow call.
+      expect(text, `${name} has no unassessed pinned local call`).not.toMatch(
+        /^    uses: TogetherWeOwn\/two-web-next\/\.github\/workflows\//m,
+      );
       for (const { id, runsOn, orgReusable, block } of jobs(text)) {
         if (orgReusable) {
           // The call inherits the caller's event, so the reusable job must

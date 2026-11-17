@@ -1,5 +1,11 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type APIResponse,
+  type Page,
+} from "@playwright/test";
 import postgres from "postgres";
 import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
@@ -1717,12 +1723,72 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
           values (${hash}, ${hash}, ${state.userId}, 'Seat fixture', true, false, ${new Date(Date.now() + 7_200_000)})`;
       }
       await sql`insert into users (id, username, member) values (${savedUserId}, 'Seat fixture', true)`;
-      await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, capacity, rsvp_open)
+      await sql`insert into events (event_key, title, description, game, organizer_name, starts_at, ends_at, location, status, capacity, rsvp_open)
         values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
-          '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true)`;
+          'Catan', 'Vexa', '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true)`;
       await sql`insert into rsvps (event_id, user_id, status)
         select id, ${savedUserId}, 'going' from events where event_key = ${key}`;
     });
+    // Facts list (C6): Host then Game, one organizer hook, no member data,
+    // for a guest and for each member state, at both widths. The facts
+    // full page is captured for the review artifact.
+    const expectFacts = async (page: Page, who: string, width: number) => {
+      const facts = page.getByTestId("kit-event-facts");
+      await expect(facts).toHaveCount(1);
+      await expect(facts.locator("dt")).toHaveText(["Host", "Game"]);
+      await expect(facts.locator("dd")).toHaveText(["Vexa", "Catan"]);
+      await expect(page.getByTestId("event-organizer")).toHaveCount(1);
+      await expect(facts.getByTestId("event-organizer")).toHaveText("Vexa");
+      await expect(facts.locator("a")).toHaveCount(0);
+      const cardBounds = await page.getByTestId("kit-seat-card").boundingBox();
+      const factsBounds = await facts.boundingBox();
+      const shareHeadingBounds = await page.locator(".event-share h2").boundingBox();
+      expect(cardBounds).not.toBeNull();
+      expect(factsBounds).not.toBeNull();
+      expect(shareHeadingBounds).not.toBeNull();
+      expect(factsBounds!.y - (cardBounds!.y + cardBounds!.height)).toBeCloseTo(16, 0);
+      if (width === 390) {
+        expect(
+          shareHeadingBounds!.y - (factsBounds!.y + factsBounds!.height),
+        ).toBeGreaterThanOrEqual(24);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      const name = `kit-review-facts-${who}-${width}`;
+      const path = test.info().outputPath(`${name}.png`);
+      if (width === 1280) {
+        const rail = facts.locator("..");
+        const bounds = await rail.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.height).toBeLessThanOrEqual(800 - 92);
+      }
+      await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    };
+    const guestContext = await browser.newContext({
+      baseURL: target.origin,
+      javaScriptEnabled: false,
+    });
+    try {
+      const guestPage = await guestContext.newPage();
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await guestPage.setViewportSize(viewport);
+        const response = await guestPage.goto(`/e/${key}`);
+        expect(response?.status()).toBe(200);
+        expect(response?.headers()["x-two-renderer"]).toBe("kit");
+        await expectFacts(guestPage, "guest", viewport.width);
+        // Guest privacy: no roster, no member links, no sign-out chrome.
+        await expect(guestPage.getByTestId("event-attendees")).toHaveCount(0);
+        await expect(guestPage.locator('a[href^="/members/"]')).toHaveCount(0);
+        await expect(guestPage.getByText("Sign out")).toHaveCount(0);
+      }
+    } finally {
+      await guestContext.close();
+    }
     const page = await context.newPage();
     for (const state of states) {
       const signature = createHmac("sha256", kitFixtureSessionSecret())
@@ -1759,6 +1825,7 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
         if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
         await page.screenshot({ path, animations: "disabled", caret: "hide" });
         await test.info().attach(name, { path, contentType: "image/png" });
+        await expectFacts(page, state.name, viewport.width);
       }
     }
   } finally {
