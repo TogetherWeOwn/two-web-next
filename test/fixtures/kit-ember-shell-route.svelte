@@ -1,6 +1,6 @@
 <script lang="ts">
 import { page } from "$app/state";
-import EmberShell from "$lib/EmberShell.svelte";
+import EmberShell from "#lib/EmberShell.svelte";
 
 let state = $derived(page.url.searchParams.get("state"));
 </script>
