@@ -2,8 +2,6 @@
 import { page } from "$app/state";
 import EmberShell from "#lib/EmberShell.svelte";
 import SiteMetadata from "#lib/SiteMetadata.svelte";
-
-let state = $derived(page.url.searchParams.get("state"));
 </script>
 
 {#snippet accountChrome()}
@@ -12,10 +10,10 @@ let state = $derived(page.url.searchParams.get("state"));
 
 <SiteMetadata title="Welcome" theme="home" />
 <EmberShell
-  activeNav={state === "member" ? "events" : "home"}
-  member={state === "member"}
-  hideAccount={state === "hidden"}
-  accountChrome={state === "member" ? accountChrome : undefined}
+  activeNav={page.url.searchParams.get("state") ==="member" ? "events" : "home"}
+  member={page.url.searchParams.get("state") ==="member"}
+  hideAccount={page.url.searchParams.get("state") ==="hidden"}
+  accountChrome={page.url.searchParams.get("state") ==="member" ? accountChrome : undefined}
 >
   <h1>Welcome to Together We Own</h1>
   <p>Find your next game night with the community.</p>
