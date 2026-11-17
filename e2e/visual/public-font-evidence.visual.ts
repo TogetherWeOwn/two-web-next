@@ -80,6 +80,51 @@ test("rules separately loaded Mona Sans evidence @ 360", async ({ page }, testIn
   expect(fonts[0]?.glyphCount).toBeGreaterThan(0);
 });
 
+for (const [description, stack, fallback] of [
+  ["unquoted family", "Original Display, Georgia, serif", ", Georgia, serif"],
+  ["single-quoted family", "'Original, Display', serif", ", serif"],
+  ["no fallback", "Original Display", ""],
+  ["escaped quote", '"Original\\" Display", Georgia, serif', ", Georgia, serif"],
+]) {
+  test(`normalizes a display stack with ${description}`, async ({ page }) => {
+    await page.goto("/rules");
+    await page.locator("#rules-heading").evaluate((element, value) => {
+      (element as HTMLElement).style.setProperty("--font-display", value!);
+    }, stack);
+    const capture = await captureNormalizedDisplayFont(page, {
+      url: FONT_URL,
+      root: "#rules-heading",
+      heading: "#rules-heading",
+    });
+    expect(capture.token.original).toBe(stack);
+    expect(capture.token.normalized).toBe(`"${capture.face.family}"${fallback}`);
+  });
+}
+
+for (const [description, value] of [
+  ["missing", null],
+  ["empty", "   "],
+] as const) {
+  test(`rejects a ${description} display token`, async ({ page }) => {
+    await page.route("**/empty-font-fixture", (route) =>
+      route.fulfill({ contentType: "text/html", body: "<main><h1>Fixture</h1></main>" }),
+    );
+    await page.goto("/empty-font-fixture");
+    if (value !== null) {
+      await page.locator("main").evaluate((element, token) => {
+        (element as HTMLElement).style.setProperty("--font-display", token);
+      }, value);
+    }
+    await expect(
+      captureNormalizedDisplayFont(page, {
+        url: FONT_URL,
+        root: "main",
+        heading: "h1",
+      }),
+    ).rejects.toThrow("Expected a nonempty --font-display stack");
+  });
+}
+
 test("normalized display font evidence on a fixture @ 360", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 360, height: 844 });
   await page.route("**/visual-font-fixture", (route) =>
