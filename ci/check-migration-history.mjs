@@ -148,16 +148,27 @@ function baselineInventory(root, entries) {
   return files;
 }
 
-export function checkMigrations(root, base) {
-  const current = filesystemInventory(root);
-  validateInventory(current);
-  validateLock(readRegular(root, lockFile), current, lockFile);
+function validatedBaseline(root, base) {
   const entries = gitTree(root, base);
   const previous = baselineInventory(root, entries);
   if (entries.has(lockFile)) {
     validateLock(gitFile(root, entries.get(lockFile), lockFile), previous, "Git baseline lock");
   } else if (entries.has(helperFile)) {
     throw new Error("Git baseline lock is missing after guard adoption");
+  }
+  return previous;
+}
+
+export function checkMigrations(root, base, target = base) {
+  const current = filesystemInventory(root);
+  validateInventory(current);
+  validateLock(readRegular(root, lockFile), current, lockFile);
+  const previous = validatedBaseline(root, base);
+  const targetFiles = target === base ? previous : validatedBaseline(root, target);
+  // Both the target and candidate must preserve inherited history.
+  for (const [path, hash] of Object.entries(previous)) {
+    if (!(path in targetFiles) || targetFiles[path] !== hash)
+      throw new Error(`target changed inherited migration: ${path}`);
   }
   // Bootstrap is allowed only before guard adoption; even then, every SQL file
   // already in the base is immutable. Updating the lock never blesses edits.
@@ -167,12 +178,17 @@ export function checkMigrations(root, base) {
   }
   const highest = Math.max(
     999,
-    ...Object.keys(previous)
+    ...Object.keys(targetFiles)
       .filter((path) => !grandfathered.has(path))
       .map((path) => Number(path.split("/").at(-1).slice(0, 4))),
   );
   for (const path of Object.keys(current)) {
     if (path in previous) continue;
+    if (path in targetFiles) {
+      if (current[path] !== targetFiles[path])
+        throw new Error(`target migration SQL is immutable: ${path}`);
+      continue;
+    }
     const number = Number(path.split("/").at(-1).slice(0, 4));
     if (grandfathered.has(path) || number <= highest)
       throw new Error(`new migration must append above reserved number ${highest}: ${path}`);
@@ -189,13 +205,13 @@ export function resolveBaseline(root, env = process.env) {
     // A queue commit is unmerged: baseline it against the exact parent the
     // queue will merge onto, same role as the PR base SHA above.
     else if (env.GITHUB_EVENT_NAME === "merge_group") base = event.merge_group?.base_sha;
-    // Dispatch and the nightly schedule have no event base: both check main's tip.
+    // Dispatch and the nightly schedule have no event base: use the main tip.
     else if (env.GITHUB_EVENT_NAME !== "workflow_dispatch" && env.GITHUB_EVENT_NAME !== "schedule")
       throw new Error("unsupported CI event for historical baseline");
     if (base !== "origin/main" && !/^[0-9a-f]{40}$/.test(base ?? ""))
       throw new Error("missing/invalid CI base SHA");
     if (base === "origin/main") {
-      // Dispatch checks against the current target branch, not a stale local ref.
+      // Fetch the actual branch name rather than relying on the remote default HEAD.
       git(root, ["fetch", "--no-tags", "origin", "main"]);
       base = "FETCH_HEAD";
     } else {
@@ -213,13 +229,31 @@ export function resolveBaseline(root, env = process.env) {
     .trim();
 }
 
+export function resolveCandidateBaselines(root, env = process.env) {
+  if (
+    env.GITHUB_ACTIONS !== "true" ||
+    env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+    !env.GITHUB_REF?.startsWith("refs/heads/") ||
+    env.GITHUB_REF === "refs/heads/main"
+  ) {
+    throw new Error("candidate baseline is limited to dispatched branch CI");
+  }
+  const target = resolveBaseline(root, env);
+  const base = git(root, ["merge-base", target, "HEAD"]).toString("utf8").trim();
+  if (!/^[0-9a-f]{40}$/.test(base)) throw new Error("missing/invalid merge base");
+  return { base, target };
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const root = fileURLToPath(new URL("../", import.meta.url));
   const args = process.argv.slice(2);
   const isWriteLock = args.length === 1 && args[0] === "--write-lock";
+  const isCandidate = args.length === 1 && args[0] === "--candidate-ci";
   const isCheck = args.length === 0;
-  if (!isWriteLock && !isCheck) {
-    console.error("migration-history: usage: node ci/check-migration-history.mjs [--write-lock]");
+  if (!isWriteLock && !isCheck && !isCandidate) {
+    console.error(
+      "migration-history: usage: node ci/check-migration-history.mjs [--write-lock|--candidate-ci]",
+    );
     process.exitCode = 2;
   } else {
     try {
@@ -232,7 +266,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           "migration-history: wrote candidate lock; run ci/check-migration-numbers.sh to verify against Git history",
         );
       } else {
-        const result = checkMigrations(root, resolveBaseline(root));
+        const { base, target } = isCandidate
+          ? resolveCandidateBaselines(root)
+          : { base: resolveBaseline(root) };
+        const result = checkMigrations(root, base, target);
         console.log(
           `migration-history: ok (${result.total} migrations; ${result.historical} historical paths and SQL hashes protected)`,
         );

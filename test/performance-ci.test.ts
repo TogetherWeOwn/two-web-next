@@ -160,7 +160,11 @@ describe("performance CI", () => {
       {
         eventKey: fixtureKey,
         title: "Lighthouse fixture game night",
+        game: "Community games",
+        organizer_name: "Community host",
         startsAt: new Date("2030-01-08T00:00:00Z"),
+        endsAt: new Date("2030-01-08T02:00:00Z"),
+        rsvpOpen: true,
         timezone: "Europe/London",
         location: "Community voice channel",
         goingCount: 3,
@@ -741,7 +745,7 @@ describe("performance CI", () => {
 
   it("pins the patched Puppeteer graph only under Lighthouse", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-    expect(pkg.devDependencies["@lhci/cli"]).toBe("0.15.1");
+    expect(pkg.devDependencies["@lhci/cli"]).toBe("0.16.1");
     // chrome-launcher 1.x drops the rimraf 3 -> glob 7 -> minimatch 3 chain
     // (GHSA-g3hv-75wg-m249); uuid 11.1.1 fixes GHSA-w5hq-g745-h8pq. LHCI only
     // calls Launcher.getInstallations() and uuid.v4(), both unchanged.
@@ -778,29 +782,45 @@ describe("performance CI", () => {
         `
       import assert from "node:assert/strict";
       import { createRequire } from "node:module";
-      import { existsSync, writeFileSync } from "node:fs";
+      import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+      import { tmpdir } from "node:os";
       import { dirname, join } from "node:path";
       import { pathToFileURL } from "node:url";
       const require = createRequire(import.meta.url);
       const lhciRequire = createRequire(require.resolve("@lhci/cli/package.json"));
-      assert.equal(require("@lhci/cli/package.json").version, "0.15.1");
-      const tmp = lhciRequire("tmp");
-      assert.equal(lhciRequire("tmp/package.json").version, "0.2.7");
+      assert.equal(require("@lhci/cli/package.json").version, "0.16.1");
+      // Retain the patched override if the dependency returns; do not resolve an
+      // unrelated hoisted copy when LHCI no longer declares the edge.
+      assert.equal(Object.hasOwn(lhciRequire("./package.json").dependencies, "tmp"), false);
+      assert.equal(require("./package.json").overrides["@lhci/cli"].tmp, "0.2.7");
       // The overridden chrome-launcher is ESM; the CommonJS LHCI consumer must
       // still load it (require(esm) on the Node floor) and find the API it uses.
       assert.equal(lhciRequire("chrome-launcher/package.json").version, "1.2.2");
       assert.equal(typeof lhciRequire("chrome-launcher").Launcher.getInstallations, "function");
       assert.equal(lhciRequire("uuid/package.json").version, "11.1.1");
       assert.match(lhciRequire("uuid").v4(), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-      const file = tmp.fileSync({ postfix: ".html" });
+      // Exercise LHCI 0.16's actual flags-file creation and cleanup without
+      // launching Chrome or relying on a hoisted temporary-file package.
+      const cwd = process.cwd();
+      const scratch = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "lhci-flags-"));
       try {
-        assert.ok(file.name.endsWith(".html"));
-        writeFileSync(file.name, "local fixture");
-        assert.ok(existsSync(file.name));
-      } finally { file.removeCallback(); }
-      assert.equal(existsSync(file.name), false);
+        process.chdir(scratch);
+        const Runner = lhciRequire("./src/collect/node-runner.js");
+        const { args, cleanupFn } = Runner.computeArgumentsAndCleanup("http://127.0.0.1/", { settings: { formFactor: "mobile" } });
+        const flagsPath = args[args.indexOf("--cli-flags-path") + 1];
+        try {
+          assert.ok(flagsPath.startsWith(join(scratch, ".lighthouseci") + "/"));
+          assert.ok(flagsPath.endsWith(".json"));
+          assert.equal(JSON.parse(readFileSync(flagsPath, "utf8")).formFactor, "mobile");
+          assert.ok(existsSync(flagsPath));
+        } finally { cleanupFn(); }
+        assert.equal(existsSync(flagsPath), false);
+      } finally {
+        process.chdir(cwd);
+        rmSync(scratch, { recursive: true, force: true });
+      }
       const lighthouseRequire = createRequire(lhciRequire.resolve("lighthouse/package.json"));
-      assert.equal(lhciRequire("lighthouse/package.json").version, "12.6.1");
+      assert.equal(lhciRequire("lighthouse/package.json").version, "13.6.0");
       const puppeteer = lighthouseRequire("puppeteer-core/package.json");
       assert.equal(puppeteer.version, "25.16.0");
       assert.equal(puppeteer.dependencies["@puppeteer/browsers"], "3.2.6");
@@ -833,9 +853,10 @@ describe("performance CI", () => {
       let req = lhciRequire;
       for (const name of ["proxy-agent", "pac-proxy-agent", "get-uri"]) {
         assert.equal(typeof req("./package.json").dependencies[name], "string");
-        req = createRequire(req.resolve(name + "/package.json"));
+        // get-uri 8 does not export its package.json subpath.
+        req = createRequire(join(dirname(dirname(req.resolve(name))), "package.json"));
       }
-      assert.equal(req("./package.json").version, "6.0.5");
+      assert.equal(req("./package.json").version, "8.0.1");
       assert.equal(typeof req("./package.json").dependencies["basic-ftp"], "string");
       assert.equal(req("basic-ftp/package.json").version, "6.2.4");
       assert.equal(typeof req("basic-ftp").Client, "function");

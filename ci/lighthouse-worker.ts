@@ -73,6 +73,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
     eventKey: fixtureKey,
     title: "Lighthouse fixture game night",
     game: "Community games",
+    organizer_name: "Community host",
     description: "A local-only community game night used to measure the real event page.",
     startsAt,
     endsAt: new Date(startsAt.getTime() + 7200_000),

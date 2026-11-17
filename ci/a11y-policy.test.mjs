@@ -199,6 +199,7 @@ test("the required ci-ok gate runs after a non-green audit and rejects every non
     "docs-links",
     "queue-syntax-smoke",
     "check",
+    "kit-browser-fixture",
     "node22-compat",
     "scope",
     "bot-contract-drift",
@@ -285,7 +286,7 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
         // Keep the real gate as the final command of a fail-fast run block.
         (command === "bash ci/check-migration-numbers.sh" &&
           /\n        run: \|\n          set -euo pipefail\n/.test(entry) &&
-          entry.trimEnd().endsWith(`\n            ${command}`)),
+          entry.trimEnd().endsWith(`\n            ${command} "\${migration_args[@]}"`)),
     );
     assert(step, `Required gate missing: ${command}`);
     // The docs-only/draft scope gate (TOG-11811/TOG-14880) is the one sanctioned

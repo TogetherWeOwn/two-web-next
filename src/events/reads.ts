@@ -65,6 +65,11 @@ export type HomeEvent = Pick<
    * fixtures: renderers fall back to the named `goingCount` when absent
    * (the `GoingCountState.occupancy` precedent). Aggregate only. */
   goingOccupancy?: number;
+  /** Optional for older fixtures; live rows project only public event fields. */
+  game?: string | null;
+  organizer_name?: string | null;
+  endsAt?: Date;
+  rsvpOpen?: boolean;
 };
 
 export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
@@ -367,6 +372,10 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
         goingCount,
         goingOccupancy,
         capacity,
+        game,
+        organizer_name,
+        endsAt,
+        rsvpOpen,
       }) => ({
         eventKey,
         title,
@@ -376,6 +385,10 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
         goingCount,
         goingOccupancy,
         capacity,
+        game,
+        organizer_name,
+        endsAt,
+        rsvpOpen,
       }),
     );
   });

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -11,6 +13,112 @@ import {
 } from "./kit-offline-browser.mjs";
 
 const NOW = Date.UTC(2030, 0, 2, 3, 4, 5);
+
+test("home capture records success and fails closed with diagnostic evidence", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "kit-capture-test-"));
+  try {
+    await mkdir(join(dir, "tooling", "ci"), { recursive: true });
+    await mkdir(join(dir, "bin"));
+    await writeFile(join(dir, "bin", "git"), '#!/bin/sh\nprintf "fixture-sha\\n"\n', {
+      mode: 0o755,
+    });
+    await writeFile(
+      join(dir, "tooling", "ci", "kit-home-evidence.mjs"),
+      `export const homeEvidenceStates = ["guest"];
+export const homeEvidencePage = () => "fixture";
+export async function assertHomeEvidence() {
+  if (process.env.CAPTURE_CASE === "assertion") throw new Error("fixture assertion failed");
+}`,
+    );
+    await writeFile(
+      join(dir, "tooling", "ci", "kit-offline-browser.mjs"),
+      `export async function withKitOfflineBrowser({ source }, capture) {
+  if (process.env.CAPTURE_CASE === "incomplete" && source.endsWith("after")) return;
+  const page = {
+    setViewportSize: async () => {},
+    screenshot: async () => Buffer.from("fixture image"),
+    evaluate: async (fn) => {
+      if (fn.toString().includes("scrollWidth")) return {
+        width: 390, scrollWidth: 390,
+        font: process.env.CAPTURE_CASE === "fallback-first" ? "serif, Mona Sans" : '"Mona Sans", sans-serif',
+        fontAvailable: true,
+      };
+      globalThis.document = { fonts: {
+        ready: Promise.resolve(),
+        load: async (spec) => process.env.CAPTURE_CASE === "missing-font" && spec.startsWith("700")
+          ? [] : [{ family: "Mona Sans", status: "loaded" }],
+      } };
+      try { return await fn(); } finally { delete globalThis.document; }
+    },
+  };
+  await capture({ page });
+}`,
+    );
+    const script = new URL("./kit-home-capture.mjs", import.meta.url);
+    const run = async (scenario, executable = script) => {
+      const output = join(dir, `output-${scenario}`);
+      const result = spawnSync(process.execPath, [executable.pathname, "guest", output], {
+        cwd: dir,
+        env: {
+          ...process.env,
+          PATH: `${join(dir, "bin")}:${process.env.PATH}`,
+          FINAL_SHA: "fixture-sha",
+          CAPTURE_CASE: scenario,
+        },
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      assert.equal(result.error, undefined);
+      assert.equal(result.signal, null);
+      return {
+        result,
+        manifest: JSON.parse(await readFile(join(output, "manifest.json"), "utf8")),
+      };
+    };
+    const success = await run("success");
+    assert.equal(success.result.status, 0, success.result.stderr);
+    assert.equal(success.manifest.captures.length, 4);
+    assert.deepEqual(success.manifest.errors, []);
+    assert.deepEqual(
+      success.manifest.captures.map(({ name }) => name),
+      [
+        "before-guest-desktop.png",
+        "before-guest-mobile.png",
+        "after-guest-desktop.png",
+        "after-guest-mobile.png",
+      ],
+    );
+    const failure = await run("assertion");
+    assert.equal(failure.result.status, 1);
+    assert.equal(failure.manifest.captures.length, 3);
+    assert.match(failure.manifest.errors[0], /after: fixture assertion failed/);
+    for (const scenario of ["missing-font", "fallback-first"]) {
+      const failure = await run(scenario);
+      assert.equal(failure.result.status, 1);
+      assert.equal(failure.manifest.captures.length, 3);
+      assert.equal(failure.manifest.captures[2].tree, "after");
+      assert.match(failure.manifest.errors[0], /after:/);
+      if (scenario === "missing-font") {
+        assert.equal(failure.manifest.captures[2].metrics.fontLoaded, false);
+        assert.match(failure.manifest.errors[0], /heading font did not load/);
+      }
+    }
+    const incomplete = await run("incomplete");
+    assert.equal(incomplete.result.status, 1);
+    assert.equal(incomplete.manifest.captures.length, 2);
+    assert.deepEqual(incomplete.manifest.errors, []);
+
+    const source = await readFile(script, "utf8");
+    assert.ok(source.includes("process.exitCode = 1;"));
+    const mutant = join(dir, "mutant.mjs");
+    await writeFile(mutant, source.replace("process.exitCode = 1;", ""));
+    const mutation = await run("assertion", new URL(`file://${mutant}`));
+    assert.throws(() => assert.equal(mutation.result.status, 1), assert.AssertionError);
+    assert.match(mutation.manifest.errors[0], /fixture assertion failed/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("fixed server clock is module-scoped and leaves the global Date alone", () => {
   const realNow = Date.now;
@@ -48,6 +156,53 @@ for (const state of homeEvidenceStates) {
   });
 }
 
+test("Kit home hero presents its heading and action at desktop and mobile widths", async () => {
+  await withKitHomeEvidence("guest", async ({ page }) => {
+    for (const [width, height] of [
+      [1280, 800],
+      [390, 844],
+    ]) {
+      await page.setViewportSize({ width, height });
+      const hero = page.locator('section[aria-labelledby="home-heading"]');
+      const heading = hero.locator("h1");
+      const action = hero.locator(".hero-action");
+      const button = action.getByTestId("join");
+      const lead = action.locator(".lead");
+      assert.equal(await hero.evaluate((el) => getComputedStyle(el).textAlign), "left");
+      assert.equal(await action.evaluate((el) => getComputedStyle(el).display), "flex");
+      const typography = await heading.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const probe = document.createElement("span");
+        probe.style.fontSize = "var(--text-hero)";
+        el.append(probe);
+        const expectedSize = getComputedStyle(probe).fontSize;
+        probe.remove();
+        return {
+          size: style.fontSize,
+          expectedSize,
+          weight: style.fontWeight,
+          expectedWeight: style.getPropertyValue("--font-weight-display").trim() || "560",
+        };
+      });
+      assert.equal(typography.size, typography.expectedSize);
+      assert.notEqual(typography.expectedWeight, "");
+      assert.equal(typography.weight, typography.expectedWeight);
+      const [actionBox, buttonBox, leadBox] = await Promise.all([
+        action.boundingBox(),
+        button.boundingBox(),
+        lead.boundingBox(),
+      ]);
+      assert.ok(actionBox && buttonBox && leadBox, `hero boxes at ${width}px`);
+      if (width === 390) {
+        assert.ok(Math.abs(buttonBox.width - actionBox.width) < 1, "mobile action fills its row");
+        assert.ok(leadBox.y >= buttonBox.y + buttonBox.height, "mobile lead follows action");
+      } else {
+        assert.ok(leadBox.x >= buttonBox.x + buttonBox.width, "desktop lead follows action inline");
+      }
+    }
+  });
+});
+
 test("Kit offline fixture fixes the server render clock", async () => {
   await withKitOfflineBrowser(
     { now: Date.UTC(2030, 0, 2), page: "<p>{new Date().toISOString()}</p>" },
@@ -67,7 +222,15 @@ import SiteFooter from '#lib/SiteFooter.svelte';
 <JsonLd testid="site-jsonld" json={'{"fixture":true}'} />
 <SiteFooter />
 <p class="proof">Fixture rendered</p>
-<style>.proof { color: rgb(12, 34, 56); }</style>`,
+<span class="theme-pill">Theme token proof</span>
+<style>
+  .proof { color: rgb(12, 34, 56); }
+  .theme-pill {
+    border-radius: var(--radius-pill);
+    padding-inline: var(--space-inset-tag-x);
+    font-family: var(--font-data);
+  }
+</style>`,
     },
     async ({ page, html, unexpected }) => {
       assert.match(html, /Fixture rendered/);
@@ -78,6 +241,17 @@ import SiteFooter from '#lib/SiteFooter.svelte';
         await page.locator(".proof").evaluate((el) => getComputedStyle(el).color),
         "rgb(12, 34, 56)",
       );
+      const pill = await page.locator(".theme-pill").evaluate((el) => {
+        const style = getComputedStyle(el);
+        return {
+          radius: style.borderRadius,
+          padding: style.paddingInline,
+          font: style.fontFamily,
+        };
+      });
+      assert.equal(pill.radius, "999px");
+      assert.equal(pill.padding, "7px");
+      assert.equal(pill.font, '"Fragment Mono", ui-monospace, monospace');
       // The shipped footer consumes a generated Tailwind theme token. Compare
       // its computed background with the browser-resolved custom property, not
       // merely the presence of a token name in the emitted stylesheet.
@@ -124,6 +298,94 @@ import SiteFooter from '#lib/SiteFooter.svelte';
   );
 });
 
+test("Kit fixture opts into compiled JavaScript hydration", async () => {
+  const fixture = `<script>let count = $state(0);</script>
+<button onclick={() => count++}>{count}</button>`;
+  await withKitOfflineBrowser({ page: fixture }, async ({ page }) => {
+    await page.locator("button").click();
+    assert.equal(await page.locator("button").textContent(), "0");
+  });
+  await withKitOfflineBrowser({ page: fixture, javaScriptEnabled: true }, async ({ page }) => {
+    await page.waitForLoadState("networkidle");
+    await page.locator("button").click();
+    await page.waitForFunction(() => document.querySelector("button")?.textContent === "1");
+  });
+});
+
+test("Kit fixture denies WebSocket connections and workers", async () => {
+  let connections = 0;
+  const listener = createServer((socket) => {
+    connections++;
+    socket.destroy();
+  });
+  await new Promise((resolve) => listener.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = listener.address().port;
+    const fixture = `<script>
+let closed = $state(0);
+function connect() {
+  for (const scheme of ['ws', 'wss']) {
+    const socket = new WebSocket(scheme + '://127.0.0.1:${port}/fixture');
+    socket.onclose = () => closed++;
+  }
+}
+</script><button onclick={connect}>{closed}</button>`;
+    let closed;
+    let directive;
+    await assert.rejects(
+      withKitOfflineBrowser({ page: fixture, javaScriptEnabled: true }, async ({ page }) => {
+        await page.waitForLoadState("networkidle");
+        await page.locator("button").click();
+        await page.waitForFunction(
+          () => document.querySelector("button")?.textContent === "2",
+          null,
+          {
+            timeout: 10_000,
+          },
+        );
+        closed = await page.locator("button").textContent();
+        directive = await page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              const timer = setTimeout(() => resolve("timeout"), 10_000);
+              document.addEventListener(
+                "securitypolicyviolation",
+                (event) => {
+                  clearTimeout(timer);
+                  resolve(event.effectiveDirective);
+                },
+                { once: true },
+              );
+              new Worker(URL.createObjectURL(new Blob([""], { type: "text/javascript" })));
+            }),
+        );
+      }),
+      /ws(?:s)?:\/\/127\.0\.0\.1/,
+    );
+    const assertObservations = (closedValue, workerDirective) => {
+      assert.equal(closedValue, "2");
+      assert.equal(workerDirective, "worker-src");
+    };
+    assertObservations(closed, directive);
+    assert.throws(() => assertObservations("1", directive), assert.AssertionError);
+    assert.throws(() => assertObservations(closed, "wrong-directive"), assert.AssertionError);
+    assert.equal(connections, 0);
+  } finally {
+    await new Promise((resolve, reject) =>
+      listener.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test("Kit fixture denies public JavaScript even with hydration enabled", async () => {
+  await assert.rejects(
+    withKitOfflineBrowser({ page: "<p>Fixture</p>", javaScriptEnabled: true }, async ({ page }) => {
+      await page.evaluate(() => fetch("/islands/events-calendar.js").catch(() => null));
+    }),
+    /events-calendar\.js/,
+  );
+});
+
 test("Kit fixture renders query data and same-origin static assets", async () => {
   await withKitOfflineBrowser(
     {
@@ -164,8 +426,17 @@ test("asset reads reject escapes, symlinks, and unsupported files", async () => 
     await writeFile(join(root, "safe.js"), "unsupported");
     await writeFile(join(dir, "outside.css"), "outside");
     await symlink(join(dir, "outside.css"), join(root, "link.css"));
+    await symlink(join(dir, "outside.css"), join(root, "link.js"));
+    await writeFile(join(dir, "outside.js"), "outside");
     await symlink(dir, join(root, "linked-dir"));
     assert.equal((await readFixtureAsset(root, "/safe.css")).body.toString(), "safe");
+    assert.equal(
+      (await readFixtureAsset(root, "/safe.js", { allowJavaScript: true })).contentType,
+      "text/javascript",
+    );
+    for (const path of ["/link.js", "/linked-dir/outside.js", "/%2e%2e/outside.js"]) {
+      assert.equal(await readFixtureAsset(root, path, { allowJavaScript: true }), null, path);
+    }
     for (const path of [
       "/../outside.css",
       "/%2e%2e/outside.css",

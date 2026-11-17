@@ -83,6 +83,15 @@ test("the Kit fixture owns the live event detail only on its loopback worker", (
   assert.match(helper, /kitFixtureOwnsEventDetail/);
 });
 
+test("the Kit join fixture flag is confined to the loopback worker", () => {
+  const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
+  const hooks = readFileSync(new URL("../web/src/hooks.server.ts", import.meta.url), "utf8");
+  const deployed = readFileSync(new URL("../web/wrangler.jsonc", import.meta.url), "utf8");
+  assert.match(worker, /KIT_PARITY_FIXTURE_JOIN: "true"/);
+  assert.match(hooks, /fixtureJoin: env\.KIT_PARITY_FIXTURE_JOIN === "true"/);
+  assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_JOIN/);
+});
+
 test("both loopback parity workers inject the same healthy-empty Discord seam", () => {
   // The cross-target events-calendar comparison renders the partial-source
   // notice only when a target reports a Discord failure, so both loopback

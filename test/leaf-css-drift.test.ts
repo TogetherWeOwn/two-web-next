@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { URL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseLeafModule } from "../ci/leaf-css-parser.mjs";
+import { decodeCssDictionary } from "../src/css-dictionary";
 import { Layout } from "../src/pages";
 import { LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 import type { Env } from "../src/env";
@@ -50,38 +52,37 @@ describe("content-leaf inlined CSS", () => {
       true,
     ],
     ["no tokens", ["a {}", "b {}", "c {}", "d {}"], true],
-    ["sentinel collision", [".base-theme ~ p {}", "b {}", "c {}", "d {}"], false],
+    ["former sentinel", [".base-theme ~ p {}", "b {}", "c {}", "d {}"], true],
+    ["repeated rules", [".card { margin: 0 auto; }\n".repeat(12), "b {}", "c {}", "d {}"], true],
+    ["reserved marker", ["a {}", "b \u0080 {}", "c {}", "d {}"], false],
+    ["last reserved marker", ["a {}", "b Ï {}", "c {}", "d {}"], false],
+    ["oversized input", ["a {}\n".repeat(20_001), "b {}", "c {}", "d {}"], false],
   ])("executes generated initializer for %s", (_name, sources, packed) => {
     const dir = mkdtempSync(join(tmpdir(), "leaf-css-generator-"));
     try {
       for (const sub of ["ci", "public", "src", "web/src/lib"])
         mkdirSync(join(dir, sub), { recursive: true });
-      writeFileSync(
-        join(dir, "ci/build-leaf-css.mjs"),
-        readFileSync(new URL("../ci/build-leaf-css.mjs", import.meta.url)),
-      );
+      for (const file of ["build-leaf-css.mjs", "css-dictionary.mjs"]) {
+        writeFileSync(
+          join(dir, "ci", file),
+          readFileSync(new URL(`../ci/${file}`, import.meta.url)),
+        );
+      }
       SOURCES.forEach((entry, i) => writeFileSync(join(dir, entry), sources[i]!));
       execFileSync(process.execPath, [join(dir, "ci/build-leaf-css.mjs")], { timeout: 10000 });
       const generated = readFileSync(join(dir, "src/leaf-critical-css.ts"), "utf8");
-      expect(generated.includes('.split("~").join(".base-theme")')).toBe(packed);
-      // This fixture runs only generator-produced code; security readers never evaluate it.
-      const js = generated.replaceAll(": string =", " =");
-      const modulePath = join(dir, "src/fixture.mjs");
-      writeFileSync(modulePath, js);
-      const output = execFileSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          `import { LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256 } from ${JSON.stringify(new URL(`file://${modulePath}`).href)}; console.log(JSON.stringify([LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256]));`,
-        ],
-        { encoding: "utf8", timeout: 10000 },
-      );
+      expect(generated.includes("decodeCssDictionary(")).toBe(packed);
+      expect(generated).not.toContain('.split("~")');
       const css = sources.join("\n");
-      expect(JSON.parse(output)).toEqual([
-        css,
-        createHash("sha256").update(css, "utf8").digest("base64"),
-      ]);
+      const sha256 = createHash("sha256").update(css, "utf8").digest("base64");
+      expect(parseLeafModule(generated)).toEqual({ css, sha256 });
+      if (packed) {
+        const call = /decodeCssDictionary\(("(?:[^"\\]|\\.)*"), (\[.*\])\);\n/.exec(generated);
+        expect(call).not.toBeNull();
+        const dictionary = JSON.parse(call![2]!) as string[];
+        expect(decodeCssDictionary(JSON.parse(call![1]!), dictionary)).toBe(css);
+        if (_name === "repeated rules") expect(dictionary.length).toBeGreaterThan(0);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -92,10 +93,12 @@ describe("content-leaf inlined CSS", () => {
     try {
       for (const sub of ["ci", "public", "src", "web/src/lib"])
         mkdirSync(join(dir, sub), { recursive: true });
-      writeFileSync(
-        join(dir, "ci/build-leaf-css.mjs"),
-        readFileSync(new URL("../ci/build-leaf-css.mjs", import.meta.url)),
-      );
+      for (const file of ["build-leaf-css.mjs", "css-dictionary.mjs"]) {
+        writeFileSync(
+          join(dir, "ci", file),
+          readFileSync(new URL(`../ci/${file}`, import.meta.url)),
+        );
+      }
       SOURCES.forEach((entry, i) => writeFileSync(join(dir, entry), i === 1 ? "</StYlE>" : "a {}"));
       const result = spawnSync(process.execPath, [join(dir, "ci/build-leaf-css.mjs")], {
         encoding: "utf8",

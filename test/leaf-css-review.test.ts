@@ -25,6 +25,10 @@ function fixture() {
       'const SOURCES = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"];',
     ),
   );
+  writeFileSync(
+    join(dir, "ci/css-dictionary.mjs"),
+    readFileSync(join(root, "ci/css-dictionary.mjs")),
+  );
   writeFileSync(join(dir, "public/styles.css"), "body { color: black; }");
   writeFileSync(join(dir, "public/theme-tokens.css"), ":root { --accent: lime; }");
   writeFileSync(join(dir, "public/theme.css"), ".hero { display: grid; }");
@@ -93,8 +97,8 @@ describe("generated leaf CSS review evidence", () => {
     writeFileSync(
       generator,
       readFileSync(generator, "utf8").replace(
-        'const initializer = packed ? `${literal}.split("~").join(".base-theme")` : literal;',
-        "const initializer = JSON.stringify(css);",
+        "const encoded = css.length <= 100_000 && !/[\\u0080-Ï]/u.test(css) ? packCss(css) : null;",
+        "const encoded = null;",
       ),
     );
     const historical = commit();
@@ -103,7 +107,7 @@ describe("generated leaf CSS review evidence", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, changed: false });
   });
   it.each([
-    ["altered decoder", "text.replace('.join(\".base-theme\")', '.join(\".other\")')"],
+    ["altered decoder", "text.replaceAll('decodeCssDictionary', 'otherDecoder')"],
     [
       "trailing expression",
       "text.replace(';\\nexport const LEAF_CRITICAL_CSS_SHA256', '+\"x\";\\nexport const LEAF_CRITICAL_CSS_SHA256')",
@@ -131,7 +135,7 @@ describe("generated leaf CSS review evidence", () => {
     const source = readFileSync(generator, "utf8");
     for (const literal of [false, true]) {
       const initializer =
-        'const initializer = packed ? `${literal}.split("~").join(".base-theme")` : literal;';
+        "const encoded = css.length <= 100_000 && !/[\\u0080-Ï]/u.test(css) ? packCss(css) : null;";
       const prefix = JSON.stringify(`// comment${terminator}extra();\n`);
       const target = "writeFileSync(fd, text);";
       expect(source.split(target)).toHaveLength(2);
@@ -139,7 +143,7 @@ describe("generated leaf CSS review evidence", () => {
       expect(modified).not.toBe(source);
       if (literal) {
         expect(modified.split(initializer)).toHaveLength(2);
-        modified = modified.replace(initializer, "const initializer = JSON.stringify(css);");
+        modified = modified.replace(initializer, "const encoded = null;");
       }
       writeFileSync(generator, modified);
       const altered = commit();
@@ -186,9 +190,10 @@ describe("generated leaf CSS review evidence", () => {
     }
   });
 
-  it.each(["missing", "optional", "utf8"])("rejects %s source on either side", (kind) => {
+  it.each(["missing", "packer", "optional", "utf8"])("rejects %s source on either side", (kind) => {
     const { dir, base, commit, run } = fixture();
     if (kind === "missing") rmSync(join(dir, "public/theme.css"));
+    if (kind === "packer") rmSync(join(dir, "ci/css-dictionary.mjs"));
     if (kind === "utf8") writeFileSync(join(dir, "public/theme.css"), Buffer.from([0xff]));
     if (kind === "optional") {
       mkdirSync(join(dir, "assets/leaf-only.css"), { recursive: true });
