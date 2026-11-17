@@ -63,7 +63,7 @@ export function fixedDateBanner(now) {
 // production credentials; an empty `unexpected` only covers routed requests.
 // `now` (epoch ms) fixes the clock seen by the bundled server render only.
 export async function withKitOfflineBrowser(
-  { source, page: fixture, search = "", now, javaScriptEnabled = false },
+  { source, page: fixture, search = "", now = undefined, javaScriptEnabled = false },
   callback,
 ) {
   if (typeof search !== "string" || (search && !search.startsWith("?")) || search.includes("#")) {

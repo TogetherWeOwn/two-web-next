@@ -430,11 +430,8 @@ describe("source-managed moderator deployment preflight", () => {
 });
 
 describe("staging smoke workflow safety", () => {
-  it("routes runners by repo visibility with a job-private container", () => {
-    // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
-    expect(smoke).toContain(
-      `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`,
-    );
+  it("uses a hosted runner with a job-private container", () => {
+    expect(smoke).toContain("runs-on: ubuntu-latest\n");
     expect(smoke).toContain("image: node:24-bookworm");
     expect(smoke.split("ubuntu-latest")).toHaveLength(2);
   });
@@ -528,7 +525,7 @@ describe("production deployment preserves configured triggers", () => {
       'npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"',
     );
     const gradual = workflow.indexOf(
-      "uses: TogetherWeOwn/.github/actions/gradual-promote@d427f7212f478ea3823a605edb394b0722e152b5",
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@2ef8ad6447e11d019ac3098bcfd011193b75266a",
     );
 
     expect(upload).toBeGreaterThan(-1);

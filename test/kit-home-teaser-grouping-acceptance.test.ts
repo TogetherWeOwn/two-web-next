@@ -204,13 +204,15 @@ function teaserCardCount(html: string): number {
   if (listAt === -1) throw new Error("missing home-events-list");
   const seeAll = html.indexOf("See all events", listAt);
   if (seeAll === -1) throw new Error("missing See all events link");
-  return (html.slice(listAt, seeAll).match(/<li class="card"/g) ?? []).length;
+  return (html.slice(listAt, seeAll).match(/<li class="card(?:\s[^"]*)?"/g) ?? []).length;
 }
 
 /** The one card linking `eventKey` inside the group for `key`. */
 function groupTeaserRow(html: string, key: TeaserGroupKey, eventKey: string): string {
   const slice = groupSlice(html, key);
-  const hit = slice.split('<li class="card"').find((chunk) => chunk.includes(`/e/${eventKey}"`));
+  const hit = [...slice.matchAll(/<li class="card(?:\s[^"]*)?"[^>]*>[\s\S]*?<\/li>/g)].find(
+    ([row]) => row.includes(`/e/${eventKey}"`),
+  )?.[0];
   if (!hit) throw new Error(`no ${eventKey} row under ${key}`);
   return hit.split("</li>")[0]!;
 }

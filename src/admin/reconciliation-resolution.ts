@@ -13,7 +13,7 @@ export async function recordReconciliationResolution(
     values ('operations', 'bot-reconciliation.resolve', 'bot_reconciliation_intents', ${key},
       'User', ${actorId}, 'resolve', ${JSON.stringify({
         resolution: { before: null, after: resolution },
-      })}::jsonb)`;
+      })}::text::jsonb)`;
 }
 
 /** The store commits the receipt and conditional resolution in the same transaction. */

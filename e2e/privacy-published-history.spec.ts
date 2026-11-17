@@ -10,7 +10,7 @@
 // endpoint, old body bundles, client code, new tokens or quality-budget changes.
 // References/assumptions: existing privacy twins and content-leaf navigation;
 // no new visual direction. States: normal current page + keyboard-focused history.
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
@@ -27,6 +27,9 @@ let fixture: PrivacyHistoryFixture;
 test.use({ javaScriptEnabled: false, serviceWorkers: "block" });
 test.beforeAll(async () => {
   fixture = await compilePrivacyHistory();
+  expect(fixture.css).toContain(
+    readFileSync(join(historyRoot, "web/src/lib/site-header.css"), "utf8"),
+  );
 });
 
 async function openPrivacy(page: Page, twin: HistoryTwin) {

@@ -11,12 +11,16 @@ const [state, destination] = process.argv.slice(2);
 if (!state || !destination) throw new Error("usage: kit-home-capture.mjs <state> <destination>");
 const tooling = resolve("tooling");
 const { homeEvidencePage, homeEvidenceStates, assertHomeEvidence } = await import(
-  pathToFileURL(join(tooling, "ci/kit-home-evidence.mjs"))
+  pathToFileURL(resolve("after/ci/kit-home-evidence.mjs"))
 );
 const { withKitOfflineBrowser } = await import(
   pathToFileURL(join(tooling, "ci/kit-offline-browser.mjs"))
 );
-if (!homeEvidenceStates.includes(state)) throw new Error(`Unknown state: ${state}`);
+const eventEvidence = homeEvidenceStates.includes(state)
+  ? null
+  : await import(pathToFileURL(resolve("after/ci/kit-event-evidence.mjs")));
+const eventState = eventEvidence?.eventEvidenceStates.includes(state) ?? false;
+if (!eventState && !homeEvidenceStates.includes(state)) throw new Error(`Unknown state: ${state}`);
 
 const output = resolve(destination);
 await mkdir(output, { recursive: true });
@@ -34,7 +38,13 @@ for (const tree of ["before", "after"]) {
   try {
     if (tree === "after") assert.equal(sha, process.env.FINAL_SHA, "after is not the PR head");
     await withKitOfflineBrowser(
-      { source, page: homeEvidencePage(state), now: Date.UTC(2026, 9, 20, 12) },
+      {
+        source,
+        page: eventState
+          ? eventEvidence.eventEvidencePage(homeEvidencePage("guest"), state)
+          : homeEvidencePage(state),
+        now: Date.UTC(2026, 9, 20, 12),
+      },
       async ({ page }) => {
         for (const viewport of viewports) {
           await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -48,8 +58,13 @@ for (const tree of ["before", "after"]) {
                 faces.every((face) => face.status === "loaded" && face.family === "Mona Sans"),
             );
           });
+          if (eventState) await page.locator(".event-band").scrollIntoViewIfNeeded();
           const name = `${tree}-${state}-${viewport.name}.png`;
-          const bytes = await page.screenshot({ animations: "disabled", caret: "hide" });
+          const bytes = await page.screenshot({
+            animations: "disabled",
+            caret: "hide",
+            fullPage: true,
+          });
           await writeFile(join(output, name), bytes);
           const metrics = await page.evaluate(() => ({
             width: document.documentElement.clientWidth,
@@ -66,7 +81,8 @@ for (const tree of ["before", "after"]) {
             metrics: { ...metrics, fontLoaded },
           });
           if (tree === "after") {
-            await assertHomeEvidence(page, state);
+            if (eventState) await eventEvidence.assertEventEvidence(page, state, viewport.name);
+            else await assertHomeEvidence(page, state);
             assert.ok(metrics.scrollWidth <= metrics.width, `${state}: horizontal overflow`);
             assert.equal(metrics.font.split(",")[0].replaceAll('"', "").trim(), "Mona Sans");
             assert.ok(fontLoaded && metrics.fontAvailable, `${state}: heading font did not load`);
