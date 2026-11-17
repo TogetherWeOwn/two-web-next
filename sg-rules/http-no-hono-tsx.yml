@@ -5,11 +5,18 @@ message: "The HTTP core must not import or re-export Hono"
 files:
   - src/http/**/*.tsx
 rule:
-  kind: string
-  regex: '^["\x27]hono(?:/[^"\x27]*)?["\x27]$'
+  all:
+    - any:
+        - kind: string
+          regex: '^["\x27]hono(?:/[^"\x27]*)?["\x27]$'
+        - kind: template_string
+          regex: '^`hono(?:/[^`$]*)?`$'
   any:
     - inside:
         kind: import_statement
+        field: source
+    - inside:
+        kind: import_require_clause
         field: source
     - inside:
         kind: export_statement

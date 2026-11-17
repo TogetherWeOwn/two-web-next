@@ -26,7 +26,8 @@ try {
     writeFileSync(outside, 'import "hono";\n');
     const extensions = ["ts", "mts", "cts", "tsx", "js", "mjs", "cjs"];
     const files = extensions.map((extension) => join(directory, `boundary.${extension}`));
-    for (const file of files) writeFileSync(file, 'import "other";\n');
+    for (const file of files)
+      writeFileSync(file, 'import "other";\nconst load = () => import(`hono/${name}`);\n');
     const scan = () =>
       spawnSync("npx", ["-y", "--package", "@ast-grep/cli@0.50.0", "ast-grep", "scan"], {
         encoding: "utf8",
@@ -39,9 +40,26 @@ try {
       );
     }
     for (const file of files) writeFileSync(file, 'const cors = require("hono/cors");\n');
+    const extraCases = [
+      "import type Hono = require('hono');",
+      "import Cors = require('hono/cors');",
+      "const load = () => import(`hono`);",
+      "const cors = require(`hono/cors`);",
+    ];
+    const extraFiles = ["ts", "tsx"].flatMap((extension) =>
+      extraCases.map((source, index) => {
+        const file = join(directory, `case-${index}.${extension}`);
+        writeFileSync(file, `${source}\n`);
+        return file;
+      }),
+    );
     const denied = scan();
     const deniedOutput = `${denied.stdout ?? ""}\n${denied.stderr ?? ""}`;
-    if (denied.error || denied.status !== 1 || files.some((file) => !deniedOutput.includes(file))) {
+    if (
+      denied.error ||
+      denied.status !== 1 ||
+      [...files, ...extraFiles].some((file) => !deniedOutput.includes(`${file}:`))
+    ) {
       throw new Error(
         `HTTP boundary scan did not reject every file: ${deniedOutput || denied.error?.message}`,
       );
