@@ -19,7 +19,7 @@ function fixture() {
     run_attempt: 2,
     workflow_id: 12,
     repository: { full_name: "example/repo" },
-    head_sha: expected.orchestrationSha,
+    head_sha: expected.sourceSha,
     event: "pull_request",
     pull_requests: [{ number: 7, head: { sha: expected.sourceSha } }],
   };
@@ -45,16 +45,19 @@ function check({ expected, run, attempt, job, liveHead }) {
 
 test("synthetic PR metadata separates merge SHA and tested head", () => {
   assert.doesNotThrow(() => check(fixture()));
-  const f = fixture();
-  f.run.event = f.attempt.event = "push";
-  f.expected.orchestrationSha = f.run.head_sha = f.attempt.head_sha = f.expected.sourceSha;
-  assert.doesNotThrow(() => check(f));
+  for (const event of ["push", "workflow_dispatch"]) {
+    const f = fixture();
+    f.run.event = f.attempt.event = event;
+    assert.throws(() => check(f));
+    f.expected.orchestrationSha = f.expected.sourceSha;
+    assert.doesNotThrow(() => check(f));
+  }
 });
 
 test("synthetic metadata refuses stale, ambiguous and unsuccessful producers", () => {
   for (const change of [
     (f) => (f.expected.sourceSha = "invalid"),
-    (f) => (f.run.head_sha = f.expected.sourceSha),
+    (f) => (f.run.head_sha = f.expected.orchestrationSha),
     (f) => (f.attempt.run_attempt = 1),
     (f) => (f.attempt.repository.full_name = "other/repo"),
     (f) => (f.run.workflow_id = 13),

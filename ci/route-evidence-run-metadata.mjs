@@ -1,5 +1,6 @@
 // Inputs must come from the trusted workflow and GitHub API, not an artifact.
-// This check alone does not authenticate producer outputs or report contents.
+// This check alone does not authenticate producer outputs, report contents,
+// or the orchestration SHA; that binding must be established separately.
 const sha = (value) => typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
 const positive = (value) => Number.isSafeInteger(value) && value > 0;
 
@@ -29,12 +30,12 @@ export function assertRouteEvidenceRunMetadata(expected, run, attempt, job, live
     run.run_attempt !== expected.runAttempt ||
     run.workflow_id !== expected.workflowId ||
     run.repository?.full_name !== expected.repository ||
-    run.head_sha !== expected.orchestrationSha ||
+    run.head_sha !== expected.sourceSha ||
     attempt.id !== expected.runId ||
     attempt.run_attempt !== expected.runAttempt ||
     attempt.workflow_id !== expected.workflowId ||
     attempt.repository?.full_name !== expected.repository ||
-    attempt.head_sha !== expected.orchestrationSha ||
+    attempt.head_sha !== expected.sourceSha ||
     attempt.event !== run.event ||
     job.id !== expected.producerJobId ||
     job.run_id !== expected.runId ||
