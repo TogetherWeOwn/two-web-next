@@ -21,7 +21,7 @@ describe("reconciliation resolution receipt", () => {
 
     await expect(resolveReconciliation({ resolve }, key, "123", "not_applied")).resolves.toBe(true);
     expect(resolve).toHaveBeenCalledWith(key, "123", "not_applied", expect.any(Function));
-    const values = tx.mock.calls[0].slice(1);
+    const values = tx.mock.calls[0]?.slice(1);
     expect(values).toEqual([
       key,
       "123",
