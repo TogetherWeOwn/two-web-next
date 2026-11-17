@@ -22,6 +22,9 @@ describe("dormant reconciliation persistence", () => {
     }
     for (const invalid of [
       { idempotencyKey: "bad" },
+      { idempotencyKey: [intent.idempotencyKey] as unknown as string },
+      { subject: ["event-123"] as unknown as string },
+      { subject: null as unknown as string },
       { verb: "voice.move_member" },
       { subject: "message body" },
       { subject: "" },
@@ -47,6 +50,16 @@ describe("dormant reconciliation persistence", () => {
     await expect(
       store.resolve(intent.idempotencyKey, "123", "free text", async () => {}),
     ).rejects.toThrow();
+    for (const [key, actor] of [
+      [[intent.idempotencyKey], "123"],
+      [intent.idempotencyKey, ["123"]],
+      [intent.idempotencyKey, 123],
+      [intent.idempotencyKey, null],
+    ]) {
+      await expect(
+        store.resolve(key as string, actor as string, "confirmed", async () => {}),
+      ).rejects.toThrow("Invalid reconciliation resolution");
+    }
     expect(sql.begin).toHaveBeenCalledTimes(1);
   });
 });

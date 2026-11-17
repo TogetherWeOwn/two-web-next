@@ -28,8 +28,10 @@ export type ReconciliationIntent = {
 /** Validate again at the persistence boundary, not just at a future caller. */
 export function reconciliationIntent(input: ReconciliationIntent): ReconciliationIntent {
   if (
+    typeof input.idempotencyKey !== "string" ||
     !UUID.test(input.idempotencyKey) ||
     !VERBS.has(input.verb) ||
+    typeof input.subject !== "string" ||
     !SUBJECT.test(input.subject) ||
     !Number.isInteger(input.attempts) ||
     input.attempts < 1 ||
@@ -91,7 +93,13 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
       resolution: string,
       receipt: (tx: TxClient) => Promise<void>,
     ): Promise<boolean> {
-      if (!UUID.test(key) || !ACTOR.test(actor) || !RESOLUTIONS.has(resolution)) {
+      if (
+        typeof key !== "string" ||
+        !UUID.test(key) ||
+        typeof actor !== "string" ||
+        !ACTOR.test(actor) ||
+        !RESOLUTIONS.has(resolution)
+      ) {
         throw new Error("Invalid reconciliation resolution");
       }
       if (typeof receipt !== "function") throw new Error("Reconciliation receipt is required");

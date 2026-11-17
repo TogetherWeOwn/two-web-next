@@ -119,21 +119,23 @@ describe.skipIf(!process.env.DATABASE_URL)(
         await fixture.client`select * from bot_reconciliation_intents where idempotency_key = ${key}`;
       expect(open).toMatchObject({ idempotency_key: key, attempts: 2, last_code: "unknown" });
       await expect(store.record({ ...intent, subject: "other" })).rejects.toThrow();
+      await fixture.client`create table reconciliation_test_receipts (key uuid not null)`;
       await expect(
-        store.resolve(key, "123", "confirmed", async () => {
+        store.resolve(key, "123", "confirmed", async (tx) => {
+          await tx`insert into reconciliation_test_receipts (key) values (${key}::uuid)`;
           throw new Error("receipt failed");
         }),
       ).rejects.toThrow("receipt failed");
       const [rolledBack] =
         await fixture.client`select resolved_at from bot_reconciliation_intents where idempotency_key = ${key}`;
       expect(rolledBack!.resolved_at).toBeNull();
-      let receipts = 0;
+      expect(await fixture.client`select key from reconciliation_test_receipts`).toEqual([]);
       const resolve = () =>
-        store.resolve(key, "123", "confirmed", async () => {
-          receipts++;
+        store.resolve(key, "123", "confirmed", async (tx) => {
+          await tx`insert into reconciliation_test_receipts (key) values (${key}::uuid)`;
         });
       expect((await Promise.all([resolve(), resolve()])).sort()).toEqual([false, true]);
-      expect(receipts).toBe(1);
+      expect(await fixture.client`select key from reconciliation_test_receipts`).toEqual([{ key }]);
       await expect(store.record(intent)).rejects.toThrow();
       const [resolved] =
         await fixture.client`select resolved_by, resolution from bot_reconciliation_intents where idempotency_key = ${key}`;
