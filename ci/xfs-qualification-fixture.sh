@@ -50,5 +50,7 @@ chmod 700 "$root"
 mkdir "$nested"
 sudo mount --bind "$root" "$alias"
 sudo mount -t tmpfs -o size=8m tmpfs "$nested"
+sudo chown "$(id -u):$(id -g)" "$nested"
+chmod 700 "$nested"
 
 XFS_FIXTURE_ROOT="$root" XFS_FIXTURE_ALIAS="$alias" XFS_FIXTURE_NON_XFS="$nested" "$@"
