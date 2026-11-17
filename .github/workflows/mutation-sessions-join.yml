@@ -46,6 +46,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --include=dev --no-audit --no-fund
+      - name: Prepare first-party generated sources
+        run: npm run generate:first-party
       - name: Mutation harness selftest
         run: npm run mutation:sessions-join:selftest
       - name: Mutation run (sessions + join + rsvp + admin + agent-events)

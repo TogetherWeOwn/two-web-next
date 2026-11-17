@@ -1,6 +1,6 @@
 // Pins the review-tiers.yml invariants: parse/version/default, this file is
-// sensitive, ordinary is exactly the audited pure-copy modules, and the
-// sensitive-wins overrides for gate-input docs and served SVG assets.
+// sensitive, ordinary is limited to audited modules and presentation globs,
+// and sensitive overrides win for security-sensitive paths.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +15,8 @@ interface ReviewTiers {
   tiers: Record<string, string[]>;
 }
 
-const doc = parse(readFileSync(resolve(root, ".github/review-tiers.yml"), "utf8")) as ReviewTiers;
+const policy = readFileSync(resolve(root, ".github/review-tiers.yml"), "utf8");
+const doc = parse(policy) as ReviewTiers;
 
 function globToRegExp(pattern: string): RegExp {
   let re = "^";
@@ -69,10 +70,64 @@ describe("review-tiers.yml", () => {
     expect(classify(".github/workflows/ci.yml")).toBe("sensitive");
   });
 
-  it("contains only the three audited pure-copy modules in ordinary", () => {
+  it("limits ordinary to the three audited modules and presentation globs", () => {
     expect(new Set(doc.tiers.ordinary)).toEqual(
-      new Set(["src/about-content.ts", "src/faq-content.ts", "src/rules-content.ts"]),
+      new Set([
+        "src/about-content.ts",
+        "src/faq-content.ts",
+        "src/rules-content.ts",
+        "web/src/lib/**/*.svelte",
+        "web/src/lib/**/*.css",
+      ]),
     );
+  });
+
+  it("classifies presentation files and retains sensitive web boundaries", () => {
+    for (const file of [
+      "web/src/lib/Button.svelte",
+      "web/src/lib/nested/Button.svelte",
+      "web/src/lib/theme.css",
+      "web/src/lib/nested/theme.css",
+    ])
+      expect(classify(file), file).toBe("ordinary");
+
+    for (const file of [
+      "web/src/routes/+page.svelte",
+      "web/src/routes/admin/+page.server.ts",
+      "web/src/lib/server/Button.svelte",
+      "web/src/lib/server/nested/theme.css",
+      "web/src/hooks.server.ts",
+      "web/src/hooks.ts",
+      "web/utility.server.ts",
+      "web/src/lib/nested/utility.server.ts",
+      "web/vite.config.ts",
+      "web/svelte.config.js",
+      "web/wrangler.staging.jsonc",
+      "web/package.json",
+      "web/package-lock.json",
+      "web/_headers",
+      "web/tsconfig.json",
+      "web/src/lib/utility.ts",
+      "web/unknown.txt",
+      "ci/example.ts",
+      "e2e/example.ts",
+      ".github/example.yml",
+    ])
+      expect(classify(file), file).toBe("sensitive");
+  });
+
+  it("documents the manually reviewed Svelte content-trigger contract", () => {
+    // Comments are the policy's consumption boundary; this is not a scanner.
+    for (const text of [
+      "Any .svelte file containing raw HTML, a fetch call, a form action, or a",
+      "load function is sensitive regardless of path.",
+      "manually; path classification does not automatically enforce these triggers.",
+      "`{@html content}` or `{@html\\n  content}`",
+      "`fetch(url)`, `fetch (url)`, or `globalThis.fetch(url)`",
+      '`<form action="?/save">` or `<form\\n  action={target}>`',
+      "`export function load(...)` or `export const load = async (...) => ...`",
+    ])
+      expect(policy).toContain(text);
   });
 
   it("has no exact glob string in more than one tier", () => {

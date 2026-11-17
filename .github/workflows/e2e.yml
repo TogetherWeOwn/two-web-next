@@ -195,8 +195,12 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --include=dev --no-audit --no-fund
+      - name: Prepare first-party generated inputs
+        run: npm run generate:first-party
       - name: Verify CI isolation
         run: node e2e/prepare.mjs
+      - name: Prepare disposable runtime role
+        run: psql -h 127.0.0.1 -U agent_test -d two_web_next -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Apply migrations to disposable Postgres
         run: npm run db:migrate
       - name: Seed journey fixtures
@@ -413,6 +417,7 @@ jobs:
           name: saved-review-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             test-results/**/attachments/hono-review-*.png
+            test-results/**/attachments/kit-review-*.png
             test-results-kit-parity/**/attachments/kit-review-*.png
           if-no-files-found: error
           retention-days: 7

@@ -260,26 +260,24 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   },
 ];
 
-// Fixture-only manifest for the executed parity journeys (member board +
-// live event detail). The shipped manifest held /leaderboards/members on Hono
-// until the fresh privacy verdict, so the Playwright Kit fixture
-// (ci/kit-worker-dev.mjs) could otherwise only ever compare Hono against
-// Hono; the live detail entry stays disabled until the RSVP companion passes,
-// so the same fixture enables it for its executed journey. The fixture sets
-// KIT_PARITY_FIXTURE_MEMBER_BOARD=true and/or
-// KIT_PARITY_FIXTURE_EVENT_DETAIL=true on its own generated loopback worker;
-// this helper honours them only for an http loopback APP_URL, so a deployed
-// Kit Worker (preview workers.dev, staging, production) can never enable
-// either route through them. Returns undefined when neither flag is set, which
-// leaves dispatch on the shipped manifest untouched and unmutated.
+// Fixture-only manifest for executed parity journeys. The generated loopback
+// worker can enable the member board, live event detail, and join entries for
+// their Kit journeys. Flags are honoured only for an HTTP loopback APP_URL;
+// deployed Workers retain the shipped manifest. No flag mutates that manifest.
+// The fixture exercises the actual Kit dispatcher rather than a second render
+// implementation. Each override is restricted to its exact method and path;
+// absent flags leave the manifest unchanged, including the disabled join route.
+// An invalid or non-loopback APP_URL also leaves production ownership unchanged.
 export function fixtureManifestFor(env: {
   APP_URL?: string;
   KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
+  KIT_PARITY_FIXTURE_JOIN?: string;
 }): OwnedRoute[] | undefined {
   const wantBoard = env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true";
   const wantDetail = env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true";
-  if (!wantBoard && !wantDetail) return undefined;
+  const wantJoin = env.KIT_PARITY_FIXTURE_JOIN === "true";
+  if (!wantBoard && !wantDetail && !wantJoin) return undefined;
   let app: URL;
   try {
     app = new URL(env.APP_URL ?? "");
@@ -293,6 +291,8 @@ export function fixtureManifestFor(env: {
     if (wantBoard && entry.method === "GET" && entry.path === "/leaderboards/members")
       return { ...entry, enabled: true };
     if (wantDetail && entry.method === "GET" && entry.path === "/e/:key")
+      return { ...entry, enabled: true };
+    if (wantJoin && entry.method === "GET" && entry.path === "/join")
       return { ...entry, enabled: true };
     return entry;
   });
@@ -367,22 +367,23 @@ function decodeKitPath(path: string): string | null {
   }
 }
 
-function normalizePath(path: string): string | null {
-  const withoutData = path.endsWith(DATA_SUFFIX) ? path.slice(0, -DATA_SUFFIX.length) : path;
+function normalizePath(path: string, stripData = true): string | null {
+  const withoutData =
+    stripData && path.endsWith(DATA_SUFFIX) ? path.slice(0, -DATA_SUFFIX.length) : path;
   const decoded = decodeKitPath(withoutData);
   if (decoded === null) return null;
   // An encoded data suffix (%5F is "_") decodes into the suffix; strip again
   // so /events/past/%5F%5Fdata.json follows its page like the literal form.
-  const base = decoded.endsWith(DATA_SUFFIX) ? decoded.slice(0, -DATA_SUFFIX.length) : decoded;
-  let out = base;
-  while (out.length > 1 && out.endsWith("/")) out = out.slice(0, -1);
-  return out || "/";
+  const base =
+    stripData && decoded.endsWith(DATA_SUFFIX) ? decoded.slice(0, -DATA_SUFFIX.length) : decoded;
+  // Hono treats non-root trailing-slash variants as distinct paths.
+  if (base.length > 1 && base.endsWith("/")) return null;
+  return base || "/";
 }
 
 function isReserved(path: string): boolean {
   if (RESERVED_EXACT.has(path)) return true;
-  // The bare prefix counts too: trailing-slash normalization turns "/api/"
-  // into "/api", which must not escape the reservation.
+  // The bare prefix counts too: "/api" must not escape the reservation.
   return RESERVED_PREFIXES.some(
     (prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix),
   );
@@ -400,7 +401,14 @@ function matchPattern(pattern: string, path: string): boolean {
 function bestMatch(path: string, manifest: OwnedRoute[]): OwnedRoute | undefined {
   let best: OwnedRoute | undefined;
   let bestStatic = -1;
-  let bestExact = false;
+  // Exact matches use the maximum score below.
+  // Pattern scores count path segments, so they cannot equal it.
+  // This puts an exact match above every matching pattern,
+  // regardless of manifest order. The strict comparison keeps
+  // the first entry when two scores tie, including exact ties.
+  // A disabled winner still prevents a lower-scored route
+  // from taking ownership: enabledRouteFor checks it only
+  // after this selection completes.
   for (const entry of manifest) {
     const pattern = entry.path;
     const exact = !pattern.includes(":");
@@ -408,13 +416,6 @@ function bestMatch(path: string, manifest: OwnedRoute[]): OwnedRoute | undefined
     const statics = exact
       ? Number.MAX_SAFE_INTEGER
       : pattern.split("/").filter((p) => !p.startsWith(":")).length;
-    if (bestExact && !exact) continue;
-    if (exact && !bestExact) {
-      best = entry;
-      bestExact = true;
-      bestStatic = Number.MAX_SAFE_INTEGER;
-      continue;
-    }
     if (statics > bestStatic) {
       best = entry;
       bestStatic = statics;
@@ -423,8 +424,12 @@ function bestMatch(path: string, manifest: OwnedRoute[]): OwnedRoute | undefined
   return best;
 }
 
-function enabledRouteFor(decision: RouteDecision, manifest: OwnedRoute[]): OwnedRoute | undefined {
-  const normalized = normalizePath(decision.path);
+function enabledRouteFor(
+  decision: RouteDecision,
+  manifest: OwnedRoute[],
+  stripData = true,
+): OwnedRoute | undefined {
+  const normalized = normalizePath(decision.path, stripData);
   if (normalized === null) return undefined;
   if (isReserved(normalized)) return undefined;
   const upper = decision.method.toUpperCase();
@@ -443,8 +448,14 @@ export function resolveRouteOwner(
 
 // Hook entry point: pure function of method + path. Reads nothing else, so the
 // body is still unread and the URL (query included) is intact for the owner.
-export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST) {
-  return enabledRouteFor({ method: request.method, path: new URL(request.url).pathname }, manifest);
+export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST, url?: URL) {
+  // Kit has already stripped a literal data suffix from event.url. Do not
+  // strip again: an encoded suffix is not a Kit data request.
+  return enabledRouteFor(
+    { method: request.method, path: (url ?? new URL(request.url)).pathname },
+    manifest,
+    !url,
+  );
 }
 
 export function decideOwner(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST): RouteOwner {
@@ -511,16 +522,16 @@ export interface HookDispatchDeps {
   // one: the hook forwards only the loopback parity-fixture flag below and
   // the core alone turns flag + appUrl into the fixture route choice.
   manifest?: OwnedRoute[];
-  // Loopback Kit parity fixture flags, forwarded from env by the hook as
-  // plain booleans (KIT_PARITY_FIXTURE_MEMBER_BOARD / _EVENT_DETAIL ===
-  // "true"). Honoured only through fixtureManifestFor: exact flags plus an
-  // http loopback appUrl, so a deployed Worker can never enable either route
-  // through them. Absent or false leaves the shipped ROUTE_MANIFEST untouched.
+  // Loopback Kit parity fixture flags, forwarded from env as booleans.
+  // fixtureManifestFor requires an HTTP loopback appUrl; deployed Workers
+  // cannot enable routes through these flags or mutate ROUTE_MANIFEST.
   fixtureMemberBoard?: boolean;
   // Live event-detail fixture flag for the RSVP companion's executed journey:
   // same loopback-only honouring as the board flag above. The shipped detail
   // entry stays disabled; the fixture worker alone enables it.
   fixtureEventDetail?: boolean;
+  // Join remains Hono-owned outside the loopback parity fixture.
+  fixtureJoin?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
@@ -688,7 +699,7 @@ function decodeTwinPath(path: string): string {
   }
 }
 
-export function isSameOriginAllowed(request: Request, appUrl: string): boolean {
+export function isSameOriginAllowed(request: Request, appUrl: string, url?: URL): boolean {
   const method = request.method.toUpperCase();
   let path: string;
   try {
@@ -697,7 +708,14 @@ export function isSameOriginAllowed(request: Request, appUrl: string): boolean {
     return false;
   }
   if (!UNSAFE_METHODS.some((m) => m === method)) return true;
-  if (SAME_ORIGIN_EXEMPTIONS.some(({ method: em, path: ep }) => em === method && ep === path)) {
+  // A normalized data URL must not grant an exemption absent from the actual
+  // request, or vice versa. The request origin remains authoritative below.
+  const eventPath = url ? decodeTwinPath(url.pathname) : path;
+  if (
+    SAME_ORIGIN_EXEMPTIONS.some(
+      ({ method: em, path: ep }) => em === method && ep === path && ep === eventPath,
+    )
+  ) {
     return true;
   }
   let expected: string | undefined;
@@ -851,6 +869,21 @@ export async function dispatchHookRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
 ): Promise<Response> {
+  const response = await dispatchOwnedRequest(event, deps);
+  // Match Kit's post-hook ETag check before it can discard response headers.
+  const etag = response.headers.get("etag");
+  let validator = event.request.headers.get("if-none-match");
+  if (validator?.startsWith('W/"')) validator = validator.slice(2);
+  if (response.status === 200 && etag !== null && validator === etag) {
+    return new Response(null, { status: 304, headers: response.headers });
+  }
+  return response;
+}
+
+async function dispatchOwnedRequest(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+): Promise<Response> {
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }
@@ -865,6 +898,7 @@ export async function dispatchHookRequest(
         APP_URL: deps.appUrl,
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
         KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
+        KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
       }) ??
       stagingManifestFor({
         APP_URL: deps.appUrl,
@@ -872,6 +906,7 @@ export async function dispatchHookRequest(
         KIT_ROUTE_STATIC: deps.kitRouteStatic,
       }) ??
       ROUTE_MANIFEST,
+    event.url,
   );
   if (!route) {
     return deps.honoFetch(event.request);
@@ -889,7 +924,7 @@ export async function dispatchHookRequest(
   // exact APP_URL Origin (or the Sec-Fetch-Site fallback when Origin is
   // absent), with only the documented machine exemptions. Refused before the
   // session bridge and before resolve, body unread, hardened like Hono.
-  if (!isSameOriginAllowed(event.request, deps.appUrl)) {
+  if (!isSameOriginAllowed(event.request, deps.appUrl, event.url)) {
     const refused = sameOriginRefusal(event, deps.appUrl, deps.featuredImageHosts);
     refused.headers.set("x-request-id", requestId);
     return refused;
@@ -907,9 +942,8 @@ export async function dispatchHookRequest(
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
   // closed to guest-equivalent locals, exactly as if no bridge were wired.
   // It runs outside the member-read boundary: its session read is not member data.
-  // Deferred as a closure because the live detail wrapper runs before it (see
-  // below): the bridge still precedes every render, but a throttled detail
-  // client never reaches it.
+  // Deferred for the live detail wrapper: the bridge still precedes every
+  // render, but a throttled detail client never reaches it.
   const bridgeSession = async (): Promise<void> => {
     if (!deps.sessionFor) return;
     try {

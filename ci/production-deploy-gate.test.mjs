@@ -767,7 +767,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
   const gradual = workflow.indexOf(
-    "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
+    "uses: TogetherWeOwn/.github/actions/gradual-promote@d427f7212f478ea3823a605edb394b0722e152b5",
   );
   assert.ok(
     credentialCheck > 0 &&
@@ -1403,7 +1403,7 @@ for (const [name, pattern, mutate] of [
     (s) => (s.jobs = withQuality(qualityJob({ conclusion: "failure" }))),
   ],
   [
-    "Lighthouse budget step skipped under a green quality job",
+    "web standards step skipped under a green quality job",
     /e2e-staging\.yml run 200 did not execute and pass the staging quality gate/,
     (s) =>
       (s.jobs = withQuality(
@@ -1411,11 +1411,11 @@ for (const [name, pattern, mutate] of [
       )),
   ],
   [
-    "Lighthouse quality step failing under a green quality job",
+    "web standards step failing under a green quality job",
     /e2e-staging\.yml run 200 did not execute and pass the staging quality gate/,
     (s) =>
       (s.jobs = withQuality(
-        qualityJob({ steps: qualitySteps({ [stagingQualitySteps[1]]: "failure" }) }),
+        qualityJob({ steps: qualitySteps({ [stagingQualitySteps[0]]: "failure" }) }),
       )),
   ],
   [
@@ -1461,6 +1461,27 @@ for (const [name, pattern, mutate] of [
   });
 }
 
+test("auto-approve permits Lighthouse failures when web standards pass", async () => {
+  const staging = stagingEvidence();
+  staging.jobs = withQuality(
+    qualityJob({
+      steps: [
+        ...qualitySteps(),
+        {
+          name: "Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)",
+          conclusion: "failure",
+        },
+        {
+          name: "Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)",
+          conclusion: "failure",
+        },
+      ],
+    }),
+  );
+  const evidence = await checkAuto(staging);
+  assert.equal(evidence.sha, dispatchSha);
+});
+
 test("auto-approve still requires the main-only branch policy", async () => {
   for (const environment of [
     { ...autoEnvironment, deployment_branch_policy: null },
@@ -1496,6 +1517,22 @@ test("auto-approve's staging quality job and steps are the ones the workflows ru
   for (const step of stagingQualitySteps) {
     assert.ok(quality.includes(`      - name: ${step}\n`), `web-quality-origin.yml runs "${step}"`);
   }
+  for (const name of [
+    "Lighthouse performance budgets",
+    "Lighthouse quality scores",
+    "Quality summary",
+  ]) {
+    assert.match(
+      quality,
+      new RegExp(
+        `- name: ${name}[^\\n]*\\n(?:        [^\\n]*\\n)*?        continue-on-error: true\\n`,
+      ),
+    );
+  }
+  assert.match(
+    quality,
+    /- name: Web standards[^\n]*\n        if:[^\n]*\n        run: npm run standards/,
+  );
 });
 
 test("auto-approve keeps the enable flag and main-only dispatch checks before any API call", async () => {
@@ -1622,10 +1659,7 @@ test("each gradual stage also judges the new version's live error rate before ro
   assert.equal((action.match(/id: error-rate-(5|50|100)\n/g) ?? []).length, 3);
   // End-of-line anchor: a trailing `|| true` on the run line would
   // neutralize the gate while an unanchored count stays green.
-  assert.equal(
-    (action.match(/node "\$\{\{ github\.action_path \}\}\/error-rate-gate\.mjs"$/gm) ?? []).length,
-    3,
-  );
+  assert.equal((action.match(/node "\$ACTION_PATH\/error-rate-gate\.mjs"$/gm) ?? []).length, 3);
   // The gate reads analytics with the same caller-supplied token/account
   // pair as the wrangler steps; the rehearsal-only fixture override must
   // never be reachable from the production promotion path.
@@ -1679,6 +1713,7 @@ test("each gradual stage also judges the new version's live error rate before ro
     const block = stepBlock(`Live error-rate gate at ${pct} percent`);
     assert.ok(block.includes("if: inputs.error-rate-gate == 'true'\n"), `gate ${pct} if guard`);
     for (const envLine of [
+      "ACTION_PATH: ${{ github.action_path }}",
       "WORKER_NAME: ${{ inputs.worker-name }}",
       "NEW_VERSION: ${{ steps.promoted-version.outputs.id }}",
       "CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}",

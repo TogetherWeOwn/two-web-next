@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { resolve } from "node:path";
 import { build } from "esbuild";
+import { workerNodeBuiltins } from "../ci/worker-node-builtins.mjs";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { decodeWireBody } from "./fixtures/decode-wire-body";
 
 // Exercise the real asset binding: constructed Response mocks have mutable
 // headers and miss the secureHeaders failure on ASSETS.fetch responses.
@@ -34,12 +36,16 @@ describe.each(["wrangler.jsonc", "wrangler.local.jsonc"])(
               for (let i = 0; i < res.rawHeaders.length; i += 2) {
                 responseHeaders.push([res.rawHeaders[i]!, res.rawHeaders[i + 1]!]);
               }
-              resolve(
-                new Response(chunks.length ? Buffer.concat(chunks) : null, {
-                  status: res.statusCode!,
-                  headers: responseHeaders,
-                }),
-              );
+              try {
+                resolve(
+                  new Response(decodeWireBody(chunks, responseHeaders), {
+                    status: res.statusCode!,
+                    headers: responseHeaders,
+                  }),
+                );
+              } catch (error) {
+                reject(error);
+              }
             });
           },
         );
@@ -58,6 +64,7 @@ describe.each(["wrangler.jsonc", "wrangler.local.jsonc"])(
         target: "es2022",
         conditions: ["workerd", "worker", "browser"],
         external: ["node:*", "cloudflare:*"],
+        plugins: [workerNodeBuiltins],
       });
       mf = new Miniflare(
         convertV4MiniflareOptions({

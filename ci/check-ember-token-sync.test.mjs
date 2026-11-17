@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -44,7 +45,8 @@ function withScratch(fn) {
       cpSync(join(ROOT, path), join(root, path));
     }
     mkdirSync(join(root, "public"), { recursive: true });
-    mkdirSync(join(root, "web/src"), { recursive: true });
+    mkdirSync(join(root, "web/src/lib"), { recursive: true });
+    cpSync(join(ROOT, "web/src/lib/site-header.css"), join(root, "web/src/lib/site-header.css"));
     mkdirSync(join(root, "src"), { recursive: true });
     for (const path of CHROME_CONSUMERS) cpSync(join(ROOT, path), join(root, path));
     return fn(root);
@@ -333,6 +335,7 @@ for (const [directory, hooks] of [
           "web/package.json",
           "ci/build-ember-tokens.mjs",
           "ci/build-leaf-css.mjs",
+          "ci/css-dictionary.mjs",
           "ci/build-events-css.mjs",
           "public/styles.css",
           "public/schedule-theme.css",
@@ -391,6 +394,67 @@ for (const [directory, hooks] of [
       });
     });
   }
+}
+
+for (const [bundle, constant] of [
+  ["leaf", "LEAF"],
+  ["events", "EVENTS"],
+]) {
+  test(`${bundle} CSS publication preserves the old module until atomic rename and cleans up on failure`, () => {
+    withScratch((root) => {
+      mkdirSync(join(root, "ci"));
+      cpSync(join(ROOT, `ci/build-${bundle}-css.mjs`), join(root, `ci/build-${bundle}-css.mjs`));
+      cpSync(join(ROOT, "ci/css-dictionary.mjs"), join(root, "ci/css-dictionary.mjs"));
+      for (const name of ["styles.css", "theme-tokens.css", "theme.css", "schedule-theme.css"]) {
+        writeFileSync(join(root, "public", name), `/* ${name} */`);
+      }
+      const output = join(root, `src/${bundle}-critical-css.ts`);
+      const preload = join(root, "observe.mjs");
+      writeFileSync(
+        preload,
+        `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const output = ${JSON.stringify(output)};
+const originalWrite = fs.writeFileSync;
+const originalRename = fs.renameSync;
+fs.writeFileSync = (target, ...args) => {
+  if (target === output) throw new Error("in-place publication");
+  return originalWrite(target, ...args);
+};
+fs.renameSync = (source, target) => {
+  if (target !== output || fs.readFileSync(output, "utf8") !== "old module") throw new Error("old module changed before rename");
+  if (!fs.readFileSync(source, "utf8").includes(${JSON.stringify(`${constant}_CRITICAL_CSS_SHA256`)})) throw new Error("incomplete temporary module");
+  if (process.env.FAIL_RENAME === "1") throw new Error("injected rename failure");
+  return originalRename(source, target);
+};
+syncBuiltinESMExports();
+`,
+      );
+      const run = (fail) =>
+        execFileSync(
+          process.execPath,
+          ["--import", preload, join(root, `ci/build-${bundle}-css.mjs`)],
+          {
+            env: { ...process.env, FAIL_RENAME: fail ? "1" : "0" },
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+      writeFileSync(output, "old module");
+      assert.throws(() => run(true), /injected rename failure/);
+      assert.equal(readFileSync(output, "utf8"), "old module");
+      assert.deepEqual(
+        readdirSync(join(root, "src")).filter((name) => name.startsWith(`${bundle}-critical-css`)),
+        [`${bundle}-critical-css.ts`],
+      );
+      run(false);
+      assert.match(readFileSync(output, "utf8"), new RegExp(`${constant}_CRITICAL_CSS_SHA256`));
+      assert.deepEqual(
+        readdirSync(join(root, "src")).filter((name) => name.startsWith(`${bundle}-critical-css`)),
+        [`${bundle}-critical-css.ts`],
+      );
+    });
+  });
 }
 
 test("ember token sync selftest passes on the wired sheets", () => {
@@ -511,7 +575,7 @@ test("Kit exposes every utility role and Hono keeps only consumed author aliases
   const served = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"]
     .map((path) => outputs.get(path))
     .join("\n");
-  assert.ok(!css.includes("@theme static"), "unused utilities are not forced into the bundle");
+  assert.ok(css.includes("@theme static"), "theme variables survive without utility references");
   for (const [alias] of ROLES) {
     const utility =
       /^(g\d|hair\d|t\d|ember|on-accent|accent-hi|border|live|echo|ok|danger|warn|focus-ring)/.test(

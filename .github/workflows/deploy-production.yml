@@ -78,6 +78,8 @@ jobs:
           INPUT_SHA: ${{ inputs.sha }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PRODUCTION_AUTO_PROMOTE_DISABLED: ${{ vars.PRODUCTION_AUTO_PROMOTE_DISABLED }}
+          PRODUCTION_ACCEPTED_SHA: ${{ vars.PRODUCTION_ACCEPTED_SHA }}
       # Clean skip when automatic promotion has nothing soaked and green to
       # promote: the resolver exits 0 with an empty sha, and every step below
       # stands down so the run stays green without deploying.
@@ -387,6 +389,14 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
       - run: npm ci --include=dev
+      - name: Prepare first-party generated inputs
+        # Rescue targets can predate the explicit preparation command.
+        run: |
+          if node -e 'process.exit(typeof require("./package.json").scripts?.["generate:first-party"] === "string" ? 0 : 1)'; then
+            npm run generate:first-party
+          else
+            npm run --if-present postinstall
+          fi
       # No migrations, queue creation or SQL tests here: provisioning and W16
       # rehearsal are separate operator work. CI uses disposable SQL services.
       - name: Build production target without deploying
@@ -492,7 +502,7 @@ jobs:
       # stays above.
       - name: Gradual promotion 5-50-100 with automatic rollback
         id: gradual
-        uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06
+        uses: TogetherWeOwn/.github/actions/gradual-promote@d427f7212f478ea3823a605edb394b0722e152b5
         with:
           worker-name: two-web-next-production
           version-tag: ${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

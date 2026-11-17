@@ -12,6 +12,7 @@ import app from "../app";
 import type { Db } from "../../src/db/index";
 import type { Env } from "../../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../../src/sessions";
+import { collectImportedCss } from "./kit-imported-css";
 
 export const ORIGIN = "https://period.example.test";
 export type Twin = "Hono" | "Kit";
@@ -108,6 +109,7 @@ export async function request({ env, path, actor, audit }) {
               "let current; export const setEnv = (value) => { current = value; }; export const env = new Proxy({}, { get: (_, key) => Reflect.get(current, key) });",
             loader: "js",
           }));
+          collectImportedCss(plugin, styles);
           plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
             const { js, css } = compile(readFileSync(path, "utf8"), {
               generate: "server",

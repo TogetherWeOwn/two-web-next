@@ -213,9 +213,9 @@ jobs:
       - name: Install-hook inventory and asset boundary tests
         if: github.event_name == 'pull_request'
         run: node --test ci/install-hook-inventory.test.mjs ci/asset-output-boundary.test.mjs
-      - name: Kit CSS collector selftests
+      - name: Kit CSS collector and evidence selftests
         if: github.event_name == 'pull_request'
-        run: node --test ci/kit-css-collect.test.mjs
+        run: node --test ci/kit-css-collect.test.mjs ci/kit-css-evidence.test.mjs
       - name: Install locked workflow parser without hooks
         if: github.event_name == 'pull_request'
         run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
@@ -331,11 +331,15 @@ jobs:
           nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
+      - name: Prepare disposable runtime role
+        run: PGPASSWORD=ci psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: Prepare first-party generated inputs
+        run: npm run generate:first-party
       - name: Cache Playwright Chromium
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -581,6 +585,12 @@ jobs:
           POSTGRES_PASSWORD: ci
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+      catalog-postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - name: Require successful scope
         env:
@@ -599,6 +609,12 @@ jobs:
       - name: State glyph assembler fixtures
         if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/state-glyph-assemble.test.mjs
+      - name: Tag capture guard fixtures
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/kit-tag-capture-guards.test.mjs
+      - name: Disposable migration role wiring fixtures
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/disposable-runtime-role.test.mjs
       - name: Job-private localhost:5432 forward to the Postgres service
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
@@ -683,6 +699,9 @@ jobs:
       - name: Public-route smoke selftest (loopback fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:smoke
+      - name: Prepare disposable runtime role
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: PGPASSWORD=ci psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Apply migrations
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate
@@ -743,6 +762,9 @@ jobs:
       - name: Floor guard (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run floor-guard:selftest && npm run floor-guard
+      - name: Test data config recognizer
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/inventory-data-config.test.mjs
       # Test-inventory HARD gate (quality-gates.md): every test file runs
       # somewhere. Filesystem-only; --strict fails the job on any orphan.
       - name: Test inventory (HARD)
@@ -879,9 +901,9 @@ jobs:
             artifacts/worker-startup-local/summary.md
           if-no-files-found: error
           retention-days: 14
-      - name: Kit disposable browser fixture
+      - name: Kit filter links (Vite and browser fixture)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
+        run: node --test --test-timeout=120000 ci/kit-filter-links-browser.test.mjs
       - name: Kit admin contrast (built runtime, intercepted fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         env:
@@ -898,9 +920,39 @@ jobs:
           path: artifacts/kit-admin-contrast/
           if-no-files-found: error
           retention-days: 14
+      - name: Kit compiled theme token regression
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node --test ci/kit-theme-compiled.test.mjs
       - name: Kit performance budgets (worker + generated assets)
+        id: kit_perf
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/check-kit-perf.mjs --format json
+      - name: Collect bounded Kit CSS on budget failure
+        id: kit_css
+        if: failure() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && steps.kit_perf.outcome == 'failure'
+        run: |
+          set -eu
+          out=$(mktemp -d "$RUNNER_TEMP/kit-css-failure.XXXXXX")
+          echo "KIT_CSS_FAILURE_DIR=$out" >> "$GITHUB_ENV"
+          env -i PATH="$PATH" node ci/kit-css-collect.mjs --root "$GITHUB_WORKSPACE" --out "$out" --leg head \
+            --source-sha "$GITHUB_SHA" --workflow-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" --repository "$GITHUB_REPOSITORY"
+      - name: Upload bounded Kit CSS on budget failure
+        if: failure() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && steps.kit_perf.outcome == 'failure' && steps.kit_css.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-css-budget-${{ github.sha }}
+          path: ${{ env.KIT_CSS_FAILURE_DIR }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 3
+      - name: Remove Kit CSS failure diagnostic
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && steps.kit_perf.outcome == 'failure' && env.KIT_CSS_FAILURE_DIR != ''
+        run: |
+          case "$KIT_CSS_FAILURE_DIR" in
+            "$RUNNER_TEMP"/kit-css-failure.*) rm -rf -- "$KIT_CSS_FAILURE_DIR" ;;
+            *) exit 1 ;;
+          esac
       - name: Kit route performance budgets (complete immutable dependency closure)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/check-kit-route-perf.mjs
@@ -934,7 +986,7 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:catalog-preflight
         env:
-          CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@catalog-postgres:5432/postgres
       # Changed-lines WARN gate (quality-gates.md): added TS lines should be
       # executed (80%). Reads the coverage this job just produced; a missing
       # report after successful coverage fails the step (fail closed). Earlier
@@ -1016,12 +1068,16 @@ jobs:
           set -euo pipefail
           auth="$(printf 'x-access-token:%s' "${MIGRATION_GIT_TOKEN:?}" | base64 -w0)"
           echo "::add-mask::$auth"
+          migration_args=()
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/* && "$GITHUB_REF" != refs/heads/main ]]; then
+            migration_args+=(--candidate-ci)
+          fi
           GIT_CONFIG_COUNT=2 \
           GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.extraheader" \
           GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
           GIT_CONFIG_KEY_1="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git.extraheader" \
           GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
-            bash ci/check-migration-numbers.sh
+            bash ci/check-migration-numbers.sh "${migration_args[@]}"
       - name: Migration snapshot chain (local files, no credentials)
         shell: bash
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.db == 'true')
@@ -1100,7 +1156,15 @@ jobs:
           npm run lighthouse:evidence:selftest
       - name: Build (wrangler dry run)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: npx wrangler deploy --dry-run --outdir dist
+        run: npx wrangler deploy --dry-run --outdir dist --metafile dist/bundle-meta.json
+      - name: Archive main Worker build graph
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: worker-main-graph-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/bundle-meta.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Build alert Tail Worker (wrangler dry run)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config tail/wrangler.jsonc --dry-run --outdir ../dist-tail
@@ -1225,6 +1289,9 @@ jobs:
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Prepare disposable runtime role
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: PGPASSWORD=ci psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Apply migrations
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate
@@ -1311,6 +1378,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --include=dev --no-audit --no-fund
+      - name: Prepare first-party generated inputs
+        run: npm run generate:first-party
       - name: Cache Playwright Chromium
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1347,6 +1416,33 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  kit-browser-fixture:
+    name: kit-browser-fixture
+    needs: [scope]
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Install Kit parity Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Kit disposable browser fixture
+        run: node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
+
   # Change-gated aggregator (TOG-14880, TOG-14877 CI standard): the single
   # merge-gate check. Reports success when the scope verdict is clean and every
   # selected job succeeded; a job that the scope skipped counts only when it
@@ -1371,6 +1467,7 @@ jobs:
         docs-links,
         queue-syntax-smoke,
         check,
+        kit-browser-fixture,
         node22-compat,
         scope,
         bot-contract-drift,
@@ -1432,11 +1529,13 @@ jobs:
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}
           DRAFT: ${{ needs.scope.outputs.draft }}
+          DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
           FULL: ${{ needs.scope.outputs.full }}
           APP: ${{ needs.scope.outputs.app }}
           WORKER: ${{ needs.scope.outputs.worker }}
           DB: ${{ needs.scope.outputs.db }}
           CHECK_RESULT: ${{ needs.check.result }}
+          KIT_BROWSER_RESULT: ${{ needs.kit-browser-fixture.result }}
           A11Y_RESULT: ${{ needs.a11y.result }}
           LIGHTHOUSE_RESULT: ${{ needs.lighthouse.result }}
           BUDGET_RESULT: ${{ needs.bundle-budget.result }}
@@ -1446,7 +1545,7 @@ jobs:
           [ "$SCOPE_RESULT" = success ] || fail "scope did not succeed; failing closed."
           # Empty or unexpected outputs would read as unselected areas and let a
           # skipped job pass, so every verdict must be exactly true or false.
-          for pair in "FULL=$FULL" "APP=$APP" "WORKER=$WORKER" "DB=$DB" "DRAFT=$DRAFT"; do
+          for pair in "FULL=$FULL" "APP=$APP" "WORKER=$WORKER" "DB=$DB" "DRAFT=$DRAFT" "DOCS_ONLY=$DOCS_ONLY"; do
             case "${pair#*=}" in
               true|false) ;;
               *) fail "scope output ${pair%%=*} is '${pair#*=}', expected true or false; failing closed." ;;
@@ -1469,6 +1568,8 @@ jobs:
           }
           if selected_app_db; then A11Y_SEL=true; else A11Y_SEL=false; fi
           if selected_app; then PERF_SEL=true; else PERF_SEL=false; fi
+          if [ "$DOCS_ONLY" != true ] && { selected_app || [ "$WORKER" = true ]; }; then KIT_BROWSER_SEL=true; else KIT_BROWSER_SEL=false; fi
+          check_job "$KIT_BROWSER_RESULT" "$KIT_BROWSER_SEL" kit-browser-fixture
           check_job "$A11Y_RESULT" "$A11Y_SEL" a11y
           check_job "$LIGHTHOUSE_RESULT" "$PERF_SEL" lighthouse
           check_job "$BUDGET_RESULT" "$PERF_SEL" bundle-budget
