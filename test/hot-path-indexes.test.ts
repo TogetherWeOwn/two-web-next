@@ -3,9 +3,11 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { sql } from "drizzle-orm";
 import { PgDialect, getTableConfig } from "drizzle-orm/pg-core";
+import { drizzle } from "drizzle-orm/postgres-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { events, rsvps } from "../src/db/admin-schema";
 import { waitlistOffers } from "../src/db/dormant-schema";
+import { adminSchema, schema } from "../src/db/index";
 import { joinAttempts } from "../src/db/schema";
 import { createWaitlistOffer } from "../src/events/waitlist-offers";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../src/jobs/constants";
@@ -391,37 +393,93 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
       expect(await create(second)).not.toBeNull();
     });
 
-    it("scopes offers for an event with more RSVPs than the driver parameter limit", async () => {
-      const eventId = await makeEvent({ capacity: 1 });
-      const rsvpId = await makeRsvp(eventId, "waitlisted");
-      const otherEvent = await makeEvent();
-      const otherRsvp = await makeRsvp(otherEvent, "waitlisted");
-      const another = await makeRsvp(eventId, "waitlisted");
-      const rollback = new Error("roll back bulk fixture");
-      // Roll back the bulk rows rather than cascading 70,000 trigger-bearing deletes.
-      await expect(
-        fixture.db.transaction(async (tx) => {
-          await tx.execute(sql`
-            insert into rsvps (event_id, user_id, status)
-            select ${eventId}, 'bulk-' || g, 'waitlisted' from generate_series(1, 70000) g`);
-          await tx.execute(sql`
-            insert into waitlist_offers (rsvp_id, offered_at, expires_at)
-            values (${rsvpId}, now() - interval '3 hours', now() - interval '1 hour'),
-                   (${otherRsvp}, now() - interval '3 hours', now() - interval '1 hour')`);
-          const states = async (id: number) =>
-            (
-              await tx.execute<{ state: string }>(sql`
-              select state from waitlist_offers where rsvp_id = ${id} order by created_at, id`)
-            ).map((row) => row.state);
-          expect(await createWaitlistOffer(tx, rsvpId)).not.toBeNull();
-          expect(await states(rsvpId)).toEqual(["expired", "held"]);
-          expect(await states(otherRsvp)).toEqual(["held"]);
-          expect(await createWaitlistOffer(tx, rsvpId)).not.toBeNull();
-          expect(await createWaitlistOffer(tx, another)).toBeNull();
-          throw rollback;
-        }),
-      ).rejects.toBe(rollback);
-    }, 60_000);
+    it("keeps event-scoped offer query parameters bounded as the RSVP line grows", async () => {
+      const queries: { query: string; params: unknown[] }[] = [];
+      const db = drizzle(client, {
+        schema: { ...schema, ...adminSchema },
+        logger: { logQuery: (query, params) => queries.push({ query, params: [...params] }) },
+      });
+      let baseline: { query: string; count: number }[] | undefined;
+      for (const size of [4, 32]) {
+        const eventId = await makeEvent({ capacity: 1 });
+        const rsvpId = await makeRsvp(eventId, "waitlisted");
+        const another = await makeRsvp(eventId, "waitlisted");
+        const otherEvent = await makeEvent();
+        const otherRsvp = await makeRsvp(otherEvent, "waitlisted");
+        const rollback = new Error("roll back bounded fixture");
+        await expect(
+          db.transaction(async (tx) => {
+            await tx.execute(sql`set local statement_timeout = '5s'`);
+            await tx.execute(sql`set local lock_timeout = '1s'`);
+            await tx.execute(sql`
+              insert into rsvps (event_id, user_id, status)
+              select ${eventId}, 'bounded-' || g, 'waitlisted' from generate_series(1, ${size - 2}) g`);
+            const old = await tx.execute<{ id: string; notification_key: string }>(sql`
+              insert into waitlist_offers (rsvp_id, offered_at, expires_at)
+              values (${rsvpId}, now() - interval '3 hours', now() - interval '1 hour')
+              returning id, notification_key`);
+            await tx.execute(sql`
+              insert into waitlist_offers (rsvp_id, offered_at, expires_at)
+              values (${otherRsvp}, now() - interval '3 hours', now() - interval '1 hour')`);
+            const other = () =>
+              tx.execute(sql`
+              select id, state, offered_at::text, expires_at::text, updated_at::text
+              from waitlist_offers where rsvp_id = ${otherRsvp}`);
+            const before = await other();
+            const invoke = async (id: number) => {
+              const start = queries.length;
+              const result = await createWaitlistOffer(tx, id);
+              const offerQueries = queries
+                .slice(start)
+                .filter(({ query }) => /\b(?:from|update)\s+"?waitlist_offers"?/i.test(query));
+              expect(offerQueries).toHaveLength(3);
+              const shapes = offerQueries.map(({ query, params }) => {
+                const normalized = query
+                  .replaceAll('"', "")
+                  .replace(/\s+/g, " ")
+                  .trim()
+                  .toLowerCase();
+                const match = normalized.match(
+                  /rsvp_id\s+in\s*\(select\s+(?:\w+\.)?id\s+from\s+rsvps\s+where\s+(?:\w+\.)?event_id\s*=\s*\$(\d+)\)/,
+                );
+                expect(match, normalized).not.toBeNull();
+                expect(params[Number(match![1]) - 1]).toBe(eventId);
+                expect(params.length).toBeLessThanOrEqual(8);
+                return { query: normalized, count: params.length };
+              });
+              expect(
+                shapes.filter(
+                  ({ query }) => query.startsWith("select ") && /for update$/.test(query),
+                ),
+              ).toHaveLength(1);
+              expect(shapes.filter(({ query }) => query.startsWith("update "))).toHaveLength(1);
+              expect(
+                shapes.filter(
+                  ({ query }) => query.startsWith("select ") && !/for update$/.test(query),
+                ),
+              ).toHaveLength(1);
+              if (baseline) expect(shapes).toEqual(baseline);
+              else baseline = shapes;
+              return result;
+            };
+            const first = await invoke(rsvpId);
+            expect(first).not.toBeNull();
+            expect(first!.id).not.toBe(old[0]!.id);
+            expect(first!.notificationKey).not.toBe(old[0]!.notification_key);
+            const history = await tx.execute<{ state: string }>(sql`
+              select state from waitlist_offers where rsvp_id = ${rsvpId} order by created_at, id`);
+            expect(history.map((row) => row.state)).toEqual(["expired", "held"]);
+            expect(await invoke(rsvpId)).toMatchObject({
+              id: first!.id,
+              notificationKey: first!.notificationKey,
+            });
+            expect(await invoke(another)).toBeNull();
+            expect(await other()).toEqual(before);
+            throw rollback;
+          }),
+        ).rejects.toBe(rollback);
+      }
+    }, 15_000);
 
     it("offers while capacity is unlimited", async () => {
       const eventId = await makeEvent({ capacity: null });
