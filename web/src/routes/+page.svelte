@@ -1,4 +1,5 @@
 <script lang="ts">
+import "./home-presentation.css";
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import type { HomeUpcomingRow } from "../../../src/events/reads";
