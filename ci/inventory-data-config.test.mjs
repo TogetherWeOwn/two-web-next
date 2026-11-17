@@ -31,6 +31,20 @@ test("rejects unmodeled callee bindings, export mutation and executable values",
     assert.throws(() => validate(source));
 });
 
+test("rejects reserved import bindings and malformed regular expressions", () => {
+  const names =
+    "await break case catch class const continue debugger default delete do else enum export extends false finally for function if import in instanceof new null return super switch this throw true try typeof var void while with yield implements interface let package private protected public static eval arguments undefined defineConfig";
+  for (const name of names.split(" ")) {
+    assert.throws(() => validate(config(`...${name}`, `import ${name} from "./base";`)), name);
+  }
+  for (const expression of ["/*/", "/a/gg", "/a/z", "/a/**", "/+/", "/?/"]) {
+    assert.throws(() => validate(config(`grep: ${expression}`)), expression);
+  }
+  assert.doesNotThrow(() =>
+    validate(config("...base, grep: /chosen$/i, class: true", 'import base from "./base";')),
+  );
+});
+
 test("rejects prototype setters at config and project scopes", () => {
   for (const selector of ["grep", "grepInvert"]) {
     for (const key of ["__proto__", '"__proto__"', "'__proto__'"]) {
@@ -65,6 +79,20 @@ test("composes recognized file-selector fields in source order", () => {
     testMatch: ["b.spec.ts"],
     projects: [{ testDir: "p" }],
   });
+});
+
+test("never discards config or project title filters during composition", () => {
+  const unfiltered = { testMatch: ["example.spec.ts"] };
+  for (const selector of ["grep", "grepInvert"]) {
+    for (const filtered of [{ [selector]: "chosen" }, { projects: [{ [selector]: "chosen" }] }]) {
+      for (const records of [
+        [unfiltered, filtered],
+        [filtered, unfiltered],
+      ]) {
+        assert.throws(() => composeSelectorFields(records), /Unsupported selector field/);
+      }
+    }
+  }
 });
 
 test("refuses unsupported and malformed selector data instead of discarding it", () => {
