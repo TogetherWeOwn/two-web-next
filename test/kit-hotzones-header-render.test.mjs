@@ -12,12 +12,15 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(join(root, "web/package.json"));
 const { compile } = webRequire("svelte/compiler");
 let renderKit;
+let kitCss = "";
 
 beforeAll(async () => {
+  const styles = [];
   const { outputFiles } = await build({
     stdin: {
       contents: `
         import { render } from "svelte/server";
+        import "./web/src/lib/site-header.css";
         import Index from "./web/src/routes/hotzones/+page.svelte";
         import Signal from "./web/src/routes/hotzones/[signal]/+page.svelte";
         export function renderKit(signal, data) {
@@ -39,6 +42,10 @@ beforeAll(async () => {
       {
         name: "kit-hotzones-header-ssr",
         setup(plugin) {
+          plugin.onLoad({ filter: /\.css$/ }, ({ path }) => {
+            styles.push(readFileSync(path, "utf8"));
+            return { contents: "", loader: "js" };
+          });
           plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
             const { js } = compile(readFileSync(path, "utf8"), {
               generate: "server",
@@ -51,9 +58,13 @@ beforeAll(async () => {
       },
     ],
   });
-  ({ renderKit } = await import(
+  kitCss = styles.join("\n");
+  expect(kitCss).toContain(readFileSync(join(root, "web/src/lib/site-header.css"), "utf8"));
+  const kit = await import(
     `data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString("base64")}`
-  ));
+  );
+  renderKit = (signal, data) =>
+    `<style data-kit-imported-css>${kitCss}</style>${kit.renderKit(signal, data)}`;
 });
 
 const cells = Array.from({ length: 7 }, () => Array(24).fill(0));
@@ -95,6 +106,7 @@ for (const renderer of ["Hono", "Kit"]) {
         renderer === "Kit"
           ? renderKit(signal, data)
           : await (signal ? HotzoneSignalPage(data) : HotzonesIndexPage(data)).toString();
+      if (renderer === "Kit") expect(html).toContain(kitCss);
       const header = html.replace(/<!---->/g, "").match(/<header\b[^>]*>[\s\S]*?<\/header>/)?.[0];
       expect(header).toBeDefined();
       expect(header).toContain('aria-label="Account"');
