@@ -28,6 +28,7 @@ function withSourceTree(run: (dir: string) => void) {
       "web/src",
       "ci/build-ember-tokens.mjs",
       "ci/build-leaf-css.mjs",
+      "ci/css-dictionary.mjs",
       "ci/build-events-css.mjs",
       "package.json",
       ".npmrc",

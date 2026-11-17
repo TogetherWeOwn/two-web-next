@@ -100,8 +100,8 @@ describe("Kit GET /join markup contract (src/screens/join.tsx parity)", () => {
       "/discord",
       "/join.md",
       "data-join-widget",
-      "join-layout",
-      "join-panel",
+      "ember-join",
+      "join-card",
       "join-preview",
     ]) {
       expect(page, `missing ${needle}`).toContain(needle);

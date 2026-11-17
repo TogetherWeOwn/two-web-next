@@ -24,10 +24,13 @@ const workflows = readdirSync(dir)
   .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
 
 const hosted = "ubuntu-latest";
-// The recovery proof needs the same fixed GitHub-hosted OS as its qualification run.
+// Visual evidence and the recovery proof need a fixed GitHub-hosted OS.
 const pinnedHostedJob = (name: string, id: string) =>
   (name === "e2e.yml" && id === "browser-smoke") ||
-  (name === "admin-stale-save-ubuntu24-proof.yml" && id === "recovery-proof");
+  (name === "kit-home-evidence.yml" && id === "capture") ||
+  (name === "admin-stale-save-ubuntu24-proof.yml" && id === "recovery-proof") ||
+  (name === "kit-footer-browser.yml" && id === "footer-browser") ||
+  (name === "xfs-qualification.yml" && id === "fixture");
 const byVisibility = `\${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
 const byVisibilityPrGuarded = `\${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
 const publicGuard = `!github.event.repository.private && '["${hosted}"]'`;
@@ -55,6 +58,46 @@ function jobs(text: string) {
 }
 
 describe("workflow runner labels", () => {
+  it("keeps release, rollback and migration jobs on hosted runners in both visibilities", () => {
+    for (const [name, ids] of [
+      ["release.yml", ["tag"]],
+      ["rollback-production.yml", ["preflight", "rollback-production", "notify"]],
+      ["db-migrate.yml", ["migrate"]],
+    ] as const) {
+      const workflow = workflows.find((entry) => entry.name === name);
+      expect(workflow, name).toBeDefined();
+      expect(jobs(workflow!.text).map(({ id, runsOn }) => [id, runsOn])).toEqual(
+        ids.map((id) => [id, hosted]),
+      );
+      expect(workflow!.text).not.toMatch(/CI_OVERFLOW_RUNNER|private-runner-json/);
+    }
+    const release = workflows.find(({ name }) => name === "release.yml")!.text;
+    const calls = release.match(
+      /^        uses: TogetherWeOwn\/\.github\/actions\/calver@[0-9a-f]{40}.*$/gm,
+    );
+    expect(calls).toHaveLength(4);
+    expect(new Set(calls)).toEqual(
+      new Set([
+        "        uses: TogetherWeOwn/.github/actions/calver@1e3c0c04b15a31baf498398417d98e44d0d8cbdb # shared CalVer releaser",
+      ]),
+    );
+    expect(release.match(/^          runs-on-json: '"ubuntu-latest"'$/gm)).toHaveLength(4);
+  });
+
+  it("keeps all featured proof jobs on standard hosted runners", () => {
+    const workflow = workflows.find(({ name }) => name === "featured-offline-proof.yml");
+    expect(workflow).toBeDefined();
+    expect(jobs(workflow!.text).map(({ id, runsOn }) => [id, runsOn])).toEqual(
+      ["scope", "capture", "current-source", "featured-proof"].map((id) => [id, hosted]),
+    );
+  });
+
+  it("keeps the XFS fixture on a disposable hosted runner for every event", () => {
+    const workflow = workflows.find(({ name }) => name === "xfs-qualification.yml");
+    expect(workflow).toBeDefined();
+    expect(jobs(workflow!.text).find(({ id }) => id === "fixture")?.runsOn).toBe("ubuntu-24.04");
+  });
+
   it("finds every workflow job", () => {
     expect(workflows.length).toBeGreaterThan(0);
     for (const { name, text } of workflows) expect(jobs(text).length, name).toBeGreaterThan(0);

@@ -79,6 +79,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           PRODUCTION_AUTO_PROMOTE_DISABLED: ${{ vars.PRODUCTION_AUTO_PROMOTE_DISABLED }}
+          PRODUCTION_ACCEPTED_SHA: ${{ vars.PRODUCTION_ACCEPTED_SHA }}
       # Clean skip when automatic promotion has nothing soaked and green to
       # promote: the resolver exits 0 with an empty sha, and every step below
       # stands down so the run stays green without deploying.
@@ -501,7 +502,7 @@ jobs:
       # stays above.
       - name: Gradual promotion 5-50-100 with automatic rollback
         id: gradual
-        uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06
+        uses: TogetherWeOwn/.github/actions/gradual-promote@d427f7212f478ea3823a605edb394b0722e152b5
         with:
           worker-name: two-web-next-production
           version-tag: ${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
