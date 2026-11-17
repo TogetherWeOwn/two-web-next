@@ -49,7 +49,11 @@ for (const tree of ["before", "after"]) {
             );
           });
           const name = `${tree}-${state}-${viewport.name}.png`;
-          const bytes = await page.screenshot({ animations: "disabled", caret: "hide" });
+          const bytes = await page.screenshot({
+            animations: "disabled",
+            caret: "hide",
+            fullPage: true,
+          });
           await writeFile(join(output, name), bytes);
           const metrics = await page.evaluate(() => ({
             width: document.documentElement.clientWidth,

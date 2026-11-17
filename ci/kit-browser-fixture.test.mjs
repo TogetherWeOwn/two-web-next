@@ -37,7 +37,10 @@ export async function assertHomeEvidence() {
   if (process.env.CAPTURE_CASE === "incomplete" && source.endsWith("after")) return;
   const page = {
     setViewportSize: async () => {},
-    screenshot: async () => Buffer.from("fixture image"),
+    screenshot: async (options) => {
+      if (options.fullPage !== true) throw new Error("full-page capture required");
+      return Buffer.from("fixture image");
+    },
     evaluate: async (fn) => {
       if (fn.toString().includes("scrollWidth")) return {
         width: 390, scrollWidth: 390,

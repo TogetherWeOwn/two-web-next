@@ -25,6 +25,8 @@ jobs:
           [
             guest,
             member,
+            guestEvents,
+            memberEvents,
             nonmember,
             sessionOutage,
             eventsOutage,
