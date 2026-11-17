@@ -1,7 +1,7 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
-import type { KitEventDetailModel } from "../../../src/events/kit-detail";
+import { kitEventFacts, type KitEventDetailModel } from "../../../src/events/kit-detail";
 import { ONGOING_COPY } from "../../../src/events/ongoing";
 import { isPublicJoinUrl } from "../../../src/events/public-join-url";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
@@ -11,6 +11,7 @@ import { EVENT_ONGOING_TESTID } from "../../../src/islands/contracts";
 // Mutation ownership and native island mounts stay unchanged; this route is csr=false.
 let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrite?: boolean } =
   $props();
+const facts = $derived(kitEventFacts(model));
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
@@ -144,6 +145,24 @@ const detailIslands = [
       <div class="event-rsvp">{@html model.detailHtml.rsvp}</div>
       {#if model.seatCard.note}<p class="seat-card-note">{model.seatCard.note}</p>{/if}
     </section>
+    {#if facts.length > 0}
+      <section class="event-facts" aria-label="Event facts" data-testid="kit-event-facts">
+        <dl>
+          {#each facts as fact (fact.key)}
+            <div>
+              <dt>{fact.key}</dt>
+              <dd>
+                {#if fact.key === "Host"}
+                  <p data-testid="event-organizer">{fact.value}</p>
+                {:else}
+                  {fact.value}
+                {/if}
+              </dd>
+            </div>
+          {/each}
+        </dl>
+      </section>
+    {/if}
     {@html model.detailHtml.share}
   </div>
   <div class="event-layout-body">
@@ -257,6 +276,13 @@ const detailIslands = [
     border-radius: var(--radius-l);
     padding: var(--space-inset-card);
   }
+  .event-facts { background: var(--color-g2); border-radius: var(--radius-l); padding: var(--space-2) var(--space-inset-card); }
+  .event-facts dl { margin: 0; }
+  .event-facts dl > div { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-4); padding: var(--space-inset-tight) 0; }
+  .event-facts dl > div + div { border-top: 1px solid var(--color-hair1); }
+  .event-facts dt { margin: 0; color: var(--color-t3); font: var(--text-label) / var(--leading-label) var(--font-data); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+  .event-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; text-align: right; color: var(--color-t1); font-size: var(--text-ui); }
+  .event-facts dd p { margin: 0; }
   .seat-card-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-inset-tight); }
   .seat-card-head h2 { margin: 0; font-size: var(--text-title); font-weight: var(--font-weight-semibold); line-height: var(--leading-title); }
   .seat-card-tag { padding: var(--space-inset-tag-y) var(--space-inset-tag-x); border-radius: var(--radius-s); color: var(--color-warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-warn) 45%, transparent); font: var(--text-label) / var(--leading-label) var(--font-data); letter-spacing: var(--tracking-label); text-transform: uppercase; }
