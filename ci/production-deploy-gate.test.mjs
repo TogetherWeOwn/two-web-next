@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -1508,7 +1509,13 @@ test("auto-approve's staging quality job and steps are the ones the workflows ru
   );
   assert.match(
     e2e,
-    /\n {2}staging-quality:\n {4}name: staging-quality\n[\s\S]*?uses: \.\/\.github\/workflows\/web-quality-origin\.yml\n/,
+    /\n {2}staging-quality:\n {4}name: staging-quality\n[\s\S]*?uses: TogetherWeOwn\/two-web-next\/\.github\/workflows\/web-quality-origin\.yml@38581ef492f5c972969f5dfada396a9f0e2ee989\n/,
+  );
+  // The caller runs the pinned definition, not necessarily this checkout's copy.
+  assert.equal(
+    createHash("sha256").update(quality).digest("hex"),
+    "ee636905e04598b8280f68626570a6f731a090814ff6fef0b09835b2eb097031",
+    "local quality workflow must match the pinned definition before checking its steps",
   );
   assert.match(quality, /\n {2}quality:\n {4}name: quality\n/);
   assert.equal(stagingQualityJob, "staging-quality / quality");
