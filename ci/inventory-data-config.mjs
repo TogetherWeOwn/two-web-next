@@ -23,6 +23,8 @@ export function validateDataConfig(text, configPath) {
   const identifier = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
   const string = /^(?:'[^'\\]*'|"[^"\\]*")$/;
   const bindings = new Set();
+  const reservedBinding =
+    /^(?:await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|new|null|return|super|switch|this|throw|true|try|typeof|var|void|while|with|yield|implements|interface|let|package|private|protected|public|static|eval|arguments|undefined|defineConfig)$/;
   expect("import");
   expect("{");
   expect("defineConfig");
@@ -36,9 +38,7 @@ export function validateDataConfig(text, configPath) {
   while (take("import")) {
     const name = tokens[i++];
     assert.ok(
-      identifier.test(name ?? "") &&
-        !["defineConfig", "undefined"].includes(name) &&
-        !bindings.has(name),
+      identifier.test(name ?? "") && !reservedBinding.test(name) && !bindings.has(name),
       `${configPath} has an invalid import binding`,
     );
     bindings.add(name);
@@ -81,12 +81,21 @@ export function validateDataConfig(text, configPath) {
         if (take("]")) return;
       } while (true);
     }
+    const literal = tokens[i++] ?? "";
     assert.ok(
       /^(?:'[^'\\]*'|"[^"\\]*"|(?:0|[1-9][0-9]*)(?:\.[0-9]+)?|true|false|null|undefined|\/[A-Za-z0-9_.^$*+?|!-]+\/[A-Za-z]*)$/.test(
-        tokens[i++] ?? "",
+        literal,
       ),
       `${configPath} has an unsupported value`,
     );
+    if (literal.startsWith("/")) {
+      const end = literal.lastIndexOf("/");
+      try {
+        new RegExp(literal.slice(1, end), literal.slice(end + 1));
+      } catch {
+        assert.fail(`${configPath} has an invalid regular expression`);
+      }
+    }
   };
   expect("export");
   expect("default");

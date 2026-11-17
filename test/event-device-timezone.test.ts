@@ -194,7 +194,7 @@ function kitBundle() {
       const outfile = join(scratch, "server-bundle.mjs");
       writeFileSync(
         serverEntry,
-        `import {render} from 'svelte/server'; import Detail from ${component}; export const renderDetail = model => render(Detail, {props:{model}});`,
+        `import {render} from 'svelte/server'; import ${JSON.stringify(join(WORKTREE, "web/src/lib/site-header.css"))}; import Detail from ${component}; export const renderDetail = model => render(Detail, {props:{model}});`,
       );
       writeFileSync(
         clientEntry,
@@ -233,6 +233,9 @@ function kitBundle() {
         format: "esm",
         outfile,
       });
+      expect(styles.server.join("\n")).toContain(
+        readFileSync(join(WORKTREE, "web/src/lib/site-header.css"), "utf8"),
+      );
       const server = await import(pathToFileURL(outfile).href);
       const client = await build({
         ...options("client"),
@@ -304,10 +307,11 @@ async function renderFixture(view: View, clock: ClockCase) {
   const bundle = await kitBundle();
   const { head, body } = bundle.renderDetail(outcome.model);
   const model = JSON.stringify(outcome.model).replace(/</g, "\\u003c");
-  return {
-    html: `<!doctype html><html lang="en"><head>${head}<style data-kit-imported-css>${bundle.css}</style></head><body><div id="detail-root">${body}</div><script>window.__detailModel=${model}</script></body></html>`,
-    client: bundle.client,
-  };
+  const html = `<!doctype html><html lang="en"><head>${head}<style data-kit-imported-css>${bundle.css}</style></head><body><div id="detail-root">${body}</div><script>window.__detailModel=${model}</script></body></html>`;
+  expect(html, "imported Kit CSS must reach the rendered fixture").toContain(
+    readFileSync(join(WORKTREE, "web/src/lib/site-header.css"), "utf8"),
+  );
+  return { html, client: bundle.client };
 }
 
 for (const view of VIEWS) {
