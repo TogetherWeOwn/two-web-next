@@ -21,6 +21,7 @@ import {
   filesystemInventory,
   formatLock,
   resolveBaseline,
+  resolveCandidateBaselines,
 } from "./check-migration-history.mjs";
 
 const initial = {
@@ -410,14 +411,197 @@ for (const defaultBranch of ["main", "master"]) {
     const eventPath = join(f.root, "event.json");
     put(f.root, "event.json", JSON.stringify({ pull_request: { base: { sha: f.base } } }));
     const env = { GITHUB_ACTIONS: "true", GITHUB_EVENT_PATH: eventPath };
+    assert.throws(
+      () =>
+        resolveCandidateBaselines(clone, {
+          ...env,
+          GITHUB_EVENT_NAME: "workflow_dispatch",
+          GITHUB_REF: "refs/heads/candidate",
+        }),
+      /cannot read Git baseline \(merge-base\)/,
+    );
     assert.equal(resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: "pull_request" }), f.base);
     assert.deepEqual(checkMigrations(clone, f.base), { total: 5, historical: 4 });
+    // Dispatch needs the candidate's ancestry, not only the fetched base object.
+    git(clone, "fetch", "--unshallow", "origin");
     // The nightly schedule has no event base either (the full-run cron in ci.yml).
     for (const name of ["workflow_dispatch", "schedule"]) {
       assert.equal(resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: name }), f.base);
     }
   });
 }
+
+for (const name of ["workflow_dispatch"]) {
+  test(`${name} candidate uses branch point when main gains a migration`, (t) => {
+    const f = fixture(t);
+    git(f.root, "branch", "main", f.base);
+    git(f.root, "remote", "add", "origin", f.root);
+    git(f.root, "checkout", "-q", "main");
+    put(f.root, "drizzle/1003_main.sql", "SELECT 3;\n");
+    lock(f.root);
+    git(f.root, "add", ".");
+    git(f.root, "commit", "-qm", "main migration");
+    const main = git(f.root, "rev-parse", "HEAD");
+    const eventPath = join(f.root, "event.json");
+    put(f.root, "event.json", "{}");
+    const env = { GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: name, GITHUB_EVENT_PATH: eventPath };
+    assert.equal(resolveBaseline(f.root, env), main);
+    git(f.root, "checkout", "-q", "fixture");
+    assert.equal(resolveBaseline(f.root, env), main);
+    const { base: baseline, target } = resolveCandidateBaselines(f.root, {
+      ...env,
+      GITHUB_REF: "refs/heads/fixture",
+    });
+    assert.equal(baseline, f.base);
+    assert.equal(target, main);
+    assert.deepEqual(checkMigrations(f.root, baseline, target), { total: 4, historical: 4 });
+    put(f.root, "drizzle/1003_collision.sql", "SELECT 4;\n");
+    lock(f.root);
+    assert.throws(() => checkMigrations(f.root, baseline, target), /reserved number 1003/);
+    rmSync(join(f.root, "drizzle/1003_collision.sql"));
+    rmSync(join(f.root, "drizzle/1000_original.sql"));
+    lock(f.root);
+    assert.throws(() => checkMigrations(f.root, baseline), /historical migration deleted\/renamed/);
+  });
+
+  test(`${name} fails closed without a merge base`, (t) => {
+    const f = fixture(t);
+    git(f.root, "remote", "add", "origin", f.root);
+    git(f.root, "checkout", "-q", "--orphan", "main");
+    git(f.root, "commit", "--allow-empty", "-qm", "unrelated main");
+    git(f.root, "checkout", "-q", "fixture");
+    const eventPath = join(f.root, "event.json");
+    put(f.root, "event.json", "{}");
+    assert.throws(
+      () =>
+        resolveCandidateBaselines(f.root, {
+          GITHUB_ACTIONS: "true",
+          GITHUB_EVENT_NAME: name,
+          GITHUB_REF: "refs/heads/fixture",
+          GITHUB_EVENT_PATH: eventPath,
+        }),
+      /cannot read Git baseline \(merge-base\)/,
+    );
+  });
+}
+
+test("candidate mode rejects strict callers", (t) => {
+  const f = fixture(t);
+  for (const [event, ref] of [
+    ["schedule", "refs/heads/fixture"],
+    ["push", "refs/heads/fixture"],
+    ["workflow_dispatch", "refs/heads/main"],
+    ["workflow_dispatch", "refs/tags/v1"],
+  ]) {
+    assert.throws(
+      () =>
+        resolveCandidateBaselines(f.root, {
+          GITHUB_ACTIONS: "true",
+          GITHUB_EVENT_NAME: event,
+          GITHUB_REF: ref,
+        }),
+      /limited to dispatched branch CI/,
+    );
+  }
+});
+
+test("candidate validates target lock and inherited history", (t) => {
+  const f = fixture(t);
+  put(f.root, "drizzle/1000_original.sql", "SELECT 999;\n");
+  lock(f.root);
+  git(f.root, "add", ".");
+  git(f.root, "commit", "-qm", "target edits history");
+  assert.throws(
+    () => checkMigrations(f.root, f.base, "HEAD"),
+    /target changed inherited migration/,
+  );
+  put(f.root, "migrations.lock", formatLock({}));
+  git(f.root, "add", ".");
+  git(f.root, "commit", "-qm", "target corrupt lock");
+  put(f.root, "drizzle/1000_original.sql", initial["drizzle/1000_original.sql"]);
+  lock(f.root);
+  assert.throws(
+    () => checkMigrations(f.root, f.base, "HEAD"),
+    /Git baseline lock: lock does not match/,
+  );
+});
+
+test("candidate rejects inherited edits, renames, and missing locks", (t) => {
+  const f = fixture(t);
+  put(f.root, "drizzle/1000_original.sql", "SELECT 999;\n");
+  lock(f.root);
+  assert.throws(() => checkMigrations(f.root, f.base, f.base), /historical SQL is immutable/);
+  renameSync(join(f.root, "drizzle/1000_original.sql"), join(f.root, "drizzle/1000_renamed.sql"));
+  lock(f.root);
+  assert.throws(
+    () => checkMigrations(f.root, f.base, f.base),
+    /historical migration deleted\/renamed/,
+  );
+  rmSync(join(f.root, "migrations.lock"));
+  assert.throws(() => checkMigrations(f.root, f.base, f.base), /missing\/unreadable/);
+});
+
+test("candidate checks the target reservation maximum across directories", (t) => {
+  const f = fixture(t);
+  put(f.root, "drizzle/1005_target.sql", "SELECT 5;\n");
+  lock(f.root);
+  git(f.root, "add", ".");
+  git(f.root, "commit", "-qm", "target reservation");
+  const target = git(f.root, "rev-parse", "HEAD");
+  rmSync(join(f.root, "drizzle/1005_target.sql"));
+  put(f.root, "db/migrations/1004_candidate.sql", "SELECT 4;\n");
+  lock(f.root);
+  assert.throws(() => checkMigrations(f.root, f.base, target), /reserved number 1005/);
+  renameSync(
+    join(f.root, "db/migrations/1004_candidate.sql"),
+    join(f.root, "db/migrations/1006_candidate.sql"),
+  );
+  lock(f.root);
+  assert.equal(checkMigrations(f.root, f.base, target).total, 5);
+});
+
+test("candidate accepts identical target migration but rejects changed SQL and collisions", (t) => {
+  const f = fixture(t);
+  put(f.root, "drizzle/1003_target.sql", "SELECT 3;\n");
+  lock(f.root);
+  git(f.root, "add", ".");
+  git(f.root, "commit", "-qm", "target migration");
+  const target = git(f.root, "rev-parse", "HEAD");
+  assert.equal(checkMigrations(f.root, f.base, target).total, 5);
+  put(f.root, "drizzle/1003_target.sql", "SELECT 4;\n");
+  lock(f.root);
+  assert.throws(() => checkMigrations(f.root, f.base, target), /target migration.*immutable/);
+  rmSync(join(f.root, "drizzle/1003_target.sql"));
+  put(f.root, "db/migrations/1003_collision.sql", "SELECT 3;\n");
+  lock(f.root);
+  assert.throws(() => checkMigrations(f.root, f.base, target), /reserved number 1003/);
+  rmSync(join(f.root, "db/migrations/1003_collision.sql"));
+  put(f.root, "drizzle/1001_gap.sql", "SELECT 1;\n");
+  lock(f.root);
+  assert.throws(() => checkMigrations(f.root, f.base, target), /reserved number 1003/);
+});
+
+test("candidate rejects deleted target history and missing target lock", (t) => {
+  const f = fixture(t);
+  rmSync(join(f.root, "drizzle/1000_original.sql"));
+  lock(f.root);
+  git(f.root, "add", ".");
+  git(f.root, "commit", "-qm", "target deletes history");
+  put(f.root, "drizzle/1000_original.sql", initial["drizzle/1000_original.sql"]);
+  lock(f.root);
+  assert.throws(
+    () => checkMigrations(f.root, f.base, "HEAD"),
+    /target changed inherited migration/,
+  );
+  rmSync(join(f.root, "migrations.lock"));
+  git(f.root, "add", ".");
+  git(f.root, "commit", "-qm", "target loses lock");
+  lock(f.root);
+  assert.throws(
+    () => checkMigrations(f.root, f.base, "HEAD"),
+    /baseline lock is missing after guard adoption/,
+  );
+});
 
 test("CLI guard and regeneration cannot bless a historical edit", (t) => {
   const f = fixture(t);
