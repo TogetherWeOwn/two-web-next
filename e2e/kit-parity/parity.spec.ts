@@ -1739,6 +1739,18 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
       await expect(page.getByTestId("event-organizer")).toHaveCount(1);
       await expect(facts.getByTestId("event-organizer")).toHaveText("Vexa");
       await expect(facts.locator("a")).toHaveCount(0);
+      const cardBounds = await page.getByTestId("kit-seat-card").boundingBox();
+      const factsBounds = await facts.boundingBox();
+      const shareHeadingBounds = await page.locator(".event-share h2").boundingBox();
+      expect(cardBounds).not.toBeNull();
+      expect(factsBounds).not.toBeNull();
+      expect(shareHeadingBounds).not.toBeNull();
+      expect(factsBounds!.y - (cardBounds!.y + cardBounds!.height)).toBeCloseTo(16, 0);
+      if (width === 390) {
+        expect(
+          shareHeadingBounds!.y - (factsBounds!.y + factsBounds!.height),
+        ).toBeGreaterThanOrEqual(24);
+      }
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         width,
       );

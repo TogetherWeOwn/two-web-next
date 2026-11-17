@@ -268,7 +268,7 @@ const detailIslands = [
 
 <style>
   .event-layout-head { grid-area: head; min-width: 0; }
-  .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+  .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
   .event-layout-rail :global(> section) { border: 0; }
   .event-layout-body { grid-area: body; min-width: 0; }
   .seat-card {
@@ -294,6 +294,9 @@ const detailIslands = [
   :global(.event-theme) .seat-card :global(.event-rsvp > section > a),
   :global(.event-theme) .seat-card :global(.event-rsvp button) { width: 100%; box-sizing: border-box; }
   :global(.event-theme) .event-detail-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  @media (max-width: 820px) {
+    .event-facts + :global(.event-share) { margin-top: var(--space-2); }
+  }
   /* Kit breakpoint.compact-max, layout.rail.seat, and layout.sticky-offset. */
   @media (min-width: 821px) {
     .event-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "head rail" "body rail"; column-gap: var(--space-9); align-items: start; }
