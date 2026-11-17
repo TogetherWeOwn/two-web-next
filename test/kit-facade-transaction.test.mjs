@@ -130,6 +130,23 @@ it("leaves an existing companion ignore entry unchanged", async () => {
   expect(fs.readFileSync(args.ignoreFile)).toEqual(previous);
 });
 
+it("places the companion exclusion after a later negation", async () => {
+  const args = fixture(Buffer.from("kit-adapter.js\n!*.js\n"));
+  await installFacadeFiles(args);
+  expect(fs.readFileSync(args.ignoreFile, "utf8")).toBe("kit-adapter.js\n!*.js\nkit-adapter.js\n");
+});
+
+it("rejects an ignore file hardlinked to the adapter without changing bytes", async () => {
+  const args = fixture();
+  fs.linkSync(args.entry, args.ignoreFile);
+  const original = fs.readFileSync(args.entry);
+  await expect(installFacadeFiles(args)).rejects.toThrow(".assetsignore aliases the adapter");
+  expect(fs.readFileSync(args.entry)).toEqual(original);
+  expect(fs.readFileSync(args.ignoreFile)).toEqual(original);
+  expect(fs.existsSync(args.companion)).toBe(false);
+  expect(fs.existsSync(args.staged)).toBe(false);
+});
+
 it("rejects a non-regular ignore file before changing anything", async () => {
   const args = fixture();
   fs.mkdirSync(args.ignoreFile);

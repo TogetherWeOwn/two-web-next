@@ -37,6 +37,8 @@ export async function installFacadeFiles({ root, prepare, io = {} }) {
   if (ignoreStat && !ignoreStat.isFile()) {
     throw new Error("worker facade: .assetsignore is not a regular file");
   }
+  if (ignoreStat && ignoreStat.dev === entryStat.dev && ignoreStat.ino === entryStat.ino)
+    fail(".assetsignore aliases the adapter");
   const previous = ignoreStat ? fs.readFileSync(ignoreFile) : null;
   const forward = { ...fs, ...io };
   const undoFs = { ...fs, ...io.undo };
@@ -59,7 +61,7 @@ export async function installFacadeFiles({ root, prepare, io = {} }) {
     const base =
       previous === null ? `${entry.split(/[\\/]/).pop()}\n` : previous.toString("latin1");
     const name = companion.split(/[\\/]/).pop();
-    if (!base.split(/\r?\n/).includes(name)) {
+    if (base.split(/\r?\n/).filter(Boolean).at(-1) !== name) {
       const next = Buffer.from(`${base.replace(/\n?$/, "\n")}${name}\n`, "latin1");
       undo.push(() =>
         previous === null
