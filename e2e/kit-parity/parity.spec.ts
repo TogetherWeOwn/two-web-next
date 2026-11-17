@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
 import postgres from "postgres";
+import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
@@ -1773,6 +1774,11 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
   }
 });
 
+function archiveSectionForComparison(section: string, kitOwnsArchive: boolean): string {
+  if (kitOwnsArchive) assertEmberArchive(section);
+  return normalizeSection(kitOwnsArchive ? stripEmberDelta(section) : section);
+}
+
 test("cross-target: normalized archive sections match", async () => {
   const bodies = new Map<string, string>();
   for (const target of targets) {
@@ -1784,9 +1790,30 @@ test("cross-target: normalized archive sections match", async () => {
   // treatment as ci/kit-preview-e2e.mjs): raw section bytes always differ
   // (hydration markers, boolean attributes, `>` escaping), so compare the
   // normalized contract after origin normalization, not the bytes.
+  const kitSection = bodies
+    .get("kit")!
+    .match(/<section[^>]*data-testid="past-events"[\s\S]*?<\/section>/)?.[0];
+  expect(kitSection, "Kit archive section exists").toBeDefined();
+  const kitOwnsArchive = expectedKitMarker("/events/past") === "kit";
+  if (kitOwnsArchive) {
+    const fallback = stripEmberDelta(kitSection!);
+    expect(archiveSectionForComparison(kitSection!, true)).toBe(
+      archiveSectionForComparison(fallback, false),
+    );
+    expect(archiveSectionForComparison(kitSection!, false)).not.toBe(
+      archiveSectionForComparison(fallback, false),
+    );
+    expect(fallback).toContain("E2E Past Night");
+    expect(archiveSectionForComparison(kitSection!, true)).not.toBe(
+      archiveSectionForComparison(fallback.replace("E2E Past Night", "Different event"), false),
+    );
+    expect(() =>
+      archiveSectionForComparison(kitSection!.replace("Sign-up record", "Changed"), true),
+    ).toThrow();
+  }
   expect(
-    sectionOf(bodies.get("kit")!, "past-events"),
-    "Kit section matches Hono section after origin normalization",
+    archiveSectionForComparison(kitSection!, kitOwnsArchive),
+    "Archive section matches Hono under the configured ownership",
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
@@ -1907,18 +1934,126 @@ test.describe("kit: archive visuals", () => {
           expect(response?.status(), `kit ${view.path} @ ${viewport.name}`).toBe(200);
           await expect(page.getByTestId(view.testid)).toBeVisible();
           await page.waitForLoadState("networkidle");
+          const kitOwnsArchive = expectedKitMarker(view.path) === "kit";
+          if (view.name === "populated" && kitOwnsArchive) {
+            const card = page.getByTestId("event-card").first();
+            await expect.soft(card.locator(".event-title")).toHaveCSS("display", "flex");
+            const state = card.getByText("Sign-up record");
+            await expect.soft(state).toBeVisible();
+            await expect.soft(state).toHaveCSS("border-top-style", "solid");
+            await expect.soft(state).toHaveCSS("font-size", "12px");
+            await expect.soft(state).toHaveCSS("text-transform", "uppercase");
+            await expect.soft(state).toHaveCSS("padding", "5px 7px");
+            await expect.soft(state).toHaveCSS("white-space", "nowrap");
+            const glyph = card.locator(".state-glyph");
+            if (viewport.name === "desktop") {
+              await expect.soft(glyph).toBeVisible();
+              await expect.soft(glyph).toHaveCSS("width", "16px");
+              await expect.soft(glyph).toHaveCSS("height", "16px");
+            } else {
+              await expect.soft(glyph).toBeHidden();
+            }
+          } else if (view.name === "populated") {
+            const card = page.getByTestId("event-card").first();
+            await expect.soft(card.getByRole("link", { name: "E2E Past Night" })).toBeVisible();
+            await expect.soft(card.locator(".state-glyph, .event-title")).toHaveCount(0);
+            await expect.soft(card.getByText("Sign-up record")).toHaveCount(0);
+          }
           await expect
             .soft(page)
-            .toHaveScreenshot(`kit-archive-${view.name}-${viewport.name}.png`, {
-              fullPage: true,
-              mask: [page.locator("time")],
-            });
+            .toHaveScreenshot(
+              `kit-archive-${view.name}${view.name === "populated" && !kitOwnsArchive ? "-hono" : ""}-${viewport.name}.png`,
+              {
+                fullPage: true,
+                mask: [page.locator("time")],
+              },
+            );
+          if (view.name === "populated") {
+            const name = `kit-review-archive-default-${viewport.name}`;
+            const path = test.info().outputPath(`${name}.png`);
+            await page.screenshot({ path, fullPage: true, mask: [page.locator("time")] });
+            await test.info().attach(name, { path, contentType: "image/png" });
+          }
         }
         expect(pageErrors, "no uncaught page errors").toEqual([]);
       } finally {
         await context.close();
       }
     });
+  }
+});
+
+test("hono: populated archive fallback baseline @ desktop and mobile", async ({ browser }) => {
+  const hono = targets.find((target) => target.name === "hono")!;
+  const context = await browser.newContext({
+    baseURL: hono.origin,
+    ignoreHTTPSErrors: hono.ignoreHTTPSErrors,
+  });
+  try {
+    await context.route("**/*", (route) => {
+      const origin = new URL(route.request().url()).origin;
+      return origin === hono.origin || origin === KIT_ORIGIN
+        ? route.continue()
+        : route.abort("blockedbyclient");
+    });
+    const page = await context.newPage();
+    for (const viewport of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport.size);
+      const response = await page.goto("/events/past");
+      expect(response?.status()).toBe(200);
+      await expect(page.getByTestId("past-events")).toBeVisible();
+      await page.waitForLoadState("networkidle");
+      await expect.soft(page).toHaveScreenshot(`kit-archive-populated-hono-${viewport.name}.png`, {
+        fullPage: true,
+        mask: [page.locator("time")],
+      });
+      const name = `kit-review-hono-archive-fallback-${viewport.name}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, mask: [page.locator("time")] });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    }
+  } finally {
+    await context.close();
+  }
+});
+
+test("kit: archive search and keyboard focus evidence", async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: KIT_ORIGIN, ignoreHTTPSErrors: true });
+  try {
+    await context.route("**/*", (route) => {
+      const origin = new URL(route.request().url()).origin;
+      return origin === "https://localhost:8787" || origin === KIT_ORIGIN
+        ? route.continue()
+        : route.abort("blockedbyclient");
+    });
+    const page = await context.newPage();
+    for (const viewport of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport.size);
+      const response = await page.goto("/events/past?q=Past");
+      expect(response?.status()).toBe(200);
+      const card = page.getByTestId("event-card").first();
+      const title = card.getByRole("link", { name: "E2E Past Night" });
+      await expect(title.locator("mark")).toHaveText("Past");
+      await page.waitForLoadState("networkidle");
+      const save = async (state: string) => {
+        const name = `kit-review-archive-${state}-${viewport.name}`;
+        const path = test.info().outputPath(`${name}.png`);
+        await page.screenshot({ path, fullPage: true, mask: [page.locator("time")] });
+        await test.info().attach(name, { path, contentType: "image/png" });
+      };
+      await save("search");
+      for (
+        let i = 0;
+        i < 30 && !(await title.evaluate((el) => el === document.activeElement));
+        i++
+      ) {
+        await page.keyboard.press("Tab");
+      }
+      await expect(title).toBeFocused();
+      await save("focus");
+    }
+  } finally {
+    await context.close();
   }
 });
 
