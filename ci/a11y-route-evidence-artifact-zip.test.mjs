@@ -116,7 +116,11 @@ test("verifies bounded streamed artifact bytes before extracting", async () => {
 
 test("accepts an exact-cap archive and refuses an independently valid one-byte-over archive", async () => {
   const max = 10 * 1024 * 1024;
-  const size = (max - 186) / 2;
+  const overhead = zip([
+    { name: "a.json", method: 0 },
+    { name: "b.json", method: 0 },
+  ]).length;
+  const size = (max - overhead) / 2;
   const makeArchive = (extra) =>
     zip([
       { name: "a.json", data: Buffer.alloc(size), method: 0 },
