@@ -12,6 +12,10 @@ function location(value) {
   return Number.isSafeInteger(value) && value >= 0;
 }
 
+function stringArgv(value) {
+  return Array.isArray(value) && Array.from(value).every((arg) => typeof arg === "string");
+}
+
 function identity(value) {
   if (
     !value ||
@@ -41,7 +45,13 @@ function pins(value, label) {
   if (!Array.isArray(value) || value.length === 0) fail(`missing ${label} pins`);
   const result = new Map();
   for (const pin of value) {
-    if (!pin || !text(pin.path) || !/^[a-f0-9]{64}$/.test(pin.sha256) || result.has(pin.path)) {
+    if (
+      !pin ||
+      !text(pin.path) ||
+      typeof pin.sha256 !== "string" ||
+      !/^[a-f0-9]{64}$/.test(pin.sha256) ||
+      result.has(pin.path)
+    ) {
       fail(`invalid ${label} pin`);
     }
     result.set(pin.path, pin.sha256);
@@ -80,11 +90,9 @@ function validateContext(reviewed, observed) {
     install.dependency !== "required-success" ||
     !text(install.scriptsPolicy) ||
     install.scriptsPolicy !== expectedInstall.scriptsPolicy ||
-    !Array.isArray(install.argv) ||
-    !Array.isArray(expectedInstall.argv) ||
+    !stringArgv(install.argv) ||
+    !stringArgv(expectedInstall.argv) ||
     install.argv[0] !== "ci" ||
-    install.argv.some((arg) => typeof arg !== "string") ||
-    expectedInstall.argv.some((arg) => typeof arg !== "string") ||
     JSON.stringify(install.argv) !== JSON.stringify(expectedInstall.argv)
   ) {
     fail("invalid install evidence");
@@ -104,8 +112,8 @@ function validateContext(reviewed, observed) {
     loader.checkout !== expectedLoader.checkout ||
     !text(loader.entrypoint) ||
     loader.entrypoint !== expectedLoader.entrypoint ||
-    !Array.isArray(loader.argv) ||
-    !Array.isArray(expectedLoader.argv) ||
+    !stringArgv(loader.argv) ||
+    !stringArgv(expectedLoader.argv) ||
     JSON.stringify(loader.argv) !== JSON.stringify(expectedLoader.argv) ||
     loader.nodeOptions !== (loader.route === "local-playwright-tsx" ? "--import tsx" : "") ||
     loader.nodePath !== "" ||

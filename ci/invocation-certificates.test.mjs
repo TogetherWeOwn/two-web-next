@@ -145,6 +145,26 @@ test("rejects matching malformed install commands and unreviewed loader context"
   }
 });
 
+test("rejects matching malformed argv and non-string pin digests", () => {
+  const sparseInstall = ["ci", "missing", "option"];
+  const sparseLoader = ["test", "missing", "option"];
+  delete sparseInstall[1];
+  delete sparseLoader[1];
+  for (const [field, argv] of [
+    ["install", sparseInstall],
+    ["loader", sparseLoader],
+    ["loader", ["test", null]],
+    ["loader", ["test", 1]],
+  ]) {
+    const record = fixture();
+    record.context[field].argv = argv;
+    assert.throws(() => validateInvocationCertificates([copy(record)], [record]), /invalid/);
+  }
+  const record = fixture();
+  record.context.templateInputs[0].sha256 = ["a".repeat(64)];
+  assert.throws(() => validateInvocationCertificates([record], [record]), /invalid template pin/);
+});
+
 test("rejects changed or incomplete ordered effect evidence", () => {
   const reviewed = fixture();
   for (const mutate of [
