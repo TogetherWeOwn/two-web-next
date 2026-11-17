@@ -1120,6 +1120,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     if ("waiting" in prepared) throw new Error("unexpected pending conflict");
     const claimed = (await events.claimSync(prepared, start))!;
     expect(claimed.nextAttemptAt).toBeNull();
+    expect(claimed.claimStartedAt).toEqual(start);
+    expect(await events.prepareSync(eventKey, key, start)).toMatchObject({
+      idempotencyKey: key,
+      claimStartedAt: start,
+    });
+    expect((await events.pendingSync(eventKey))?.claimStartedAt).toEqual(start);
     const bot = botDouble();
     expect(
       await handleSyncEvent({ eventKey, idempotencyKey: key }, 1, {
