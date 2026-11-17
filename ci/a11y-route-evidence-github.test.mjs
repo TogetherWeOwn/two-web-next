@@ -51,6 +51,46 @@ test("metadata client accepts valid JSON at the byte limit", async () => {
   assert.deepEqual(await request("/pulls/1"), value);
 });
 
+for (const stalledPart of ["headers", "body"]) {
+  test(`metadata deadline aborts stalled ${stalledPart}`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let signal;
+    let bodyStarted = false;
+    const request = createRouteEvidenceRequest(
+      "owner/repo",
+      "test-token",
+      async (_url, options) => {
+        signal = options.signal;
+        const stalled = () =>
+          new Promise((_, reject) => {
+            signal.addEventListener("abort", () => reject(new Error("test-token")), { once: true });
+          });
+        if (stalledPart === "headers") return stalled();
+        return {
+          ok: true,
+          body: {
+            async *[Symbol.asyncIterator]() {
+              bodyStarted = true;
+              await stalled();
+            },
+          },
+        };
+      },
+    );
+    const result = request("/pulls/1");
+    const rejection = assert.rejects(result, {
+      message: "route evidence refused: GitHub metadata unavailable",
+    });
+    await Promise.resolve();
+    if (stalledPart === "body") assert.equal(bodyStarted, true);
+    t.mock.timers.tick(9_999);
+    assert.equal(signal.aborted, false);
+    t.mock.timers.tick(1);
+    assert.equal(signal.aborted, true);
+    await rejection;
+  });
+}
+
 test("metadata client redacts errors from the transport", async () => {
   const request = createRouteEvidenceRequest("owner/repo", "test-token", async () => {
     throw new Error("test-token");
