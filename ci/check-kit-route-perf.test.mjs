@@ -241,6 +241,11 @@ test("CSS warnings cover both bytes and multiple routes without labeling fits", 
   };
   assert.throws(
     () => propose({ version: 1, sha: "a".repeat(40), measurement: result }, base),
+    /measurement did not pass/,
+  );
+  assert.throws(
+    () =>
+      propose({ version: 1, sha: "a".repeat(40), measurement: { ...result, exitCode: 0 } }, base),
     /measurement exceeds current main ceiling/,
   );
 });
