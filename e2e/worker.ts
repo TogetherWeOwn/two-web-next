@@ -63,9 +63,15 @@ function proxyPolicyFixture(url: URL): Response | null {
 }
 
 export default {
-  async fetch(request: Request, env: JobsEnv, ctx: ExecutionContext) {
+  async fetch(request: Request, env: JobsEnv & { ASSETS: Fetcher }, ctx: ExecutionContext) {
     const url = new URL(request.url);
     if (url.origin !== localOrigin) return new Response("Local CI only", { status: 403 });
+    if (url.pathname === "/fonts/fragment-mono-latin-400.woff2") {
+      const asset = await env.ASSETS.fetch(request);
+      const response = new Response(asset.body, asset);
+      if (asset.ok) response.headers.set("Cache-Control", "public, max-age=31536000, immutable");
+      return response;
+    }
     if (url.pathname === "/__e2e/network") return Response.json({ outbound, forbidden });
     if (url.pathname === "/__e2e/redirect-canary") {
       return Response.redirect("https://discord.com/__e2e/egress-canary", 302);
