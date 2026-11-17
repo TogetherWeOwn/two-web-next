@@ -63,6 +63,24 @@ test("synthetic artifact metadata binds the producer run and attempt", () => {
   assert.equal(check(fixture()), 78);
 });
 
+test("synthetic artifact metadata accepts the maximum artifact size", () => {
+  const f = fixture();
+  f.artifacts[0].size_in_bytes = 10 * 1024 * 1024;
+  assert.equal(check(f), 78);
+});
+
+test("synthetic artifact metadata accepts creation at producer start", () => {
+  const f = fixture();
+  f.artifacts[0].created_at = f.job.started_at;
+  assert.equal(check(f), 78);
+});
+
+test("synthetic artifact metadata accepts creation at producer completion", () => {
+  const f = fixture();
+  f.artifacts[0].created_at = f.job.completed_at;
+  assert.equal(check(f), 78);
+});
+
 test("synthetic artifact metadata refuses missing, stale and ambiguous evidence", () => {
   for (const change of [
     (f) => (f.artifacts = []),
