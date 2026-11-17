@@ -521,7 +521,8 @@ import CalendarEmpty from '#lib/CalendarEmpty.svelte';
 const state = { view: 'list' as const, month: '2030-06', q: ${JSON.stringify(query)}, game: ${JSON.stringify(game || "")}, past: true, page: 2 };
 const past = Array.from({ length: 7 }, (_, i) => ({ eventKey: i === 1 ? 'game/night' : String(i), title: i === 0 ? 'Cancelled night' : 'Past night', status: i === 0 ? 'cancelled' : 'past', startsAt: new Date('2030-06-15T18:00:00Z'), timezone: 'UTC' }));
 </script>
-<CalendarEmpty kind="${kind}" {state} gameFilter={${JSON.stringify(game)}} {past} inviteUrl="https://discord.test/invite" />`,
+<svelte:head><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
+<div class="base-theme schedule-theme"><main class="events-page"><CalendarEmpty kind="${kind}" {state} gameFilter={${JSON.stringify(game)}} {past} inviteUrl="https://discord.test/invite" /></main></div>`,
       },
       async ({ page, html }) => {
         if (scenario === "never" || scenario === "error" || scenario === "partial") {
@@ -565,6 +566,20 @@ const past = Array.from({ length: 7 }, (_, i) => ({ eventKey: i === 1 ? 'game/ni
             .getAttribute("href");
           assert.doesNotMatch(all, /[?&]game=/);
           if (query) assert.match(all, /q=night/);
+        }
+        if (process.env.KIT_CALENDAR_EVIDENCE_DIR) {
+          const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
+          await mkdir(directory, { recursive: true });
+          for (const [name, width, height] of [
+            ["desktop", 1280, 800],
+            ["mobile", 390, 844],
+          ]) {
+            await page.setViewportSize({ width, height });
+            await page.screenshot({
+              path: join(directory, `calendar-empty-${scenario}-${name}.png`),
+              fullPage: true,
+            });
+          }
         }
       },
     );
