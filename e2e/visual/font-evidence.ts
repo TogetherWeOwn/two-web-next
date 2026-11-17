@@ -96,3 +96,31 @@ export async function captureWithGeometry(
   const dimensions = { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
   return { png, dimensions, before, after };
 }
+
+/** Normalize an existing display token without changing which elements use it. */
+export async function captureNormalizedDisplayFont(
+  page: Page,
+  options: { url: string; weight?: string; root: string; heading: string },
+) {
+  const face = await loadVisualFont(page, options);
+  const token = await page.locator(options.root).evaluate((element, family) => {
+    const root = element as HTMLElement;
+    const original = getComputedStyle(root).getPropertyValue("--font-display").trim();
+    const match = original.match(/^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,]+)(,.*)?$/);
+    if (!match) throw new Error("Expected a nonempty --font-display stack");
+    const normalized = `"${family}"${match[1] ?? ""}`;
+    root.style.setProperty("--font-display", normalized);
+    return { original, normalized };
+  }, face.family);
+  const capture = await captureWithGeometry(
+    page,
+    { heading: options.heading },
+    {
+      animations: "disabled",
+      caret: "hide",
+      scale: "css",
+    },
+  );
+  const fonts = await renderedPlatformFonts(page, options.heading);
+  return { face, token, fonts, ...capture };
+}
