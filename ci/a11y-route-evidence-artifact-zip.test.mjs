@@ -89,6 +89,75 @@ test("accepts each ZIP limit exactly and rejects one unit over", () => {
   );
 });
 
+test("accepts valid archives at byte and compression limits and rejects one byte over", () => {
+  const limits = {
+    maxArchiveBytes: 10000,
+    maxEntries: 10,
+    maxEntryBytes: 1000,
+    maxTotalBytes: 1000,
+    maxRatio: 1000,
+  };
+  const exact = zip([{ name: "a", data: "x".repeat(100), method: 0 }]);
+  const over = zip([{ name: "a", data: "x".repeat(101), method: 0 }]);
+  for (const key of ["maxArchiveBytes", "maxEntryBytes", "maxTotalBytes"]) {
+    const boundary = key === "maxArchiveBytes" ? exact.length : 100;
+    assert.equal(
+      extractRouteEvidenceZip(exact, { ...limits, [key]: boundary }).get("a").length,
+      100,
+    );
+    assert.throws(
+      () => extractRouteEvidenceZip(over, { ...limits, [key]: boundary }),
+      refused,
+      key,
+    );
+  }
+
+  const compressedExact = zip([{ name: "a", data: "x".repeat(100) }]);
+  const compressedOver = zip([{ name: "a", data: "x".repeat(101) }]);
+  const compressedSize = compressedExact.readUInt32LE(18);
+  assert.equal(compressedOver.readUInt32LE(18), compressedSize);
+  const ratioLimits = { ...limits, maxRatio: 100 / compressedSize };
+  assert.equal(extractRouteEvidenceZip(compressedExact, ratioLimits).get("a").length, 100);
+  assert.throws(() => extractRouteEvidenceZip(compressedOver, ratioLimits), refused);
+});
+
+test("enforces entry count and cumulative bytes across multiple entries", () => {
+  const entries = [
+    { name: "a", data: "abc", method: 0 },
+    { name: "b", data: "de", method: 0 },
+  ];
+  const archive = zip(entries);
+  const limits = {
+    maxArchiveBytes: archive.length,
+    maxEntries: 2,
+    maxEntryBytes: 3,
+    maxTotalBytes: 5,
+    maxRatio: 1,
+  };
+  assert.deepEqual([...extractRouteEvidenceZip(archive, limits).values()].map(String), [
+    "abc",
+    "de",
+  ]);
+  assert.throws(() => extractRouteEvidenceZip(archive, { ...limits, maxEntries: 1 }), refused);
+  assert.throws(() => extractRouteEvidenceZip(archive, { ...limits, maxTotalBytes: 4 }), refused);
+});
+
+test("bounds inflated output even when the declared size is within the cap", () => {
+  const limits = {
+    maxArchiveBytes: 1000,
+    maxEntries: 1,
+    maxEntryBytes: 100,
+    maxTotalBytes: 100,
+    maxRatio: 1000,
+  };
+  const exact = { name: "a", data: "x".repeat(100) };
+  assert.equal(extractRouteEvidenceZip(zip([exact]), limits).get("a").length, 100);
+  assert.throws(
+    () => extractRouteEvidenceZip(zip([{ ...exact, data: "x".repeat(101), usize: 100 }]), limits),
+    refused,
+  );
+});
+
 test("extracts stored and deflated regular files as data", () => {
   const files = extractRouteEvidenceZip(zip(ok));
   assert.deepEqual([...files.keys()], ["report.json", "notes.txt"]);
@@ -186,6 +255,26 @@ test("refuses size lies, bad CRC and decompression bombs", () => {
     () => extractRouteEvidenceZip(zip(ok), { ...total, maxTotalBytes: 1e6, maxEntries: 1 }),
     refused,
   );
+});
+
+test("refuses overlapping independently valid nested local entries", () => {
+  const inner = zip([{ name: "inner", data: "payload", method: 0 }]);
+  const innerEnd = inner.length - 22;
+  const innerCdOffset = inner.readUInt32LE(innerEnd + 16);
+  const innerLocal = inner.subarray(0, innerCdOffset);
+  const outer = zip([{ name: "outer", data: innerLocal, method: 0 }]);
+  assert.deepEqual(extractRouteEvidenceZip(inner).get("inner"), Buffer.from("payload"));
+  assert.deepEqual(extractRouteEvidenceZip(outer).get("outer"), innerLocal);
+
+  const outerEnd = outer.length - 22;
+  const innerCd = Buffer.from(inner.subarray(innerCdOffset, innerEnd));
+  innerCd.writeUInt32LE(30 + Buffer.byteLength("outer"), 42);
+  const end = Buffer.from(outer.subarray(outerEnd));
+  end.writeUInt16LE(2, 8);
+  end.writeUInt16LE(2, 10);
+  end.writeUInt32LE(end.readUInt32LE(12) + innerCd.length, 12);
+  const nested = Buffer.concat([outer.subarray(0, outerEnd), innerCd, end]);
+  assert.throws(() => extractRouteEvidenceZip(nested), refused);
 });
 
 test("refuses structural abuse", () => {
