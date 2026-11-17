@@ -29,6 +29,7 @@ export type Outcome =
 export const uniqueKey = (eventKey: string) => `sync-event:${eventKey}`;
 
 const LOCK_TIMEOUT_MS = 2000;
+export const SYNC_CLAIM_ACTIVE_MS = 60_000;
 /**
  * Per-op bound for the producer's lock-acquire and queue-send.
  * Every neighboring op races a deadline; acquire and send were awaited bare,
@@ -219,6 +220,15 @@ export async function handleSyncEvent(
         Math.max(attempts, prepared.requestAttempts),
       ),
     };
+  }
+  if (
+    (prepared.requestAttempts >= SYNC_EVENT.tries || attempts >= SYNC_EVENT.tries) &&
+    !prepared.nextAttemptAt &&
+    prepared.claimStartedAt &&
+    now().getTime() - prepared.claimStartedAt.getTime() < SYNC_CLAIM_ACTIVE_MS
+  ) {
+    // A duplicate must not retire the last carrier while its owner is settling.
+    return { retryInSeconds: SYNC_EVENT.uniqueForSeconds };
   }
   if (prepared.requestAttempts >= SYNC_EVENT.tries) {
     return { failed: "request retry budget exhausted; unresolved identity retained" };
