@@ -139,8 +139,10 @@ snapshots. The events module is preparatory and is not used by any served page. 
 `ci/build-ember-tokens.mjs` adapter builds the Hono and Kit token sheets from
 the pinned vendored design-kit CSS and needs the locked esbuild installed to
 compact served sheets. It composes scoped roles with `assets/styles.css` and
-`assets/theme.css`; all three existing Hono sheets keep their original raw and
-gzip ceilings, without extra requests or changes to unthemed legacy pages.
+`assets/theme.css`; the separate bundle budgets retain their raw and gzip
+ceilings, without extra requests or changes to unthemed legacy pages. The
+homepage theme test reports its 13,000-byte shared-theme ceiling as advisory;
+source/generated integrity and other budget and correctness gates remain hard.
 The explicit preparation command **checks** the tracked adapters before
 generating ignored critical CSS. It fails without repairing stale committed
 output, so preparation cannot mask drift before CI checks it. The redundant

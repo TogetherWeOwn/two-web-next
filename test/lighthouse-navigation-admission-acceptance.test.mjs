@@ -109,10 +109,13 @@ function withDir(fn) {
     .then(() => fn(root))
     .finally(() => rmSync(root, { recursive: true, force: true }));
 }
-function writeReports(dir, reports) {
+function writeReports(dir, reports, suffix = "") {
   mkdirSync(dir, { recursive: true });
   reports.forEach((r, i) =>
-    writeFileSync(join(dir, `lhr-${1000 + i}.json`), typeof r === "string" ? r : JSON.stringify(r)),
+    writeFileSync(
+      join(dir, `lhr-${1000 + i}${suffix}.json`),
+      typeof r === "string" ? r : JSON.stringify(r),
+    ),
   );
 }
 const textAt = (path) => (existsSync(path) ? readFileSync(path, "utf8") : "");
@@ -611,10 +614,12 @@ it("RED: the desktop summary CLI refuses cloned per-run files even with complete
 
 for (const p of profiles) {
   describe(`${p.kind} read-only fixture verification`, () => {
-    async function fixture(args, reports, check) {
+    async function fixture(args, reports, check, suffix = "") {
       return withDir(async (root) => {
         const dir = join(root, "input");
-        writeReports(dir, reports);
+        writeReports(dir, reports, suffix);
+        writeFileSync(join(dir, "lhr-123-invalid.json"), "{broken");
+        writeFileSync(join(dir, "lhr-123-4-5.json"), "{broken");
         // A complete prior attempt is present but can never fill root quotas.
         writeReports(join(dir, "mobile-attempts", "attempt-1"), full(p));
         const before = tree(dir);
@@ -682,6 +687,19 @@ for (const p of profiles) {
           p.collect.url.map((url) => ({ url, quota: 3, runs: 3 })),
         );
       });
+    });
+    it("accepts current LHCI report filenames without reading malformed names or archives", async () => {
+      await fixture(
+        flags,
+        full(p),
+        ({ code, value }) => {
+          expect(code).toBe(0);
+          expect(value.code).toBe("collection_complete");
+          expect(value.rejectionCounts).toEqual({});
+          expect(value.rows.map((row) => row.runs)).toEqual(p.collect.url.map(() => 3));
+        },
+        "-0",
+      );
     });
     it("RED: mixed rejected reports expose exact stable counts, not private evidence", async () => {
       const reports = full(p);

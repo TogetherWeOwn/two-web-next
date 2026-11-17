@@ -85,12 +85,12 @@ export const PROFILES = {
   },
 };
 // Mirrors @lhci/utils saved-reports.js: collect saves every run as
-// `.lighthouseci/lhr-<timestamp>.json` and clears those files at the start of
+// `.lighthouseci/lhr-<timestamp>[-<suffix>].json` and clears those files at the start of
 // each (non-additive) collect. The filesystem upload instead writes ONE file
 // per route into the quality dir (reportFilenamePattern has no per-run token,
 // so the runs of a route overwrite each other and only the median survives).
-const LHR_FILE_REGEX = /^lhr-\d+\.json$/;
-const LHR_HTML_REGEX = /^lhr-\d+\.html$/;
+const LHR_FILE_REGEX = /^lhr-\d+(?:-\d+)?\.json$/;
+const LHR_HTML_REGEX = /^lhr-\d+(?:-\d+)?\.html$/;
 // One retry: the flake hit 3 runs in 3 days against many greens, so a single
 // consecutive-failure needs two bad runs in a row; more attempts would not fit
 // the quality job's timeout (mobile + desktop + standards share it).
@@ -475,10 +475,12 @@ async function selftest() {
   {
     const lhci = mkdtempSync(join(tmpdir(), "lh-quality-collected-"));
     writeFileSync(join(lhci, "lhr-1.json"), JSON.stringify(lhr("https://h/")));
+    writeFileSync(join(lhci, "lhr-1-42.json"), JSON.stringify(lhr("https://h/")));
+    writeFileSync(join(lhci, "lhr-1-invalid.json"), JSON.stringify(lhr("https://h/")));
     writeFileSync(join(lhci, "lhr-2.json"), "{truncated");
     writeFileSync(join(lhci, "manifest.json"), "{}");
     writeFileSync(join(lhci, "assertion-results.json"), "{}");
-    assert.equal(loadCollectedLhrs(lhci).length, 1);
+    assert.equal(loadCollectedLhrs(lhci).length, 2);
     assert.equal(loadCollectedLhrs(join(lhci, "missing")).length, 0);
   }
 
@@ -490,6 +492,8 @@ async function selftest() {
     mkdirSync(qdir, { recursive: true });
     writeFileSync(join(lhci, "lhr-1.json"), "{}");
     writeFileSync(join(lhci, "lhr-1.html"), "<html></html>");
+    writeFileSync(join(lhci, "lhr-1-42.json"), "{}");
+    writeFileSync(join(lhci, "lhr-1-42.html"), "<html></html>");
     writeFileSync(join(lhci, "quality-collect.log"), "keep");
     writeFileSync(join(qdir, "old-report.json"), "{}");
     clearAttemptEvidence({ qualityDir: qdir, lhciDir: lhci });
@@ -517,7 +521,7 @@ async function selftest() {
       mkdirSync(qdir, { recursive: true });
       step.urls.forEach((url, i) => {
         writeFileSync(
-          join(lhci, `lhr-${calls}${String(i).padStart(4, "0")}.json`),
+          join(lhci, `lhr-${calls}${String(i).padStart(4, "0")}-${i}.json`),
           JSON.stringify(lhr(url, deployed)),
         );
       });

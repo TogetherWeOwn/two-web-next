@@ -115,6 +115,7 @@ For ONE Discord id, in one transaction:
 | `web_sessions` | `user_id` (this signs the member out everywhere) |
 | `web_session_grace` | `user_id` (retired predecessor identity and bearer hashes) |
 | `join_attempts` | `discord_id` |
+| `event_echo_members` | `user_id` (the aggregate event echo remains) |
 
 The output counts carry one key per table: `web_sessions` counts live
 session rows and `web_session_grace` counts retired predecessor records, so a
@@ -229,6 +230,10 @@ Scope below.
   rows are swept when the next login starts (`sweepExpired`, called from
   `src/auth/routes.ts` and `src/join/route-start.ts`), as published in the
   [retention ledger](retention-ledger.md).
+- `waitlist_offers` (dormant) has no member or event column: each row
+  references only its RSVP (`rsvp_id`, `ON DELETE CASCADE`), so the RSVP
+  delete above removes any offer and its notification key. Erasure has nothing
+  else to delete; see the [retention ledger](retention-ledger.md).
 - The Discord-side mirror (roles, messages, tickets) is out of scope here:
   Discord is governed by Discord's own privacy policy, and removal there
   happens through Discord's moderation tools, not this command.

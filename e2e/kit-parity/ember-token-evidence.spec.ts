@@ -9,6 +9,7 @@ import { withKitOfflineBrowser } from "../../ci/kit-offline-browser.mjs";
 const targets = [
   { name: "hono", origin: HONO_ORIGIN, path: "/" },
   { name: "kit", origin: KIT_ORIGIN, path: "/events/past" },
+  { name: "kit-join", origin: KIT_ORIGIN, path: "/join" },
 ] as const;
 const states = ["default", "reduced-motion", "forced-colors", "keyboard-focus"] as const;
 
@@ -66,6 +67,23 @@ test("captures structured-time row states in Kit without JavaScript", async ({},
   );
 });
 
+test("Kit join reflows at 320px and has no accessibility violations", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.route("**/*", (route) =>
+    new URL(route.request().url()).origin === KIT_ORIGIN
+      ? route.continue()
+      : route.abort("blockedbyclient"),
+  );
+  const response = await page.goto(`${KIT_ORIGIN}/join`);
+  expect(response?.status()).toBe(200);
+  expect(response?.headers()["x-two-renderer"]).toBe("kit");
+  await expect(page.getByTestId("join-oneclick")).toBeVisible();
+  const overflow = await page.evaluate("document.documentElement.scrollWidth > window.innerWidth");
+  expect(overflow).toBe(false);
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 for (const target of targets) {
   for (const viewport of PARITY_VIEWPORTS) {
     for (const state of states) {
@@ -91,6 +109,12 @@ for (const target of targets) {
             expect(response?.headers()["x-two-renderer"]).toBe("kit");
             await expect(page.getByTestId("past-events")).toBeVisible();
             await expect(page.getByText("E2E Past Night", { exact: true })).toBeVisible();
+          } else if (target.name === "kit-join") {
+            expect(response?.headers()["x-two-renderer"]).toBe("kit");
+            await expect(
+              page.getByRole("heading", { level: 1, name: "Play with people who show up." }),
+            ).toBeVisible();
+            await expect(page.getByTestId("join-oneclick")).toBeVisible();
           } else {
             await expect(page.locator("#home-heading")).toBeVisible();
           }
@@ -129,7 +153,10 @@ for (const target of targets) {
           expect(pageErrors).toEqual([]);
 
           const name = `ember-${target.name}-${viewport.size.width}-${state}`;
-          await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: false });
+          await page.screenshot({
+            path: testInfo.outputPath(`${name}.png`),
+            fullPage: target.name === "kit-join",
+          });
           const receipt = {
             sha: process.env.GITHUB_SHA,
             path: target.path,

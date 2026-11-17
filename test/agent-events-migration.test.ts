@@ -56,7 +56,14 @@ async function createMigrationFixture(raw: string) {
       if (statement.trim()) {
         // Canonical legacy FKs explicitly qualify public; redirect only those
         // references to the schema we just created, as the safety helper does.
-        await sql.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
+        await sql.unsafe(
+          statement
+            .replaceAll('"public".', `"${schemaName}".`)
+            .replace(
+              /(GRANT\s+\w+(?:\s*\([^;()]*\))?\s+ON\s+(?:TABLE|SEQUENCE)\s+)public\./gi,
+              `$1"${schemaName}".`,
+            ),
+        );
       }
     }
   };
@@ -75,10 +82,16 @@ async function createMigrationFixture(raw: string) {
   // current service selects) apply after 1019 so post-migration ingress sees
   // the schema current code expects. 1019's own assertions still verify its
   // data migration: 1020 only adds, never alters 1019's rows.
-  const migrate = () =>
+  const migrate = (beforeClaimColumn?: (sql: postgres.TransactionSql) => Promise<void>) =>
     client.begin(async (sql) => {
       await apply(sql, migration1019.sql);
-      for (const migration of migrations.slice(migrationIndex + 1)) await apply(sql, migration.sql);
+      for (const [index, migration] of migrations.entries()) {
+        if (index <= migrationIndex) continue;
+        if (journal.entries[index]?.tag === "1036_event-sync-claim-started") {
+          await beforeClaimColumn?.(sql);
+        }
+        await apply(sql, migration.sql);
+      }
     });
   return { client, schemaName, migrate, dispose };
 }
@@ -268,6 +281,33 @@ describe.skipIf(!process.env.DATABASE_URL)(
     }, 30_000);
     afterEach(async () => {
       await fixture?.dispose();
+    });
+
+    it("backfills existing sync attempts and defaults new claims at insertion time", async () => {
+      const oldKey = randomUUID();
+      const newKey = randomUUID();
+      let migrationTime: Date | undefined;
+      await fixture.migrate(async (sql) => {
+        const [clock] = await sql`SELECT now() AS instant`;
+        migrationTime = clock!.instant;
+        await sql`INSERT INTO event_sync_attempts
+          (idempotency_key, event_id, revision, action, payload, mirrored_at, state)
+          SELECT ${oldKey}, id, 1, 'sync', '{}'::jsonb, now(), 'succeeded'
+          FROM events ORDER BY id LIMIT 1`;
+      });
+      const [old] = await fixture.client`SELECT claim_started_at FROM event_sync_attempts
+        WHERE idempotency_key = ${oldKey}`;
+      expect(old?.claim_started_at).toEqual(migrationTime);
+      const [fresh] = await fixture.client`INSERT INTO event_sync_attempts
+        (idempotency_key, event_id, revision, action, payload, mirrored_at, state)
+        SELECT ${newKey}, id, 2, 'sync', '{}'::jsonb, now(), 'succeeded'
+        FROM events ORDER BY id LIMIT 1 RETURNING claim_started_at, now() AS inserted_at`;
+      expect(fresh?.claim_started_at).toBeInstanceOf(Date);
+      expect(fresh?.claim_started_at).toEqual(fresh?.inserted_at);
+      const [column] = await fixture.client`SELECT is_nullable, column_default
+        FROM information_schema.columns WHERE table_schema = ${fixture.schemaName}
+        AND table_name = 'event_sync_attempts' AND column_name = 'claim_started_at'`;
+      expect(column).toMatchObject({ is_nullable: "NO", column_default: "now()" });
     });
 
     it("preserves populated rows and evidence, converts each zone to UTC, and retires agent_events", async () => {
