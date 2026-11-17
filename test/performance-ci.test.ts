@@ -160,7 +160,11 @@ describe("performance CI", () => {
       {
         eventKey: fixtureKey,
         title: "Lighthouse fixture game night",
+        game: "Community games",
+        organizer_name: "Community host",
         startsAt: new Date("2030-01-08T00:00:00Z"),
+        endsAt: new Date("2030-01-08T02:00:00Z"),
+        rsvpOpen: true,
         timezone: "Europe/London",
         location: "Community voice channel",
         goingCount: 3,

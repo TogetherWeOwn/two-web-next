@@ -502,7 +502,7 @@ jobs:
       # stays above.
       - name: Gradual promotion 5-50-100 with automatic rollback
         id: gradual
-        uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06
+        uses: TogetherWeOwn/.github/actions/gradual-promote@2ef8ad6447e11d019ac3098bcfd011193b75266a
         with:
           worker-name: two-web-next-production
           version-tag: ${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

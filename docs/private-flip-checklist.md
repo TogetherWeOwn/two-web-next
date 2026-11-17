@@ -9,13 +9,15 @@ setting, before they flip it.
 
 ## Runner separation (verify, already in code)
 
-- Pull-request and merge-queue runs always use GitHub-hosted runners, in both
-  visibilities. Code that has not landed on `main` never runs on the
-  self-hosted fleet, which also serves the deploy, backup and migration
-  workflows.
-- Only `main` pushes, schedules and manual dispatches may use the self-hosted
-  fleet, and only while the repository is private.
-- `test/workflow-runners.test.ts` pins both rules for every workflow,
+- The current `ci.yml` selects GitHub-hosted runners for every event, including
+  manual dispatches on branches, in both visibilities. Other workflows retain
+  visibility-based selectors; review their event and ref restrictions before a
+  flip. A branch dispatch can select workflow YAML from that branch, so these
+  source assertions do not enforce historical or modified workflow definitions.
+- Pull-request and merge-queue events in the checked workflow definitions select
+  GitHub-hosted runners in both visibilities. Other events in some workflows can
+  select self-hosted runners while private.
+- `test/workflow-runners.test.ts` pins these source contracts for every workflow,
   including reusable workflows (local or org-level) called from a
   pull-request workflow: callers pass an explicit GitHub-hosted runner input
   instead of accepting a visibility-based default. Run

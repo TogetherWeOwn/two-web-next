@@ -22,8 +22,9 @@
  * utilities. Revisit if they acquire utility classes or forward class names. */
 @source not "./lib/Chip.svelte";
 @source not "./lib/SegmentedControl.svelte";
-/* Prose, attributes and component CSS produce these false candidates, never
- * classes. kit-tailwind-sources.test.ts guards that boundary. */
+@source not "./lib/StructuredTime.svelte";
+/* Prose, attributes, component CSS and the relative leaderboard scope produce
+ * these false candidates, never classes. kit-tailwind-sources.test.ts guards that boundary. */
 @source not inline("visible relative static block hidden table inline outline flex flex-wrap");
 
 /* The join-attempts audit page keeps the Hono viewer's `filters` form class

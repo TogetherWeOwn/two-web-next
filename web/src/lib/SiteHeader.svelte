@@ -28,7 +28,7 @@ let {
 </script>
 
 <a class="skip-link" href="#main">Skip to content</a>
-<header class="bar site-header">
+<header class="bar site-header" data-kit-site-header>
   <nav class="main-nav" aria-label="Primary">
     <a href="/" aria-current={activeNav === "home" ? "page" : undefined}>Home</a>
     <a

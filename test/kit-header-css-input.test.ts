@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,6 +14,28 @@ const inputs = [
 ];
 
 describe("Kit header leaf stylesheet input", () => {
+  it("delivers the header stylesheet once through the root layout", () => {
+    const sourceDir = join(root, "web/src");
+    const owners = readdirSync(sourceDir, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.(svelte|ts|js|css)$/.test(entry.name))
+      .map((entry) => join(entry.parentPath, entry.name))
+      .filter((path) =>
+        /(?:import|@import)[^;\n]*["'][^"']*site-header\.css["']/.test(readFileSync(path, "utf8")),
+      );
+    expect(owners).toEqual([join(sourceDir, "routes/+layout.svelte")]);
+    const layout = readFileSync(owners[0]!, "utf8");
+    expect(layout).toContain('import "../lib/site-header.css";');
+    expect(layout.indexOf('import "../app.css";')).toBeLessThan(
+      layout.indexOf('import "../lib/site-header.css";'),
+    );
+  });
+
+  it("scopes sticky positioning to Kit headers at compact widths", () => {
+    const css = readFileSync(join(root, "web/src/lib/site-header.css"), "utf8");
+    expect(css).toMatch(/@media\s*\(max-width:\s*820px\)/);
+    expect(css).toMatch(/\[data-kit-site-header\]\s*\{\s*position:\s*sticky;\s*top:\s*0;/);
+  });
+
   it.each(["valid", "missing", "unsafe"])("handles %s fourth input", (state) => {
     const dir = mkdtempSync(join(tmpdir(), "kit-header-css-"));
     try {

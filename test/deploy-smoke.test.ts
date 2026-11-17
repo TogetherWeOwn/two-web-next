@@ -10,11 +10,22 @@ import { describe, expect, it } from "vitest";
 // needs verified upstream hashes so local tests cannot cover stale code.
 const gradualPromoteHashesByRef: Record<
   string,
-  { helper: string; manifest: string; gate: string }
+  { helper: string; manifest: string; gate: string; prePromotion?: string }
 > = {
   "89c290be20c0044efaf6916f28341c76e75fff06": {
     helper: "8f87a83d79cc24dacdb5a7247eb1ad67afa0dde71ce3d210980927fe681a320a",
     manifest: "3ec491a337a484c5cdcb25695c6d0d9c48576a76a13c94453bd5ff98aa59b13a",
+    gate: "973d48bd7a0ee0c130a4842e4bd2441451791d1483abdef37fcd7a0895766914",
+  },
+  "2ef8ad6447e11d019ac3098bcfd011193b75266a": {
+    helper: "8f87a83d79cc24dacdb5a7247eb1ad67afa0dde71ce3d210980927fe681a320a",
+    manifest: "e2f34a41d902be69371342c1fbc37f6cabf07ddc697fe60c3ebf4278cd2ae92a",
+    gate: "629091bf134d50211759bca63b7b6fe7c812187c2858c9b369be237514d7b7bf",
+    prePromotion: "9d61c85f02c461fdd002a6c09ea2a0da6fe220f8ca6f27d7357b7b1413074bce",
+  },
+  d427f7212f478ea3823a605edb394b0722e152b5: {
+    helper: "8f87a83d79cc24dacdb5a7247eb1ad67afa0dde71ce3d210980927fe681a320a",
+    manifest: "a3ba59bdb2cd2a533a42e7b88df3e51feb6d757769c25f3a1b1b75ee450ec1b6",
     gate: "973d48bd7a0ee0c130a4842e4bd2441451791d1483abdef37fcd7a0895766914",
   },
 };
@@ -599,7 +610,7 @@ describe("production deploy smoke (offline)", () => {
   it("probes the apex origin with the indexable posture, never staging", () => {
     const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
     expect(workflow).toContain(
-      "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@2ef8ad6447e11d019ac3098bcfd011193b75266a",
     );
     const centralActionRef = workflow.match(
       /uses: TogetherWeOwn\/\.github\/actions\/gradual-promote@([0-9a-f]{40})/,
@@ -614,6 +625,12 @@ describe("production deploy smoke (offline)", () => {
       .update(readFileSync(".github/actions/gradual-promote/error-rate-gate.mjs"))
       .digest("hex");
     expect(gateSha256).toBe(expectedHashes?.gate);
+    if (expectedHashes?.prePromotion) {
+      const prePromotionSha256 = createHash("sha256")
+        .update(readFileSync(".github/actions/gradual-promote/pre-promotion-check.mjs"))
+        .digest("hex");
+      expect(prePromotionSha256).toBe(expectedHashes.prePromotion);
+    }
     const action = readFileSync(".github/actions/gradual-promote/action.yml", "utf8");
     expect(actionManifestSha256(action)).toBe(expectedHashes?.manifest);
     expect(workflow).toContain("domain: togetherweown.com");

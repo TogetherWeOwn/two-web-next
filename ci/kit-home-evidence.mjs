@@ -10,9 +10,21 @@ const member = {
   member: true,
   moderator: false,
 };
+const event = {
+  source: "canonical",
+  eventKey: "game-night-1",
+  title: "Game night",
+  startsAt: "2026-10-20T19:00:00.000Z",
+  timezone: "UTC",
+  location: "Online",
+  goingCount: 3,
+  capacity: null,
+};
 const states = {
   guest: {},
   member: { session: member },
+  guestEvents: { upcomingEvents: [event] },
+  memberEvents: { session: member, upcomingEvents: [event] },
   nonmember: { session: { ...member, userId: "player-1", username: "Player", member: false } },
   sessionOutage: { sessionUnavailable: true },
   eventsOutage: { eventsUnavailable: true },
@@ -44,6 +56,7 @@ export function homeEvidencePage(state) {
 import Home from '../+page.svelte';
 import { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS } from '../../../../src/home-copy';
 const data = ${JSON.stringify(data)};
+data.upcomingEvents = data.upcomingEvents.map(event => ({ ...event, startsAt: new Date(event.startsAt) }));
 data.homeCopy = { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS };
 </script>
 <Home {data} />`;
@@ -76,10 +89,15 @@ export async function assertHomeEvidence(page, state) {
     ["sessionOutage", "eventsOutage"].includes(state) ? 1 : 0,
     `${state}: fallback`,
   );
-  assert.equal(
-    await page.getByTestId("home-events-empty").getAttribute("data-state"),
-    state === "eventsOutage" ? "unavailable" : "empty",
-  );
+  if (states[state].upcomingEvents) {
+    assert.equal(await count("home-events-list"), 1, `${state}: event list`);
+    assert.match(await page.getByTestId("home-events-list").innerText(), /Game night/);
+  } else {
+    assert.equal(
+      await page.getByTestId("home-events-empty").getAttribute("data-state"),
+      state === "eventsOutage" ? "unavailable" : "empty",
+    );
+  }
   if (session?.member)
     assert.equal(
       await page

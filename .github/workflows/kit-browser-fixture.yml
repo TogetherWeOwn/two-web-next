@@ -84,9 +84,17 @@ jobs:
       - run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
         working-directory: web
       - run: npx playwright install --with-deps chromium
-      - run: node --test ci/kit-hydration-harness.test.mjs ci/kit-browser-fixture.test.mjs ci/kit-browser-fixture-isolation.test.mjs
+      - run: node --test ci/kit-hydration-harness.test.mjs ci/kit-browser-fixture.test.mjs ci/kit-browser-fixture-isolation.test.mjs ci/kit-tag-browser.test.mjs
         env:
           KIT_CALENDAR_EVIDENCE_DIR: artifacts/kit-calendar
+      - run: node --test ci/kit-button-isolated-browser.test.mjs
+        if: ${{ !cancelled() }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: kit-button-screenshots
+          path: artifacts/kit-button/
+          if-no-files-found: error
       - name: Retain calendar fixture evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

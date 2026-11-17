@@ -488,6 +488,27 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
       expect(await create(rsvpId)).not.toBeNull();
     });
 
+    it.each(["repeatable read", "serializable"] as const)(
+      "rejects a stale %s transaction before it can overbook",
+      async (isolationLevel) => {
+        const eventId = await makeEvent({ capacity: 1 });
+        const first = await makeRsvp(eventId, "waitlisted");
+        const second = await makeRsvp(eventId, "waitlisted");
+        await expect(
+          fixture.db.transaction(
+            async (tx) => {
+              await tx.select({ snapshot: sql`count(*)` }).from(waitlistOffers);
+              expect(await create(first)).not.toBeNull();
+              await createWaitlistOffer(tx, second);
+            },
+            { isolationLevel },
+          ),
+        ).rejects.toThrow(/read committed/i);
+        expect(await rows(first)).toHaveLength(1);
+        expect(await rows(second)).toHaveLength(0);
+      },
+    );
+
     it("serializes concurrent creators to one held offer for the last seat", async () => {
       const eventId = await makeEvent({ capacity: 1 });
       const a = await makeRsvp(eventId, "waitlisted");
