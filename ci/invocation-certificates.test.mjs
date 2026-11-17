@@ -165,6 +165,29 @@ test("rejects matching malformed argv and non-string pin digests", () => {
   assert.throws(() => validateInvocationCertificates([record], [record]), /invalid template pin/);
 });
 
+test("rejects malformed edge positions and write arrays on either side", () => {
+  const sparse = ["missing"];
+  delete sparse[0];
+  for (const [field, values, error] of [
+    ["edges", [sparse, [null]], /invalid occurrence identity/],
+    ["writes", [sparse, [null], [""], [1]], /invalid effects/],
+  ]) {
+    for (const value of values) {
+      for (const side of ["both", "observed", "reviewed"]) {
+        const observed = fixture();
+        const reviewed = copy(observed);
+        const set = (record) => {
+          if (field === "edges") record.identity.edges = value;
+          else record.context.effects[0].writes = value;
+        };
+        if (side !== "reviewed") set(observed);
+        if (side !== "observed") set(reviewed);
+        assert.throws(() => validateInvocationCertificates([observed], [reviewed]), error);
+      }
+    }
+  }
+});
+
 test("rejects changed or incomplete ordered effect evidence", () => {
   const reviewed = fixture();
   for (const mutate of [

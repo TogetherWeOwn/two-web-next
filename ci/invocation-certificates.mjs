@@ -25,7 +25,7 @@ function identity(value) {
     !location(value.run) ||
     !location(value.terminal) ||
     !Array.isArray(value.edges) ||
-    value.edges.some(
+    Array.from(value.edges).some(
       (edge) => !edge || !text(edge.root) || !text(edge.script) || !location(edge.offset),
     )
   ) {
@@ -141,7 +141,8 @@ function validateContext(reviewed, observed) {
       effect.audit !== expected.audit ||
       !Array.isArray(expected.writes) ||
       !Array.isArray(effect.writes) ||
-      expected.writes.some((write) => !text(write)) ||
+      !Array.from(expected.writes).every(text) ||
+      !Array.from(effect.writes).every(text) ||
       JSON.stringify(expected.writes) !== JSON.stringify(effect.writes)
     ) {
       fail("invalid effects evidence");
