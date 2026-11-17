@@ -183,6 +183,9 @@ worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 checks relative links and anchors on every PR. `check` runs unless its run was
 cancelled, starts from `scope` alone so it runs in parallel with the audit
 and performance jobs, and skips its heavy steps on docs-only and draft PRs.
+The independent `kit-browser-fixture` job runs alongside `check` for non-draft,
+non-docs-only full, app or worker scopes. `ci-ok` requires its success when
+selected, and fails on failure, cancellation or an unexpected skip.
 `node22-compat` reports the same way on the exact Node 22.23.0 `engines`
 floor — the version asserted in its log — running lint, typecheck and the
 unit suite, so the declared 22 range is verified beside the Node 24 jobs;

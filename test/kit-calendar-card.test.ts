@@ -33,6 +33,11 @@ export const bodies = {
   discord: renderCard({ ...event, kind: "discord", key: "discord-9" }),
   marks: renderCard({ ...event, titleSegments: [{ text: "<b>", match: false },
     { text: "Tom & ", match: true }, { text: "x", match: false }] }),
+  emptyDescription: renderCard({ ...event, description: "" }),
+  limitDescription: renderCard({ ...event, description: "😀".repeat(240) }),
+  longDescription: renderCard({ ...event, description: "😀".repeat(241) }),
+  passage: renderCard({ ...event, description: "😀".repeat(241),
+    passage: [{ text: "matched & text", match: true }] }),
 };`;
 
 it("renders calendar card actions and escapes search spans", async () => {
@@ -79,8 +84,18 @@ it("renders calendar card actions and escapes search spans", async () => {
     expect(b.cancelled).not.toContain('data-testid="signin"');
     expect(b.discord).toContain('href="https://discord.test/invite"');
     expect(b.discord).not.toContain('href="/e/a"');
-    expect(b.marks).toContain("&lt;b&gt;<mark>Tom &amp; </mark>x");
+    expect(b.marks).toMatch(
+      /&lt;b(?:>|&gt;)(?:<!--[^>]*-->)*<mark>Tom &amp; <\/mark>(?:<!--[^>]*-->)*x/,
+    );
     expect(b.marks).not.toContain("<b>");
+    expect(b.emptyDescription).not.toContain('class="schedule-text"');
+    expect(b.limitDescription).not.toContain("<details");
+    expect(b.limitDescription).toContain("😀".repeat(240));
+    expect(b.longDescription).toContain('<details class="schedule-text">');
+    expect(b.longDescription).toContain(`${"😀".repeat(240)}…`);
+    expect(b.longDescription).toContain("😀".repeat(241));
+    expect(b.passage).toContain("<mark>matched &amp; text</mark>");
+    expect(b.passage).toContain("😀".repeat(241));
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

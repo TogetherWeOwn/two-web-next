@@ -417,6 +417,7 @@ jobs:
           name: saved-review-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             test-results/**/attachments/hono-review-*.png
+            test-results/**/attachments/kit-review-*.png
             test-results-kit-parity/**/attachments/kit-review-*.png
           if-no-files-found: error
           retention-days: 7

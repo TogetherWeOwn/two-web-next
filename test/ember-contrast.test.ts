@@ -61,10 +61,9 @@ describe("ember text pairs meet WCAG AA on their grounds", () => {
   });
 });
 
-describe("echo violet is never a text colour", () => {
-  // Kit rule (tokens §1.5): echo violet (#9d6aff) is 4.27:1 on overlay and
-  // under 4.5:1, so Echo tags sit on grounds 0-2 only -- never as text on
-  // overlay, and this migration introduces no echo text at all.
+describe("echo violet text stays on an accessible ground", () => {
+  // Kit tokens §1.5 prohibit Echo tags on overlay; §1.8 pairs echo violet
+  // with an opaque echo-bg for AA text. Only the Tag rule may use that pair.
   const roots = ["../public", "../assets", "../web/src"] as const;
 
   function* cssLike(): Generator<{ file: string; css: string }> {
@@ -137,10 +136,48 @@ describe("echo violet is never a text colour", () => {
     }
   });
 
-  it("references no echo kit variable as a color value", () => {
+  function disallowedEchoText(file: string, css: string): string[] {
+    // Admit only this exact rule, with no competing declarations inside it.
+    const safeTagRule =
+      /(?:^|})\s*\.echo\s*\{\s*color:\s*var\(--echo\);\s*background:\s*var\(--echo-bg\);\s*box-shadow:\s*inset 0 0 0 1px color-mix\(in srgb, var\(--echo\) 50%, transparent\);\s*\}/g;
+    const clean = css.replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, " ");
+    const rules = [...clean.matchAll(safeTagRule)];
+    const checked =
+      file === "../web/src/lib/Tag.svelte" && rules.length === 1
+        ? clean.replace(safeTagRule, " ")
+        : clean;
+    return echoTextReferences(checked);
+  }
+
+  it("rejects missing and translucent fills, including in Tag", () => {
+    const file = "../web/src/lib/Tag.svelte";
+    for (const fill of [
+      "",
+      "background:rgba(38,28,60,.5);",
+      "background:color-mix(in srgb, var(--echo-bg), transparent);",
+    ]) {
+      expect(disallowedEchoText(file, `.echo { color:var(--echo); ${fill} }`)).not.toEqual([]);
+    }
+    const safe =
+      ".echo { color: var(--echo); background: var(--echo-bg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--echo) 50%, transparent); }";
+    expect(disallowedEchoText(file, safe)).toEqual([]);
+    expect(disallowedEchoText("../assets/example.css", safe)).not.toEqual([]);
+    expect(disallowedEchoText(file, `${safe} a{color:var(--echo);}`)).not.toEqual([]);
+  });
+
+  it("checks the generated Echo pair against AA", () => {
+    const theme = readFileSync(new URL("../web/src/ember-theme.css", import.meta.url), "utf8");
+    const echo = theme.match(/--echo:(#[0-9a-f]{6})[;}]/i)?.[1];
+    const background = theme.match(/--echo-bg:(#[0-9a-f]{6})[;}]/i)?.[1];
+    expect(echo).toBeDefined();
+    expect(background).toBeDefined();
+    expect(ratio(echo!, background!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("references echo text only in the filled Tag rule", () => {
     const violations: string[] = [];
     for (const { file, css } of cssLike()) {
-      for (const reference of echoTextReferences(css)) {
+      for (const reference of disallowedEchoText(file, css)) {
         violations.push(`${file}: ${reference}`);
       }
     }
