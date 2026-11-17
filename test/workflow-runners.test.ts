@@ -118,6 +118,49 @@ describe("workflow runner labels", () => {
     );
   });
 
+  it("keeps backup and staging jobs on standard hosted runners for every event", () => {
+    for (const [name, ids] of [
+      ["backup-bootstrap-selftest.yml", ["scope", "bootstrap-selftest", "backup-bootstrap"]],
+      ["backup-restore-proof.yml", ["scope", "proof", "backup-restore-proof-ok"]],
+      ["db-backup.yml", ["backup"]],
+      ["error-rate-gate-rehearsal.yml", ["rehearsal"]],
+      ["staging-catalog-preflight.yml", ["preflight"]],
+      ["staging-census.yml", ["scope", "census"]],
+      ["staging-role-bootstrap.yml", ["bootstrap"]],
+      ["staging-smoke.yml", ["internal-action-smoke"]],
+    ] as const) {
+      const workflow = workflows.find((entry) => entry.name === name);
+      expect(workflow, name).toBeDefined();
+      expect(
+        jobs(workflow!.text).map(({ id, runsOn }) => [id, runsOn]),
+        name,
+      ).toEqual(ids.map((id) => [id, hosted]));
+    }
+  });
+
+  it("pins backup and staging container images to their intended major versions", () => {
+    for (const [name, image] of [
+      ["backup-bootstrap-selftest.yml", "python:3.13-bookworm"],
+      ["backup-restore-proof.yml", "postgres:18"],
+      ["staging-smoke.yml", "node:24-bookworm"],
+    ] as const) {
+      const workflow = workflows.find((entry) => entry.name === name);
+      expect(workflow, name).toBeDefined();
+      expect(workflow!.text, name).toContain(`${image}@sha256:`);
+      expect(workflow!.text, name).toMatch(new RegExp(`${image}@sha256:[a-f0-9]{64}(?:\\s|$)`));
+    }
+  });
+
+  it("passes the staging version to the rehearsal through the step environment", () => {
+    const workflow = workflows.find(({ name }) => name === "error-rate-gate-rehearsal.yml");
+    expect(workflow).toBeDefined();
+    const step = workflow!.text.split("      - name: Simulated elevated rate")[1];
+    expect(step).toBeDefined();
+    expect(step).toContain("SIM_VERSION: ${{ steps.staging-version.outputs.id }}");
+    expect(step).not.toContain('export SIM_VERSION="${{');
+    expect(step).toContain('NEW_VERSION="$SIM_VERSION"');
+  });
+
   it("keeps the XFS fixture on a disposable hosted runner for every event", () => {
     const workflow = workflows.find(({ name }) => name === "xfs-qualification.yml");
     expect(workflow).toBeDefined();

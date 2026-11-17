@@ -28,9 +28,7 @@ concurrency:
 jobs:
   rehearsal:
     name: error-rate-gate-rehearsal
-    # The org's two-selfhosted runner group refuses public repos:
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     # Bind the staging Environment: the job reads the Environment-scoped
     # staging Cloudflare credentials and inherits its main-only branch
@@ -67,7 +65,6 @@ jobs:
       - name: Simulated elevated rate for the staging version (must halt)
         run: |
           set -euo pipefail
-          export SIM_VERSION="${{ steps.staging-version.outputs.id }}"
           node -e 'const fs=require("node:fs");fs.writeFileSync("error-rate-fixture.json",JSON.stringify({data:{viewer:{accounts:[{workersInvocationsAdaptive:[{sum:{requests:200,errors:80},dimensions:{scriptVersion:process.env.SIM_VERSION}}]}]}},errors:null}))'
           if ERROR_RATE_FIXTURE=error-rate-fixture.json ERROR_RATE_SOAK_SECONDS=0 ERROR_RATE_ATTEMPTS=1 \
               WORKER_NAME=two-web-next NEW_VERSION="$SIM_VERSION" \
@@ -85,4 +82,5 @@ jobs:
           fi
           echo "simulated elevated error rate halted the gate as required"
         env:
+          SIM_VERSION: ${{ steps.staging-version.outputs.id }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
