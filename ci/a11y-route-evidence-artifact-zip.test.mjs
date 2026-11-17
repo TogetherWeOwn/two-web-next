@@ -115,6 +115,53 @@ test("verifies bounded streamed artifact bytes before extracting", async () => {
   await assert.rejects(readRouteEvidenceArtifact(response([badZip]), badZipDigest), refused);
 });
 
+test("accepts the streamed archive byte limit and rejects one byte over", async () => {
+  const max = 10 * 1024 * 1024;
+  const size = (max - 186) / 2;
+  const archive = zip([
+    { name: "a.json", data: Buffer.alloc(size), method: 0 },
+    { name: "b.json", data: Buffer.alloc(size), method: 0 },
+  ]);
+  assert.equal(archive.length, max);
+  const digest = `sha256:${createHash("sha256").update(archive).digest("hex")}`;
+  const response = (chunks) => ({
+    ok: true,
+    body: (async function* () {
+      yield* chunks;
+    })(),
+  });
+  const chunks = [archive.subarray(0, size), archive.subarray(size)];
+  assert.equal((await readRouteEvidenceArtifact(response(chunks), digest)).size, 2);
+  await assert.rejects(
+    readRouteEvidenceArtifact(response([...chunks, Buffer.of(0)]), digest),
+    /route evidence refused: invalid artifact download/,
+  );
+});
+
+test("accepts each ZIP limit exactly and rejects one unit over", () => {
+  const archive = zip([{ name: "a.json", data: "a".repeat(100) }]);
+  const compressedSize = archive.readUInt32LE(18);
+  const limits = {
+    maxArchiveBytes: archive.length,
+    maxEntries: 1,
+    maxEntryBytes: 100,
+    maxTotalBytes: 100,
+    maxRatio: 100 / compressedSize,
+  };
+  assert.equal(extractRouteEvidenceZip(archive, limits).get("a.json").length, 100);
+  for (const key of ["maxArchiveBytes", "maxEntries", "maxEntryBytes", "maxTotalBytes"]) {
+    assert.throws(
+      () => extractRouteEvidenceZip(archive, { ...limits, [key]: limits[key] - 1 }),
+      refused,
+      key,
+    );
+  }
+  assert.throws(
+    () => extractRouteEvidenceZip(archive, { ...limits, maxRatio: 99 / compressedSize }),
+    refused,
+  );
+});
+
 test("extracts stored and deflated regular files as data", () => {
   const files = extractRouteEvidenceZip(zip(ok));
   assert.deepEqual([...files.keys()], ["report.json", "notes.txt"]);
@@ -216,10 +263,9 @@ test("refuses structural abuse", () => {
 });
 
 test("error text never echoes archive-controlled content", () => {
-  try {
-    extractRouteEvidenceZip(zip([{ name: "../secret", data: "x" }]));
-    assert.fail("expected refusal");
-  } catch (err) {
+  assert.throws(() => extractRouteEvidenceZip(zip([{ name: "../secret", data: "x" }])), (err) => {
+    assert.match(err.message, refused);
     assert.doesNotMatch(err.message, /secret/);
-  }
+    return true;
+  });
 });
