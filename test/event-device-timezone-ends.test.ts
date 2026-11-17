@@ -216,7 +216,7 @@ function kitBundle() {
       const outfile = join(scratch, "server-bundle.mjs");
       writeFileSync(
         serverEntry,
-        `import {render} from 'svelte/server'; import Detail from ${component}; export const renderDetail = model => render(Detail, {props:{model}});`,
+        `import {render} from 'svelte/server'; import ${JSON.stringify(join(WORKTREE, "web/src/lib/site-header.css"))}; import Detail from ${component}; export const renderDetail = model => render(Detail, {props:{model}});`,
       );
       writeFileSync(
         clientEntry,
