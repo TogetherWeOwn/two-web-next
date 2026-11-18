@@ -35,9 +35,10 @@ const empty = $derived.by(() => {
   }
   return {
     title: selection.filter === "guides" ? "No Guides yet." : "No active members this month yet.",
-    detail: selection.filter === "guides"
-      ? "Guides help new members find their first event."
-      : `Everyone lists all ${number.format(filterCounts.everyone)} members.`,
+    detail:
+      selection.filter === "guides"
+        ? "Guides help new members find their first event."
+        : `Everyone lists all ${number.format(filterCounts.everyone)} members.`,
     action: "Show everyone",
     href: everyoneHref,
   };

@@ -2,10 +2,7 @@
 import Button from "./Button.svelte";
 import type { MembersDirectoryView } from "./members-directory";
 
-let {
-  counts,
-  guest,
-}: { counts: MembersDirectoryView["counts"]; guest: boolean } = $props();
+let { counts, guest }: { counts: MembersDirectoryView["counts"]; guest: boolean } = $props();
 const number = new Intl.NumberFormat("en");
 </script>
 
