@@ -97,6 +97,11 @@ describe("TimeBlock server output", () => {
       expect(html).not.toContain("href=");
       expect(html).toContain("as of");
     }
-    expect(render({ ...base, viewerZone: "Invalid/Zone" })).toContain("UTC");
+    for (const viewerZone of [undefined, "Invalid/Zone"]) {
+      const html = render({ ...base, viewerZone });
+      expect(html).toContain("UTC fallback");
+      expect(html).not.toContain("your time");
+    }
+    expect(render({ ...base, viewerZone: "UTC" })).toContain("your time");
   });
 });

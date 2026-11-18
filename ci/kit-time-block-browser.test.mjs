@@ -54,7 +54,8 @@ test("time block hydrates and withdraws expired snapshot claims", {
   const client = await bundle("client");
   const data = { asOf: "2026-11-07T19:20:00Z", start: "2026-11-07T19:30:00Z" };
   const html = renderFixture(data);
-  assert.doesNotMatch(html, /starts in|Live since/);
+  assert.doesNotMatch(html, /starts in|Live since|your time/);
+  assert.match(html, /UTC fallback/);
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage({ timezoneId: "America/New_York" });
@@ -68,7 +69,10 @@ test("time block hydrates and withdraws expired snapshot claims", {
     await page.addScriptTag({ content: client });
     await page.getByText("starts in 10 m").waitFor();
     assert.equal(await page.getByRole("link", { name: /Refresh/ }).count(), 0);
-    assert.match(await page.locator(".time-block").innerText(), /America\/New_York/);
+    const hydratedText = await page.locator(".time-block").innerText();
+    assert.match(hydratedText, /America\/New_York/);
+    assert.match(hydratedText, /your time \(from your browser\)/);
+    assert.doesNotMatch(hydratedText, /UTC fallback/);
     await page.clock.fastForward(60_000);
     await page.getByRole("link", { name: /Refresh/ }).waitFor();
     assert.doesNotMatch(await page.locator(".time-block").innerText(), /starts in/);

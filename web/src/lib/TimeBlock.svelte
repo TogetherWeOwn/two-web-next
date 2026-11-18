@@ -92,7 +92,7 @@ onMount(() => {
   <div class="time-block" data-state={eventState}>
     <time datetime={time.datetime} class:cancelled={eventState === "cancelled"}>{eventState === "ended" ? shortDate : eventState === "live" && !withdrawn ? "Live" : time.localTime}</time>
     <div class="details">
-      <div>{time.localDate}, your time{#if browserZone && !viewerZone}{" (from your browser)"}{/if}</div>
+      <div>{time.localDate}{#if (viewerZone || browserZone) && time.zone === (viewerZone || browserZone)}, your time{#if browserZone && !viewerZone}{" (from your browser)"}{/if}{:else}, UTC fallback{/if}</div>
       <div class="anchor">
         {time.zone}{" · "}{time.utcTime} UTC{#if eventState === "upcoming" && countdown && !withdrawn}{" · "}{countdown}{:else if eventState === "live" && !withdrawn}{" · "}since {time.localTime}{#if roomCount !== undefined && Number.isSafeInteger(roomCount) && roomCount >= 0}{" · "}{roomCount} in the room{/if}{:else if eventState === "ended"}{" · "}{endedTime ? `ended ${endedTime.localTime}` : "Ended"}{" · "}Echo frozen{:else if eventState === "cancelled"}{" · "}Cancelled{/if}{#if hasClaim && snapshot}{" · "}{withdrawn && eventState === "live" ? "live as of" : "as of"} <time datetime={snapshot.datetime}>{snapshotLabel}</time>{#if withdrawn && refreshPath}{" · "}<TextLink href={refreshPath}>Refresh<span class="sr-only"> the event time</span></TextLink>{/if}{:else if eventState === "live" && !snapshot}{" · "}Live status unavailable{#if refreshPath}{" · "}<TextLink href={refreshPath}>Refresh<span class="sr-only"> the event time</span></TextLink>{/if}{/if}
       </div>

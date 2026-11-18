@@ -63,7 +63,7 @@ export function fixedDateBanner(now) {
 // production credentials; an empty `unexpected` only covers routed requests.
 // `now` (epoch ms) fixes the clock seen by the bundled server render only.
 export async function withKitOfflineBrowser(
-  { source, page: fixture, search = "", now = undefined, javaScriptEnabled = false },
+  { source, page: fixture, search = "", now = undefined, javaScriptEnabled = false, timezoneId },
   callback,
 ) {
   if (typeof search !== "string" || (search && !search.startsWith("?")) || search.includes("#")) {
@@ -116,7 +116,11 @@ export async function withKitOfflineBrowser(
     const html = await response.text();
     const browser = await chromium.launch({ headless: true });
     try {
-      const context = await browser.newContext({ javaScriptEnabled, serviceWorkers: "block" });
+      const context = await browser.newContext({
+        javaScriptEnabled,
+        serviceWorkers: "block",
+        timezoneId,
+      });
       const unexpected = [];
       await context.routeWebSocket("**/*", (socket) => {
         unexpected.push(socket.url());
