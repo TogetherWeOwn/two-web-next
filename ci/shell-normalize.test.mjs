@@ -62,16 +62,10 @@ test("multiple complete words, empty quotes and exact tab-stripped closers", () 
 
 test("marker named cd and exact closers preserve the following command", () => {
   for (const newline of ["\n", "\r\n"]) {
-    const source = [
-      "cat <<cd",
-      "npm run decoy",
-      "cd extra",
-      "",
-      "cd",
-      "cd web",
-      "npm run real",
-      "",
-    ].join(newline);
+    const source = "cat <<cd\nnpm run decoy\ncd extra\n\ncd\ncd web\nnpm run real\n".replaceAll(
+      "\n",
+      newline,
+    );
     const masked = check(source, source);
     assert.doesNotMatch(masked, /decoy|cd extra/);
     assert.match(masked, /cd web/);
@@ -97,6 +91,7 @@ test("ambiguous delimiters and arithmetic subscripts fail closed", () => {
     ["cat <<EOF\r\\\n\nEOF\n# body text\nEOF\r\nprintf done\n", /ambiguous heredoc delimiter/],
     ["echo $[1 + 1]\n", /unsupported parameter expansion/],
     ["a[1<<2]=value\nprintf done\n", /arithmetic subscript/],
+    ["LC_ALL=C a[1<<2]=value\n", /arithmetic subscript/],
     ["a[1\n << 2]=value\nprintf done\n", /arithmetic subscript/],
     ["a[b[0]<<2]=value\n", /arithmetic subscript/],
     ["case x in y|x ) declare a[(1 | 2) & 3 << 4]=value;; esac\n", /arithmetic subscript/],
@@ -155,7 +150,12 @@ test("shell boundaries do not expose heredoc bodies or remove literal text", () 
     [";", " |", " |&", " ||", " &", " &&"].map((separator) => `${word}${separator} cat`),
   );
   const commands = [...literals, ...earlierCommands].map((arg) => `printf ${arg}`);
-  for (const head of [...commands, "/usr/bin/printf '%s' item[1", "./printf item[1"]) {
+  for (const head of [
+    ...commands,
+    "/usr/bin/printf '%s' item[1",
+    "./printf item[1",
+    "LC_ALL=C printf '%s' item[1",
+  ]) {
     const command = `${head} <<EOF\n`;
     const source = `${command}body\nEOF\n: item[1\nprintf done\n`;
     assert.equal(check(source, source), `${command}    \n   \n: item[1\nprintf done\n`);

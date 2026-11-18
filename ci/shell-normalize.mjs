@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { logicalCursor, parseHeredocOpener } from "./shell-heredoc-opener.mjs";
 
-const COMMAND_PREFIX = /^[ \t]*(?:if|then|else|elif|while|until|do)$/u;
+const COMMAND_PREFIX = /^[ \t]*(?:if|then|else|elif|while|until|do|[A-Za-z_]\w*=[\w./:-]*)$/u;
 const ORDINARY_COMMAND =
   /^[ \t]*(?!(?:fi|case|esac|for|select|done|in|function|time|coproc|alias|declare|typeset|local|export|readonly|builtin|command)$)(?:[A-Za-z_]\w*|:|[\w./-]*\/[\w.-]+)$/u;
 export const ROOT_CWD_REMEDIATION =
@@ -50,7 +50,7 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
         ordinaryCommand = false;
         headStart = c === ")" ? -1 : i + 1;
       } else if (headStart >= 0 && !tokenStart && /[ \t]/.test(c)) {
-        // Control lists introduce commands; declarations still accept assignment words.
+        // Control lists and simple assignments can precede a command head.
         const head = text.slice(headStart, i).replace(/\\\r?\n/g, "");
         headStart = COMMAND_PREFIX.test(head) ? i + 1 : -1;
         ordinaryCommand = headStart < 0 && ORDINARY_COMMAND.test(head);
