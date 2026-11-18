@@ -1,6 +1,13 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type APIResponse,
+  type Page,
+} from "@playwright/test";
 import postgres from "postgres";
+import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
@@ -299,6 +306,87 @@ function expectNoMarker(headers: Record<string, string>, label: string) {
     `${label}: Hono-owned response carries no Kit marker`,
   ).toBeNull();
 }
+
+test("kit: capture synthetic non-member and account-hidden headers", async ({ browser }) => {
+  test.setTimeout(120_000);
+  requireGithubRunner();
+  for (const state of ["non-member", "account-hidden"] as const) {
+    for (const width of [1280, 390]) {
+      const bearer = `two_${randomBytes(32).toString("base64url")}`;
+      const tokenHash = createHash("sha256").update(bearer).digest("hex");
+      const userId = `9${BigInt(`0x${randomBytes(7).toString("hex")}`)
+        .toString()
+        .padStart(17, "0")}`;
+      const signature = createHmac("sha256", kitFixtureSessionSecret())
+        .update(bearer)
+        .digest("base64");
+      const context = await browser.newContext({
+        baseURL: KIT_ORIGIN,
+        viewport: { width, height: width === 1280 ? 800 : 844 },
+        storageState: {
+          cookies: [
+            {
+              name: "__Host-two_session",
+              value: `${bearer}.${signature}`,
+              domain: new URL(KIT_ORIGIN).hostname,
+              path: "/",
+              expires: -1,
+              httpOnly: true,
+              secure: true,
+              sameSite: "Lax",
+            },
+          ],
+          origins: [],
+        },
+      });
+      try {
+        await withSessionDb(async (sql) => {
+          await sql`
+            insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at)
+            values (${tokenHash}, ${tokenHash}, ${userId}, 'Synthetic Viewer', null, ${state === "account-hidden"}, false, ${new Date(Date.now() + 120 * 60 * 1000)})`;
+        });
+        await context.route("**/*", (route) =>
+          new URL(route.request().url()).origin === KIT_ORIGIN
+            ? route.continue()
+            : route.abort("blockedbyclient"),
+        );
+        const page = await context.newPage();
+        const path =
+          state === "non-member" ? `/e/${SEEDED_EVENT_KEY}` : "/leaderboards/members?season=bogus";
+        const response = await page.goto(path);
+        expect(response?.status()).toBe(state === "non-member" ? 200 : 400);
+        expect(response?.headers()["x-two-renderer"]).toBe("kit");
+        if (state === "non-member") {
+          await expect(page.locator(".header-account .who")).toHaveText("Synthetic Viewer");
+          await expect(page.locator('.header-account button[type="submit"]')).toHaveText(
+            "Sign out",
+          );
+          await expect(page.locator('.main-nav a[href="/leaderboards/members"]')).toHaveCount(0);
+        } else {
+          await expect(page.locator(".header-account")).toHaveCount(0);
+          await expect(
+            page.getByRole("heading", { name: "Check the board filters" }),
+          ).toBeVisible();
+        }
+        await page.evaluate(() => (globalThis as any).document.fonts.ready);
+        await page.screenshot({
+          path: test.info().outputPath(`brand-kit-${state}-${width}.png`),
+          animations: "disabled",
+          caret: "hide",
+        });
+      } finally {
+        try {
+          await context.close();
+        } finally {
+          await withSessionDb(async (sql) => {
+            await sql`delete from web_session_grace where user_id = ${userId}`;
+            await sql`delete from web_sessions where user_id = ${userId}`;
+          });
+        }
+      }
+    }
+  }
+});
 
 for (const target of targets) {
   test.describe(`${target.name}: past archive renders the seeded row`, () => {
@@ -1635,12 +1723,72 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
           values (${hash}, ${hash}, ${state.userId}, 'Seat fixture', true, false, ${new Date(Date.now() + 7_200_000)})`;
       }
       await sql`insert into users (id, username, member) values (${savedUserId}, 'Seat fixture', true)`;
-      await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, capacity, rsvp_open)
+      await sql`insert into events (event_key, title, description, game, organizer_name, starts_at, ends_at, location, status, capacity, rsvp_open)
         values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
-          '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true)`;
+          'Catan', 'Vexa', '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true)`;
       await sql`insert into rsvps (event_id, user_id, status)
         select id, ${savedUserId}, 'going' from events where event_key = ${key}`;
     });
+    // Facts list (C6): Host then Game, one organizer hook, no member data,
+    // for a guest and for each member state, at both widths. The facts
+    // full page is captured for the review artifact.
+    const expectFacts = async (page: Page, who: string, width: number) => {
+      const facts = page.getByTestId("kit-event-facts");
+      await expect(facts).toHaveCount(1);
+      await expect(facts.locator("dt")).toHaveText(["Host", "Game"]);
+      await expect(facts.locator("dd")).toHaveText(["Vexa", "Catan"]);
+      await expect(page.getByTestId("event-organizer")).toHaveCount(1);
+      await expect(facts.getByTestId("event-organizer")).toHaveText("Vexa");
+      await expect(facts.locator("a")).toHaveCount(0);
+      const cardBounds = await page.getByTestId("kit-seat-card").boundingBox();
+      const factsBounds = await facts.boundingBox();
+      const shareHeadingBounds = await page.locator(".event-share h2").boundingBox();
+      expect(cardBounds).not.toBeNull();
+      expect(factsBounds).not.toBeNull();
+      expect(shareHeadingBounds).not.toBeNull();
+      expect(factsBounds!.y - (cardBounds!.y + cardBounds!.height)).toBeCloseTo(16, 0);
+      if (width === 390) {
+        expect(
+          shareHeadingBounds!.y - (factsBounds!.y + factsBounds!.height),
+        ).toBeGreaterThanOrEqual(24);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      const name = `kit-review-facts-${who}-${width}`;
+      const path = test.info().outputPath(`${name}.png`);
+      if (width === 1280) {
+        const rail = facts.locator("..");
+        const bounds = await rail.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.height).toBeLessThanOrEqual(800 - 92);
+      }
+      await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    };
+    const guestContext = await browser.newContext({
+      baseURL: target.origin,
+      javaScriptEnabled: false,
+    });
+    try {
+      const guestPage = await guestContext.newPage();
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await guestPage.setViewportSize(viewport);
+        const response = await guestPage.goto(`/e/${key}`);
+        expect(response?.status()).toBe(200);
+        expect(response?.headers()["x-two-renderer"]).toBe("kit");
+        await expectFacts(guestPage, "guest", viewport.width);
+        // Guest privacy: no roster, no member links, no sign-out chrome.
+        await expect(guestPage.getByTestId("event-attendees")).toHaveCount(0);
+        await expect(guestPage.locator('a[href^="/members/"]')).toHaveCount(0);
+        await expect(guestPage.getByText("Sign out")).toHaveCount(0);
+      }
+    } finally {
+      await guestContext.close();
+    }
     const page = await context.newPage();
     for (const state of states) {
       const signature = createHmac("sha256", kitFixtureSessionSecret())
@@ -1677,6 +1825,7 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
         if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
         await page.screenshot({ path, animations: "disabled", caret: "hide" });
         await test.info().attach(name, { path, contentType: "image/png" });
+        await expectFacts(page, state.name, viewport.width);
       }
     }
   } finally {
@@ -1692,6 +1841,11 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
   }
 });
 
+function archiveSectionForComparison(section: string, kitOwnsArchive: boolean): string {
+  if (kitOwnsArchive) assertEmberArchive(section);
+  return normalizeSection(kitOwnsArchive ? stripEmberDelta(section) : section);
+}
+
 test("cross-target: normalized archive sections match", async () => {
   const bodies = new Map<string, string>();
   for (const target of targets) {
@@ -1703,9 +1857,30 @@ test("cross-target: normalized archive sections match", async () => {
   // treatment as ci/kit-preview-e2e.mjs): raw section bytes always differ
   // (hydration markers, boolean attributes, `>` escaping), so compare the
   // normalized contract after origin normalization, not the bytes.
+  const kitSection = bodies
+    .get("kit")!
+    .match(/<section[^>]*data-testid="past-events"[\s\S]*?<\/section>/)?.[0];
+  expect(kitSection, "Kit archive section exists").toBeDefined();
+  const kitOwnsArchive = expectedKitMarker("/events/past") === "kit";
+  if (kitOwnsArchive) {
+    const fallback = stripEmberDelta(kitSection!);
+    expect(archiveSectionForComparison(kitSection!, true)).toBe(
+      archiveSectionForComparison(fallback, false),
+    );
+    expect(archiveSectionForComparison(kitSection!, false)).not.toBe(
+      archiveSectionForComparison(fallback, false),
+    );
+    expect(fallback).toContain("E2E Past Night");
+    expect(archiveSectionForComparison(kitSection!, true)).not.toBe(
+      archiveSectionForComparison(fallback.replace("E2E Past Night", "Different event"), false),
+    );
+    expect(() =>
+      archiveSectionForComparison(kitSection!.replace("Sign-up record", "Changed"), true),
+    ).toThrow();
+  }
   expect(
-    sectionOf(bodies.get("kit")!, "past-events"),
-    "Kit section matches Hono section after origin normalization",
+    archiveSectionForComparison(kitSection!, kitOwnsArchive),
+    "Archive section matches Hono under the configured ownership",
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
@@ -1826,18 +2001,126 @@ test.describe("kit: archive visuals", () => {
           expect(response?.status(), `kit ${view.path} @ ${viewport.name}`).toBe(200);
           await expect(page.getByTestId(view.testid)).toBeVisible();
           await page.waitForLoadState("networkidle");
+          const kitOwnsArchive = expectedKitMarker(view.path) === "kit";
+          if (view.name === "populated" && kitOwnsArchive) {
+            const card = page.getByTestId("event-card").first();
+            await expect.soft(card.locator(".event-title")).toHaveCSS("display", "flex");
+            const state = card.getByText("Sign-up record");
+            await expect.soft(state).toBeVisible();
+            await expect.soft(state).toHaveCSS("border-top-style", "solid");
+            await expect.soft(state).toHaveCSS("font-size", "12px");
+            await expect.soft(state).toHaveCSS("text-transform", "uppercase");
+            await expect.soft(state).toHaveCSS("padding", "5px 7px");
+            await expect.soft(state).toHaveCSS("white-space", "nowrap");
+            const glyph = card.locator(".state-glyph");
+            if (viewport.name === "desktop") {
+              await expect.soft(glyph).toBeVisible();
+              await expect.soft(glyph).toHaveCSS("width", "16px");
+              await expect.soft(glyph).toHaveCSS("height", "16px");
+            } else {
+              await expect.soft(glyph).toBeHidden();
+            }
+          } else if (view.name === "populated") {
+            const card = page.getByTestId("event-card").first();
+            await expect.soft(card.getByRole("link", { name: "E2E Past Night" })).toBeVisible();
+            await expect.soft(card.locator(".state-glyph, .event-title")).toHaveCount(0);
+            await expect.soft(card.getByText("Sign-up record")).toHaveCount(0);
+          }
           await expect
             .soft(page)
-            .toHaveScreenshot(`kit-archive-${view.name}-${viewport.name}.png`, {
-              fullPage: true,
-              mask: [page.locator("time")],
-            });
+            .toHaveScreenshot(
+              `kit-archive-${view.name}${view.name === "populated" && !kitOwnsArchive ? "-hono" : ""}-${viewport.name}.png`,
+              {
+                fullPage: true,
+                mask: [page.locator("time")],
+              },
+            );
+          if (view.name === "populated") {
+            const name = `kit-review-archive-default-${viewport.name}`;
+            const path = test.info().outputPath(`${name}.png`);
+            await page.screenshot({ path, fullPage: true, mask: [page.locator("time")] });
+            await test.info().attach(name, { path, contentType: "image/png" });
+          }
         }
         expect(pageErrors, "no uncaught page errors").toEqual([]);
       } finally {
         await context.close();
       }
     });
+  }
+});
+
+test("hono: populated archive fallback baseline @ desktop and mobile", async ({ browser }) => {
+  const hono = targets.find((target) => target.name === "hono")!;
+  const context = await browser.newContext({
+    baseURL: hono.origin,
+    ignoreHTTPSErrors: hono.ignoreHTTPSErrors,
+  });
+  try {
+    await context.route("**/*", (route) => {
+      const origin = new URL(route.request().url()).origin;
+      return origin === hono.origin || origin === KIT_ORIGIN
+        ? route.continue()
+        : route.abort("blockedbyclient");
+    });
+    const page = await context.newPage();
+    for (const viewport of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport.size);
+      const response = await page.goto("/events/past");
+      expect(response?.status()).toBe(200);
+      await expect(page.getByTestId("past-events")).toBeVisible();
+      await page.waitForLoadState("networkidle");
+      await expect.soft(page).toHaveScreenshot(`kit-archive-populated-hono-${viewport.name}.png`, {
+        fullPage: true,
+        mask: [page.locator("time")],
+      });
+      const name = `kit-review-hono-archive-fallback-${viewport.name}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, mask: [page.locator("time")] });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    }
+  } finally {
+    await context.close();
+  }
+});
+
+test("kit: archive search and keyboard focus evidence", async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: KIT_ORIGIN, ignoreHTTPSErrors: true });
+  try {
+    await context.route("**/*", (route) => {
+      const origin = new URL(route.request().url()).origin;
+      return origin === "https://localhost:8787" || origin === KIT_ORIGIN
+        ? route.continue()
+        : route.abort("blockedbyclient");
+    });
+    const page = await context.newPage();
+    for (const viewport of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport.size);
+      const response = await page.goto("/events/past?q=Past");
+      expect(response?.status()).toBe(200);
+      const card = page.getByTestId("event-card").first();
+      const title = card.getByRole("link", { name: "E2E Past Night" });
+      await expect(title.locator("mark")).toHaveText("Past");
+      await page.waitForLoadState("networkidle");
+      const save = async (state: string) => {
+        const name = `kit-review-archive-${state}-${viewport.name}`;
+        const path = test.info().outputPath(`${name}.png`);
+        await page.screenshot({ path, fullPage: true, mask: [page.locator("time")] });
+        await test.info().attach(name, { path, contentType: "image/png" });
+      };
+      await save("search");
+      for (
+        let i = 0;
+        i < 30 && !(await title.evaluate((el) => el === document.activeElement));
+        i++
+      ) {
+        await page.keyboard.press("Tab");
+      }
+      await expect(title).toBeFocused();
+      await save("focus");
+    }
+  } finally {
+    await context.close();
   }
 });
 

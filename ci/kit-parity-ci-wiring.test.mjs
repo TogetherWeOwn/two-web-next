@@ -92,14 +92,23 @@ test("the Kit join fixture flag is confined to the loopback worker", () => {
   assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_JOIN/);
 });
 
+test("the Kit dashboard fixture flag is absent from deployed configuration", () => {
+  for (const file of ["wrangler.jsonc", "web/wrangler.jsonc", "web/wrangler.staging.jsonc"]) {
+    const deployed = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_ADMIN_DASHBOARD/, file);
+  }
+});
+
 test("both loopback parity workers inject the same healthy-empty Discord seam", () => {
   // The cross-target events-calendar comparison renders the partial-source
   // notice only when a target reports a Discord failure, so both loopback
   // workers must simulate the same healthy-empty state or the sections
-  // diverge. The Kit wrapper MUST assign onto the incoming env object: Kit
-  // reads the ambient `cloudflare:workers` env (the entrypoint's original
-  // object), so a spread copy passed to worker.fetch is invisible to it and
-  // Kit falls back to a live read the fixture fetch stub refuses.
+  // diverge. Hono additionally permits an explicit failure header for recovery
+  // screenshots; without that header both workers stay healthy.
+  // The Kit wrapper MUST assign onto the incoming env object: Kit reads the
+  // ambient `cloudflare:workers` env (the entrypoint's original object), so a
+  // spread copy passed to worker.fetch is invisible to it and Kit falls back
+  // to a live read the fixture fetch stub refuses.
   const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
   assert.match(
     worker,
@@ -109,7 +118,7 @@ test("both loopback parity workers inject the same healthy-empty Discord seam", 
   const hono = readFileSync(new URL("../e2e/worker.ts", import.meta.url), "utf8");
   assert.match(
     hono,
-    /DISCORD_EVENTS: \{ upcoming: async \(\) => \[\], lastReadFailed: \(\) => false \}/,
+    /DISCORD_EVENTS: \{\s*upcoming: async \(\) => \[\],\s*lastReadFailed: \(\) => request\.headers\.get\("x-e2e-discord-read"\) === "failed",\s*\}/,
   );
 });
 

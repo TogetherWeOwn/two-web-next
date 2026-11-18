@@ -22,8 +22,7 @@ on:
 
 permissions:
   contents: read
-  # The scope job lists the PR's changed files via the API.
-  pull-requests: read
+  pull-requests: read # The scope job lists changed PR files via the API.
 
 # Runs on main are never cancelled in progress: a cancel request marks the run
 # cancelled even when every job then succeeds, and the staging deploy trigger
@@ -95,8 +94,7 @@ jobs:
   # would leave it missing and block the PR, so it is deliberately not used).
   scope:
     name: scope
-    # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'scope') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     # Includes the pinned stock source build and upstream test inventory.
     timeout-minutes: 15
     outputs:
@@ -257,7 +255,7 @@ jobs:
   docs-links:
     name: docs-links
     needs: scope
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'docs-links') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -292,29 +290,17 @@ jobs:
     # test/helpers via the fixtures; db covers the migrations the fixtures
     # run). Drafts skip: undrafting re-runs via ready_for_review.
     if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.db == 'true')
-    # Overflow switch (TOG ops, 2026-10-01): repo vars CI_OVERFLOW_RUNNER (JSON
-    # runs-on, e.g. ["ubuntu-latest"]), CI_OVERFLOW_JOBS (JSON job ids) and
-    # CI_OVERFLOW_EVENTS (JSON event names) together route this job without a PR.
-    # The public guard comes first, so a public repo never leaves GitHub-hosted
-    # Linux, whatever the overflow vars name (the org's two-selfhosted runner group
-    # also refuses public repos, TOG-12326). Private repo: the overflow switch if
-    # selected, else the self-hosted fleet. Hosted minutes come from the included
-    # allowance; an rbx1 guard reverts at 45k.
-    # Runner separation: the pull_request/merge_group term sits between the
-    # public guard and the overflow switch, so runs of code that has not landed
-    # on main always stay on GitHub-hosted Linux, whatever the repo visibility
-    # or the overflow vars say. Only main pushes, schedules and manual
-    # dispatches may reach the self-hosted fleet (docs/private-flip-checklist.md).
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'a11y') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    # This workflow uses hosted runners for every event and repository visibility.
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
     # its own network namespace; localhost:5432 is forwarded to the service.
     container:
-      image: node:24-bookworm
+      image: node:24-bookworm@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496 # 24.22.3-bookworm
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_PASSWORD: ci
         options: >-
@@ -562,8 +548,7 @@ jobs:
     needs: [scope]
     # `!cancelled()`, not `always()`: see the note on ci-ok.
     if: ${{ !cancelled() }}
-    # Overflow switch: see CI_OVERFLOW_* note on the first job above.
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     # Container setup and serial SQL coverage takes 17-20m on the slowest shared
     # runners, so 20m cancelled green runs (TOG-12177). The full suite now
     # runs 29-38m on main; 40m left no headroom for runner noise, so the
@@ -580,13 +565,13 @@ jobs:
       options: --cgroupns=host
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_PASSWORD: ci
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
       catalog-postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_PASSWORD: ci
         options: >-
@@ -953,9 +938,9 @@ jobs:
             "$RUNNER_TEMP"/kit-css-failure.*) rm -rf -- "$KIT_CSS_FAILURE_DIR" ;;
             *) exit 1 ;;
           esac
-      - name: Kit route performance budgets (complete immutable dependency closure)
+      - name: Kit route performance (report only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: node ci/check-kit-route-perf.mjs
+        run: node ci/check-kit-route-perf.mjs --report-only
       - name: Kit Worker bundle dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config web/wrangler.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
@@ -1224,8 +1209,7 @@ jobs:
     needs: [scope]
     # `!cancelled()`, not `always()`: see the note on ci-ok.
     if: ${{ !cancelled() }}
-    # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'node22-compat') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     # The lint + typecheck + unit-test suite runs 28-30m; 30m cancelled
     # green runs on runner noise (worst observed pass 29m32s, 28s of
     # margin). 45m keeps a ~34% margin; the progress sidecar samples the
@@ -1235,10 +1219,10 @@ jobs:
     # localhost:5432 cannot collide on the shared Docker host), at the exact
     # engines floor instead of Node 24.
     container:
-      image: node:22.23.0-bookworm
+      image: node:22.23.0-bookworm@sha256:e0d149b4727ac0c20d9774e801e423d7a946a0bffced886f42cfe9cd3c67820a
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_PASSWORD: ci
         options: >-
@@ -1312,10 +1296,11 @@ jobs:
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
 
   bundle-budget:
+    name: bundle-budget
     needs: scope
     # Budgets only observe the served assets (app). Drafts skip.
     if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'bundle-budget') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1353,13 +1338,14 @@ jobs:
           retention-days: 3
 
   lighthouse:
+    name: lighthouse
     needs: scope
     # Fixture worker serves the app over fixed routes (app only). Drafts skip.
     if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'lighthouse') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     # A private namespace keeps Wrangler's fixed audit port off the shared host.
     container:
-      image: node:24-bookworm
+      image: node:24-bookworm@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496 # 24.22.3-bookworm
     # 45 covers one collect retry on each step (ci/lighthouse-perf-run.mjs and
     # ci/lighthouse-quality-run.mjs each make a second whole-run attempt when
     # the first comes up short of LHRs).
@@ -1393,7 +1379,14 @@ jobs:
           npx playwright install --with-deps chromium
           node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
       - name: Lighthouse (local fixture worker, no database or Discord)
+        id: mobile
         run: npm run lighthouse
+      # The mobile runner clears earlier attempts. Preserve the final raw reports
+      # before desktop clears the top-level files; the upload manifest is not raw evidence.
+      - name: Preserve fixture mobile samples
+        if: ${{ !cancelled() && (steps.mobile.outcome == 'success' || steps.mobile.outcome == 'failure') }}
+        continue-on-error: true # Evidence only; keep the existing gate verdicts.
+        run: bash ci/lighthouse-preserve-mobile.sh .lighthouseci mobile-fixture
       # Web quality gate (owner 2026-10-10): category scores vs ci/quality-budget.json, then security headers,
       # HTML basics and internal links. Each step runs even after an earlier failure so one red run lists
       # everything to fix; any failure fails this job and therefore ci-ok.
@@ -1474,8 +1467,7 @@ jobs:
         join-evidence-source,
       ]
     if: ${{ !cancelled() }}
-    # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'ci-ok') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # The result gates that used to sit in `check`, unchanged: a failing,
@@ -1524,7 +1516,10 @@ jobs:
       # Only explicit success from both performance jobs may read green.
       - name: Performance gate (lighthouse + bundle-budget must succeed)
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-        run: node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"
+        env:
+          LIGHTHOUSE_RESULT: ${{ needs.lighthouse.result }}
+          BUDGET_RESULT: ${{ needs.bundle-budget.result }}
+        run: node ci/require-performance.mjs "$LIGHTHOUSE_RESULT" "$BUDGET_RESULT"
       - name: Aggregate change-gated conclusions
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}

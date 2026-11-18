@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -713,21 +714,15 @@ test("preflight checkouts materialize ci and wrangler.jsonc for the production g
   }
 });
 
-test("manual production workflow routes runners by repo visibility and uses production-only secrets", () => {
+test("production workflow uses hosted runners and production-only secrets", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
   );
-  // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
-  const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
   // preflight, staging-soak, regression, deploy-production,
-  // post-deploy-watch and notify.
-  assert.equal(workflow.split(runsOn).length - 1, 6);
-  assert.equal(
-    workflow.split("ubuntu-latest").length - 1,
-    6,
-    "ubuntu-latest only as the public-repo branch",
-  );
+  // post-deploy-watch and notify use hosted runners in either visibility.
+  assert.equal((workflow.match(/^    runs-on: ubuntu-latest$/gm) ?? []).length, 6);
+  assert.equal((workflow.match(/^    runs-on:/gm) ?? []).length, 6);
   // Staging credentials appear only in the staging-soak job, which binds
   // the staging Environment, runs no wrangler and makes one gate call.
   const soak = workflow.slice(
@@ -767,7 +762,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
   const gradual = workflow.indexOf(
-    "uses: TogetherWeOwn/.github/actions/gradual-promote@d427f7212f478ea3823a605edb394b0722e152b5",
+    "uses: TogetherWeOwn/.github/actions/gradual-promote@2ef8ad6447e11d019ac3098bcfd011193b75266a",
   );
   assert.ok(
     credentialCheck > 0 &&
@@ -794,6 +789,45 @@ test("manual production workflow routes runners by repo visibility and uses prod
   assert.match(call, /account-id: \$\{\{ secrets\.PRODUCTION_CLOUDFLARE_ACCOUNT_ID \}\}/);
   assert.ok(!workflow.includes("npx wrangler versions deploy --env production"));
   assert.ok(!workflow.includes("wrangler deploy --env production"));
+});
+
+test("production dead-letter baseline is scoped to the gradual and post-promotion smokes", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const deploy = workflow.slice(
+    workflow.indexOf("\n  deploy-production:\n"),
+    workflow.indexOf("\n  post-deploy-watch:\n"),
+  );
+  const steps = deploy.split("\n      - name: ");
+  const baseline =
+    steps.find((step) => step.startsWith("Capture pre-promote dead-letter baseline\n")) ?? "";
+  assert.match(baseline, /^        id: dead-letter-baseline$/m);
+  assert.match(baseline, /echo "failed=\$baseline" >> "\$GITHUB_OUTPUT"/);
+  assert.doesNotMatch(baseline, /GITHUB_ENV/);
+
+  // The regression job has its own missing-baseline policy; only check the deploy job here.
+  const consumers = [
+    "Gradual promotion 5-50-100 with automatic rollback",
+    "Verify public routes on the promoted version",
+  ];
+  for (const name of consumers) {
+    const step = steps.find((step) => step.startsWith(`${name}\n`)) ?? "";
+    assert.match(
+      step,
+      /^        env:\n          SMOKE_FAILED_BASELINE: \$\{\{ steps\.dead-letter-baseline\.outputs\.failed \}\}\n          SMOKE_ALLOW_MISSING_BASELINE: "1"$/m,
+      name,
+    );
+    assert.ok(steps.indexOf(baseline) < steps.indexOf(step), `${name} follows baseline capture`);
+  }
+  for (const key of ["SMOKE_FAILED_BASELINE", "SMOKE_ALLOW_MISSING_BASELINE"]) {
+    assert.equal(
+      deploy.split(key).length - 1,
+      consumers.length,
+      `${key} belongs only to the two smoke consumers`,
+    );
+  }
 });
 
 test("shared gradual action promotes 5-50-100 with per-stage gates and auto-rollback", () => {
@@ -1508,7 +1542,13 @@ test("auto-approve's staging quality job and steps are the ones the workflows ru
   );
   assert.match(
     e2e,
-    /\n {2}staging-quality:\n {4}name: staging-quality\n[\s\S]*?uses: \.\/\.github\/workflows\/web-quality-origin\.yml\n/,
+    /\n {2}staging-quality:\n {4}name: staging-quality\n[\s\S]*?uses: TogetherWeOwn\/two-web-next\/\.github\/workflows\/web-quality-origin\.yml@38581ef492f5c972969f5dfada396a9f0e2ee989\n/,
+  );
+  // The caller runs the pinned definition, not necessarily this checkout's copy.
+  assert.equal(
+    createHash("sha256").update(quality).digest("hex"),
+    "ee636905e04598b8280f68626570a6f731a090814ff6fef0b09835b2eb097031",
+    "local quality workflow must match the pinned definition before checking its steps",
   );
   assert.match(quality, /\n {2}quality:\n {4}name: quality\n/);
   assert.equal(stagingQualityJob, "staging-quality / quality");

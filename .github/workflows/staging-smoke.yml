@@ -42,11 +42,9 @@ concurrency:
 jobs:
   internal-action-smoke:
     name: internal-action-smoke
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     container:
-      image: node:24-bookworm
+      image: node:24-bookworm@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496
     timeout-minutes: 10
     environment:
       name: staging

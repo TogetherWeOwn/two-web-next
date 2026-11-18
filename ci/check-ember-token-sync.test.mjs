@@ -110,8 +110,29 @@ test("Hono exposes each consumed role once and omits unread roles", () => {
     const consumed = new RegExp(`var\\(\\s*--${alias}(?=[\\s,)])`).test(consumers);
     assert.equal([...css.matchAll(new RegExp(`--${alias}:`, "g"))].length, consumed ? 1 : 0, alias);
   }
+  const facade = outputs.get("public/theme-tokens.css");
+  const base = facade.match(/^\.base-theme\{([^}]+)\}/)?.[1];
+  const schedule = facade.match(
+    /\.base-theme\.schedule-theme,\.base-theme\[data-theme=schedule\]\{([^}]+)\}/,
+  )?.[1];
+  assert.ok(base && schedule, "the facade has separate base and schedule rules");
+  for (const alias of [
+    "g1",
+    "g3",
+    "hair1",
+    "t1",
+    "space-1",
+    "space-2",
+    "space-4",
+    "radius-pill",
+    "font-size-small",
+    "font-weight-medium",
+  ]) {
+    assert.ok(schedule.includes(`--${alias}:`), `${alias} is available in the schedule theme`);
+    assert.ok(!base.includes(`--${alias}:`), `${alias} is absent from the base theme`);
+  }
+  assert.ok(!facade.includes("--hair2:"));
   for (const alias of ["hair1", "hair2"]) {
-    assert.ok(!outputs.get("public/theme-tokens.css").includes(`--${alias}:`));
     assert.ok(!outputs.get("public/theme.css").includes(`--${alias}:`));
     assert.ok(!outputs.get("web/src/ember-theme.css").includes(`--${alias}:`));
     assert.ok(outputs.get("web/src/ember-theme.css").includes(`--color-${alias}:`));
@@ -129,10 +150,11 @@ test("new authored role reads regenerate aliases and reject stale artifacts", ()
       build(root);
       const file = join(root, path);
       const before = readFileSync(file, "utf8");
-      writeFileSync(file, `${before}\n.probe{padding:var( --space-4 )}`);
+      writeFileSync(file, `${before}\n.probe{padding:var( --space-3 )}`);
       assert.throws(() => check(root), /generated token drift/);
-      const styles = generate(root).get("public/styles.css");
-      assert.equal([...styles.matchAll(/--space-4:16px/g)].length, 1, path);
+      const sheet = path === "public/kit-events-controls.css" ? "theme-tokens" : "styles";
+      const css = generate(root).get(`public/${sheet}.css`);
+      assert.equal([...css.matchAll(/--space-3:12px/g)].length, 1, path);
       writeFileSync(file, before);
     }
   });

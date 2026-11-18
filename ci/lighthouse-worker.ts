@@ -209,7 +209,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         if (
           inTransaction &&
           sql ===
-            `${eventSelect} where ("events"."status" = $1 and "events"."ends_at" >= $2 and isfinite("events"."starts_at")) order by "events"."starts_at" asc, "events"."id" asc limit $3` &&
+            `${eventSelect} where ("events"."status" = $1 and "events"."ends_at" >= $2 and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and ("events"."starts_at" >= '0001-01-01 00:00:00+00'::timestamptz and "events"."starts_at" < '275760-09-13 00:00:00.001+00'::timestamptz and "events"."ends_at" >= '0001-01-01 00:00:00+00'::timestamptz and "events"."ends_at" < '275760-09-13 00:00:00.001+00'::timestamptz)) order by "events"."starts_at" asc, "events"."id" asc limit $3` &&
           params.length === 3 &&
           params[0] === "published" &&
           isInstant(params[1]) &&

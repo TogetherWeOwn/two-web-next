@@ -232,12 +232,13 @@ test("scope never skips candidate helpers using a later revision's import invent
       "utf8",
     );
     const block = workflow.match(
-      /      - id: scope\n[\s\S]*?        run: \|\n((?:          .*\n|\n)+)/,
+      /      - id: scope\n        env:\n((?:          .*\n)+)        run: \|\n((?:          .*\n|\n)+)/,
     );
     assert.ok(block, "execute the actual scope step, not a duplicate implementation");
-    const script = block[1]
-      .replace(/^          /gm, "")
-      .replaceAll("${{ github.event_name }}", "$EVENT_NAME");
+    assert.match(block[1], /^          EVENT_NAME: \$\{\{ github\.event_name \}\}$/m);
+    const script = block[2].replace(/^          /gm, "");
+    assert.doesNotMatch(script, /\$\{\{/);
+    assert.match(script, /\[ "\$EVENT_NAME" = workflow_dispatch \]/);
     const evaluate = (head, trusted, event = "workflow_run") => {
       write("output", "");
       execFileSync("bash", ["-c", script], {
