@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import { events, rsvps } from "../db/admin-schema";
 import { waitlistOffers } from "../db/dormant-schema";
 import type { Db } from "../db/index";
@@ -75,4 +75,71 @@ export async function claimWaitlistOffer(
     .where(and(eq(waitlistOffers.id, offer.id), eq(waitlistOffers.rsvpId, rsvpId)))
     .returning();
   return { ok: true as const, offer: updated!, replay: false };
+}
+
+/** Dormant member action; userId must come from the authenticated session. */
+export function declineWaitlistOffer(
+  tx: Tx,
+  eventId: number,
+  rsvpId: number,
+  userId: string,
+  offerId: string,
+) {
+  return releaseWaitlistOffer(tx, eventId, rsvpId, offerId, { state: "declined", userId });
+}
+
+/** Dormant internal action; never expose this as a member mutation. */
+export function expireWaitlistOffer(tx: Tx, eventId: number, rsvpId: number, offerId: string) {
+  return releaseWaitlistOffer(tx, eventId, rsvpId, offerId, { state: "expired" });
+}
+
+async function releaseWaitlistOffer(
+  tx: Tx,
+  eventId: number,
+  rsvpId: number,
+  offerId: string,
+  target: { state: "declined"; userId: string } | { state: "expired" },
+) {
+  if (!UUID.test(offerId)) return { ok: false as const, reason: "not_found" };
+  const [isolation] = await tx.execute<{ level: string }>(
+    sql`select current_setting('transaction_isolation') as level`,
+  );
+  if (isolation?.level !== "read committed")
+    throw new Error("Waitlist offers require a READ COMMITTED transaction");
+  // Same order as claim; release does not need any other RSVP or offer rows.
+  const [event] = await tx
+    .select({ id: events.id })
+    .from(events)
+    .where(eq(events.id, eventId))
+    .for("update");
+  if (!event) return { ok: false as const, reason: "not_found" };
+  const [rsvp] = await tx
+    .select({ userId: rsvps.userId })
+    .from(rsvps)
+    .where(and(eq(rsvps.eventId, eventId), eq(rsvps.id, rsvpId)))
+    .for("update");
+  if (!rsvp || (target.state === "declined" && rsvp.userId !== target.userId))
+    return { ok: false as const, reason: "not_found" };
+  const match = and(eq(waitlistOffers.id, offerId), eq(waitlistOffers.rsvpId, rsvpId));
+  const [offer] = await tx.select().from(waitlistOffers).where(match).for("update");
+  if (!offer) return { ok: false as const, reason: "not_found" };
+  if (offer.state === target.state) return { ok: true as const, offer, replay: true };
+  if (offer.state !== "held") return { ok: false as const, reason: "not_held" };
+
+  // Release only the hold; event eligibility and allocation belong to the caller.
+  const [clock] = await tx.execute<{ now: string }>(sql`select clock_timestamp()::text as now`);
+  const now = sql`${clock!.now}::timestamptz`;
+  const declining = target.state === "declined";
+  const [updated] = await tx
+    .update(waitlistOffers)
+    .set({ state: target.state, updatedAt: now })
+    .where(
+      and(
+        match,
+        declining ? gt(waitlistOffers.expiresAt, now) : lte(waitlistOffers.expiresAt, now),
+      ),
+    )
+    .returning();
+  if (!updated) return { ok: false as const, reason: declining ? "expired" : "not_due" };
+  return { ok: true as const, offer: updated, replay: false };
 }
