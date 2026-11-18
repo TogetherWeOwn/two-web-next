@@ -202,7 +202,9 @@ export async function loadCalendarPageModel(args: {
   if (view === "calendar") {
     const monthRows = await listUpcomingForMonth(db, month, now, opts);
     monthReadMayBeIncomplete =
-      monthRows.mayBeTruncated === true || localPast.discardedStartMonths?.has(month) === true;
+      monthRows.mayBeTruncated === true ||
+      monthRows.discardedMayOverlapMonth === true ||
+      localPast.discardedStartMonths?.has(month) === true;
     zone = calendarZone([
       ...monthRows.map((event) => event.timezone),
       ...localPast.map((event) => event.timezone),
@@ -227,7 +229,7 @@ export async function loadCalendarPageModel(args: {
     // A recognized game narrows the empty claim, not text-search demand below.
     searching: searching || gameFilter !== null,
     upcomingEmpty: totalUpcoming === 0 && transients.length === 0,
-    pastEmpty: localPast.length === 0,
+    pastEmpty: localPast.length === 0 && !localPast.hadDiscardedRows,
     readFailed: discordFailed,
   });
 

@@ -36,23 +36,27 @@ export const EmptyNever: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
   </div>
 );
 
-/** Upcoming is empty but the drawer has history: show the last few so the page never reads as dead. */
+/** Upcoming is empty but the schedule has history. Show recent past cards when readable. */
 export const EmptyGap: FC<{ past: PublicEvent[]; zone: string }> = ({ past, zone }) => (
   <div data-testid={EVENTS_EMPTY_GAP_TESTID}>
     <h2>{EVENTS_EMPTY_COPY.gapTitle}</h2>
-    <h3>{EVENTS_EMPTY_COPY.gapListHeading}</h3>
-    <ul data-testid={EVENTS_EMPTY_GAP_LIST_TESTID}>
-      {past.slice(0, EVENTS_GAP_LIST_LIMIT).map((e) => (
-        <li data-testid={EVENTS_EMPTY_GAP_ITEM_TESTID}>
-          {/* Same dead-anchor rule as the card title: cancelled detail pages
-              answer 410, so the gap list keeps the title as plain text. */}
-          {e.status === "cancelled" ? e.title : <a href={`/e/${e.eventKey}`}>{e.title}</a>}{" "}
-          <time datetime={e.startsAt.toISOString()}>
-            {cardTimeLabel(e.startsAt, rowZone(e, zone))}
-          </time>
-        </li>
-      ))}
-    </ul>
+    {past.length > 0 ? (
+      <>
+        <h3>{EVENTS_EMPTY_COPY.gapListHeading}</h3>
+        <ul data-testid={EVENTS_EMPTY_GAP_LIST_TESTID}>
+          {past.slice(0, EVENTS_GAP_LIST_LIMIT).map((e) => (
+            <li data-testid={EVENTS_EMPTY_GAP_ITEM_TESTID}>
+              {/* Same dead-anchor rule as the card title: cancelled detail pages
+                  answer 410, so the gap list keeps the title as plain text. */}
+              {e.status === "cancelled" ? e.title : <a href={`/e/${e.eventKey}`}>{e.title}</a>}{" "}
+              <time datetime={e.startsAt.toISOString()}>
+                {cardTimeLabel(e.startsAt, rowZone(e, zone))}
+              </time>
+            </li>
+          ))}
+        </ul>
+      </>
+    ) : null}
     <p>
       <a href="/events/past">{EVENTS_EMPTY_COPY.pastArchive}</a>
     </p>

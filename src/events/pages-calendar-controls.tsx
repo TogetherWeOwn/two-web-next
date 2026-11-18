@@ -29,6 +29,7 @@ import {
   eventsSearchMissCopy,
   eventsViewStatusCopy,
   pastEventsUrl,
+  upcomingEventsPageUnreadableCopy,
   type CalendarEmptyState,
   type CalendarState,
 } from "../islands/contracts";
@@ -45,29 +46,43 @@ export const CalendarLiveRegions: FC<{
   searching: boolean;
   emptyState: CalendarEmptyState;
   hasSearchResults: boolean;
+  pageUnreadable: boolean;
   searchMiss: boolean;
   gameFilter: string | null;
-}> = ({ state, pastCount, searching, emptyState, hasSearchResults, searchMiss, gameFilter }) => (
+}> = ({
+  state,
+  pastCount,
+  searching,
+  emptyState,
+  hasSearchResults,
+  pageUnreadable,
+  searchMiss,
+  gameFilter,
+}) => (
   <>
     <p role="status" class="sr-only" data-testid={EVENTS_VIEW_STATUS_TESTID}>
       {eventsViewStatusCopy(state.view)}
     </p>
-    {/* Counted matches still make a hit on an unavailable page. Announce a
-        miss only when the screen renders one. */}
+    {/* Announce unreadable results here because the visible notice is in a
+        swapped zone and a search leaves focus in the input. */}
     <p role="status" class="sr-only" data-testid={EVENTS_SEARCH_STATUS_TESTID}>
-      {searching && emptyState !== "error"
-        ? hasSearchResults
-          ? gameFilter !== null
-            ? eventsSearchGameHitCopy(state.q, gameFilter)
-            : eventsSearchHitCopy(state.q)
-          : searchMiss
-            ? gameFilter !== null
-              ? eventsSearchGameMissCopy(state.q, gameFilter)
-              : eventsSearchMissCopy(state.q)
-            : ""
-        : gameFilter !== null && emptyState !== "error"
-          ? eventsGameFilterCopy(gameFilter)
-          : ""}
+      {emptyState === "error"
+        ? ""
+        : pageUnreadable
+          ? upcomingEventsPageUnreadableCopy(state.page)
+          : searching
+            ? hasSearchResults
+              ? gameFilter !== null
+                ? eventsSearchGameHitCopy(state.q, gameFilter)
+                : eventsSearchHitCopy(state.q)
+              : searchMiss
+                ? gameFilter !== null
+                  ? eventsSearchGameMissCopy(state.q, gameFilter)
+                  : eventsSearchMissCopy(state.q)
+                : ""
+            : gameFilter !== null
+              ? eventsGameFilterCopy(gameFilter)
+              : ""}
     </p>
     <p role="status" class="sr-only" data-testid={EVENTS_PAST_STATUS_TESTID}>
       {state.past && pastCount > 0 ? EVENTS_PAST_STATUS_COPY : ""}

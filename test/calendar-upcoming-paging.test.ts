@@ -436,6 +436,60 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
     }
   });
 
+  it("distinguishes an unreadable past-only schedule from one with no events", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    const path = "/events?view=calendar&month=2060-06";
+    try {
+      for (const html of await calendarTwins(db, path)) {
+        expect(html).toContain('data-testid="events-empty-never"');
+      }
+      await client`insert into events (event_key, title, starts_at, ends_at, timezone, status)
+        values ('past-only', 'June past import', '2060-06-20T22:00:00Z',
+          '0001-01-01 00:00:00+00 BC', 'Pacific/Kiritimati', 'past')`;
+      for (const url of [path, "/events"]) {
+        for (const html of await calendarTwins(db, url)) {
+          expect(html).not.toContain('data-testid="events-empty-never"');
+          expect(html).toContain('data-testid="events-empty-gap"');
+          expect(html).not.toContain('data-testid="events-empty-gap-list"');
+          expect(html).toContain('href="/events/past"');
+          expect(html).not.toContain("June past import");
+        }
+      }
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("does not call an uncapped month empty when a fetched upcoming row has an unreadable end", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2060-06-30T21:00:00Z"));
+    try {
+      await client`insert into events (event_key, title, starts_at, ends_at, timezone, status)
+        select 'past-' || n, 'May UTC event', '2060-05-15T22:00:00Z',
+          '2060-05-15T23:00:00Z', 'UTC', 'past'
+        from generate_series(1, ${EVENTS_PAST_DRAWER_LIMIT}::int) as n`;
+      await client`insert into events (event_key, title, starts_at, ends_at, timezone, status)
+        values ('overflow-end', 'July host import', '2060-06-30T22:00:00Z',
+          '280000-06-01T20:00:00Z', 'Pacific/Kiritimati', 'published')`;
+      for (const html of await calendarTwins(db, "/events?view=calendar&month=2060-07&past=1")) {
+        expect(html).toContain('data-testid="events-calendar-grid"');
+        expect(html).toContain("May UTC event");
+        expect(html).not.toContain("July host import");
+        expect(html).not.toContain('data-testid="calendar-month-empty"');
+      }
+      // This row is also fetched for June's trailing grid week, but starts in July in its host zone.
+      for (const html of await calendarTwins(db, "/events?view=calendar&month=2060-06")) {
+        expect(html).toContain(calendarMonthEmptyCopy("2060-06"));
+      }
+    } finally {
+      vi.useRealTimers();
+      await fixture.dispose();
+    }
+  });
+
   it("does not claim a whole month is empty when only the selected game has no events there", async () => {
     const fixture = await createMemberDataFixture(url!, { max: 2 });
     const { client, db } = fixture;
@@ -492,8 +546,15 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
         expect(html).toContain('<p data-testid="events-page-unreadable">Events on page 2 can');
         expect(html).not.toContain('data-testid="events-out-of-range"');
         expect(html).not.toContain('data-testid="events-empty-search"');
-        expect(html).toContain(eventsSearchHitCopy("Paged"));
+        expect(html).toContain('data-testid="events-search-status">Events on page 2 can');
         expect(html).not.toContain(eventsSearchMissCopy("Paged"));
+      }
+      for (const html of await calendarTwins(db, "/events?q=Paged%20overflow")) {
+        expect(cards(html)).toHaveLength(0);
+        expect(html).toContain('data-testid="events-pager"');
+        expect(html).toContain("Page 1 of 1.");
+        expect(html).toContain('data-testid="events-page-unreadable">Events on page 1 can');
+        expect(html).toContain('data-testid="events-search-status">Events on page 1 can');
       }
       for (const html of await calendarTwins(db, "/events?q=Paged&page=3")) {
         expect(html).toContain("Page 3 is outside the schedule.");

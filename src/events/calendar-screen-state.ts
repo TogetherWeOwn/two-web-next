@@ -58,8 +58,8 @@ export function deriveCalendarScreenState({
   const searching = calendarSearching(state);
   const showPast = calendarShowingPast(state);
   const hasVisibleResults = upcoming.length > 0 || (showPast && past.length > 0);
-  // An empty list page with counted results isn't a search miss. It can be
-  // past the end, or in range with rows that JS could not render.
+  // An empty list page with counted results isn't a search miss. If it is
+  // in range, the notice says it can't be shown, not why it has no cards.
   const emptyCountedPage = state.view === "list" && totalPages > 0 && upcoming.length === 0;
   const outOfRange = emptyCountedPage && state.page > totalPages;
   const pageUnreadable = emptyCountedPage && !outOfRange;

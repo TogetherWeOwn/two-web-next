@@ -4,6 +4,7 @@ import {
   EVENTS_LIST_HEADING_SR,
   EVENTS_LIST_TESTID,
   EVENTS_OUT_OF_RANGE_TESTID,
+  EVENTS_PAGE_UNREADABLE_TESTID,
   EVENTS_PAGER_FIRST_COPY,
   EVENTS_PAGER_FIRST_TESTID,
   EVENTS_PAGER_LABEL,
@@ -134,7 +135,9 @@ export const CalendarList: FC<{
         {upcomingEventsOutOfRangeCopy(state.page, totalPages)}
       </p>
     ) : pageUnreadable ? (
-      <p data-testid="events-page-unreadable">{upcomingEventsPageUnreadableCopy(state.page)}</p>
+      <p data-testid={EVENTS_PAGE_UNREADABLE_TESTID}>
+        {upcomingEventsPageUnreadableCopy(state.page)}
+      </p>
     ) : null}
     <h2 class="sr-only">{EVENTS_LIST_HEADING_SR}</h2>
     <ul data-testid={EVENTS_LIST_TESTID}>

@@ -176,6 +176,7 @@ export const EVENTS_PAGER_PREV_COPY = "Previous page";
 export const EVENTS_PAGER_NEXT_COPY = "Next page";
 export const EVENTS_PAGER_LAST_COPY = "Last page";
 export const EVENTS_OUT_OF_RANGE_TESTID = "events-out-of-range";
+export const EVENTS_PAGE_UNREADABLE_TESTID = "events-page-unreadable";
 export function upcomingEventsOutOfRangeCopy(page: number, totalPages: number): string {
   return `Page ${page} is outside the schedule. There ${totalPages === 1 ? "is" : "are"} ${totalPages} ${totalPages === 1 ? "page" : "pages"}.`;
 }

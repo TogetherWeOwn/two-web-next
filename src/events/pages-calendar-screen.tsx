@@ -176,6 +176,7 @@ export const EventsCalendarPage: FC<{
           searching={searching}
           emptyState={emptyState}
           hasSearchResults={hasResultsOrPageNotice}
+          pageUnreadable={pageUnreadable}
           searchMiss={searchMiss}
           gameFilter={gameFilter}
         />
