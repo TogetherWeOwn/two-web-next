@@ -3,9 +3,16 @@ import { isMap, isScalar, isSeq, parseDocument } from "yaml";
 // Convert only an unambiguous YAML data tree; aliases, tags, merge keys and
 // complex mapping keys need separate semantic analysis and are rejected.
 export function workflowRunPlainData(run) {
+  // Match the occurrence projector's depth limit: only leaves fit at 128.
+  const maxProjectionDepth = 128;
   let count = 0;
   function convert(node, depth) {
-    if (++count > 100_000 || depth > 128 || !node || node.tag) {
+    if (
+      ++count > 100_000 ||
+      !node ||
+      node.tag ||
+      (depth >= maxProjectionDepth && !isScalar(node))
+    ) {
       throw new Error(`${run.origin.workflow}: unsupported workflow data`);
     }
     if (isScalar(node)) {
@@ -32,13 +39,14 @@ export function workflowRunPlainData(run) {
     }
     throw new Error(`${run.origin.workflow}: unsupported workflow data`);
   }
+  // Count the command and context wrappers, plus the preceding-steps array.
   return {
     origin: { ...run.origin },
     run: run.run,
-    workflow: convert(run.workflow, 0),
-    job: convert(run.job, 0),
-    step: convert(run.step, 0),
-    precedingSteps: run.precedingSteps.map((step) => convert(step, 0)),
+    workflow: convert(run.workflow, 2),
+    job: convert(run.job, 2),
+    step: convert(run.step, 2),
+    precedingSteps: run.precedingSteps.map((step) => convert(step, 3)),
   };
 }
 

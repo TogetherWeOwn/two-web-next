@@ -48,7 +48,7 @@ test("projects discovered YAML context as isolated plain data", () => {
   browser:
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, empty-map: {}, empty-sequence: [] }
       - run: npm run browser
 `,
   );
@@ -59,6 +59,8 @@ test("projects discovered YAML context as isolated plain data", () => {
     return { occurrence, context: source.context };
   });
   assert.equal(result.context.precedingSteps[0].with["fetch-depth"], 0);
+  assert.deepEqual(result.context.precedingSteps[0].with["empty-map"], {});
+  assert.deepEqual(result.context.precedingSteps[0].with["empty-sequence"], []);
   assert.equal(result.context.step.run, "npm run browser");
   assert.equal(context.job.steps[0].uses, "actions/checkout@v4");
   assert.equal(discovered.precedingSteps[0].get("uses"), "actions/checkout@v4");
@@ -144,8 +146,8 @@ test("plain data conversion enforces depth and shared work boundaries", () => {
     step: new Scalar(null),
     precedingSteps: [],
   };
-  const nested = (depth) => {
-    let node = new Scalar("value");
+  const nested = (depth, leaf = new Scalar("value")) => {
+    let node = leaf;
     for (let i = 0; i < depth; i++) {
       const sequence = new YAMLSeq();
       sequence.items = [node];
@@ -153,9 +155,18 @@ test("plain data conversion enforces depth and shared work boundaries", () => {
     }
     return node;
   };
-  run.workflow = nested(128);
-  assert.doesNotThrow(() => workflowRunPlainData(run));
-  run.workflow = nested(129);
+  run.workflow = nested(126);
+  run.precedingSteps = [nested(125)];
+  const context = workflowRunPlainData(run);
+  const root = { origin: context.origin, location: 0, npmEdges: [], context };
+  const [projection] = enumerateInvocationOccurrences([root], {}, (_occurrence, source) => source);
+  assert.deepEqual(projection.context, context);
+  run.precedingSteps = [nested(126)];
+  assert.throws(() => workflowRunPlainData(run), /ci.yml: unsupported workflow data/);
+  run.precedingSteps = [];
+  run.workflow = nested(126, new YAMLSeq());
+  assert.throws(() => workflowRunPlainData(run), /ci.yml: unsupported workflow data/);
+  run.workflow = nested(127);
   assert.throws(() => workflowRunPlainData(run), /ci.yml: unsupported workflow data/);
 
   const sequence = new YAMLSeq();
