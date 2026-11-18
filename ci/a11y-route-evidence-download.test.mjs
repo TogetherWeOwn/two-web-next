@@ -179,6 +179,24 @@ test("refuses at the deadline even while the body ignores abort", { timeout: 2_0
   }
 });
 
+test("stops reading chunks when the clock expires before the timer fires", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let pulls = 0;
+  t.mock.method(performance, "now", () => (pulls >= 2 ? 10_000 : 0));
+  const { download } = transport(redirect(storageUrl), () => ({
+    ok: true,
+    body: (async function* () {
+      pulls++;
+      yield zip.subarray(0, 10);
+      pulls++;
+      yield zip.subarray(10);
+      pulls++;
+    })(),
+  }));
+  await assert.rejects(download(42, expectedDigest), refused);
+  assert.equal(pulls, 2);
+});
+
 for (const [phase, checksAtExpiry] of [
   ["before", 1],
   ["after", 2],
