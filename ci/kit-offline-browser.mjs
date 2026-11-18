@@ -63,14 +63,25 @@ export function fixedDateBanner(now) {
 // production credentials; an empty `unexpected` only covers routed requests.
 /**
  * `now` (epoch ms) fixes the server clock; `timezoneId` overrides only the browser timezone.
- * @param {{ source?: string, page: string, search?: string, now?: number, javaScriptEnabled?: boolean, timezoneId?: string }} options
+ * `searches` opts in extra exact query strings of the same path; `open(search)` navigates to one.
+ * @param {{ source?: string, page: string, search?: string, searches?: string[], now?: number, javaScriptEnabled?: boolean, timezoneId?: string }} options
  */
 export async function withKitOfflineBrowser(
-  { source, page: fixture, search = "", now = undefined, javaScriptEnabled = false, timezoneId },
+  {
+    source,
+    page: fixture,
+    search = "",
+    searches = [],
+    now = undefined,
+    javaScriptEnabled = false,
+    timezoneId,
+  },
   callback,
 ) {
-  if (typeof search !== "string" || (search && !search.startsWith("?")) || search.includes("#")) {
-    throw new Error("Fixture search must be a query string");
+  for (const value of [search, ...searches]) {
+    if (typeof value !== "string" || (value && !value.startsWith("?")) || value.includes("#")) {
+      throw new Error("Fixture search must be a query string");
+    }
   }
   const banner = now === undefined ? undefined : fixedDateBanner(now);
   const options = { source, page: fixture, csr: javaScriptEnabled };
@@ -112,11 +123,16 @@ export async function withKitOfflineBrowser(
     const origin = "http://kit-fixture.test";
     const path = "/__browser_fixture__";
     const fixtureUrl = new URL(path + search, origin).href;
-    const response = await server.respond(new Request(fixtureUrl), {
-      getClientAddress: () => "127.0.0.1",
-    });
-    assert.equal(response.status, 200);
-    const html = await response.text();
+    const pages = new Map();
+    for (const value of new Set([search, ...searches])) {
+      const href = new URL(path + value, origin).href;
+      const response = await server.respond(new Request(href), {
+        getClientAddress: () => "127.0.0.1",
+      });
+      assert.equal(response.status, 200);
+      pages.set(href, await response.text());
+    }
+    const html = pages.get(fixtureUrl);
     const browser = await chromium.launch({ headless: true });
     try {
       const context = await browser.newContext({
@@ -132,11 +148,11 @@ export async function withKitOfflineBrowser(
       await context.route("**/*", async (route) => {
         const url = new URL(route.request().url());
         if (url.origin === origin && route.request().method() === "GET") {
-          if (url.href === fixtureUrl)
+          if (pages.has(url.href))
             return route.fulfill({
               contentType: "text/html",
               headers: { "content-security-policy": "worker-src 'none'; frame-src 'none'" },
-              body: html,
+              body: pages.get(url.href),
             });
           const isAppAsset = url.pathname.startsWith("/_app/");
           const directory = isAppAsset ? join(output, "client") : join(root, "public");
@@ -151,7 +167,13 @@ export async function withKitOfflineBrowser(
       const page = await context.newPage();
       try {
         await page.goto(fixtureUrl);
-        return await callback({ page, html, unexpected: [...unexpected] });
+        const open = async (value) => {
+          const href = new URL(path + value, origin).href;
+          assert.ok(pages.has(href), `Fixture search not allowlisted: ${value}`);
+          await page.goto(href);
+          return pages.get(href);
+        };
+        return await callback({ page, html, open, unexpected: [...unexpected] });
       } finally {
         await context.close();
         assert.deepEqual(unexpected, []);
