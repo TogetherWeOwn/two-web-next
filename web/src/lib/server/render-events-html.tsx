@@ -1,7 +1,7 @@
 import { raw } from "hono/html";
 import { render } from "svelte/server";
 import { ScheduleShell } from "../../../../src/events/pages-shared";
-import { renderEventsDocument } from "../../../../src/kit-events-html";
+import { renderEventsHtml as renderEventsDocument } from "../../../../src/kit-events-html";
 import CalendarScreen from "../CalendarScreen.svelte";
 import { projectEventsCalendar } from "./events-calendar";
 
@@ -24,6 +24,7 @@ export function renderEventsHtml(
         session={data.session}
         loginReturnTo={data.loginReturnTo}
         markdownAlternate="/events.md"
+        kitCalendar
       >
         {/* Only Svelte's escaped SSR output crosses into the document as HTML. */}
         {raw(body)}

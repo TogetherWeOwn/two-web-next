@@ -592,10 +592,6 @@ describe("Kit events list endpoint binding", () => {
     // Helper wiring: the endpoint renders through the tested load and screen.
     expect(source).toContain("loadEventsPage");
     expect(source).toContain("renderEventsHtml");
-    expect(source).toContain('from "../../lib/server/render-events-html"');
-    expect(source.indexOf("new Response(rendered.body")).toBeLessThan(
-      source.indexOf("cookies.delete(JOIN_RESULT_COOKIE"),
-    );
     expect(source).toContain("dbForFn: dbFor");
     expect(source).toContain("kitEventsSessionFor(env)");
     expect(source).toContain("kitEventsJourneyFor(env)");

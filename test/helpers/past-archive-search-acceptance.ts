@@ -316,14 +316,6 @@ export async function compileArchiveKit() {
                 : 'export {env} from "acceptance:bindings";',
             loader: "js",
           }));
-          plugin.onResolve({ filter: /segmented-control\.css\?url$/ }, () => ({
-            path: "calendar-css",
-            namespace: "acceptance-asset",
-          }));
-          plugin.onLoad({ filter: /.*/, namespace: "acceptance-asset" }, () => ({
-            contents: 'export default "/_app/immutable/assets/segmented-control.fixture.css";',
-            loader: "js",
-          }));
           plugin.onLoad({ filter: /\.svelte$/ }, (args) => ({
             contents: compile(readFileSync(args.path, "utf8"), {
               generate: "server",

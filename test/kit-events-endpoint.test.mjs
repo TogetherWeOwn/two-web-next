@@ -257,6 +257,7 @@ describe("Kit events endpoint flash-consumption controls", () => {
     expect(body).not.toContain("<practice>");
     expect(body).not.toContain("not-public-proof");
     expect(body).toContain('<link rel="stylesheet" href="/schedule-theme.css"');
+    expect(body).toContain('<link rel="stylesheet" href="/kit-events-controls.css"');
     expect(body).toContain('src="/islands/events-calendar.js"');
     expect(body).not.toMatch(/<script\b[^>]*\btype="module"/);
     expect(deleteCookie).not.toHaveBeenCalled();
@@ -326,9 +327,10 @@ describe("Kit events endpoint flash-consumption controls", () => {
     expect(response.headers.get("x-two-events-too-long")).toBe("true");
     expect(body).toContain('role="alert"');
     expect(body).not.toContain(query);
-    expect(body).not.toContain(stylesheet);
+    expect(body).not.toContain('data-testid="events-calendar"');
     expect(body).not.toContain('data-testid="auth-error"');
     expect(seams.model).not.toHaveBeenCalled();
+    expect(seams.render.mock.calls[0][0]).toMatchObject({ queryTooLong: true });
     expect(deleteCookie).not.toHaveBeenCalled();
   });
 });
