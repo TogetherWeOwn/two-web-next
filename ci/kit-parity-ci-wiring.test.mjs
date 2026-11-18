@@ -103,14 +103,11 @@ test("both loopback parity workers inject the same healthy-empty Discord seam", 
   // spread copy passed to worker.fetch is invisible to it and Kit falls back
   // to a live read the fixture fetch stub refuses.
   const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
-  assert.match(worker, /"  upcoming: async \(\) => \[\],"/);
-  assert.match(worker, /lastReadFailed: \(\) => discordReadFailed\.getStore\(\) \?\? false/);
+  assert.match(worker, /"  upcoming: async \(\) => \{",[\s\S]*?"    return \[\];",/);
+  assert.match(worker, /lastReadFailed: \(\) => discordRead\.getStore\(\)\?\.failed \?\? false/);
   assert.match(worker, /request\.headers\.get\("x-e2e-discord-read"\) === "failed"/);
   assert.match(worker, /env\.DISCORD_EVENTS = discordEvents;/);
-  assert.match(
-    worker,
-    /discordReadFailed\.run\(failed, \(\) => worker\.fetch\(request, env, ctx\)\)/,
-  );
+  assert.match(worker, /discordRead\.run\(read, \(\) => worker\.fetch\(request, env, ctx\)\)/);
   assert.doesNotMatch(worker, /\{\s*\.\.\.env,\s*DISCORD_EVENTS/);
   const hono = readFileSync(new URL("../e2e/worker.ts", import.meta.url), "utf8");
   assert.match(

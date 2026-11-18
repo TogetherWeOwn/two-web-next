@@ -1,4 +1,5 @@
 import "./member-board-viewer.visual";
+import { randomUUID } from "node:crypto";
 import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 import { HONO_ORIGIN, KIT_ORIGIN, PARITY_VIEWPORTS } from "../kit-parity";
 
@@ -78,10 +79,12 @@ for (const viewport of [...PARITY_VIEWPORTS.map(({ size }) => size), { width: 32
     await page.setViewportSize(viewport);
     const failed = await context.newPage();
     await failed.setViewportSize(viewport);
-    await failed.setExtraHTTPHeaders({ "x-e2e-discord-read": "failed" });
 
-    // Search bypasses the anonymous HTML cache. Send both navigations to the
-    // exact same URL so differing output can only come from the request seam.
+    // Search bypasses the anonymous HTML cache. Both requests must reach the
+    // fixture's Discord read before either is allowed to render its result.
+    const pair = { "x-e2e-discord-read-pair": randomUUID() };
+    await page.setExtraHTTPHeaders(pair);
+    await failed.setExtraHTTPHeaders({ ...pair, "x-e2e-discord-read": "failed" });
     const search = "/events?q=e2e-no-matching-event-7319";
     const responses = await Promise.all([
       gotoKitEvents(failed, search),
@@ -89,7 +92,10 @@ for (const viewport of [...PARITY_VIEWPORTS.map(({ size }) => size), { width: 32
     ]);
     for (const response of responses) {
       expect(response.headers()["cache-control"]).toContain("no-store");
+      expect(response.headers()["x-e2e-discord-read-overlapped"]).toBe("true");
     }
+    await page.setExtraHTTPHeaders({});
+    await failed.setExtraHTTPHeaders({ "x-e2e-discord-read": "failed" });
     await expect(page.getByTestId("events-empty-search")).toBeVisible();
     await expect(page.getByTestId("events-empty-error")).toHaveCount(0);
     await expect(failed.getByTestId("events-empty-error")).toBeVisible();
