@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { Hono } from "hono";
@@ -17,27 +16,22 @@ import { partialEvent } from "./calendar-discord-partial";
 type KitRender = typeof import("../../web/src/lib/server/render-events-html").renderEventsHtml;
 const root = fileURLToPath(new URL("../../", import.meta.url).href);
 const webRequire = createRequire(new URL("../../web/package.json", import.meta.url).href);
-const { compile } = webRequire("svelte/compiler");
 let loaded: Promise<KitRender> | undefined;
 
-// Lazily bundle the actual Kit SSR adapter (Svelte CalendarScreen inside the
-// shared shell) once per worker, compiling .svelte for the server like Kit does.
+// Bundle the actual Kit SSR adapter once per test worker.
 export function renderKitEvents(
   data: Parameters<KitRender>[0],
   headers: Parameters<KitRender>[1],
   restoredWrite = false,
 ): ReturnType<KitRender> {
   loaded ??= (async () => {
-    const adapter = join(root, "web/src/lib/server/render-events-html.tsx");
+    const { compile } = webRequire("svelte/compiler");
     const { outputFiles } = await build({
-      stdin: { contents: `export * from ${JSON.stringify(adapter)};`, resolveDir: root },
-      absWorkingDir: root,
-      nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
-      alias: { "#lib": join(root, "web/src/lib") },
+      entryPoints: [join(root, "web/src/lib/server/render-events-html.tsx")],
+      nodePaths: [join(root, "web/node_modules")],
       bundle: true,
       format: "esm",
       platform: "node",
-      logLevel: "warning",
       write: false,
       tsconfigRaw: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "hono/jsx" } },
       plugins: [

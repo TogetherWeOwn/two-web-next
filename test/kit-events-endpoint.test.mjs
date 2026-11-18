@@ -57,13 +57,8 @@ class HttpError extends Error {
 }
 
 beforeAll(async () => {
-  const root = fileURLToPath(new URL("..", import.meta.url));
-  const endpoint = fileURLToPath(new URL("../web/src/routes/events/+server.ts", import.meta.url));
   const { outputFiles } = await build({
-    stdin: {
-      contents: `export { GET } from ${JSON.stringify(endpoint)};`,
-      resolveDir: root,
-    },
+    entryPoints: [fileURLToPath(new URL("../web/src/routes/events/+server.ts", import.meta.url))],
     bundle: true,
     format: "esm",
     platform: "node",
@@ -88,7 +83,7 @@ beforeAll(async () => {
           build.onLoad({ filter: /.*/, namespace: "kit-events-endpoint-test" }, ({ path }) => ({
             contents: virtualModules.get(path),
             loader: "js",
-            resolveDir: root,
+            resolveDir: fileURLToPath(new URL("..", import.meta.url)),
           }));
         },
       },
@@ -294,7 +289,9 @@ describe("Kit events endpoint flash-consumption controls", () => {
       "miss",
       "content",
     ]);
-    expect(body).toMatch(/data-cal-zone="head">\s*<link rel="stylesheet" href="\/kit-events-controls\.css"/);
+    expect(body).toMatch(
+      /data-cal-zone="head">\s*<link rel="stylesheet" href="\/kit-events-controls\.css"/,
+    );
     expect(body).not.toContain('data-testid="auth-error"');
     expect(body).not.toContain('data-testid="join-result"');
     expect(deleteCookie).not.toHaveBeenCalled();

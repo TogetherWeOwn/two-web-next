@@ -53,7 +53,7 @@ function persistedCard(
 /** Allowlist the calendar body inputs; never give the component DB rows or viewer credentials. */
 export function projectEventsCalendar(data: KitEventsLoadData) {
   const { state, zone, now } = data;
-  const { weeks, showPast, hasVisibleResults, outOfRange, searchMiss, monthEmpty } =
+  const { weeks, showPast, hasVisibleResults, outOfRange, pageUnreadable, searchMiss, monthEmpty } =
     deriveCalendarScreenState(data);
   const query = matchQuery(state.q) ?? "";
   const currentMonth = wallMonth(now, zone);
@@ -71,6 +71,7 @@ export function projectEventsCalendar(data: KitEventsLoadData) {
     showPast,
     hasVisibleResults,
     outOfRange,
+    pageUnreadable,
     searchMiss,
     monthEmpty,
     zone,

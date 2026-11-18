@@ -4,8 +4,14 @@ import type { DefaultTreeAdapterMap } from "parse5";
 import type { Env } from "../../src/env";
 import { EventsCalendarPage } from "../../src/events/pages";
 import { dispatchEventsRequest } from "../../src/kit-events";
-import { GAME_ORIGIN, gameRecoveryFixture, gameRow, type GameTwin, renderKitEvents } from "./calendar-game-recovery";
 import type { CalendarState } from "../../src/islands/contracts";
+import {
+  GAME_ORIGIN,
+  gameRecoveryFixture,
+  gameRow,
+  renderKitEvents,
+} from "./calendar-game-recovery";
+import type { GameTwin } from "./calendar-game-recovery";
 import { gathering } from "./calendar-multiday-acceptance";
 
 export const navigationState: CalendarState = {

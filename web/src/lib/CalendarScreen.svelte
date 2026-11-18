@@ -51,6 +51,7 @@ let {
   discordFailed,
   hasVisibleResults,
   outOfRange,
+  pageUnreadable = false,
   searchMiss,
   monthEmpty,
   inviteUrl,
@@ -74,6 +75,7 @@ let {
   discordFailed: boolean;
   hasVisibleResults: boolean;
   outOfRange: boolean;
+  pageUnreadable?: boolean;
   searchMiss: boolean;
   monthEmpty: boolean;
   inviteUrl: string;
@@ -85,6 +87,7 @@ let {
   now: Date;
 } = $props();
 let searching = $derived(calendarSearching(state));
+let hasResultsOrPageNotice = $derived(hasVisibleResults || outOfRange || pageUnreadable);
 </script>
 
 <section data-island={EVENTS_CALENDAR_ISLAND} data-testid={EVENTS_CALENDAR_TESTID} data-view={state.view} data-month={state.month} data-past={state.past ? "1" : ""} data-load-error={EVENTS_CALENDAR_FETCH_FAILED} data-search-max-length={EVENTS_SEARCH_MAX_LENGTH} data-search-too-long={EVENTS_SEARCH_TOO_LONG_COPY} aria-labelledby="events-heading">
@@ -103,7 +106,7 @@ let searching = $derived(calendarSearching(state));
       {/if}
     </p>
   {/if}
-  <CalendarControls {state} {appUrl} {games} {gameFilter} {searching} pastCount={past.length} {emptyState} {hasVisibleResults} {outOfRange} />
+  <CalendarControls {state} {appUrl} {games} {gameFilter} {searching} pastCount={past.length} {emptyState} {hasVisibleResults} {outOfRange} {pageUnreadable} {searchMiss} />
   <p role="status" {...{ [EVENTS_CAL_FEEDBACK]: true }}></p>
   <div>
     <p role="status" data-testid={EVENTS_READ_STATUS_TESTID}></p>
@@ -118,12 +121,12 @@ let searching = $derived(calendarSearching(state));
     {#each Array.from({ length: EVENTS_LOADING_ROWS }) as _}<p aria-hidden="true">…</p>{/each}
   </div>
   <div data-cal-zone="content" data-testid={EVENTS_CONTENT_TESTID}>
-    {#if discordFailed && emptyState === null && (hasVisibleResults || outOfRange || state.view === "calendar")}
+    {#if discordFailed && emptyState === null && (hasResultsOrPageNotice || state.view === "calendar")}
       <CalendarEmpty kind="partial" {state} {gameFilter} past={gapPast} {inviteUrl} />
     {/if}
     {#if emptyState !== null}<CalendarEmpty kind={emptyState} {state} {gameFilter} past={gapPast} {inviteUrl} />{/if}
-    {#if emptyState === null && (hasVisibleResults || outOfRange) && state.view === "list"}
-      <CalendarList {state} {upcoming} {past} {totalPages} {outOfRange} {showPast} {member} {inviteUrl} {loginReturnTo} />
+    {#if emptyState === null && hasResultsOrPageNotice && state.view === "list"}
+      <CalendarList {state} {upcoming} {past} {totalPages} {outOfRange} {pageUnreadable} {showPast} {member} {inviteUrl} {loginReturnTo} />
     {/if}
     {#if emptyState === null && state.view === "calendar"}
       <CalendarGrid {state} {weeks} {zone} {now} />
@@ -131,7 +134,7 @@ let searching = $derived(calendarSearching(state));
     {/if}
     {#if monthEmpty}
       <div data-testid={CALENDAR_MONTH_EMPTY_TESTID}>
-        <p>{calendarMonthEmptyCopy(state.month)}</p>
+        <p>{calendarMonthEmptyCopy(state.month, gameFilter)}</p>
         <p><a href={calendarUrl({ ...state, view: "list" })}>{CALENDAR_MONTH_EMPTY_RECOVERY_COPY}</a></p>
       </div>
     {/if}

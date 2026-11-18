@@ -12,7 +12,16 @@ export interface KitEventsHtml {
   body: string;
 }
 
-/** Render a calendar or the shared refusal; dispatch turns the marked refusal into 422. */
+/**
+ * Render a calendar with the supplied adapter or the Hono fallback.
+ *
+ * Props mirror src/events/routes-calendar.tsx exactly: the too-long branch
+ * renders the notice screen with the app URL only (never the query), and the
+ * list branch carries the same state/rows/zone/now/pagination/empty-state,
+ * member chrome, header session, invite URL, login return and one-shot flash. Status stays
+ * 200 here: the dispatch rewrites the marked too-long render to the Hono 422
+ * on the way out, exactly like the Hono handler's c.html(..., 422).
+ */
 export async function renderEventsHtml(
   data: KitEventsLoadData | { queryTooLong: true; appUrl: string },
   headers: Record<string, string>,

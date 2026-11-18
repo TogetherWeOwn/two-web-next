@@ -12,6 +12,7 @@ import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
   expectedKitMarker,
+  HONO_ORIGIN,
   kitFixtureOwnsEventDetail,
   kitFixtureOwnsMemberBoard,
   kitFixtureSessionSecret,
@@ -1884,16 +1885,14 @@ test("cross-target: normalized archive sections match", async () => {
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
-test("Kit calendar fragments style controls in a document opened before activation", async ({
-  page,
-}) => {
+test("Kit calendar styles survive a swap into the old document", async ({ page }) => {
   // The Hono renderer supplies the pre-activation shell. Only the initial
   // navigation is intercepted; the existing island fetches from Kit.
-  await page.route(`${KIT_ORIGIN}/events`, async (route) => {
-    const old = await page.request.get(`${HONO_ORIGIN}/events`, { maxRedirects: 0 });
-    expect(old.status()).toBe(200);
-    await route.fulfill({ response: old });
-  }, { times: 1 });
+  const old = await page.request.get(`${HONO_ORIGIN}/events`, { maxRedirects: 0 });
+  expect(old.status()).toBe(200);
+  await page.route(`${KIT_ORIGIN}/events`, (route) => route.fulfill({ response: old }), {
+    times: 1,
+  });
   await page.goto(`${KIT_ORIGIN}/events`);
   await expect(page.locator(".schedule-views")).toBeVisible();
   await expect(page.locator('link[href="/kit-events-controls.css"]')).toHaveCount(0);
@@ -1920,7 +1919,9 @@ test("cross-target: normalized events-calendar sections match", async ({ playwri
         if (!section) throw new Error("Missing calendar section");
         const segments = section.querySelector('nav.segments[aria-label="How to show the events"]');
         if (segments) {
-          section.querySelector('link[rel="stylesheet"][href="/kit-events-controls.css"]')?.remove();
+          section
+            .querySelector('link[rel="stylesheet"][href="/kit-events-controls.css"]')
+            ?.remove();
           const group = document.createElement("div");
           group.className = "schedule-views";
           group.setAttribute("role", "group");

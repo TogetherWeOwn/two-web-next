@@ -27,6 +27,7 @@ import {
   eventsSearchMissCopy,
   eventsViewStatusCopy,
   pastEventsUrl,
+  upcomingEventsPageUnreadableCopy,
   type CalendarEmptyState,
   type CalendarState,
 } from "../../../src/islands/contracts";
@@ -44,6 +45,8 @@ let {
   emptyState,
   hasVisibleResults,
   outOfRange,
+  pageUnreadable = false,
+  searchMiss = true,
 }: {
   state: CalendarState;
   appUrl: string;
@@ -54,22 +57,20 @@ let {
   emptyState: CalendarEmptyState;
   hasVisibleResults: boolean;
   outOfRange: boolean;
+  pageUnreadable?: boolean;
+  searchMiss?: boolean;
 } = $props();
 
 let url = $derived(feedUrl(appUrl, gameFilter));
-let searchStatus = $derived(
-  searching && emptyState !== "error"
-    ? hasVisibleResults || outOfRange
-      ? gameFilter !== null
-        ? eventsSearchGameHitCopy(state.q, gameFilter)
-        : eventsSearchHitCopy(state.q)
-      : gameFilter !== null
-        ? eventsSearchGameMissCopy(state.q, gameFilter)
-        : eventsSearchMissCopy(state.q)
-    : gameFilter !== null && emptyState !== "error"
-      ? eventsGameFilterCopy(gameFilter)
-      : "",
-);
+let searchStatus = $derived.by(() => {
+  if (emptyState === "error") return "";
+  if (pageUnreadable) return upcomingEventsPageUnreadableCopy(state.page);
+  if (!searching) return gameFilter === null ? "" : eventsGameFilterCopy(gameFilter);
+  if (hasVisibleResults || outOfRange)
+    return gameFilter === null ? eventsSearchHitCopy(state.q) : eventsSearchGameHitCopy(state.q, gameFilter);
+  if (!searchMiss) return "";
+  return gameFilter === null ? eventsSearchMissCopy(state.q) : eventsSearchGameMissCopy(state.q, gameFilter);
+});
 </script>
 
 <p role="status" class="sr-only" data-testid={EVENTS_VIEW_STATUS_TESTID}>{eventsViewStatusCopy(state.view)}</p>

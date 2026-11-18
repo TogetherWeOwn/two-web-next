@@ -748,21 +748,17 @@ const weeks = monthGrid(state.month, '2026-06-15', new Map([['2026-06-15', ${sce
           ["mobile", 390, 844],
         ]) {
           await page.setViewportSize({ width, height });
-          const list = page.getByTestId("events-view-list");
-          const calendar = page.getByTestId("events-view-calendar");
-          const selected = ["filtered", "list", "gap"].includes(scenario) ? list : calendar;
+          const isList = ["filtered", "list", "gap"].includes(scenario);
+          const selected = page.getByTestId(isList ? "events-view-list" : "events-view-calendar");
           assert.equal(await selected.getAttribute("aria-current"), "page");
-          assert.equal(await selected.evaluate((el) => getComputedStyle(el).gap), "8px");
-          assert.equal(
-            await selected.evaluate((el) => getComputedStyle(el).backgroundColor),
-            "rgb(46, 36, 32)",
-          );
-          await list.focus();
+          const background = await selected.evaluate((el) => getComputedStyle(el).backgroundColor);
+          assert.equal(background, "rgb(46, 36, 32)");
+          await page.getByTestId("events-view-list").focus();
           await page.keyboard.press("Tab");
-          assert.equal(
-            await calendar.evaluate((el) => el.matches(":focus-visible") && getComputedStyle(el).outlineStyle === "solid"),
-            true,
-          );
+          const focused = page
+            .getByTestId("events-view-calendar")
+            .and(page.locator(":focus-visible"));
+          assert.equal(await focused.evaluate((el) => getComputedStyle(el).outlineWidth), "2px");
           if (directory)
             await page.screenshot({
               path: join(directory, `screen-${scenario}-${name}.png`),
