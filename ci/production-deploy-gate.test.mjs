@@ -714,21 +714,15 @@ test("preflight checkouts materialize ci and wrangler.jsonc for the production g
   }
 });
 
-test("manual production workflow routes runners by repo visibility and uses production-only secrets", () => {
+test("production workflow uses hosted runners and production-only secrets", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
   );
-  // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
-  const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
   // preflight, staging-soak, regression, deploy-production,
-  // post-deploy-watch and notify.
-  assert.equal(workflow.split(runsOn).length - 1, 6);
-  assert.equal(
-    workflow.split("ubuntu-latest").length - 1,
-    6,
-    "ubuntu-latest only as the public-repo branch",
-  );
+  // post-deploy-watch and notify use hosted runners in either visibility.
+  assert.equal((workflow.match(/^    runs-on: ubuntu-latest$/gm) ?? []).length, 6);
+  assert.equal((workflow.match(/^    runs-on:/gm) ?? []).length, 6);
   // Staging credentials appear only in the staging-soak job, which binds
   // the staging Environment, runs no wrangler and makes one gate call.
   const soak = workflow.slice(

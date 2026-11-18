@@ -38,11 +38,7 @@ jobs:
       group: deploy-staging
       cancel-in-progress: false
       queue: max
-    # The org's two-selfhosted runner group refuses public repositories, so a
-    # fixed self-hosted label strands this job while the repo is public
-    # (TOG-12326). Public: GitHub-hosted, free for public repos. Private:
-    # back on the self-hosted fleet with no workflow change.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     # Environment secrets and the deployed staging URL. Exact-SHA CI, the
     # staging hold and post-deploy verification are the automated release gates.
