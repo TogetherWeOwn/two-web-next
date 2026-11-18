@@ -21,6 +21,7 @@ export function watchTimeSnapshot(
   let disposed = false;
   let snapshot: TimeSnapshot | undefined;
   let pageNow = -Infinity;
+  let acceptedAsOf = -Infinity;
   let lastMonotonic = 0;
 
   function monotonicNow(): number {
@@ -37,9 +38,10 @@ export function watchTimeSnapshot(
     timer = undefined;
     const wall = Date.now();
     const monotonic = monotonicNow();
-    // Advance even without a claim. A bad page-clock sample is sticky across replacements.
+    // Only a previously accepted claim can establish a wall-clock rollback.
+    const badWall = !Number.isFinite(wall) || wall < acceptedAsOf;
     pageNow =
-      !Number.isFinite(wall) || !Number.isFinite(monotonic) || monotonic < lastMonotonic
+      badWall || !Number.isFinite(monotonic) || monotonic < lastMonotonic
         ? Number.NaN
         : Math.max(wall, pageNow + (monotonic - lastMonotonic));
     lastMonotonic = monotonic;
@@ -58,6 +60,7 @@ export function watchTimeSnapshot(
       if (staleAt !== null) onStale();
       return;
     }
+    acceptedAsOf = Math.max(acceptedAsOf, snapshot.asOf);
     timer = page.setTimeout(check, Math.min(staleAt - now, 2_147_483_647));
   }
 

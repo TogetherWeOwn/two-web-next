@@ -117,7 +117,7 @@ describe("page-owned snapshot watcher", () => {
     watcher.dispose();
   });
 
-  it("rechecks replacement snapshots and withdraws on a monotonic rollback", () => {
+  it.each(["wall", "monotonic"])("withdraws and stays closed on %s clock rollback", (clock) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     let monotonic = 0;
@@ -129,11 +129,16 @@ describe("page-owned snapshot watcher", () => {
     expect(onStale).toHaveBeenCalledOnce();
     watcher.replace(snapshot(3_000, 1_000));
     expect(vi.getTimerCount()).toBe(1);
-    monotonic = 999;
+    if (clock === "wall") vi.setSystemTime(999);
+    else monotonic = 999;
     page.dispatchEvent(new Event("pageshow"));
     expect(onStale).toHaveBeenCalledTimes(2);
-    watcher.dispose();
+    vi.setSystemTime(1_101);
+    monotonic = 1_001;
+    watcher.replace({ ...snapshot(5_000, monotonic), asOf: 1_100 });
+    expect(onStale).toHaveBeenCalledTimes(3);
     expect(vi.getTimerCount()).toBe(0);
+    watcher.dispose();
   });
 
   it("carries clock progress across replacement and fails closed on rollback", () => {
@@ -221,7 +226,7 @@ describe("page-owned snapshot watcher", () => {
     watcher.dispose();
   });
 
-  it("withdraws replacements with missing, future or unreadable response timing", () => {
+  it("withdraws replacements with invalid response timing or a future server timestamp", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const { page, visibility } = environment();
@@ -231,12 +236,14 @@ describe("page-owned snapshot watcher", () => {
       watcher.replace(snapshot(5_000, responseStart));
       expect(vi.getTimerCount()).toBe(0);
     }
-    expect(onStale).toHaveBeenCalledTimes(3);
+    watcher.replace({ ...snapshot(5_000), asOf: 1_001 });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(onStale).toHaveBeenCalledTimes(4);
     watcher.replace(snapshot(5_000));
     expect(vi.getTimerCount()).toBe(1);
     watcher.dispose();
     watcher.replace(snapshot(1_000));
-    expect(onStale).toHaveBeenCalledTimes(3);
+    expect(onStale).toHaveBeenCalledTimes(4);
   });
 
   it("withdraws once at the deadline and tears down its listeners and timer", () => {
