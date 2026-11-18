@@ -36,6 +36,7 @@ export interface CalendarScreenState {
   showPast: boolean;
   hasVisibleResults: boolean;
   outOfRange: boolean;
+  pageUnreadable: boolean;
   searchMiss: boolean;
   weeks: CalendarDay<CalRow>[][];
   monthEmpty: boolean;
@@ -57,16 +58,15 @@ export function deriveCalendarScreenState({
   const searching = calendarSearching(state);
   const showPast = calendarShowingPast(state);
   const hasVisibleResults = upcoming.length > 0 || (showPast && past.length > 0);
-  // A page past the end renders an out-of-range note with turns back into the
-  // schedule — like the past archive — never a "never scheduled" state and
-  // never a search miss for matches sitting on another page.
-  const outOfRange = state.view === "list" && upcoming.length === 0 && totalPages > 0;
-  // An error state suppresses the miss block: a failed read must never read
-  // as "no matches" (contract: error beats everything, including a search).
+  // An empty list page with counted results isn't a search miss. If it is
+  // in range, the notice says it can't be shown, not why it has no cards.
+  const emptyCountedPage = state.view === "list" && totalPages > 0 && upcoming.length === 0;
+  const outOfRange = emptyCountedPage && state.page > totalPages;
+  const pageUnreadable = emptyCountedPage && !outOfRange;
   const searchMiss =
     emptyState === null &&
     !discordFailed &&
-    !outOfRange &&
+    !emptyCountedPage &&
     ((searching && !hasVisibleResults) ||
       (!searching && gameFilter !== null && upcoming.length === 0 && totalPages === 0));
   const byDay = new Map<string, CalRow[]>();
@@ -119,5 +119,14 @@ export function deriveCalendarScreenState({
     !monthReadMayBeIncomplete &&
     !pastCouldBeMissingInMonth &&
     !searchMiss;
-  return { searching, showPast, hasVisibleResults, outOfRange, searchMiss, weeks, monthEmpty };
+  return {
+    searching,
+    showPast,
+    hasVisibleResults,
+    outOfRange,
+    pageUnreadable,
+    searchMiss,
+    weeks,
+    monthEmpty,
+  };
 }
