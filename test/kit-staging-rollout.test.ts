@@ -258,14 +258,21 @@ describe("staging deployment selection", () => {
     expect(deployWorkflow).toMatch(/workflow_dispatch:\n\s+inputs:\n\s+kit_route_family:/);
     expect(deployWorkflow).toContain("default: hono");
     expect(deployWorkflow).toContain("- hono\n          - archive\n          - archive-static");
-    expect(deployWorkflow).toContain(
-      "KIT_ROUTE_ARCHIVE:${{ steps.kit-route-flags.outputs.archive }}",
-    );
-    expect(deployWorkflow).toContain(
-      "KIT_ROUTE_STATIC:${{ steps.kit-route-flags.outputs.static }}",
-    );
     expect(deployWorkflow).toContain("--config web/wrangler.staging.jsonc");
     expect(deployWorkflow).not.toContain("--config wrangler.jsonc --tag");
+  });
+
+  it("passes validated route flags through step env as quoted Wrangler arguments", () => {
+    const deploy = deployWorkflow.match(
+      /\n      - name: Deploy to Cloudflare Workers\n(?:        #.*\n)*        run: (.+)\n        env:\n((?:          .*\n)+)/,
+    );
+    expect(deploy).not.toBeNull();
+    const [, run, env] = deploy ?? [];
+    expect(env).toContain("KIT_ROUTE_ARCHIVE: ${{ steps.kit-route-flags.outputs.archive }}");
+    expect(env).toContain("KIT_ROUTE_STATIC: ${{ steps.kit-route-flags.outputs.static }}");
+    expect(run).not.toContain("${{");
+    expect(run).toContain('--var "KIT_ROUTE_ARCHIVE:$KIT_ROUTE_ARCHIVE"');
+    expect(run).toContain('--var "KIT_ROUTE_STATIC:$KIT_ROUTE_STATIC"');
   });
 
   it("builds the Kit Worker before deployment and retains the queue handoff order", () => {

@@ -31,14 +31,15 @@ describe("pr-size advisory wiring", () => {
     expect(workflow.match(/^permissions:/gm)).toHaveLength(1);
     const topLevel = workflow.match(/^permissions:\n([\s\S]*?)(?=^[A-Za-z][A-Za-z0-9_-]*:)/m)?.[1];
     expect(topLevel?.trim()).toBe("contents: read");
-    for (const id of ["pr-size", "pr-size-gate"]) {
+    for (const id of ["pr-size", "pr-size-gate", "pr-size-weekly"]) {
       const callerJob = job(id);
       expect(callerJob.match(/^    permissions:/gm)).toHaveLength(1);
       const callerPermissions = callerJob.match(
         /^    permissions:\n([\s\S]*?)(?=^    [A-Za-z][A-Za-z0-9_-]*:)/m,
       )?.[1];
-      expect(callerPermissions?.trimEnd()).toBe(
-        "      contents: read\n      issues: write\n      pull-requests: write",
+      const access = id === "pr-size-weekly" ? "read" : "write";
+      expect(callerPermissions?.replace(/ +#.*$/gm, "").trimEnd()).toBe(
+        `      contents: read\n      issues: ${access}\n      pull-requests: ${access}`,
       );
     }
     expect(job("pr-size-weekly")).not.toMatch(/\bwrite\b/);

@@ -73,9 +73,7 @@ const queueCommand = step("Ensure queues exist");
 const tailCommand = `${step("Re-verify exact-SHA full CI before Tail Worker deploy")}\n${step("Deploy alert Tail Worker before attaching the app")}`;
 const deployGateCommand = step("Re-verify exact-SHA full CI before Worker deploy");
 const defaultRouteFlags = kitRouteFlagsForFamily("hono");
-const deployCommand = `${deployGateCommand}\n${step("Deploy to Cloudflare Workers")
-  .replaceAll("${{ steps.kit-route-flags.outputs.archive }}", defaultRouteFlags.archive)
-  .replaceAll("${{ steps.kit-route-flags.outputs.static }}", defaultRouteFlags.static)}`;
+const deployCommand = `${deployGateCommand}\n${step("Deploy to Cloudflare Workers")}`;
 
 function executeStaging(ctx, evidence, changes = {}) {
   const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "staging-gate-"));
@@ -145,6 +143,8 @@ function executeStaging(ctx, evidence, changes = {}) {
           GITHUB_REF: ctx.ref,
           GITHUB_SHA: ctx.sha,
           DEPLOY_SHA: ctx.checkoutSha,
+          KIT_ROUTE_ARCHIVE: defaultRouteFlags.archive,
+          KIT_ROUTE_STATIC: defaultRouteFlags.static,
           GITHUB_TOKEN: "offline-stub",
           TEST_CHECKOUT_SHA: ctx.checkoutSha,
           TEST_EVIDENCE: join(dir, "evidence.json"),
