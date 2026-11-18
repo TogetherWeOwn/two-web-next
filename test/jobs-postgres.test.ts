@@ -1,6 +1,7 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pgReconciliationReads } from "../src/admin/reconciliation-reads";
+import { reconciliationService } from "../src/admin/reconciliation-service";
 import { pgPruneStores, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 import { registerJobsServerTimeoutsAcceptance } from "./helpers/jobs-server-timeouts-acceptance";
@@ -48,6 +49,53 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
       (${key(251)}::uuid, 'event.upsert', 'event:42', '2026-01-02'::timestamptz, '2026-01-03'::timestamptz, 1)`;
     expect(resultKeys(await reads.listOpen())).toEqual([key(101), ...keys(1, 99)]);
     expect(resultKeys(await reads.listResolved())).toEqual([key(251), ...keys(201, 49)]);
+  });
+
+  it("records moderator access, resolves once under contention, and refuses failed receipts", async () => {
+    const key = (n: number) => `00000000-0000-0000-0001-${n.toString().padStart(12, "0")}`;
+    const actor = "100000000000000111";
+    const service = reconciliationService(sql, actor);
+    await sql`insert into bot_reconciliation_intents (idempotency_key, verb, subject, attempts)
+      values (${key(1)}::uuid, 'event.upsert', 'event:42', 1),
+        (${key(2)}::uuid, 'event.upsert', 'event:43', 1)`;
+
+    expect(await service.get(key(1))).toMatchObject({ idempotencyKey: key(1), resolvedAt: null });
+    expect(await service.get(key(3))).toBeNull();
+    expect(
+      (
+        await Promise.all([
+          service.resolve(key(1), "confirmed"),
+          service.resolve(key(1), "confirmed"),
+        ])
+      ).sort(),
+    ).toEqual(["resolved", "unchanged"]);
+    expect(await service.get(key(1))).toMatchObject({
+      idempotencyKey: key(1),
+      resolution: "confirmed",
+    });
+    const receipts = await sql`select subject_id, description from activity_log
+      where causer_id = ${actor} and subject_type = 'bot_reconciliation_intents'`;
+    expect(receipts.filter((row) => row.description === "bot-reconciliation.read")).toEqual(
+      expect.arrayContaining([{ description: "bot-reconciliation.read", subject_id: null }]),
+    );
+    expect(receipts.filter((row) => row.description === "bot-reconciliation.resolve")).toEqual([
+      { description: "bot-reconciliation.resolve", subject_id: key(1) },
+    ]);
+
+    // Refuse new receipts in this disposable schema, leaving existing evidence intact.
+    await sql`alter table activity_log add constraint test_refuse_reconciliation_receipt
+      check (subject_type <> 'bot_reconciliation_intents') not valid`;
+    try {
+      await expect(service.get(key(2))).rejects.toThrow();
+      await expect(service.resolve(key(2), "not_applied")).rejects.toThrow();
+      expect(await pgReconciliationReads(sql).get(key(2))).toMatchObject({
+        idempotencyKey: key(2),
+        resolvedAt: null,
+        resolution: null,
+      });
+    } finally {
+      await sql`alter table activity_log drop constraint test_refuse_reconciliation_receipt`;
+    }
   });
 
   // Observe the holder instead of guessing with a sleep: pg_try_advisory_xact_lock
