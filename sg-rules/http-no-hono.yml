@@ -43,11 +43,7 @@ rule:
     - inside:
         kind: export_statement
         field: source
-    - nthChild:
-        position: 1
-        ofRule:
-          not:
-            kind: comment
+    - matches: value-position
       inside:
         kind: arguments
         stopBy:
@@ -56,13 +52,28 @@ rule:
               - any:
                   - kind: parenthesized_expression
                   - kind: as_expression
-              - nthChild:
-                  position: 1
-                  ofRule:
-                    not:
-                      kind: comment
+                  - kind: satisfies_expression
+                  - kind: non_null_expression
+                  - kind: type_assertion
+              - matches: value-position
         inside:
           kind: call_expression
           any:
             - pattern: import($$$)
             - pattern: require($$$)
+utils:
+  value-position:
+    any:
+      - nthChild:
+          position: 1
+          ofRule:
+            not:
+              kind: comment
+      - nthChild:
+          position: 2
+          ofRule:
+            not:
+              kind: comment
+        inside:
+          kind: type_assertion
+          stopBy: neighbor

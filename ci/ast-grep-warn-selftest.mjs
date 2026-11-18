@@ -46,9 +46,16 @@ try {
     for (const extension of ["ts", "tsx"]) {
       appendFileSync(
         join(directory, `boundary.${extension}`),
-        'const assertedOther = require("node:path" as "hono");\n',
+        'const assertedOther = require("node:path" as "hono");\n' +
+          'const satisfiedOther = require("node:path" satisfies "hono");\n' +
+          'const wrappedLater = require("node:path", ("hono" satisfies string)!);\n',
       );
     }
+    appendFileSync(
+      join(directory, "boundary.ts"),
+      'const typeOperand = require(<"hono">"node:path");\n' +
+        'const assertionLater = require("node:path", <string>"hono");\n',
+    );
     const scan = (script) => spawnSync("npm", ["run", script], { encoding: "utf8" });
     const allowed = scan("scan:fetch-await");
     const allowedOutput = `${allowed.stdout ?? ""}\n${allowed.stderr ?? ""}`;
@@ -73,6 +80,9 @@ try {
       "const asserted = () => import('hono' as const);",
       "const nestedAssertion = require((('hono/cors' as const)));",
       "const commentedAssertion = require((/* inner */ 'hono' as const));",
+      "const satisfied = () => import('hono' satisfies string);",
+      "const nonNull = require(('hono/cors')!);",
+      "const nestedWrappers = require((('hono' satisfies string)!) as string);",
     ];
     const escapedCases = [
       String.raw`import 'hono';`,
@@ -99,12 +109,20 @@ try {
         return file;
       }),
     );
+    const angleCases = [
+      "const load = () => import(<string>'hono');",
+      "const cors = require(<string>('hono/cors'!));",
+    ].map((source, index) => {
+      const file = join(directory, `angle-${index}.ts`);
+      writeFileSync(file, `${source}\n`);
+      return file;
+    });
     const denied = scan("scan:http-boundary");
     const deniedOutput = `${denied.stdout ?? ""}\n${denied.stderr ?? ""}`;
     if (
       denied.error ||
       denied.status !== 1 ||
-      [...files, ...extraFiles].some((file) => !deniedOutput.includes(`${file}:`))
+      [...files, ...extraFiles, ...angleCases].some((file) => !deniedOutput.includes(`${file}:`))
     ) {
       throw new Error(
         `HTTP boundary scan did not reject every file: ${deniedOutput || denied.error?.message}`,
