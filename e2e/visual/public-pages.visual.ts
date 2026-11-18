@@ -6,6 +6,7 @@ import {
   captureWithoutFontWait,
   expectStablePublicPageCapture,
   loadVisualFont,
+  normalizeDisplayFont,
   readCaptureGeometry,
   renderedPlatformFonts,
 } from "./font-evidence";
@@ -36,6 +37,7 @@ for (const [viewport, size] of VIEWPORTS) {
       await page.setViewportSize(size);
       if (name === "privacy") {
         await page.route("**/fonts/fragment-mono-latin-400.woff2", (route) => route.abort());
+        await page.route("**/fonts/mona-sans-latin-wght.woff2", (route) => route.abort());
       }
       const response = await page.goto(path);
       expect(response?.status()).toBe(200);
@@ -45,7 +47,10 @@ for (const [viewport, size] of VIEWPORTS) {
         const code = page.locator(".base-theme.content-theme code").first();
         await code.evaluate((node) => node.setAttribute("data-font-evidence", ""));
         const selector = ".base-theme.content-theme code[data-font-evidence]";
-        const selectors = { code: selector };
+        const selectors = { code: selector, heading: ".content-theme h1" };
+        const displayFonts = await renderedPlatformFonts(page, selectors.heading);
+        expect(displayFonts.length).toBeGreaterThan(0);
+        expect(displayFonts.every((font) => font.glyphCount > 0 && !font.isCustomFont)).toBe(true);
         const fonts = await renderedPlatformFonts(page, selector);
         expect(fonts.some((font) => font.isCustomFont && font.familyName === "Fragment Mono")).toBe(
           false,
@@ -107,22 +112,13 @@ for (const [viewport, size] of VIEWPORTS) {
         );
         expect(saw).toBe(true);
         let normalizedCodeFonts: Awaited<ReturnType<typeof renderedPlatformFonts>> | undefined;
-        const font = await loadVisualFont(page, {
+        const normalized = await normalizeDisplayFont(page, {
           url: "/fonts/mona-sans-latin-wght.woff2",
           weight: "200 900",
+          root: ".content-theme",
         });
-        expect(font.status).toBe("loaded");
-        await page.evaluate((family) => {
-          const root = document.querySelector<HTMLElement>(".content-theme")!;
-          const stack = getComputedStyle(root).getPropertyValue("--font-display");
-          if (!/^\s*['"]?Mona Sans Content['"]?\s*,/.test(stack)) {
-            throw new Error("Unexpected content display font stack");
-          }
-          root.style.setProperty(
-            "--font-display",
-            stack.replace(/^\s*['"]?Mona Sans Content['"]?\s*,/, `"${family}",`),
-          );
-        }, font.family);
+        expect(normalized.face.status).toBe("loaded");
+        expect(normalized.token.original).toMatch(/^\s*['"]?Mona Sans Content['"]?\s*,/);
         if (name === "privacy") {
           // Normalize the code face independently of the blocked-font control above.
           const codeFont = await loadVisualFont(page, {
@@ -188,7 +184,7 @@ for (const [viewport, size] of VIEWPORTS) {
     });
     try {
       expect((await page.goto("/about", { waitUntil: "domcontentloaded" }))?.status()).toBe(200);
-      await request;
+      const fontRequest = await request;
       const heading = ".content-theme h1";
       await expect
         .poll(async () => {
@@ -220,7 +216,17 @@ for (const [viewport, size] of VIEWPORTS) {
         (el as HTMLElement).style.removeProperty("visibility");
       });
       release();
+      const fontResponse = await fontRequest.response();
+      expect(fontResponse?.ok()).toBe(true);
+      expect(await fontResponse?.finished()).toBeNull();
       await page.evaluate(() => document.fonts.ready);
+      expect(
+        await page.evaluate(() =>
+          Array.from(document.fonts).some(
+            (face) => face.family === "Mona Sans Content" && face.status === "loaded",
+          ),
+        ),
+      ).toBe(true);
       await page.evaluate(
         () =>
           new Promise<void>((resolve) =>
