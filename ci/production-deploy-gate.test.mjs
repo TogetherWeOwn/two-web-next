@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
-import { parse } from "yaml";
+import { parse, parseDocument } from "yaml";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 import {
   AUTOMATIC_PROMOTION_EVENTS,
@@ -889,9 +889,13 @@ test("production dead-letter baseline scope ignores YAML comments and sibling st
 
 test("production dead-letter baseline scope rejects workflow defaults and extra reads", () => {
   const workflow = productionWorkflow();
+  const withDefaults = parseDocument(workflow);
+  withDefaults.setIn(["env", "UNRELATED_FIXTURE_DEFAULT"], "1");
+  assertProductionBaselineScope(withDefaults.toString());
+  withDefaults.setIn(["env", "SMOKE_FAILED_BASELINE"], "0");
   assert.throws(
-    () => assertProductionBaselineScope(`env: { SMOKE_FAILED_BASELINE: '0' }\n${workflow}`),
-    /must not be set workflow-wide/,
+    () => assertProductionBaselineScope(withDefaults.toString()),
+    /SMOKE_FAILED_BASELINE must not be set workflow-wide/,
   );
   for (const [condition, error] of [
     ["steps.dead-letter-baseline.outputs.failed == '0'", /must not be read under another variable/],
