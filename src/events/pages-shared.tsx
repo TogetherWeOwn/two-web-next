@@ -19,7 +19,6 @@ const ScheduleShell: FC<
     session?: Session | HeaderSession | null;
     loginReturnTo?: string | null;
     markdownAlternate?: string;
-    kitCalendar?: boolean;
   }>
 > = ({
   title,
@@ -30,7 +29,6 @@ const ScheduleShell: FC<
   session,
   loginReturnTo,
   markdownAlternate,
-  kitCalendar,
   children,
 }) => (
   <Layout
@@ -39,7 +37,6 @@ const ScheduleShell: FC<
     shareDescription={description}
     robots={robots}
     theme="schedule"
-    kitCalendar={kitCalendar}
     markdownAlternate={markdownAlternate}
   >
     <SiteHeader

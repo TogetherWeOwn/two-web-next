@@ -2,18 +2,11 @@
 // Like the admin-load tests, bundle the route without Kit's generated tsconfig.
 // Only framework/data boundaries and the deliberately failing renderer are seams.
 import { build } from "esbuild";
-import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderKitEvents as realRender } from "./helpers/calendar-game-recovery";
 import { gathering } from "./helpers/calendar-multiday-acceptance";
 
-const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
-const { compile } = webRequire("svelte/compiler");
-const renderer = fileURLToPath(
-  new URL("../web/src/lib/server/render-events-html.tsx", import.meta.url),
-);
 const modelModule = fileURLToPath(new URL("../src/events/page-models.server.ts", import.meta.url));
 const virtualModules = new Map([
   [
@@ -53,7 +46,6 @@ const virtualModules = new Map([
 ]);
 
 let GET;
-let realRender;
 let seams;
 
 class HttpError extends Error {
@@ -69,11 +61,9 @@ beforeAll(async () => {
   const endpoint = fileURLToPath(new URL("../web/src/routes/events/+server.ts", import.meta.url));
   const { outputFiles } = await build({
     stdin: {
-      contents: `export { GET } from ${JSON.stringify(endpoint)};
-      export { renderEventsHtml as realRender } from ${JSON.stringify(renderer)};`,
+      contents: `export { GET } from ${JSON.stringify(endpoint)};`,
       resolveDir: root,
     },
-    nodePaths: [fileURLToPath(new URL("../web/node_modules", import.meta.url))],
     bundle: true,
     format: "esm",
     platform: "node",
@@ -100,17 +90,11 @@ beforeAll(async () => {
             loader: "js",
             resolveDir: root,
           }));
-          build.onLoad({ filter: /\.svelte$/ }, ({ path }) => ({
-            contents: compile(readFileSync(path, "utf8"), { generate: "server", filename: path }).js
-              .code,
-            loader: "js",
-            resolveDir: dirname(path),
-          }));
         },
       },
     ],
   });
-  ({ GET, realRender } = await import(
+  ({ GET } = await import(
     `data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString("base64")}`
   ));
 });
@@ -310,6 +294,7 @@ describe("Kit events endpoint flash-consumption controls", () => {
       "miss",
       "content",
     ]);
+    expect(body).toMatch(/data-cal-zone="head">\s*<link rel="stylesheet" href="\/kit-events-controls\.css"/);
     expect(body).not.toContain('data-testid="auth-error"');
     expect(body).not.toContain('data-testid="join-result"');
     expect(deleteCookie).not.toHaveBeenCalled();

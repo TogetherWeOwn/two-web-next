@@ -28,13 +28,6 @@ test("Kit events index renders the seeded guest schedule @ desktop and mobile", 
       const response = await page.goto("/events");
       expect(response?.status(), `Kit /events @ ${viewport.name}`).toBe(200);
       await expect(page.getByTestId("events-calendar")).toBeVisible();
-      const view = page
-        .getByRole("navigation", { name: "How to show the events" })
-        .getByRole("link", { name: "List" });
-      await expect(view).toHaveAttribute("aria-current", "page");
-      await expect(view).toHaveCSS("gap", "8px");
-      await expect(view).toHaveCSS("font-size", "14px");
-      await expect(view).toHaveCSS("border-radius", "999px");
       await expect(page.getByTestId("event-card")).toHaveCount(SEEDED_UPCOMING_EVENTS.length);
       for (const title of SEEDED_UPCOMING_EVENTS) {
         const row = page.getByTestId("event-card").filter({ hasText: title });

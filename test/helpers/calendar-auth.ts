@@ -4,8 +4,8 @@ import type { Db } from "../../src/db/index";
 import { events } from "../../src/db/admin-schema";
 import type { Env } from "../../src/env";
 import app from "../app";
+import { renderKitEvents } from "./calendar-game-recovery";
 import { loadEventsPage } from "../../src/kit-events";
-import { renderEventsHtml } from "../../src/kit-events-html";
 
 export const CALENDAR_AUTH_ORIGIN = "https://calendar.example.test";
 export const CALENDAR_AUTH_QUERY = 'Raid & friends 雪 🦊 /?#=+% "night"';
@@ -111,7 +111,7 @@ export function calendarAuthFixture(renderer: "hono" | "kit" = "hono") {
         journeyForFn: async () => null,
         discordForFn: () => discord,
       });
-      const rendered = await renderEventsHtml(data as never, collected);
+      const rendered = await renderKitEvents(data as never, collected);
       return new Response(rendered.body, { status: rendered.status, headers: rendered.headers });
     },
   };

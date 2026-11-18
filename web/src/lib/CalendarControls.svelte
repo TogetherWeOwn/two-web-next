@@ -78,6 +78,8 @@ let searchStatus = $derived(
 <p role="status" class="sr-only" data-testid={CALENDAR_MONTH_STATUS_TESTID}>{state.view === "calendar" ? calendarMonthLabel(state.month) : ""}</p>
 
 <div data-cal-zone="head">
+  <!-- Keep the sheet in the swap zone for tabs opened before Kit rendered the calendar. -->
+  <link rel="stylesheet" href="/kit-events-controls.css" />
   <SegmentedControl label={EVENTS_VIEW_GROUP_LABEL} items={[
     { href: calendarUrl({ ...state, view: "list" }), label: "List", current: state.view === "list", testId: EVENTS_VIEW_LIST_TESTID },
     { href: calendarUrl({ ...state, view: "calendar" }), label: "Calendar", current: state.view === "calendar", testId: EVENTS_VIEW_CALENDAR_TESTID },

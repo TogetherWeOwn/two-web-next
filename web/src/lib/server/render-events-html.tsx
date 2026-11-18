@@ -24,7 +24,6 @@ export function renderEventsHtml(
         session={data.session}
         loginReturnTo={data.loginReturnTo}
         markdownAlternate="/events.md"
-        kitCalendar
       >
         {/* Only Svelte's escaped SSR output crosses into the document as HTML. */}
         {raw(body)}

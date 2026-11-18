@@ -22,7 +22,6 @@ export const Layout: FC<
     shareDescription?: string | null;
     robots?: string;
     theme?: "home" | "event" | "content" | "join" | "profile" | "schedule";
-    kitCalendar?: boolean;
     /** Rooted path of the curated Markdown alternate (A2), e.g. `/about.md`. */
     markdownAlternate?: string;
     /**
@@ -42,7 +41,6 @@ export const Layout: FC<
   shareDescription,
   robots,
   theme,
-  kitCalendar,
   markdownAlternate,
   inlineCriticalCss,
   children,
@@ -142,7 +140,6 @@ export const Layout: FC<
             {theme === "event" ? <link rel="stylesheet" href="/event-theme.css" /> : null}
             {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
             {theme === "schedule" ? <link rel="stylesheet" href="/schedule-theme.css" /> : null}
-            {kitCalendar ? <link rel="stylesheet" href="/kit-events-controls.css" /> : null}
           </>
         ) : null}
       </head>

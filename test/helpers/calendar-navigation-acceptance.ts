@@ -4,9 +4,8 @@ import type { DefaultTreeAdapterMap } from "parse5";
 import type { Env } from "../../src/env";
 import { EventsCalendarPage } from "../../src/events/pages";
 import { dispatchEventsRequest } from "../../src/kit-events";
-import { GAME_ORIGIN, gameRecoveryFixture, gameRow, type GameTwin } from "./calendar-game-recovery";
+import { GAME_ORIGIN, gameRecoveryFixture, gameRow, type GameTwin, renderKitEvents } from "./calendar-game-recovery";
 import type { CalendarState } from "../../src/islands/contracts";
-import { renderEventsHtml } from "../../src/kit-events-html";
 import { gathering } from "./calendar-multiday-acceptance";
 
 export const navigationState: CalendarState = {
@@ -59,7 +58,7 @@ export async function navigationHtml(
   const data = navigationData(state, totalPages, empty);
   return twin === "Hono"
     ? await jsx(EventsCalendarPage, data).toString()
-    : (await renderEventsHtml(data, {})).body;
+    : (await renderKitEvents(data, {})).body;
 }
 
 type Node = DefaultTreeAdapterMap["node"];

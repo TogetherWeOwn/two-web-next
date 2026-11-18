@@ -1,3 +1,9 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
+
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { Hono } from "hono";
@@ -6,8 +12,53 @@ import { events } from "../../src/db/admin-schema";
 import type { Env } from "../../src/env";
 import { registerEventRoutes } from "../../src/events/routes";
 import { loadEventsPage } from "../../src/kit-events";
-import { renderEventsHtml } from "../../src/kit-events-html";
 import { partialEvent } from "./calendar-discord-partial";
+
+type KitRender = typeof import("../../web/src/lib/server/render-events-html").renderEventsHtml;
+const root = fileURLToPath(new URL("../../", import.meta.url).href);
+const webRequire = createRequire(new URL("../../web/package.json", import.meta.url).href);
+const { compile } = webRequire("svelte/compiler");
+let loaded: Promise<KitRender> | undefined;
+
+// Lazily bundle the actual Kit SSR adapter (Svelte CalendarScreen inside the
+// shared shell) once per worker, compiling .svelte for the server like Kit does.
+export function renderKitEvents(
+  data: Parameters<KitRender>[0],
+  headers: Parameters<KitRender>[1],
+  restoredWrite = false,
+): ReturnType<KitRender> {
+  loaded ??= (async () => {
+    const adapter = join(root, "web/src/lib/server/render-events-html.tsx");
+    const { outputFiles } = await build({
+      stdin: { contents: `export * from ${JSON.stringify(adapter)};`, resolveDir: root },
+      absWorkingDir: root,
+      nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
+      alias: { "#lib": join(root, "web/src/lib") },
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      logLevel: "warning",
+      write: false,
+      tsconfigRaw: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "hono/jsx" } },
+      plugins: [
+        {
+          name: "kit-events-renderer",
+          setup(plugin) {
+            plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => ({
+              contents: compile(readFileSync(path, "utf8"), { generate: "server", filename: path })
+                .js.code,
+              loader: "js",
+              resolveDir: dirname(path),
+            }));
+          },
+        },
+      ],
+    });
+    const url = `data:text/javascript;base64,${Buffer.from(outputFiles[0]!.text).toString("base64")}`;
+    return ((await import(url)) as { renderEventsHtml: KitRender }).renderEventsHtml;
+  })();
+  return loaded.then((render) => render(data, headers, restoredWrite));
+}
 
 export const GAME_ORIGIN = "https://calendar.example.test";
 export const GAME_ENTRY = "/events?view=list&month=2099-05&game=Chess";
@@ -151,7 +202,7 @@ export function gameRecoveryFixture(
         journeyForFn: async () => null,
         discordForFn: () => source,
       });
-      const rendered = await renderEventsHtml(data as never, collected);
+      const rendered = await renderKitEvents(data as never, collected);
       return new Response(rendered.body, { status: rendered.status, headers: rendered.headers });
     },
   };
