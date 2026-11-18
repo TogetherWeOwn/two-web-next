@@ -147,7 +147,9 @@ test("here-strings and arithmetic shifts are not heredocs", () => {
 });
 
 test("shell boundaries do not expose heredoc bodies or remove literal text", () => {
-  for (const arg of ["'literal a[1'", '"literal a[1"', "literal\\ a[1", "a\\[1"]) {
+  const literals = ["'literal a[1'", '"literal a[1"', "literal\\ a[1", "a\\[1"];
+  const earlierCommands = ["a[1\\]; cat", "a[1']'; cat"];
+  for (const arg of [...literals, ...earlierCommands]) {
     const command = `printf ${arg} <<EOF\n`;
     const source = `${command}body\nEOF\nprintf done\n`;
     assert.equal(check(source, source), `${command}    \n   \nprintf done\n`);

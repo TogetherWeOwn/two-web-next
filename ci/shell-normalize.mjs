@@ -53,7 +53,7 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
       // Track only unquoted, unescaped NAME[...], across logical continuations.
       if (c === "[" && (identifier || subscriptDepth)) subscriptDepth++;
       else if (c === "]" && subscriptDepth) subscriptDepth--;
-      else if (c === "\n") subscriptDepth = 0;
+      else if (c === ";" || c === "\n") subscriptDepth = 0;
       identifier = tokenStart ? /[A-Za-z_]/.test(c) : identifier && /\w/.test(c);
     }
     assert.ok(c !== "`" || quote === "'", "unsupported command substitution");
