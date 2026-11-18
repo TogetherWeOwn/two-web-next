@@ -80,6 +80,8 @@ test("marker named cd and exact closers preserve the following command", () => {
 });
 
 test("literal carriage returns in delimiters preserve following commands", () => {
+  const quoted = "cat <<'EOF\r'\nbody\nEOF\r\nprintf done\n";
+  check(quoted, quoted);
   for (const opener of ["<<EOF\r", "<<'EOF\r'", "<<-EOF\r"]) {
     for (const newline of ["\n", "\r\n"]) {
       const source = `cat ${opener} ;\nbody\n${opener.startsWith("<<-") ? "\t" : ""}EOF\r${newline}printf done\n`;
@@ -87,6 +89,19 @@ test("literal carriage returns in delimiters preserve following commands", () =>
       assert.doesNotMatch(masked, /body/);
       assert.match(masked, /printf done/);
     }
+  }
+});
+
+test("ambiguous delimiters and arithmetic subscripts fail closed", () => {
+  for (const [source, error] of [
+    ["cat <<EOF\r\\\n\nEOF\n# body text\nEOF\r\nprintf done\n", /ambiguous heredoc delimiter/],
+    ["a[1<<2]=value\nprintf done\n", /arithmetic subscript/],
+    ["a[1\\\n<\\\n<2]=value\nprintf done\n", /arithmetic subscript/],
+  ]) {
+    for (const strict of [false, true])
+      for (const mask of [false, true]) {
+        assert.throws(() => normalizeShell(source, { strict, mask }), error);
+      }
   }
 });
 
@@ -123,6 +138,7 @@ test("here-strings and arithmetic shifts are not heredocs", () => {
     "echo $((1))#literal\n",
     'echo "$((1))#literal"\n',
     "((8 << 1))\nnpm run real\n",
+    "echo 'a[1<<2]' \\<\\<\n",
   ]) {
     assert.equal(check(source, source), source);
   }

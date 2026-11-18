@@ -137,8 +137,18 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
         tokenStart = true;
         continue;
       }
+      if (text[second] === "<") {
+        assert.ok(
+          !/(?:^|[ \t\n;|&()])[a-zA-Z_][\w]*\[[^\]\n]*$/.test(out),
+          "unsupported arithmetic subscript",
+        );
+      }
       const opener = parseHeredocOpener(text, i);
       if (opener) {
+        assert.ok(
+          !(opener.spelling.endsWith("\r") && text[opener.end] === "\n"),
+          "unsupported ambiguous heredoc delimiter",
+        );
         pending.push({ ...opener, strip: opener.stripTabs });
         out += opener.spelling;
         i = opener.end - 1;
