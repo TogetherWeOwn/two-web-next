@@ -19,12 +19,18 @@ export function createRouteEvidenceDownload(repository, token, fetchImpl = fetch
       throw new Error("route evidence refused: invalid artifact ID");
     const controller = new AbortController();
     const deadline = performance.now() + downloadTimeoutMs;
-    const timer = setTimeout(() => controller.abort(), downloadTimeoutMs);
+    const expiry = Promise.withResolvers();
+    const deadlineError = new Error("download deadline exceeded");
+    const timer = setTimeout(() => {
+      expiry.reject(deadlineError);
+      controller.abort();
+    }, downloadTimeoutMs);
     const checkDeadline = () => {
       controller.signal.throwIfAborted();
-      if (performance.now() >= deadline) throw new Error("download deadline exceeded");
+      if (performance.now() >= deadline) throw deadlineError;
     };
-    try {
+
+    async function downloadArtifact() {
       const response = await fetchImpl(
         `https://api.github.com/repos/${repository}/actions/artifacts/${artifactId}/zip`,
         {
@@ -55,7 +61,12 @@ export function createRouteEvidenceDownload(repository, token, fetchImpl = fetch
         signal: controller.signal,
       });
       checkDeadline();
-      const files = await readRouteEvidenceArtifact(archive, digest);
+      return readRouteEvidenceArtifact(archive, digest, checkDeadline);
+    }
+
+    try {
+      // Refuse even if a pending fetch or body read never observes abort.
+      const files = await Promise.race([expiry.promise, downloadArtifact()]);
       // Bounded synchronous extraction can finish before a queued timer fires.
       checkDeadline();
       return files;

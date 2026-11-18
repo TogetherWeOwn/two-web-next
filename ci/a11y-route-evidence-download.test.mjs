@@ -155,3 +155,51 @@ test("shares one deadline across the API request and storage body read", async (
   assert.equal(signal.aborted, true);
   await rejection;
 });
+
+test("refuses at the deadline even while the body ignores abort", { timeout: 2_000 }, async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const reading = Promise.withResolvers();
+  const resume = Promise.withResolvers();
+  const { download, calls } = transport(redirect(storageUrl), () => ({
+    ok: true,
+    body: (async function* () {
+      reading.resolve();
+      await resume.promise;
+      yield zip;
+    })(),
+  }));
+  const rejection = assert.rejects(download(42, expectedDigest), refused);
+  try {
+    await reading.promise;
+    t.mock.timers.tick(10_000);
+    assert.equal(calls[1].options.signal.aborted, true);
+    await rejection;
+  } finally {
+    resume.resolve();
+  }
+});
+
+for (const [phase, checksAtExpiry] of [
+  ["before", 1],
+  ["after", 2],
+]) {
+  test(`refuses when the clock expires ${phase} extraction before the timer fires`, async (t) => {
+    let eof = false;
+    let checksAfterEof = 0;
+    t.mock.method(performance, "now", () =>
+      eof && ++checksAfterEof >= checksAtExpiry ? 10_000 : 0,
+    );
+    // With invalid ZIP bytes, the parser would throw before any post-extraction clock check.
+    const bytes = phase === "before" ? Buffer.from("not a ZIP") : zip;
+    const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    const { download } = transport(redirect(storageUrl), () => ({
+      ok: true,
+      body: (async function* () {
+        yield bytes;
+        eof = true;
+      })(),
+    }));
+    await assert.rejects(download(42, digest), refused);
+    assert.equal(checksAfterEof, checksAtExpiry);
+  });
+}
