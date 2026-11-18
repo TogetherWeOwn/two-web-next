@@ -77,7 +77,7 @@ const failing =
   (...args) => {
     const target = String(name === "renameSync" ? args[1] : args[0]);
     if (target.endsWith(suffix)) throw new Error(message);
-    return fsReal[name](...args);
+    return name === "renameSync" ? fsReal.renameSync(...args) : fsReal.writeFileSync(...args);
   };
 // Writes only a prefix of non-empty data to `suffix`, then throws.
 const partial =
