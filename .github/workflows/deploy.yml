@@ -23,7 +23,7 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  actions: read # Read exact-SHA CI run and job evidence before staging mutations.
 
 jobs:
   deploy-staging:

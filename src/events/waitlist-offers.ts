@@ -11,7 +11,7 @@ export {
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
-/** Dormant helper; callers own a READ COMMITTED transaction. No notification is sent. */
+/** Dormant helper: replay a live hold or offer a seat only to the eligible FIFO head. */
 export async function createWaitlistOffer(tx: Tx, rsvpId: number) {
   await requireReadCommitted(tx);
   // Discover the event without locking the RSVP ahead of it.
@@ -110,8 +110,9 @@ async function offerWaitlistSeats(tx: Tx, eventId: number, rsvpId?: number) {
       ),
     )
     .orderBy(asc(rsvps.createdAt), sql`coalesce(${rsvps.legacyId}, ${rsvps.id})`, asc(rsvps.id));
-  const heads = target ? [target] : await (free === null ? fifo : fifo.limit(free));
-  if (heads.length === 0) return [];
+  const limit = rsvpId === undefined ? free : 1;
+  const heads = await (limit === null ? fifo : fifo.limit(limit));
+  if (heads.length === 0 || (rsvpId !== undefined && heads[0]?.id !== rsvpId)) return [];
   const expiresAt = sql`least(${now} + interval '2 hours', (select starts_at from events where id = ${eventId}))`;
   const byRsvp = new Map<number, typeof waitlistOffers.$inferSelect>();
   // Unlimited events still need to stay below Postgres's bind parameter limit.

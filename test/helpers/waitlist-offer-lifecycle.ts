@@ -114,6 +114,22 @@ export function registerWaitlistOfferLifecycle() {
       expect(await fx.db.select().from(rsvps).orderBy(rsvps.id)).toEqual(before);
     });
 
+    it("uses exact timestamps and legacy IDs for targeted FIFO offers", async () => {
+      const { event, rows } = await seed({ users: ["later", "native", "legacy"] });
+      const [later, native, legacy] = rows;
+      await fx.db
+        .update(rsvps)
+        .set({
+          createdAt: sql`timestamptz '2026-01-01T00:00:00.000001Z' +
+            case when id = ${later!.id} then interval '1 microsecond' else interval '0' end`,
+          legacyId: sql`case when id = ${legacy!.id} then ${later!.id}::bigint else null end`,
+        })
+        .where(eq(rsvps.eventId, event.id));
+      expect((await create(event, later!)).ok).toBe(false);
+      expect((await create(event, native!)).ok).toBe(false);
+      expect((await made(event, legacy!)).rsvpId).toBe(legacy!.id);
+    });
+
     it("serializes concurrent allocators and keeps existing holds after a capacity reduction", async () => {
       const { event, rows } = await seed({ capacity: 2, users: ["u1", "u2", "u3"] });
       const results = await Promise.all([allocate(event.id), allocate(event.id)]);
@@ -127,13 +143,16 @@ export function registerWaitlistOfferLifecycle() {
     });
 
     it.each(["declined", "expired"] as const)(
-      "advances past a %s head with a fresh hold",
+      "advances past a %s head without letting targeted creation jump the queue",
       async (state) => {
-        const { event, rsvp, rows } = await seed({ users: ["u1", "u2"] });
+        const { event, rsvp, rows } = await seed({ users: ["u1", "u2", "u3"] });
         const old = await made(event, rsvp);
         if (state === "declined") {
           expect((await decline(event, rsvp, "u1", old.id)).ok).toBe(true);
         } else await lapse(old.id);
+        expect((await create(event, rsvp)).ok).toBe(false);
+        expect((await create(event, rows[2]!)).ok).toBe(false);
+        expect(await offers()).toMatchObject([{ id: old.id, state }]);
         const allocated = await allocate(event.id);
         expect(allocated).toHaveLength(1);
         const next = allocated[0]!;
@@ -375,15 +394,16 @@ export function registerWaitlistOfferLifecycle() {
       expect(wrong).toMatchObject({ ok: false });
     });
 
-    it("refuses to claim an expired offer, then expires it and issues a fresh window and key", async () => {
-      const { event, rsvp } = await seed();
+    it("refuses an expired claim and offers the freed seat to the next RSVP", async () => {
+      const { event, rsvp, rows } = await seed({ users: ["u1", "u2"] });
       const old = await made(event, rsvp);
       await lapse(old.id);
       expect(await claim(event, rsvp, "u1", old.id)).toMatchObject({ ok: false });
       expect((await rsvpOf(rsvp.id)).status).toBe("waitlisted");
-      const fresh = await create(event, rsvp);
+      const fresh = await create(event, rows[1]!);
       expect(fresh.ok).toBe(true);
       if (!fresh.ok) return;
+      expect(fresh.offer.rsvpId).toBe(rows[1]!.id);
       expect(fresh.offer.id).not.toBe(old.id);
       expect(fresh.offer.notificationKey).not.toBe(old.notificationKey);
       expect(fresh.offer.expiresAt.getTime()).toBeGreaterThan(Date.now());
@@ -451,8 +471,16 @@ export function registerWaitlistOfferLifecycle() {
       if (state === "expired") await lapse(old.id);
       const settled = await release();
       if (!settled.ok) throw new Error(`release refused: ${settled.reason}`);
-      const fresh = await made(event, rsvp);
-      expect(fresh.notificationKey).not.toBe(old.notificationKey);
+      // Seed a replacement on the same RSVP to test transition binding, not allocation.
+      const [fresh] = await fx.db
+        .insert(waitlistOffers)
+        .values({
+          rsvpId: rsvp.id,
+          offeredAt: sql`now()`,
+          expiresAt: sql`now() + interval '2 hours'`,
+        })
+        .returning();
+      expect(fresh!.notificationKey).not.toBe(old.notificationKey);
       expect(await release()).toEqual({ ok: true, offer: settled.offer, replay: true });
       expect(await offers()).toEqual(expect.arrayContaining([settled.offer, fresh]));
       expect(await rsvpOf(rsvp.id)).toEqual(rsvp);

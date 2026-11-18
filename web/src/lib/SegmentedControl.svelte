@@ -1,5 +1,5 @@
 <script lang="ts">
-// The consuming document loads schedule-theme.css, including without JS.
+// The consuming document supplies the styles, including without JS.
 let {
   label,
   items,

@@ -1,31 +1,42 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
-// These source checks cover the checked-in workflow definitions and assessed
-// reusable calls, not workflow YAML loaded from an older or modified branch.
-// Branch dispatches are especially important: a PR-only event guard does not
-// protect a private branch's workflow_dispatch. See docs/private-flip-checklist.md.
+type RunnerInputs = Record<string, unknown>;
+type Job = {
+  "runs-on"?: unknown;
+  uses?: string;
+  with?: RunnerInputs;
+  steps?: { with?: RunnerInputs }[];
+};
+type Workflow = { jobs: Record<string, Job>; on: string | string[] | Record<string, unknown> };
+
+// This checks the source in this checkout, not older or modified refs loaded
+// by GitHub for a branch dispatch. See docs/private-flip-checklist.md.
 const dir = ".github/workflows";
 const workflows = readdirSync(dir)
   .filter((name) => /\.ya?ml$/.test(name))
-  .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
+  .map((name) => {
+    const text = readFileSync(join(dir, name), "utf8");
+    return { name, text, source: parse(text) as Workflow };
+  });
 
 const hosted = "ubuntu-latest";
-// Visual evidence and the recovery proof need a fixed GitHub-hosted OS.
-const pinnedHostedJob = (name: string, id: string) =>
-  (name === "e2e.yml" && id === "browser-smoke") ||
-  (name === "kit-home-evidence.yml" && id === "capture") ||
-  (name === "kit-event-evidence.yml" && id === "capture") ||
-  (name === "admin-stale-save-ubuntu24-proof.yml" && id === "recovery-proof") ||
-  (name === "kit-footer-browser.yml" && id === "footer-browser") ||
-  (name === "xfs-qualification.yml" && id === "fixture");
-const byVisibility = `\${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
-const byVisibilityPrGuarded = `\${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
-const publicGuard = `!github.event.repository.private && '["${hosted}"]'`;
-const prGuard = `(github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["${hosted}"]'`;
-const overflowSwitch = (job: string) =>
-  `\${{ fromJSON((${publicGuard}) || (${prGuard}) || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), '${job}') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}`;
+const hostedJson = JSON.stringify([hosted]);
+// Keep the fixed OS for visual baselines, recovery and the XFS fixture.
+// Re-baseline browser-smoke in the same PR as any bump (docs/visual-regression.md).
+const pinnedHostedJobs = new Map([
+  ["e2e.yml", "browser-smoke"],
+  ["kit-home-evidence.yml", "capture"],
+  ["kit-event-evidence.yml", "capture"],
+  ["admin-stale-save-ubuntu24-proof.yml", "recovery-proof"],
+  ["kit-footer-browser.yml", "footer-browser"],
+  ["xfs-qualification.yml", "fixture"],
+]);
+const localCall = /^\.\/\.github\/workflows\/([\w.-]+\.ya?ml)$/;
+const frozenLocalCall =
+  /^TogetherWeOwn\/two-web-next\/\.github\/workflows\/([\w.-]+\.ya?ml)@([0-9a-f]{40})$/;
 
 // These same-repository callees were checked at this immutable revision; their
 // job definitions matched the corresponding local workflows when pinned.
@@ -37,32 +48,70 @@ const verifiedLocalWorkflows = [
   "zap-staging.yml",
 ];
 
-function jobs(text: string) {
-  const body = text.slice(text.search(/^jobs:\n/m));
-  const found: { id: string; runsOn: string | undefined; orgReusable: boolean; block: string }[] =
-    [];
-  for (const block of body.split(/^(?=  [A-Za-z0-9_-]+:\n)/m).slice(1)) {
-    const id = block.match(/^  ([A-Za-z0-9_-]+):\n/)?.[1] ?? "";
-    // A reusable-workflow call has no runner; the called workflow's jobs are checked.
-    if (/^    uses: \.\/\.github\/workflows\/[\w.-]+\.ya?ml$/m.test(block)) continue;
-    const localCall = block.match(
-      /^    uses: TogetherWeOwn\/two-web-next\/\.github\/workflows\/([\w.-]+\.ya?ml)@([0-9a-f]{40})$/m,
-    );
-    if (
-      localCall &&
-      verifiedLocalWorkflows.includes(localCall[1]!) &&
-      localCall[2] === verifiedLocalRef
-    )
-      continue;
-    // Same for a pinned org reusable call (full-SHA pin, never a moving tag):
-    // the org workflow pins its own runners, so there is no local label to check.
-    const orgReusable =
-      /^    uses: TogetherWeOwn\/\.github\/\.github\/workflows\/[\w.-]+\.ya?ml@[0-9a-f]{40}$/m.test(
-        block,
+// These pins were checked for defaults and runner inputs. A repin needs
+// another source review; a full SHA alone doesn't establish runner selection.
+const verifiedHostedOrgReusables = new Map([
+  ["review-rules.yml@2ef8ad6447e11d019ac3098bcfd011193b75266a", "runs-on-json"],
+  ["test-guard.yml@2ef8ad6447e11d019ac3098bcfd011193b75266a", "runs-on-json"],
+  ["pr-size.yml@ac9ce8d63e0cebd19ede904ac79137190c329964", "runs-on"],
+  ["pr-size-gate.yml@ac9ce8d63e0cebd19ede904ac79137190c329964", "runs-on"],
+  ["pr-size-weekly.yml@ac9ce8d63e0cebd19ede904ac79137190c329964", "runs-on"],
+]);
+
+function isVerifiedFrozenLocal(uses: string) {
+  const match = uses.match(frozenLocalCall);
+  return (
+    match !== null && verifiedLocalWorkflows.includes(match[1]!) && match[2] === verifiedLocalRef
+  );
+}
+
+function expectHostedJob(name: string, id: string, job: Job) {
+  const label = `${name} job ${id}`;
+  if (job.uses === undefined) {
+    const expected = pinnedHostedJobs.get(name) === id ? "ubuntu-24.04" : hosted;
+    expect(job["runs-on"], `${label} uses literal ${expected}`).toBe(expected);
+  } else {
+    expect(job, `${label} is a reusable call without a local runner`).not.toHaveProperty("runs-on");
+    const target = job.uses.match(localCall)?.[1];
+    if (target) {
+      const workflow = workflows.find((entry) => entry.name === target);
+      expect(events(workflow?.source.on), `${label} calls local workflow ${target}`).toContain(
+        "workflow_call",
       );
-    found.push({ id, runsOn: block.match(/^    runs-on: (.*)$/m)?.[1], orgReusable, block });
+    } else if (!isVerifiedFrozenLocal(job.uses)) {
+      const org = job.uses.match(/^TogetherWeOwn\/\.github\/\.github\/workflows\/(.+)$/)?.[1];
+      const input = verifiedHostedOrgReusables.get(org ?? "");
+      expect(input, `${label} uses an assessed reusable workflow: ${job.uses}`).toBeDefined();
+      // GitHub matches reusable-workflow inputs case-insensitively.
+      const inputs = Object.entries(job.with ?? {});
+      const overrides = inputs.filter(([key]) => key.toLowerCase() === input);
+      if (org?.startsWith("review-rules.yml@")) {
+        expect(overrides, `${label} needs explicit ${input}`).not.toHaveLength(0);
+      }
+      for (const [key, value] of overrides) {
+        expect(value, `${label} overrides ${key} only with hosted Linux`).toBe(hostedJson);
+      }
+    }
   }
-  return found;
+  for (const inputs of [job.with, ...(job.steps ?? []).map((step) => step.with)]) {
+    for (const [key, value] of Object.entries(inputs ?? {})) {
+      const input = key.toLowerCase();
+      if (input === "runs-on" || input === "runs-on-json") {
+        expect([JSON.stringify(hosted), hostedJson], `${label} input ${key}`).toContain(value);
+      }
+    }
+  }
+}
+
+function directJobs({ jobs }: Workflow) {
+  return Object.entries(jobs)
+    .filter(([, job]) => job.uses === undefined)
+    .map(([id, job]) => ({ id, runsOn: job["runs-on"] }));
+}
+
+function events(on: Workflow["on"] | undefined) {
+  if (typeof on === "string") return [on];
+  return Array.isArray(on) ? on : Object.keys(on ?? {});
 }
 
 describe("workflow runner labels", () => {
@@ -74,7 +123,7 @@ describe("workflow runner labels", () => {
     ] as const) {
       const workflow = workflows.find((entry) => entry.name === name);
       expect(workflow, name).toBeDefined();
-      expect(jobs(workflow!.text).map(({ id, runsOn }) => [id, runsOn])).toEqual(
+      expect(directJobs(workflow!.source).map(({ id, runsOn }) => [id, runsOn])).toEqual(
         ids.map((id) => [id, hosted]),
       );
       expect(workflow!.text).not.toMatch(/CI_OVERFLOW_RUNNER|private-runner-json/);
@@ -95,7 +144,7 @@ describe("workflow runner labels", () => {
   it("keeps every main CI job hosted for public and private branch dispatches", () => {
     const workflow = workflows.find(({ name }) => name === "ci.yml");
     expect(workflow).toBeDefined();
-    const ciJobs = jobs(workflow!.text);
+    const ciJobs = directJobs(workflow!.source);
     expect(ciJobs.map(({ id }) => id)).toEqual([
       "join-evidence-source",
       "bot-contract-drift",
@@ -115,7 +164,7 @@ describe("workflow runner labels", () => {
       // non-main branch, which the former PR-only guard did not cover.
       expect(runsOn, `ci.yml job ${id}`).toBe(hosted);
     }
-    expect(overflowSwitch("check")).not.toBe(hosted);
+    expect(events(workflow!.source.on)).toContain("workflow_dispatch");
   });
 
   it("keeps deploy, proof and gate jobs hosted for every event and visibility", () => {
@@ -132,7 +181,7 @@ describe("workflow runner labels", () => {
       const workflow = workflows.find((entry) => entry.name === name);
       expect(workflow, name).toBeDefined();
       expect(
-        jobs(workflow!.text).map(({ id, runsOn }) => [id, runsOn]),
+        directJobs(workflow!.source).map(({ id, runsOn }) => [id, runsOn]),
         name,
       ).toEqual(ids.map((id) => [id, hosted]));
     }
@@ -141,7 +190,7 @@ describe("workflow runner labels", () => {
   it("keeps all featured proof jobs on standard hosted runners", () => {
     const workflow = workflows.find(({ name }) => name === "featured-offline-proof.yml");
     expect(workflow).toBeDefined();
-    expect(jobs(workflow!.text).map(({ id, runsOn }) => [id, runsOn])).toEqual(
+    expect(directJobs(workflow!.source).map(({ id, runsOn }) => [id, runsOn])).toEqual(
       ["scope", "capture", "current-source", "featured-proof"].map((id) => [id, hosted]),
     );
   });
@@ -149,7 +198,9 @@ describe("workflow runner labels", () => {
   it("pins event evidence to the hosted visual runner", () => {
     const workflow = workflows.find(({ name }) => name === "kit-event-evidence.yml");
     expect(workflow).toBeDefined();
-    expect(jobs(workflow!.text).find(({ id }) => id === "capture")?.runsOn).toBe("ubuntu-24.04");
+    expect(directJobs(workflow!.source).find(({ id }) => id === "capture")?.runsOn).toBe(
+      "ubuntu-24.04",
+    );
   });
 
   it("keeps backup and staging jobs on standard hosted runners for every event", () => {
@@ -166,7 +217,7 @@ describe("workflow runner labels", () => {
       const workflow = workflows.find((entry) => entry.name === name);
       expect(workflow, name).toBeDefined();
       expect(
-        jobs(workflow!.text).map(({ id, runsOn }) => [id, runsOn]),
+        directJobs(workflow!.source).map(({ id, runsOn }) => [id, runsOn]),
         name,
       ).toEqual(ids.map((id) => [id, hosted]));
     }
@@ -198,119 +249,116 @@ describe("workflow runner labels", () => {
   it("keeps the XFS fixture on a disposable hosted runner for every event", () => {
     const workflow = workflows.find(({ name }) => name === "xfs-qualification.yml");
     expect(workflow).toBeDefined();
-    expect(jobs(workflow!.text).find(({ id }) => id === "fixture")?.runsOn).toBe("ubuntu-24.04");
+    expect(directJobs(workflow!.source).find(({ id }) => id === "fixture")?.runsOn).toBe(
+      "ubuntu-24.04",
+    );
   });
 
   it("recognizes only verified pinned same-repository calls", () => {
     const caller = (target: string, ref: string) =>
-      `jobs:\n  call:\n    uses: TogetherWeOwn/two-web-next/.github/workflows/${target}@${ref}\n`;
+      `TogetherWeOwn/two-web-next/.github/workflows/${target}@${ref}`;
     for (const target of verifiedLocalWorkflows) {
-      expect(jobs(caller(target, verifiedLocalRef))).toEqual([]);
+      expect(isVerifiedFrozenLocal(caller(target, verifiedLocalRef))).toBe(true);
     }
-    expect(jobs(caller("release.yml", "0".repeat(40)))).toHaveLength(1);
-    expect(jobs(caller("unknown.yml", verifiedLocalRef))).toHaveLength(1);
-    expect(jobs(caller("release.yml", "main"))).toHaveLength(1);
+    expect(isVerifiedFrozenLocal(caller("release.yml", "0".repeat(40)))).toBe(false);
+    expect(isVerifiedFrozenLocal(caller("unknown.yml", verifiedLocalRef))).toBe(false);
+    expect(isVerifiedFrozenLocal(caller("release.yml", "main"))).toBe(false);
   });
 
   it("finds every workflow job", () => {
     expect(workflows.length).toBeGreaterThan(0);
-    for (const { name, text } of workflows) expect(jobs(text).length, name).toBeGreaterThan(0);
-  });
-
-  it("runs every job on GitHub-hosted Linux unless the repo is private", () => {
-    for (const { name, text } of workflows) {
-      for (const { id, runsOn, orgReusable } of jobs(text)) {
-        if (orgReusable) continue;
-        // Visual baselines render body text with the runner's system fonts, so
-        // e2e.yml browser-smoke is deliberately pinned to ubuntu-24.04 and
-        // re-baselined in the same PR on bumps (docs/visual-regression.md).
-        // ubuntu-24.04 is still GitHub-hosted Linux, so the self-hosted
-        // queue-forever risk does not apply.
-        const allowed = pinnedHostedJob(name, id)
-          ? [hosted, "ubuntu-24.04", byVisibility, byVisibilityPrGuarded, overflowSwitch(id)]
-          : [hosted, byVisibility, byVisibilityPrGuarded, overflowSwitch(id)];
-        expect(allowed, `${name} job ${id}`).toContain(runsOn);
-      }
+    for (const { name, source } of workflows) {
+      expect(Object.keys(source.jobs).length, name).toBeGreaterThan(0);
+      expect(events(source.on).length, `${name} declares workflow events`).toBeGreaterThan(0);
     }
   });
 
-  it("evaluates the public-repo guard before any CI_OVERFLOW_* variable", () => {
-    let overflowJobs = 0;
-    for (const { name, text } of workflows) {
-      for (const { id, runsOn } of jobs(text)) {
-        if (!runsOn?.includes("vars.CI_OVERFLOW_")) continue;
-        overflowJobs += 1;
-        const guard = runsOn.indexOf(publicGuard);
-        const firstOverflowVar = runsOn.indexOf("vars.CI_OVERFLOW_");
-        expect(guard, `${name} job ${id} has the public guard`).toBeGreaterThan(-1);
-        expect(guard, `${name} job ${id} guards before reading the overflow vars`).toBeLessThan(
-          firstOverflowVar,
-        );
-        expect(runsOn, `${name} job ${id} routes public repos only to ${hosted}`).toMatch(
-          /^\$\{\{ fromJSON\(\(!github\.event\.repository\.private && '\["ubuntu-latest"\]'\) \|\| /,
-        );
-      }
+  it("requires the literal hosted runner or an assessed reusable call for every job", () => {
+    for (const { name, source } of workflows) {
+      for (const [id, job] of Object.entries(source.jobs)) expectHostedJob(name, id, job);
     }
-    expect(overflowJobs).toBe(0);
-    // Private branch dispatch with no overflow fell through to the fleet.
-    const repositoryPrivate = true;
-    const eventName: string = "workflow_dispatch";
-    const oldSelection =
-      (!repositoryPrivate && hosted) ||
-      ((eventName === "pull_request" || eventName === "merge_group") && hosted) ||
-      "self-hosted";
-    expect(oldSelection).toBe("self-hosted");
-    expect(overflowSwitch("check")).toContain("github.event_name == 'pull_request'");
-    expect(overflowSwitch("check")).not.toContain("workflow_dispatch");
+    for (const [name, id] of pinnedHostedJobs) {
+      const workflow = workflows.find((entry) => entry.name === name);
+      expect(workflow?.source.jobs[id]?.["runs-on"], `${name} job ${id}`).toBe("ubuntu-24.04");
+    }
   });
 
-  it("keeps self-hosted labels behind the repo-visibility check", () => {
+  it.each([
+    ["an omitted runner", ""],
+    ["a self-hosted label list", "runs-on: [self-hosted, two-selfhosted]"],
+    ["a runner group", "runs-on: {group: private, labels: ubuntu-latest}"],
+    ["an ARM runner", "runs-on: ubuntu-24.04-arm"],
+    ["a larger runner", "runs-on: ubuntu-24.04-16core"],
+    ["a variable selector", "runs-on: ${{ vars.CI_OVERFLOW_RUNNER }}"],
+    [
+      "a visibility selector",
+      "runs-on: ${{ github.event.repository.private && 'self-hosted' || 'ubuntu-latest' }}",
+    ],
+  ])("rejects %s in a branch-dispatched workflow", (_case, selector) => {
+    const yaml = `on: workflow_dispatch\njobs:\n  check:\n    name: Check\n    ${selector}`;
+    const source = parse(yaml) as Workflow;
+    expect(() => expectHostedJob("fixture.yml", "check", source.jobs.check!)).toThrow(
+      "uses literal ubuntu-latest",
+    );
+  });
+
+  it("requires fixed runner labels for the pinned jobs only", () => {
+    const fixed = { "runs-on": "ubuntu-24.04" };
+    const latest = { "runs-on": hosted };
+    expect(() => expectHostedJob("e2e.yml", "browser-smoke", fixed)).not.toThrow();
+    expect(() => expectHostedJob("e2e.yml", "browser-smoke", latest)).toThrow(
+      "uses literal ubuntu-24.04",
+    );
+    expect(() => expectHostedJob("fixture.yml", "check", fixed)).toThrow(
+      "uses literal ubuntu-latest",
+    );
+  });
+
+  it("rejects unassessed reusable pins and non-hosted runner overrides", () => {
+    const uses =
+      "TogetherWeOwn/.github/.github/workflows/test-guard.yml@2ef8ad6447e11d019ac3098bcfd011193b75266a";
+    const reviewRules = uses.replace("test-guard.yml", "review-rules.yml");
+    expect(() => expectHostedJob("fixture.yml", "call", { uses })).not.toThrow();
+    expect(() => expectHostedJob("fixture.yml", "call", { uses: reviewRules })).toThrow(
+      "needs explicit runs-on-json",
+    );
+    expect(() =>
+      expectHostedJob("fixture.yml", "call", { uses: uses.replace(/@.*/, `@${"0".repeat(40)}`) }),
+    ).toThrow("uses an assessed reusable workflow");
+    for (const [key, value] of [
+      ["runs-on-json", '["self-hosted"]'],
+      ["Runs-On-Json", '["windows-latest"]'],
+    ] as const) {
+      expect(() =>
+        expectHostedJob("fixture.yml", "call", { uses, with: { [key]: value } }),
+      ).toThrow(`overrides ${key} only with hosted Linux`);
+    }
+    expect(() =>
+      expectHostedJob("fixture.yml", "direct", {
+        "runs-on": hosted,
+        steps: [{ with: { "Runs-On-Json": "${{ vars.CI_OVERFLOW_RUNNER }}" } }],
+      }),
+    ).toThrow("input Runs-On-Json");
+  });
+
+  it("does not restore retired fleet or overflow settings in workflow source", () => {
     for (const { name, text } of workflows) {
-      const ungated = text
+      const retired = text
         .split("\n")
-        .filter((line) => !/^\s*#/.test(line) && /self-hosted|two-selfhosted/.test(line))
-        .filter((line) => !line.includes("github.event.repository.private && "));
-      expect(ungated, name).toEqual([]);
+        .filter(
+          (line) =>
+            !/^\s*#/.test(line) &&
+            /self-hosted|two-selfhosted|CI_OVERFLOW_|private-runner-json/.test(line),
+        );
+      expect(retired, name).toEqual([]);
     }
   });
 
-  // Trigger parsing: the block `on:` form (until the next top-level key) and
-  // the inline `on: pull_request` / `on: [pull_request, ...]` forms. Anything
-  // else fails the test loudly instead of reading as "not PR-triggered".
-  function triggersOnPullRequest(name: string, text: string) {
-    const onLine = text.match(/^on:(.*)$/m);
-    expect(onLine, `${name} has a parseable on: line`).not.toBeNull();
-    const inline = (onLine![1] ?? "").trim();
-    if (inline !== "" && !inline.startsWith("#")) return /\bpull_request\b/.test(inline);
-    const start = text.search(/^on:.*\n/m);
-    const rest = text.slice(start + onLine![0].length + 1);
-    const end = rest.search(/^[A-Za-z]/m);
-    const block = end < 0 ? rest : rest.slice(0, end);
-    expect(
-      /^ {2}[A-Za-z_]+\s*:/m.test(block),
-      `${name} has a parseable on: block with at least one trigger`,
-    ).toBe(true);
-    return /^ {2}pull_request\s*:/m.test(block);
-  }
-
-  // Org reusable workflows whose pinned ref was verified to run only on
-  // GitHub-hosted runners with no caller-side runner input (checked at the
-  // pin on 2026-11-17 for test-guard (runs-on-json); the three pr-size pins re-verified on
-  // 2026-11-11: each defaults its `runs-on` input to '["ubuntu-latest"]' and
-  // runs its job via fromJSON(inputs.runs-on)). A repin fails this test until
-  // the new pin is re-verified and this list updated; any other org reusable
-  // call from a PR-triggered workflow must pass an explicit hosted runner input.
-  const verifiedHostedOrgReusables = [
-    "TogetherWeOwn/.github/.github/workflows/test-guard.yml@2ef8ad6447e11d019ac3098bcfd011193b75266a",
-    "TogetherWeOwn/.github/.github/workflows/pr-size.yml@ac9ce8d63e0cebd19ede904ac79137190c329964",
-    "TogetherWeOwn/.github/.github/workflows/pr-size-gate.yml@ac9ce8d63e0cebd19ede904ac79137190c329964",
-    "TogetherWeOwn/.github/.github/workflows/pr-size-weekly.yml@ac9ce8d63e0cebd19ede904ac79137190c329964",
-  ];
-
-  it("keeps pull_request and merge_group runs off the self-hosted fleet", () => {
-    const prWorkflows = workflows.filter(({ name, text }) => triggersOnPullRequest(name, text));
-    // Non-vacuity: the four PR-triggered workflows whose jobs could otherwise
-    // select the self-hosted fleet while private are all in scope.
+  it("requires a separate assessment before allowing frozen local calls from PR events", () => {
+    const forEvent = (event: string) =>
+      workflows.filter((w) => events(w.source.on).includes(event));
+    const prWorkflows = forEvent("pull_request");
+    const mergeQueueWorkflows = forEvent("merge_group");
     expect(prWorkflows.map(({ name }) => name)).toEqual(
       expect.arrayContaining([
         "backup-bootstrap-selftest.yml",
@@ -319,56 +367,27 @@ describe("workflow runner labels", () => {
         "pr-gates.yml",
       ]),
     );
-    let guardedJobs = 0;
-    // A local reusable-workflow call inherits the caller's event, so a
-    // workflow a PR-triggered workflow calls must meet the same rule.
-    const checkJobs = (name: string, text: string) => {
-      // Frozen callees need a separate PR-event runner assessment, including
-      // when reached through a relative reusable-workflow call.
-      expect(text, `${name} has no unassessed pinned local call`).not.toMatch(
-        /^    uses: TogetherWeOwn\/two-web-next\/\.github\/workflows\//m,
-      );
-      for (const { id, runsOn, orgReusable, block } of jobs(text)) {
-        if (orgReusable) {
-          // The call inherits the caller's event, so the reusable job must
-          // be pinned to GitHub-hosted runners from here, whatever default
-          // the called workflow would pick for a private caller repository.
-          const uses = block.match(
-            /^    uses: (TogetherWeOwn\/\.github\/\.github\/workflows\/[\w.-]+\.ya?ml@[0-9a-f]{40})$/m,
-          )?.[1];
-          const explicitHosted = /^\s+runs-on(?:-json)?: '\["ubuntu-latest"\]'$/m.test(block);
-          expect(
-            explicitHosted || (uses !== undefined && verifiedHostedOrgReusables.includes(uses)),
-            `${name} job ${id} pins hosted runners for its org reusable call (${uses ?? "unparsed"})`,
-          ).toBe(true);
-          continue;
-        }
-        if (runsOn === undefined) continue;
-        const allowed = pinnedHostedJob(name, id)
-          ? [hosted, "ubuntu-24.04", byVisibilityPrGuarded, overflowSwitch(id)]
-          : [hosted, byVisibilityPrGuarded, overflowSwitch(id)];
-        expect(allowed, `${name} job ${id} keeps PR events hosted`).toContain(runsOn);
-        if (runsOn.includes("self-hosted")) guardedJobs += 1;
-        if (runsOn.includes("vars.CI_OVERFLOW_")) {
-          const guard = runsOn.indexOf(prGuard);
-          expect(guard, `${name} job ${id} has the PR guard`).toBeGreaterThan(-1);
-          expect(guard, `${name} job ${id} guards before the overflow vars`).toBeLessThan(
-            runsOn.indexOf("vars.CI_OVERFLOW_"),
-          );
-          expect(guard, `${name} job ${id} guards before the self-hosted label`).toBeLessThan(
-            runsOn.indexOf("self-hosted"),
-          );
+    expect(mergeQueueWorkflows.map(({ name }) => name)).toEqual(
+      expect.arrayContaining(["ci.yml", "e2e.yml", "pr-gates.yml"]),
+    );
+    // A relative reusable-workflow call inherits the caller's event.
+    const visited = new Set<string>();
+    const checkCalls = ({ name, source }: (typeof workflows)[number]) => {
+      if (visited.has(name)) return;
+      visited.add(name);
+      for (const [id, { uses }] of Object.entries(source.jobs)) {
+        if (!uses) continue;
+        expect(uses, `${name} job ${id} has no unassessed pinned local call`).not.toMatch(
+          frozenLocalCall,
+        );
+        const target = uses.match(localCall)?.[1];
+        if (target) {
+          const workflow = workflows.find((entry) => entry.name === target);
+          expect(workflow, `${name} calls ${target}`).toBeDefined();
+          checkCalls(workflow!);
         }
       }
     };
-    for (const { name, text } of prWorkflows) {
-      checkJobs(name, text);
-      for (const call of text.matchAll(/uses: \.\/\.github\/workflows\/([\w.-]+\.ya?ml)/g)) {
-        const target = workflows.find((w) => w.name === call[1]);
-        expect(target, `${name} calls ${call[1]}`).toBeDefined();
-        checkJobs(target!.name, target!.text);
-      }
-    }
-    expect(guardedJobs).toBe(0);
+    for (const workflow of [...prWorkflows, ...mergeQueueWorkflows]) checkCalls(workflow);
   });
 });

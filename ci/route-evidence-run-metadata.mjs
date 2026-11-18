@@ -1,10 +1,20 @@
+import { bindRouteEvidencePullRequest } from "./route-evidence-event-binding.mjs";
+
 // Inputs must come from the trusted workflow and GitHub API, not an artifact.
 // This check alone does not authenticate producer outputs, report contents,
 // or the orchestration SHA; that binding must be established separately.
-// Keep the run head distinct from the workflow-code SHA, but require it to
-// match the source until an independently authenticated event binding exists.
 const sha = (value) => typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
 const positive = (value) => Number.isSafeInteger(value) && value > 0;
+
+function matchesPullRequest(record, expected) {
+  const pulls = record.pull_requests;
+  return (
+    Array.isArray(pulls) &&
+    pulls.length === 1 &&
+    pulls[0]?.number === expected.pullNumber &&
+    pulls[0]?.head?.sha === expected.sourceSha
+  );
+}
 
 // The caller must collect every page of the attempt-specific jobs API. A single
 // matching page cannot establish uniqueness when another page is missing.
@@ -29,7 +39,9 @@ export function selectRouteEvidenceProducer(jobs, totalCount, name) {
   return matches[0];
 }
 
-export function assertRouteEvidenceRunMetadata(expected, run, attempt, job, liveHead) {
+// Optional pullRequest inputs are the trusted runner context and event file,
+// plus the independently fetched live PR. Rebind against this exact run.
+export function assertRouteEvidenceRunMetadata(expected, run, attempt, job, liveHead, pullRequest) {
   const refuse = () => {
     throw new Error("route evidence refused: inconsistent run metadata");
   };
@@ -53,7 +65,7 @@ export function assertRouteEvidenceRunMetadata(expected, run, attempt, job, live
     !sha(expected.sourceSha) ||
     !sha(expected.orchestrationSha) ||
     !sha(expected.runHeadSha) ||
-    expected.runHeadSha !== expected.sourceSha
+    (pullRequest === undefined && expected.runHeadSha !== expected.sourceSha)
   )
     refuse();
   if (
@@ -89,14 +101,25 @@ export function assertRouteEvidenceRunMetadata(expected, run, attempt, job, live
   if (run.event === "pull_request") {
     if (
       !positive(expected.pullNumber) ||
-      !Array.isArray(run.pull_requests) ||
-      run.pull_requests.length !== 1 ||
-      run.pull_requests[0]?.number !== expected.pullNumber ||
-      run.pull_requests[0]?.head?.sha !== expected.sourceSha ||
+      !matchesPullRequest(run, expected) ||
       liveHead !== expected.sourceSha
     )
       refuse();
+    if (pullRequest !== undefined) {
+      const bound = bindRouteEvidencePullRequest(
+        pullRequest?.context,
+        pullRequest?.event,
+        run,
+        pullRequest?.livePull,
+      );
+      if (
+        bound.pullNumber !== expected.pullNumber ||
+        bound.sourceSha !== expected.sourceSha ||
+        !matchesPullRequest(attempt, expected)
+      )
+        refuse();
+    }
   } else if (run.event === "push" || run.event === "workflow_dispatch") {
-    if (expected.sourceSha !== expected.orchestrationSha) refuse();
+    if (pullRequest !== undefined || expected.sourceSha !== expected.orchestrationSha) refuse();
   } else refuse();
 }
