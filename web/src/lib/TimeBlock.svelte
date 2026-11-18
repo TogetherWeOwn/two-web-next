@@ -31,7 +31,33 @@ let time = $derived(structuredTime(start, viewerZone || browserZone));
 let endedTime = $derived(structuredTime(end, viewerZone || browserZone));
 let snapshot = $derived(structuredTime(asOf, viewerZone || browserZone));
 let startInstant = $derived(toInstant(start));
+let shortDate = $derived(
+  startInstant && time
+    ? new Intl.DateTimeFormat("en-GB", {
+        timeZone: time.zone,
+        day: "numeric",
+        month: "short",
+      }).format(startInstant)
+    : "",
+);
 let snapshotInstant = $derived(toInstant(asOf));
+let snapshotLabel = $derived.by(() => {
+  if (!time || !snapshot || !startInstant || !snapshotInstant) return "";
+  const dateKey = new Intl.DateTimeFormat("en-GB", {
+    timeZone: time.zone,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  });
+  const date = new Intl.DateTimeFormat("en-GB", {
+    timeZone: time.zone,
+    day: "numeric",
+    month: "short",
+  });
+  return dateKey.format(startInstant) === dateKey.format(snapshotInstant)
+    ? snapshot.localTime
+    : `${date.format(snapshotInstant)} ${snapshot.localTime}`;
+});
 let remaining = $derived(
   startInstant && snapshotInstant ? startInstant.getTime() - snapshotInstant.getTime() : NaN,
 );
@@ -64,21 +90,21 @@ onMount(() => {
 
 {#if time}
   <div class="time-block" data-state={eventState}>
-    <time datetime={time.datetime} class:cancelled={eventState === "cancelled"}>{time.localTime}</time>
+    <time datetime={time.datetime} class:cancelled={eventState === "cancelled"}>{eventState === "ended" ? shortDate : eventState === "live" && !withdrawn ? "Live" : time.localTime}</time>
     <div class="details">
-      <div>{time.localDate}, {time.zone}{#if browserZone && !viewerZone}{" (from your browser)"}{/if}</div>
+      <div>{time.localDate}, your time{#if browserZone && !viewerZone}{" (from your browser)"}{/if}</div>
       <div class="anchor">
-        {time.utcTime} UTC
-        {#if eventState === "upcoming" && countdown && !withdrawn} · {countdown}
-        {:else if eventState === "live" && !withdrawn} · Live since {time.localTime} {time.zone}{#if roomCount !== undefined && Number.isSafeInteger(roomCount) && roomCount >= 0} · {roomCount} in the room{/if}
-        {:else if eventState === "ended" && endedTime} · ended {endedTime.localTime} {endedTime.zone} · Echo frozen
-        {:else if eventState === "cancelled"} · Cancelled{/if}
+        {time.zone}{" · "}{time.utcTime} UTC
+        {#if eventState === "upcoming" && countdown && !withdrawn}{" · "}{countdown}
+        {:else if eventState === "live" && !withdrawn}{" · "}since {time.localTime}{#if roomCount !== undefined && Number.isSafeInteger(roomCount) && roomCount >= 0}{" · "}{roomCount} in the room{/if}
+        {:else if eventState === "ended"}{" · "}{endedTime ? `ended ${endedTime.localTime}` : "Ended"}{" · "}Echo frozen
+        {:else if eventState === "cancelled"}{" · "}Cancelled{/if}
         {#if hasClaim && snapshot}
-          · {withdrawn && eventState === "live" ? "live as of" : "as of"} <time datetime={snapshot.datetime}>{snapshot.localDate} {snapshot.localTime} {snapshot.zone}</time>
-          {#if withdrawn && refreshPath} · <TextLink href={refreshPath}>Refresh<span class="sr-only"> the event time</span></TextLink>{/if}
+          {" · "}{withdrawn && eventState === "live" ? "live as of" : "as of"} <time datetime={snapshot.datetime}>{snapshotLabel}</time>
+          {#if withdrawn && refreshPath}{" · "}<TextLink href={refreshPath}>Refresh<span class="sr-only"> the event time</span></TextLink>{/if}
         {:else if eventState === "live" && !snapshot}
-          · Live status unavailable
-          {#if refreshPath} · <TextLink href={refreshPath}>Refresh<span class="sr-only"> the event time</span></TextLink>{/if}
+          {" · "}Live status unavailable
+          {#if refreshPath}{" · "}<TextLink href={refreshPath}>Refresh<span class="sr-only"> the event time</span></TextLink>{/if}
         {/if}
       </div>
     </div>
@@ -88,10 +114,11 @@ onMount(() => {
 {/if}
 
 <style>
-  .time-block { border-top: 1px solid var(--two-color-hair-2); padding-top: var(--two-space-7); display: flex; align-items: baseline; gap: var(--two-space-4); flex-wrap: wrap; }
-  .time-block > time { font-size: var(--two-font-size-figure); font-variant-numeric: tabular-nums; }
+  .time-block { border-top: 1px solid var(--two-color-hair-2); padding-top: var(--two-space-inset-card-lg); display: flex; align-items: baseline; gap: var(--two-space-4); flex-wrap: wrap; color: var(--two-color-text-primary); font-size: var(--two-font-size-body-reading); }
+  .time-block > time { font-family: var(--two-font-display); font-size: var(--two-font-size-figure); font-weight: var(--two-font-weight-display); letter-spacing: var(--two-tracking-figure); font-variant-numeric: tabular-nums; }
   time.cancelled { text-decoration: line-through; }
-  .details { color: var(--t1); font-size: var(--text-ui); }
-  .anchor { color: var(--t3); font-family: var(--font-data); font-size: var(--text-label); }
+  .details { color: var(--two-color-text-primary); font-size: var(--two-font-size-body-reading); }
+  .anchor { color: var(--two-color-text-tertiary); font-family: var(--two-font-data); font-size: var(--two-font-size-label); }
+  @media (max-width: 390px) { .details { flex-basis: 100%; } }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 </style>

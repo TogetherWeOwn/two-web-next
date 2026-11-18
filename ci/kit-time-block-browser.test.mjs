@@ -67,17 +67,27 @@ test("time block hydrates and withdraws expired snapshot claims", {
     }, data);
     await page.addScriptTag({ content: client });
     await page.getByText("starts in 10 m").waitFor();
+    assert.equal(await page.getByRole("link", { name: /Refresh/ }).count(), 0);
     assert.match(await page.locator(".time-block").innerText(), /America\/New_York/);
     await page.clock.fastForward(60_000);
     await page.getByRole("link", { name: /Refresh/ }).waitFor();
     assert.doesNotMatch(await page.locator(".time-block").innerText(), /starts in/);
     await page.clock.fastForward(9 * 60_000);
     await page.getByRole("button", { name: "Replace snapshot" }).click();
-    await page.getByText(/Live since/).waitFor();
-    assert.match(await page.locator(".time-block").innerText(), /8 in the room/);
+    await page.getByText(/since 14:30/).waitFor();
+    assert.equal(await page.getByRole("link", { name: /Refresh/ }).count(), 0);
+    const liveText = await page.locator(".time-block").innerText();
+    assert.match(liveText, /^Live\b/);
+    assert.match(liveText, / · 8 in the room/);
+    assert.match(liveText, /America\/New_York · 19:30 UTC/);
+    assert.equal((liveText.match(/America\/New_York/g) ?? []).length, 1);
+    assert.match(liveText, /as of 14:30/);
     await page.clock.fastForward(60_000);
     await page.getByText(/live as of/).waitFor();
-    assert.doesNotMatch(await page.locator(".time-block").innerText(), /Live since|8 in the room/);
+    assert.doesNotMatch(
+      await page.locator(".time-block").innerText(),
+      /^Live\b|since 14:30|8 in the room/,
+    );
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

@@ -31,6 +31,15 @@ describe("TimeBlock server output", () => {
     expect(html).not.toMatch(/starts in|\bin 10 m/);
   });
 
+  it("labels the viewer zone and formats snapshot dates only across local days", () => {
+    const sameDay = render(base);
+    expect(sameDay).toContain("your time");
+    expect(sameDay).toMatch(/Europe\/London(?: |&nbsp;|&#160;)· 19:30 UTC/);
+    expect(sameDay).toMatch(/as of\s*<time[^>]*>19:20<\/time>/);
+    const previousDay = render({ ...base, asOf: "2026-11-06T23:50:00Z" });
+    expect(previousDay).toMatch(/as of\s*<time[^>]*>6 Nov 23:50<\/time>/);
+  });
+
   it("withdraws live and room count claims but retains the snapshot time", () => {
     const html = render({ ...base, state: "live", roomCount: 8 });
     expect(html).toContain("live as of");
@@ -56,9 +65,24 @@ describe("TimeBlock server output", () => {
     expect(invalid).not.toContain("<time");
   });
 
+  it("shows the local event date and ended wording even without an end time", () => {
+    const html = render({
+      ...base,
+      state: "ended",
+      start: "2026-11-07T23:30:00Z",
+      viewerZone: "Europe/Berlin",
+    });
+    expect(html).toContain("8 Nov");
+    expect(html).toContain("Ended");
+    expect(html).toContain("Echo frozen");
+    expect(html).not.toContain("href=");
+  });
+
   it("rejects unsafe refresh destinations and falls back to UTC for invalid zones", () => {
     for (const refreshHref of ["//evil.example", "/\\evil.example", "https://evil.example"]) {
-      expect(render({ ...base, refreshHref })).not.toContain("href=");
+      const html = render({ ...base, refreshHref });
+      expect(html).not.toContain("href=");
+      expect(html).toContain("as of");
     }
     expect(render({ ...base, viewerZone: "Invalid/Zone" })).toContain("UTC");
   });
