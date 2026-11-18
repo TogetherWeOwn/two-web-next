@@ -101,6 +101,6 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
     expect(workflow).toMatch(
       /concurrency:\n {6}group: deploy-staging\n {6}cancel-in-progress: false/,
     );
-    expect(workflow).toMatch(/^permissions:\n {2}contents: read\n {2}actions: read\n/m);
+    expect(workflow).toMatch(/^permissions:\n {2}contents: read\n {2}actions: read #[^\n]+\n\n/m);
   });
 });

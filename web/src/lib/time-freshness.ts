@@ -1,9 +1,8 @@
 import { snapshotNow, timeSnapshotIsStale, type SnapshotClock } from "./time-freshness-clock";
 
-export interface TimeSnapshot {
-  asOf: number;
+export interface TimeSnapshot extends Pick<SnapshotClock, "asOf" | "snapshotAgeAtResponseStart"> {
   staleAt: number | null;
-  // performance.now() time origin of the response carrying this snapshot.
+  // Response start in the page's performance.now() time coordinate.
   responseStart: number;
 }
 
@@ -74,6 +73,7 @@ export function watchTimeSnapshot(
     clock = {
       asOf: next.asOf,
       responseStart: next.responseStart,
+      snapshotAgeAtResponseStart: next.snapshotAgeAtResponseStart,
       hydrationWall: Math.max(hydrationWall, previousNow),
       hydrationMonotonic: monotonic,
       previousNow,

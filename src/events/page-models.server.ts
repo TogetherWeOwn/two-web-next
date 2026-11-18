@@ -59,15 +59,17 @@ export function resolveCalendarInput(input: {
   event?: string | null;
   month?: string | null;
 }): CalendarPageInput {
-  const q = input.q ?? "";
-  const queryTooLong = [...q].length > MAX_QUERY_LENGTH;
+  const rawQuery = input.q ?? "";
+  const queryTooLong = [...rawQuery].length > MAX_QUERY_LENGTH;
+  // The screen and SQL must agree that a NUL-only query is not a search.
+  const q = rawQuery.replaceAll(String.fromCharCode(0), "");
   const searching = !queryTooLong && matchQuery(q) !== null;
   const view = searching ? "list" : input.view === "calendar" ? "calendar" : "list";
   const parsedPage = Number.parseInt(input.page ?? "1", 10);
   const rawJumpKey = (input.event ?? "").replaceAll(String.fromCharCode(0), "");
 
   return {
-    q,
+    q: searching ? q : "",
     game: input.game ?? "",
     searching,
     view,
@@ -85,6 +87,7 @@ export interface CalendarPageModel {
   upcoming: (PublicEvent | DiscordTransient)[];
   past: PublicEvent[];
   pastMayBeTruncated?: boolean;
+  monthReadMayBeIncomplete?: boolean;
   zone: string;
   totalPages: number;
   emptyState: ReturnType<typeof calendarEmptyState>;
@@ -194,9 +197,14 @@ export async function loadCalendarPageModel(args: {
 
   let upcoming = probe;
   let zone = probeZone;
+  let monthReadMayBeIncomplete = false;
   const month = parseCalendarMonth(input.month) ?? fallbackMonth;
   if (view === "calendar") {
     const monthRows = await listUpcomingForMonth(db, month, now, opts);
+    monthReadMayBeIncomplete =
+      monthRows.mayBeTruncated === true ||
+      monthRows.discardedMayOverlapMonth === true ||
+      localPast.discardedStartMonths?.has(month) === true;
     zone = calendarZone([
       ...monthRows.map((event) => event.timezone),
       ...localPast.map((event) => event.timezone),
@@ -221,7 +229,7 @@ export async function loadCalendarPageModel(args: {
     // A recognized game narrows the empty claim, not text-search demand below.
     searching: searching || gameFilter !== null,
     upcomingEmpty: totalUpcoming === 0 && transients.length === 0,
-    pastEmpty: localPast.length === 0,
+    pastEmpty: localPast.length === 0 && !localPast.hadDiscardedRows,
     readFailed: discordFailed,
   });
 
@@ -247,6 +255,7 @@ export async function loadCalendarPageModel(args: {
     upcoming,
     past: localPast,
     pastMayBeTruncated: localPast.mayBeTruncated,
+    monthReadMayBeIncomplete,
     zone,
     totalPages,
     emptyState,

@@ -111,6 +111,15 @@ describe("content leaves render without webfonts", () => {
     ).toContain(".base-theme:not(.content-theme) h1");
     expect(guardsOf(".base-theme h1{font-family:var(--font-display)}")).toEqual([]);
     expect(
+      guardsOf(
+        ".base-theme:not(.content-theme) .hero.kit-home h1,.base-theme:not(.content-theme) h2{font-family:var(--font-display)}",
+      ),
+    ).toEqual([
+      ".base-theme:not(.content-theme) .hero.kit-home h1,.base-theme:not(.content-theme) h2",
+    ]);
+    const mixedSelector = ".base-theme .hero.kit-home h1,.base-theme:not(.content-theme) h2";
+    expect(guardsOf(`${mixedSelector}{font-family:var(--font-display)}`)).toEqual([mixedSelector]);
+    expect(
       displayTargets(".base-theme h1,.base-theme h2{font-family:var(--font-display)}"),
     ).toEqual([".base-theme h1", ".base-theme h2"]);
   });

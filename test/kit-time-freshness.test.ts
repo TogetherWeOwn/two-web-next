@@ -9,7 +9,10 @@ type TestPage = EventTarget & {
   clearTimeout: typeof clearTimeout;
 };
 type TestVisibility = EventTarget;
-type Snapshot = { asOf: number; staleAt: number | null; responseStart: number };
+function snapshot(staleAt: number | null, responseStart = 0, age: number | null = 0) {
+  return { asOf: 1_000, staleAt, responseStart, snapshotAgeAtResponseStart: age };
+}
+type Snapshot = ReturnType<typeof snapshot>;
 let createWatcher: (
   snapshot: Snapshot,
   onStale: () => void,
@@ -62,9 +65,40 @@ describe("page-owned snapshot watcher", () => {
     page: TestPage,
     visibility: TestVisibility,
   ) {
-    return createWatcher({ asOf: 1_000, staleAt, responseStart: 0 }, onStale, page, visibility)
-      .dispose;
+    return createWatcher(snapshot(staleAt), onStale, page, visibility).dispose;
   }
+
+  it("counts the age at receipt for initial and replacement deadlines", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const { page, visibility } = environment();
+    const onStale = vi.fn();
+    const watcher = createWatcher(snapshot(2_000, 0, 800), onStale, page, visibility);
+    vi.advanceTimersByTime(199);
+    expect(onStale).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onStale).toHaveBeenCalledOnce();
+    // The replacement's age bound advances beyond the prior clock reading.
+    watcher.replace(snapshot(2_200, 200, 1_100));
+    vi.advanceTimersByTime(99);
+    expect(onStale).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(1);
+    expect(onStale).toHaveBeenCalledTimes(2);
+    watcher.dispose();
+  });
+
+  it.each([null, -1, Infinity, NaN])("withdraws a claim with untrusted age %s", (age) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const { page, visibility } = environment();
+    const onStale = vi.fn();
+    const watcher = createWatcher(snapshot(2_000), onStale, page, visibility);
+    expect(vi.getTimerCount()).toBe(1);
+    watcher.replace(snapshot(2_000, 0, age));
+    expect(onStale).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    watcher.dispose();
+  });
 
   it("rechecks replacement snapshots and withdraws on a monotonic rollback", () => {
     vi.useFakeTimers();
@@ -76,16 +110,11 @@ describe("page-owned snapshot watcher", () => {
       value: { now: () => monotonic },
     });
     const onStale = vi.fn();
-    const watcher = createWatcher(
-      { asOf: 1_000, staleAt: 2_000, responseStart: 0 },
-      onStale,
-      page,
-      visibility,
-    );
+    const watcher = createWatcher(snapshot(2_000), onStale, page, visibility);
     monotonic = 1_000;
     page.dispatchEvent(new Event("pageshow"));
     expect(onStale).toHaveBeenCalledOnce();
-    watcher.replace({ asOf: 1_000, staleAt: 3_000, responseStart: 1_000 });
+    watcher.replace(snapshot(3_000, 1_000));
     expect(vi.getTimerCount()).toBe(1);
     monotonic = 999;
     page.dispatchEvent(new Event("pageshow"));
@@ -104,20 +133,15 @@ describe("page-owned snapshot watcher", () => {
       value: { now: () => monotonic },
     });
     const onStale = vi.fn();
-    const watcher = createWatcher(
-      { asOf: 1_000, staleAt: 5_000, responseStart: 0 },
-      onStale,
-      page,
-      visibility,
-    );
+    const watcher = createWatcher(snapshot(5_000), onStale, page, visibility);
     monotonic = 1_000;
-    watcher.replace({ asOf: 1_000, staleAt: 1_500, responseStart: 1_000 });
+    watcher.replace(snapshot(1_500, 1_000));
     expect(onStale).toHaveBeenCalledOnce();
     monotonic = 999;
-    watcher.replace({ asOf: 1_000, staleAt: 5_000, responseStart: 999 });
+    watcher.replace(snapshot(5_000, 999));
     expect(onStale).toHaveBeenCalledTimes(2);
     monotonic = 1_001;
-    watcher.replace({ asOf: 1_000, staleAt: 5_000, responseStart: 1_001 });
+    watcher.replace(snapshot(5_000, 1_001));
     expect(onStale).toHaveBeenCalledTimes(3);
     expect(vi.getTimerCount()).toBe(0);
     watcher.dispose();
@@ -133,19 +157,14 @@ describe("page-owned snapshot watcher", () => {
       value: { now: () => monotonic },
     });
     const onStale = vi.fn();
-    const watcher = createWatcher(
-      { asOf: 1_000, staleAt: null, responseStart: 0 },
-      onStale,
-      page,
-      visibility,
-    );
+    const watcher = createWatcher(snapshot(null), onStale, page, visibility);
     monotonic = 1_000;
     page.dispatchEvent(new Event("pageshow"));
     monotonic = 999;
     visibility.dispatchEvent(new Event("visibilitychange"));
     expect(onStale).not.toHaveBeenCalled();
     monotonic = 1_001;
-    watcher.replace({ asOf: 1_000, staleAt: 5_000, responseStart: 1_001 });
+    watcher.replace(snapshot(5_000, 1_001));
     expect(onStale).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
     watcher.dispose();
@@ -155,13 +174,8 @@ describe("page-owned snapshot watcher", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const { page, visibility } = environment();
-    const onStale = vi.fn(() => watcher.replace({ asOf: 1_000, staleAt: 5_000, responseStart: 0 }));
-    const watcher = createWatcher(
-      { asOf: 1_000, staleAt: 2_000, responseStart: 0 },
-      onStale,
-      page,
-      visibility,
-    );
+    const onStale = vi.fn(() => watcher.replace(snapshot(5_000)));
+    const watcher = createWatcher(snapshot(2_000), onStale, page, visibility);
     vi.advanceTimersByTime(1_000);
     expect(onStale).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(1);
@@ -169,12 +183,7 @@ describe("page-owned snapshot watcher", () => {
     expect(vi.getTimerCount()).toBe(0);
 
     const disposeOnStale = vi.fn(() => second.dispose());
-    const second = createWatcher(
-      { asOf: 1_000, staleAt: 3_000, responseStart: 0 },
-      disposeOnStale,
-      page,
-      visibility,
-    );
+    const second = createWatcher(snapshot(3_000), disposeOnStale, page, visibility);
     vi.advanceTimersByTime(1_000);
     expect(disposeOnStale).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
@@ -187,12 +196,7 @@ describe("page-owned snapshot watcher", () => {
     vi.setSystemTime(1_000);
     const { page, visibility } = environment();
     const onStale = vi.fn();
-    const watcher = createWatcher(
-      { asOf: 1_000, staleAt: 1_000, responseStart: 0 },
-      onStale,
-      page,
-      visibility,
-    );
+    const watcher = createWatcher(snapshot(1_000), onStale, page, visibility);
     expect(onStale).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
     watcher.dispose();
@@ -203,13 +207,8 @@ describe("page-owned snapshot watcher", () => {
     vi.setSystemTime(1_000);
     const { page, visibility } = environment();
     const onStale = vi.fn();
-    const watcher = createWatcher(
-      { asOf: 1_000, staleAt: 5_000, responseStart: 0 },
-      onStale,
-      page,
-      visibility,
-    );
-    watcher.replace({ asOf: 1_000, staleAt: 1_000, responseStart: 0 });
+    const watcher = createWatcher(snapshot(5_000), onStale, page, visibility);
+    watcher.replace(snapshot(1_000));
     expect(onStale).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
     page.dispatchEvent(new Event("pageshow"));
@@ -222,19 +221,14 @@ describe("page-owned snapshot watcher", () => {
     vi.setSystemTime(1_000);
     const { page, visibility } = environment();
     const onStale = vi.fn();
-    const watcher = createWatcher(
-      { asOf: 1_000, staleAt: 5_000, responseStart: 0 },
-      onStale,
-      page,
-      visibility,
-    );
+    const watcher = createWatcher(snapshot(5_000), onStale, page, visibility);
     for (const responseStart of [NaN, -1, 1]) {
-      watcher.replace({ asOf: 1_000, staleAt: 5_000, responseStart });
+      watcher.replace(snapshot(5_000, responseStart));
       expect(vi.getTimerCount()).toBe(0);
     }
     expect(onStale).toHaveBeenCalledTimes(3);
     watcher.dispose();
-    watcher.replace({ asOf: 1_000, staleAt: 1_000, responseStart: 0 });
+    watcher.replace(snapshot(1_000));
     expect(onStale).toHaveBeenCalledTimes(3);
   });
 

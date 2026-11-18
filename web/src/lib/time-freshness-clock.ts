@@ -3,9 +3,13 @@ import { twoMotionPollStaleAfter } from "../../../vendor/design-kit/tokens";
 /**
  * Return the deadline for a server snapshot's relative or live claims.
  * A consuming page must enforce the kit's cache contract separately: shared
- * responses use max-age=0 and s-maxage no greater than each claim's
- * staleAt minus asOf, rounded down to seconds; zero means no shared caching.
- * Otherwise use private, no-cache. Do not serve C4 pages with
+ * responses use max-age=0 and cap s-maxage at the earliest claim's remaining
+ * lifetime at response emission (staleAt minus server time, rounded down to
+ * seconds). Do not share if that bound is unknown or less than one second;
+ * withdraw claims that have already expired. Use private, no-cache
+ * for non-shared responses. Shared responses also need a trustworthy age
+ * bound at receipt: the HTTP Age header alone does not account for time
+ * before response emission. Do not serve C4 pages with
  * stale-while-revalidate, stale-if-error or immutable.
  * This helper does not set headers or invalidate an existing cache entry.
  */
@@ -35,6 +39,8 @@ export function timeStaleAt(
 export interface SnapshotClock {
   asOf: number;
   responseStart: number;
+  /** Trusted upper bound in ms on the snapshot's age at responseStart, or null if unknown. */
+  snapshotAgeAtResponseStart: number | null;
   hydrationWall: number;
   hydrationMonotonic: number;
   previousNow: number;
@@ -42,8 +48,18 @@ export interface SnapshotClock {
 
 /** Compute the conservative snapshot clock, or NaN when either clock is unreliable. */
 export function snapshotNow(clock: SnapshotClock, wall: number, monotonic: number): number {
-  const { asOf, responseStart, hydrationWall, hydrationMonotonic, previousNow } = clock;
+  const {
+    asOf,
+    responseStart,
+    snapshotAgeAtResponseStart,
+    hydrationWall,
+    hydrationMonotonic,
+    previousNow,
+  } = clock;
   if (
+    snapshotAgeAtResponseStart === null ||
+    !Number.isFinite(snapshotAgeAtResponseStart) ||
+    snapshotAgeAtResponseStart < 0 ||
     ![asOf, responseStart, hydrationWall, hydrationMonotonic, previousNow, wall, monotonic].every(
       Number.isFinite,
     ) ||
@@ -59,7 +75,7 @@ export function snapshotNow(clock: SnapshotClock, wall: number, monotonic: numbe
     previousNow,
     wall,
     hydrationWall + monotonic - hydrationMonotonic,
-    asOf + monotonic - responseStart,
+    asOf + snapshotAgeAtResponseStart + (monotonic - responseStart),
   );
 }
 
