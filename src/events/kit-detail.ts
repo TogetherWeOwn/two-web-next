@@ -166,6 +166,8 @@ export function kitSeatCard(
   };
 }
 
+export { kitEventFacts } from "./kit-event-facts";
+
 export interface KitEventDetailModel {
   seatCard: KitSeatCard;
   /** Escaped server-only member presentation; created after disclosure declaration. */
