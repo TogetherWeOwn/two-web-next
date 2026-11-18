@@ -25,7 +25,7 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
   let quote = null;
   let tokenStart = true;
   let identifier = false;
-  let commandStart = 0;
+  let headStart = 0;
   let ordinaryCommand = false;
   let subscriptDepth = 0;
   let arithmetic = 0;
@@ -54,11 +54,11 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
       if (c === ";" || c === "\n" || (!subscriptDepth && /[|&)]/.test(c))) {
         subscriptDepth = 0;
         ordinaryCommand = false;
-        commandStart = c === ")" ? -1 : i + 1;
-      } else if (commandStart >= 0 && identifier && /[ \t]/.test(c)) {
+        headStart = c === ")" ? -1 : i + 1;
+      } else if (headStart >= 0 && identifier && /[ \t]/.test(c)) {
         // Keep keywords and declaration commands eligible for assignment words.
-        ordinaryCommand = ORDINARY_COMMAND.test(text.slice(commandStart, i).replace(/\\\r?\n/g, ""));
-        commandStart = -1;
+        ordinaryCommand = ORDINARY_COMMAND.test(text.slice(headStart, i).replace(/\\\r?\n/g, ""));
+        headStart = -1;
       }
       if (c === "[" && (subscriptDepth || (!ordinaryCommand && identifier))) subscriptDepth++;
       else if (c === "]" && subscriptDepth) subscriptDepth--;
@@ -119,7 +119,7 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
         }
       }
       i = pos - 1;
-      commandStart = pos;
+      headStart = pos;
       tokenStart = true;
       continue;
     }
