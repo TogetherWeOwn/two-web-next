@@ -111,7 +111,26 @@ test("Hono exposes each consumed role once and omits unread roles", () => {
     assert.equal([...css.matchAll(new RegExp(`--${alias}:`, "g"))].length, consumed ? 1 : 0, alias);
   }
   const facade = outputs.get("public/theme-tokens.css");
-  assert.match(facade, /schedule-theme[^}]*--hair1:/);
+  const base = facade.match(/^\.base-theme\{([^}]+)\}/)?.[1];
+  const schedule = facade.match(
+    /\.base-theme\.schedule-theme,\.base-theme\[data-theme=schedule\]\{([^}]+)\}/,
+  )?.[1];
+  assert.ok(base && schedule, "the facade has separate base and schedule rules");
+  for (const alias of [
+    "g1",
+    "g3",
+    "hair1",
+    "t1",
+    "space-1",
+    "space-2",
+    "space-4",
+    "radius-pill",
+    "font-size-small",
+    "font-weight-medium",
+  ]) {
+    assert.ok(schedule.includes(`--${alias}:`), `${alias} is available in the schedule theme`);
+    assert.ok(!base.includes(`--${alias}:`), `${alias} is absent from the base theme`);
+  }
   assert.ok(!facade.includes("--hair2:"));
   for (const alias of ["hair1", "hair2"]) {
     assert.ok(!outputs.get("public/theme.css").includes(`--${alias}:`));

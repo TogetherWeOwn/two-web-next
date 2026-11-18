@@ -12,7 +12,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
 const loadWeb = (name) => import(pathToFileURL(webRequire.resolve(name)).href);
 
-test("imported filter links retain their theme-backed styles", { timeout: 120000 }, async () => {
+async function checkFilterLinks(entry, themeClass) {
   const output = await mkdtemp(join(tmpdir(), "kit-filter-browser-"));
   let server;
   let browser;
@@ -31,7 +31,7 @@ test("imported filter links retain their theme-backed styles", { timeout: 120000
         outDir: output,
         emptyOutDir: false,
         lib: {
-          entry: join(root, "test/fixtures/kit-filter-browser-entry.js"),
+          entry: join(root, "test/fixtures", entry),
           formats: ["es"],
           fileName: "fixture",
         },
@@ -53,7 +53,7 @@ test("imported filter links retain their theme-backed styles", { timeout: 120000
       } else {
         response.writeHead(200, { "content-type": "text/html" });
         response.end(
-          '<!doctype html><html><head><link rel="stylesheet" href="/fixture.css"></head><body class="base-theme schedule-theme"><script type="module" src="/fixture.js"></script></body></html>',
+          `<!doctype html><html><head><link rel="stylesheet" href="/fixture.css"></head><body class="${themeClass}"><script type="module" src="/fixture.js"></script></body></html>`,
         );
       }
     });
@@ -129,4 +129,15 @@ test("imported filter links retain their theme-backed styles", { timeout: 120000
       );
     await rm(output, { recursive: true, force: true });
   }
-});
+}
+
+for (const [stylesheet, entry, themeClass] of [
+  ["Svelte source stylesheet", "kit-filter-browser-entry.js", "base-theme"],
+  ["static stylesheet", "kit-filter-static-browser-entry.js", "base-theme schedule-theme"],
+]) {
+  test(
+    `imported filter links retain their theme-backed styles with the ${stylesheet}`,
+    { timeout: 120000 },
+    () => checkFilterLinks(entry, themeClass),
+  );
+}
