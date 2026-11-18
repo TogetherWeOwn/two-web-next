@@ -172,7 +172,9 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
       expect(july.map((row) => row.eventKey)).toEqual([key(0), key(1)]);
       const august = await listUpcomingForMonth(db, "2060-08", NOW);
       expect(august.map((row) => row.eventKey)).toEqual([key(2), key(3)]);
-      expect(await listUpcomingForMonth(db, "2060-09", NOW)).toEqual([]);
+      const september = await listUpcomingForMonth(db, "2060-09", NOW);
+      expect(september).toHaveLength(0);
+      expect(september.mayBeTruncated).toBe(false);
       // A bad month is an empty grid, never a 500.
       expect(await listUpcomingForMonth(db, "banana", NOW)).toEqual([]);
     } finally {
@@ -365,6 +367,7 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
       await seedUpcoming(client, 1, 1, new Date("2060-07-15T18:00:00Z"));
       const monthRows = await listUpcomingForMonth(db, "2060-07", NOW);
       expect(monthRows).toHaveLength(EVENTS_MONTH_GRID_LIMIT - 1);
+      expect(monthRows.mayBeTruncated).toBe(true);
       expect(monthRows.some((row) => row.eventKey === key(1))).toBe(false);
       for (const html of await calendarTwins(db, "/events?view=calendar&month=2060-07")) {
         expect(html).toContain('data-testid="events-calendar-grid"');
