@@ -216,12 +216,14 @@ describe("installWorkerFacade", () => {
     const dir = scratch(ADAPTER);
     let competing;
     const io = {
-      writeFileSync: (path, data, options) => {
-        if (String(path).endsWith(IGNORE)) {
-          competing = installWorkerFacade({ dir }).catch((error) => error);
-          throw new Error("injected ignore");
-        }
-        return fsReal.writeFileSync(path, data, options);
+      writeFileSync: failing("writeFileSync", IGNORE, "injected ignore"),
+      undo: {
+        renameSync: (from, to) => {
+          if (String(to).endsWith(STAGED)) {
+            competing = installWorkerFacade({ dir }).catch((error) => error);
+          }
+          return fsReal.renameSync(from, to);
+        },
       },
     };
     await expect(installWorkerFacade({ dir, io })).rejects.toThrow(/injected ignore/);
@@ -303,9 +305,18 @@ describe("installed facade", () => {
   });
 
   it("refuses an adapter default export that cannot serve fetch", async () => {
-    const dir = scratch("export default { scheduled() {} };\n");
-    await installWorkerFacade({ dir });
-    await expect(load(dir)).rejects.toThrow(/fetch/);
-    expect(existsSync(join(dir, COMPANION_NAME))).toBe(true);
+    for (const source of [
+      "export default { scheduled() {} };\n",
+      "export default { fetch: 1 };\n",
+      "export default { *fetch() {} };\n",
+      "export default { fetch: function* () {} };\n",
+      "export default { get fetch() { return () => {}; } };\n",
+      "export default { fetch() {}, fetch: null };\n",
+      "export default { fetch() {}, ...other };\n",
+      "export default { fetch() {}, ['fetch']: null };\n",
+      "const adapter = { fetch() {} }; export default adapter;\n",
+    ]) {
+      await rejectsUnchanged(scratch(source), /fetch/);
+    }
   });
 });
