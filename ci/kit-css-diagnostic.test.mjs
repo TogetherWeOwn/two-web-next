@@ -130,9 +130,8 @@ describe("kit css diagnostic workflow", () => {
   });
 
   it("rejects a weakened collector boundary", () => {
-    const section = text
-      .split("- name: Collect bounded client CSS and manifest")[1]
-      ?.split("- uses: actions/upload-artifact")[0];
+    const step = (name) => text.split(`- name: ${name}`)[1]?.split(/\n      - /)[0];
+    const section = step("Collect bounded client CSS and manifest");
     assert.ok(section);
     const check = (s) => {
       assert.match(s, /--network none/);
@@ -141,6 +140,7 @@ describe("kit css diagnostic workflow", () => {
       assert.match(s, /dst=\/tools,readonly/);
       assert.doesNotMatch(s, /docker\.sock|GITHUB_ENV|GITHUB_OUTPUT|ACTIONS_RUNTIME_TOKEN/);
     };
+    check(step("Measure head Kit route closure"));
     check(section);
     for (const [from, to] of [
       ["--network none", ""],

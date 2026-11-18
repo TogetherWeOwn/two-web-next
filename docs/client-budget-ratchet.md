@@ -72,3 +72,29 @@ and no orphan graph assets. Aggregate totals still count the complete shipping
 The real-build regression runs the installed SvelteKit/Vite plugin on local
 root-page, root-layout, nested-layout and root-reset-page fixtures before
 running the actual evidence generator and checker.
+
+## Reviewed admission of new routes
+
+1. While the PR is draft, dispatch `kit-css-diagnostic.yml` from reviewed `main`
+   with the current approved `base_sha` and exact draft `head_sha`. Read the
+   head job's `kit-css-head` artifact, `kit-route-perf.json`. No report means
+   no route evidence, even if CSS collection succeeded. The report cannot
+   approve routes; the hard shipping gate still rejects unapproved inventory.
+2. Add `ci/budgets/decisions/kit-perf/route-admission-<slug>.json` with `version: 1`,
+   `beforeSha256` (`clientPlanDigest` of the full preceding `approvedClientPlan`),
+   the measured `sourceSha`, exact Actions `jobUrl`, `reportSha256` (SHA-256 of
+   the report file), `aggregate` from the report, and an explicit `additions`
+   array of `{id, measured, ceiling}`. Encode with two-space `JSON.stringify`
+   indentation and a final newline. Copy measurements from the report. Round
+   bytes × 1.25 up to 512 B raw or 256 B gzip, add one to nonzero file counts,
+   and clip each initial ceiling to the preceding aggregate cap. Empty groups
+   stay zero. Refuse measurements over a current cap; never compensate by
+   raising one. Commit only matching new live rows with the record; never edit
+   the historical records.
+3. Remeasure the corrected exact head on Actions with the same base and
+   collector. Verify the only diff since the measured predecessor is the
+   record and matching new live rows. Link both run/job/attempts and artifacts;
+   use the manifest/inventory hashes to identify the builds and corroborate
+   route inventory, new-route counts and aggregate totals. Refresh the evidence
+   on material base, input or measurement drift. Require normal exact-head CI
+   and review; the diagnostic never feeds a privileged job or replaces a check.

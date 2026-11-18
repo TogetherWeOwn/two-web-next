@@ -81,11 +81,12 @@ function list(value) {
   return value;
 }
 
-export function measureRoutes(root = resolve(import.meta.dirname, "..")) {
-  const parse = (path) => JSON.parse(read(root, path));
+// `identity`, when an object, receives content hashes for diagnostic output only.
+export function measureRoutes(root = resolve(import.meta.dirname, ".."), identity = null) {
   const manifestBytes = read(root, `${OUTPUT}/client/.vite/manifest.json`);
   const manifest = JSON.parse(manifestBytes);
-  const evidence = parse(`${OUTPUT}/client-route-evidence.json`);
+  const evidenceBytes = read(root, `${OUTPUT}/client-route-evidence.json`);
+  const evidence = JSON.parse(evidenceBytes);
   keys(evidence, [
     "version",
     "viteSha256",
@@ -194,9 +195,11 @@ export function measureRoutes(root = resolve(import.meta.dirname, "..")) {
     evidence.routes.length,
     "duplicate route",
   );
+  const inventory = identity && createHash("sha256");
   const fileMetrics = new Map(
     aggregateAssets.map((file) => {
       const bytes = read(root, `${OUTPUT}/client/${file}`);
+      inventory?.update(`${JSON.stringify([file, sha256(bytes)])}\n`);
       return [file, { rawBytes: bytes.length, gzipBytes: gzipSync(bytes).length }];
     }),
   );
@@ -264,11 +267,43 @@ export function measureRoutes(root = resolve(import.meta.dirname, "..")) {
     [...nodes.keys()].filter((index) => !referencedNodes.has(index)),
   );
   same([...used], [...assets]); // orphan graph chunks cannot silently pass
+  if (inventory)
+    Object.assign(identity, {
+      viteSha256: evidence.viteSha256,
+      serverSha256: evidence.serverSha256,
+      routeEvidenceSha256: sha256(evidenceBytes),
+      inventorySha256: inventory.digest("hex"),
+    });
   return {
     version: 1,
     scope: ROUTE_SCOPE,
     routes,
     aggregate: { js: summarize(aggregateAssets, "js"), css: summarize(aggregateAssets, "css") },
+  };
+}
+
+// Non-gating hosted diagnostic: measures only, never loads or compares budgets.
+export function diagnoseRoutes(root, meta) {
+  for (const k of ["sourceSha", "baseSha", "workflowSha"])
+    assert.match(meta[k], /^[0-9a-f]{40}$/u, `bad ${k}`);
+  for (const k of ["runId", "runAttempt"]) assert.match(meta[k], /^[1-9][0-9]{0,19}$/, `bad ${k}`);
+  assert.match(meta.job, /^[A-Za-z0-9_-]{1,100}$/, "bad job");
+  const identity = {};
+  const m = measureRoutes(root, identity);
+  const strip = ({ rawBytes, gzipBytes, files }) => ({ rawBytes, gzipBytes, files });
+  const both = (v) => ({ js: strip(v.js), css: strip(v.css) });
+  return {
+    version: 1,
+    scope: m.scope,
+    sourceSha: meta.sourceSha,
+    baseSha: meta.baseSha,
+    workflowSha: meta.workflowSha,
+    runId: meta.runId,
+    runAttempt: meta.runAttempt,
+    job: { id: meta.job, leg: "head" },
+    identity,
+    routes: Object.fromEntries(Object.entries(m.routes).map(([id, v]) => [id, both(v)])),
+    aggregate: both(m.aggregate),
   };
 }
 
@@ -335,7 +370,13 @@ export function checkRoutes(root = resolve(import.meta.dirname, "..")) {
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const invoked = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invoked && process.argv[2] === "--diagnostic") {
+  const [, , , root, sourceSha, baseSha, workflowSha, runId, runAttempt, job] = process.argv;
+  assert.equal(process.argv.length, 10, "expected diagnostic root, SHAs, run ID, attempt and job");
+  const report = diagnoseRoutes(root, { sourceSha, baseSha, workflowSha, runId, runAttempt, job });
+  console.log(JSON.stringify(report));
+} else if (invoked) {
   assert.ok(
     process.argv.length === 2 || (process.argv.length === 4 && process.argv[2] === "--root"),
     "usage: node ci/check-kit-route-perf.mjs [--root DIR]",

@@ -6,11 +6,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
-import { INITIAL_CLIENT_BUDGET } from "./client-ratchet-approval.mjs";
+import {
+  approvedClientPlan,
+  clientPlanDigest,
+  INITIAL_CLIENT_BUDGET,
+} from "./client-ratchet-approval.mjs";
 import { measure as measureKit } from "./check-kit-perf.mjs";
 import { CLIENT_FILES, measuredDecision, propose } from "./kit-client-ratchet.mjs";
 import {
   checkRoutes,
+  diagnoseRoutes,
   measureRoutes,
   OUTPUT,
   ROUTE_BUDGET,
@@ -337,6 +342,70 @@ test("new source, built and live-budget route still requires explicit admission"
   const result = checkRoutes(f.root);
   assert.equal(result.exitCode, 2);
   assert.match(result.error, /approved route plan/);
+});
+
+test("draft diagnostics measure without approving, then admission still requires exact source and build coverage", (t) => {
+  const f = fixture(t);
+  const id = "/new";
+  const source = "web/src/routes/new/+server.ts";
+  const meta = {
+    sourceSha: "a".repeat(40),
+    baseSha: "b".repeat(40),
+    workflowSha: "c".repeat(40),
+    runId: "1",
+    runAttempt: "2",
+    job: "leg",
+  };
+  const before = approvedClientPlan(f.root);
+  const ceiling = f.budget.routes["/api"];
+  f.budget.routes[id] = ceiling;
+  f.saveBudget();
+  assert.match(checkRoutes(f.root).error, /approved route plan/); // live-only
+  delete f.budget.routes[id];
+  f.saveBudget();
+  f.put(source, "endpoint");
+  assert.match(checkRoutes(f.root).error, /inventory mismatch/); // source-only
+  f.evidence.routes.push({ id, page: null });
+  f.save();
+  rmSync(join(f.root, source));
+  assert.match(checkRoutes(f.root).error, /inventory mismatch/); // built-only
+  f.put(source, "endpoint");
+
+  const report = diagnoseRoutes(f.root, meta);
+  assert.equal(report.sourceSha, meta.sourceSha);
+  assert.deepEqual(report.job, { id: "leg", leg: "head" });
+  assert.deepEqual(Object.keys(report.routes).sort(), ["/", "/about", "/api", id]);
+  assert.equal(report.identity.viteSha256, f.evidence.viteSha256);
+  const built = measureRoutes(f.root);
+  for (const kind of ["js", "css"]) {
+    const { rawBytes, gzipBytes, files } = built.aggregate[kind];
+    assert.deepEqual(report.aggregate[kind], { rawBytes, gzipBytes, files });
+  }
+  f.budget.routes[id] = ceiling;
+  f.saveBudget();
+  assert.match(checkRoutes(f.root).error, /approved route plan/);
+  const path = "ci/budgets/decisions/kit-perf/route-admission-new.json";
+  const save = (record) => f.put(path, `${JSON.stringify(record, null, 2)}\n`);
+  save(report);
+  assert.match(checkRoutes(f.root).error, /invalid admission fields/);
+  save({
+    version: 1,
+    beforeSha256: clientPlanDigest(before),
+    sourceSha: report.sourceSha,
+    jobUrl: "https://github.com/TogetherWeOwn/two-web-next/actions/runs/1/job/2",
+    reportSha256: hash(JSON.stringify(report)),
+    aggregate: report.aggregate,
+    additions: [{ id, ceiling, measured: report.routes[id] }],
+  });
+  assert.equal(checkRoutes(f.root).exitCode, 0); // zero-file exact fit
+  f.put("web/src/routes/new/+page.svelte", "client page");
+  f.evidence.routes.at(-1).page = f.evidence.routes[0].page;
+  f.save();
+  assert.ok(checkRoutes(f.root).breaches.includes(`${id} js`));
+  f.evidence.routes.pop();
+  f.save();
+  rmSync(join(f.root, "web/src/routes/new"), { recursive: true });
+  assert.match(checkRoutes(f.root).error, /inventory mismatch/); // an approved route absent from both
 });
 
 test("missing initial approved route evidence fails closed", (t) => {
