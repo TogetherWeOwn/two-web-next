@@ -24,16 +24,18 @@ const workflows = readdirSync(dir)
 
 const hosted = "ubuntu-latest";
 const hostedJson = JSON.stringify([hosted]);
-// Keep the fixed OS for visual baselines, recovery and the XFS fixture.
+// Keep the fixed OS for visual baselines, recovery and isolated evidence jobs.
 // Re-baseline browser-smoke in the same PR as any bump (docs/visual-regression.md).
-const pinnedHostedJobs = new Map([
+const pinnedHostedJobs = [
+  ["ci.yml", "route-evidence-producer"],
+  ["ci.yml", "route-evidence-admission"],
   ["e2e.yml", "browser-smoke"],
   ["kit-home-evidence.yml", "capture"],
   ["kit-event-evidence.yml", "capture"],
   ["admin-stale-save-ubuntu24-proof.yml", "recovery-proof"],
   ["kit-footer-browser.yml", "footer-browser"],
   ["xfs-qualification.yml", "fixture"],
-]);
+] as const;
 const localCall = /^\.\/\.github\/workflows\/([\w.-]+\.ya?ml)$/;
 const frozenLocalCall =
   /^TogetherWeOwn\/two-web-next\/\.github\/workflows\/([\w.-]+\.ya?ml)@([0-9a-f]{40})$/;
@@ -68,7 +70,8 @@ function isVerifiedFrozenLocal(uses: string) {
 function expectHostedJob(name: string, id: string, job: Job) {
   const label = `${name} job ${id}`;
   if (job.uses === undefined) {
-    const expected = pinnedHostedJobs.get(name) === id ? "ubuntu-24.04" : hosted;
+    const pinned = pinnedHostedJobs.some(([file, jobId]) => file === name && jobId === id);
+    const expected = pinned ? "ubuntu-24.04" : hosted;
     expect(job["runs-on"], `${label} uses literal ${expected}`).toBe(expected);
   } else {
     expect(job, `${label} is a reusable call without a local runner`).not.toHaveProperty("runs-on");
@@ -157,13 +160,11 @@ describe("workflow runner labels", () => {
       "bundle-budget",
       "lighthouse",
       "kit-browser-fixture",
+      "route-evidence-producer",
+      "route-evidence-admission",
       "ci-ok",
     ]);
-    for (const { id, runsOn } of ciJobs) {
-      // An unconditional selector also covers private workflow_dispatch on a
-      // non-main branch, which the former PR-only guard did not cover.
-      expect(runsOn, `ci.yml job ${id}`).toBe(hosted);
-    }
+    for (const { id } of ciJobs) expectHostedJob("ci.yml", id, workflow!.source.jobs[id]!);
     expect(events(workflow!.source.on)).toContain("workflow_dispatch");
   });
 

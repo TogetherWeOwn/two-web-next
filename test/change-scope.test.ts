@@ -754,6 +754,8 @@ describe("ci heavy-job scope gates", () => {
       .map((line) => line.replace(/^ {10}/, ""))
       .join("\n");
     const ok: Record<string, string> = {
+      GITHUB_EVENT_NAME: "pull_request",
+      ROUTE_ADMISSION_RESULT: "success",
       SCOPE_RESULT: "success",
       FULL: "false",
       APP: "false",

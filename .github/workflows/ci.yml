@@ -37,7 +37,8 @@ permissions:
 # push-event runs). test/ci-concurrency.test.ts and the staging gate selftest pin
 # this.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || github.ref }}
+  # An installed pinned invocation must not share the ordinary PR run's slot.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || github.ref }}${{ github.event_name == 'pull_request' && github.workflow_sha != github.sha && github.workflow_sha != github.event.pull_request.head.sha && '-pinned' || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
 
 jobs:
@@ -217,6 +218,9 @@ jobs:
       - name: Install locked workflow parser without hooks
         if: github.event_name == 'pull_request'
         run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - name: Test synthetic route admission and workflow wiring
+        if: github.event_name == 'pull_request'
+        run: node --test ci/a11y-route-evidence-*.test.mjs ci/coverage-command.test.mjs
       - name: Verify script-disabled esbuild proof
         if: github.event_name == 'pull_request'
         run: node --test ci/verify-esbuild.test.mjs
@@ -1429,6 +1433,105 @@ jobs:
       - name: Kit disposable browser fixture
         run: node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
 
+  # This synthetic chain runs even on draft and docs PRs. The ordinary PR
+  # invocation exercises the wiring with the already-reviewed helper revision;
+  # only a separately installed required-workflow rule can authenticate W.
+  route-evidence-producer:
+    name: route-evidence-producer
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      fixture_digest: ${{ steps.cases.outputs.fixture_digest }}
+    env:
+      ROUTE_WORKFLOW_SHA: ${{ (github.workflow_sha == github.sha || github.workflow_sha == github.event.pull_request.head.sha) && 'a34bc2fd65a88c39018c1e343dc64330c9e17101' || github.workflow_sha }}
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Require an immutable non-candidate revision
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/ci.yml@"?* ]]
+          [[ "$ROUTE_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ && "$ROUTE_WORKFLOW_SHA" != "$SOURCE_SHA" && "$ROUTE_WORKFLOW_SHA" != "$GITHUB_SHA" ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.ROUTE_WORKFLOW_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Run cases
+        id: cases
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ROUTE_WORKFLOW_SHA"
+          fixture=$(sha256sum ci/fixtures/execution-receipt-vitest.json)
+          printf 'fixture_digest=%s\n' "${fixture%% *}" >> "$GITHUB_OUTPUT"
+          node ci/produce-synthetic-route-report.mjs "$RUNNER_TEMP/report.json"
+      - name: Upload report
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: route-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/report.json
+          archive: true
+          compression-level: 0
+          overwrite: false
+          if-no-files-found: error
+          retention-days: 14
+
+  route-evidence-admission:
+    name: route-evidence-admission
+    needs: [route-evidence-producer]
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    env:
+      ROUTE_WORKFLOW_SHA: ${{ (github.workflow_sha == github.sha || github.workflow_sha == github.event.pull_request.head.sha) && 'a34bc2fd65a88c39018c1e343dc64330c9e17101' || github.workflow_sha }}
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      ROUTE_PRODUCER_RESULT: ${{ needs.route-evidence-producer.result }}
+    steps:
+      - name: Require a bound PR and successful producer
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "::error::Route evidence refused: no reviewed merge-group source binding."
+            exit 1
+          fi
+          test "$ROUTE_PRODUCER_RESULT" = success
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/ci.yml@"?* ]]
+          [[ "$ROUTE_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ && "$ROUTE_WORKFLOW_SHA" != "$SOURCE_SHA" && "$ROUTE_WORKFLOW_SHA" != "$GITHUB_SHA" ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.ROUTE_WORKFLOW_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Admit synthetic report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROUTE_ARTIFACT_ID: ${{ needs.route-evidence-producer.outputs.artifact_id }}
+          ROUTE_ARTIFACT_DIGEST: ${{ needs.route-evidence-producer.outputs.artifact_digest }}
+          ROUTE_FIXTURE_DIGEST: ${{ needs.route-evidence-producer.outputs.fixture_digest }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ROUTE_WORKFLOW_SHA"
+          fixture=$(sha256sum ci/fixtures/execution-receipt-vitest.json)
+          test "${fixture%% *}" = "$ROUTE_FIXTURE_DIGEST"
+          node ci/run-synthetic-route-admission.mjs
+          printf 'Workflow %s; helper checkout %s; fixture sha256:%s; artifact %s sha256:%s\n' \
+            "$GITHUB_WORKFLOW_SHA" "$ROUTE_WORKFLOW_SHA" "$ROUTE_FIXTURE_DIGEST" "$ROUTE_ARTIFACT_ID" "$ROUTE_ARTIFACT_DIGEST"
+
   # Change-gated aggregator (TOG-14880, TOG-14877 CI standard): the single
   # merge-gate check. Reports success when the scope verdict is clean and every
   # selected job succeeded; a job that the scope skipped counts only when it
@@ -1458,6 +1561,7 @@ jobs:
         scope,
         bot-contract-drift,
         join-evidence-source,
+        route-evidence-admission,
       ]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -1515,6 +1619,7 @@ jobs:
         run: node ci/require-performance.mjs "$LIGHTHOUSE_RESULT" "$BUDGET_RESULT"
       - name: Aggregate change-gated conclusions
         env:
+          ROUTE_ADMISSION_RESULT: ${{ needs.route-evidence-admission.result }}
           SCOPE_RESULT: ${{ needs.scope.result }}
           DRAFT: ${{ needs.scope.outputs.draft }}
           DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
@@ -1531,6 +1636,11 @@ jobs:
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
           [ "$SCOPE_RESULT" = success ] || fail "scope did not succeed; failing closed."
+          case "$GITHUB_EVENT_NAME:$ROUTE_ADMISSION_RESULT" in
+            pull_request:success) ;;
+            push:skipped|schedule:skipped|workflow_dispatch:skipped) ;;
+            *) fail "Required route admission did not succeed for this event." ;;
+          esac
           # Empty or unexpected outputs would read as unselected areas and let a
           # skipped job pass, so every verdict must be exactly true or false.
           for pair in "FULL=$FULL" "APP=$APP" "WORKER=$WORKER" "DB=$DB" "DRAFT=$DRAFT" "DOCS_ONLY=$DOCS_ONLY"; do

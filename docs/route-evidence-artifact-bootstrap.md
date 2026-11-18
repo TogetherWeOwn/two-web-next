@@ -1,31 +1,26 @@
 # Route evidence artifact bootstrap
 
-`ci/route-evidence-artifact-metadata.mjs` is an inert validation building block.
-Its synthetic fixtures are not route parity or evidence admission. No workflow
-calls it and no completion declaration is enabled by it.
+[CI](../.github/workflows/ci.yml) wires a synthetic producer and a separate
+admission job into `ci-ok`. The producer runs only reviewed fixture code; the
+consumer independently binds the live PR head (H), checks the current run and
+attempt, compares the reviewed fixture digest, and validates the artifact as
+bounded data. Only the uploader's actual ID and digest select the archive.
+Run-level artifact metadata corroborates that association; it does not identify
+which job uploaded an artifact. If an attempt reused an earlier producer or
+artifact, rerun the complete chain, not only the consumer.
 
-A future trusted consumer must first obtain the expected source SHA independently
-from GitHub's PR/event metadata, distinguish it from the workflow orchestration
-SHA, and use the run and attempt-specific GitHub APIs. The supplied artifact list
-must be the complete, paginated set of matching artifacts for that run, not a
-candidate-provided list or a latest-by-name lookup. The expected artifact ID and
-digest must come from a trusted producer wrapper, not the artifact itself or a
-candidate-controlled output. This helper refuses missing or multiple matches,
-unsuccessful producer metadata, a different attempt-specific name, digest, run,
-source head or creation window, an expired or oversized artifact, and PR head drift.
-It does not prove which job uploaded an artifact: run metadata, timing and a name
-are not job authentication. Until the wrapper and GitHub control-plane association
-are independently established, a successful return is not trusted provenance.
+An ordinary PR run uses the pinned merged helper revision, not the candidate
+checkout. Its success exercises the wiring but does not authenticate the caller.
+A protected invocation needs a separately activated organization rule pinned to
+the reviewed, merged workflow revision (W). Verify that the provider supplies W,
+that both jobs check out W rather than H or the preparation helper revision, and
+that the protected run refuses substituted or missing evidence. A green check
+name alone does not verify enforcement.
 
-Remaining integration must use reviewed base-pinned workflow and consumer code,
-explicitly check out and verify the candidate source SHA in an unprivileged
-producer without persisted checkout or production credentials, and isolate the
-trusted wrapper and its outputs from candidate code. The consumer must verify the
-producer's successful runner/report steps, authenticate the artifact-to-job and
-attempt association, download by immutable ID with compressed and extracted size
-limits, verify the digest, and parse reports only as data with the existing strict
-adapters. It must bind reviewed input hashes and exact selectors to the evaluated
-checkout, retain inspectable evidence, and fail the required aggregate on failure,
-cancellation or an unexpected skip. Synthetic end-to-end positive and negative
-runs must exercise that boundary before real admission; current reviewed
-obligation inventory, route coverage and API-10 retirement remain unresolved.
+All PRs, including drafts and docs-only changes, need successful synthetic
+admission. Merge-group runs still execute existing CI gates but fail route
+admission and `ci-ok` until a reviewed group-source binding exists. Push,
+schedule and dispatch runs retain their existing gates and supply no admission.
+No synthetic run establishes real route parity, enables a completion
+declaration, or clears API-10 retirement. Real admission still needs isolation
+of candidate execution from the trusted supervisor and upload outputs.

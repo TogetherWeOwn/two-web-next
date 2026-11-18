@@ -32,6 +32,8 @@ test("the independent browser fixture remains selected and fail-closed in ci-ok"
   )?.[1];
   assert(script);
   const base = {
+    GITHUB_EVENT_NAME: "pull_request",
+    ROUTE_ADMISSION_RESULT: "success",
     SCOPE_RESULT: "success",
     DRAFT: "false",
     DOCS_ONLY: "false",
@@ -56,6 +58,14 @@ test("the independent browser fixture remains selected and fail-closed in ci-ok"
   assert.equal(run({ DOCS_ONLY: "true", KIT_BROWSER_RESULT: "skipped" }), 0);
   assert.notEqual(run({ DOCS_ONLY: "", KIT_BROWSER_RESULT: "skipped" }), 0);
   assert.notEqual(run({ SCOPE_RESULT: "failure", KIT_BROWSER_RESULT: "skipped" }), 0);
+  for (const scope of [{}, { DRAFT: "true" }, { DOCS_ONLY: "true" }]) {
+    assert.equal(run(scope), 0);
+    for (const result of ["failure", "cancelled", "skipped", ""])
+      assert.equal(run({ ...scope, ROUTE_ADMISSION_RESULT: result }), 1);
+  }
+  assert.equal(run({ GITHUB_EVENT_NAME: "merge_group", ROUTE_ADMISSION_RESULT: "skipped" }), 1);
+  assert.equal(run({ GITHUB_EVENT_NAME: "merge_group", ROUTE_ADMISSION_RESULT: "success" }), 1);
+  assert.equal(run({ GITHUB_EVENT_NAME: "push", ROUTE_ADMISSION_RESULT: "skipped" }), 0);
 });
 
 test("the required check keeps full coverage in isolated serial threads inside main's job budget", async () => {

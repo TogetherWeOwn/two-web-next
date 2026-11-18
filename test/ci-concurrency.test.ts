@@ -106,7 +106,7 @@ describe("workflow concurrency", () => {
     // deploy.yml only deploys push-event runs, so staging would miss that SHA.
     expect(triggers(ci)).toMatch(/\n  schedule:\n    - cron: /);
     expect(ci).toMatch(
-      /\n  group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| \(github\.event_name == 'schedule' && 'nightly'\) \|\| github\.ref \}\}\n/,
+      /\n  group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| \(github\.event_name == 'schedule' && 'nightly'\) \|\| github\.ref \}\}\$\{\{ github\.event_name == 'pull_request' && [^\n]+ && '-pinned' \|\| '' \}\}\n/,
     );
   });
 
@@ -163,6 +163,8 @@ const gates = [
     block: jobBlock(ciText, "ci-ok"),
     script: runScript,
     env: ({ scope, downstream }: Results) => ({
+      GITHUB_EVENT_NAME: "pull_request",
+      ROUTE_ADMISSION_RESULT: "success",
       SCOPE_RESULT: scope,
       ...{ FULL: "true", APP: "true", WORKER: "true", DB: "true", DRAFT: "false" },
       DOCS_ONLY: "false",
