@@ -122,6 +122,42 @@ export function registerWaitlistOfferLifecycle() {
       expect((await rsvpOf(rsvp.id)).status).toBe("waitlisted");
     });
 
+    it.each(["expiry", "start"] as const)("refuses exactly at %s", async (boundary) => {
+      const { event, rsvp } = await seed();
+      const offer = await made(event, rsvp);
+      await run(async (tx) => {
+        // Shadow only this transaction's clock with its fixed database timestamp.
+        await tx.execute(sql`create function ${sql.identifier(fx.schemaName)}.clock_timestamp()
+          returns timestamptz language sql stable as 'select pg_catalog.transaction_timestamp()'`);
+        await tx.execute(
+          sql`select set_config('search_path', ${`${fx.schemaName}, pg_catalog`}, true)`,
+        );
+        if (boundary === "expiry") {
+          await tx
+            .update(waitlistOffers)
+            .set({ expiresAt: sql`transaction_timestamp()` })
+            .where(eq(waitlistOffers.id, offer.id));
+        } else {
+          await tx
+            .update(events)
+            .set({ startsAt: sql`transaction_timestamp()` })
+            .where(eq(events.id, event.id));
+        }
+        const [proof] = await tx.execute<{ equal: boolean; live: boolean }>(sql`
+          select ${boundary === "expiry" ? sql`o.expires_at` : sql`e.starts_at`} = clock_timestamp() as equal,
+            o.expires_at > clock_timestamp() as live
+          from waitlist_offers o join events e on e.id = ${event.id} where o.id = ${offer.id}`);
+        expect(proof).toMatchObject({ equal: true, live: boundary === "start" });
+        expect(await claimWaitlistOffer(tx, event.id, rsvp.id, "u1", offer.id)).toMatchObject({
+          ok: false,
+          reason: boundary === "expiry" ? "expired" : "unavailable",
+        });
+        await tx.execute(sql`drop function ${sql.identifier(fx.schemaName)}.clock_timestamp()`);
+      });
+      expect((await offers())[0]!.state).toBe("held");
+      expect((await rsvpOf(rsvp.id)).status).toBe("waitlisted");
+    });
+
     it("claims for the owner, resets the mirror, and replays acceptance", async () => {
       const { event, rsvp } = await seed();
       const offer = await made(event, rsvp);
