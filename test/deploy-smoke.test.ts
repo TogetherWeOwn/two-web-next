@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 // Tie the hermetic action mirror to the immutable production ref. A pin change
 // needs verified upstream hashes so local tests cannot cover stale code.
@@ -295,31 +296,43 @@ describe("deploy public-route smoke (offline)", () => {
     expect(smokeSection).toContain('SMOKE_ALLOW_MISSING_BASELINE: "1"');
   });
 
-  it("hands the pre-promote dead-letter baseline to every promote smoke via GITHUB_ENV", () => {
-    // The gradual-promote action runs this repo's bin/smoke.mjs in the same
-    // job, so the $GITHUB_ENV export scopes every stage gate plus the
-    // post-promotion verify to growth past the retained count.
-    const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
-    const jobAt = workflow.indexOf("\n  deploy-production:\n");
-    const releaseAt = workflow.indexOf("\n  release:\n");
-    expect(jobAt).toBeGreaterThan(-1);
-    expect(releaseAt).toBeGreaterThan(jobAt);
-    const job = workflow.slice(jobAt, releaseAt);
-    const captureAt = job.indexOf("- name: Capture pre-promote dead-letter baseline");
-    const gradualAt = job.indexOf("- name: Gradual promotion 5-50-100 with automatic rollback");
-    const verifyAt = job.indexOf("- name: Verify public routes on the promoted version");
+  it("passes the pre-promote baseline output only to gradual promotion and verification", () => {
+    type Step = { id?: string; run?: string; env?: Record<string, string> };
+    type Job = { env?: Record<string, string>; steps: Step[] };
+    const workflow: { env?: Record<string, string>; jobs: Record<string, Job> } = parse(
+      readFileSync(".github/workflows/deploy-production.yml", "utf8"),
+    );
+    const job = workflow.jobs["deploy-production"];
+    const steps = job?.steps ?? [];
+    const captureAt = steps.findIndex((step) => step.id === "dead-letter-baseline");
+    const gradualAt = steps.findIndex((step) => step.id === "gradual");
+    const verifyAt = steps.findIndex((step) => step.id === "verify");
     expect(captureAt).toBeGreaterThan(-1);
     expect(gradualAt).toBeGreaterThan(captureAt);
     expect(verifyAt).toBeGreaterThan(gradualAt);
-    const captureBlock = job.match(
-      /- name: Capture pre-promote dead-letter baseline\n[\s\S]*?run: \|\n((?:          .*\n)+)/,
-    )?.[1];
+    expect(Object.keys(workflow.jobs).indexOf("release")).toBeGreaterThan(
+      Object.keys(workflow.jobs).indexOf("deploy-production"),
+    );
+    const captureBlock = steps[captureAt]?.run;
     expect(captureBlock).toBeDefined();
     expect(captureBlock).toContain("for i in 1 2 3 4 5");
     expect(captureBlock).toContain('fetch("https://togetherweown.com/up"');
     expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
-    expect(captureBlock).toContain('echo "SMOKE_FAILED_BASELINE=$baseline" >> "$GITHUB_ENV"');
-    expect(captureBlock).toContain('echo "SMOKE_ALLOW_MISSING_BASELINE=1" >> "$GITHUB_ENV"');
+    expect(captureBlock).toContain('echo "failed=$baseline" >> "$GITHUB_OUTPUT"');
+    expect(captureBlock).not.toContain("GITHUB_ENV");
+    const baselineEnv = {
+      SMOKE_FAILED_BASELINE: "${{ steps.dead-letter-baseline.outputs.failed }}",
+      SMOKE_ALLOW_MISSING_BASELINE: "1",
+    };
+    for (const key of Object.keys(baselineEnv)) {
+      expect(workflow.env ?? {}).not.toHaveProperty(key);
+      expect(job?.env ?? {}).not.toHaveProperty(key);
+      expect(
+        steps.filter((step) => Object.hasOwn(step.env ?? {}, key)).map((step) => step.id),
+      ).toEqual(["gradual", "verify"]);
+    }
+    expect(steps[gradualAt]?.env).toMatchObject(baselineEnv);
+    expect(steps[verifyAt]?.env).toMatchObject(baselineEnv);
   });
 
   it("hands the pre-rollback dead-letter baseline to rollback smoke after capture", () => {

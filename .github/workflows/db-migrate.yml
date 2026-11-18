@@ -22,7 +22,7 @@ on:
         required: false
 
 permissions:
-  contents: read
+  contents: read # Checkout and fetch the migration numbering baseline.
 
 # Never cancel an in-flight schema change. Bot operations must be coordinated
 # separately; the script also serializes web applies at the database level.
@@ -32,6 +32,7 @@ concurrency:
 
 jobs:
   migrate:
+    name: migrate
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Required reviewers, prevent-self-review and main-only branch policy must
