@@ -1,9 +1,54 @@
 /* Kit's server-only view links use the same pinned Ember roles as the filter fixture. */
-.segments{display:inline-flex;box-sizing:border-box;padding:var(--space-1);border:1px solid var(--hair1);border-radius:var(--radius-pill);background:var(--g1)}
-.segments>a{display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);min-height:36px;padding:0 var(--space-4);border-radius:var(--radius-pill);color:var(--t2);font-family:var(--font-ui);font-size:var(--font-size-small);font-weight:var(--font-weight-medium);text-decoration:none}
-.segments>a[aria-current="page"]{background:var(--g3);color:var(--t1)}
-.segments>a:focus-visible{outline:var(--focus-width) solid var(--focus-ring);outline-offset:var(--focus-offset)}
-.segments .count{font-family:var(--font-data)}
-@media (hover: hover){.segments>a:hover{color:var(--t1)}}
-@media (max-width: 390px){.segments{display:flex;width:100%}.segments>a{flex:1}}
-@media (forced-colors: active){.segments>a[aria-current="page"]:not(:focus-visible){outline:1px solid CanvasText;outline-offset:-1px}}
+.segments {
+  display: inline-flex;
+  box-sizing: border-box;
+  padding: var(--space-1);
+  border: 1px solid var(--hair1);
+  border-radius: var(--radius-pill);
+  background: var(--g1);
+}
+.segments > a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-pill);
+  color: var(--t2);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+}
+.segments > a[aria-current="page"] {
+  background: var(--g3);
+  color: var(--t1);
+}
+.segments > a:focus-visible {
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+.segments .count {
+  font-family: var(--font-data);
+}
+@media (hover: hover) {
+  .segments > a:hover {
+    color: var(--t1);
+  }
+}
+@media (max-width: 390px) {
+  .segments {
+    display: flex;
+    width: 100%;
+  }
+  .segments > a {
+    flex: 1;
+  }
+}
+@media (forced-colors: active) {
+  .segments > a[aria-current="page"]:not(:focus-visible) {
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+  }
+}
