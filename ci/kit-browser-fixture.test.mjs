@@ -637,6 +637,121 @@ const past: CalendarPersistedCard = { kind: 'event', key: 'past', eventKey: 'pas
   });
 }
 
+for (const scenario of [
+  "populated",
+  "list",
+  "empty",
+  "gap",
+  "filtered",
+  "failure",
+  "partial",
+  "month-empty",
+]) {
+  test(`calendar screen renders ${scenario} without JavaScript`, async () => {
+    await withKitOfflineBrowser(
+      {
+        page: `<script lang="ts">
+import CalendarScreen from '#lib/CalendarScreen.svelte';
+import { monthGrid } from '../../../../src/islands/contracts';
+const state = { view: ${JSON.stringify(["filtered", "list", "gap"].includes(scenario) ? "list" : "calendar")} as const, month: '2026-06', q: ${JSON.stringify(scenario === "filtered" ? "chess" : "")}, game: '', past: false, page: 1 };
+const now = new Date('2026-06-15T12:00:00Z');
+const event = { key: 'game', title: 'Game night', startsAt: new Date('2026-06-15T18:00:00Z'), zone: 'UTC', cancelled: false, ongoing: false, availability: '2 seats left' };
+const listEvent = { kind: 'event' as const, key: 'game', eventKey: 'game', title: 'Game night', titleSegments: null, zone: 'UTC', startsAt: event.startsAt, endsAt: null, location: null, description: null, passage: null, availability: { state: 'open' as const, text: 'Spots open', ongoing: false }, status: 'published', game: null, host: '', goingCount: 1, goingOccupancy: 1, capacity: null };
+const gapEvent = { eventKey: 'past', title: 'Previous game night', startsAt: new Date('2026-05-15T18:00:00Z'), timezone: 'UTC', status: 'published' };
+const weeks = monthGrid(state.month, '2026-06-15', new Map([['2026-06-15', ${scenario === "populated" || scenario === "partial" ? "[event]" : "[]"}]]));
+</script>
+<svelte:head><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
+<div class="base-theme schedule-theme"><main class="events-page"><CalendarScreen {state} appUrl="https://example.test" games={[]} gameFilter={null} past={[]} gapPast={${scenario === "gap" ? "[gapEvent]" : "[]"}} upcoming={${scenario === "list" ? "[listEvent]" : "[]"}} totalPages={1} showPast={false} emptyState={${scenario === "empty" ? "'never'" : scenario === "gap" ? "'gap'" : scenario === "failure" ? "'error'" : "null"}} discordFailed={${scenario === "failure" || scenario === "partial"}} hasVisibleResults={${scenario === "populated" || scenario === "list" || scenario === "partial" || scenario === "month-empty"}} outOfRange={false} searchMiss={${scenario === "filtered"}} monthEmpty={${scenario === "month-empty"}} inviteUrl="https://discord.test/invite" member={false} {weeks} zone="UTC" {now} /></main></div>`,
+      },
+      async ({ page, html }) => {
+        assert.match(html, /data-island="events-calendar"/);
+        assert.deepEqual(
+          await page
+            .locator("[data-cal-zone]")
+            .evaluateAll((zones) => zones.map((zone) => zone.getAttribute("data-cal-zone"))),
+          ["head", "subscribe", "actions", "miss", "content"],
+        );
+        const form = page.locator('form[role="search"]');
+        assert.equal(await form.getAttribute("method"), "get");
+        assert.equal(await form.getAttribute("action"), "/events");
+        assert.equal(await page.getByTestId("events-read-retry").isHidden(), true);
+        assert.equal(await page.getByTestId("events-read-clear").isHidden(), true);
+        if (scenario === "populated") {
+          assert.match(await page.locator('[data-cal-zone="content"]').innerText(), /Game night/);
+          assert.match(await page.getByLabel("Next month").getAttribute("href"), /month=2026-07/);
+        }
+        if (scenario === "list") {
+          assert.match(await page.getByTestId("events-list").innerText(), /Game night/i);
+          assert.equal(await page.getByTestId("calendar-month").count(), 0);
+        }
+        if (scenario === "empty") {
+          assert.match(
+            await page.locator('[data-cal-zone="content"]').innerText(),
+            /Nothing on the calendar yet/i,
+          );
+          assert.equal(await page.getByTestId("calendar-month").count(), 0);
+        }
+        if (scenario === "gap") {
+          const gap = page.getByTestId("events-empty-gap");
+          assert.match(await gap.innerText(), /Previous game night/);
+          assert.equal(
+            await gap.getByRole("link", { name: "Previous game night" }).getAttribute("href"),
+            "/e/past",
+          );
+        }
+        if (scenario === "filtered") {
+          assert.equal(await form.locator('[name="q"]').inputValue(), "chess");
+          assert.match(
+            await page.locator('[data-cal-zone="miss"]').innerText(),
+            /Nothing matches that search/i,
+          );
+          assert.equal(
+            await page.getByTestId("events-search-clear-empty").getAttribute("href"),
+            "/events",
+          );
+        }
+        if (scenario === "failure") {
+          assert.equal(await page.locator('[role="alert"]').count(), 1);
+          assert.equal(await page.locator('[data-cal-zone="miss"]').innerText(), "");
+          assert.equal(
+            await page.getByTestId("events-retry").getAttribute("href"),
+            "/events?view=calendar&month=2026-06",
+          );
+        }
+        if (scenario === "partial") {
+          assert.match(
+            await page.getByTestId("events-partial-source").innerText(),
+            /may be missing/,
+          );
+          assert.match(await page.locator('[data-cal-zone="content"]').innerText(), /Game night/);
+          assert.equal(await page.getByTestId("calendar-month-empty").count(), 0);
+        }
+        if (scenario === "month-empty") {
+          assert.equal(await page.getByTestId("calendar-month").textContent(), "June 2026");
+          assert.equal(
+            await page.getByTestId("calendar-month-empty").locator("a").getAttribute("href"),
+            "/events",
+          );
+        }
+        if (process.env.KIT_CALENDAR_EVIDENCE_DIR) {
+          const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
+          await mkdir(directory, { recursive: true });
+          for (const [name, width, height] of [
+            ["desktop", 1280, 800],
+            ["mobile", 390, 844],
+          ]) {
+            await page.setViewportSize({ width, height });
+            await page.screenshot({
+              path: join(directory, `screen-${scenario}-${name}.png`),
+              fullPage: true,
+            });
+          }
+        }
+      },
+    );
+  });
+}
+
 test("calendar grid renders navigation and event states without JavaScript", async () => {
   await withKitOfflineBrowser(
     {
