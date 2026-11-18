@@ -8,10 +8,8 @@ function check(input, expected) {
   assert.equal(normalizeShell(normalized, { strict: true }), normalized);
   const masked = normalizeShell(normalized, { mask: true, strict: true });
   assert.equal(masked.length, normalized.length);
-  assert.deepEqual(
-    [...masked.matchAll(/\n/g)].map((m) => m.index),
-    [...normalized.matchAll(/\n/g)].map((m) => m.index),
-  );
+  const lfOffsets = (text) => Array.from(text.matchAll(/\n/g), (m) => m.index);
+  assert.deepEqual(lfOffsets(masked), lfOffsets(normalized));
   assert.equal(normalizeShell(normalized, { mask: true, strict: true }), masked);
   return masked;
 }
@@ -99,6 +97,7 @@ test("ambiguous delimiters and arithmetic subscripts fail closed", () => {
     ["cat <<EOF\r\\\n\nEOF\n# body text\nEOF\r\nprintf done\n", /ambiguous heredoc delimiter/],
     ["echo $[1 + 1]\n", /unsupported parameter expansion/],
     ["a[1<<2]=value\nprintf done\n", /arithmetic subscript/],
+    ["a[1\n << 2]=value\nprintf done\n", /arithmetic subscript/],
     ["a[b[0]<<2]=value\n", /arithmetic subscript/],
     ["case x in y|x ) declare a[(1 | 2) & 3 << 4]=value;; esac\n", /arithmetic subscript/],
     ["a[1\\\n<\\\n<2]=value\nprintf done\n", /arithmetic subscript/],
@@ -155,8 +154,9 @@ test("shell boundaries do not expose heredoc bodies or remove literal text", () 
   const earlierCommands = ["a[1\\]", "a[1']'"].flatMap((word) =>
     [";", " |", " |&", " ||", " &", " &&"].map((separator) => `${word}${separator} cat`),
   );
-  for (const arg of [...literals, ...earlierCommands]) {
-    const command = `printf ${arg} <<EOF\n`;
+  const commands = [...literals, ...earlierCommands].map((arg) => `printf ${arg}`);
+  for (const head of [...commands, "/usr/bin/printf '%s' item[1", "./printf item[1"]) {
+    const command = `${head} <<EOF\n`;
     const source = `${command}body\nEOF\nprintf done\n`;
     assert.equal(check(source, source), `${command}    \n   \nprintf done\n`);
   }
@@ -186,8 +186,7 @@ test("body and comment command decoys are masked or removed", () => {
       "npx playwright test real",
       "",
     ].join(newline);
-    const canonical = `\n${source.slice(source.indexOf(newline) + newline.length)}`;
-    const masked = check(source, canonical);
+    const masked = check(source, `\n${source.slice(source.indexOf(newline) + newline.length)}`);
     assert.doesNotMatch(masked, /decoy/);
     assert.equal((masked.match(/playwright test/g) ?? []).length, 1);
   }
