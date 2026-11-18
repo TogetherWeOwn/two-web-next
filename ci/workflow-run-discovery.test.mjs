@@ -90,6 +90,37 @@ test("projects actual browser workflow contexts within the clone bounds", () => 
   }
 });
 
+test("plain data conversion rejects unsafe YAML integers", () => {
+  const workflow = (value) => `defaults: ${value}\njobs: { build: { steps: [{ run: hi }] } }`;
+  for (const value of [
+    "9007199254740992",
+    "9007199254740993",
+    "-9007199254740993",
+    "0x20000000000001",
+  ]) {
+    const [run] = discoverWorkflowRuns("ci.yml", workflow(value));
+    assert.throws(() => workflowRunPlainData(run), /ci.yml: unsupported workflow data/);
+  }
+  for (const value of [Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER, 1.25]) {
+    const [run] = discoverWorkflowRuns("ci.yml", workflow(value));
+    assert.equal(workflowRunPlainData(run).workflow.defaults, value);
+  }
+  const [quoted] = discoverWorkflowRuns("ci.yml", workflow('"9007199254740993"'));
+  assert.equal(workflowRunPlainData(quoted).workflow.defaults, "9007199254740993");
+});
+
+test("workflow context rejects unsupported YAML version directives", () => {
+  const context = (version) => {
+    const [run] = discoverWorkflowRuns(
+      "ci.yml",
+      `%YAML ${version}\n---\njobs: { build: { steps: [{ run: hi }] } }`,
+    );
+    return workflowRunPlainData(run);
+  };
+  assert.throws(() => context("1.3"), /ci.yml: invalid workflow YAML/);
+  assert.equal(context("1.2").step.run, "hi");
+});
+
 test("plain data conversion rejects unsupported YAML semantics", () => {
   for (const prefix of [
     "defaults: &defaults { shell: bash }\n",

@@ -18,7 +18,14 @@ export function workflowRunPlainData(run) {
     if (isScalar(node)) {
       const value = node.value;
       if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-      if (typeof value === "number" && Number.isFinite(value)) return value;
+      // The parser can round large YAML integers before we see the value.
+      if (
+        typeof value === "number" &&
+        Number.isFinite(value) &&
+        (!Number.isInteger(value) || Number.isSafeInteger(value))
+      ) {
+        return value;
+      }
     } else if (isSeq(node)) {
       return node.items.map((item) => convert(item, depth + 1));
     } else if (isMap(node)) {
@@ -54,7 +61,10 @@ export function workflowRunPlainData(run) {
 // inspection. Discovery alone is not evidence that a step ran or succeeded.
 export function discoverWorkflowRuns(name, text) {
   const doc = parseDocument(text);
-  if (doc.errors.length) throw new Error(`${name}: invalid workflow YAML`);
+  // Unsupported versions warn and fall back to the default schema.
+  if (doc.errors.length || doc.warnings.some(({ code }) => code === "BAD_DIRECTIVE")) {
+    throw new Error(`${name}: invalid workflow YAML`);
+  }
   if (!isMap(doc.contents)) throw new Error(`${name}: invalid workflow root`);
   const jobs = doc.contents.get("jobs", true);
   if (!isMap(jobs)) throw new Error(`${name}: invalid jobs`);
