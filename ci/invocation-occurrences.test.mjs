@@ -44,10 +44,23 @@ test("projects isolated commands and workflow roots without changing traversal",
     [root],
     scripts,
     (occurrence, source, workflow) => {
+      assert.equal(occurrence.origin.job, "test");
+      assert.equal(workflow.metadata.value, 1);
+      assert.equal(workflow.npmEdges.length, 2);
+      assert.equal(
+        source.npmEdges.length,
+        source.location === 0 ? 2 : source.location === 3 ? 1 : 0,
+      );
       const result = { occurrence, source: source.location, root: workflow.location };
       source.npmEdges.length = 0;
       workflow.npmEdges.length = 0;
       workflow.metadata.value = 2;
+      if (occurrence.command === 3) {
+        occurrence.origin.job = "changed";
+        occurrence.npmEdges[0].location = -1;
+        occurrence.npmEdges.length = 0;
+        assert.equal(workflow.origin.job, "test");
+      }
       return result;
     },
   );
@@ -59,6 +72,7 @@ test("projects isolated commands and workflow roots without changing traversal",
     results.map(({ root: location }) => location),
     [0, 0, 0, 0, 0],
   );
+  assert.deepEqual(results[2].occurrence.npmEdges, [edge("a", 1), edge("b", 4)]);
   assert.deepEqual(results[4].occurrence.npmEdges, [edge("a", 2), edge("b", 4)]);
   assert.deepEqual({ root, scripts }, before);
 });
@@ -90,6 +104,49 @@ test("fails closed when projection inputs are not cloneable", () => {
     }),
   );
   assert.equal(called, false);
+  assert.deepEqual(enumerateInvocationOccurrences([root], {}), [
+    { origin, command: 0, npmEdges: [] },
+  ]);
+});
+
+test("refuses symbol-keyed metadata only on the projection path", () => {
+  const flag = Symbol("parser flag");
+  const root = { ...command(0, [{ ...edge("a", 1), [flag]: true }]), origin };
+  const scripts = { a: [command(2)] };
+  assert.equal(enumerateInvocationOccurrences([root], scripts)[1].npmEdges[0][flag], true);
+  assert.throws(
+    () => enumerateInvocationOccurrences([root], scripts, (value) => value),
+    /projection requires plain data/,
+  );
+});
+
+test("bounds repeated projection copies without changing ordinary traversal", () => {
+  const root = {
+    ...command(
+      0,
+      Array.from({ length: 400 }, (_, location) => edge("leaf", location)),
+    ),
+    origin,
+  };
+  const scripts = { leaf: [command(1)] };
+  assert.equal(enumerateInvocationOccurrences([root], scripts).length, 401);
+  assert.throws(
+    () => enumerateInvocationOccurrences([root], scripts, (occurrence) => occurrence),
+    /projection clone limit exceeded/,
+  );
+  const small = { ...command(0, [edge("leaf", 0)]), origin };
+  assert.equal(enumerateInvocationOccurrences([small], scripts, (value) => value).length, 2);
+});
+
+test("refuses async projections instead of returning a rejected promise", () => {
+  const root = { ...command(0), origin };
+  assert.throws(
+    () =>
+      enumerateInvocationOccurrences([root], {}, async () => {
+        throw new Error("projection rejected asynchronously");
+      }),
+    /projection must be synchronous/,
+  );
 });
 
 test("propagates projection failures instead of returning partial occurrences", () => {
