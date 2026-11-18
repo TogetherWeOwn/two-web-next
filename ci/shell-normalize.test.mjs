@@ -142,7 +142,7 @@ test("here-strings and arithmetic shifts are not heredocs", () => {
     "cat <<<word\nnpm run real\n",
     "echo $((8 << 1))\nnpm run real\n",
     "echo $((1))#literal\n",
-    'echo "$((1))#literal"\n',
+    'echo "$((1))#literal" "$$[worker]" $$[worker]\n',
     "((8 << 1))\nnpm run real\n",
     "echo 'a[1<<2]' \\<\\<\n",
   ]) {

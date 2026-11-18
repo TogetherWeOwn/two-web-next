@@ -62,11 +62,12 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
     const expansion = c === "$" && quote !== "'";
     if (expansion || (!quote && c === "(")) {
       const next = skipContinuations(text, i + 1);
-      if (expansion) {
-        assert.ok(text[next] !== "'" || quote, "unsupported ANSI-C shell quote");
-        assert.ok(!["{", "["].includes(text[next]), "unsupported parameter expansion");
-      }
-      if (text[next] === "(") {
+      assert.ok(!expansion || text[next] !== "'" || quote, "unsupported ANSI-C shell quote");
+      assert.ok(!expansion || !["{", "["].includes(text[next]), "unsupported parameter expansion");
+      if (expansion && text[next] === "$") {
+        out += c;
+        i = next;
+      } else if (text[next] === "(") {
         i = expansion ? skipContinuations(text, next + 1) : next;
         assert.equal(text[i], "(", "unsupported command substitution");
         out += expansion ? "$((" : "((";
