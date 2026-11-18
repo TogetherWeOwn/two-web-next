@@ -9,7 +9,7 @@ import {
   canonicalIntervalDays,
   monthGrid,
   wallDateIso,
-  wallMonth,
+  wallDayStart,
   type CalendarDay,
   type CalendarEmptyState,
   type CalendarState,
@@ -22,6 +22,7 @@ export interface CalendarScreenStateInput {
   upcoming: CalRow[];
   past: PublicEvent[];
   pastMayBeTruncated?: boolean;
+  monthReadMayBeIncomplete?: boolean;
   zone: string;
   now: Date;
   totalPages: number;
@@ -45,6 +46,7 @@ export function deriveCalendarScreenState({
   upcoming,
   past,
   pastMayBeTruncated = past.length >= EVENTS_PAST_DRAWER_LIMIT,
+  monthReadMayBeIncomplete = false,
   zone,
   now,
   totalPages,
@@ -98,28 +100,24 @@ export function deriveCalendarScreenState({
     }
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
-  // Month-local emptiness follows occupied in-month cells, including canonical
-  // continuations, but never spillover cells. Count past start-days even with
-  // the drawer closed: the claim names the month, not just the visible rows.
-  // A truncated past drawer (at the cap) leaves months at or before the wall month
-  // incomplete — older in-month past rows may exist unread — so the claim is
-  // suppressed there; future months cannot hold past rows. A failed source
-  // suppresses the claim — October may only look empty — while the
-  // error/never/gap states keep their own precedence. A game-scoped miss
-  // already names the effective scope with its own broadening link, so it
-  // suppresses the unscoped month sentence: with game-filtered grid rows the
-  // sentence is false when another game occupies the month, and its
-  // Upcoming-events link would land back on the same filtered zero.
+  // Count occupied in-month days, including continuations and past start-days
+  // behind a closed drawer, but never days in the adjacent months.
   const monthHasInMonthRows =
     weeks.some((week) => week.some((day) => day.inMonth && day.events.length > 0)) ||
     past.some((e) => wallDateIso(e.startsAt, rowZone(e, zone)).startsWith(`${state.month}-`));
-  const monthCouldHoldPast = state.month <= wallMonth(now, zone);
+  // The past read sorts UTC starts descending, so every retained start bounds
+  // omitted starts. Allow a full day for a host zone ahead of UTC; the grid's
+  // modal zone cannot bound the wall date of an unseen row.
+  const monthStart = wallDayStart(`${state.month}-01`);
+  const pastCouldBeMissingInMonth =
+    pastMayBeTruncated && !past.some((e) => e.startsAt.getTime() + 86_400_000 < monthStart);
   const monthEmpty =
     emptyState === null &&
     state.view === "calendar" &&
     !discordFailed &&
     !monthHasInMonthRows &&
-    !(pastMayBeTruncated && monthCouldHoldPast) &&
+    !monthReadMayBeIncomplete &&
+    !pastCouldBeMissingInMonth &&
     !searchMiss;
   return { searching, showPast, hasVisibleResults, outOfRange, searchMiss, weeks, monthEmpty };
 }

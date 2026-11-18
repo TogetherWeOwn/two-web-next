@@ -335,8 +335,8 @@ export function calendarMonthLabel(month: string): string {
 }
 
 /** Month-local empty guidance names the selected month, never the schedule. */
-export const calendarMonthEmptyCopy = (month: string): string =>
-  `No events in ${calendarMonthLabel(month)}.`;
+export const calendarMonthEmptyCopy = (month: string, game?: string | null): string =>
+  `No ${game ? `“${game}” ` : ""}events in ${calendarMonthLabel(month)}.`;
 
 export interface CalendarDay<E = unknown> {
   /** ISO date; trailing neighbours after 9999-12 use the expanded year +010000. */
