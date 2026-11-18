@@ -58,6 +58,8 @@ test("multiple complete words, empty quotes and exact tab-stripped closers", () 
   assert.match(masked, /cd web/);
   const spaces = "cat <<-EOF\n  EOF\ncd web\nEOF\nnpm run real\n";
   assert.doesNotMatch(check(spaces, spaces), /cd web/);
+  const literalCr = "cat <<EOF\nEOF\r\\\n\nbody\nEOF\n";
+  assert.doesNotMatch(check(literalCr, literalCr), /body/);
 });
 
 test("marker named cd and exact closers preserve the following command", () => {
@@ -95,6 +97,7 @@ test("literal carriage returns in delimiters preserve following commands", () =>
 test("ambiguous delimiters and arithmetic subscripts fail closed", () => {
   for (const [source, error] of [
     ["cat <<EOF\r\\\n\nEOF\n# body text\nEOF\r\nprintf done\n", /ambiguous heredoc delimiter/],
+    ["echo $[1 + 1]\n", /unsupported parameter expansion/],
     ["a[1<<2]=value\nprintf done\n", /arithmetic subscript/],
     ["a[b[0]<<2]=value\n", /arithmetic subscript/],
     ["case x in y|x ) declare a[(1 | 2) & 3 << 4]=value;; esac\n", /arithmetic subscript/],
@@ -157,6 +160,8 @@ test("shell boundaries do not expose heredoc bodies or remove literal text", () 
     const source = `${command}body\nEOF\nprintf done\n`;
     assert.equal(check(source, source), `${command}    \n   \nprintf done\n`);
   }
+  const conditional = "if printf '%s' item[1 <<EOF\nbody\nEOF\nthen :; fi\n";
+  assert.doesNotMatch(check(conditional, conditional), /body/);
   const escaped = "printf \\< <<EOF\nnpm run decoy\nEOF\nnpm run real\n";
   assert.doesNotMatch(check(escaped, escaped), /decoy/);
   const nonbreaking = "cat <<EOF suffix\nbody\nEOF suffix\nnpm run real\n";
