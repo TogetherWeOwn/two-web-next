@@ -85,6 +85,7 @@ export interface CalendarPageModel {
   upcoming: (PublicEvent | DiscordTransient)[];
   past: PublicEvent[];
   pastMayBeTruncated?: boolean;
+  monthReadMayBeIncomplete?: boolean;
   zone: string;
   totalPages: number;
   emptyState: ReturnType<typeof calendarEmptyState>;
@@ -194,9 +195,14 @@ export async function loadCalendarPageModel(args: {
 
   let upcoming = probe;
   let zone = probeZone;
+  let monthReadMayBeIncomplete = false;
   const month = parseCalendarMonth(input.month) ?? fallbackMonth;
   if (view === "calendar") {
     const monthRows = await listUpcomingForMonth(db, month, now, opts);
+    monthReadMayBeIncomplete =
+      monthRows.mayBeTruncated === true ||
+      monthRows.discardedMayOverlapMonth === true ||
+      localPast.discardedStartMonths?.has(month) === true;
     zone = calendarZone([
       ...monthRows.map((event) => event.timezone),
       ...localPast.map((event) => event.timezone),
@@ -221,7 +227,7 @@ export async function loadCalendarPageModel(args: {
     // A recognized game narrows the empty claim, not text-search demand below.
     searching: searching || gameFilter !== null,
     upcomingEmpty: totalUpcoming === 0 && transients.length === 0,
-    pastEmpty: localPast.length === 0,
+    pastEmpty: localPast.length === 0 && !localPast.hadDiscardedRows,
     readFailed: discordFailed,
   });
 
@@ -247,6 +253,7 @@ export async function loadCalendarPageModel(args: {
     upcoming,
     past: localPast,
     pastMayBeTruncated: localPast.mayBeTruncated,
+    monthReadMayBeIncomplete,
     zone,
     totalPages,
     emptyState,

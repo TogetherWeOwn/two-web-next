@@ -360,11 +360,19 @@ test("Kit fixture opts into compiled JavaScript hydration", async () => {
     await page.locator("button").click();
     assert.equal(await page.locator("button").textContent(), "0");
   });
-  await withKitOfflineBrowser({ page: fixture, javaScriptEnabled: true }, async ({ page }) => {
-    await page.waitForLoadState("networkidle");
-    await page.locator("button").click();
-    await page.waitForFunction(() => document.querySelector("button")?.textContent === "1");
-  });
+  const timezoneId = "America/Los_Angeles";
+  await withKitOfflineBrowser(
+    { page: fixture, javaScriptEnabled: true, timezoneId },
+    async ({ page }) => {
+      assert.equal(
+        await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone),
+        timezoneId,
+      );
+      await page.waitForLoadState("networkidle");
+      await page.locator("button").click();
+      await page.waitForFunction(() => document.querySelector("button")?.textContent === "1");
+    },
+  );
 });
 
 test("Kit fixture denies WebSocket connections and workers", async () => {

@@ -201,8 +201,20 @@ for (const [metric, field] of [
       assert.equal(result.exitCode, advisory ? 0 : 1);
       assert.deepEqual(result.breaches, advisory ? [] : [`/ ${kind}`]);
       assert.equal(result.warnings.length, advisory ? 1 : 0);
+      const report = checkRoutes(f.root, { reportOnly: true });
+      const key = { raw: "rawBytes", gzip: "gzipBytes", count: "files" }[metric];
+      assert.equal(report.exitCode, 0);
+      assert.deepEqual(report.breaches, []);
+      assert.deepEqual(report.warnings, [
+        {
+          route: "/",
+          kind,
+          metric: key,
+          measured: result.routes["/"][kind][key],
+          ceiling: f.budget.routes["/"][kind][field],
+        },
+      ]);
       if (advisory) {
-        const key = metric === "raw" ? "rawBytes" : "gzipBytes";
         assert.deepEqual(result.warnings[0], {
           route: "/",
           kind: "css",
@@ -327,16 +339,91 @@ for (const kind of ["js", "css"])
       assert.match(rejected.error, /approved route plan/);
     });
 
-test("new source, built and live-budget route still requires explicit admission", (t) => {
+test("shipping reports an unapproved route without admitting it to the ratchet", (t) => {
   const f = fixture(t);
   f.put("web/src/routes/new/+page.svelte", "new");
   f.evidence.routes.push({ id: "/new", page: f.evidence.routes[0].page });
-  f.budget.routes["/new"] = f.budget.routes["/"];
   f.save();
+  const report = checkRoutes(f.root, { reportOnly: true });
+  assert.equal(report.exitCode, 0);
+  assert.deepEqual(report.routes["/new"], report.routes["/"]);
+  assert.deepEqual(report.warnings, [{ route: "/new", reason: "unapproved-route" }]);
+  assert.match(checkRoutes(f.root).error, /inventory mismatch/);
+
+  f.budget.routes["/new"] = f.budget.routes["/"];
   f.saveBudget();
+  assert.deepEqual(checkRoutes(f.root, { reportOnly: true }), report);
   const result = checkRoutes(f.root);
   assert.equal(result.exitCode, 2);
   assert.match(result.error, /approved route plan/);
+
+  f.evidence.routes.pop();
+  f.save();
+  const incomplete = checkRoutes(f.root, { reportOnly: true });
+  assert.equal(incomplete.exitCode, 2);
+  assert.match(incomplete.error, /inventory mismatch/);
+});
+
+function runReportOnlyCli(args, summaryPath) {
+  return spawnSync(process.execPath, ["ci/check-kit-route-perf.mjs", "--report-only", ...args], {
+    cwd: join(import.meta.dirname, ".."),
+    env: { ...process.env, GITHUB_STEP_SUMMARY: summaryPath },
+    encoding: "utf8",
+  });
+}
+
+test("report-only CLI writes JSON and job summary and fails on broken measurement", (t) => {
+  const f = fixture(t);
+  f.put("web/src/routes/new/+server.ts", "new");
+  f.evidence.routes.push({ id: "/new", page: null });
+  f.save();
+  f.budget.routes["/"].js.maxFiles -= 1;
+  f.approveBudget();
+
+  const path = join(f.root, "job-summary.md");
+  const run = () => runReportOnlyCli(["--root", f.root], path);
+  const measured = run();
+  assert.equal(measured.status, 0, measured.stdout || measured.stderr);
+  const report = JSON.parse(measured.stdout);
+  assert.equal(report.exitCode, 0);
+  assert.equal(report.routes["/new"].js.rawBytes, 0);
+  const summary = readFileSync(path, "utf8");
+  assert.match(summary, /Advisory warnings: 2/);
+  assert.match(summary, /`\/new`: no approved ceiling/);
+  assert.match(summary, /`\/`: JS files 9 exceeds 8/);
+  assert.match(summary, /\| `\/new` \| 0 \| 0 \| 0 \| 0 \| 0 \| 0 \|/);
+  assert.ok(summary.includes(`| **All client assets** | ${report.aggregate.js.rawBytes} |`));
+
+  f.put(`${OUTPUT}/client/.vite/manifest.json`, "{");
+  const broken = run();
+  assert.equal(broken.status, 2, broken.stdout || broken.stderr);
+  assert.equal(JSON.parse(broken.stdout).exitCode, 2);
+  assert.match(readFileSync(path, "utf8"), /Measurement failed/);
+});
+
+test("report-only CLI preserves measurement results when the job summary cannot be written", (t) => {
+  const f = fixture(t);
+  const run = () => runReportOnlyCli(["--root", f.root], f.root);
+  const result = checkRoutes(f.root, { reportOnly: true });
+  const measured = run();
+  assert.equal(measured.status, 0, measured.stdout || measured.stderr);
+  assert.deepEqual(JSON.parse(measured.stdout), result);
+  assert.match(measured.stderr, /unable to write job summary/);
+
+  f.put(`${OUTPUT}/client/.vite/manifest.json`, "{");
+  const failure = checkRoutes(f.root, { reportOnly: true });
+  const broken = run();
+  assert.equal(broken.status, 2, broken.stdout || broken.stderr);
+  assert.deepEqual(JSON.parse(broken.stdout), failure);
+  assert.match(broken.stderr, /unable to write job summary/);
+});
+
+test("report-only CLI rejects a missing root argument with a JSON usage error", () => {
+  const result = runReportOnlyCli(["--root"], "");
+  assert.equal(result.status, 2, result.stdout || result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.exitCode, 2);
+  assert.match(report.error, /^usage: node ci\/check-kit-route-perf\.mjs/);
 });
 
 test("missing initial approved route evidence fails closed", (t) => {

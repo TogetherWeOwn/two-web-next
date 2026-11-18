@@ -56,6 +56,7 @@ export const EventsCalendarPage: FC<{
   upcoming: CalRow[];
   past: PublicEvent[];
   pastMayBeTruncated?: boolean;
+  monthReadMayBeIncomplete?: boolean;
   zone: string;
   now: Date;
   /** Upcoming-list pages; the month grid is month-scoped and ignores it. */
@@ -86,6 +87,7 @@ export const EventsCalendarPage: FC<{
   upcoming,
   past,
   pastMayBeTruncated,
+  monthReadMayBeIncomplete,
   zone,
   now,
   totalPages,
@@ -108,6 +110,7 @@ export const EventsCalendarPage: FC<{
       upcoming,
       past,
       pastMayBeTruncated,
+      monthReadMayBeIncomplete,
       zone,
       now,
       totalPages,
@@ -272,7 +275,7 @@ export const EventsCalendarPage: FC<{
 
           {monthEmpty ? (
             <div data-testid={CALENDAR_MONTH_EMPTY_TESTID}>
-              <p>{calendarMonthEmptyCopy(state.month)}</p>
+              <p>{calendarMonthEmptyCopy(state.month, gameFilter)}</p>
               <p>
                 <a href={calendarUrl({ ...state, view: "list" })}>
                   {CALENDAR_MONTH_EMPTY_RECOVERY_COPY}
