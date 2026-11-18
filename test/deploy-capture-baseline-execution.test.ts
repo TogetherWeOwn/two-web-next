@@ -83,18 +83,18 @@ if (count === Number(process.env.CAPTURE_NODE_EXIT_ON_ATTEMPT)) {
 const succeedOn = Number(process.env.CAPTURE_SUCCEED_ON_ATTEMPT);
 const failed = Number(process.env.CAPTURE_FAILED_COUNT);
 // Canned /up answers per attempt. The success attempt returns a healthy
-// payload; earlier attempts fail the way a real outage does, except attempts
-// 2, 4 and 5, which return malformed payloads the validation must reject: a
-// string count, a float count and a negative count (the float kills a dropped
-// Number.isInteger check, the negative kills a dropped f >= 0 lower bound;
-// dropping the typeof check alone is unobservable because isInteger already
-// implies it).
+// payload; earlier attempts throw or return malformed data: a string count,
+// a missing count, a float (guards Number.isInteger), or a negative count
+// (guards the lower bound).
 globalThis.fetch = async () => {
   if (count === succeedOn) {
     return { json: async () => ({ queue: { failed } }) };
   }
   if (count === 2) {
     return { json: async () => ({ queue: { failed: "bogus" } }) };
+  }
+  if (count === 3) {
+    return { json: async () => ({ queue: {} }) };
   }
   if (count === 4) {
     return { json: async () => ({ queue: { failed: 2.5 } }) };
@@ -168,7 +168,7 @@ describe.each(TARGETS)("$stepName ($workflow)", (target) => {
     expect(run.status).toBe(0);
     expect(run.attempts).toBe(1);
     expect(run.sleepDelays).toEqual([]);
-    expect(run.stepOutput).toContain("failed=3");
+    expect(run.stepOutput).toBe("failed=3\n");
     expect(run.output).toContain("dead-letter baseline: 3");
     expect(run.output).not.toContain("::warning::");
     expect(run.stepEnv).toBe("");
@@ -179,7 +179,8 @@ describe.each(TARGETS)("$stepName ($workflow)", (target) => {
     expect(run.status).toBe(0);
     expect(run.attempts).toBe(3);
     expect(run.sleepDelays).toEqual(["5", "5"]);
-    expect(run.stepOutput).toContain("failed=7");
+    expect(run.stepOutput).toBe("failed=7\n");
+    expect(run.stepEnv).toBe("");
     expect(run.output).toContain("dead-letter baseline: 7");
     expect(run.output).not.toContain("::warning::");
   });
@@ -193,7 +194,8 @@ describe.each(TARGETS)("$stepName ($workflow)", (target) => {
     expect(run.status).toBe(0);
     expect(run.attempts).toBe(1);
     expect(run.sleepDelays).toEqual([]);
-    expect(run.stepOutput).toContain("failed=0");
+    expect(run.stepOutput).toBe("failed=0\n");
+    expect(run.stepEnv).toBe("");
     expect(run.output).toContain("dead-letter baseline: 0");
     expect(run.output).not.toContain("::warning::");
   });
@@ -203,8 +205,7 @@ describe.each(TARGETS)("$stepName ($workflow)", (target) => {
     expect(run.status).toBe(0);
     expect(run.attempts).toBe(5);
     expect(run.sleepDelays).toEqual(["5", "5", "5", "5"]);
-    expect(run.stepOutput).toContain("failed=\n");
-    expect(run.stepOutput).not.toContain("failed=0");
+    expect(run.stepOutput).toBe("failed=\n");
     expect(run.output).toContain("::warning::dead-letter baseline unreadable");
     expect(run.output).toContain("dead-letter baseline: unknown");
     expect(run.stepEnv).toBe("");
@@ -217,7 +218,8 @@ describe.each(TARGETS)("$stepName ($workflow)", (target) => {
     expect(run.status).toBe(0);
     expect(run.attempts).toBe(2);
     expect(run.sleepDelays).toEqual(["5"]);
-    expect(run.stepOutput).toContain("failed=7");
+    expect(run.stepOutput).toBe("failed=7\n");
+    expect(run.stepEnv).toBe("");
     expect(run.output).toContain("dead-letter baseline: 7");
     expect(run.output).not.toContain("::warning::");
   });

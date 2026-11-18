@@ -821,13 +821,20 @@ test("production dead-letter baseline is scoped to the gradual and post-promotio
     );
     assert.ok(steps.indexOf(baseline) < steps.indexOf(step), `${name} follows baseline capture`);
   }
+  const workflowDefaults = workflow.slice(0, workflow.indexOf("\njobs:\n"));
   for (const key of ["SMOKE_FAILED_BASELINE", "SMOKE_ALLOW_MISSING_BASELINE"]) {
+    assert.ok(!workflowDefaults.includes(key), `${key} must not be set workflow-wide`);
     assert.equal(
       deploy.split(key).length - 1,
       consumers.length,
       `${key} belongs only to the two smoke consumers`,
     );
   }
+  assert.equal(
+    deploy.split("steps.dead-letter-baseline.outputs.failed").length - 1,
+    consumers.length,
+    "the baseline output must not be read under another variable name or input",
+  );
 });
 
 test("shared gradual action promotes 5-50-100 with per-stage gates and auto-rollback", () => {
