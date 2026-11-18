@@ -11,9 +11,14 @@ if [[ ${2:-} == mobile-fixture ]]; then
   snapshot=$dir/mobile-fixture
   # Refuse to mix samples if this one-shot snapshot already exists.
   mkdir -- "$snapshot"
-  find "$dir" -maxdepth 1 -type f \
-    \( -regextype posix-extended -regex '.*/lhr-[0-9]+(-[0-9]+)?\.json' -o -name assertion-results.json \) \
-    -exec cp -t "$snapshot" -- '{}' +
+  # Keep this path usable with both GNU and BSD tools for the evidence selftest.
+  for file in "$dir"/lhr-*.json "$dir"/assertion-results.json; do
+    [[ -f "$file" && ! -L "$file" ]] || continue
+    name=${file##*/}
+    if [[ "$name" == assertion-results.json || "$name" =~ ^lhr-[0-9]+(-[0-9]+)?\.json$ ]]; then
+      cp -- "$file" "$snapshot/"
+    fi
+  done
 else
   mkdir -p "$dir/mobile-interrupted"
   find "$dir" -maxdepth 1 -type f \

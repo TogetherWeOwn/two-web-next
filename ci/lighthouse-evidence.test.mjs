@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -160,7 +160,12 @@ test("fixture snapshot retains the final mobile attempt when desktop reuses the 
   ];
   for (const [name, body] of final) await writeFile(join(dir, name), body);
   await writeFile(join(dir, "lhr-200.html"), "HTML report");
+  await writeFile(join(dir, "lhr-200-1-1.json"), "not a raw report name");
   await writeFile(join(dir, "manifest.json"), "representative reports only");
+  await symlink("lhr-200.json", join(dir, "lhr-202.json"));
+  const nested = join(dir, "lhr-203.json");
+  await mkdir(nested);
+  await writeFile(join(nested, "lhr-204.json"), "nested report");
   const args = [
     fileURLToPath(new URL("./lighthouse-preserve-mobile.sh", import.meta.url)),
     dir,
