@@ -2,6 +2,7 @@ import { expect, localOrigin, test } from "../fixtures";
 import {
   captureNormalizedDisplayFont,
   captureWithGeometry,
+  expectStablePublicPageCapture,
   loadVisualFont,
   renderedPlatformFonts,
 } from "./font-evidence";
@@ -47,6 +48,27 @@ for (const size of [
     });
   }
 }
+
+test("rules full-page display evidence @ 360", async ({ page }, testInfo) => {
+  const size = { width: 360, height: 844 };
+  const heading = "#rules-heading";
+  await page.setViewportSize(size);
+  expect((await page.goto("/rules"))?.status()).toBe(200);
+  await page.waitForLoadState("networkidle");
+  await page.evaluate(() => document.fonts.ready);
+  const capture = await expectStablePublicPageCapture(page, testInfo, {
+    heading,
+    width: size.width,
+  });
+  expect(capture.dimensions.height).toBeGreaterThan(size.height);
+  const fonts = await renderedPlatformFonts(page, heading);
+  await testInfo.attach("rules-360-fonts", {
+    body: JSON.stringify(fonts),
+    contentType: "application/json",
+  });
+  expect(fonts.length).toBeGreaterThan(0);
+  expect(fonts.every((font) => !font.isCustomFont && font.glyphCount > 0)).toBe(true);
+});
 
 test("rules separately loaded Mona Sans evidence @ 360", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 360, height: 844 });
