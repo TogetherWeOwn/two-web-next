@@ -21,7 +21,7 @@ const island = readFileSync(
   "utf8",
 );
 const notice = (page: Page) =>
-  page.locator('[role="status"], [role="alert"]').filter({ hasText: MISSING_DISCORD });
+  page.getByTestId("events-partial-source").filter({ hasText: MISSING_DISCORD });
 const root = (page: Page) => page.getByTestId("events-calendar");
 
 function expectSameState(href: string, path: string) {
@@ -281,4 +281,93 @@ test("a superseded failed-source response cannot overwrite a recovered committed
   await expect(root(page)).not.toContainText("Local chess night 1");
   await expect(search).toBeFocused();
   expect(f.traffic.map((entry) => entry.island)).toEqual([false, true, true]);
+});
+
+// Real shipped schedule stylesheet over the synthetic fixture. Covers the
+// recovery-link order and the narrow/wide/forced-colors month grid cues.
+const scheduleCss = readFileSync(
+  new NodeURL("../public/schedule-theme.css", import.meta.url),
+  "utf8",
+);
+const CALENDAR_PATH = "/events?past=1&view=calendar&month=2099-05";
+
+test.describe("calendar without JavaScript", () => {
+  test.use({ javaScriptEnabled: false });
+
+  test("retains the server-rendered keyboard scroll target", async ({ page, context }) => {
+    await fixture(context);
+    await page.goto(PARTIAL_ORIGIN + CALENDAR_PATH);
+    await expect(page.getByTestId("events-calendar-scroll")).toHaveAttribute("tabindex", "0");
+    await expect(page.getByTestId("events-calendar-scroll")).toHaveAccessibleName(
+      "Events calendar",
+    );
+  });
+});
+
+const afterDisplay = (page: Page) =>
+  page
+    .locator(".schedule-month-frame")
+    .evaluate((node) => getComputedStyle(node, "::after").display);
+
+test("partial calendar keeps retry before invite and shows grid scroll cues only when narrow", async ({
+  page,
+  context,
+}) => {
+  await fixture(context);
+  await context.route(`${PARTIAL_ORIGIN}/schedule-theme.css`, (route) =>
+    route.fulfill({ contentType: "text/css", body: scheduleCss }),
+  );
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(PARTIAL_ORIGIN + CALENDAR_PATH);
+
+  const actions = notice(page).locator(".schedule-recovery-actions");
+  await expect(actions.locator("a")).toHaveCount(2);
+  await expect(actions.locator("a").first()).toHaveAccessibleName(RETRY_NAME);
+  await expect(actions.locator("a").last()).toHaveAttribute("href", PARTIAL_INVITE);
+
+  const frame = page.locator(".schedule-month-frame");
+  const hint = page.locator(".schedule-month-hint");
+  const scroll = page.getByTestId("events-calendar-scroll");
+  await expect(scroll).toHaveCount(1);
+  expect(
+    await frame.evaluate((n) => n.contains(document.querySelector(".schedule-month-hint"))),
+  ).toBe(true);
+
+  // Wide: no hint, fade, or unnecessary tab stop.
+  await expect(hint).toBeHidden();
+  expect(await afterDisplay(page)).toBe("none");
+  await expect(scroll).not.toHaveAttribute("tabindex");
+  await expect(scroll).toHaveAccessibleName("Events calendar");
+
+  // Narrow: the visible text cue and keyboard scroll target return.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(hint).toBeVisible();
+  await expect(hint).not.toHaveAttribute("aria-hidden");
+  expect(await afterDisplay(page)).toBe("block");
+  expect(await scroll.evaluate((n) => n.scrollWidth > n.clientWidth)).toBe(true);
+  await expect(scroll).toHaveAttribute("tabindex", "0");
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(scroll).not.toHaveAttribute("tabindex");
+  await page.getByRole("link", { name: "Next month" }).click();
+  await expect(page.getByTestId("calendar-month")).toContainText("June");
+  await expect(scroll).not.toHaveAttribute("tabindex");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(scroll).toHaveAttribute("tabindex", "0");
+  // Recovery links wrap but keep their order and stay on screen.
+  const retry = await actions.locator("a").first().boundingBox();
+  const invite = await actions.locator("a").last().boundingBox();
+  expect(retry && invite && (invite.y > retry.y || invite.x > retry.x)).toBe(true);
+  expect(invite!.x + invite!.width).toBeLessThanOrEqual(390);
+
+  // The narrower viewport retains the cue and does not push the invite offscreen.
+  await page.setViewportSize({ width: 320, height: 844 });
+  await expect(hint).toBeVisible();
+  const narrowInvite = await actions.locator("a").last().boundingBox();
+  expect(narrowInvite).not.toBeNull();
+  expect(narrowInvite!.x + narrowInvite!.width).toBeLessThanOrEqual(320);
+
+  // Forced colors: the decorative gradient fade is removed, text hint remains.
+  await page.emulateMedia({ forcedColors: "active" });
+  expect(await afterDisplay(page)).toBe("none");
+  await expect(hint).toBeVisible();
 });

@@ -93,10 +93,11 @@ export async function partialHtml(
 }
 
 export function discordNotices(html: string): string[] {
-  // Accept semantic status or alert wrappers, not an implementation-specific id
-  // or exact wording. This extracts rendered content, never source literals.
+  // Extract the rendered partial notice, not the live island status.
   return [
-    ...html.matchAll(/<(p|div|aside|section)\b[^>]*role="(?:status|alert)"[^>]*>([\s\S]*?)<\/\1>/g),
+    ...html.matchAll(
+      /<(p|div|aside|section)\b[^>]*data-testid="events-partial-source"[^>]*>([\s\S]*?)<\/\1>/g,
+    ),
   ]
     .map((match) => match[2]!)
     .filter((body) => MISSING_DISCORD.test(body.replace(/<[^>]*>/g, " ")));

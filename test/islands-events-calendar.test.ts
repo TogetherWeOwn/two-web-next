@@ -885,7 +885,8 @@ describe("EventsCalendar SSR drift", () => {
     expect(gap).toContain('href="/events/past"');
 
     const err = await (await calendar([], [], failedSource()).request("/events")).text();
-    expect(err).toContain(`role="alert" data-testid="${EVENTS_EMPTY_ERROR_TESTID}"`);
+    expect(err).toContain(`data-testid="${EVENTS_EMPTY_ERROR_TESTID}"`);
+    expect(err).not.toContain(`role="alert" data-testid="${EVENTS_EMPTY_ERROR_TESTID}"`);
     expect(err).toContain(`data-testid="${EVENTS_RETRY_TESTID}"`);
     expect(err).toContain(esc(EVENTS_EMPTY_COPY.errorTitle));
     expect(err).toContain(esc(EVENTS_EMPTY_COPY.errorBody));

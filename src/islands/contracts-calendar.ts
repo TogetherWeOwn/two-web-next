@@ -257,7 +257,7 @@ export const EVENTS_PARTIAL_COPY = {
 /* Month grid: whole weeks, Monday-first, leading/trailing neighbours flagged;
  * "today" is evaluated in the hosts' zone, not the server's or the viewer's. */
 export const EVENTS_CALENDAR_SCROLL_TESTID = "events-calendar-scroll";
-export const EVENTS_CALENDAR_SCROLL_LABEL = "Events calendar; scroll horizontally to see all days";
+export const EVENTS_CALENDAR_SCROLL_LABEL = "Events calendar";
 export const EVENTS_CALENDAR_GRID_TESTID = "events-calendar-grid";
 export const CALENDAR_MONTH_TESTID = "calendar-month";
 export const CALENDAR_MONTH_STATUS_TESTID = "calendar-month-status";

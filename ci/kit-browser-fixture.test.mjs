@@ -533,8 +533,30 @@ const past = Array.from({ length: 7 }, (_, i) => ({ eventKey: i === 1 ? 'game/ni
           );
         }
         if (scenario === "error" || scenario === "partial") {
-          assert.equal(await page.getByRole(scenario === "error" ? "alert" : "status").count(), 1);
+          const notice = page.getByTestId(
+            scenario === "error" ? "events-empty-error" : "events-partial-source",
+          );
+          assert.equal(await notice.count(), 1);
+          assert.equal(await notice.getAttribute("role"), null);
           assert.match(await page.getByTestId("events-retry").getAttribute("href"), /page=2/);
+          const order = await page
+            .locator(".schedule-recovery-actions a")
+            .evaluateAll((links) => links.map((link) => link.dataset.testid));
+          assert.deepEqual(order, ["events-retry", "discord-join"], "retry precedes invite");
+          for (const [width, height] of [
+            [1280, 800],
+            [390, 844],
+            [320, 844],
+          ]) {
+            await page.setViewportSize({ width, height });
+            const retry = await page.getByTestId("events-retry").boundingBox();
+            const join = await page.getByTestId("discord-join").boundingBox();
+            assert.ok(
+              join.y > retry.y || join.x > retry.x,
+              `invite follows retry visually at ${width}px`,
+            );
+            assert.ok(join.x + join.width <= width, `invite stays on screen at ${width}px`);
+          }
         }
         if (scenario === "gap") {
           assert.equal(await page.getByTestId("events-empty-gap-item").count(), 5);
@@ -573,6 +595,7 @@ const past = Array.from({ length: 7 }, (_, i) => ({ eventKey: i === 1 ? 'game/ni
           for (const [name, width, height] of [
             ["desktop", 1280, 800],
             ["mobile", 390, 844],
+            ["narrow", 320, 844],
           ]) {
             await page.setViewportSize({ width, height });
             await page.screenshot({
@@ -704,15 +727,49 @@ const weeks = monthGrid(state.month, '2026-06-15', new Map<string, CalendarGridE
       assert.equal(await form.locator('[name="past"]').inputValue(), "1");
       assert.equal(await form.locator('[name="view"]').inputValue(), "calendar");
       assert.equal(await page.getByTestId("events-calendar-scroll").getAttribute("tabindex"), "0");
+      const fade = () =>
+        page
+          .locator(".schedule-month-frame")
+          .evaluate((node) => getComputedStyle(node, "::after").display);
+      const hint = page.locator(".schedule-month-hint");
+      await page.setViewportSize({ width: 1280, height: 800 });
+      assert.equal(await hint.isVisible(), false, "wide grid shows no scroll hint");
+      assert.equal(await fade(), "none", "wide grid shows no fade");
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(await hint.isVisible(), true, "narrow grid shows scroll hint");
+      assert.equal(await hint.getAttribute("aria-hidden"), null);
+      assert.equal(await fade(), "block", "narrow grid shows fade");
+      assert.ok(
+        await page
+          .getByTestId("events-calendar-scroll")
+          .evaluate((node) => node.scrollWidth > node.clientWidth),
+        "narrow grid scrolls horizontally",
+      );
+      await page.emulateMedia({ forcedColors: "active" });
+      assert.equal(await fade(), "none", "forced colors removes the decorative fade");
+      assert.equal(await hint.isVisible(), true, "forced colors keeps the text hint");
+      await page.emulateMedia({ forcedColors: "none" });
       if (process.env.KIT_CALENDAR_EVIDENCE_DIR) {
         const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
         await mkdir(directory, { recursive: true });
         for (const [name, width, height] of [
           ["desktop", 1280, 800],
           ["mobile", 390, 844],
+          ["narrow", 320, 844],
         ]) {
           await page.setViewportSize({ width, height });
+          const scroll = page.getByTestId("events-calendar-scroll");
+          await scroll.evaluate((node) => {
+            node.scrollLeft = 0;
+          });
           await page.screenshot({ path: join(directory, `calendar-${name}.png`), fullPage: true });
+          await scroll.evaluate((node) => {
+            node.scrollLeft = node.scrollWidth;
+          });
+          await page.screenshot({
+            path: join(directory, `calendar-${name}-end.png`),
+            fullPage: true,
+          });
         }
       }
     },

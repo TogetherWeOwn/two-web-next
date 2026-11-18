@@ -59,35 +59,35 @@ export const EmptyGap: FC<{ past: PublicEvent[]; zone: string }> = ({ past, zone
   </div>
 );
 
-/** A read failed (role=alert): Retry re-issues the same URL; the join link is the human fallback. */
+/** A read failed: Retry re-issues the same URL; the join link is the human fallback. */
 export const EmptyError: FC<{ url: string; inviteUrl: string }> = ({ url, inviteUrl }) => (
-  <div role="alert" data-testid={EVENTS_EMPTY_ERROR_TESTID}>
+  <div data-testid={EVENTS_EMPTY_ERROR_TESTID}>
     <h2>{EVENTS_EMPTY_COPY.errorTitle}</h2>
     <p>{EVENTS_EMPTY_COPY.errorBody}</p>
-    <p>
+    <div class="schedule-recovery-actions">
       <a href={url} data-testid={EVENTS_RETRY_TESTID}>
         {EVENTS_EMPTY_COPY.retry}
-      </a>{" "}
+      </a>
       <a href={inviteUrl} data-testid={DISCORD_JOIN_TESTID}>
         {EVENTS_EMPTY_COPY.join}
       </a>
-    </p>
+    </div>
   </div>
 );
 
-/** Partial source (role=status): healthy rows stay visible beside this notice.
+/** Partial source: healthy rows stay visible beside this notice.
  * Retry re-issues the same URL; the join link is the human fallback. */
 export const PartialSourceNotice: FC<{ url: string; inviteUrl: string }> = ({ url, inviteUrl }) => (
-  <div role="status" data-testid={EVENTS_PARTIAL_TESTID}>
+  <div data-testid={EVENTS_PARTIAL_TESTID}>
     <p>{EVENTS_PARTIAL_COPY.notice}</p>
-    <p>
+    <div class="schedule-recovery-actions">
       <a href={url} data-testid={EVENTS_RETRY_TESTID}>
         {EVENTS_EMPTY_COPY.retry}
-      </a>{" "}
+      </a>
       <a href={inviteUrl} data-testid={DISCORD_JOIN_TESTID}>
         {EVENTS_EMPTY_COPY.join}
       </a>
-    </p>
+    </div>
   </div>
 );
 

@@ -45,6 +45,16 @@
   )
     return;
 
+  // Keep the server-rendered tab stop only when the grid can scroll.
+  function syncGridTabStop() {
+    var scroll = root.querySelector('[data-testid="events-calendar-scroll"]');
+    if (!scroll) return;
+    if (scroll.scrollWidth > scroll.clientWidth) scroll.setAttribute("tabindex", "0");
+    else scroll.removeAttribute("tabindex");
+  }
+  window.addEventListener("resize", syncGridTabStop);
+  syncGridTabStop();
+
   var DEBOUNCE_MS = 300;
   var searchMaxLength = Number(root.dataset.searchMaxLength);
   var searchTooLong = root.dataset.searchTooLong;
@@ -515,6 +525,7 @@
       feedback.textContent = overLimit() ? searchTooLong : "";
       // A card or month control cannot take focus while content is hidden.
       setLoading(false);
+      syncGridTabStop();
       if (ownsFocus && (opts.focus || opts.control)) {
         var target = opts.focus && root.querySelector(opts.focus);
         if (!target && opts.control)

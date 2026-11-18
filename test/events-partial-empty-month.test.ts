@@ -39,7 +39,9 @@ registerEventRoutes(
 
 function notices(html: string): string[] {
   return [
-    ...html.matchAll(/<(p|div|aside|section)\b[^>]*role="(?:status|alert)"[^>]*>([\s\S]*?)<\/\1>/g),
+    ...html.matchAll(
+      /<(p|div|aside|section)\b[^>]*data-testid="events-partial-source"[^>]*>([\s\S]*?)<\/\1>/g,
+    ),
   ]
     .map((match) => match[2]!)
     .filter((body) => /Discord[\s\S]*missing/i.test(body.replace(/<[^>]*>/g, " ")));

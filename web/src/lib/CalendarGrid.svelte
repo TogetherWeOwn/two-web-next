@@ -38,31 +38,36 @@ const scrollAttributes = { tabindex: 0 };
     {#if state.past}<input type="hidden" name="past" value="1" />{/if}{" "}
     <button class="btn" type="submit" data-testid="calendar-month-jump-submit">Go</button>
   </form>
-  <div role="region" aria-label="Events calendar; scroll horizontally to see all days" {...scrollAttributes} data-testid="events-calendar-scroll">
-    <table data-testid="events-calendar-grid">
-      <caption class="sr-only">{calendarMonthLabel(state.month)}</caption>
-      <thead><tr>{#each WEEKDAY_HEADINGS as day}<th scope="col">{day}</th>{/each}</tr></thead>
-      <tbody>
-        {#each weeks as week}
-          <tr>
-            {#each week as day}
-              <td data-testid="calendar-day" data-date={day.iso} aria-current={day.isToday ? "date" : undefined} data-outside={day.inMonth ? undefined : "true"}>
-                <span>{day.day}</span>
-                <ul>
-                  {#each day.events as event}
-                    {@const entryZone = isValidZone(event.zone) ? event.zone : "UTC"}
-                    {@const continued = day.iso !== wallDateIso(event.startsAt, entryZone)}
-                    {@const availabilityText = event.ongoing ? [ONGOING_COPY, event.availability].filter(Boolean).join(" ") : event.availability}
-                    <li><a href={calendarJumpUrl(state.past, event.key, state.game)} data-cal-jump data-cancelled={event.cancelled ? "true" : undefined} aria-label={continued ? gridContinuationAccessibleName(event.title, day.iso, event.cancelled, availabilityText) : gridAccessibleName(event.title, event.startsAt, entryZone, event.cancelled, availabilityText)}>
-                      {continued ? `Continues ${gridTitle(event.title)}` : `${wallTimeHm(event.startsAt, entryZone)} ${entryZone} ${gridTitle(event.title)}`}{#if event.cancelled}{" "}<span class="schedule-badge">Cancelled</span>{/if}{#if event.ongoing}{" "}<span class="schedule-badge" data-testid="event-ongoing">{ONGOING_COPY}</span>{/if}{#if event.availability}{" "}<span data-testid="event-schedule-availability">{event.availability}</span>{/if}
-                    </a></li>
-                  {/each}
-                </ul>
-              </td>
+  <div class="schedule-month-container">
+    <div class="schedule-month-frame">
+      <p class="schedule-month-hint">Scroll sideways for Fri–Sun →</p>
+      <div role="region" aria-label="Events calendar" {...scrollAttributes} data-testid="events-calendar-scroll">
+        <table data-testid="events-calendar-grid">
+          <caption class="sr-only">{calendarMonthLabel(state.month)}</caption>
+          <thead><tr>{#each WEEKDAY_HEADINGS as day}<th scope="col">{day}</th>{/each}</tr></thead>
+          <tbody>
+            {#each weeks as week}
+              <tr>
+                {#each week as day}
+                  <td data-testid="calendar-day" data-date={day.iso} aria-current={day.isToday ? "date" : undefined} data-outside={day.inMonth ? undefined : "true"}>
+                    <span>{day.day}</span>
+                    <ul>
+                      {#each day.events as event}
+                        {@const entryZone = isValidZone(event.zone) ? event.zone : "UTC"}
+                        {@const continued = day.iso !== wallDateIso(event.startsAt, entryZone)}
+                        {@const availabilityText = event.ongoing ? [ONGOING_COPY, event.availability].filter(Boolean).join(" ") : event.availability}
+                        <li><a href={calendarJumpUrl(state.past, event.key, state.game)} data-cal-jump data-cancelled={event.cancelled ? "true" : undefined} aria-label={continued ? gridContinuationAccessibleName(event.title, day.iso, event.cancelled, availabilityText) : gridAccessibleName(event.title, event.startsAt, entryZone, event.cancelled, availabilityText)}>
+                          {continued ? `Continues ${gridTitle(event.title)}` : `${wallTimeHm(event.startsAt, entryZone)} ${entryZone} ${gridTitle(event.title)}`}{#if event.cancelled}{" "}<span class="schedule-badge">Cancelled</span>{/if}{#if event.ongoing}{" "}<span class="schedule-badge" data-testid="event-ongoing">{ONGOING_COPY}</span>{/if}{#if event.availability}{" "}<span data-testid="event-schedule-availability">{event.availability}</span>{/if}
+                        </a></li>
+                      {/each}
+                    </ul>
+                  </td>
+                {/each}
+              </tr>
             {/each}
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
