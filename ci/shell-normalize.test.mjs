@@ -62,10 +62,8 @@ test("multiple complete words, empty quotes and exact tab-stripped closers", () 
 
 test("marker named cd and exact closers preserve the following command", () => {
   for (const newline of ["\n", "\r\n"]) {
-    const source = "cat <<cd\nnpm run decoy\ncd extra\n\ncd\ncd web\nnpm run real\n".replaceAll(
-      "\n",
-      newline,
-    );
+    const text = "cat <<cd\nnpm run decoy\ncd extra\n\ncd\ncd web\nnpm run real\n";
+    const source = text.replaceAll("\n", newline);
     const masked = check(source, source);
     assert.doesNotMatch(masked, /decoy|cd extra/);
     assert.match(masked, /cd web/);
@@ -93,7 +91,9 @@ test("ambiguous delimiters and arithmetic subscripts fail closed", () => {
     ["a[1<<2]=value\nprintf done\n", /arithmetic subscript/],
     ["LC_ALL=C a[1<<2]=value\n", /arithmetic subscript/],
     ["a[1\n << 2]=value\nprintf done\n", /arithmetic subscript/],
+    ["a[1\r\n << 2]=value\r\nprintf done\r\n", /arithmetic subscript/],
     ["LC_ALL='C' a[1\n << 2]=value\nprintf done\n", /arithmetic subscript/],
+    ["LC_ALL='C' a[1\r\n << 2]=value\r\nprintf done\r\n", /arithmetic subscript/],
     ["time -p >out a[1\n << 2]=value\n", /arithmetic subscript/],
     ["declare -a a[1\n << 2]=value\n", /arithmetic subscript/],
     ["a=([1]=value)\n", /unsupported compound assignment/],
@@ -168,13 +168,16 @@ test("shell boundaries do not expose heredoc bodies or remove literal text", () 
     `"printf" '%s' item[1`,
     "command -p printf '%s' item[1",
     ">out pr\\intf '%s' item[1",
-  ]) {
-    const ordinary = `${head}\nprintf done\n`;
-    assert.equal(check(ordinary, ordinary), ordinary);
-    const command = `${head} <<EOF\n`;
-    const source = `${command}body\nEOF\n: item[1\nprintf done\n`;
-    assert.equal(check(source, source), `${command}    \n   \n: item[1\nprintf done\n`);
-  }
+  ])
+    for (const newline of ["\n", "\r\n"]) {
+      const ordinary = `${head}${newline}printf done${newline}`;
+      assert.equal(check(ordinary, ordinary), ordinary);
+      const command = `${head} <<EOF${newline}`;
+      const suffix = `: item[1${newline}printf done${newline}`;
+      const maskedEol = newline.replace("\r", " ");
+      const source = `${command}body${newline}EOF${newline}${suffix}`;
+      assert.equal(check(source, source), `${command}    ${maskedEol}   ${maskedEol}${suffix}`);
+    }
   const conditional = "if printf '%s' item[1 <<EOF\nbody\nEOF\nthen :; fi\n";
   assert.doesNotMatch(check(conditional, conditional), /body/);
   const escaped = "printf \\< <<EOF\nnpm run decoy\nEOF\nnpm run real\n";
@@ -191,11 +194,9 @@ test("shell boundaries do not expose heredoc bodies or remove literal text", () 
 
 test("body and comment command decoys are masked or removed", () => {
   for (const newline of ["\n", "\r\n"]) {
-    const source =
-      "# npm run decoy\ncat <<EOF\nnpx playwright test\nnpm run decoy\n\nEOF\nnpx playwright test real\n".replaceAll(
-        "\n",
-        newline,
-      );
+    const text =
+      "# npm run decoy\ncat <<EOF\nnpx playwright test\nnpm run decoy\n\nEOF\nnpx playwright test real\n";
+    const source = text.replaceAll("\n", newline);
     const masked = check(source, `\n${source.slice(source.indexOf(newline) + newline.length)}`);
     assert.doesNotMatch(masked, /decoy/);
     assert.equal((masked.match(/playwright test/g) ?? []).length, 1);
