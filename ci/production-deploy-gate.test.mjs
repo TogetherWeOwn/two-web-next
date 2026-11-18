@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
+import { parse } from "yaml";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 import {
   AUTOMATIC_PROMOTION_EVENTS,
@@ -791,21 +792,31 @@ test("production workflow uses hosted runners and production-only secrets", () =
   assert.ok(!workflow.includes("wrangler deploy --env production"));
 });
 
-test("production dead-letter baseline is scoped to the gradual and post-promotion smokes", () => {
-  const workflow = readFileSync(
-    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
-    "utf8",
-  );
-  const deploy = workflow.slice(
-    workflow.indexOf("\n  deploy-production:\n"),
-    workflow.indexOf("\n  post-deploy-watch:\n"),
-  );
-  const steps = deploy.split("\n      - name: ");
-  const baseline =
-    steps.find((step) => step.startsWith("Capture pre-promote dead-letter baseline\n")) ?? "";
-  assert.match(baseline, /^        id: dead-letter-baseline$/m);
-  assert.match(baseline, /echo "failed=\$baseline" >> "\$GITHUB_OUTPUT"/);
-  assert.doesNotMatch(baseline, /GITHUB_ENV/);
+function* workflowExpressions(value, key) {
+  if (typeof value === "string") {
+    // GitHub allows `if` expressions without interpolation delimiters.
+    if (key === "if" && !value.includes("${{")) yield value;
+    else {
+      for (const [, expression] of value.matchAll(
+        /\$\{\{((?:'(?:[^']|'')*'|(?!\}\})[^'])*)\}\}/g,
+      )) {
+        yield expression;
+      }
+    }
+  } else if (value && typeof value === "object") {
+    for (const [childKey, child] of Object.entries(value))
+      yield* workflowExpressions(child, childKey);
+  }
+}
+
+function assertProductionBaselineScope(workflow) {
+  const config = parse(workflow);
+  const deploy = config.jobs["deploy-production"];
+  const { steps } = deploy;
+  const baseline = steps.find((step) => step.name === "Capture pre-promote dead-letter baseline");
+  assert.equal(baseline?.id, "dead-letter-baseline");
+  assert.match(baseline.run, /echo "failed=\$baseline" >> "\$GITHUB_OUTPUT"/);
+  assert.doesNotMatch(baseline.run, /GITHUB_ENV/);
 
   // The regression job has its own missing-baseline policy; only check the deploy job here.
   const consumers = [
@@ -813,33 +824,77 @@ test("production dead-letter baseline is scoped to the gradual and post-promotio
     "Verify public routes on the promoted version",
   ];
   for (const name of consumers) {
-    const step = steps.find((step) => step.startsWith(`${name}\n`)) ?? "";
-    assert.match(
-      step,
-      /^        env:\n          SMOKE_FAILED_BASELINE: \$\{\{ steps\.dead-letter-baseline\.outputs\.failed \}\}\n          SMOKE_ALLOW_MISSING_BASELINE: "1"$/m,
+    const step = steps.find((step) => step.name === name);
+    assert.equal(
+      step?.env?.SMOKE_FAILED_BASELINE,
+      "${{ steps.dead-letter-baseline.outputs.failed }}",
       name,
     );
+    assert.equal(step.env.SMOKE_ALLOW_MISSING_BASELINE, "1", name);
     assert.ok(steps.indexOf(baseline) < steps.indexOf(step), `${name} follows baseline capture`);
   }
-  const workflowDefaults = workflow.slice(0, workflow.indexOf("\njobs:\n"));
+  const deployText = JSON.stringify(deploy);
   for (const key of ["SMOKE_FAILED_BASELINE", "SMOKE_ALLOW_MISSING_BASELINE"]) {
-    assert.ok(!workflowDefaults.includes(key), `${key} must not be set workflow-wide`);
+    assert.ok(!Object.hasOwn(config.env ?? {}, key), `${key} must not be set workflow-wide`);
     assert.equal(
-      deploy.split(key).length - 1,
+      deployText.split(key).length - 1,
       consumers.length,
       `${key} belongs only to the two smoke consumers`,
     );
   }
-  // Count references to the capture step itself so bracket lookups count too.
-  const baselineRefs =
-    deploy.match(
-      /\bsteps(?:\s*\.\s*dead-letter-baseline\b|\s*\[\s*'dead-letter-baseline'\s*\])/gi,
-    ) ?? [];
+  let baselineRefs = 0;
+  for (const expression of workflowExpressions(deploy)) {
+    // Skip quoted literals and read the whole step ID, including hyphens.
+    const lookups =
+      /'(?:[^']|'')*'|(?<![\w.-])steps\s*(?:\.\s*([\w-]+)|(\[)(?:\s*'((?:[^']|'')*)'\s*\])?)/gi;
+    for (const [, property, bracket, index] of expression.matchAll(lookups)) {
+      assert.ok(!bracket || index !== undefined, "computed steps index hides which output is read");
+      if ((property ?? index)?.toLowerCase() === baseline.id) baselineRefs++;
+    }
+  }
   assert.equal(
-    baselineRefs.length,
+    baselineRefs,
     consumers.length,
     "the baseline output must not be read under another variable name or input",
   );
+}
+
+const productionWorkflow = () =>
+  readFileSync(new URL("../.github/workflows/deploy-production.yml", import.meta.url), "utf8");
+
+test("production dead-letter baseline is scoped to the gradual and post-promotion smokes", () => {
+  assertProductionBaselineScope(productionWorkflow());
+});
+
+test("production dead-letter baseline scope ignores YAML comments and sibling step IDs", () => {
+  const workflow = `# SMOKE_FAILED_BASELINE must be step-local\n${productionWorkflow()}`;
+  const withOtherRead = workflow.replace(
+    "\n  post-deploy-watch:",
+    "\n      # ${{ steps['dead-letter-baseline'].outputs.failed }}\n" +
+      "      - name: Read another output\n" +
+      "        if: steps.dead-letter-baseline-check.outputs.failed == '0'\n" +
+      "        run: 'true'\n\n  post-deploy-watch:",
+  );
+  assertProductionBaselineScope(withOtherRead);
+});
+
+test("production dead-letter baseline scope rejects workflow defaults and extra reads", () => {
+  const workflow = productionWorkflow();
+  assert.throws(
+    () => assertProductionBaselineScope(`env: { SMOKE_FAILED_BASELINE: '0' }\n${workflow}`),
+    /must not be set workflow-wide/,
+  );
+  for (const [lookup, error] of [
+    ["steps.dead-letter-baseline", /must not be read under another variable/],
+    ["steps['dead-letter-baseline']", /must not be read under another variable/],
+    ["steps[format('{0}', 'dead-letter-baseline')]", /computed steps index/],
+  ]) {
+    const withExtraRead = workflow.replace(
+      "\n  post-deploy-watch:",
+      `\n      - name: Read an extra output\n        if: ${lookup}.outputs.failed == '0'\n        run: 'true'\n\n  post-deploy-watch:`,
+    );
+    assert.throws(() => assertProductionBaselineScope(withExtraRead), error);
+  }
 });
 
 test("shared gradual action promotes 5-50-100 with per-stage gates and auto-rollback", () => {
