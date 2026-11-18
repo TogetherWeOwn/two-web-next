@@ -382,7 +382,10 @@ test("deploy-production watches for 30 minutes and rolls back on a breach or fai
   // that lacks this mode.
   assert.match(watch, /ref: \$\{\{ github\.sha \}\}/);
   const rollback = job("auto-rollback", "release");
-  assert.match(rollback, /uses: \.\/\.github\/workflows\/rollback-production\.yml\n/);
+  assert.match(
+    rollback,
+    /uses: TogetherWeOwn\/two-web-next\/\.github\/workflows\/rollback-production\.yml@38581ef492f5c972969f5dfada396a9f0e2ee989\n/,
+  );
   assert.match(rollback, /environment: production\n/);
   assert.match(rollback, /version_id: \$\{\{ needs\.preflight\.outputs\.rollback_version_id \}\}/);
   assert.match(rollback, /ref: \$\{\{ needs\.preflight\.outputs\.sha \}\}/);
