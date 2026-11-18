@@ -23,9 +23,9 @@ proof of the state of any private runner fleet.
   registration, discarded afterwards) or persistent, and record the answer
   and date in the ops notes. Do not widen the set of events allowed on the
   fleet until this is answered.
-- Confirm the runner group's repository access matches the new visibility:
-  the group must include this repository once private, and must not serve
-  public repositories if the repository is flipped back.
+- Do not grant this repository access to the self-hosted runner group merely
+  because it becomes private. Any separate fleet use requires explicit
+  authorization; review access again if the repository becomes public.
 
 ## Actions settings
 
