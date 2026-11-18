@@ -16,7 +16,7 @@ function check(directory) {
     } else if (entry.isFile() && extensions.has(extension)) {
       try {
         const ast = parse(readFileSync(path, "utf8"), {
-          sourceType: "unambiguous",
+          sourceType: extension === ".cjs" ? "commonjs" : "unambiguous",
           plugins: [
             ...(/\.[mc]?tsx?$/.test(extension) ? ["typescript"] : []),
             ...(/\.[jt]sx$/.test(extension) ? ["jsx"] : []),

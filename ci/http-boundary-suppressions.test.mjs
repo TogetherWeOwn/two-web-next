@@ -15,7 +15,7 @@ const sources = {
   jsx: "export const view = <div>text</div>;",
   js: 'export const text = "// ast-grep-ignore: example-rule";',
   mjs: "export const text = `/* ast-grep-ignore */`;",
-  cjs: 'module.exports = "ast-grep-ignore";',
+  cjs: 'module.exports = "ast-grep-ignore"; return;',
 };
 
 function scan(t, files, { throughPackageScript = false } = {}) {
