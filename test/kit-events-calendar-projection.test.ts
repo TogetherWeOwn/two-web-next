@@ -1,7 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { fileURLToPath, URL } from "node:url";
+import { build } from "esbuild";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { KitEventsLoadData } from "../src/kit-events";
-import { projectEventsCalendar } from "../web/src/lib/server/events-calendar";
 import { gathering } from "./helpers/calendar-multiday-acceptance";
+
+let projectEventsCalendar: typeof import("../web/src/lib/server/events-calendar").projectEventsCalendar;
+
+beforeAll(async () => {
+  // Bundle the real Kit module without asking root Vitest to resolve Kit's $app/tsconfig.
+  const { outputFiles } = await build({
+    entryPoints: [
+      fileURLToPath(new URL("../web/src/lib/server/events-calendar.ts", import.meta.url)),
+    ],
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    write: false,
+    tsconfigRaw: {},
+  });
+  const encoded = Buffer.from(outputFiles[0]!.text).toString("base64");
+  ({ projectEventsCalendar } = await import(`data:text/javascript;base64,${encoded}`));
+});
 
 const venueOnly = "private-venue-note";
 const row = gathering({
