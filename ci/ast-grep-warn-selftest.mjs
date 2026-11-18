@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const fixture = join("src", `ast-grep-warning-selftest-${process.pid}.test.ts`);
@@ -25,7 +25,13 @@ try {
     const outside = join(outsideDirectory, "boundary.ts");
     writeFileSync(outside, 'import "hono";\n');
     const extensions = ["ts", "mts", "cts", "tsx", "jsx", "js", "mjs", "cjs"];
-    const files = extensions.map((extension) => join(directory, `boundary.${extension}`));
+    const hiddenDirectory = join(directory, ".generated", "nested");
+    mkdirSync(hiddenDirectory, { recursive: true });
+    const hidden = join(hiddenDirectory, "headers.ts");
+    const files = [
+      ...extensions.map((extension) => join(directory, `boundary.${extension}`)),
+      hidden,
+    ];
     for (const file of files)
       writeFileSync(
         file,
@@ -34,11 +40,8 @@ try {
           "const other = () => import(`h\\x6fno/cors${name}`);\n" +
           'const computed = () => import(resolve("hono"));\n',
       );
-    const scan = () =>
-      spawnSync("npx", ["-y", "--package", "@ast-grep/cli@0.50.0", "ast-grep", "scan"], {
-        encoding: "utf8",
-      });
-    const allowed = scan();
+    const scan = (script) => spawnSync("npm", ["run", script], { encoding: "utf8" });
+    const allowed = scan("scan:fetch-await");
     const allowedOutput = `${allowed.stdout ?? ""}\n${allowed.stderr ?? ""}`;
     if (allowed.error || allowed.status !== 0 || allowedOutput.includes("http-no-hono")) {
       throw new Error(
@@ -46,6 +49,7 @@ try {
       );
     }
     for (const file of files) writeFileSync(file, 'const cors = require("hono/cors");\n');
+    writeFileSync(hidden, 'import "hono";\n');
     const extraCases = [
       "import type Hono = require('hono');",
       "import Cors = require('hono/cors');",
@@ -77,7 +81,7 @@ try {
         return file;
       }),
     );
-    const denied = scan();
+    const denied = scan("scan:http-boundary");
     const deniedOutput = `${denied.stdout ?? ""}\n${denied.stderr ?? ""}`;
     if (
       denied.error ||
