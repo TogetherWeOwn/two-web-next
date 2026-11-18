@@ -93,7 +93,7 @@ export default defineConfig({
       // ci/budgets/kit/startup.json (same cold-start bound as
       // ci/kit-worker-e2e.mjs's listen).
       timeout: kitPerfBudget.startup.maxMs,
-      env: { WRANGLER_SEND_METRICS: "false" },
+      env: { WRANGLER_SEND_METRICS: "false", KIT_PARITY_FIXTURE_ADMIN_DASHBOARD: "true" },
     },
   ],
 });
