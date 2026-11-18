@@ -2,10 +2,11 @@
 // temporary directory, no build, no Wrangler.
 // Design credit: Rick7C2, draft #2092 at eb1ba5d47e6d5a35a0a6deb2b7532b4c045865f3.
 import * as fsReal from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { securityHeadersFor } from "../src/headers";
 import {
   COMPANION_NAME,
@@ -14,7 +15,22 @@ import {
   installWorkerFacade,
 } from "../web/scripts/install-worker-facade.mjs";
 
-const { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } = fsReal;
+// Exercise the real lock state machine with fixture admission, not XFS admission.
+// Filesystem admission is independently qualified on real XFS in CI.
+vi.mock("../web/scripts/kit-lock.mjs", async (importOriginal) => {
+  const { createKitLock } = await importOriginal();
+  const fs = await import("node:fs");
+  return {
+    withKitLock: createKitLock({
+      admit: (path) => ({ path, recheck() {}, close() {} }),
+      mkdir: fs.mkdirSync,
+      lstat: (path) => fs.lstatSync(path, { bigint: true }),
+      rmdir: fs.rmdirSync,
+    }),
+  };
+});
+
+const { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } = fsReal;
 const dirs = [];
 const env = { APP_URL: "https://togetherweown.com" };
 const IGNORE = ".assetsignore";
@@ -39,8 +55,15 @@ function scratch(adapter) {
 }
 const read = (dir, name) => readFileSync(join(dir, name), "utf8");
 const names = (dir) => readdirSync(dir).sort();
-const load = (dir) =>
-  import(/* @vite-ignore */ `${pathToFileURL(join(dir, ENTRY_NAME)).href}?${Math.random()}`);
+const load = (dir) => {
+  const generated = mkdtempSync(join(tmpdir(), "kit-worker-import-"));
+  dirs.push(generated);
+  for (const name of [ENTRY_NAME, COMPANION_NAME]) {
+    fsReal.copyFileSync(join(dir, name), join(generated, name));
+  }
+  const outfile = join(generated, "_worker.js");
+  return import(/* @vite-ignore */ pathToFileURL(outfile).href);
+};
 const snapshot = (dir) => Object.fromEntries(names(dir).map((name) => [name, read(dir, name)]));
 // Rejects with `pattern` and proves the directory is unchanged.
 async function rejectsUnchanged(dir, pattern, options = {}) {
@@ -83,11 +106,20 @@ describe("installWorkerFacade", () => {
     expect(names(dir)).toEqual([IGNORE, COMPANION_NAME, ENTRY_NAME].sort());
   });
 
-  it("appends to an existing .assetsignore once", async () => {
-    const dir = scratch(ADAPTER);
-    writeFileSync(join(dir, IGNORE), `_routes.json\n${COMPANION_NAME}`);
-    await installWorkerFacade({ dir });
-    expect(read(dir, IGNORE)).toBe(`_routes.json\n${COMPANION_NAME}`);
+  it("preserves existing .assetsignore entries and ensures a final companion exclusion", async () => {
+    for (const [before, after] of [
+      ["_routes.json", `_routes.json\n${COMPANION_NAME}\n`],
+      [`_routes.json\n${COMPANION_NAME}`, `_routes.json\n${COMPANION_NAME}`],
+      [
+        `${COMPANION_NAME}\n!${COMPANION_NAME}\n`,
+        `${COMPANION_NAME}\n!${COMPANION_NAME}\n${COMPANION_NAME}\n`,
+      ],
+    ]) {
+      const dir = scratch(ADAPTER);
+      writeFileSync(join(dir, IGNORE), before);
+      await installWorkerFacade({ dir });
+      expect(read(dir, IGNORE)).toBe(after);
+    }
   });
 
   it("fails closed on malformed, disguised or absent inputs without mutating", async () => {
@@ -133,9 +165,9 @@ describe("installWorkerFacade", () => {
   it("never removes a staged file another actor created before exclusive creation", async () => {
     const dir = scratch(ADAPTER);
     const io = {
-      writeFileSync: (path, data, options) => {
+      openSync: (path, flags) => {
         if (String(path).endsWith(STAGED)) fsReal.writeFileSync(path, "theirs");
-        return fsReal.writeFileSync(path, data, options);
+        return fsReal.openSync(path, flags);
       },
     };
     await expect(installWorkerFacade({ dir, io })).rejects.toThrow(/EEXIST/);
@@ -178,6 +210,23 @@ describe("installWorkerFacade", () => {
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
     expect(read(dir, COMPANION_NAME)).toBe(ADAPTER);
     expect(read(dir, ENTRY_NAME).startsWith(FACADE_MARKER)).toBe(true);
+  });
+
+  it("retains exclusive ownership while a failed install rolls back", async () => {
+    const dir = scratch(ADAPTER);
+    let competing;
+    const io = {
+      writeFileSync: (path, data, options) => {
+        if (String(path).endsWith(IGNORE)) {
+          competing = installWorkerFacade({ dir }).catch((error) => error);
+          throw new Error("injected ignore");
+        }
+        return fsReal.writeFileSync(path, data, options);
+      },
+    };
+    await expect(installWorkerFacade({ dir, io })).rejects.toThrow(/injected ignore/);
+    expect((await competing).code).toBe("EEXIST");
+    expect(snapshot(dir)).toEqual({ [ENTRY_NAME]: ADAPTER });
   });
 
   it("rolls every completed step back when a later step fails", async () => {
