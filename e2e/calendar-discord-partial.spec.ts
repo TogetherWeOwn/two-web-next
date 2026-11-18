@@ -233,6 +233,32 @@ test("recovery → failure adds the missing-source notice through the shipped fr
   ).toBeVisible();
 });
 
+test("search announces a newly failed source without moving focus", async ({ page, context }) => {
+  const f = await fixture(context);
+  f.state.failed = false;
+  await page.goto(PARTIAL_ORIGIN + PARTIAL_PATH);
+  const search = page.getByTestId("events-search");
+  const status = page.getByTestId("events-search-status");
+  const originalStatus = await status.elementHandle();
+  await search.focus();
+
+  f.state.readError = true;
+  f.state.failed = true;
+  await search.fill("missing");
+  await expect(page.getByTestId("events-empty-error")).toBeVisible();
+  await expect(status).toContainText(
+    await page.getByTestId("events-empty-error").locator("h2").innerText(),
+  );
+  await expect(search).toBeFocused();
+  expect(await status.evaluate((node, saved) => node === saved, originalStatus)).toBe(true);
+
+  f.state.readError = false;
+  await search.fill("chess");
+  await expect(notice(page)).toBeVisible();
+  await expect(status).toContainText(MISSING_DISCORD);
+  await expect(search).toBeFocused();
+});
+
 test("malformed fragment retains the committed partial rows, warning, controls and keyboard focus", async ({
   page,
   context,

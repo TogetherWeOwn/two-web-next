@@ -8,6 +8,7 @@ import {
   EVENTS_PAST_ARCHIVE_LINK_TESTID,
   EVENTS_PAST_STATUS_COPY,
   EVENTS_PAST_STATUS_TESTID,
+  EVENTS_PARTIAL_COPY,
   EVENTS_SEARCH_CLEAR_TESTID,
   EVENTS_SEARCH_LABEL,
   EVENTS_SEARCH_PLACEHOLDER,
@@ -44,6 +45,7 @@ let {
   emptyState,
   hasVisibleResults,
   outOfRange,
+  discordFailed,
 }: {
   state: CalendarState;
   appUrl: string;
@@ -54,6 +56,7 @@ let {
   emptyState: CalendarEmptyState;
   hasVisibleResults: boolean;
   outOfRange: boolean;
+  discordFailed: boolean;
 } = $props();
 
 let url = $derived(feedUrl(appUrl, gameFilter));
@@ -73,7 +76,7 @@ let searchStatus = $derived(
 </script>
 
 <p role="status" class="sr-only" data-testid={EVENTS_VIEW_STATUS_TESTID}>{eventsViewStatusCopy(state.view)}</p>
-<p role="status" class="sr-only" data-testid={EVENTS_SEARCH_STATUS_TESTID}>{searchStatus}</p>
+<p role="status" class="sr-only" data-testid={EVENTS_SEARCH_STATUS_TESTID}>{searchStatus}{emptyState === "error" ? EVENTS_EMPTY_COPY.errorTitle : discordFailed && emptyState === null && (hasVisibleResults || outOfRange || state.view === "calendar") ? ` ${EVENTS_PARTIAL_COPY.notice}` : ""}</p>
 <p role="status" class="sr-only" data-testid={EVENTS_PAST_STATUS_TESTID}>{state.past && pastCount > 0 ? EVENTS_PAST_STATUS_COPY : ""}</p>
 <p role="status" class="sr-only" data-testid={CALENDAR_MONTH_STATUS_TESTID}>{state.view === "calendar" ? calendarMonthLabel(state.month) : ""}</p>
 

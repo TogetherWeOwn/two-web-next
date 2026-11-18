@@ -1510,7 +1510,7 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     expect(b.requests[1]!.url).toBe("/events?q=newer&past=1");
   });
 
-  it("copies an empty SSR search status over stale miss text on a read error", async () => {
+  it("announces a read error in place of stale search miss text", async () => {
     const html = await (await calendar([], [], failedSource()).request("/events?q=x")).text();
     const status = html.match(/data-testid="events-search-status">([^<]*)<\/p>/)![1]!;
     const b = browser("/events?q=x");
@@ -1522,7 +1522,9 @@ describe("EventsCalendar shipped binder request/state drift", () => {
       content: [EVENTS_EMPTY_ERROR_TESTID],
     });
     await b.settle();
-    expect(b.liveNodes["events-search-status"]!.textContent).toBe("");
+    expect(b.liveNodes["events-search-status"]!.textContent).toBe(
+      esc(EVENTS_EMPTY_COPY.errorTitle),
+    );
     expect(b.zones.content.childNodes).toEqual([EVENTS_EMPTY_ERROR_TESTID]);
   });
 

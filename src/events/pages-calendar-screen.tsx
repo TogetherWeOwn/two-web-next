@@ -166,6 +166,7 @@ export const EventsCalendarPage: FC<{
           hasVisibleResults={hasVisibleResults}
           outOfRange={outOfRange}
           gameFilter={gameFilter}
+          discordFailed={discordFailed}
         />
 
         <CalendarHead state={state} appUrl={appUrl} gameFilter={gameFilter} />

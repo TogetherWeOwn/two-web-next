@@ -10,6 +10,7 @@ import {
   EVENTS_PAST_ARCHIVE_LINK_TESTID,
   EVENTS_PAST_STATUS_COPY,
   EVENTS_PAST_STATUS_TESTID,
+  EVENTS_PARTIAL_COPY,
   EVENTS_SEARCH_CLEAR_TESTID,
   EVENTS_SEARCH_LABEL,
   EVENTS_SEARCH_PLACEHOLDER,
@@ -47,7 +48,17 @@ export const CalendarLiveRegions: FC<{
   hasVisibleResults: boolean;
   outOfRange: boolean;
   gameFilter: string | null;
-}> = ({ state, pastCount, searching, emptyState, hasVisibleResults, outOfRange, gameFilter }) => (
+  discordFailed: boolean;
+}> = ({
+  state,
+  pastCount,
+  searching,
+  emptyState,
+  hasVisibleResults,
+  outOfRange,
+  gameFilter,
+  discordFailed,
+}) => (
   <>
     <p role="status" class="sr-only" data-testid={EVENTS_VIEW_STATUS_TESTID}>
       {eventsViewStatusCopy(state.view)}
@@ -55,8 +66,7 @@ export const CalendarLiveRegions: FC<{
     {/* An out-of-range search page still announces a hit: its matches sit
         on another page, so "nothing matches" would be wrong and the miss
         block stays hidden for the same reason (see searchMiss in the screen).
-        A game facet announces alongside the search (or alone); a failed read
-        stays silent either way. */}
+        A game facet announces alongside the search (or alone). */}
     <p role="status" class="sr-only" data-testid={EVENTS_SEARCH_STATUS_TESTID}>
       {searching && emptyState !== "error"
         ? hasVisibleResults || outOfRange
@@ -68,6 +78,13 @@ export const CalendarLiveRegions: FC<{
             : eventsSearchMissCopy(state.q)
         : gameFilter !== null && emptyState !== "error"
           ? eventsGameFilterCopy(gameFilter)
+          : ""}
+      {emptyState === "error"
+        ? EVENTS_EMPTY_COPY.errorTitle
+        : discordFailed &&
+            emptyState === null &&
+            (hasVisibleResults || outOfRange || state.view === "calendar")
+          ? ` ${EVENTS_PARTIAL_COPY.notice}`
           : ""}
     </p>
     <p role="status" class="sr-only" data-testid={EVENTS_PAST_STATUS_TESTID}>

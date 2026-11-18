@@ -90,7 +90,7 @@ let searching = $derived(calendarSearching(state));
     <p>Game nights, tournaments and whatever else the community puts on.</p>
     {#if !member}<a class="btn" href={loginReturnTo ? `/join?next=${encodeURIComponent(loginReturnTo)}` : "/join"}>Join the Discord</a>{/if}
   </div>
-  <CalendarControls {state} {appUrl} {games} {gameFilter} {searching} pastCount={past.length} {emptyState} {hasVisibleResults} {outOfRange} />
+  <CalendarControls {state} {appUrl} {games} {gameFilter} {searching} pastCount={past.length} {emptyState} {hasVisibleResults} {outOfRange} {discordFailed} />
   <p role="status" {...{ [EVENTS_CAL_FEEDBACK]: true }}></p>
   <div>
     <p role="status" data-testid={EVENTS_READ_STATUS_TESTID}></p>
