@@ -61,12 +61,99 @@ function fixture() {
   };
 }
 
+const mergeSha = "d".repeat(40);
+
+function boundFixture(runHeadSha = mergeSha) {
+  const f = fixture();
+  const { repository, pullNumber, sourceSha } = f.expected;
+  const repo = { full_name: repository };
+  const pull = { number: pullNumber, head: { sha: sourceSha }, base: { repo, ref: "main" } };
+  f.pullRequest = {
+    context: {
+      eventName: "pull_request",
+      repository,
+      ref: `refs/pull/${pullNumber}/merge`,
+      sha: mergeSha,
+    },
+    event: { number: pullNumber, repository: repo, pull_request: structuredClone(pull) },
+    livePull: { ...pull, state: "open" },
+  };
+  f.expected.runHeadSha = runHeadSha;
+  f.run.head_sha = f.attempt.head_sha = f.artifacts[0].workflow_run.head_sha = runHeadSha;
+  return f;
+}
+
 function check(f) {
-  return selectRouteEvidenceArtifact(f.expected, f.run, f.attempt, f.job, f.liveHead, f.artifacts);
+  return selectRouteEvidenceArtifact(
+    f.expected,
+    f.run,
+    f.attempt,
+    f.job,
+    f.liveHead,
+    f.artifacts,
+    f.pullRequest,
+  );
 }
 
 test("synthetic artifact metadata binds the producer run and attempt", () => {
   assert.equal(check(fixture()), 78);
+});
+
+test("synthetic bound PR artifacts accept either provider head without changing the tested source", () => {
+  assert.equal(check(boundFixture()), 78);
+  assert.equal(check(boundFixture(fixture().expected.sourceSha)), 78);
+});
+
+test("synthetic bound PR metadata refuses a provider head unrelated to the event", () => {
+  assert.throws(() => check(boundFixture("e".repeat(40))), /inconsistent pull request binding/);
+});
+
+test("synthetic bound PR metadata refuses another PR even at the same source", () => {
+  const f = boundFixture();
+  const { context, event, livePull } = f.pullRequest;
+  context.ref = "refs/pull/8/merge";
+  event.number = event.pull_request.number = livePull.number = 8;
+  assert.throws(() => check(f), /inconsistent run metadata/);
+});
+
+test("synthetic bound PR metadata refuses missing or conflicting provenance", () => {
+  for (const [change, error] of [
+    [(f) => delete f.pullRequest, /inconsistent run metadata/],
+    [(f) => delete f.pullRequest.livePull, /inconsistent pull request binding/],
+    [(f) => (f.pullRequest.livePull.head.sha = mergeSha), /inconsistent pull request binding/],
+    [
+      (f) => (f.pullRequest.context.sha = f.expected.orchestrationSha),
+      /inconsistent pull request binding/,
+    ],
+    [(f) => (f.run.pull_requests = []), /inconsistent run metadata/],
+    [(f) => (f.liveHead = mergeSha), /inconsistent run metadata/],
+    [(f) => (f.attempt.head_sha = f.expected.sourceSha), /inconsistent run metadata/],
+    [(f) => (f.attempt.pull_requests[0].number += 1), /inconsistent run metadata/],
+    [(f) => delete f.attempt.pull_requests, /inconsistent run metadata/],
+    [
+      (f) => (f.artifacts[0].workflow_run.head_sha = f.expected.sourceSha),
+      /inconsistent artifact metadata/,
+    ],
+  ]) {
+    const f = boundFixture();
+    change(f);
+    assert.throws(() => check(f), error);
+  }
+});
+
+test("synthetic metadata does not fall back when a PR binding is supplied but invalid", () => {
+  const f = boundFixture(fixture().expected.sourceSha);
+  f.pullRequest = null;
+  assert.throws(() => check(f), /inconsistent pull request binding/);
+});
+
+test("synthetic push and dispatch metadata do not accept PR binding inputs", () => {
+  for (const event of ["push", "workflow_dispatch"]) {
+    const f = boundFixture(fixture().expected.sourceSha);
+    f.run.event = f.attempt.event = event;
+    f.expected.orchestrationSha = f.expected.sourceSha;
+    assert.throws(() => check(f), /inconsistent run metadata/);
+  }
 });
 
 test("synthetic artifact metadata refuses a merge run without independent binding", () => {
