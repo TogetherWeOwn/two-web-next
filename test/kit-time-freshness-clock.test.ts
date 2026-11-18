@@ -35,11 +35,13 @@ describe("snapshot freshness", () => {
     const clock = {
       asOf: 1_000,
       responseStart: 100,
+      snapshotAgeAtResponseStart: 0,
       hydrationWall: 1_050,
       hydrationMonotonic: 200,
       previousNow: 1_050,
     };
     expect(snapshotNow(clock, 1_060, 300)).toBe(1_200);
+    expect(snapshotNow({ ...clock, hydrationWall: 1_150 }, 1_160, 300)).toBe(1_250);
     expect(snapshotNow(clock, 2_000, 300)).toBe(2_000);
     expect(snapshotNow({ ...clock, previousNow: 3_000 }, 1_060, 300)).toBe(3_000);
     expect(snapshotNow(clock, 999, 300)).toBeNaN();
@@ -47,6 +49,24 @@ describe("snapshot freshness", () => {
     expect(snapshotNow(clock, 1_060, 199)).toBeNaN();
     expect(snapshotNow({ ...clock, responseStart: 201 }, 1_060, 300)).toBeNaN();
     expect(snapshotNow(clock, 1_060, NaN)).toBeNaN();
+  });
+
+  it("withdraws claims at the deadline even when the response arrived with an aged snapshot", () => {
+    const clock = {
+      asOf: 1_000,
+      responseStart: 100,
+      snapshotAgeAtResponseStart: 800,
+      hydrationWall: 1_050,
+      hydrationMonotonic: 200,
+      previousNow: 1_050,
+    };
+    expect(timeSnapshotIsStale(2_000, snapshotNow(clock, 1_060, 299))).toBe(false);
+    expect(timeSnapshotIsStale(2_000, snapshotNow(clock, 1_060, 300))).toBe(true);
+
+    for (const age of [null, -1, Infinity, NaN]) {
+      const now = snapshotNow({ ...clock, snapshotAgeAtResponseStart: age }, 1_060, 300);
+      expect(timeSnapshotIsStale(2_000, now)).toBe(true);
+    }
   });
 
   const minute = 60_000;
