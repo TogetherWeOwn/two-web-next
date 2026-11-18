@@ -512,59 +512,6 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
     }
   });
 
-  it("uses ordinary calendar controls for a NUL-only query", async () => {
-    const fixture = await createMemberDataFixture(url!, { max: 2 });
-    const { client, db } = fixture;
-    try {
-      await seedUpcoming(client, 0, 1, new Date("2060-07-15T18:00:00Z"));
-      for (const html of await calendarTwins(db, "/events?view=calendar&month=2060-07&q=%00%20")) {
-        expect(html).toContain('data-testid="events-calendar-grid"');
-        expect(html).toContain("Paged 0");
-        expect(html).not.toContain("Continue search in past events");
-        expect(html).not.toContain('data-testid="events-search-clear"');
-        expect(html).not.toContain('name="robots"');
-        expect(html).not.toContain("\u0000");
-      }
-      expect(await db.select().from(eventSearchLogs)).toEqual([]);
-    } finally {
-      await fixture.dispose();
-    }
-  });
-
-  it("keeps an in-range page of unrenderable matches distinct from a miss or out-of-range page", async () => {
-    const fixture = await createMemberDataFixture(url!, { max: 2 });
-    const { client, db } = fixture;
-    try {
-      await seedUpcoming(client, 0, EVENTS_UPCOMING_PAGE_SIZE, new Date("2060-07-15T18:00:00Z"));
-      await client`insert into events (event_key, title, starts_at, ends_at, status)
-        values ('overflow-page', 'Paged overflow', '280000-06-01T18:00:00Z',
-          '280000-06-01T20:00:00Z', 'published')`;
-      for (const html of await calendarTwins(db, "/events?q=Paged&page=2")) {
-        expect(cards(html)).toHaveLength(0);
-        expect(html).toContain("Page 2 of 2.");
-        expect(html).toContain('href="/events?q=Paged"');
-        expect(html).toContain('<p data-testid="events-page-unreadable">Events on page 2 can');
-        expect(html).not.toContain('data-testid="events-out-of-range"');
-        expect(html).not.toContain('data-testid="events-empty-search"');
-        expect(html).toContain('data-testid="events-search-status">Events on page 2 can');
-        expect(html).not.toContain(eventsSearchMissCopy("Paged"));
-      }
-      for (const html of await calendarTwins(db, "/events?q=Paged%20overflow")) {
-        expect(cards(html)).toHaveLength(0);
-        expect(html).toContain('data-testid="events-pager"');
-        expect(html).toContain("Page 1 of 1.");
-        expect(html).toContain('data-testid="events-page-unreadable">Events on page 1 can');
-        expect(html).toContain('data-testid="events-search-status">Events on page 1 can');
-      }
-      for (const html of await calendarTwins(db, "/events?q=Paged&page=3")) {
-        expect(html).toContain("Page 3 is outside the schedule.");
-        expect(html).toContain(eventsSearchHitCopy("Paged"));
-      }
-    } finally {
-      await fixture.dispose();
-    }
-  });
-
   it("keeps paged and jump renders noindex across anonymous cache hits", async () => {
     const fixture = await createMemberDataFixture(url!, { max: 2 });
     const { client, db } = fixture;

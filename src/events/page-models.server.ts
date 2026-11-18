@@ -59,17 +59,15 @@ export function resolveCalendarInput(input: {
   event?: string | null;
   month?: string | null;
 }): CalendarPageInput {
-  const rawQuery = input.q ?? "";
-  const queryTooLong = [...rawQuery].length > MAX_QUERY_LENGTH;
-  // The screen and SQL must agree that a NUL-only query is not a search.
-  const q = rawQuery.replaceAll(String.fromCharCode(0), "");
+  const q = input.q ?? "";
+  const queryTooLong = [...q].length > MAX_QUERY_LENGTH;
   const searching = !queryTooLong && matchQuery(q) !== null;
   const view = searching ? "list" : input.view === "calendar" ? "calendar" : "list";
   const parsedPage = Number.parseInt(input.page ?? "1", 10);
   const rawJumpKey = (input.event ?? "").replaceAll(String.fromCharCode(0), "");
 
   return {
-    q: searching ? q : "",
+    q,
     game: input.game ?? "",
     searching,
     view,

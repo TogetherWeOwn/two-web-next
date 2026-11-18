@@ -104,29 +104,20 @@ export const EventsCalendarPage: FC<{
   joinResult = null,
   markdownAlternate = null,
 }) => {
-  const {
-    searching,
-    showPast,
-    hasVisibleResults,
-    outOfRange,
-    pageUnreadable,
-    searchMiss,
-    weeks,
-    monthEmpty,
-  } = deriveCalendarScreenState({
-    state,
-    upcoming,
-    past,
-    pastMayBeTruncated,
-    monthReadMayBeIncomplete,
-    zone,
-    now,
-    totalPages,
-    emptyState,
-    discordFailed,
-    gameFilter,
-  });
-  const hasResultsOrPageNotice = hasVisibleResults || outOfRange || pageUnreadable;
+  const { searching, showPast, hasVisibleResults, outOfRange, searchMiss, weeks, monthEmpty } =
+    deriveCalendarScreenState({
+      state,
+      upcoming,
+      past,
+      pastMayBeTruncated,
+      monthReadMayBeIncomplete,
+      zone,
+      now,
+      totalPages,
+      emptyState,
+      discordFailed,
+      gameFilter,
+    });
   const url = calendarUrl(state);
   return (
     <ScheduleShell
@@ -175,9 +166,8 @@ export const EventsCalendarPage: FC<{
           pastCount={past.length}
           searching={searching}
           emptyState={emptyState}
-          hasSearchResults={hasResultsOrPageNotice}
-          pageUnreadable={pageUnreadable}
-          searchMiss={searchMiss}
+          hasVisibleResults={hasVisibleResults}
+          outOfRange={outOfRange}
           gameFilter={gameFilter}
         />
 
@@ -222,14 +212,14 @@ export const EventsCalendarPage: FC<{
         <div data-cal-zone="content" data-testid={EVENTS_CONTENT_TESTID}>
           {/* Partial source: healthy rows stay useful beside the notice. An
               empty state (including the failed-empty error) takes precedence,
-              and a page notice keeps its turns back into the schedule.
+              and an out-of-range page keeps its turns back into the schedule.
               The month grid renders whenever there is no empty state, so an
               empty month of a non-empty schedule carries the notice too —
               without it the month would read as definitively empty. Inside
               the swapped zone so fragment turns add/remove the notice. */}
           {discordFailed &&
           emptyState === null &&
-          (hasResultsOrPageNotice || state.view === "calendar") ? (
+          (hasVisibleResults || outOfRange || state.view === "calendar") ? (
             <PartialSourceNotice url={url} inviteUrl={inviteUrl} />
           ) : null}
 
@@ -241,7 +231,7 @@ export const EventsCalendarPage: FC<{
             <EmptyGap past={past} zone={zone} />
           ) : null}
 
-          {emptyState === null && hasResultsOrPageNotice && state.view === "list" ? (
+          {emptyState === null && (hasVisibleResults || outOfRange) && state.view === "list" ? (
             <CalendarList
               state={state}
               upcoming={upcoming}
@@ -250,7 +240,6 @@ export const EventsCalendarPage: FC<{
               now={now}
               totalPages={totalPages}
               outOfRange={outOfRange}
-              pageUnreadable={pageUnreadable}
               showPast={showPast}
               member={member}
               inviteUrl={inviteUrl}

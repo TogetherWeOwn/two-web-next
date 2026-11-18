@@ -16,11 +16,11 @@ describe("framework-neutral calendar page input", () => {
     });
   });
 
-  it("clears blank queries and defaults invalid views and pages", () => {
+  it("defaults invalid views and pages without changing a valid raw query", () => {
     expect(
       resolveCalendarInput({ q: "   ", view: "bogus", page: "-2", past: "1", event: "abc" }),
     ).toMatchObject({
-      q: "",
+      q: "   ",
       searching: false,
       view: "list",
       past: true,
