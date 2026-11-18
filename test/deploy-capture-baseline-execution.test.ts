@@ -18,8 +18,6 @@ interface CaptureTarget {
   workflow: string;
   stepName: string;
   host: string;
-  sink: "output" | "env";
-  outputKey: string;
   env?: Record<string, string>;
 }
 
@@ -28,23 +26,17 @@ const TARGETS: CaptureTarget[] = [
     workflow: ".github/workflows/deploy.yml",
     stepName: "Capture pre-deploy dead-letter baseline",
     host: "next.togetherweown.com/up",
-    sink: "output",
-    outputKey: "failed",
   },
   {
     workflow: ".github/workflows/deploy-production.yml",
     stepName: "Capture pre-promote dead-letter baseline",
     host: "togetherweown.com/up",
-    sink: "env",
-    outputKey: "SMOKE_FAILED_BASELINE",
   },
   {
     workflow: ".github/workflows/rollback-production.yml",
     stepName: "Capture pre-rollback dead-letter baseline",
     // The rollback reads the environment's origin from ci/rollback-target.mjs.
     host: 'new URL("/up", process.env.ROLLBACK_ORIGIN)',
-    sink: "output",
-    outputKey: "failed",
     env: { ROLLBACK_ORIGIN: "https://togetherweown.com" },
   },
 ];
@@ -171,20 +163,15 @@ await new Promise((resolve) => setImmediate(resolve));
 }
 
 describe.each(TARGETS)("$stepName ($workflow)", (target) => {
-  const sinkOf = (run: { stepOutput: string; stepEnv: string }) =>
-    target.sink === "env" ? run.stepEnv : run.stepOutput;
-
   it("writes the fetched failed count and stops after the first success", () => {
     const run = runCaptureBlock(target, 1, 3);
     expect(run.status).toBe(0);
     expect(run.attempts).toBe(1);
     expect(run.sleepDelays).toEqual([]);
-    expect(sinkOf(run)).toContain(`${target.outputKey}=3`);
+    expect(run.stepOutput).toContain("failed=3");
     expect(run.output).toContain("dead-letter baseline: 3");
     expect(run.output).not.toContain("::warning::");
-    if (target.sink === "env") {
-      expect(run.stepEnv).toContain("SMOKE_ALLOW_MISSING_BASELINE=1");
-    }
+    expect(run.stepEnv).toBe("");
   });
 
   it("retries unreadable baselines until one reads", () => {
@@ -192,7 +179,7 @@ describe.each(TARGETS)("$stepName ($workflow)", (target) => {
     expect(run.status).toBe(0);
     expect(run.attempts).toBe(3);
     expect(run.sleepDelays).toEqual(["5", "5"]);
-    expect(sinkOf(run)).toContain(`${target.outputKey}=7`);
+    expect(run.stepOutput).toContain("failed=7");
     expect(run.output).toContain("dead-letter baseline: 7");
     expect(run.output).not.toContain("::warning::");
   });
@@ -206,7 +193,7 @@ describe.each(TARGETS)("$stepName ($workflow)", (target) => {
     expect(run.status).toBe(0);
     expect(run.attempts).toBe(1);
     expect(run.sleepDelays).toEqual([]);
-    expect(sinkOf(run)).toContain(`${target.outputKey}=0`);
+    expect(run.stepOutput).toContain("failed=0");
     expect(run.output).toContain("dead-letter baseline: 0");
     expect(run.output).not.toContain("::warning::");
   });
@@ -216,13 +203,11 @@ describe.each(TARGETS)("$stepName ($workflow)", (target) => {
     expect(run.status).toBe(0);
     expect(run.attempts).toBe(5);
     expect(run.sleepDelays).toEqual(["5", "5", "5", "5"]);
-    expect(sinkOf(run)).toContain(`${target.outputKey}=\n`);
-    expect(sinkOf(run)).not.toContain(`${target.outputKey}=0`);
+    expect(run.stepOutput).toContain("failed=\n");
+    expect(run.stepOutput).not.toContain("failed=0");
     expect(run.output).toContain("::warning::dead-letter baseline unreadable");
     expect(run.output).toContain("dead-letter baseline: unknown");
-    if (target.sink === "env") {
-      expect(run.stepEnv).toContain("SMOKE_ALLOW_MISSING_BASELINE=1");
-    }
+    expect(run.stepEnv).toBe("");
   });
 
   it("tolerates a node crash on one attempt without failing the deploy", () => {
@@ -232,7 +217,7 @@ describe.each(TARGETS)("$stepName ($workflow)", (target) => {
     expect(run.status).toBe(0);
     expect(run.attempts).toBe(2);
     expect(run.sleepDelays).toEqual(["5"]);
-    expect(sinkOf(run)).toContain(`${target.outputKey}=7`);
+    expect(run.stepOutput).toContain("failed=7");
     expect(run.output).toContain("dead-letter baseline: 7");
     expect(run.output).not.toContain("::warning::");
   });
