@@ -174,7 +174,7 @@ test("shell boundaries do not expose heredoc bodies or remove literal text", () 
       assert.equal(check(ordinary, ordinary), ordinary);
       const command = `${head} <<EOF${newline}`;
       const suffix = `: item[1${newline}printf done${newline}`;
-      const maskedEol = newline.replace("\r", " ");
+      const maskedEol = newline === "\r\n" ? " \n" : "\n";
       const source = `${command}body${newline}EOF${newline}${suffix}`;
       assert.equal(check(source, source), `${command}    ${maskedEol}   ${maskedEol}${suffix}`);
     }
