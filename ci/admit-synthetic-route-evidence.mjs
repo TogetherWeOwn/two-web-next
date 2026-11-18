@@ -54,9 +54,15 @@ export async function admitSyntheticRouteEvidence({
   );
   const artifact = await request(`/actions/artifacts/${expected.artifactId}`);
   const bound = { ...expected, ...binding, workflowId: workflow.id, producerJobId: job.id };
-  const artifactId = selectRouteEvidenceArtifact(bound, run, attempt, job, livePull.head.sha, [
-    artifact,
-  ]);
+  const artifactId = selectRouteEvidenceArtifact(
+    bound,
+    run,
+    attempt,
+    job,
+    livePull.head.sha,
+    [artifact],
+    { context, event, livePull },
+  );
   const entries = await download(artifactId, expected.artifactDigest);
   const identities = validateSyntheticRouteReport(root, entries);
 

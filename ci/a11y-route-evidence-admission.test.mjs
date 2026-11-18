@@ -10,9 +10,11 @@ import { syntheticRouteReport } from "./route-evidence-synthetic-report.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
-function fixture() {
+function fixture(head = "source") {
   const repository = "example/repo";
   const sourceSha = "a".repeat(40);
+  const mergeSha = "d".repeat(40);
+  const runHeadSha = head === "merge" ? mergeSha : sourceSha;
   const pull = {
     number: 7,
     state: "open",
@@ -24,7 +26,7 @@ function fixture() {
     run_attempt: 2,
     workflow_id: 12,
     repository: { full_name: repository },
-    head_sha: sourceSha,
+    head_sha: runHeadSha,
     event: "pull_request",
     pull_requests: [{ number: 7, head: { sha: sourceSha } }],
   };
@@ -60,7 +62,7 @@ function fixture() {
     expired: false,
     size_in_bytes: 100,
     created_at: "2026-01-01T00:03:00Z",
-    workflow_run: { id: 34, head_sha: sourceSha },
+    workflow_run: { id: 34, head_sha: runHeadSha },
   };
   return {
     expected,
@@ -73,7 +75,7 @@ function fixture() {
       repository,
       eventName: "pull_request",
       ref: "refs/pull/7/merge",
-      sha: "d".repeat(40),
+      sha: mergeSha,
     },
     event: {
       number: 7,
@@ -99,25 +101,27 @@ function requestFor(f, onPull = () => f.pull) {
   };
 }
 
-test("admission accepts only the bound synthetic report and rechecks the live head", async () => {
-  const f = fixture();
-  const visits = [];
-  const request = requestFor(f, () => {
-    visits.push("pull");
-    return f.pull;
+for (const head of ["source", "merge"]) {
+  test(`admission accepts a bound ${head} head and rechecks the live head`, async () => {
+    const f = fixture(head);
+    const visits = [];
+    const request = requestFor(f, () => {
+      visits.push("pull");
+      return f.pull;
+    });
+    const download = async (id, digest) => {
+      visits.push("download");
+      assert.equal(id, f.expected.artifactId);
+      assert.equal(digest, f.expected.artifactDigest);
+      return new Map([["report.json", syntheticRouteReport(root)]]);
+    };
+    const result = await admitSyntheticRouteEvidence({ ...f, root, request, download });
+    assert.equal(result.kind, "synthetic");
+    assert.equal(result.sourceSha, f.pull.head.sha);
+    assert.equal(result.identities.cases.length, 3);
+    assert.deepEqual(visits, ["pull", "download", "pull"]);
   });
-  const download = async (id, digest) => {
-    visits.push("download");
-    assert.equal(id, f.expected.artifactId);
-    assert.equal(digest, f.expected.artifactDigest);
-    return new Map([["report.json", syntheticRouteReport(root)]]);
-  };
-  const result = await admitSyntheticRouteEvidence({ ...f, root, request, download });
-  assert.equal(result.kind, "synthetic");
-  assert.equal(result.sourceSha, f.pull.head.sha);
-  assert.equal(result.identities.cases.length, 3);
-  assert.deepEqual(visits, ["pull", "download", "pull"]);
-});
+}
 
 test("admission refuses a head changed during artifact download", async () => {
   const f = fixture();
@@ -145,6 +149,8 @@ test("admission refuses stale, failed, missing and ambiguous metadata before dow
     },
     "unbound run head": (f) => {
       f.run.head_sha = f.expected.orchestrationSha;
+      f.attempt.head_sha = f.run.head_sha;
+      f.artifact.workflow_run.head_sha = f.run.head_sha;
     },
     "failed producer": (f) => {
       f.job.conclusion = "failure";
