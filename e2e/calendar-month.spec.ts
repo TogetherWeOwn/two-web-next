@@ -1,23 +1,36 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
+
+const reviewViewports = [
+  { width: 1280, height: 800 },
+  { width: 390, height: 844 },
+  { width: 320, height: 844 },
+];
+
+async function attachReviewScreenshot(page: Page, name: string) {
+  const path = test.info().outputPath(`${name}.png`);
+  await page.screenshot({ path, fullPage: true, animations: "disabled" });
+  await test.info().attach(name, { path, contentType: "image/png" });
+}
 
 test("capture Worker recovery states for review", async ({ page, context }) => {
   await context.setExtraHTTPHeaders({ "x-e2e-discord-read": "failed" });
-  for (const state of ["partial", "error"] as const) {
+  const states = [
+    // Keep the partial response separate from the healthy month in the anonymous cache.
+    [
+      "partial",
+      "/events?view=calendar&month=2099-05&e2e-recovery=partial",
+      "events-partial-source",
+    ],
     // A deliberately unmatched search leaves no canonical rows for the error state.
-    const url =
-      state === "partial"
-        ? "/events?view=calendar&month=2099-05"
-        : "/events?q=e2e-no-matching-event-7319";
-    for (const width of [1280, 390, 320]) {
-      await page.setViewportSize({ width, height: width === 1280 ? 800 : 844 });
+    ["error", "/events?q=e2e-no-matching-event-7319", "events-empty-error"],
+  ] as const;
+  for (const [state, url, testId] of states) {
+    for (const viewport of reviewViewports) {
+      await page.setViewportSize(viewport);
       await page.goto(url);
-      await expect(
-        page.getByTestId(state === "partial" ? "events-partial-source" : "events-empty-error"),
-      ).toBeVisible();
-      const name = `hono-review-worker-${state}-${width}`;
-      const path = test.info().outputPath(`${name}.png`);
-      await page.screenshot({ path, fullPage: true, animations: "disabled" });
-      await test.info().attach(name, { path, contentType: "image/png" });
+      await expect(page.getByTestId(testId)).toBeVisible();
+      await attachReviewScreenshot(page, `hono-review-worker-${state}-${viewport.width}`);
     }
   }
 });
@@ -50,19 +63,18 @@ test("calendar month view shows the chosen month and hides the other month", asy
   await expect(grid).toContainText("E2E Calendar May");
   await expect(grid).not.toContainText("E2E Calendar June");
 
-  for (const width of [1280, 390, 320]) {
-    await page.setViewportSize({ width, height: width === 1280 ? 800 : 844 });
-    const scroll = page.getByTestId("events-calendar-scroll");
-    for (const position of ["start", "end"]) {
+  const scroll = page.getByTestId("events-calendar-scroll");
+  const originalViewport = page.viewportSize();
+  for (const viewport of reviewViewports) {
+    await page.setViewportSize(viewport);
+    for (const position of ["start", "end"] as const) {
       await scroll.evaluate((element, end) => {
         element.scrollLeft = end ? element.scrollWidth : 0;
       }, position === "end");
-      const name = `hono-review-calendar-${width}-${position}`;
-      const path = test.info().outputPath(`${name}.png`);
-      await page.screenshot({ path, fullPage: true, animations: "disabled" });
-      await test.info().attach(name, { path, contentType: "image/png" });
+      await attachReviewScreenshot(page, `hono-review-calendar-${viewport.width}-${position}`);
     }
   }
+  if (originalViewport) await page.setViewportSize(originalViewport);
 
   // The month param drives the render in both directions.
   await page.goto("/events?view=calendar&month=2099-06");

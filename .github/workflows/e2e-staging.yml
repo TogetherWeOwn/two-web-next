@@ -76,12 +76,13 @@ jobs:
         env:
           HEAD_SHA: ${{ steps.candidate.outputs.sha }}
           WORKFLOW_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # The trusted tree supplies the helper import inventory. If main
           # moved past the candidate, that inventory cannot justify a skip.
           # Manual dispatch and a candidate without a parent also run fully.
-          if [ "${{ github.event_name }}" = workflow_dispatch ] || [ "$HEAD_SHA" != "$WORKFLOW_SHA" ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
+          if [ "$EVENT_NAME" = workflow_dispatch ] || [ "$HEAD_SHA" != "$WORKFLOW_SHA" ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             echo "skip_e2e=false" >> "$GITHUB_OUTPUT"
             exit 0

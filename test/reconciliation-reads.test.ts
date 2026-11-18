@@ -8,12 +8,12 @@ const row = {
   idempotency_key: key,
   verb: "event.upsert",
   subject: "event:42",
-  first_seen_at: now,
-  last_attempt_at: now,
+  first_seen_at_ms: now.getTime(),
+  last_attempt_at_ms: now.getTime(),
   attempts: 2,
   last_code: "needs_reconciliation",
   last_status: 409,
-  resolved_at: null,
+  resolved_at_ms: null,
   resolution: null,
   last_request_id: "secret-request",
   resolved_by: "secret-actor",
@@ -62,6 +62,21 @@ describe("dormant reconciliation reads", () => {
     for (const call of [calls[1], calls[3]]) {
       expect(call?.query).not.toMatch(/select \*|last_request_id|resolved_by/i);
     }
+  });
+
+  it("projects PostgreSQL epoch milliseconds as Dates", async () => {
+    const { reads } = fixture([
+      {
+        ...row,
+        last_attempt_at_ms: now.getTime() + 123_456,
+        resolved_at_ms: now.getTime() + 184_567,
+      },
+    ]);
+    expect(await reads.get(key)).toMatchObject({
+      firstSeenAt: now,
+      lastAttemptAt: new Date("2026-01-01T00:02:03.456Z"),
+      resolvedAt: new Date("2026-01-01T00:03:04.567Z"),
+    });
   });
 
   it("rejects invalid keys without a query and returns null for a missing key", async () => {

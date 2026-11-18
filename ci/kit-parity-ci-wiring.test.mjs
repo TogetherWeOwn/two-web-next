@@ -97,11 +97,11 @@ test("both loopback parity workers inject the same healthy-empty Discord seam", 
   // notice only when a target reports a Discord failure, so both loopback
   // workers must simulate the same healthy-empty state or the sections
   // diverge. Hono additionally permits an explicit failure header for recovery
-  // screenshots; without that header both workers stay healthy. The Kit wrapper
-  // MUST assign onto the incoming env object: Kit
-  // reads the ambient `cloudflare:workers` env (the entrypoint's original
-  // object), so a spread copy passed to worker.fetch is invisible to it and
-  // Kit falls back to a live read the fixture fetch stub refuses.
+  // screenshots; without that header both workers stay healthy.
+  // The Kit wrapper MUST assign onto the incoming env object: Kit reads the
+  // ambient `cloudflare:workers` env (the entrypoint's original object), so a
+  // spread copy passed to worker.fetch is invisible to it and Kit falls back
+  // to a live read the fixture fetch stub refuses.
   const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
   assert.match(
     worker,

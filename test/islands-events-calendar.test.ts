@@ -457,7 +457,9 @@ describe("EventsCalendar review regressions", () => {
     const html = await (await calendar([], [], failedSource()).request("/events?q=x")).text();
     expect(html).toContain(EVENTS_EMPTY_ERROR_TESTID);
     expect(html).not.toContain(EVENTS_EMPTY_SEARCH_TESTID);
-    expect(html).toContain(`data-testid="${EVENTS_SEARCH_STATUS_TESTID}"></p>`);
+    expect(html).toContain(
+      `data-testid="${EVENTS_SEARCH_STATUS_TESTID}">We couldn&#39;t load the calendar.</p>`,
+    );
     expect(html).not.toContain(eventsSearchMissCopy("x"));
   });
 });
