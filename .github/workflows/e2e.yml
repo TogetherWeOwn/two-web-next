@@ -426,6 +426,7 @@ jobs:
             test-results/**/attachments/hono-review-*.png
             test-results/**/attachments/kit-review-*.png
             test-results-kit-parity/**/attachments/kit-review-*.png
+            test-results-kit-visual/**/attachments/kit-review-calendar-*.png
           if-no-files-found: error
           retention-days: 7
       - name: Waitlist roster screenshot evidence

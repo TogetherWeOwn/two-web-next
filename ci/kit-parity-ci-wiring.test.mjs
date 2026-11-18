@@ -96,16 +96,20 @@ test("both loopback parity workers inject the same healthy-empty Discord seam", 
   // The cross-target events-calendar comparison renders the partial-source
   // notice only when a target reports a Discord failure, so both loopback
   // workers must simulate the same healthy-empty state or the sections
-  // diverge. Hono additionally permits an explicit failure header for recovery
-  // screenshots; without that header both workers stay healthy.
+  // diverge. Both fixtures opt into failure via an explicit test header;
+  // the browser journey checks that concurrent Kit reads do not share it.
   // The Kit wrapper MUST assign onto the incoming env object: Kit reads the
   // ambient `cloudflare:workers` env (the entrypoint's original object), so a
   // spread copy passed to worker.fetch is invisible to it and Kit falls back
   // to a live read the fixture fetch stub refuses.
   const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
+  assert.match(worker, /"  upcoming: async \(\) => \[\],"/);
+  assert.match(worker, /lastReadFailed: \(\) => discordReadFailed\.getStore\(\) \?\? false/);
+  assert.match(worker, /request\.headers\.get\("x-e2e-discord-read"\) === "failed"/);
+  assert.match(worker, /env\.DISCORD_EVENTS = discordEvents;/);
   assert.match(
     worker,
-    /env\.DISCORD_EVENTS = \{ upcoming: async \(\) => \[\], lastReadFailed: \(\) => false \};/,
+    /discordReadFailed\.run\(failed, \(\) => worker\.fetch\(request, env, ctx\)\)/,
   );
   assert.doesNotMatch(worker, /\{\s*\.\.\.env,\s*DISCORD_EVENTS/);
   const hono = readFileSync(new URL("../e2e/worker.ts", import.meta.url), "utf8");
