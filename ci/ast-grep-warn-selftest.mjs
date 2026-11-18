@@ -31,7 +31,8 @@ try {
         file,
         String.raw`import 'oth\x65r'; import 'ho\n o'; const unrelated = require('other');` +
           "\nconst load = () => import(`hono/${name}`);\n" +
-          "const other = () => import(`h\\x6fno/cors${name}`);\n",
+          "const other = () => import(`h\\x6fno/cors${name}`);\n" +
+          'const computed = () => import(resolve("hono"));\n',
       );
     const scan = () =>
       spawnSync("npx", ["-y", "--package", "@ast-grep/cli@0.50.0", "ast-grep", "scan"], {
@@ -60,6 +61,8 @@ try {
       String.raw`const cors = require('hono\x2fcors');`,
       String.raw`const cors = require('\150\157\156\157\057cors');`,
       String.raw`const cors = require('hono\57cors');`,
+      `const load = () => import((('hono')));`,
+      `const cors = require((('hono/cors')));`,
       String.raw`import 'ho\u{6e}o';`,
       "import 'ho\\\nno';",
       String.raw`const load = () => import(` + "`" + String.raw`h\x6fno` + "`" + `);`,

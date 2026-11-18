@@ -45,6 +45,9 @@ rule:
         field: source
     - inside:
         kind: arguments
+        stopBy:
+          not:
+            kind: parenthesized_expression
         inside:
           kind: call_expression
           any:
