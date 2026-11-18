@@ -77,6 +77,57 @@ test("projects isolated commands and workflow roots without changing traversal",
   assert.deepEqual({ root, scripts }, before);
 });
 
+test("projects isolated parent commands and script indexes for each path", () => {
+  const root = { ...command(0, [edge("a", 1), edge("a", 2)]), origin };
+  const scripts = {
+    a: [command(3), command(4, [edge("b", 5)])],
+    b: [command(6), command(7)],
+  };
+  const before = structuredClone({ root, scripts });
+  const results = enumerateInvocationOccurrences(
+    [root],
+    scripts,
+    (occurrence, source, workflow, ancestry) => {
+      const path = ancestry.map(({ command: parent, index }) => `${parent.location}:${index}`);
+      for (const { command: parent } of ancestry) {
+        assert.ok(parent.npmEdges.length > 0);
+        parent.npmEdges.length = 0;
+      }
+      assert.equal(workflow.npmEdges.length, 2);
+      return { location: source.location, path, edges: occurrence.npmEdges };
+    },
+    { includeAncestry: true },
+  );
+  const branch = [
+    [3, ["0:0"]],
+    [4, ["0:1"]],
+    [6, ["0:1", "4:0"]],
+    [7, ["0:1", "4:1"]],
+  ];
+  assert.deepEqual(
+    results.map(({ location, path }) => [location, path]),
+    [[0, []], ...branch, ...branch],
+  );
+  assert.deepEqual(results[3].edges, [edge("a", 1), edge("b", 5)]);
+  assert.deepEqual(results[7].edges, [edge("a", 2), edge("b", 5)]);
+  assert.deepEqual({ root, scripts }, before);
+});
+
+test("ancestry copies share the projection budget and reset between scans", () => {
+  const root = { ...command(0, [edge("a", 1)]), origin };
+  const scripts = {
+    a: [{ ...command(2, [edge("b", 3)]), metadata: "x".repeat(600_000) }],
+    b: [command(4)],
+  };
+  const project = (occurrence) => occurrence.command;
+  assert.deepEqual(enumerateInvocationOccurrences([root], scripts, project), [0, 2, 4]);
+  assert.throws(
+    () => enumerateInvocationOccurrences([root], scripts, project, { includeAncestry: true }),
+    /projection clone limit exceeded/,
+  );
+  assert.deepEqual(enumerateInvocationOccurrences([root], scripts, project), [0, 2, 4]);
+});
+
 test("projection cannot mutate traversal through an aliased edge array", () => {
   const edges = [edge("a", 1)];
   const root = { ...command(0, edges), origin, metadata: { edges } };
