@@ -43,7 +43,11 @@ try {
     const scan = (script) => spawnSync("npm", ["run", script], { encoding: "utf8" });
     const allowed = scan("scan:fetch-await");
     const allowedOutput = `${allowed.stdout ?? ""}\n${allowed.stderr ?? ""}`;
-    if (allowed.error || allowed.status !== 0 || allowedOutput.includes("http-no-hono")) {
+    if (
+      allowed.error ||
+      allowed.status !== 0 ||
+      /(?:error|warning)\[http-no-hono/.test(allowedOutput)
+    ) {
       throw new Error(
         `allowed imports or outside path failed: ${allowedOutput || allowed.error?.message}`,
       );
