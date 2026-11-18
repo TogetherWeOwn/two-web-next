@@ -1,5 +1,10 @@
 import { expect, localOrigin, test } from "../fixtures";
-import { captureWithGeometry, loadVisualFont, renderedPlatformFonts } from "./font-evidence";
+import {
+  captureNormalizedDisplayFont,
+  captureWithGeometry,
+  loadVisualFont,
+  renderedPlatformFonts,
+} from "./font-evidence";
 
 const FONT_URL = `${localOrigin}/fonts/mona-sans-latin-wght.woff2`;
 
@@ -73,4 +78,108 @@ test("rules separately loaded Mona Sans evidence @ 360", async ({ page }, testIn
   expect(fonts[0]?.familyName).toMatch(/^Mona Sans(?:\s|$)/);
   expect(fonts[0]?.isCustomFont).toBe(true);
   expect(fonts[0]?.glyphCount).toBeGreaterThan(0);
+});
+
+for (const [description, stack, fallback] of [
+  ["unquoted family", "Original Display, Georgia, serif", ", Georgia, serif"],
+  ["single-quoted family", "'Original, Display', serif", ", serif"],
+  ["no fallback", "Original Display", ""],
+  ["escaped quote", '"Original\\" Display", Georgia, serif', ", Georgia, serif"],
+  ["space after quoted family", '"Original, Display" , Georgia, serif', ", Georgia, serif"],
+  ["escaped comma", "Original\\,Display, serif", ", serif"],
+  ["multiline fallback", "Original Display,\nGeorgia, serif", ",\nGeorgia, serif"],
+  ["non-CSS whitespace in fallback", "Original Display, Georgia ", ", Georgia "],
+  ["comma in a comment", "Original /* , */ Display, Georgia, serif", ", Georgia, serif"],
+  ["escaped final space", "Original Display, /* keep */ Backup\\ ", ", /* keep */ Backup\\ "],
+]) {
+  test(`normalizes a display stack with ${description}`, async ({ page }) => {
+    await page.goto("/rules");
+    await page.locator("#rules-heading").evaluate((element, value) => {
+      (element as HTMLElement).style.setProperty("--font-display", value!);
+    }, stack);
+    const capture = await captureNormalizedDisplayFont(page, {
+      url: FONT_URL,
+      root: "#rules-heading",
+      heading: "#rules-heading",
+    });
+    expect(capture.token.original).toBe(stack);
+    expect(capture.token.normalized).toBe(`"${capture.face.family}"${fallback}`);
+  });
+}
+
+for (const [description, value] of [
+  ["missing", null],
+  ["empty", "   "],
+] as const) {
+  test(`rejects a ${description} display token`, async ({ page }) => {
+    await page.route("**/empty-font-fixture", (route) =>
+      route.fulfill({ contentType: "text/html", body: "<main><h1>Fixture</h1></main>" }),
+    );
+    await page.goto("/empty-font-fixture");
+    if (value !== null) {
+      await page.locator("main").evaluate((element, token) => {
+        (element as HTMLElement).style.setProperty("--font-display", token);
+      }, value);
+    }
+    await expect(
+      captureNormalizedDisplayFont(page, {
+        url: FONT_URL,
+        root: "main",
+        heading: "h1",
+      }),
+    ).rejects.toThrow("Expected a nonempty --font-display stack");
+  });
+}
+
+test("rejects a display token override blocked by an important declaration", async ({ page }) => {
+  await page.route("**/important-font-fixture", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<style>main { --font-display: Original, serif !important; }</style><main><h1>Fixture</h1></main>",
+    }),
+  );
+  await page.goto("/important-font-fixture");
+  await expect(
+    captureNormalizedDisplayFont(page, { url: FONT_URL, root: "main", heading: "h1" }),
+  ).rejects.toThrow("Display token override did not take effect");
+});
+
+test("normalized display font evidence on a fixture @ 360", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 360, height: 844 });
+  await page.route("**/visual-font-fixture", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<style>
+        .content { --font-display: "Original, Display", Georgia, serif; min-height: 1200px; }
+        h1 { font-family: var(--font-display); }
+      </style><main class="content"><h1>Fixture heading</h1></main>`,
+    }),
+  );
+  await page.goto("/visual-font-fixture");
+  const capture = await captureNormalizedDisplayFont(page, {
+    url: FONT_URL,
+    weight: "100 900",
+    root: ".content",
+    heading: "h1",
+  });
+  await testInfo.attach("fixture-normalized-360.png", {
+    body: capture.png,
+    contentType: "image/png",
+  });
+  await testInfo.attach("fixture-normalized-360.json", {
+    body: JSON.stringify({ ...capture, png: undefined }, null, 2),
+    contentType: "application/json",
+  });
+  expect(capture.face.status).toBe("loaded");
+  expect(capture.token.original).toBe('"Original, Display", Georgia, serif');
+  expect(capture.token.normalized).toBe(`"${capture.face.family}", Georgia, serif`);
+  expect(capture.headingFamily.split(",")[0]?.replaceAll('"', "").trim()).toBe(capture.face.family);
+  expect(capture.fonts).toHaveLength(1);
+  expect(capture.fonts[0]?.familyName).toMatch(/^Mona Sans(?:\s|$)/);
+  expect(capture.fonts[0]?.isCustomFont).toBe(true);
+  expect(capture.fonts[0]?.glyphCount).toBeGreaterThan(0);
+  expect(capture.dimensions.width).toBe(360);
+  expect(capture.dimensions.height).toBeGreaterThan(844);
+  expect(capture.before.nodes.heading?.width).toBeGreaterThan(0);
+  expect(capture.after.nodes.heading).toEqual(capture.before.nodes.heading);
 });
