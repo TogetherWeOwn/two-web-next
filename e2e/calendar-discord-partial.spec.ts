@@ -304,6 +304,31 @@ test.describe("calendar without JavaScript", () => {
   });
 });
 
+test("a failed month read restores the grid tab stop after resizing during loading", async ({
+  page,
+  context,
+}) => {
+  const f = await fixture(context);
+  await context.route(`${PARTIAL_ORIGIN}/schedule-theme.css`, (route) =>
+    route.fulfill({ contentType: "text/css", body: scheduleCss }),
+  );
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(PARTIAL_ORIGIN + CALENDAR_PATH);
+  const scroll = page.getByTestId("events-calendar-scroll");
+  await expect(scroll).not.toHaveAttribute("tabindex");
+
+  f.state.badFragment = true;
+  const pending = f.holdNext();
+  await page.getByRole("link", { name: "Next month" }).click();
+  await pending.entered.ready;
+  await expect(scroll).toBeHidden();
+  await page.setViewportSize({ width: 390, height: 844 });
+  pending.done.release();
+  await pending.settled.ready;
+  await expect(scroll).toBeVisible();
+  await expect(scroll).toHaveAttribute("tabindex", "0");
+});
+
 const afterDisplay = (page: Page) =>
   page
     .locator(".schedule-month-frame")

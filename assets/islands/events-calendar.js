@@ -272,7 +272,10 @@
     var content = root.querySelector('[data-cal-zone="content"]');
     if (content) content.hidden = on;
     root.setAttribute("aria-busy", on ? "true" : "false");
-    if (!on) root.removeAttribute("aria-busy");
+    if (!on) {
+      root.removeAttribute("aria-busy");
+      syncGridTabStop();
+    }
   }
 
   // URLs change across month steps; the control's test ID or label is stable.
@@ -525,7 +528,6 @@
       feedback.textContent = overLimit() ? searchTooLong : "";
       // A card or month control cannot take focus while content is hidden.
       setLoading(false);
-      syncGridTabStop();
       if (ownsFocus && (opts.focus || opts.control)) {
         var target = opts.focus && root.querySelector(opts.focus);
         if (!target && opts.control)
