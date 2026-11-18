@@ -530,7 +530,7 @@ describe("H4 host/join acceptance: Kit presentation legs (RED at base)", () => {
       joinInstructions: JOIN_INSTRUCTIONS,
     });
     const html = renderDetail(model);
-    expect(html).toContain("Hosted by");
+    expect(html).toMatch(/<dt\b[^>]*>Host<\/dt>/);
     expect(html).toContain('data-testid="event-organizer"');
     expect(html).toContain(ORGANIZER);
     expect(html).toContain('data-testid="event-join-details"');
@@ -652,8 +652,9 @@ describe("H4 host/join acceptance: cross-renderer parity (RED at base)", () => {
         joinInstructions: JOIN_INSTRUCTIONS,
       }),
     );
+    expect(honoHtml).toContain("Hosted by");
+    expect(kitHtml).toMatch(/<dt\b[^>]*>Host<\/dt>/);
     const pins = [
-      "Hosted by",
       'data-testid="event-organizer"',
       ORGANIZER,
       'data-testid="event-join-details"',

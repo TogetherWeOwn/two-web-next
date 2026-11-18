@@ -61,9 +61,17 @@ export function rowAvailability(
     pastContext || e.status === "past" || (now != null && e.endsAt.getTime() <= now.getTime());
   if (ended) return { state: "past", text: "Ended", ongoing: false };
   const ongoing = now != null && isOngoing(e, now);
-  if (!e.rsvpOpen) return { state: "paused", text: "RSVPs paused", ongoing };
+  return seatAvailability(e, ongoing);
+}
+
+/** Shared seat verdict for published schedule rows and the smaller home projection. */
+export function seatAvailability(
+  e: { rsvpOpen?: boolean; capacity: number | null; goingOccupancy?: number; goingCount: number },
+  ongoing = false,
+): ScheduleAvailability {
+  if (e.rsvpOpen === false) return { state: "paused", text: "RSVPs paused", ongoing };
   if (e.capacity === null) return { state: "uncapped", text: "No seat limit", ongoing };
-  const remaining = Math.max(0, e.capacity - e.goingOccupancy);
+  const remaining = Math.max(0, e.capacity - (e.goingOccupancy ?? e.goingCount));
   if (remaining <= 0) return { state: "full", text: "Full", ongoing };
   return {
     state: "open",
