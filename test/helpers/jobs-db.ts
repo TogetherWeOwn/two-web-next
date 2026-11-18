@@ -20,6 +20,7 @@ export async function createJobsFixture(raw: string, opts: { max?: number } = {}
     const rawClient = client;
     return {
       client: rawClient,
+      db: fixture.db,
       schemaName: fixture.schemaName,
       async dispose() {
         try {
