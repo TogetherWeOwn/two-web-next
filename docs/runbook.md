@@ -385,7 +385,10 @@ binding isolation before any remote mutation.
    archive route, dispatch the same workflow from `main` with
    `kit_route_family=archive` (only `GET /events/past`); choose
    `kit_route_family=archive-static` to cumulatively add `GET /about` and
-   `GET /faq`. `hono` disables every Kit route family, and missing or
+   `GET /faq`. Choose `kit_route_family=events` for the `/events` list alone;
+   `/events/past`, the static pages and `/e/:key` stay on Hono. The dispatch
+   fails unless a fresh `GET /events` returns HTTP 200 with `x-two-renderer: kit`
+   after revision verification. `hono` disables every Kit route family, and missing or
    unrecognized runtime flags fail closed to Hono. The next automatic main-CI
    deployment resets the selection to `hono`.
 
@@ -415,7 +418,9 @@ binding isolation before any remote mutation.
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
    queue readiness only warns and `unknown` passes there.
 4. To select a route family explicitly, use Actions → `deploy` → Run workflow
-   on branch `main`, then choose `hono`, `archive`, or `archive-static`.
+   on branch `main`, then choose `hono`, `archive`, `archive-static`, or `events`.
+   For an events rollout, record the exact deployed commit, the deploy run link
+   and the `Verify staging Kit events renderer` result together.
    `workflow_dispatch` uses the same exact-SHA CI gate, staging migration,
    Kit build, Tail-first deployment, queue handoff, revision verification and
    smoke path as the automatic workflow. This is the supported route-selection
@@ -431,6 +436,14 @@ binding isolation before any remote mutation.
    otherwise reports only limited queue-ledger evidence (below), not successful
    private persistence. Source behavior and local tests are not proof of live
    isolation.
+
+Staging and preview must have no recurring idle runtime charges. Before a
+rollout, account for containers, Durable Objects and their alarms, scheduled
+Workers, Stream inputs, and database compute. During an approved use window,
+record pipeline startup and readiness for the exact SHA and environment, and
+native stop, scale-to-zero, or expiry evidence even on failure or cancellation.
+Do not bypass an installation or qualification hold. Any recurring idle charge
+needs a dated owner exception with resource scope, cost, and expiry or review date.
 
 ### Neon web schema migrations (separate operator action)
 

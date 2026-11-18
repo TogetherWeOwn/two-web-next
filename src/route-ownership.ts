@@ -299,7 +299,7 @@ export function fixtureManifestFor(env: {
 }
 
 // Staging Kit starts with every route on Hono. The reviewed deploy workflow
-// may enable only the archive and static page families, while all other routes
+// may enable only the archive, static and events-list families, while all other routes
 // stay Hono-owned even when the shared manifest enables them for preview/local
 // parity. The staging hostname or any rollout flag selects this restrictive
 // manifest, even with a misconfigured APP_URL. Only the exact staging APP_URL
@@ -309,6 +309,7 @@ export function stagingManifestFor(
     APP_URL?: string;
     KIT_ROUTE_ARCHIVE?: string;
     KIT_ROUTE_STATIC?: string;
+    KIT_ROUTE_EVENTS?: string;
   },
   routes: OwnedRoute[] = ROUTE_MANIFEST,
 ): OwnedRoute[] | undefined {
@@ -319,15 +320,20 @@ export function stagingManifestFor(
     // With rollout flags present an invalid URL must not select the preview manifest.
     app = undefined;
   }
-  const hasRolloutFlags = env.KIT_ROUTE_ARCHIVE !== undefined || env.KIT_ROUTE_STATIC !== undefined;
+  const hasRolloutFlags =
+    env.KIT_ROUTE_ARCHIVE !== undefined ||
+    env.KIT_ROUTE_STATIC !== undefined ||
+    env.KIT_ROUTE_EVENTS !== undefined;
   if (app?.hostname !== new URL(STAGING_APP_URL).hostname && !hasRolloutFlags) return undefined;
 
   const archiveEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_ARCHIVE === "true";
   // Static pages are the second cumulative rollout stage; they cannot precede
   // the archive family even if a Worker variable is set out of band.
   const staticEnabled = archiveEnabled && env.KIT_ROUTE_STATIC === "true";
+  const eventsEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_EVENTS === "true";
   return routes.map((entry) => {
     const familyEnabled =
+      (entry.method === "GET" && entry.path === "/events" && eventsEnabled) ||
       (entry.method === "GET" && entry.path === "/events/past" && archiveEnabled) ||
       (entry.method === "GET" &&
         (entry.path === "/about" || entry.path === "/faq") &&
@@ -515,6 +521,7 @@ export interface HookDispatchDeps {
   // values keep every route on Hono. Preview/local parity stays unchanged.
   kitRouteArchive?: string;
   kitRouteStatic?: string;
+  kitRouteEvents?: string;
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
@@ -904,6 +911,7 @@ async function dispatchOwnedRequest(
         APP_URL: deps.appUrl,
         KIT_ROUTE_ARCHIVE: deps.kitRouteArchive,
         KIT_ROUTE_STATIC: deps.kitRouteStatic,
+        KIT_ROUTE_EVENTS: deps.kitRouteEvents,
       }) ??
       ROUTE_MANIFEST,
     event.url,
