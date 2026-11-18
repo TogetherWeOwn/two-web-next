@@ -1,5 +1,27 @@
 import { expect, test } from "./fixtures";
 
+test("capture Worker recovery states for review", async ({ page, context }) => {
+  await context.setExtraHTTPHeaders({ "x-e2e-discord-read": "failed" });
+  for (const state of ["partial", "error"] as const) {
+    // A deliberately unmatched search leaves no canonical rows for the error state.
+    const url =
+      state === "partial"
+        ? "/events?view=calendar&month=2099-05"
+        : "/events?q=e2e-no-matching-event-7319";
+    for (const width of [1280, 390, 320]) {
+      await page.setViewportSize({ width, height: width === 1280 ? 800 : 844 });
+      await page.goto(url);
+      await expect(
+        page.getByTestId(state === "partial" ? "events-partial-source" : "events-empty-error"),
+      ).toBeVisible();
+      const name = `hono-review-worker-${state}-${width}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, animations: "disabled" });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    }
+  }
+});
+
 // Public calendar-month journey: the CI seed (e2e/seed.mjs) publishes one
 // fixture in each of two far-future months, and a real browser drives
 // /events?view=calendar&month=<non-default month> as a guest, with no
