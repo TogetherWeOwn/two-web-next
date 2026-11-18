@@ -346,6 +346,25 @@ export function registerWaitlistOfferLifecycle() {
       expect(await rsvpOf(rsvp.id)).toEqual(rsvp);
     });
 
+    it("expires only the requested offer when two holds in the event are due", async () => {
+      const { event, rsvp, rows } = await seed({ capacity: 2, users: ["u1", "u2"] });
+      const target = await made(event, rsvp);
+      const other = await made(event, rows[1]!);
+      await lapse(target.id);
+      await lapse(other.id);
+      const before = (await offers()).find((offer) => offer.id === other.id);
+      expect(before).toMatchObject({ state: "held" });
+
+      expect(await expire(event, rsvp, target.id)).toMatchObject({
+        ok: true,
+        replay: false,
+        offer: { id: target.id, state: "expired" },
+      });
+      const after = await offers();
+      expect(after.find((offer) => offer.id === target.id)?.state).toBe("expired");
+      expect(after.find((offer) => offer.id === other.id)).toEqual(before);
+    });
+
     it.each(["declined", "expired"] as const)("replays %s safely", async (state) => {
       const { event, rsvp } = await seed();
       const old = await made(event, rsvp);
