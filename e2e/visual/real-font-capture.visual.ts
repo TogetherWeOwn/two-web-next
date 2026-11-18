@@ -1,5 +1,10 @@
 import { expect, localOrigin, test } from "../fixtures";
-import { captureRealFont, dataFont, displayFont } from "./real-font-capture";
+import { captureRealFont, dataFont, displayFont, readHints } from "./real-font-capture";
+
+test("font hints split rel tokens on HTML whitespace only", () => {
+  const hints = readHints('<link rel="other&nbsp;preload"><link rel="other&#9;preload">');
+  expect(hints.map(({ rel }) => rel)).toEqual(["other\tpreload"]);
+});
 
 // Intercepting any request in the context disables Chromium's HTTP cache.
 test.use({

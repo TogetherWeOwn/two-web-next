@@ -85,14 +85,14 @@ function observeNetwork(session: CDPSession, state: FontState) {
 }
 
 // Parse out of the browser so raw markup cannot initiate another request.
-function readHints(html: string) {
+export function readHints(html: string) {
   type Node = DefaultTreeAdapterTypes.ChildNode;
   type Hint = { rel: string; as: string; href: string | null; priority: string | null };
   function collect(node: Node): Hint[] {
     if ("tagName" in node && node.tagName === "link") {
       const attr = (key: string) => node.attrs.find(({ name }) => name === key)?.value ?? null;
       const rel = attr("rel") ?? "";
-      if (/(?:^|\s)(?:preload|prefetch|modulepreload)(?:\s|$)/i.test(rel))
+      if (/(?:^|[\t\n\f\r ])(?:preload|prefetch|modulepreload)(?:[\t\n\f\r ]|$)/i.test(rel))
         return [{ rel, as: attr("as") ?? "", href: attr("href"), priority: attr("fetchpriority") }];
     }
     return "childNodes" in node ? node.childNodes.flatMap(collect) : [];
