@@ -53,6 +53,29 @@ describe("TimeBlock server output", () => {
     }
   });
 
+  it("renders each conditional separator attached to its preceding text", () => {
+    const cases = [
+      [base, "19:30 UTC · as of 19:20 · Refresh"],
+      [{ ...base, state: "live" }, "19:30 UTC · live as of 19:20 · Refresh"],
+      [
+        { ...base, state: "live", asOf: "invalid" },
+        "19:30 UTC · Live status unavailable · Refresh",
+      ],
+      [{ ...base, state: "ended" }, "19:30 UTC · Ended · Echo frozen"],
+      [{ ...base, state: "cancelled" }, "19:30 UTC · Cancelled"],
+    ] as const;
+    for (const [props, expected] of cases) {
+      const html = render(props);
+      const anchor = html.match(/<div class="anchor">([\s\S]*?)<\/div>/)?.[1] ?? "";
+      const text = anchor
+        .replace(/<!--[\s\S]*?-->/g, "")
+        .replace(/<[^>]*>/g, "")
+        .replace(/&nbsp;|&#160;|&#x0*a0;/gi, " ");
+      expect(text).toContain(expected);
+      expect(text).not.toMatch(/\s ·/);
+    }
+  });
+
   it("withdraws live and room count claims but retains the snapshot time", () => {
     const html = render({ ...base, state: "live", roomCount: 8 });
     expect(html).toContain("live as of");
