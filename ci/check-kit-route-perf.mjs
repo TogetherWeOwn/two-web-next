@@ -383,10 +383,17 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       "usage: node ci/check-kit-route-perf.mjs [--report-only] [--root DIR]",
     );
     result = checkRoutes(args[1], { reportOnly });
-    if (reportOnly && process.env.GITHUB_STEP_SUMMARY)
-      appendFileSync(process.env.GITHUB_STEP_SUMMARY, jobSummary(result));
   } catch (error) {
     result = measurementFailure(error);
+  }
+  if (reportOnly && process.env.GITHUB_STEP_SUMMARY) {
+    try {
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, jobSummary(result));
+    } catch (error) {
+      console.error(
+        `kit route performance: unable to write job summary (${error.code ?? "unknown error"})`,
+      );
+    }
   }
   console.log(JSON.stringify(result));
   process.exitCode = result.exitCode;

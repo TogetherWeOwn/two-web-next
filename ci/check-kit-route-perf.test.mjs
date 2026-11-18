@@ -364,6 +364,14 @@ test("shipping reports an unapproved route without admitting it to the ratchet",
   assert.match(incomplete.error, /inventory mismatch/);
 });
 
+function runReportOnlyCli(args, summaryPath) {
+  return spawnSync(process.execPath, ["ci/check-kit-route-perf.mjs", "--report-only", ...args], {
+    cwd: join(import.meta.dirname, ".."),
+    env: { ...process.env, GITHUB_STEP_SUMMARY: summaryPath },
+    encoding: "utf8",
+  });
+}
+
 test("report-only CLI writes JSON and job summary and fails on broken measurement", (t) => {
   const f = fixture(t);
   f.put("web/src/routes/new/+server.ts", "new");
@@ -373,16 +381,7 @@ test("report-only CLI writes JSON and job summary and fails on broken measuremen
   f.approveBudget();
 
   const path = join(f.root, "job-summary.md");
-  const run = () =>
-    spawnSync(
-      process.execPath,
-      ["ci/check-kit-route-perf.mjs", "--report-only", "--root", f.root],
-      {
-        cwd: join(import.meta.dirname, ".."),
-        env: { ...process.env, GITHUB_STEP_SUMMARY: path },
-        encoding: "utf8",
-      },
-    );
+  const run = () => runReportOnlyCli(["--root", f.root], path);
   const measured = run();
   assert.equal(measured.status, 0, measured.stdout || measured.stderr);
   const report = JSON.parse(measured.stdout);
@@ -400,6 +399,31 @@ test("report-only CLI writes JSON and job summary and fails on broken measuremen
   assert.equal(broken.status, 2, broken.stdout || broken.stderr);
   assert.equal(JSON.parse(broken.stdout).exitCode, 2);
   assert.match(readFileSync(path, "utf8"), /Measurement failed/);
+});
+
+test("report-only CLI preserves measurement results when the job summary cannot be written", (t) => {
+  const f = fixture(t);
+  const run = () => runReportOnlyCli(["--root", f.root], f.root);
+  const result = checkRoutes(f.root, { reportOnly: true });
+  const measured = run();
+  assert.equal(measured.status, 0, measured.stdout || measured.stderr);
+  assert.deepEqual(JSON.parse(measured.stdout), result);
+  assert.match(measured.stderr, /unable to write job summary/);
+
+  f.put(`${OUTPUT}/client/.vite/manifest.json`, "{");
+  const failure = checkRoutes(f.root, { reportOnly: true });
+  const broken = run();
+  assert.equal(broken.status, 2, broken.stdout || broken.stderr);
+  assert.deepEqual(JSON.parse(broken.stdout), failure);
+  assert.match(broken.stderr, /unable to write job summary/);
+});
+
+test("report-only CLI rejects a missing root argument with a JSON usage error", () => {
+  const result = runReportOnlyCli(["--root"], "");
+  assert.equal(result.status, 2, result.stdout || result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.exitCode, 2);
+  assert.match(report.error, /^usage: node ci\/check-kit-route-perf\.mjs/);
 });
 
 test("missing initial approved route evidence fails closed", (t) => {
