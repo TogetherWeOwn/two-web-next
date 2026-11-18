@@ -904,9 +904,13 @@ async function dispatchOwnedRequest(
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
         KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
         KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
-        // The dispatcher normally treats HEAD as GET; this fixture needs GET only.
+        // Use the original URL: Kit strips the data suffix from event.url.
         KIT_PARITY_FIXTURE_ADMIN_DASHBOARD:
-          deps.fixtureAdminDashboard && event.request.method === "GET" ? "true" : undefined,
+          deps.fixtureAdminDashboard &&
+          event.request.method === "GET" &&
+          new URL(event.request.url).pathname === "/admin"
+            ? "true"
+            : undefined,
       }) ??
       stagingManifestFor({
         APP_URL: deps.appUrl,

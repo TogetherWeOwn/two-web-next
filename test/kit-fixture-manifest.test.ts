@@ -355,6 +355,18 @@ describe("fixtureManifestFor (moderator dashboard)", () => {
     expect(honoFetch).toHaveBeenCalledExactlyOnceWith(request);
     expect(resolve).not.toHaveBeenCalled();
   });
+
+  it("keeps a normalized dashboard data request on Hono", async () => {
+    const request = new Request(`${loopback}/admin/__data.json`);
+    const resolve = vi.fn(async () => new Response("kit"));
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    await dispatchHookRequest(
+      { request, url: new URL(`${loopback}/admin`), route: { id: "/admin" }, isDataRequest: true },
+      { appUrl: loopback, resolve, honoFetch, fixtureAdminDashboard: true },
+    );
+    expect(honoFetch).toHaveBeenCalledExactlyOnceWith(request);
+    expect(resolve).not.toHaveBeenCalled();
+  });
 });
 
 describe("fixtureManifestFor (event-detail RSVP companion)", () => {
