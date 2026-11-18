@@ -26,9 +26,10 @@ import type { PageServerLoad } from "./$types";
 export const load: PageServerLoad = async ({ parent, request, locals }) => {
   const { actor } = await parent();
   const reconciliationAvailable =
-    fixtureManifestFor(env)?.some(
-      (route) => route.path === "/admin/reconciliation" && route.enabled,
-    ) ?? false;
+    fixtureManifestFor({
+      APP_URL: env.APP_URL,
+      includeReconciliation: env.KIT_PARITY_FIXTURE_ADMIN_DASHBOARD === "true",
+    })?.some((route) => route.path === "/admin/reconciliation" && route.enabled) ?? false;
   const db = await dbFor({ env });
   // Match dbFor's precedence: an injected ADMIN_DB overrides either URL, so
   // the funnel cache scopes to the same identity the Hono route uses.
