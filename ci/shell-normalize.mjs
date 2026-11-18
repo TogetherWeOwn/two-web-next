@@ -3,7 +3,7 @@ import { logicalCursor, parseHeredocOpener } from "./shell-heredoc-opener.mjs";
 
 const COMMAND_PREFIX = /^[ \t]*(?:if|then|else|elif|while|until|do)$/u;
 const ORDINARY_COMMAND =
-  /^[ \t]*(?!(?:fi|case|esac|for|select|done|in|function|time|coproc|alias|declare|typeset|local|export|readonly|builtin|command)$)(?:[A-Za-z_]\w*|[\w./-]*\/[\w.-]+)$/u;
+  /^[ \t]*(?!(?:fi|case|esac|for|select|done|in|function|time|coproc|alias|declare|typeset|local|export|readonly|builtin|command)$)(?:[A-Za-z_]\w*|:|[\w./-]*\/[\w.-]+)$/u;
 export const ROOT_CWD_REMEDIATION =
   "this gate cannot resolve playwright runs outside the repo root; run the step or script at the root or teach ci/test-inventory.mjs the new form";
 

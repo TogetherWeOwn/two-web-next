@@ -157,8 +157,8 @@ test("shell boundaries do not expose heredoc bodies or remove literal text", () 
   const commands = [...literals, ...earlierCommands].map((arg) => `printf ${arg}`);
   for (const head of [...commands, "/usr/bin/printf '%s' item[1", "./printf item[1"]) {
     const command = `${head} <<EOF\n`;
-    const source = `${command}body\nEOF\nprintf done\n`;
-    assert.equal(check(source, source), `${command}    \n   \nprintf done\n`);
+    const source = `${command}body\nEOF\n: item[1\nprintf done\n`;
+    assert.equal(check(source, source), `${command}    \n   \n: item[1\nprintf done\n`);
   }
   const conditional = "if printf '%s' item[1 <<EOF\nbody\nEOF\nthen :; fi\n";
   assert.doesNotMatch(check(conditional, conditional), /body/);
