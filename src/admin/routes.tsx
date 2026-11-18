@@ -39,10 +39,12 @@ import type { Context } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
 import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./queue-redispatch";
 import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
+import { ReconciliationDetailPage, ReconciliationPage } from "./pages/reconciliation";
+import { reconciliationServiceFor } from "./reconciliation-service";
 import { opsOverridesHandler, opsOverridesMethodRefused } from "./ops-overrides";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
-import { badRequest, prefersHtmlError, varyAccept } from "../errors";
+import { badRequest, databaseUnavailableBuffered, prefersHtmlError, varyAccept } from "../errors";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import { eventKeyAllowed } from "../events/keys";
 import {
@@ -445,6 +447,43 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       c,
       <AdminDashboard actor={c.get("adminActor")} funnel={funnel} zeroSearches={zeroSearches} />,
     );
+  });
+
+  admin.get("/reconciliation", async (c) => {
+    declareAccess(c, {
+      resource: "reconciliation",
+      action: "list",
+      route: "admin.reconciliation.index",
+    });
+    try {
+      const service = await reconciliationServiceFor(c.env, c.get("adminActor").id);
+      if (!service) return databaseUnavailableBuffered(c);
+      const open = await service.listOpen();
+      const resolved = await service.listResolved();
+      return bufferedMemberHtml(c, <ReconciliationPage open={open} resolved={resolved} />);
+    } catch {
+      return databaseUnavailableBuffered(c);
+    }
+  });
+
+  admin.get("/reconciliation/:key", async (c) => {
+    declareAccess(c, {
+      resource: "reconciliation",
+      action: "view",
+      route: "admin.reconciliation.show",
+    });
+    try {
+      const service = await reconciliationServiceFor(c.env, c.get("adminActor").id);
+      if (!service) return databaseUnavailableBuffered(c);
+      const row = await service.get(c.req.param("key"));
+      return row
+        ? bufferedMemberHtml(c, <ReconciliationDetailPage row={row} />)
+        : errorPage(c, 404, "Reconciliation record not found", undefined, [
+            { href: "/admin/reconciliation", label: "Back to reconciliation" },
+          ]);
+    } catch {
+      return databaseUnavailableBuffered(c);
+    }
   });
 
   admin.get("/join-attempts", async (c) => {

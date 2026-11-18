@@ -244,6 +244,13 @@ const MATRIX: Case[] = [
     contentType: "application/x-www-form-urlencoded",
   },
   { method: "GET", route: "/admin", status: 503, actor: "moderator", format: "html" },
+  ...["/admin/reconciliation", "/admin/reconciliation/:key"].map((route) => ({
+    method: "GET",
+    route,
+    status: 503,
+    actor: "moderator" as const,
+    format: "html" as const,
+  })),
   // Operational admission is disabled before any session/source/audit lookup.
   { method: "GET", route: "/admin/ops-overrides", status: 404 },
   ...["POST", "PUT", "PATCH", "DELETE", "OPTIONS"].map((method) => ({

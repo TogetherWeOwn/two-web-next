@@ -161,6 +161,16 @@
   },
   {
     "method": "GET",
+    "path": "/admin/reconciliation",
+    "auth": "moderator"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/reconciliation/:key",
+    "auth": "moderator"
+  },
+  {
+    "method": "GET",
     "path": "/api/public/community",
     "auth": "public"
   },

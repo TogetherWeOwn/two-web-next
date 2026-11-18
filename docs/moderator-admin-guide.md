@@ -763,8 +763,8 @@ row, the same rule as join attempts. Keep member identifiers private.
 
 ### Dashboard
 
-`/admin` has **Events**, **Featured content**, **Activity log** and **Join attempts**
-cards plus these diagnostic sections when their data is available:
+`/admin` has **Events**, **Featured content**, **Activity log**, **Join attempts**
+and **Reconciliation** cards, plus these diagnostic sections when available:
 
 - **Join funnel, last 90 days:** counts for recorded outcomes across the full
   window, not just one 100-row viewer page. Aggregate counts contain no member
@@ -791,6 +791,13 @@ can return 503; guests still go to sign-in. Stop and escalate rather than assumi
 an otherwise usable panel with empty counts.
 There is no member-access-log viewer, user editor, role/ban manager
 or join-attempt mutation screen here.
+
+## Inspect an unconfirmed bot change
+
+Open **Reconciliation** to view the oldest open records and recently resolved
+records. Open a record to see its original key and last recorded outcome. Check
+Discord independently: an open record does not prove whether the change happened.
+This view is read-only; it cannot resolve, send or retry a change.
 
 ## Member deletion requests
 

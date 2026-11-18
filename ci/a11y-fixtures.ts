@@ -1,4 +1,6 @@
 import postgres from "postgres";
+import { RECONCILIATION_FIXTURE, RECONCILIATION_RESOLVED_FIXTURE } from "./a11y-cases.mjs";
+import { botReconciliationIntents } from "../src/db/dormant-schema";
 import { auditDatabaseOptions, auditDatabaseUrl } from "./a11y-policy.mjs";
 import { createMemberDataFixture } from "../test/helpers/member-data-db";
 import { cookieFor, env, MODERATOR, seed, SUBJECT } from "../test/helpers/member-data";
@@ -80,6 +82,23 @@ export async function fixtures(raw: string) {
       isPublished: true,
       url: "/events",
     });
+    await fixture.db.insert(botReconciliationIntents).values([
+      {
+        idempotencyKey: RECONCILIATION_FIXTURE,
+        verb: "announcement.post",
+        subject: "announcement:42",
+        attempts: 2,
+      },
+      {
+        idempotencyKey: RECONCILIATION_RESOLVED_FIXTURE,
+        verb: "event.upsert",
+        subject: "event:42",
+        attempts: 1,
+        resolvedAt: new Date("2030-01-01T20:00:00Z"),
+        resolvedBy: MODERATOR.userId,
+        resolution: "superseded",
+      },
+    ]);
     await migrate(sessionClient as unknown as Sql);
     const sessions = createPostgresSessionStore(sessionClient as unknown as Sql);
     return {

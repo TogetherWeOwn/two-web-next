@@ -225,6 +225,8 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/ops-overrides` | ops-control-bearer | dashboard-operator-override-panel-acceptance: read-only record/epoch HTML, token-only admission, no-store, explicit staleness bound |
 | `GET /admin/queue/failed/:id/preview` | staging-operator | queue-preview-route / queue-preview-postgres: one-row snapshot advice only; the guarded apply lives on the redispatch route |
 | `GET /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route / source-evidence-postgres / source-evidence-statements: evidence-only source/cache proof; session-free, no audit write, inert without runtime-only settings |
+| `GET /admin/reconciliation` | moderator | reconciliation-route: audited intent lists |
+| `GET /admin/reconciliation/:key` | moderator | reconciliation-route: audited intent detail |
 | `GET /api/public/community` | public | public-data: community snapshot; null counts when collectors are down, public ETag/304 |
 | `GET /api/public/events` | public | public-data: published events, 20-row/32 KiB cap, public ETag/304 |
 | `GET /api/public/events/:key` | public | public-data: one published event; drafts and cancelled rows 404, public ETag/304 |

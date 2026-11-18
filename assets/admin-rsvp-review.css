@@ -45,3 +45,7 @@
 .admin-table .admin-chronology {
   white-space: nowrap;
 }
+
+.reconciliation-detail {
+  overflow-wrap: anywhere;
+}
