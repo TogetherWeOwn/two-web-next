@@ -68,10 +68,11 @@ let searchStatus = $derived.by(() => {
   if (emptyState === "error") return "";
   if (pageUnreadable) return upcomingEventsPageUnreadableCopy(state.page);
   if (!searching) return gameFilter === null ? "" : eventsGameFilterCopy(gameFilter);
+  const { q } = state;
   if (hasVisibleResults || outOfRange)
-    return gameFilter === null ? eventsSearchHitCopy(state.q) : eventsSearchGameHitCopy(state.q, gameFilter);
+    return gameFilter === null ? eventsSearchHitCopy(q) : eventsSearchGameHitCopy(q, gameFilter);
   if (!searchMiss) return "";
-  return gameFilter === null ? eventsSearchMissCopy(state.q) : eventsSearchGameMissCopy(state.q, gameFilter);
+  return gameFilter === null ? eventsSearchMissCopy(q) : eventsSearchGameMissCopy(q, gameFilter);
 });
 </script>
 

@@ -44,8 +44,8 @@ export function renderKitEvents(...args: Parameters<KitRender>): ReturnType<KitR
         },
       ],
     });
-    const url = `data:text/javascript;base64,${Buffer.from(outputFiles[0]!.text).toString("base64")}`;
-    return ((await import(url)) as { renderEventsHtml: KitRender }).renderEventsHtml;
+    const bundleUrl = `data:text/javascript;base64,${Buffer.from(outputFiles[0]!.text).toString("base64")}`;
+    return ((await import(bundleUrl)) as { renderEventsHtml: KitRender }).renderEventsHtml;
   })();
   return loaded.then((render) => render(...args));
 }
