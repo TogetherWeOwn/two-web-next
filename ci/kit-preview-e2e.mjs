@@ -29,6 +29,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { chromium } from "playwright";
+import { assertEmberArchive, stripEmberDelta } from "./kit-archive-delta.mjs";
 
 const root = new URL("../", import.meta.url);
 const webDir = new URL("../web/", import.meta.url);
@@ -193,6 +194,12 @@ function normalize(html) {
       // Inter-tag whitespace is a serializer choice, not a contract.
       .replace(/>\s+</g, "><")
       .trim()
+  );
+}
+
+function previewSectionsMatch(kitSection, honoSection, kitOwnsArchive) {
+  return (
+    normalize(kitOwnsArchive ? stripEmberDelta(kitSection) : kitSection) === normalize(honoSection)
   );
 }
 
@@ -473,9 +480,11 @@ async function unitParity() {
         browserFixturesRun = true;
       }
 
-      const same = normalize(sectionOf(honoHtml)) === normalize(sectionOf(kitHtml));
+      const kitSection = sectionOf(kitHtml);
+      if (keys.length > 0) assertEmberArchive(kitSection);
+      const same = normalize(sectionOf(honoHtml)) === normalize(stripEmberDelta(kitSection));
       check(
-        `${path}: archive section is byte-identical (modulo boolean serialization)`,
+        `${path}: archive section matches after validated presentation delta`,
         same,
         "section HTML differs",
       );
@@ -552,7 +561,9 @@ async function previewParity(kitBase, honoBase) {
     console.log(`--- Kit ${path} ---`);
     expectArchive(kitHtml, { keys, pager: [] });
     expectShell(kitHtml);
-    const same = normalize(sectionOf(kitHtml)) === normalize(sectionOf(honoHtml));
+    const kitSection = sectionOf(kitHtml);
+    if (kitOwnsArchive && keys.length > 0) assertEmberArchive(kitSection);
+    const same = previewSectionsMatch(kitSection, sectionOf(honoHtml), kitOwnsArchive);
     check(`${path}: preview sections match staging`, same, "section HTML differs");
   }
   // /api/* still reaches the unchanged Hono app through the Kit catch-all.
