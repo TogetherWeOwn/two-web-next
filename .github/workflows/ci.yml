@@ -1494,6 +1494,8 @@ jobs:
       actions: read
       contents: read
       pull-requests: read
+    outputs:
+      admitted_run: ${{ steps.admit.outputs.admitted_run }}
     env:
       ROUTE_WORKFLOW_SHA: ${{ (github.workflow_sha == github.sha || github.workflow_sha == github.event.pull_request.head.sha) && 'a34bc2fd65a88c39018c1e343dc64330c9e17101' || github.workflow_sha }}
       SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
@@ -1518,6 +1520,7 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - name: Admit synthetic report
+        id: admit
         env:
           GH_TOKEN: ${{ github.token }}
           ROUTE_ARTIFACT_ID: ${{ needs.route-evidence-producer.outputs.artifact_id }}
@@ -1529,6 +1532,7 @@ jobs:
           fixture=$(sha256sum ci/fixtures/execution-receipt-vitest.json)
           test "${fixture%% *}" = "$ROUTE_FIXTURE_DIGEST"
           node ci/run-synthetic-route-admission.mjs
+          printf 'admitted_run=%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           printf 'Workflow %s; helper checkout %s; fixture sha256:%s; artifact %s sha256:%s\n' \
             "$GITHUB_WORKFLOW_SHA" "$ROUTE_WORKFLOW_SHA" "$ROUTE_FIXTURE_DIGEST" "$ROUTE_ARTIFACT_ID" "$ROUTE_ARTIFACT_DIGEST"
 
@@ -1560,12 +1564,13 @@ jobs:
         node22-compat,
         scope,
         bot-contract-drift,
-        join-evidence-source,
         route-evidence-admission,
+        join-evidence-source,
       ]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions: {}
     steps:
       # The result gates that used to sit in `check`, unchanged: a failing,
       # cancelled or (when selected) skipped upstream job fails this required
@@ -1600,26 +1605,18 @@ jobs:
           A11Y_RESULT: ${{ needs.a11y.result }}
           A11Y_SELECTED: ${{ needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.db == 'true' }}
         run: test "$A11Y_RESULT" = success || { test "$A11Y_SELECTED" = false && test "$A11Y_RESULT" = skipped; }
-      # Check out so the always-run performance gate below can report, even
-      # when a gate above already failed.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-        with:
-          node-version: 24
-      # Only explicit success from both performance jobs may read green.
+      # Keep the result check inline: an aggregate of trusted evidence must
+      # not check out or execute code from the candidate.
       - name: Performance gate (lighthouse + bundle-budget must succeed)
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         env:
           LIGHTHOUSE_RESULT: ${{ needs.lighthouse.result }}
           BUDGET_RESULT: ${{ needs.bundle-budget.result }}
-        run: node ci/require-performance.mjs "$LIGHTHOUSE_RESULT" "$BUDGET_RESULT"
+        run: test "$LIGHTHOUSE_RESULT" = success && test "$BUDGET_RESULT" = success
       - name: Aggregate change-gated conclusions
         env:
           ROUTE_ADMISSION_RESULT: ${{ needs.route-evidence-admission.result }}
+          ROUTE_ADMITTED_RUN: ${{ needs.route-evidence-admission.outputs.admitted_run }}
           SCOPE_RESULT: ${{ needs.scope.result }}
           DRAFT: ${{ needs.scope.outputs.draft }}
           DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
@@ -1637,7 +1634,10 @@ jobs:
           fail() { echo "::error::$1"; exit 1; }
           [ "$SCOPE_RESULT" = success ] || fail "scope did not succeed; failing closed."
           case "$GITHUB_EVENT_NAME:$ROUTE_ADMISSION_RESULT" in
-            pull_request:success) ;;
+            pull_request:success)
+              [ "$ROUTE_ADMITTED_RUN" = "$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT" ] ||
+                fail "Route admission is not from this run attempt; rerun all jobs."
+              ;;
             push:skipped|schedule:skipped|workflow_dispatch:skipped) ;;
             *) fail "Required route admission did not succeed for this event." ;;
           esac

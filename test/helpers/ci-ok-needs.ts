@@ -11,6 +11,7 @@ export const baseCiOkNeeds = [
   "node22-compat",
   "scope",
   "bot-contract-drift",
+  "route-evidence-admission",
 ];
 
 export const evidenceJobs = [

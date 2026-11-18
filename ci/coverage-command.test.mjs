@@ -33,7 +33,10 @@ test("the independent browser fixture remains selected and fail-closed in ci-ok"
   assert(script);
   const base = {
     GITHUB_EVENT_NAME: "pull_request",
+    GITHUB_RUN_ID: "101",
+    GITHUB_RUN_ATTEMPT: "2",
     ROUTE_ADMISSION_RESULT: "success",
+    ROUTE_ADMITTED_RUN: "101:2",
     SCOPE_RESULT: "success",
     DRAFT: "false",
     DOCS_ONLY: "false",
@@ -63,6 +66,8 @@ test("the independent browser fixture remains selected and fail-closed in ci-ok"
     for (const result of ["failure", "cancelled", "skipped", ""])
       assert.equal(run({ ...scope, ROUTE_ADMISSION_RESULT: result }), 1);
   }
+  for (const receipt of ["101:1", "100:2", ""])
+    assert.equal(run({ ROUTE_ADMITTED_RUN: receipt }), 1);
   assert.equal(run({ GITHUB_EVENT_NAME: "merge_group", ROUTE_ADMISSION_RESULT: "skipped" }), 1);
   assert.equal(run({ GITHUB_EVENT_NAME: "merge_group", ROUTE_ADMISSION_RESULT: "success" }), 1);
   assert.equal(run({ GITHUB_EVENT_NAME: "push", ROUTE_ADMISSION_RESULT: "skipped" }), 0);

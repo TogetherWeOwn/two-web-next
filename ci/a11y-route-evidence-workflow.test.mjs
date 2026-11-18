@@ -21,6 +21,13 @@ test("synthetic evidence uses only isolated pinned jobs and direct upload output
   assert.equal(producer.needs, undefined);
   assert.deepEqual(consumer.needs, ["route-evidence-producer"]);
   assert.ok(gate.needs.includes("route-evidence-admission"));
+  assert.deepEqual(gate.permissions, {});
+  assert.ok(gate.steps.every((item) => !item.uses));
+  assert.equal(consumer.outputs.admitted_run, "${{ steps.admit.outputs.admitted_run }}");
+  assert.equal(
+    step(gate, "Aggregate change-gated conclusions").env.ROUTE_ADMITTED_RUN,
+    "${{ needs.route-evidence-admission.outputs.admitted_run }}",
+  );
   assert.equal(producer.if, "${{ github.event_name == 'pull_request' }}");
   assert.doesNotMatch(consumer.if, /needs\.scope|docs_only|draft/);
   assert.match(consumer.if, /!cancelled\(\)/);

@@ -887,20 +887,11 @@ describe("performance CI", () => {
     const performanceGateMarker =
       "\n      - name: Performance gate (lighthouse + bundle-budget must succeed)\n";
     const performanceGateIndex = ciOk.indexOf(performanceGateMarker);
-    const ciOkBeforePerformanceGate = ciOk.slice(0, performanceGateIndex);
     const performanceGate =
       ciOk.slice(performanceGateIndex + performanceGateMarker.length).split("\n      - name:")[0] ??
       "";
     const performanceGateCondition =
       "always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')";
-    const checkoutStep =
-      ciOkBeforePerformanceGate
-        .split("\n      - uses: actions/checkout@")[1]
-        ?.split("\n      - ")[0] ?? "";
-    const setupNodeStep =
-      ciOkBeforePerformanceGate
-        .split("\n      - uses: actions/setup-node@")[1]
-        ?.split("\n      - ")[0] ?? "";
 
     expect(performanceGateIndex).toBeGreaterThan(-1);
     expect(ciOk).toContain("name: ci-ok");
@@ -910,12 +901,18 @@ describe("performance CI", () => {
     expect(performanceGate).toContain(
       "env:\n          LIGHTHOUSE_RESULT: ${{ needs.lighthouse.result }}\n          BUDGET_RESULT: ${{ needs.bundle-budget.result }}",
     );
-    expect(performanceGate).toContain(
-      'run: node ci/require-performance.mjs "$LIGHTHOUSE_RESULT" "$BUDGET_RESULT"',
-    );
-    expect(performanceGate.match(/^        run:.*$/m)?.[0]).not.toContain("${{");
-    expect(checkoutStep).toContain(`\n        if: ${performanceGateCondition}\n`);
-    expect(setupNodeStep).toContain(`\n        if: ${performanceGateCondition}\n`);
+    expect(ciOk).not.toContain("uses:");
+    const script = performanceGate.match(/^        run: (.+)$/m)?.[1] ?? "exit 99";
+    expect(script).not.toContain("${{");
+    const status = (lighthouse: string, bundle: string) =>
+      spawnSync("bash", ["-c", script], {
+        env: { LIGHTHOUSE_RESULT: lighthouse, BUDGET_RESULT: bundle },
+      }).status;
+    expect(status("success", "success")).toBe(0);
+    for (const result of ["skipped", "failure", "cancelled", ""]) {
+      expect(status(result, "success")).toBe(1);
+      expect(status("success", result)).toBe(1);
+    }
     // check starts from scope alone and keeps the gate's selftests.
     expect(check).toContain("needs: [scope]");
     expect(check).toContain("run: node ci/require-performance.mjs --selftest");

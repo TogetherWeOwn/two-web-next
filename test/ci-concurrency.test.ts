@@ -164,7 +164,10 @@ const gates = [
     script: runScript,
     env: ({ scope, downstream }: Results) => ({
       GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_RUN_ID: "101",
+      GITHUB_RUN_ATTEMPT: "1",
       ROUTE_ADMISSION_RESULT: "success",
+      ROUTE_ADMITTED_RUN: "101:1",
       SCOPE_RESULT: scope,
       ...{ FULL: "true", APP: "true", WORKER: "true", DB: "true", DRAFT: "false" },
       DOCS_ONLY: "false",

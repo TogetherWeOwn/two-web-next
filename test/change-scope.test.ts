@@ -755,7 +755,10 @@ describe("ci heavy-job scope gates", () => {
       .join("\n");
     const ok: Record<string, string> = {
       GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_RUN_ID: "101",
+      GITHUB_RUN_ATTEMPT: "1",
       ROUTE_ADMISSION_RESULT: "success",
+      ROUTE_ADMITTED_RUN: "101:1",
       SCOPE_RESULT: "success",
       FULL: "false",
       APP: "false",

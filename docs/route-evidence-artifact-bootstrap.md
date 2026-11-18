@@ -6,8 +6,9 @@ consumer independently binds the live PR head (H), checks the current run and
 attempt, compares the reviewed fixture digest, and validates the artifact as
 bounded data. Only the uploader's actual ID and digest select the archive.
 Run-level artifact metadata corroborates that association; it does not identify
-which job uploaded an artifact. If an attempt reused an earlier producer or
-artifact, rerun the complete chain, not only the consumer.
+which job uploaded an artifact. `ci-ok` requires admission from its own run
+and attempt. If a partial rerun reuses the producer or admission result, rerun
+all jobs.
 
 An ordinary PR run uses the pinned merged helper revision, not the candidate
 checkout. Its success exercises the wiring but does not authenticate the caller.
