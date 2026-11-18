@@ -90,6 +90,14 @@ test("accepts a locked local tsx route after a successful-install prerequisite i
   assert.throws(() => validate(record), /invalid loader/);
 });
 
+test("rejects an install at the exact invocation position", () => {
+  const record = fixture();
+  const { install, effects } = record.context;
+  install.step = effects[1].step = record.identity.step;
+  install.run = effects[1].run = record.identity.run;
+  assert.throws(() => validate(record), /invalid install evidence/);
+});
+
 test("rejects matching records that fail occurrence, install, or resolution constraints", () => {
   for (const [mutate, error] of [
     [(c) => (c.install.workflow = "other.yml"), /invalid install/],
@@ -292,6 +300,16 @@ test("checks matching effects for install order, checkout identity, and protecte
   validate(record);
   checkout.checkout = "another-checkout";
   assert.throws(() => validate(record), /invalid checkout effect/);
+});
+
+test("protects an absent npm config from preceding writes", () => {
+  const record = fixture();
+  const { install, effects } = record.context;
+  install.inputs = install.inputs.filter(({ path }) => path !== ".npmrc");
+  install.argv.push("--ignore-scripts");
+  validate(record);
+  effects[0].writes.push("file:.npmrc");
+  assert.throws(() => validate(record), /invalid effect write/);
 });
 
 test("rejects changed or incomplete ordered effect evidence", () => {
