@@ -16,6 +16,7 @@ function skipContinuations(text, p) {
 }
 
 // Normalize comments and continuations; masking the heredoc ranges is terminal.
+// Grouped conditional regex patterns are outside this lexical subset.
 // The unmasked view is idempotent. Strict mode rejects open quotes and heredocs
 // swallowing test commands, even when that text would otherwise be masked.
 export function normalizeShell(text, { strict = false, mask = false } = {}) {
@@ -43,6 +44,7 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
   }
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
+    if (c === "\n" && text[i - 1] !== "\r") assert.ok(!out.endsWith("\r"), "ambiguous CRLF");
     if (arithmetic) {
       const badCloser = c === ")" && arithmetic === 2 && text[i + 1] !== ")";
       assert.ok(!badCloser && !/[\n\\'"`$#]/.test(c), "unsupported arithmetic shell syntax");

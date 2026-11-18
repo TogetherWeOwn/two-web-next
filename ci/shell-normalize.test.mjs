@@ -121,6 +121,7 @@ test("single-quoted continuations and escaped-backslash parity remain literal", 
     check(even, even);
     const odd = `echo three\\\\\\${newline}continued${newline}`;
     check(odd, `echo three\\\\continued${newline}`);
+    assert.throws(() => normalizeShell(`echo x\\\r\\${newline}\nprintf done\n`), /ambiguous CRLF/);
   }
 });
 
