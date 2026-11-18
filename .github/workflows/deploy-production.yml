@@ -468,15 +468,12 @@ jobs:
           BUILD_SHA: ${{ needs.preflight.outputs.sha }}
           WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/worker-version-upload.jsonl
       - name: Capture pre-promote dead-letter baseline
-        # Read-only GET before the central gradual-promote action runs: that
-        # action's stage smokes execute this repo's bin/smoke.mjs in this job,
-        # so SMOKE_FAILED_BASELINE published here via $GITHUB_ENV scopes every
-        # stage gate to growth past the retained queue_failed_jobs count (the
-        # count is database-wide, never version-scoped). Retried, then an
-        # unreadable /up leaves the baseline empty and the stage smokes skip
-        # the dead-letter gate on history (SMOKE_ALLOW_MISSING_BASELINE)
-        # instead of failing on any positive count. Never fails the deploy on
-        # its own.
+        id: dead-letter-baseline
+        # Read-only GET before promotion. Only the gradual action and the
+        # post-promotion smoke receive this output. They gate on growth past
+        # the retained queue_failed_jobs count, which is database-wide, not
+        # version-scoped. If /up stays unreadable after retries, the empty
+        # baseline skips the historical dead-letter check (not other gates).
         run: |
           baseline=""
           for i in 1 2 3 4 5; do
@@ -485,8 +482,7 @@ jobs:
             if [ "$i" -lt 5 ]; then sleep 5; fi
           done
           if [ -z "$baseline" ]; then echo "::warning::dead-letter baseline unreadable after 5 attempts; promote smokes will skip the dead-letter gate on history"; fi
-          echo "SMOKE_FAILED_BASELINE=$baseline" >> "$GITHUB_ENV"
-          echo "SMOKE_ALLOW_MISSING_BASELINE=1" >> "$GITHUB_ENV"
+          echo "failed=$baseline" >> "$GITHUB_OUTPUT"
           echo "dead-letter baseline: ${baseline:-unknown}"
       # Gradual promotion lives in the shared central composite action
       # (TogetherWeOwn/.github/actions/gradual-promote, pinned below): 5% ->
@@ -496,6 +492,9 @@ jobs:
       # stays above.
       - name: Gradual promotion 5-50-100 with automatic rollback
         id: gradual
+        env:
+          SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
+          SMOKE_ALLOW_MISSING_BASELINE: "1"
         uses: TogetherWeOwn/.github/actions/gradual-promote@2ef8ad6447e11d019ac3098bcfd011193b75266a
         with:
           worker-name: two-web-next-production
@@ -545,6 +544,8 @@ jobs:
           echo "::error::post-promotion public-route smoke failed; promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - auto-rollback restores it with the rollback-production workflow"
           exit 1
         env:
+          SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
+          SMOKE_ALLOW_MISSING_BASELINE: "1"
           PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
           PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}
       - name: Record successful production promotion

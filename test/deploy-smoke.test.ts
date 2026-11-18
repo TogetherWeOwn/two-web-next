@@ -295,10 +295,9 @@ describe("deploy public-route smoke (offline)", () => {
     expect(smokeSection).toContain('SMOKE_ALLOW_MISSING_BASELINE: "1"');
   });
 
-  it("hands the pre-promote dead-letter baseline to every promote smoke via GITHUB_ENV", () => {
-    // The gradual-promote action runs this repo's bin/smoke.mjs in the same
-    // job, so the $GITHUB_ENV export scopes every stage gate plus the
-    // post-promotion verify to growth past the retained count.
+  it("hands the pre-promote dead-letter baseline to both production smoke steps", () => {
+    // Both the gradual action's stage smokes and the final verification
+    // compare against the same pre-promote count.
     const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
     const jobAt = workflow.indexOf("\n  deploy-production:\n");
     const releaseAt = workflow.indexOf("\n  release:\n");
@@ -318,8 +317,16 @@ describe("deploy public-route smoke (offline)", () => {
     expect(captureBlock).toContain("for i in 1 2 3 4 5");
     expect(captureBlock).toContain('fetch("https://togetherweown.com/up"');
     expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
-    expect(captureBlock).toContain('echo "SMOKE_FAILED_BASELINE=$baseline" >> "$GITHUB_ENV"');
-    expect(captureBlock).toContain('echo "SMOKE_ALLOW_MISSING_BASELINE=1" >> "$GITHUB_ENV"');
+    expect(captureBlock).toContain('echo "failed=$baseline" >> "$GITHUB_OUTPUT"');
+    expect(captureBlock).not.toContain("$GITHUB_ENV");
+    const receiptAt = job.indexOf("- name: Record successful production promotion");
+    expect(receiptAt).toBeGreaterThan(verifyAt);
+    for (const step of [job.slice(gradualAt, verifyAt), job.slice(verifyAt, receiptAt)]) {
+      expect(step).toContain(
+        "SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}",
+      );
+      expect(step).toContain('SMOKE_ALLOW_MISSING_BASELINE: "1"');
+    }
   });
 
   it("hands the pre-rollback dead-letter baseline to rollback smoke after capture", () => {
