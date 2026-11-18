@@ -55,11 +55,11 @@ export const EmptyGap: FC<{ past: PublicEvent[]; zone: string }> = ({ past, zone
             </li>
           ))}
         </ul>
+        <p>
+          <a href="/events/past">{EVENTS_EMPTY_COPY.pastArchive}</a>
+        </p>
       </>
     ) : null}
-    <p>
-      <a href="/events/past">{EVENTS_EMPTY_COPY.pastArchive}</a>
-    </p>
   </div>
 );
 

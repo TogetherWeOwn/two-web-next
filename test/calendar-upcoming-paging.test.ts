@@ -440,6 +440,8 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
     const fixture = await createMemberDataFixture(url!, { max: 2 });
     const { client, db } = fixture;
     const path = "/events?view=calendar&month=2060-06";
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2060-06-30T23:55:00Z"));
     try {
       for (const html of await calendarTwins(db, path)) {
         expect(html).toContain('data-testid="events-empty-never"');
@@ -450,13 +452,24 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
       for (const url of [path, "/events"]) {
         for (const html of await calendarTwins(db, url)) {
           expect(html).not.toContain('data-testid="events-empty-never"');
-          expect(html).toContain('data-testid="events-empty-gap"');
+          const gap = html.match(/data-testid="events-empty-gap">(.*?)<\/div>/s)?.[1];
+          expect(gap).toBeDefined();
           expect(html).not.toContain('data-testid="events-empty-gap-list"');
-          expect(html).toContain('href="/events/past"');
+          expect(html).toContain('href="/events/past" data-testid="events-past-archive-link"');
+          expect(gap).not.toContain('href="/events/past"');
           expect(html).not.toContain("June past import");
         }
       }
+      await client`insert into events (event_key, title, starts_at, ends_at, timezone, status)
+        values ('past-readable', 'Readable past event', '2060-06-19T22:00:00Z',
+          '2060-06-19T23:00:00Z', 'UTC', 'past')`;
+      for (const html of await calendarTwins(db, path)) {
+        const gap = html.match(/data-testid="events-empty-gap">(.*?)<\/div>/s)?.[1];
+        expect(gap).toContain("Readable past event");
+        expect(gap).toContain('href="/events/past"');
+      }
     } finally {
+      vi.useRealTimers();
       await fixture.dispose();
     }
   });
