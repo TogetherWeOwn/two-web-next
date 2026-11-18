@@ -35,14 +35,16 @@ export async function assertHomeEvidence() {
       join(dir, "tooling", "ci", "kit-offline-browser.mjs"),
       `export async function withKitOfflineBrowser({ source }, capture) {
   if (process.env.CAPTURE_CASE === "incomplete" && source.endsWith("after")) return;
+  let focused = false;
   const page = {
     setViewportSize: async () => {},
     locator: () => ({
-      focus: async () => {},
+      focus: async () => { focused = true; },
       evaluate: async () => process.env.CAPTURE_CASE !== "focus-hidden",
     }),
     screenshot: async (options) => {
       if (options.fullPage !== true) throw new Error("full-page capture required");
+      if (!options.path && focused) throw new Error("ordinary capture retained focus");
       return Buffer.from("fixture image");
     },
     evaluate: async (fn) => {

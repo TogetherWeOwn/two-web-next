@@ -74,19 +74,22 @@ for (const tree of ["before", "after"]) {
             assert.ok(metrics.scrollWidth <= metrics.width, `${state}: horizontal overflow`);
             assert.equal(metrics.font.split(",")[0].replaceAll('"', "").trim(), "Mona Sans");
             assert.ok(fontLoaded && metrics.fontAvailable, `${state}: heading font did not load`);
-            if (state === "guest") {
-              const button = page.locator(".join-band-btn");
-              await button.focus();
-              assert.equal(
-                await button.evaluate((element) => element.matches(":focus-visible")),
-                true,
-              );
-              await page.screenshot({
-                path: join(output, `focus-${state}-${viewport.name}.png`),
-                animations: "disabled",
-                fullPage: true,
-              });
-            }
+          }
+        }
+        if (tree === "after" && state === "guest") {
+          for (const viewport of viewports) {
+            await page.setViewportSize({ width: viewport.width, height: viewport.height });
+            const button = page.locator(".join-band-btn");
+            await button.focus();
+            assert.equal(
+              await button.evaluate((element) => element.matches(":focus-visible")),
+              true,
+            );
+            await page.screenshot({
+              path: join(output, `focus-${state}-${viewport.name}.png`),
+              animations: "disabled",
+              fullPage: true,
+            });
           }
         }
       },
