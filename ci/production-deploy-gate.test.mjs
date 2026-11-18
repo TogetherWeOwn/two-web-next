@@ -791,6 +791,45 @@ test("production workflow uses hosted runners and production-only secrets", () =
   assert.ok(!workflow.includes("wrangler deploy --env production"));
 });
 
+test("production dead-letter baseline is scoped to the gradual and post-promotion smokes", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const deploy = workflow.slice(
+    workflow.indexOf("\n  deploy-production:\n"),
+    workflow.indexOf("\n  post-deploy-watch:\n"),
+  );
+  const steps = deploy.split("\n      - name: ");
+  const baseline =
+    steps.find((step) => step.startsWith("Capture pre-promote dead-letter baseline\n")) ?? "";
+  assert.match(baseline, /^        id: dead-letter-baseline$/m);
+  assert.match(baseline, /echo "failed=\$baseline" >> "\$GITHUB_OUTPUT"/);
+  assert.doesNotMatch(baseline, /GITHUB_ENV/);
+
+  // The regression job has its own missing-baseline policy; only check the deploy job here.
+  const consumers = [
+    "Gradual promotion 5-50-100 with automatic rollback",
+    "Verify public routes on the promoted version",
+  ];
+  for (const name of consumers) {
+    const step = steps.find((step) => step.startsWith(`${name}\n`)) ?? "";
+    assert.match(
+      step,
+      /^        env:\n          SMOKE_FAILED_BASELINE: \$\{\{ steps\.dead-letter-baseline\.outputs\.failed \}\}\n          SMOKE_ALLOW_MISSING_BASELINE: "1"$/m,
+      name,
+    );
+    assert.ok(steps.indexOf(baseline) < steps.indexOf(step), `${name} follows baseline capture`);
+  }
+  for (const key of ["SMOKE_FAILED_BASELINE", "SMOKE_ALLOW_MISSING_BASELINE"]) {
+    assert.equal(
+      deploy.split(key).length - 1,
+      consumers.length,
+      `${key} belongs only to the two smoke consumers`,
+    );
+  }
+});
+
 test("shared gradual action promotes 5-50-100 with per-stage gates and auto-rollback", () => {
   const action = readFileSync(
     new URL("../.github/actions/gradual-promote/action.yml", import.meta.url),

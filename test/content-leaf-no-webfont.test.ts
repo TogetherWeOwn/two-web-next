@@ -137,6 +137,8 @@ describe("content leaves use the optional display face", () => {
     ).toEqual([
       ".base-theme:not(.content-theme) .hero.kit-home h1,.base-theme:not(.content-theme) h2",
     ]);
+    const mixedSelector = ".base-theme .hero.kit-home h1,.base-theme:not(.content-theme) h2";
+    expect(guardsOf(`${mixedSelector}{font-family:var(--font-display)}`)).toEqual([mixedSelector]);
     expect(
       displayTargets(".base-theme h1,.base-theme h2{font-family:var(--font-display)}"),
     ).toEqual([".base-theme h1", ".base-theme h2"]);
