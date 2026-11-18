@@ -280,14 +280,14 @@ export async function rankUpcoming(
  * so the covered range reaches into the adjacent months and the read keeps
  * exactly the rows whose finite scheduled interval overlaps a covered wall
  * day in their own zone — including starts before the leading week. SQL reads
- * the covered UTC days widened for the widest zone offset; the grid cap is a
- * pathological guard only: a real month never holds that many events. */
+ * the covered UTC days widened for the widest zone offset. A full read at the
+ * cap does not establish that all in-month rows were examined. */
 export async function listUpcomingForMonth(
   db: Db,
   month: string,
   now = new Date(),
   opts: CalendarReadOpts = {},
-): Promise<PublicEvent[]> {
+): Promise<PublicEvent[] & { mayBeTruncated?: boolean }> {
   // A bad month is an empty grid, never a 500: the route only passes
   // validated months, this keeps the read total.
   const range = calendarGridRange(month);
@@ -310,7 +310,7 @@ export async function listUpcomingForMonth(
     )
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(EVENTS_MONTH_GRID_LIMIT);
-  return withGoing(
+  const visible = await withGoing(
     db,
     rows.filter((r) => {
       if (!isRenderableEventWindow(r)) return false;
@@ -319,6 +319,7 @@ export async function listUpcomingForMonth(
       );
     }),
   );
+  return Object.assign(visible, { mayBeTruncated: rows.length >= EVENTS_MONTH_GRID_LIMIT });
 }
 
 // Exclude PostgreSQL infinity starts before limits so unusable links cannot occupy slots.

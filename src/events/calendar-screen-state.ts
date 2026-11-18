@@ -9,7 +9,7 @@ import {
   canonicalIntervalDays,
   monthGrid,
   wallDateIso,
-  wallMonth,
+  wallDayStart,
   type CalendarDay,
   type CalendarEmptyState,
   type CalendarState,
@@ -22,6 +22,7 @@ export interface CalendarScreenStateInput {
   upcoming: CalRow[];
   past: PublicEvent[];
   pastMayBeTruncated?: boolean;
+  upcomingMonthMayBeTruncated?: boolean;
   zone: string;
   now: Date;
   totalPages: number;
@@ -35,6 +36,7 @@ export interface CalendarScreenState {
   showPast: boolean;
   hasVisibleResults: boolean;
   outOfRange: boolean;
+  pageUnreadable: boolean;
   searchMiss: boolean;
   weeks: CalendarDay<CalRow>[][];
   monthEmpty: boolean;
@@ -45,6 +47,7 @@ export function deriveCalendarScreenState({
   upcoming,
   past,
   pastMayBeTruncated = past.length >= EVENTS_PAST_DRAWER_LIMIT,
+  upcomingMonthMayBeTruncated = false,
   zone,
   now,
   totalPages,
@@ -55,16 +58,15 @@ export function deriveCalendarScreenState({
   const searching = calendarSearching(state);
   const showPast = calendarShowingPast(state);
   const hasVisibleResults = upcoming.length > 0 || (showPast && past.length > 0);
-  // A page past the end renders an out-of-range note with turns back into the
-  // schedule — like the past archive — never a "never scheduled" state and
-  // never a search miss for matches sitting on another page.
-  const outOfRange = state.view === "list" && upcoming.length === 0 && totalPages > 0;
-  // An error state suppresses the miss block: a failed read must never read
-  // as "no matches" (contract: error beats everything, including a search).
+  // An empty list page with counted results isn't a search miss. It can be
+  // past the end, or in range with rows that JS could not render.
+  const emptyCountedPage = state.view === "list" && totalPages > 0 && upcoming.length === 0;
+  const outOfRange = emptyCountedPage && state.page > totalPages;
+  const pageUnreadable = emptyCountedPage && !outOfRange;
   const searchMiss =
     emptyState === null &&
     !discordFailed &&
-    !outOfRange &&
+    !emptyCountedPage &&
     ((searching && !hasVisibleResults) ||
       (!searching && gameFilter !== null && upcoming.length === 0 && totalPages === 0));
   const byDay = new Map<string, CalRow[]>();
@@ -98,28 +100,33 @@ export function deriveCalendarScreenState({
     }
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
-  // Month-local emptiness follows occupied in-month cells, including canonical
-  // continuations, but never spillover cells. Count past start-days even with
-  // the drawer closed: the claim names the month, not just the visible rows.
-  // A truncated past drawer (at the cap) leaves months at or before the wall month
-  // incomplete — older in-month past rows may exist unread — so the claim is
-  // suppressed there; future months cannot hold past rows. A failed source
-  // suppresses the claim — October may only look empty — while the
-  // error/never/gap states keep their own precedence. A game-scoped miss
-  // already names the effective scope with its own broadening link, so it
-  // suppresses the unscoped month sentence: with game-filtered grid rows the
-  // sentence is false when another game occupies the month, and its
-  // Upcoming-events link would land back on the same filtered zero.
+  // Count occupied in-month days, including continuations and past start-days
+  // behind a closed drawer, but never days in the adjacent months.
   const monthHasInMonthRows =
     weeks.some((week) => week.some((day) => day.inMonth && day.events.length > 0)) ||
     past.some((e) => wallDateIso(e.startsAt, rowZone(e, zone)).startsWith(`${state.month}-`));
-  const monthCouldHoldPast = state.month <= wallMonth(now, zone);
+  // The past read sorts UTC starts descending, so every retained start bounds
+  // omitted starts. Allow a full day for a host zone ahead of UTC; the grid's
+  // modal zone cannot bound the wall date of an unseen row.
+  const monthStart = wallDayStart(`${state.month}-01`);
+  const pastCouldBeMissingInMonth =
+    pastMayBeTruncated && !past.some((e) => e.startsAt.getTime() + 86_400_000 < monthStart);
   const monthEmpty =
     emptyState === null &&
     state.view === "calendar" &&
     !discordFailed &&
     !monthHasInMonthRows &&
-    !(pastMayBeTruncated && monthCouldHoldPast) &&
+    !upcomingMonthMayBeTruncated &&
+    !pastCouldBeMissingInMonth &&
     !searchMiss;
-  return { searching, showPast, hasVisibleResults, outOfRange, searchMiss, weeks, monthEmpty };
+  return {
+    searching,
+    showPast,
+    hasVisibleResults,
+    outOfRange,
+    pageUnreadable,
+    searchMiss,
+    weeks,
+    monthEmpty,
+  };
 }

@@ -24,6 +24,7 @@ import {
   calendarUrl,
   upcomingEventsOutOfRangeCopy,
   upcomingEventsPageStatusCopy,
+  upcomingEventsPageUnreadableCopy,
   type CalendarState,
 } from "../islands/contracts";
 import type { PublicEvent } from "./reads";
@@ -108,6 +109,7 @@ export const CalendarList: FC<{
   now: Date;
   totalPages: number;
   outOfRange: boolean;
+  pageUnreadable: boolean;
   showPast: boolean;
   member: boolean;
   inviteUrl: string;
@@ -120,6 +122,7 @@ export const CalendarList: FC<{
   now,
   totalPages,
   outOfRange,
+  pageUnreadable,
   showPast,
   member,
   inviteUrl,
@@ -130,6 +133,8 @@ export const CalendarList: FC<{
       <p role="status" data-testid={EVENTS_OUT_OF_RANGE_TESTID}>
         {upcomingEventsOutOfRangeCopy(state.page, totalPages)}
       </p>
+    ) : pageUnreadable ? (
+      <p data-testid="events-page-unreadable">{upcomingEventsPageUnreadableCopy(state.page)}</p>
     ) : null}
     <h2 class="sr-only">{EVENTS_LIST_HEADING_SR}</h2>
     <ul data-testid={EVENTS_LIST_TESTID}>
@@ -146,7 +151,7 @@ export const CalendarList: FC<{
         />
       ))}
     </ul>
-    {totalPages > 1 || outOfRange ? (
+    {totalPages > 1 || outOfRange || pageUnreadable ? (
       <nav aria-label={EVENTS_PAGER_LABEL} data-testid={EVENTS_PAGER_TESTID}>
         {/* Boundary turns only where they land somewhere new: First from any
             later or unavailable page, Last only before the final page. An

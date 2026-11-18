@@ -44,28 +44,27 @@ export const CalendarLiveRegions: FC<{
   pastCount: number;
   searching: boolean;
   emptyState: CalendarEmptyState;
-  hasVisibleResults: boolean;
-  outOfRange: boolean;
+  hasSearchResults: boolean;
+  searchMiss: boolean;
   gameFilter: string | null;
-}> = ({ state, pastCount, searching, emptyState, hasVisibleResults, outOfRange, gameFilter }) => (
+}> = ({ state, pastCount, searching, emptyState, hasSearchResults, searchMiss, gameFilter }) => (
   <>
     <p role="status" class="sr-only" data-testid={EVENTS_VIEW_STATUS_TESTID}>
       {eventsViewStatusCopy(state.view)}
     </p>
-    {/* An out-of-range search page still announces a hit: its matches sit
-        on another page, so "nothing matches" would be wrong and the miss
-        block stays hidden for the same reason (see searchMiss in the screen).
-        A game facet announces alongside the search (or alone); a failed read
-        stays silent either way. */}
+    {/* Counted matches still make a hit on an unavailable page. Announce a
+        miss only when the screen renders one. */}
     <p role="status" class="sr-only" data-testid={EVENTS_SEARCH_STATUS_TESTID}>
       {searching && emptyState !== "error"
-        ? hasVisibleResults || outOfRange
+        ? hasSearchResults
           ? gameFilter !== null
             ? eventsSearchGameHitCopy(state.q, gameFilter)
             : eventsSearchHitCopy(state.q)
-          : gameFilter !== null
-            ? eventsSearchGameMissCopy(state.q, gameFilter)
-            : eventsSearchMissCopy(state.q)
+          : searchMiss
+            ? gameFilter !== null
+              ? eventsSearchGameMissCopy(state.q, gameFilter)
+              : eventsSearchMissCopy(state.q)
+            : ""
         : gameFilter !== null && emptyState !== "error"
           ? eventsGameFilterCopy(gameFilter)
           : ""}

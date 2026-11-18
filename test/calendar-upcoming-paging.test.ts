@@ -3,7 +3,7 @@
 // bounded no matter how many future events exist. Real route + real SQL
 // against the isolated test database only.
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import { eventSearchLogs } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
@@ -17,10 +17,15 @@ import {
 import { registerEventRoutes } from "../src/events/routes";
 import {
   calendarGridRange,
+  calendarMonthEmptyCopy,
   eventsSearchHitCopy,
   eventsSearchMissCopy,
+  EVENTS_MONTH_GRID_LIMIT,
+  EVENTS_PAST_DRAWER_LIMIT,
   EVENTS_UPCOMING_PAGE_SIZE,
 } from "../src/islands/contracts";
+import { loadEventsPage } from "../src/kit-events";
+import { renderEventsHtml } from "../src/kit-events-html";
 import { createMemberDataFixture, testDatabaseUrl } from "./helpers/member-data-db";
 
 const raw = process.env.DATABASE_URL;
@@ -72,6 +77,31 @@ async function seedUpcoming(
 
 const cards = (html: string): string[] =>
   [...html.matchAll(/data-testid="event-card"/g)].map((m) => m[0]);
+
+async function calendarTwins(db: NonNullable<EnvWithAdminDb["ADMIN_DB"]>, path: string) {
+  __resetAnonEventCacheForTests();
+  const env = routeEnv(db);
+  const hono = await app().request(path, {}, env);
+  const url = new URL(path, env.APP_URL);
+  const headers: Record<string, string> = {};
+  const model = await loadEventsPage({
+    env: env as never,
+    url,
+    method: "GET",
+    island: false,
+    request: new Request(url),
+    setHeaders: (values) => Object.assign(headers, values),
+    deleteJoinCookie: () => {},
+    dbForFn: async () => db,
+    sessionForFn: async () => null,
+    journeyForFn: async () => null,
+    discordForFn: () => ({ upcoming: async () => [], lastReadFailed: () => false }),
+  });
+  const kit = await renderEventsHtml(model, headers);
+  expect(hono.status).toBe(200);
+  expect(kit.status).toBe(200);
+  return [await hono.text(), kit.body];
+}
 
 describe("upcoming page numbers", () => {
   it("falls back to page one for invalid input", () => {
@@ -310,6 +340,134 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
       expect(html).toContain('data-testid="events-calendar-grid"');
       expect(html).toContain("Paged 0");
       expect(html).not.toContain("Paged 1");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("does not call a capped spillover grid empty", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      const first = calendarGridRange("2060-07")!.first;
+      expect(first).toMatch(/^2060-06-/);
+      const start = `${first}T00:00:00Z`;
+      await seedUpcoming(client, 0, 1, new Date(`${first}T12:00:00Z`));
+      // One SQL-envelope row is filtered before plotting, so counting only
+      // the rendered rows would miss that the SQL cap was reached.
+      await client`insert into events (event_key, title, starts_at, ends_at, status)
+        values ('widened-envelope', 'Outside grid', ${start}::timestamptz - interval '8 hours',
+          ${start}::timestamptz - interval '6 hours', 'published')`;
+      await client`insert into events (event_key, title, starts_at, ends_at, status)
+        select 'spill-' || n, 'Spillover', ${start}::timestamptz + interval '12 hours',
+          ${start}::timestamptz + interval '14 hours', 'published'
+        from generate_series(1, ${EVENTS_MONTH_GRID_LIMIT - 2}::int) as n`;
+      await seedUpcoming(client, 1, 1, new Date("2060-07-15T18:00:00Z"));
+      const monthRows = await listUpcomingForMonth(db, "2060-07", NOW);
+      expect(monthRows).toHaveLength(EVENTS_MONTH_GRID_LIMIT - 1);
+      expect(monthRows.some((row) => row.eventKey === key(1))).toBe(false);
+      for (const html of await calendarTwins(db, "/events?view=calendar&month=2060-07")) {
+        expect(html).toContain('data-testid="events-calendar-grid"');
+        expect(html).toContain("Spillover");
+        expect(html).not.toContain('data-testid="calendar-month-empty"');
+        expect(html).not.toContain('data-testid="events-partial-source"');
+      }
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("does not call the next UTC month empty when a truncated past row starts there in its host zone", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2060-06-30T23:55:00Z"));
+    try {
+      await seedUpcoming(client, 0, 1, new Date("2060-09-15T18:00:00Z"));
+      await client`insert into events (event_key, title, starts_at, ends_at, timezone, status)
+        select 'past-' || n, 'Recent UTC event', '2060-06-30T23:00:00Z',
+          '2060-06-30T23:30:00Z', 'UTC', 'past'
+        from generate_series(1, ${EVENTS_PAST_DRAWER_LIMIT}::int) as n`;
+      await client`insert into events (event_key, title, starts_at, ends_at, timezone, status)
+        values ('host-july', 'July host event', '2060-06-30T22:00:00Z',
+          '2060-06-30T22:30:00Z', 'Pacific/Kiritimati', 'past')`;
+      for (const html of await calendarTwins(db, "/events?view=calendar&month=2060-07&past=1")) {
+        expect(html).toContain("Recent UTC event");
+        expect(html).not.toContain("July host event");
+        expect(html).not.toContain('data-testid="calendar-month-empty"');
+      }
+      for (const html of await calendarTwins(db, "/events?view=calendar&month=2060-08")) {
+        expect(html).toContain(calendarMonthEmptyCopy("2060-08"));
+      }
+    } finally {
+      vi.useRealTimers();
+      await fixture.dispose();
+    }
+  });
+
+  it("does not claim a whole month is empty when only the selected game has no events there", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      await client`insert into events (event_key, title, game, starts_at, ends_at, status) values
+        ('other-game', 'July Go fixture', 'Go', '2060-07-15T18:00:00Z', '2060-07-15T20:00:00Z', 'published'),
+        ('selected-game', 'September Chess fixture', 'Chess', '2060-09-15T18:00:00Z',
+          '2060-09-15T20:00:00Z', 'published')`;
+      const grid = "/events?view=calendar&month=2060-07";
+      for (const html of await calendarTwins(db, `${grid}&game=Chess`)) {
+        expect(html).toContain('data-testid="events-calendar-grid"');
+        expect(html).not.toContain("July Go fixture");
+        expect(html).toContain("No “Chess” events in July 2060.");
+        expect(html).not.toContain(calendarMonthEmptyCopy("2060-07"));
+        expect(html).toContain('href="/events?game=Chess">Upcoming events</a>');
+      }
+      for (const html of await calendarTwins(db, grid)) expect(html).toContain("July Go fixture");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("uses ordinary calendar controls for a NUL-only query", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      await seedUpcoming(client, 0, 1, new Date("2060-07-15T18:00:00Z"));
+      for (const html of await calendarTwins(db, "/events?view=calendar&month=2060-07&q=%00%20")) {
+        expect(html).toContain('data-testid="events-calendar-grid"');
+        expect(html).toContain("Paged 0");
+        expect(html).not.toContain("Continue search in past events");
+        expect(html).not.toContain('data-testid="events-search-clear"');
+        expect(html).not.toContain('name="robots"');
+        expect(html).not.toContain("\u0000");
+      }
+      expect(await db.select().from(eventSearchLogs)).toEqual([]);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("keeps an in-range page of unrenderable matches distinct from a miss or out-of-range page", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      await seedUpcoming(client, 0, EVENTS_UPCOMING_PAGE_SIZE, new Date("2060-07-15T18:00:00Z"));
+      await client`insert into events (event_key, title, starts_at, ends_at, status)
+        values ('overflow-page', 'Paged overflow', '280000-06-01T18:00:00Z',
+          '280000-06-01T20:00:00Z', 'published')`;
+      for (const html of await calendarTwins(db, "/events?q=Paged&page=2")) {
+        expect(cards(html)).toHaveLength(0);
+        expect(html).toContain("Page 2 of 2.");
+        expect(html).toContain('href="/events?q=Paged"');
+        expect(html).toContain('<p data-testid="events-page-unreadable">Events on page 2 can');
+        expect(html).not.toContain('data-testid="events-out-of-range"');
+        expect(html).not.toContain('data-testid="events-empty-search"');
+        expect(html).toContain(eventsSearchHitCopy("Paged"));
+        expect(html).not.toContain(eventsSearchMissCopy("Paged"));
+      }
+      for (const html of await calendarTwins(db, "/events?q=Paged&page=3")) {
+        expect(html).toContain("Page 3 is outside the schedule.");
+        expect(html).toContain(eventsSearchHitCopy("Paged"));
+      }
     } finally {
       await fixture.dispose();
     }
