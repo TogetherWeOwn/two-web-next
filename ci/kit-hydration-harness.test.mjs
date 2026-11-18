@@ -2,12 +2,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { serveKitFixture } from "./kit-hydration-harness.mjs";
+import { compileKitFixture, serveKitFixture } from "./kit-hydration-harness.mjs";
+
+const fixture = fileURLToPath(
+  new URL("../test/fixtures/kit-browser-harness.svelte", import.meta.url),
+);
+
+test("fixture compiler returns SSR, CSS and hydration code without a server", async () => {
+  const { body, head, css, js } = await compileKitFixture({ fixture });
+  assert.match(body, /Count: 0/);
+  assert.match(head, /<title>Café fixture<\/title>/);
+  assert.match(css, /color: rgb\(12, 34, 56\)/);
+  assert.match(js, /dataset\.hydrated/);
+});
 
 test("fixture serves SSR, hydrates, styles and closes", { timeout: 120000 }, async () => {
-  const fixture = fileURLToPath(
-    new URL("../test/fixtures/kit-browser-harness.svelte", import.meta.url),
-  );
   const server = await serveKitFixture({ fixture });
   let browser;
   try {
