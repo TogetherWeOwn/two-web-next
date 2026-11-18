@@ -82,11 +82,14 @@ function expectHostedJob(name: string, id: string, job: Job) {
       const org = job.uses.match(/^TogetherWeOwn\/\.github\/\.github\/workflows\/(.+)$/)?.[1];
       const input = verifiedHostedOrgReusables.get(org ?? "");
       expect(input, `${label} uses an assessed reusable workflow: ${job.uses}`).toBeDefined();
-      for (const [key, value] of Object.entries(job.with ?? {})) {
-        // GitHub matches reusable-workflow inputs case-insensitively.
-        if (key.toLowerCase() === input) {
-          expect(value, `${label} overrides ${key} only with hosted Linux`).toBe(hostedJson);
-        }
+      // GitHub matches reusable-workflow inputs case-insensitively.
+      const inputs = Object.entries(job.with ?? {});
+      const overrides = inputs.filter(([key]) => key.toLowerCase() === input);
+      if (org?.startsWith("review-rules.yml@")) {
+        expect(overrides, `${label} needs explicit ${input}`).not.toHaveLength(0);
+      }
+      for (const [key, value] of overrides) {
+        expect(value, `${label} overrides ${key} only with hosted Linux`).toBe(hostedJson);
       }
     }
   }
@@ -266,6 +269,7 @@ describe("workflow runner labels", () => {
     expect(workflows.length).toBeGreaterThan(0);
     for (const { name, source } of workflows) {
       expect(Object.keys(source.jobs).length, name).toBeGreaterThan(0);
+      expect(events(source.on).length, `${name} declares workflow events`).toBeGreaterThan(0);
     }
   });
 
@@ -291,9 +295,8 @@ describe("workflow runner labels", () => {
       "runs-on: ${{ github.event.repository.private && 'self-hosted' || 'ubuntu-latest' }}",
     ],
   ])("rejects %s in a branch-dispatched workflow", (_case, selector) => {
-    const source = parse(
-      `on: workflow_dispatch\njobs:\n  check:\n    name: Check\n    ${selector}`,
-    ) as Workflow;
+    const yaml = `on: workflow_dispatch\njobs:\n  check:\n    name: Check\n    ${selector}`;
+    const source = parse(yaml) as Workflow;
     expect(() => expectHostedJob("fixture.yml", "check", source.jobs.check!)).toThrow(
       "uses literal ubuntu-latest",
     );
@@ -314,39 +317,28 @@ describe("workflow runner labels", () => {
   it("rejects unassessed reusable pins and non-hosted runner overrides", () => {
     const uses =
       "TogetherWeOwn/.github/.github/workflows/test-guard.yml@2ef8ad6447e11d019ac3098bcfd011193b75266a";
+    const reviewRules = uses.replace("test-guard.yml", "review-rules.yml");
     expect(() => expectHostedJob("fixture.yml", "call", { uses })).not.toThrow();
+    expect(() => expectHostedJob("fixture.yml", "call", { uses: reviewRules })).toThrow(
+      "needs explicit runs-on-json",
+    );
     expect(() =>
       expectHostedJob("fixture.yml", "call", { uses: uses.replace(/@.*/, `@${"0".repeat(40)}`) }),
     ).toThrow("uses an assessed reusable workflow");
-    expect(() =>
-      expectHostedJob("fixture.yml", "call", { uses, with: { "runs-on-json": '["self-hosted"]' } }),
-    ).toThrow("overrides runs-on-json only with hosted Linux");
-    expect(() =>
-      expectHostedJob("fixture.yml", "direct", {
-        "runs-on": hosted,
-        steps: [{ with: { "runs-on-json": "${{ vars.CI_OVERFLOW_RUNNER }}" } }],
-      }),
-    ).toThrow("input runs-on-json");
-  });
-
-  it("checks mixed-case runner input names", () => {
-    const uses =
-      "TogetherWeOwn/.github/.github/workflows/test-guard.yml@2ef8ad6447e11d019ac3098bcfd011193b75266a";
-    expect(() =>
-      expectHostedJob("fixture.yml", "call", { uses, with: { "Runs-On-Json": hostedJson } }),
-    ).not.toThrow();
-    expect(() =>
-      expectHostedJob("fixture.yml", "call", {
-        uses,
-        with: { "Runs-On-Json": '["windows-latest"]' },
-      }),
-    ).toThrow("overrides Runs-On-Json only with hosted Linux");
+    for (const [key, value] of [
+      ["runs-on-json", '["self-hosted"]'],
+      ["Runs-On-Json", '["windows-latest"]'],
+    ] as const) {
+      expect(() =>
+        expectHostedJob("fixture.yml", "call", { uses, with: { [key]: value } }),
+      ).toThrow(`overrides ${key} only with hosted Linux`);
+    }
     expect(() =>
       expectHostedJob("fixture.yml", "direct", {
         "runs-on": hosted,
-        steps: [{ with: { "Runs-On": '"windows-latest"' } }],
+        steps: [{ with: { "Runs-On-Json": "${{ vars.CI_OVERFLOW_RUNNER }}" } }],
       }),
-    ).toThrow("input Runs-On");
+    ).toThrow("input Runs-On-Json");
   });
 
   it("does not restore retired fleet or overflow settings in workflow source", () => {
@@ -363,15 +355,10 @@ describe("workflow runner labels", () => {
   });
 
   it("requires a separate assessment before allowing frozen local calls from PR events", () => {
-    for (const { name, source } of workflows) {
-      expect(events(source.on).length, `${name} declares workflow events`).toBeGreaterThan(0);
-    }
-    const prWorkflows = workflows.filter(({ source }) =>
-      events(source.on).includes("pull_request"),
-    );
-    const mergeQueueWorkflows = workflows.filter(({ source }) =>
-      events(source.on).includes("merge_group"),
-    );
+    const forEvent = (event: string) =>
+      workflows.filter((w) => events(w.source.on).includes(event));
+    const prWorkflows = forEvent("pull_request");
+    const mergeQueueWorkflows = forEvent("merge_group");
     expect(prWorkflows.map(({ name }) => name)).toEqual(
       expect.arrayContaining([
         "backup-bootstrap-selftest.yml",
