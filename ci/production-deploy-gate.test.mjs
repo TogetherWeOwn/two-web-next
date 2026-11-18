@@ -853,12 +853,14 @@ function assertProductionBaselineScope(workflow) {
   }
   let baselineRefs = 0;
   for (const expression of workflowExpressions(deploy)) {
-    // Skip quoted literals and read the whole step ID, including hyphens.
+    // Skip quoted literals and property names. Only read `steps` by literal step ID.
     const lookups =
-      /'(?:[^']|'')*'|(?<![\w.-])steps\s*(?:\.\s*([\w-]+)|(\[)(?:\s*'((?:[^']|'')*)'\s*\])?)/gi;
-    for (const [, property, bracket, index] of expression.matchAll(lookups)) {
-      assert.ok(!bracket || index !== undefined, "computed steps index hides which output is read");
-      if ((property ?? index)?.toLowerCase() === baseline.id) baselineRefs++;
+      /'(?:[^']|'')*'|\.\s*[\w-]+|(?<![\w-])(steps)(?![\w-])(?:\s*(?:\.\s*([\w-]+)|\[\s*'([\w-]+)'\s*\]))?/gi;
+    for (const [, context, property, index] of expression.matchAll(lookups)) {
+      if (!context) continue;
+      const id = property ?? index;
+      assert.ok(id, "the steps context must be read by literal step ID");
+      if (id.toLowerCase() === baseline.id) baselineRefs++;
     }
   }
   assert.equal(
@@ -881,7 +883,7 @@ test("production dead-letter baseline scope ignores YAML comments and sibling st
     "\n  post-deploy-watch:",
     "\n      # ${{ steps['dead-letter-baseline'].outputs.failed }}\n" +
       "      - name: Read another output\n" +
-      "        if: steps.dead-letter-baseline-check.outputs.failed == '0'\n" +
+      "        if: contains('toJSON(steps)', '(') && steps.dead-letter-baseline-check.outputs.failed == '0'\n" +
       "        run: 'true'\n\n  post-deploy-watch:",
   );
   assertProductionBaselineScope(withOtherRead);
@@ -903,7 +905,7 @@ test("production dead-letter baseline scope rejects workflow defaults and extra 
       "steps['dead-letter-baseline'].outputs.failed == '0'",
       /must not be read under another variable/,
     ],
-    ["steps[format('{0}', 'dead-letter-baseline')].outputs.failed == '0'", /computed steps index/],
+    ["steps[format('{0}', 'dead-letter-baseline')].outputs.failed == '0'", /literal step ID/],
     [
       "${{ contains('it''s }}', '}') && steps.dead-letter-baseline.outputs.failed == '0' }}",
       /must not be read under another variable/,
@@ -918,6 +920,18 @@ test("production dead-letter baseline scope rejects workflow defaults and extra 
       `\n      - name: Read an extra output\n        if: ${condition}\n        run: 'true'\n\n  post-deploy-watch:`,
     );
     assert.throws(() => assertProductionBaselineScope(withExtraRead), error);
+  }
+});
+
+test("production dead-letter baseline scope rejects whole-context and wildcard reads", () => {
+  for (const expression of ["toJSON(steps)", "toJSON(steps.*.outputs)"]) {
+    const workflow = parseDocument(productionWorkflow());
+    workflow.addIn(["jobs", "deploy-production", "steps"], {
+      name: "Read aggregate step outputs",
+      env: { READ_OUTPUTS: `\${{ ${expression} }}` },
+      run: "true",
+    });
+    assert.throws(() => assertProductionBaselineScope(workflow.toString()), /literal step ID/);
   }
 });
 
