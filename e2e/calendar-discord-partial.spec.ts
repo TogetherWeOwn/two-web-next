@@ -347,10 +347,10 @@ test("capture shared SSR recovery states for review", async ({ page, context }) 
       await expect(
         state === "partial" ? notice(page) : page.getByTestId("events-empty-error"),
       ).toBeVisible();
-      await test.info().attach(`hono-review-fixture-${state}-${width}`, {
-        body: await page.screenshot({ fullPage: true, animations: "disabled" }),
-        contentType: "image/png",
-      });
+      const name = `hono-review-fixture-${state}-${width}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, animations: "disabled" });
+      await test.info().attach(name, { path, contentType: "image/png" });
     }
   }
 });

@@ -36,10 +36,9 @@ test("calendar month view shows the chosen month and hides the other month", asy
         element.scrollLeft = end ? element.scrollWidth : 0;
       }, position === "end");
       const name = `hono-review-calendar-${width}-${position}`;
-      await test.info().attach(name, {
-        body: await page.screenshot({ fullPage: true, animations: "disabled" }),
-        contentType: "image/png",
-      });
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, animations: "disabled" });
+      await test.info().attach(name, { path, contentType: "image/png" });
     }
   }
 
