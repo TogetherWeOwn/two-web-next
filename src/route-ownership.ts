@@ -210,19 +210,6 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: true,
     reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
   },
-  // New Kit-only reads: disabled outside the loopback evidence fixture. No Hono twin.
-  {
-    method: "GET",
-    path: "/admin/reconciliation",
-    enabled: false,
-    reads: { resource: "reconciliation", action: "list", route: "admin.reconciliation.index" },
-  },
-  {
-    method: "GET",
-    path: "/admin/reconciliation/:key",
-    enabled: false,
-    reads: { resource: "reconciliation", action: "view", route: "admin.reconciliation.show" },
-  },
   { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
   // rendering stays off until edit parity reviews enablement; write siblings
@@ -302,21 +289,34 @@ export function fixtureManifestFor(env: {
   if (app.protocol !== "http:") return undefined;
   // URL keeps the brackets on an IPv6 hostname ("[::1]").
   if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(app.hostname)) return undefined;
-  return ROUTE_MANIFEST.map((entry) => {
+  const routes = ROUTE_MANIFEST.map((entry) => {
     if (wantBoard && entry.method === "GET" && entry.path === "/leaderboards/members")
       return { ...entry, enabled: true };
     if (wantDetail && entry.method === "GET" && entry.path === "/e/:key")
       return { ...entry, enabled: true };
     if (wantJoin && entry.method === "GET" && entry.path === "/join")
       return { ...entry, enabled: true };
-    if (
-      wantReconciliation &&
-      entry.method === "GET" &&
-      ["/admin", "/admin/reconciliation", "/admin/reconciliation/:key"].includes(entry.path)
-    )
+    if (wantReconciliation && entry.method === "GET" && entry.path === "/admin")
       return { ...entry, enabled: true };
     return entry;
   });
+  // Kit-only evidence routes have no Hono twin and no shipped ownership entry.
+  if (wantReconciliation)
+    routes.push(
+      {
+        method: "GET",
+        path: "/admin/reconciliation",
+        enabled: true,
+        reads: { resource: "reconciliation", action: "list", route: "admin.reconciliation.index" },
+      },
+      {
+        method: "GET",
+        path: "/admin/reconciliation/:key",
+        enabled: true,
+        reads: { resource: "reconciliation", action: "view", route: "admin.reconciliation.show" },
+      },
+    );
+  return routes;
 }
 
 // Staging Kit starts with every route on Hono. The reviewed deploy workflow

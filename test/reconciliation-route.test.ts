@@ -1,6 +1,18 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
 import { readKitReconciliation } from "../src/admin/kit-reconciliation";
+import { fixtureManifestFor, ROUTE_MANIFEST } from "../src/route-ownership";
+
+it("adds only two GETs to the explicit loopback fixture, never to the shipped manifest", () => {
+  const flag = { KIT_PARITY_FIXTURE_RECONCILIATION: "true" };
+  const fixture = fixtureManifestFor({ ...flag, APP_URL: "http://127.0.0.1:8788" });
+  expect(fixture?.slice(ROUTE_MANIFEST.length).map(({ method, path }) => [method, path])).toEqual([
+    ["GET", "/admin/reconciliation"],
+    ["GET", "/admin/reconciliation/:key"],
+  ]);
+  expect(ROUTE_MANIFEST.some(({ path }) => path.startsWith("/admin/reconciliation"))).toBe(false);
+  expect(fixtureManifestFor({ ...flag, APP_URL: "https://example.com" })).toBeUndefined();
+});
 
 afterEach(() => vi.restoreAllMocks());
 
