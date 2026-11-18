@@ -274,13 +274,13 @@ export function fixtureManifestFor(env: {
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
   KIT_PARITY_FIXTURE_JOIN?: string;
   KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
-  KIT_PARITY_FIXTURE_RECONCILIATION?: string;
+  includeReconciliation?: boolean;
 }): OwnedRoute[] | undefined {
   const wantBoard = env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true";
   const wantDetail = env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true";
   const wantJoin = env.KIT_PARITY_FIXTURE_JOIN === "true";
   const wantDashboard = env.KIT_PARITY_FIXTURE_ADMIN_DASHBOARD === "true";
-  const wantReconciliation = env.KIT_PARITY_FIXTURE_RECONCILIATION === "true";
+  const wantReconciliation = env.includeReconciliation === true;
   if (!wantBoard && !wantDetail && !wantJoin && !wantDashboard && !wantReconciliation)
     return undefined;
   let app: URL;
@@ -557,7 +557,6 @@ export interface HookDispatchDeps {
   // Join remains Hono-owned outside the loopback parity fixture.
   fixtureJoin?: boolean;
   fixtureAdminDashboard?: boolean;
-  fixtureReconciliation?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
@@ -925,7 +924,7 @@ async function dispatchOwnedRequest(
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
         KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
         KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
-        KIT_PARITY_FIXTURE_RECONCILIATION: deps.fixtureReconciliation ? "true" : undefined,
+        includeReconciliation: deps.fixtureAdminDashboard,
         // Use the original URL: Kit strips the data suffix from event.url.
         KIT_PARITY_FIXTURE_ADMIN_DASHBOARD:
           deps.fixtureAdminDashboard &&

@@ -4,7 +4,7 @@ import { readKitReconciliation } from "../src/admin/kit-reconciliation";
 import { fixtureManifestFor, ROUTE_MANIFEST } from "../src/route-ownership";
 
 it("adds only two GETs to the explicit loopback fixture, never to the shipped manifest", () => {
-  const flag = { KIT_PARITY_FIXTURE_RECONCILIATION: "true" };
+  const flag = { includeReconciliation: true };
   const fixture = fixtureManifestFor({ ...flag, APP_URL: "http://127.0.0.1:8788" });
   expect(fixture?.slice(ROUTE_MANIFEST.length).map(({ method, path }) => [method, path])).toEqual([
     ["GET", "/admin/reconciliation"],
