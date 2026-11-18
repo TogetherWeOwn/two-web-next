@@ -16,11 +16,11 @@ describe("framework-neutral calendar page input", () => {
     });
   });
 
-  it("defaults invalid views and pages without changing a valid raw query", () => {
+  it("clears blank queries and defaults invalid views and pages", () => {
     expect(
       resolveCalendarInput({ q: "   ", view: "bogus", page: "-2", past: "1", event: "abc" }),
     ).toMatchObject({
-      q: "   ",
+      q: "",
       searching: false,
       view: "list",
       past: true,
@@ -31,8 +31,13 @@ describe("framework-neutral calendar page input", () => {
   });
 
   it("refuses overlong queries and drops NUL from bounded jump keys", () => {
-    const tooLong = resolveCalendarInput({ q: "x".repeat(256) });
-    expect(tooLong).toMatchObject({ queryTooLong: true, searching: false, page: 1 });
+    for (const q of ["x".repeat(256), String.fromCharCode(0).repeat(256)]) {
+      expect(resolveCalendarInput({ q })).toMatchObject({
+        queryTooLong: true,
+        searching: false,
+        page: 1,
+      });
+    }
     expect(resolveCalendarInput({ event: `a${String.fromCharCode(0)}b` })).toMatchObject({
       jumpKey: "ab",
       jumpRequested: true,
