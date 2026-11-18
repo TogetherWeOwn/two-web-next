@@ -106,6 +106,60 @@ test("rejects invalid install and loader context regardless of sibling order", (
   }
 });
 
+test("requires separate certificates for every same-config occurrence in either order", () => {
+  const addEdge = (identity) => identity.edges.push({ root: ".", script: "nested", offset: 6 });
+  const good = fixture();
+  for (const distinguish of [
+    ...["job", "step", "run", "terminal"].map((field) => (identity) => identity[field]++),
+    addEdge,
+    (identity) => {
+      identity.job++;
+      addEdge(identity);
+    },
+  ]) {
+    const sibling = copy(good);
+    distinguish(sibling.identity);
+    for (const observed of [
+      [good, sibling],
+      [sibling, good],
+    ]) {
+      for (const reviewed of [
+        [good, sibling],
+        [sibling, good],
+      ]) {
+        validateInvocationCertificates(observed, copy(reviewed));
+      }
+      for (const only of observed) {
+        assert.throws(
+          () => validateInvocationCertificates(observed, [copy(only)]),
+          /unexpected occurrence/,
+        );
+      }
+      for (const [mutate, invalidEvenIfReviewed] of [
+        [(context) => (context.install.outcome = "failure"), true],
+        [(context) => (context.loader.nodeOptions = "--require hook"), true],
+        [(context) => context.effects[0].writes.push("playwright.config.ts"), false],
+        [(context) => (context.templateInputs[0].sha256 = "b".repeat(64)), false],
+      ]) {
+        const changed = copy(sibling);
+        mutate(changed.context);
+        const pair = observed.map((record) => (record === sibling ? changed : record));
+        const reviewedPairs = [
+          [good, sibling],
+          [sibling, good],
+        ];
+        if (invalidEvenIfReviewed) reviewedPairs.push([good, changed], [changed, good]);
+        for (const reviewed of reviewedPairs) {
+          assert.throws(
+            () => validateInvocationCertificates(pair, copy(reviewed)),
+            /Invocation certificate/,
+          );
+        }
+      }
+    }
+  }
+});
+
 test("rejects matching malformed install commands and unreviewed loader context", () => {
   for (const argv of [[], ["install"], ["ci", null], ["ci", 1]]) {
     const record = fixture();
