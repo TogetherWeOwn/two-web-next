@@ -376,6 +376,14 @@ jobs:
       - name: Kit parity ledger (no quiet green)
         if: ${{ !cancelled() }}
         run: node ci/check-kit-parity.mjs
+      - name: Reconciliation audited-read evidence
+        if: ${{ !cancelled() }}
+        env:
+          KIT_PARITY_FIXTURE_RECONCILIATION: "true"
+          RECONCILIATION_EVIDENCE_DIR: ${{ runner.temp }}/reconciliation-evidence
+        run: >-
+          npx playwright test --config playwright.kit-parity.config.ts --reporter=list
+          e2e/kit-parity/reconciliation-evidence.spec.ts
       # Throttle pacing: the parity step just spent 1 QA login. Sleep past
       # the 60 s window so the perf gate below starts with an empty bucket.
       - name: Let the QA-login throttle window expire before auth-perf
@@ -427,6 +435,7 @@ jobs:
             test-results/**/attachments/hono-review-*.png
             test-results/**/attachments/kit-review-*.png
             test-results-kit-parity/**/attachments/kit-review-*.png
+            ${{ runner.temp }}/reconciliation-evidence/*.png
           if-no-files-found: error
           retention-days: 7
       - name: Waitlist roster screenshot evidence

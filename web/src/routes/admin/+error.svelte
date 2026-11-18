@@ -22,6 +22,7 @@ import { adminReadRetryHref } from "#lib/admin-read-retry.ts";
 const routeId = $derived(page.route.id ?? "");
 const eventFamily = $derived(routeId.startsWith("/admin/events/"));
 const featuredFamily = $derived(routeId.startsWith("/admin/featured/"));
+const reconciliationDetail = $derived(routeId === "/admin/reconciliation/[key]");
 const missing = $derived(page.status === 404);
 const outage = $derived(page.status === 503);
 const retryHref = $derived(
@@ -29,15 +30,18 @@ const retryHref = $derived(
 );
 const eventMissing = $derived(missing && eventFamily);
 const featuredMissing = $derived(missing && featuredFamily);
+const reconciliationMissing = $derived(missing && reconciliationDetail);
 const reference = $derived(page.data?.requestId);
 const title = $derived(
   eventMissing
     ? "Event not found"
     : featuredMissing
       ? "Featured content not found"
-      : outage
-        ? "Admin temporarily unavailable"
-        : "Something went wrong",
+      : reconciliationMissing
+        ? "Reconciliation record not found"
+        : outage
+          ? "Admin temporarily unavailable"
+          : "Something went wrong",
 );
 </script>
 
@@ -50,6 +54,9 @@ const title = $derived(
     {:else if featuredFamily}
       <a href="/admin/featured">Back to featured</a>
       {" · "}
+    {:else if reconciliationDetail}
+      <a href="/admin/reconciliation">Back to reconciliation</a>
+      {" · "}
     {/if}
     <a href="/admin">Back to the dashboard</a>
   </p>
@@ -59,6 +66,9 @@ const title = $derived(
   {:else if featuredMissing}
     <h1 id="admin-error-heading">Featured content not found</h1>
     <p class="hint">There is no featured item with that id. It may have been deleted.</p>
+  {:else if reconciliationMissing}
+    <h1 id="admin-error-heading">Reconciliation record not found</h1>
+    <p class="hint">The key does not match a recorded reconciliation intent.</p>
   {:else if outage}
     <h1 id="admin-error-heading">Admin temporarily unavailable</h1>
     <p class="hint">The admin panel is temporarily unavailable. Try again shortly.</p>

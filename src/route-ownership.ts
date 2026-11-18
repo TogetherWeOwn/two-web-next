@@ -210,6 +210,19 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: true,
     reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
   },
+  // New Kit-only reads: disabled outside the loopback evidence fixture. No Hono twin.
+  {
+    method: "GET",
+    path: "/admin/reconciliation",
+    enabled: false,
+    reads: { resource: "reconciliation", action: "list", route: "admin.reconciliation.index" },
+  },
+  {
+    method: "GET",
+    path: "/admin/reconciliation/:key",
+    enabled: false,
+    reads: { resource: "reconciliation", action: "view", route: "admin.reconciliation.show" },
+  },
   { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
   // rendering stays off until edit parity reviews enablement; write siblings
@@ -261,8 +274,8 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
 ];
 
 // Fixture-only manifest for executed parity journeys. The generated loopback
-// worker can enable the member board, live event detail, and join entries for
-// their Kit journeys. Flags are honoured only for an HTTP loopback APP_URL;
+// worker can enable specific routes for their Kit journeys and captures.
+// Flags are honoured only for an HTTP loopback APP_URL;
 // deployed Workers retain the shipped manifest. No flag mutates that manifest.
 // The fixture exercises the actual Kit dispatcher rather than a second render
 // implementation. Each override is restricted to its exact method and path;
@@ -273,11 +286,13 @@ export function fixtureManifestFor(env: {
   KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
   KIT_PARITY_FIXTURE_JOIN?: string;
+  KIT_PARITY_FIXTURE_RECONCILIATION?: string;
 }): OwnedRoute[] | undefined {
   const wantBoard = env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true";
   const wantDetail = env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true";
   const wantJoin = env.KIT_PARITY_FIXTURE_JOIN === "true";
-  if (!wantBoard && !wantDetail && !wantJoin) return undefined;
+  const wantReconciliation = env.KIT_PARITY_FIXTURE_RECONCILIATION === "true";
+  if (!wantBoard && !wantDetail && !wantJoin && !wantReconciliation) return undefined;
   let app: URL;
   try {
     app = new URL(env.APP_URL ?? "");
@@ -293,6 +308,12 @@ export function fixtureManifestFor(env: {
     if (wantDetail && entry.method === "GET" && entry.path === "/e/:key")
       return { ...entry, enabled: true };
     if (wantJoin && entry.method === "GET" && entry.path === "/join")
+      return { ...entry, enabled: true };
+    if (
+      wantReconciliation &&
+      entry.method === "GET" &&
+      ["/admin", "/admin/reconciliation", "/admin/reconciliation/:key"].includes(entry.path)
+    )
       return { ...entry, enabled: true };
     return entry;
   });
@@ -532,6 +553,7 @@ export interface HookDispatchDeps {
   fixtureEventDetail?: boolean;
   // Join remains Hono-owned outside the loopback parity fixture.
   fixtureJoin?: boolean;
+  fixtureReconciliation?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
@@ -899,6 +921,7 @@ async function dispatchOwnedRequest(
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
         KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
         KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
+        KIT_PARITY_FIXTURE_RECONCILIATION: deps.fixtureReconciliation ? "true" : undefined,
       }) ??
       stagingManifestFor({
         APP_URL: deps.appUrl,

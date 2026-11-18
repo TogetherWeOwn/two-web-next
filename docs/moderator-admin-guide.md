@@ -763,8 +763,8 @@ row, the same rule as join attempts. Keep member identifiers private.
 
 ### Dashboard
 
-`/admin` has **Events**, **Featured content**, **Activity log**, **Join attempts**
-and **Reconciliation** cards plus these diagnostic sections when available:
+`/admin` has **Events**, **Featured content**, **Activity log** and **Join attempts**
+cards plus these diagnostic sections when their data is available:
 
 - **Join funnel, last 90 days:** counts for recorded outcomes across the full
   window, not just one 100-row viewer page. Aggregate counts contain no member
@@ -792,12 +792,15 @@ an otherwise usable panel with empty counts.
 There is no member-access-log viewer, user editor, role/ban manager
 or join-attempt mutation screen here.
 
-## Inspect an unconfirmed bot change
+## Inspect a recorded reconciliation intent (Kit fixture only)
 
-Open **Reconciliation** to view the oldest open records and recently resolved
-records. Open a record to see its original key and last recorded outcome. Check
-Discord independently: an open record does not prove whether the change happened.
-This view is read-only; it cannot resolve, send or retry a change.
+**Reconciliation** is on the Kit fixture dashboard, not the deployed dashboard.
+Open it to see up to 100 open intents and 50 recently resolved intents. Access
+is recorded before any rows appear. This shows recorded intents only: an
+exhausted retry can stay in the sync ledger without an intent. An empty list
+is not an all-clear. Check Discord independently; no shown or missing record
+proves delivery. The viewer does not record intents, change the queue, resolve
+records, or send or retry bot changes.
 
 ## Member deletion requests
 

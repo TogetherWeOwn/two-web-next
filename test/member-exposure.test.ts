@@ -56,8 +56,6 @@ const ADMIN_READS = [
   "/featured/:id",
   "/join-attempts",
   "/join-attempts/:id",
-  "/reconciliation",
-  "/reconciliation/:key",
   ...ADMIN_REDIRECTS,
 ];
 const OPERATIONAL_READS = [
@@ -280,8 +278,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
               ? 302
               : role !== "moderator"
                 ? 403
-                : pattern === "/reconciliation/:key" ||
-                    ["/featured/:id", "/featured-contents/:id/edit", "/join-attempts/:id"].includes(
+                : ["/featured/:id", "/featured-contents/:id/edit", "/join-attempts/:id"].includes(
                       pattern,
                     )
                   ? 404

@@ -8,15 +8,7 @@ const otherMember = "100000000000000102";
 const skip = (reason) => ({ skip: true, reason });
 export const A11Y_FREEZE_DATES = "12–14 Oct UTC";
 export const A11Y_OPS_CONTROL_TOKEN = "a11y-operator-fixture-".repeat(2);
-export const RECONCILIATION_FIXTURE = "30000000-0000-0000-0000-000000000001";
-export const RECONCILIATION_RESOLVED_FIXTURE = "30000000-0000-0000-0000-000000000002";
 export const coverage = {
-  "/admin/reconciliation/:key": {
-    cases: [
-      { path: `/admin/reconciliation/${RECONCILIATION_FIXTURE}`, identity: "moderator" },
-      { path: `/admin/reconciliation/${RECONCILIATION_RESOLVED_FIXTURE}`, identity: "moderator" },
-    ],
-  },
   "/discord": skip("External invite redirect, not an HTML page"),
   "/join/discord": skip("OAuth redirect, never contact Discord in CI"),
   "/auth/discord": skip("OAuth redirect, never contact Discord in CI"),
