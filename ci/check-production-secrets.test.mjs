@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
-import { parseDocument } from "yaml";
+import { isScalar, parseDocument } from "yaml";
 import {
   REQUIRED_PRODUCTION_SECRETS,
   checkProductionSecrets,
@@ -652,12 +652,14 @@ const ROLLBACK_CALLEES = new Set([
 function delegatesToRollback(lines, environment) {
   const document = parseDocument(lines.join("\n"));
   if (document.errors.length > 0) return false;
-  try {
-    const job = document.toJS({ maxAliasCount: 0 });
-    return ROLLBACK_CALLEES.has(job?.uses) && job?.with?.environment === environment;
-  } catch {
-    return false;
-  }
+  const uses = document.get("uses", true);
+  const target = document.getIn(["with", "environment"], true);
+  return (
+    isScalar(uses) &&
+    ROLLBACK_CALLEES.has(uses.value) &&
+    isScalar(target) &&
+    target.value === environment
+  );
 }
 
 export function productionSecretEnvironmentViolations(text, file) {
@@ -1198,6 +1200,13 @@ ${block}
   }
 });
 
+function parsedEnvironmentName(lines) {
+  const document = parseDocument(lines.join("\n"));
+  if (document.errors.length > 0) return undefined;
+  const name = document.getIn(["environment", "name"], true);
+  return isScalar(name) ? name.value : undefined;
+}
+
 test("rollback callee binds its credential-reading job to the selected environment", () => {
   const text = readFileSync(new URL("rollback-production.yml", WORKFLOWS), "utf8");
   const { jobs } = splitWorkflow(text);
@@ -1207,6 +1216,10 @@ test("rollback callee binds its credential-reading job to the selected environme
   assert.equal(credentialJobs.length, 1);
   assert.equal(credentialJobs[0].id, "rollback-production");
   assert.equal(jobEnvironment(credentialJobs[0].lines), "${{ inputs.environment }}");
+  assert.equal(parsedEnvironmentName(credentialJobs[0].lines), "${{ inputs.environment }}");
+  const continued = ["    environment:", "      name: ${{ inputs.environment }}", "        extra"];
+  assert.equal(jobEnvironment(continued), "${{ inputs.environment }}");
+  assert.notEqual(parsedEnvironmentName(continued), "${{ inputs.environment }}");
   assert.deepEqual(stagingCloudflareEnvironmentViolations(text, "rollback-production.yml"), []);
   assert.deepEqual(productionSecretEnvironmentViolations(text, "rollback-production.yml"), []);
 });
@@ -1228,6 +1241,17 @@ test("staging-pinned reusable caller passes staging secrets through without a jo
       CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 `;
   assert.deepEqual(stagingCloudflareEnvironmentViolations(pinned, "fixture.yml"), []);
+  const aliased = pinned
+    .replace(
+      "jobs:\n  rollback:",
+      "jobs:\n  plan:\n    runs-on: ubuntu-latest\n  other:\n    needs: &prerequisites plan\n    runs-on: ubuntu-latest\n  rollback:",
+    )
+    .replace("    needs: plan", "    needs: *prerequisites");
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(aliased, "fixture.yml"), []);
+  const productionAliased = aliased
+    .replace("environment: staging", "environment: production")
+    .replaceAll("secrets.CLOUDFLARE_", "secrets.PRODUCTION_CLOUDFLARE_");
+  assert.deepEqual(productionSecretEnvironmentViolations(productionAliased, "fixture.yml"), []);
   const immutable = pinned.replace(
     "./.github/workflows/rollback-production.yml",
     "TogetherWeOwn/two-web-next/.github/workflows/rollback-production.yml@38581ef492f5c972969f5dfada396a9f0e2ee989",
