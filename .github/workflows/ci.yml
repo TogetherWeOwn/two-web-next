@@ -1379,7 +1379,14 @@ jobs:
           npx playwright install --with-deps chromium
           node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
       - name: Lighthouse (local fixture worker, no database or Discord)
+        id: mobile
         run: npm run lighthouse
+      # The mobile runner clears earlier attempts. Preserve the final raw reports
+      # before desktop clears the top-level files; the upload manifest is not raw evidence.
+      - name: Preserve fixture mobile samples
+        if: ${{ !cancelled() && (steps.mobile.outcome == 'success' || steps.mobile.outcome == 'failure') }}
+        continue-on-error: true # Evidence only; keep the existing gate verdicts.
+        run: bash ci/lighthouse-preserve-mobile.sh .lighthouseci mobile-fixture
       # Web quality gate (owner 2026-10-10): category scores vs ci/quality-budget.json, then security headers,
       # HTML basics and internal links. Each step runs even after an earlier failure so one red run lists
       # everything to fix; any failure fails this job and therefore ci-ok.
