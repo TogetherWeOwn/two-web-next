@@ -795,12 +795,21 @@ test("production workflow uses hosted runners and production-only secrets", () =
 function* workflowExpressions(value, key) {
   if (typeof value === "string") {
     // GitHub allows `if` expressions without interpolation delimiters.
-    if (key === "if" && !value.includes("${{")) yield value;
-    else {
-      for (const [, expression] of value.matchAll(
-        /\$\{\{((?:'(?:[^']|'')*'|(?!\}\})[^'])*)\}\}/g,
-      )) {
-        yield expression;
+    if (key === "if" && !value.trimStart().startsWith("${{")) {
+      yield value;
+      return;
+    }
+    let start;
+    let quoted = false;
+    for (const { 0: token, index } of value.matchAll(/\$\{\{|\}\}|'/g)) {
+      if (start === undefined) {
+        if (token === "${{") start = index + token.length;
+      } else if (token === "'") {
+        // A doubled quote toggles twice, leaving us inside the string.
+        quoted = !quoted;
+      } else if (token === "}}" && !quoted) {
+        yield value.slice(start, index);
+        start = undefined;
       }
     }
   } else if (value && typeof value === "object") {
@@ -884,14 +893,25 @@ test("production dead-letter baseline scope rejects workflow defaults and extra 
     () => assertProductionBaselineScope(`env: { SMOKE_FAILED_BASELINE: '0' }\n${workflow}`),
     /must not be set workflow-wide/,
   );
-  for (const [lookup, error] of [
-    ["steps.dead-letter-baseline", /must not be read under another variable/],
-    ["steps['dead-letter-baseline']", /must not be read under another variable/],
-    ["steps[format('{0}', 'dead-letter-baseline')]", /computed steps index/],
+  for (const [condition, error] of [
+    ["steps.dead-letter-baseline.outputs.failed == '0'", /must not be read under another variable/],
+    [
+      "steps['dead-letter-baseline'].outputs.failed == '0'",
+      /must not be read under another variable/,
+    ],
+    ["steps[format('{0}', 'dead-letter-baseline')].outputs.failed == '0'", /computed steps index/],
+    [
+      "${{ contains('it''s }}', '}') && steps.dead-letter-baseline.outputs.failed == '0' }}",
+      /must not be read under another variable/,
+    ],
+    [
+      "contains('${{', '{') && steps.dead-letter-baseline.outputs.failed == '0'",
+      /must not be read under another variable/,
+    ],
   ]) {
     const withExtraRead = workflow.replace(
       "\n  post-deploy-watch:",
-      `\n      - name: Read an extra output\n        if: ${lookup}.outputs.failed == '0'\n        run: 'true'\n\n  post-deploy-watch:`,
+      `\n      - name: Read an extra output\n        if: ${condition}\n        run: 'true'\n\n  post-deploy-watch:`,
     );
     assert.throws(() => assertProductionBaselineScope(withExtraRead), error);
   }
