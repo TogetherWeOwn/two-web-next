@@ -764,7 +764,7 @@ row, the same rule as join attempts. Keep member identifiers private.
 ### Dashboard
 
 `/admin` has **Events**, **Featured content**, **Activity log**, **Join attempts**
-and **Reconciliation** cards, plus these diagnostic sections when available:
+and **Reconciliation** cards plus these diagnostic sections when available:
 
 - **Join funnel, last 90 days:** counts for recorded outcomes across the full
   window, not just one 100-row viewer page. Aggregate counts contain no member
