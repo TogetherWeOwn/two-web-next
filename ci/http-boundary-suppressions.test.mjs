@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -18,7 +18,7 @@ const sources = {
   cjs: 'module.exports = "ast-grep-ignore";',
 };
 
-function scan(t, files) {
+function scan(t, files, { throughPackageScript = false } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "http-suppressions-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   for (const [path, source] of Object.entries(files)) {
@@ -26,18 +26,27 @@ function scan(t, files) {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, source);
   }
-  const result = spawnSync(process.execPath, [guard], { cwd, encoding: "utf8", timeout: 10_000 });
+  if (throughPackageScript) {
+    // Use the real script wiring; keep the fixture out of the checkout.
+    copyFileSync(new URL("../package.json", import.meta.url), join(cwd, "package.json"));
+    mkdirSync(join(cwd, "ci"));
+    symlinkSync(guard, join(cwd, "ci/http-boundary-suppressions.mjs"));
+  }
+  const [command, ...args] = throughPackageScript
+    ? ["npm", "--offline", "--ignore-scripts", "--silent", "run", "scan:fetch-await"]
+    : [process.execPath, guard];
+  const result = spawnSync(command, args, { cwd, encoding: "utf8", timeout: 10_000 });
   assert.ifError(result.error);
   return result;
 }
 
-test("rejects line and block directives in every supported file type, including hidden paths", (t) => {
+test("the fetch-await scan rejects line and block directives in every supported file type, including hidden paths", (t) => {
   const files = Object.entries(sources).map(([extension, source], index) => {
     const path = `src/http/nested/.hidden/sample.${extension}`;
     const directive = index % 2 ? "/* ast-grep-ignore */" : "// ast-grep-ignore: example-rule";
     return [path, `${source}\n${directive}\nvoid 0;\n`];
   });
-  const result = scan(t, Object.fromEntries(files));
+  const result = scan(t, Object.fromEntries(files), { throughPackageScript: true });
   assert.equal(result.status, 1, result.stderr);
   assert.deepEqual(
     result.stderr.trim().split("\n").sort(),
