@@ -1,11 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page } from "@playwright/test";
 import { PARITY_VIEWPORTS, parityTargets } from "../kit-parity";
-import {
-  MODERATOR_FIXTURE_ACTOR,
-  moderatorTest as test,
-  withModeratorFixture,
-} from "./moderator-fixture";
+import { moderatorTest as test, withModeratorFixture } from "./moderator-fixture";
 
 const list = "/admin/reconciliation";
 const openKey = "e2e00000-0000-4000-8000-00000000a001";
@@ -97,11 +93,11 @@ for (const { size } of PARITY_VIEWPORTS) {
           );
         }
       } finally {
+        // Keep append-only receipts until the disposable CI database is destroyed.
         await sql.begin(async (tx) => {
           await tx`drop trigger if exists e2e_reconciliation_receipt_fail on activity_log`;
           await tx`drop function if exists e2e_reconciliation_receipt_fail()`;
           await tx`delete from bot_reconciliation_intents where idempotency_key in (${openKey}, ${resolvedKey})`;
-          await tx`delete from activity_log where causer_id = ${MODERATOR_FIXTURE_ACTOR} and description = 'bot-reconciliation.read'`;
         });
       }
     });

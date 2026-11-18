@@ -303,22 +303,22 @@ export function fixtureManifestFor(env: {
       return { ...entry, enabled: true };
     return entry;
   });
-  // Kit-only evidence routes have no Hono twin and no shipped ownership entry.
-  if (wantReconciliation)
-    routes.push(
-      {
+  // These Kit-only evidence routes have no Hono twin.
+  // Build them from fixture data, separate from the shipped manifest literals.
+  if (wantReconciliation) {
+    const reads = [
+      ["/admin/reconciliation", "list", "admin.reconciliation.index"],
+      ["/admin/reconciliation/:key", "view", "admin.reconciliation.show"],
+    ] as const;
+    for (const [path, action, route] of reads) {
+      routes.push({
         method: "GET",
-        path: "/admin/reconciliation",
+        path,
         enabled: true,
-        reads: { resource: "reconciliation", action: "list", route: "admin.reconciliation.index" },
-      },
-      {
-        method: "GET",
-        path: "/admin/reconciliation/:key",
-        enabled: true,
-        reads: { resource: "reconciliation", action: "view", route: "admin.reconciliation.show" },
-      },
-    );
+        reads: { resource: "reconciliation", action, route },
+      });
+    }
+  }
   return routes;
 }
 
