@@ -859,23 +859,23 @@ const weeks = monthGrid(state.month, '2026-06-15', new Map<string, CalendarGridE
       const scroll = page.getByTestId("events-calendar-scroll");
       assert.equal(await scroll.getAttribute("tabindex"), "0");
       const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
-      if (directory) {
-        await mkdir(directory, { recursive: true });
-        for (const [name, viewport] of calendarViewports) {
-          await page.setViewportSize(viewport);
-          const maxScroll = await scroll.evaluate(
-            (element) => element.scrollWidth - element.clientWidth,
-          );
-          assert.equal(maxScroll > 0, name !== "desktop", `${name}: grid overflow`);
-          for (const [position, left] of [
-            ["start", 0],
-            ["end", maxScroll],
-          ]) {
-            const actual = await scroll.evaluate((element, target) => {
-              element.scrollTo({ left: target, behavior: "instant" });
-              return element.scrollLeft;
-            }, left);
-            assert.equal(actual, left, `${name}: grid is at the ${position} of its scroll range`);
+      if (directory) await mkdir(directory, { recursive: true });
+      for (const [name, viewport] of calendarViewports) {
+        await page.setViewportSize(viewport);
+        const maxScroll = await scroll.evaluate(
+          (element) => element.scrollWidth - element.clientWidth,
+        );
+        assert.equal(maxScroll > 0, name !== "desktop", `${name}: grid overflow`);
+        for (const [position, left] of [
+          ["start", 0],
+          ["end", maxScroll],
+        ]) {
+          const actual = await scroll.evaluate((element, target) => {
+            element.scrollTo({ left: target, behavior: "instant" });
+            return element.scrollLeft;
+          }, left);
+          assert.equal(actual, left, `${name}: grid is at the ${position} of its scroll range`);
+          if (directory) {
             const path = join(directory, `calendar-${name}-${position}.png`);
             await page.screenshot({ path, fullPage: true });
             if (position === "start" && name !== "narrow") {
