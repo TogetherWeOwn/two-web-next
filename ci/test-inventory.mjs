@@ -358,12 +358,8 @@ function workflowShellView(text, name) {
             (!isMap(pair.value) || (!pair.value.anchor && !pair.value.tag))),
         `${name} has an anchored or tagged directory control, or an alias, this gate cannot model`,
       );
-      // The structural cwd audit must see decoded control keys too, including
-      // a mapping-valued `run` under workflow or job defaults.
-      if (
-        ["defaults", "working-directory"].includes(pair.key.value) ||
-        (pair.key.value === "run" && isMap(pair.value))
-      ) {
+      // Normalize only the actual workflow, job and step directory controls.
+      if (directoryKeys.has(pair)) {
         edits.push({
           start: pair.key.range[0],
           end: pair.key.range[1],
@@ -544,8 +540,47 @@ function splitShellTokens(segment) {
 // `npm run -- b` still runs b.
 function parseNpmRunOccurrences(text) {
   const out = [];
+  // Discovery precedes argument validation. Reject non-bare selector names
+  // here, before quoted or composed tokens can create phantom npm calls.
+  // The argument tokenizer accepts whole quoted tokens as well as bare ones;
+  // this lexical cut also rejects shell-composed and escaped option names.
+  const lexical = text;
+  let normalized = "";
+  const offsets = [];
+  for (let i = 0; i < lexical.length; i++) {
+    if (lexical[i] === '"' || lexical[i] === "'") continue;
+    if (lexical[i] === "\\" && lexical[i + 1] === "\n") {
+      i++;
+      continue;
+    }
+    if (lexical[i] === "\\" && lexical[i + 1] === "\r" && lexical[i + 2] === "\n") {
+      i += 2;
+      continue;
+    }
+    if (lexical[i] === "\\" && i + 1 < lexical.length) i++;
+    normalized += lexical[i];
+    offsets.push(i);
+  }
+  for (const match of normalized.matchAll(/--grep(?==|\s|$)/g)) {
+    const start = offsets[match.index];
+    const end = offsets[match.index + match[0].length - 1] + 1;
+    assert.ok(
+      lexical.slice(start, end) === "--grep" &&
+        !/["'\\]/.test(lexical[start - 1] ?? "") &&
+        !/["'\\]/.test(lexical[end] ?? ""),
+      "CI has a non-bare playwright --grep option name; this gate cannot model it",
+    );
+  }
   const joined = text.replace(/\\\r?\n/g, " ");
   for (const m of joined.matchAll(/\bnpm\s+run(?:-script)?\b/g)) {
+    // A grep operand can contain command-like text. Fail closed before npm
+    // discovery, even across newlines: shell quoting is not modeled here.
+    // This also rejects an unrelated grep followed by npm in one run block;
+    // put those commands in separate steps when their state permits it.
+    assert.ok(
+      !/--grep(?:=|\s+)["']?[A-Za-z0-9_@. \t\r\n-]*$/.test(joined.slice(0, m.index)),
+      "CI has npm run text in a playwright --grep operand; this gate cannot model it",
+    );
     const lineEnd = joined.indexOf("\n", m.index);
     const segment = joined.slice(m.index + m[0].length, lineEnd === -1 ? undefined : lineEnd);
     const tokens = splitShellTokens(segment);
@@ -612,6 +647,47 @@ function parseNpmRunOccurrences(text) {
       }
     }
     out.push({ name, forwarding, redirect, unknown, index: m.index });
+  }
+  // Check shell-word boundaries before returning any discovered scripts. A
+  // continuation disappears in the shell. Workflow text still has YAML block
+  // indentation, so conservatively remove indentation after a continuation too;
+  // this can reject indented shell words rather than credit an ambiguous run.
+  const words = text.replace(/\\\r?\n[ \t]*/g, "");
+  for (const match of words.matchAll(/--grep(?==|\s|$)/g)) {
+    let i = match.index + match[0].length;
+    if (words[i] === "=") i++;
+    else while (words[i] === " " || words[i] === "\t") i++;
+    const quote = words[i] === '"' || words[i] === "'" ? words[i++] : null;
+    if (quote) {
+      const end = words.indexOf(quote, i);
+      assert.ok(
+        end !== -1 &&
+          /^[A-Za-z0-9_@. -]*$/.test(words.slice(i, end)) &&
+          (end + 1 === words.length || /[\s;&|]/.test(words[end + 1])),
+        "CI has a composed playwright --grep operand; this gate cannot model it",
+      );
+    } else {
+      const end = words.slice(i).search(/[\s;&|]/);
+      const operand = words.slice(i, end === -1 ? undefined : i + end);
+      assert.ok(
+        /^[A-Za-z0-9_@.-]*$/.test(operand),
+        "CI has a composed playwright --grep operand; this gate cannot model it",
+      );
+    }
+  }
+  // Raw discovery cannot distinguish an npm command from text inside a quoted
+  // path or config operand. Reject that ambiguity before granting any credit.
+  let quote = null;
+  let escaped = false;
+  for (let i = 0; i < joined.length; i++) {
+    const c = joined[i];
+    if ((quote || escaped) && out.some((occ) => occ.index === i)) {
+      assert.fail("CI has npm run text in a quoted shell word; this gate cannot model it");
+    }
+    if (escaped) escaped = false;
+    else if (c === "\\" && quote !== "'") escaped = true;
+    else if (quote && c === quote) quote = null;
+    else if (!quote && (c === "'" || c === '"')) quote = c;
   }
   return out;
 }
@@ -1129,13 +1205,14 @@ function normalizeFilterRef(ref, source) {
 // unfiltered invocation runs every match; otherwise only the union runs.
 function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
   const found = new Map();
-  const record = (config, files, source) => {
+  const record = (config, files, source, grepFiltered) => {
     const entry = found.get(config) ?? { unfiltered: false, files: new Set(), dirs: new Set() };
-    if (files === null) entry.unfiltered = true;
-    else {
+    if (files === null && !grepFiltered) entry.unfiltered = true;
+    else if (files !== null) {
       for (const f of files) {
         const abs = join(root, f);
         assert.ok(existsSync(abs), `${source} filters a missing playwright path (${f})`);
+        if (grepFiltered) continue;
         if (statSync(abs).isDirectory()) entry.dirs.add(f.endsWith("/") ? f : `${f}/`);
         else entry.files.add(f);
       }
@@ -1144,6 +1221,7 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
   };
   const parseTokens = (tokens, source) => {
     let config = null;
+    let grepFiltered = false;
     const positionals = [];
     for (let i = 0; i < tokens.length; i += 1) {
       const t = tokens[i];
@@ -1152,6 +1230,14 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
         assert.ok(config === null, `${source} names two playwright configs`);
         config = normalizeConfigRef(tokens[i + 1], source);
         i += 1;
+      } else if (t === "--grep" || t.startsWith("--grep=")) {
+        assert.ok(!grepFiltered, `${source} names two playwright grep filters`);
+        const value = t === "--grep" ? tokens[++i] : t.slice("--grep=".length);
+        assert.ok(
+          typeof value === "string" && /^[A-Za-z0-9_@. -]+$/.test(value) && !value.startsWith("-"),
+          `${source} has a non-literal or missing playwright --grep value`,
+        );
+        grepFiltered = true;
       } else if (t.startsWith("-")) {
         assert.fail(
           `${source} passes a playwright flag this gate cannot expand (${t}): use --config and file paths only, or teach ci/test-inventory.mjs the new flag`,
@@ -1165,7 +1251,9 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
       existsSync(join(root, config)),
       `${source} references a missing playwright config (${config})`,
     );
-    record(config, positionals.length ? positionals : null, source);
+    // A title filter can select only part of a file, including imported suites.
+    // Validate it, but never use that invocation as whole-spec evidence.
+    record(config, positionals.length ? positionals : null, source, grepFiltered);
   };
   // Workflow steps: `playwright test` plus YAML `>-` continuation lines (the
   // kit-parity file filters live on the next line). Continuation stops at the
@@ -1194,13 +1282,15 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
   // runs to the next shell chain separator, never into a following command.
   for (const name of invoked) {
     const body = scripts[name] ?? "";
-    for (const m of body.matchAll(/\bplaywright\s+test\b/g)) {
-      const tail = body.slice(m.index + m[0].length);
+    const occurrences = /\bplaywright\s+test\b/g;
+    let m;
+    while ((m = occurrences.exec(body)) !== null) {
+      const tail = body.slice(occurrences.lastIndex);
       const end = tail.search(/&&|\|\||;/);
-      parseTokens(
-        tokenizeArgs(end === -1 ? tail : tail.slice(0, end), `script ${name}`),
-        `script ${name}`,
-      );
+      const args = end === -1 ? tail : tail.slice(0, end);
+      parseTokens(tokenizeArgs(args, `script ${name}`), `script ${name}`);
+      // Arguments already consumed are not independent command invocations.
+      occurrences.lastIndex += args.length;
     }
   }
   return found;
@@ -2541,7 +2631,7 @@ function selftest() {
     }
   });
 
-  check("playwright workflow attribution ignores metadata and audits decoded directories", () => {
+  check("playwright workflow attribution and grep selection preserve inventory controls", () => {
     const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
     try {
       mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
@@ -2554,6 +2644,29 @@ function selftest() {
       writeFileSync(join(dir, "e2e", "a.spec.ts"), 'import "./suite.visual";\n');
       writeFileSync(join(dir, "e2e", "suite.visual.ts"), 'test("not selected", () => {});\n');
       const workflow = join(dir, ".github", "workflows", "ci.yml");
+      const run = (command) => {
+        const scalar = command.includes("\n")
+          ? `|\n          ${command.replaceAll("\n", "\n          ")}`
+          : command;
+        writeFileSync(workflow, `name: ci\njobs:\n  t:\n    steps:\n      - run: ${scalar}\n`);
+      };
+      writeFileSync(
+        workflow,
+        'name: ci\njobs:\n  t:\n    steps:\n      - name: "Browser tests --grep"\n        run: npx playwright test\n',
+      );
+      assert.deepEqual(playwrightInventory(dir).orphans, []);
+      assert.equal(playwrightJsonSummary(dir).reachable, 2);
+      assert.deepEqual(playwrightJsonSummary(dir).orphans, []);
+      writeFileSync(
+        workflow,
+        'name: ci\njobs:\n  t:\n    steps:\n      - name: "Browser tests --grep"\n        run: npx playwright test --grep smoke\n',
+      );
+      assert.deepEqual(playwrightInventory(dir).orphans, ["e2e/a.spec.ts", "e2e/suite.visual.ts"]);
+      assert.equal(playwrightJsonSummary(dir).reachable, 0);
+      assert.deepEqual(playwrightJsonSummary(dir).orphans, [
+        "e2e/a.spec.ts",
+        "e2e/suite.visual.ts",
+      ]);
       for (const quote of ["'", '"']) {
         for (const command of [
           "echo playwright test",
@@ -2752,12 +2865,195 @@ function selftest() {
         "e2e/a.spec.ts",
         "e2e/suite.visual.ts",
       ]);
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      for (const args of ["--grep smoke", '--grep "smoke test"', "--grep=smoke"]) {
+        for (const path of ["", " e2e/a.spec.ts"]) {
+          run(`npx playwright test ${args}${path}`);
+          assert.deepEqual(playwrightInventory(dir).orphans, [
+            "e2e/a.spec.ts",
+            "e2e/suite.visual.ts",
+          ]);
+        }
+      }
+      for (const args of [
+        "--grep",
+        "--grep=",
+        "--grep $PATTERN",
+        "--grep smoke --grep other",
+        "--grep smoke --unknown",
+      ]) {
+        run(`npx playwright test ${args}`);
+        assert.throws(() => playwrightInventory(dir));
+      }
+      run("npx playwright test --grep smoke e2e/missing.spec.ts");
+      assert.throws(() => playwrightInventory(dir), /missing playwright path/);
+      run("npx playwright test --config missing.config.ts --grep smoke");
+      assert.throws(() => playwrightInventory(dir), /missing playwright config/);
+      run("cd e2e && npx playwright test --grep smoke");
+      assert.throws(() => playwrightInventory(dir), /directory change/);
       writeFileSync(
         workflow,
-        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --grep smoke\n",
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --grep smoke\n      - run: npx playwright test\n",
       );
-      assert.throws(() => playwrightInventory(dir), /flag this gate cannot expand/);
-      assert.throws(() => playwrightJsonSummary(dir), /flag this gate cannot expand/);
+      assert.deepEqual(playwrightInventory(dir).orphans, []);
+      for (const quote of ["'", '"']) {
+        for (const args of [
+          `${quote}--grep${quote} "npm run browser"`,
+          `${quote}--grep=npm run browser${quote}`,
+          `${quote}--grep${quote}="npm run browser"`,
+        ]) {
+          const filtered = `playwright test ${args}`;
+          writeFileSync(
+            join(dir, "package.json"),
+            JSON.stringify({ scripts: { browser: "playwright test", nested: filtered } }),
+          );
+          run(`npx ${filtered}`);
+          assert.throws(() => playwrightInventory(dir), /non-bare playwright --grep option name/);
+          run("npm run nested");
+          assert.throws(() => playwrightInventory(dir), /non-bare playwright --grep option name/);
+        }
+      }
+      for (const args of ['--g"re"p "npm run browser"', '--gr\\ep "npm run browser"']) {
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({
+            scripts: { browser: "playwright test", nested: `playwright test ${args}` },
+          }),
+        );
+        run(`npx playwright test ${args}`);
+        assert.throws(() => playwrightInventory(dir), /non-bare playwright --grep option name/);
+        run("npm run nested");
+        assert.throws(() => playwrightInventory(dir), /non-bare playwright --grep option name/);
+      }
+      mkdirSync(join(dir, "npm run browser"));
+      for (const operand of [
+        `'smoke '"npm run browser"`,
+        `"smoke "'npm run browser'`,
+        `'smoke'"test"`,
+        `"smoke"'test'`,
+        `'smoke'test`,
+        `smoke'test'`,
+        `'smoke'""`,
+        `smoke\\ test`,
+        `'smoke'\\\n"test"`,
+      ]) {
+        for (const separator of [" ", "="]) {
+          const filtered = `playwright test --grep${separator}${operand}`;
+          writeFileSync(
+            join(dir, "package.json"),
+            JSON.stringify({
+              scripts: { browser: "playwright test", nested: filtered, outer: "npm run nested" },
+            }),
+          );
+          for (const command of [`npx ${filtered}`, "npm run nested", "npm run outer"]) {
+            run(command);
+            assert.throws(() => playwrightInventory(dir), /composed playwright --grep operand/);
+          }
+        }
+      }
+      for (const args of ['--grep "npm run browser"', '--grep="npm run browser"']) {
+        const filtered = `playwright test ${args}`;
+        const scripts = { browser: "playwright test", nested: filtered };
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts }));
+        run(`npx ${filtered}`);
+        assert.throws(
+          () => playwrightInventory(dir),
+          /npm run text in a playwright --grep operand/,
+        );
+        run("npm run nested");
+        assert.throws(
+          () => playwrightInventory(dir),
+          /npm run text in a playwright --grep operand/,
+        );
+      }
+      mkdirSync(join(dir, "e2e/npm run browser"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e/npm run browser/path.spec.ts"),
+        'import "../suite.visual";\ntest("smoke", () => {});\n',
+      );
+      for (const quote of ["'", '"']) {
+        const filtered = `playwright test --grep smoke ${quote}e2e/npm run browser${quote}`;
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({
+            scripts: { browser: "playwright test", nested: filtered, outer: "npm run nested" },
+          }),
+        );
+        for (const command of [`npx ${filtered}`, "npm run nested", "npm run outer"]) {
+          run(command);
+          assert.throws(() => playwrightInventory(dir), /npm run text in a quoted shell word/);
+          assert.throws(() => playwrightJsonSummary(dir), /npm run text in a quoted shell word/);
+        }
+      }
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ scripts: { browser: "playwright test", build: "vite build" } }),
+      );
+      run(`docker run "\${common[@]}" --network none "$image" sh -eu -c '
+  node ci/build-ember-tokens.mjs --check
+  node ci/build-leaf-css.mjs'
+docker run "\${common[@]}" --network none "$image" npm run build --prefix web`);
+      for (const result of [playwrightInventory(dir), playwrightJsonSummary(dir)]) {
+        assert.deepEqual(result.orphans, [
+          "e2e/a.spec.ts",
+          "e2e/npm run browser/path.spec.ts",
+          "e2e/suite.visual.ts",
+        ]);
+      }
+      writeFileSync(
+        workflow,
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --grep smoke\n      - run: npm run browser\n",
+      );
+      assert.deepEqual(playwrightInventory(dir).orphans, []);
+      // Intentionally unsupported: an unrelated grep and npm in one block.
+      writeFileSync(
+        workflow,
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: |\n          git log --grep smoke\n          npm run browser\n",
+      );
+      assert.throws(() => playwrightInventory(dir), /npm run text in a playwright --grep operand/);
+      for (const quote of ["'", '"']) {
+        const operand = `--grep ${quote}smoke\nnpm run browser${quote}`;
+        writeFileSync(
+          workflow,
+          `name: ci\njobs:\n  t:\n    steps:\n      - run: |\n          npx playwright test --grep ${quote}smoke\n          npm run browser${quote}\n`,
+        );
+        assert.throws(
+          () => playwrightInventory(dir),
+          /npm run text in a playwright --grep operand/,
+        );
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({
+            scripts: { browser: "playwright test", nested: `playwright test ${operand}` },
+          }),
+        );
+        run("npm run nested");
+        assert.throws(
+          () => playwrightInventory(dir),
+          /npm run text in a playwright --grep operand/,
+        );
+      }
+      writeFileSync(
+        workflow,
+        'name: ci\njobs:\n  t:\n    steps:\n      - run: >\n          npx playwright test --grep "smoke\n          npm run browser"\n',
+      );
+      assert.throws(() => playwrightInventory(dir), /npm run text in a playwright --grep operand/);
+      mkdirSync(join(dir, "test"));
+      run("npm run browser");
+      for (const args of ["--grep playwright test", "--grep=playwright test"]) {
+        const script = `playwright test ${args}`;
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { browser: script } }));
+        assert.deepEqual(playwrightInventory(dir).orphans, [
+          "e2e/a.spec.ts",
+          "e2e/npm run browser/path.spec.ts",
+          "e2e/suite.visual.ts",
+        ]);
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({ scripts: { browser: `${script} && playwright test` } }),
+        );
+        assert.deepEqual(playwrightInventory(dir).orphans, []);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
