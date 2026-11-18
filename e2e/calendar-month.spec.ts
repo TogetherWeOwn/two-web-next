@@ -4,8 +4,7 @@ import { expect, test } from "./fixtures";
 // fixture in each of two far-future months, and a real browser drives
 // /events?view=calendar&month=<non-default month> as a guest, with no
 // session. Proves the chosen month's events render and the other month's do
-// not, with the month state asserted before any screenshot/axe step (this
-// spec takes neither).
+// not, with the month state asserted before the review screenshots.
 //
 // Zero QA logins by design: POST /auth/qa/:identity shares the `qa-login`
 // throttle (10/min per runner IP, src/throttle.ts) across the whole
@@ -28,6 +27,21 @@ test("calendar month view shows the chosen month and hides the other month", asy
   // screenshot or axe step runs before these assertions.
   await expect(grid).toContainText("E2E Calendar May");
   await expect(grid).not.toContainText("E2E Calendar June");
+
+  for (const width of [1280, 390, 320]) {
+    await page.setViewportSize({ width, height: width === 1280 ? 800 : 844 });
+    const scroll = page.getByTestId("events-calendar-scroll");
+    for (const position of ["start", "end"]) {
+      await scroll.evaluate((element, end) => {
+        element.scrollLeft = end ? element.scrollWidth : 0;
+      }, position === "end");
+      const name = `hono-review-calendar-${width}-${position}`;
+      await test.info().attach(name, {
+        body: await page.screenshot({ fullPage: true, animations: "disabled" }),
+        contentType: "image/png",
+      });
+    }
+  }
 
   // The month param drives the render in both directions.
   await page.goto("/events?view=calendar&month=2099-06");

@@ -43,7 +43,7 @@ function gate() {
 }
 
 async function fixture(context: BrowserContext) {
-  const state = { failed: true, row: 1, badFragment: false };
+  const state = { failed: true, row: 1, badFragment: false, readError: false };
   const held: {
     entered: ReturnType<typeof gate>;
     done: ReturnType<typeof gate>;
@@ -79,7 +79,8 @@ async function fixture(context: BrowserContext) {
           past: url.searchParams.get("past") === "1",
           page: Number(url.searchParams.get("page") ?? 1),
         },
-        upcoming: [partialEvent(state.row)],
+        upcoming: state.readError ? [] : [partialEvent(state.row)],
+        emptyState: state.readError ? "error" : null,
         discordFailed: state.failed,
       }),
       PARTIAL_ORIGIN,
@@ -327,6 +328,31 @@ test("a failed month read restores the grid tab stop after resizing during loadi
   await pending.settled.ready;
   await expect(scroll).toBeVisible();
   await expect(scroll).toHaveAttribute("tabindex", "0");
+});
+
+test("capture shared SSR recovery states for review", async ({ page, context }) => {
+  const f = await fixture(context);
+  for (const name of ["styles.css", "theme-tokens.css", "theme.css", "schedule-theme.css"]) {
+    const body = readFileSync(new NodeURL(`../public/${name}`, import.meta.url), "utf8");
+    await context.route(`${PARTIAL_ORIGIN}/${name}`, (route) =>
+      route.fulfill({ contentType: "text/css", body }),
+    );
+  }
+  for (const state of ["partial", "error"] as const) {
+    f.state.readError = state === "error";
+    f.state.failed = state === "partial";
+    for (const width of [1280, 390, 320]) {
+      await page.setViewportSize({ width, height: width === 1280 ? 800 : 844 });
+      await page.goto(PARTIAL_ORIGIN + CALENDAR_PATH);
+      await expect(
+        state === "partial" ? notice(page) : page.getByTestId("events-empty-error"),
+      ).toBeVisible();
+      await test.info().attach(`hono-review-fixture-${state}-${width}`, {
+        body: await page.screenshot({ fullPage: true, animations: "disabled" }),
+        contentType: "image/png",
+      });
+    }
+  }
 });
 
 const afterDisplay = (page: Page) =>
