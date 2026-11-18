@@ -76,6 +76,15 @@ describe("route-free Kit members directory projection", () => {
     expect(names(view("filter=everyone"))).toEqual(["SampleCafé", "SampleJuniper", "SampleSpruce"]);
   });
 
+  it("breaks activity ties by name and puts unrecorded activity last", () => {
+    const members = [
+      fixture("SampleFir", { lastActivityAt: 0 }),
+      fixture("SampleAsh"),
+      fixture("SampleElm", { lastActivityAt: 0 }),
+    ];
+    expect(names(view("", members))).toEqual(["SampleElm", "SampleFir", "SampleAsh"]);
+  });
+
   it("finds active and inactive members by name or handle, including an @ prefix", () => {
     expect(names(view("q=sAmPlE"))).toEqual(["SampleCafé", "SampleJuniper", "SampleSpruce"]);
     expect(names(view(`q=${encodeURIComponent("  SAMPLECAFÉ  ")}`))).toEqual(["SampleCafé"]);

@@ -105,7 +105,11 @@ export function projectMembersDirectory(
           (handleTerm !== "" && searchable(member.handle).includes(handleTerm)),
       )
     : [...population];
-  results.sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
+  results.sort(
+    (a, b) =>
+      (b.lastActivityAt ?? -Infinity) - (a.lastActivityAt ?? -Infinity) ||
+      a.name.localeCompare(b.name, "en"),
+  );
 
   const pageCount = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
   selection.page = Math.min(selection.page, pageCount);
