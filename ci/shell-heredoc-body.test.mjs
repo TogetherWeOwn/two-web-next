@@ -62,6 +62,13 @@ test("closers must be exact; only requested leading tabs are stripped", () => {
   checkClosed("", "\n", "", { marker: "", quoted: true });
 });
 
+test("a tab-prefixed marker matches before tab stripping", () => {
+  const metadata = { marker: "\tEND", quoted: true, stripTabs: true };
+  checkClosed("\tdata\n", "\tEND\n", "data\n", metadata);
+  checkClosed("\tdata\r\n", "\tEND\r\n", "data\r\n", metadata);
+  checkClosed("\tdata\n", "\tEND\r\n", "data\n", { ...metadata, marker: "\tEND\r" });
+});
+
 test("EOF does not invent a newline or an empty closer", () => {
   for (const [source, logicalBody, marker] of [
     ["prefix\n\tpart\\\r\nial", "partial", "EOF"],

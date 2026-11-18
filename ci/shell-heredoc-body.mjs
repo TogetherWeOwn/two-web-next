@@ -27,7 +27,10 @@ export function readHeredocBody(source, bodyStart, { marker, stripTabs, quoted }
     const line = stripTabs ? joined.replace(/^\t+/, "") : joined;
     // A CR immediately before the final LF can also be part of a trusted marker.
     // Do not drop a literal CR exposed by a splice before a later LF.
-    if (line === marker || (ending === "\r\n" && `${line}\r` === marker)) {
+    const matchesMarker = (text) =>
+      text === marker || (ending === "\r\n" && `${text}\r` === marker);
+    // A quoted marker can start with a tab, even when body indentation is stripped.
+    if (matchesMarker(joined) || (stripTabs && matchesMarker(line))) {
       return {
         status: "closed",
         body: { start: bodyStart, end: lineStart },
