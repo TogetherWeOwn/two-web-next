@@ -18,11 +18,10 @@ export function watchTimeSnapshot(
   visibility: Document = document,
 ): { replace: (snapshot: TimeSnapshot) => void; dispose: () => void } {
   let timer: number | undefined;
-  let withdrawn = false;
   let disposed = false;
-  let snapshot = initial;
-  let clock: SnapshotClock | undefined;
-  let lastMonotonic: number | undefined;
+  let snapshot: TimeSnapshot | undefined;
+  let pageNow = -Infinity;
+  let lastMonotonic = 0;
 
   function monotonicNow(): number {
     try {
@@ -36,48 +35,35 @@ export function watchTimeSnapshot(
     if (disposed) return;
     if (timer !== undefined) page.clearTimeout(timer);
     timer = undefined;
+    const wall = Date.now();
     const monotonic = monotonicNow();
-    const now =
-      !clock || lastMonotonic === undefined || monotonic < lastMonotonic
+    // Advance even without a claim. A bad page-clock sample is sticky across replacements.
+    pageNow =
+      !Number.isFinite(wall) || !Number.isFinite(monotonic) || monotonic < lastMonotonic
         ? Number.NaN
-        : snapshotNow(clock, Date.now(), monotonic);
+        : Math.max(wall, pageNow + (monotonic - lastMonotonic));
     lastMonotonic = monotonic;
-    if (clock) {
-      clock.previousNow = now;
-      clock.hydrationWall = now;
-      clock.hydrationMonotonic = monotonic;
-    }
-    if (withdrawn || snapshot.staleAt === null) return;
-    if (timeSnapshotIsStale(snapshot.staleAt, now)) {
-      withdrawn = true;
-      onStale();
+    if (!snapshot) return;
+
+    const now = snapshotNow(
+      { ...snapshot, hydrationWall: pageNow, hydrationMonotonic: monotonic, previousNow: pageNow },
+      wall,
+      monotonic,
+    );
+    // Only a trustworthy snapshot can advance the page clock beyond its own reading.
+    if (Number.isFinite(now)) pageNow = now;
+    const { staleAt } = snapshot;
+    if (staleAt === null || timeSnapshotIsStale(staleAt, now)) {
+      snapshot = undefined;
+      if (staleAt !== null) onStale();
       return;
     }
-    timer = page.setTimeout(check, Math.min(snapshot.staleAt - now, 2_147_483_647));
+    timer = page.setTimeout(check, Math.min(staleAt - now, 2_147_483_647));
   }
 
   function replace(next: TimeSnapshot) {
     if (disposed) return;
-    if (timer !== undefined) page.clearTimeout(timer);
-    timer = undefined;
-    const hydrationWall = Date.now();
-    const monotonic = monotonicNow();
-    const previousNow = clock
-      ? lastMonotonic === undefined || monotonic < lastMonotonic
-        ? Number.NaN
-        : snapshotNow(clock, hydrationWall, monotonic)
-      : hydrationWall;
     snapshot = next;
-    withdrawn = false;
-    lastMonotonic = monotonic;
-    clock = {
-      asOf: next.asOf,
-      responseStart: next.responseStart,
-      snapshotAgeAtResponseStart: next.snapshotAgeAtResponseStart,
-      hydrationWall: Math.max(hydrationWall, previousNow),
-      hydrationMonotonic: monotonic,
-      previousNow,
-    };
     check();
   }
 

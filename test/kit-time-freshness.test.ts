@@ -46,14 +46,11 @@ afterEach(() => {
 });
 
 describe("page-owned snapshot watcher", () => {
-  function environment() {
+  function environment(now = () => Date.now() - 1_000) {
     const page = new EventTarget() as TestPage;
     page.setTimeout = setTimeout;
     page.clearTimeout = clearTimeout;
-    Object.defineProperty(page, "performance", {
-      configurable: true,
-      value: { now: () => Date.now() - 1_000 },
-    });
+    Object.defineProperty(page, "performance", { value: { now } });
     const visibility: TestVisibility = new EventTarget();
     Object.defineProperty(visibility, "visibilityState", { value: "visible", configurable: true });
     return { page, visibility };
@@ -92,23 +89,39 @@ describe("page-owned snapshot watcher", () => {
     vi.setSystemTime(1_000);
     const { page, visibility } = environment();
     const onStale = vi.fn();
-    const watcher = createWatcher(snapshot(2_000), onStale, page, visibility);
+    const watcher = createWatcher(snapshot(2_000, 0, 800), onStale, page, visibility);
     expect(vi.getTimerCount()).toBe(1);
     watcher.replace(snapshot(2_000, 0, age));
     expect(onStale).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(50);
+    watcher.replace(snapshot(2_000, 50));
+    vi.advanceTimersByTime(149);
+    expect(onStale).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(1);
+    expect(onStale).toHaveBeenCalledTimes(2);
+    watcher.dispose();
+  });
+
+  it("arms a valid replacement after an unaged terminal snapshot", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const { page, visibility } = environment();
+    const onStale = vi.fn();
+    const watcher = createWatcher(snapshot(null, 0, null), onStale, page, visibility);
+    watcher.replace(snapshot(2_000));
+    vi.advanceTimersByTime(999);
+    expect(onStale).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onStale).toHaveBeenCalledOnce();
     watcher.dispose();
   });
 
   it("rechecks replacement snapshots and withdraws on a monotonic rollback", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { page, visibility } = environment();
     let monotonic = 0;
-    Object.defineProperty(page, "performance", {
-      configurable: true,
-      value: { now: () => monotonic },
-    });
+    const { page, visibility } = environment(() => monotonic);
     const onStale = vi.fn();
     const watcher = createWatcher(snapshot(2_000), onStale, page, visibility);
     monotonic = 1_000;
@@ -126,12 +139,8 @@ describe("page-owned snapshot watcher", () => {
   it("carries clock progress across replacement and fails closed on rollback", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { page, visibility } = environment();
     let monotonic = 0;
-    Object.defineProperty(page, "performance", {
-      configurable: true,
-      value: { now: () => monotonic },
-    });
+    const { page, visibility } = environment(() => monotonic);
     const onStale = vi.fn();
     const watcher = createWatcher(snapshot(5_000), onStale, page, visibility);
     monotonic = 1_000;
@@ -147,20 +156,16 @@ describe("page-owned snapshot watcher", () => {
     watcher.dispose();
   });
 
-  it("retains clock failures observed while a snapshot has no claim", () => {
+  it.each([999, NaN])("retains a bad clock sample (%s) when there is no claim", (badSample) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { page, visibility } = environment();
     let monotonic = 0;
-    Object.defineProperty(page, "performance", {
-      configurable: true,
-      value: { now: () => monotonic },
-    });
+    const { page, visibility } = environment(() => monotonic);
     const onStale = vi.fn();
-    const watcher = createWatcher(snapshot(null), onStale, page, visibility);
+    const watcher = createWatcher(snapshot(null, 0, null), onStale, page, visibility);
     monotonic = 1_000;
     page.dispatchEvent(new Event("pageshow"));
-    monotonic = 999;
+    monotonic = badSample;
     visibility.dispatchEvent(new Event("visibilitychange"));
     expect(onStale).not.toHaveBeenCalled();
     monotonic = 1_001;
@@ -227,6 +232,8 @@ describe("page-owned snapshot watcher", () => {
       expect(vi.getTimerCount()).toBe(0);
     }
     expect(onStale).toHaveBeenCalledTimes(3);
+    watcher.replace(snapshot(5_000));
+    expect(vi.getTimerCount()).toBe(1);
     watcher.dispose();
     watcher.replace(snapshot(1_000));
     expect(onStale).toHaveBeenCalledTimes(3);
@@ -237,6 +244,10 @@ describe("page-owned snapshot watcher", () => {
     vi.setSystemTime(1_000);
     const { page, visibility } = environment();
     const onStale = vi.fn();
+    const addPage = vi.spyOn(page, "addEventListener");
+    const addVisibility = vi.spyOn(visibility, "addEventListener");
+    const removePage = vi.spyOn(page, "removeEventListener");
+    const removeVisibility = vi.spyOn(visibility, "removeEventListener");
     const stop = watchTimeSnapshot(2_000, onStale, page, visibility);
     expect(vi.getTimerCount()).toBe(1);
     page.dispatchEvent(new Event("pageshow"));
@@ -246,6 +257,10 @@ describe("page-owned snapshot watcher", () => {
     visibility.dispatchEvent(new Event("visibilitychange"));
     expect(onStale).toHaveBeenCalledOnce();
     stop();
+    expect(removePage).toHaveBeenCalledOnce();
+    expect(removePage.mock.calls).toEqual(addPage.mock.calls);
+    expect(removeVisibility).toHaveBeenCalledOnce();
+    expect(removeVisibility.mock.calls).toEqual(addVisibility.mock.calls);
     expect(vi.getTimerCount()).toBe(0);
   });
 
