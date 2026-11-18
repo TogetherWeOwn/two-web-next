@@ -3,6 +3,7 @@ import postgres from "postgres";
 import { requireTestDatabase } from "../ci-only.mjs";
 import { expect, localOrigin, test } from "../fixtures";
 import {
+  captureNormalizedDisplayFont,
   captureWithGeometry,
   captureWithoutFontWait,
   loadVisualFont,
@@ -198,6 +199,32 @@ for (const [viewport, size] of VIEWPORTS) {
     });
   }
 }
+
+test("rules normalized display font @ 360px", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 360, height: 844 });
+  expect((await page.goto("/rules"))?.status()).toBe(200);
+  await page.waitForLoadState("networkidle");
+  const capture = await captureNormalizedDisplayFont(page, {
+    url: "/fonts/mona-sans-latin-wght.woff2",
+    weight: "200 900",
+    root: ".content-theme",
+    heading: ".content-theme h1",
+  });
+  expect(capture.face.status).toBe("loaded");
+  expect(capture.fonts.length).toBeGreaterThan(0);
+  expect(
+    capture.fonts.every(
+      (used) =>
+        used.isCustomFont &&
+        used.postScriptName === "MonaSansExtraLight-Regular" &&
+        used.glyphCount > 0,
+    ),
+  ).toBe(true);
+  await testInfo.attach("rules-360-normalized", {
+    body: capture.png,
+    contentType: "image/png",
+  });
+});
 
 for (const [viewport, size] of VIEWPORTS) {
   test(`cold optional fallback does not swap @ ${viewport}`, async ({ page }, testInfo) => {
