@@ -55,9 +55,9 @@ const roster = [
   }),
 ];
 
-function view(query = "", members: readonly DirectoryFixtureMember[] = roster) {
+function view(query = "", members: readonly DirectoryFixtureMember[] = roster, at = snapshotAt) {
   const projection = projectMembersDirectory(
-    { audience: "member", counts, members, weekStartsAt, snapshotAt },
+    { audience: "member", counts, members, weekStartsAt, snapshotAt: at },
     new URLSearchParams(query),
   );
   if (projection.audience !== "member") throw new Error("Expected member projection");
@@ -156,6 +156,20 @@ describe("route-free Kit members directory projection", () => {
     expect(projection.organizers).toHaveLength(4);
   });
 
+  it("includes the last instant of the selected week but no later or invalid joins", () => {
+    const nextWeek = weekStartsAt + 7 * day;
+    const members = [
+      newcomer("FirstFixture", weekStartsAt),
+      newcomer("LastFixture", nextWeek - 1),
+      newcomer("NextWeekFixture", nextWeek),
+      newcomer("InvalidFixture", NaN),
+    ];
+    expect(view("", members, nextWeek + day).newcomers.map(({ name }) => name)).toEqual([
+      "LastFixture",
+      "FirstFixture",
+    ]);
+  });
+
   it("projects only one page before transfer and normalizes out-of-range selections", () => {
     const members = Array.from({ length: 21 }, (_, i) =>
       fixture(`PagedFixture${i}`, { lastActivityAt: i }),
@@ -168,7 +182,16 @@ describe("route-free Kit members directory projection", () => {
     });
     expect(first.rows).toHaveLength(20);
     expect(first.rows[0]?.name).toBe("PagedFixture20");
-    for (const page of ["1.5", "Infinity", "abc", "9007199254740992"]) {
+    const invalidPages = [
+      "1.5",
+      "2.0000000000000001",
+      "0x2",
+      "2e0",
+      "Infinity",
+      "abc",
+      "9007199254740992",
+    ];
+    for (const page of invalidPages) {
       const invalid = view(`page=${page}`, members);
       expect(invalid.selection.page).toBe(1);
       expect(names(invalid)).toEqual(names(first));
@@ -195,5 +218,25 @@ describe("route-free Kit members directory projection", () => {
     expect(exact.selection.query).toBe(query);
     expect(names(exact)).toEqual(["ExactMatch"]);
     expect(view(`q=${query}z`, members)).toEqual(exact);
+  });
+
+  it("normalizes equivalent queries before the limit and keeps supplementary characters whole", () => {
+    const prefix = "x".repeat(memberSearchLimit - 1);
+    const members = [fixture(`${prefix}é`), fixture(`${prefix}🎮`), fixture(`${prefix}z`)];
+    for (const [input, expected] of [
+      ["é", "é"],
+      ["é", "é"],
+      ["🎮z", "🎮"],
+    ]) {
+      const projection = view(`q=${encodeURIComponent(prefix + input)}`, members);
+      expect(projection.selection.query).toBe(prefix + expected);
+      expect(names(projection)).toEqual([prefix + expected]);
+    }
+  });
+
+  it("matches Greek sigma across name and handle substring boundaries", () => {
+    const members = [fixture("ΟΣΚΑΡ"), fixture("HandleFixture", { handle: "ΟΣΚΑΡ" })];
+    expect(names(view(`q=${encodeURIComponent("ΟΣ")}`, members))).toContain("ΟΣΚΑΡ");
+    expect(names(view(`q=${encodeURIComponent("@ος")}`, members))).toContain("HandleFixture");
   });
 });

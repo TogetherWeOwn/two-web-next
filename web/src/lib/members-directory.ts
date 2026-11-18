@@ -3,6 +3,7 @@ export const MEMBER_SEARCH_LIMIT = 80;
 const PAGE_SIZE = 20;
 const NEWCOMER_LIMIT = 6;
 const ORGANIZER_LIMIT = 4;
+const WEEK_MS = 7 * 86_400_000;
 
 type MemberFilter = (typeof MEMBER_FILTERS)[number];
 type Counts = { members: number; attendedThisMonth: number };
@@ -54,16 +55,19 @@ export type MembersDirectoryView = { audience: "guest"; counts: Counts } | Membe
 
 function selectDirectory(params: URLSearchParams): DirectorySelection {
   const filter = params.get("filter");
-  const page = Number(params.get("page"));
+  const rawPage = params.get("page");
+  const page = rawPage && /^\d+$/.test(rawPage) ? Number(rawPage) : 1;
+  const query = (params.get("q") ?? "").normalize("NFKC").trim();
   return {
     filter: filter === "everyone" || filter === "guides" ? filter : "active",
-    query: (params.get("q") ?? "").trim().slice(0, MEMBER_SEARCH_LIMIT).trimEnd(),
+    query: [...query].slice(0, MEMBER_SEARCH_LIMIT).join("").trimEnd(),
     page: Number.isSafeInteger(page) && page > 0 ? page : 1,
   };
 }
 
 function searchable(text: string) {
-  return text.normalize("NFKC").toLowerCase();
+  // Lowercasing alone can give a query and its match different sigma forms.
+  return text.normalize("NFKC").toLowerCase().replaceAll("ς", "σ");
 }
 
 function identity({ name, avatarUrl }: Identity): Identity {
@@ -114,12 +118,14 @@ export function projectMembersDirectory(
   const pageCount = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
   selection.page = Math.min(selection.page, pageCount);
   const offset = (selection.page - 1) * PAGE_SIZE;
+  const weekEndsAt = input.weekStartsAt + WEEK_MS;
   const newcomers = visible
     .flatMap((member) => {
       if (!member.welcome) return [];
       const { joinedAt, day, sayHiHref } = member.welcome;
-      if (joinedAt < input.weekStartsAt || joinedAt > input.snapshotAt) return [];
-      return [{ ...identity(member), joinedAt, day, sayHiHref }];
+      return joinedAt >= input.weekStartsAt && joinedAt < weekEndsAt && joinedAt <= input.snapshotAt
+        ? [{ ...identity(member), joinedAt, day, sayHiHref }]
+        : [];
     })
     .sort((a, b) => b.joinedAt - a.joinedAt)
     .slice(0, NEWCOMER_LIMIT)
