@@ -15,41 +15,106 @@ function fixture() {
   const context = {
     templateInputs: [pin(".github/workflows/example.yml")],
     install: {
-      job: "job-1",
+      workflow: identity.workflow,
+      job: identity.job,
+      step: 1,
+      run: 0,
       root: ".",
       checkout: "checkout-1",
       method: "npm-ci",
       outcome: "success",
       dependency: "required-success",
       scriptsPolicy: "ignore-scripts=true",
-      argv: ["ci"],
-      inputs: [pin("package-lock.json")],
+      npmConfig: { includeDev: true, installStrategy: "hoisted", unknownSettings: [] },
+      argv: ["ci", "--include=dev", "--no-fund"],
+      inputs: [pin("package-lock.json"), pin("package.json"), pin(".npmrc")],
     },
     loader: {
       route: "local-playwright",
       root: ".",
       checkout: "checkout-1",
       entrypoint: "node_modules/playwright/cli.js",
+      tsxEntrypoint: null,
+      cwd: ".",
+      config: "playwright.config.ts",
+      tsconfig: "tsconfig.json",
+      resolutionPaths: ["playwright.config.js"],
       argv: ["test"],
       nodeOptions: "",
       nodePath: "",
       tsconfigOverride: "",
       resolutionOverride: "",
       unknownSettings: [],
-      inputs: [pin("playwright.config.ts")],
+      inputs: [pin("playwright.config.ts"), pin("tsconfig.json")],
     },
     effects: [
       {
         name: "prepare",
+        site: "setup:prepare",
+        step: 0,
+        run: 0,
+        kind: "audited",
         audit: "reviewed fixture",
-        writes: ["application-output"],
-        inputs: [pin("prepare.mjs")],
+        writes: ["file:generated/output.json", "env:APP_ORIGIN"],
+        inputs: [pin("prepare.mjs"), pin("prepare-helper.mjs")],
+      },
+      {
+        name: "npm ci",
+        site: "setup:install",
+        step: 1,
+        run: 0,
+        kind: "install",
+        audit: "reviewed install contract",
+        writes: ["installed-packages"],
+        inputs: [pin("package-lock.json")],
       },
     ],
   };
   return { identity, context };
 }
 const copy = (value) => structuredClone(value);
+const validate = (record, reviewed = record) =>
+  validateInvocationCertificates([copy(record)], [copy(reviewed)]);
+
+test("accepts a locked local tsx route after a successful-install prerequisite in the same step", () => {
+  const record = fixture();
+  const { install, loader, effects } = record.context;
+  install.step = effects[1].step = record.identity.step;
+  install.run = effects[1].run = record.identity.run - 1;
+  install.argv.push("--ignore-scripts", "--min-release-age=3");
+  loader.route = "local-playwright-tsx";
+  loader.tsxEntrypoint = "node_modules/tsx/dist/loader.mjs";
+  loader.nodeOptions = "--import=tsx";
+  validate(record);
+  loader.tsxEntrypoint = "elsewhere/loader.mjs";
+  assert.throws(() => validate(record), /invalid loader/);
+});
+
+test("rejects matching records that fail occurrence, install, or resolution constraints", () => {
+  for (const [mutate, error] of [
+    [(c) => (c.install.workflow = "other.yml"), /invalid install/],
+    [(c) => c.install.job++, /invalid install/],
+    [(c) => (c.install.step = 3), /invalid install/],
+    [(c) => (c.install.root = "web"), /invalid install/],
+    [(c) => c.install.inputs.shift(), /missing install/],
+    [(c) => (c.install.npmConfig.includeDev = false), /invalid install/],
+    [(c) => c.install.npmConfig.unknownSettings.push("unknown"), /invalid install/],
+    [(c) => (c.install.scriptsPolicy = "ignore-scripts=false"), /invalid install/],
+    [(c) => c.install.argv.push("--ignore-scripts=false"), /invalid install/],
+    [(c) => c.install.argv.push("--no-package-lock"), /invalid install/],
+    [(c) => c.install.argv.push("--include=dev"), /invalid install/],
+    [(c) => (c.loader.checkout = "another-checkout"), /invalid loader/],
+    [(c) => (c.loader.cwd = "web"), /invalid loader/],
+    [(c) => (c.loader.entrypoint = "somewhere/cli.js"), /invalid loader/],
+    [(c) => c.loader.argv.push("--tsconfig=alternate.json"), /invalid loader/],
+    [(c) => c.loader.inputs.pop(), /invalid loader resolution/],
+    [(c) => c.loader.resolutionPaths.push("../elsewhere"), /invalid loader resolution/],
+  ]) {
+    const record = fixture();
+    mutate(record.context);
+    assert.throws(() => validate(record), error);
+  }
+});
 
 test("matches every occurrence once, including repeated script paths", () => {
   const first = fixture();
@@ -78,6 +143,8 @@ test("rejects invalid install and loader context regardless of sibling order", (
     (c) => (c.install.root = "other-root"),
     (c) => (c.install.scriptsPolicy = "ignore-scripts=false"),
     (c) => (c.install.inputs[0].sha256 = "b".repeat(64)),
+    (c) => (c.install.inputs[2].sha256 = "b".repeat(64)),
+    (c) => (c.loader.resolutionPaths = []),
     (c) => (c.loader.nodeOptions = "--require unexpected"),
     (c) => (c.loader.nodePath = "elsewhere"),
     (c) => (c.loader.tsconfigOverride = "other.json"),
@@ -92,6 +159,7 @@ test("rejects invalid install and loader context regardless of sibling order", (
   for (const mutate of cases) {
     const bad = copy(good);
     bad.identity.job++;
+    bad.context.install.job = bad.identity.job;
     const reviewed = [copy(good), copy(bad)];
     mutate(bad.context);
     for (const observed of [
@@ -188,6 +256,44 @@ test("rejects malformed edge positions and write arrays on either side", () => {
   }
 });
 
+test("checks matching effects for install order, checkout identity, and protected writes", () => {
+  for (const [mutate, error] of [
+    [(c) => c.effects.pop(), /missing install effect/],
+    [(c) => c.effects.reverse(), /invalid effects/],
+    [(c) => (c.effects[0].site = c.effects[1].site), /invalid effects/],
+    [(c) => (c.effects[1].run = 1), /invalid install effect/],
+    [(c) => (c.effects[1].inputs[0].sha256 = "b".repeat(64)), /conflicting snapshot pins/],
+    [(c) => (c.effects[0].step = 3), /invalid effects/],
+  ]) {
+    const record = fixture();
+    mutate(record.context);
+    assert.throws(() => validate(record), error);
+  }
+  for (const write of [
+    "env:PATH",
+    "env:NODE_OPTIONS",
+    "env:npm_config_ignore_scripts",
+    "file:.npmrc",
+    "file:playwright.config.js",
+    "file:node_modules/example",
+    "file:prepare-helper.mjs",
+    "file:./generated/output.json",
+  ]) {
+    const record = fixture();
+    record.context.effects[0].writes.push(write);
+    assert.throws(() => validate(record), /invalid effect write/);
+  }
+  const record = fixture();
+  const checkout = Object.assign(record.context.effects[0], {
+    kind: "checkout",
+    writes: ["checkout"],
+    checkout: record.context.install.checkout,
+  });
+  validate(record);
+  checkout.checkout = "another-checkout";
+  assert.throws(() => validate(record), /invalid checkout effect/);
+});
+
 test("rejects changed or incomplete ordered effect evidence", () => {
   const reviewed = fixture();
   for (const mutate of [
@@ -198,7 +304,10 @@ test("rejects changed or incomplete ordered effect evidence", () => {
       c.effects.push(copy(c.effects[0]));
     },
     (c) => {
-      c.effects[0].inputs[0].sha256 = "c".repeat(64);
+      c.effects.reverse();
+    },
+    (c) => {
+      c.effects[0].inputs[1].sha256 = "c".repeat(64);
     },
     (c) => {
       c.effects[0].writes.push("NODE_OPTIONS");
