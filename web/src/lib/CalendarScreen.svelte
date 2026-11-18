@@ -23,6 +23,8 @@ import {
   type CalendarEmptyState,
   type CalendarState,
 } from "../../../src/islands/contracts";
+import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
+import type { JoinResult } from "../../../src/return-journey";
 import type { CalendarGridProps } from "./calendar-grid";
 import type { CalendarListCard, CalendarPersistedCard } from "./calendar-list";
 import CalendarControls from "./CalendarControls.svelte";
@@ -54,6 +56,7 @@ let {
   inviteUrl,
   member,
   loginReturnTo = null,
+  joinResult = null,
   weeks,
   zone,
   now,
@@ -76,6 +79,7 @@ let {
   inviteUrl: string;
   member: boolean;
   loginReturnTo?: string | null;
+  joinResult?: JoinResult | null;
   weeks: CalendarGridProps["weeks"];
   zone: string;
   now: Date;
@@ -90,6 +94,15 @@ let searching = $derived(calendarSearching(state));
     <p>Game nights, tournaments and whatever else the community puts on.</p>
     {#if !member}<a class="btn" href={loginReturnTo ? `/join?next=${encodeURIComponent(loginReturnTo)}` : "/join"}>Join the Discord</a>{/if}
   </div>
+  {#if joinResult}
+    <p class="notice" role="status" data-testid="join-result">
+      {#if joinResult === "added"}
+        {HOME_JOIN_RESULT_COPY.added}
+      {:else}
+        {HOME_JOIN_RESULT_COPY.alreadyInServer}{" "}<a href="/discord" data-testid="reinvite-link">{HOME_JOIN_RESULT_COPY.reinvite}</a>
+      {/if}
+    </p>
+  {/if}
   <CalendarControls {state} {appUrl} {games} {gameFilter} {searching} pastCount={past.length} {emptyState} {hasVisibleResults} {outOfRange} />
   <p role="status" {...{ [EVENTS_CAL_FEEDBACK]: true }}></p>
   <div>

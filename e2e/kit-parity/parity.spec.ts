@@ -1884,7 +1884,35 @@ test("cross-target: normalized archive sections match", async () => {
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
-test("cross-target: normalized events-calendar sections match", async ({ playwright }) => {
+test("cross-target: normalized events-calendar sections match", async ({ playwright, page }) => {
+  // Compare parsed SSR, not serializer whitespace, attribute order, or
+  // Svelte markers. The reviewed segmented view links have a nav wrapper;
+  // normalize only that wrapper, leaving the links and selection intact.
+  const calendarSection = async (html: string) =>
+    normalizeSection(
+      await page.evaluate((html) => {
+        const document = new DOMParser().parseFromString(html, "text/html");
+        const section = document.querySelector('section[data-testid="events-calendar"]');
+        if (!section) throw new Error("Missing calendar section");
+        const segments = section.querySelector('nav.segments[aria-label="How to show the events"]');
+        if (segments) {
+          const group = document.createElement("div");
+          group.className = "schedule-views";
+          group.setAttribute("role", "group");
+          group.setAttribute("aria-label", "How to show the events");
+          while (segments.firstChild) group.appendChild(segments.firstChild);
+          segments.replaceWith(group);
+        }
+        for (const element of [section, ...section.querySelectorAll("*")]) {
+          const attrs = [...element.attributes].sort((a, b) => a.name.localeCompare(b.name));
+          for (const { name, value } of attrs) {
+            element.removeAttribute(name);
+            element.setAttribute(name, value);
+          }
+        }
+        return section.outerHTML.replace(/<!--[\s\S]*?-->/g, "");
+      }, html),
+    );
   const bodies = new Map<string, string>();
   for (const target of targets) {
     // A fresh jar prevents authentication by the shared QA-login cookie.
@@ -1911,14 +1939,12 @@ test("cross-target: normalized events-calendar sections match", async ({ playwri
   }
   // Non-vacuous equality: the compared sections carry the seeded row, so
   // two empty lists cannot pass for parity.
-  expect(
-    sectionOf(bodies.get("hono")!, "events-calendar"),
-    "Hono events-calendar section carries the seeded row",
-  ).toContain("E2E Community Night");
-  expect(
-    sectionOf(bodies.get("kit")!, "events-calendar"),
-    "Kit section matches Hono section after origin normalization",
-  ).toBe(sectionOf(bodies.get("hono")!, "events-calendar"));
+  const hono = await calendarSection(bodies.get("hono")!);
+  const kit = await calendarSection(bodies.get("kit")!);
+  expect(hono, "Hono events-calendar section carries the seeded row").toContain(
+    "E2E Community Night",
+  );
+  expect(kit, "Kit matches the Hono calendar contract after normalization").toBe(hono);
 });
 
 test("cross-target: normalized member-board tables match", async () => {

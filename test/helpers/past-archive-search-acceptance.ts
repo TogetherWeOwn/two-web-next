@@ -15,7 +15,6 @@ import type { Env } from "../../src/env";
 import { discordEventsSource } from "../../src/events/discord-transients";
 import { eventLinkAvailability, listPast, type PublicEvent } from "../../src/events/reads";
 import { dispatchEventsRequest, loadEventsPage } from "../../src/kit-events";
-import { renderEventsHtml } from "../../src/kit-events-html";
 import {
   dispatchPastArchiveRequest,
   loadPastArchivePage,
@@ -211,7 +210,6 @@ const kitDependencies = {
   loadPastArchivePage,
   toPublicPastArchiveRow,
   loadEventsPage,
-  renderEventsHtml,
   kitEventsSessionFor,
   kitEventsJourneyFor,
   discordEventsSource,
@@ -237,7 +235,6 @@ export async function compileArchiveKit() {
     [join(root, "src/events/reads.ts"), ["listPast", "eventLinkAvailability"]],
     [join(root, "src/kit-past-events.ts"), ["loadPastArchivePage", "toPublicPastArchiveRow"]],
     [join(root, "src/kit-events.ts"), ["loadEventsPage"]],
-    [join(root, "src/kit-events-html.ts"), ["renderEventsHtml"]],
     [join(root, "src/kit-session.ts"), ["kitEventsSessionFor", "kitEventsJourneyFor"]],
     [join(root, "src/events/discord-transients.ts"), ["discordEventsSource"]],
   ]);
@@ -317,6 +314,14 @@ export async function compileArchiveKit() {
               args.path === "bindings"
                 ? "export let env, deps; export function bind(e,d){env=e;deps=d;}"
                 : 'export {env} from "acceptance:bindings";',
+            loader: "js",
+          }));
+          plugin.onResolve({ filter: /segmented-control\.css\?url$/ }, () => ({
+            path: "calendar-css",
+            namespace: "acceptance-asset",
+          }));
+          plugin.onLoad({ filter: /.*/, namespace: "acceptance-asset" }, () => ({
+            contents: 'export default "/_app/immutable/assets/segmented-control.fixture.css";',
             loader: "js",
           }));
           plugin.onLoad({ filter: /\.svelte$/ }, (args) => ({

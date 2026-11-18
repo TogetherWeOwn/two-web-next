@@ -708,10 +708,9 @@ function assertJoinContract(label, html, get, expected) {
   return failures;
 }
 
-// Events-list contract (src/events/pages-calendar-screen.tsx via
-// src/kit-events-html.tsx): the native endpoint renders the Hono calendar
-// screen, so the island identity, view toggles, search form, archive and
-// subscribe links and markdown alternate ride both renderers. Rows are live
+// Events-list contract: Hono and Kit use the same island identity, view
+// toggles, search form, archive and subscribe links, and Markdown alternate.
+// The Kit endpoint renders the calendar body in the shared shell. Rows are live
 // reads (staging is often empty), so cards are never required here — the
 // hermetic calendar-parity and acceptance suites pin seeded rows. Cache
 // acceptance: public 60 only without a flash, session or search, otherwise
