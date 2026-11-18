@@ -1,5 +1,6 @@
 import { pgReconciliationStore } from "../jobs/reconciliation";
 import type { TxClient } from "../jobs/types";
+import { reconciliationResolutionInput } from "./reconciliation-input";
 
 /** Record only the bounded resolution category, not a bot response or payload. */
 export async function recordReconciliationResolution(
@@ -26,4 +27,18 @@ export function resolveReconciliation(
   return store.resolve(key, actorId, resolution, (tx) =>
     recordReconciliationResolution(tx, actorId, key, resolution),
   );
+}
+
+/** Validate route input before attempting the audited conditional write. */
+export async function submitReconciliationResolution(
+  store: Pick<ReturnType<typeof pgReconciliationStore>, "resolve">,
+  actorId: string,
+  key: unknown,
+  resolution: unknown,
+): Promise<"invalid" | "resolved" | "unchanged"> {
+  const input = reconciliationResolutionInput(key, resolution);
+  if (!input) return "invalid";
+  return (await resolveReconciliation(store, input.key, actorId, input.resolution))
+    ? "resolved"
+    : "unchanged";
 }
