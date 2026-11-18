@@ -40,6 +40,19 @@ describe("TimeBlock server output", () => {
     expect(previousDay).toMatch(/as of\s*<time[^>]*>6 Nov 23:50<\/time>/);
   });
 
+  it("keeps conditional separators attached without a preceding ordinary space", () => {
+    for (const props of [
+      base,
+      { ...base, state: "live" },
+      { ...base, state: "live", asOf: "invalid" },
+      { ...base, state: "ended" },
+      { ...base, state: "cancelled" },
+    ]) {
+      const html = render(props);
+      expect(html).not.toMatch(/ (?:&nbsp;|&#160;| )·/);
+    }
+  });
+
   it("withdraws live and room count claims but retains the snapshot time", () => {
     const html = render({ ...base, state: "live", roomCount: 8 });
     expect(html).toContain("live as of");
