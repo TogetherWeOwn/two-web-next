@@ -75,8 +75,9 @@ export function enumerateInvocationOccurrences(workflowCommands, scripts, projec
         command: source.location,
         npmEdges: edges,
       });
+      // The ancestry array and frames spend budget, but depth starts at each parent command.
       const result = includeAncestry
-        ? project(occurrence, source, workflow, clone(ancestry))
+        ? project(occurrence, source, workflow, clone(ancestry, new WeakMap(), -2))
         : project(occurrence, source, workflow);
       if (isPromise(result)) {
         // The synchronous refusal is authoritative; drain the promise rejection.

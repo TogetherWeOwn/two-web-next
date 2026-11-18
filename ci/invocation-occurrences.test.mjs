@@ -218,6 +218,24 @@ test("accepts 128 nested projection objects and rejects the 129th", () => {
   );
 });
 
+test("ancestry preserves the parent command clone depth limit", () => {
+  let metadata = {};
+  for (let depth = 2; depth < 128; depth++) metadata = { child: metadata };
+  const root = { ...command(0, [edge("leaf", 1)]), metadata };
+  const scripts = { leaf: [command(2)] };
+  const project = (occurrence, _source, _workflow, ancestry) => [
+    occurrence.command,
+    ancestry.map(({ command: parent }) => parent.location),
+  ];
+  assert.deepEqual(
+    enumerateInvocationOccurrences([root], scripts, project, { includeAncestry: true }),
+    [
+      [0, []],
+      [2, [0]],
+    ],
+  );
+});
+
 test("refuses async projections instead of returning a rejected promise", () => {
   const root = { ...command(0), origin };
   assert.throws(
