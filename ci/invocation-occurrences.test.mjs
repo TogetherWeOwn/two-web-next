@@ -138,6 +138,35 @@ test("bounds repeated projection copies without changing ordinary traversal", ()
   assert.equal(enumerateInvocationOccurrences([small], scripts, (value) => value).length, 2);
 });
 
+test("accepts the exact projection copy budget and rejects one unit more", () => {
+  const root = command(0, [edge("leaf", 0)]);
+  const project = (occurrence) => occurrence.command;
+  const scripts = (length) => ({ leaf: [{ ...command(1), metadata: "x".repeat(length) }] });
+  // The six snapshots cost 254 units with empty leaf metadata. Its string is
+  // copied only in the leaf source snapshot, so each character adds one unit.
+  const limit = 1_000_000 - 254;
+  assert.deepEqual(enumerateInvocationOccurrences([root], scripts(limit), project), [0, 1]);
+  assert.throws(
+    () => enumerateInvocationOccurrences([root], scripts(limit + 1), project),
+    /projection clone limit exceeded/,
+  );
+});
+
+test("accepts 128 nested projection objects and rejects the 129th", () => {
+  const roots = (depth) => {
+    let metadata = {};
+    // The command itself counts as the outermost object.
+    for (let i = 2; i < depth; i++) metadata = { child: metadata };
+    return [{ ...command(0), metadata }];
+  };
+  const project = (occurrence) => occurrence.command;
+  assert.deepEqual(enumerateInvocationOccurrences(roots(128), {}, project), [0]);
+  assert.throws(
+    () => enumerateInvocationOccurrences(roots(129), {}, project),
+    /projection clone depth limit exceeded/,
+  );
+});
+
 test("refuses async projections instead of returning a rejected promise", () => {
   const root = { ...command(0), origin };
   assert.throws(
