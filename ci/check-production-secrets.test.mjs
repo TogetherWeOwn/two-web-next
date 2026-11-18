@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
+import { parseDocument } from "yaml";
 import {
   REQUIRED_PRODUCTION_SECRETS,
   checkProductionSecrets,
@@ -643,19 +644,20 @@ function jobEnvironment(lines) {
 // `environment: production` (pinned by the rollback-workflow test).
 // Anything else — another callee, no environment input, or a non-production
 // one — still fails closed. Never exempted by job name.
-const ROLLBACK_CALLEE =
-  /^ {4}uses:\s*(?:\.\/\.github\/workflows\/rollback-production\.yml|TogetherWeOwn\/two-web-next\/\.github\/workflows\/rollback-production\.yml@38581ef492f5c972969f5dfada396a9f0e2ee989)\s*$/;
+const ROLLBACK_CALLEES = new Set([
+  "./.github/workflows/rollback-production.yml",
+  "TogetherWeOwn/two-web-next/.github/workflows/rollback-production.yml@38581ef492f5c972969f5dfada396a9f0e2ee989",
+]);
 
 function delegatesToRollback(lines, environment) {
-  if (!lines.some((line) => ROLLBACK_CALLEE.test(line))) return false;
-  const at = lines.findIndex((line) => /^ {4}with:\s*$/.test(line));
-  if (at < 0) return false;
-  for (const line of lines.slice(at + 1)) {
-    if (/^ {4}\S/.test(line)) break;
-    const pin = /^ {6}environment:\s*(.+)$/.exec(line);
-    if (pin) return stripQuotes(pin[1]).toLowerCase() === environment;
+  const document = parseDocument(lines.join("\n"));
+  if (document.errors.length > 0) return false;
+  try {
+    const job = document.toJS({ maxAliasCount: 0 });
+    return ROLLBACK_CALLEES.has(job?.uses) && job?.with?.environment === environment;
+  } catch {
+    return false;
   }
-  return false;
 }
 
 export function productionSecretEnvironmentViolations(text, file) {
@@ -1237,8 +1239,16 @@ test("staging-pinned reusable caller passes staging secrets through without a jo
   }
   const quoted = pinned.replace("environment: staging", "environment: 'staging'");
   assert.deepEqual(stagingCloudflareEnvironmentViolations(quoted, "fixture.yml"), [], "quoted pin");
-  const uppercase = pinned.replace("environment: staging", "environment: STAGING");
-  assert.deepEqual(stagingCloudflareEnvironmentViolations(uppercase, "fixture.yml"), [], "case");
+  for (const value of ["STAGING", "staging\n        extra"]) {
+    const invalid = pinned.replace("environment: staging", `environment: ${value}`);
+    assert.equal(stagingCloudflareEnvironmentViolations(invalid, "fixture.yml").length, 1, value);
+  }
+  for (const value of ["PRODUCTION", "production\n        extra"]) {
+    const invalid = pinned
+      .replace("environment: staging", `environment: ${value}`)
+      .replaceAll("secrets.CLOUDFLARE_", "secrets.PRODUCTION_CLOUDFLARE_");
+    assert.equal(productionSecretEnvironmentViolations(invalid, "fixture.yml").length, 1, value);
+  }
   // A remote callee's `environment` input has unknown semantics: fail closed.
   const remote = pinned.replace(
     "uses: ./.github/workflows/rollback-production.yml",
