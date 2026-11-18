@@ -110,8 +110,10 @@ test("Hono exposes each consumed role once and omits unread roles", () => {
     const consumed = new RegExp(`var\\(\\s*--${alias}(?=[\\s,)])`).test(consumers);
     assert.equal([...css.matchAll(new RegExp(`--${alias}:`, "g"))].length, consumed ? 1 : 0, alias);
   }
+  const facade = outputs.get("public/theme-tokens.css");
+  assert.match(facade, /schedule-theme[^}]*--hair1:/);
+  assert.ok(!facade.includes("--hair2:"));
   for (const alias of ["hair1", "hair2"]) {
-    assert.ok(!outputs.get("public/theme-tokens.css").includes(`--${alias}:`));
     assert.ok(!outputs.get("public/theme.css").includes(`--${alias}:`));
     assert.ok(!outputs.get("web/src/ember-theme.css").includes(`--${alias}:`));
     assert.ok(outputs.get("web/src/ember-theme.css").includes(`--color-${alias}:`));
@@ -129,10 +131,11 @@ test("new authored role reads regenerate aliases and reject stale artifacts", ()
       build(root);
       const file = join(root, path);
       const before = readFileSync(file, "utf8");
-      writeFileSync(file, `${before}\n.probe{padding:var( --space-4 )}`);
+      writeFileSync(file, `${before}\n.probe{padding:var( --space-3 )}`);
       assert.throws(() => check(root), /generated token drift/);
-      const styles = generate(root).get("public/styles.css");
-      assert.equal([...styles.matchAll(/--space-4:16px/g)].length, 1, path);
+      const sheet = path === "public/kit-events-controls.css" ? "theme-tokens" : "styles";
+      const css = generate(root).get(`public/${sheet}.css`);
+      assert.equal([...css.matchAll(/--space-3:12px/g)].length, 1, path);
       writeFileSync(file, before);
     }
   });
