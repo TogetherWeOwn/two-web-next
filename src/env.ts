@@ -94,6 +94,8 @@ export type Env = AgentEventsEnv & {
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
   // Loopback Kit parity fixture only; the shipped join entry stays disabled.
   KIT_PARITY_FIXTURE_JOIN?: string;
+  // Loopback Kit parity fixture only; serves GET /admin for dashboard captures.
+  KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
   // Generated local capture build only; no deployed config defines the build gate.
   SSR_CAPTURE_FIXTURE?: string;
   // Staging Kit rollout controls (web/wrangler.staging.jsonc only). The exact
