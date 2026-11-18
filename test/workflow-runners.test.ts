@@ -82,19 +82,19 @@ function expectHostedJob(name: string, id: string, job: Job) {
       const org = job.uses.match(/^TogetherWeOwn\/\.github\/\.github\/workflows\/(.+)$/)?.[1];
       const input = verifiedHostedOrgReusables.get(org ?? "");
       expect(input, `${label} uses an assessed reusable workflow: ${job.uses}`).toBeDefined();
-      if (input && job.with && Object.hasOwn(job.with, input)) {
-        expect(job.with[input], `${label} overrides ${input} only with hosted Linux`).toBe(
-          hostedJson,
-        );
+      for (const [key, value] of Object.entries(job.with ?? {})) {
+        // GitHub matches reusable-workflow inputs case-insensitively.
+        if (key.toLowerCase() === input) {
+          expect(value, `${label} overrides ${key} only with hosted Linux`).toBe(hostedJson);
+        }
       }
     }
   }
   for (const inputs of [job.with, ...(job.steps ?? []).map((step) => step.with)]) {
-    for (const key of ["runs-on", "runs-on-json"]) {
-      if (inputs && Object.hasOwn(inputs, key)) {
-        expect([JSON.stringify(hosted), hostedJson], `${label} input ${key}`).toContain(
-          inputs[key],
-        );
+    for (const [key, value] of Object.entries(inputs ?? {})) {
+      const input = key.toLowerCase();
+      if (input === "runs-on" || input === "runs-on-json") {
+        expect([JSON.stringify(hosted), hostedJson], `${label} input ${key}`).toContain(value);
       }
     }
   }
@@ -329,6 +329,26 @@ describe("workflow runner labels", () => {
     ).toThrow("input runs-on-json");
   });
 
+  it("checks mixed-case runner input names", () => {
+    const uses =
+      "TogetherWeOwn/.github/.github/workflows/test-guard.yml@2ef8ad6447e11d019ac3098bcfd011193b75266a";
+    expect(() =>
+      expectHostedJob("fixture.yml", "call", { uses, with: { "Runs-On-Json": hostedJson } }),
+    ).not.toThrow();
+    expect(() =>
+      expectHostedJob("fixture.yml", "call", {
+        uses,
+        with: { "Runs-On-Json": '["windows-latest"]' },
+      }),
+    ).toThrow("overrides Runs-On-Json only with hosted Linux");
+    expect(() =>
+      expectHostedJob("fixture.yml", "direct", {
+        "runs-on": hosted,
+        steps: [{ with: { "Runs-On": '"windows-latest"' } }],
+      }),
+    ).toThrow("input Runs-On");
+  });
+
   it("does not restore retired fleet or overflow settings in workflow source", () => {
     for (const { name, text } of workflows) {
       const retired = text
@@ -343,11 +363,15 @@ describe("workflow runner labels", () => {
   });
 
   it("requires a separate assessment before allowing frozen local calls from PR events", () => {
-    const prWorkflows = workflows.filter(({ name, source }) => {
-      const triggers = events(source.on);
-      expect(triggers.length, `${name} declares workflow events`).toBeGreaterThan(0);
-      return triggers.includes("pull_request") || triggers.includes("merge_group");
-    });
+    for (const { name, source } of workflows) {
+      expect(events(source.on).length, `${name} declares workflow events`).toBeGreaterThan(0);
+    }
+    const prWorkflows = workflows.filter(({ source }) =>
+      events(source.on).includes("pull_request"),
+    );
+    const mergeQueueWorkflows = workflows.filter(({ source }) =>
+      events(source.on).includes("merge_group"),
+    );
     expect(prWorkflows.map(({ name }) => name)).toEqual(
       expect.arrayContaining([
         "backup-bootstrap-selftest.yml",
@@ -356,11 +380,9 @@ describe("workflow runner labels", () => {
         "pr-gates.yml",
       ]),
     );
-    expect(
-      workflows
-        .filter(({ source }) => events(source.on).includes("merge_group"))
-        .map(({ name }) => name),
-    ).toEqual(expect.arrayContaining(["ci.yml", "e2e.yml", "pr-gates.yml"]));
+    expect(mergeQueueWorkflows.map(({ name }) => name)).toEqual(
+      expect.arrayContaining(["ci.yml", "e2e.yml", "pr-gates.yml"]),
+    );
     // A relative reusable-workflow call inherits the caller's event.
     const visited = new Set<string>();
     const checkCalls = ({ name, source }: (typeof workflows)[number]) => {
@@ -379,6 +401,6 @@ describe("workflow runner labels", () => {
         }
       }
     };
-    for (const workflow of prWorkflows) checkCalls(workflow);
+    for (const workflow of [...prWorkflows, ...mergeQueueWorkflows]) checkCalls(workflow);
   });
 });
