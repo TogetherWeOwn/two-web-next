@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { createDiscordReadRendezvous } from "./kit-discord-read-rendezvous.mjs";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -115,6 +116,41 @@ test("both loopback parity workers inject the same healthy-empty Discord seam", 
     /DISCORD_EVENTS: \{\s*upcoming: async \(\) => \[\],\s*lastReadFailed: \(\) => request\.headers\.get\("x-e2e-discord-read"\) === "failed",\s*\}/,
   );
 });
+
+for (const [arrival, timely] of [
+  [9_999, true],
+  [10_000, false],
+  [10_001, false],
+]) {
+  test(`the Kit Discord overlap deadline uses the second arrival at ${arrival}ms`, async () => {
+    let clock = 0;
+    let resume;
+    const wait = createDiscordReadRendezvous({
+      now: () => clock,
+      pause: () =>
+        new Promise((resolve) => {
+          resume = resolve;
+        }),
+    });
+    const first = wait("pair", true);
+    assert.equal(typeof resume, "function", "the first read must still be waiting");
+
+    clock = arrival;
+    const second = wait("pair", false);
+    // The partner arrives before the first poll resumes, but not always in time.
+    clock = 10_010;
+    resume();
+
+    if (timely) {
+      await Promise.all([first, second]);
+    } else {
+      await Promise.all([
+        assert.rejects(first, /Timed out waiting for the other Kit Discord read/),
+        assert.rejects(second, /Timed out waiting for the other Kit Discord read/),
+      ]);
+    }
+  });
+}
 
 test("both loopback parity workers share the raised read budget", () => {
   // The Kit fixture enforces the same `events-read:anon` bucket as the Hono
