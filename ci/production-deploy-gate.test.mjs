@@ -792,10 +792,9 @@ test("production workflow uses hosted runners and production-only secrets", () =
   assert.ok(!workflow.includes("wrangler deploy --env production"));
 });
 
-function* workflowExpressions(value, key) {
+function* workflowExpressions(value, isCondition = false) {
   if (typeof value === "string") {
-    // GitHub allows `if` expressions without interpolation delimiters.
-    if (key === "if" && !value.trimStart().startsWith("${{")) {
+    if (isCondition && !value.trimStart().startsWith("${{")) {
       yield value;
       return;
     }
@@ -813,8 +812,15 @@ function* workflowExpressions(value, key) {
       }
     }
   } else if (value && typeof value === "object") {
-    for (const [childKey, child] of Object.entries(value))
-      yield* workflowExpressions(child, childKey);
+    for (const child of Object.values(value)) yield* workflowExpressions(child);
+  }
+}
+
+function* deployExpressions({ steps, ...job }) {
+  // Only the job and its steps have `if` conditions with optional delimiters.
+  for (const { if: condition, ...fields } of [job, ...steps]) {
+    yield* workflowExpressions(condition, true);
+    yield* workflowExpressions(fields);
   }
 }
 
@@ -852,7 +858,7 @@ function assertProductionBaselineScope(workflow) {
     );
   }
   let baselineRefs = 0;
-  for (const expression of workflowExpressions(deploy)) {
+  for (const expression of deployExpressions(deploy)) {
     // Skip quoted literals and property names. Only read `steps` by literal step ID.
     const lookups =
       /'(?:[^']|'')*'|\.\s*[\w-]+|(?<![\w-])(steps)(?![\w-])(?:\s*(?:\.\s*([\w-]+)|\[\s*'([\w-]+)'\s*\]))?/gi;
@@ -921,6 +927,19 @@ test("production dead-letter baseline scope rejects workflow defaults and extra 
     );
     assert.throws(() => assertProductionBaselineScope(withExtraRead), error);
   }
+});
+
+test("production dead-letter baseline scope checks interpolation in an env key named if", () => {
+  const workflow = parseDocument(productionWorkflow());
+  workflow.addIn(["jobs", "deploy-production", "steps"], {
+    name: "Read an extra output in env",
+    env: { if: "baseline: '${{ steps.dead-letter-baseline.outputs.failed }}'" },
+    run: "true",
+  });
+  assert.throws(
+    () => assertProductionBaselineScope(workflow.toString()),
+    /must not be read under another variable/,
+  );
 });
 
 test("production dead-letter baseline scope rejects whole-context and wildcard reads", () => {
