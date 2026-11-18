@@ -96,3 +96,57 @@ export async function captureWithGeometry(
   const dimensions = { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
   return { png, dimensions, before, after };
 }
+
+/** Normalize an existing display token without changing which elements use it. */
+export async function captureNormalizedDisplayFont(
+  page: Page,
+  options: { url: string; weight?: string; root: string; heading: string },
+) {
+  const face = await loadVisualFont(page, options);
+  const token = await page.locator(options.root).evaluate((element, family) => {
+    const root = element as HTMLElement;
+    const original = getComputedStyle(root)
+      .getPropertyValue("--font-display")
+      .replace(/^[\t\n\f\r ]+/g, "");
+    if (!original || /^[\t\n\f\r ]+$/.test(original))
+      throw new Error("Expected a nonempty --font-display stack");
+    let quote = "";
+    let separator = original.length;
+    for (let i = 0; i < original.length; i++) {
+      const char = original[i];
+      if (char === "\\") {
+        i++;
+      } else if (quote) {
+        if (char === quote) quote = "";
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === "/" && original[i + 1] === "*") {
+        const end = original.indexOf("*/", i + 2);
+        if (end === -1) throw new Error("Unterminated comment in --font-display stack");
+        i = end + 1;
+      } else if (char === ",") {
+        separator = i;
+        break;
+      }
+    }
+    const normalized = `"${family}"${original.slice(separator)}`;
+    root.style.setProperty("--font-display", normalized);
+    const effective = getComputedStyle(root).getPropertyValue("--font-display");
+    if (effective !== normalized) throw new Error("Display token override did not take effect");
+    return { original, normalized: effective };
+  }, face.family);
+  const capture = await captureWithGeometry(
+    page,
+    { heading: options.heading },
+    {
+      animations: "disabled",
+      caret: "hide",
+      scale: "css",
+    },
+  );
+  const headingFamily = await page.locator(options.heading).evaluate((element) => {
+    return getComputedStyle(element).fontFamily;
+  });
+  const fonts = await renderedPlatformFonts(page, options.heading);
+  return { face, token, headingFamily, fonts, ...capture };
+}
