@@ -107,8 +107,9 @@ export async function captureNormalizedDisplayFont(
     const root = element as HTMLElement;
     const original = getComputedStyle(root)
       .getPropertyValue("--font-display")
-      .replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
-    if (!original) throw new Error("Expected a nonempty --font-display stack");
+      .replace(/^[\t\n\f\r ]+/g, "");
+    if (!original || /^[\t\n\f\r ]+$/.test(original))
+      throw new Error("Expected a nonempty --font-display stack");
     let quote = "";
     let separator = original.length;
     for (let i = 0; i < original.length; i++) {
@@ -119,6 +120,10 @@ export async function captureNormalizedDisplayFont(
         if (char === quote) quote = "";
       } else if (char === '"' || char === "'") {
         quote = char;
+      } else if (char === "/" && original[i + 1] === "*") {
+        const end = original.indexOf("*/", i + 2);
+        if (end === -1) throw new Error("Unterminated comment in --font-display stack");
+        i = end + 1;
       } else if (char === ",") {
         separator = i;
         break;
@@ -126,7 +131,9 @@ export async function captureNormalizedDisplayFont(
     }
     const normalized = `"${family}"${original.slice(separator)}`;
     root.style.setProperty("--font-display", normalized);
-    return { original, normalized };
+    const effective = getComputedStyle(root).getPropertyValue("--font-display");
+    if (effective !== normalized) throw new Error("Display token override did not take effect");
+    return { original, normalized: effective };
   }, face.family);
   const capture = await captureWithGeometry(
     page,
@@ -137,6 +144,9 @@ export async function captureNormalizedDisplayFont(
       scale: "css",
     },
   );
+  const headingFamily = await page.locator(options.heading).evaluate((element) => {
+    return getComputedStyle(element).fontFamily;
+  });
   const fonts = await renderedPlatformFonts(page, options.heading);
-  return { face, token, fonts, ...capture };
+  return { face, token, headingFamily, fonts, ...capture };
 }

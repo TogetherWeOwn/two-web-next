@@ -89,6 +89,8 @@ for (const [description, stack, fallback] of [
   ["escaped comma", "Original\\,Display, serif", ", serif"],
   ["multiline fallback", "Original Display,\nGeorgia, serif", ",\nGeorgia, serif"],
   ["non-CSS whitespace in fallback", "Original Display, Georgia ", ", Georgia "],
+  ["comma in a comment", "Original /* , */ Display, Georgia, serif", ", Georgia, serif"],
+  ["escaped final space", "Original Display, /* keep */ Backup\\ ", ", /* keep */ Backup\\ "],
 ]) {
   test(`normalizes a display stack with ${description}`, async ({ page }) => {
     await page.goto("/rules");
@@ -129,6 +131,19 @@ for (const [description, value] of [
   });
 }
 
+test("rejects a display token override blocked by an important declaration", async ({ page }) => {
+  await page.route("**/important-font-fixture", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<style>main { --font-display: Original, serif !important; }</style><main><h1>Fixture</h1></main>",
+    }),
+  );
+  await page.goto("/important-font-fixture");
+  await expect(
+    captureNormalizedDisplayFont(page, { url: FONT_URL, root: "main", heading: "h1" }),
+  ).rejects.toThrow("Display token override did not take effect");
+});
+
 test("normalized display font evidence on a fixture @ 360", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 360, height: 844 });
   await page.route("**/visual-font-fixture", (route) =>
@@ -158,6 +173,7 @@ test("normalized display font evidence on a fixture @ 360", async ({ page }, tes
   expect(capture.face.status).toBe("loaded");
   expect(capture.token.original).toBe('"Original, Display", Georgia, serif');
   expect(capture.token.normalized).toBe(`"${capture.face.family}", Georgia, serif`);
+  expect(capture.headingFamily.split(",")[0]?.replaceAll('"', "").trim()).toBe(capture.face.family);
   expect(capture.fonts).toHaveLength(1);
   expect(capture.fonts[0]?.familyName).toMatch(/^Mona Sans(?:\s|$)/);
   expect(capture.fonts[0]?.isCustomFont).toBe(true);
