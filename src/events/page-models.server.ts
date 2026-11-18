@@ -87,7 +87,7 @@ export interface CalendarPageModel {
   upcoming: (PublicEvent | DiscordTransient)[];
   past: PublicEvent[];
   pastMayBeTruncated?: boolean;
-  upcomingMonthMayBeTruncated?: boolean;
+  monthReadMayBeIncomplete?: boolean;
   zone: string;
   totalPages: number;
   emptyState: ReturnType<typeof calendarEmptyState>;
@@ -197,11 +197,12 @@ export async function loadCalendarPageModel(args: {
 
   let upcoming = probe;
   let zone = probeZone;
-  let upcomingMonthMayBeTruncated = false;
+  let monthReadMayBeIncomplete = false;
   const month = parseCalendarMonth(input.month) ?? fallbackMonth;
   if (view === "calendar") {
     const monthRows = await listUpcomingForMonth(db, month, now, opts);
-    upcomingMonthMayBeTruncated = monthRows.mayBeTruncated ?? false;
+    monthReadMayBeIncomplete =
+      monthRows.mayBeTruncated === true || localPast.discardedStartMonths?.has(month) === true;
     zone = calendarZone([
       ...monthRows.map((event) => event.timezone),
       ...localPast.map((event) => event.timezone),
@@ -252,7 +253,7 @@ export async function loadCalendarPageModel(args: {
     upcoming,
     past: localPast,
     pastMayBeTruncated: localPast.mayBeTruncated,
-    upcomingMonthMayBeTruncated,
+    monthReadMayBeIncomplete,
     zone,
     totalPages,
     emptyState,

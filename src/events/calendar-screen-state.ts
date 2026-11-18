@@ -22,7 +22,7 @@ export interface CalendarScreenStateInput {
   upcoming: CalRow[];
   past: PublicEvent[];
   pastMayBeTruncated?: boolean;
-  upcomingMonthMayBeTruncated?: boolean;
+  monthReadMayBeIncomplete?: boolean;
   zone: string;
   now: Date;
   totalPages: number;
@@ -47,7 +47,7 @@ export function deriveCalendarScreenState({
   upcoming,
   past,
   pastMayBeTruncated = past.length >= EVENTS_PAST_DRAWER_LIMIT,
-  upcomingMonthMayBeTruncated = false,
+  monthReadMayBeIncomplete = false,
   zone,
   now,
   totalPages,
@@ -116,7 +116,7 @@ export function deriveCalendarScreenState({
     state.view === "calendar" &&
     !discordFailed &&
     !monthHasInMonthRows &&
-    !upcomingMonthMayBeTruncated &&
+    !monthReadMayBeIncomplete &&
     !pastCouldBeMissingInMonth &&
     !searchMiss;
   return {

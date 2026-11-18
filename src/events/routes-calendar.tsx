@@ -182,7 +182,7 @@ export function registerCalendarRoutes(
           upcoming={upcoming}
           past={localPast}
           pastMayBeTruncated={pastMayBeTruncated}
-          upcomingMonthMayBeTruncated={model.upcomingMonthMayBeTruncated}
+          monthReadMayBeIncomplete={model.monthReadMayBeIncomplete}
           zone={zone}
           now={now}
           totalPages={totalPages}

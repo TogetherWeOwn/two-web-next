@@ -56,7 +56,7 @@ export const EventsCalendarPage: FC<{
   upcoming: CalRow[];
   past: PublicEvent[];
   pastMayBeTruncated?: boolean;
-  upcomingMonthMayBeTruncated?: boolean;
+  monthReadMayBeIncomplete?: boolean;
   zone: string;
   now: Date;
   /** Upcoming-list pages; the month grid is month-scoped and ignores it. */
@@ -87,7 +87,7 @@ export const EventsCalendarPage: FC<{
   upcoming,
   past,
   pastMayBeTruncated,
-  upcomingMonthMayBeTruncated,
+  monthReadMayBeIncomplete,
   zone,
   now,
   totalPages,
@@ -118,7 +118,7 @@ export const EventsCalendarPage: FC<{
     upcoming,
     past,
     pastMayBeTruncated,
-    upcomingMonthMayBeTruncated,
+    monthReadMayBeIncomplete,
     zone,
     now,
     totalPages,

@@ -405,6 +405,34 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
     }
   });
 
+  it("does not use the past cutoff to rule out a fetched row with an unreadable end", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2060-06-30T23:55:00Z"));
+    try {
+      await seedUpcoming(client, 0, 1, new Date("2060-09-15T18:00:00Z"));
+      await client`insert into events (event_key, title, starts_at, ends_at, timezone, status)
+        select 'past-' || n, 'May UTC event', '2060-05-15T22:00:00Z',
+          '2060-05-15T23:00:00Z', 'UTC', 'past'
+        from generate_series(1, ${EVENTS_PAST_DRAWER_LIMIT - 1}::int) as n`;
+      await client`insert into events (event_key, title, starts_at, ends_at, timezone, status)
+        values ('unreadable-end', 'June host import', '2060-06-20T22:00:00Z',
+          '0001-01-01 00:00:00+00 BC', 'Pacific/Kiritimati', 'past')`;
+      for (const html of await calendarTwins(db, "/events?view=calendar&month=2060-06&past=1")) {
+        expect(html).toContain("May UTC event");
+        expect(html).not.toContain("June host import");
+        expect(html).not.toContain('data-testid="calendar-month-empty"');
+      }
+      for (const html of await calendarTwins(db, "/events?view=calendar&month=2060-07")) {
+        expect(html).toContain(calendarMonthEmptyCopy("2060-07"));
+      }
+    } finally {
+      vi.useRealTimers();
+      await fixture.dispose();
+    }
+  });
+
   it("does not claim a whole month is empty when only the selected game has no events there", async () => {
     const fixture = await createMemberDataFixture(url!, { max: 2 });
     const { client, db } = fixture;

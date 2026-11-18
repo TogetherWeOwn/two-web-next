@@ -111,7 +111,7 @@ describe("deriveCalendarScreenState", () => {
     // A spillover-only row does not occupy the month.
     expect(empty({ upcoming: [event("2030-05-31T10:00:00Z", "2030-05-31T11:00:00Z")] })).toBe(true);
     // A capped read doesn't prove absence, even when it plots no rows.
-    expect(empty({ upcomingMonthMayBeTruncated: true })).toBe(false);
+    expect(empty({ monthReadMayBeIncomplete: true })).toBe(false);
     expect(empty({ pastMayBeTruncated: true })).toBe(false);
     const july = { ...calState, month: "2030-07" };
     // With no retained starts, the truncated drawer doesn't bound unseen rows.

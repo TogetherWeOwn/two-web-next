@@ -37,7 +37,7 @@ import {
   PAST_EVENTS_PAGE_SIZE,
   type DiscordTransient,
 } from "../islands/contracts";
-import { calendarZone, canonicalIntervalDays, wallDayStart } from "./date-format";
+import { calendarZone, canonicalIntervalDays, wallDayStart, wallMonth } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
 import { normalizePastPage } from "./past-page";
 export { normalizePastPage } from "./past-page";
@@ -611,7 +611,7 @@ export async function listCalendarPast(
   db: Db,
   now = new Date(),
   opts: CalendarReadOpts = {},
-): Promise<PublicEvent[] & { mayBeTruncated?: boolean }> {
+): Promise<PublicEvent[] & { mayBeTruncated?: boolean; discardedStartMonths?: Set<string> }> {
   const rows = await db
     .select()
     .from(events)
@@ -626,9 +626,21 @@ export async function listCalendarPast(
   // that `isfinite()` cannot see. Truncation is judged on the pre-filter
   // fetched count (like `listUpcoming`/`listPast` `hasMore`): a post-filter
   // length would misread a drawer that dropped an overflow row as complete.
-  const truncated = rows.length >= EVENTS_PAST_DRAWER_LIMIT;
-  const visible = await withGoing(db, rows.filter(isRenderableEventWindow));
-  return Object.assign(visible, { mayBeTruncated: truncated });
+  const discardedStartMonths = new Set<string>();
+  const renderable = rows.filter((row) => {
+    if (isRenderableEventWindow(row)) return true;
+    // A valid start with an unreadable end can still belong to a displayed
+    // host month. Only UTC years 0–10000 can touch the supported year range.
+    const year = row.startsAt.getUTCFullYear();
+    if (year >= 0 && year <= 10000) {
+      discardedStartMonths.add(wallMonth(row.startsAt, row.timezone));
+    }
+    return false;
+  });
+  return Object.assign(await withGoing(db, renderable), {
+    mayBeTruncated: rows.length >= EVENTS_PAST_DRAWER_LIMIT,
+    discardedStartMonths,
+  });
 }
 
 /** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */
