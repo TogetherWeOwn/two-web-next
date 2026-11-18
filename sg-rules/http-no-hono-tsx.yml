@@ -10,7 +10,13 @@ rule:
         - kind: string
           regex: '^["\x27]hono(?:/[^"\x27]*)?["\x27]$'
         - kind: template_string
-          regex: "^`hono(?:/[^`$]*)?`$"
+          regex: >-
+            (?xs)^ ` (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:h|\\(?:h|x68|u0068|u\{0*68\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:o|\\(?:o|x6[fF]|u006[fF]|u\{0*6[fF]\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:n|\\(?:x6[eE]|u006[eE]|u\{0*6[eE]\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:o|\\(?:o|x6[fF]|u006[fF]|u\{0*6[fF]\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:/|\\(?:/|x2[fF]|u002[fF]|u\{0*2[fF]\}))
         # Match escaped spellings of the package and slash without banning
         # unrelated escaped module names. Line continuations decode to nothing.
         - kind: string
@@ -57,9 +63,19 @@ rule:
               - matches: value-position
         inside:
           kind: call_expression
-          any:
-            - pattern: import($$$)
-            - pattern: require($$$)
+          has:
+            field: function
+            any:
+              - kind: import
+              - kind: identifier
+                regex: "^require$"
+              - kind: parenthesized_expression
+                has:
+                  kind: identifier
+                  regex: "^require$"
+                  stopBy:
+                    not:
+                      kind: parenthesized_expression
 utils:
   value-position:
     nthChild:

@@ -1,0 +1,7 @@
+id: http-no-hono-jsx
+valid:
+  - const node = 'div'
+  - import { value } from './view'
+invalid:
+  - <div />
+  - <div>text</div>

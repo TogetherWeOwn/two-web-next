@@ -8,7 +8,7 @@ valid:
   - const other = require('other')
   - const unrelated = object.require('hono')
   - const other = import(`other`)
-  - const dynamic = import(`hono/${name}`)
+  - const dynamic = import(`other/${name}`)
 invalid:
   - import { Hono } from 'hono'
   - import type { Context } from 'hono'

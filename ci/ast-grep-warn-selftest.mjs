@@ -36,9 +36,12 @@ try {
       writeFileSync(
         file,
         String.raw`import 'oth\x65r'; import 'ho\n o'; const unrelated = require('other');` +
-          "\nconst load = () => import(`hono/${name}`);\n" +
-          "const other = () => import(`h\\x6fno/cors${name}`);\n" +
+          "\nconst load = () => import(`other/${name}`);\n" +
+          "const other = () => import(`oth\\x65r/cors${name}`);\n" +
           'const computed = () => import(resolve("hono"));\n' +
+          'const unrelatedCall = (other)("hono");\n' +
+          'const unrelatedMember = loader.require("hono");\n' +
+          'const text = "ast-grep-ignore: http-no-hono";\n' +
           'const extra = require("node:path", "hono");\n' +
           'const wrappedExtra = require("node:path", (("hono")));\n' +
           'const commentedExtra = require(/* first */ "node:path", /* second */ (/* nested */ "hono"));\n',
@@ -68,6 +71,21 @@ try {
         `allowed imports or outside path failed: ${allowedOutput || allowed.error?.message}`,
       );
     }
+    const suppressed = join(hiddenDirectory, "suppressed.ts");
+    for (const directive of ["// ast-grep-ignore: http-no-hono", "/* ast-grep-ignore */"]) {
+      writeFileSync(suppressed, `${directive}\nimport "hono";\n`);
+      const suppressionScan = scan("scan:http-boundary");
+      const suppressionOutput = `${suppressionScan.stdout ?? ""}\n${suppressionScan.stderr ?? ""}`;
+      if (
+        suppressionScan.error ||
+        suppressionScan.status === 0 ||
+        !suppressionOutput.includes(`${suppressed}:`) ||
+        !suppressionOutput.includes("ast-grep suppression is forbidden")
+      ) {
+        throw new Error(`HTTP boundary accepted a suppression: ${suppressionOutput}`);
+      }
+    }
+    rmSync(suppressed);
     for (const file of files) writeFileSync(file, 'const cors = require("hono/cors");\n');
     writeFileSync(hidden, 'import "hono";\n');
     const extraCases = [
@@ -75,6 +93,10 @@ try {
       "import Cors = require('hono/cors');",
       String.raw`import type { Context } from 'h\x6fno';`,
       "const load = () => import(`hono`);",
+      "const dynamic = () => import(`hono/${name}`);",
+      "const parenthesized = (require)('hono');",
+      "const commented = require /* call */ ('hono');",
+      "const commentedImport = () => import /* call */ ('hono');",
       "const cors = require(`hono/cors`);",
       "const dollar = require(`hono/$literal`);",
       "const asserted = () => import('hono' as const);",
@@ -86,8 +108,13 @@ try {
     ];
     const escapedCases = [
       String.raw`import 'hono';`,
+      "const dynamic = () => import(`hono/${name}`);",
+      "const parenthesized = ((require))('hono');",
+      "const commented = require /* call */ ('hono');",
+      "const commentedImport = () => import /* call */ ('hono');",
       String.raw`export * from 'hono\x2fcors';`,
       String.raw`const load = () => import('h\x6fno');`,
+      String.raw`const load = () => import(` + "`" + String.raw`h\x6fno\x2f${name}` + "`" + `);`,
       String.raw`const cors = require('hono\x2fcors');`,
       String.raw`const cors = require('\150\157\156\157\057cors');`,
       String.raw`const cors = require('hono\57cors');`,
@@ -117,12 +144,25 @@ try {
       writeFileSync(file, `${source}\n`);
       return file;
     });
+    const jsxFiles = ["tsx", "jsx"].flatMap((extension) =>
+      ["export const node = <div />;", "export const node = <div>text</div>;"].map(
+        (source, index) => {
+          const file = join(directory, `jsx-${index}.${extension}`);
+          writeFileSync(file, `${source}\n`);
+          return file;
+        },
+      ),
+    );
     const denied = scan("scan:http-boundary");
     const deniedOutput = `${denied.stdout ?? ""}\n${denied.stderr ?? ""}`;
     if (
       denied.error ||
       denied.status !== 1 ||
-      [...files, ...extraFiles, ...angleCases].some((file) => !deniedOutput.includes(`${file}:`))
+      deniedOutput.includes("could not inspect comments") ||
+      !/error\[http-no-hono/.test(deniedOutput) ||
+      [...files, ...extraFiles, ...angleCases, ...jsxFiles].some(
+        (file) => !deniedOutput.includes(`${file}:`),
+      )
     ) {
       throw new Error(
         `HTTP boundary scan did not reject every file: ${deniedOutput || denied.error?.message}`,

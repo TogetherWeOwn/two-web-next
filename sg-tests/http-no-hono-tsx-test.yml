@@ -3,7 +3,7 @@ valid:
   - import { value } from './hono'; const node = <div>{value}</div>
   - const node = <div>hono</div>
   - const other = require('other')
-  - const dynamic = import(`hono/${name}`)
+  - const dynamic = import(`other/${name}`)
   - const unrelated = require(`other`)
 invalid:
   - import { Hono } from 'hono'; const node = <div />
