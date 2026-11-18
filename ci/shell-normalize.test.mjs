@@ -97,6 +97,7 @@ test("ambiguous delimiters and arithmetic subscripts fail closed", () => {
     ["cat <<EOF\r\\\n\nEOF\n# body text\nEOF\r\nprintf done\n", /ambiguous heredoc delimiter/],
     ["a[1<<2]=value\nprintf done\n", /arithmetic subscript/],
     ["a[b[0]<<2]=value\n", /arithmetic subscript/],
+    ["case x in y|x ) declare a[(1 | 2) & 3 << 4]=value;; esac\n", /arithmetic subscript/],
     ["a[1\\\n<\\\n<2]=value\nprintf done\n", /arithmetic subscript/],
     ["a\\\r\nb[1<\\\r\n<2]=value\n", /arithmetic subscript/],
   ]) {
@@ -148,7 +149,9 @@ test("here-strings and arithmetic shifts are not heredocs", () => {
 
 test("shell boundaries do not expose heredoc bodies or remove literal text", () => {
   const literals = ["'literal a[1'", '"literal a[1"', "literal\\ a[1", "a\\[1"];
-  const earlierCommands = ["a[1\\]; cat", "a[1']'; cat"];
+  const earlierCommands = ["a[1\\]", "a[1']'"].flatMap((word) =>
+    [";", " |", " |&", " ||", " &", " &&"].map((separator) => `${word}${separator} cat`),
+  );
   for (const arg of [...literals, ...earlierCommands]) {
     const command = `printf ${arg} <<EOF\n`;
     const source = `${command}body\nEOF\nprintf done\n`;

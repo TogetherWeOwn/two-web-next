@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { logicalCursor, parseHeredocOpener } from "./shell-heredoc-opener.mjs";
 
+const ORDINARY_COMMAND =
+  /^[ \t]*(?!(?:if|then|else|elif|fi|case|esac|for|select|while|until|do|done|in|function|time|coproc|alias|declare|typeset|local|export|readonly|builtin|command)$)[A-Za-z_]\w*$/u;
 export const ROOT_CWD_REMEDIATION =
   "this gate cannot resolve playwright runs outside the repo root; run the step or script at the root or teach ci/test-inventory.mjs the new form";
 
@@ -15,17 +17,16 @@ function heredocEnds(line, marker, strip) {
   return bare === marker || (bare.endsWith("\r") && bare.slice(0, -1) === marker);
 }
 
-// Drop token-leading comments and join continuations outside single quotes.
-// Copy heredoc bodies verbatim, or mask them and their closers without moving
-// offsets. For an unquoted delimiter, join continuations before matching it.
-// Strict mode rejects open quotes and heredocs that swallow test invocations;
-// prefix slices may end inside either construct. The unmasked view is
-// idempotent. The masked view is terminal output, not input for reparsing.
+// Normalize comments and continuations; match unquoted heredoc closers on logical lines.
+// Unmasked output is idempotent. Masking preserves body and closer offsets, but is terminal.
+// Unlike prefix mode, strict mode rejects open quotes and heredocs swallowing test commands.
 export function normalizeShell(text, { strict = false, mask = false } = {}) {
   let out = "";
   let quote = null;
   let tokenStart = true;
   let identifier = false;
+  let commandStart = 0;
+  let ordinaryCommand = false;
   let subscriptDepth = 0;
   let arithmetic = 0;
   const pending = [];
@@ -50,35 +51,35 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
       }
     }
     if (!quote) {
-      // Track only unquoted, unescaped NAME[...], across logical continuations.
-      if (c === "[" && (identifier || subscriptDepth)) subscriptDepth++;
+      if (c === ";" || c === "\n" || (!subscriptDepth && /[|&)]/.test(c))) {
+        subscriptDepth = 0;
+        ordinaryCommand = false;
+        commandStart = c === ")" ? -1 : i + 1;
+      } else if (commandStart >= 0 && identifier && /[ \t]/.test(c)) {
+        // Keep keywords and declaration commands eligible for assignment words.
+        ordinaryCommand = ORDINARY_COMMAND.test(text.slice(commandStart, i).replace(/\\\r?\n/g, ""));
+        commandStart = -1;
+      }
+      if (c === "[" && (subscriptDepth || (!ordinaryCommand && identifier))) subscriptDepth++;
       else if (c === "]" && subscriptDepth) subscriptDepth--;
-      else if (c === ";" || c === "\n") subscriptDepth = 0;
       identifier = tokenStart ? /[A-Za-z_]/.test(c) : identifier && /\w/.test(c);
     }
     assert.ok(c !== "`" || quote === "'", "unsupported command substitution");
-    if (quote !== "'" && c === "$") {
+    const expansion = c === "$" && quote !== "'";
+    if (expansion || (!quote && c === "(")) {
       const next = skipContinuations(text, i + 1);
-      assert.ok(text[next] !== "'" || quote, "unsupported ANSI-C shell quote");
-      assert.ok(text[next] !== "{", "unsupported parameter expansion");
-      if (text[next] === "(") {
-        const after = skipContinuations(text, next + 1);
-        if (text[after] === "(") {
-          out += "$((";
-          i = after;
-          arithmetic = 2;
-          tokenStart = false;
-          continue;
-        }
-        assert.fail("unsupported command substitution");
+      if (expansion) {
+        assert.ok(text[next] !== "'" || quote, "unsupported ANSI-C shell quote");
+        assert.ok(text[next] !== "{", "unsupported parameter expansion");
       }
-    }
-    if (!quote && c === "(" && text[skipContinuations(text, i + 1)] === "(") {
-      out += "((";
-      i = skipContinuations(text, i + 1);
-      arithmetic = 2;
-      tokenStart = true;
-      continue;
+      if (text[next] === "(") {
+        i = expansion ? skipContinuations(text, next + 1) : next;
+        assert.equal(text[i], "(", "unsupported command substitution");
+        out += expansion ? "$((" : "((";
+        arithmetic = 2;
+        tokenStart = !expansion;
+        continue;
+      }
     }
     if (!quote && c === "#" && tokenStart) {
       const end = text.indexOf("\n", i);
@@ -90,24 +91,22 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
       out += c;
       let pos = i + 1;
       while (pending.length > 0) {
-        const { marker, strip, quoted } = pending.shift();
+        const { marker, stripTabs, quoted } = pending.shift();
         let closed = false;
         let body = "";
         while (pos < text.length) {
           const start = pos;
-          let end = text.indexOf("\n", pos);
-          let stop = end === -1 ? text.length : end;
-          let line = text.slice(pos, stop);
-          while (!quoted && end !== -1 && /(?:^|[^\\])(?:\\\\)*\\\r?$/.test(line)) {
-            pos = end + 1;
-            end = text.indexOf("\n", pos);
-            stop = end === -1 ? text.length : end;
-            line = `${line.replace(/\\\r?$/, "")}${text.slice(pos, stop)}`;
+          let line = "";
+          while (true) {
+            const lf = text.indexOf("\n", pos);
+            line += text.slice(pos, lf < 0 ? text.length : lf);
+            pos = lf < 0 ? text.length : lf + 1;
+            if (quoted || lf < 0 || !/(?:^|[^\\])(?:\\\\)*\\\r?$/.test(line)) break;
+            line = line.replace(/\\\r?$/, "");
           }
-          const raw = text.slice(start, end === -1 ? stop : end + 1);
+          const raw = text.slice(start, pos);
           out += mask ? raw.replace(/[^\n]/g, " ") : raw;
-          pos = end === -1 ? stop : end + 1;
-          if (heredocEnds(line, marker, strip)) {
+          if (heredocEnds(line, marker, stripTabs)) {
             closed = true;
             break;
           }
@@ -120,48 +119,48 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
         }
       }
       i = pos - 1;
+      commandStart = pos;
       tokenStart = true;
       continue;
     }
     if (!quote && (c === "<" || c === ">")) {
       const second = skipContinuations(text, i + 1);
       assert.ok(text[second] !== "(", "unsupported process substitution");
-      if (c === ">" || text[second] !== "<") {
-        out += c;
-        tokenStart = true;
-        continue;
-      }
-      const third = skipContinuations(text, second + 1);
-      if (text[third] === "<") {
-        out += "<<<";
+      if (c === "<" && text[second] === "<") {
+        const third = skipContinuations(text, second + 1);
+        if (text[third] !== "<") {
+          assert.equal(subscriptDepth, 0, "unsupported arithmetic subscript");
+          const opener = parseHeredocOpener(text, i);
+          assert.ok(opener, "unsupported shell heredoc syntax");
+          assert.ok(
+            !(opener.spelling.endsWith("\r") && text[opener.end] === "\n"),
+            "unsupported ambiguous heredoc delimiter",
+          );
+          pending.push(opener);
+          out += opener.spelling;
+          i = opener.end - 1;
+          tokenStart = false;
+          continue;
+        }
+        out += "<<";
         i = third;
-        tokenStart = true;
-        continue;
+      } else if (text[second] === "&" || (c === ">" && text[second] === "|")) {
+        out += c;
+        i = second;
       }
-      assert.equal(subscriptDepth, 0, "unsupported arithmetic subscript");
-      const opener = parseHeredocOpener(text, i);
-      if (opener) {
-        assert.ok(
-          !(opener.spelling.endsWith("\r") && text[opener.end] === "\n"),
-          "unsupported ambiguous heredoc delimiter",
-        );
-        pending.push({ ...opener, strip: opener.stripTabs });
-        out += opener.spelling;
-        i = opener.end - 1;
-        tokenStart = false;
-        continue;
-      }
+      out += text[i];
+      tokenStart = true;
+      continue;
     }
     out += c;
     if (c === "\\" && quote !== "'" && i + 1 < text.length) {
       out += text[++i];
       tokenStart = false;
-    } else if (quote && c === quote) quote = null;
-    else if (!quote && (c === "'" || c === '"' || c === "`")) {
-      quote = c;
-      tokenStart = false;
-    } else if (!quote) tokenStart = /[ \t\n;|&()<>]/.test(c);
-    else tokenStart = false;
+    } else {
+      if (c === quote) quote = null;
+      else if (!quote && (c === "'" || c === '"')) quote = c;
+      tokenStart = !quote && /[ \t\n;|&()<>]/.test(c);
+    }
   }
   assert.equal(arithmetic, 0, "unterminated arithmetic shell syntax");
   if (strict) assert.equal(quote, null, "unterminated shell quote");
