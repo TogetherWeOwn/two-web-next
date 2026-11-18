@@ -19,13 +19,8 @@ for (const path of ["/about", "/faq", "/rules", "/privacy"]) {
       test(`real font evidence: ${path} @ ${width} ${state}`, async ({ page }, testInfo) => {
         await page.setViewportSize({ width, height });
         const privacy = path === "/privacy";
-        const capture = await captureRealFont(
-          page,
-          path,
-          state,
-          testInfo,
-          privacy ? dataFont : displayFont,
-        );
+        const trackedFont = privacy ? dataFont : displayFont;
+        const capture = await captureRealFont(page, path, state, testInfo, trackedFont);
         const { content, requests, settled, timing, warmup } = capture;
         expect(timing.viewport).toEqual({ width, height, devicePixelRatio: 1 });
         expect(settled.fonts.length).toBeGreaterThan(0);

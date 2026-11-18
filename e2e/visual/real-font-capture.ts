@@ -1,4 +1,5 @@
 import type { CDPSession, Page, Response, TestInfo } from "@playwright/test";
+import { type DefaultTreeAdapterTypes, parseFragment } from "parse5";
 import { expect, localOrigin } from "../fixtures";
 import { captureWithoutFontWait, renderedPlatformFonts } from "./font-evidence";
 
@@ -18,13 +19,9 @@ const frameLimit = 35;
 const isFont = (url: string) => /\.woff2(?:$|\?)/i.test(url);
 
 function evidenceHeaders(headers: Record<string, unknown>) {
-  return Object.fromEntries(
-    Object.entries(headers).filter(([key]) =>
-      /^(link|cache-control|age|etag|content-type|content-length|priority|last-modified|vary|server-timing)$/i.test(
-        key,
-      ),
-    ),
-  );
+  const allowed =
+    /^(link|cache-control|age|etag|content-type|content-length|priority|last-modified|vary|server-timing)$/i;
+  return Object.fromEntries(Object.entries(headers).filter(([key]) => allowed.test(key)));
 }
 
 function observeNetwork(session: CDPSession, state: FontState) {
@@ -87,35 +84,37 @@ function observeNetwork(session: CDPSession, state: FontState) {
   };
 }
 
+// Parse out of the browser so raw markup cannot initiate another request.
+function readHints(html: string) {
+  type Node = DefaultTreeAdapterTypes.ChildNode;
+  type Hint = { rel: string; as: string; href: string | null; priority: string | null };
+  function collect(node: Node): Hint[] {
+    if ("tagName" in node && node.tagName === "link") {
+      const attr = (key: string) => node.attrs.find(({ name }) => name === key)?.value ?? null;
+      const rel = attr("rel") ?? "";
+      if (/(?:^|\s)(?:preload|prefetch|modulepreload)(?:\s|$)/i.test(rel))
+        return [{ rel, as: attr("as") ?? "", href: attr("href"), priority: attr("fetchpriority") }];
+    }
+    return "childNodes" in node ? node.childNodes.flatMap(collect) : [];
+  }
+  return parseFragment(html).childNodes.flatMap(collect);
+}
+
 async function inspectNavigation(page: Page, response: Response) {
-  const observations = await page.evaluate(
-    (html) => {
-      const hints = (root: ParentNode) =>
-        Array.from(root.querySelectorAll("link"))
-          .filter(({ relList }) =>
-            ["preload", "prefetch", "modulepreload"].some((rel) => relList.contains(rel)),
-          )
-          .map((link) => ({
-            rel: link.rel,
-            as: link.as,
-            href: link.getAttribute("href"),
-            priority: link.getAttribute("fetchpriority"),
-          }));
-      const resources = performance
-        .getEntriesByType("resource")
-        .filter(({ name }) => /\.woff2(?:$|\?)/i.test(name))
-        .map((entry) => entry.toJSON() as PerformanceResourceTiming);
-      const raw = document.createElement("template");
-      raw.innerHTML = html;
-      return { rawHints: hints(raw.content), hints: hints(document), resources };
-    },
-    await response.text(),
-  );
+  const { links, resources } = await page.evaluate(() => ({
+    links: Array.from(document.querySelectorAll("link"), (link) => link.outerHTML).join(""),
+    resources: performance
+      .getEntriesByType("resource")
+      .filter(({ name }) => /\.woff2(?:$|\?)/i.test(name))
+      .map((entry) => entry.toJSON() as PerformanceResourceTiming),
+  }));
   return {
     url: response.url(),
     status: response.status(),
     headers: evidenceHeaders(await response.allHeaders()),
-    ...observations,
+    rawHints: readHints(await response.text()),
+    hints: readHints(links),
+    resources,
   };
 }
 
