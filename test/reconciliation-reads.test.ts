@@ -8,12 +8,12 @@ const row = {
   idempotency_key: key,
   verb: "event.upsert",
   subject: "event:42",
-  first_seen_at: now,
-  last_attempt_at: now,
+  first_seen_at_ms: now.getTime(),
+  last_attempt_at_ms: now.getTime(),
   attempts: 2,
   last_code: "needs_reconciliation",
   last_status: 409,
-  resolved_at: null,
+  resolved_at_ms: null,
   resolution: null,
   last_request_id: "secret-request",
   resolved_by: "secret-actor",
@@ -64,13 +64,12 @@ describe("dormant reconciliation reads", () => {
     }
   });
 
-  it("projects PostgreSQL timestamp strings as Dates", async () => {
+  it("projects PostgreSQL epoch milliseconds as Dates", async () => {
     const { reads } = fixture([
       {
         ...row,
-        first_seen_at: "2026-01-01 01:00:00+01",
-        last_attempt_at: "2026-01-01 01:02:03.456+01",
-        resolved_at: "2026-01-01 01:03:04.567+01",
+        last_attempt_at_ms: now.getTime() + 123_456,
+        resolved_at_ms: now.getTime() + 184_567,
       },
     ]);
     expect(await reads.get(key)).toMatchObject({

@@ -60,38 +60,47 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     expect(resultKeys(await reads.listResolved())).toEqual([key(251), ...keys(201, 49)]);
   });
 
-  it("returns Date timestamps from raw and Drizzle-injected reconciliation reads", async () => {
+  it("returns exact Dates from both reconciliation clients regardless of DateStyle", async ({
+    onTestFinished,
+  }) => {
+    // Both pools have one connection, so the setting reaches every read transaction.
+    const dateFixture = await createJobsFixture(process.env.DATABASE_URL!);
+    onTestFinished(() => dateFixture.dispose());
+    const sql = dateFixture.client;
     const openKey = "00000000-0000-0000-0002-000000000001";
     const resolvedKey = "00000000-0000-0000-0002-000000000002";
-    const firstSeenAt = "2026-01-02T09:10:11.123+02:00";
-    const lastAttemptAt = "2026-01-03T10:11:12.456+02:00";
-    const resolvedAt = "2026-01-04T11:12:13.789+02:00";
+    const firstSeenAt = "2026-12-17T09:10:11.123+02:00";
+    const lastAttemptAt = "2026-12-18T10:11:12.456+02:00";
+    const resolvedAt = "2026-12-19T11:12:13.789999+02:00";
     await sql`insert into bot_reconciliation_intents
       (idempotency_key, verb, subject, attempts, first_seen_at, last_attempt_at, resolved_at) values
       (${openKey}::uuid, 'event.upsert', 'event:42', 1, ${firstSeenAt}, ${lastAttemptAt}, null),
       (${resolvedKey}::uuid, 'event.upsert', 'event:43', 1, ${firstSeenAt}, ${lastAttemptAt}, ${resolvedAt})`;
 
     const actor = "100000000000000112";
-    const injected = await reconciliationServiceFor({ ...env, ADMIN_DB: fixture!.db }, actor);
+    const injected = await reconciliationServiceFor({ ...env, ADMIN_DB: dateFixture.db }, actor);
     const timestamps = {
-      firstSeenAt: new Date(firstSeenAt),
-      lastAttemptAt: new Date(lastAttemptAt),
+      firstSeenAt: new Date("2026-12-17T07:10:11.123Z"),
+      lastAttemptAt: new Date("2026-12-18T08:11:12.456Z"),
     };
     const open = { ...timestamps, idempotencyKey: openKey, resolvedAt: null };
     const resolved = {
       ...timestamps,
       idempotencyKey: resolvedKey,
-      resolvedAt: new Date(resolvedAt),
+      resolvedAt: new Date("2026-12-19T09:12:13.789Z"),
     };
-    for (const service of [reconciliationService(sql, actor), injected!]) {
-      expect(await service.get(openKey)).toMatchObject(open);
-      expect(await service.get(resolvedKey)).toMatchObject(resolved);
-      expect(await service.listOpen()).toEqual(
-        expect.arrayContaining([expect.objectContaining(open)]),
-      );
-      expect(await service.listResolved()).toEqual(
-        expect.arrayContaining([expect.objectContaining(resolved)]),
-      );
+    for (const [client, service] of [
+      [sql, reconciliationService(sql, actor)],
+      [dateFixture.db.$client, injected!],
+    ] as const) {
+      for (const dateStyle of ["ISO, MDY", "SQL, DMY"]) {
+        await client`select set_config('DateStyle', ${dateStyle}, false)`;
+        expect(await service.get(openKey)).toMatchObject(open);
+        expect(await service.get(resolvedKey)).toMatchObject(resolved);
+        expect(await service.listOpen()).toEqual([expect.objectContaining(open)]);
+        expect(await service.listResolved()).toEqual([expect.objectContaining(resolved)]);
+        expect(await client`show DateStyle`).toEqual([{ DateStyle: dateStyle }]);
+      }
     }
   });
 
