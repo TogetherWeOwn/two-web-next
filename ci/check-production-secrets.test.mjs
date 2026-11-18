@@ -645,7 +645,9 @@ function jobEnvironment(lines) {
 // one — still fails closed. Never exempted by job name.
 function delegatesToProduction(lines) {
   const uses = lines.some((line) =>
-    /^\s*uses:\s*\.\/\.github\/workflows\/rollback-production\.yml\s*$/.test(line),
+    /^\s*uses:\s*(?:\.\/\.github\/workflows\/rollback-production\.yml|TogetherWeOwn\/two-web-next\/\.github\/workflows\/rollback-production\.yml@38581ef492f5c972969f5dfada396a9f0e2ee989)\s*$/.test(
+      line,
+    ),
   );
   if (!uses) return false;
   return lines.some((line) => /^\s+environment:\s*production\s*$/.test(line));
@@ -987,6 +989,15 @@ ${withBlock}
 `;
   const production = caller("      environment: production\n      version_id: abc");
   assert.deepEqual(productionSecretEnvironmentViolations(production, "fixture.yml"), []);
+  const pinned = production.replace(
+    "./.github/workflows/rollback-production.yml",
+    "TogetherWeOwn/two-web-next/.github/workflows/rollback-production.yml@38581ef492f5c972969f5dfada396a9f0e2ee989",
+  );
+  assert.deepEqual(productionSecretEnvironmentViolations(pinned, "fixture.yml"), []);
+  for (const ref of ["main", "38581ef492f5c972969f5dfada396a9f0e2ee988"]) {
+    const untrusted = pinned.replace("38581ef492f5c972969f5dfada396a9f0e2ee989", ref);
+    assert.equal(productionSecretEnvironmentViolations(untrusted, "fixture.yml").length, 1);
+  }
   // The exemption is pinned to the rollback callee: the same shape against
   // any other local workflow still fails closed.
   const otherCallee = production.replace("rollback-production.yml", "release.yml");
@@ -1035,10 +1046,18 @@ const TARGET_GUARDED_STAGING_CLOUDFLARE =
 // (`uses: ./...`) with the callee's environment pinned to the literal
 // `staging` in `with:`: the pin fixes the callee's target-selected
 // Environment to staging on every run, and the callee's own secret reads are
-// gated independently. A remote callee, or a missing or expression-driven
-// pin, fails closed: the pin must be auditable as the literal staging leg.
+// gated independently. Only the verified immutable same-repository rollback
+// ref is accepted remotely; other remote callees and missing or expression-driven
+// environment pins fail closed.
 function isStagingPinnedCall(lines) {
-  if (!lines.some((line) => /^ {4}uses:\s*\.\//.test(line))) return false;
+  if (
+    !lines.some((line) =>
+      /^ {4}uses:\s*(?:\.\/|TogetherWeOwn\/two-web-next\/\.github\/workflows\/rollback-production\.yml@38581ef492f5c972969f5dfada396a9f0e2ee989\s*$)/.test(
+        line,
+      ),
+    )
+  )
+    return false;
   const at = lines.findIndex((line) => /^ {4}with:\s*$/.test(line));
   if (at < 0) return false;
   for (const line of lines.slice(at + 1)) {
@@ -1198,6 +1217,15 @@ test("staging-pinned reusable caller passes staging secrets through without a jo
       CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 `;
   assert.deepEqual(stagingCloudflareEnvironmentViolations(pinned, "fixture.yml"), []);
+  const immutable = pinned.replace(
+    "./.github/workflows/rollback-production.yml",
+    "TogetherWeOwn/two-web-next/.github/workflows/rollback-production.yml@38581ef492f5c972969f5dfada396a9f0e2ee989",
+  );
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(immutable, "fixture.yml"), []);
+  for (const ref of ["main", "38581ef492f5c972969f5dfada396a9f0e2ee988"]) {
+    const untrusted = immutable.replace("38581ef492f5c972969f5dfada396a9f0e2ee989", ref);
+    assert.equal(stagingCloudflareEnvironmentViolations(untrusted, "fixture.yml").length, 1);
+  }
   const quoted = pinned.replace("environment: staging", "environment: 'staging'");
   assert.deepEqual(stagingCloudflareEnvironmentViolations(quoted, "fixture.yml"), [], "quoted pin");
   // A remote callee's `environment` input has unknown semantics: fail closed.
