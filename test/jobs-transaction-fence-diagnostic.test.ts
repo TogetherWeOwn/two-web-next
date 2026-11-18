@@ -99,6 +99,9 @@ it("qualifies row authority and legacy DB write rejection on Node with direct Po
       { version: number }[]
     >`select current_setting('server_version_num')::int as version`;
     expect(Math.floor(server!.version / 10_000)).toBe(17);
+    // Stage the additive column before the legacy client prepares SELECT a.*.
+    // Activate only the trigger after the claim so the result shape stays stable.
+    await outsider`alter table event_sync_attempts add column generation bigint`;
     const legacy = pgEventStore(outsider);
     const legacyId = await seed("fixture-legacy");
     const legacyKey = crypto.randomUUID();
@@ -112,7 +115,6 @@ it("qualifies row authority and legacy DB write rejection on Node with direct Po
     await outsider.begin(async (tx) => {
       await tx`set local statement_timeout = '1500ms'`;
       await tx`lock table event_sync_attempts in access exclusive mode`;
-      await tx`alter table event_sync_attempts add column generation bigint`;
       // A fixture DB guard, not a production migration or a receiver barrier.
       await tx`create function fixture_fence() returns trigger language plpgsql as $$
       begin
