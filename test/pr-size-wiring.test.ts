@@ -38,7 +38,7 @@ describe("pr-size advisory wiring", () => {
         /^    permissions:\n([\s\S]*?)(?=^    [A-Za-z][A-Za-z0-9_-]*:)/m,
       )?.[1];
       const access = id === "pr-size-weekly" ? "read" : "write";
-      expect(callerPermissions?.replace(/ +#.*$/gm, "").trimEnd()).toBe(
+      expect(callerPermissions?.trimEnd()).toBe(
         `      contents: read\n      issues: ${access}\n      pull-requests: ${access}`,
       );
     }

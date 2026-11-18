@@ -45,10 +45,10 @@ describe("pr-size moved-behaviour contract", () => {
     expect(branchProtection).toContain("`pr-size-gate`");
     const topLevel = workflow.split(/\npermissions:\n/)[1]?.split(/\n\S/)[0] ?? "";
     expect(topLevel).not.toMatch(/\bwrite\b/);
-    for (const id of ["pr-size", "pr-size-gate"]) {
-      expect(job(id)).toMatch(/^      issues: write #[^\n]+$/m);
-      expect(job(id)).toMatch(/^      pull-requests: write #[^\n]+$/m);
-    }
+    expect(job("pr-size")).toContain("      issues: write\n");
+    expect(job("pr-size")).toContain("      pull-requests: write\n");
+    expect(job("pr-size-gate")).toContain("      issues: write\n");
+    expect(job("pr-size-gate")).toContain("      pull-requests: write\n");
     expect(job("pr-size-weekly")).not.toMatch(/\bwrite\b/);
   });
 
