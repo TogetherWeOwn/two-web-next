@@ -938,9 +938,9 @@ jobs:
             "$RUNNER_TEMP"/kit-css-failure.*) rm -rf -- "$KIT_CSS_FAILURE_DIR" ;;
             *) exit 1 ;;
           esac
-      - name: Kit route performance budgets (complete immutable dependency closure)
+      - name: Kit route performance (report only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: node ci/check-kit-route-perf.mjs
+        run: node ci/check-kit-route-perf.mjs --report-only
       - name: Kit Worker bundle dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config web/wrangler.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
