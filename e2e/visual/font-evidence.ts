@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { Locator, Page } from "@playwright/test";
+import { existsSync } from "node:fs";
+import { expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 
 /** Avoid installing a screenshot mask overlay when no targets exist. */
 export async function nonemptyMask(locator: Locator) {
@@ -97,10 +98,54 @@ export async function captureWithGeometry(
   return { png, dimensions, before, after };
 }
 
-/** Normalize an existing display token without changing which elements use it. */
-export async function captureNormalizedDisplayFont(
+/** Check the first full-page PNG; a second capture is a stability control, not a retry. */
+export async function expectStablePublicPageCapture(
   page: Page,
-  options: { url: string; weight?: string; root: string; heading: string },
+  testInfo: TestInfo,
+  {
+    heading,
+    width,
+    snapshot,
+    afterFirst,
+  }: { heading: string; width: number; snapshot?: string; afterFirst?: () => Promise<void> },
+) {
+  if (snapshot) expect(existsSync(testInfo.snapshotPath(snapshot))).toBe(true);
+  const nodes = { heading, main: "main", footer: "footer" };
+  const options = {
+    mask: await nonemptyMask(page.locator("time")),
+    animations: "disabled" as const,
+    caret: "hide" as const,
+    scale: "css" as const,
+  };
+  const first = await captureWithGeometry(page, nodes, options);
+  await afterFirst?.();
+  await testInfo.attach("first-capture", { body: first.png, contentType: "image/png" });
+  await testInfo.attach("first-geometry", {
+    body: JSON.stringify({
+      before: first.before,
+      after: first.after,
+      dimensions: first.dimensions,
+    }),
+    contentType: "application/json",
+  });
+  expect.soft(first.after).toEqual(first.before);
+  expect.soft(first.dimensions.width).toBe(width);
+  expect.soft(first.dimensions.height).toBe(first.before.document.scrollHeight);
+  if (snapshot) expect.soft(first.png).toMatchSnapshot(snapshot, { maxDiffPixels: 300 });
+
+  const second = await captureWithGeometry(page, nodes, options);
+  await testInfo.attach("second-capture", { body: second.png, contentType: "image/png" });
+  expect.soft(second.before).toEqual(first.after);
+  expect.soft(second.after).toEqual(first.after);
+  expect.soft(second.dimensions).toEqual(first.dimensions);
+  expect.soft(second.png.equals(first.png)).toBe(true);
+  return first;
+}
+
+/** Normalize an existing display token without changing which elements use it. */
+export async function normalizeDisplayFont(
+  page: Page,
+  options: { url: string; weight?: string; root: string },
 ) {
   const face = await loadVisualFont(page, options);
   const token = await page.locator(options.root).evaluate((element, family) => {
@@ -135,6 +180,14 @@ export async function captureNormalizedDisplayFont(
     if (effective !== normalized) throw new Error("Display token override did not take effect");
     return { original, normalized: effective };
   }, face.family);
+  return { face, token };
+}
+
+export async function captureNormalizedDisplayFont(
+  page: Page,
+  options: { url: string; weight?: string; root: string; heading: string },
+) {
+  const { face, token } = await normalizeDisplayFont(page, options);
   const capture = await captureWithGeometry(
     page,
     { heading: options.heading },
