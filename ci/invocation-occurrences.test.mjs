@@ -36,6 +36,77 @@ test("retains parser safety flags on every npm edge", () => {
   assert.notEqual(results[2].npmEdges[1], second);
 });
 
+test("projects isolated commands and workflow roots without changing traversal", () => {
+  const root = { ...command(0, [edge("a", 1), edge("a", 2)]), origin, metadata: { value: 1 } };
+  const scripts = { a: [command(3, [edge("b", 4)])], b: [command(5)] };
+  const before = structuredClone({ root, scripts });
+  const results = enumerateInvocationOccurrences(
+    [root],
+    scripts,
+    (occurrence, source, workflow) => {
+      const result = { occurrence, source: source.location, root: workflow.location };
+      source.npmEdges.length = 0;
+      workflow.npmEdges.length = 0;
+      workflow.metadata.value = 2;
+      return result;
+    },
+  );
+  assert.deepEqual(
+    results.map(({ source }) => source),
+    [0, 3, 5, 3, 5],
+  );
+  assert.deepEqual(
+    results.map(({ root: location }) => location),
+    [0, 0, 0, 0, 0],
+  );
+  assert.deepEqual(results[4].occurrence.npmEdges, [edge("a", 2), edge("b", 4)]);
+  assert.deepEqual({ root, scripts }, before);
+});
+
+test("projection cannot mutate traversal through an aliased edge array", () => {
+  const edges = [edge("a", 1)];
+  const root = { ...command(0, edges), origin, metadata: { edges } };
+  const results = enumerateInvocationOccurrences(
+    [root],
+    { a: [command(2)] },
+    (occurrence, source) => {
+      source.metadata?.edges.splice(0);
+      return occurrence;
+    },
+  );
+  assert.deepEqual(
+    results.map(({ command: location }) => location),
+    [0, 2],
+  );
+  assert.deepEqual(root.npmEdges, [edge("a", 1)]);
+});
+
+test("fails closed when projection inputs are not cloneable", () => {
+  const root = { ...command(0), origin, metadata: () => {} };
+  let called = false;
+  assert.throws(() =>
+    enumerateInvocationOccurrences([root], {}, () => {
+      called = true;
+    }),
+  );
+  assert.equal(called, false);
+});
+
+test("propagates projection failures instead of returning partial occurrences", () => {
+  const root = { ...command(0, [edge("a", 1)]), origin };
+  const visited = [];
+  assert.throws(
+    () =>
+      enumerateInvocationOccurrences([root], { a: [command(2)] }, (occurrence) => {
+        visited.push(occurrence.command);
+        if (occurrence.command === 2) throw new Error("projection rejected");
+        return occurrence;
+      }),
+    /projection rejected/,
+  );
+  assert.deepEqual(visited, [0, 2]);
+});
+
 test("keeps workflow contexts distinct for the same script", () => {
   const other = { workflow: "two.yml", job: "browser", step: 1 };
   const results = enumerateInvocationOccurrences(
