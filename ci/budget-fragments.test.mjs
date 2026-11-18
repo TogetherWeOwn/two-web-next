@@ -849,6 +849,38 @@ test("bundle checker breach against a fragment ceiling exits 1", (t) => {
   assert.equal(runBundle(root, sink), 1);
 });
 
+test("only the Kit controls stylesheet has advisory byte targets", (t) => {
+  const { root } = bundleFixture(t, {});
+  for (const name of ["kit-events-controls.css.json", "schedule-theme.css.json"]) {
+    const path = `ci/budgets/bundle/${name}`;
+    writeFile(root, path, readFileSync(join(repoRoot, path)));
+  }
+  const controls = "public/kit-events-controls.css";
+  const schedule = "public/schedule-theme.css";
+  const parts = Array.from({ length: 40 }, (_, i) =>
+    createHash("sha256").update(String(i)).digest("base64"),
+  );
+  const payload = Buffer.from(parts.join(""));
+  writeFile(root, controls, payload);
+  writeFile(root, schedule, "/* fits */");
+  const logs = [];
+  const diagnostics = [];
+  const output = { log: (line) => logs.push(line), error: (line) => diagnostics.push(line) };
+  assert.equal(runBundle(root, output), 0);
+  const overages = `raw ${payload.length}B over 1536B, gzip ${gzipSync(payload).length}B over 768B`;
+  assert.ok(diagnostics.includes(`bundle budget: warning: ${controls}: ${overages} (advisory)`));
+  assert.ok(logs.some((line) => line.includes("passed with advisory warnings")));
+
+  writeFile(root, schedule, " ".repeat(9729));
+  assert.equal(runBundle(root, output), 1);
+  assert.ok(diagnostics.some((line) => line.includes(`${schedule}: raw 9729B over 9728B`)));
+
+  writeFile(root, schedule, "/* fits */");
+  rmSync(join(root, controls));
+  assert.equal(runBundle(root, output), 1);
+  assert.ok(diagnostics.some((line) => line.includes(`${controls}: missing/unreadable asset`)));
+});
+
 test("duplicate bundle entry across fragments cannot enforce (2)", (t) => {
   const { root } = bundleFixture(t, {
     "example-copy.json": {
