@@ -206,6 +206,8 @@ test("CLI refuses malformed or missing trusted inputs before metadata access", (
   }).trim();
   const env = {
     PATH: process.env.PATH,
+    // The CI container keeps the checkout's safe.directory entry in HOME.
+    HOME: process.env.HOME,
     GH_TOKEN: "fixture-only",
     ROUTE_WORKFLOW_SHA: workflowSha,
     GITHUB_EVENT_PATH: eventPath,
@@ -219,8 +221,11 @@ test("CLI refuses malformed or missing trusted inputs before metadata access", (
     ROUTE_ARTIFACT_ID: String(f.expected.artifactId),
     ROUTE_ARTIFACT_DIGEST: "c".repeat(64),
   };
-  const metadataMarker = "synthetic transport reached\n";
-  const preload = `data:text/javascript,${encodeURIComponent(`globalThis.fetch = () => { process.stderr.write(${JSON.stringify(metadataMarker)}); throw new Error("fixture transport stopped"); };`)}`;
+  const preload = join(scratch, "refuse-fetch.mjs");
+  writeFileSync(
+    preload,
+    'globalThis.fetch = () => { process.stderr.write("synthetic transport reached\\n"); throw new Error("fixture transport stopped"); };',
+  );
   const cli = fileURLToPath(new URL("./run-synthetic-route-admission.mjs", import.meta.url));
   function check(overrides, marker = "") {
     const result = spawnSync(process.execPath, ["--import", preload, cli], {
@@ -235,7 +240,7 @@ test("CLI refuses malformed or missing trusted inputs before metadata access", (
     assert.equal(result.stderr, `${marker}route evidence refused: synthetic admission failed\n`);
   }
   // Valid inputs reach the deliberately refusing transport; there is no live request.
-  check({}, metadataMarker);
+  check({}, "synthetic transport reached\n");
   for (const overrides of [
     { ROUTE_WORKFLOW_SHA: workflowSha.replace(/^./, workflowSha[0] === "f" ? "e" : "f") },
     { ROUTE_WORKFLOW_SHA: "main" },
