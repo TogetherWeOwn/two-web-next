@@ -62,11 +62,10 @@ jobs:
   pr-size:
     name: pr-size
     if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''
-    # Create repository size labels, apply them to PRs, and maintain the advisory comment.
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
+      issues: write # Create repository size labels.
+      pull-requests: write # Apply size labels and maintain the advisory PR comment.
     uses: TogetherWeOwn/.github/.github/workflows/pr-size.yml@ac9ce8d63e0cebd19ede904ac79137190c329964
     with:
       pr-number: ${{ inputs.pr_number || '' }}
@@ -81,11 +80,10 @@ jobs:
   pr-size-gate:
     name: pr-size-gate
     if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''
-    # Create the size-exception label when needed and maintain the gate's PR comment.
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
+      issues: write # Create the size-exception label when needed.
+      pull-requests: write # Maintain the gate's PR comment.
     uses: TogetherWeOwn/.github/.github/workflows/pr-size-gate.yml@ac9ce8d63e0cebd19ede904ac79137190c329964
     with:
       pr-number: ${{ inputs.pr_number || '' }}
@@ -94,9 +92,8 @@ jobs:
   pr-size-weekly:
     name: pr-size-weekly
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr_number == '')
-    # Read size labels and merged PRs for the weekly tally.
     permissions:
       contents: read
-      issues: read
-      pull-requests: read
+      issues: read # Read size labels for the weekly tally.
+      pull-requests: read # Read merged PRs for the weekly tally.
     uses: TogetherWeOwn/.github/.github/workflows/pr-size-weekly.yml@ac9ce8d63e0cebd19ede904ac79137190c329964
