@@ -114,6 +114,22 @@ export function registerWaitlistOfferLifecycle() {
       expect(await fx.db.select().from(rsvps).orderBy(rsvps.id)).toEqual(before);
     });
 
+    it("uses exact timestamps and legacy IDs for targeted FIFO offers", async () => {
+      const { event, rows } = await seed({ users: ["later", "native", "legacy"] });
+      const [later, native, legacy] = rows;
+      await fx.db
+        .update(rsvps)
+        .set({
+          createdAt: sql`timestamptz '2026-01-01T00:00:00.000001Z' +
+            case when id = ${later!.id} then interval '1 microsecond' else interval '0' end`,
+          legacyId: sql`case when id = ${legacy!.id} then ${later!.id}::bigint else null end`,
+        })
+        .where(eq(rsvps.eventId, event.id));
+      expect((await create(event, later!)).ok).toBe(false);
+      expect((await create(event, native!)).ok).toBe(false);
+      expect((await made(event, legacy!)).rsvpId).toBe(legacy!.id);
+    });
+
     it("serializes concurrent allocators and keeps existing holds after a capacity reduction", async () => {
       const { event, rows } = await seed({ capacity: 2, users: ["u1", "u2", "u3"] });
       const results = await Promise.all([allocate(event.id), allocate(event.id)]);
