@@ -43,11 +43,16 @@ rule:
     - inside:
         kind: export_statement
         field: source
-    - inside:
+    - nthChild: 1
+      inside:
         kind: arguments
         stopBy:
           not:
-            kind: parenthesized_expression
+            all:
+              - any:
+                  - kind: parenthesized_expression
+                  - kind: as_expression
+              - nthChild: 1
         inside:
           kind: call_expression
           any:

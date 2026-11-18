@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const fixture = join("src", `ast-grep-warning-selftest-${process.pid}.test.ts`);
@@ -38,8 +38,16 @@ try {
         String.raw`import 'oth\x65r'; import 'ho\n o'; const unrelated = require('other');` +
           "\nconst load = () => import(`hono/${name}`);\n" +
           "const other = () => import(`h\\x6fno/cors${name}`);\n" +
-          'const computed = () => import(resolve("hono"));\n',
+          'const computed = () => import(resolve("hono"));\n' +
+          'const extra = require("node:path", "hono");\n' +
+          'const wrappedExtra = require("node:path", (("hono")));\n',
       );
+    for (const extension of ["ts", "tsx"]) {
+      appendFileSync(
+        join(directory, `boundary.${extension}`),
+        'const assertedOther = require("node:path" as "hono");\n',
+      );
+    }
     const scan = (script) => spawnSync("npm", ["run", script], { encoding: "utf8" });
     const allowed = scan("scan:fetch-await");
     const allowedOutput = `${allowed.stdout ?? ""}\n${allowed.stderr ?? ""}`;
@@ -61,6 +69,8 @@ try {
       "const load = () => import(`hono`);",
       "const cors = require(`hono/cors`);",
       "const dollar = require(`hono/$literal`);",
+      "const asserted = () => import('hono' as const);",
+      "const nestedAssertion = require((('hono/cors' as const)));",
     ];
     const escapedCases = [
       String.raw`import 'hono';`,
