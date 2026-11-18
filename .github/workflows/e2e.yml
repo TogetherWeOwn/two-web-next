@@ -372,6 +372,7 @@ jobs:
         run: >-
           npx playwright test --config playwright.kit-parity.config.ts
           e2e/kit-parity/parity.spec.ts e2e/kit-parity/auth-boundaries.spec.ts
+          e2e/kit-parity/moderator-dashboard.spec.ts
       - name: Kit parity ledger (no quiet green)
         if: ${{ !cancelled() }}
         run: node ci/check-kit-parity.mjs
@@ -426,6 +427,7 @@ jobs:
             test-results/**/attachments/hono-review-*.png
             test-results/**/attachments/kit-review-*.png
             test-results-kit-parity/**/attachments/kit-review-*.png
+            test-results-kit-parity/**/attachments/hono-review-moderator-*.png
           if-no-files-found: error
           retention-days: 7
       - name: Waitlist roster screenshot evidence
