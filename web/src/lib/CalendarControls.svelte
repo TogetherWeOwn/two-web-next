@@ -33,6 +33,7 @@ import {
 import { feedUrl, webcalUrl } from "../../../src/events/feeds";
 import { SUBSCRIPTION_GUIDANCE } from "../../../src/events/subscription-copy";
 import SegmentedControl from "./SegmentedControl.svelte";
+import "./segmented-control.css";
 
 let {
   state,
