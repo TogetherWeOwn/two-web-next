@@ -22,9 +22,11 @@ on:
   schedule:
     - cron: "17 14 * * *"
 
+# Contents read supports checkout and commit ancestry checks. Actions read
+# supports exact-SHA CI/staging evidence and production Environment protection.
 permissions:
-  contents: read # Checkout and verify commit ancestry.
-  actions: read # Read exact-SHA CI/staging evidence and production Environment protection.
+  contents: read
+  actions: read
 
 concurrency:
   group: deploy-production
