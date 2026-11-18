@@ -1,13 +1,11 @@
-import { existsSync } from "node:fs";
 import postgres from "postgres";
 import { requireTestDatabase } from "../ci-only.mjs";
 import { expect, localOrigin, test } from "../fixtures";
 import {
-  captureNormalizedDisplayFont,
   captureWithGeometry,
   captureWithoutFontWait,
+  expectStablePublicPageCapture,
   loadVisualFont,
-  nonemptyMask,
   readCaptureGeometry,
   renderedPlatformFonts,
 } from "./font-evidence";
@@ -156,40 +154,18 @@ for (const [viewport, size] of VIEWPORTS) {
               used.postScriptName === "MonaSansExtraLight-Regular",
           ),
         ).toBe(true);
-        const snapshot = `${name}-${viewport}.png`;
-        expect(existsSync(testInfo.snapshotPath(snapshot))).toBe(true);
-        const nodes = { heading: ".content-theme h1", main: "main", footer: "footer" };
-        const options = {
-          mask: await nonemptyMask(page.locator("time")),
-          animations: "disabled" as const,
-          caret: "hide" as const,
-          scale: "css" as const,
-        };
-        const first = await captureWithGeometry(page, nodes, options);
-        if (name === "privacy") {
-          expect(await renderedPlatformFonts(page, "code[data-code-proof]")).toEqual(
-            normalizedCodeFonts,
-          );
-        }
-        await testInfo.attach("first-capture", { body: first.png, contentType: "image/png" });
-        await testInfo.attach("first-geometry", {
-          body: JSON.stringify({
-            before: first.before,
-            after: first.after,
-            dimensions: first.dimensions,
-          }),
-          contentType: "application/json",
+        await expectStablePublicPageCapture(page, testInfo, {
+          heading: ".content-theme h1",
+          width: size.width,
+          snapshot: `${name}-${viewport}.png`,
+          afterFirst: async () => {
+            if (name === "privacy") {
+              expect(await renderedPlatformFonts(page, "code[data-code-proof]")).toEqual(
+                normalizedCodeFonts,
+              );
+            }
+          },
         });
-        expect.soft(first.after).toEqual(first.before);
-        expect.soft(first.dimensions.width).toBe(size.width);
-        expect.soft(first.dimensions.height).toBe(first.before.document.scrollHeight);
-        expect.soft(first.png).toMatchSnapshot(snapshot, { maxDiffPixels: 300 });
-        const second = await captureWithGeometry(page, nodes, options);
-        await testInfo.attach("second-capture", { body: second.png, contentType: "image/png" });
-        expect.soft(second.before).toEqual(first.after);
-        expect.soft(second.after).toEqual(first.after);
-        expect.soft(second.dimensions).toEqual(first.dimensions);
-        expect.soft(second.png.equals(first.png)).toBe(true);
       } else {
         await expect(page).toHaveScreenshot(`${name}-${viewport}.png`, {
           fullPage: true,
@@ -199,32 +175,6 @@ for (const [viewport, size] of VIEWPORTS) {
     });
   }
 }
-
-test("rules normalized display font @ 360px", async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 360, height: 844 });
-  expect((await page.goto("/rules"))?.status()).toBe(200);
-  await page.waitForLoadState("networkidle");
-  const capture = await captureNormalizedDisplayFont(page, {
-    url: "/fonts/mona-sans-latin-wght.woff2",
-    weight: "200 900",
-    root: ".content-theme",
-    heading: ".content-theme h1",
-  });
-  expect(capture.face.status).toBe("loaded");
-  expect(capture.fonts.length).toBeGreaterThan(0);
-  expect(
-    capture.fonts.every(
-      (used) =>
-        used.isCustomFont &&
-        used.postScriptName === "MonaSansExtraLight-Regular" &&
-        used.glyphCount > 0,
-    ),
-  ).toBe(true);
-  await testInfo.attach("rules-360-normalized", {
-    body: capture.png,
-    contentType: "image/png",
-  });
-});
 
 for (const [viewport, size] of VIEWPORTS) {
   test(`cold optional fallback does not swap @ ${viewport}`, async ({ page }, testInfo) => {

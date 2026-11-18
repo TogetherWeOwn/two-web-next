@@ -2,22 +2,10 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-// The org's two-selfhosted runner group refuses public repos, so a job pinned to
-// a self-hosted label queues forever while this repo is public (TOG-12326). Every
-// job must reach the self-hosted fleet only behind a repo-visibility check and
-// otherwise run on GitHub-hosted Linux; the CI_OVERFLOW_* repo vars may still
-// route a switch-enabled job elsewhere without a PR, but only while the repo is
-// private: the public guard is evaluated first, so a repo variable can never
-// send a public repo's run (a fork's pull_request included) to another runner.
-//
-// Runner separation: the self-hosted fleet also serves the deploy, backup and
-// migration workflows, so code that has not landed on main must never run on
-// it. In every workflow that triggers on pull_request, the runs-on expression
-// must therefore force GitHub-hosted Linux for pull_request and merge_group
-// events in both visibilities (the PR term ahead of the overflow vars, so the
-// vars cannot reroute those events either), and reach the self-hosted fleet
-// only for other events (main pushes, schedules, manual dispatches) while the
-// repository is private. See docs/private-flip-checklist.md.
+// These source checks cover the checked-in workflow definitions and assessed
+// reusable calls, not workflow YAML loaded from an older or modified branch.
+// Branch dispatches are especially important: a PR-only event guard does not
+// protect a private branch's workflow_dispatch. See docs/private-flip-checklist.md.
 const dir = ".github/workflows";
 const workflows = readdirSync(dir)
   .filter((name) => /\.ya?ml$/.test(name))
@@ -128,6 +116,26 @@ describe("workflow runner labels", () => {
       expect(runsOn, `ci.yml job ${id}`).toBe(hosted);
     }
     expect(overflowSwitch("check")).not.toBe(hosted);
+  });
+
+  it("keeps deploy, proof and gate jobs hosted for every event and visibility", () => {
+    for (const [name, ids] of [
+      [
+        "deploy-production.yml",
+        "preflight staging-soak regression deploy-production post-deploy-watch notify".split(" "),
+      ],
+      ["deploy.yml", ["deploy-staging"]],
+      ["gradual-promote-proof.yml", ["proof"]],
+      ["pr-gates.yml", ["pr-lint", "gitleaks"]],
+      ["staging-rollback-drill.yml", ["plan", "verdict"]],
+    ] as const) {
+      const workflow = workflows.find((entry) => entry.name === name);
+      expect(workflow, name).toBeDefined();
+      expect(
+        jobs(workflow!.text).map(({ id, runsOn }) => [id, runsOn]),
+        name,
+      ).toEqual(ids.map((id) => [id, hosted]));
+    }
   });
 
   it("keeps all featured proof jobs on standard hosted runners", () => {
@@ -243,7 +251,17 @@ describe("workflow runner labels", () => {
         );
       }
     }
-    expect(overflowJobs).toBeGreaterThan(0);
+    expect(overflowJobs).toBe(0);
+    // Private branch dispatch with no overflow fell through to the fleet.
+    const repositoryPrivate = true;
+    const eventName: string = "workflow_dispatch";
+    const oldSelection =
+      (!repositoryPrivate && hosted) ||
+      ((eventName === "pull_request" || eventName === "merge_group") && hosted) ||
+      "self-hosted";
+    expect(oldSelection).toBe("self-hosted");
+    expect(overflowSwitch("check")).toContain("github.event_name == 'pull_request'");
+    expect(overflowSwitch("check")).not.toContain("workflow_dispatch");
   });
 
   it("keeps self-hosted labels behind the repo-visibility check", () => {
@@ -351,6 +369,6 @@ describe("workflow runner labels", () => {
         checkJobs(target!.name, target!.text);
       }
     }
-    expect(guardedJobs).toBeGreaterThan(0);
+    expect(guardedJobs).toBe(0);
   });
 });

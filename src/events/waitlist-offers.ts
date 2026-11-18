@@ -3,7 +3,11 @@ import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { waitlistOffers } from "../db/dormant-schema";
 
-export { claimWaitlistOffer } from "./waitlist-offer-transitions";
+export {
+  claimWaitlistOffer,
+  declineWaitlistOffer,
+  expireWaitlistOffer,
+} from "./waitlist-offer-transitions";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 

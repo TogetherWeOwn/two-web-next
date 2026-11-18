@@ -51,9 +51,7 @@ jobs:
       rollback_version_id: ${{ steps.rollback-target.outputs.version_id }}
       rollback_commit: ${{ steps.rollback-target.outputs.commit }}
       started_at: ${{ steps.start.outputs.started_at }}
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Record when this promotion attempt started
@@ -199,8 +197,7 @@ jobs:
     # production comparison runs in regression below.
     needs: preflight
     if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
-    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     # Secrets preflight: any job reading staging Cloudflare secrets must bind
     # the staging Environment (fail-closed without it). Repo-level names keep
@@ -244,8 +241,7 @@ jobs:
     # (1% floor). GET-only, no auth, no writes.
     needs: [preflight, staging-soak]
     if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
-    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     # The production Environment binding stays as the reviewer checkpoint
     # before the deploy job (and still supplies the production account id),
@@ -328,9 +324,7 @@ jobs:
     outputs:
       promoted_version_id: ${{ steps.gradual.outputs.promoted-version-id }}
       verify_outcome: ${{ steps.verify.outcome }}
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # 30 minutes: the gradual stages now also soak and judge the new
     # version's live error rate (worst case about 4 extra minutes a stage).
     timeout-minutes: 30
@@ -619,8 +613,7 @@ jobs:
     # the promoted version serves and needs watching.
     if: >-
       !cancelled() && needs.deploy-production.outputs.verify_outcome == 'success'
-    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     # No Environment binding, deliberately: this job must start watching the
     # moment promotion reaches 100%, with no second approval in reviewer
@@ -726,8 +719,7 @@ jobs:
         release,
       ]
     if: ${{ always() && needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true' }}
-    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # Tip checkout, like the preflight checks. Setup steps stay non-fatal:
