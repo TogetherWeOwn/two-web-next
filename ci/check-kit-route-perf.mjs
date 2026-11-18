@@ -8,7 +8,7 @@
 // remain outside this immutable-JS/CSS metric and under existing served gates.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
@@ -81,12 +81,11 @@ function list(value) {
   return value;
 }
 
-// `identity`, when an object, receives content hashes for diagnostic output only.
-export function measureRoutes(root = resolve(import.meta.dirname, ".."), identity = null) {
+export function measureRoutes(root = resolve(import.meta.dirname, "..")) {
+  const parse = (path) => JSON.parse(read(root, path));
   const manifestBytes = read(root, `${OUTPUT}/client/.vite/manifest.json`);
   const manifest = JSON.parse(manifestBytes);
-  const evidenceBytes = read(root, `${OUTPUT}/client-route-evidence.json`);
-  const evidence = JSON.parse(evidenceBytes);
+  const evidence = parse(`${OUTPUT}/client-route-evidence.json`);
   keys(evidence, [
     "version",
     "viteSha256",
@@ -195,11 +194,9 @@ export function measureRoutes(root = resolve(import.meta.dirname, ".."), identit
     evidence.routes.length,
     "duplicate route",
   );
-  const inventory = identity && createHash("sha256");
   const fileMetrics = new Map(
     aggregateAssets.map((file) => {
       const bytes = read(root, `${OUTPUT}/client/${file}`);
-      inventory?.update(`${JSON.stringify([file, sha256(bytes)])}\n`);
       return [file, { rawBytes: bytes.length, gzipBytes: gzipSync(bytes).length }];
     }),
   );
@@ -267,13 +264,6 @@ export function measureRoutes(root = resolve(import.meta.dirname, ".."), identit
     [...nodes.keys()].filter((index) => !referencedNodes.has(index)),
   );
   same([...used], [...assets]); // orphan graph chunks cannot silently pass
-  if (inventory)
-    Object.assign(identity, {
-      viteSha256: evidence.viteSha256,
-      serverSha256: evidence.serverSha256,
-      routeEvidenceSha256: sha256(evidenceBytes),
-      inventorySha256: inventory.digest("hex"),
-    });
   return {
     version: 1,
     scope: ROUTE_SCOPE,
@@ -282,70 +272,59 @@ export function measureRoutes(root = resolve(import.meta.dirname, ".."), identit
   };
 }
 
-// Non-gating hosted diagnostic: measures only, never loads or compares budgets.
-export function diagnoseRoutes(root, meta) {
-  for (const k of ["sourceSha", "baseSha", "workflowSha"])
-    assert.match(meta[k], /^[0-9a-f]{40}$/u, `bad ${k}`);
-  for (const k of ["runId", "runAttempt"]) assert.match(meta[k], /^[1-9][0-9]{0,19}$/, `bad ${k}`);
-  assert.match(meta.job, /^[A-Za-z0-9_-]{1,100}$/, "bad job");
-  const identity = {};
-  const m = measureRoutes(root, identity);
-  const strip = ({ rawBytes, gzipBytes, files }) => ({ rawBytes, gzipBytes, files });
-  const both = (v) => ({ js: strip(v.js), css: strip(v.css) });
+function measurementFailure(error) {
   return {
     version: 1,
-    scope: m.scope,
-    sourceSha: meta.sourceSha,
-    baseSha: meta.baseSha,
-    workflowSha: meta.workflowSha,
-    runId: meta.runId,
-    runAttempt: meta.runAttempt,
-    job: { id: meta.job, leg: "head" },
-    identity,
-    routes: Object.fromEntries(Object.entries(m.routes).map(([id, v]) => [id, both(v)])),
-    aggregate: both(m.aggregate),
+    scope: ROUTE_SCOPE,
+    exitCode: 2,
+    error: String(error.message).slice(0, 1000),
   };
 }
 
-export function checkRoutes(root = resolve(import.meta.dirname, "..")) {
+export function checkRoutes(
+  root = resolve(import.meta.dirname, ".."),
+  { reportOnly = false } = {},
+) {
   try {
-    const budget = validateRouteBudget(JSON.parse(read(root, ROUTE_BUDGET)));
-    assert.deepEqual(
-      budget,
-      approvedRouteBudget(root),
-      "live budget differs from approved route plan",
-    );
+    const budget = approvedRouteBudget(root);
+    // The trusted-main ratchet still requires an exact live and measured plan.
+    if (!reportOnly) {
+      const live = validateRouteBudget(JSON.parse(read(root, ROUTE_BUDGET)));
+      assert.deepEqual(live, budget, "live budget differs from approved route plan");
+    }
     const measurement = measureRoutes(root);
-    same(Object.keys(measurement.routes), Object.keys(budget.routes));
+    if (!reportOnly) same(Object.keys(measurement.routes), Object.keys(budget.routes));
     const breaches = [];
     const warnings = [];
     const headroomShortfalls = [];
     for (const [id, route] of Object.entries(measurement.routes)) {
+      if (!Object.hasOwn(budget.routes, id)) {
+        warnings.push({ route: id, reason: "unapproved-route" });
+        continue;
+      }
       for (const kind of ["js", "css"]) {
         const value = route[kind];
         const ceiling = budget.routes[id][kind];
-        const rawOver = value.rawBytes > ceiling.maxRawBytes;
-        const gzipOver = value.gzipBytes > ceiling.maxGzipBytes;
-        if (kind === "css") {
-          if (rawOver)
+        let breached = false;
+        for (const [metric, limit] of [
+          ["rawBytes", "maxRawBytes"],
+          ["gzipBytes", "maxGzipBytes"],
+          ["files", "maxFiles"],
+        ]) {
+          if (value[metric] <= ceiling[limit]) continue;
+          if (reportOnly || (kind === "css" && metric !== "files")) {
             warnings.push({
               route: id,
               kind,
-              metric: "rawBytes",
-              measured: value.rawBytes,
-              ceiling: ceiling.maxRawBytes,
+              metric,
+              measured: value[metric],
+              ceiling: ceiling[limit],
             });
-          if (gzipOver)
-            warnings.push({
-              route: id,
-              kind,
-              metric: "gzipBytes",
-              measured: value.gzipBytes,
-              ceiling: ceiling.maxGzipBytes,
-            });
+          } else {
+            breached = true;
+          }
         }
-        if (value.files > ceiling.maxFiles || (kind === "js" && (rawOver || gzipOver)))
-          breaches.push(`${id} ${kind}`);
+        if (breached) breaches.push(`${id} ${kind}`);
         if (
           targetBytes(value.rawBytes, 512) > ceiling.maxRawBytes ||
           targetBytes(value.gzipBytes, 256) > ceiling.maxGzipBytes
@@ -361,27 +340,54 @@ export function checkRoutes(root = resolve(import.meta.dirname, "..")) {
       headroomShortfalls,
     };
   } catch (error) {
-    return {
-      version: 1,
-      scope: ROUTE_SCOPE,
-      exitCode: 2,
-      error: String(error.message).slice(0, 1000),
-    };
+    return measurementFailure(error);
   }
 }
 
-const invoked = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (invoked && process.argv[2] === "--diagnostic") {
-  const [, , , root, sourceSha, baseSha, workflowSha, runId, runAttempt, job] = process.argv;
-  assert.equal(process.argv.length, 10, "expected diagnostic root, SHAs, run ID, attempt and job");
-  const report = diagnoseRoutes(root, { sourceSha, baseSha, workflowSha, runId, runAttempt, job });
-  console.log(JSON.stringify(report));
-} else if (invoked) {
-  assert.ok(
-    process.argv.length === 2 || (process.argv.length === 4 && process.argv[2] === "--root"),
-    "usage: node ci/check-kit-route-perf.mjs [--root DIR]",
-  );
-  const result = checkRoutes(process.argv[3]);
+function jobSummary(result) {
+  const title = "## Kit route performance (report only)\n\n";
+  if (result.exitCode === 2) return `${title}Measurement failed; see the step's JSON output.\n`;
+
+  // Route IDs come from source paths. Keep Markdown and HTML syntax inert.
+  const label = (id) =>
+    `\`${JSON.stringify(id).slice(1, -1).replaceAll("`", "\\u0060").replaceAll("|", "\\u007c")}\``;
+  const row = (id, { js, css }) =>
+    `| ${id} | ${js.rawBytes} | ${js.gzipBytes} | ${js.files} | ${css.rawBytes} | ${css.gzipBytes} | ${css.files} |`;
+  return [
+    title.trimEnd(),
+    "",
+    `Advisory warnings: ${result.warnings.length}`,
+    "",
+    ...result.warnings.map(({ route, reason, kind, metric, measured, ceiling }) =>
+      reason === "unapproved-route"
+        ? `- ${label(route)}: no approved ceiling (route measured below).`
+        : `- ${label(route)}: ${kind.toUpperCase()} ${metric} ${measured} exceeds ${ceiling}.`,
+    ),
+    "",
+    "| Route | JS raw B | JS gzip B | JS files | CSS raw B | CSS gzip B | CSS files |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ...Object.entries(result.routes).map(([id, route]) => row(label(id), route)),
+    row("**All client assets**", result.aggregate),
+    "",
+  ].join("\n");
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const args = process.argv.slice(2);
+  const reportOnly = args[0] === "--report-only";
+  if (reportOnly) args.shift();
+  let result;
+  try {
+    assert.ok(
+      args.length === 0 || (args.length === 2 && args[0] === "--root"),
+      "usage: node ci/check-kit-route-perf.mjs [--report-only] [--root DIR]",
+    );
+    result = checkRoutes(args[1], { reportOnly });
+    if (reportOnly && process.env.GITHUB_STEP_SUMMARY)
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, jobSummary(result));
+  } catch (error) {
+    result = measurementFailure(error);
+  }
   console.log(JSON.stringify(result));
   process.exitCode = result.exitCode;
 }

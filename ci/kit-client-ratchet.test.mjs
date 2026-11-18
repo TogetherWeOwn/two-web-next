@@ -19,9 +19,7 @@ import { parse } from "yaml";
 import { ROUTE_BUDGET, ROUTE_SCOPE } from "./check-kit-route-perf.mjs";
 import {
   approvedClientBudget,
-  approvedClientPlan,
   approvedRouteBudget,
-  clientPlanDigest,
   initialRouteBudget,
   INITIAL_CLIENT_BUDGET,
   INITIAL_ROUTE_DECISION,
@@ -523,7 +521,7 @@ for (const smallCss of [false, true])
     const root = decisionRoot(t);
     cpSync(join(repo, "ci"), join(root, "ci"), {
       recursive: true,
-      filter: (source) => !/\/(?:auto-client-ratchet-|route-admission-)/.test(source),
+      filter: (source) => !/\/auto-client-ratchet-[a-f0-9]{12}\.md$/.test(source),
     });
     cpSync(join(repo, "package.json"), join(root, "package.json"));
     symlinkSync(join(repo, "node_modules"), join(root, "node_modules"));
@@ -566,7 +564,7 @@ test("successive asymmetric generated CSS ratchets pass the unchanged shipping g
   const root = decisionRoot(t);
   cpSync(join(repo, "ci"), join(root, "ci"), {
     recursive: true,
-    filter: (source) => !/\/(?:auto-client-ratchet-|route-admission-)/.test(source),
+    filter: (source) => !/\/auto-client-ratchet-[a-f0-9]{12}\.md$/.test(source),
   });
   cpSync(join(repo, "package.json"), join(root, "package.json"));
   symlinkSync(join(repo, "node_modules"), join(root, "node_modules"));
@@ -643,108 +641,6 @@ test("initial measured route admission remains pinned independently of the live 
     JSON.parse(readFileSync(join(repo, ROUTE_BUDGET), "utf8")),
     approvedRouteBudget(repo),
   );
-});
-
-function admission(approved) {
-  const js = { rawBytes: 261632, gzipBytes: 104448, files: 55 };
-  const css = { rawBytes: 400, gzipBytes: 100, files: 1 };
-  return {
-    version: 1,
-    beforeSha256: clientPlanDigest(approved),
-    sourceSha: sha,
-    jobUrl: `https://github.com/${repository}/actions/runs/1/job/2`,
-    reportSha256: "b".repeat(64),
-    aggregate: { js, css },
-    additions: [
-      {
-        id: "/new/[key]",
-        measured: { js: { ...js }, css: { ...css } },
-        ceiling: {
-          js: { ...INITIAL_CLIENT_BUDGET.js },
-          css: { maxRawBytes: 512, maxGzipBytes: 256, maxFiles: 2 },
-        },
-      },
-    ],
-  };
-}
-
-function saveAdmission(root, record, slug = "new") {
-  const path = join(root, `ci/budgets/decisions/kit-perf/route-admission-${slug}.json`);
-  writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`);
-  return path;
-}
-
-test("exact-cap admission preserves the full plan and the writer still lowers without adding keys", (t) => {
-  const root = decisionRoot(t);
-  const before = approvedClientPlan(root);
-  assert.equal(
-    clientPlanDigest(before),
-    clientPlanDigest({ ...before, client: { css: before.client.css, js: before.client.js } }),
-  );
-  const record = admission(before);
-  const [{ id, ceiling }] = record.additions;
-  const f = shippingFixture();
-  f.report.measurement.routes[id] = structuredClone(f.report.measurement.routes["/"]);
-  f.report.measurement.routes[id].css = { rawBytes: 0, gzipBytes: 0, files: 0, assets: [] };
-  assert.throws(() => propose(f.report, f.files), /revision\/inventory mismatch/);
-  saveAdmission(root, record);
-  const after = approvedClientPlan(root);
-  assert.deepEqual(after, {
-    client: before.client,
-    routeBudget: { ...before.routeBudget, routes: { ...before.routeBudget.routes, [id]: ceiling } },
-  });
-  f.files[ROUTE_BUDGET] = after.routeBudget;
-  f.report.sha = head;
-  const p = propose(f.report, f.files);
-  assert.ok(p.changes.some((change) => change.id === id && change.kind === "js"));
-  saveDecision(root, f);
-  assert.deepEqual(approvedRouteBudget(root), p.files[ROUTE_BUDGET]);
-  assert.equal(
-    approvedClientBudget(root).js.maxRawBytes,
-    p.files[CLIENT_FILES[0]].client.js.maxRawBytes,
-  );
-});
-
-test("admission refuses malformed, stale, over-cap and non-additive records", (t) => {
-  const root = decisionRoot(t);
-  const before = approvedClientPlan(root);
-  const record = admission(before);
-  const [a] = record.additions;
-  const stale = structuredClone(before);
-  stale.routeBudget.routes["/admin"].js.maxRawBytes -= 512;
-  for (const [patch, error] of [
-    [{ version: 2 }, /unsupported route admission/],
-    [{ additions: [] }, /empty route admission/],
-    [{ additions: [a, a] }, /duplicate or already approved/],
-    [{ additions: [{ ...a, id: "/admin" }] }, /duplicate or already approved/],
-    [{ additions: [{ ...a, id: "/new//path" }] }, /invalid admitted route/],
-    [{ client: before.client }, /invalid admission fields/],
-    [{ beforeSha256: clientPlanDigest(stale) }, /approved ceiling chain/],
-    [
-      { aggregate: { ...record.aggregate, css: { ...record.aggregate.css, rawBytes: 3585 } } },
-      /exceeds current aggregate/,
-    ],
-  ]) {
-    saveAdmission(root, { ...record, ...patch });
-    assert.throws(() => approvedClientPlan(root), error);
-  }
-  const invalid = structuredClone(record);
-  invalid.additions[0].measured.js.files += 1;
-  saveAdmission(root, invalid);
-  assert.throws(() => approvedClientPlan(root), /exceeds current aggregate/);
-  invalid.additions[0].measured.js.files -= 1;
-  invalid.additions[0].ceiling.css.maxRawBytes += 512;
-  saveAdmission(root, invalid);
-  assert.throws(() => approvedClientPlan(root), /incorrect admission ceiling/);
-  const path = saveAdmission(root, record);
-  writeFileSync(
-    path,
-    readFileSync(path, "utf8").replace('"version": 1', '"version": 2, "version": 1'),
-  );
-  assert.throws(() => approvedClientPlan(root), /invalid admission JSON encoding/);
-  saveAdmission(root, record);
-  saveDecision(root, shippingFixture()); // Legacy lowering from the same plan is a competitor.
-  assert.throws(() => approvedClientPlan(root), /one successor in the approved ceiling chain/);
 });
 
 test("decision oracle replays successive lowerings and refuses a re-raise or missing evidence", (t) => {

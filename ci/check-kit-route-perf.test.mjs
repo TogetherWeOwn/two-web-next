@@ -6,16 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
-import {
-  approvedClientPlan,
-  clientPlanDigest,
-  INITIAL_CLIENT_BUDGET,
-} from "./client-ratchet-approval.mjs";
+import { INITIAL_CLIENT_BUDGET } from "./client-ratchet-approval.mjs";
 import { measure as measureKit } from "./check-kit-perf.mjs";
 import { CLIENT_FILES, measuredDecision, propose } from "./kit-client-ratchet.mjs";
 import {
   checkRoutes,
-  diagnoseRoutes,
   measureRoutes,
   OUTPUT,
   ROUTE_BUDGET,
@@ -206,8 +201,20 @@ for (const [metric, field] of [
       assert.equal(result.exitCode, advisory ? 0 : 1);
       assert.deepEqual(result.breaches, advisory ? [] : [`/ ${kind}`]);
       assert.equal(result.warnings.length, advisory ? 1 : 0);
+      const report = checkRoutes(f.root, { reportOnly: true });
+      const key = { raw: "rawBytes", gzip: "gzipBytes", count: "files" }[metric];
+      assert.equal(report.exitCode, 0);
+      assert.deepEqual(report.breaches, []);
+      assert.deepEqual(report.warnings, [
+        {
+          route: "/",
+          kind,
+          metric: key,
+          measured: result.routes["/"][kind][key],
+          ceiling: f.budget.routes["/"][kind][field],
+        },
+      ]);
       if (advisory) {
-        const key = metric === "raw" ? "rawBytes" : "gzipBytes";
         assert.deepEqual(result.warnings[0], {
           route: "/",
           kind: "css",
@@ -332,80 +339,67 @@ for (const kind of ["js", "css"])
       assert.match(rejected.error, /approved route plan/);
     });
 
-test("new source, built and live-budget route still requires explicit admission", (t) => {
+test("shipping reports an unapproved route without admitting it to the ratchet", (t) => {
   const f = fixture(t);
   f.put("web/src/routes/new/+page.svelte", "new");
   f.evidence.routes.push({ id: "/new", page: f.evidence.routes[0].page });
-  f.budget.routes["/new"] = f.budget.routes["/"];
   f.save();
+  const report = checkRoutes(f.root, { reportOnly: true });
+  assert.equal(report.exitCode, 0);
+  assert.deepEqual(report.routes["/new"], report.routes["/"]);
+  assert.deepEqual(report.warnings, [{ route: "/new", reason: "unapproved-route" }]);
+  assert.match(checkRoutes(f.root).error, /inventory mismatch/);
+
+  f.budget.routes["/new"] = f.budget.routes["/"];
   f.saveBudget();
+  assert.deepEqual(checkRoutes(f.root, { reportOnly: true }), report);
   const result = checkRoutes(f.root);
   assert.equal(result.exitCode, 2);
   assert.match(result.error, /approved route plan/);
-});
 
-test("draft diagnostics measure without approving, then admission still requires exact source and build coverage", (t) => {
-  const f = fixture(t);
-  const id = "/new";
-  const source = "web/src/routes/new/+server.ts";
-  const meta = {
-    sourceSha: "a".repeat(40),
-    baseSha: "b".repeat(40),
-    workflowSha: "c".repeat(40),
-    runId: "1",
-    runAttempt: "2",
-    job: "leg",
-  };
-  const before = approvedClientPlan(f.root);
-  const ceiling = f.budget.routes["/api"];
-  f.budget.routes[id] = ceiling;
-  f.saveBudget();
-  assert.match(checkRoutes(f.root).error, /approved route plan/); // live-only
-  delete f.budget.routes[id];
-  f.saveBudget();
-  f.put(source, "endpoint");
-  assert.match(checkRoutes(f.root).error, /inventory mismatch/); // source-only
-  f.evidence.routes.push({ id, page: null });
-  f.save();
-  rmSync(join(f.root, source));
-  assert.match(checkRoutes(f.root).error, /inventory mismatch/); // built-only
-  f.put(source, "endpoint");
-
-  const report = diagnoseRoutes(f.root, meta);
-  assert.equal(report.sourceSha, meta.sourceSha);
-  assert.deepEqual(report.job, { id: "leg", leg: "head" });
-  assert.deepEqual(Object.keys(report.routes).sort(), ["/", "/about", "/api", id]);
-  assert.equal(report.identity.viteSha256, f.evidence.viteSha256);
-  const built = measureRoutes(f.root);
-  for (const kind of ["js", "css"]) {
-    const { rawBytes, gzipBytes, files } = built.aggregate[kind];
-    assert.deepEqual(report.aggregate[kind], { rawBytes, gzipBytes, files });
-  }
-  f.budget.routes[id] = ceiling;
-  f.saveBudget();
-  assert.match(checkRoutes(f.root).error, /approved route plan/);
-  const path = "ci/budgets/decisions/kit-perf/route-admission-new.json";
-  const save = (record) => f.put(path, `${JSON.stringify(record, null, 2)}\n`);
-  save(report);
-  assert.match(checkRoutes(f.root).error, /invalid admission fields/);
-  save({
-    version: 1,
-    beforeSha256: clientPlanDigest(before),
-    sourceSha: report.sourceSha,
-    jobUrl: "https://github.com/TogetherWeOwn/two-web-next/actions/runs/1/job/2",
-    reportSha256: hash(JSON.stringify(report)),
-    aggregate: report.aggregate,
-    additions: [{ id, ceiling, measured: report.routes[id] }],
-  });
-  assert.equal(checkRoutes(f.root).exitCode, 0); // zero-file exact fit
-  f.put("web/src/routes/new/+page.svelte", "client page");
-  f.evidence.routes.at(-1).page = f.evidence.routes[0].page;
-  f.save();
-  assert.ok(checkRoutes(f.root).breaches.includes(`${id} js`));
   f.evidence.routes.pop();
   f.save();
-  rmSync(join(f.root, "web/src/routes/new"), { recursive: true });
-  assert.match(checkRoutes(f.root).error, /inventory mismatch/); // an approved route absent from both
+  const incomplete = checkRoutes(f.root, { reportOnly: true });
+  assert.equal(incomplete.exitCode, 2);
+  assert.match(incomplete.error, /inventory mismatch/);
+});
+
+test("report-only CLI writes JSON and job summary and fails on broken measurement", (t) => {
+  const f = fixture(t);
+  f.put("web/src/routes/new/+server.ts", "new");
+  f.evidence.routes.push({ id: "/new", page: null });
+  f.save();
+  f.budget.routes["/"].js.maxFiles -= 1;
+  f.approveBudget();
+
+  const path = join(f.root, "job-summary.md");
+  const run = () =>
+    spawnSync(
+      process.execPath,
+      ["ci/check-kit-route-perf.mjs", "--report-only", "--root", f.root],
+      {
+        cwd: join(import.meta.dirname, ".."),
+        env: { ...process.env, GITHUB_STEP_SUMMARY: path },
+        encoding: "utf8",
+      },
+    );
+  const measured = run();
+  assert.equal(measured.status, 0, measured.stdout || measured.stderr);
+  const report = JSON.parse(measured.stdout);
+  assert.equal(report.exitCode, 0);
+  assert.equal(report.routes["/new"].js.rawBytes, 0);
+  const summary = readFileSync(path, "utf8");
+  assert.match(summary, /Advisory warnings: 2/);
+  assert.match(summary, /`\/new`: no approved ceiling/);
+  assert.match(summary, /`\/`: JS files 9 exceeds 8/);
+  assert.match(summary, /\| `\/new` \| 0 \| 0 \| 0 \| 0 \| 0 \| 0 \|/);
+  assert.ok(summary.includes(`| **All client assets** | ${report.aggregate.js.rawBytes} |`));
+
+  f.put(`${OUTPUT}/client/.vite/manifest.json`, "{");
+  const broken = run();
+  assert.equal(broken.status, 2, broken.stdout || broken.stderr);
+  assert.equal(JSON.parse(broken.stdout).exitCode, 2);
+  assert.match(readFileSync(path, "utf8"), /Measurement failed/);
 });
 
 test("missing initial approved route evidence fails closed", (t) => {

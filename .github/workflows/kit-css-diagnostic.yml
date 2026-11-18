@@ -33,7 +33,6 @@ on:
     paths:
       - .github/workflows/kit-css-diagnostic.yml
       - ci/kit-css-collect.mjs
-      - ci/check-kit-route-perf.mjs
       - ci/kit-css-collect.test.mjs
       - ci/kit-css-diagnostic.test.mjs
 permissions: {}
@@ -132,12 +131,6 @@ jobs:
           git -C "$work/git" fetch -q --no-tags --depth=1 origin "$WORKFLOW_SHA" "$SOURCE_SHA"
           git -C "$work/git" show "$WORKFLOW_SHA:ci/kit-css-collect.mjs" > "$work/tools/collect.mjs"
           git -C "$work/git" archive --format=tar "$SOURCE_SHA" | tar -x -C "$work/export"
-          if [ "$LEG" = head ]; then
-            mkdir "$work/tools/route"
-            for f in check-kit-route-perf bundle-inventory client-ratchet-approval kit-client-ratchet kit-route-budget; do
-              git -C "$work/git" show "$WORKFLOW_SHA:ci/$f.mjs" > "$work/tools/route/$f.mjs"
-            done
-          fi
           rm -rf "$work/git"
           test -f "$work/export/package-lock.json" && test -f "$work/export/web/package-lock.json"
       - name: Install and build in separate constrained containers
@@ -176,25 +169,6 @@ jobs:
             --source-sha "$SOURCE_SHA" --workflow-sha "$WORKFLOW_SHA" \
             --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --repository "$GITHUB_REPOSITORY"
-      - name: Measure head Kit route closure (diagnostic, no budgets)
-        if: matrix.leg == 'head'
-        # Missing route evidence cannot be used for admission; still publish CSS.
-        continue-on-error: true
-        env:
-          BASE_SHA: ${{ github.event_name == 'pull_request' && startsWith(github.workflow_ref, 'TogetherWeOwn/two-web-next/.github/workflows/kit-css-diagnostic.yml@') && github.event.pull_request.base.sha || needs.resolve.outputs.base }}
-          COLLECTOR_SHA: ${{ needs.resolve.outputs.workflow }}
-        run: |
-          set -euo pipefail
-          docker run --name "$KIT_CSS_CONTAINER" --rm --network none --read-only \
-            --cap-drop ALL --security-opt no-new-privileges --user "$(id -u):$(id -g)" \
-            --pids-limit 128 --memory 512m --cpus 1 --tmpfs /tmp:rw,exec,nosuid,nodev,size=64m \
-            --mount "type=bind,src=$KIT_CSS_WORK/export,dst=/src,readonly" \
-            --mount "type=bind,src=$KIT_CSS_WORK/tools,dst=/tools,readonly" \
-            node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413 \
-            node /tools/route/check-kit-route-perf.mjs --diagnostic /src \
-            "$SOURCE_SHA" "$BASE_SHA" "$COLLECTOR_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_JOB" \
-            > "$KIT_CSS_WORK/route.json"
-          mv "$KIT_CSS_WORK/route.json" "$KIT_CSS_WORK/out/kit-route-perf.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kit-css-${{ matrix.leg }}
