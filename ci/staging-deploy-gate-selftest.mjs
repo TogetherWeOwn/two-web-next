@@ -72,12 +72,11 @@ const gateCommand = step("Require successful exact-SHA full CI");
 const queueCommand = step("Ensure queues exist");
 const tailCommand = `${step("Re-verify exact-SHA full CI before Tail Worker deploy")}\n${step("Deploy alert Tail Worker before attaching the app")}`;
 const deployGateCommand = step("Re-verify exact-SHA full CI before Worker deploy");
-const defaultRouteFlags = kitRouteFlagsForFamily("hono");
-const deployCommand = `${deployGateCommand}\n${step("Deploy to Cloudflare Workers")
-  .replaceAll("${{ steps.kit-route-flags.outputs.archive }}", defaultRouteFlags.archive)
-  .replaceAll("${{ steps.kit-route-flags.outputs.static }}", defaultRouteFlags.static)}`;
+const workerDeployCommand = step("Deploy to Cloudflare Workers");
+const deployCommand = `${deployGateCommand}\n${workerDeployCommand}`;
 
-function executeStaging(ctx, evidence, changes = {}) {
+function executeStaging(ctx, evidence, changes = {}, routeFamily = "hono") {
+  const flags = kitRouteFlagsForFamily(routeFamily);
   const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "staging-gate-"));
   try {
     writeFileSync(join(dir, "event.json"), JSON.stringify(ctx.event));
@@ -145,6 +144,8 @@ function executeStaging(ctx, evidence, changes = {}) {
           GITHUB_REF: ctx.ref,
           GITHUB_SHA: ctx.sha,
           DEPLOY_SHA: ctx.checkoutSha,
+          KIT_ROUTE_ARCHIVE: flags.archive,
+          KIT_ROUTE_STATIC: flags.static,
           GITHUB_TOKEN: "offline-stub",
           TEST_CHECKOUT_SHA: ctx.checkoutSha,
           TEST_EVIDENCE: join(dir, "evidence.json"),
@@ -385,6 +386,19 @@ const mutationCalls = [
   "wrangler deploy --config tail/wrangler.jsonc",
   `wrangler deploy --config web/wrangler.staging.jsonc --tag ${sha} --var KIT_ROUTE_ARCHIVE:false --var KIT_ROUTE_STATIC:false`,
 ];
+for (const [family, staticFlag] of [
+  ["archive", "false"],
+  ["archive-static", "true"],
+]) {
+  test(`workflow_dispatch: ${family} passes the selected route flags to the Worker deploy`, () => {
+    const result = executeStaging(context("workflow_dispatch"), fixture(), {}, family);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.calls, [
+      ...mutationCalls.slice(0, 3),
+      `wrangler deploy --config web/wrangler.staging.jsonc --tag ${sha} --var KIT_ROUTE_ARCHIVE:true --var KIT_ROUTE_STATIC:${staticFlag}`,
+    ]);
+  });
+}
 for (const eventName of ["workflow_run", "workflow_dispatch"]) {
   for (const [phase, allowedCalls] of [
     ["afterPreparation", 0],
@@ -570,7 +584,12 @@ test("workflow wires the tested gate before both mutations and preserves staging
   );
   assert.match(workflow, /run: node ci\/kit-route-flags\.mjs/);
   assert.match(workflow, /run: npm run build --prefix web/);
-  assert.match(workflow, /--config web\/wrangler\.staging\.jsonc/);
+  assert.match(workerDeployCommand, /--config web\/wrangler\.staging\.jsonc/);
+  assert.match(
+    workerDeployCommand,
+    /--var "KIT_ROUTE_ARCHIVE:\$KIT_ROUTE_ARCHIVE" --var "KIT_ROUTE_STATIC:\$KIT_ROUTE_STATIC"/,
+  );
+  assert.doesNotMatch(workerDeployCommand, /\$\{\{/);
   assert.doesNotMatch(workflow, /^  push:/m);
   assert.match(
     workflow,
