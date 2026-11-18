@@ -120,8 +120,9 @@ describe("route-free Kit members directory projection", () => {
   it("omits opted-out members from rows, search, welcomes and organisers", () => {
     const visible = newcomer("VisibleFixture", snapshotAt);
     const hidden = newcomer("OptedOutFixture", snapshotAt, true);
-    const projection = view("filter=everyone", [visible, hidden]);
-    expect(names(projection)).toEqual([visible.name]);
+    const ordinary = fixture("WithoutOrganizerRole");
+    const projection = view("filter=everyone", [visible, hidden, ordinary]);
+    expect(names(projection)).toEqual([visible.name, ordinary.name]);
     expect(projection.newcomers.map(({ name }) => name)).toEqual([visible.name]);
     expect(projection.organizers.map(({ name }) => name)).toEqual([visible.name]);
     expect(view("q=optedout", [visible, hidden]).resultCount).toBe(0);
@@ -172,14 +173,27 @@ describe("route-free Kit members directory projection", () => {
       expect(invalid.selection.page).toBe(1);
       expect(names(invalid)).toEqual(names(first));
     }
+    const second = view("page=2", members);
+    expect(second.selection.page).toBe(2);
+    expect(names(second)).toEqual(["PagedFixture0"]);
     expect(names(view("page=100000", members))).toEqual(["PagedFixture0"]);
     expect(view("page=2", members.slice(0, 20))).toMatchObject({
       selection: { page: 1 },
       resultCount: 20,
       pageCount: 1,
     });
-    expect(view(`q=${"x".repeat(memberSearchLimit + 1)}`).selection.query).toHaveLength(
-      memberSearchLimit,
-    );
+  });
+
+  it("matches at the search limit and truncates a query one character over it", () => {
+    const prefix = "x".repeat(memberSearchLimit - 1);
+    const query = `${prefix}a`;
+    const members = [
+      fixture("ExactMatch", { handle: query }),
+      fixture("NearMatch", { handle: `${prefix}b` }),
+    ];
+    const exact = view(`q=${query}`, members);
+    expect(exact.selection.query).toBe(query);
+    expect(names(exact)).toEqual(["ExactMatch"]);
+    expect(view(`q=${query}z`, members)).toEqual(exact);
   });
 });
