@@ -43,6 +43,7 @@ export const GET: RequestHandler = async ({ request, cookies, url, locals, setHe
       data,
       collected,
       locals.restoredWrite === true && !island,
+      request.headers.get("x-two-island") === "events-calendar",
     );
     const response = new Response(rendered.body, {
       status: rendered.status,

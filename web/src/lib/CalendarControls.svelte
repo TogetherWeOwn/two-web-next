@@ -47,6 +47,7 @@ let {
   outOfRange,
   pageUnreadable = false,
   searchMiss = true,
+  island = false,
 }: {
   state: CalendarState;
   appUrl: string;
@@ -59,6 +60,7 @@ let {
   outOfRange: boolean;
   pageUnreadable?: boolean;
   searchMiss?: boolean;
+  island?: boolean;
 } = $props();
 
 let url = $derived(feedUrl(appUrl, gameFilter));
@@ -79,8 +81,9 @@ let searchStatus = $derived.by(() => {
 <p role="status" class="sr-only" data-testid={CALENDAR_MONTH_STATUS_TESTID}>{state.view === "calendar" ? calendarMonthLabel(state.month) : ""}</p>
 
 <div data-cal-zone="head">
-  <!-- Keep the sheet in the swap zone for tabs opened before Kit rendered the calendar. -->
+  <!-- Older tabs may predate both the control sheet and its schedule token aliases. -->
   <link rel="stylesheet" href="/kit-events-controls.css" />
+  {#if island}<link rel="stylesheet" href="/theme-tokens.css?kit-events-controls" />{/if}
   <SegmentedControl label={EVENTS_VIEW_GROUP_LABEL} items={[
     { href: calendarUrl({ ...state, view: "list" }), label: "List", current: state.view === "list", testId: EVENTS_VIEW_LIST_TESTID },
     { href: calendarUrl({ ...state, view: "calendar" }), label: "Calendar", current: state.view === "calendar", testId: EVENTS_VIEW_CALENDAR_TESTID },

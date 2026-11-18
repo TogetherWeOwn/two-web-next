@@ -1886,13 +1886,15 @@ test("cross-target: normalized archive sections match", async () => {
 });
 
 test("Kit calendar styles survive a swap into the old document", async ({ page }) => {
-  // The Hono renderer supplies the pre-activation shell. Only the initial
-  // navigation is intercepted; the existing island fetches from Kit.
+  // Serve the old Hono shell without the new aliases; the island fetches from Kit.
   const old = await page.request.get(`${HONO_ORIGIN}/events`, { maxRedirects: 0 });
   expect(old.status()).toBe(200);
   await page.route(`${KIT_ORIGIN}/events`, (route) => route.fulfill({ response: old }), {
     times: 1,
   });
+  await page.route(`${KIT_ORIGIN}/theme-tokens.css`, (route) =>
+    route.fulfill({ contentType: "text/css", body: "" }),
+  );
   await page.goto(`${KIT_ORIGIN}/events`);
   await expect(page.locator(".schedule-views")).toBeVisible();
   await expect(page.locator('link[href="/kit-events-controls.css"]')).toHaveCount(0);

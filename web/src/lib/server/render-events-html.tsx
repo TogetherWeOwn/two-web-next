@@ -8,11 +8,12 @@ import { projectEventsCalendar } from "./events-calendar";
 export function renderEventsHtml(
   data: Parameters<typeof renderEventsDocument>[0],
   headers: Record<string, string>,
-  restoredWrite: boolean,
+  restoredWrite = false,
+  island = false,
 ) {
   return renderEventsDocument(data, headers, restoredWrite, async (data) => {
     const { body } = await render(CalendarScreen, {
-      props: { ...projectEventsCalendar(data), joinResult: data.joinResult },
+      props: { ...projectEventsCalendar(data), joinResult: data.joinResult, island },
     });
     return (
       <ScheduleShell

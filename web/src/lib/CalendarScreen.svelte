@@ -58,6 +58,7 @@ let {
   member,
   loginReturnTo = null,
   joinResult = null,
+  island = false,
   weeks,
   zone,
   now,
@@ -82,6 +83,7 @@ let {
   member: boolean;
   loginReturnTo?: string | null;
   joinResult?: JoinResult | null;
+  island?: boolean;
   weeks: CalendarGridProps["weeks"];
   zone: string;
   now: Date;
@@ -106,7 +108,7 @@ let hasResultsOrPageNotice = $derived(hasVisibleResults || outOfRange || pageUnr
       {/if}
     </p>
   {/if}
-  <CalendarControls {state} {appUrl} {games} {gameFilter} {searching} pastCount={past.length} {emptyState} {hasVisibleResults} {outOfRange} {pageUnreadable} {searchMiss} />
+  <CalendarControls {state} {appUrl} {games} {gameFilter} {searching} pastCount={past.length} {emptyState} {hasVisibleResults} {outOfRange} {pageUnreadable} {searchMiss} {island} />
   <p role="status" {...{ [EVENTS_CAL_FEEDBACK]: true }}></p>
   <div>
     <p role="status" data-testid={EVENTS_READ_STATUS_TESTID}></p>

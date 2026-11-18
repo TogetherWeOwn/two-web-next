@@ -19,11 +19,7 @@ const webRequire = createRequire(new URL("../../web/package.json", import.meta.u
 let loaded: Promise<KitRender> | undefined;
 
 // Bundle the actual Kit SSR adapter once per test worker.
-export function renderKitEvents(
-  data: Parameters<KitRender>[0],
-  headers: Parameters<KitRender>[1],
-  restoredWrite = false,
-): ReturnType<KitRender> {
+export function renderKitEvents(...args: Parameters<KitRender>): ReturnType<KitRender> {
   loaded ??= (async () => {
     const { compile } = webRequire("svelte/compiler");
     const { outputFiles } = await build({
@@ -51,7 +47,7 @@ export function renderKitEvents(
     const url = `data:text/javascript;base64,${Buffer.from(outputFiles[0]!.text).toString("base64")}`;
     return ((await import(url)) as { renderEventsHtml: KitRender }).renderEventsHtml;
   })();
-  return loaded.then((render) => render(data, headers, restoredWrite));
+  return loaded.then((render) => render(...args));
 }
 
 export const GAME_ORIGIN = "https://calendar.example.test";

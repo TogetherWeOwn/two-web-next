@@ -282,13 +282,8 @@ describe("Kit events endpoint flash-consumption controls", () => {
     const body = await (await GET(event)).text();
     expect(body).toMatch(/^<!doctype html>/i);
     expect(body).toContain('data-island="events-calendar"');
-    expect([...body.matchAll(/data-cal-zone="([^"]+)"/g)].map((match) => match[1])).toEqual([
-      "head",
-      "subscribe",
-      "actions",
-      "miss",
-      "content",
-    ]);
+    const zones = Array.from(body.matchAll(/data-cal-zone="([^"]+)"/g), (match) => match[1]);
+    expect(zones).toEqual(["head", "subscribe", "actions", "miss", "content"]);
     expect(body).toMatch(
       /data-cal-zone="head">\s*<link rel="stylesheet" href="\/kit-events-controls\.css"/,
     );
