@@ -149,7 +149,17 @@ describe("route-free Kit members directory projection", () => {
     });
     expect(first.rows).toHaveLength(20);
     expect(first.rows[0]?.name).toBe("PagedFixture20");
+    for (const page of ["1.5", "Infinity", "abc", "9007199254740992"]) {
+      const invalid = view(`page=${page}`, members);
+      expect(invalid.selection.page).toBe(1);
+      expect(names(invalid)).toEqual(names(first));
+    }
     expect(names(view("page=100000", members))).toEqual(["PagedFixture0"]);
+    expect(view("page=2", members.slice(0, 20))).toMatchObject({
+      selection: { page: 1 },
+      resultCount: 20,
+      pageCount: 1,
+    });
     expect(view(`q=${"x".repeat(MEMBER_SEARCH_LIMIT + 1)}`).selection.query).toHaveLength(
       MEMBER_SEARCH_LIMIT,
     );
