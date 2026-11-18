@@ -437,13 +437,11 @@ binding isolation before any remote mutation.
    private persistence. Source behavior and local tests are not proof of live
    isolation.
 
-Staging and preview must have no recurring idle runtime charges. Before a
-rollout, account for containers, Durable Objects and their alarms, scheduled
-Workers, Stream inputs, and database compute. During an approved use window,
-record pipeline startup and readiness for the exact SHA and environment, and
-native stop, scale-to-zero, or expiry evidence even on failure or cancellation.
-Do not bypass an installation or qualification hold. Any recurring idle charge
-needs a dated owner exception with resource scope, cost, and expiry or review date.
+Staging and preview must have no recurring idle runtime charges. Inventory containers,
+Durable Objects and alarms, scheduled Workers, Stream inputs, and database compute.
+Preserve all holds. Record exact-SHA startup and readiness, the bounded use window,
+and native cleanup or expiry even on failure or cancellation. An idle charge needs a
+dated owner exception with resource scope, cost, and expiry or review date.
 
 ### Neon web schema migrations (separate operator action)
 

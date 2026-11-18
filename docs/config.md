@@ -24,8 +24,7 @@ PRs, logs or command arguments.
   `next.togetherweown.com` and defaults all Kit route families to Hono. The
   `deploy.yml` workflow's automatic main-CI path resets all families to Hono;
   a `workflow_dispatch` on `main` selects `hono`, `archive`, cumulative
-  `archive-static`, or `events` (events list only). The GitHub Environment
-  `staging` supplies deployment-scoped
+  `archive-static`, or `events` (list only). The GitHub Environment `staging` supplies deployment-scoped
   values; it is not a human approval gate or Wrangler named environment. Worker
   name is `two-web-next`; Hyperdrive's resource name is not a Worker selector
   or isolation guarantee. `wrangler.jsonc` remains the Hono config and the
