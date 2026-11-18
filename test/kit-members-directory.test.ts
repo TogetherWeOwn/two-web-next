@@ -1,9 +1,27 @@
-import { describe, expect, it } from "vitest";
-import {
-  type DirectoryFixtureMember,
-  MEMBER_SEARCH_LIMIT,
-  projectMembersDirectory,
-} from "../web/src/lib/members-directory";
+import { fileURLToPath, URL } from "node:url";
+import { build } from "esbuild";
+import { beforeAll, describe, expect, it } from "vitest";
+import type { DirectoryFixtureMember } from "../web/src/lib/members-directory";
+
+type DirectoryModule = typeof import("../web/src/lib/members-directory");
+let projectMembersDirectory: DirectoryModule["projectMembersDirectory"];
+let memberSearchLimit: DirectoryModule["MEMBER_SEARCH_LIMIT"];
+
+beforeAll(async () => {
+  // Bundle the real Kit module without asking root Vitest to resolve Kit's $app/tsconfig.
+  const { outputFiles } = await build({
+    entryPoints: [fileURLToPath(new URL("../web/src/lib/members-directory.ts", import.meta.url))],
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    write: false,
+    tsconfigRaw: {},
+  });
+  const encoded = Buffer.from(outputFiles[0]!.text).toString("base64");
+  ({ projectMembersDirectory, MEMBER_SEARCH_LIMIT: memberSearchLimit } = await import(
+    `data:text/javascript;base64,${encoded}`
+  ));
+});
 
 const counts = { members: 814, attendedThisMonth: 212 };
 const weekStartsAt = Date.parse("2030-04-08T00:00:00Z");
@@ -160,8 +178,8 @@ describe("route-free Kit members directory projection", () => {
       resultCount: 20,
       pageCount: 1,
     });
-    expect(view(`q=${"x".repeat(MEMBER_SEARCH_LIMIT + 1)}`).selection.query).toHaveLength(
-      MEMBER_SEARCH_LIMIT,
+    expect(view(`q=${"x".repeat(memberSearchLimit + 1)}`).selection.query).toHaveLength(
+      memberSearchLimit,
     );
   });
 });
