@@ -109,16 +109,14 @@ test("plain data conversion rejects unsafe YAML integers", () => {
   assert.equal(workflowRunPlainData(quoted).workflow.defaults, "9007199254740993");
 });
 
-test("workflow context rejects unsupported YAML version directives", () => {
-  const context = (version) => {
-    const [run] = discoverWorkflowRuns(
-      "ci.yml",
-      `%YAML ${version}\n---\njobs: { build: { steps: [{ run: hi }] } }`,
-    );
-    return workflowRunPlainData(run);
-  };
-  assert.throws(() => context("1.3"), /ci.yml: invalid workflow YAML/);
-  assert.equal(context("1.2").step.run, "hi");
+test("workflow discovery rejects unsupported YAML version directives", () => {
+  const workflow = (version) => `%YAML ${version}\n---\njobs: { build: { steps: [{ run: hi }] } }`;
+  assert.throws(
+    () => discoverWorkflowRuns("ci.yml", workflow("1.3")),
+    /ci.yml: invalid workflow YAML/,
+  );
+  const [run] = discoverWorkflowRuns("ci.yml", workflow("1.2"));
+  assert.equal(workflowRunPlainData(run).step.run, "hi");
 });
 
 test("plain data conversion rejects unsupported YAML semantics", () => {
