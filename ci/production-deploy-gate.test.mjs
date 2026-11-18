@@ -830,8 +830,13 @@ test("production dead-letter baseline is scoped to the gradual and post-promotio
       `${key} belongs only to the two smoke consumers`,
     );
   }
+  // Count references to the capture step itself so bracket lookups count too.
+  const baselineRefs =
+    deploy.match(
+      /\bsteps(?:\s*\.\s*dead-letter-baseline\b|\s*\[\s*'dead-letter-baseline'\s*\])/gi,
+    ) ?? [];
   assert.equal(
-    deploy.split("steps.dead-letter-baseline.outputs.failed").length - 1,
+    baselineRefs.length,
     consumers.length,
     "the baseline output must not be read under another variable name or input",
   );
