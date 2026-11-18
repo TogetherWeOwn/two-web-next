@@ -164,7 +164,15 @@ describe("workflow runner labels", () => {
       "route-evidence-admission",
       "ci-ok",
     ]);
-    for (const { id } of ciJobs) expectHostedJob("ci.yml", id, workflow!.source.jobs[id]!);
+    for (const { id, runsOn } of ciJobs) {
+      if (id === "route-evidence-producer" || id === "route-evidence-admission") {
+        expect(runsOn, `ci.yml job ${id}`).toBe("ubuntu-24.04");
+      } else {
+        // An unconditional selector also covers private workflow_dispatch on a
+        // non-main branch, which the former PR-only guard did not cover.
+        expect(runsOn, `ci.yml job ${id}`).toBe(hosted);
+      }
+    }
     expect(events(workflow!.source.on)).toContain("workflow_dispatch");
   });
 

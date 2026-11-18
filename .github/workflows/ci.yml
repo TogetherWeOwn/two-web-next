@@ -35,9 +35,8 @@ permissions:
 # main's ref, and a pending nightly would otherwise replace a pending push run,
 # whose cancelled conclusion the staging deploy trigger rejects (it deploys only
 # push-event runs). test/ci-concurrency.test.ts and the staging gate selftest pin
-# this.
+# this. An installed pinned invocation must not share the ordinary PR run's slot.
 concurrency:
-  # An installed pinned invocation must not share the ordinary PR run's slot.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || github.ref }}${{ github.event_name == 'pull_request' && github.workflow_sha != github.sha && github.workflow_sha != github.event.pull_request.head.sha && '-pinned' || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
 
