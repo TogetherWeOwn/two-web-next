@@ -1,10 +1,14 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pgReconciliationReads } from "../src/admin/reconciliation-reads";
-import { reconciliationService } from "../src/admin/reconciliation-service";
+import {
+  reconciliationService,
+  reconciliationServiceFor,
+} from "../src/admin/reconciliation-service";
 import { pgPruneStores, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 import { registerJobsServerTimeoutsAcceptance } from "./helpers/jobs-server-timeouts-acceptance";
+import { env } from "./helpers/member-data";
 
 // Real Postgres, guarded before driver construction: agent-testdb or the CI
 // service only. Each fixture migrates and drops only its disposable schema.
@@ -20,7 +24,12 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     await fixture?.dispose();
   });
 
-  it("returns filtered, ordered reconciliation windows at both limits", async () => {
+  it("returns filtered, ordered reconciliation windows at both limits", async ({
+    onTestFinished,
+  }) => {
+    const windowFixture = await createJobsFixture(process.env.DATABASE_URL!);
+    onTestFinished(() => windowFixture.dispose());
+    const sql = windowFixture.client;
     const reads = pgReconciliationReads(sql);
     const key = (n: number) => `00000000-0000-0000-0000-${n.toString().padStart(12, "0")}`;
     const keys = (start: number, count: number) =>
@@ -49,6 +58,41 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
       (${key(251)}::uuid, 'event.upsert', 'event:42', '2026-01-02'::timestamptz, '2026-01-03'::timestamptz, 1)`;
     expect(resultKeys(await reads.listOpen())).toEqual([key(101), ...keys(1, 99)]);
     expect(resultKeys(await reads.listResolved())).toEqual([key(251), ...keys(201, 49)]);
+  });
+
+  it("returns Date timestamps from raw and Drizzle-injected reconciliation reads", async () => {
+    const openKey = "00000000-0000-0000-0002-000000000001";
+    const resolvedKey = "00000000-0000-0000-0002-000000000002";
+    const firstSeenAt = "2026-01-02T09:10:11.123+02:00";
+    const lastAttemptAt = "2026-01-03T10:11:12.456+02:00";
+    const resolvedAt = "2026-01-04T11:12:13.789+02:00";
+    await sql`insert into bot_reconciliation_intents
+      (idempotency_key, verb, subject, attempts, first_seen_at, last_attempt_at, resolved_at) values
+      (${openKey}::uuid, 'event.upsert', 'event:42', 1, ${firstSeenAt}, ${lastAttemptAt}, null),
+      (${resolvedKey}::uuid, 'event.upsert', 'event:43', 1, ${firstSeenAt}, ${lastAttemptAt}, ${resolvedAt})`;
+
+    const actor = "100000000000000112";
+    const injected = await reconciliationServiceFor({ ...env, ADMIN_DB: fixture!.db }, actor);
+    const timestamps = {
+      firstSeenAt: new Date(firstSeenAt),
+      lastAttemptAt: new Date(lastAttemptAt),
+    };
+    const open = { ...timestamps, idempotencyKey: openKey, resolvedAt: null };
+    const resolved = {
+      ...timestamps,
+      idempotencyKey: resolvedKey,
+      resolvedAt: new Date(resolvedAt),
+    };
+    for (const service of [reconciliationService(sql, actor), injected!]) {
+      expect(await service.get(openKey)).toMatchObject(open);
+      expect(await service.get(resolvedKey)).toMatchObject(resolved);
+      expect(await service.listOpen()).toEqual(
+        expect.arrayContaining([expect.objectContaining(open)]),
+      );
+      expect(await service.listResolved()).toEqual(
+        expect.arrayContaining([expect.objectContaining(resolved)]),
+      );
+    }
   });
 
   it("records moderator access, resolves once under contention, and refuses failed receipts", async () => {
@@ -86,8 +130,12 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     await sql`alter table activity_log add constraint test_refuse_reconciliation_receipt
       check (subject_type <> 'bot_reconciliation_intents') not valid`;
     try {
-      await expect(service.get(key(2))).rejects.toThrow();
-      await expect(service.resolve(key(2), "not_applied")).rejects.toThrow();
+      const receiptViolation = {
+        code: "23514",
+        constraint_name: "test_refuse_reconciliation_receipt",
+      };
+      await expect(service.get(key(2))).rejects.toMatchObject(receiptViolation);
+      await expect(service.resolve(key(2), "not_applied")).rejects.toMatchObject(receiptViolation);
       expect(await pgReconciliationReads(sql).get(key(2))).toMatchObject({
         idempotencyKey: key(2),
         resolvedAt: null,

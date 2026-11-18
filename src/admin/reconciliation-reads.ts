@@ -12,29 +12,34 @@ type Row = {
   idempotency_key: string;
   verb: string;
   subject: string;
-  first_seen_at: Date;
-  last_attempt_at: Date;
+  first_seen_at: Date | string;
+  last_attempt_at: Date | string;
   attempts: number;
   last_code: string | null;
   last_status: number | null;
-  resolved_at: Date | null;
+  resolved_at: Date | string | null;
   resolution: string | null;
 };
+
+// Drizzle leaves timestamp strings on its shared postgres.js client.
+function readTimestamp(value: Date | string): Date {
+  return typeof value === "string" ? new Date(value) : value;
+}
 
 function project(row: Row) {
   return {
     idempotencyKey: row.idempotency_key,
     verb: row.verb,
     subject: /^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,199}$/.test(row.subject) ? row.subject : null,
-    firstSeenAt: row.first_seen_at,
-    lastAttemptAt: row.last_attempt_at,
+    firstSeenAt: readTimestamp(row.first_seen_at),
+    lastAttemptAt: readTimestamp(row.last_attempt_at),
     attempts: row.attempts,
     lastCode: row.last_code === null ? null : diagnosticCode(row.last_code),
     lastStatus:
       Number.isInteger(row.last_status) && row.last_status! >= 100 && row.last_status! <= 599
         ? row.last_status
         : null,
-    resolvedAt: row.resolved_at,
+    resolvedAt: row.resolved_at === null ? null : readTimestamp(row.resolved_at),
     resolution: ["confirmed", "not_applied", "superseded"].includes(row.resolution ?? "")
       ? row.resolution
       : null,

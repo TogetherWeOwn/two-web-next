@@ -64,6 +64,22 @@ describe("dormant reconciliation reads", () => {
     }
   });
 
+  it("projects PostgreSQL timestamp strings as Dates", async () => {
+    const { reads } = fixture([
+      {
+        ...row,
+        first_seen_at: "2026-01-01 01:00:00+01",
+        last_attempt_at: "2026-01-01 01:02:03.456+01",
+        resolved_at: "2026-01-01 01:03:04.567+01",
+      },
+    ]);
+    expect(await reads.get(key)).toMatchObject({
+      firstSeenAt: now,
+      lastAttemptAt: new Date("2026-01-01T00:02:03.456Z"),
+      resolvedAt: new Date("2026-01-01T00:03:04.567Z"),
+    });
+  });
+
   it("rejects invalid keys without a query and returns null for a missing key", async () => {
     const { reads, calls } = fixture([]);
     expect(await reads.get("not-a-uuid")).toBeNull();
