@@ -1910,7 +1910,11 @@ test("cross-target: normalized events-calendar sections match", async ({ playwri
             element.setAttribute(name, value);
           }
         }
-        return section.outerHTML.replace(/<!--[\s\S]*?-->/g, "");
+        const comments = document.createTreeWalker(section, NodeFilter.SHOW_COMMENT);
+        const markers: Node[] = [];
+        while (comments.nextNode()) markers.push(comments.currentNode);
+        for (const marker of markers) marker.parentNode?.removeChild(marker);
+        return section.outerHTML;
       }, html),
     );
   const bodies = new Map<string, string>();

@@ -53,7 +53,7 @@ test("imported filter links retain their theme-backed styles", { timeout: 120000
       } else {
         response.writeHead(200, { "content-type": "text/html" });
         response.end(
-          '<!doctype html><html><head><link rel="stylesheet" href="/fixture.css"></head><body class="base-theme"><script type="module" src="/fixture.js"></script></body></html>',
+          '<!doctype html><html><head><link rel="stylesheet" href="/fixture.css"></head><body class="base-theme schedule-theme"><script type="module" src="/fixture.js"></script></body></html>',
         );
       }
     });

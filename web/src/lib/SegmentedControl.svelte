@@ -1,5 +1,5 @@
 <script lang="ts">
-// The consuming document loads segmented-control.css, including without JS.
+// The consuming document loads schedule-theme.css, including without JS.
 let {
   label,
   items,
@@ -12,8 +12,7 @@ let {
 <nav aria-label={label} class="segments">
   {#each items as item (item.href)}
     <a href={item.href} aria-current={item.current ? "page" : undefined} data-testid={item.testId}>
-      {item.label}
-      {#if item.count !== undefined}<span class="count">{item.count}</span>{/if}
+      {item.label}{#if item.count !== undefined}<span class="count">{item.count}</span>{/if}
     </a>
   {/each}
 </nav>

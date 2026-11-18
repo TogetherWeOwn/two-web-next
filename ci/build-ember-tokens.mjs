@@ -194,12 +194,16 @@ export function generate(root = ROOT) {
   const consumers = new Map(
     HONO_CONSUMERS.map((path) => [path, readFileSync(join(root, path), "utf8")]),
   );
-  const consumed = new Set(
-    [...consumers.values()].flatMap((css) =>
-      [...css.matchAll(/var\(\s*--([\w-]+)/g)].map((match) => match[1]),
-    ),
+  const roleReads = (css) => [...css.matchAll(/var\(\s*--([\w-]+)/g)].map((match) => match[1]);
+  const schedulePath = "public/schedule-theme.css";
+  const scheduleReads = new Set(roleReads(consumers.get(schedulePath)));
+  const sharedReads = new Set(
+    [...consumers].flatMap(([path, css]) => (path === schedulePath ? [] : roleReads(css))),
   );
-  const honoRoles = roles.filter(([alias]) => consumed.has(alias));
+  const honoRoles = roles.filter(([alias]) => sharedReads.has(alias));
+  const scheduleRoles = roles.filter(
+    ([alias]) => scheduleReads.has(alias) && !sharedReads.has(alias),
+  );
   const get = (name) => {
     const value = kit.base.get(`--two-${name}`);
     if (value === undefined) throw new Error(`missing kit role --two-${name}`);
@@ -233,7 +237,7 @@ export function generate(root = ROOT) {
   const brand = ["ember", "magenta", "violet"]
     .map((name) => `--color-brand-${name}:${get(`color-grad-${name}`)};`)
     .join("");
-  const facade = `.base-theme{${hooks("")}${aliases}${brand}color-scheme:dark;${declarations(honoRoles.filter(foundation))}}${schedule}{${hooks("schedule-")}${aliases}}`;
+  const facade = `.base-theme{${hooks("")}${aliases}${brand}color-scheme:dark;${declarations(honoRoles.filter(foundation))}}${schedule}{${hooks("schedule-")}${aliases}${declarations(scheduleRoles)}}`;
   const reduced = honoRoles
     .filter(([, source]) => kit.reduced.has(`--two-${source}`))
     .map(([alias, source]) => `--${alias}:${kit.reduced.get(`--two-${source}`)};`)

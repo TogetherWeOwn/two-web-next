@@ -33,8 +33,6 @@ export const Layout: FC<
      * scoped to "/" plus the content leaves.
      */
     inlineCriticalCss?: boolean;
-    /** Same-origin stylesheet supplied by the server renderer, not request input. */
-    stylesheet?: string;
   }>
 > = ({
   title,
@@ -45,7 +43,6 @@ export const Layout: FC<
   theme,
   markdownAlternate,
   inlineCriticalCss,
-  stylesheet,
   children,
 }) => (
   <>
@@ -145,7 +142,6 @@ export const Layout: FC<
             {theme === "schedule" ? <link rel="stylesheet" href="/schedule-theme.css" /> : null}
           </>
         ) : null}
-        {stylesheet ? <link rel="stylesheet" href={stylesheet} /> : null}
       </head>
       <body
         class={

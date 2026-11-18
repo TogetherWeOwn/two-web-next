@@ -9,13 +9,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { gathering } from "./helpers/calendar-multiday-acceptance";
 
-const { compile } = createRequire(new URL("../web/package.json", import.meta.url))(
-  "svelte/compiler",
-);
+const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
+const { compile } = webRequire("svelte/compiler");
 const renderer = fileURLToPath(
   new URL("../web/src/lib/server/render-events-html.tsx", import.meta.url),
 );
-const stylesheet = "/_app/immutable/assets/segmented-control.fixture.css";
 const modelModule = fileURLToPath(new URL("../src/events/page-models.server.ts", import.meta.url));
 const virtualModules = new Map([
   [
@@ -52,7 +50,6 @@ const virtualModules = new Map([
     "renderer",
     "export const renderEventsHtml = (...args) => globalThis.__kitEventsEndpoint.render(...args);",
   ],
-  ["stylesheet", `export default ${JSON.stringify(stylesheet)};`],
 ]);
 
 let GET;
@@ -94,7 +91,6 @@ beforeAll(async () => {
             [/\/events\/discord-transients$/, "discord"],
             [/\/events\/page-models\.server$/, "model"],
             [/lib\/server\/render-events-html$/, "renderer"],
-            [/segmented-control\.css\?url$/, "stylesheet"],
           ];
           for (const [filter, path] of replacements) {
             build.onResolve({ filter }, () => ({ path, namespace: "kit-events-endpoint-test" }));
@@ -260,7 +256,7 @@ describe("Kit events endpoint flash-consumption controls", () => {
     expect(body).toContain("Solo &lt;practice");
     expect(body).not.toContain("<practice>");
     expect(body).not.toContain("not-public-proof");
-    expect(body).toContain(`<link rel="stylesheet" href="${stylesheet}"`);
+    expect(body).toContain('<link rel="stylesheet" href="/schedule-theme.css"');
     expect(body).toContain('src="/islands/events-calendar.js"');
     expect(body).not.toMatch(/<script\b[^>]*\btype="module"/);
     expect(deleteCookie).not.toHaveBeenCalled();

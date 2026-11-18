@@ -3,7 +3,6 @@ import { render } from "svelte/server";
 import { ScheduleShell } from "../../../../src/events/pages-shared";
 import { renderEventsDocument } from "../../../../src/kit-events-html";
 import CalendarScreen from "../CalendarScreen.svelte";
-import stylesheet from "../segmented-control.css?url";
 import { projectEventsCalendar } from "./events-calendar";
 
 export function renderEventsHtml(
@@ -25,7 +24,6 @@ export function renderEventsHtml(
         session={data.session}
         loginReturnTo={data.loginReturnTo}
         markdownAlternate="/events.md"
-        stylesheet={stylesheet}
       >
         {/* Only Svelte's escaped SSR output crosses into the document as HTML. */}
         {raw(body)}
