@@ -7,7 +7,7 @@ import {
 // The caller must authenticate the artifact ID and digest independently before
 // passing a successful GitHub download response. A matching digest alone does
 // not bind the archive to a producer, run, or attempt.
-export async function readRouteEvidenceArtifact(response, expectedDigest) {
+export async function readRouteEvidenceArtifact(response, expectedDigest, checkDeadline) {
   const refuse = () => {
     throw new Error("route evidence refused: invalid artifact download");
   };
@@ -27,6 +27,7 @@ export async function readRouteEvidenceArtifact(response, expectedDigest) {
   let size = 0;
   try {
     for await (const chunk of response.body) {
+      checkDeadline?.();
       // Empty chunks make no progress toward the byte cap and could be endless.
       if (!(chunk instanceof Uint8Array) || chunk.byteLength === 0) refuse();
       if (chunk.byteLength > archive.length - size) refuse();
@@ -38,5 +39,6 @@ export async function readRouteEvidenceArtifact(response, expectedDigest) {
     refuse();
   }
   if (size === 0 || `sha256:${hash.digest("hex")}` !== expectedDigest) refuse();
+  checkDeadline?.();
   return extractRouteEvidenceZip(archive.subarray(0, size));
 }
