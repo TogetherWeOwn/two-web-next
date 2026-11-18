@@ -43,7 +43,11 @@ rule:
     - inside:
         kind: export_statement
         field: source
-    - nthChild: 1
+    - nthChild:
+        position: 1
+        ofRule:
+          not:
+            kind: comment
       inside:
         kind: arguments
         stopBy:
@@ -52,7 +56,11 @@ rule:
               - any:
                   - kind: parenthesized_expression
                   - kind: as_expression
-              - nthChild: 1
+              - nthChild:
+                  position: 1
+                  ofRule:
+                    not:
+                      kind: comment
         inside:
           kind: call_expression
           any:

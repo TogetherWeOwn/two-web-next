@@ -40,7 +40,8 @@ try {
           "const other = () => import(`h\\x6fno/cors${name}`);\n" +
           'const computed = () => import(resolve("hono"));\n' +
           'const extra = require("node:path", "hono");\n' +
-          'const wrappedExtra = require("node:path", (("hono")));\n',
+          'const wrappedExtra = require("node:path", (("hono")));\n' +
+          'const commentedExtra = require(/* first */ "node:path", /* second */ (/* nested */ "hono"));\n',
       );
     for (const extension of ["ts", "tsx"]) {
       appendFileSync(
@@ -71,6 +72,7 @@ try {
       "const dollar = require(`hono/$literal`);",
       "const asserted = () => import('hono' as const);",
       "const nestedAssertion = require((('hono/cors' as const)));",
+      "const commentedAssertion = require((/* inner */ 'hono' as const));",
     ];
     const escapedCases = [
       String.raw`import 'hono';`,
@@ -81,6 +83,8 @@ try {
       String.raw`const cors = require('hono\57cors');`,
       `const load = () => import((('hono')));`,
       `const cors = require((('hono/cors')));`,
+      `const load = () => import(/* first */ 'hono');`,
+      `const cors = require(/* first */ (/* nested */ 'hono/cors'));`,
       String.raw`import 'ho\u{6e}o';`,
       "import 'ho\\\nno';",
       String.raw`const load = () => import(` + "`" + String.raw`h\x6fno` + "`" + `);`,
