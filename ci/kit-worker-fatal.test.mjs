@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import * as fs from "node:fs";
 import { createServer } from "node:net";
-import { delimiter, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
@@ -89,8 +89,24 @@ async function install() {
   return entry;
 }
 
-async function instrument(entry) {
-  const outfile = join(scratch, "fatal.mjs");
+const throwingHooks = {
+  name: "test-only-throwing-hooks",
+  setup(builder) {
+    builder.onLoad({ filter: /\/output\/server\/entries\/hooks\.server\.js$/ }, ({ path }) => {
+      assert.equal(path, join(dirname(assets), "output/server/entries/hooks.server.js"));
+      assert.match(fs.readFileSync(path, "utf8"), /\bhandle\b/);
+      evidence.hookSubstitutions += 1;
+      return {
+        contents: `export const handle = () => { throw new Error("TEST_ONLY_PRIVATE_DETAIL"); }; export const handleError = () => ({ message: "Internal Error" });`,
+      };
+    });
+  },
+};
+
+async function bundle(entry, fault) {
+  // The XFS copy has no node_modules ancestors. Resolve from the locked workspaces.
+  evidence.lastBundle = fault ? "fatal" : "parity";
+  const outfile = join(scratch, `${evidence.lastBundle}.mjs`);
   await build({
     entryPoints: [entry],
     outfile,
@@ -102,27 +118,10 @@ async function instrument(entry) {
     conditions: ["workerd", "worker", "browser"],
     external: ["node:*", "cloudflare:*"],
     logLevel: "silent",
-    plugins: [
-      {
-        name: "test-only-throwing-hooks",
-        setup(builder) {
-          builder.onLoad(
-            { filter: /\/output\/server\/entries\/hooks\.server\.js$/ },
-            ({ path }) => {
-              assert.equal(path, join(dirname(assets), "output/server/entries/hooks.server.js"));
-              assert.match(fs.readFileSync(path, "utf8"), /\bhandle\b/);
-              evidence.hookSubstitutions += 1;
-              return {
-                contents: `export const handle = () => { throw new Error("TEST_ONLY_PRIVATE_DETAIL"); }; export const handleError = () => ({ message: "Internal Error" });`,
-              };
-            },
-          );
-        },
-      },
-    ],
+    plugins: fault ? [throwingHooks] : [],
   });
-  assert.equal(evidence.hookSubstitutions, 1, "exactly one compiled hook must be replaced");
-  assert.ok(fs.readFileSync(outfile, "utf8").includes(PRIVATE_DETAIL));
+  assert.equal(evidence.hookSubstitutions, Number(fault), "unexpected compiled-hook substitutions");
+  assert.equal(fs.readFileSync(outfile, "utf8").includes(PRIVATE_DETAIL), fault);
   return outfile;
 }
 
@@ -151,7 +150,6 @@ async function start(name, main) {
       PATH: process.env.PATH ?? "",
       HOME: scratch,
       XDG_CONFIG_HOME: scratch,
-      NODE_PATH: deps.join(delimiter),
       WRANGLER_SEND_METRICS: "false",
       CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
       CLOUDFLARE_INCLUDE_PROCESS_ENV: "false",
@@ -261,8 +259,8 @@ describe("Kit built Worker fatal path", () => {
     try {
       const entry = await install();
       scratch = fs.mkdtempSync(join(process.env.RUNNER_TEMP, "kit-fatal-"));
-      parity = await start("kit-parity-fixture", entry);
-      fatal = await start("kit-fatal-fixture", await instrument(entry));
+      parity = await start("kit-parity-fixture", await bundle(entry, false));
+      fatal = await start("kit-fatal-fixture", await bundle(entry, true));
       assert.equal(sha256(fs.readFileSync(entry)), evidence.entrySha256);
       assert.equal(sha256(fs.readFileSync(join(assets, COMPANION_NAME))), evidence.adapterSha256);
     } catch (error) {
