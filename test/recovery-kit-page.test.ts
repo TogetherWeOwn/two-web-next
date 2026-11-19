@@ -1,10 +1,7 @@
 // route-inventory: GET /auth/recover
-// SvelteKit migration card 20/43: GET /auth/recover and the HTML outcomes from
-// /join/callback + auth recovery render through the injected Svelte outcome
-// renderer (RecoveryModel via renderHtmlOutcome), preserving the Hono
-// controllers and the one-use OAuth state/journey logic. The Hono bytes,
-// statuses, redirects and cookie clearing stay identical; the Kit route stays
-// Hono-owned (enabled: false) until the enablement review.
+// The recovery outcome tests exercise the existing Hono renderer and callback
+// contracts. The Kit source checks below do not render Kit or connect its
+// component to the callback; route ownership remains disabled pending review.
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { Hono } from "hono";
@@ -287,6 +284,80 @@ describe("recovery outcomes through the injected renderer", () => {
       expect(line).toMatch(/HttpOnly/i);
       expect(line).toMatch(/SameSite=Lax/i);
     }
+  });
+
+  it("a stale denial leaves a newer join journey intact without exchanging or recording it", async () => {
+    const { fake, env: e } = isolated();
+    const calls = mockDiscord();
+    const start = await startJoin(e, "?source=web-homepage&next=/events");
+    const res = await app.request(
+      `/join/callback?error=access_denied&error_description=${TOKEN}&state=stale`,
+      { headers: { cookie: start.cookie } },
+      e,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store, private");
+    const html = await res.text();
+    expectRecoveryShell(html);
+    expect(html).toContain("Join cancelled");
+    expect(html).not.toContain(TOKEN);
+    expect(calls).toHaveLength(0);
+    expect(fake.attempts).toHaveLength(0);
+    const cookies = res.headers.getSetCookie().join("\n");
+    expect(cookies).not.toContain("__Host-two_join_state=");
+    expect(cookies).not.toContain("__Host-two_join_source=");
+    expect(cookies).not.toContain("__Host-two_join_next=");
+    expect(cookies).not.toContain("__Host-two_session=");
+  });
+
+  it("a refused bot add preserves retry and invite recovery without issuing a session", async () => {
+    const { fake, env: e } = isolated();
+    mockDiscord({ joinStatus: 403 });
+    const { state, cookie } = await startJoin(e, "?source=web-homepage&next=/events");
+    const res = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      { headers: { cookie } },
+      e,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store, private");
+    const html = await res.text();
+    expectRecoveryShell(html);
+    expect(html).toContain("We couldn&#39;t add you automatically");
+    expect(html).toContain('href="/join/discord?next=%2Fevents&amp;source=web-homepage"');
+    expect(html).toContain('href="https://discord.gg/invite"');
+    expect(html).not.toContain(TOKEN);
+    expect(fake.attempts).toHaveLength(1);
+    expect(fake.attempts[0]).toMatchObject({ outcome: "degraded", source: "web-homepage" });
+    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+  });
+
+  it.each([
+    [201, "added"],
+    [204, "already_member"],
+  ])("returns to the requested page after Discord add status %i", async (joinStatus, outcome) => {
+    const { fake, env: e } = isolated();
+    mockDiscord({ joinStatus });
+    const { state, cookie } = await startJoin(
+      e,
+      "?source=web-homepage&next=%2Fevents%3Fview%3Dlist",
+    );
+    const res = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      { headers: { cookie } },
+      e,
+    );
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/events?view=list");
+    expect(res.headers.get("location")).not.toContain(TOKEN);
+    expect(fake.attempts).toHaveLength(1);
+    expect(fake.attempts[0]).toMatchObject({ outcome, source: "web-homepage", discordId: "42" });
+    const cookies = res.headers.getSetCookie().join("\n");
+    expect(cookies).toContain("__Host-two_session=");
+    expect(cookies).not.toContain(TOKEN);
   });
 
   it("a replayed callback renders expired at 200 with no second exchange, attempt or session", async () => {
