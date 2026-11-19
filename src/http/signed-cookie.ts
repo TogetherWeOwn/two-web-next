@@ -33,9 +33,12 @@ export async function verifySignedCookie(encoded: string, secret: string): Promi
 
 const scope = { path: "/", secure: true, httpOnly: true, sameSite: "lax" } as const;
 
-function checkScope(name: string, maxAge: number | undefined) {
+function checkScope(name: string, ageSeconds: number | undefined) {
   if (!/^__Host-[\w!#$%&'*.^`|~+-]+$/.test(name)) throw new Error("Invalid host cookie name");
-  if (maxAge !== undefined && (!Number.isInteger(maxAge) || maxAge < 0 || maxAge > 34_560_000)) {
+  if (
+    ageSeconds !== undefined &&
+    (!Number.isInteger(ageSeconds) || ageSeconds < 0 || ageSeconds > 34_560_000)
+  ) {
     throw new RangeError("Invalid cookie Max-Age");
   }
 }
@@ -45,11 +48,11 @@ export async function signedCookieHeader(
   name: string,
   value: string,
   secret: string,
-  maxAge?: number,
+  ageSeconds?: number,
 ) {
-  checkScope(name, maxAge);
+  checkScope(name, ageSeconds);
   const encoded = await encodeSignedValue(value, secret);
-  const age = maxAge === undefined ? "" : `; Max-Age=${maxAge}`;
+  const age = ageSeconds === undefined ? "" : `; Max-Age=${ageSeconds}`;
   return `${name}=${encoded}${age}; Path=/; HttpOnly; Secure; SameSite=Lax`;
 }
 
@@ -70,12 +73,12 @@ export async function setSignedEventCookie(
   name: string,
   value: string,
   secret: string,
-  maxAge?: number,
+  ageSeconds?: number,
 ): Promise<void> {
-  checkScope(name, maxAge);
+  checkScope(name, ageSeconds);
   cookies.set(name, await encodeSignedValue(value, secret), {
     ...scope,
-    ...(maxAge === undefined ? {} : { maxAge }),
+    ...(ageSeconds === undefined ? {} : { maxAge: ageSeconds }),
     encode: (encoded) => encoded,
   });
 }
