@@ -313,6 +313,7 @@ describe("installed facade", () => {
       "export default { get fetch() { return () => {}; } };\n",
       "export default { fetch() {}, fetch: null };\n",
       "export default { fetch() {}, ...other };\n",
+      "export default { __proto__: null, fetch() {} };\n",
       "export default { fetch() {}, ['fetch']: null };\n",
       "const adapter = { fetch() {} }; export default adapter;\n",
     ]) {
