@@ -6,7 +6,6 @@ import Tag from "#lib/Tag.svelte";
 import { EXISTING_RESPONSES_TESTID, existingResponsesText } from "../../../src/islands/contracts";
 import type { EventGoneModel } from "../../../src/kit-event-states";
 
-// T4 cancellation uses the detail rail, but never an RSVP or attendee surface.
 let { model }: { model: EventGoneModel } = $props();
 </script>
 
