@@ -74,16 +74,14 @@ stage, the author merges. Every required check must be green on that head and
 every review finding must be fixed or answered with evidence. Pin the merge to
 that SHA; do not approve a final stage and leave an open PR for the author.
 
-A merge to `main` does not reach production on its own. Automatic promotion in
-[deploy-production.yml](.github/workflows/deploy-production.yml) promotes only
-the soaked staging SHA that equals `PRODUCTION_ACCEPTED_SHA`, which the Release
-Manager sets once per release (`ci/resolve-promotion-sha.mjs`). So ordinary PRs
-need **no per-PR Release Manager confirmation** before merge. Exception: a PR that
-changes `.github/workflows/**`, `ci/resolve-promotion-sha.mjs`, deploy, wrangler
-or binding config can change what reaches production, so it needs an exact-head
-Release Manager `request_confirmation` on its own card before merge. Every
-production deploy, including manual dispatch, still needs Release Manager
-acceptance.
+A merge to `main` does not reach production on its own. For automatic promotion,
+[the resolver](ci/resolve-promotion-sha.mjs) skips unless the qualified, soaked
+staging SHA equals `PRODUCTION_ACCEPTED_SHA`. The Release Manager accepts the
+exact release SHA; the authorized Operator sets the variable to that SHA.
+Ordinary PRs need **no per-PR Release Manager confirmation**. Changes to the
+promotion path still need exact-head confirmation before merge, as described
+below. Every production deploy, including manual dispatch, still needs Release
+Manager acceptance.
 
 ### Merge and production staging evidence
 
@@ -105,15 +103,22 @@ Before merge, require:
    security reviews, rulesets and native review stages are complete.
    Record exact-head GitHub Actions run/job links and conclusions; local output
    does not replace required Actions evidence.
-2. **Release Manager confirmation only for promotion-path PRs.** Only PRs that
-   touch `.github/workflows/**`, `ci/resolve-promotion-sha.mjs`, deploy, wrangler
-   or binding config need an exact-head Release Manager confirmation before merge.
-   Everything else is gated at release time by `PRODUCTION_ACCEPTED_SHA`.
+2. **Exact-head Release Manager confirmation for promotion-path PRs.** This
+   covers `.github/workflows/**`, actions and tooling that qualify, select,
+   deploy or roll back a production candidate (including
+   `ci/resolve-promotion-sha.mjs` and `ci/production-deploy-gate.mjs`), and
+   deploy, Wrangler or binding config.
+   Obtain a `request_confirmation` on a child card assigned and addressed to the
+   Release Manager. Include the migration ledger evidence or "no migration", the
+   known-good rollback target and the automatic post-merge staging path. A push
+   that changes the PR head requires fresh confirmation. This does not authorize
+   a production deploy; release acceptance is separate.
 3. **Pinned handoff and retained safeguards.** The final-stage reviewer, or the
    author when no native review stage applies, squash-merges only the reviewed
-   head (and confirmed, for promotion-path PRs), with the merge pinned to that SHA. Record the
-   squash SHA (and any confirmation) in the release log. Incident, freeze and hold
-   safeguards, identity/capability holds and rollback requirements still apply.
+   head and, for a promotion-path PR, only if it matches the confirmed SHA.
+   Record the pinned squash SHA and any required confirmation in the release log.
+   Incident, freeze and hold safeguards, identity/capability holds and rollback
+   requirements still apply.
    An otherwise mergeable PR need not be restacked solely because `main` moved.
 
 After merge, the resulting **exact `main` SHA** must pass the existing full CI,
@@ -142,13 +147,11 @@ and all existing promotion, migration and rollback guards. If matching evidence
 cannot be obtained, hold that candidate's promotion; do not stage an unmerged
 head, infer a pass from a skip, or change a workflow in this documentation PR.
 
-This changes when staging evidence is required, not the pipeline or other
-merge/release gates. No red deterministic gate is waived, no pipeline skip/no-op
-is authorized, and every other production deploy still requires Release Manager
-confirmation. Previously rejected requests remain historical rejections, not
-retroactive approvals: resubmit each candidate for fresh exact-head confirmation.
-This documentation grants no merge or production permission, including for a PR
-documenting it.
+This policy does not change the pipeline or waive any other merge or release
+requirement. Previously rejected requests are not retroactive approvals; obtain
+fresh acceptance for any release candidate and fresh confirmation when the PR
+changes the promotion path. This documentation does not authorize any
+particular merge or production deployment.
 
 ### Pull-request size labels (advisory)
 

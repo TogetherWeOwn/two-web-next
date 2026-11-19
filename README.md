@@ -764,11 +764,10 @@ Squash-merge only; PR titles follow Conventional Commits and the body follows th
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
 `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review` are required
 on the exact head, with no approving review. The final-stage reviewer merges when
-native review stages apply; otherwise the author merges. A merge to `main` reaches
-production, so it needs fresh per-PR exact-head Release Manager confirmation on a
-child card assigned and addressed to the Release Manager. Pin the squash merge to
-that confirmed head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
-for post-merge staging qualification and retained safeguards, and [AGENTS.md](AGENTS.md).
+native review stages apply; otherwise the author merges. Pin the squash merge to
+that reviewed head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
+for the promotion-path PR exception, post-merge staging qualification and
+per-release Release Manager acceptance, and [AGENTS.md](AGENTS.md) for agent guidance.
 
 ## License
 
