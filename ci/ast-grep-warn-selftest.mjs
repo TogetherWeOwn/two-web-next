@@ -35,7 +35,8 @@ try {
     for (const file of files)
       writeFileSync(
         file,
-        String.raw`import 'oth\x65r'; import 'ho\n o'; const unrelated = require('other');` +
+        (file.endsWith(".cjs") ? "" : String.raw`import 'oth\x65r'; import 'ho\n o'; `) +
+          "const unrelated = require('other');" +
           "\nconst load = () => import(`other/${name}`);\n" +
           "const other = () => import(`oth\\x65r/cors${name}`);\n" +
           'const computed = () => import(resolve("hono"));\n' +
@@ -124,14 +125,13 @@ try {
       String.raw`const load = () => import(` + "`" + String.raw`h\x6fno` + "`" + `);`,
     ];
     const extraFiles = ["ts", "tsx", "jsx", "cjs"].flatMap((extension) =>
-      (extension === "jsx" || extension === "cjs"
-        ? escapedCases
-        : [...extraCases, ...escapedCases]
-      ).map((source, index) => {
-        const file = join(directory, `case-${index}.${extension}`);
-        writeFileSync(file, `${source}\n`);
-        return file;
-      }),
+      (extension === "jsx" || extension === "cjs" ? escapedCases : [...extraCases, ...escapedCases])
+        .filter((source) => extension !== "cjs" || !/^(import|export) /.test(source))
+        .map((source, index) => {
+          const file = join(directory, `case-${index}.${extension}`);
+          writeFileSync(file, `${source}\n`);
+          return file;
+        }),
     );
     const angleCases = [
       "const load = () => import(<string>'hono');",
