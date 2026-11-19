@@ -3,6 +3,7 @@
 import { dbFor } from "../admin/db";
 import { isDatabaseUnavailable } from "../db/errors";
 import { databaseUnavailable, notFoundHandler } from "../errors";
+import { etagFor, matchesIfNoneMatch } from "../http/conditional";
 import {
   IcsSequenceRangeError,
   IcsTimestampRangeError,
@@ -17,7 +18,6 @@ import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { getEventRow, listFeed } from "./reads";
 import {
   eventsUnavailable,
-  matchesIfNoneMatch,
   publicReadGuard,
   unavailableFeed,
   type App,
@@ -25,18 +25,13 @@ import {
   type SessionReader,
 } from "./routes-shared";
 
-async function sha256Etag(body: string): Promise<string> {
-  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
-  return `"${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
-}
-
 /** Strong validator over the bytes; preserve queued headers, but never read or issue a session here. */
 async function feedResponse(
   c: Ctx,
   body: string,
   headers: Record<string, string>,
 ): Promise<Response> {
-  const etag = await sha256Etag(body);
+  const etag = await etagFor(body, "SHA-256");
   if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) {
     return c.body(null, 304, { etag, "cache-control": headers["cache-control"]! });
   }

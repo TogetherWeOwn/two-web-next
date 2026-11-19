@@ -3,6 +3,7 @@
 // this file holds what at least two groups use. Re-exported from the barrel.
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import type { Env, Session } from "../env";
+import { etagFor, matchesIfNoneMatch } from "../http/conditional";
 import { warnInvalidConfigOnce } from "../config-warn";
 import { loginUrl, wallDateIso, wallTimeHm } from "../islands/contracts";
 import { safeNext } from "../join/service";
@@ -185,23 +186,6 @@ export function publicEventJson(e: PublicEvent): PublicEventDto {
   };
 }
 
-export async function etagFor(body: string): Promise<string> {
-  const d = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(body));
-  return `"${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
-}
-
-/**
- * Shared If-None-Match matcher (RFC 9110 §13.1.2, weak comparison): `*`
- * matches any current validator, otherwise a comma-separated list matches
- * when any entry equals the current ETag after stripping the `W/` prefix.
- */
-export function matchesIfNoneMatch(header: string | null | undefined, etag: string): boolean {
-  if (!header) return false;
-  const value = header.trim();
-  if (value === "*") return true;
-  return value.split(",").some((tag) => tag.trim().replace(/^W\//, "") === etag);
-}
-
 export async function jsonSession(
   c: Ctx,
   readFragmentSession: SessionReader,
@@ -237,7 +221,7 @@ export async function jsonSession(
 
 export async function jsonResponse(c: Ctx, value: unknown): Promise<Response> {
   const body = JSON.stringify(value);
-  const etag = await etagFor(body);
+  const etag = await etagFor(body, "SHA-1");
   c.header("cache-control", "private, no-cache");
   c.header("etag", etag);
   if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) return c.body(null, 304);

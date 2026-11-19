@@ -25,8 +25,11 @@ const featuredFamily = $derived(routeId.startsWith("/admin/featured/"));
 const reconciliationDetail = $derived(routeId === "/admin/reconciliation/[key]");
 const missing = $derived(page.status === 404);
 const outage = $derived(page.status === 503);
+const resolutionError = $derived(
+  reconciliationDetail && (page.status === 400 || page.status === 409),
+);
 const retryHref = $derived(
-  outage || page.status === 500 ? adminReadRetryHref(page.url, "admin") : null,
+  outage || page.status === 500 || resolutionError ? adminReadRetryHref(page.url, "admin") : null,
 );
 const eventMissing = $derived(missing && eventFamily);
 const featuredMissing = $derived(missing && featuredFamily);
@@ -69,6 +72,13 @@ const title = $derived(
   {:else if reconciliationMissing}
     <h1 id="admin-error-heading">Reconciliation record not found</h1>
     <p class="hint">The key does not match a recorded reconciliation intent.</p>
+  {:else if resolutionError}
+    <h1 id="admin-error-heading">Resolution not recorded</h1>
+    {#if page.status === 409}
+      <p class="hint">The record may already be resolved or no longer exist. Review it before trying again.</p>
+    {:else}
+      <p class="hint">Choose one of the listed resolutions and try again.</p>
+    {/if}
   {:else if outage}
     <h1 id="admin-error-heading">Admin temporarily unavailable</h1>
     <p class="hint">The admin panel is temporarily unavailable. Try again shortly.</p>
@@ -85,7 +95,7 @@ const title = $derived(
     </p>
   {/if}
   {#if retryHref}
-    <p><a href={retryHref} style="outline-color: var(--color-lobby-focus)">Retry loading</a></p>
+    <p><a href={retryHref} style="outline-color: var(--color-lobby-focus)">{resolutionError ? "Review the record" : "Retry loading"}</a></p>
   {/if}
 </section>
 </AdminShell>

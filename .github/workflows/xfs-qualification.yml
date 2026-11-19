@@ -51,6 +51,18 @@ jobs:
     timeout-minutes: 15
     env:
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    services:
+      postgres:
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
+        env:
+          POSTGRES_USER: agent_test
+          POSTGRES_DB: two_web_next
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1::5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U agent_test -d two_web_next"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,3 +98,32 @@ jobs:
           path: artifacts/kit-worker-fatal/
           if-no-files-found: error
           retention-days: 14
+      - name: Prepare disposable runtime role
+        env:
+          DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
+      - name: Migrate loopback Postgres and check migration history
+        env:
+          DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
+        run: |
+          npm run db:migrate
+          npm run db:check
+      - name: Run Kit and Hono against the installed XFS output
+        shell: bash
+        env:
+          KIT_WORKER_TEST_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
+        run: |
+          result=0
+          bash ci/xfs-qualification-fixture.sh bash ci/kit-worker-installed-output.sh \
+            | tee "$RUNNER_TEMP/kit-installed-output.log" || result=$?
+          grep -Fx 'Fixture mounts and backing file removed' "$RUNNER_TEMP/kit-installed-output.log"
+          exit "$result"
+      - name: Verify loopback Postgres stopped
+        if: always()
+        shell: bash
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker stop "$POSTGRES_CONTAINER"
+          test "$(docker inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER")" = false
+          printf '%s\n' 'Disposable Postgres stopped; the runner removes job services at teardown'

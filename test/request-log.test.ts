@@ -7,6 +7,7 @@ import { memberReadBoundary } from "../src/member-reads";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
 import { newRequestId, requestLog, safeRequestId } from "../src/request-log";
 import { selectRequestId } from "../src/http/request-log";
+import { fetchApp } from "./helpers/fetch-app";
 
 // Lets one test make the real app's outer post-processing throw.
 const post = vi.hoisted(() => ({ fail: false }));
@@ -315,20 +316,31 @@ describe("structured request logs (local fixtures only)", () => {
 
   it("is mounted on the real app including errors, redirects and guarded sub-apps", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    for (const [path, status, route] of [
-      ["/up", 503, "/up"],
-      ["/discord", 302, "/discord"],
-      ["/members/123456789012345678", 302, "/members/:user"],
-      ["/admin/events/123456789012345678", 302, "/admin/events/:key"],
-      ["/admin/events/new", 302, "/admin/events/new"],
-      ["/no-such-path/123456789012345678", 404, "unmatched"],
+    for (const [method, path, status, route] of [
+      ["GET", "/up", 503, "/up"],
+      ["GET", "/discord", 302, "/discord"],
+      ["GET", "/members/123456789012345678", 302, "/members/:user"],
+      ["GET", "/admin/events/123456789012345678", 302, "/admin/events/:key"],
+      ["GET", "/admin/events/new", 302, "/admin/events/new"],
+      ["GET", "/no-such-path/123456789012345678", 404, "unmatched"],
+      // An invalid event key and a disabled probe both refuse without touching external services.
+      ["GET", "/e/123456789012345678.md?token=query-secret", 404, "/e/:file{.+\\.md}"],
+      ["POST", "/__probe/alert?token=query-secret", 404, "/__probe/alert"],
     ] as const) {
       log.mockClear();
-      const res = await app.request(path, { headers: { "cf-ray": RAY } }, env as never);
+      const res = await fetchApp(
+        new Request(new URL(path, env.APP_URL), {
+          method,
+          headers: { "cf-ray": RAY, origin: env.APP_URL },
+        }),
+        env,
+        {} as ExecutionContext,
+      );
       expect(res.status).toBe(status);
       expect(res.headers.get("x-request-id")).toBe(RAY);
       expect(logs(log)).toEqual([expect.objectContaining({ route, status, request_id: RAY })]);
       expect(JSON.stringify(log.mock.calls)).not.toContain("123456789012345678");
+      expect(JSON.stringify(log.mock.calls)).not.toContain("query-secret");
     }
   });
 });
