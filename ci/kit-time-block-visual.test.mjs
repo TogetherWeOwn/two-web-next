@@ -51,6 +51,15 @@ test("built Kit time block renders required states with and without JavaScript",
           fullPage: true,
         });
       }
+      const fixtureUrl = page.url();
+      await page.goto(`${fixtureUrl}#stale`);
+      const [refreshed] = await Promise.all([
+        page.waitForResponse(
+          (response) => response.url() === fixtureUrl && response.request().isNavigationRequest(),
+        ),
+        blocks.nth(2).getByRole("link", { name: "Refresh the event time" }).click(),
+      ]);
+      assert.equal(refreshed.status(), 200);
     });
   }
 });

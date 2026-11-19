@@ -22,12 +22,13 @@ const base = {
 
 describe("TimeBlock server output", () => {
   it("renders the absolute time and withdraws the countdown without hydration", () => {
-    const html = render(base);
+    const html = render({ ...base, refreshHref: `${base.refreshHref}#details` });
     expect(html).toContain('datetime="2026-11-07T19:30:00.000Z"');
     expect(html).toContain("Europe/London");
     expect(html).toContain("19:30 UTC");
     expect(html).toContain("as of");
     expect(html).toContain('href="/events?view=upcoming"');
+    expect(html).toContain("data-sveltekit-reload");
     expect(html).not.toMatch(/starts in|\bin 10 m/);
   });
 
@@ -90,6 +91,7 @@ describe("TimeBlock server output", () => {
     const html = render({ ...base, state: "live", asOf: "invalid", roomCount: 8 });
     expect(html).toContain("Live status unavailable");
     expect(html).toContain('href="/events?view=upcoming"');
+    expect(html).toContain("data-sveltekit-reload");
     expect(html).not.toContain("Live since");
     expect(html).not.toContain("8 in the room");
   });

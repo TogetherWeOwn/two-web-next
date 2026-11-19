@@ -14,8 +14,8 @@ const _asOf = "2026-11-07T19:20:00Z";
   <TimeBlock start={_start} asOf={_asOf} state="upcoming" stale={false} refreshHref="/events" />
   <h2>Live</h2>
   <TimeBlock start={_start} asOf="2026-11-07T19:35:00Z" state="live" stale={false} roomCount={8} refreshHref="/events" />
-  <h2>Stale</h2>
-  <TimeBlock start={_start} asOf="2026-11-07T19:35:00Z" state="live" stale={true} roomCount={8} refreshHref="/events" />
+  <h2 id="stale">Stale</h2>
+  <TimeBlock start={_start} asOf="2026-11-07T19:35:00Z" state="live" stale={true} roomCount={8} refreshHref="/__browser_fixture__" />
   <h2>Ended</h2>
   <TimeBlock start={_start} end="2026-11-07T21:00:00Z" asOf={_asOf} state="ended" echoFrozen />
   <h2>Ended without an Echo</h2>

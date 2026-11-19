@@ -6,6 +6,7 @@ import { watchTimeSnapshot } from "../../web/src/lib/time-freshness";
 const data = { asOf: "2026-11-07T19:20:00Z", start: "2026-11-07T19:30:00Z" };
 let _stale = $state(true);
 let _state = $state<"upcoming" | "live">("upcoming");
+let _viewerZone = $state<string | undefined>("Europe/Paris");
 let asOf = $state(data.asOf as string);
 let watcher: ReturnType<typeof watchTimeSnapshot>;
 
@@ -40,3 +41,6 @@ function _replace() {
 
 <TimeBlock start={data.start} {asOf} state={_state} stale={_stale} roomCount={8} refreshHref="/events" />
 <button onclick={_replace}>Replace snapshot</button>
+
+<TimeBlock start={data.start} {asOf} state="ended" viewerZone={_viewerZone} />
+<button onclick={() => (_viewerZone = undefined)}>Clear viewer zone</button>

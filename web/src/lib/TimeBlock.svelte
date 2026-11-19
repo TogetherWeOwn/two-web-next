@@ -85,10 +85,15 @@ let refreshPath = $derived(
 );
 
 onMount(() => {
-  if (!viewerZone) browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   mounted = true;
 });
 </script>
+
+{#snippet refreshLink(path: string)}
+  <!-- A fragment-only difference must not let Kit reuse the stale snapshot. -->
+  <span data-sveltekit-reload><TextLink href={path}>Refresh<span class="sr-only"> the event time</span></TextLink></span>
+{/snippet}
 
 {#if time}
   <div class="time-block" data-state={eventState}>
@@ -96,7 +101,7 @@ onMount(() => {
     <div class="details">
       <div>{time.localDate}{#if (viewerZone || browserZone) && time.zone === (viewerZone || browserZone)}, your time{#if browserZone && !viewerZone}{" (from your browser)"}{/if}{:else}, UTC fallback{/if}</div>
       <div class="anchor">
-        {time.zone}{" · "}{time.utcTime} UTC{#if eventState === "upcoming" && countdown && !withdrawn}{" · "}{countdown}{:else if eventState === "live" && !withdrawn}{" · "}since {time.localTime}{#if roomCount !== undefined && Number.isSafeInteger(roomCount) && roomCount >= 0}{" · "}{roomCount} in the room{/if}{:else if eventState === "ended"}{" · "}{endedTime ? `ended ${endedTime.localTime}` : "Ended"}{#if echoFrozen}{" · "}Echo frozen{/if}{:else if eventState === "cancelled"}{" · "}Cancelled{/if}{#if hasClaim && snapshot}{" · "}{withdrawn && eventState === "live" ? "live as of" : "as of"} <time datetime={snapshot.datetime}>{snapshotLabel}</time>{#if withdrawn && refreshPath}{" · "}<TextLink href={refreshPath}>Refresh<span class="sr-only"> the event time</span></TextLink>{/if}{:else if eventState === "live" && !snapshot}{" · "}Live status unavailable{#if refreshPath}{" · "}<TextLink href={refreshPath}>Refresh<span class="sr-only"> the event time</span></TextLink>{/if}{/if}
+        {time.zone}{" · "}{time.utcTime} UTC{#if eventState === "upcoming" && countdown && !withdrawn}{" · "}{countdown}{:else if eventState === "live" && !withdrawn}{" · "}since {time.localTime}{#if roomCount !== undefined && Number.isSafeInteger(roomCount) && roomCount >= 0}{" · "}{roomCount} in the room{/if}{:else if eventState === "ended"}{" · "}{endedTime ? `ended ${endedTime.localTime}` : "Ended"}{#if echoFrozen}{" · "}Echo frozen{/if}{:else if eventState === "cancelled"}{" · "}Cancelled{/if}{#if hasClaim && snapshot}{" · "}{withdrawn && eventState === "live" ? "live as of" : "as of"} <time datetime={snapshot.datetime}>{snapshotLabel}</time>{#if withdrawn && refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{:else if eventState === "live" && !snapshot}{" · "}Live status unavailable{#if refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{/if}
       </div>
     </div>
   </div>
