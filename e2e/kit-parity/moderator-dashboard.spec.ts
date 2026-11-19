@@ -40,7 +40,14 @@ for (const { size } of PARITY_VIEWPORTS) {
     await withModeratorFixture(browser, "kit", size, async ({ page, sql, navigate, capture }) => {
       async function check(name: string, path: string, status: number, heading: string) {
         await navigate(path, status, heading);
-        await expectReadOnlyLayout(page);
+        if (name === "open") {
+          await expect(page.getByRole("combobox", { name: "Resolution" })).toBeVisible();
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+          ).toBe(true);
+        } else {
+          await expectReadOnlyLayout(page);
+        }
         expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
         const back = path === list ? "Back to the dashboard" : "Back to reconciliation";
         await expect(page.getByRole("link", { name: back, exact: true })).toBeVisible();
@@ -52,7 +59,43 @@ for (const { size } of PARITY_VIEWPORTS) {
         }
       }
 
+      // Use a native form navigation so the built Worker sees a browser Origin.
+      async function submitFixture(
+        value: string,
+        status: number,
+        heading: string,
+        captureName: string,
+      ) {
+        const [response] = await Promise.all([
+          page.waitForNavigation(),
+          page.evaluate(
+            ({ action, value }) => {
+              const form = document.createElement("form");
+              form.method = "post";
+              form.action = action;
+              const field = document.createElement("input");
+              field.name = "resolution";
+              field.value = value;
+              form.appendChild(field);
+              document.body.appendChild(form);
+              form.submit();
+            },
+            { action: open, value },
+          ),
+        ]);
+        expect(response?.status()).toBe(status);
+        await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+        await expectReadOnlyLayout(page);
+        expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+        await capture(`reconciliation-${captureName}`);
+      }
+
       expect(await sql`select 1 from bot_reconciliation_intents limit 1`).toHaveLength(0);
+      const receipts = () => sql`
+        select causer_id, properties from activity_log
+        where description = 'bot-reconciliation.resolve' and subject_id = ${openKey}
+        order by id`;
+      const priorReceipts = (await receipts()).length;
       await check("empty", list, 200, "Reconciliation");
       await expect(page.getByText("No open intents recorded.")).toBeVisible();
       await sql`insert into bot_reconciliation_intents
@@ -79,12 +122,19 @@ for (const { size } of PARITY_VIEWPORTS) {
         await check("resolved", resolved, 200, "announcement.post");
         await expect(page.getByText("Superseded")).toBeVisible();
         await check("missing", `${list}/not-a-key`, 404, "Reconciliation record not found");
-        // Fail the second list receipt and the detail receipt, not the open read.
+        await submitFixture("unknown", 400, "Resolution not recorded", "invalid-resolution");
+        await expect(page.getByRole("link", { name: "Review the record" })).toHaveAttribute(
+          "href",
+          open,
+        );
+        // Fail the second list, detail and resolution receipts, not the open list read.
         await sql.begin(async (tx) => {
           await tx`create function e2e_reconciliation_receipt_fail() returns trigger language plpgsql as $$
             begin
-              if new.causer_id = '900000000000009101' and new.description = 'bot-reconciliation.read'
-                  and new.event in ('list_resolved', 'view') then raise exception 'synthetic receipt failure'; end if;
+              if new.causer_id = '900000000000009101' and (
+                (new.description = 'bot-reconciliation.read' and new.event in ('list_resolved', 'view'))
+                or new.description = 'bot-reconciliation.resolve'
+              ) then raise exception 'synthetic receipt failure'; end if;
               return new;
             end $$`;
           await tx`create trigger e2e_reconciliation_receipt_fail before insert on activity_log
@@ -100,6 +150,38 @@ for (const { size } of PARITY_VIEWPORTS) {
             /synthetic_open|synthetic_resolved|synthetic receipt failure/,
           );
         }
+        await submitFixture("confirmed", 503, "Admin temporarily unavailable", "write-unavailable");
+        await expect(page.locator("body")).not.toContainText(
+          /synthetic_open|synthetic receipt failure/,
+        );
+        expect(
+          await sql`select resolution from bot_reconciliation_intents where idempotency_key = ${openKey}`,
+        ).toEqual([{ resolution: null }]);
+        expect(await receipts()).toHaveLength(priorReceipts);
+        await sql`drop trigger e2e_reconciliation_receipt_fail on activity_log`;
+
+        await navigate(open, 200, "event.upsert");
+        await page.getByRole("combobox", { name: "Resolution" }).selectOption("confirmed");
+        const saved = page.waitForResponse((response) => response.request().method() === "POST");
+        await page.getByRole("button", { name: "Stamp resolved" }).click();
+        const response = await saved;
+        expect(response.status()).toBe(303);
+        expect(response.headers().location).toBe(open);
+        await expect(page.getByText("Confirmed", { exact: true })).toBeVisible();
+        await expectReadOnlyLayout(page);
+        await capture("reconciliation-recorded-resolution");
+
+        await submitFixture("not_applied", 409, "Resolution not recorded", "stale-resolution");
+        await expect(page.getByRole("link", { name: "Review the record" })).toHaveAttribute(
+          "href",
+          open,
+        );
+        expect((await receipts()).slice(priorReceipts)).toEqual([
+          {
+            causer_id: "900000000000009101",
+            properties: { resolution: { before: null, after: "confirmed" } },
+          },
+        ]);
       } finally {
         // Keep append-only receipts until the disposable CI database is destroyed.
         await sql.begin(async (tx) => {

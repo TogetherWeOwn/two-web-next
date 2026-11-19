@@ -318,6 +318,14 @@ export function fixtureManifestFor(env: {
         reads: { resource: "reconciliation", action, route },
       });
     }
+    routes.push({
+      method: "POST",
+      path: "/admin/reconciliation/:key",
+      enabled: true,
+      // Use the detail's private rendering boundary. The submit itself audits
+      // atomically in the service and returns no intent data.
+      reads: { resource: "reconciliation", action: "view", route: "admin.reconciliation.show" },
+    });
   }
   return routes;
 }

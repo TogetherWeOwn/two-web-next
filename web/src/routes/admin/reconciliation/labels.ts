@@ -1,4 +1,4 @@
-const resolutions = {
+export const resolutions = {
   confirmed: "Confirmed",
   not_applied: "Not applied",
   superseded: "Superseded",
