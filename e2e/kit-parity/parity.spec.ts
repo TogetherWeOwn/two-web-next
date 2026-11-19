@@ -1950,6 +1950,8 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
     await expect(enhancedCard.getByRole("heading", { name: "1 of 2 in" })).toHaveCount(0);
 
+    // The enhanced navigations rotated the shared fixture session.
+    await context.addCookies(await enhanced.cookies());
     const post = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
