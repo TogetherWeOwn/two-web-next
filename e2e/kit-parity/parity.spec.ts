@@ -2288,6 +2288,167 @@ test("Kit member event detail captures the ended record at both widths", async (
   }
 });
 
+test("Kit saved live snapshot expires without changing the RSVP", async ({ browser }) => {
+  test.setTimeout(60_000);
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const target = targets.find((item) => item.name === "kit")!;
+  const key = "01J00000000000000000000989";
+  const userId = "900000000000000843";
+  const bearer = `two_${randomBytes(32).toString("base64url")}`;
+  const hash = createHash("sha256").update(bearer).digest("hex");
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
+  const now = Date.now();
+  const end = new Date(now + 3_600_000);
+  const path = `/e/${key}?attendees=1`;
+  const plain = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  const enhanced = await browser.newContext({ baseURL: target.origin });
+  async function assertMobileSeatOrder(page: Page) {
+    const time = page.locator(".event-layout-head > [data-testid=kit-event-time]:last-child");
+    const seat = page.locator(
+      ".event-layout-head:has(> [data-testid=kit-event-time]:last-child) + .event-layout-rail > [data-testid=kit-seat-card]:first-child",
+    );
+    await expect(seat).toBeVisible();
+    const [block, card] = await Promise.all([time.boundingBox(), seat.boundingBox()]);
+    expect(card!.y).toBeGreaterThanOrEqual(block!.y + block!.height);
+  }
+  async function capture(page: Page, name: string) {
+    const size = page.viewportSize()?.width === 390 ? "40px" : "89.6px";
+    await expect(page.locator(".live-time .time-block > time")).toHaveCSS("font-size", size);
+    const screenshot = test.info().outputPath(`${name}.png`);
+    await page.screenshot({ path: screenshot, animations: "disabled", caret: "hide" });
+    await test.info().attach(name, { path: screenshot, contentType: "image/png" });
+  }
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into users (id, username, member) values (${userId}, 'Seat fixture', true)`;
+      await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+        values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(now + 7_200_000)})`;
+      await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, rsvp_open)
+        values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
+          ${new Date(now - 3_600_000)}, ${end}, 'Community voice', 'published', true)`;
+    });
+    const noJs = await plain.newPage();
+    const guest = await noJs.goto(path);
+    expect(guest?.headers()["x-two-renderer"]).toBe("kit");
+    expect(guest?.headers()["cache-control"]).toBe("private, no-store");
+    await plain.addCookies([
+      {
+        name: "__Host-two_session",
+        value: `${bearer}.${signature}`,
+        domain: new URL(target.origin).hostname,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    ]);
+    for (const { size: viewport } of PARITY_VIEWPORTS) {
+      await noJs.setViewportSize(viewport);
+      expect((await noJs.goto(path))?.headers()["x-two-renderer"]).toBe("kit");
+      if (viewport.width === 390) await assertMobileSeatOrder(noJs);
+      const rsvp = noJs.getByRole("button", { name: "I'm in", exact: true });
+      await expect(rsvp).toBeEnabled();
+      await rsvp.scrollIntoViewIfNeeded();
+      const ends = noJs.locator("p:visible", { hasText: /^Ends / }).last();
+      await expect(ends.locator("time")).toHaveAttribute("datetime", end.toISOString());
+      await expect(ends).toBeInViewport();
+      const ordered = await ends.evaluate((line) => {
+        const button = document.querySelector('[data-testid="rsvp-going"]')!;
+        const follows = line.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING;
+        return (
+          Boolean(follows) &&
+          line.getBoundingClientRect().bottom <= button.getBoundingClientRect().top
+        );
+      });
+      expect(ordered, "the end precedes the RSVP in DOM and visual order").toBe(true);
+      await capture(noJs, `kit-review-event-live-open-${viewport.width}`);
+    }
+    await withSessionDb(async (sql) => {
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, ${userId}, 'going' from events where event_key = ${key}`;
+    });
+    await noJs.reload();
+    await expect(noJs.getByTestId("rsvp-syncing")).toBeVisible();
+    await withSessionDb(async (sql) => {
+      await sql`update rsvps set synced_to_discord_at = ${new Date(now)} where user_id = ${userId}`;
+    });
+    for (const { size: viewport } of PARITY_VIEWPORTS) {
+      await noJs.setViewportSize(viewport);
+      const response = await noJs.reload();
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      expect(response?.headers()["cache-control"]).toBe("private, no-store");
+      if (viewport.width === 390) await assertMobileSeatOrder(noJs);
+      const time = noJs.getByTestId("kit-event-time").locator('> .time-block[data-state="live"]');
+      const seat = noJs.getByTestId("kit-seat-card");
+      await expect(noJs.getByTestId("event-ongoing")).toHaveText("Live");
+      await expect(time.locator("[data-live-fresh]:visible").last()).toHaveText("as of");
+      await expect(time.locator("time").last()).toHaveAttribute("datetime", end.toISOString());
+      await expect(seat.getByRole("heading", { name: "You're in." })).toBeVisible();
+      await expect(seat.getByTestId("rsvp-synced")).toHaveText("Synced to Discord.");
+      await expect(seat.getByRole("button").or(seat.getByRole("link"))).toHaveCount(0);
+      await expect(noJs.getByRole("complementary", { name: /^Your seat$/ })).toHaveCount(0);
+      await expect(noJs.getByRole("link", { name: "Refresh the event time" })).toHaveCount(0);
+      await capture(noJs, `kit-review-event-live-${viewport.width}`);
+    }
+    await enhanced.addCookies(await plain.cookies());
+    const page = await enhanced.newPage();
+    await page.goto(`${path}#snapshot`);
+    const live = page.getByTestId("event-ongoing");
+    await expect(live).toBeVisible();
+    const deadline = Date.parse(
+      (await page.locator("#kit-live-snapshot").getAttribute("data-stale-at"))!,
+    );
+    await page.bringToFront();
+    const hidden = await live.evaluate((tag, ms) => {
+      // Sample both sides in one browser task so the real timer cannot win the race.
+      Date.now = () => ms - 1;
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+      const before = tag.hasAttribute("hidden");
+      Date.now = () => ms;
+      document.dispatchEvent(new Event("visibilitychange"));
+      return [before, tag.hasAttribute("hidden")];
+    }, deadline);
+    expect(hidden).toEqual([false, true]);
+    await expect(page.locator("[data-live-fresh]:visible")).toHaveCount(0);
+    await expect(page.getByText("Stale", { exact: true })).toHaveCount(2);
+    await expect(page.getByRole("link", { name: "Refresh the event time" })).toHaveAttribute(
+      "href",
+      `${target.origin}${path}`,
+    );
+    await expect(page.getByTestId("rsvp-synced")).toBeVisible();
+    await expect(page.getByTestId("kit-event-time").getByText("live as of")).toBeVisible();
+    for (const { size: viewport } of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport);
+      await capture(page, `kit-review-event-stale-${viewport.width}`);
+    }
+    const refreshed = page.waitForResponse(
+      (response) =>
+        response.url() === `${target.origin}${path}` && response.request().isNavigationRequest(),
+    );
+    await page.getByRole("link", { name: "Refresh the event time" }).click();
+    expect((await refreshed).headers()["cache-control"]).toBe("private, no-store");
+    await expect(live).toBeVisible();
+    await page.getByTestId("event-device-timezone-ends-button").click();
+    await expect(page.getByTestId("event-device-timezone-ends-status")).not.toBeEmpty();
+    await page.addInitScript(() => {
+      Date.now = () => 1;
+    });
+    await page.reload();
+    await expect(live).toBeHidden();
+    await expect(page.getByRole("link", { name: "Refresh the event time" })).toBeVisible();
+    await expect(page.getByTestId("rsvp-synced")).toBeVisible();
+  } finally {
+    await Promise.all([plain.close(), enhanced.close()]);
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key = ${key}`;
+      await sql`delete from web_session_grace where user_id = ${userId}`;
+      await sql`delete from web_sessions where user_id = ${userId}`;
+      await sql`delete from users where id = ${userId}`;
+    });
+  }
+});
+
 // Successful archive page turns with browser history restoration.
 //
 // Isolated deterministic fixture: 24 dated rows plus the seeded past night

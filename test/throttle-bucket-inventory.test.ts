@@ -315,11 +315,13 @@ describe("throttle bucket inventory", () => {
   it("pins in-handler guard buckets to their call sites", () => {
     const found = guardBuckets();
     expect([...found.keys()].sort()).toEqual([
+      "admin-write",
       "events-read",
       "login-callback",
       "login-recover",
       "login-redirect",
     ]);
+    expect(found.get("admin-write")).toEqual(["src/admin/kit-reconciliation-write.ts"]);
     expect(found.get("login-redirect")).toEqual(["src/auth/routes.ts"]);
     expect(found.get("login-callback")).toEqual(["src/auth/routes.ts"]);
     expect(found.get("login-recover")).toEqual(["src/write-recovery.tsx"]);
@@ -408,6 +410,7 @@ describe("throttle bucket inventory", () => {
     expect(throttlingDoc).toContain("POST /admin/featured");
     expect(throttlingDoc).toContain("POST /admin/events");
     expect(throttlingDoc).toContain("POST /admin/queue/failed/:id/redispatch");
+    expect(throttlingDoc).toContain("POST /admin/reconciliation/:key");
   });
 
   it("pins each bucket to its registration file in its own table row", () => {
@@ -428,7 +431,7 @@ describe("throttle bucket inventory", () => {
       );
     }
     for (const [bucket, files] of guardBuckets()) {
-      bucketFiles.set(bucket, files);
+      bucketFiles.set(bucket, [...(bucketFiles.get(bucket) ?? []), ...files]);
     }
     const rows = throttlingDoc.split("\n").filter((line) => line.startsWith("|"));
     for (const [bucket, files] of bucketFiles) {
