@@ -212,7 +212,8 @@ describe("Kit RSVP closure uses the server render clock", () => {
   ])("$name", async ({ server, viewer }) => {
     const { kind, html } = await renderAt(server, viewer);
     expect(kind).toBe("ok");
-    expect(html).toContain('data-testid="rsvp-closed"');
+    expect(html).toContain('data-testid="event-past"');
+    expect(html).toContain("Sign-up record");
     expectNoRsvpAction(html);
   });
 

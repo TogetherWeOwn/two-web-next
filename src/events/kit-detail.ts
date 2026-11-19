@@ -198,10 +198,10 @@ export interface KitEventDetailModel {
   status: string;
   isDraft: boolean;
   isPast: boolean;
-  /** Server snapshot at the render instant (`isOngoing`): the "Happening now"
-   * hero badge. Never a client clock; RSVP verdicts are unaffected. Optional
-   * so a pre-existing fixture without the flag reads as not ongoing. */
-  isOngoing?: boolean;
+  lifecycle:
+    | { kind: "live"; since: string; asOf: string; asOfText: string }
+    | { kind: "ended"; date: string; endTime: string; next: { key: string; date: string } | null }
+    | null;
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
@@ -381,6 +381,51 @@ function toLink(link: EventLink, now: Date): KitEventDetailLink {
     location: link.location,
     game: link.game || null,
     availability: eventLinkAvailability(link, now),
+  };
+}
+
+function detailLifecycle(
+  event: PublicEvent,
+  now: Date,
+  timeZone: string,
+  next: EventLink | null | undefined,
+): KitEventDetailModel["lifecycle"] {
+  const live = isOngoing(event, now);
+  const ended = (event.status === "past" || event.status === "published") && event.endsAt <= now;
+  if ((!live && !ended) || !instantIso(event.startsAt) || !instantIso(event.endsAt)) return null;
+  const date = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  const clock = new Intl.DateTimeFormat("en-GB", { timeZone, timeStyle: "short" });
+  if (live) {
+    const startDate = date.format(event.startsAt);
+    const asOfDate = date.format(now);
+    return {
+      kind: "live",
+      since: clock.format(event.startsAt),
+      asOf: now.toISOString(),
+      asOfText: `${startDate === asOfDate ? "" : `${asOfDate}, `}${clock.format(now)}`,
+    };
+  }
+  return {
+    kind: "ended",
+    date: date.format(event.startsAt),
+    endTime: clock.format(event.endsAt),
+    next:
+      next && next.startsAt > now
+        ? {
+            key: next.eventKey,
+            date: new Intl.DateTimeFormat("en-GB", {
+              timeZone: isValidZone(next.timezone) ? next.timezone : "UTC",
+              weekday: "short",
+              day: "numeric",
+              month: "short",
+            }).format(next.startsAt),
+          }
+        : null,
   };
 }
 
@@ -588,6 +633,7 @@ export async function resolveKitEventDetail(
       const pagePath = `/e/${event.eventKey}`;
       const pageCanonical = canonicalUrl(appUrl, pagePath);
       const review = wantsReview ? savedEventReview(event, now, search) : null;
+      const zoneLabel = isValidZone(event.timezone) ? event.timezone : "UTC";
       const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
@@ -631,7 +677,7 @@ export async function resolveKitEventDetail(
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
-          isOngoing: isOngoing(event, now),
+          lifecycle: review ? null : detailLifecycle(event, now, zoneLabel, series?.next),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,
@@ -663,7 +709,7 @@ export async function resolveKitEventDetail(
           whenText: formatDetailWhen(event.startsAt, event.timezone),
           endsWhenText: formatDetailWhen(event.endsAt, event.timezone),
           durationText: formatElapsedDuration(event.endsAt.getTime() - event.startsAt.getTime()),
-          zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
+          zoneLabel,
           timeDatetime: instantIso(event.startsAt),
           attendees,
           attendeesPaging,

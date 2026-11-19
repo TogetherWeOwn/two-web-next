@@ -924,7 +924,8 @@ describe("Kit detail presentation", () => {
       html.push(renderDetail(outcome.model as unknown as Record<string, unknown>));
       expect(Date.now()).toBe(new Date(wall).getTime());
     }
-    expect(html[0]).toContain("Happening now");
+    expect(html[0]).toContain('data-testid="event-ongoing"');
+    expect(html[0]).toContain('<time datetime="2098-12-31T20:00:00.000Z">20:00</time>');
     expect(html[0]).toBe(html[1]);
   });
 
@@ -1232,17 +1233,28 @@ describe("Kit detail presentation", () => {
     const pastHtml = renderDetail(past.outcome.model as unknown as Record<string, unknown>);
     expect(pastHtml).toContain('data-testid="event-past"');
     expect(pastHtml).toContain("text/markdown");
-    // A past row closes RSVP for members, exactly as the served button does.
+    // An ended past row still closes RSVP for members, but shows the sign-up record.
     const pastMember = await resolve(
       KEY,
-      fakeStore({ event: { ...row({ status: "past" }), goingCount: 3 } as PublicEvent }),
+      fakeStore({
+        event: {
+          ...row({
+            status: "past",
+            startsAt: new Date("2020-01-01T20:00:00Z"),
+            endsAt: new Date("2020-01-01T22:00:00Z"),
+          }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
       memberSession(),
     );
     if (pastMember.outcome.kind !== "ok") throw new Error("unreachable");
     const pastMemberHtml = renderDetail(
       pastMember.outcome.model as unknown as Record<string, unknown>,
     );
-    expect(pastMemberHtml).toContain('data-testid="rsvp-closed"');
+    expect(pastMemberHtml).toContain("No Echo for this one. 3 signed up.");
+    expect(pastMemberHtml).not.toContain(`action="/e/${KEY}/rsvp"`);
+    expect(pastMemberHtml).not.toContain("Next one:");
   });
 
   // The host/join fields are independently optional, so each one renders on

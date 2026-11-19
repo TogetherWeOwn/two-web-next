@@ -2201,27 +2201,55 @@ test("kit: archive search and keyboard focus evidence", async ({ browser }) => {
   }
 });
 
-test("Kit event detail captures ongoing and ended events at both widths", async ({ browser }) => {
+test("Kit member event detail captures live and ended events at both widths", async ({
+  browser,
+}) => {
   expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
   const target = targets.find((item) => item.name === "kit")!;
-  const ongoingKey = "01J00000000000000000000993";
+  const liveKey = "01J00000000000000000000993";
   const endedKey = "01J00000000000000000000994";
+  const nextKey = "01J00000000000000000000995";
+  const userId = "900000000000000848";
+  const bearer = `two_${randomBytes(32).toString("base64url")}`;
+  const hash = createHash("sha256").update(bearer).digest("hex");
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
   const now = Date.now();
   const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
   try {
     await withSessionDb(async (sql) => {
+      await sql`insert into users (id, username, member) values (${userId}, 'Seat fixture', true)`;
+      await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+        values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(now + 7_200_000)})`;
       for (const event of [
-        { key: ongoingKey, start: now - 3_600_000, end: now + 3_600_000 },
+        { key: liveKey, start: now - 3_600_000, end: now + 3_600_000 },
         { key: endedKey, start: now - 10_800_000, end: now - 3_600_000 },
       ]) {
         await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, rsvp_open)
           values (${event.key}, 'Community game night', 'Bring a favourite game and meet the community.',
             ${new Date(event.start)}, ${new Date(event.end)}, 'Community voice', 'published', true)`;
       }
+      await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 2, recurrence_index = 1
+        where event_key = ${endedKey}`;
+      await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
+        select ${nextKey}, title, starts_at + interval '7 days', ends_at + interval '7 days', 'published', id, 2
+        from events where event_key = ${endedKey}`;
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, ${userId}, 'going' from events where event_key in (${liveKey}, ${endedKey})`;
     });
+    await context.addCookies([
+      {
+        name: "__Host-two_session",
+        value: `${bearer}.${signature}`,
+        domain: new URL(target.origin).hostname,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    ]);
     const page = await context.newPage();
     for (const state of [
-      { name: "ongoing", key: ongoingKey },
+      { name: "live", key: liveKey },
       { name: "ended", key: endedKey },
     ]) {
       for (const viewport of [
@@ -2232,14 +2260,37 @@ test("Kit event detail captures ongoing and ended events at both widths", async 
         const response = await page.goto(`/e/${state.key}`);
         expect(response?.status()).toBe(200);
         expect(response?.headers()["x-two-renderer"]).toBe("kit");
-        if (state.name === "ongoing") {
-          await expect(page.getByTestId("event-ongoing")).toHaveText("Happening now");
-          await expect(
-            page.getByTestId("kit-seat-card").getByRole("link", { name: "Log in with Discord" }),
-          ).toBeVisible();
+        const time = page.getByTestId("kit-event-time");
+        await expect(page.getByText("Sign out", { exact: true })).toBeVisible();
+        await expect(
+          page.getByRole("complementary", { name: "Your seat", exact: true }),
+        ).toHaveCount(0);
+        if (state.name === "live") {
+          const seat = page.getByTestId("kit-seat-card");
+          await expect(page.getByTestId("event-ongoing")).toHaveText("Live");
+          await expect(time.locator("time").first()).toHaveText("Live");
+          await expect(time.locator("time").last()).toHaveAttribute("datetime", /^\d{4}-/);
+          await expect(time).toContainText("as of");
+          await expect(seat.getByRole("heading", { name: "You're in." })).toBeVisible();
+          await expect(seat.getByRole("button")).toHaveCount(0);
+          await expect(seat.getByRole("link")).toHaveCount(0);
+          if (viewport.width === 390) {
+            await expect(
+              page.locator(
+                ".event-layout-head:has(> [data-testid=kit-event-time]:last-child) + .event-layout-rail > [data-testid=kit-seat-card]:first-child",
+              ),
+            ).toHaveCount(1);
+          }
         } else {
+          const record = page.getByRole("region", { name: "Sign-up record" });
           await expect(page.getByTestId("event-ongoing")).toHaveCount(0);
-          await expect(page.getByTestId("rsvp-closed")).toHaveText("This one has been and gone");
+          await expect(time).toContainText("Ended");
+          await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
+          await expect(record).toContainText("No Echo for this one. 1 signed up.");
+          await expect(record.getByRole("link", { name: /^Next one:/ })).toHaveAttribute(
+            "href",
+            `/e/${nextKey}`,
+          );
         }
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
           viewport.width,
@@ -2253,7 +2304,10 @@ test("Kit event detail captures ongoing and ended events at both widths", async 
   } finally {
     await context.close();
     await withSessionDb(async (sql) => {
-      await sql`delete from events where event_key in (${ongoingKey}, ${endedKey})`;
+      await sql`delete from events where event_key in (${liveKey}, ${endedKey}, ${nextKey})`;
+      await sql`delete from web_session_grace where user_id = ${userId}`;
+      await sql`delete from web_sessions where user_id = ${userId}`;
+      await sql`delete from users where id = ${userId}`;
     });
   }
 });
