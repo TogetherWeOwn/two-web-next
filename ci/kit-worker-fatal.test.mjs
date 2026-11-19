@@ -27,7 +27,6 @@ import {
   installWorkerFacade,
 } from "../web/scripts/install-worker-facade.mjs";
 
-const APEX = "togetherweown.com";
 const PRIVATE_DETAIL = "TEST_ONLY_PRIVATE_DETAIL";
 const CLIENT_ID = "fixture-client-request-id";
 const STATIC = "/_app/version.json";
@@ -132,6 +131,7 @@ async function start(name, main) {
   const { port } = server.address();
   await new Promise((done, fail) => server.close((error) => (error ? fail(error) : done())));
   const config = join(scratch, `${name}.jsonc`);
+  const origin = `http://127.0.0.1:${port}`;
   fs.writeFileSync(
     config,
     JSON.stringify({
@@ -140,7 +140,7 @@ async function start(name, main) {
       compatibility_date: "2026-09-29",
       compatibility_flags: ["nodejs_compat"],
       assets: { directory: assets, binding: "ASSETS", run_worker_first: true },
-      vars: { APP_URL: `https://${APEX}`, FEATURED_IMAGE_HOSTS: "", DISCORD_INVITE_URL: INVITE },
+      vars: { APP_URL: origin, FEATURED_IMAGE_HOSTS: "", DISCORD_INVITE_URL: INVITE },
     }),
   );
   const args = ["dev", "--config", config, "--local", "--ip", "127.0.0.1"];
@@ -182,9 +182,8 @@ async function start(name, main) {
   });
   // Only loopback transport; never follow an app redirect out of the fixture.
   const fetchWorker = (path, options = {}) =>
-    fetch(`http://127.0.0.1:${port}${path}`, {
+    fetch(`${origin}${path}`, {
       ...options,
-      headers: { host: APEX, ...options.headers },
       redirect: "manual",
       signal: AbortSignal.timeout(5_000),
     });
@@ -326,21 +325,20 @@ describe("Kit built Worker fatal path", () => {
     return {
       ...envelope(res, "/about", "GET"),
       "no fatal hash": !fallbackHash(res),
-      "Kit rendered 200":
-        res.status === 200 &&
-        res.headers.get("x-two-renderer") === "kit" &&
-        (await res.text()).includes('id="about-heading"'),
+      "Kit status 200": res.status === 200,
+      "Kit renderer marker": res.headers.get("x-two-renderer") === "kit",
+      "Kit heading rendered": (await res.text()).includes('id="about-heading"'),
     };
   });
   checkCase("GET /api/public/join Hono dispatch", async () => {
     const res = await parity(API, { headers: { accept: "application/json" } });
+    const json = mediaType(res) === "application/json";
     return {
       ...envelope(res, API, "GET"),
-      "Hono returned 200 JSON":
-        res.status === 200 &&
-        !res.headers.has("x-two-renderer") &&
-        mediaType(res) === "application/json",
-      "join response intact": (await res.json())?.invite_url === INVITE,
+      "Hono status 200": res.status === 200,
+      "no Kit renderer marker": !res.headers.has("x-two-renderer"),
+      "JSON media type": json,
+      "join response intact": json && (await res.json())?.invite_url === INVITE,
     };
   });
   checkCase("GET built static asset 200", async () => (await static200()).checks);
