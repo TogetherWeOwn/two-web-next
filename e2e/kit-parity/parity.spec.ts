@@ -1728,6 +1728,10 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     { name: "open", userId: openUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
   ];
   const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  const enhanced = await browser.newContext({
+    baseURL: target.origin,
+    viewport: { width: 390, height: 844 },
+  });
   try {
     await withSessionDb(async (sql) => {
       for (const state of states) {
@@ -1797,6 +1801,8 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
         expect(response?.status()).toBe(200);
         expect(response?.headers()["x-two-renderer"]).toBe("kit");
         await expectFacts(guestPage, "guest", viewport.width);
+        // A full event keeps the guest card's login link but does not surface B4.
+        await expect(guestPage.locator('aside[aria-label="Your seat"]')).toHaveCount(0);
         // Guest privacy: no roster, no member links, no sign-out chrome.
         await expect(guestPage.getByTestId("event-attendees")).toHaveCount(0);
         await expect(guestPage.locator('a[href^="/members/"]')).toHaveCount(0);
@@ -1895,6 +1901,11 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
       }
     }
     const bar = page.getByRole("complementary", { name: "Your seat" });
+    await page.setViewportSize({ width: 820, height: 844 });
+    await expect(bar).toHaveCount(1);
+    await page.setViewportSize({ width: 821, height: 844 });
+    await expect(bar).toHaveCount(0);
+    await page.setViewportSize({ width: 390, height: 844 });
     const footer = page.getByRole("contentinfo");
     const lastLink = footer.getByRole("link", { name: "Privacy" });
     await footer.getByRole("link", { name: "House rules" }).focus();
@@ -1904,6 +1915,26 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     const lastBounds = (await lastLink.boundingBox())!;
     const barBounds = (await bar.boundingBox())!;
     expect(lastBounds.y + lastBounds.height).toBeLessThanOrEqual(barBounds.y);
+
+    // Drive the shipped island in place before exercising the native form.
+    await enhanced.addCookies(await context.cookies());
+    const enhancedPage = await enhanced.newPage();
+    await enhancedPage.route(`**/events/${openKey}/rsvp`, async (route) => {
+      if (route.request().method() === "PUT") {
+        await route.fulfill({ status: 201, json: { data: { status: "going" } } });
+      } else {
+        await route.abort("failed");
+      }
+    });
+    await enhancedPage.goto(`/e/${openKey}`);
+    const enhancedCard = enhancedPage.getByTestId("kit-seat-card");
+    const enhancedBar = enhancedPage.getByRole("complementary", { name: "Your seat" });
+    await expect(enhancedBar).toBeVisible();
+    await enhancedCard.getByRole("button", { name: "I'm in" }).click();
+    await expect(enhancedCard.getByTestId("rsvp-confirmed")).toBeVisible();
+    await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    await expect(enhancedCard.getByRole("heading", { name: "0 of 2 in" })).toHaveCount(0);
+    await expect(enhancedBar).toHaveCount(0);
 
     const post = page.waitForResponse(
       (response) =>
@@ -1920,6 +1951,13 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     await expect(bar).toContainText("You're in");
     await expect(bar.getByRole("button")).toHaveCount(0);
 
+    // Reload from the real saved row, then lose the enhanced withdrawal response.
+    await enhancedPage.reload();
+    await expect(enhancedBar).toContainText("You're in");
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(enhancedCard.getByTestId("rsvp-unknown")).toHaveAttribute("role", "alert");
+    await expect(enhancedBar).toHaveCount(0);
+
     // Probe absence against actual server snapshots, without redoing the sibling renderer captures.
     for (const state of ["live", "ended", "cancelled"]) {
       await withSessionDb(async (sql) => {
@@ -1933,7 +1971,7 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
       await expect(page.locator('aside[aria-label="Your seat"]')).toHaveCount(0);
     }
   } finally {
-    await context.close();
+    await Promise.all([context.close(), enhanced.close()]);
     await withSessionDb(async (sql) => {
       await sql`delete from events where event_key in (${key}, ${openKey})`;
       for (const state of states) {

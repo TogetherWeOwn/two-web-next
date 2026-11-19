@@ -1,5 +1,4 @@
 <script lang="ts">
-import Button from "#lib/Button.svelte";
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import Tag from "#lib/Tag.svelte";
@@ -127,7 +126,7 @@ const detailIslands = [
     {#if model.isOngoing}
       <p class="notice" data-testid={EVENT_ONGOING_TESTID}>{ONGOING_COPY}</p>
     {/if}
-    {#if openSeat}<Tag variant="ok">{openSeat.detail}</Tag>{/if}
+    {#if openSeat}<span class="seat-open-snapshot"><Tag variant="ok">{openSeat.detail}</Tag></span>{/if}
     <h1 data-waitlist-position={model.waitlistPosition ?? ""}>{model.title}</h1>
   </section>
   {#if model.joinResult}
@@ -146,13 +145,17 @@ const detailIslands = [
     <section class="seat-card" aria-labelledby={seatHeading ? 'seat-card-heading' : undefined} aria-label={seatHeading ? undefined : 'RSVP'} data-testid="kit-seat-card">
       {#if seatHeading}
         <div class="seat-card-head">
-          <h2 id="seat-card-heading">{seatHeading}</h2>
-          {#if openSeat}<Tag variant="ok">{openSeat.detail}</Tag>
+          <h2 id="seat-card-heading">
+            {#if openSeat}
+              <span class="seat-open-snapshot">{seatHeading}</span><span class="seat-open-fallback">{model.seatCard.heading}</span>
+            {:else}{seatHeading}{/if}
+          </h2>
+          {#if openSeat}<span class="seat-open-snapshot"><Tag variant="ok">{openSeat.detail}</Tag></span>
           {:else if model.seatCard.tag}<span class="seat-card-tag">{model.seatCard.tag.text}</span>{/if}
         </div>
       {/if}
       <div class="event-rsvp">{@html model.detailHtml.rsvp}</div>
-      {#if openSeat}<Button href={model.icsUrl} fullWidth>Add to calendar</Button>{/if}
+      {#if openSeat}<a class="seat-action" href={model.icsUrl}>Add to calendar</a>{/if}
       {#if model.seatCard.note}<p class="seat-card-note">{model.seatCard.note}</p>{/if}
     </section>
     {#if facts.length > 0}
@@ -276,18 +279,17 @@ const detailIslands = [
   {#if bar}
     <aside class="event-seat-bar" aria-label="Your seat" data-state={bar.state}>
       <p><strong>{bar.title}</strong><br />{bar.detail}</p>
-      <Button href={model.icsUrl} ariaLabel="Add to calendar" size="sm">
+      <a class="seat-action seat-action-icon" href={model.icsUrl} aria-label="Add to calendar">
         <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round">
           <rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M8 3v4M16 3v4M3.5 10h17"/>
         </svg>
-      </Button>
+      </a>
       {#if bar.state === "open"}
         <form method="post" action={bar.action}>
-          <input type="hidden" name="status" value="going" />
-          <Button type="submit" variant="primary">{RSVP_COPY.cta}</Button>
+          <button class="seat-action seat-action-primary" type="submit" name="status" value="going">{RSVP_COPY.cta}</button>
         </form>
       {:else if bar.state === "guest"}
-        <Button href={bar.href} variant="primary">{bar.label}</Button>
+        <a class="seat-action seat-action-primary" href={bar.href}>{bar.label}</a>
       {/if}
     </aside>
   {/if}
@@ -322,7 +324,27 @@ const detailIslands = [
   :global(.event-theme) .seat-card :global(.event-rsvp > section > a),
   :global(.event-theme) .seat-card :global(.event-rsvp button) { width: 100%; box-sizing: border-box; }
   :global(.event-theme) .event-detail-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
-  .seat-card:has(.seat-card-head :global(.ok)) > :global(a.pill) { margin-top: var(--space-3); }
+  /* Native B4/C5 controls: the Kit pill treatment without a client handler. */
+  .seat-action {
+    display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+    min-height: 44px; border: 0; border-radius: var(--radius-pill); padding: 0 var(--space-5);
+    box-shadow: inset 0 0 0 1px var(--color-hair2); background: transparent; color: var(--color-t1);
+    font: var(--font-weight-semibold) var(--text-ui) var(--font-ui);
+    font-stretch: var(--font-width-button); text-decoration: none; cursor: pointer;
+  }
+  .seat-action-primary { background: var(--color-ember); color: var(--color-on-accent); box-shadow: none; }
+  .seat-action-icon { min-height: 36px; padding-inline: var(--space-3); }
+  .seat-action:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
+  .seat-card > .seat-action { width: 100%; margin-top: var(--space-3); }
+  @media (forced-colors: active) { .seat-action { border: 1px solid ButtonText; } }
+  .seat-open-fallback { display: none; }
+  /* An in-place RSVP can invalidate the SSR snapshot. The shared island still
+     owns live feedback; fall back to its neutral card until the next render. */
+  .event-layout:not(:has(:global([data-testid="rsvp-going"]))),
+  .event-layout:has(:global([data-island="rsvp-button"][data-outcome-unknown])) {
+    .seat-open-snapshot { display: none; }
+    .seat-open-fallback { display: inline; }
+  }
   .event-seat-bar { display: none; }
   /* Kit B4 uses the sheet elevation and keeps the full bar out of the focus viewport. */
   @media (max-width: 820px) {
@@ -351,7 +373,7 @@ const detailIslands = [
     /* The inline island can update without navigation. Never offer a stale B4
        snapshot beside a changed or unconfirmed answer; native B4 POSTs reload. */
     .event-layout:not(:has(:global([data-testid="rsvp-going"]:enabled))) ~ .event-seat-bar[data-state="open"],
-    .event-layout:not(:has(:global([data-testid="rsvp-confirmed"]))) ~ .event-seat-bar[data-state="saved"] { display: none; }
+    .event-layout:not(:has(:global([data-testid="rsvp-withdraw"]:enabled))) ~ .event-seat-bar[data-state="saved"] { display: none; }
   }
   /* Kit breakpoint.compact-max, layout.rail.seat, and layout.sticky-offset. */
   @media (min-width: 821px) {

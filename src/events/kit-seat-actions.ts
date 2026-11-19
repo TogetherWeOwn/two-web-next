@@ -20,12 +20,17 @@ function upcoming(model: SeatSnapshot): boolean {
   return model.status === "published" && !model.rsvpClosed && !model.isOngoing && !model.review;
 }
 
+function hasSeat(model: SeatSnapshot): boolean {
+  return model.capacity === null || model.goingOccupancy < model.capacity;
+}
+
 export function kitOpenSeat(model: SeatSnapshot): string | null {
-  if (!upcoming(model) || !model.viewerMember || !model.rsvpOpen || model.answer) return null;
-  const { capacity, goingOccupancy, goingCount } = model;
-  if (capacity === null) return `${goingCount} going`;
+  if (!upcoming(model) || !model.viewerMember || !model.rsvpOpen || model.answer || !hasSeat(model))
+    return null;
   // Occupancy includes unnamed going rows and is the same count used to admit a seat.
-  return goingOccupancy < capacity ? `${goingOccupancy} of ${capacity} in` : null;
+  return model.capacity === null
+    ? `${model.goingCount} going`
+    : `${model.goingOccupancy} of ${model.capacity} in`;
 }
 
 export function kitSeatActionBar(
@@ -56,7 +61,7 @@ export function kitSeatActionBar(
         : "Time unavailable",
     } as const;
   }
-  if (!model.viewerMember) {
+  if (!model.viewerMember && hasSeat(model)) {
     return {
       state: "guest",
       title: "Log in to RSVP",
