@@ -71,9 +71,13 @@ export async function partialHtml(
   // loginReturnTo from the request path). Pass the request path so fragment
   // turns stay committable; the default keeps the entry-page value.
   loginReturnTo = PARTIAL_PATH,
+  render: (
+    data: Parameters<typeof renderEventsHtml>[0],
+    headers: Record<string, string>,
+  ) => ReturnType<typeof renderEventsHtml> = renderEventsHtml,
 ) {
   return (
-    await renderEventsHtml(
+    await render(
       {
         ...model,
         now: new Date("2099-05-01T12:00:00Z"),
