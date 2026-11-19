@@ -138,13 +138,12 @@ for (const view of SHARE_VIEWS) {
       expect(status).toBe(200);
       const nodes = elements(html);
       const scripts = nodes.filter((node) => node.tagName === "script");
-      const expectedScripts =
+      let expectedScripts =
         view === "Hono" && options.viewer !== "guest"
           ? [...EXISTING_SCRIPTS, "/islands/auth-status.js"].sort()
           : EXISTING_SCRIPTS;
-      expect(scripts.flatMap((node) => attr(node, "src") ?? []).sort()).toEqual(
-        view === "Kit" ? [...expectedScripts, "/islands/site-header-menu.js"] : expectedScripts,
-      );
+      if (view === "Kit") expectedScripts = expectedScripts.concat("/islands/site-header-menu.js");
+      expect(scripts.flatMap((node) => attr(node, "src") ?? []).sort()).toEqual(expectedScripts);
       for (const node of scripts.filter((node) => attr(node, "src") === undefined)) {
         expect(attr(node, "type")).toBe("application/ld+json");
       }

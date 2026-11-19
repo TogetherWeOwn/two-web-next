@@ -8,6 +8,7 @@
   :root:has([data-kit-site-header]) {
     scroll-padding-top: 60px;
   }
+
   .base-theme [data-kit-site-header] {
     position: sticky;
     top: 0;
@@ -43,13 +44,17 @@
     border-bottom: 1px solid var(--color-hair2, var(--line));
   }
   [data-kit-site-header] :is(.menu-brand, .main-nav, .header-account form, .menu-account-actions),
-  [data-kit-site-header]:not([data-menu-ready]) .menu-sheet:target,
+  [data-kit-site-header]:not([data-menu-ready], :has(~ :focus-within)) .menu-sheet:target,
   [data-kit-site-header] .menu-sheet[data-open] {
     display: block;
   }
-  [data-kit-site-header] .header-account {
+  .base-theme [data-kit-site-header] .header-account {
+    justify-self: stretch;
     font: inherit;
     text-align: left;
+  }
+  [data-kit-site-header] .header-account :is(.account-caption, .who) {
+    padding-inline: var(--space-4);
   }
   .base-theme [data-kit-site-header] .menu-sheet :is(a, button):where(:not([hidden])) {
     display: flex;

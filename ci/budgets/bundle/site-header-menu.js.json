@@ -1,6 +1,6 @@
 {
-  "$comment": "Deferred Kit header enhancement; server links and POST work without this asset.",
+  "$comment": "See ci/budgets/README.md for budget policy.",
   "budgets": {
-    "public/islands/site-header-menu.js": { "maxRawBytes": 2560, "maxGzipBytes": 1280 }
+    "public/islands/site-header-menu.js": { "maxRawBytes": 2048, "maxGzipBytes": 1024 }
   }
 }

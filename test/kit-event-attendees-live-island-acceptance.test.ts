@@ -36,7 +36,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL as NodeURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { build } from "esbuild";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { Db } from "../src/db/index";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
@@ -604,8 +604,8 @@ async function browser(opts: {
 
   const context: Record<string, unknown> = {
     document: documentStub,
-    matchMedia: () => ({ matches: false, addEventListener: vi.fn() }),
-    addEventListener: vi.fn(),
+    matchMedia: () => ({ matches: false, addEventListener: () => undefined }),
+    addEventListener: () => undefined,
     CustomEvent: class {
       constructor(
         public type: string,

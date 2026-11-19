@@ -10,17 +10,16 @@ const member = "?state=member&auth=1";
 const menu = (page, role = "button") => page.getByRole(role, { name: "Menu", exact: true });
 const shot = (page, name) =>
   page.screenshot({ path: `artifacts/kit-ember-shell/${name}.png`, animations: "disabled" });
-const source = () =>
-  readFile(new URL("../test/fixtures/kit-ember-shell-route.svelte", import.meta.url), "utf8");
+const route = new URL("../test/fixtures/kit-ember-shell-route.svelte", import.meta.url);
 
 test("built Ember shell preserves its landmarks and account states without JavaScript", {
   timeout: 720_000,
 }, async () => {
-  const fixture = await source();
+  const source = await readFile(route, "utf8");
   await mkdir("artifacts/kit-ember-shell", { recursive: true });
   for (const state of ["guest", "member", "hidden"]) {
     await withKitOfflineBrowser(
-      { page: fixture, search: state === "member" ? member : `?state=${state}` },
+      { page: source, search: state === "member" ? member : `?state=${state}` },
       async ({ page, html }) => {
         assert.match(html, /_app\/immutable\/assets\/[^" ]+\.css/);
         assert.equal(await page.locator('a[href="#main"]').count(), 1);
@@ -99,11 +98,16 @@ test("built Ember shell preserves its landmarks and account states without JavaS
             const account = sheet.getByRole("navigation", { name: "Account" });
             const link = (name) => sheet.getByRole("link", { name });
             await expect(account).toHaveCount(Number(state !== "hidden"));
-            await expect(link("Your profile")).toHaveCount(Number(state === "member"));
+            await expect(link("Profile")).toHaveCount(Number(state === "member"));
             await expect(link("Sign in with Discord")).toHaveCount(Number(state === "guest"));
             await expect(link("Leaderboard")).toHaveCount(Number(state === "member"));
             await expect(page.locator("[inert]")).toHaveCount(0);
+            if (state !== "hidden") await expect(account).toHaveCSS("justify-self", "stretch");
             await shot(page, `nojs-${state}-open-390`);
+            await sheet.getByRole("link", { name: "Close menu" }).press("Tab");
+            await expect(page.getByRole("link", { name: "About", exact: true })).toBeFocused();
+            await expect(sheet).toBeHidden();
+            await fallback.click();
           }
           if (state === "member") {
             const button = page.getByTestId(viewport.width === 390 ? "menu-signout" : "signout");
@@ -127,7 +131,8 @@ test("built Ember shell preserves its landmarks and account states without JavaS
 test("CSR-disabled Kit header supports keyboard, account variants, and a blocked island", {
   timeout: 720_000,
 }, async () => {
-  const options = { page: await source(), javaScriptEnabled: true, headerMenu: true };
+  const source = await readFile(route, "utf8");
+  const options = { page: source, javaScriptEnabled: true, headerMenu: true };
   await withKitOfflineBrowser(options, async ({ page, html }) => {
     const url = page.url();
     const toggle = menu(page);
@@ -180,6 +185,7 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     await page.setViewportSize(mobile);
     const board = sheet.getByRole("link", { name: "Leaderboard" });
     const account = sheet.getByRole("navigation", { name: "Account" });
+    const profile = sheet.getByRole("link", { name: "Profile", exact: true });
     for (const [name, search, count, current] of [
       ["guest", "?state=guest", 0, "page"],
       ["member", member, 1, "location"],
@@ -189,7 +195,7 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     ]) {
       await page.goto(url + search);
       await toggle.click();
-      await expect(sheet.getByRole("link", { name: "Profile", exact: true })).toHaveCount(count);
+      await expect(profile).toHaveCount(Number(name === "member"));
       await expect(sheet.getByRole("button", { name: "Sign out" })).toHaveCount(count);
       await expect(sheet.locator("[aria-current]")).toHaveAttribute("aria-current", current);
       await expect(board).toHaveCount(Number(current === "location"));

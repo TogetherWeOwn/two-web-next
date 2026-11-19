@@ -71,7 +71,7 @@ const menuIsland = '<script src="/islands/site-header-menu.js" defer></' + "scri
       {/if}
       {#if authenticated}
         <div class="menu-account-actions">
-          <a href="/profile">Profile</a>
+          {#if member || activeNav === "leaderboard"}<a href="/profile">Profile</a>{/if}
           <form method="post" action="/logout">
             <button type="submit" data-testid="menu-signout">Sign out</button>
           </form>
@@ -85,9 +85,7 @@ const menuIsland = '<script src="/islands/site-header-menu.js" defer></' + "scri
 <header class="bar site-header" data-kit-site-header>
   {@render lockup(true)}
   <a class="menu-toggle" id="kit-menu" href="#menu-sheet" aria-label="Menu" aria-controls="menu-sheet">
-    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false">
-      <path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-    </svg>
+    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
   </a>
   <div class="menu-sheet" id="menu-sheet">
     {@render primary()}

@@ -5,7 +5,7 @@ import SiteMetadata from "#lib/SiteMetadata.svelte";
 </script>
 
 {#snippet accountChrome()}
-  <a href="/profile">Your profile</a>
+  <a class="menu-desktop-account" href="/profile">Your profile</a>
   <form action="/logout" method="post"><button data-testid="signout">Sign out</button></form>
 {/snippet}
 
