@@ -9,6 +9,7 @@ import { profilesApp } from "../src/profiles/routes";
 import { requestLog } from "../src/request-log";
 import { createMemorySessionStore } from "../src/sessions";
 import app from "./app";
+import { fetchApp } from "./helpers/fetch-app";
 import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
 
 vi.mock("postgres", () => ({
@@ -37,21 +38,46 @@ describe("shared malformed-request negotiation", () => {
     ["text/html;q=0, application/json", "application/json"],
     ["text/*;q=0.4, application/json;q=0.8", "application/json"],
     ["*/*;q=1, text/html;q=0, application/json;q=0.5", "application/json"],
+    // Goldens for the old selector over Hono's quality-sorted ranges.
+    ["", "text/html"],
+    ["application/json;q=0, text/html;q=0", "text/html"],
+    ["text/html;q=0, application/json;q=.5, TEXT/HTML;q=.8", "text/html"],
+    ["application/json;q=.8, text/html;q=.8", "application/json"],
+    ["text/*;q=.8, application/json;q=.8", "application/json"],
+    ["application/json;Q=1;q=0, text/html;q=.5", "text/html"],
+    ["text/html;q=-1, application/json;Q=2", "application/json"],
+    ['application/json;q=0;q="", text/html;q=.5', "text/html"],
+    [", application/json;invalid; q=0, text/html;q=.5", "text/html"],
+    ["application/json;q=NaN, text/html;q=.5", "text/html"],
+    ["application/json;q=bogus, text/html;q=.5", "application/json"],
+    ["application/json;q==0, text/html;q=.5", "application/json"],
+    ['application/json;q="0"junk, text/html;q=.5', "application/json"],
+    ['text/html;note="a,application/json; b=\\"x";q=".8", application/json;q=.5', "text/html"],
+    ['text/html;note="unterminated, application/json', "text/html"],
+    [';note="a,application/json; q=1", text/html;q=.5', "text/html"],
   ])("Accept %s selects %s and preserves existing Vary", async (accept, type) => {
     const app = new Hono();
     app.post("/form", (c) => {
       c.header("Vary", "Origin, Cookie");
       return badRequest(c);
     });
-    const response = await app.request("/form", {
-      method: "POST",
-      headers: accept ? { accept } : {},
-    });
+    const response = await fetchApp(
+      new Request(new URL("/form", env.APP_URL), {
+        method: "POST",
+        headers: accept === undefined ? {} : { accept },
+      }),
+      env,
+      {} as ExecutionContext,
+      app.fetch,
+    );
     expect(response.status).toBe(400);
     expect(response.headers.get("content-type")).toContain(type);
     expect(response.headers.get("cache-control")).toBe("no-store, private");
     expect(response.headers.get("vary")).toBe("Origin, Cookie, Accept");
     if (type === "application/json") {
+      expect(await response.clone().text()).toBe(
+        '{"error":"bad_request","message":"Check your request and try again."}',
+      );
       expect(await response.json()).toEqual({
         error: "bad_request",
         message: "Check your request and try again.",
@@ -90,6 +116,8 @@ describe("legacy machine errors require an explicit HTML preference", () => {
     ["/form", "text/html;q=0, */*", false],
     ["/form", "text/html;q=0", false],
     ["/form", "text/html;q=0, application/json;q=0", false],
+    ["/form", "text/html;q=0, application/json;q=.5, TEXT/HTML;q=.8", true],
+    ["/form", "text/html;q=NaN, */*", false],
     ["/form", "text/plain, text/html;q=0", false],
     ["/api/upload", "text/html", false],
     ["/events", "text/html", false],
