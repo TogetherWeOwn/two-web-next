@@ -70,7 +70,7 @@ export async function assertJoinEvidence(page, state, shell) {
     "#main",
   );
   if (state === "recovery") {
-    assert.equal(await page.locator("#recovery-heading").innerText(), "Your session expired");
+    assert.equal(await page.locator("#recovery-heading").textContent(), "Your session expired");
     assert.equal(
       await page.getByTestId("recovery-retry").getAttribute("href"),
       "/auth/discord?next=%2Fevents",
