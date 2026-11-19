@@ -159,13 +159,19 @@ describe("Hono feed HEAD representations", () => {
     },
   );
 
-  it.each(["/events.rss", "/events.ics", ICS_PATH])(
-    "%s HEAD evaluates an exact validator and retains middleware on 304",
-    async (path) => {
+  it.each(
+    ["/events.rss", "/events.ics", ICS_PATH].flatMap((path) =>
+      (["exact", "weak", "wildcard"] as const).map((kind) => ({ path, kind })),
+    ),
+  )(
+    "$path HEAD evaluates a $kind validator and retains middleware on 304",
+    async ({ path, kind }) => {
       const f = fixture();
       const get = await f.request(path);
       expect(get.status).toBe(200);
-      const head = await f.request(path, "HEAD", "guest", get.headers.get("etag")!);
+      const etag = get.headers.get("etag")!;
+      const validators = { exact: etag, weak: `W/${etag}`, wildcard: "*" };
+      const head = await f.request(path, "HEAD", "guest", validators[kind]);
       expect(head.status).toBe(304);
       expect(await head.text()).toBe("");
       expect(head.headers.get("etag")).toBe(get.headers.get("etag"));
