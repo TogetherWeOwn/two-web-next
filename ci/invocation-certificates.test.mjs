@@ -347,6 +347,8 @@ test("checks matching effects for install order, supported kinds, and protected 
   for (const [mutate, error] of [
     [(c) => c.effects.pop(), /missing install effect/],
     [(c) => (c.effects[0].kind = "restore"), /invalid effects/],
+    [(c) => (c.effects[0].checkout = c.install.checkout), /invalid effects/],
+    [(c) => (c.effects[1].envWrites = []), /invalid effects/],
     [(c) => c.effects.reverse(), /invalid effects/],
     [(c) => (c.effects[0].site = c.effects[1].site), /invalid effects/],
     [(c) => (c.effects[1].run = 1), /invalid install effect/],
@@ -423,13 +425,14 @@ test("rejects missing, mismatched, repeated, late or unsupported checkout effect
   }
 });
 
-const envBound = (name) => ({ name, format: "github-env-ascii-token", maxBytes: 64 });
+const envBound = (name, maxBytes = 64) => ({ name, format: "github-env-ascii-token", maxBytes });
 
 test("admits bounded application env writes alongside independent file effects", () => {
   const record = checkoutFixture();
   const prepare = record.context.effects[1];
-  prepare.writes.push("env:APP_ORIGIN", "env:E2E_FIXTURE");
-  prepare.envWrites = [envBound("APP_ORIGIN"), envBound("E2E_FIXTURE")];
+  const name = `E2E_${"X".repeat(63)}`;
+  prepare.writes.push("env:APP_ORIGIN", `env:${name}`);
+  prepare.envWrites = [envBound("APP_ORIGIN", 1), envBound(name, 4096)];
   validate(record);
   const observed = copy(record);
   observed.context.effects[1].envWrites.reverse();
@@ -446,6 +449,8 @@ test("rejects execution settings and unbounded or ambiguous application env evid
     "npm_config_ignore_scripts",
     "GITHUB_PATH",
     "TSX_TSCONFIG_PATH",
+    "APP_",
+    `E2E_${"X".repeat(64)}`,
     "APP_ORIGIN\n",
     "app_origin",
   ]) {
