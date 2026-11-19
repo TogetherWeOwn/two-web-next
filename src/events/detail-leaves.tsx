@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
 import { renderGoingCount, type RsvpClosedReason } from "../islands/contracts";
+import { kitOpenSeat } from "./kit-seat-actions";
 import type { EventAttendee, ViewerRsvp } from "./reads";
 import { RsvpControl } from "./rsvp-button";
 
@@ -45,6 +46,7 @@ export interface DetailLeavesModel
     DetailShareModel {
   rsvpOpen: boolean;
   rsvpClosed: RsvpClosedReason | null;
+  isOngoing?: boolean;
   answer: ViewerRsvp | null;
   waitlistPosition: number | null;
   viewerModerator: boolean;
@@ -374,7 +376,10 @@ export function withEventDetailHtml<T extends DetailLeavesModel>(
           retainEmptyInstants
           omitHost={Boolean(model.organizerName?.trim())}
           showSpotsLeft={
-            model.status !== "past" && model.status !== "cancelled" && model.rsvpClosed !== "past"
+            model.status !== "past" &&
+            model.status !== "cancelled" &&
+            model.rsvpClosed !== "past" &&
+            kitOpenSeat(model) === null
           }
         />
       ).toString(),
