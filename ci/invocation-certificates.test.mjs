@@ -346,7 +346,7 @@ test("rejects malformed edge positions and write arrays on either side", () => {
 test("checks matching effects for install order, supported kinds, and protected writes", () => {
   for (const [mutate, error] of [
     [(c) => c.effects.pop(), /missing install effect/],
-    [(c) => (c.effects[0].kind = "checkout"), /invalid effects/],
+    [(c) => (c.effects[0].kind = "restore"), /invalid effects/],
     [(c) => c.effects.reverse(), /invalid effects/],
     [(c) => (c.effects[0].site = c.effects[1].site), /invalid effects/],
     [(c) => (c.effects[1].run = 1), /invalid install effect/],
@@ -358,10 +358,7 @@ test("checks matching effects for install order, supported kinds, and protected 
     assert.throws(() => validate(record), error);
   }
   for (const write of [
-    "env:APP_ORIGIN",
-    "env:PATH",
-    "env:NODE_OPTIONS",
-    "env:npm_config_ignore_scripts",
+    "path:generated/bin",
     "file:.npmrc",
     "file:package.json",
     "file:playwright.config.js",
@@ -372,6 +369,110 @@ test("checks matching effects for install order, supported kinds, and protected 
     const record = fixture();
     record.context.effects[0].writes.push(write);
     assert.throws(() => validate(record), /invalid effect write/);
+  }
+});
+
+function checkoutFixture() {
+  const record = fixture();
+  const { install, effects, templateInputs } = record.context;
+  effects[0].run = 1;
+  effects.unshift({
+    name: "fixture checkout",
+    site: "setup:checkout",
+    step: 0,
+    run: 0,
+    kind: "checkout",
+    audit: "reviewed checkout contract",
+    checkout: install.checkout,
+    writes: ["checkout"],
+    inputs: copy(templateInputs),
+  });
+  return record;
+}
+
+test("admits the reviewed checkout before install without relaxing file protections", () => {
+  const record = checkoutFixture();
+  validate(record);
+  record.context.effects[1].writes.push("file:playwright.config.js");
+  assert.throws(() => validate(record), /invalid effect write/);
+});
+
+test("rejects missing, mismatched, repeated, late or unsupported checkout effects", () => {
+  const good = checkoutFixture();
+  const changed = copy(good);
+  changed.context.effects.shift();
+  assert.throws(() => validate(changed, good), /effects differ/);
+  changed.context.effects.unshift({ ...copy(good.context.effects[0]), checkout: "other" });
+  assert.throws(() => validate(good, changed), /invalid checkout effect/);
+  for (const mutate of [
+    ([checkout]) => delete checkout.checkout,
+    ([checkout]) => (checkout.checkout = "other"),
+    ([checkout]) => checkout.writes.push("file:generated/extra"),
+    (effects) => {
+      const checkout = effects.shift();
+      effects.push({ ...checkout, step: 2, run: 0 });
+    },
+    (effects) => {
+      effects[1].run++;
+      effects.splice(1, 0, { ...copy(effects[0]), site: "setup:repeat", run: 1 });
+    },
+  ]) {
+    const record = copy(good);
+    mutate(record.context.effects);
+    assert.throws(() => validate(record), /invalid checkout effect/);
+  }
+});
+
+const envBound = (name) => ({ name, format: "github-env-ascii-token", maxBytes: 64 });
+
+test("admits bounded application env writes alongside independent file effects", () => {
+  const record = checkoutFixture();
+  const prepare = record.context.effects[1];
+  prepare.writes.push("env:APP_ORIGIN", "env:E2E_FIXTURE");
+  prepare.envWrites = [envBound("APP_ORIGIN"), envBound("E2E_FIXTURE")];
+  validate(record);
+  const observed = copy(record);
+  observed.context.effects[1].envWrites.reverse();
+  assert.throws(() => validate(observed, record), /invalid environment write evidence/);
+  observed.context.effects[1].envWrites.reverse();
+  observed.context.effects[1].envWrites[0].maxBytes++;
+  assert.throws(() => validate(observed, record), /invalid environment write evidence/);
+});
+
+test("rejects execution settings and unbounded or ambiguous application env evidence", () => {
+  for (const name of [
+    "PATH",
+    "NODE_OPTIONS",
+    "npm_config_ignore_scripts",
+    "GITHUB_PATH",
+    "TSX_TSCONFIG_PATH",
+    "APP_ORIGIN\n",
+    "app_origin",
+  ]) {
+    const record = fixture();
+    const prepare = record.context.effects[0];
+    prepare.writes.push(`env:${name}`);
+    prepare.envWrites = [envBound(name)];
+    assert.throws(() => validate(record), /invalid environment write evidence/);
+  }
+  const name = "APP_ORIGIN";
+  for (const evidence of [
+    undefined,
+    null,
+    Array(1),
+    [envBound("APP_OTHER")],
+    [{ ...envBound(name), format: "multiline" }],
+    [{ ...envBound(name), maxBytes: 0 }],
+    [{ ...envBound(name), maxBytes: 4097 }],
+    [{ ...envBound(name), value: "unneeded" }],
+    [envBound(name), envBound(name)],
+  ]) {
+    const record = fixture();
+    const prepare = record.context.effects[0];
+    prepare.writes.push(`env:${name}`);
+    if (evidence?.length === 2) prepare.writes.push(`env:${name}`);
+    prepare.envWrites = evidence;
+    assert.throws(() => validate(record), /invalid environment write evidence/);
   }
 });
 
