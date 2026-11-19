@@ -1,5 +1,6 @@
 <script lang="ts">
-import Shell from "#lib/Shell.svelte";
+import EmberShell from "#lib/EmberShell.svelte";
+import SiteMetadata from "#lib/SiteMetadata.svelte";
 import { canonicalUrl } from "../../../../src/seo";
 import type { PageProps } from "./$types";
 
@@ -30,14 +31,16 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
   </div>
 {/snippet}
 
-<Shell
-  restoredWrite={data.restoredWrite}
+<SiteMetadata
   title="Join Together We Own"
   canonical={canonicalUrl(appUrl, "/join")}
   description={JOIN_INTRO}
   theme="join"
-  {accountChrome}
->
+/>
+<EmberShell {accountChrome}>
+  {#if data.restoredWrite}
+    <div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>
+  {/if}
   {#if joinResult}
     <p class="notice" role="status" data-testid="join-result">
       {#if joinResult === "added"}
@@ -150,7 +153,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
       {/if}
     </div>
   </div>
-</Shell>
+</EmberShell>
 
 <style>
   .ember-join {

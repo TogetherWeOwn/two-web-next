@@ -18,7 +18,36 @@ const joinStates = {
   joinRestoredWrite: { restoredWrite: true },
 };
 
-export const joinEvidenceStates = Object.freeze([...Object.keys(joinStates), "recovery"]);
+const joinRetry = {
+  retryUrl: "/join/discord?next=%2Fevents&source=web-homepage",
+  retryLabel: "Try again",
+  inviteUrl: "https://discord.gg/invite",
+};
+
+// These models are supplied by the fixture, not by a public callback route.
+const callbackRecoveryStates = {
+  joinDenied: { title: "Join cancelled", message: "No problem. Nothing was shared." },
+  joinBotFailed: {
+    title: "We couldn't add you automatically",
+    message: "The bot will give you your rank when it's back.",
+    supportReference: "fixture <em>42</em> & queued",
+  },
+  joinExpired: {
+    title: "Join approval expired",
+    message: "That Discord approval expired. Try again or use the invite below.",
+  },
+};
+
+export const joinEvidenceStates = Object.freeze([
+  ...Object.keys(joinStates),
+  ...Object.keys(callbackRecoveryStates),
+  "recovery",
+  "eventGone",
+]);
+
+export function isJoinPage(state) {
+  return Object.hasOwn(joinStates, state);
+}
 
 export function joinEvidencePage(state) {
   if (!joinEvidenceStates.includes(state)) throw new Error(`Unknown join evidence state: ${state}`);
@@ -36,6 +65,33 @@ import RecoveryPage from '../auth/recover/+page.svelte';
 const data = ${JSON.stringify(data)};
 </script>
 <RecoveryPage {data} />`;
+  }
+  if (Object.hasOwn(callbackRecoveryStates, state)) {
+    const model = { ...callbackRecoveryStates[state], ...joinRetry };
+    return `<script>
+import Recovery from '#lib/Recovery.svelte';
+const model = ${JSON.stringify(model)};
+</script>
+<Recovery {...model} />`;
+  }
+  if (state === "eventGone") {
+    const model = {
+      title: "Cancelled game night",
+      game: "Chess",
+      eventKey: "game-night",
+      icsUrl: "/events/game-night.ics",
+      markdownAlternate: "/e/game-night.md",
+      upcomingUrl: "/events",
+      related: [],
+      existingResponses: 0,
+      jsonLd: "{}",
+      siteJsonLd: "{}",
+    };
+    return `<script>
+import EventGone from '#lib/EventGone.svelte';
+const model = ${JSON.stringify(model)};
+</script>
+<EventGone {model} />`;
   }
   const data = {
     inviteUrl: "https://discord.gg/invite",
@@ -69,6 +125,41 @@ export async function assertJoinEvidence(page, state, shell) {
     await page.getByRole("link", { name: "Skip to content" }).getAttribute("href"),
     "#main",
   );
+  if (state === "eventGone") {
+    assert.equal(
+      await page.getByRole("heading", { level: 1 }).textContent(),
+      "Cancelled game night",
+    );
+    assert.equal(await page.getByTestId("event-cancelled").textContent(), "Cancelled");
+    assert.equal(
+      await page.getByRole("link", { name: "See upcoming events" }).getAttribute("href"),
+      "/events",
+    );
+    assert.equal(
+      await page.getByTestId("event-cancelled-ics").getAttribute("href"),
+      "/events/game-night.ics",
+    );
+    return;
+  }
+  if (Object.hasOwn(callbackRecoveryStates, state)) {
+    const { title, message, supportReference } = callbackRecoveryStates[state];
+    assert.equal(await page.locator("#recovery-heading").textContent(), title);
+    assert.equal(await page.locator(".recovery-hero .lead").textContent(), message);
+    const reference = page.getByTestId("error-support-reference");
+    assert.equal(await reference.count(), supportReference ? 1 : 0);
+    if (supportReference) {
+      assert.equal(await reference.textContent(), supportReference);
+      assert.equal(await reference.locator("*").count(), 0);
+    }
+    const retry = page.getByTestId("recovery-retry");
+    assert.equal(await retry.textContent(), joinRetry.retryLabel);
+    assert.equal(await retry.getAttribute("href"), joinRetry.retryUrl);
+    assert.equal(
+      await page.getByTestId("recovery-invite").getAttribute("href"),
+      joinRetry.inviteUrl,
+    );
+    return;
+  }
   if (state === "recovery") {
     assert.equal(await page.locator("#recovery-heading").textContent(), "Your session expired");
     assert.equal(
