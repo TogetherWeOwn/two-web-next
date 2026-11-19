@@ -295,7 +295,7 @@ describe("gitleaks-scan.sh", () => {
       "--redact",
       "--verbose",
       "--exit-code 1",
-      "--log-opts=HEAD",
+      '--log-opts="--text --diff-merges=first-parent HEAD"',
       "--ignore-gitleaks-allow",
     ]) {
       expect(scanScript, flag).toContain(flag);
