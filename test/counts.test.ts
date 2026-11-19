@@ -70,6 +70,60 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("home counts snapshot", () => {
+  it("returns the observed values and reclassifies a cached snapshot at the freshness boundary", async () => {
+    state.live[0]!.counts_updated_at = new Date(NOW - 300_000 + 1);
+    expect(await counts.readHomeCountsSnapshot(env)).toEqual({
+      memberCount: 84,
+      onlineCount: 12,
+      observedAt: new Date(NOW - 300_000 + 1).toISOString(),
+      stale: false,
+    });
+    vi.setSystemTime(NOW + 1);
+    expect(await counts.readHomeCountsSnapshot(env)).toMatchObject({
+      stale: true,
+      memberCount: 84,
+    });
+    expect(state.queries).toHaveLength(1);
+  });
+
+  it.each([null, "", "invalid", new Date(NaN), 123, new Date(NOW + 1)])(
+    "does not invent a snapshot for an invalid or future timestamp %s",
+    async (timestamp) => {
+      state.live[0]!.counts_updated_at = timestamp;
+      expect(await counts.readHomeCountsSnapshot(env)).toBeNull();
+    },
+  );
+
+  it("withholds a cached observation if the clock moves behind it", async () => {
+    expect(await counts.readHomeCountsSnapshot(env)).toMatchObject({ stale: false });
+    vi.setSystemTime(NOW - 1);
+    expect(await counts.readHomeCountsSnapshot(env)).toBeNull();
+    expect(state.queries).toHaveLength(1);
+    vi.setSystemTime(NOW);
+    expect(await counts.readHomeCountsSnapshot(env)).toMatchObject({ stale: false });
+  });
+
+  it("keeps an invalid online count unknown without inventing zero", async () => {
+    state.live[0]!.online_count = "invalid";
+    expect(await counts.readHomeCountsSnapshot(env)).toEqual({
+      memberCount: 84,
+      onlineCount: null,
+      observedAt: new Date(NOW).toISOString(),
+      stale: false,
+    });
+  });
+
+  it("does not expose a snapshot on missing counts or a failed read", async () => {
+    state.live[0]!.human_member_count = null;
+    expect(await counts.readHomeCountsSnapshot(env)).toBeNull();
+    vi.setSystemTime(NOW + counts.COUNTS_CACHE_TTL_MS);
+    state.liveError = new Error("unavailable");
+    expect(await counts.readHomeCountsSnapshot(env)).toBeNull();
+    expect(await counts.readHomeCountsSnapshot({} as Env)).toBeNull();
+  });
+});
+
 describe("readCounts contract", () => {
   it("does not connect when no database is configured", async () => {
     expect(await counts.readCounts({} as Env)).toEqual(counts.UNAVAILABLE);
