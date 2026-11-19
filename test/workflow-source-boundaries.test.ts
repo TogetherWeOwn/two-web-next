@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 type Step = { name?: string; id?: string; run?: string; env?: Record<string, string> };
-type Workflow = { jobs: Record<string, { steps: Step[] }> };
+type Workflow = { jobs: Record<string, { steps?: Step[] }> };
 type Call = { command: string; args: string[] };
 
 function workflow(name: string): Workflow {
@@ -24,9 +24,13 @@ function shellArguments(run: string | undefined, env: Record<string, string>): C
       writeFileSync(
         join(scratch, command),
         String.raw`#!${process.execPath}
+const command = "${command}";
 const args = process.argv.slice(2);
-require("node:fs").appendFileSync(process.env.ARGUMENT_LOG, JSON.stringify({ command: "${command}", args }) + "\n");
-process.stdout.write(args.includes("--deploy-spec") ? "version@5%\ntag\n" : "version-id\n");
+require("node:fs").appendFileSync(process.env.ARGUMENT_LOG, JSON.stringify({ command, args }) + "\n");
+// The npx stub is a pipeline producer; the node stub does not read stdin.
+if (command === "node") {
+  process.stdout.write(args.includes("--deploy-spec") ? "version@5%\ntag\n" : "version-id\n");
+}
 `,
         { mode: 0o700 },
       );
@@ -50,7 +54,7 @@ process.stdout.write(args.includes("--deploy-spec") ? "version@5%\ntag\n" : "ver
 
 describe("workflow source argument boundaries", () => {
   it("passes all three staging Kit route flags as single Wrangler arguments", () => {
-    const step = workflow("deploy").jobs["deploy-staging"]?.steps.find(
+    const step = workflow("deploy").jobs["deploy-staging"]?.steps?.find(
       ({ name }) => name === "Deploy to Cloudflare Workers",
     );
     expect(step?.env).toMatchObject({
@@ -108,7 +112,7 @@ describe("workflow source argument boundaries", () => {
   });
 
   it("keeps the validated staging scope inputs in env and quotes the shell arguments", () => {
-    const scope = workflow("e2e-staging").jobs.scope?.steps.find(({ id }) => id === "scope");
+    const scope = workflow("e2e-staging").jobs.scope?.steps?.find(({ id }) => id === "scope");
     expect(scope?.env).toMatchObject({
       HEAD_SHA: "${{ steps.candidate.outputs.sha }}",
       WORKFLOW_SHA: "${{ github.sha }}",
@@ -118,5 +122,13 @@ describe("workflow source argument boundaries", () => {
     expect(scope?.run).toContain('"$EVENT_NAME"');
     expect(scope?.run).toContain('"$HEAD_SHA" != "$WORKFLOW_SHA"');
     expect(scope?.run).toContain('"$HEAD_SHA~1" "$HEAD_SHA"');
+  });
+
+  it("does not interpolate expressions into the staging error-rate rehearsal script", () => {
+    const rehearsal = Object.values(workflow("error-rate-gate-rehearsal").jobs)
+      .flatMap(({ steps }) => steps ?? [])
+      .find(({ name }) => name?.startsWith("Simulated elevated rate"));
+    expect(rehearsal?.run).toEqual(expect.any(String));
+    expect(rehearsal?.run).not.toContain("${{");
   });
 });
