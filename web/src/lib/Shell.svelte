@@ -44,7 +44,7 @@ let {
   authenticated?: boolean;
   /** Drop the account area entirely, as Hono account={false} does on sessionless pages. */
   hideAccount?: boolean;
-  /** Preserve the script-free contract on recovery and error surfaces. */
+  /** Keep surfaces such as sign-in recovery on the fragment menu. */
   menuFallbackOnly?: boolean;
   /** Trusted root-layout display bit; shows the restored-write notice first in main. */
   restoredWrite?: boolean;
@@ -69,7 +69,7 @@ const shellClass = $derived(
   restyle is a token swap in that one file. The content theme is the
   exception: it renders leaf-CSS classes only (see shellClass). -->
 <div class={shellClass} data-theme={theme}>
-  <SiteHeader {activeNav} {member} {loginReturnTo} {accountChrome} {authenticated} {hideAccount} menuFallbackOnly={menuFallbackOnly || theme === "content"} />
+  <SiteHeader {activeNav} {member} {loginReturnTo} {accountChrome} {authenticated} {hideAccount} menuFallbackOnly={menuFallbackOnly || !activeNav || theme === "content"} />
   <main class={mainClass} id="main" tabindex="-1">{#if restoredWrite}<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>{/if}{@render children()}</main>
   <SiteFooter {theme} />
 </div>

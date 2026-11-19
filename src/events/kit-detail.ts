@@ -257,7 +257,6 @@ export interface KitEventDetailModel {
   showJoinPitch: boolean;
   joinReturnTo: string;
   joinResult: JoinResult | null;
-  /** Existing server viewer, independent of membership or display name. */
   viewerAuthenticated: boolean;
   viewerMember: boolean;
   viewerModerator: boolean;

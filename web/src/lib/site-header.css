@@ -72,7 +72,7 @@
     background: var(--g2, var(--surface));
   }
   .base-theme [data-kit-site-header] :is(.menu-sheet > .brand, .menu-desktop-account),
-  [data-kit-site-header] .menu-signed-in > form[action="/logout"] > button {
+  [data-kit-site-header] .header-account.menu-signed-in > form > button {
     display: none;
   }
   @media (forced-colors: active) {
