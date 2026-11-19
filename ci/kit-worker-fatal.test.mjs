@@ -194,8 +194,8 @@ async function start(name, main) {
     assert.ok(!spawnFailed && !exited, `${name} exited before readiness`);
     try {
       const res = await fetchWorker(STATIC);
-      const body = await res.text();
-      if (res.status === 200 && body === expected) return fetchWorker;
+      evidence.readiness = { name, status: res.status };
+      if ((await res.text()) === expected && res.status === 200) return fetchWorker;
     } catch (error) {
       if (
         error.name !== "TimeoutError" &&
@@ -205,7 +205,7 @@ async function start(name, main) {
     }
     await delay(250);
   }
-  throw new Error(`${name} did not serve the built version asset`);
+  assert.fail(`${name} did not serve the built version asset`);
 }
 
 function checkCase(label, run) {
@@ -319,7 +319,6 @@ describe("Kit built Worker fatal path", () => {
       };
     });
   }
-
   checkCase("GET /about Kit success", async () => {
     const res = await parity("/about", { headers: { accept: "text/html" } });
     return {
