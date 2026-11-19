@@ -351,8 +351,10 @@ const detailIslands = [
     :global(html):has(.event-seat-bar) {
       --event-bar-safe: env(safe-area-inset-bottom, 0px);
       --event-bar-height: calc(max(44px, 3.5rem) + 2 * var(--space-3) + 1px + var(--event-bar-safe));
-      scroll-padding-bottom: var(--event-bar-height);
-      padding-bottom: var(--event-bar-height);
+      /* Keep the focus outline clear of the fixed bar, including at max scroll. */
+      --event-bar-clearance: calc(var(--event-bar-height) + var(--space-2));
+      scroll-padding-bottom: var(--event-bar-clearance);
+      padding-bottom: var(--event-bar-clearance);
     }
     .event-seat-bar {
       position: fixed;
