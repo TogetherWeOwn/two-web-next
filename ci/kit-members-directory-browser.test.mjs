@@ -27,7 +27,6 @@ const extra = [
 ];
 const source = () =>
   readFile(new URL("../test/fixtures/kit-members-directory-route.svelte", import.meta.url), "utf8");
-const has = (html, pattern) => pattern.test(html);
 const names =
   /Fixture Member|Quiet Inactive|Hidden Opt Out|fixture_handle|quiet_inactive|hidden_opt_out|\/members\/|\/welcome\//;
 
@@ -60,8 +59,8 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
       assert.match(html.default, /Event host/);
       assert.match(html.default, /Fixture Member 1(?!\d)/);
       assert.doesNotMatch(html.default, /Quiet Inactive|Hidden Opt Out|hidden_opt_out/);
-      // No newcomers: the directory remains, the welcome links go away.
-      assert.equal(has(html["no-newcomers"], /\/welcome\//), false);
+      // No newcomers: the strip disappears, but the organizer help link can remain.
+      assert.doesNotMatch(html["no-newcomers"], /Joined this week|\/welcome\/fixture-\d/);
       assert.match(html["no-newcomers"], /Fixture Member 7/);
       // Empty and no-result states.
       assert.match(html["empty-e1"], /No members to list yet\./);
