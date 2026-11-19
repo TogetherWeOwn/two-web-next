@@ -33,28 +33,16 @@ function observeNetwork(session: CDPSession, state: FontState) {
     "Network.requestWillBeSent",
     ({ requestId: id, type, request, initiator, timestamp }) => {
       const { url, initialPriority, isLinkPreload } = request;
-      if (new URL(url).origin === localOrigin && (type === "Document" || isFont(url))) {
-        requests.push({
-          id,
-          phase,
-          url,
-          type,
-          detail: { initialPriority, isLinkPreload, initiator, timestamp },
-        });
-      }
+      const detail = { initialPriority, isLinkPreload, initiator, timestamp };
+      if (new URL(url).origin === localOrigin && (type === "Document" || isFont(url)))
+        requests.push({ id, phase, url, type, detail });
     },
   );
   session.on("Network.responseReceived", ({ requestId, response }) => {
     const { status, fromDiskCache, fromServiceWorker, fromPrefetchCache, timing, headers } =
       response;
-    record(requestId, "response", {
-      status,
-      fromDiskCache,
-      fromServiceWorker,
-      fromPrefetchCache,
-      timing,
-      headers: evidenceHeaders(headers),
-    });
+    const cache = { fromDiskCache, fromServiceWorker, fromPrefetchCache };
+    record(requestId, "response", { status, ...cache, timing, headers: evidenceHeaders(headers) });
   });
   session.on("Network.responseReceivedExtraInfo", ({ requestId, statusCode, headers }) =>
     record(requestId, "wire-response", { statusCode, headers: evidenceHeaders(headers) }),
@@ -89,16 +77,18 @@ export function readHints(html: string) {
   type Node = DefaultTreeAdapterTypes.ChildNode;
   type Hint = { rel: string; as: string; href: string | null; priority: string | null };
   function collect(node: Node): Hint[] {
-    if ("tagName" in node && node.tagName === "link") {
-      const attr = (key: string) => node.attrs.find(({ name }) => name === key)?.value ?? null;
-      const rel = attr("rel") ?? "";
-      if (/(?:^|[\t\n\f\r ])(?:preload|prefetch|modulepreload)(?:[\t\n\f\r ]|$)/i.test(rel))
-        return [{ rel, as: attr("as") ?? "", href: attr("href"), priority: attr("fetchpriority") }];
-    }
-    return "childNodes" in node ? node.childNodes.flatMap(collect) : [];
+    if (!("tagName" in node) || node.tagName !== "link")
+      return "childNodes" in node ? node.childNodes.flatMap(collect) : [];
+    const attr = (key: string) => node.attrs.find(({ name }) => name === key)?.value ?? null;
+    const rel = attr("rel") ?? "";
+    return /(?:^|[\t\n\f\r ])(?:preload|prefetch|modulepreload)(?:[\t\n\f\r ]|$)/i.test(rel)
+      ? [{ rel, as: attr("as") ?? "", href: attr("href"), priority: attr("fetchpriority") }]
+      : [];
   }
   return parseFragment(html).childNodes.flatMap(collect);
 }
+export const isFontHint = ({ as, href }: ReturnType<typeof readHints>[number]) =>
+  as.toLowerCase() === "font" || href?.includes(displayFont);
 
 async function inspectNavigation(page: Page, response: Response) {
   const { links, resources } = await page.evaluate(() => ({
@@ -146,14 +136,20 @@ async function headingPixels(page: Page, images: string[], box: Box) {
       };
       const reference = await pixels(images[0]!);
       const matches = [];
-      for (const image of images.slice(1)) {
-        const sample = await pixels(image);
-        matches.push(sample.every((value, i) => value === reference[i]));
-      }
+      for (const image of images.slice(1))
+        matches.push((await pixels(image)).every((value, i) => value === reference[i]));
       return matches;
     },
     { images, box },
   );
+}
+
+type Frame = { data: string; timestamp: number };
+export function paintedFrames(frames: Frame[], timing: { timeOrigin: number; paintTime?: number }) {
+  return frames
+    .map(({ data, timestamp }) => ({ data, atMs: timestamp * 1000 - timing.timeOrigin }))
+    .filter(({ atMs }) => atMs >= (timing.paintTime ?? Infinity))
+    .sort((a, b) => a.atMs - b.atMs);
 }
 
 export async function captureRealFont(
@@ -165,7 +161,7 @@ export async function captureRealFont(
 ) {
   const session = await page.context().newCDPSession(page);
   const network = observeNetwork(session, state);
-  const frames: { data: string; timestamp: number }[] = [];
+  const frames: Frame[] = [];
   let truncated = false;
   let acknowledgmentError: unknown;
   try {
@@ -230,10 +226,8 @@ export async function captureRealFont(
     const settled = await readHeading();
     if (!settled.box) throw new Error("No settled heading bounds");
     const png = await captureWithoutFontWait(page);
-    await session.send("Page.stopScreencast");
     const content = await inspectNavigation(page, response);
-    const timing = await page.evaluate((selector) => {
-      const heading = document.querySelector(selector)!;
+    const timing = await page.locator(contentHeading).evaluate((heading) => {
       const paints = performance.getEntriesByType("paint");
       const reply = paints.find(({ name }) => name === "first-contentful-paint") as
         | (PerformanceEntry & { paintTime?: number })
@@ -256,23 +250,22 @@ export async function captureRealFont(
           stretch,
         })),
       };
-    }, contentHeading);
-    const samples = frames.map(({ data, timestamp }) => ({
-      data,
-      atMs: timestamp * 1000 - timing.timeOrigin,
-    }));
-    const painted = samples.filter(
-      ({ atMs }) => timing.paintTime !== undefined && atMs >= timing.paintTime,
-    );
+    });
+    const fontUrl = `${localOrigin}${trackedFont}`;
+    const resourceEnd = content.resources.find(({ name }) => name === fontUrl)?.responseEnd;
+    const isAfterFont = ({ atMs }: { atMs: number }) => atMs > (resourceEnd ?? Infinity);
+    // Chromium can still be encoding the post-response PNG. Keep the report on timeout.
+    const received = () => paintedFrames(frames, timing).some(isAfterFont);
+    if (state === "cold-shaped" && resourceEnd !== undefined)
+      await expect.soft.poll(received, { timeout: 1000 }).toBe(true);
+    await session.send("Page.stopScreencast");
+    const painted = paintedFrames(frames, timing);
+    const afterFont = painted.find(isAfterFont);
     const matches = await headingPixels(
       page,
       [png.toString("base64"), ...painted.map(({ data }) => data)],
       settled.box,
     );
-    const resourceEnd = content.resources.find(
-      ({ name }) => name === `${localOrigin}${trackedFont}`,
-    )?.responseEnd;
-    const afterFont = painted.find(({ atMs }) => resourceEnd !== undefined && atMs > resourceEnd);
     const capture = {
       path,
       state,

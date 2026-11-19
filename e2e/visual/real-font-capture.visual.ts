@@ -1,9 +1,19 @@
 import { expect, localOrigin, test } from "../fixtures";
-import { captureRealFont, dataFont, displayFont, readHints } from "./real-font-capture";
+import * as evidence from "./real-font-capture";
 
-test("font hints split rel tokens on HTML whitespace only", () => {
-  const hints = readHints('<link rel="other&nbsp;preload"><link rel="other&#9;preload">');
-  expect(hints.map(({ rel }) => rel)).toEqual(["other\tpreload"]);
+const { dataFont, displayFont } = evidence;
+test("font hint classification follows HTML token rules", () => {
+  const link = (space: string) => `<link rel="other${space}preload" as="FONT" href="${dataFont}">`;
+  const hints = evidence.readHints(link("&nbsp;") + link("&#9;"));
+  expect(hints.filter(evidence.isFontHint)).toEqual([
+    { rel: "other\tpreload", as: "FONT", href: dataFont, priority: null },
+  ]);
+});
+
+test("paint samples use timestamp order even when PNGs arrive out of order", () => {
+  const frames = [170, 90, 110].map((ms) => ({ data: String(ms), timestamp: ms / 1000 }));
+  const painted = evidence.paintedFrames(frames, { timeOrigin: 0, paintTime: 100 });
+  expect(painted.map(({ atMs }) => atMs)).toEqual([110, 170]);
 });
 
 // Intercepting any request in the context disables Chromium's HTTP cache.
@@ -25,7 +35,7 @@ for (const path of ["/about", "/faq", "/rules", "/privacy"]) {
         await page.setViewportSize({ width, height });
         const privacy = path === "/privacy";
         const trackedFont = privacy ? dataFont : displayFont;
-        const capture = await captureRealFont(page, path, state, testInfo, trackedFont);
+        const capture = await evidence.captureRealFont(page, path, state, testInfo, trackedFont);
         const { content, requests, settled, timing, warmup } = capture;
         expect(timing.viewport).toEqual({ width, height, devicePixelRatio: 1 });
         expect(settled.fonts.length).toBeGreaterThan(0);
@@ -33,18 +43,15 @@ for (const path of ["/about", "/faq", "/rules", "/privacy"]) {
         const inventory = privacy ? [`${localOrigin}${dataFont}`] : [];
         expect(content.resources.map(({ name }) => name)).toEqual(inventory);
         const contentRequests = requests.filter(({ phase }) => phase === "content");
-        expect(contentRequests.filter(({ type }) => type === "Font").map(({ url }) => url)).toEqual(
-          inventory,
+        const fontRequests = contentRequests.flatMap(({ type, url }) =>
+          type === "Font" ? [url] : [],
         );
-        expect(
-          [...content.rawHints, ...content.hints].filter(
-            ({ as, href }) => as === "font" || href?.includes(displayFont),
-          ),
-        ).toEqual([]);
+        expect(fontRequests).toEqual(inventory);
+        const hints = [...content.rawHints, ...content.hints];
+        expect(hints.filter(evidence.isFontHint)).toEqual([]);
         expect(content.headers.link).toBeUndefined();
-        expect(
-          contentRequests.flatMap(({ events }) => events).map(({ event }) => event),
-        ).not.toContain("early-hints");
+        for (const { events } of contentRequests)
+          expect(events.find(({ event }) => event === "early-hints")).toBeUndefined();
         if (state === "warm") {
           const preload = expect.objectContaining({
             rel: "preload",
