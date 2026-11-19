@@ -218,11 +218,15 @@ function browser() {
     expect(prevented).toBe(true);
   };
   const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
-  async function finish(index: number, children: Partial<Record<string, Element[]>> = {}) {
+  async function finish(
+    index: number,
+    children: Partial<Record<string, Element[]>> = {},
+    zoneNames = Object.keys(zones),
+  ) {
     const page = node("html");
     const next = node("section", { "data-island": "events-calendar" });
     next.replaceChildren(
-      ...Object.keys(zones).map((name) => {
+      ...zoneNames.map((name) => {
         const zone = node("div", { "data-cal-zone": name });
         zone.replaceChildren(...(children[name] ?? []));
         return zone;
@@ -508,9 +512,14 @@ describe("calendar keyboard focus after failed hidden-content navigation", () =>
   }
 
   async function fail(b: Browser, failure: Failure) {
+    if (failure === "invalid") {
+      // Keep four zones so admission reaches the duplicate-name check.
+      await b.finish(0, {}, ["head", "actions", "head", "content"]);
+      return;
+    }
     if (failure === "transport") b.requests[0]!.reject(new Error("offline"));
     else if (failure === "deadline") b.expireDeadline();
-    else b.requests[0]!.resolve({ ok: failure !== "http", text: async () => "invalid" });
+    else b.requests[0]!.resolve({ ok: false });
     await b.settle();
   }
 
