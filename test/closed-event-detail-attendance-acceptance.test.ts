@@ -446,7 +446,7 @@ describe("Hono cancelled detail (RED: existing responses, no capacity)", () => {
 describe("Kit past detail (RED: final attendance, no spots line)", () => {
   it.each(CASES)("shows the going count with no spots/full line ($name)", async (counts) => {
     const html = await kitDetailHtml("past", counts);
-    expect(html).toContain('data-testid="event-past">Past event');
+    expect(html).toContain('<h2 id="signup-record-heading">Sign-up record</h2>');
     await expectPastLineup(html, counts);
   });
 });
@@ -483,10 +483,12 @@ describe("server-time closure for still-published detail", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  async function expectElapsedHtml(html: string) {
-    expect(html).toContain(`data-testid="${RSVP_CLOSED_TESTID}"`);
+  async function expectElapsedHtml(html: string, kit = false) {
+    expect(html).toContain(
+      kit ? 'aria-labelledby="signup-record-heading"' : `data-testid="${RSVP_CLOSED_TESTID}"`,
+    );
     const text = await visibleText(html);
-    expect(text).toContain("This one has been and gone");
+    expect(text).toContain(kit ? "Sign-up record" : "This one has been and gone");
     expect(text).toContain("9 of 10 going");
     expect(html).not.toContain("data-rsvp-form");
     await expectPastLineup(html, counts);
@@ -522,7 +524,7 @@ describe("server-time closure for still-published detail", () => {
     expect(outcome.model.rsvpClosed).toBe("past");
     expect(outcome.model.goingCount).toBe(9);
     const html = renderers.renderDetail(outcome.model as unknown as Record<string, unknown>);
-    await expectElapsedHtml(html);
+    await expectElapsedHtml(html, true);
   });
 
   it("Hono published ending one millisecond later keeps spots (CONTROL)", async () => {
@@ -879,11 +881,12 @@ describe("schedule cards already suppress both lines (CONTROL: green before and 
 describe("keyboard and no-JS detail journeys (CONTROL: green before and after)", () => {
   const full = CASES[0]!;
 
-  async function expectPastJourney(html: string): Promise<void> {
-    // Closed RSVP is a status notice, never a form: nothing to submit, focus,
-    // or trap without JS.
-    expect(html).toContain(`data-testid="${RSVP_CLOSED_TESTID}"`);
-    expect(await visibleText(html)).toContain(rsvpClosedCopy("past"));
+  async function expectPastJourney(html: string, kit = false): Promise<void> {
+    // The closure notice or sign-up record replaces the form without JS.
+    expect(html).toContain(
+      kit ? 'aria-labelledby="signup-record-heading"' : `data-testid="${RSVP_CLOSED_TESTID}"`,
+    );
+    expect(await visibleText(html)).toContain(kit ? "Sign-up record" : rsvpClosedCopy("past"));
     expect(html).not.toContain("data-rsvp-form");
     expect(html).not.toContain('data-testid="rsvp-going"');
     // The device-timezone action ships hidden with an empty live region; the
@@ -919,7 +922,7 @@ describe("keyboard and no-JS detail journeys (CONTROL: green before and after)",
   });
 
   it("Kit past keeps the closed no-JS journey", async () => {
-    await expectPastJourney(await kitDetailHtml("past", full));
+    await expectPastJourney(await kitDetailHtml("past", full), true);
   });
 
   it("Hono cancelled keeps alternatives, ICS and the way back", async () => {

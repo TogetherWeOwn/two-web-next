@@ -2,14 +2,17 @@
 // Local fixtures, real Hono and compiled Svelte SSR. Run with root+web deps:
 // env -u DATABASE_URL npx vitest run test/event-ongoing-detail-acceptance.test.ts
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { EVENT_ONGOING_TESTID } from "../src/islands/contracts";
 import { FULL, PAUSED } from "./fixtures/schedule-availability";
 import {
   END,
   MID,
   ONGOING,
   START,
+  attribute,
   clientSurface,
   document,
+  elements,
   hero,
   ongoingEvent,
   visibleText,
@@ -106,8 +109,17 @@ for (const twin of ["Hono", "Kit"] as const) {
     it.each(cases)("$name", async ({ row, now, ongoing, availability }) => {
       const result = await detailSnapshot(twin, row, kit, now);
       expect(result.status).toBe(200);
-      const visibleHero = visibleText(hero(result.html));
-      expect.soft(ONGOING.test(visibleHero), visibleHero).toBe(ongoing);
+      const detailHero = hero(result.html);
+      if (twin === "Kit") {
+        const badges = elements(
+          detailHero,
+          (node) => attribute(node, "data-testid") === EVENT_ONGOING_TESTID,
+        );
+        expect.soft(badges.map(visibleText)).toEqual(ongoing ? ["Live"] : []);
+      } else {
+        const visibleHero = visibleText(detailHero);
+        expect.soft(ONGOING.test(visibleHero), visibleHero).toBe(ongoing);
+      }
       expect.soft(visibleText(document(result.html))).toMatch(availability);
       if (now >= END) {
         expect.soft(visibleText(document(result.html))).not.toMatch(TWO_LEFT);

@@ -1030,7 +1030,7 @@ describe("Kit detail presentation", () => {
     [
       "ended event",
       { startsAt: new Date("2020-01-10T20:00:00Z"), endsAt: new Date("2020-01-10T22:00:00Z") },
-      "This one has been and gone",
+      '<h2 id="signup-record-heading">Sign-up record</h2>',
       false,
     ],
     ["paused RSVPs", { rsvpOpen: false }, "RSVPs are paused for this event", false],
@@ -1068,7 +1068,7 @@ describe("Kit detail presentation", () => {
     [
       "ended event",
       { startsAt: new Date("2020-01-10T20:00:00Z"), endsAt: new Date("2020-01-10T22:00:00Z") },
-      "This one has been and gone",
+      '<h2 id="signup-record-heading">Sign-up record</h2>',
     ],
     ["paused RSVPs", { rsvpOpen: false }, "Log in with Discord"],
   ])(
