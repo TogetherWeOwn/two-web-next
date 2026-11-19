@@ -15,6 +15,7 @@ async function expectReadOnlyLayout(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 }
 
+// Comparison captures, not visual baselines or replacements for existing axe gates.
 for (const { name } of parityTargets()) {
   for (const { size } of PARITY_VIEWPORTS) {
     test(`${name} moderator dashboard at ${size.width}×${size.height}`, async ({ browser }) => {
@@ -23,7 +24,6 @@ for (const { name } of parityTargets()) {
         await expectReadOnlyLayout(page);
         const reconciliation = page.getByRole("link", { name: "Reconciliation" });
         await expect(reconciliation).toHaveCount(name === "kit" ? 1 : 0);
-        // Check the changed card list, not unchanged dashboard widgets.
         if (name === "kit") {
           const audit = await new AxeBuilder({ page }).include("main .facts").analyze();
           expect(audit.violations).toEqual([]);
