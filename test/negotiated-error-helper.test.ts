@@ -53,7 +53,11 @@ describe("shared malformed-request negotiation", () => {
     ["application/json;q==0, text/html;q=.5", "application/json"],
     ['application/json;q="0"junk, text/html;q=.5', "application/json"],
     ['text/html;note="a,application/json; b=\\"x";q=".8", application/json;q=.5', "text/html"],
-    ['text/html;note="unterminated, application/json', "text/html"],
+    [
+      'text/html;note="a,application/json; b=\\"x";q=".8", application/json;q=.9',
+      "application/json",
+    ],
+    ['text/html;q=.5;note="unterminated, application/json', "text/html"],
     [';note="a,application/json; q=1", text/html;q=.5', "text/html"],
   ])("Accept %s selects %s and preserves existing Vary", async (accept, type) => {
     const app = new Hono();
