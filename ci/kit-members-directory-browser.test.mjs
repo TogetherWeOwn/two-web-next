@@ -95,6 +95,40 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
       assert.doesNotMatch(second, /Fixture Member 1(?!\d)/);
       assert.match(last, /Fixture Member 45(?!\d)/);
 
+      // Click helpers can scroll controls back into view, hiding a sticky overlap.
+      for (const { width, height } of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+        { width: 320, height: 640 },
+      ]) {
+        await page.setViewportSize({ width, height });
+        await open("?state=many");
+        const form = page.getByRole("search", { name: "Search members" });
+        const top = await form.evaluate((node) => node.getBoundingClientRect().top + scrollY);
+        await page.evaluate((y) => scrollTo({ top: y + 200, behavior: "instant" }), top);
+        assert.ok(
+          await page.evaluate((y) => scrollY > y, top),
+          `did not scroll past search at ${width}px`,
+        );
+        for (const control of [
+          form.getByRole("searchbox"),
+          form.getByRole("button", { name: "Search" }),
+        ]) {
+          assert.ok(
+            await control.evaluate((node) => {
+              const { left, top, bottom, width, height } = node.getBoundingClientRect();
+              return (
+                top >= 0 &&
+                bottom <= innerHeight &&
+                node.contains(document.elementFromPoint(left + width / 2, top + height / 2))
+              );
+            }),
+            `sticky search control is obscured at ${width}px`,
+          );
+        }
+        await page.screenshot({ path: `${out}/scrolled-${width}.png` });
+      }
+
       await open("");
       assert.match((await page.locator("h1").textContent()) ?? "", /here\. Say hi/);
       // Keyboard: Tab reaches the search field and Enter submits it without JavaScript.

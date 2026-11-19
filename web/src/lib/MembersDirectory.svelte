@@ -87,7 +87,7 @@ function href(filter = "active", query = "", page = 1) {
 <style>
   .directory-toolbar {
     position: sticky;
-    top: var(--two-size-header-wide);
+    top: 0;
     z-index: 1;
     display: flex;
     flex-wrap: wrap;
@@ -97,8 +97,7 @@ function href(filter = "active", query = "", page = 1) {
     border-block-end: 1px solid var(--two-color-line-hairline);
     background: var(--two-color-bg-canvas);
   }
-  :global(.base-theme:has(.directory-toolbar) > [data-kit-site-header]) { position: sticky; top: 0; z-index: 2; background: var(--two-color-bg-canvas); }
-  :global(html:has(.directory-toolbar)) { scroll-padding-block-start: calc(var(--two-size-header-wide) + 100px); }
+  :global(html:has(.directory-toolbar)) { scroll-padding-block-start: 100px; }
   form { display: flex; align-items: center; gap: var(--space-2); flex: 1 1 280px; max-width: 420px; }
   input[type="search"] {
     flex: 1;
@@ -118,8 +117,10 @@ function href(filter = "active", query = "", page = 1) {
   .directory-columns { display: grid; grid-template-columns: minmax(0, 1fr) var(--two-layout-rail-min); gap: 48px; padding-block: var(--space-3) var(--space-11); }
   .directory-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding-block: var(--space-3); }
   @media (max-width: 820px) {
-    :global(html:has(.directory-toolbar)) { scroll-padding-block-start: calc(var(--two-size-header-compact) + 180px); }
-    .directory-toolbar { top: var(--two-size-header-compact); flex-direction: column; align-items: stretch; }
+    /* Only the directory toolbar sticks; the two-row shell header scrolls away. */
+    :global(.base-theme:has(.directory-toolbar) > [data-kit-site-header]) { position: static; }
+    :global(html:has(.directory-toolbar)) { scroll-padding-block-start: 180px; }
+    .directory-toolbar { flex-direction: column; align-items: stretch; }
     form { flex: auto; max-width: none; }
     .directory-toolbar :global(.segments > a) { flex: 1; padding-inline: var(--space-2); }
     .directory-order { margin-inline: 0; }
