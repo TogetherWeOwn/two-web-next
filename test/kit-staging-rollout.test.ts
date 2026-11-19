@@ -17,7 +17,13 @@ const main = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8"));
 const jobs = readWranglerConfig(readFileSync("wrangler.jobs.jsonc", "utf8"));
 const deployWorkflow = readFileSync(".github/workflows/deploy.yml", "utf8");
 
-type RolloutFlags = { archive?: string; static?: string; events?: string };
+type RolloutFlags = {
+  archive?: string;
+  static?: string;
+  events?: string;
+  home?: string;
+  join?: string;
+};
 
 function stagingDeps(flags: RolloutFlags = {}) {
   return {
@@ -25,6 +31,8 @@ function stagingDeps(flags: RolloutFlags = {}) {
     kitRouteArchive: flags.archive,
     kitRouteStatic: flags.static,
     kitRouteEvents: flags.events,
+    kitRouteHome: flags.home,
+    kitRouteJoin: flags.join,
     featuredImageHosts: "",
     honoFetch: vi.fn(async () => new Response("hono", { status: 200 })),
     resolve: vi.fn(
@@ -235,6 +243,66 @@ describe("Kit staging route rollout", () => {
   );
 });
 
+describe("staging home and join opt-ins", () => {
+  // Use enabled fixture entries to exercise opt-in before the page PRs land.
+  const pages = ["/", "/join", "/events", "/events/past", "/about"];
+  const excluded = ["/join/discord", "/join/callback", "/auth/recover", "/e/:key"];
+  const routes: typeof ROUTE_MANIFEST = [
+    ...[...pages, ...excluded].map((path) => ({ method: "GET", path, enabled: true })),
+    ...["/", "/join"].map((path) => ({ method: "POST", path, enabled: true })),
+  ];
+
+  it.each([
+    ["/", "KIT_ROUTE_HOME"],
+    ["/join", "KIT_ROUTE_JOIN"],
+  ] as const)("admits only the enabled GET %s entry; HEAD follows GET", (path, flag) => {
+    const env = { APP_URL: STAGING_APP_URL, [flag]: "true" };
+    const manifest = stagingManifestFor(env, routes);
+    expect(manifest?.filter(({ enabled }) => enabled)).toEqual([
+      { method: "GET", path, enabled: true },
+    ]);
+    expect(resolveRouteOwner({ method: "HEAD", path }, manifest)).toBe("kit");
+    for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+      expect(resolveRouteOwner({ method, path }, manifest)).toBe("hono");
+    }
+    const disabled = stagingManifestFor(env, [{ method: "GET", path, enabled: false }]);
+    expect(resolveRouteOwner({ method: "GET", path }, disabled)).toBe("hono");
+    for (const APP_URL of ["https://togetherweown.com", `${STAGING_APP_URL}/`, "not a URL"]) {
+      expect(stagingManifestFor({ ...env, APP_URL }, routes)?.some((r) => r.enabled)).toBe(false);
+    }
+    for (const value of [undefined, "false", "TRUE", "true ", "1"]) {
+      const invalid = stagingManifestFor({ ...env, [flag]: value }, routes);
+      expect(invalid?.some((r) => r.enabled)).toBe(false);
+    }
+  });
+
+  it.each([
+    ["/", "home"],
+    ["/join", "join"],
+  ] as const)("dispatches enabled GET %s to Kit only when opted in", async (path, flag) => {
+    const entry = ROUTE_MANIFEST.find((route) => route.method === "GET" && route.path === path);
+    if (!entry) throw new Error(`Missing GET ${path} manifest entry`);
+    const prior = entry.enabled;
+    entry.enabled = true;
+    try {
+      const off = await dispatchAt(path, { [flag]: "false" });
+      expect(off.deps.honoFetch).toHaveBeenCalledOnce();
+      expect(off.response.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+      const on = await dispatchAt(path, { [flag]: "true" });
+      expect(on.deps.honoFetch).not.toHaveBeenCalled();
+      expect(on.response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+      const url = new URL(path, "https://preview.example.test");
+      const preview = await dispatchHookRequest(
+        { request: new Request(url), url, route: { id: path } },
+        { ...stagingDeps({ [flag]: "true" }), appUrl: url.origin },
+      );
+      expect(await preview.text()).toBe("hono");
+    } finally {
+      entry.enabled = prior;
+    }
+  });
+});
+
 describe("Kit staging Wrangler config", () => {
   it("keeps the existing staging Worker contract and starts all families on Hono", () => {
     expect(staging.name).toBe("two-web-next");
@@ -245,6 +313,11 @@ describe("Kit staging Wrangler config", () => {
     expect(staging.vars?.KIT_ROUTE_STATIC).toBe("false");
     expect(staging.vars?.KIT_ROUTE_EVENTS).toBe("false");
     expect(main.env?.production?.vars).not.toHaveProperty("KIT_ROUTE_EVENTS");
+    expect(main.env?.production?.vars).toBeDefined();
+    for (const flag of ["KIT_ROUTE_HOME", "KIT_ROUTE_JOIN"]) {
+      expect(staging.vars?.[flag]).toBe("false");
+      expect(main.env?.production?.vars).not.toHaveProperty(flag);
+    }
     expect(staging.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
     expect(staging.tail_consumers).toEqual([{ service: "two-web-next-alerts" }]);
     expect(staging.assets).toMatchObject({
@@ -279,11 +352,11 @@ describe("Kit staging Wrangler config", () => {
 });
 
 describe("staging deployment selection", () => {
-  it("offers an ordered archive rollout and a separate events-only option", () => {
+  it("offers an ordered archive rollout and separate and combined Ember choices", () => {
     expect(deployWorkflow).toMatch(/workflow_dispatch:\n\s+inputs:\n\s+kit_route_family:/);
     expect(deployWorkflow).toContain("default: hono");
     expect(deployWorkflow).toContain(
-      "- hono\n          - archive\n          - archive-static\n          - events",
+      "- hono\n          - archive\n          - archive-static\n          - events\n          - home\n          - join\n          - ember-pages",
     );
     const deployStep = deployWorkflow
       .split("      - name: Deploy to Cloudflare Workers\n")[1]
@@ -297,6 +370,13 @@ describe("staging deployment selection", () => {
     expect(deployEnv).toContain(
       "KIT_ROUTE_EVENTS: ${{ steps.kit-route-flags.outputs.events || 'false' }}",
     );
+    for (const family of ["home", "join"]) {
+      const flag = `KIT_ROUTE_${family.toUpperCase()}`;
+      expect(deployStep).toContain(`"${flag}:$${flag}"`);
+      expect(deployEnv).toContain(
+        `${flag}: \${{ steps.kit-route-flags.outputs.${family} || 'false' }}`,
+      );
+    }
     expect(deployWorkflow).toContain("--config web/wrangler.staging.jsonc");
     expect(deployWorkflow).not.toContain("--config wrangler.jsonc --tag");
   });

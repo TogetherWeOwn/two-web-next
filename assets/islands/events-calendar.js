@@ -10,6 +10,8 @@
   if (!root) return;
 
   var ZONE_SELECTOR = "[data-cal-zone]";
+  var CONTENT_SELECTOR = '[data-cal-zone="content"]';
+  var HEADING_SELECTOR = "#events-heading";
   var zones = Array.from(root.querySelectorAll(ZONE_SELECTOR));
   var skeleton = root.querySelector('[data-testid="events-loading"]');
   var feedback = root.querySelector("[data-cal-feedback]");
@@ -259,7 +261,7 @@
 
   function setLoading(on) {
     skeleton.hidden = !on;
-    var content = root.querySelector('[data-cal-zone="content"]');
+    var content = root.querySelector(CONTENT_SELECTOR);
     if (content) content.hidden = on;
     root.setAttribute("aria-busy", on ? "true" : "false");
     if (!on) root.removeAttribute("aria-busy");
@@ -282,28 +284,11 @@
     );
   }
 
-  // Failed navigation keeps every last-good zone intact, so the initiating
-  // control survives — but hiding the content zone may already have blurred
-  // its keyboard origin to body. When this request still owns keyboard focus
-  // (focus never moved, no newer input, and any body blur came from hiding
-  // its own content-zone origin), reveal the last-good view first and restore
-  // that control with the same resolution successful swaps use. Pointer
-  // activation carries no control and never restores.
-  function restoreFailedFocus(opts, focusAtStart, focusMoved, inputRevisionAtStart) {
-    if (!opts.control || !focusAtStart || focusMoved || inputRevision !== inputRevisionAtStart)
-      return;
-    var blurred =
-      document.activeElement === focusAtStart ||
-      (opts.skeleton &&
-        root.contains(focusAtStart) &&
-        focusAtStart.closest('[data-cal-zone="content"]') &&
-        document.activeElement === document.body);
-    if (!blurred) return;
-    // A hidden control cannot take focus: reveal before resolving, so the
-    // surviving origin resolves to itself rather than the heading fallback.
-    setLoading(false);
-    var target = (opts.focus && root.querySelector(opts.focus)) || null;
-    if (!target) target = replacementControl(opts.control) || root.querySelector("#events-heading");
+  // Call only after revealing content so a surviving control can take focus.
+  function restoreFocus(opts) {
+    var target = opts.focus && root.querySelector(opts.focus);
+    if (!target && opts.control)
+      target = replacementControl(opts.control) || root.querySelector(HEADING_SELECTOR);
     if (target) target.focus();
   }
 
@@ -335,6 +320,21 @@
           }
         : null;
     if (trackFocus) document.addEventListener("focusin", trackFocus, { signal: controller.signal });
+    // Treat body focus as ours only when loading could have hidden the origin.
+    // Moving focus or typing again (even back to the old value) revokes ownership.
+    function ownsFocus() {
+      var current = document.activeElement;
+      return (
+        !focusMoved &&
+        inputRevision === inputRevisionAtStart &&
+        (current === focusAtStart ||
+          (current === document.body &&
+            opts.skeleton &&
+            focusAtStart &&
+            root.contains(focusAtStart) &&
+            focusAtStart.closest(CONTENT_SELECTOR)))
+      );
+    }
     activeIsSearch = !!opts.search;
     setLoading(!!opts.skeleton);
     // The owned deadline covers the whole read: headers plus body. On expiry
@@ -353,7 +353,8 @@
         window.location.assign(window.location.href);
       } else {
         showRecovery(url, cooldownMs, inputRevisionAtStart, gameRevisionAtStart);
-        restoreFailedFocus(opts, focusAtStart, focusMoved, inputRevisionAtStart);
+        // A success-only target (for example a retried card) cannot claim focus on failure.
+        if (opts.control && focusAtStart && ownsFocus()) restoreFocus(opts);
       }
     }
     if (canTimeout) {
@@ -434,18 +435,8 @@
       Array.from(next.querySelectorAll('a[data-testid="signin"]')).forEach(function (source) {
         authHref(source, "/join/discord");
       });
-      // Check ownership before replacement detaches the focused control. Newer
-      // typing (even back to the same value) or moved focus cancels restoration.
-      // Hiding content can itself blur its control to body after a paint.
-      var hiddenOrigin =
-        focusAtStart &&
-        root.contains(focusAtStart) &&
-        focusAtStart.closest('[data-cal-zone="content"]');
-      var skeletonBlur = opts.skeleton && hiddenOrigin && document.activeElement === document.body;
-      var ownsFocus =
-        !focusMoved &&
-        inputRevision === inputRevisionAtStart &&
-        (document.activeElement === focusAtStart || skeletonBlur);
+      // Snapshot ownership before replacement detaches the focused control.
+      var restoreAfterSwap = (opts.focus || opts.control) && ownsFocus();
       // Admit every expected name exactly once before touching the live zones.
       var byName = new Map();
       sources.forEach(function (source) {
@@ -515,12 +506,7 @@
       feedback.textContent = overLimit() ? searchTooLong : "";
       // A card or month control cannot take focus while content is hidden.
       setLoading(false);
-      if (ownsFocus && (opts.focus || opts.control)) {
-        var target = opts.focus && root.querySelector(opts.focus);
-        if (!target && opts.control)
-          target = replacementControl(opts.control) || root.querySelector("#events-heading");
-        if (target) target.focus();
-      }
+      if (restoreAfterSwap) restoreFocus(opts);
     } catch (error) {
       if (active !== controller || error.name === "AbortError") return;
       // The bounded reader did its job: the destination page itself is past
@@ -698,7 +684,7 @@
     // pointer activation never focuses the button and stays where it was.
     function parkFocus(control) {
       if (document.activeElement !== control) return;
-      var target = root.querySelector("#events-heading") || input;
+      var target = root.querySelector(HEADING_SELECTOR) || input;
       if (target) target.focus();
     }
     retry.addEventListener("click", function () {

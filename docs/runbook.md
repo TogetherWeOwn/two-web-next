@@ -385,12 +385,13 @@ binding isolation before any remote mutation.
    archive route, dispatch the same workflow from `main` with
    `kit_route_family=archive` (only `GET /events/past`); choose
    `kit_route_family=archive-static` to cumulatively add `GET /about` and
-   `GET /faq`. Choose `kit_route_family=events` for the `/events` list alone;
-   `/events/past`, the static pages and `/e/:key` stay on Hono. The dispatch
-   fails unless a fresh `GET /events` returns HTTP 200 with `x-two-renderer: kit`
-   after revision verification. `hono` disables every Kit route family, and missing or
-   unrecognized runtime flags fail closed to Hono. The next automatic main-CI
-   deployment resets the selection to `hono`.
+   `GET /faq`. Choose `events`, `home` or `join` for `/events`, `/` or
+   `/join`, or `ember-pages` for all three. Disabled Ember GET entries block
+   selection before migrations or Worker mutations. HEAD follows GET; event
+   detail, OAuth, recovery and write methods are unaffected. After revision
+   verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
+   to an unauthenticated GET that does not follow redirects. Missing or
+   malformed flags fail closed to Hono.
 
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
    ([smoke checker](../bin/smoke.mjs)), covering 24 public routes: `/up`
@@ -418,9 +419,8 @@ binding isolation before any remote mutation.
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
    queue readiness only warns and `unknown` passes there.
 4. To select a route family explicitly, use Actions → `deploy` → Run workflow
-   on branch `main`, then choose `hono`, `archive`, `archive-static`, or `events`.
-   For an events rollout, record the exact deployed commit, the deploy run link
-   and the `Verify staging Kit events renderer` result together.
+   on `main` and choose a family above. Record the exact deployed commit, the
+   deploy run link and each applicable `Verify staging Kit … renderer` result.
    `workflow_dispatch` uses the same exact-SHA CI gate, staging migration,
    Kit build, Tail-first deployment, queue handoff, revision verification and
    smoke path as the automatic workflow. This is the supported route-selection
