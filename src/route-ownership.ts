@@ -306,9 +306,10 @@ export function fixtureManifestFor(env: {
   // These Kit-only evidence routes have no Hono twin.
   // Build them from fixture data, separate from the shipped manifest literals.
   if (wantReconciliation) {
+    const detailPath = "/admin/reconciliation/:key";
     const reads = [
       ["/admin/reconciliation", "list", "admin.reconciliation.index"],
-      ["/admin/reconciliation/:key", "view", "admin.reconciliation.show"],
+      [detailPath, "view", "admin.reconciliation.show"],
     ] as const;
     for (const [path, action, route] of reads) {
       routes.push({
@@ -320,10 +321,9 @@ export function fixtureManifestFor(env: {
     }
     routes.push({
       method: "POST",
-      path: "/admin/reconciliation/:key",
+      path: detailPath,
       enabled: true,
-      // Use the detail's private rendering boundary. The submit itself audits
-      // atomically in the service and returns no intent data.
+      // The service audits the submit; the detail boundary keeps its response private.
       reads: { resource: "reconciliation", action: "view", route: "admin.reconciliation.show" },
     });
   }
