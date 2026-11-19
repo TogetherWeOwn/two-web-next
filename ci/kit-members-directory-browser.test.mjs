@@ -111,6 +111,7 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
       assert.match(await list.innerText(), /Fixture Member 21(?!\d)/);
       assert.doesNotMatch(await list.innerText(), /Fixture Member 1(?!\d)/);
       await pager.getByRole("link", { name: "Previous page" }).click();
+      assert.equal(new URL(page.url()).search, "?state=many");
       assert.match(await list.innerText(), /Fixture Member 1(?!\d)/);
       assert.doesNotMatch(await list.innerText(), /Fixture Member 21(?!\d)/);
       assert.match(await open("?state=many&page=9"), /Fixture Member 45(?!\d)/);
