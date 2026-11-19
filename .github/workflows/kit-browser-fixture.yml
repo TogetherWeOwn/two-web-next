@@ -11,7 +11,7 @@ on:
         type: boolean
         default: false
       join_evidence:
-        description: Capture the six synthetic Join and recovery component states
+        description: Capture the synthetic Join, recovery, and cancelled-event component states
         type: boolean
         default: false
 
@@ -31,7 +31,17 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        state: [join, joinStartFailed, joinAdded, joinAlreadyMember, joinRestoredWrite, recovery]
+        state:
+          - join
+          - joinStartFailed
+          - joinAdded
+          - joinAlreadyMember
+          - joinRestoredWrite
+          - joinDenied
+          - joinBotFailed
+          - joinExpired
+          - recovery
+          - eventGone
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,8 +58,9 @@ jobs:
         env:
           FINAL_SHA: ${{ github.sha }}
           STATE: ${{ matrix.state }}
+          SHELL_VARIANT: ${{ matrix.state == 'eventGone' && 'baseline' || 'ember' }}
           TZ: UTC
-        run: node ci/kit-join-capture.mjs "$STATE" "artifacts/kit-join/$STATE" baseline
+        run: node ci/kit-join-capture.mjs "$STATE" "artifacts/kit-join/$STATE" "$SHELL_VARIANT"
       - name: Retain component evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

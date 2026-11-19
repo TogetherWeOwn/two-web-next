@@ -234,6 +234,7 @@ async function open(t, twin, options = {}) {
     await route.abort();
   });
   await page.goto(scheduleOrigin + schedulePath);
+  await page.evaluate(() => document.fonts.ready); // Finish loading the document's fonts first.
   enhanced = true;
   if (spec.javaScriptEnabled !== false) {
     for (const src of scripts)

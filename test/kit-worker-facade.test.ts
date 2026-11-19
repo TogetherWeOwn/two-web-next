@@ -1,6 +1,10 @@
 // Runtime design credit: Rick7C2, draft #2092 at eb1ba5d47e6d5a35a0a6deb2b7532b4c045865f3.
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { createKitWorkerFacade, KIT_WORKER_FACADE } from "../src/kit-worker-facade";
+import {
+  createKitWorkerFacade,
+  KIT_WORKER_FACADE,
+  preserveHonoDataResponse,
+} from "../src/kit-worker-facade";
 
 const env = { APP_URL: "https://togetherweown.com" };
 const req = () => new Request("https://togetherweown.com/about");
@@ -25,6 +29,52 @@ describe("createKitWorkerFacade", () => {
     expect(protect).toHaveBeenCalledTimes(1);
     expect(protect).toHaveBeenCalledWith(request, expect.any(Response), env);
     expect(await out.text()).toBe("ok");
+  });
+
+  it("returns the original Hono data response without a replay or body read", async () => {
+    const request = new Request(`${env.APP_URL}/admin/__data.json`);
+    const original = new Response("login required", {
+      status: 302,
+      headers: [
+        ["location", "/auth/discord"],
+        ["set-cookie", "first=1"],
+        ["set-cookie", "second=2"],
+      ],
+    });
+    const honoFetch = vi.fn(async (_request: Request) => original);
+    const fetch = vi.fn(async (input: Request, _env: typeof env) => {
+      const placeholder = preserveHonoDataResponse(input, await honoFetch(input));
+      expect(placeholder.status).toBe(204);
+      expect(placeholder.headers.has("location")).toBe(false);
+      return placeholder;
+    });
+    const protect = vi.fn(passthrough);
+    const out = await createKitWorkerFacade({ fetch }, protect).fetch(request, env);
+    expect(out).toBe(original);
+    expect(out.bodyUsed).toBe(false);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(honoFetch).toHaveBeenCalledExactlyOnceWith(request);
+    expect(protect).not.toHaveBeenCalled();
+    expect(preserveHonoDataResponse(request, original)).toBe(original);
+  });
+
+  it("protects a replacement response instead of releasing a pending Hono response", async () => {
+    const request = new Request(`${env.APP_URL}/admin/__data.json`);
+    const original = new Response(null, { status: 302, headers: { location: "/auth/discord" } });
+    const fatal = new Response("Internal Error", { status: 500 });
+    const protect = vi.fn(passthrough);
+    const facade = createKitWorkerFacade(
+      {
+        async fetch(input: Request, _env: typeof env) {
+          preserveHonoDataResponse(input, original);
+          return fatal;
+        },
+      },
+      protect,
+    );
+    expect(await facade.fetch(request, env)).toBe(fatal);
+    expect(protect).toHaveBeenCalledExactlyOnceWith(request, fatal, env);
+    expect(preserveHonoDataResponse(request, original)).toBe(original);
   });
 
   it("runs other handlers with the adapter as receiver and keeps non-functions", () => {
