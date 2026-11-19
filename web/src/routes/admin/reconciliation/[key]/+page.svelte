@@ -2,14 +2,13 @@
 import AdminShell from "#lib/AdminShell.svelte";
 import { resolutionLabel } from "../labels";
 import type { PageProps } from "./$types";
-
 let { data }: PageProps = $props();
 const row = $derived(data.row);
 </script>
 
 <AdminShell title="Reconciliation detail">
   <section aria-labelledby="reconciliation-heading">
-    <p><a href="/admin/reconciliation">Back to reconciliation</a></p>
+    <p><a href="/admin/reconciliation" class="reconciliation-focus">Back to reconciliation</a></p>
     <h1 id="reconciliation-heading">{row.verb}</h1>
     {#if !row.resolvedAt}
       <p class="notice">
@@ -40,7 +39,5 @@ const row = $derived(data.row);
 </AdminShell>
 
 <style>
-  h1, dd {
-    overflow-wrap: break-word;
-  }
+  h1, dd { overflow-wrap: break-word; }
 </style>

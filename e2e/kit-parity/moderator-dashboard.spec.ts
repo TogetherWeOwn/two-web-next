@@ -8,6 +8,7 @@ const openKey = "e2e00000-0000-4000-8000-00000000a001";
 const resolvedKey = "e2e00000-0000-4000-8000-00000000b001";
 const open = `${list}/${openKey}`;
 const resolved = `${list}/${resolvedKey}`;
+const focusOutline = "rgb(255, 156, 54) solid 3px";
 
 async function expectReadOnlyLayout(page: Page) {
   await expect(page.locator("main form, main a[href$='/resolve']")).toHaveCount(0);
@@ -16,29 +17,20 @@ async function expectReadOnlyLayout(page: Page) {
 
 // Comparison captures, not visual baselines or replacements for existing axe gates.
 for (const { name } of parityTargets()) {
-  for (const viewport of PARITY_VIEWPORTS) {
-    test(`${name} moderator dashboard at ${viewport.size.width}×${viewport.size.height}`, async ({
-      browser,
-    }) => {
-      await withModeratorFixture(
-        browser,
-        name,
-        viewport.size,
-        async ({ page, navigate, capture }) => {
-          await navigate("/admin", 200, "Moderation");
-          await expectReadOnlyLayout(page);
-          await expect(page.getByRole("link", { name: "Reconciliation" })).toHaveCount(
-            name === "kit" ? 1 : 0,
-          );
-          // Check the changed card list, not unchanged dashboard widgets.
-          if (name === "kit") {
-            expect(
-              (await new AxeBuilder({ page }).include("main .facts").analyze()).violations,
-            ).toEqual([]);
-          }
-          await capture("dashboard");
-        },
-      );
+  for (const { size } of PARITY_VIEWPORTS) {
+    test(`${name} moderator dashboard at ${size.width}×${size.height}`, async ({ browser }) => {
+      await withModeratorFixture(browser, name, size, async ({ page, navigate, capture }) => {
+        await navigate("/admin", 200, "Moderation");
+        await expectReadOnlyLayout(page);
+        const reconciliation = page.getByRole("link", { name: "Reconciliation" });
+        await expect(reconciliation).toHaveCount(name === "kit" ? 1 : 0);
+        // Check the changed card list, not unchanged dashboard widgets.
+        if (name === "kit") {
+          const audit = await new AxeBuilder({ page }).include("main .facts").analyze();
+          expect(audit.violations).toEqual([]);
+        }
+        await capture("dashboard");
+      });
     });
   }
 }
@@ -52,11 +44,14 @@ for (const { size } of PARITY_VIEWPORTS) {
         await expectReadOnlyLayout(page);
         expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
         await capture(`reconciliation-${name}`);
+        await page.keyboard.press("Tab");
+        for (const link of await page.getByRole("link", { name: /^(Back to|Retry)/ }).all()) {
+          await link.focus();
+          await expect(link).toHaveCSS("outline", focusOutline);
+        }
       }
 
-      expect(
-        await sql`select idempotency_key from bot_reconciliation_intents limit 1`,
-      ).toHaveLength(0);
+      expect(await sql`select 1 from bot_reconciliation_intents limit 1`).toHaveLength(0);
       await check("empty", list, 200, "Reconciliation");
       await expect(page.getByText("No open intents recorded.")).toBeVisible();
       await sql`insert into bot_reconciliation_intents
@@ -66,11 +61,12 @@ for (const { size } of PARITY_VIEWPORTS) {
       try {
         await check("populated", list, 200, "Reconciliation");
         await expect(page.locator(`a[href='${resolved}']`)).toBeVisible();
-        await page.getByRole("link", { name: "Back to the dashboard" }).focus();
         for (const name of ["Open intents", "Recently resolved"]) {
           await page.keyboard.press("Tab");
           const region = page.getByRole("region", { name });
           await expect(region.getByRole("link")).toBeFocused();
+          await expect(region.getByRole("link")).toHaveCSS("outline", focusOutline);
+          await capture(`reconciliation-focus-${name === "Open intents" ? "open" : "resolved"}`);
           if (size.width === 390) {
             const start = await region.evaluate((el) => el.scrollLeft);
             await page.keyboard.press("ArrowRight");

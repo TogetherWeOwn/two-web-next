@@ -7,7 +7,7 @@ let { data }: PageProps = $props();
 </script>
 
 <AdminShell title="Reconciliation">
-  <p><a href="/admin">Back to the dashboard</a></p>
+  <p><a href="/admin" class="reconciliation-focus">Back to the dashboard</a></p>
   <h1>Reconciliation</h1>
   <p>This read-only view shows recorded intents only. Some unconfirmed bot changes may not
     appear here. Check Discord independently to verify delivery.</p>
@@ -28,7 +28,7 @@ let { data }: PageProps = $props();
             {#each records as row (row.idempotencyKey)}
               {@const iso = (row.resolvedAt ?? row.firstSeenAt).toISOString()}
               <tr>
-                <td><a href={`/admin/reconciliation/${encodeURIComponent(row.idempotencyKey)}`}>
+                <td><a href={`/admin/reconciliation/${encodeURIComponent(row.idempotencyKey)}`} class="reconciliation-focus">
                   {row.verb}<span class="sr-only">: {row.idempotencyKey}</span>
                 </a></td>
                 <td class="admin-chronology"><time datetime={iso}>{iso.slice(0, 19).replace("T", " ")}</time></td>

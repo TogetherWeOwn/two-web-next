@@ -46,7 +46,7 @@ const title = $derived(
 </script>
 
 <AdminShell {title}>
-<section aria-labelledby="admin-error-heading">
+<section aria-labelledby="admin-error-heading" class:reconciliation-error={reconciliationDetail || routeId === "/admin/reconciliation"}>
   <p>
     {#if eventFamily}
       <a href="/admin/events">Back to events</a>

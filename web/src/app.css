@@ -61,6 +61,9 @@ html body {
   color: var(--color-lobby-ink);
   outline-color: currentColor;
 }
+.kit-admin :is(a.reconciliation-focus, .reconciliation-error a):focus-visible {
+  outline-color: var(--color-lobby-focus);
+}
 .kit-admin :is(.facts .card h2 a, p.notice) {
   color: var(--ink);
 }
