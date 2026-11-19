@@ -267,17 +267,12 @@ describe("staging home and join opt-ins", () => {
     }
     const disabled = stagingManifestFor(env, [{ method: "GET", path, enabled: false }]);
     expect(resolveRouteOwner({ method: "GET", path }, disabled)).toBe("hono");
-
-    const invalid = [
-      ...["https://togetherweown.com", `${STAGING_APP_URL}/`, "not a URL"].map((APP_URL) => ({
-        APP_URL,
-      })),
-      ...[undefined, "false", "TRUE", "true ", "1"].map((value) => ({ [flag]: value })),
-    ];
-    for (const override of invalid) {
-      expect(stagingManifestFor({ ...env, ...override }, routes)?.some((r) => r.enabled)).toBe(
-        false,
-      );
+    for (const APP_URL of ["https://togetherweown.com", `${STAGING_APP_URL}/`, "not a URL"]) {
+      expect(stagingManifestFor({ ...env, APP_URL }, routes)?.some((r) => r.enabled)).toBe(false);
+    }
+    for (const value of [undefined, "false", "TRUE", "true ", "1"]) {
+      const invalid = stagingManifestFor({ ...env, [flag]: value }, routes);
+      expect(invalid?.some((r) => r.enabled)).toBe(false);
     }
   });
 
@@ -296,6 +291,12 @@ describe("staging home and join opt-ins", () => {
       const on = await dispatchAt(path, { [flag]: "true" });
       expect(on.deps.honoFetch).not.toHaveBeenCalled();
       expect(on.response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+      const url = new URL(path, "https://preview.example.test");
+      const preview = await dispatchHookRequest(
+        { request: new Request(url), url, route: { id: path } },
+        { ...stagingDeps({ [flag]: "true" }), appUrl: url.origin },
+      );
+      expect(await preview.text()).toBe("hono");
     } finally {
       entry.enabled = prior;
     }
