@@ -117,8 +117,10 @@ describe("Kit home port: request posture", () => {
 describe("Kit home port: manifest", () => {
   it("declares the Kit home's member-read boundary without enabling it", () => {
     const manifest = read(manifestPath);
+    expect(manifest).toMatch(/path:\s*"\/"/);
+    expect(manifest).toMatch(/method:\s*"GET",\s*path:\s*"\/",\s*enabled:\s*false/);
     expect(manifest).toMatch(
-      /method:\s*"GET",\s*path:\s*"\/",\s*enabled:\s*false,\s*reads:\s*\{\s*resource:\s*"member",\s*action:\s*"list",\s*route:\s*"home"\s*\}/,
+      /path:\s*"\/"[^}]*reads:\s*\{\s*resource:\s*"member",\s*action:\s*"list",\s*route:\s*"home"\s*\}/,
     );
   });
 });

@@ -54,13 +54,11 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
 const nextOwnEvent = $derived(
   session?.member
     ? (upcomingEvents as HomeUpcomingRow[])
-        .filter((event) => event.source === "canonical" && event.startsAt.getTime() > renderTime.getTime())
         .flatMap((event) => {
-          if (event.source !== "canonical") return [];
+          if (event.source !== "canonical" || event.startsAt <= renderTime) return [];
           const answer = data.memberRsvps?.find((rsvp) => rsvp.eventKey === event.eventKey);
-          return answer?.status === "going" || answer?.status === "waitlisted"
-            ? [{ event, status: answer.status === "going" ? ("going" as const) : ("waitlisted" as const) }]
-            : [];
+          if (answer?.status !== "going" && answer?.status !== "waitlisted") return [];
+          return [{ event, status: answer.status as "going" | "waitlisted" }];
         })
         .sort((a, b) => a.event.startsAt.getTime() - b.event.startsAt.getTime())[0]
     : undefined,
