@@ -112,7 +112,7 @@ try {
       "const commentedImport = () => import /* call */ ('hono');",
       String.raw`export * from 'hono\x2fcors';`,
       String.raw`const load = () => import('h\x6fno');`,
-      String.raw`const load = () => import(` + "`" + String.raw`h\x6fno\x2f${name}` + "`" + `);`,
+      "const load = () => import(`h\\x6fno\\x2f${name}`);",
       String.raw`const cors = require('hono\x2fcors');`,
       String.raw`const cors = require('\150\157\156\157\057cors');`,
       String.raw`const cors = require('hono\57cors');`,
