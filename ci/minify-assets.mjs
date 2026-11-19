@@ -214,12 +214,8 @@ function selftest() {
     cpSync(join(repoRoot, "assets"), join(scratch, "assets"), { recursive: true });
     cpSync(join(repoRoot, "public"), join(scratch, "public"), { recursive: true });
     cpSync(join(repoRoot, "vendor"), join(scratch, "vendor"), { recursive: true });
-    for (const path of [
-      ...HONO_CONSUMERS,
-      ...ARTIFACTS,
-      "lib/time-freshness.ts",
-      "lib/time-freshness-clock.ts",
-    ]) {
+    cpSync(join(repoRoot, "lib"), join(scratch, "lib"), { recursive: true });
+    for (const path of [...HONO_CONSUMERS, ...ARTIFACTS]) {
       mkdirSync(dirname(join(scratch, path)), { recursive: true });
       copyFileSync(join(repoRoot, path), join(scratch, path));
     }

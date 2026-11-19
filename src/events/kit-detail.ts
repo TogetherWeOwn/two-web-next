@@ -208,6 +208,7 @@ export interface KitEventDetailModel {
     asOfText: string;
     staleAt: string;
     since: string;
+    sinceText: string;
     utc: string;
   };
   goingCount: number;
@@ -400,14 +401,22 @@ function liveDetailTime(
   if (!isOngoing(event, now)) return undefined;
   const staleAt = timeStaleAt("live", +now, +event.startsAt, +event.endsAt);
   if (staleAt === null || !Number.isFinite(staleAt)) return undefined;
-  const clock = wallTimeHm(now, zone);
+  const offsets = new Intl.DateTimeFormat("en-GB", { timeZone: zone, timeZoneName: "shortOffset" });
+  const offset = (at: Date) =>
+    offsets.formatToParts(at).find((part) => part.type === "timeZoneName")?.value;
+  const startOffset = offset(event.startsAt);
+  const nowOffset = offset(now);
+  const shifted = startOffset !== nowOffset;
+  const since = wallTimeHm(event.startsAt, zone);
+  const clock = wallTimeHm(now, zone) + (shifted ? ` ${nowOffset}` : "");
   const sameDay = wallDateIso(event.startsAt, zone) === wallDateIso(now, zone);
-  const date = new Intl.DateTimeFormat("en-GB", { timeZone: zone, dateStyle: "medium" });
+  const date = new Intl.DateTimeFormat("en-GB", { timeZone: zone, day: "numeric", month: "short" });
   return {
     asOf: now.toISOString(),
-    asOfText: sameDay ? clock : `${date.format(now)}, ${clock}`,
+    asOfText: sameDay ? clock : `${date.format(now)} ${clock}`,
     staleAt: new Date(staleAt).toISOString(),
-    since: wallTimeHm(event.startsAt, zone),
+    since,
+    sinceText: shifted ? `${since} ${startOffset}` : since,
     utc: wallTimeHm(event.startsAt, "UTC"),
   };
 }

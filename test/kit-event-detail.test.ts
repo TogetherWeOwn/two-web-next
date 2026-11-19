@@ -930,26 +930,27 @@ describe("Kit detail presentation", () => {
   });
 
   it("shows live timing in published review without enabling RSVP", async () => {
-    const event = { ...row(), goingCount: 0, goingOccupancy: 0 };
-    const render = (now: Date) =>
-      resolveKitEventDetail({
-        key: KEY,
-        path: `/e/${KEY}`,
-        search: "?review=1",
-        env,
-        session: memberSession(MOD_ID, true),
-        joinResult: null,
-        setHeaders: () => {},
-        store: fakeStore({ event }),
-        now,
-      });
-    const last = await render(new Date(+event.endsAt - 1));
+    const endsAt = new Date("2026-10-25T01:15:00.001Z");
+    const event = {
+      ...row({ timezone: "Europe/London", startsAt: new Date("2026-10-25T00:45:00Z"), endsAt }),
+      goingCount: 0,
+      goingOccupancy: 0,
+    };
+    const render = () =>
+      resolve(KEY, fakeStore({ event }), memberSession(MOD_ID, true), null, "?review=1");
+    vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(new Date(+event.endsAt - 1));
+    const { outcome: last } = await render();
     expect(last.kind).toBe("ok");
     if (last.kind !== "ok") throw new Error(last.kind);
-    expect(last.model.liveTime?.staleAt).toBe(event.endsAt.toISOString());
+    expect(last.model.liveTime).toMatchObject({
+      staleAt: event.endsAt.toISOString(),
+      sinceText: "01:45 GMT+1",
+      asOfText: "01:15 GMT",
+    });
     expect(last.model.review?.actions).toContain("Back to edit");
     expect(last.model.detailHtml.rsvp).toContain("disabled");
-    const end = await render(event.endsAt);
+    vi.setSystemTime(event.endsAt);
+    const { outcome: end } = await render();
     expect(end.kind).toBe("ok");
     if (end.kind !== "ok") throw new Error(end.kind);
     expect(end.model.liveTime).toBeUndefined();

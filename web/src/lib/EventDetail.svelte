@@ -159,7 +159,7 @@ const detailIslands = $derived(
       </time>
       <div>
         <p>
-          <span data-live-fresh>Since {live.since} · {model.zoneLabel} · as of</span>
+          <span data-live-fresh>Since {live.sinceText} · {model.zoneLabel} · as of</span>
           <span hidden data-live-stale>{model.zoneLabel} · {live.utc} UTC · live as of</span>
           <time datetime={live.asOf}>{live.asOfText}</time><span id="kit-live-refresh"></span>
         </p>
@@ -318,7 +318,7 @@ const detailIslands = $derived(
 
 <style>
   .event-layout-head { grid-area: head; min-width: 0; }
-  .lifecycle-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .lifecycle-tags { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
   .lifecycle-time { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-4); padding-top: var(--space-7); margin-bottom: var(--space-4); border-top: 1px solid var(--color-hair2); }
   .lifecycle-figure { font-size: var(--text-figure); line-height: 1; font-variant-numeric: tabular-nums; }
   .lifecycle-time p { margin: 0; color: var(--color-t3); font: var(--text-small) / var(--leading-label) var(--font-data); }
@@ -346,7 +346,6 @@ const detailIslands = $derived(
   .event-facts dd p { margin: 0; }
   .seat-card-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-inset-tight); }
   .seat-card-head h2 { margin: 0; font-size: var(--text-title); font-weight: var(--font-weight-semibold); line-height: var(--leading-title); }
-  .live-rsvp-end { margin-bottom: var(--space-inset-tight); }
   .seat-card-tag { padding: var(--space-inset-tag-y) var(--space-inset-tag-x); border-radius: var(--radius-s); color: var(--color-warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-warn) 45%, transparent); font: var(--text-label) / var(--leading-label) var(--font-data); letter-spacing: var(--tracking-label); text-transform: uppercase; }
   .seat-card-note { margin: var(--space-inset-tight) 0 0; font-size: var(--text-small); color: var(--color-t2); }
   :global(.event-theme) .seat-card :global(.event-rsvp) { display: block; margin: 0; }

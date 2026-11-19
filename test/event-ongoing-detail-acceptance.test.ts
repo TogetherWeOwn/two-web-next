@@ -148,22 +148,17 @@ for (const twin of ["Hono", "Kit"] as const) {
       const result = await detailSnapshot(twin, ongoingEvent(), kit, MID);
       expect(result.status).toBe(200);
       const surface = clientSurface(result.html);
-      expect(surface.scripts.map((script) => script.src).sort()).toEqual(
-        [
-          "/islands/attendees-live.js",
-          "/islands/copy-link.js",
-          "/islands/event-share.js",
-          "/islands/going-count.js",
-          "/islands/rsvp-button.js",
-          ...(twin === "Hono"
-            ? [
-                "/islands/auth-status.js",
-                "/islands/event-device-timezone.js",
-                "/islands/event-time-from-now.js",
-              ]
-            : ["/islands/kit-live-event-time.js"]),
-        ].sort(),
-      );
+      expect(surface.scripts.map((script) => script.src).sort()).toEqual([
+        "/islands/attendees-live.js",
+        ...(twin === "Hono" ? ["/islands/auth-status.js"] : []),
+        "/islands/copy-link.js",
+        ...(twin === "Hono" ? ["/islands/event-device-timezone.js"] : []),
+        "/islands/event-share.js",
+        ...(twin === "Hono" ? ["/islands/event-time-from-now.js"] : []),
+        "/islands/going-count.js",
+        ...(twin === "Kit" ? ["/islands/kit-live-event-time.js"] : []),
+        "/islands/rsvp-button.js",
+      ]);
       expect(surface.scripts.every((script) => script.body === "")).toBe(true);
       expect(surface.handlers).toEqual([]);
       expect(fetch).not.toHaveBeenCalled();
