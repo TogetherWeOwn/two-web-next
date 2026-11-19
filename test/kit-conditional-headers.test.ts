@@ -9,6 +9,8 @@ function fixture(status = 200, etag: string | null = '"fixture"') {
     "content-security-policy": "default-src 'self'",
     "cache-control": "public, max-age=60",
     "x-custom-contract": "retained",
+    "x-request-id": "fixture-request",
+    "x-two-origin": "two-web-next",
     vary: "Accept",
   });
   if (etag !== null) headers.set("etag", etag);
@@ -46,6 +48,9 @@ describe("Kit conditional response headers", () => {
         expect(response.status).toBe(304);
         expect(await response.text()).toBe("");
         expect([...response.headers]).toEqual([...upstream.headers]);
+        expect(response.headers.get("content-security-policy")).toContain("default-src 'self'");
+        expect(response.headers.get("x-request-id")).toBeTruthy();
+        expect(response.headers.get("x-two-origin")).toBe("two-web-next");
         expect(response.headers.getSetCookie()).toEqual(upstream.headers.getSetCookie());
         expect(response.headers.getSetCookie()).toHaveLength(2);
         expect(honoFetch.mock.calls.length + resolve.mock.calls.length).toBe(1);

@@ -25,6 +25,7 @@ import {
 import { STAGING_APP_URL } from "./qa";
 import { newRequestId, safeRequestId } from "./request-log";
 import { withStreamedBody } from "./html-stream";
+import { applySingleValidator } from "./http/conditional";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { isKitNoticeDocument, readKitRestoredWrite } from "./kit-restored-write";
@@ -910,14 +911,7 @@ export async function dispatchHookRequest(
   deps: HookDispatchDeps,
 ): Promise<Response> {
   const response = await dispatchOwnedRequest(event, deps);
-  // Match Kit's post-hook ETag check before it can discard response headers.
-  const etag = response.headers.get("etag");
-  let validator = event.request.headers.get("if-none-match");
-  if (validator?.startsWith('W/"')) validator = validator.slice(2);
-  if (response.status === 200 && etag !== null && validator === etag) {
-    return new Response(null, { status: 304, headers: response.headers });
-  }
-  return response;
+  return applySingleValidator(event.request, response);
 }
 
 async function dispatchOwnedRequest(
