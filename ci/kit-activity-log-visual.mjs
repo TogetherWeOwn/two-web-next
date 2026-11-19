@@ -22,7 +22,7 @@ export function expectedContent(empty) {
   const actions = empty ? "Clear filters Page 1" : "Page 1 Next";
   const table = cells.join(" ").replaceAll("|", " ");
   const text = `${shell} ${intro} ${form} Who What When (UTC) Subject ${table} ${actions} Together We Own · moderators only`;
-  return [text, cells, [empty ? subject : "", ""], empty ? path : `${path}?page=2`];
+  return [text, cells, [empty ? subject : "", ""], `${path}?page=${empty ? 1 : 2}`];
 }
 
 export function validateView(response, content, state, empty, keyboard) {

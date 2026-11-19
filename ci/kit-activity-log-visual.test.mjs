@@ -11,6 +11,7 @@ test("capture refuses renderer, fixture content and keyboard drift", () => {
   const response = ["http://127.0.0.1:8788/admin/activity-log", 200, "kit", "private, no-store"];
   const state = [true, false, false];
   const content = structuredClone(expectedContent(false));
+  assert.equal(expectedContent(true).at(-1), "/admin/activity-log?page=1");
   validateView(response, content, state, false, false);
   const hono = response.with(2, "hono");
   assert.throws(() => validateView(hono, content, state, false, false), /provenance/);
