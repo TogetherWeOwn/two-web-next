@@ -2,7 +2,20 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { serveKitFixture } from "./kit-hydration-harness.mjs";
+import { bundleKitFixture, serveKitFixture } from "./kit-hydration-harness.mjs";
+
+test("fixture compiler returns independent server and client bundles", async () => {
+  const fixture = fileURLToPath(
+    new URL("../test/fixtures/kit-browser-harness.svelte", import.meta.url),
+  );
+  const source = `import Fixture from ${JSON.stringify(fixture)}; export default Fixture;`;
+  const server = await bundleKitFixture("server", source);
+  const client = await bundleKitFixture("client", source);
+  assert.match(server.code, /Café fixture/);
+  assert.equal(server.css, "");
+  assert.match(client.code, /Café fixture/);
+  assert.match(client.css, /12,\s*34,\s*56/);
+});
 
 test("fixture serves SSR, hydrates, styles and closes", { timeout: 120000 }, async () => {
   const fixture = fileURLToPath(

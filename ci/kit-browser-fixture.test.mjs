@@ -207,11 +207,19 @@ test("Kit home hero presents its heading and action at desktop and mobile widths
   });
 });
 
-test("Kit offline fixture fixes the server render clock", async () => {
+test("Kit offline fixture fixes the server clock and browser timezone", async () => {
   await withKitOfflineBrowser(
-    { now: Date.UTC(2030, 0, 2), page: "<p>{new Date().toISOString()}</p>" },
+    {
+      now: Date.UTC(2030, 0, 2),
+      page: "<p>{new Date().toISOString()}</p>",
+      timezoneId: "America/New_York",
+    },
     async ({ page }) => {
       assert.equal(await page.locator("p").textContent(), "2030-01-02T00:00:00.000Z");
+      assert.equal(
+        await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone),
+        "America/New_York",
+      );
     },
   );
 });

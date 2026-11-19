@@ -3,7 +3,7 @@ import { onMount } from "svelte";
 import TimeBlock from "../../web/src/lib/TimeBlock.svelte";
 import { watchTimeSnapshot } from "../../web/src/lib/time-freshness";
 
-let { data } = $props();
+const data = { asOf: "2026-11-07T19:20:00Z", start: "2026-11-07T19:30:00Z" };
 let _stale = $state(true);
 let _state = $state<"upcoming" | "live">("upcoming");
 let asOf = $state(data.asOf as string);
