@@ -4,6 +4,7 @@
 // Each read degrades independently so ranks can survive a
 // missing collector snapshot (and live counts can survive a missing ladder).
 import postgres from "postgres";
+import { twoMotionPollStaleAfter } from "../vendor/design-kit/tokens";
 import { exceptionClass } from "./alerts";
 import { botDatabaseUrl, databaseOptions } from "./db/connection";
 import type { Env } from "./env";
@@ -113,6 +114,51 @@ const readLive = cachedRead<LiveCounts>(
     return liveCounts(rows[0]);
   },
 );
+
+// The Ember home needs the observed timestamp even after the legacy reader
+// hides stale numerals. Keep this projection separate from the frozen contract;
+// failures and invalid/future timestamps are not evidence of a snapshot.
+export type HomeCountsSnapshot = {
+  memberCount: number;
+  onlineCount: number | null;
+  observedAt: string;
+  stale: boolean;
+};
+
+type StoredHomeSnapshot = Omit<HomeCountsSnapshot, "stale">;
+
+const readHomeSnapshot = cachedRead<StoredHomeSnapshot | null>("counts.home", null, async (sql) => {
+  const rows = await sql<Row[]>`
+    SELECT human_member_count, online_count, counts_updated_at
+    FROM web_v1.live_counts LIMIT 1
+  `;
+  const row = rows[0];
+  const raw = row?.counts_updated_at;
+  // The view returns UTC ISO text; parsing a zone-free string would use local time.
+  const updatedAt =
+    raw instanceof Date
+      ? raw.getTime()
+      : typeof raw === "string" &&
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$/.test(raw)
+        ? Date.parse(raw)
+        : NaN;
+  const memberCount = count(row?.human_member_count);
+  if (!Number.isFinite(updatedAt) || updatedAt > Date.now() || memberCount === null) return null;
+  return {
+    memberCount,
+    onlineCount: count(row?.online_count),
+    observedAt: new Date(updatedAt).toISOString(),
+  };
+});
+
+export async function readHomeCountsSnapshot(env: Env): Promise<HomeCountsSnapshot | null> {
+  const snapshot = await readHomeSnapshot(botDatabaseUrl(env));
+  if (!snapshot) return null;
+  const age = Date.now() - Date.parse(snapshot.observedAt);
+  // Re-evaluate on every request, including cache hits and clock changes.
+  if (age < 0) return null;
+  return { ...snapshot, stale: age >= twoMotionPollStaleAfter };
+}
 
 // The bot view already aggregates highest-rank-held counts. Bound the ladder,
 // not the member population: never LIMIT member rows or substitute role totals.

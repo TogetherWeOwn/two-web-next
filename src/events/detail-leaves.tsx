@@ -44,9 +44,9 @@ export interface DetailLeavesModel
   extends DetailMetadataModel,
     DetailRosterModel,
     DetailShareModel {
+  isOngoing?: boolean;
   rsvpOpen: boolean;
   rsvpClosed: RsvpClosedReason | null;
-  isOngoing?: boolean;
   answer: ViewerRsvp | null;
   waitlistPosition: number | null;
   viewerModerator: boolean;
@@ -381,7 +381,7 @@ export function withEventDetailHtml<T extends DetailLeavesModel>(
       metadata: (
         <EventMetadata
           model={model}
-          showTimeFromNow={model.status !== "draft"}
+          showTimeFromNow={model.status !== "draft" && !model.isOngoing}
           retainEmptyInstants
           omitHost={Boolean(model.organizerName?.trim())}
           refreshSeat={kitOpenSeat(model) !== null}

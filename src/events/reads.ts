@@ -390,7 +390,8 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
       )
       .orderBy(asc(events.startsAt), asc(events.id))
       .limit(3);
-    // The homepage gets public signposts and an aggregate, never creator or RSVP identities.
+    // The home cache carries event signposts, organizer display names and aggregates,
+    // never RSVP identities. The current Hono teaser does not render organizer names.
     // Retain the renderability guard for finite dates outside JavaScript's range.
     return (await withGoing(tx, rows.filter(isRenderableEventWindow))).map(
       ({
@@ -428,7 +429,9 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
  * Homepage teaser row: canonical published events plus display-only Discord
  * snapshot rows, labelled by source. Discord rows carry no RSVP aggregate and
  * no detail page — they keep their Discord invite link at render time.
- * Never carries creator, RSVP identities, or member data.
+ * Canonical rows may include an organizer display name. A guest payload built
+ * from these rows must omit it before Kit home is enabled. Neither source
+ * carries RSVP identities or per-viewer answers.
  */
 export type HomeCanonicalRow = HomeEvent & { source: "canonical" };
 export type HomeDiscordRow = {
@@ -449,7 +452,8 @@ export const HOME_UPCOMING_LIMIT = 3;
  * Pure merge for the homepage teaser (shared with the SvelteKit card): the
  * same source-aware rules as /events — deduplicated Discord transients,
  * hidden-event suppression via persisted ids, re-checked against the local
- * clock — merged in start order and capped. No private data enters or leaves.
+ * clock — merged in start order and capped. The shared result is viewer-invariant,
+ * not a guest payload.
  */
 export function mergeHomeUpcoming(
   canonical: HomeEvent[],
@@ -465,7 +469,23 @@ export function mergeHomeUpcoming(
       (t.endsAt === null || (Number.isFinite(t.endsAt.getTime()) && t.endsAt >= now)),
   );
   const rows: HomeUpcomingRow[] = [
-    ...canonical.map((e): HomeUpcomingRow => ({ ...e, source: "canonical" as const })),
+    ...canonical.map(
+      (e): HomeUpcomingRow => ({
+        source: "canonical",
+        eventKey: e.eventKey,
+        title: e.title,
+        startsAt: e.startsAt,
+        timezone: e.timezone,
+        location: e.location,
+        goingCount: e.goingCount,
+        goingOccupancy: e.goingOccupancy,
+        capacity: e.capacity,
+        game: e.game,
+        organizer_name: e.organizer_name,
+        endsAt: e.endsAt,
+        rsvpOpen: e.rsvpOpen,
+      }),
+    ),
     ...eligible.map(
       (t): HomeUpcomingRow => ({
         source: "discord" as const,
@@ -870,6 +890,8 @@ export interface EventSeriesContext {
   hosts: string[];
   previous: EventLink | null;
   next: EventLink | null;
+  /** Earliest future published sibling at the requested render instant. */
+  upcoming?: EventLink | null;
 }
 
 /** The series-membership slice of the loaded row the context read keys on. */
@@ -893,6 +915,7 @@ export const SERIES_CONTEXT_MAX_TEXT_BYTES = 4096;
 export async function getEventSeriesContext(
   db: Db,
   event: SeriesEventRef,
+  now?: Date,
 ): Promise<EventSeriesContext | null> {
   // Standalone fast path: no series pointer, rule, or index means no run to
   // read, so the detail skips the query entirely (zero reads, not one empty).
@@ -924,6 +947,7 @@ export async function getEventSeriesContext(
         game: sql<string | null>`case when ${textFits} then ${events.game} end`,
         organizer_name: sql<string | null>`case when ${textFits} then ${events.organizer_name} end`,
         recurrenceIndex: events.recurrenceIndex,
+        ...(now ? { status: events.status } : {}),
         textFits,
       })
       .from(events)
@@ -993,7 +1017,12 @@ export async function getEventSeriesContext(
     seen.add(name);
     hosts.push(name);
   }
-  return { hosts, previous, next };
+  if (!now) return { hosts, previous, next };
+  const upcoming = run
+    .filter((row) => row.id !== event.id && row.status === "published" && row.startsAt > now)
+    .filter(isRenderableEventWindow)
+    .sort((a, b) => +a.startsAt - +b.startsAt)[0];
+  return { hosts, previous, next, upcoming: upcoming ? toLink(upcoming) : null };
 }
 
 /** Viewer answer for the RSVP island (TOG-9839 slice 2): the caller's own row

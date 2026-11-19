@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
+
+import { ENTRY_NAME } from "../web/scripts/kit-facade-transaction.mjs";
+import { kitRouteFlagsForFamily } from "./kit-route-flags.mjs";
+import { readWranglerConfig } from "./wrangler-config.mjs";
 
 // Executed CLI contract for the production trigger drift probe: the header
 // and both runbooks define the probe entirely by its exit codes (0 clean,
@@ -18,6 +22,54 @@ const SYNC = "two-web-next-production-sync-event";
 const INTERNAL = "two-web-next-production-internal-action";
 const WEB_SCRIPT = "two-web-next-production";
 const JOBS_SCRIPT = "two-web-jobs-production";
+
+const readConfig = (path) =>
+  readWranglerConfig(readFileSync(new URL(path, import.meta.url), "utf8"));
+
+test("inert Kit production config mirrors the production web Worker without deploy topology", () => {
+  const root = readConfig("../wrangler.jsonc");
+  const production = root.env.production;
+  const { vars: _vars, ...kit } = readConfig("../web/wrangler.production.jsonc");
+  const adapterOutput = ".svelte-kit/cloudflare";
+
+  // Exact shape: no routes, named preview environment, consumers or extra bindings.
+  assert.deepEqual(kit, {
+    $schema: root.$schema,
+    name: production.name,
+    main: `${adapterOutput}/${ENTRY_NAME}`,
+    compatibility_date: production.compatibility_date ?? root.compatibility_date,
+    compatibility_flags: production.compatibility_flags ?? root.compatibility_flags,
+    observability: production.observability ?? root.observability,
+    workers_dev: false,
+    preview_urls: false,
+    placement: production.placement,
+    tail_consumers: production.tail_consumers,
+    version_metadata: production.version_metadata,
+    keep_vars: production.keep_vars ?? root.keep_vars,
+    triggers: { crons: [] },
+    queues: { producers: production.queues.producers },
+    assets: { ...(production.assets ?? root.assets), directory: adapterOutput },
+    hyperdrive: production.hyperdrive,
+  });
+  assert.equal(kit.name, WEB_SCRIPT);
+});
+
+test("inert Kit production vars allow only reviewed public values and disabled route flags", () => {
+  const { vars } = readConfig("../wrangler.jsonc").env.production;
+  const publicKeys = [
+    "APP_URL",
+    "FEATURED_IMAGE_HOSTS",
+    "DISCORD_CLIENT_ID",
+    "DISCORD_GUILD_ID",
+    "DISCORD_MODERATOR_ROLE_IDS",
+    "DISCORD_INVITE_URL",
+  ];
+  const flagKeys = Object.keys(kitRouteFlagsForFamily("hono"));
+  assert.deepEqual(readConfig("../web/wrangler.production.jsonc").vars, {
+    ...Object.fromEntries(publicKeys.map((key) => [key, vars[key]])),
+    ...Object.fromEntries(flagKeys.map((key) => [`KIT_ROUTE_${key.toUpperCase()}`, "false"])),
+  });
+});
 
 const schedules = (key) => `/workers/scripts/${key}/schedules`;
 const crons = (...entries) => ({

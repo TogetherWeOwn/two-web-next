@@ -1,4 +1,7 @@
-import { deriveCalendarScreenState } from "../../../../src/events/calendar-screen-state";
+import {
+  calendarDiscordReadMarker,
+  deriveCalendarScreenState,
+} from "../../../../src/events/calendar-screen-state";
 import { effectiveZone } from "../../../../src/events/date-format";
 import {
   type CalRow,
@@ -65,6 +68,7 @@ export function projectEventsCalendar(data: KitEventsLoadData) {
     totalPages: data.totalPages,
     emptyState: data.emptyState,
     discordFailed: data.discordFailed,
+    discordRead: calendarDiscordReadMarker(data.discordSnapshotAt, data.discordFailed),
     inviteUrl: data.inviteUrl,
     member: data.member,
     loginReturnTo: data.loginReturnTo,

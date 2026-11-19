@@ -1881,11 +1881,61 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     const enhancedCard = enhancedPage.getByTestId("kit-seat-card");
     const lineup = enhancedPage.getByTestId("event-going-count");
     const spots = enhancedPage.getByTestId("event-spots-left");
-    await expect(enhancedCard.getByRole("heading", { name: "1 of 2 in" })).toBeVisible();
+    const initialSeat = enhancedCard.getByText("1 of 2 in", { exact: true });
+    const going = lineup.locator("[data-count]");
+    await expect(initialSeat).toBeVisible();
     await expect(lineup).toBeHidden();
     await enhancedCard.getByRole("button", { name: "I'm in" }).click();
     await expect(enhancedCard.getByTestId("rsvp-confirmed")).toBeVisible();
+    await expect(lineup).toBeVisible();
+    await expect(going).toHaveText("1 of 2 going");
+    await expect(initialSeat).toBeHidden();
     await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    await expect(spots).toBeVisible();
+    await expect(spots).toHaveText("Full");
+
+    // Keep the same Kit mount across a finite → unlimited → finite edit.
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = null where event_key = ${openKey}`;
+    });
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(going).toHaveText("0 going");
+    await expect(spots).toBeHidden();
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = 3 where event_key = ${openKey}`;
+    });
+    await enhancedCard.getByRole("button", { name: "I'm in" }).click();
+    await expect(going).toHaveText("1 of 3 going");
+    await expect(spots).toBeVisible();
+    await expect(spots).toHaveText("1 of 3 spots left");
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(going).toHaveText("0 of 3 going");
+
+    // Start the failed-first-read journey from a fresh snapshot.
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = 2 where event_key = ${openKey}`;
+    });
+    await enhancedPage.goto(`/e/${openKey}`);
+    await expect(initialSeat).toBeVisible();
+    await expect(lineup).toBeHidden();
+    // Fail the first count read only; RSVP and the manual retry hit the real fixture.
+    await enhancedPage.route(
+      `${target.origin}/events.json?event_key=${openKey}`,
+      (route) => route.fulfill({ status: 503 }),
+      { times: 1 },
+    );
+    await enhancedCard.getByRole("button", { name: "I'm in" }).click();
+    await expect(enhancedCard.getByTestId("rsvp-confirmed")).toBeVisible();
+    await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    const stale = lineup.getByTestId("event-going-count-stale");
+    await expect(stale).toBeVisible();
+    await expect(stale).toContainText(
+      "Going count could not refresh. Showing the last saved count.",
+    );
+    const retry = stale.getByRole("button", { name: "Try again" });
+    await expect(retry).toBeVisible();
+    await retry.click();
+    await expect(stale).toHaveCount(0);
     await expect(lineup.locator("[data-count]")).toHaveText("1 of 2 going");
     await expect(spots).toBeVisible();
     await expect(spots).toHaveText("Full");
@@ -1900,6 +1950,8 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
     await expect(enhancedCard.getByRole("heading", { name: "1 of 2 in" })).toHaveCount(0);
 
+    // The enhanced navigations rotated the shared fixture session.
+    await context.addCookies(await enhanced.cookies());
     const post = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
@@ -2257,6 +2309,278 @@ test("kit: archive search and keyboard focus evidence", async ({ browser }) => {
     }
   } finally {
     await context.close();
+  }
+});
+
+test("Kit member event detail captures the ended record at both widths", async ({ browser }) => {
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const target = targets.find((item) => item.name === "kit")!;
+  const adjacentKey = "01J00000000000000000000993";
+  const endedKey = "01J00000000000000000000994";
+  const nextKey = "01J00000000000000000000995";
+  const laterKey = "01J00000000000000000000996";
+  const historicalKey = "01J00000000000000000000997";
+  const unreadableKey = "01J00000000000000000000998";
+  const userId = "900000000000000848";
+  const bearer = `two_${randomBytes(32).toString("base64url")}`;
+  const hash = createHash("sha256").update(bearer).digest("hex");
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
+  const now = Date.now();
+  const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into users (id, username, member) values (${userId}, 'Seat fixture', true)`;
+      await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+        values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(now + 7_200_000)})`;
+      for (const event of [
+        { key: adjacentKey, start: now - 3_600_000, end: now + 3_600_000 },
+        { key: endedKey, start: Date.UTC(2026, 0, 2, 4), end: Date.UTC(2026, 0, 2, 6) },
+      ]) {
+        await sql`insert into events (event_key, title, description, starts_at, ends_at, timezone, location, status, rsvp_open)
+          values (${event.key}, 'Community game night', 'Bring a favourite game and meet the community.',
+            ${new Date(event.start)}, ${new Date(event.end)}, 'America/New_York', 'Community voice', 'published', true)`;
+      }
+      await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 6, recurrence_index = 1
+        where event_key = ${endedKey}`;
+      await sql`update events set parent_event_id = (select id from events where event_key = ${endedKey}),
+        recurrence_index = 2 where event_key = ${adjacentKey}`;
+      for (const sibling of [
+        { key: laterKey, days: 14, status: "published", index: 3 },
+        { key: nextKey, days: 7, status: "published", index: 4 },
+        { key: historicalKey, days: 1, status: "past", index: 5 },
+      ]) {
+        const startsAt = now + sibling.days * 86_400_000;
+        await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
+          select ${sibling.key}, title, ${new Date(startsAt)}, ${new Date(startsAt + 7_200_000)},
+            ${sibling.status}, id, ${sibling.index} from events where event_key = ${endedKey}`;
+      }
+      await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
+        select ${unreadableKey}, title, ${new Date(now + 172_800_000)}, 'infinity'::timestamptz,
+          'published', id, 6 from events where event_key = ${endedKey}`;
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, ${userId}, 'going' from events where event_key = ${endedKey}`;
+    });
+    await context.addCookies([
+      {
+        name: "__Host-two_session",
+        value: `${bearer}.${signature}`,
+        domain: new URL(target.origin).hostname,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    ]);
+    const page = await context.newPage();
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
+      const response = await page.goto(`/e/${endedKey}`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      const time = page.getByTestId("kit-event-time");
+      const record = page.getByRole("region", { name: "Sign-up record" });
+      await expect(page.getByText("Sign out", { exact: true })).toBeVisible();
+      await expect(page.getByRole("complementary", { name: "Your seat", exact: true })).toHaveCount(
+        0,
+      );
+      await expect(page.getByTestId("event-ongoing")).toHaveCount(0);
+      await expect(time.locator('time[datetime="2026-01-02T06:00:00.000Z"]')).toHaveText(
+        "2 Jan 2026, 01:00",
+      );
+      await expect(page.getByTestId("event-series-next")).toHaveAttribute(
+        "href",
+        `/e/${adjacentKey}`,
+      );
+      await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
+      await expect(record).toContainText("No Echo for this one. 1 signed up.");
+      await expect(record.getByRole("link", { name: /^Next one:/ })).toHaveAttribute(
+        "href",
+        `/e/${nextKey}`,
+      );
+      if (width === 390) {
+        await expect(
+          page.locator(
+            ".event-layout-head:has(> [data-testid=kit-event-time]:last-child) + .event-layout-rail > [aria-labelledby=signup-record-heading]:first-child",
+          ),
+        ).toHaveCount(1);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      const name = `kit-review-event-ended-${width}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    }
+  } finally {
+    await context.close();
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key in (${adjacentKey}, ${endedKey}, ${nextKey}, ${laterKey}, ${historicalKey}, ${unreadableKey})`;
+      await sql`delete from web_session_grace where user_id = ${userId}`;
+      await sql`delete from web_sessions where user_id = ${userId}`;
+      await sql`delete from users where id = ${userId}`;
+    });
+  }
+});
+
+test("Kit saved live snapshot expires without changing the RSVP", async ({ browser }) => {
+  test.setTimeout(60_000);
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const target = targets.find((item) => item.name === "kit")!;
+  const key = "01J00000000000000000000989";
+  const userId = "900000000000000843";
+  const bearer = `two_${randomBytes(32).toString("base64url")}`;
+  const hash = createHash("sha256").update(bearer).digest("hex");
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
+  const now = Date.now();
+  const end = new Date(now + 3_600_000);
+  const path = `/e/${key}?attendees=1`;
+  const plain = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  const enhanced = await browser.newContext({ baseURL: target.origin });
+  async function assertMobileSeatOrder(page: Page) {
+    const time = page.locator(".event-layout-head > [data-testid=kit-event-time]:last-child");
+    const seat = page.locator(
+      ".event-layout-head:has(> [data-testid=kit-event-time]:last-child) + .event-layout-rail > [data-testid=kit-seat-card]:first-child",
+    );
+    await expect(seat).toBeVisible();
+    const [block, card] = await Promise.all([time.boundingBox(), seat.boundingBox()]);
+    expect(card!.y).toBeGreaterThanOrEqual(block!.y + block!.height);
+  }
+  async function capture(page: Page, name: string) {
+    const size = page.viewportSize()?.width === 390 ? "40px" : "89.6px";
+    await expect(page.locator(".live-time .time-block > time")).toHaveCSS("font-size", size);
+    const screenshot = test.info().outputPath(`${name}.png`);
+    await page.screenshot({ path: screenshot, animations: "disabled", caret: "hide" });
+    await test.info().attach(name, { path: screenshot, contentType: "image/png" });
+  }
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into users (id, username, member) values (${userId}, 'Seat fixture', true)`;
+      await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+        values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(now + 7_200_000)})`;
+      await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, rsvp_open)
+        values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
+          ${new Date(now - 3_600_000)}, ${end}, 'Community voice', 'published', true)`;
+    });
+    const noJs = await plain.newPage();
+    const guest = await noJs.goto(path);
+    expect(guest?.headers()["x-two-renderer"]).toBe("kit");
+    expect(guest?.headers()["cache-control"]).toBe("private, no-store");
+    await plain.addCookies([
+      {
+        name: "__Host-two_session",
+        value: `${bearer}.${signature}`,
+        domain: new URL(target.origin).hostname,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    ]);
+    for (const { size: viewport } of PARITY_VIEWPORTS) {
+      await noJs.setViewportSize(viewport);
+      expect((await noJs.goto(path))?.headers()["x-two-renderer"]).toBe("kit");
+      if (viewport.width === 390) await assertMobileSeatOrder(noJs);
+      const rsvp = noJs.getByRole("button", { name: "I'm in", exact: true });
+      await expect(rsvp).toBeEnabled();
+      await rsvp.scrollIntoViewIfNeeded();
+      const ends = noJs.locator("p:visible", { hasText: /^Ends / }).last();
+      await expect(ends.locator("time")).toHaveAttribute("datetime", end.toISOString());
+      await expect(ends).toBeInViewport();
+      const ordered = await ends.evaluate((line) => {
+        const button = document.querySelector('[data-testid="rsvp-going"]')!;
+        const follows = line.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING;
+        return (
+          Boolean(follows) &&
+          line.getBoundingClientRect().bottom <= button.getBoundingClientRect().top
+        );
+      });
+      expect(ordered, "the end precedes the RSVP in DOM and visual order").toBe(true);
+      await capture(noJs, `kit-review-event-live-open-${viewport.width}`);
+    }
+    await withSessionDb(async (sql) => {
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, ${userId}, 'going' from events where event_key = ${key}`;
+    });
+    await noJs.reload();
+    await expect(noJs.getByTestId("rsvp-syncing")).toBeVisible();
+    await withSessionDb(async (sql) => {
+      await sql`update rsvps set synced_to_discord_at = ${new Date(now)} where user_id = ${userId}`;
+    });
+    for (const { size: viewport } of PARITY_VIEWPORTS) {
+      await noJs.setViewportSize(viewport);
+      const response = await noJs.reload();
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      expect(response?.headers()["cache-control"]).toBe("private, no-store");
+      if (viewport.width === 390) await assertMobileSeatOrder(noJs);
+      const time = noJs.getByTestId("kit-event-time").locator('> .time-block[data-state="live"]');
+      const seat = noJs.getByTestId("kit-seat-card");
+      await expect(noJs.getByTestId("event-ongoing")).toHaveText("Live");
+      await expect(time.locator("[data-live-fresh]:visible").last()).toHaveText("as of");
+      await expect(time.locator("time").last()).toHaveAttribute("datetime", end.toISOString());
+      await expect(seat.getByRole("heading", { name: "You're in." })).toBeVisible();
+      await expect(seat.getByTestId("rsvp-synced")).toHaveText("Synced to Discord.");
+      await expect(seat.getByRole("button").or(seat.getByRole("link"))).toHaveCount(0);
+      await expect(noJs.getByRole("complementary", { name: /^Your seat$/ })).toHaveCount(0);
+      await expect(noJs.getByRole("link", { name: "Refresh the event time" })).toHaveCount(0);
+      await capture(noJs, `kit-review-event-live-${viewport.width}`);
+    }
+    await enhanced.addCookies(await plain.cookies());
+    const page = await enhanced.newPage();
+    await page.goto(`${path}#snapshot`);
+    const live = page.getByTestId("event-ongoing");
+    await expect(live).toBeVisible();
+    const deadline = Date.parse(
+      (await page.locator("#kit-live-snapshot").getAttribute("data-stale-at"))!,
+    );
+    await page.bringToFront();
+    const hidden = await live.evaluate((tag, ms) => {
+      // Sample both sides in one browser task so the real timer cannot win the race.
+      Date.now = () => ms - 1;
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+      const before = tag.hasAttribute("hidden");
+      Date.now = () => ms;
+      document.dispatchEvent(new Event("visibilitychange"));
+      return [before, tag.hasAttribute("hidden")];
+    }, deadline);
+    expect(hidden).toEqual([false, true]);
+    await expect(page.locator("[data-live-fresh]:visible")).toHaveCount(0);
+    await expect(page.getByText("Stale", { exact: true })).toHaveCount(2);
+    await expect(page.getByRole("link", { name: "Refresh the event time" })).toHaveAttribute(
+      "href",
+      `${target.origin}${path}`,
+    );
+    await expect(page.getByTestId("rsvp-synced")).toBeVisible();
+    await expect(page.getByTestId("kit-event-time").getByText("live as of")).toBeVisible();
+    for (const { size: viewport } of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport);
+      await capture(page, `kit-review-event-stale-${viewport.width}`);
+    }
+    const refreshed = page.waitForResponse(
+      (response) =>
+        response.url() === `${target.origin}${path}` && response.request().isNavigationRequest(),
+    );
+    await page.getByRole("link", { name: "Refresh the event time" }).click();
+    expect((await refreshed).headers()["cache-control"]).toBe("private, no-store");
+    await expect(live).toBeVisible();
+    await page.getByTestId("event-device-timezone-ends-button").click();
+    await expect(page.getByTestId("event-device-timezone-ends-status")).not.toBeEmpty();
+    await page.addInitScript(() => {
+      Date.now = () => 1;
+    });
+    await page.reload();
+    await expect(live).toBeHidden();
+    await expect(page.getByRole("link", { name: "Refresh the event time" })).toBeVisible();
+    await expect(page.getByTestId("rsvp-synced")).toBeVisible();
+  } finally {
+    await Promise.all([plain.close(), enhanced.close()]);
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key = ${key}`;
+      await sql`delete from web_session_grace where user_id = ${userId}`;
+      await sql`delete from web_sessions where user_id = ${userId}`;
+      await sql`delete from users where id = ${userId}`;
+    });
   }
 });
 

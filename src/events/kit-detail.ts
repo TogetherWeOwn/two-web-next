@@ -17,6 +17,7 @@
 // read, draft stays forbidden without the moderator bit, an indeterminate
 // session is unavailable (never a false logout, never a guest render of
 // member state), and every database failure is a 503 before bytes.
+import { timeStaleAt } from "../../lib/time-freshness-clock";
 import { dbFor } from "../admin/db";
 import { savedEventReview } from "../admin/event-saved-review";
 import {
@@ -70,7 +71,6 @@ import {
   type EventNeighbors,
   type EventSeriesContext,
   type PublicEvent,
-  type SeriesEventRef,
   type ViewerRsvp,
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
@@ -89,7 +89,7 @@ export interface KitEventDetailStore {
   /** Series run read. Optional so existing fakes keep compiling: the resolver
    * falls back to the shared read, which skips standalone events with zero
    * queries and fails open everywhere else. */
-  seriesFn?: (db: Db, event: SeriesEventRef) => Promise<EventSeriesContext | null>;
+  seriesFn?: typeof getEventSeriesContext;
   /** Bounded attendee window for one native page: the page plus the first row
    * of the next page (lookahead, never rendered) that powers Next. */
   attendeesFn: (db: Db, eventId: number, page: number) => Promise<EventAttendee[]>;
@@ -199,9 +199,11 @@ export interface KitEventDetailModel {
   isDraft: boolean;
   isPast: boolean;
   /** Server snapshot at the render instant (`isOngoing`): the "Happening now"
-   * hero badge. Never a client clock; RSVP verdicts are unaffected. Optional
+   * interval. Never a client clock; RSVP verdicts are unaffected. Optional
    * so a pre-existing fixture without the flag reads as not ongoing. */
   isOngoing?: boolean;
+  lifecycle: { date: string; endTime: string; next: { key: string; date: string } | null } | null;
+  liveTime?: { asOf: string; staleAt: string };
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
@@ -343,7 +345,7 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
     getReviewEventFn: (db, key) => getEventForModeratorReview(db, key),
     neighborsFn: getEventNeighbors,
     relatedFn: listRelatedEvents,
-    seriesFn: (db, event) => getEventSeriesContext(db, event),
+    seriesFn: (db, event, now) => getEventSeriesContext(db, event, now),
     attendeesFn: async (db, eventId, page) => {
       // Same bounded window as the served handler: the requested page plus
       // the first row of the next page (lookahead, never rendered) that
@@ -382,6 +384,46 @@ function toLink(link: EventLink, now: Date): KitEventDetailLink {
     game: link.game || null,
     availability: eventLinkAvailability(link, now),
   };
+}
+
+function detailLifecycle(
+  event: PublicEvent,
+  timeZone: string,
+  next: EventLink | null | undefined,
+): KitEventDetailModel["lifecycle"] {
+  if (!instantIso(event.startsAt) || !instantIso(event.endsAt)) return null;
+  const date = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  const clock = new Intl.DateTimeFormat("en-GB", { timeZone, timeStyle: "short" });
+  const startDate = date.format(event.startsAt);
+  const endDate = date.format(event.endsAt);
+  const endTime = clock.format(event.endsAt);
+  return {
+    date: startDate,
+    endTime: startDate === endDate ? endTime : `${endDate}, ${endTime}`,
+    next: next
+      ? {
+          key: next.eventKey,
+          date: new Intl.DateTimeFormat("en-GB", {
+            timeZone: isValidZone(next.timezone) ? next.timezone : "UTC",
+            weekday: "short",
+            day: "numeric",
+            month: "short",
+          }).format(next.startsAt),
+        }
+      : null,
+  };
+}
+
+function liveDetailTime(event: PublicEvent, now: Date): KitEventDetailModel["liveTime"] {
+  if (!isOngoing(event, now)) return undefined;
+  const staleAt = timeStaleAt("live", +now, +event.startsAt, +event.endsAt);
+  if (staleAt === null || !Number.isFinite(staleAt)) return undefined;
+  return { asOf: now.toISOString(), staleAt: new Date(staleAt).toISOString() };
 }
 
 // A code bug (no branded status) must never look like a downstream outage:
@@ -532,8 +574,12 @@ export async function resolveKitEventDetail(
         (related) => related,
         (): EventLink[] => [],
       );
-      const seriesSettled = (
-        store.seriesFn ? store.seriesFn(db, event) : getEventSeriesContext(db, event)
+      const ended =
+        (event.status === "past" || event.status === "published") && event.endsAt <= now;
+      const seriesSettled = (store.seriesFn ?? getEventSeriesContext)(
+        db,
+        event,
+        ended ? now : undefined,
       ).then(
         (series) => series,
         (): EventSeriesContext | null => null,
@@ -588,6 +634,8 @@ export async function resolveKitEventDetail(
       const pagePath = `/e/${event.eventKey}`;
       const pageCanonical = canonicalUrl(appUrl, pagePath);
       const review = wantsReview ? savedEventReview(event, now, search) : null;
+      const zoneLabel = isValidZone(event.timezone) ? event.timezone : "UTC";
+      const liveTime = liveDetailTime(event, now);
       const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
@@ -631,7 +679,9 @@ export async function resolveKitEventDetail(
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
-          isOngoing: isOngoing(event, now),
+          isOngoing: Boolean(liveTime),
+          lifecycle: ended ? detailLifecycle(event, zoneLabel, series?.upcoming) : null,
+          ...(liveTime ? { liveTime } : {}),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,
@@ -663,7 +713,7 @@ export async function resolveKitEventDetail(
           whenText: formatDetailWhen(event.startsAt, event.timezone),
           endsWhenText: formatDetailWhen(event.endsAt, event.timezone),
           durationText: formatElapsedDuration(event.endsAt.getTime() - event.startsAt.getTime()),
-          zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
+          zoneLabel,
           timeDatetime: instantIso(event.startsAt),
           attendees,
           attendeesPaging,
