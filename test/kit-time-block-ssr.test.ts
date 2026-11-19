@@ -68,9 +68,8 @@ describe("TimeBlock server output", () => {
       const html = render(props);
       const anchor = html.match(/<div class="(?:[^"]*\s)?anchor(?:\s[^"]*)?">([\s\S]*?)<\/div>/);
       expect(anchor).not.toBeNull();
-      const text = (anchor?.[1] ?? "")
-        .replace(/<!--[\s\S]*?-->/g, "")
-        .replace(/<[^>]*>/g, "")
+      const text = Array.from(`>${anchor?.[1] ?? ""}`.matchAll(/(?<=>)[^<]+/g), (match) => match[0])
+        .join("")
         .replace(/&nbsp;|&#160;|&#x0*a0;/gi, " ");
       expect(text).toContain(expected);
       expect(text).not.toMatch(/\s ·/);
