@@ -56,7 +56,7 @@ function fixture() {
         run: 0,
         kind: "audited",
         audit: "reviewed fixture",
-        writes: ["file:generated/output.json", "env:APP_ORIGIN"],
+        writes: ["file:generated/output.json"],
         inputs: [pin("prepare.mjs"), pin("prepare-helper.mjs")],
       },
       {
@@ -123,6 +123,29 @@ test("rejects matching records that fail occurrence, install, or resolution cons
     mutate(record.context);
     assert.throws(() => validate(record), error);
   }
+});
+
+test("binds literal config selections to the pinned file", () => {
+  const record = fixture();
+  const { loader } = record.context;
+  loader.argv = ["test", "--config", `./${loader.config}`];
+  validate(record);
+  for (const args of [["--config", "other.config.ts"], ["--config"], ["-cother.config.ts"]]) {
+    loader.argv = ["test", ...args];
+    assert.throws(() => validate(record), /invalid loader evidence/);
+  }
+});
+
+test("requires script edges to share the pinned install manifest", () => {
+  const record = fixture();
+  const outer = { root: ".", script: "outer", offset: 0 };
+  record.identity.edges.unshift(outer);
+  validate(record);
+  record.context.install.inputs.splice(1, 1);
+  assert.throws(() => validate(record), /missing install manifest/);
+  record.context.install.inputs.push(pin("package.json"));
+  outer.root = "other";
+  assert.throws(() => validate(record), /invalid install evidence/);
 });
 
 test("matches every occurrence once, including repeated script paths", () => {
@@ -320,9 +343,10 @@ test("rejects malformed edge positions and write arrays on either side", () => {
   }
 });
 
-test("checks matching effects for install order, checkout identity, and protected writes", () => {
+test("checks matching effects for install order, supported kinds, and protected writes", () => {
   for (const [mutate, error] of [
     [(c) => c.effects.pop(), /missing install effect/],
+    [(c) => (c.effects[0].kind = "checkout"), /invalid effects/],
     [(c) => c.effects.reverse(), /invalid effects/],
     [(c) => (c.effects[0].site = c.effects[1].site), /invalid effects/],
     [(c) => (c.effects[1].run = 1), /invalid install effect/],
@@ -334,10 +358,12 @@ test("checks matching effects for install order, checkout identity, and protecte
     assert.throws(() => validate(record), error);
   }
   for (const write of [
+    "env:APP_ORIGIN",
     "env:PATH",
     "env:NODE_OPTIONS",
     "env:npm_config_ignore_scripts",
     "file:.npmrc",
+    "file:package.json",
     "file:playwright.config.js",
     "file:node_modules/example",
     "file:prepare-helper.mjs",
@@ -347,15 +373,6 @@ test("checks matching effects for install order, checkout identity, and protecte
     record.context.effects[0].writes.push(write);
     assert.throws(() => validate(record), /invalid effect write/);
   }
-  const record = fixture();
-  const checkout = Object.assign(record.context.effects[0], {
-    kind: "checkout",
-    writes: ["checkout"],
-    checkout: record.context.install.checkout,
-  });
-  validate(record);
-  checkout.checkout = "another-checkout";
-  assert.throws(() => validate(record), /invalid checkout effect/);
 });
 
 test("protects an absent npm config from preceding writes", () => {

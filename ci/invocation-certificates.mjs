@@ -104,6 +104,20 @@ function frozenArgv(argv) {
   );
 }
 
+// Admit only positional filters and a single literal long-form config file.
+function configMatches({ argv, cwd, config }) {
+  let selected = false;
+  for (let i = 1; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg.startsWith("-")) continue;
+    if (selected || arg !== "--config") return false;
+    const path = argv[++i]?.replace(/^\.\//, "");
+    if (!repoPath(path) || path.startsWith("-") || under(cwd, path) !== config) return false;
+    selected = true;
+  }
+  return true;
+}
+
 function validateContext(reviewed, observed, terminal) {
   if (!reviewed || !observed) fail("missing context");
   samePins(reviewed.templateInputs, observed.templateInputs, "template");
@@ -123,7 +137,7 @@ function validateContext(reviewed, observed, terminal) {
     install.step !== expectedInstall.step ||
     install.run !== expectedInstall.run ||
     !(install.root === "." || repoPath(install.root)) ||
-    (terminal.edges.length > 0 && terminal.edges.at(-1).root !== install.root) ||
+    terminal.edges.some((edge) => edge.root !== install.root) ||
     !text(install.checkout) ||
     install.root !== expectedInstall.root ||
     install.checkout !== expectedInstall.checkout ||
@@ -184,7 +198,7 @@ function validateContext(reviewed, observed, terminal) {
     !stringArgv(loader.argv) ||
     !stringArgv(expectedLoader.argv) ||
     loader.argv[0] !== "test" ||
-    loader.argv.some((arg) => /^--(?:tsconfig|loader|import|require)(?:=|$)/.test(arg)) ||
+    !configMatches(loader) ||
     JSON.stringify(loader.argv) !== JSON.stringify(expectedLoader.argv) ||
     loader.nodeOptions !== expectedLoader.nodeOptions ||
     [loader, expectedLoader].some(
@@ -249,10 +263,7 @@ function validateEffects(reviewed, observed, terminal) {
     ...loader.resolutionPaths,
   ];
   const related = (a, b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
-  const reservedEnv =
-    /^(?:PATH|HOME|USERPROFILE|ENV|SHELL|IFS|PS[0-9]|PROMPT_COMMAND|(?:GITHUB|RUNNER|NODE|NPM|TSX|TS_NODE|PLAYWRIGHT|LD|DYLD|BASH|ZSH|XDG)_.*)$/;
   const sites = new Set();
-  let checkouts = 0;
   let installs = 0;
   let previous = null;
   for (let i = 0; i < reviewed.effects.length; i++) {
@@ -272,7 +283,7 @@ function validateEffects(reviewed, observed, terminal) {
       expected.run !== effect.run ||
       !before(effect, terminal) ||
       (previous && !before(previous, effect)) ||
-      !["audited", "checkout", "install"].includes(expected.kind) ||
+      !["audited", "install"].includes(expected.kind) ||
       expected.kind !== effect.kind ||
       !text(expected.audit) ||
       effect.audit !== expected.audit ||
@@ -286,17 +297,7 @@ function validateEffects(reviewed, observed, terminal) {
     }
     sites.add(effect.site);
     previous = effect;
-    if (effect.kind === "checkout") {
-      if (
-        ++checkouts > 1 ||
-        !before(effect, install) ||
-        effect.checkout !== install.checkout ||
-        expected.checkout !== effect.checkout ||
-        effect.writes.join() !== "checkout"
-      ) {
-        fail("invalid checkout effect");
-      }
-    } else if (effect.kind === "install") {
+    if (effect.kind === "install") {
       if (
         ++installs > 1 ||
         effect.step !== install.step ||
@@ -308,12 +309,7 @@ function validateEffects(reviewed, observed, terminal) {
     } else {
       for (const write of effect.writes) {
         const file = write.startsWith("file:") ? write.slice(5) : null;
-        const env = write.startsWith("env:") ? write.slice(4) : null;
-        if (
-          !(file !== null ? repoPath(file) : /^[A-Za-z_][A-Za-z0-9_]*$/.test(env ?? "")) ||
-          (file !== null && protectedPaths.some((path) => related(file, path))) ||
-          (env !== null && reservedEnv.test(env.toUpperCase()))
-        ) {
+        if (!repoPath(file) || protectedPaths.some((path) => related(file, path))) {
           fail("invalid effect write");
         }
       }
@@ -326,7 +322,8 @@ function validateEffects(reviewed, observed, terminal) {
 // The caller must independently derive effective settings, the complete prefix
 // and its writes, and the canonical resolution closure (including absent
 // candidates in resolutionPaths). Effects must have distinct (step, run)
-// positions strictly before the terminal; site labels do not establish order.
+// positions strictly before the terminal; checkout and env writes are unsupported.
+// Edges share the pinned install manifest. Config file resolution stays caller-owned.
 // Only package-lock.json is supported: the caller must verify the absence of
 // the higher-priority npm-shrinkwrap.json at the install root.
 // This checks a reviewed static contract; install.outcome is the required
