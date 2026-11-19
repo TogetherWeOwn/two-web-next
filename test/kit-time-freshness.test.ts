@@ -25,9 +25,7 @@ beforeAll(async () => {
   try {
     const outfile = join(scratch, "watcher.mjs");
     await build({
-      entryPoints: [
-        fileURLToPath(new URL("../web/src/lib/time-freshness.ts", import.meta.url).href),
-      ],
+      entryPoints: [fileURLToPath(new URL("../lib/time-freshness.ts", import.meta.url).href)],
       bundle: true,
       platform: "node",
       format: "esm",
