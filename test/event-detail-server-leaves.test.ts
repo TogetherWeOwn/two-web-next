@@ -4,7 +4,7 @@ import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { EventMetadata, EventShare, withEventDetailHtml } from "../src/events/detail-leaves";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
-import { kitSeatActionBar } from "../src/events/kit-seat-actions";
+import { kitOpenSeat } from "../src/events/kit-seat-actions";
 import { ATTENDEE_PAGE_SIZE, type PublicEvent } from "../src/events/reads";
 import type { KitSession } from "../src/kit-session";
 
@@ -230,10 +230,10 @@ describe("shared event detail server leaves", () => {
     // The open-seat card owns the initial count; the lineup can still refresh.
     expect(forcedOpen.detailHtml.metadata).toContain('data-seat-refresh="initial"');
     expect(forcedOpen.detailHtml.metadata).toContain('data-testid="event-spots-left"');
-    expect(kitSeatActionBar(forcedOpen)).toMatchObject({ state: "open", title: "0 of 10 in" });
+    expect(kitOpenSeat(forcedOpen)).toBe("0 of 10 in");
   });
 
-  it("projects open-seat copy and the native action from the same RSVP snapshot", async () => {
+  it("projects open-seat copy and refresh markup from the same RSVP snapshot", async () => {
     const { model } = await resolve(
       {
         startsAt: new Date("2030-01-10T21:00:00Z"),
@@ -243,27 +243,20 @@ describe("shared event detail server leaves", () => {
       member,
       "?attendees=2",
     );
-    expect(kitSeatActionBar(model)).toEqual({
-      state: "open",
-      title: "2 of 10 in",
-      detail: "Sign-ups open",
-      action: `/e/${KEY}/rsvp?attendees=2`,
-    });
+    expect(kitOpenSeat(model)).toBe("2 of 10 in");
     expect(model.detailHtml.rsvp).toContain(`/e/${KEY}/rsvp?attendees=2`);
     expect(model.detailHtml.metadata).toContain('data-seat-refresh="initial"');
     expect(model.detailHtml.metadata).toContain("data-spots>8 of 10 spots left</span>");
-    expect(kitSeatActionBar({ ...model, capacity: null })?.title).toBe("1 going");
-    expect(kitSeatActionBar({ ...model, goingOccupancy: 10 })).toBeNull();
-    expect(kitSeatActionBar({ ...model, rsvpOpen: false })).toBeNull();
-    expect(kitSeatActionBar({ ...model, isOngoing: true })).toBeNull();
-    expect(kitSeatActionBar({ ...model, rsvpClosed: "past" })).toBeNull();
-    expect(kitSeatActionBar({ ...model, status: "cancelled" })).toBeNull();
+    expect(kitOpenSeat({ ...model, capacity: null })).toBe("1 going");
+    expect(kitOpenSeat({ ...model, goingOccupancy: 10 })).toBeNull();
+    expect(kitOpenSeat({ ...model, rsvpOpen: false })).toBeNull();
+    expect(kitOpenSeat({ ...model, isOngoing: true })).toBeNull();
+    expect(kitOpenSeat({ ...model, rsvpClosed: "past" })).toBeNull();
+    expect(kitOpenSeat({ ...model, status: "cancelled" })).toBeNull();
+    expect(kitOpenSeat({ ...model, viewerMember: false })).toBeNull();
     expect(
-      kitSeatActionBar({
-        ...model,
-        answer: { status: "going", syncedToDiscordAt: null },
-      }),
-    ).toEqual({ state: "saved", title: "You're in", detail: "Starts at 21:00" });
+      kitOpenSeat({ ...model, answer: { status: "going", syncedToDiscordAt: null } }),
+    ).toBeNull();
   });
 
   it("keeps review form-free and the cancelled hidden-row difference explicit", async () => {

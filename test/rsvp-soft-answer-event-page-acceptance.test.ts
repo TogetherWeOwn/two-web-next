@@ -696,13 +696,10 @@ describe("Kit established branches are unchanged", () => {
     expect(html).toContain('data-testid="rsvp-syncing"');
   });
 
-  it.each([
-    { phase: "upcoming", isOngoing: false, submits: ["going", "going"] },
-    { phase: "ongoing", isOngoing: true, submits: ["going"] },
-  ])("unanswered members keep the inline join CTA ($phase)", ({ isOngoing, submits }) => {
-    const html = kit({ answer: null, isOngoing });
+  it("unanswered members still get the bare join CTA", () => {
+    const html = kit({ answer: null });
     expect(html).toContain('data-testid="rsvp-going"');
-    expect(submitValues(html)).toEqual(submits);
+    expect(submitValues(html)).toEqual(["going"]);
     expect(softLine(html, "maybe")).toBeNull();
   });
 

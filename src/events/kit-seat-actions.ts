@@ -1,6 +1,6 @@
-import { loginUrl, RSVP_COPY, type RsvpClosedReason } from "../islands/contracts";
-import { rsvpActionHref } from "./attendee-paths";
-import { wallTimeHm } from "./date-format";
+import type { RsvpClosedReason } from "../islands/contracts";
+
+export const KIT_SIGNUPS_OPEN = "Sign-ups open";
 import type { ViewerRsvp } from "./reads";
 
 interface SeatSnapshot {
@@ -31,44 +31,4 @@ export function kitOpenSeat(model: SeatSnapshot): string | null {
   return model.capacity === null
     ? `${model.goingCount} going`
     : `${model.goingOccupancy} of ${model.capacity} in`;
-}
-
-export function kitSeatActionBar(
-  model: SeatSnapshot & {
-    eventKey: string;
-    joinReturnTo: string;
-    timeDatetime: string;
-    zoneLabel: string;
-    attendeesPaging: { page: number };
-  },
-) {
-  if (!upcoming(model)) return null;
-  const open = kitOpenSeat(model);
-  if (open) {
-    return {
-      state: "open",
-      title: open,
-      detail: "Sign-ups open",
-      action: rsvpActionHref(model.eventKey, model.attendeesPaging.page),
-    } as const;
-  }
-  if (model.viewerMember && model.answer?.status === "going") {
-    return {
-      state: "saved",
-      title: "You're in",
-      detail: model.timeDatetime
-        ? `Starts at ${wallTimeHm(new Date(model.timeDatetime), model.zoneLabel)}`
-        : "Time unavailable",
-    } as const;
-  }
-  if (!model.viewerMember && hasSeat(model)) {
-    return {
-      state: "guest",
-      title: "Log in to RSVP",
-      detail: model.rsvpOpen ? "Sign-ups open" : "Paused",
-      href: loginUrl(model.joinReturnTo),
-      label: RSVP_COPY.guestCta,
-    } as const;
-  }
-  return null;
 }
