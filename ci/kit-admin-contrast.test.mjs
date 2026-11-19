@@ -308,7 +308,14 @@ describe("Kit admin contrast", () => {
           if (isInvalid) {
             assert.equal(await summary.evaluate((el) => el === document.activeElement), true);
             await page.keyboard.press("Tab");
-            assert.equal(await summaryLink.evaluate((el) => el.matches(":focus-visible")), true);
+            assert.deepEqual(
+              await summaryLink.evaluate((el) => {
+                const style = getComputedStyle(el);
+                return [el.matches(":focus-visible"), style.outlineStyle, style.outlineColor];
+              }),
+              [true, "solid", "rgb(255, 156, 54)"],
+              "the focused summary link uses the lobby focus token, not the light-theme outline",
+            );
             assert.match(
               await summaryLink.evaluate((el) => getComputedStyle(el).textDecorationLine),
               /underline/,
