@@ -51,12 +51,11 @@ async function install() {
   evidence.checkout = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   assert.match(evidence.checkout, /^[a-f0-9]{40}$/);
   assert.equal(evidence.checkout, process.env.EXPECTED_HEAD_SHA, "requires exact-head checkout");
-
-  // Adapter 8 imports cloudflare-tmp/server.js, which imports output/server.
-  // Keep the three siblings together and create the installation root private.
+  // Keep the adapter's relative imports intact across the three siblings.
   assets = join(root, "cloudflare");
   fs.mkdirSync(assets, { mode: 0o700 });
   for (const name of ["cloudflare", "cloudflare-tmp", "output"]) {
+    evidence.lastCopyStep = `copy ${name}`;
     const source = join(dirname(DEFAULT_DIR), name);
     assert.ok(fs.lstatSync(source).isDirectory());
     assert.ok(
@@ -67,6 +66,7 @@ async function install() {
     );
     fs.cpSync(source, join(root, name), { recursive: true, force: false, errorOnExist: true });
   }
+  evidence.lastCopyStep = "verify copied adapter";
   const entry = join(assets, ENTRY_NAME);
   const original = fs.readFileSync(join(DEFAULT_DIR, ENTRY_NAME));
   evidence.stockAdapterSha256 = sha256(original);
@@ -265,6 +265,7 @@ describe("Kit built Worker fatal path", () => {
       assert.equal(sha256(fs.readFileSync(entry)), evidence.entrySha256);
       assert.equal(sha256(fs.readFileSync(join(assets, COMPANION_NAME))), evidence.adapterSha256);
     } catch (error) {
+      if (Number.isInteger(error.errno)) evidence.setupErrno = error.errno;
       throw new Error(
         error.code === "ERR_ASSERTION" ? error.message.split("\n", 1)[0] : "fixture setup failed",
       );
