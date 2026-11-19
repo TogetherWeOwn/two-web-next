@@ -94,11 +94,6 @@ jobs:
       # The Worker bundle imports web/src modules, so wrangler needs the Kit
       # workspace dependencies (same install as ci.yml).
       - run: npm ci --prefix web --include=dev --no-audit --no-fund
-      - name: Select Kit route families
-        id: kit-route-flags
-        env:
-          KIT_ROUTE_FAMILY: ${{ github.event_name == 'workflow_dispatch' && inputs.kit_route_family || 'hono' }}
-        run: node --import tsx ci/kit-route-flags.mjs
       # No test re-run here: the exact-SHA gate above (re-checked before each
       # mutation below) requires full CI, which already ran every `npm run
       # check` part on this commit. A second copy outgrew this job's timeout.
@@ -109,6 +104,11 @@ jobs:
         run: npm run build:assets:check
       - name: Build Kit staging Worker
         run: npm run build --prefix web
+      - name: Select Kit route families
+        id: kit-route-flags
+        env:
+          KIT_ROUTE_FAMILY: ${{ github.event_name == 'workflow_dispatch' && inputs.kit_route_family || 'hono' }}
+        run: node --import tsx ci/kit-route-flags.mjs
       - name: Moderator role-config preflight (before any Cloudflare mutation)
         # Read the same top-level source var Wrangler deploys, not a CI secret.
         run: npm run check:worker-moderators

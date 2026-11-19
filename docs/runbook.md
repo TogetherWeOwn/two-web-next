@@ -419,9 +419,8 @@ binding isolation before any remote mutation.
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
    queue readiness only warns and `unknown` passes there.
 4. To select a route family explicitly, use Actions → `deploy` → Run workflow
-   on branch `main`, then choose `hono`, `archive`, `archive-static`, `events`,
-   `home`, `join`, or `ember-pages`. Record the exact deployed commit, the deploy
-   run link and each applicable `Verify staging Kit … renderer` result together.
+   on `main` and choose a family above. Record the exact deployed commit, the
+   deploy run link and each applicable `Verify staging Kit … renderer` result.
    `workflow_dispatch` uses the same exact-SHA CI gate, staging migration,
    Kit build, Tail-first deployment, queue handoff, revision verification and
    smoke path as the automatic workflow. This is the supported route-selection

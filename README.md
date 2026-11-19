@@ -709,8 +709,7 @@ Owner+Moderator pair (staging guild `1545644954272137297`:
 `1546211363578191873,1545648550329851946`; production guild
 `326474832151838730`: `1546777855801954408,1546777856984481792`) before deployment.
 The staging workflow deploys `web/wrangler.staging.jsonc` and supplies only the
-validated `KIT_ROUTE_ARCHIVE`, `KIT_ROUTE_STATIC`, `KIT_ROUTE_EVENTS`,
-`KIT_ROUTE_HOME` and `KIT_ROUTE_JOIN` route flags with `--var`;
+validated [staging route flags](docs/config.md) with `--var`;
 it does not override either moderator var. A separate GitHub moderator secret
 cannot make the gate pass. `keep_vars` retains unrelated remote plaintext vars,
 and Wrangler retains remote secrets. No binding values are read back or copied.

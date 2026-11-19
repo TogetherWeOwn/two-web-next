@@ -170,11 +170,7 @@ function executeStaging(ctx, evidence, changes = {}, routeFamily = "hono") {
   }
 }
 
-const emberRoutes = [
-  ["events", "/events"],
-  ["home", "/"],
-  ["join", "/join"],
-];
+const emberRoutes = Object.entries({ events: "/events", home: "/", join: "/join" });
 
 test("Kit route-family selection emits validated flags and fails closed", async () => {
   const { tsImport } = await import("tsx/esm/api");
@@ -208,15 +204,12 @@ test("Kit route-family selection emits validated flags and fails closed", async 
         encoding: "utf8",
         env: { ...process.env, GITHUB_OUTPUT: output, KIT_ROUTE_FAMILY: family },
       });
-      assert.equal(result.status, expected && !disabled ? 0 : 1, result.stderr);
-      assert.equal(
-        readFileSync(output, "utf8"),
-        expected && !disabled
-          ? ["archive", "static", "events", "home", "join"]
-              .map((name) => `${name}=${expected.includes(name)}\n`)
-              .join("")
-          : "",
-      );
+      const flags = ["archive", "static", "events", "home", "join"]
+        .map((name) => `${name}=${expected?.includes(name) ?? false}\n`)
+        .join("");
+      const success = expected && !disabled;
+      assert.equal(result.status, success ? 0 : 1, result.stderr);
+      assert.equal(readFileSync(output, "utf8"), success ? flags : "");
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -238,18 +231,16 @@ test("the combined selection refuses any disabled or non-GET Ember entry", async
 test("each Ember opt-in probes the exact staging GET after revision verification", () => {
   const preflight = workflow.indexOf("run: node --import tsx ci/kit-route-flags.mjs");
   assert.ok(preflight > workflow.indexOf("- name: Require successful exact-SHA full CI"));
+  assert.ok(preflight > workflow.indexOf("run: npm run build --prefix web"));
   assert.ok(preflight < workflow.indexOf("- name: Plan staging web migrations"));
   for (const [flag, path] of emberRoutes) {
     const probeOffset = workflow.indexOf(`- name: Verify staging Kit ${flag} renderer`);
     assert.ok(probeOffset > workflow.indexOf("- name: Verify deployed revision"));
     assert.ok(probeOffset < workflow.indexOf("- name: Scope post-deploy smoke"));
-    const probe = workflow.slice(probeOffset).split("\n      - ")[0];
-    assert.ok(
-      probe.split("\n").includes(`        if: steps.kit-route-flags.outputs.${flag} == 'true'`),
-    );
-    assert.ok(
-      probe.split("\n").includes(`        run: node ci/staging-kit-route-check.mjs ${path}`),
-    );
+    const [probe] = workflow.slice(probeOffset).split("\n      - ");
+    const lines = probe.split("\n");
+    assert.ok(lines.includes(`        if: steps.kit-route-flags.outputs.${flag} == 'true'`));
+    assert.ok(lines.includes(`        run: node ci/staging-kit-route-check.mjs ${path}`));
   }
   const cases = emberRoutes.flatMap(([, path]) => [
     [path, 200, "kit", 0],
