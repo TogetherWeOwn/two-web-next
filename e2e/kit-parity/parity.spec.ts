@@ -2255,16 +2255,17 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
     const deadline = Date.parse(
       (await page.locator("#kit-live-snapshot").getAttribute("data-stale-at"))!,
     );
-    await page.evaluate((ms) => {
-      Date.now = () => ms;
-      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
-    }, deadline - 1);
-    await expect(live).toBeVisible();
     await page.bringToFront();
-    await page.evaluate((ms) => {
+    const hidden = await live.evaluate((tag, ms) => {
+      // Sample both sides in one browser task so the real timer cannot win the race.
+      Date.now = () => ms - 1;
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+      const before = tag.hasAttribute("hidden");
       Date.now = () => ms;
       document.dispatchEvent(new Event("visibilitychange"));
+      return [before, tag.hasAttribute("hidden")];
     }, deadline);
+    expect(hidden).toEqual([false, true]);
     await expect(page.locator("[data-live-fresh]:visible")).toHaveCount(0);
     await expect(page.getByText("Stale", { exact: true })).toHaveCount(2);
     await expect(page.getByRole("link", { name: "Refresh the event time" })).toHaveAttribute(

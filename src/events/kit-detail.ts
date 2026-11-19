@@ -1,4 +1,3 @@
-import { timeStaleAt } from "../../web/src/lib/time-freshness-clock";
 // Kit read model for the live GET /e/:key detail: published, past and
 // moderator draft rows with member-only attendee disclosure.
 //
@@ -18,6 +17,7 @@ import { timeStaleAt } from "../../web/src/lib/time-freshness-clock";
 // read, draft stays forbidden without the moderator bit, an indeterminate
 // session is unavailable (never a false logout, never a guest render of
 // member state), and every database failure is a 503 before bytes.
+import { timeStaleAt } from "../../lib/time-freshness-clock";
 import { dbFor } from "../admin/db";
 import { savedEventReview } from "../admin/event-saved-review";
 import {

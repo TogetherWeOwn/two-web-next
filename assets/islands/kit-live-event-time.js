@@ -1,6 +1,6 @@
 // Kit's live detail uses this timezone island in place of the ordinary bundle.
 import "./event-device-timezone.js";
-import { watchTimeSnapshot } from "../../web/src/lib/time-freshness";
+import { watchTimeSnapshot } from "../../lib/time-freshness";
 
 const root = document.getElementById("kit-live-snapshot");
 if (root) {
