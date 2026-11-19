@@ -32,7 +32,6 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           REVIEWED_HEAD: ${{ inputs.reviewed_head }}
           SQUASH_SHA: ${{ inputs.squash_sha }}
-        shell: bash
         run: |
           set -euo pipefail
           trap 'echo "::error::Diagnostic provenance refused"' ERR
@@ -80,8 +79,10 @@ jobs:
           - "127.0.0.1:5432:5432"
         options: >-
           --health-cmd "pg_isready -U agent_test -d two_web_next"
-          --health-interval 5s --health-timeout 5s --health-retries 10
+          --health-interval 5s --health-timeout 5s --health-retries 10 --log-driver=none
     steps:
+      - name: Require first run attempt
+        run: '[[ "$GITHUB_RUN_ATTEMPT" == 1 ]] || { echo "::error::Diagnostic reruns are not allowed"; exit 1; }'
       - name: Check out verified workflow source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -108,8 +109,7 @@ jobs:
         shell: bash
         run: |
           exec env -i PATH="$PATH" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_ACTIONS="$GITHUB_ACTIONS" \
-            RUNNER_OS="$RUNNER_OS" RUNNER_TEMP="$RUNNER_TEMP" bash harness/ci/kit-activity-log-run.sh
+            RUNNER_OS="$RUNNER_OS" RUNNER_TEMP="$RUNNER_TEMP" RUNNER_TRACKING_ID="${RUNNER_TRACKING_ID:?}" bash harness/ci/kit-activity-log-run.sh
       - name: Clear fixture state
         if: always()
-        shell: bash
         run: rm -rf -- "$RUNNER_TEMP/kit-activity-log" "$GITHUB_WORKSPACE/app"
