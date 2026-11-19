@@ -115,13 +115,11 @@ describe("Kit home port: request posture", () => {
 });
 
 describe("Kit home port: manifest", () => {
-  it("registers a public, Hono-owned manifest entry", () => {
+  it("declares the Kit home's member-read boundary without enabling it", () => {
     const manifest = read(manifestPath);
-    expect(manifest).toMatch(/path:\s*"\/"/);
-    expect(manifest).toMatch(/path:\s*"\/[^}]*reads:\s*"public"/);
-    // Stays on Hono until the enablement review: flipping enabled flips
-    // ownership, and the parity ledger fails any enabled route with no run.
-    expect(manifest).toMatch(/method:\s*"GET",\s*path:\s*"\/",\s*enabled:\s*false/);
+    expect(manifest).toMatch(
+      /method:\s*"GET",\s*path:\s*"\/",\s*enabled:\s*false,\s*reads:\s*\{\s*resource:\s*"member",\s*action:\s*"list",\s*route:\s*"home"\s*\}/,
+    );
   });
 });
 
@@ -185,8 +183,9 @@ describe("Kit home port: header, hero and metadata chrome", () => {
 
   it("keeps each panel independently degraded", () => {
     const page = read(pagePath);
-    // Stale or missing counts hide the numeral instead of inventing one.
-    expect(page).toContain("counts.memberCount !=");
+    // Missing snapshots hide counts; stale snapshots carry their observation time.
+    expect(page).toContain("{#if countsSnapshot}");
+    expect(page).toContain("countsSnapshot.observedAt");
     // An empty ladder still names the ranks; a zero rank reads unclaimed.
     expect(page).toContain("unclaimed");
     // Featured renders only for visible rows; an empty events read states why.

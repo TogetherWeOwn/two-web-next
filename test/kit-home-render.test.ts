@@ -25,6 +25,12 @@ function baseData(overrides: Record<string, unknown> = {}): Record<string, unkno
     inviteUrl: INVITE_URL,
     appUrl: APP_URL,
     counts: { memberCount: 42, onlineCount: 7, ranks: [] },
+    countsSnapshot: {
+      memberCount: 42,
+      onlineCount: 7,
+      observedAt: "2026-09-30T12:00:00.000Z",
+      stale: false,
+    },
     upcomingEvents: [],
     eventsUnavailable: false,
     featured: [],
@@ -71,12 +77,69 @@ describe("Kit home SSR render: session-aware header and hero", () => {
     }
   });
 
+  it("does not infer quiet voice or a busiest evening from online counts", () => {
+    for (const stale of [false, true]) {
+      const html = renderPage(
+        baseData({
+          countsSnapshot: {
+            memberCount: 42,
+            onlineCount: 0,
+            observedAt: "2026-09-30T12:00:00.000Z",
+            stale,
+          },
+          upcomingEvents: [fullnessEvent({ title: "Synthetic game night" })],
+        }),
+      );
+      expect(html).toContain("Synthetic game night");
+      expect(html).toContain("0</strong> online");
+      expect(html).not.toContain("It's quiet right now");
+      expect(html).not.toContain("evenings are busiest");
+      expect(html).not.toContain("In voice now");
+    }
+  });
+
+  it("labels a stale snapshot with its observation time and preserves zero online", () => {
+    const html = renderPage(
+      baseData({
+        countsSnapshot: {
+          memberCount: 42,
+          onlineCount: 0,
+          observedAt: "2026-09-30T12:00:00.001Z",
+          stale: true,
+        },
+      }),
+    );
+    expect(html).toContain('data-stale="true"');
+    expect(html).toContain("0</strong> online");
+    expect(html).toContain("Last seen");
+    expect(html).toContain('datetime="2026-09-30T12:00:00.001Z"');
+    expect(html).toContain("2026-09-30 12:00:00.001 UTC");
+  });
+
   it("renders the guest header with the Discord join entry point", () => {
     const html = renderPage(baseData());
     expect(html).toContain('data-testid="signin"');
     expect(html).toContain('data-testid="join"');
     expect(html).not.toContain('data-testid="join-result"');
     expect(html).not.toContain('data-testid="notice"');
+  });
+
+  it("does not render attendee names from an event fixture for a guest", () => {
+    const html = renderPage(
+      baseData({
+        upcomingEvents: [
+          fullnessEvent({
+            title: "Public game night",
+            organizer_name: "SyntheticHostName",
+            attendees: [{ username: "SyntheticPrivateName" }],
+          }),
+        ],
+      }),
+    );
+    expect(html).toContain("Public game night");
+    expect(html).toContain("1 of 4 going");
+    expect(html).not.toContain("SyntheticPrivateName");
+    expect(html).not.toContain("SyntheticHostName");
   });
 
   it("renders the member header with the invite URL and no join entry point", () => {
@@ -181,11 +244,10 @@ describe("Kit home SSR render: notice slot and one-shot flash", () => {
 });
 
 describe("Kit home SSR render: independently degraded panels", () => {
-  it("hides stale counts instead of inventing values", () => {
-    const html = renderPage(
-      baseData({ counts: { memberCount: null, onlineCount: null, ranks: [] } }),
-    );
+  it("does not substitute legacy counts when the snapshot is unavailable", () => {
+    const html = renderPage(baseData({ countsSnapshot: null }));
     expect(html).not.toContain('data-testid="member-count"');
+    expect(html).not.toContain("Last seen");
     // The ladder still names the ranks with the shared fallback.
     expect(html).toContain('data-testid="rank-stack"');
     expect(html).toContain("Prospect");
@@ -210,12 +272,18 @@ describe("Kit home SSR render: independently degraded panels", () => {
     expect(html).toContain('data-testid="home-events-empty"');
     expect(html).toContain("Nothing scheduled yet.");
     expect(html).toContain('data-testid="home-events-join"');
+    for (const session of [null, memberSession]) {
+      const empty = renderPage(baseData({ session }));
+      expect(empty).toContain('href="/discord" data-testid="home-suggest-event"');
+      expect(empty).toContain("Suggest an event in Discord");
+    }
   });
 
   it("states the events outage without hiding the rest of the page", () => {
     const html = renderPage(baseData({ eventsUnavailable: true }));
     expect(html).toContain('data-state="unavailable"');
     expect(html).toContain("Game nights are unavailable right now.");
+    expect(html).not.toContain('data-testid="home-suggest-event"');
     expect(html).toContain('data-testid="member-count"');
   });
 
@@ -317,7 +385,64 @@ function fullnessRow(html: string, key: string): string {
   return hit.split("</li>")[0]!;
 }
 
+describe("Kit home SSR render: member standing", () => {
+  it("shows the earliest future own RSVP without exposing it to guests", () => {
+    const upcomingEvents = [
+      fullnessEvent({
+        eventKey: "later",
+        title: "Later",
+        startsAt: new Date("2031-01-01T20:00:00Z"),
+      }),
+      fullnessEvent({
+        eventKey: "first",
+        title: "First",
+        startsAt: new Date("2030-01-01T20:00:00Z"),
+      }),
+      fullnessEvent({ eventKey: "past", startsAt: new Date("2020-01-01T20:00:00Z") }),
+    ];
+    const memberRsvps = [
+      { eventKey: "later", status: "going" },
+      { eventKey: "first", status: "waitlisted" },
+      { eventKey: "past", status: "going" },
+    ];
+    const html = renderPage(baseData({ session: memberSession, upcomingEvents, memberRsvps }));
+    const standing = html.split('data-testid="home-standing"')[1]!.split("</section>")[0]!;
+    expect(standing).toContain('href="/e/first"');
+    expect(standing).toContain("You're on the waitlist.");
+    expect(standing).not.toContain('href="/e/later"');
+    for (const session of [null, nonMemberSession]) {
+      expect(renderPage(baseData({ session, upcomingEvents, memberRsvps }))).not.toContain(
+        'data-testid="home-standing"',
+      );
+    }
+    expect(
+      renderPage(baseData({ session: memberSession, upcomingEvents, memberRsvps: [] })),
+    ).not.toContain('data-testid="home-standing"');
+  });
+});
+
 describe("Kit home SSR render: teaser fullness verdict (owned pins)", () => {
+  it("marks only the member's matching going or waitlisted event", () => {
+    const upcomingEvents = [
+      fullnessEvent({ eventKey: "going-night" }),
+      fullnessEvent({ eventKey: "waitlist-night" }),
+      fullnessEvent({ eventKey: "other-night" }),
+    ];
+    const memberRsvps = [
+      { eventKey: "going-night", status: "going", syncedToDiscordAt: null },
+      { eventKey: "waitlist-night", status: "waitlisted", syncedToDiscordAt: null },
+      { eventKey: "other-night", status: "not_going", syncedToDiscordAt: null },
+    ];
+    const html = renderPage(baseData({ session: memberSession, upcomingEvents, memberRsvps }));
+    expect(fullnessRow(html, "going-night")).toContain("You're going.");
+    expect(fullnessRow(html, "waitlist-night")).toContain("You're on the waitlist.");
+    expect(fullnessRow(html, "other-night")).not.toContain("home-event-own-rsvp");
+    for (const session of [null, nonMemberSession]) {
+      const guestHtml = renderPage(baseData({ session, upcomingEvents, memberRsvps }));
+      expect(guestHtml).not.toContain("home-event-own-rsvp");
+    }
+  });
+
   it("marks a teaser row full from occupancy even when the named count has room", () => {
     // One nameless going row holds the last seat: the verdict reads
     // occupancy, never the attributable count alone, so the Kit teaser
@@ -363,6 +488,7 @@ describe("Kit home SSR render: teaser fullness verdict (owned pins)", () => {
     for (const [fields, verdict] of cases) {
       const html = renderPage(
         baseData({
+          session: memberSession,
           upcomingEvents: [
             fullnessEvent({
               game: "  Wingspan  ",

@@ -140,12 +140,15 @@ function featuredRow(id: number, title: string, startsAt: string | null, endsAt:
   return [id, title, `Featured body ${id}`, null, null, null, startsAt, endsAt];
 }
 
-function fixture(featuredRows: unknown[][]) {
+function fixture(featuredRows: unknown[][], options: { failMemberRsvps?: boolean } = {}) {
+  let memberRsvpQueries = 0;
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
   const eventStartsAt = new Date(Date.now() + 3600_000);
   const event = {
     id: 1,
+    eventKey: "game-night-1",
     title: "Game night 1",
+    organizer_name: "Synthetic Host",
     startsAt: eventStartsAt,
     endsAt: new Date(eventStartsAt.getTime() + 7200_000),
   };
@@ -172,7 +175,13 @@ function fixture(featuredRows: unknown[][]) {
     if (sql.includes("set_config")) return { rows: [] };
     if (sql.includes('"timezone"') && !sql.includes('"title"')) return { rows: [] };
     if (sql.includes("discord_event_id") && !sql.includes('"title"')) return { rows: [] };
-    if (sql.includes('from "rsvps"')) return { rows: [] };
+    if (sql.includes('from "rsvps"')) {
+      if (sql.includes('inner join "events"')) {
+        memberRsvpQueries++;
+        if (options.failMemberRsvps) throw new Error("RSVP read failed");
+      }
+      return { rows: [] };
+    }
     if (sql.includes('from "events"')) {
       return {
         rows: [
@@ -192,7 +201,7 @@ function fixture(featuredRows: unknown[][]) {
     lastReadFailed: () => false,
   };
   const env = { ...baseEnv, ADMIN_DB: db, DISCORD_EVENTS: discord } as Env;
-  return { db, env, use: () => setSharedEnv(env) };
+  return { db, env, use: () => setSharedEnv(env), memberRsvpQueries: () => memberRsvpQueries };
 }
 
 function loadArgs(): KitHomeLoadArgs {
@@ -207,6 +216,51 @@ function loadArgs(): KitHomeLoadArgs {
 }
 
 describe("Kit home featured DTO: cached shape matches the direct reader", () => {
+  it("redacts host names from guest load data without changing the cached member view", async () => {
+    const f = fixture([]);
+    f.use();
+    const guest = await load(loadArgs());
+    expect(guest.upcomingEvents).toHaveLength(1);
+    expect(JSON.stringify(guest.upcomingEvents)).not.toContain("Synthetic Host");
+
+    const args = loadArgs();
+    args.locals = {
+      status: "authenticated",
+      session: {
+        userId: "123456789012345678",
+        username: "Member",
+        avatar: null,
+        member: true,
+        moderator: false,
+      },
+    };
+    const member = await load(args);
+    expect(member.upcomingEvents[0]?.organizer_name).toBe("Synthetic Host");
+  });
+
+  it("propagates an authenticated member RSVP read failure from the load", async () => {
+    const f = fixture([], { failMemberRsvps: true });
+    f.use();
+    const args = loadArgs();
+    args.locals = {
+      status: "authenticated",
+      session: {
+        userId: "123456789012345678",
+        username: "Member",
+        avatar: null,
+        member: true,
+        moderator: false,
+      },
+      joinResult: "added",
+    };
+    const deleteCookie = vi.fn();
+    args.cookies.delete = deleteCookie;
+
+    await expect(load(args)).rejects.toThrow("RSVP read failed");
+    expect(f.memberRsvpQueries()).toBe(1);
+    expect(deleteCookie).not.toHaveBeenCalled();
+  });
+
   it("serves exactly the six VisibleFeatured fields, equal to listVisibleFeatured", async () => {
     const day = 86_400_000;
     const now = Date.now();
@@ -223,6 +277,9 @@ describe("Kit home featured DTO: cached shape matches the direct reader", () => 
     f.use();
 
     const data = await load(loadArgs());
+    // No bot source is configured: never claim an observed snapshot.
+    expect(data.countsSnapshot).toBeNull();
+    expect(data.memberRsvps).toEqual([]);
     expect(data.featured.map((row) => row.title)).toEqual(["Bounded slot", "Always visible"]);
     for (const row of data.featured) {
       expect(Object.keys(row).sort()).toEqual(DISPLAY_KEYS);

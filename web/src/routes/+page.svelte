@@ -10,6 +10,7 @@ import type { HomeNotice } from "../../../src/home-copy";
 import {
   SPOTS_LEFT_TESTID,
   cardTimeLabel,
+  goingAnnouncementText,
   goingCountText,
   isValidZone,
 } from "../../../src/islands/contracts";
@@ -32,6 +33,7 @@ const {
   inviteUrl,
   appUrl,
   counts,
+  countsSnapshot,
   upcomingEvents,
   eventsUnavailable,
   featured,
@@ -49,6 +51,20 @@ const siteGraph = $derived(siteJsonLd(appUrl));
 // noticeText above): without it the groups widen to the helper's input.
 const renderTime = new Date();
 const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, renderTime));
+const nextOwnEvent = $derived(
+  session?.member
+    ? (upcomingEvents as HomeUpcomingRow[])
+        .filter((event) => event.source === "canonical" && event.startsAt.getTime() > renderTime.getTime())
+        .flatMap((event) => {
+          if (event.source !== "canonical") return [];
+          const answer = data.memberRsvps?.find((rsvp) => rsvp.eventKey === event.eventKey);
+          return answer?.status === "going" || answer?.status === "waitlisted"
+            ? [{ event, status: answer.status === "going" ? ("going" as const) : ("waitlisted" as const) }]
+            : [];
+        })
+        .sort((a, b) => a.event.startsAt.getTime() - b.event.startsAt.getTime())[0]
+    : undefined,
+);
 </script>
 
 {#snippet guestChrome()}
@@ -117,10 +133,13 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
         <a href={inviteUrl}>Join with an invite link instead</a>
       </p>
     {/if}
-    {#if counts.memberCount != null}
-      <p class="counts" data-testid="member-count">
-        <strong>{counts.memberCount}</strong> members{#if counts.onlineCount != null && counts.onlineCount > 0}
-          {" · "}<strong>{counts.onlineCount}</strong> online{/if}
+    {#if countsSnapshot}
+      <p class="counts" data-testid="member-count" data-stale={countsSnapshot.stale}>
+        <strong>{countsSnapshot.memberCount}</strong> members{#if countsSnapshot.onlineCount != null}
+          {" · "}<strong>{countsSnapshot.onlineCount}</strong> online{/if}
+        {#if countsSnapshot.stale}
+          {" · Last seen "}<time datetime={countsSnapshot.observedAt}>{countsSnapshot.observedAt.replace("T", " ").replace("Z", " UTC")}</time>
+        {/if}
       </p>
     {/if}
   </section>
@@ -227,7 +246,7 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
                 <div class="event-meta">
                 <h3>{event.title}</h3>
                 {#if event.source === "canonical" && event.game?.trim()}<p>{event.game.trim()}</p>{/if}
-                {#if event.source === "canonical" && event.organizer_name?.trim()}
+                {#if session?.member && event.source === "canonical" && event.organizer_name?.trim()}
                   <p class="home-event-host" data-testid="event-card-host">Hosted by {event.organizer_name.trim()}</p>
                 {/if}
                 {#if event.location}<p>{event.location}</p>{/if}
@@ -241,6 +260,12 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
                     {goingCountText(event.goingCount, event.capacity)}{" · "}
                     <span data-testid={availability.state === "full" ? SPOTS_LEFT_TESTID : "event-schedule-availability"}>{availability.text}</span>
                   </p>
+                  {#if session?.member}
+                    {@const answer = data.memberRsvps?.find((rsvp) => rsvp.eventKey === event.eventKey)}
+                    {#if answer?.status === "going" || answer?.status === "waitlisted"}
+                      <p data-testid="home-event-own-rsvp">{goingAnnouncementText(answer.status)}</p>
+                    {/if}
+                  {/if}
                 {/if}
                 </div>
               </a>
@@ -275,6 +300,9 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
             and you’ll hear about the next one.
           {/if}
         </p>
+        {#if !eventsUnavailable}
+          <p><a href="/discord" data-testid="home-suggest-event">Suggest an event in Discord</a></p>
+        {/if}
       </div>
     {/if}
     {#if !session}
@@ -285,6 +313,19 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
       </p>
     {/if}
   </section>
+  {#if nextOwnEvent}
+    <section aria-labelledby="home-standing-heading" data-testid="home-standing">
+      <h2 id="home-standing-heading">Where you stand.</h2>
+      <div class="card">
+        <p>Next</p>
+        <p><a href={`/e/${encodeURIComponent(nextOwnEvent.event.eventKey)}`}>{nextOwnEvent.event.title}</a></p>
+        <p>
+          <time datetime={nextOwnEvent.event.startsAt.toISOString()}>{cardTimeLabel(nextOwnEvent.event.startsAt, nextOwnEvent.event.timezone)} ({isValidZone(nextOwnEvent.event.timezone) ? nextOwnEvent.event.timezone : "UTC"})</time>
+          {" · "}{goingAnnouncementText(nextOwnEvent.status)}
+        </p>
+      </div>
+    </section>
+  {/if}
   {#if !session?.member}
     <section class="join-band" aria-labelledby="join-band-heading" data-testid="join-band">
       <div>

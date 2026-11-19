@@ -24,11 +24,36 @@ const states = {
   guest: {},
   member: { session: member },
   guestEvents: { upcomingEvents: [event] },
-  memberEvents: { session: member, upcomingEvents: [event] },
+  memberEvents: {
+    session: member,
+    upcomingEvents: [event],
+    memberRsvps: [{ eventKey: event.eventKey, status: "going" }],
+  },
+  staleCounts: {
+    countsSnapshot: {
+      memberCount: 42,
+      onlineCount: 0,
+      observedAt: "2026-10-20T11:00:00.000Z",
+      stale: true,
+    },
+    upcomingEvents: [event],
+  },
+  quietOnline: {
+    countsSnapshot: {
+      memberCount: 42,
+      onlineCount: 0,
+      observedAt: "2026-10-20T12:00:00.000Z",
+      stale: false,
+    },
+    upcomingEvents: [event],
+  },
   nonmember: { session: { ...member, userId: "player-1", username: "Player", member: false } },
   sessionOutage: { sessionUnavailable: true },
   eventsOutage: { eventsUnavailable: true },
-  missingCounts: { counts: { memberCount: null, onlineCount: null, ranks: [] } },
+  missingCounts: {
+    counts: { memberCount: null, onlineCount: null, ranks: [] },
+    countsSnapshot: null,
+  },
   joinFailed: { notice: "join_failed" },
   joinAdded: { joinResult: "added" },
   alreadyMember: { joinResult: "already_member" },
@@ -46,6 +71,13 @@ export function homeEvidencePage(state) {
     inviteUrl: "https://discord.gg/invite",
     appUrl: "https://example.test",
     counts: { memberCount: 42, onlineCount: 7, ranks: [] },
+    countsSnapshot: {
+      memberCount: 42,
+      onlineCount: 7,
+      observedAt: "2026-10-20T12:00:00.000Z",
+      stale: false,
+    },
+    memberRsvps: [],
     upcomingEvents: [],
     eventsUnavailable: false,
     featured: [],
@@ -89,6 +121,26 @@ export async function assertHomeEvidence(page, state) {
     `${state}: join action`,
   );
   assert.equal(await count("member-count"), state === "missingCounts" ? 0 : 1, `${state}: counts`);
+  if (state === "staleCounts") {
+    assert.equal(await page.getByTestId("member-count").getAttribute("data-stale"), "true");
+    assert.match(await page.getByTestId("member-count").innerText(), /0 online.*Last seen/);
+  }
+  if (state === "quietOnline" || state === "staleCounts") {
+    assert.doesNotMatch(
+      await page.locator("body").innerText(),
+      /It's quiet right now|evenings are busiest|In voice now/,
+    );
+  }
+  assert.equal(
+    await count("home-standing"),
+    state === "memberEvents" ? 1 : 0,
+    `${state}: standing`,
+  );
+  assert.equal(
+    await count("home-event-own-rsvp"),
+    state === "memberEvents" ? 1 : 0,
+    `${state}: own RSVP`,
+  );
   assert.equal(await count("notice"), state === "joinFailed" ? 1 : 0, `${state}: notice`);
   assert.equal(await page.getByTestId("home-highlights").locator("li").count(), 4);
   if (!session?.member && state !== "sessionOutage" && state !== "joinFailed")
