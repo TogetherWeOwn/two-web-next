@@ -298,7 +298,7 @@ export function fixtureManifestFor(env: {
       return { ...entry, enabled: true };
     if (wantDetail && entry.method === "GET" && entry.path === "/e/:key")
       return { ...entry, enabled: true };
-    if (wantJoin && entry.method === "GET" && entry.path === "/join")
+    if (wantJoin && entry.method === "GET" && ["/join", "/auth/recover"].includes(entry.path))
       return { ...entry, enabled: true };
     if (wantDashboard && entry.method === "GET" && entry.path === "/admin")
       return { ...entry, enabled: true };
@@ -580,6 +580,8 @@ export interface HookDispatchDeps {
   fixtureEventDetail?: boolean;
   // Join remains Hono-owned outside the loopback parity fixture.
   fixtureJoin?: boolean;
+  // Recovery retains Hono middleware and controller; only SSR is delegated.
+  recoveryPage?: (event: HookEventLike) => Promise<Response>;
   fixtureAdminDashboard?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
@@ -963,6 +965,14 @@ async function dispatchOwnedRequest(
   );
   if (!route) {
     return deps.honoFetch(event.request);
+  }
+  if (route.path === "/auth/recover") {
+    // The no-JS recovery page has no Kit data representation. Never mint
+    // journey state from a data request or run the generic session bridge.
+    if (event.isDataRequest || event.route?.id !== route.path || !deps.recoveryPage) {
+      return deps.honoFetch(event.request);
+    }
+    return deps.recoveryPage(event);
   }
   // Kit request correlation (Hono requestLog parity): admit the validated
   // edge id (cf-ray) or mint a ULID, ignoring any client-sent x-request-id.

@@ -11,12 +11,16 @@ import {
   kitEventsSessionFor,
   kitSessionBridge,
 } from "../../src/kit-session";
-import { dispatchHookRequest } from "../../src/route-ownership";
+import {
+  dispatchHookRequest,
+  KIT_RENDERER_HEADER,
+  KIT_RENDERER_VALUE,
+} from "../../src/route-ownership";
 import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
-import { honoFetch } from "#lib/server/hono.ts";
+import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
 
 // Pure env binding: trust, ownership, decoration, the read-only session
 // bridge and the archive/list/detail/hot-zone guard branches live in the tested core
@@ -50,6 +54,19 @@ const base: Handle = async ({ event, resolve }) => {
     // core alone decides when the option is set.
     resolve: (hookEvent, opts) =>
       resolve(hookEvent as Parameters<typeof resolve>[0], opts as Parameters<typeof resolve>[1]),
+    recoveryPage: () =>
+      honoRecoveryFetch(event.request, async (model, requestId) => {
+        event.locals.recovery = model;
+        event.locals.requestId = requestId;
+        const response = await resolve(event);
+        if (
+          response.status === 200 &&
+          response.headers.get("content-type")?.includes("text/html")
+        ) {
+          response.headers.set(KIT_RENDERER_HEADER, KIT_RENDERER_VALUE);
+        }
+        return response;
+      }),
     pastArchive: (request, render, requestId) =>
       dispatchPastArchiveRequest(request, env, render, undefined, undefined, requestId),
     eventsPage: (request, render, requestId) =>
