@@ -707,7 +707,7 @@ const listEvent = { kind: 'event' as const, key: 'game', eventKey: 'game', title
 const gapEvent = { eventKey: 'past', title: 'Previous game night', startsAt: new Date('2026-05-15T18:00:00Z'), timezone: 'UTC', status: 'published' };
 const weeks = monthGrid(state.month, '2026-06-15', new Map([['2026-06-15', ${scenario === "populated" || scenario === "partial" ? "[event]" : "[]"}]]));
 </script>
-<svelte:head><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
+<svelte:head><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/theme-tokens.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
 <div class="base-theme schedule-theme"><main class="events-page"><CalendarScreen {state} appUrl="https://example.test" games={[]} gameFilter={null} past={[]} gapPast={${scenario === "gap" ? "[gapEvent]" : "[]"}} upcoming={${scenario === "list" ? "[listEvent]" : "[]"}} totalPages={1} showPast={false} emptyState={${scenario === "empty" ? "'never'" : scenario === "gap" ? "'gap'" : scenario === "failure" ? "'error'" : "null"}} discordFailed={${scenario === "failure" || scenario === "partial"}} hasVisibleResults={${scenario === "populated" || scenario === "list" || scenario === "partial" || scenario === "month-empty"}} outOfRange={false} searchMiss={${scenario === "filtered"}} monthEmpty={${scenario === "month-empty"}} inviteUrl="https://discord.test/invite" member={false} {weeks} zone="UTC" {now} /></main></div>`,
       },
       async ({ page, html }) => {
@@ -780,19 +780,29 @@ const weeks = monthGrid(state.month, '2026-06-15', new Map([['2026-06-15', ${sce
             "/events",
           );
         }
-        if (process.env.KIT_CALENDAR_EVIDENCE_DIR) {
-          const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
-          await mkdir(directory, { recursive: true });
-          for (const [name, width, height] of [
-            ["desktop", 1280, 800],
-            ["mobile", 390, 844],
-          ]) {
-            await page.setViewportSize({ width, height });
+        const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
+        if (directory) await mkdir(directory, { recursive: true });
+        for (const [name, width, height] of [
+          ["desktop", 1280, 800],
+          ["mobile", 390, 844],
+        ]) {
+          await page.setViewportSize({ width, height });
+          const isList = ["filtered", "list", "gap"].includes(scenario);
+          const selected = page.getByTestId(isList ? "events-view-list" : "events-view-calendar");
+          assert.equal(await selected.getAttribute("aria-current"), "page");
+          const background = await selected.evaluate((el) => getComputedStyle(el).backgroundColor);
+          assert.equal(background, "rgb(46, 36, 32)");
+          await page.getByTestId("events-view-list").focus();
+          await page.keyboard.press("Tab");
+          const focused = page
+            .getByTestId("events-view-calendar")
+            .and(page.locator(":focus-visible"));
+          assert.equal(await focused.evaluate((el) => getComputedStyle(el).outlineWidth), "2px");
+          if (directory)
             await page.screenshot({
               path: join(directory, `screen-${scenario}-${name}.png`),
               fullPage: true,
             });
-          }
         }
       },
     );
