@@ -224,10 +224,12 @@ describe("shared event detail server leaves", () => {
     expect(forcedClosed.rsvp).not.toContain("<form");
     expect(forcedClosed.metadata).not.toContain('data-testid="event-spots-left"');
     vi.setSystemTime(new Date(0));
-    const forcedOpen = withEventDetailHtml({ ...ended.model, rsvpClosed: null }).detailHtml;
-    expect(forcedOpen.rsvp).toContain("data-rsvp-form");
-    expect(forcedOpen.rsvp).not.toContain("rsvp-closed");
-    expect(forcedOpen.metadata).toContain('data-testid="event-spots-left"');
+    const forcedOpen = withEventDetailHtml({ ...ended.model, rsvpClosed: null });
+    expect(forcedOpen.detailHtml.rsvp).toContain("data-rsvp-form");
+    expect(forcedOpen.detailHtml.rsvp).not.toContain("rsvp-closed");
+    // With no ongoing verdict, the open-seat card owns the count instead.
+    expect(forcedOpen.detailHtml.metadata).not.toContain('data-testid="event-spots-left"');
+    expect(kitSeatActionBar(forcedOpen)).toMatchObject({ state: "open", title: "0 of 10 in" });
   });
 
   it("projects open-seat copy and the native action from the same RSVP snapshot", async () => {
