@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import app from "../src/index";
-import { securityHeadersFor } from "../src/headers";
 import type { Env } from "../src/env";
+import { securityHeadersFor } from "../src/http/secure-headers";
+import { fetchApp } from "./helpers/fetch-app";
 
 // TOG-12247: the SvelteKit spike sets headers through securityHeadersFor()
 // instead of hono's secureHeaders(). Both must emit the same set, so a page
@@ -35,13 +35,13 @@ const cases: Array<[string, string]> = [
 ];
 
 describe("securityHeadersFor matches hono secureHeaders", () => {
-  for (const featured of [undefined, "cdn.example.test, img.example.test"]) {
+  for (const featured of [undefined, "cdn.example.com, img.example.com"]) {
     for (const [method, path] of cases) {
       it(`${method} ${path} (featured hosts: ${featured ?? "none"})`, async () => {
-        const res = await app.request(
-          path,
-          { method, headers: { host: "next.example.test" } },
+        const res = await fetchApp(
+          new Request(`${env.APP_URL}${path}`, { method, headers: { host: "next.example.test" } }),
           { ...env, FEATURED_IMAGE_HOSTS: featured },
+          {} as ExecutionContext,
         );
         const expected = securityHeadersFor({ path, method }, featured);
         for (const [name, value] of expected) expect(res.headers.get(name), name).toBe(value);

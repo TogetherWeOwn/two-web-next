@@ -160,14 +160,17 @@ async function renderAt(
   serverNow: string,
   viewerNow: string,
   status: PublicEvent["status"] = "published",
+  review = false,
 ) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(serverNow));
   const session =
-    status === "draft" ? { ...member, session: { ...member.session!, moderator: true } } : member;
+    review || status === "draft"
+      ? { ...member, session: { ...member.session!, moderator: true } }
+      : member;
   const outcome = await resolveKitEventDetail({
     key: KEY,
-    search: "",
+    search: review ? "?review=1" : "",
     path: PATH,
     env: { APP_URL } as Env,
     session,
@@ -212,9 +215,22 @@ describe("Kit RSVP closure uses the server render clock", () => {
   ])("$name", async ({ server, viewer }) => {
     const { kind, html } = await renderAt(server, viewer);
     expect(kind).toBe("ok");
-    expect(html).toContain('data-testid="rsvp-closed"');
+    expect(html).toContain('data-testid="event-past"');
+    expect(html).toContain("Sign-up record");
     expectNoRsvpAction(html);
   });
+
+  it.each(["published", "past"] as const)(
+    "keeps the ended %s record and inert RSVP in moderator preview",
+    async (status) => {
+      const { kind, html } = await renderAt(AFTER_END, BEFORE_END, status, true);
+      expect(kind).toBe("ok");
+      expect(html).toContain('id="signup-record-heading"');
+      expect(html).toContain('disabled="" aria-describedby="preview-rsvp-hint"');
+      expect(html).toContain('id="preview-rsvp-hint">RSVP is disabled in preview.');
+      expectNoRsvpAction(html);
+    },
+  );
 
   it.each([
     { name: "a fast viewer cannot close a still-open event", viewer: AFTER_END },
