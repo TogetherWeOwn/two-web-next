@@ -8,14 +8,23 @@ import { createServer } from "node:net";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = join(repo, "web");
-const worker = join(web, ".svelte-kit/cloudflare/_worker.js");
-const assets = join(web, ".svelte-kit/cloudflare");
 const databaseUrl = process.env.KIT_WORKER_TEST_DATABASE_URL;
+
+async function workerOutput(args) {
+  if (args.length === 0) {
+    const assets = join(web, ".svelte-kit/cloudflare");
+    return { worker: join(assets, "_worker.js"), assets };
+  }
+  assert.deepEqual(args, ["--installed-output"], "unexpected Kit Worker fixture arguments");
+  const { prepareInstalledKitWorker } = await import("./kit-worker-installed-output.mjs");
+  return prepareInstalledKitWorker(repo);
+}
 
 function requireDisposableDatabase(value) {
   if (!value)
@@ -89,10 +98,13 @@ async function unusedPort() {
 }
 
 requireDisposableDatabase(databaseUrl);
+const args = process.argv.slice(2);
+const { worker, assets } = await workerOutput(args);
 const scratch = await mkdtemp(
   join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-worker-e2e-"),
 );
 const wrangler = join(web, "node_modules/.bin/wrangler");
+const workers = [];
 
 // Start one loopback Worker. The generated Kit Worker and the direct Hono
 // Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
@@ -121,6 +133,7 @@ async function startWorker(name, main, assetsDirectory) {
     },
   };
   await writeFile(config, JSON.stringify(configBody));
+  if (args.length) console.log(`Launching loopback ${name} Worker`);
   const child = spawn(
     wrangler,
     [
@@ -150,7 +163,14 @@ async function startWorker(name, main, assetsDirectory) {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  const worker = { child, origin, log: "" };
+  const worker = { name, child, origin, log: "", stopped: false };
+  worker.closed = new Promise((done) => {
+    child.once("close", () => {
+      worker.stopped = true;
+      done();
+    });
+  });
+  workers.push(worker);
   child.on("error", (error) => {
     worker.log += `\n${error.message}`;
   });
@@ -164,12 +184,11 @@ async function startWorker(name, main, assetsDirectory) {
 
 // Buffer Worker output and print it only on failure: --log-level error keeps
 // success quiet while a red check still shows the cause.
-const kit = await startWorker("kit", worker, assets);
-const hono = await startWorker("hono", join(repo, "src/worker.ts"), join(repo, "public"));
-const origin = kit.origin;
-const workerLog = () => `Kit Worker:\n${kit.log}\nDirect Hono Worker:\n${hono.log}`;
 let failed = false;
 try {
+  const kit = await startWorker("kit", worker, assets);
+  const hono = await startWorker("hono", join(repo, "src/worker.ts"), join(repo, "public"));
+  const origin = kit.origin;
   await Promise.all([
     listen(kit.child, kit.origin, () => kit.log),
     listen(hono.child, hono.origin, () => hono.log),
@@ -598,18 +617,23 @@ try {
   failed = true;
   throw error;
 } finally {
-  for (const { child: proc } of [kit, hono]) proc.kill("SIGTERM");
   await Promise.all(
-    [kit, hono].map(async ({ child: proc }) => {
-      await Promise.race([
-        new Promise((resolveExit) => proc.once("exit", resolveExit)),
-        new Promise((resolveExit) => setTimeout(resolveExit, 5_000)),
-      ]);
-      if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
+    workers.map(async (worker) => {
+      if (!worker.stopped) worker.child.kill("SIGTERM");
+      await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
+      if (!worker.stopped) worker.child.kill("SIGKILL");
+      await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
     }),
   );
-  // Print after the children have exited so the Workers' own error logs have
-  // flushed into the buffers; printing in catch races the log.
-  if (failed) process.stderr.write(`Generated Kit Worker output:\n${tail(workerLog())}\n`);
+  // Print after the children close so their output has flushed.
+  if (failed) {
+    for (const { name, log } of workers)
+      process.stderr.write(`${name} Worker output:\n${tail(log)}\n`);
+  }
+  assert.ok(
+    workers.every(({ stopped }) => stopped),
+    "loopback Workers did not stop",
+  );
   await rm(scratch, { recursive: true, force: true });
+  if (args.length) console.log("PASS loopback Workers and scratch cleaned up");
 }
