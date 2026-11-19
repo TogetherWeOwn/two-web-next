@@ -69,8 +69,13 @@ for (const { size } of PARITY_VIEWPORTS) {
         await page.getByRole("link", { name: "Back to the dashboard" }).focus();
         for (const name of ["Open intents", "Recently resolved"]) {
           await page.keyboard.press("Tab");
-          await expect(page.getByRole("region", { name })).toBeFocused();
-          await page.keyboard.press("Tab");
+          const region = page.getByRole("region", { name });
+          await expect(region.getByRole("link")).toBeFocused();
+          if (size.width === 390) {
+            const start = await region.evaluate((el) => el.scrollLeft);
+            await page.keyboard.press("ArrowRight");
+            await expect.poll(() => region.evaluate((el) => el.scrollLeft)).toBeGreaterThan(start);
+          }
         }
         await check("open", open, 200, "event.upsert");
         await expect(page.getByText("Delivery was not confirmed.")).toBeVisible();

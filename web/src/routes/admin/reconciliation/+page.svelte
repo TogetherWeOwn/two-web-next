@@ -9,17 +9,14 @@ let { data }: PageProps = $props();
 <AdminShell title="Reconciliation">
   <p><a href="/admin">Back to the dashboard</a></p>
   <h1>Reconciliation</h1>
-  <p>
-    This read-only view shows recorded reconciliation intents only. Some unconfirmed bot
-    changes may not appear here. Check Discord independently before drawing a conclusion
-    about delivery.
-  </p>
+  <p>This read-only view shows recorded intents only. Some unconfirmed bot changes may not
+    appear here. Check Discord independently to verify delivery.</p>
   {#each [false, true] as resolved (resolved)}
     {@const id = resolved ? "reconciliation-resolved" : "reconciliation-open"}
     {@const records = resolved ? data.resolved : data.open}
     <h2 {id}>{resolved ? "Recently resolved" : "Open intents"}</h2>
     {#if records.length}
-      <div class="admin-table-scroll" role="region" aria-labelledby={id} tabindex="0">
+      <div class="admin-table-scroll" role="region" aria-labelledby={id}>
         <table class="admin-table">
           <thead><tr>
             <th scope="col">Change</th>
