@@ -24,6 +24,7 @@ const notice = (page: Page) =>
   page.getByTestId("events-partial-source").filter({ hasText: MISSING_DISCORD });
 const root = (page: Page) => page.getByTestId("events-calendar");
 const monthPath = "/events?past=1&view=calendar&month=2099-05";
+const recovered = "Discord events are available again.";
 
 function expectSameState(href: string, path: string) {
   const actual = new URL(href, PARTIAL_ORIGIN);
@@ -43,8 +44,9 @@ function gate() {
   return { ready, release };
 }
 
-async function fixture(context: BrowserContext) {
-  const state = { failed: true, row: 1, badFragment: false, readError: false };
+async function fixture(context: BrowserContext, css = "") {
+  const state = { failed: true, row: 1, badFragment: false, readError: false, oldSnapshot: false };
+  let tick = 0;
   const held: {
     entered: ReturnType<typeof gate>;
     done: ReturnType<typeof gate>;
@@ -65,12 +67,14 @@ async function fixture(context: BrowserContext) {
       return;
     }
     if (url.pathname !== "/events") {
-      await route.fulfill({ contentType: "text/css", body: "" });
+      const body = url.pathname === "/schedule-theme.css" ? css : "";
+      await route.fulfill({ contentType: "text/css", body });
       return;
     }
     const fragment = request.headers()["x-two-island"] === "events-calendar";
     traffic.push({ path: url.pathname + url.search, island: fragment });
     const q = url.searchParams.get("q") ?? "";
+    ++tick;
     let body = await partialHtml(
       partialModel({
         state: {
@@ -83,9 +87,12 @@ async function fixture(context: BrowserContext) {
         upcoming: state.readError ? [] : [partialEvent(state.row)],
         emptyState: state.readError ? "error" : null,
         discordFailed: state.failed,
+        discordSnapshotAt: state.readError ? undefined : state.oldSnapshot ? 1 : tick,
       }),
       PARTIAL_ORIGIN,
       url.pathname + url.search,
+      undefined,
+      new Date(Date.UTC(2099, 4, 1, 12, 0, 0, tick)),
     );
     if (fragment && state.badFragment)
       body = "<html><main>Malformed fixture response</main></html>";
@@ -130,9 +137,7 @@ test("complete fixture turns keep the input identity, focus and canonical rows w
       .first(),
   ).toBeVisible();
   await expect(notice(page)).toHaveCount(0);
-  await expect(page.getByTestId("events-search-status")).not.toContainText(
-    "Discord events are available again.",
-  );
+  await expect(page.getByTestId("events-search-status")).not.toContainText(recovered);
   await expect(search).toBeFocused();
   expect(await search.evaluate((node, saved) => node === saved, original)).toBe(true);
   expect(f.traffic.map((entry) => entry.island)).toEqual([false, true]);
@@ -222,7 +227,7 @@ test("fragment failure → recovery → failure removes and restores the notice 
   await page.getByTestId("events-view-calendar").evaluate((link: HTMLElement) => link.click());
   await expect(root(page)).toHaveAttribute("data-view", "calendar");
   await expect(notice(page)).toHaveCount(0);
-  await expect(status).toContainText("Discord events are available again.");
+  await expect(status).toContainText(recovered);
   expect(await status.evaluate((node, saved) => node === saved, originalStatus)).toBe(true);
   await expect(search).toBeFocused();
   expect(await search.evaluate((node, saved) => node === saved, original)).toBe(true);
@@ -236,29 +241,40 @@ test("fragment failure → recovery → failure removes and restores the notice 
       .first(),
   ).toBeVisible();
   await expect(search).toBeFocused();
-  await expect(status).not.toContainText("Discord events are available again.");
+  await expect(status).not.toContainText(recovered);
   f.state.failed = false;
   await page.getByTestId("events-view-calendar").evaluate((link: HTMLElement) => link.click());
   await expect(root(page)).toHaveAttribute("data-view", "calendar");
-  await expect(status).toContainText("Discord events are available again.");
+  await expect(status).toContainText(recovered);
   await page.getByTestId("events-view-list").evaluate((link: HTMLElement) => link.click());
   await expect(root(page)).toHaveAttribute("data-view", "list");
-  await expect(status).not.toContainText("Discord events are available again.");
+  await expect(status).not.toContainText(recovered);
   expect(f.traffic.map((entry) => entry.island)).toEqual([false, true, true, true, true]);
   expect(f.escaped).toEqual([]);
 });
 
-test("a failed schedule read is not announced as Discord recovery", async ({ page, context }) => {
+test("an older snapshot or inconclusive read cannot announce Discord recovery", async ({
+  page,
+  context,
+}) => {
   const f = await fixture(context);
   await page.goto(PARTIAL_ORIGIN + PARTIAL_PATH);
   await expect(notice(page)).toHaveCount(1);
   f.state.failed = false;
-  f.state.readError = true;
+  const status = page.getByTestId("events-search-status");
+  // An overlapping render can have a later request time but the same snapshot generation.
+  f.state.oldSnapshot = true;
   await page.getByTestId("events-view-calendar").evaluate((link: HTMLElement) => link.click());
+  await expect(root(page)).toHaveAttribute("data-view", "calendar");
+  await expect(status).not.toContainText(recovered);
+  f.state.oldSnapshot = false;
+  f.state.readError = true;
+  await page.getByTestId("events-view-list").evaluate((link: HTMLElement) => link.click());
   await expect(page.getByTestId("events-empty-error")).toBeVisible();
-  await expect(page.getByTestId("events-search-status")).not.toContainText(
-    "Discord events are available again.",
-  );
+  await expect(status).not.toContainText(recovered);
+  f.state.readError = false;
+  await page.getByTestId("events-view-calendar").evaluate((link: HTMLElement) => link.click());
+  await expect(status).toContainText(recovered);
 });
 
 test("recovery → failure adds the missing-source notice through the shipped fragment binder", async ({
@@ -357,7 +373,6 @@ test("a superseded failed-source response cannot overwrite a recovered committed
   expect(f.traffic.map((entry) => entry.island)).toEqual([false, true, true]);
 });
 
-// Exercise the synthetic fixture with the shipped schedule stylesheet.
 const scheduleCss = readFileSync(
   new NodeURL("../public/schedule-theme.css", import.meta.url),
   "utf8",
@@ -367,10 +382,7 @@ test("a failed month read restores the grid tab stop after resizing during loadi
   page,
   context,
 }) => {
-  const f = await fixture(context);
-  await context.route(`${PARTIAL_ORIGIN}/schedule-theme.css`, (route) =>
-    route.fulfill({ contentType: "text/css", body: scheduleCss }),
-  );
+  const f = await fixture(context, scheduleCss);
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(PARTIAL_ORIGIN + monthPath);
   const scroll = page.getByTestId("events-calendar-scroll");
@@ -397,10 +409,7 @@ test("partial calendar keeps retry before invite and shows grid scroll cues only
   page,
   context,
 }) => {
-  await fixture(context);
-  await context.route(`${PARTIAL_ORIGIN}/schedule-theme.css`, (route) =>
-    route.fulfill({ contentType: "text/css", body: scheduleCss }),
-  );
+  await fixture(context, scheduleCss);
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(PARTIAL_ORIGIN + monthPath);
 
@@ -409,21 +418,16 @@ test("partial calendar keeps retry before invite and shows grid scroll cues only
   await expect(actions.locator("a").first()).toHaveAccessibleName(RETRY_NAME);
   await expect(actions.locator("a").last()).toHaveAttribute("href", PARTIAL_INVITE);
 
-  const frame = page.locator(".schedule-month-frame");
-  const hint = page.locator(".schedule-month-hint");
+  const hint = page.locator(".schedule-month-frame .schedule-month-hint");
   const scroll = page.getByTestId("events-calendar-scroll");
   await expect(scroll).toHaveCount(1);
-  expect(
-    await frame.evaluate((n) => n.contains(document.querySelector(".schedule-month-hint"))),
-  ).toBe(true);
+  await expect(hint).toHaveCount(1);
 
-  // Wide: no hint, fade, or unnecessary tab stop.
   await expect(hint).toBeHidden();
   expect(await afterDisplay(page)).toBe("none");
   await expect(scroll).not.toHaveAttribute("tabindex");
   await expect(scroll).toHaveAccessibleName("Events calendar");
 
-  // Narrow: the visible text cue and keyboard scroll target return.
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(hint).toBeVisible();
   await expect(hint).not.toHaveAttribute("aria-hidden");
@@ -440,20 +444,18 @@ test("partial calendar keeps retry before invite and shows grid scroll cues only
   await expect(scroll).not.toHaveAttribute("tabindex");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(scroll).toHaveAttribute("tabindex", "0");
-  // Recovery links wrap but keep their order and stay on screen.
+
   const retry = await actions.locator("a").first().boundingBox();
   const invite = await actions.locator("a").last().boundingBox();
   expect(retry && invite && (invite.y > retry.y || invite.x > retry.x)).toBe(true);
   expect(invite!.x + invite!.width).toBeLessThanOrEqual(390);
 
-  // The narrower viewport retains the cue and does not push the invite offscreen.
   await page.setViewportSize({ width: 320, height: 844 });
   await expect(hint).toBeVisible();
   const narrowInvite = await actions.locator("a").last().boundingBox();
   expect(narrowInvite).not.toBeNull();
   expect(narrowInvite!.x + narrowInvite!.width).toBeLessThanOrEqual(320);
 
-  // Forced colors: the decorative gradient fade is removed, text hint remains.
   await page.emulateMedia({ forcedColors: "active" });
   expect(await afterDisplay(page)).toBe("none");
   await expect(hint).toBeVisible();

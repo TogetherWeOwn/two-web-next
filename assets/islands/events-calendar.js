@@ -8,6 +8,7 @@
   "use strict";
   var root = document.querySelector('[data-island="events-calendar"]');
   if (!root) return;
+  var discordRead = Math.max(+root.dataset.discordRead || 0, 0);
 
   var ZONE_SELECTOR = "[data-cal-zone]";
   var CONTENT_SELECTOR = '[data-cal-zone="content"]';
@@ -481,14 +482,15 @@
       // the next submit re-enters the fragment flow. A no-op when the zones
       // carry no form (e.g. the list view) or the node is already wired.
       wireJumpForm();
-      var discordRecovered =
-        root.dataset.discordFailed === "1" &&
-        next.getAttribute("data-discord-failed") === "" &&
-        !next.querySelector('[data-testid="events-empty-error"]');
+      // Odd reads fence their generation. Unknown reads disarm recovery without forgetting the fence.
+      var read = +next.dataset.discordRead;
+      var newerRead = read > Math.abs(discordRead);
+      var discordRecovered = newerRead && discordRead % 2 === 1 && read % 2 === 0;
+      if (newerRead) discordRead = read;
+      else if (!(read >= 0) && discordRead > 0) discordRead = -discordRead;
       root.dataset.view = next.dataset.view;
       root.dataset.month = next.dataset.month;
       root.dataset.past = next.dataset.past;
-      root.dataset.discordFailed = next.dataset.discordFailed || "";
       live.forEach(function (node, i) {
         var source = page.querySelector('[data-testid="' + LIVE_TESTIDS[i] + '"]');
         if (source)

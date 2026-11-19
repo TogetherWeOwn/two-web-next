@@ -57,6 +57,7 @@ export function partialModel(overrides: Partial<CalendarPageModel> = {}): Calend
     totalPages: 3,
     emptyState: null,
     discordFailed: true,
+    discordSnapshotAt: 1,
     games: [],
     gameFilter: null,
     ...overrides,
@@ -75,12 +76,13 @@ export async function partialHtml(
     data: Parameters<typeof renderEventsHtml>[0],
     headers: Record<string, string>,
   ) => ReturnType<typeof renderEventsHtml> = renderEventsHtml,
+  now = new Date("2099-05-01T12:00:00Z"),
 ) {
   return (
     await render(
       {
         ...model,
-        now: new Date("2099-05-01T12:00:00Z"),
+        now,
         member: false,
         session: null,
         moderator: false,

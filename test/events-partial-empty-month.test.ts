@@ -74,6 +74,7 @@ describe("partial-source empty month", () => {
       expect(html).toContain('data-testid="events-page-unreadable"');
       expect(status).toContain("Events on page 2 can");
       expect(status).toMatch(MISSING_DISCORD);
+      expect(html).toContain('data-discord-read="3"');
       expect(notices(html)).toHaveLength(1);
     },
   );
