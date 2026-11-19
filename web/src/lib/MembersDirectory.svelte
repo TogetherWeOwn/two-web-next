@@ -55,7 +55,7 @@ function href(filter = "active", query = "", page = 1) {
         {#if fixtureState}<input type="hidden" name="state" value={fixtureState} />{/if}
         {#if filter !== "active"}<input type="hidden" name="filter" value={filter} />{/if}
         <label class="sr-only" for="directory-search">Find by name or Discord handle</label>
-        <input id="directory-search" type="search" name="q" value={query} maxlength={MEMBER_SEARCH_LIMIT} placeholder="Find by name or Discord handle" />
+        <input id="directory-search" type="search" name="q" value={query} maxlength={MEMBER_SEARCH_LIMIT} placeholder="Name or Discord handle" />
         <Button type="submit" size="sm">Search</Button>
       </form>
       <SegmentedControl label="Which members" items={MEMBER_FILTERS.map((choice) => ({
@@ -95,7 +95,7 @@ function href(filter = "active", query = "", page = 1) {
     gap: var(--space-3);
     padding-block: var(--two-space-inset-room);
     border-block-end: 1px solid var(--two-color-line-hairline);
-    background: var(--two-color-bg-canvas);
+    background: var(--color-page);
   }
   :global(html:has(.directory-toolbar)) { scroll-padding-block-start: 100px; }
   form { display: flex; align-items: center; gap: var(--space-2); flex: 1 1 280px; max-width: 420px; }
@@ -114,7 +114,7 @@ function href(filter = "active", query = "", page = 1) {
   input::placeholder { color: var(--t3); opacity: 1; }
   input:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
   .directory-order { margin: 0 0 0 auto; color: var(--t3); font: var(--text-label)/1.3 var(--font-data); letter-spacing: var(--tracking-label); text-transform: uppercase; }
-  .directory-columns { display: grid; grid-template-columns: minmax(0, 1fr) var(--two-layout-rail-min); gap: 48px; padding-block: var(--space-3) var(--space-11); }
+  .directory-columns { display: grid; grid-template-columns: minmax(0, 1fr) var(--two-layout-rail-min); gap: var(--two-space-8); padding-block: var(--space-3) var(--space-11); }
   .directory-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding-block: var(--space-3); }
   @media (max-width: 820px) {
     /* Only the directory toolbar sticks; the two-row shell header scrolls away. */

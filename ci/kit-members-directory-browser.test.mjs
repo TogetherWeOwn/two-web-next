@@ -129,10 +129,21 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
         await page.screenshot({ path: `${out}/scrolled-${width}.png` });
       }
 
+      await page.setViewportSize({ width: 1280, height: 800 });
       await open("");
       assert.match((await page.locator("h1").textContent()) ?? "", /here\. Say hi/);
+      const rows = page.getByRole("list", { name: "Members", exact: true }).getByRole("listitem");
+      const gameColumnStart = (name) =>
+        rows
+          .filter({ has: page.getByRole("link", { name, exact: true }) })
+          .locator(".directory-games")
+          .evaluate((cell) => cell.getBoundingClientRect().left);
+      assert.equal(
+        await gameColumnStart("Fixture Member 7"),
+        await gameColumnStart("Fixture Member 1"),
+        "the Guide badge must not shift the game column at 1280px",
+      );
       // Keyboard: Tab reaches the search field and Enter submits it without JavaScript.
-      await page.setViewportSize({ width: 1280, height: 800 });
       let focused = false;
       for (let i = 0; i < 40 && !focused; i++) {
         await page.keyboard.press("Tab");
