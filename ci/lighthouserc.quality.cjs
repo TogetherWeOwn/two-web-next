@@ -21,7 +21,10 @@ const collect = deployed
 
 const assertions = {};
 for (const [category, minScore] of Object.entries(budget.categories)) {
-  assertions[`categories:${category}`] = ["error", { minScore, aggregationMethod: "median-run" }];
+  assertions[`categories:${category}`] = [
+    category === "performance" ? "warn" : "error",
+    { minScore, aggregationMethod: "median-run" },
+  ];
 }
 
 // Deployed staging sits behind the platform bot-management script (cdn-cgi

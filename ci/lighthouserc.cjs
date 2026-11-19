@@ -1,6 +1,7 @@
 // Legacy public-page thresholds and mid-range phone profile.
 // Threshold changes need a separate owner-approved PR, never a green-build fix. The mobile performance
 // category floor comes from ci/quality-budget.json (owner-approved web quality gate, 2026-10-10).
+// Owner decision (2026-11-14): advisory until the Ember + SvelteKit migration is done; restore "error" after it.
 const budget = require("./quality-budget.json");
 const paths = [
   "/",
@@ -47,16 +48,16 @@ module.exports = {
     assert: {
       assertions: {
         "categories:performance": [
-          "error",
+          "warn",
           { minScore: budget.mobilePerformance, aggregationMethod: "median-run" },
         ],
         "largest-contentful-paint": [
-          "error",
+          "warn",
           { maxNumericValue: 2000, aggregationMethod: "median" },
         ],
-        "cumulative-layout-shift": ["error", { maxNumericValue: 0.1, aggregationMethod: "median" }],
-        "server-response-time": ["error", { maxNumericValue: 600, aggregationMethod: "median" }],
-        "total-blocking-time": ["error", { maxNumericValue: 200, aggregationMethod: "median" }],
+        "cumulative-layout-shift": ["warn", { maxNumericValue: 0.1, aggregationMethod: "median" }],
+        "server-response-time": ["warn", { maxNumericValue: 600, aggregationMethod: "median" }],
+        "total-blocking-time": ["warn", { maxNumericValue: 200, aggregationMethod: "median" }],
         "first-contentful-paint": ["warn", { maxNumericValue: 1800, aggregationMethod: "median" }],
       },
     },
