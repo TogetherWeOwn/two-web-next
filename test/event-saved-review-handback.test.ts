@@ -118,6 +118,7 @@ async function resolve(
   session: KitRequestSession = MODERATOR,
   kitStore: KitEventDetailStore = store(),
   key = KEY,
+  renderTime?: Date,
 ) {
   const seen: Record<string, string>[] = [];
   const outcome = await resolveKitEventDetail({
@@ -129,12 +130,17 @@ async function resolve(
     joinResult: null,
     setHeaders: (headers) => seen.push(headers),
     store: kitStore,
+    now: renderTime,
   });
   return { outcome, seen };
 }
 
-async function resolveOk(search: string, kitStore: KitEventDetailStore = store()) {
-  const { outcome } = await resolve(search, MODERATOR, kitStore);
+async function resolveOk(
+  search: string,
+  kitStore: KitEventDetailStore = store(),
+  renderTime?: Date,
+) {
+  const { outcome } = await resolve(search, MODERATOR, kitStore, KEY, renderTime);
   if (outcome.kind !== "ok") throw new Error(`Expected detail, got ${outcome.kind}`);
   return outcome;
 }
@@ -396,7 +402,7 @@ it("shows the ended record data in moderator review without enabling RSVP", asyn
     startsAt: new Date("2030-01-09T23:00:00Z"),
     endsAt: new Date("2030-01-10T01:00:00Z"),
   };
-  const { model } = await resolveOk("?review=1", store({}, ended));
+  const { model } = await resolveOk("?review=1", store({}, ended), now);
   expect(model.lifecycle).toMatchObject({ date: "9 Jan 2030", endTime: "10 Jan 2030, 01:00" });
   expect(model.detailHtml.rsvp).toContain("RSVP is disabled in preview.");
 });

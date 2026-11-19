@@ -343,7 +343,7 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
     getReviewEventFn: (db, key) => getEventForModeratorReview(db, key),
     neighborsFn: getEventNeighbors,
     relatedFn: listRelatedEvents,
-    seriesFn: getEventSeriesContext,
+    seriesFn: (db, event, now) => getEventSeriesContext(db, event, now),
     attendeesFn: async (db, eventId, page) => {
       // Same bounded window as the served handler: the requested page plus
       // the first row of the next page (lookahead, never rendered) that
@@ -386,12 +386,10 @@ function toLink(link: EventLink, now: Date): KitEventDetailLink {
 
 function detailLifecycle(
   event: PublicEvent,
-  now: Date,
   timeZone: string,
   next: EventLink | null | undefined,
 ): KitEventDetailModel["lifecycle"] {
-  const ended = (event.status === "past" || event.status === "published") && event.endsAt <= now;
-  if (!ended || !instantIso(event.startsAt) || !instantIso(event.endsAt)) return null;
+  if (!instantIso(event.startsAt) || !instantIso(event.endsAt)) return null;
   const date = new Intl.DateTimeFormat("en-GB", {
     timeZone,
     day: "numeric",
@@ -567,7 +565,13 @@ export async function resolveKitEventDetail(
         (related) => related,
         (): EventLink[] => [],
       );
-      const seriesSettled = (store.seriesFn ?? getEventSeriesContext)(db, event, now).then(
+      const ended =
+        (event.status === "past" || event.status === "published") && event.endsAt <= now;
+      const seriesSettled = (store.seriesFn ?? getEventSeriesContext)(
+        db,
+        event,
+        ended ? now : undefined,
+      ).then(
         (series) => series,
         (): EventSeriesContext | null => null,
       );
@@ -666,7 +670,7 @@ export async function resolveKitEventDetail(
           isDraft: event.status === "draft",
           isPast: event.status === "past",
           isOngoing: isOngoing(event, now),
-          lifecycle: detailLifecycle(event, now, zoneLabel, series?.upcoming),
+          lifecycle: ended ? detailLifecycle(event, zoneLabel, series?.upcoming) : null,
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,

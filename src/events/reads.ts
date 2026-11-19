@@ -927,7 +927,7 @@ export async function getEventSeriesContext(
         game: sql<string | null>`case when ${textFits} then ${events.game} end`,
         organizer_name: sql<string | null>`case when ${textFits} then ${events.organizer_name} end`,
         recurrenceIndex: events.recurrenceIndex,
-        status: events.status,
+        ...(now ? { status: events.status } : {}),
         textFits,
       })
       .from(events)

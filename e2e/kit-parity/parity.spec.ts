@@ -2183,6 +2183,8 @@ test("Kit member event detail captures the ended record at both widths", async (
   const adjacentKey = "01J00000000000000000000993";
   const endedKey = "01J00000000000000000000994";
   const nextKey = "01J00000000000000000000995";
+  const laterKey = "01J00000000000000000000996";
+  const historicalKey = "01J00000000000000000000997";
   const userId = "900000000000000848";
   const bearer = `two_${randomBytes(32).toString("base64url")}`;
   const hash = createHash("sha256").update(bearer).digest("hex");
@@ -2202,13 +2204,20 @@ test("Kit member event detail captures the ended record at both widths", async (
           values (${event.key}, 'Community game night', 'Bring a favourite game and meet the community.',
             ${new Date(event.start)}, ${new Date(event.end)}, 'Community voice', 'published', true)`;
       }
-      await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 3, recurrence_index = 1
+      await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 5, recurrence_index = 1
         where event_key = ${endedKey}`;
       await sql`update events set parent_event_id = (select id from events where event_key = ${endedKey}),
         recurrence_index = 2 where event_key = ${adjacentKey}`;
-      await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
-        select ${nextKey}, title, now() + interval '7 days', now() + interval '7 days 2 hours', 'published', id, 3
-        from events where event_key = ${endedKey}`;
+      for (const sibling of [
+        { key: laterKey, days: 14, status: "published", index: 3 },
+        { key: nextKey, days: 7, status: "published", index: 4 },
+        { key: historicalKey, days: 1, status: "past", index: 5 },
+      ]) {
+        const startsAt = now + sibling.days * 86_400_000;
+        await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
+          select ${sibling.key}, title, ${new Date(startsAt)}, ${new Date(startsAt + 7_200_000)},
+            ${sibling.status}, id, ${sibling.index} from events where event_key = ${endedKey}`;
+      }
       await sql`insert into rsvps (event_id, user_id, status)
         select id, ${userId}, 'going' from events where event_key = ${endedKey}`;
     });
@@ -2267,7 +2276,7 @@ test("Kit member event detail captures the ended record at both widths", async (
   } finally {
     await context.close();
     await withSessionDb(async (sql) => {
-      await sql`delete from events where event_key in (${adjacentKey}, ${endedKey}, ${nextKey})`;
+      await sql`delete from events where event_key in (${adjacentKey}, ${endedKey}, ${nextKey}, ${laterKey}, ${historicalKey})`;
       await sql`delete from web_session_grace where user_id = ${userId}`;
       await sql`delete from web_sessions where user_id = ${userId}`;
       await sql`delete from users where id = ${userId}`;
