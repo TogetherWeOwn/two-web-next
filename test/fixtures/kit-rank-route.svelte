@@ -2,8 +2,6 @@
 import EmberShell from "#lib/EmberShell.svelte";
 import RankLabel from "#lib/RankLabel.svelte";
 import SiteMetadata from "#lib/SiteMetadata.svelte";
-
-const ranks = [1, 2, 3, 4, 5] as const;
 </script>
 
 <SiteMetadata title="Member ranks" theme="home" />
@@ -13,7 +11,7 @@ const ranks = [1, 2, 3, 4, 5] as const;
     <section>
       <h2>{large ? "Profile ranks" : "Inline ranks"}</h2>
       <ul role="list">
-        {#each ranks as rank (rank)}
+        {#each [1, 2, 3, 4, 5] as const as rank (rank)}
           <li><RankLabel {rank} {large} /></li>
         {/each}
       </ul>
