@@ -196,9 +196,8 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
   });
 
   describe("waitlist offer creation", () => {
-    // Assumed API: createWaitlistOffer(tx, rsvpId) locks the event, reads one
-    // post-lock clock_timestamp(), expires lapsed holds and returns the live
-    // held offer, a new one, or null when ineligible or no seat is free.
+    // Targeted creation reads one post-lock clock, expires lapsed holds and
+    // replays a live hold or creates one only for the eligible FIFO head.
     let offerSeq = 0;
     afterEach(async () => {
       // Scoped cleanup: never touch the suite's seeded rows.
@@ -332,23 +331,27 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
       expect(await rows(rsvpId)).toHaveLength(1);
     });
 
-    it("expires a lapsed hold and opens a fresh window with a new key", async () => {
+    it("expires a lapsed hold and opens a fresh window with a new key for the next RSVP", async () => {
       const eventId = await makeEvent();
       const rsvpId = await makeRsvp(eventId, "waitlisted");
+      const next = await makeRsvp(eventId, "waitlisted");
       const [old] = await client<{ id: string; notification_key: string }[]>`
         insert into waitlist_offers (rsvp_id, offered_at, expires_at)
         values (${rsvpId}, now() - interval '3 hours', now() - interval '1 hour')
         returning id, notification_key`;
-      const offer = await create(rsvpId);
+      expect(await create(rsvpId)).toBeNull();
+      const offer = await create(next);
       expect(offer).not.toBeNull();
       expect(offer!.id).not.toBe(old!.id);
       expect(offer!.notificationKey).not.toBe(old!.notification_key);
       const history = await rows(rsvpId);
-      expect(history.map((r) => r.state)).toEqual(["expired", "held"]);
-      expect(Date.parse(history[1]!.expires_at) - Date.parse(history[1]!.offered_at)).toBe(
+      expect(history.map((r) => r.state)).toEqual(["expired"]);
+      const nextRows = await rows(next);
+      expect(nextRows.map((r) => r.state)).toEqual(["held"]);
+      expect(Date.parse(nextRows[0]!.expires_at) - Date.parse(nextRows[0]!.offered_at)).toBe(
         TWO_HOURS_MS,
       );
-      expect(Date.parse(history[1]!.offered_at)).toBeGreaterThan(
+      expect(Date.parse(nextRows[0]!.offered_at)).toBeGreaterThan(
         Date.parse(history[0]!.expires_at),
       );
     });
@@ -429,9 +432,13 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
             const invoke = async (id: number) => {
               const start = queries.length;
               const result = await createWaitlistOffer(tx, id);
+              // The FIFO query reads RSVPs with a correlated offer-history check.
+              // Compare the three top-level offer queries shared by creation and replay.
               const offerQueries = queries
                 .slice(start)
-                .filter(({ query }) => /\b(?:from|update)\s+"?waitlist_offers"?/i.test(query));
+                .filter(({ query }) =>
+                  /^(?:select [^()]*\bfrom|update)\s+"?waitlist_offers"?\s/i.test(query),
+                );
               expect(offerQueries).toHaveLength(3);
               const shapes = offerQueries.map(({ query, params }) => {
                 const normalized = query
@@ -462,18 +469,18 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
               else baseline = shapes;
               return result;
             };
-            const first = await invoke(rsvpId);
+            const first = await invoke(another);
             expect(first).not.toBeNull();
             expect(first!.id).not.toBe(old[0]!.id);
             expect(first!.notificationKey).not.toBe(old[0]!.notification_key);
             const history = await tx.execute<{ state: string }>(sql`
               select state from waitlist_offers where rsvp_id = ${rsvpId} order by created_at, id`);
-            expect(history.map((row) => row.state)).toEqual(["expired", "held"]);
-            expect(await invoke(rsvpId)).toMatchObject({
+            expect(history.map((row) => row.state)).toEqual(["expired"]);
+            expect(await invoke(another)).toMatchObject({
               id: first!.id,
               notificationKey: first!.notificationKey,
             });
-            expect(await invoke(another)).toBeNull();
+            expect(await invoke(rsvpId)).toBeNull();
             expect(await other()).toEqual(before);
             throw rollback;
           }),

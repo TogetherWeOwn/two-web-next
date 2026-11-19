@@ -9,7 +9,21 @@ type TestPage = EventTarget & {
   setTimeout: typeof setTimeout;
   clearTimeout: typeof clearTimeout;
 };
-type Snapshot = { asOf: number; staleAt: number | null; responseStart: number };
+type Snapshot = {
+  asOf: number;
+  staleAt: number | null;
+  responseStart: number;
+  snapshotAgeAtResponseStart: number | null;
+};
+
+function snapshot(staleAt: number | null): Snapshot {
+  return {
+    asOf: 1_000,
+    staleAt,
+    responseStart: 0,
+    snapshotAgeAtResponseStart: staleAt === null ? null : 0,
+  };
+}
 let createWatcher: (
   snapshot: Snapshot,
   onStale: () => void,
@@ -43,14 +57,11 @@ afterEach(() => {
 });
 
 describe("snapshot watcher wall-clock rollback", () => {
-  function environment() {
+  function environment(monotonicNow: () => number) {
     const page = new EventTarget() as TestPage;
     page.setTimeout = setTimeout;
     page.clearTimeout = clearTimeout;
-    Object.defineProperty(page, "performance", {
-      configurable: true,
-      value: { now: () => Date.now() - 1_000 },
-    });
+    Object.defineProperty(page, "performance", { value: { now: monotonicNow } });
     const visibility = new EventTarget();
     Object.defineProperty(visibility, "visibilityState", { value: "visible", configurable: true });
     return { page, visibility };
@@ -59,19 +70,10 @@ describe("snapshot watcher wall-clock rollback", () => {
   it("does not extend a claim when the wall clock moves backward", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { page, visibility } = environment();
     let monotonic = 0;
-    Object.defineProperty(page, "performance", {
-      configurable: true,
-      value: { now: () => monotonic },
-    });
+    const { page, visibility } = environment(() => monotonic);
     const onStale = vi.fn();
-    const watcher = createWatcher(
-      { asOf: 1_000, staleAt: 2_000, responseStart: 0 },
-      onStale,
-      page,
-      visibility,
-    );
+    const watcher = createWatcher(snapshot(2_000), onStale, page, visibility);
     vi.setSystemTime(1_800);
     page.dispatchEvent(new Event("pageshow"));
     vi.setSystemTime(1_100);
@@ -87,23 +89,15 @@ describe("snapshot watcher wall-clock rollback", () => {
   it("withdraws and remains fail-closed when the monotonic clock moves backward", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { page, visibility } = environment();
     let monotonic = 100;
-    Object.defineProperty(page, "performance", {
-      configurable: true,
-      value: { now: () => monotonic },
-    });
+    const { page, visibility } = environment(() => monotonic);
     const onStale = vi.fn();
-    const watcher = createWatcher(
-      { asOf: 1_000, staleAt: 5_000, responseStart: 0 },
-      onStale,
-      page,
-      visibility,
-    );
+    const watcher = createWatcher(snapshot(5_000), onStale, page, visibility);
+    expect(onStale).not.toHaveBeenCalled();
     monotonic = 99;
     page.dispatchEvent(new Event("pageshow"));
     expect(onStale).toHaveBeenCalledOnce();
-    watcher.replace({ asOf: 1_000, staleAt: 6_000, responseStart: 0 });
+    watcher.replace(snapshot(6_000));
     expect(onStale).toHaveBeenCalledTimes(2);
     watcher.dispose();
   });
@@ -111,24 +105,15 @@ describe("snapshot watcher wall-clock rollback", () => {
   it("keeps a clock failure across a snapshot without a deadline", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { page, visibility } = environment();
     let monotonic = 100;
-    Object.defineProperty(page, "performance", {
-      configurable: true,
-      value: { now: () => monotonic },
-    });
+    const { page, visibility } = environment(() => monotonic);
     const onStale = vi.fn();
-    const watcher = createWatcher(
-      { asOf: 1_000, staleAt: null, responseStart: 0 },
-      onStale,
-      page,
-      visibility,
-    );
+    const watcher = createWatcher(snapshot(null), onStale, page, visibility);
     monotonic = 99;
     page.dispatchEvent(new Event("pageshow"));
     expect(onStale).not.toHaveBeenCalled();
     monotonic = 101;
-    watcher.replace({ asOf: 1_000, staleAt: 5_000, responseStart: 0 });
+    watcher.replace(snapshot(5_000));
     expect(onStale).toHaveBeenCalledOnce();
     watcher.dispose();
   });
@@ -136,25 +121,19 @@ describe("snapshot watcher wall-clock rollback", () => {
   it("carries a clock advance through replacement after wall-clock rollback", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { page, visibility } = environment();
     let monotonic = 0;
-    Object.defineProperty(page, "performance", {
-      configurable: true,
-      value: { now: () => monotonic },
-    });
+    const { page, visibility } = environment(() => monotonic);
     const onStale = vi.fn();
-    const watcher = createWatcher(
-      { asOf: 1_000, staleAt: 5_000, responseStart: 0 },
-      onStale,
-      page,
-      visibility,
-    );
+    const watcher = createWatcher(snapshot(5_000), onStale, page, visibility);
     vi.setSystemTime(1_800);
     page.dispatchEvent(new Event("pageshow"));
     vi.setSystemTime(1_100);
-    watcher.replace({ asOf: 1_000, staleAt: 2_000, responseStart: 0 });
+    watcher.replace(snapshot(2_000));
+    monotonic = 199;
+    vi.advanceTimersByTime(199);
+    expect(onStale).not.toHaveBeenCalled();
     monotonic = 200;
-    vi.advanceTimersByTime(200);
+    vi.advanceTimersByTime(1);
     expect(onStale).toHaveBeenCalledOnce();
     watcher.dispose();
   });

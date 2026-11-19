@@ -14,6 +14,10 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   and stays exempt. Islands (`assets/islands/*.js`) are out of scope: they
   use assigned `.then` chains behind generation guards. Rule fixtures live
   in `sg-tests/fetch-await*.yml` and run under `npm run scan:rules-test`.
+- **HTTP scan suppression guard (HARD):** `npm run scan:fetch-await` also
+  rejects `ast-grep-ignore` comments in JavaScript and TypeScript under
+  `src/http/`, including hidden directories. The guard runs before ast-grep
+  and does not depend on any HTTP import rules.
 - **Changed-lines coverage (WARN, 80%):** `ci/patch-coverage.mjs` intersects
   the PR diff with `coverage-final.json`; added TS lines nobody executes warn.
   Missing or malformed `coverage-final.json` fails the step instead of skipping,

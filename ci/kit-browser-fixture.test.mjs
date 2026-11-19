@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,10 +35,16 @@ export async function assertHomeEvidence() {
       join(dir, "tooling", "ci", "kit-offline-browser.mjs"),
       `export async function withKitOfflineBrowser({ source }, capture) {
   if (process.env.CAPTURE_CASE === "incomplete" && source.endsWith("after")) return;
+  let focused = false;
   const page = {
     setViewportSize: async () => {},
+    locator: () => ({
+      focus: async () => { focused = true; },
+      evaluate: async () => process.env.CAPTURE_CASE !== "focus-hidden",
+    }),
     screenshot: async (options) => {
       if (options.fullPage !== true) throw new Error("full-page capture required");
+      if (!options.path && focused) throw new Error("ordinary capture retained focus");
       return Buffer.from("fixture image");
     },
     evaluate: async (fn) => {
@@ -92,6 +98,9 @@ export async function assertHomeEvidence() {
         "after-guest-mobile.png",
       ],
     );
+    const hiddenFocus = await run("focus-hidden");
+    assert.equal(hiddenFocus.result.status, 1);
+    assert.match(hiddenFocus.manifest.errors[0], /after:/);
     const failure = await run("assertion");
     assert.equal(failure.result.status, 1);
     assert.equal(failure.manifest.captures.length, 3);
@@ -360,11 +369,19 @@ test("Kit fixture opts into compiled JavaScript hydration", async () => {
     await page.locator("button").click();
     assert.equal(await page.locator("button").textContent(), "0");
   });
-  await withKitOfflineBrowser({ page: fixture, javaScriptEnabled: true }, async ({ page }) => {
-    await page.waitForLoadState("networkidle");
-    await page.locator("button").click();
-    await page.waitForFunction(() => document.querySelector("button")?.textContent === "1");
-  });
+  const timezoneId = "America/Los_Angeles";
+  await withKitOfflineBrowser(
+    { page: fixture, javaScriptEnabled: true, timezoneId },
+    async ({ page }) => {
+      assert.equal(
+        await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone),
+        timezoneId,
+      );
+      await page.waitForLoadState("networkidle");
+      await page.locator("button").click();
+      await page.waitForFunction(() => document.querySelector("button")?.textContent === "1");
+    },
+  );
 });
 
 test("Kit fixture denies WebSocket connections and workers", async () => {
@@ -509,6 +526,12 @@ test("asset reads reject escapes, symlinks, and unsupported files", async () => 
   }
 });
 
+const calendarViewports = [
+  ["desktop", { width: 1280, height: 800 }],
+  ["mobile", { width: 390, height: 844 }],
+  ["narrow", { width: 320, height: 844 }],
+];
+
 for (const scenario of ["never", "gap", "error", "partial", "miss", "game", "both"]) {
   test(`calendar empty ${scenario} renders recovery links without JavaScript`, async () => {
     const kind = ["game", "both"].includes(scenario) ? "miss" : scenario;
@@ -525,16 +548,23 @@ const past = Array.from({ length: 7 }, (_, i) => ({ eventKey: i === 1 ? 'game/ni
 <div class="base-theme schedule-theme"><main class="events-page"><CalendarEmpty kind="${kind}" {state} gameFilter={${JSON.stringify(game)}} {past} inviteUrl="https://discord.test/invite" /></main></div>`,
       },
       async ({ page, html }) => {
+        const joinDiscord = page.getByTestId("discord-join");
+        const retry = page.getByTestId("events-retry");
+        const clearSearch = page.getByTestId("events-search-clear-empty");
+        const allGames = page.getByTestId("events-empty-search").getByRole("link", {
+          name: query ? "Search all games" : "Show all games",
+          exact: true,
+        });
+        const archive = page
+          .getByTestId("events-empty-gap")
+          .getByRole("link", { name: "Past events" });
         if (scenario === "never" || scenario === "error" || scenario === "partial") {
           assert.match(html, /https:\/\/discord\.test\/invite/);
-          assert.equal(
-            await page.getByTestId("discord-join").getAttribute("href"),
-            "https://discord.test/invite",
-          );
+          assert.equal(await joinDiscord.getAttribute("href"), "https://discord.test/invite");
         }
         if (scenario === "error" || scenario === "partial") {
           assert.equal(await page.getByRole(scenario === "error" ? "alert" : "status").count(), 1);
-          assert.match(await page.getByTestId("events-retry").getAttribute("href"), /page=2/);
+          assert.match(await retry.getAttribute("href"), /page=2/);
         }
         if (scenario === "gap") {
           assert.equal(await page.getByTestId("events-empty-gap-item").count(), 5);
@@ -550,31 +580,48 @@ const past = Array.from({ length: 7 }, (_, i) => ({ eventKey: i === 1 ? 'game/ni
               .getAttribute("href"),
             "/e/game%2Fnight",
           );
-          assert.equal(
-            await page.getByRole("link", { name: "Past events" }).getAttribute("href"),
-            "/events/past",
-          );
+          assert.equal(await archive.getAttribute("href"), "/events/past");
         }
         if (query) {
-          const clear = await page.getByTestId("events-search-clear-empty").getAttribute("href");
+          const clear = await clearSearch.getAttribute("href");
           assert.doesNotMatch(clear, /[?&]q=/);
           if (game) assert.match(clear, /game=Chess/);
         }
         if (game) {
-          const all = await page
-            .getByRole("link", { name: query ? "Search all games" : "Show all games" })
-            .getAttribute("href");
+          const all = await allGames.getAttribute("href");
           assert.doesNotMatch(all, /[?&]game=/);
           if (query) assert.match(all, /q=night/);
         }
-        if (process.env.KIT_CALENDAR_EVIDENCE_DIR) {
-          const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
-          await mkdir(directory, { recursive: true });
-          for (const [name, width, height] of [
-            ["desktop", 1280, 800],
-            ["mobile", 390, 844],
-          ]) {
-            await page.setViewportSize({ width, height });
+        const links = {
+          never: [joinDiscord],
+          gap: [archive],
+          error: [retry, joinDiscord],
+          partial: [retry, joinDiscord],
+          miss: [clearSearch],
+          game: [allGames],
+          both: [clearSearch, allGames],
+        }[scenario];
+        const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
+        if (directory) await mkdir(directory, { recursive: true });
+        for (const [name, viewport] of calendarViewports) {
+          await page.setViewportSize(viewport);
+          for (const link of links) {
+            const bounds = await link.boundingBox();
+            assert.ok(bounds, `${scenario} ${name}: recovery link is visible`);
+            assert.ok(
+              bounds.x >= 0 && bounds.x + bounds.width <= viewport.width,
+              `${scenario} ${name}: recovery link fits within the viewport (${JSON.stringify(bounds)})`,
+            );
+          }
+          if (links.length === 2) {
+            const firstId = await links[0].getAttribute("data-testid");
+            assert.equal(
+              await links[0].or(links[1]).first().getAttribute("data-testid"),
+              firstId,
+              `${scenario} ${name}: ${firstId} precedes the alternative action`,
+            );
+          }
+          if (directory) {
             await page.screenshot({
               path: join(directory, `calendar-empty-${scenario}-${name}.png`),
               fullPage: true,
@@ -628,6 +675,121 @@ const past: CalendarPersistedCard = { kind: 'event', key: 'past', eventKey: 'pas
             await page.setViewportSize({ width, height });
             await page.screenshot({
               path: join(directory, `past-drawer-${scenario}-${name}.png`),
+              fullPage: true,
+            });
+          }
+        }
+      },
+    );
+  });
+}
+
+for (const scenario of [
+  "populated",
+  "list",
+  "empty",
+  "gap",
+  "filtered",
+  "failure",
+  "partial",
+  "month-empty",
+]) {
+  test(`calendar screen renders ${scenario} without JavaScript`, async () => {
+    await withKitOfflineBrowser(
+      {
+        page: `<script lang="ts">
+import CalendarScreen from '#lib/CalendarScreen.svelte';
+import { monthGrid } from '../../../../src/islands/contracts';
+const state = { view: ${JSON.stringify(["filtered", "list", "gap"].includes(scenario) ? "list" : "calendar")} as const, month: '2026-06', q: ${JSON.stringify(scenario === "filtered" ? "chess" : "")}, game: '', past: false, page: 1 };
+const now = new Date('2026-06-15T12:00:00Z');
+const event = { key: 'game', title: 'Game night', startsAt: new Date('2026-06-15T18:00:00Z'), zone: 'UTC', cancelled: false, ongoing: false, availability: '2 seats left' };
+const listEvent = { kind: 'event' as const, key: 'game', eventKey: 'game', title: 'Game night', titleSegments: null, zone: 'UTC', startsAt: event.startsAt, endsAt: null, location: null, description: null, passage: null, availability: { state: 'open' as const, text: 'Spots open', ongoing: false }, status: 'published', game: null, host: '', goingCount: 1, goingOccupancy: 1, capacity: null };
+const gapEvent = { eventKey: 'past', title: 'Previous game night', startsAt: new Date('2026-05-15T18:00:00Z'), timezone: 'UTC', status: 'published' };
+const weeks = monthGrid(state.month, '2026-06-15', new Map([['2026-06-15', ${scenario === "populated" || scenario === "partial" ? "[event]" : "[]"}]]));
+</script>
+<svelte:head><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
+<div class="base-theme schedule-theme"><main class="events-page"><CalendarScreen {state} appUrl="https://example.test" games={[]} gameFilter={null} past={[]} gapPast={${scenario === "gap" ? "[gapEvent]" : "[]"}} upcoming={${scenario === "list" ? "[listEvent]" : "[]"}} totalPages={1} showPast={false} emptyState={${scenario === "empty" ? "'never'" : scenario === "gap" ? "'gap'" : scenario === "failure" ? "'error'" : "null"}} discordFailed={${scenario === "failure" || scenario === "partial"}} hasVisibleResults={${scenario === "populated" || scenario === "list" || scenario === "partial" || scenario === "month-empty"}} outOfRange={false} searchMiss={${scenario === "filtered"}} monthEmpty={${scenario === "month-empty"}} inviteUrl="https://discord.test/invite" member={false} {weeks} zone="UTC" {now} /></main></div>`,
+      },
+      async ({ page, html }) => {
+        assert.match(html, /data-island="events-calendar"/);
+        assert.deepEqual(
+          await page
+            .locator("[data-cal-zone]")
+            .evaluateAll((zones) => zones.map((zone) => zone.getAttribute("data-cal-zone"))),
+          ["head", "subscribe", "actions", "miss", "content"],
+        );
+        const form = page.locator('form[role="search"]');
+        assert.equal(await form.getAttribute("method"), "get");
+        assert.equal(await form.getAttribute("action"), "/events");
+        assert.equal(await page.getByTestId("events-read-retry").isHidden(), true);
+        assert.equal(await page.getByTestId("events-read-clear").isHidden(), true);
+        if (scenario === "populated") {
+          assert.match(await page.locator('[data-cal-zone="content"]').innerText(), /Game night/);
+          assert.match(await page.getByLabel("Next month").getAttribute("href"), /month=2026-07/);
+        }
+        if (scenario === "list") {
+          assert.match(await page.getByTestId("events-list").innerText(), /Game night/i);
+          assert.equal(await page.getByTestId("calendar-month").count(), 0);
+        }
+        if (scenario === "empty") {
+          assert.match(
+            await page.locator('[data-cal-zone="content"]').innerText(),
+            /Nothing on the calendar yet/i,
+          );
+          assert.equal(await page.getByTestId("calendar-month").count(), 0);
+        }
+        if (scenario === "gap") {
+          const gap = page.getByTestId("events-empty-gap");
+          assert.match(await gap.innerText(), /Previous game night/);
+          assert.equal(
+            await gap.getByRole("link", { name: "Previous game night" }).getAttribute("href"),
+            "/e/past",
+          );
+        }
+        if (scenario === "filtered") {
+          assert.equal(await form.locator('[name="q"]').inputValue(), "chess");
+          assert.match(
+            await page.locator('[data-cal-zone="miss"]').innerText(),
+            /Nothing matches that search/i,
+          );
+          assert.equal(
+            await page.getByTestId("events-search-clear-empty").getAttribute("href"),
+            "/events",
+          );
+        }
+        if (scenario === "failure") {
+          assert.equal(await page.locator('[role="alert"]').count(), 1);
+          assert.equal(await page.locator('[data-cal-zone="miss"]').innerText(), "");
+          assert.equal(
+            await page.getByTestId("events-retry").getAttribute("href"),
+            "/events?view=calendar&month=2026-06",
+          );
+        }
+        if (scenario === "partial") {
+          assert.match(
+            await page.getByTestId("events-partial-source").innerText(),
+            /may be missing/,
+          );
+          assert.match(await page.locator('[data-cal-zone="content"]').innerText(), /Game night/);
+          assert.equal(await page.getByTestId("calendar-month-empty").count(), 0);
+        }
+        if (scenario === "month-empty") {
+          assert.equal(await page.getByTestId("calendar-month").textContent(), "June 2026");
+          assert.equal(
+            await page.getByTestId("calendar-month-empty").locator("a").getAttribute("href"),
+            "/events",
+          );
+        }
+        if (process.env.KIT_CALENDAR_EVIDENCE_DIR) {
+          const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
+          await mkdir(directory, { recursive: true });
+          for (const [name, width, height] of [
+            ["desktop", 1280, 800],
+            ["mobile", 390, 844],
+          ]) {
+            await page.setViewportSize({ width, height });
+            await page.screenshot({
+              path: join(directory, `screen-${scenario}-${name}.png`),
               fullPage: true,
             });
           }
@@ -703,16 +865,32 @@ const weeks = monthGrid(state.month, '2026-06-15', new Map<string, CalendarGridE
       assert.equal(await form.locator('[name="game"]').inputValue(), "Chess");
       assert.equal(await form.locator('[name="past"]').inputValue(), "1");
       assert.equal(await form.locator('[name="view"]').inputValue(), "calendar");
-      assert.equal(await page.getByTestId("events-calendar-scroll").getAttribute("tabindex"), "0");
-      if (process.env.KIT_CALENDAR_EVIDENCE_DIR) {
-        const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
-        await mkdir(directory, { recursive: true });
-        for (const [name, width, height] of [
-          ["desktop", 1280, 800],
-          ["mobile", 390, 844],
+      const scroll = page.getByTestId("events-calendar-scroll");
+      assert.equal(await scroll.getAttribute("tabindex"), "0");
+      const directory = process.env.KIT_CALENDAR_EVIDENCE_DIR;
+      if (directory) await mkdir(directory, { recursive: true });
+      for (const [name, viewport] of calendarViewports) {
+        await page.setViewportSize(viewport);
+        const maxScroll = await scroll.evaluate(
+          (element) => element.scrollWidth - element.clientWidth,
+        );
+        assert.equal(maxScroll > 0, name !== "desktop", `${name}: grid overflow`);
+        for (const [position, left] of [
+          ["start", 0],
+          ["end", maxScroll],
         ]) {
-          await page.setViewportSize({ width, height });
-          await page.screenshot({ path: join(directory, `calendar-${name}.png`), fullPage: true });
+          const actual = await scroll.evaluate((element, target) => {
+            element.scrollTo({ left: target, behavior: "instant" });
+            return element.scrollLeft;
+          }, left);
+          assert.equal(actual, left, `${name}: grid is at the ${position} of its scroll range`);
+          if (directory) {
+            const path = join(directory, `calendar-${name}-${position}.png`);
+            await page.screenshot({ path, fullPage: true });
+            if (position === "start" && name !== "narrow") {
+              await copyFile(path, join(directory, `calendar-${name}.png`));
+            }
+          }
         }
       }
     },

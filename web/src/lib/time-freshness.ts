@@ -1,9 +1,8 @@
 import { snapshotNow, timeSnapshotIsStale, type SnapshotClock } from "./time-freshness-clock";
 
-export interface TimeSnapshot {
-  asOf: number;
+export interface TimeSnapshot extends Pick<SnapshotClock, "asOf" | "snapshotAgeAtResponseStart"> {
   staleAt: number | null;
-  // performance.now() time origin of the response carrying this snapshot.
+  // Response start in the page's performance.now() time coordinate.
   responseStart: number;
 }
 
@@ -19,11 +18,11 @@ export function watchTimeSnapshot(
   visibility: Document = document,
 ): { replace: (snapshot: TimeSnapshot) => void; dispose: () => void } {
   let timer: number | undefined;
-  let withdrawn = false;
   let disposed = false;
-  let snapshot = initial;
-  let clock: SnapshotClock | undefined;
-  let lastMonotonic: number | undefined;
+  let snapshot: TimeSnapshot | undefined;
+  let pageNow = -Infinity;
+  let acceptedAsOf = -Infinity;
+  let lastMonotonic = 0;
 
   function monotonicNow(): number {
     try {
@@ -37,47 +36,37 @@ export function watchTimeSnapshot(
     if (disposed) return;
     if (timer !== undefined) page.clearTimeout(timer);
     timer = undefined;
+    const wall = Date.now();
     const monotonic = monotonicNow();
-    const now =
-      !clock || lastMonotonic === undefined || monotonic < lastMonotonic
+    // Only a previously accepted claim can establish a wall-clock rollback.
+    const badWall = !Number.isFinite(wall) || wall < acceptedAsOf;
+    pageNow =
+      badWall || !Number.isFinite(monotonic) || monotonic < lastMonotonic
         ? Number.NaN
-        : snapshotNow(clock, Date.now(), monotonic);
+        : Math.max(wall, pageNow + (monotonic - lastMonotonic));
     lastMonotonic = monotonic;
-    if (clock) {
-      clock.previousNow = now;
-      clock.hydrationWall = now;
-      clock.hydrationMonotonic = monotonic;
-    }
-    if (withdrawn || snapshot.staleAt === null) return;
-    if (timeSnapshotIsStale(snapshot.staleAt, now)) {
-      withdrawn = true;
-      onStale();
+    if (!snapshot) return;
+
+    const now = snapshotNow(
+      { ...snapshot, hydrationWall: pageNow, hydrationMonotonic: monotonic, previousNow: pageNow },
+      wall,
+      monotonic,
+    );
+    // Only a trustworthy snapshot can advance the page clock beyond its own reading.
+    if (Number.isFinite(now)) pageNow = now;
+    const { staleAt } = snapshot;
+    if (staleAt === null || timeSnapshotIsStale(staleAt, now)) {
+      snapshot = undefined;
+      if (staleAt !== null) onStale();
       return;
     }
-    timer = page.setTimeout(check, Math.min(snapshot.staleAt - now, 2_147_483_647));
+    acceptedAsOf = Math.max(acceptedAsOf, snapshot.asOf);
+    timer = page.setTimeout(check, Math.min(staleAt - now, 2_147_483_647));
   }
 
   function replace(next: TimeSnapshot) {
     if (disposed) return;
-    if (timer !== undefined) page.clearTimeout(timer);
-    timer = undefined;
-    const hydrationWall = Date.now();
-    const monotonic = monotonicNow();
-    const previousNow = clock
-      ? lastMonotonic === undefined || monotonic < lastMonotonic
-        ? Number.NaN
-        : snapshotNow(clock, hydrationWall, monotonic)
-      : hydrationWall;
     snapshot = next;
-    withdrawn = false;
-    lastMonotonic = monotonic;
-    clock = {
-      asOf: next.asOf,
-      responseStart: next.responseStart,
-      hydrationWall: Math.max(hydrationWall, previousNow),
-      hydrationMonotonic: monotonic,
-      previousNow,
-    };
     check();
   }
 

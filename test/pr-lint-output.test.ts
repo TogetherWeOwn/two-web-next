@@ -565,18 +565,14 @@ describe("unchanged convention policy and workflow gates", () => {
     }
   });
 
-  it("retains the required check name, metadata sources, visibility-routed runners and read-only permissions", () => {
+  it("retains the required check name, metadata sources, hosted runners and read-only permissions", () => {
     const resolve = step("Resolve PR title/body");
     expect(resolve.run).toBe("python3 ci/pr-lint-output.py resolve");
     expect(readFileSync(helper, "utf8")).toContain('with_name("resolve-pr-metadata.py")');
     expect(resolve.text).toContain("          PR_NUMBER: ${{ inputs.pr_number }}\n");
     expect(workflow).toContain("    name: pr-lint\n");
-    // A public repo is always GitHub-hosted (the guard comes first, so no repo var can
-    // reroute it); private repos may select an overflow runner, else the self-hosted fleet.
-    expect(workflow).toContain(
-      `runs-on: \${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (`,
-    );
-    expect(workflow).toContain(`|| '["self-hosted","two-selfhosted"]') }}\n`);
+    expect(workflow.match(/^    runs-on: ubuntu-latest$/gm)).toHaveLength(2);
+    expect(workflow).not.toMatch(/CI_OVERFLOW_RUNNER|two-selfhosted/);
     expect(workflow.match(/^permissions:\n((?:  .*\n)+)/m)?.[1]).toBe(
       "  contents: read\n  pull-requests: read\n",
     );

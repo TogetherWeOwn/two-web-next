@@ -17,11 +17,14 @@ const main = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8"));
 const jobs = readWranglerConfig(readFileSync("wrangler.jobs.jsonc", "utf8"));
 const deployWorkflow = readFileSync(".github/workflows/deploy.yml", "utf8");
 
-function stagingDeps(flags: { archive?: string; static?: string } = {}) {
+type RolloutFlags = { archive?: string; static?: string; events?: string };
+
+function stagingDeps(flags: RolloutFlags = {}) {
   return {
     appUrl: STAGING_APP_URL,
     kitRouteArchive: flags.archive,
     kitRouteStatic: flags.static,
+    kitRouteEvents: flags.events,
     featuredImageHosts: "",
     honoFetch: vi.fn(async () => new Response("hono", { status: 200 })),
     resolve: vi.fn(
@@ -34,7 +37,7 @@ function stagingDeps(flags: { archive?: string; static?: string } = {}) {
   };
 }
 
-async function dispatchAt(path: string, flags: { archive?: string; static?: string } = {}) {
+async function dispatchAt(path: string, flags: RolloutFlags = {}) {
   const request = new Request(new URL(path, STAGING_APP_URL), {
     headers: { host: new URL(STAGING_APP_URL).host },
   });
@@ -97,6 +100,14 @@ describe("Kit staging route rollout", () => {
     },
   );
 
+  it.each(["https://togetherweown.com", `${STAGING_APP_URL}/`, "not a URL"])(
+    "refuses the events flag by itself outside the exact staging URL (%s)",
+    (appUrl) => {
+      const manifest = stagingManifestFor({ APP_URL: appUrl, KIT_ROUTE_EVENTS: "true" });
+      expect(manifest?.some((entry) => entry.enabled)).toBe(false);
+    },
+  );
+
   it("keeps unflagged staging on Hono even when APP_URL has a path", async () => {
     const request = new Request(`${STAGING_APP_URL}/hotzones`);
     const deps = { ...stagingDeps(), appUrl: `${STAGING_APP_URL}/nested` };
@@ -129,6 +140,15 @@ describe("Kit staging route rollout", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/about" }, manifest ?? [])).toBe("hono");
   });
 
+  it("does not let the events flag bypass method, detail, or manifest gates", () => {
+    const manifest = stagingManifestFor({ APP_URL: STAGING_APP_URL, KIT_ROUTE_EVENTS: "true" }, [
+      { method: "GET", path: "/events", enabled: false },
+      { method: "POST", path: "/events", enabled: true },
+      { method: "GET", path: "/e/:key", enabled: true },
+    ]);
+    expect(manifest?.map((entry) => entry.enabled)).toEqual([false, false, false]);
+  });
+
   it("enables exactly the reviewed families per flag combination at manifest level", () => {
     // Kills family-widening mutants (for example matching /events or
     // /leaderboards/members under archive): the restrictive manifest is the
@@ -158,6 +178,7 @@ describe("Kit staging route rollout", () => {
   it.each([
     ["archive only", { archive: "true" }, ["/events/past"]],
     ["archive-static", { archive: "true", static: "true" }, ["/events/past", "/about", "/faq"]],
+    ["events only", { events: "true" }, ["/events"]],
   ] as const)(
     "keeps every unselected Kit route on Hono under %s",
     async (_name, flags, kitPaths) => {
@@ -195,6 +216,8 @@ describe("Kit staging route rollout", () => {
       "hono",
     ],
     ["malformed flags fail closed", { archive: "TRUE", static: "yes" }, "/events/past", "hono"],
+    ["events flag off", { events: "false" }, "/events", "hono"],
+    ["malformed events flag", { events: "TRUE" }, "/events", "hono"],
   ] as const)(
     "routes the %s selection through the expected renderer",
     async (_name, flags, path, owner) => {
@@ -213,13 +236,15 @@ describe("Kit staging route rollout", () => {
 });
 
 describe("Kit staging Wrangler config", () => {
-  it("keeps the existing staging Worker contract and starts both families on Hono", () => {
+  it("keeps the existing staging Worker contract and starts all families on Hono", () => {
     expect(staging.name).toBe("two-web-next");
     expect(staging.main).toBe(".svelte-kit/cloudflare/_worker.js");
     expect(staging.routes).toEqual([{ pattern: "next.togetherweown.com", custom_domain: true }]);
     expect(staging.vars?.APP_URL).toBe(STAGING_APP_URL);
     expect(staging.vars?.KIT_ROUTE_ARCHIVE).toBe("false");
     expect(staging.vars?.KIT_ROUTE_STATIC).toBe("false");
+    expect(staging.vars?.KIT_ROUTE_EVENTS).toBe("false");
+    expect(main.env?.production?.vars).not.toHaveProperty("KIT_ROUTE_EVENTS");
     expect(staging.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
     expect(staging.tail_consumers).toEqual([{ service: "two-web-next-alerts" }]);
     expect(staging.assets).toMatchObject({
@@ -254,15 +279,23 @@ describe("Kit staging Wrangler config", () => {
 });
 
 describe("staging deployment selection", () => {
-  it("offers an ordered Hono, archive, then archive-plus-static rollout", () => {
+  it("offers an ordered archive rollout and a separate events-only option", () => {
     expect(deployWorkflow).toMatch(/workflow_dispatch:\n\s+inputs:\n\s+kit_route_family:/);
     expect(deployWorkflow).toContain("default: hono");
-    expect(deployWorkflow).toContain("- hono\n          - archive\n          - archive-static");
     expect(deployWorkflow).toContain(
-      "KIT_ROUTE_ARCHIVE:${{ steps.kit-route-flags.outputs.archive }}",
+      "- hono\n          - archive\n          - archive-static\n          - events",
     );
-    expect(deployWorkflow).toContain(
-      "KIT_ROUTE_STATIC:${{ steps.kit-route-flags.outputs.static }}",
+    const deployStep = deployWorkflow
+      .split("      - name: Deploy to Cloudflare Workers\n")[1]
+      ?.split(/\n      - /)[0];
+    const deployEnv = deployStep?.match(/^        env:\n((?: {10}.*\n)+)/m)?.[1];
+    expect(deployStep).toContain('"KIT_ROUTE_ARCHIVE:$KIT_ROUTE_ARCHIVE"');
+    expect(deployStep).toContain('"KIT_ROUTE_STATIC:$KIT_ROUTE_STATIC"');
+    expect(deployStep).toContain('"KIT_ROUTE_EVENTS:$KIT_ROUTE_EVENTS"');
+    expect(deployEnv).toContain("KIT_ROUTE_ARCHIVE: ${{ steps.kit-route-flags.outputs.archive }}");
+    expect(deployEnv).toContain("KIT_ROUTE_STATIC: ${{ steps.kit-route-flags.outputs.static }}");
+    expect(deployEnv).toContain(
+      "KIT_ROUTE_EVENTS: ${{ steps.kit-route-flags.outputs.events || 'false' }}",
     );
     expect(deployWorkflow).toContain("--config web/wrangler.staging.jsonc");
     expect(deployWorkflow).not.toContain("--config wrangler.jsonc --tag");

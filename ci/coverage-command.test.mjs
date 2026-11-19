@@ -349,6 +349,15 @@ test("bounded CSS evidence is collected only after the Kit budget fails", () => 
   assert.match(uploadStep, /if-no-files-found: error/);
 });
 
+test("the shipping Kit route step reports overages but still fails on bad measurements", () => {
+  const step = checkJob
+    .split(/\n      - /)
+    .find((entry) => entry.startsWith("name: Kit route performance (report only)\n"));
+  assert.ok(step);
+  assert.match(step, /^        run: node ci\/check-kit-route-perf\.mjs --report-only$/m);
+  assert.doesNotMatch(step, /continue-on-error:/);
+});
+
 test("the check job models the guarded steps the simulation relies on", () => {
   const labels = checkSteps.map((step) => step.label);
   for (const label of [AUDIT, INSTALL, COVERAGE, TIER0, PATCH, SUMMARY, UPLOAD]) {
