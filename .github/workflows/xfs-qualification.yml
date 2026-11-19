@@ -47,7 +47,7 @@ jobs:
           test "$result" -eq 42
 
   kit-fatal-proof:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -60,11 +60,10 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - name: Install locked tooling and XFS tools on the disposable runner
+      - name: Check the runner's XFS tool and install locked Node tooling
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xfsprogs
+          sudo mkfs.xfs -V
           npm ci --include=dev --ignore-scripts --no-audit --no-fund
           npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
       - name: Build stock Kit output
