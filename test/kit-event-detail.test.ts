@@ -944,9 +944,12 @@ describe("Kit detail presentation", () => {
     if (last.kind !== "ok") throw new Error(last.kind);
     expect(last.model.liveTime).toMatchObject({
       staleAt: event.endsAt.toISOString(),
-      sinceText: "01:45 GMT+1",
-      asOfText: "01:15 GMT",
+      asOf: new Date(+endsAt - 1).toISOString(),
     });
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(last.model as unknown as Record<string, unknown>);
+    expect(html).toContain("since 01:45 GMT+1");
+    expect(html).toContain(">01:15 GMT</time>");
     expect(last.model.review?.actions).toContain("Back to edit");
     expect(last.model.detailHtml.rsvp).toContain("disabled");
     vi.setSystemTime(event.endsAt);

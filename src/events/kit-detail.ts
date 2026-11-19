@@ -49,8 +49,6 @@ import {
   formatEventWhen,
   instantIso,
   isValidZone,
-  wallDateIso,
-  wallTimeHm,
 } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
@@ -203,14 +201,7 @@ export interface KitEventDetailModel {
   isPast: boolean;
   /** Server snapshot; client expiry never changes the RSVP verdict. */
   isOngoing?: boolean;
-  liveTime?: {
-    asOf: string;
-    asOfText: string;
-    staleAt: string;
-    since: string;
-    sinceText: string;
-    utc: string;
-  };
+  liveTime?: { asOf: string; staleAt: string };
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
@@ -393,32 +384,11 @@ function toLink(link: EventLink, now: Date): KitEventDetailLink {
   };
 }
 
-function liveDetailTime(
-  event: PublicEvent,
-  now: Date,
-  zone: string,
-): KitEventDetailModel["liveTime"] {
+function liveDetailTime(event: PublicEvent, now: Date): KitEventDetailModel["liveTime"] {
   if (!isOngoing(event, now)) return undefined;
   const staleAt = timeStaleAt("live", +now, +event.startsAt, +event.endsAt);
   if (staleAt === null || !Number.isFinite(staleAt)) return undefined;
-  const offsets = new Intl.DateTimeFormat("en-GB", { timeZone: zone, timeZoneName: "shortOffset" });
-  const offset = (at: Date) =>
-    offsets.formatToParts(at).find((part) => part.type === "timeZoneName")?.value;
-  const startOffset = offset(event.startsAt);
-  const nowOffset = offset(now);
-  const shifted = startOffset !== nowOffset;
-  const since = wallTimeHm(event.startsAt, zone);
-  const clock = wallTimeHm(now, zone) + (shifted ? ` ${nowOffset}` : "");
-  const sameDay = wallDateIso(event.startsAt, zone) === wallDateIso(now, zone);
-  const date = new Intl.DateTimeFormat("en-GB", { timeZone: zone, day: "numeric", month: "short" });
-  return {
-    asOf: now.toISOString(),
-    asOfText: sameDay ? clock : `${date.format(now)} ${clock}`,
-    staleAt: new Date(staleAt).toISOString(),
-    since,
-    sinceText: shifted ? `${since} ${startOffset}` : since,
-    utc: wallTimeHm(event.startsAt, "UTC"),
-  };
+  return { asOf: now.toISOString(), staleAt: new Date(staleAt).toISOString() };
 }
 
 // A code bug (no branded status) must never look like a downstream outage:
@@ -625,8 +595,7 @@ export async function resolveKitEventDetail(
       const pagePath = `/e/${event.eventKey}`;
       const pageCanonical = canonicalUrl(appUrl, pagePath);
       const review = wantsReview ? savedEventReview(event, now, search) : null;
-      const zoneLabel = isValidZone(event.timezone) ? event.timezone : "UTC";
-      const liveTime = liveDetailTime(event, now, zoneLabel);
+      const liveTime = liveDetailTime(event, now);
       const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
@@ -703,7 +672,7 @@ export async function resolveKitEventDetail(
           whenText: formatDetailWhen(event.startsAt, event.timezone),
           endsWhenText: formatDetailWhen(event.endsAt, event.timezone),
           durationText: formatElapsedDuration(event.endsAt.getTime() - event.startsAt.getTime()),
-          zoneLabel,
+          zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
           timeDatetime: instantIso(event.startsAt),
           attendees,
           attendeesPaging,

@@ -2,6 +2,7 @@
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import Tag from "#lib/Tag.svelte";
+import TimeBlock from "#lib/TimeBlock.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
 import { kitEventFacts } from "../../../src/events/kit-event-facts";
 import { isPublicJoinUrl } from "../../../src/events/public-join-url";
@@ -27,18 +28,16 @@ const savedLive = $derived(
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
 // This route is csr=false. Share one native-island block in execution order;
 // every deferred script runs after parsing, with all of its mount nodes present.
-const detailIslands = $derived(
-  [
-    ...(live ? ["kit-live-event-time"] : ["event-device-timezone", "event-time-from-now"]),
-    "rsvp-button",
-    "copy-link",
-    "event-share",
-    "going-count",
-    "attendees-live",
-  ]
-    .map((name) => `<script src="/islands/${name}.js" defer></` + "script>")
-    .join(""),
-);
+const detailIslands = $derived([
+  ...(live ? ["kit-live-event-time"] : ["event-device-timezone", "event-time-from-now"]),
+  "rsvp-button",
+  "copy-link",
+  "event-share",
+  "going-count",
+  "attendees-live",
+]
+  .map((name) => `<script src="/islands/${name}.js" defer></` + "script>")
+  .join(""));
 </script>
 
 {#snippet liveTag(testid?: string)}
@@ -154,17 +153,8 @@ const detailIslands = $derived(
   {/if}
   {#if live}
     <div class="lifecycle-time" data-testid="kit-event-time">
-      <time class="lifecycle-figure" datetime={model.timeDatetime}>
-        <span data-live-fresh>Live</span><span hidden data-live-stale>{live.since}</span>
-      </time>
-      <div>
-        <p>
-          <span data-live-fresh>Since {live.sinceText} · {model.zoneLabel} · as of</span>
-          <span hidden data-live-stale>{model.zoneLabel} · {live.utc} UTC · live as of</span>
-          <time datetime={live.asOf}>{live.asOfText}</time><span id="kit-live-refresh"></span>
-        </p>
-        <p>Ends <time datetime={model.endsAt}>{model.endsWhenText}</time></p>
-      </div>
+      <TimeBlock start={model.timeDatetime} end={model.endsAt} asOf={live.asOf} state="live" stale={false}
+        serverLive={{ eventZone: model.zoneLabel, endLabel: model.endsWhenText }} />
     </div>
   {:else}
     {@html model.detailHtml.metadata}
@@ -319,14 +309,8 @@ const detailIslands = $derived(
 <style>
   .event-layout-head { grid-area: head; min-width: 0; }
   .lifecycle-tags { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
-  .lifecycle-time { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-4); padding-top: var(--space-7); margin-bottom: var(--space-4); border-top: 1px solid var(--color-hair2); }
-  .lifecycle-figure { font-size: var(--text-figure); line-height: 1; font-variant-numeric: tabular-nums; }
-  .lifecycle-time p { margin: 0; color: var(--color-t3); font: var(--text-small) / var(--leading-label) var(--font-data); }
-  @media (max-width: 820px) {
-    .lifecycle-time { flex-direction: column; }
-    .lifecycle-figure { font-size: var(--text-figure-compact); }
-    .live-rsvp-end { display: none; }
-  }
+  .lifecycle-time { margin-bottom: var(--space-4); }
+  @media (max-width: 820px) { .live-rsvp-end { display: none; } }
   .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
   .event-layout-rail :global(> section) { border: 0; }
   .event-layout-rail :global(> .event-share) { padding: 0; margin-top: var(--space-2); }
