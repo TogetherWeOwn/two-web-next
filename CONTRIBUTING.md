@@ -265,8 +265,9 @@ reachable from the checked-out commit. On pull requests, this starts at GitHub's
 PR merge commit, not the submitted branch tip. The scan forces text diffs and
 compares each merge with its first parent, including conflict resolutions.
 That comparison can report content inherited from another parent under the
-merge SHA. An ignore fingerprint applies to one occurrence; a fingerprint for
-the original commit does not also exempt the merge occurrence.
+merge SHA. Use commit-scoped ignore fingerprints to limit an exception to one
+occurrence. A fingerprint scoped to the original commit does not also exempt
+the merge occurrence.
 
 On a pull request the job applies the base branch's
 `.gitleaks.toml` and `.gitleaksignore` and ignores inline `gitleaks:allow`
