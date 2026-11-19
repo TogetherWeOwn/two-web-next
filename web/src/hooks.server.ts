@@ -39,6 +39,7 @@ const base: Handle = async ({ event, resolve }) => {
     sessionSecret: env.SESSION_SECRET,
     kitRouteArchive: env.KIT_ROUTE_ARCHIVE,
     kitRouteStatic: env.KIT_ROUTE_STATIC,
+    kitRouteEvents: env.KIT_ROUTE_EVENTS,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,
     honoFetch,
     // Forwards the core's resolve options untouched: content-leaf renders
