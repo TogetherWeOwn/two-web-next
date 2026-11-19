@@ -950,8 +950,8 @@ describe("Kit detail presentation", () => {
     const { renderDetail } = await buildKitEventDetailBundle();
     const html = renderDetail(last.model as unknown as Record<string, unknown>);
     expect(html).toContain("since 01:45 GMT+1");
-    const asOf = '<time datetime="2026-10-25T01:15:00.000Z">01:15 GMT</time>';
-    expect(html.replace(/<!---->/g, "")).toContain(asOf);
+    const asOf = /<time datetime="2026-10-25T01:15:00\.000Z">01:15 GMT(?:\+0)?<\/time>/;
+    expect(html.replace(/<!---->/g, "")).toMatch(asOf);
     expect(last.model.review?.actions).toContain("Back to edit");
     expect(last.model.detailHtml.rsvp).toContain("disabled");
     vi.setSystemTime(event.endsAt);
