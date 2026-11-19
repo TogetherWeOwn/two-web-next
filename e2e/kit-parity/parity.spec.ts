@@ -1706,14 +1706,17 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
   }
 });
 
-test("Kit member seat card captures saved and full states", async ({ browser }) => {
+test("Kit member seat card captures open, saved and full states", async ({ browser }) => {
   const target = targets.find((item) => item.name === "kit")!;
   const key = "01J00000000000000000000991";
+  const openKey = "01J00000000000000000000992";
   const savedUserId = "900000000000000846";
   const fullUserId = "900000000000000845";
+  const openUserId = "900000000000000847";
   const states = [
     { name: "saved", userId: savedUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
     { name: "full", userId: fullUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
+    { name: "open", userId: openUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
   ];
   const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
   try {
@@ -1727,6 +1730,9 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
       await sql`insert into events (event_key, title, description, game, organizer_name, starts_at, ends_at, location, status, capacity, rsvp_open)
         values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
           'Catan', 'Vexa', '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true)`;
+      await sql`insert into events (event_key, title, description, game, organizer_name, starts_at, ends_at, location, status, capacity, rsvp_open)
+        values (${openKey}, 'Community game night', 'Bring a favourite game and meet the community.',
+          'Catan', 'Vexa', '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 2, true)`;
       await sql`insert into rsvps (event_id, user_id, status)
         select id, ${savedUserId}, 'going' from events where event_key = ${key}`;
     });
@@ -1811,16 +1817,34 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
         { width: 390, height: 844 },
       ]) {
         await page.setViewportSize(viewport);
-        const response = await page.goto(`/e/${key}`);
+        const response = await page.goto(`/e/${state.name === "open" ? openKey : key}`);
         expect(response?.status()).toBe(200);
         expect(response?.headers()["x-two-renderer"]).toBe("kit");
         const card = page.getByTestId("kit-seat-card");
         await expect(card.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
-        await expect(
-          card.getByRole("button", {
-            name: state.name === "saved" ? /can't make it/i : /join the waitlist/i,
-          }),
-        ).toBeVisible();
+        if (state.name === "open") {
+          await expect(card.getByTestId("rsvp-going")).toBeVisible();
+          const control = card.locator('[data-island="rsvp-button"]');
+          await expect(control).toHaveAttribute("data-full", "false");
+          await expect(control).toHaveAttribute("data-capacity", "2");
+          await expect(page.getByTestId("event-spots-left")).toHaveText("2 of 2 spots left");
+          if (viewport.width === 390) {
+            const overview = await page.locator(".event-layout-head").boundingBox();
+            const seat = await card.boundingBox();
+            const body = await page.locator(".event-layout-body").boundingBox();
+            expect(overview).not.toBeNull();
+            expect(seat).not.toBeNull();
+            expect(body).not.toBeNull();
+            expect(seat!.y).toBeGreaterThanOrEqual(overview!.y + overview!.height);
+            expect(body!.y).toBeGreaterThanOrEqual(seat!.y + seat!.height);
+          }
+        } else {
+          await expect(
+            card.getByRole("button", {
+              name: state.name === "saved" ? /can't make it/i : /join the waitlist/i,
+            }),
+          ).toBeVisible();
+        }
         const name = `kit-review-seat-card-${state.name}-${viewport.width}`;
         const path = test.info().outputPath(`${name}.png`);
         if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
@@ -1832,7 +1856,7 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
   } finally {
     await context.close();
     await withSessionDb(async (sql) => {
-      await sql`delete from events where event_key = ${key}`;
+      await sql`delete from events where event_key in (${key}, ${openKey})`;
       for (const state of states) {
         await sql`delete from web_session_grace where user_id = ${state.userId}`;
         await sql`delete from web_sessions where user_id = ${state.userId}`;
@@ -2174,6 +2198,63 @@ test("kit: archive search and keyboard focus evidence", async ({ browser }) => {
     }
   } finally {
     await context.close();
+  }
+});
+
+test("Kit event detail captures ongoing and ended events at both widths", async ({ browser }) => {
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const target = targets.find((item) => item.name === "kit")!;
+  const ongoingKey = "01J00000000000000000000993";
+  const endedKey = "01J00000000000000000000994";
+  const now = Date.now();
+  const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  try {
+    await withSessionDb(async (sql) => {
+      for (const event of [
+        { key: ongoingKey, start: now - 3_600_000, end: now + 3_600_000 },
+        { key: endedKey, start: now - 10_800_000, end: now - 3_600_000 },
+      ]) {
+        await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, rsvp_open)
+          values (${event.key}, 'Community game night', 'Bring a favourite game and meet the community.',
+            ${new Date(event.start)}, ${new Date(event.end)}, 'Community voice', 'published', true)`;
+      }
+    });
+    const page = await context.newPage();
+    for (const state of [
+      { name: "ongoing", key: ongoingKey },
+      { name: "ended", key: endedKey },
+    ]) {
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        const response = await page.goto(`/e/${state.key}`);
+        expect(response?.status()).toBe(200);
+        expect(response?.headers()["x-two-renderer"]).toBe("kit");
+        if (state.name === "ongoing") {
+          await expect(page.getByTestId("event-ongoing")).toHaveText("Happening now");
+          await expect(
+            page.getByTestId("kit-seat-card").getByRole("link", { name: "Log in with Discord" }),
+          ).toBeVisible();
+        } else {
+          await expect(page.getByTestId("event-ongoing")).toHaveCount(0);
+          await expect(page.getByTestId("rsvp-closed")).toHaveText("This one has been and gone");
+        }
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+          viewport.width,
+        );
+        const name = `kit-review-event-${state.name}-${viewport.width}`;
+        const path = test.info().outputPath(`${name}.png`);
+        await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+        await test.info().attach(name, { path, contentType: "image/png" });
+      }
+    }
+  } finally {
+    await context.close();
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key in (${ongoingKey}, ${endedKey})`;
+    });
   }
 });
 
