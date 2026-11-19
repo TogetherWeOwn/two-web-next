@@ -219,6 +219,11 @@ export const MonthGrid: FC<{
         {CALENDAR_MONTH_JUMP_SUBMIT_COPY}
       </button>
     </form>
-    <MonthGridBody state={state} weeks={weeks} zone={zone} now={now} />
+    <div class="schedule-month-container">
+      <div class="schedule-month-frame">
+        <p class="schedule-month-hint">Scroll sideways for Fri–Sun →</p>
+        <MonthGridBody state={state} weeks={weeks} zone={zone} now={now} />
+      </div>
+    </div>
   </div>
 );
