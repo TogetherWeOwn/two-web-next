@@ -308,8 +308,8 @@ const detailIslands = $derived([
 <style>
   .event-layout-head { grid-area: head; min-width: 0; }
   .lifecycle-tags { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
-  .lifecycle-time { margin-bottom: var(--space-4); }
-  @media (max-width: 820px) { .live-rsvp-end { display: none; } }
+  .lifecycle-time { margin-bottom: var(--space-4); --two-color-hair-2: var(--color-hair2); --two-color-text-primary: var(--color-t1); --two-color-text-tertiary: var(--color-t3); --two-space-inset-card-lg: var(--space-inset-card-lg); --two-space-4: var(--space-4); --two-font-display: var(--font-display); --two-font-data: var(--font-data); --two-font-size-figure: var(--text-figure); --two-font-size-body-reading: var(--text-body-reading); --two-font-size-label: var(--text-label); --two-font-weight-display: var(--font-weight-display); --two-tracking-figure: var(--tracking-figure); }
+  @media (max-width: 820px) { .lifecycle-time { --two-font-size-figure: var(--text-figure-compact); } .live-rsvp-end { display: none; } }
   .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
   .event-layout-rail :global(> section) { border: 0; }
   .event-layout-rail :global(> .event-share) { padding: 0; margin-top: var(--space-2); }

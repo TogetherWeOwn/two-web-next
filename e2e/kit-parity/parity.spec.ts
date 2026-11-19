@@ -2201,9 +2201,10 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
     expect(card!.y).toBeGreaterThanOrEqual(block!.y + block!.height);
   }
   async function capture(page: Page, name: string) {
-    const screenshot = test.info().outputPath(`${name}.png`);
-    await page.screenshot({ path: screenshot, animations: "disabled", caret: "hide" });
-    await test.info().attach(name, { path: screenshot, contentType: "image/png" });
+    const size = page.viewportSize()?.width === 390 ? "40px" : "89.6px";
+    await expect(page.locator(".lifecycle-time .time-block > time")).toHaveCSS("font-size", size);
+    const body = await page.screenshot({ animations: "disabled", caret: "hide" });
+    await test.info().attach(name, { body, contentType: "image/png" });
   }
   try {
     await withSessionDb(async (sql) => {
