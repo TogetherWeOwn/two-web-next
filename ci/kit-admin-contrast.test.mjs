@@ -25,6 +25,22 @@ let browser;
 let server;
 let fixtures;
 
+async function focusOutlineColor(locator) {
+  const outline = await locator.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return {
+      focused: el === document.activeElement && el.matches(":focus-visible"),
+      style: style.outlineStyle,
+      width: Number.parseFloat(style.outlineWidth),
+      color: style.outlineColor,
+    };
+  });
+  assert.ok(outline.focused, `${locator} has visible keyboard focus`);
+  assert.equal(outline.style, "solid", `${locator} has a solid outline`);
+  assert.ok(outline.width > 0, `${locator} has a nonzero outline`);
+  return outline.color;
+}
+
 before(async () => {
   scratch = await mkdtemp(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-admin-contrast-"),
@@ -281,6 +297,9 @@ describe("Kit admin contrast", () => {
               await error.waitFor({ state: "attached" });
               assert.equal(await error.isVisible(), false);
               await notes.fill("🎮".repeat(1001));
+              await page.keyboard.press("Shift+Tab");
+              await page.keyboard.press("Tab");
+              assert.equal(await focusOutlineColor(notes), "rgb(255, 156, 54)");
               assert.equal(await error.isVisible(), true);
               assert.equal(await notes.getAttribute("aria-invalid"), "true");
             }
@@ -307,6 +326,13 @@ describe("Kit admin contrast", () => {
           }
           if (isInvalid) {
             assert.equal(await summary.evaluate((el) => el === document.activeElement), true);
+            assert.equal(await focusOutlineColor(summary), "rgb(255, 156, 54)");
+            if (evidence) {
+              await page.screenshot({
+                path: join(evidence, `${name}-${width}-summary-focus.png`),
+                fullPage: true,
+              });
+            }
             await page.keyboard.press("Tab");
             assert.deepEqual(
               await summaryLink.evaluate((el) => {
@@ -425,6 +451,7 @@ describe("Kit admin contrast", () => {
             assert.notEqual(rule.width, "0px");
             assert.notEqual(rule.style, "none");
             assert.notEqual(rule.color, rule.background);
+            assert.notEqual(await focusOutlineColor(summaryLink), rule.background);
             assert.match(
               await summaryLink.evaluate((el) => getComputedStyle(el).textDecorationLine),
               /underline/,

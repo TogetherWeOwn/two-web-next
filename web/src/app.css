@@ -85,6 +85,10 @@ html body {
 }
 .kit-admin .notice[data-admin-validation-summary] a {
   color: var(--color-lobby-accent);
+}
+.kit-admin .notice[data-admin-validation-summary]:focus-visible,
+.kit-admin .notice[data-admin-validation-summary] a:focus-visible,
+.kit-admin #f-accessibility-notes:focus-visible {
   outline-color: var(--color-lobby-focus);
 }
 .kit-admin [data-event-editor][data-event-draft] .field .error,
