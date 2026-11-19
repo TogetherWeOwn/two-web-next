@@ -60,6 +60,14 @@ describe("toPublicWidgetSnapshot", () => {
     }
   });
 
+  it.each([0, 1, 2])("preserves a small presence count of %i without exposing members", (count) => {
+    const snapshot = { ...fullSnapshot(), presenceCount: count };
+    const projected = toPublicWidgetSnapshot(snapshot);
+    expect(projected?.presenceCount).toBe(count);
+    expect(JSON.stringify(projected)).not.toContain("leak-probe");
+    expect(projected).not.toHaveProperty("members");
+  });
+
   it("passes null and undefined through as null", () => {
     expect(toPublicWidgetSnapshot(null)).toBeNull();
     expect(toPublicWidgetSnapshot(undefined)).toBeNull();
@@ -238,6 +246,35 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
     ]) {
       expect(bytes, `anonymous payload leaked ${needle}`).not.toContain(needle);
     }
+  });
+});
+
+describe("Kit GET /join return journey", () => {
+  it.each([
+    [
+      "/e/game?view=calendar",
+      "web-homepage",
+      "/join/discord?next=%2Fe%2Fgame%3Fview%3Dcalendar&source=web-homepage",
+    ],
+    ["//outside.example/path", "web-homepage", "/join/discord?source=web-homepage"],
+    ["/events", "bad source", "/join/discord?next=%2Fevents"],
+    ["https://outside.example/", "bad source", "/join/discord"],
+  ])("builds the handoff from validated next and source inputs", async (next, source, expected) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 503 })),
+    );
+    const url = new URL("https://example.test/join");
+    url.searchParams.set("next", next);
+    url.searchParams.set("source", source);
+    const data = await load({
+      url,
+      request: new Request(url, { method: "GET" }),
+      cookies: { delete: () => {} },
+      setHeaders: () => {},
+    });
+    expect(data.oneClickHref).toBe(expected);
+    await Promise.all(shared().pending);
   });
 });
 
