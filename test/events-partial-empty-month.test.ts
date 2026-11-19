@@ -6,7 +6,7 @@ import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
 import { loadCalendarPageModel, resolveCalendarInput } from "../src/events/page-models.server";
 import { listCalendarPast, listUpcoming, listUpcomingForMonth } from "../src/events/reads";
 import { registerEventRoutes } from "../src/events/routes";
-import { partialEvent, partialHtml } from "./helpers/calendar-discord-partial";
+import { MISSING_DISCORD, partialEvent, partialHtml, partialModel } from "./helpers/calendar-discord-partial";
 
 // Read seams remove external SQL only; the model, Hono route and Kit screen
 // stay real. These implementation-owned cases supplement the independent
@@ -54,6 +54,15 @@ beforeEach(() => {
 });
 
 describe("partial-source empty month", () => {
+  it("announces both an unreadable page and the missing Discord source", async () => {
+    const html = await partialHtml(partialModel({ upcoming: [], past: [], totalPages: 3 }));
+    const status = html.match(/data-testid="events-search-status">([^<]*)<\/p>/)?.[1] ?? "";
+    expect(html).toContain('data-testid="events-page-unreadable"');
+    expect(status).toContain("Events on page 2 can");
+    expect(status).toMatch(MISSING_DISCORD);
+    expect(notices(html)).toHaveLength(1);
+  });
+
   it("warns on an empty month of a non-empty schedule instead of reading as definitively empty", async () => {
     // One local event lives outside the requested month, so the schedule is
     // non-empty (no empty state) while the rendered grid has no rows.

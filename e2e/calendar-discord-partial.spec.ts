@@ -129,6 +129,9 @@ test("complete fixture turns keep the input identity, focus and canonical rows w
       .first(),
   ).toBeVisible();
   await expect(notice(page)).toHaveCount(0);
+  await expect(page.getByTestId("events-search-status")).not.toContainText(
+    "Discord events are available again.",
+  );
   await expect(search).toBeFocused();
   expect(await search.evaluate((node, saved) => node === saved, original)).toBe(true);
   expect(f.traffic.map((entry) => entry.island)).toEqual([false, true]);
@@ -194,10 +197,14 @@ test("fragment failure → recovery → failure removes and restores the notice 
   const search = page.getByTestId("events-search");
   await search.focus();
   const original = await search.elementHandle();
+  const status = page.getByTestId("events-search-status");
+  const originalStatus = await status.elementHandle();
   f.state.failed = false;
   await page.getByTestId("events-view-calendar").evaluate((link: HTMLElement) => link.click());
   await expect(root(page)).toHaveAttribute("data-view", "calendar");
   await expect(notice(page)).toHaveCount(0);
+  await expect(status).toContainText("Discord events are available again.");
+  expect(await status.evaluate((node, saved) => node === saved, originalStatus)).toBe(true);
   await expect(search).toBeFocused();
   expect(await search.evaluate((node, saved) => node === saved, original)).toBe(true);
   f.state.failed = true;
@@ -210,8 +217,29 @@ test("fragment failure → recovery → failure removes and restores the notice 
       .first(),
   ).toBeVisible();
   await expect(search).toBeFocused();
-  expect(f.traffic.map((entry) => entry.island)).toEqual([false, true, true]);
+  await expect(status).not.toContainText("Discord events are available again.");
+  f.state.failed = false;
+  await page.getByTestId("events-view-calendar").evaluate((link: HTMLElement) => link.click());
+  await expect(root(page)).toHaveAttribute("data-view", "calendar");
+  await expect(status).toContainText("Discord events are available again.");
+  await page.getByTestId("events-view-list").evaluate((link: HTMLElement) => link.click());
+  await expect(root(page)).toHaveAttribute("data-view", "list");
+  await expect(status).not.toContainText("Discord events are available again.");
+  expect(f.traffic.map((entry) => entry.island)).toEqual([false, true, true, true, true]);
   expect(f.escaped).toEqual([]);
+});
+
+test("a failed schedule read is not announced as Discord recovery", async ({ page, context }) => {
+  const f = await fixture(context);
+  await page.goto(PARTIAL_ORIGIN + PARTIAL_PATH);
+  await expect(notice(page)).toHaveCount(1);
+  f.state.failed = false;
+  f.state.readError = true;
+  await page.getByTestId("events-view-calendar").evaluate((link: HTMLElement) => link.click());
+  await expect(page.getByTestId("events-empty-error")).toBeVisible();
+  await expect(page.getByTestId("events-search-status")).not.toContainText(
+    "Discord events are available again.",
+  );
 });
 
 test("recovery → failure adds the missing-source notice through the shipped fragment binder", async ({
@@ -324,10 +352,12 @@ test.describe("calendar without JavaScript", () => {
   test("retains the server-rendered keyboard scroll target", async ({ page, context }) => {
     await fixture(context);
     await page.goto(PARTIAL_ORIGIN + CALENDAR_PATH);
-    await expect(page.getByTestId("events-calendar-scroll")).toHaveAttribute("tabindex", "0");
-    await expect(page.getByTestId("events-calendar-scroll")).toHaveAccessibleName(
-      "Events calendar",
-    );
+    const region = page.getByTestId("events-calendar-scroll");
+    await expect(region).toHaveAttribute("tabindex", "0");
+    await expect(region).toHaveAccessibleName("Events calendar");
+    await page.getByTestId("calendar-month-jump-submit").focus();
+    await page.keyboard.press("Tab");
+    await expect(region).toBeFocused();
   });
 });
 

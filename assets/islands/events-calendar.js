@@ -490,12 +490,20 @@
       // the next submit re-enters the fragment flow. A no-op when the zones
       // carry no form (e.g. the list view) or the node is already wired.
       wireJumpForm();
+      var discordRecovered =
+        root.dataset.discordFailed === "1" &&
+        next.getAttribute("data-discord-failed") === "" &&
+        !next.querySelector('[data-testid="events-empty-error"]');
       root.dataset.view = next.dataset.view;
       root.dataset.month = next.dataset.month;
       root.dataset.past = next.dataset.past;
+      root.dataset.discordFailed = next.dataset.discordFailed || "";
       live.forEach(function (node, i) {
         var source = page.querySelector('[data-testid="' + LIVE_TESTIDS[i] + '"]');
-        if (source) node.textContent = source.textContent;
+        if (source) {
+          node.textContent = source.textContent;
+          if (i === 1 && discordRecovered) node.textContent += " Discord events are available again.";
+        }
       });
       var sourceGame = page.querySelector('select[name="game"]');
       // The admitted page owns this scope even when newer drafts keep the select.

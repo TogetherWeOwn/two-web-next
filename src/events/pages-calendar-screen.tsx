@@ -145,6 +145,7 @@ export const EventsCalendarPage: FC<{
         data-view={state.view}
         data-month={state.month}
         data-past={state.past ? "1" : ""}
+        data-discord-failed={discordFailed ? "1" : ""}
         data-load-error={EVENTS_CALENDAR_FETCH_FAILED}
         data-search-max-length={EVENTS_SEARCH_MAX_LENGTH}
         data-search-too-long={EVENTS_SEARCH_TOO_LONG_COPY}
