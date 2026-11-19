@@ -1,0 +1,22 @@
+id: http-no-hono
+valid:
+  - import { value } from './hono'
+  - import { value } from 'honorable'
+  - export { value } from 'other/hono'
+  - const label = 'hono'
+  - const load = () => import('other')
+  - const other = require('other')
+  - const unrelated = object.require('hono')
+  - const other = import(`other`)
+  - const dynamic = import(`other/${name}`)
+invalid:
+  - import { Hono } from 'hono'
+  - import type { Context } from 'hono'
+  - import { cors } from 'hono/cors'
+  - import 'hono/secure-headers'
+  - export { Hono } from 'hono'
+  - export type { Context } from 'hono/context'
+  - export * from 'hono/utils/http-status'
+  - const load = () => import('hono/cors')
+  - const hono = require('hono')
+  - const cors = require('hono/cors')

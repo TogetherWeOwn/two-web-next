@@ -8,6 +8,7 @@ import {
   FALLBACK_RANKS,
   HOME_JOIN_RESULT_COPY,
   HOME_NOTICES,
+  JOIN_INTRO,
   applyHomeResponsePolicy,
 } from "../../../src/home-copy";
 import { inviteDestination } from "../../../src/invite";
@@ -81,6 +82,6 @@ export const load: PageServerLoad = async ({ url, request, locals, cookies, setH
     featured,
     imageHosts: env.FEATURED_IMAGE_HOSTS,
     // SSR-only copy stays on the server, not in an unused shared client chunk.
-    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
+    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO },
   };
 };

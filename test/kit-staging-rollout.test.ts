@@ -17,11 +17,22 @@ const main = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8"));
 const jobs = readWranglerConfig(readFileSync("wrangler.jobs.jsonc", "utf8"));
 const deployWorkflow = readFileSync(".github/workflows/deploy.yml", "utf8");
 
-function stagingDeps(flags: { archive?: string; static?: string } = {}) {
+type RolloutFlags = {
+  archive?: string;
+  static?: string;
+  events?: string;
+  home?: string;
+  join?: string;
+};
+
+function stagingDeps(flags: RolloutFlags = {}) {
   return {
     appUrl: STAGING_APP_URL,
     kitRouteArchive: flags.archive,
     kitRouteStatic: flags.static,
+    kitRouteEvents: flags.events,
+    kitRouteHome: flags.home,
+    kitRouteJoin: flags.join,
     featuredImageHosts: "",
     honoFetch: vi.fn(async () => new Response("hono", { status: 200 })),
     resolve: vi.fn(
@@ -34,7 +45,7 @@ function stagingDeps(flags: { archive?: string; static?: string } = {}) {
   };
 }
 
-async function dispatchAt(path: string, flags: { archive?: string; static?: string } = {}) {
+async function dispatchAt(path: string, flags: RolloutFlags = {}) {
   const request = new Request(new URL(path, STAGING_APP_URL), {
     headers: { host: new URL(STAGING_APP_URL).host },
   });
@@ -97,6 +108,14 @@ describe("Kit staging route rollout", () => {
     },
   );
 
+  it.each(["https://togetherweown.com", `${STAGING_APP_URL}/`, "not a URL"])(
+    "refuses the events flag by itself outside the exact staging URL (%s)",
+    (appUrl) => {
+      const manifest = stagingManifestFor({ APP_URL: appUrl, KIT_ROUTE_EVENTS: "true" });
+      expect(manifest?.some((entry) => entry.enabled)).toBe(false);
+    },
+  );
+
   it("keeps unflagged staging on Hono even when APP_URL has a path", async () => {
     const request = new Request(`${STAGING_APP_URL}/hotzones`);
     const deps = { ...stagingDeps(), appUrl: `${STAGING_APP_URL}/nested` };
@@ -129,6 +148,15 @@ describe("Kit staging route rollout", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/about" }, manifest ?? [])).toBe("hono");
   });
 
+  it("does not let the events flag bypass method, detail, or manifest gates", () => {
+    const manifest = stagingManifestFor({ APP_URL: STAGING_APP_URL, KIT_ROUTE_EVENTS: "true" }, [
+      { method: "GET", path: "/events", enabled: false },
+      { method: "POST", path: "/events", enabled: true },
+      { method: "GET", path: "/e/:key", enabled: true },
+    ]);
+    expect(manifest?.map((entry) => entry.enabled)).toEqual([false, false, false]);
+  });
+
   it("enables exactly the reviewed families per flag combination at manifest level", () => {
     // Kills family-widening mutants (for example matching /events or
     // /leaderboards/members under archive): the restrictive manifest is the
@@ -158,6 +186,7 @@ describe("Kit staging route rollout", () => {
   it.each([
     ["archive only", { archive: "true" }, ["/events/past"]],
     ["archive-static", { archive: "true", static: "true" }, ["/events/past", "/about", "/faq"]],
+    ["events only", { events: "true" }, ["/events"]],
   ] as const)(
     "keeps every unselected Kit route on Hono under %s",
     async (_name, flags, kitPaths) => {
@@ -195,6 +224,8 @@ describe("Kit staging route rollout", () => {
       "hono",
     ],
     ["malformed flags fail closed", { archive: "TRUE", static: "yes" }, "/events/past", "hono"],
+    ["events flag off", { events: "false" }, "/events", "hono"],
+    ["malformed events flag", { events: "TRUE" }, "/events", "hono"],
   ] as const)(
     "routes the %s selection through the expected renderer",
     async (_name, flags, path, owner) => {
@@ -212,14 +243,81 @@ describe("Kit staging route rollout", () => {
   );
 });
 
+describe("staging home and join opt-ins", () => {
+  // Use enabled fixture entries to exercise opt-in before the page PRs land.
+  const pages = ["/", "/join", "/events", "/events/past", "/about"];
+  const excluded = ["/join/discord", "/join/callback", "/auth/recover", "/e/:key"];
+  const routes: typeof ROUTE_MANIFEST = [
+    ...[...pages, ...excluded].map((path) => ({ method: "GET", path, enabled: true })),
+    ...["/", "/join"].map((path) => ({ method: "POST", path, enabled: true })),
+  ];
+
+  it.each([
+    ["/", "KIT_ROUTE_HOME"],
+    ["/join", "KIT_ROUTE_JOIN"],
+  ] as const)("admits only the enabled GET %s entry; HEAD follows GET", (path, flag) => {
+    const env = { APP_URL: STAGING_APP_URL, [flag]: "true" };
+    const manifest = stagingManifestFor(env, routes);
+    expect(manifest?.filter(({ enabled }) => enabled)).toEqual([
+      { method: "GET", path, enabled: true },
+    ]);
+    expect(resolveRouteOwner({ method: "HEAD", path }, manifest)).toBe("kit");
+    for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+      expect(resolveRouteOwner({ method, path }, manifest)).toBe("hono");
+    }
+    const disabled = stagingManifestFor(env, [{ method: "GET", path, enabled: false }]);
+    expect(resolveRouteOwner({ method: "GET", path }, disabled)).toBe("hono");
+    for (const APP_URL of ["https://togetherweown.com", `${STAGING_APP_URL}/`, "not a URL"]) {
+      expect(stagingManifestFor({ ...env, APP_URL }, routes)?.some((r) => r.enabled)).toBe(false);
+    }
+    for (const value of [undefined, "false", "TRUE", "true ", "1"]) {
+      const invalid = stagingManifestFor({ ...env, [flag]: value }, routes);
+      expect(invalid?.some((r) => r.enabled)).toBe(false);
+    }
+  });
+
+  it.each([
+    ["/", "home"],
+    ["/join", "join"],
+  ] as const)("dispatches enabled GET %s to Kit only when opted in", async (path, flag) => {
+    const entry = ROUTE_MANIFEST.find((route) => route.method === "GET" && route.path === path);
+    if (!entry) throw new Error(`Missing GET ${path} manifest entry`);
+    const prior = entry.enabled;
+    entry.enabled = true;
+    try {
+      const off = await dispatchAt(path, { [flag]: "false" });
+      expect(off.deps.honoFetch).toHaveBeenCalledOnce();
+      expect(off.response.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+      const on = await dispatchAt(path, { [flag]: "true" });
+      expect(on.deps.honoFetch).not.toHaveBeenCalled();
+      expect(on.response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+      const url = new URL(path, "https://preview.example.test");
+      const preview = await dispatchHookRequest(
+        { request: new Request(url), url, route: { id: path } },
+        { ...stagingDeps({ [flag]: "true" }), appUrl: url.origin },
+      );
+      expect(await preview.text()).toBe("hono");
+    } finally {
+      entry.enabled = prior;
+    }
+  });
+});
+
 describe("Kit staging Wrangler config", () => {
-  it("keeps the existing staging Worker contract and starts both families on Hono", () => {
+  it("keeps the existing staging Worker contract and starts all families on Hono", () => {
     expect(staging.name).toBe("two-web-next");
     expect(staging.main).toBe(".svelte-kit/cloudflare/_worker.js");
     expect(staging.routes).toEqual([{ pattern: "next.togetherweown.com", custom_domain: true }]);
     expect(staging.vars?.APP_URL).toBe(STAGING_APP_URL);
     expect(staging.vars?.KIT_ROUTE_ARCHIVE).toBe("false");
     expect(staging.vars?.KIT_ROUTE_STATIC).toBe("false");
+    expect(staging.vars?.KIT_ROUTE_EVENTS).toBe("false");
+    expect(main.env?.production?.vars).not.toHaveProperty("KIT_ROUTE_EVENTS");
+    expect(main.env?.production?.vars).toBeDefined();
+    for (const flag of ["KIT_ROUTE_HOME", "KIT_ROUTE_JOIN"]) {
+      expect(staging.vars?.[flag]).toBe("false");
+      expect(main.env?.production?.vars).not.toHaveProperty(flag);
+    }
     expect(staging.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
     expect(staging.tail_consumers).toEqual([{ service: "two-web-next-alerts" }]);
     expect(staging.assets).toMatchObject({
@@ -254,16 +352,31 @@ describe("Kit staging Wrangler config", () => {
 });
 
 describe("staging deployment selection", () => {
-  it("offers an ordered Hono, archive, then archive-plus-static rollout", () => {
+  it("offers an ordered archive rollout and separate and combined Ember choices", () => {
     expect(deployWorkflow).toMatch(/workflow_dispatch:\n\s+inputs:\n\s+kit_route_family:/);
     expect(deployWorkflow).toContain("default: hono");
-    expect(deployWorkflow).toContain("- hono\n          - archive\n          - archive-static");
     expect(deployWorkflow).toContain(
-      "KIT_ROUTE_ARCHIVE:${{ steps.kit-route-flags.outputs.archive }}",
+      "- hono\n          - archive\n          - archive-static\n          - events\n          - home\n          - join\n          - ember-pages",
     );
-    expect(deployWorkflow).toContain(
-      "KIT_ROUTE_STATIC:${{ steps.kit-route-flags.outputs.static }}",
+    const deployStep = deployWorkflow
+      .split("      - name: Deploy to Cloudflare Workers\n")[1]
+      ?.split(/\n      - /)[0];
+    const deployEnv = deployStep?.match(/^        env:\n((?: {10}.*\n)+)/m)?.[1];
+    expect(deployStep).toContain('"KIT_ROUTE_ARCHIVE:$KIT_ROUTE_ARCHIVE"');
+    expect(deployStep).toContain('"KIT_ROUTE_STATIC:$KIT_ROUTE_STATIC"');
+    expect(deployStep).toContain('"KIT_ROUTE_EVENTS:$KIT_ROUTE_EVENTS"');
+    expect(deployEnv).toContain("KIT_ROUTE_ARCHIVE: ${{ steps.kit-route-flags.outputs.archive }}");
+    expect(deployEnv).toContain("KIT_ROUTE_STATIC: ${{ steps.kit-route-flags.outputs.static }}");
+    expect(deployEnv).toContain(
+      "KIT_ROUTE_EVENTS: ${{ steps.kit-route-flags.outputs.events || 'false' }}",
     );
+    for (const family of ["home", "join"]) {
+      const flag = `KIT_ROUTE_${family.toUpperCase()}`;
+      expect(deployStep).toContain(`"${flag}:$${flag}"`);
+      expect(deployEnv).toContain(
+        `${flag}: \${{ steps.kit-route-flags.outputs.${family} || 'false' }}`,
+      );
+    }
     expect(deployWorkflow).toContain("--config web/wrangler.staging.jsonc");
     expect(deployWorkflow).not.toContain("--config wrangler.jsonc --tag");
   });

@@ -182,12 +182,14 @@ export function registerCalendarRoutes(
           upcoming={upcoming}
           past={localPast}
           pastMayBeTruncated={pastMayBeTruncated}
+          monthReadMayBeIncomplete={model.monthReadMayBeIncomplete}
           zone={zone}
           now={now}
           totalPages={totalPages}
           emptyState={emptyState}
           robots={robots}
           discordFailed={discordFailed}
+          discordSnapshotAt={model.discordSnapshotAt}
           games={games}
           gameFilter={gameFilter}
           member={session?.member ?? false}

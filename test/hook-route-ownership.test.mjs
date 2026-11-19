@@ -595,6 +595,9 @@ describe("hooks.server route ownership wiring", () => {
     // on staging (static requires archive). The exact lines must fail.
     expect(source).toContain("kitRouteArchive: env.KIT_ROUTE_ARCHIVE");
     expect(source).toContain("kitRouteStatic: env.KIT_ROUTE_STATIC");
+    expect(source).toContain("kitRouteEvents: env.KIT_ROUTE_EVENTS");
+    expect(source).toContain("kitRouteHome: env.KIT_ROUTE_HOME");
+    expect(source).toContain("kitRouteJoin: env.KIT_ROUTE_JOIN");
     expect(source).toContain("sessionFor: kitSessionBridge(env)");
     expect(source).toContain("authStatusCookieFor: kitAuthStatusCookieFor(env)");
     expect(source.match(/dispatchHookRequest\(event,/g)?.length).toBe(1);

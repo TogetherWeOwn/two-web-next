@@ -63,10 +63,13 @@ export function cachedDiscordEventsSource(
   }
   const liveInner = resolvedInner;
   let failed = false;
+  let lastReadSnapshotAt: number | undefined;
   return {
     lastReadFailed: () => failed,
+    lastReadSnapshotAt: () => lastReadSnapshotAt,
     async upcoming(now = new Date()): Promise<DiscordTransient[]> {
       failed = false;
+      lastReadSnapshotAt = undefined;
       try {
         const key = discordSnapshotKey(env);
         const claim = await store.claim(key);
@@ -151,6 +154,24 @@ export function cachedDiscordEventsSource(
           completionFailed,
           ...(completionCode ? { code: completionCode } : {}),
         });
+        if (!completionFailed && (claim.token !== null || claimCheckedNow !== null)) {
+          // The payload was checked above, even for an expired generation. Use the
+          // raw store clock here: elapsed request time cannot legitimize a future epoch.
+          const view = claim.token === null ? claim : snapshot;
+          const epoch = view.succeededAt;
+          if (
+            Number.isFinite(view.now) &&
+            Number.isFinite(view.retryAt) &&
+            (view.leaseExpiresAt === null || Number.isFinite(view.leaseExpiresAt)) &&
+            (epoch === null ||
+              (Number.isSafeInteger(epoch) &&
+                epoch > 0 &&
+                epoch <= view.now &&
+                Number.isSafeInteger(epoch * 2 + 1)))
+          ) {
+            lastReadSnapshotAt = epoch ?? 0;
+          }
+        }
         return recent ?? [];
       } catch (err) {
         // No unadmitted live read on storage/corruption failure. Only known SQLSTATE

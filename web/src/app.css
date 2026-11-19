@@ -15,9 +15,17 @@
  * Head-only metadata has no utility classes and also stays out of detection. */
 @source "./**/*.svelte";
 @source not "./lib/SiteMetadata.svelte";
-/* Prose, attributes and the relative leaderboard scope produce these false
- * candidates, never classes. kit-tailwind-sources.test.ts guards that boundary. */
-@source not inline("visible relative static block hidden table");
+/* SkipLink uses scoped CSS, not utility classes. Its CSS declarations are
+ * otherwise scanned as utility candidates; restore detection if it uses any. */
+@source not "./lib/SkipLink.svelte";
+/* These primitives use scoped styles and reference-backed theme fallbacks, not
+ * utilities. Revisit if they acquire utility classes or forward class names. */
+@source not "./lib/Chip.svelte";
+@source not "./lib/SegmentedControl.svelte";
+@source not "./lib/StructuredTime.svelte";
+/* Prose, attributes, component CSS and the relative leaderboard scope produce
+ * these false candidates, never classes. kit-tailwind-sources.test.ts guards that boundary. */
+@source not inline("visible relative static block hidden table inline outline flex flex-wrap");
 
 /* The join-attempts audit page keeps the Hono viewer's `filters` form class
  * for markup parity, but Tailwind v4 lifts a `filter` candidate from that
@@ -49,6 +57,16 @@ html body {
  * The light ink is set directly on those elements: overriding --muted on the
  * shell would also recolor the dashboard's light resource cards
  * (.card p uses var(--muted) on #fffdf8), dropping them to 1.81:1. */
+.kit-admin .brand {
+  color: var(--color-lobby-ink);
+  outline-color: currentColor;
+}
+.kit-admin :is(a.reconciliation-focus, .reconciliation-error a):focus-visible {
+  outline-color: var(--color-lobby-focus);
+}
+.kit-admin :is(.facts .card h2 a, p.notice) {
+  color: var(--ink);
+}
 .kit-admin :is(.field .hint, .hint) {
   color: var(--color-lobby-muted);
 }

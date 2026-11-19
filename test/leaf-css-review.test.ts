@@ -20,7 +20,14 @@ function fixture() {
   for (const sub of ["ci", "public"]) mkdirSync(join(dir, sub));
   writeFileSync(
     join(dir, "ci/build-leaf-css.mjs"),
-    readFileSync(join(root, "ci/build-leaf-css.mjs")),
+    readFileSync(join(root, "ci/build-leaf-css.mjs"), "utf8").replace(
+      /const SOURCES = \[[\s\S]*?\];/,
+      'const SOURCES = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"];',
+    ),
+  );
+  writeFileSync(
+    join(dir, "ci/css-dictionary.mjs"),
+    readFileSync(join(root, "ci/css-dictionary.mjs")),
   );
   writeFileSync(join(dir, "public/styles.css"), "body { color: black; }");
   writeFileSync(join(dir, "public/theme-tokens.css"), ":root { --accent: lime; }");
@@ -64,14 +71,34 @@ describe("generated leaf CSS review evidence", () => {
     expect(report.base.sha256).toBe(report.head.sha256);
   });
 
+  it("compares historical and header-input revisions using committed bytes", () => {
+    const { dir, base, commit, run } = fixture();
+    const generator = join(dir, "ci/build-leaf-css.mjs");
+    writeFileSync(generator, readFileSync(join(root, "ci/build-leaf-css.mjs")));
+    mkdirSync(join(dir, "web/src/lib"), { recursive: true });
+    const input = join(dir, "web/src/lib/site-header.css");
+    writeFileSync(input, ".site-header { position: sticky; }");
+    const head = commit();
+    writeFileSync(input, "uncommitted change");
+    const result = run(head, base);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, changed: true });
+    rmSync(input);
+    const missing = commit();
+    for (const failed of [run(missing, base), run(base, missing)]) {
+      expect(failed.status).toBe(1);
+      expect(JSON.parse(failed.stdout)).toMatchObject(failure);
+    }
+  });
+
   it("compares a historical literal with the packed representation", () => {
     const { dir, base, commit, run } = fixture();
     const generator = join(dir, "ci/build-leaf-css.mjs");
     writeFileSync(
       generator,
       readFileSync(generator, "utf8").replace(
-        'const initializer = packed ? `${literal}.split("~").join(".base-theme")` : literal;',
-        "const initializer = JSON.stringify(css);",
+        "const encoded = css.length <= 100_000 && !/[\\u0080-Ï]/u.test(css) ? packCss(css) : null;",
+        "const encoded = null;",
       ),
     );
     const historical = commit();
@@ -80,7 +107,7 @@ describe("generated leaf CSS review evidence", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, changed: false });
   });
   it.each([
-    ["altered decoder", "text.replace('.join(\".base-theme\")', '.join(\".other\")')"],
+    ["altered decoder", "text.replaceAll('decodeCssDictionary', 'otherDecoder')"],
     [
       "trailing expression",
       "text.replace(';\\nexport const LEAF_CRITICAL_CSS_SHA256', '+\"x\";\\nexport const LEAF_CRITICAL_CSS_SHA256')",
@@ -90,11 +117,12 @@ describe("generated leaf CSS review evidence", () => {
   ])("rejects %s in generated snapshots", (_name, mutation) => {
     const { dir, base, commit, run } = fixture();
     const generator = join(dir, "ci/build-leaf-css.mjs");
-    const source = readFileSync(generator, "utf8").replace(
-      "writeFileSync(join(repoRoot, OUT), text);",
-      `writeFileSync(join(repoRoot, OUT), ${mutation});`,
-    );
-    writeFileSync(generator, source);
+    const source = readFileSync(generator, "utf8");
+    const target = "writeFileSync(fd, text);";
+    expect(source.split(target)).toHaveLength(2);
+    const modified = source.replace(target, `writeFileSync(fd, ${mutation});`);
+    expect(modified).not.toBe(source);
+    writeFileSync(generator, modified);
     const altered = commit();
     for (const result of [run(altered, base), run(base, altered)]) {
       expect(result.status).toBe(1);
@@ -107,14 +135,16 @@ describe("generated leaf CSS review evidence", () => {
     const source = readFileSync(generator, "utf8");
     for (const literal of [false, true]) {
       const initializer =
-        'const initializer = packed ? `${literal}.split("~").join(".base-theme")` : literal;';
+        "const encoded = css.length <= 100_000 && !/[\\u0080-Ï]/u.test(css) ? packCss(css) : null;";
       const prefix = JSON.stringify(`// comment${terminator}extra();\n`);
-      let modified = source.replace(
-        "writeFileSync(join(repoRoot, OUT), text);",
-        `writeFileSync(join(repoRoot, OUT), ${prefix} + text);`,
-      );
-      if (literal)
-        modified = modified.replace(initializer, "const initializer = JSON.stringify(css);");
+      const target = "writeFileSync(fd, text);";
+      expect(source.split(target)).toHaveLength(2);
+      let modified = source.replace(target, `writeFileSync(fd, ${prefix} + text);`);
+      expect(modified).not.toBe(source);
+      if (literal) {
+        expect(modified.split(initializer)).toHaveLength(2);
+        modified = modified.replace(initializer, "const encoded = null;");
+      }
       writeFileSync(generator, modified);
       const altered = commit();
       for (const result of [run(altered, base), run(base, altered)]) expect(result.status).toBe(1);
@@ -160,9 +190,10 @@ describe("generated leaf CSS review evidence", () => {
     }
   });
 
-  it.each(["missing", "optional", "utf8"])("rejects %s source on either side", (kind) => {
+  it.each(["missing", "packer", "optional", "utf8"])("rejects %s source on either side", (kind) => {
     const { dir, base, commit, run } = fixture();
     if (kind === "missing") rmSync(join(dir, "public/theme.css"));
+    if (kind === "packer") rmSync(join(dir, "ci/css-dictionary.mjs"));
     if (kind === "utf8") writeFileSync(join(dir, "public/theme.css"), Buffer.from([0xff]));
     if (kind === "optional") {
       mkdirSync(join(dir, "assets/leaf-only.css"), { recursive: true });

@@ -61,12 +61,15 @@
   --two-color-avatar-9: #3a0086;
   --two-color-avatar-10: #c2185b;
   --two-color-avatar-11: #5e35b1;
+  --two-color-machine: #7fb2ff;
+  --two-color-well: #121212;
   --two-color-bg-canvas: #15100f;
   --two-color-bg-surface: #1c1614;
   --two-color-bg-raised: #241c19;
   --two-color-bg-overlay: #2e2420;
   --two-color-bg-sticky: rgba(21, 16, 15, 0.86);
   --two-color-bg-sheet: rgba(28, 22, 20, 0.94);
+  --two-color-bg-well: #121212;
   --two-color-line-hairline: rgba(255, 236, 220, 0.08);
   --two-color-line-hairline-strong: rgba(255, 236, 220, 0.14);
   --two-color-line-control: #85766b;
@@ -90,6 +93,13 @@
   --two-color-rank-arc-4: #ff0e52;
   --two-color-rank-arc-5: #9d6aff;
   --two-color-rank-arc-off: #3e322c;
+  --two-color-label-proposed: #f2c14e;
+  --two-color-label-auto: #7fb2ff;
+  --two-color-label-reviewed: #5fd39a;
+  --two-color-label-uncertain: #f6f1ea;
+  --two-color-label-rejected: #ff7a6b;
+  --two-color-label-ghost: #a89a8e;
+  --two-color-label-halo: #121212;
   --two-space-1: 4px;
   --two-space-2: 8px;
   --two-space-3: 12px;
@@ -142,6 +152,7 @@
   --two-size-control-lg: 56px;
   --two-size-control-nav: 40px;
   --two-size-target-min: 24px;
+  --two-size-target-handle: 24px;
   --two-size-icon-sm: 16px;
   --two-size-icon-md: 20px;
   --two-size-icon-grid: 24px;
@@ -161,6 +172,12 @@
   --two-size-live-dot: 7px;
   --two-size-state-glyph: 16px;
   --two-size-lifeline-marker: 28px;
+  --two-size-box-stroke: 2px;
+  --two-size-box-halo: 1px;
+  --two-size-box-handle: 8px;
+  --two-size-box-tab: 22px;
+  --two-size-crop-tile: 112px;
+  --two-size-toolbar: 52px;
   --two-layout-container: 1240px;
   --two-layout-gutter-wide: 40px;
   --two-layout-gutter-compact: 20px;
@@ -174,6 +191,8 @@
   --two-layout-measure-lede: 52;
   --two-layout-measure-reading: 62;
   --two-layout-measure-note: 36;
+  --two-layout-inspector: 380px;
+  --two-layout-queue: 300px;
   --two-breakpoint-compact-max: 820px;
   --two-breakpoint-review-mobile: 390px;
   --two-breakpoint-review-desktop: 1280px;
@@ -228,6 +247,11 @@
   --two-elevation-sticky: rgba(21, 16, 15, 0.86);
   --two-elevation-sheet: rgba(28, 22, 20, 0.94);
   --two-elevation-blur: 14px;
+  --two-box-dash-proposed: 6 4;
+  --two-box-dash-auto: none;
+  --two-box-dash-reviewed: none;
+  --two-box-dash-uncertain: 2 3;
+  --two-box-dash-ghost: 3 3;
 }
 
 /* Reduced-motion layer: under reduce, nothing moves. */

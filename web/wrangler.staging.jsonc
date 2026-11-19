@@ -39,6 +39,9 @@
     "DISCORD_MODERATOR_ROLE_IDS": "1546211363578191873,1545648550329851946",
     "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx",
     "KIT_ROUTE_ARCHIVE": "false",
-    "KIT_ROUTE_STATIC": "false"
+    "KIT_ROUTE_STATIC": "false",
+    "KIT_ROUTE_EVENTS": "false",
+    "KIT_ROUTE_HOME": "false",
+    "KIT_ROUTE_JOIN": "false"
   }
 }

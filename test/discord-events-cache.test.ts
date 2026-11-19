@@ -52,7 +52,7 @@ function harness(script: Array<DiscordTransient[] | "fail">, retryAfter?: number
   const request = async (bindings = env) => {
     const source = cachedDiscordEventsSource(bindings, inner, memoryDiscordStore(backing));
     const rows = await source.upcoming();
-    return { rows, failed: source.lastReadFailed() };
+    return { rows, failed: source.lastReadFailed(), epoch: source.lastReadSnapshotAt?.() };
   };
   return {
     backing,
@@ -70,12 +70,12 @@ describe("shared Discord snapshots", () => {
     "retains a successful snapshot across independent request stores",
     async ({ rows }) => {
       const h = harness([rows, "fail"]);
-      expect(await h.request()).toEqual({ rows, failed: false });
+      expect(await h.request()).toEqual({ rows, failed: false, epoch: 1_000_000 });
       h.advance(DISCORD_CACHE_FRESH_MS - 1);
-      expect(await h.request()).toEqual({ rows, failed: false });
+      expect(await h.request()).toEqual({ rows, failed: false, epoch: 1_000_000 });
       expect(h.calls()).toBe(1);
       h.advance(1);
-      expect(await h.request()).toEqual({ rows, failed: false });
+      expect(await h.request()).toEqual({ rows, failed: false, epoch: 1_000_000 });
       expect(h.calls()).toBe(2);
     },
   );
@@ -83,7 +83,9 @@ describe("shared Discord snapshots", () => {
     const h = harness([[row("1")], [row("2")]]);
     await h.request();
     h.advance(DISCORD_CACHE_FRESH_MS);
-    expect((await h.request()).rows[0]!.discordId).toBe("2");
+    const refreshed = await h.request();
+    expect(refreshed.rows[0]!.discordId).toBe("2");
+    expect(refreshed.epoch).toBe(1_000_000 + DISCORD_CACHE_FRESH_MS);
   });
   it("never extends successful age on failure and expires at 600, not 660 seconds", async () => {
     const h = harness([[row()], "fail"], 1000);
@@ -93,7 +95,7 @@ describe("shared Discord snapshots", () => {
     h.advance(DISCORD_CACHE_STALE_MS - DISCORD_CACHE_FRESH_MS - 1);
     expect((await h.request()).failed).toBe(false);
     h.advance(1);
-    expect(await h.request()).toEqual({ rows: [], failed: true });
+    expect(await h.request()).toEqual({ rows: [], failed: true, epoch: 1_000_000 });
     expect(h.calls()).toBe(2);
     expect(h.backing.entries.get(discordSnapshotKey(env))!.succeededAt).toBe(1_000_000);
   });
@@ -101,7 +103,7 @@ describe("shared Discord snapshots", () => {
     "honors the default hold for retry %s",
     async (retry) => {
       const h = harness(["fail", []], retry);
-      expect((await h.request()).failed).toBe(true);
+      expect(await h.request()).toEqual({ rows: [], failed: true, epoch: 0 });
       h.advance(DISCORD_FAILURE_HOLD_MS - 1);
       expect((await h.request()).failed).toBe(true);
       expect(h.calls()).toBe(1);
@@ -184,6 +186,38 @@ describe("shared Discord snapshots", () => {
     release();
     expect(await pending).toEqual([row("2")]);
   });
+  it("retains the same generation across a stale read overlapping a failing refresh", async () => {
+    const h = harness([[row()]]);
+    await h.request();
+    h.advance(DISCORD_CACHE_STALE_MS - 2_000);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const refresh = cachedDiscordEventsSource(
+      env,
+      {
+        async upcoming() {
+          await gate;
+          return [];
+        },
+        lastReadFailed: () => true,
+      },
+      memoryDiscordStore(h.backing),
+    );
+    const pending = refresh.upcoming();
+    try {
+      expect(await h.request()).toEqual({ rows: [row()], failed: false, epoch: 1_000_000 });
+      expect(h.calls()).toBe(1);
+    } finally {
+      // The refresh completes inside its lease but after the old snapshot expires.
+      h.advance(2_001);
+      release();
+    }
+    expect(await pending).toEqual([]);
+    expect(refresh.lastReadFailed()).toBe(true);
+    expect(refresh.lastReadSnapshotAt?.()).toBe(1_000_000);
+  });
   it.each([true, false])(
     "fences late %s success/failure against a replacement lease and snapshot",
     async (success) => {
@@ -232,10 +266,16 @@ describe("shared Discord snapshots", () => {
     });
     expect(await source.upcoming()).toEqual([]);
     expect(source.lastReadFailed()).toBe(true);
+    expect(source.lastReadSnapshotAt?.()).toBeUndefined();
     expect(h.calls()).toBe(0);
     await h.request();
-    h.backing.entries.get(discordSnapshotKey(env))!.payload = [{ raw: "corruption" }];
-    expect((await h.request()).failed).toBe(true);
+    const entry = h.backing.entries.get(discordSnapshotKey(env))!;
+    entry.payload = [{ raw: "corruption" }];
+    expect(await h.request()).toEqual({ rows: [], failed: true, epoch: undefined });
+    entry.payload = [];
+    entry.succeededAt = h.backing.clock() + 60_000;
+    entry.retryAt = entry.succeededAt;
+    expect(await h.request()).toEqual({ rows: [], failed: true, epoch: undefined });
     expect(h.calls()).toBe(1);
   });
   it.each([{ rows: [] }, { rows: [row()] }])(
@@ -251,6 +291,7 @@ describe("shared Discord snapshots", () => {
       });
       expect(await source.upcoming()).toEqual(rows);
       expect(source.lastReadFailed()).toBe(false);
+      expect(source.lastReadSnapshotAt?.()).toBeUndefined();
       expect(h.calls()).toBe(1);
     },
   );
@@ -485,6 +526,7 @@ describe("shared Discord snapshots", () => {
     });
     expect(await source.upcoming()).toEqual([]);
     expect(source.lastReadFailed()).toBe(true);
+    expect(source.lastReadSnapshotAt?.()).toBeUndefined();
   });
   it("bounds new-key admission and cleanup without deleting live leases or holds", async () => {
     const h = harness([[]]);
@@ -557,7 +599,7 @@ describe("shared Discord snapshots", () => {
       const h = harness([[row()], [{ ...row("bad"), title }]]);
       await h.request();
       h.advance(DISCORD_CACHE_FRESH_MS);
-      expect(await h.request()).toEqual({ rows: [row()], failed: false });
+      expect(await h.request()).toEqual({ rows: [row()], failed: false, epoch: 1_000_000 });
       const entry = h.backing.entries.get(discordSnapshotKey(env))!;
       expect(entry.succeededAt).toBe(1_000_000);
       expect(entry.retryAt).toBe(1_000_000 + DISCORD_CACHE_FRESH_MS + DISCORD_FAILURE_HOLD_MS);

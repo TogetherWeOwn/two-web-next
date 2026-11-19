@@ -7,6 +7,7 @@ import { build } from "esbuild";
 import { Hono } from "hono";
 import type { Env } from "../../src/env";
 import { registerHotzoneRoutes } from "../../src/hotzones/routes";
+import { collectImportedCss } from "./kit-imported-css";
 
 export const periodOrigin = "https://period.example.test";
 export type PeriodTwin = "Hono" | "Kit";
@@ -40,6 +41,7 @@ export async function compilePeriodKit(): Promise<PeriodKit> {
     stdin: {
       contents: `
 import { render } from "svelte/server";
+import "./web/src/lib/site-header.css";
 import Index from "./web/src/routes/hotzones/+page.svelte";
 import Signal from "./web/src/routes/hotzones/[signal]/+page.svelte";
 import ErrorPage from "./web/src/routes/+error.svelte";
@@ -85,6 +87,7 @@ export const error = (status) => { page.status = status; return render(ErrorPage
                 : "let current; export const setEnv = (value) => { current = value; }; export const env = new Proxy({}, { get: (_, key) => Reflect.get(current, key) });",
             loader: "js",
           }));
+          collectImportedCss(plugin, styles);
           plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
             const { js, css } = compile(readFileSync(path, "utf8"), {
               generate: "server",

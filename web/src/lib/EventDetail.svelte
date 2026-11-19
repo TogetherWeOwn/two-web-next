@@ -2,6 +2,7 @@
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
+import { kitEventFacts } from "../../../src/events/kit-event-facts";
 import { ONGOING_COPY } from "../../../src/events/ongoing";
 import { isPublicJoinUrl } from "../../../src/events/public-join-url";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
@@ -11,6 +12,7 @@ import { EVENT_ONGOING_TESTID } from "../../../src/islands/contracts";
 // Mutation ownership and native island mounts stay unchanged; this route is csr=false.
 let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrite?: boolean } =
   $props();
+const facts = $derived(kitEventFacts(model));
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
@@ -98,6 +100,8 @@ const detailIslands = [
   loginReturnTo={model.path}
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
+  <div class="event-layout">
+  <div class="event-layout-head">
   <nav class="event-back" aria-label="Event calendar">
     <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
   </nav>
@@ -130,9 +134,39 @@ const detailIslands = [
     </p>
   {/if}
   {@html model.detailHtml.metadata}
-  <div class="event-rsvp">
-    {@html model.detailHtml.rsvp}
   </div>
+  <div class="event-layout-rail">
+    <section class="seat-card" aria-labelledby={model.seatCard.heading ? 'seat-card-heading' : undefined} aria-label={model.seatCard.heading ? undefined : 'RSVP'} data-testid="kit-seat-card">
+      {#if model.seatCard.heading}
+        <div class="seat-card-head">
+          <h2 id="seat-card-heading">{model.seatCard.heading}</h2>
+          {#if model.seatCard.tag}<span class="seat-card-tag">{model.seatCard.tag.text}</span>{/if}
+        </div>
+      {/if}
+      <div class="event-rsvp">{@html model.detailHtml.rsvp}</div>
+      {#if model.seatCard.note}<p class="seat-card-note">{model.seatCard.note}</p>{/if}
+    </section>
+    {#if facts.length > 0}
+      <section class="event-facts" aria-label="Event facts" data-testid="kit-event-facts">
+        <dl>
+          {#each facts as fact (fact.key)}
+            <div>
+              <dt>{fact.key}</dt>
+              <dd>
+                {#if fact.key === "Host"}
+                  <p data-testid="event-organizer">{fact.value}</p>
+                {:else}
+                  {fact.value}
+                {/if}
+              </dd>
+            </div>
+          {/each}
+        </dl>
+      </section>
+    {/if}
+    {@html model.detailHtml.share}
+  </div>
+  <div class="event-layout-body">
   <div class="event-detail-grid">
     <div>
       {#if model.description}
@@ -192,9 +226,10 @@ const detailIslands = [
         </section>
       {/if}
     </div>
-    {@html model.detailHtml.share}
   </div>
   {@html model.detailHtml.roster}
+  </div>
+  </div>
   {@html detailIslands}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
@@ -230,3 +265,39 @@ const detailIslands = [
   </div>
   {#if model.viewerModerator && model.review}{@html model.review.actions}{/if}
 </Shell>
+
+<style>
+  .event-layout-head { grid-area: head; min-width: 0; }
+  .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+  .event-layout-rail :global(> section) { border: 0; }
+  .event-layout-rail :global(> .event-share) { padding: 0; margin-top: var(--space-2); }
+  .event-layout-body { grid-area: body; min-width: 0; }
+  .seat-card {
+    background: var(--color-g2);
+    border: 0;
+    border-radius: var(--radius-l);
+    padding: var(--space-inset-card);
+  }
+  .event-facts { background: var(--color-g2); border-radius: var(--radius-l); padding: var(--space-2) var(--space-inset-card); }
+  .event-facts dl { margin: 0; }
+  .event-facts dl > div { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-4); padding: var(--space-inset-tight) 0; }
+  .event-facts dl > div + div { border-top: 1px solid var(--color-hair1); }
+  .event-facts dt { margin: 0; color: var(--color-t3); font: var(--text-label) / var(--leading-label) var(--font-data); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+  .event-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; text-align: right; color: var(--color-t1); font-size: var(--text-ui); }
+  .event-facts dd p { margin: 0; }
+  .seat-card-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-inset-tight); }
+  .seat-card-head h2 { margin: 0; font-size: var(--text-title); font-weight: var(--font-weight-semibold); line-height: var(--leading-title); }
+  .seat-card-tag { padding: var(--space-inset-tag-y) var(--space-inset-tag-x); border-radius: var(--radius-s); color: var(--color-warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-warn) 45%, transparent); font: var(--text-label) / var(--leading-label) var(--font-data); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+  .seat-card-note { margin: var(--space-inset-tight) 0 0; font-size: var(--text-small); color: var(--color-t2); }
+  :global(.event-theme) .seat-card :global(.event-rsvp) { display: block; margin: 0; }
+  :global(.event-theme) .seat-card :global(.event-rsvp > section),
+  :global(.event-theme) .seat-card :global(.event-rsvp form) { align-items: stretch; gap: var(--space-inset-tight); text-align: left; }
+  :global(.event-theme) .seat-card :global(.event-rsvp > section > a),
+  :global(.event-theme) .seat-card :global(.event-rsvp button) { width: 100%; box-sizing: border-box; }
+  :global(.event-theme) .event-detail-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  /* Kit breakpoint.compact-max, layout.rail.seat, and layout.sticky-offset. */
+  @media (min-width: 821px) {
+    .event-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "head rail" "body rail"; column-gap: var(--space-9); align-items: start; }
+    .event-layout-rail { position: sticky; top: 92px; }
+  }
+</style>

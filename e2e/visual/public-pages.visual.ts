@@ -1,6 +1,15 @@
 import postgres from "postgres";
 import { requireTestDatabase } from "../ci-only.mjs";
 import { expect, localOrigin, test } from "../fixtures";
+import {
+  captureWithGeometry,
+  captureWithoutFontWait,
+  expectStablePublicPageCapture,
+  loadVisualFont,
+  normalizeDisplayFont,
+  readCaptureGeometry,
+  renderedPlatformFonts,
+} from "./font-evidence";
 
 // Public pages only: no session, no writes. Server-rendered times depend on the
 // wall clock, so every <time> element is masked; everything else must match the
@@ -23,17 +32,213 @@ const VIEWPORTS: Array<[name: string, size: { width: number; height: number }]> 
 
 for (const [viewport, size] of VIEWPORTS) {
   for (const [name, path] of ROUTES) {
-    test(`${name} @ ${viewport}`, async ({ page }) => {
+    test(`${name} @ ${viewport}`, async ({ page: fixturePage }, testInfo) => {
+      let page = fixturePage;
       await page.setViewportSize(size);
+      if (name === "privacy") {
+        await page.route("**/fonts/fragment-mono-latin-400.woff2", (route) => route.abort());
+        await page.route("**/fonts/mona-sans-latin-wght.woff2", (route) => route.abort());
+      }
       const response = await page.goto(path);
       expect(response?.status()).toBe(200);
       await page.waitForLoadState("networkidle");
-      await expect(page).toHaveScreenshot(`${name}-${viewport}.png`, {
-        fullPage: true,
-        mask: [page.locator("time")],
-      });
+      if (name === "privacy") {
+        await page.evaluate(() => document.fonts.ready);
+        const code = page.locator(".base-theme.content-theme code").first();
+        await code.evaluate((node) => node.setAttribute("data-font-evidence", ""));
+        const selector = ".base-theme.content-theme code[data-font-evidence]";
+        const selectors = { code: selector, heading: ".content-theme h1" };
+        const displayFonts = await renderedPlatformFonts(page, selectors.heading);
+        expect(displayFonts.length).toBeGreaterThan(0);
+        expect(displayFonts.every((font) => font.glyphCount > 0 && !font.isCustomFont)).toBe(true);
+        const fonts = await renderedPlatformFonts(page, selector);
+        expect(fonts.some((font) => font.isCustomFont && font.familyName === "Fragment Mono")).toBe(
+          false,
+        );
+        expect(fonts.some((font) => font.glyphCount > 0)).toBe(true);
+        const beforeIdle = await readCaptureGeometry(page, selectors);
+        await page.evaluate(async () => {
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          );
+          await new Promise<void>((resolve) => setTimeout(resolve, 500));
+        });
+        const afterIdle = await readCaptureGeometry(page, selectors);
+        const idleFonts = await renderedPlatformFonts(page, selector);
+        expect(afterIdle).toEqual(beforeIdle);
+        expect(idleFonts).toEqual(fonts);
+        const settling = await captureWithGeometry(page, selectors);
+        const settlingFonts = await renderedPlatformFonts(page, selector);
+        await testInfo.attach(`privacy-${viewport}-baseline-settling.png`, {
+          body: settling.png,
+          contentType: "image/png",
+        });
+        await testInfo.attach(`privacy-${viewport}-baseline-settling.json`, {
+          body: JSON.stringify(
+            { before: settling.before, after: settling.after, idleFonts, settlingFonts },
+            null,
+            2,
+          ),
+          contentType: "application/json",
+        });
+        expect(settling.before).toEqual(afterIdle);
+        if (JSON.stringify(settling.before) !== JSON.stringify(settling.after)) {
+          expect(settlingFonts.map((font) => font.familyName)).not.toEqual(
+            idleFonts.map((font) => font.familyName),
+          );
+        }
+        await expect.soft(page).toHaveScreenshot(`privacy-fallback-${viewport}.png`, {
+          fullPage: true,
+          mask: [page.locator("time")],
+        });
+        // The normalized capture must be the first capture on a fresh page.
+        page = await page.context().newPage();
+        await page.setViewportSize(size);
+        expect((await page.goto(path))?.status()).toBe(200);
+        await page.waitForLoadState("networkidle");
+      }
+      // Normalize content screenshots with a separately named, explicitly
+      // loaded face; it must not compete with the shipped optional face.
+      const OPTIONAL_FACE =
+        "font-family:Mona Sans Content;font-weight:200 900;font-display:optional;";
+      expect(OPTIONAL_FACE.replace("optional;", "optionalfoo;")).not.toContain(OPTIONAL_FACE);
+      const isContentPage = await page.evaluate(() =>
+        Boolean(document.querySelector(".content-theme")),
+      );
+      if (isContentPage) {
+        const saw = await page.evaluate(
+          (s: string) => Boolean(document.head.textContent?.includes(s)),
+          OPTIONAL_FACE,
+        );
+        expect(saw).toBe(true);
+        let normalizedCodeFonts: Awaited<ReturnType<typeof renderedPlatformFonts>> | undefined;
+        const normalized = await normalizeDisplayFont(page, {
+          url: "/fonts/mona-sans-latin-wght.woff2",
+          weight: "200 900",
+          root: ".content-theme",
+        });
+        expect(normalized.face.status).toBe("loaded");
+        expect(normalized.token.original).toMatch(/^\s*['"]?Mona Sans Content['"]?\s*,/);
+        if (name === "privacy") {
+          // Normalize the code face independently of the blocked-font control above.
+          const codeFont = await loadVisualFont(page, {
+            url: "/fonts/fragment-mono-latin-400.woff2",
+          });
+          await page.locator(".content-theme code").evaluateAll((nodes, family) => {
+            for (const node of nodes) (node as HTMLElement).style.fontFamily = `"${family}"`;
+            nodes[0]?.setAttribute("data-code-proof", "");
+          }, codeFont.family);
+          normalizedCodeFonts = await renderedPlatformFonts(page, "code[data-code-proof]");
+          expect(normalizedCodeFonts.length).toBeGreaterThan(0);
+          expect(
+            normalizedCodeFonts.every(
+              (used) =>
+                used.isCustomFont &&
+                used.postScriptName === "FragmentMono-Regular" &&
+                used.glyphCount > 0,
+            ),
+          ).toBe(true);
+        }
+        await page.evaluate(() => document.fonts.ready);
+        const fonts = await renderedPlatformFonts(page, ".content-theme h1");
+        expect(fonts.length).toBeGreaterThan(0);
+        expect(
+          fonts.every(
+            (used) =>
+              used.isCustomFont &&
+              used.glyphCount > 0 &&
+              used.postScriptName === "MonaSansExtraLight-Regular",
+          ),
+        ).toBe(true);
+        await expectStablePublicPageCapture(page, testInfo, {
+          heading: ".content-theme h1",
+          width: size.width,
+          snapshot: `${name}-${viewport}.png`,
+          afterFirst: async () => {
+            if (name === "privacy") {
+              expect(await renderedPlatformFonts(page, "code[data-code-proof]")).toEqual(
+                normalizedCodeFonts,
+              );
+            }
+          },
+        });
+      } else {
+        await expect(page).toHaveScreenshot(`${name}-${viewport}.png`, {
+          fullPage: true,
+          mask: [page.locator("time")],
+        });
+      }
     });
   }
+}
+
+for (const [viewport, size] of VIEWPORTS) {
+  test(`cold optional fallback does not swap @ ${viewport}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(size);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const request = page.waitForRequest((req) => req.url().includes("mona-sans-latin-wght.woff2"));
+    await page.route("**/fonts/mona-sans-latin-wght.woff2", async (route) => {
+      await gate;
+      await route.continue();
+    });
+    try {
+      expect((await page.goto("/about", { waitUntil: "domcontentloaded" }))?.status()).toBe(200);
+      const fontRequest = await request;
+      const heading = ".content-theme h1";
+      await expect
+        .poll(async () => {
+          const fonts = await renderedPlatformFonts(page, heading);
+          return (
+            fonts.length > 0 &&
+            fonts.every(
+              (font) => font.glyphCount > 0 && !/^MonaSansExtraLight/.test(font.postScriptName),
+            )
+          );
+        })
+        .toBe(true);
+      expect(await page.evaluate(() => document.fonts.status)).toBe("loading");
+      const before = await readCaptureGeometry(page, { heading });
+      const fonts = await renderedPlatformFonts(page, heading);
+      const painted = await captureWithoutFontWait(page);
+      expect([painted.readUInt32BE(16), painted.readUInt32BE(20)]).toEqual([
+        size.width,
+        size.height,
+      ]);
+      await testInfo.attach("cold-fallback", { body: painted, contentType: "image/png" });
+      // Keep layout unchanged and prove the visible heading contributed pixels.
+      await page.locator(heading).evaluate((el) => {
+        (el as HTMLElement).style.visibility = "hidden";
+      });
+      const hidden = await captureWithoutFontWait(page);
+      expect(hidden.equals(painted)).toBe(false);
+      await page.locator(heading).evaluate((el) => {
+        (el as HTMLElement).style.removeProperty("visibility");
+      });
+      release();
+      const fontResponse = await fontRequest.response();
+      expect(fontResponse?.ok()).toBe(true);
+      expect(await fontResponse?.finished()).toBeNull();
+      await page.evaluate(() => document.fonts.ready);
+      expect(
+        await page.evaluate(() =>
+          Array.from(document.fonts).some(
+            (face) => face.family === "Mona Sans Content" && face.status === "loaded",
+          ),
+        ),
+      ).toBe(true);
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+      );
+      expect(await renderedPlatformFonts(page, heading)).toEqual(fonts);
+      expect(await readCaptureGeometry(page, { heading })).toEqual(before);
+    } finally {
+      release();
+    }
+  });
 }
 
 // Event member states. Both fixtures are inserted AFTER the public routes

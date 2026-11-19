@@ -1,6 +1,6 @@
 // route-inventory: GET /up
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Sql, TransactionSql } from "postgres";
+import type { default as postgres, Sql, TransactionSql } from "postgres";
 import app from "./app";
 import type { Env } from "../src/env";
 import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
@@ -799,7 +799,7 @@ describe.skipIf(!process.env.DATABASE_URL)("/up queue.failed redrive linkage", (
         const query = strings.reduce((text, part, i) => text + (i ? `$${i}` : "") + part, "");
         return target.unsafe(
           query.replaceAll("drizzle.__drizzle_migrations", "__drizzle_migrations"),
-          values as Parameters<Sql["unsafe"]>[1],
+          values as postgres.ParameterOrJSON<never>[],
           { prepare: true },
         );
       }) as unknown as Sql;

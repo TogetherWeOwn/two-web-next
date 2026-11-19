@@ -12,6 +12,7 @@ import app from "../app";
 import type { Db } from "../../src/db/index";
 import type { Env } from "../../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../../src/sessions";
+import { collectImportedCss } from "./kit-imported-css";
 
 export const ORIGIN = "https://period.example.test";
 export type Twin = "Hono" | "Kit";
@@ -43,6 +44,7 @@ export async function compileBoardPeriodKit(): Promise<BoardPeriodKit> {
     stdin: {
       contents: `
 import { render } from "svelte/server";
+import "./web/src/lib/site-header.css";
 import Page from "./web/src/routes/leaderboards/members/+page.svelte";
 import { load } from "./web/src/routes/leaderboards/members/+page.server.ts";
 import { memberReadResponse } from "./src/member-reads.ts";
@@ -108,6 +110,7 @@ export async function request({ env, path, actor, audit }) {
               "let current; export const setEnv = (value) => { current = value; }; export const env = new Proxy({}, { get: (_, key) => Reflect.get(current, key) });",
             loader: "js",
           }));
+          collectImportedCss(plugin, styles);
           plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
             const { js, css } = compile(readFileSync(path, "utf8"), {
               generate: "server",

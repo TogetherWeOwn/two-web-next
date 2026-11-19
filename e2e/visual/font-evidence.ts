@@ -1,0 +1,205 @@
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { expect, type Locator, type Page, type TestInfo } from "@playwright/test";
+
+/** Avoid installing a screenshot mask overlay when no targets exist. */
+export async function nonemptyMask(locator: Locator) {
+  return (await locator.count()) > 0 ? [locator] : undefined;
+}
+
+/** Load this exact face before registration; never rewrite styles or tokens. */
+export async function loadVisualFont(page: Page, options: { url: string; weight?: string }) {
+  const family = `visual-font-${randomUUID().replaceAll("-", "")}`;
+  return page.evaluate(
+    async ({ family, url, weight }) => {
+      const face = new FontFace(family, `url(${JSON.stringify(url)})`, { weight });
+      await face.load();
+      document.fonts.add(face);
+      return { family, status: face.status, weight };
+    },
+    { family, url: options.url, weight: options.weight ?? "400" },
+  );
+}
+
+/** Chromium's actual glyph usage, not a computed family or fonts.check result. */
+export async function renderedPlatformFonts(page: Page, selector: string) {
+  const session = await page.context().newCDPSession(page);
+  try {
+    const count = await page.locator(selector).count();
+    if (count !== 1) throw new Error(`Expected exactly one element, found ${count}: ${selector}`);
+    await session.send("DOM.enable");
+    await session.send("CSS.enable");
+    const { root } = await session.send("DOM.getDocument", { depth: 0 });
+    const { nodeId } = await session.send("DOM.querySelector", { nodeId: root.nodeId, selector });
+    if (!nodeId) throw new Error(`CDP could not resolve ${selector}`);
+    const { fonts } = await session.send("CSS.getPlatformFontsForNode", { nodeId });
+    return fonts;
+  } finally {
+    await session.detach();
+  }
+}
+
+/** CSS-pixel metrics; selectors must each identify exactly one light-DOM element. */
+export async function readCaptureGeometry(page: Page, selectors: Record<string, string>) {
+  return page.evaluate((named) => {
+    const metrics = (el: HTMLElement) => ({
+      scrollWidth: el.scrollWidth,
+      scrollHeight: el.scrollHeight,
+      offsetWidth: el.offsetWidth,
+      offsetHeight: el.offsetHeight,
+      clientWidth: el.clientWidth,
+      clientHeight: el.clientHeight,
+    });
+    const nodes: Record<string, { x: number; y: number; width: number; height: number }> = {};
+    for (const [name, selector] of Object.entries(named)) {
+      const found = document.querySelectorAll(selector);
+      if (found.length !== 1)
+        throw new Error(`Expected exactly one ${name}, found ${found.length}: ${selector}`);
+      const { x, y, width, height } = found[0]!.getBoundingClientRect();
+      nodes[name] = { x, y, width, height };
+    }
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      scroll: { x: scrollX, y: scrollY },
+      body: metrics(document.body),
+      document: metrics(document.documentElement),
+      nodes,
+    };
+  }, selectors);
+}
+
+/** Viewport-only Chromium capture: no Playwright font-readiness wait. */
+export async function captureWithoutFontWait(page: Page) {
+  const session = await page.context().newCDPSession(page);
+  try {
+    const { data } = await session.send("Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: false,
+    });
+    return Buffer.from(data, "base64");
+  } finally {
+    await session.detach();
+  }
+}
+
+/** Retain the first full-page capture and both measurements: no warmup or retry. */
+export async function captureWithGeometry(
+  page: Page,
+  selectors: Record<string, string>,
+  options: Pick<
+    NonNullable<Parameters<Page["screenshot"]>[0]>,
+    "mask" | "maskColor" | "animations" | "caret" | "scale"
+  > = {},
+) {
+  const before = await readCaptureGeometry(page, selectors);
+  const png = await page.screenshot({ ...options, fullPage: true });
+  const after = await readCaptureGeometry(page, selectors);
+  const dimensions = { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+  return { png, dimensions, before, after };
+}
+
+/** Check the first full-page PNG; a second capture is a stability control, not a retry. */
+export async function expectStablePublicPageCapture(
+  page: Page,
+  testInfo: TestInfo,
+  {
+    heading,
+    width,
+    snapshot,
+    afterFirst,
+  }: { heading: string; width: number; snapshot?: string; afterFirst?: () => Promise<void> },
+) {
+  if (snapshot) expect(existsSync(testInfo.snapshotPath(snapshot))).toBe(true);
+  const nodes = { heading, main: "main", footer: "footer" };
+  const options = {
+    mask: await nonemptyMask(page.locator("time")),
+    animations: "disabled" as const,
+    caret: "hide" as const,
+    scale: "css" as const,
+  };
+  const first = await captureWithGeometry(page, nodes, options);
+  await afterFirst?.();
+  await testInfo.attach("first-capture", { body: first.png, contentType: "image/png" });
+  await testInfo.attach("first-geometry", {
+    body: JSON.stringify({
+      before: first.before,
+      after: first.after,
+      dimensions: first.dimensions,
+    }),
+    contentType: "application/json",
+  });
+  expect.soft(first.after).toEqual(first.before);
+  expect.soft(first.dimensions.width).toBe(width);
+  expect.soft(first.dimensions.height).toBe(first.before.document.scrollHeight);
+  if (snapshot) expect.soft(first.png).toMatchSnapshot(snapshot, { maxDiffPixels: 300 });
+
+  const second = await captureWithGeometry(page, nodes, options);
+  await testInfo.attach("second-capture", { body: second.png, contentType: "image/png" });
+  expect.soft(second.before).toEqual(first.after);
+  expect.soft(second.after).toEqual(first.after);
+  expect.soft(second.dimensions).toEqual(first.dimensions);
+  expect.soft(second.png.equals(first.png)).toBe(true);
+  return first;
+}
+
+/** Normalize an existing display token without changing which elements use it. */
+export async function normalizeDisplayFont(
+  page: Page,
+  options: { url: string; weight?: string; root: string },
+) {
+  const face = await loadVisualFont(page, options);
+  const token = await page.locator(options.root).evaluate((element, family) => {
+    const root = element as HTMLElement;
+    const original = getComputedStyle(root)
+      .getPropertyValue("--font-display")
+      .replace(/^[\t\n\f\r ]+/g, "");
+    if (!original || /^[\t\n\f\r ]+$/.test(original))
+      throw new Error("Expected a nonempty --font-display stack");
+    let quote = "";
+    let separator = original.length;
+    for (let i = 0; i < original.length; i++) {
+      const char = original[i];
+      if (char === "\\") {
+        i++;
+      } else if (quote) {
+        if (char === quote) quote = "";
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === "/" && original[i + 1] === "*") {
+        const end = original.indexOf("*/", i + 2);
+        if (end === -1) throw new Error("Unterminated comment in --font-display stack");
+        i = end + 1;
+      } else if (char === ",") {
+        separator = i;
+        break;
+      }
+    }
+    const normalized = `"${family}"${original.slice(separator)}`;
+    root.style.setProperty("--font-display", normalized);
+    const effective = getComputedStyle(root).getPropertyValue("--font-display");
+    if (effective !== normalized) throw new Error("Display token override did not take effect");
+    return { original, normalized: effective };
+  }, face.family);
+  return { face, token };
+}
+
+export async function captureNormalizedDisplayFont(
+  page: Page,
+  options: { url: string; weight?: string; root: string; heading: string },
+) {
+  const { face, token } = await normalizeDisplayFont(page, options);
+  const capture = await captureWithGeometry(
+    page,
+    { heading: options.heading },
+    {
+      animations: "disabled",
+      caret: "hide",
+      scale: "css",
+    },
+  );
+  const headingFamily = await page.locator(options.heading).evaluate((element) => {
+    return getComputedStyle(element).fontFamily;
+  });
+  const fonts = await renderedPlatformFonts(page, options.heading);
+  return { face, token, headingFamily, fonts, ...capture };
+}
