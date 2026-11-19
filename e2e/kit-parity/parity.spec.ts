@@ -1005,7 +1005,7 @@ for (const target of targets) {
       expect(body).toContain("/islands/rsvp-button.js");
       if (target.name === "kit") {
         expect(body).toContain('data-testid="kit-seat-card"');
-        expect(body).toContain("Your RSVP");
+        expect(body).toMatch(/\d+ of 10 in/);
         expect(body).not.toContain("Log in to RSVP");
       }
       expect(body).toContain("Sign out");
@@ -1706,16 +1706,23 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
   }
 });
 
-test("Kit member seat card captures saved and full states", async ({ browser }) => {
+test("Kit member seat card captures open, saved and full states", async ({ browser }) => {
   const target = targets.find((item) => item.name === "kit")!;
   const key = "01J00000000000000000000991";
+  const openKey = "01J00000000000000000000992";
   const savedUserId = "900000000000000846";
   const fullUserId = "900000000000000845";
+  const openUserId = "900000000000000847";
   const states = [
     { name: "saved", userId: savedUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
     { name: "full", userId: fullUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
+    { name: "open", userId: openUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
   ];
   const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  const enhanced = await browser.newContext({
+    baseURL: target.origin,
+    viewport: { width: 390, height: 844 },
+  });
   try {
     await withSessionDb(async (sql) => {
       for (const state of states) {
@@ -1723,10 +1730,13 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
         await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
           values (${hash}, ${hash}, ${state.userId}, 'Seat fixture', true, false, ${new Date(Date.now() + 7_200_000)})`;
       }
-      await sql`insert into users (id, username, member) values (${savedUserId}, 'Seat fixture', true)`;
+      await sql`insert into users (id, username, member)
+        values (${savedUserId}, 'Seat fixture', true), (${openUserId}, 'Seat fixture', true)`;
       await sql`insert into events (event_key, title, description, game, organizer_name, starts_at, ends_at, location, status, capacity, rsvp_open)
         values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
-          'Catan', 'Vexa', '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true)`;
+          'Catan', 'Vexa', '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true),
+          (${openKey}, 'Community game night', 'Bring a favourite game and meet the community.',
+          'Catan', 'Vexa', '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 2, true)`;
       await sql`insert into rsvps (event_id, user_id, status)
         select id, ${savedUserId}, 'going' from events where event_key = ${key}`;
     });
@@ -1811,10 +1821,40 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
         { width: 390, height: 844 },
       ]) {
         await page.setViewportSize(viewport);
-        const response = await page.goto(`/e/${key}`);
+        const response = await page.goto(`/e/${state.name === "open" ? openKey : key}`);
         expect(response?.status()).toBe(200);
         expect(response?.headers()["x-two-renderer"]).toBe("kit");
         const card = page.getByTestId("kit-seat-card");
+        if (state.name === "open") {
+          await expect(card.getByRole("heading", { name: "0 of 2 in" })).toBeVisible();
+          await expect(card.getByText("Sign-ups open")).toBeVisible();
+          await expect(card.getByRole("button", { name: "I'm in" })).toBeVisible();
+          await expect(card.getByRole("link", { name: "Add to calendar" })).toHaveAttribute(
+            "href",
+            `/events/${openKey}.ics`,
+          );
+          await expect(page.getByTestId("event-going-count")).toBeHidden();
+          await expect(page.getByTestId("event-spots-left")).toBeHidden();
+          if (viewport.width === 390) {
+            const time = page.locator(".event-layout-head > dl:last-child");
+            await expect(time.locator("time[datetime]").first()).toHaveAttribute(
+              "datetime",
+              "2099-03-01T18:00:00.000Z",
+            );
+            await expect(time.locator("xpath=../following-sibling::*[1]/*[1]")).toHaveAttribute(
+              "data-testid",
+              "kit-seat-card",
+            );
+            await card.scrollIntoViewIfNeeded();
+          } else {
+            await expect(card.locator("..")).toHaveCSS("position", "sticky");
+          }
+          const name = `kit-review-seat-card-open-${viewport.width}`;
+          const path = test.info().outputPath(`${name}.png`);
+          await page.screenshot({ path, animations: "disabled", caret: "hide" });
+          await test.info().attach(name, { path, contentType: "image/png" });
+          continue;
+        }
         await expect(card.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
         await expect(
           card.getByRole("button", {
@@ -1829,15 +1869,58 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
         await expectFacts(page, state.name, viewport.width);
       }
     }
-  } finally {
-    await context.close();
+    // Drive the shipped island in place before exercising the native form.
+    await enhanced.addCookies(await context.cookies());
+    const enhancedPage = await enhanced.newPage();
     await withSessionDb(async (sql) => {
-      await sql`delete from events where event_key = ${key}`;
+      // No users row: this RSVP holds a seat but is not listed in the lineup.
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, '900000000000000848', 'going' from events where event_key = ${openKey}`;
+    });
+    await enhancedPage.goto(`/e/${openKey}`);
+    const enhancedCard = enhancedPage.getByTestId("kit-seat-card");
+    const lineup = enhancedPage.getByTestId("event-going-count");
+    const spots = enhancedPage.getByTestId("event-spots-left");
+    await expect(enhancedCard.getByRole("heading", { name: "1 of 2 in" })).toBeVisible();
+    await expect(lineup).toBeHidden();
+    await enhancedCard.getByRole("button", { name: "I'm in" }).click();
+    await expect(enhancedCard.getByTestId("rsvp-confirmed")).toBeVisible();
+    await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    await expect(lineup.locator("[data-count]")).toHaveText("1 of 2 going");
+    await expect(spots).toBeVisible();
+    await expect(spots).toHaveText("Full");
+
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = 3 where event_key = ${openKey}`;
+    });
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(enhancedCard.getByTestId("rsvp-going")).toBeEnabled();
+    await expect(lineup.locator("[data-count]")).toHaveText("0 of 3 going");
+    await expect(spots).toHaveText("2 of 3 spots left");
+    await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    await expect(enhancedCard.getByRole("heading", { name: "1 of 2 in" })).toHaveCount(0);
+
+    const post = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === `/e/${openKey}/rsvp`,
+    );
+    await page.getByTestId("kit-seat-card").getByRole("button", { name: "I'm in" }).click();
+    const submitted = await post;
+    expect(submitted.request().postData()).toBe("status=going");
+    expect(submitted.status()).toBe(303);
+    expect(submitted.headers().location).toBe(`/e/${openKey}`);
+    expect(submitted.headers()["x-two-renderer"]).toBeUndefined();
+    await expect(page.getByTestId("kit-seat-card").getByTestId("rsvp-confirmed")).toBeVisible();
+  } finally {
+    await Promise.all([context.close(), enhanced.close()]);
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key in (${key}, ${openKey})`;
       for (const state of states) {
         await sql`delete from web_session_grace where user_id = ${state.userId}`;
         await sql`delete from web_sessions where user_id = ${state.userId}`;
       }
-      await sql`delete from users where id = ${savedUserId}`;
+      await sql`delete from users where id in (${savedUserId}, ${openUserId})`;
     });
   }
 });

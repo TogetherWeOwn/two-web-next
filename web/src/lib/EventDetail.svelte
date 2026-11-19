@@ -1,8 +1,10 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
+import Tag from "#lib/Tag.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
 import { kitEventFacts } from "../../../src/events/kit-event-facts";
+import { kitOpenSeat, KIT_SIGNUPS_OPEN } from "../../../src/events/kit-seat-actions";
 import { ONGOING_COPY } from "../../../src/events/ongoing";
 import { isPublicJoinUrl } from "../../../src/events/public-join-url";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
@@ -13,6 +15,8 @@ import { EVENT_ONGOING_TESTID } from "../../../src/islands/contracts";
 let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrite?: boolean } =
   $props();
 const facts = $derived(kitEventFacts(model));
+const openSeat = $derived(kitOpenSeat(model));
+const seatHeading = $derived(openSeat ?? model.seatCard.heading);
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
@@ -121,6 +125,7 @@ const detailIslands = [
     {#if model.isOngoing}
       <p class="notice" data-testid={EVENT_ONGOING_TESTID}>{ONGOING_COPY}</p>
     {/if}
+    {#if openSeat}<span class="seat-open-snapshot"><Tag variant="ok">{KIT_SIGNUPS_OPEN}</Tag></span>{/if}
     <h1 data-waitlist-position={model.waitlistPosition ?? ""}>{model.title}</h1>
   </section>
   {#if model.joinResult}
@@ -136,14 +141,20 @@ const detailIslands = [
   {@html model.detailHtml.metadata}
   </div>
   <div class="event-layout-rail">
-    <section class="seat-card" aria-labelledby={model.seatCard.heading ? 'seat-card-heading' : undefined} aria-label={model.seatCard.heading ? undefined : 'RSVP'} data-testid="kit-seat-card">
-      {#if model.seatCard.heading}
+    <section class="seat-card" aria-labelledby={seatHeading ? 'seat-card-heading' : undefined} aria-label={seatHeading ? undefined : 'RSVP'} data-testid="kit-seat-card">
+      {#if seatHeading}
         <div class="seat-card-head">
-          <h2 id="seat-card-heading">{model.seatCard.heading}</h2>
-          {#if model.seatCard.tag}<span class="seat-card-tag">{model.seatCard.tag.text}</span>{/if}
+          <h2 id="seat-card-heading">
+            {#if openSeat}
+              <span class="seat-open-snapshot">{seatHeading}</span><span class="seat-open-fallback">{model.seatCard.heading}</span>
+            {:else}{seatHeading}{/if}
+          </h2>
+          {#if openSeat}<span class="seat-open-snapshot"><Tag variant="ok">{KIT_SIGNUPS_OPEN}</Tag></span>
+          {:else if model.seatCard.tag}<span class="seat-card-tag">{model.seatCard.tag.text}</span>{/if}
         </div>
       {/if}
       <div class="event-rsvp">{@html model.detailHtml.rsvp}</div>
+      {#if openSeat}<a class="seat-action" href={model.icsUrl}>Add to calendar</a>{/if}
       {#if model.seatCard.note}<p class="seat-card-note">{model.seatCard.note}</p>{/if}
     </section>
     {#if facts.length > 0}
@@ -295,6 +306,28 @@ const detailIslands = [
   :global(.event-theme) .seat-card :global(.event-rsvp > section > a),
   :global(.event-theme) .seat-card :global(.event-rsvp button) { width: 100%; box-sizing: border-box; }
   :global(.event-theme) .event-detail-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  /* Native C5 calendar link with the Kit pill treatment. */
+  .seat-action {
+    display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+    min-height: 44px; border: 0; border-radius: var(--radius-pill); padding: 0 var(--space-5);
+    box-shadow: inset 0 0 0 1px var(--color-hair2); background: transparent; color: var(--color-t1);
+    font: var(--font-weight-semibold) var(--text-ui) var(--font-ui);
+    font-stretch: var(--font-width-button); text-decoration: none; cursor: pointer;
+  }
+  .seat-action:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
+  .seat-card > .seat-action { width: 100%; margin-top: var(--space-3); }
+  @media (forced-colors: active) { .seat-action { border: 1px solid ButtonText; } }
+  .seat-open-fallback { display: none; }
+  /* C5 owns the initial availability. After an inline write the lineup badge
+     takes over, even if the inline join control later returns. */
+  .event-layout :global([data-event-lineup]:has([data-seat-refresh]:not([data-seat-refresh="ready"]))) { display: none; }
+  .event-layout :global([data-seat-refresh] [data-spots]:not([hidden]))::before { content: " · "; }
+  .event-layout:has(:global([data-seat-refresh]:not([data-seat-refresh="initial"]))),
+  .event-layout:not(:has(:global([data-testid="rsvp-going"]))),
+  .event-layout:has(:global([data-island="rsvp-button"][data-outcome-unknown])) {
+    .seat-open-snapshot { display: none; }
+    .seat-open-fallback { display: inline; }
+  }
   /* Kit breakpoint.compact-max, layout.rail.seat, and layout.sticky-offset. */
   @media (min-width: 821px) {
     .event-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "head rail" "body rail"; column-gap: var(--space-9); align-items: start; }
