@@ -34,19 +34,29 @@ for (const path of ["/about", "/faq", "/rules", "/privacy"]) {
       test(`real font evidence: ${path} @ ${width} ${state}`, async ({ page }, testInfo) => {
         await page.setViewportSize({ width, height });
         const privacy = path === "/privacy";
-        const trackedFont = privacy ? dataFont : displayFont;
-        const capture = await evidence.captureRealFont(page, path, state, testInfo, trackedFont);
+        const capture = await evidence.captureRealFont(page, path, state, testInfo, displayFont);
         const { content, requests, settled, timing, warmup } = capture;
         expect(timing.viewport).toEqual({ width, height, devicePixelRatio: 1 });
+        expect(timing.stack).toMatch(/Mona Sans Content/);
+        expect(timing.faces).toContainEqual(
+          expect.objectContaining({ family: "Mona Sans Content", display: "optional" }),
+        );
         expect(settled.fonts.length).toBeGreaterThan(0);
-        expect(settled.fonts.every((font) => !font.isCustomFont && font.glyphCount > 0)).toBe(true);
-        const inventory = privacy ? [`${localOrigin}${dataFont}`] : [];
-        expect(content.resources.map(({ name }) => name)).toEqual(inventory);
+        expect(settled.fonts.every((font) => font.glyphCount > 0)).toBe(true);
+        expect(
+          settled.fonts.every(
+            (font) => !font.isCustomFont || font.familyName.startsWith("Mona Sans"),
+          ),
+        ).toBe(true);
+        const inventory = [displayFont, ...(privacy ? [dataFont] : [])]
+          .map((font) => `${localOrigin}${font}`)
+          .sort();
+        expect(content.resources.map(({ name }) => name).sort()).toEqual(inventory);
         const contentRequests = requests.filter(({ phase }) => phase === "content");
         const fontRequests = contentRequests.flatMap(({ type, url }) =>
           type === "Font" ? [url] : [],
         );
-        expect(fontRequests).toEqual(inventory);
+        expect(fontRequests.sort()).toEqual(inventory);
         const hints = [...content.rawHints, ...content.hints];
         expect(hints.filter(evidence.isFontHint)).toEqual([]);
         expect(content.headers.link).toBeUndefined();
@@ -70,7 +80,22 @@ for (const path of ["/about", "/faq", "/rules", "/privacy"]) {
           );
           expect(homeRequest?.detail).toMatchObject({ isLinkPreload: true });
         }
-        if (privacy && state === "cold-shaped") {
+        if (state === "cold-shaped") {
+          const displayRequest = contentRequests.find(
+            ({ url }) => url === `${localOrigin}${displayFont}`,
+          );
+          expect(displayRequest?.events).toContainEqual(
+            expect.objectContaining({
+              event: "response",
+              data: expect.objectContaining({ status: 200 }),
+            }),
+          );
+          expect(displayRequest?.events).toContainEqual(
+            expect.objectContaining({ event: "finished" }),
+          );
+          expect(timing.faces).toContainEqual(
+            expect.objectContaining({ family: "Mona Sans Content", status: "loaded" }),
+          );
           expect(capture.firstFrameAtMs).toBeLessThan(capture.resourceEnd!);
           expect(capture.afterFontAtMs).toBeGreaterThan(capture.resourceEnd!);
         }
