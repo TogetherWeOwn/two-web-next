@@ -1,37 +1,20 @@
 import type { Context, Next } from "hono";
 import { KIT_FALLBACK_INLINE_STYLE, KIT_FALLBACK_STYLE_SHA256 } from "./ember-fallback-style";
 import type { Env } from "./env";
-import { operatorImageHosts } from "./config-warn";
-import { LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";
 import { robotsTagFor } from "./http/robots";
+import { securityHeadersFor } from "./http/secure-headers";
 
 export { KIT_FALLBACK_INLINE_STYLE, KIT_FALLBACK_STYLE_SHA256, robotsTagFor };
+export { isContentLeafPath, SECURITY_HEADERS, securityHeadersFor } from "./http/secure-headers";
 
-// Response-header parity (TOG-10118 ports two-web TOG-7328 + TOG-8729).
-// Two layers, same split as legacy:
-//
-// - The four static headers live here as constants AND in hono's
-//   secureHeaders options in src/index.tsx (byte-identical values to legacy
-//   AddSecurityHeaders::HEADERS). X-Frame-Options is DENY, not SAMEORIGIN:
-//   nothing frames this site (CISO bar TOG-5469).
-// - Content-Security-Policy shape + the report sink belong to the CSP-report
-//   slice (TOG-10107, src/csp-reports.ts): secureHeaders emits that policy,
-//   and its tests pin the report-to directive. This card asserts
-//   the static four + the robots tag, never the CSP shape, so the two cards
-//   cannot fight over one header.
-// - Strict-Transport-Security is explicitly disabled in src/index.tsx
-//   (strictTransportSecurity: false — Hono defaults it on). Legacy owns it
-//   at nginx (TOG-8729): it is meaningless over plaintext and dangerous
-//   from a local dev server, which would pin the developer's whole machine
-//   to HTTPS. On Workers the edge owns it (Cloudflare HSTS), never this
-//   code.
-
-export const SECURITY_HEADERS: Record<string, string> = {
-  "X-Content-Type-Options": "nosniff",
-  "Referrer-Policy": "strict-origin-when-cross-origin",
-  "X-Frame-Options": "DENY",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-};
+export async function secureHeaders(c: Context<{ Bindings: Env }>, next: Next): Promise<void> {
+  // Read Hono's normalized path and resolve config before dispatch. Apply the
+  // policy to the finished response, including guard refusals and mounted apps.
+  const headers = securityHeadersFor(c.req, c.env.FEATURED_IMAGE_HOSTS);
+  await next();
+  for (const [name, value] of headers) c.res.headers.set(name, value);
+  c.res.headers.delete("X-Powered-By");
+}
 
 /** Staging/preview/dev builds noindex every machine format (production apex only indexes). */
 export function stagingRobots(c: Context<{ Bindings: Env }>): string | null {
@@ -62,49 +45,6 @@ export async function robotsTag(c: Context<{ Bindings: Env }>, next: Next): Prom
   if (tag) c.res.headers.set("X-Robots-Tag", tag);
 }
 
-// The only pages whose shell inlines the stylesheets instead of linking
-// them (theme="content" plus the homepage's inlineCriticalCss flag in
-// src/page-shell.tsx): the stylesheets must be inlined to remove their
-// render-blocking requests on slow mobile audits, and the inlined block is
-// allowlisted by hash so style-src keeps no 'unsafe-inline'. "/" reuses the
-// exact leaf bundle byte for byte (same LEAF_CRITICAL_CSS hash, no generator
-// change); recovery/error shells keep theme="home" without the flag and stay
-// on external stylesheets. Any other response carrying the hash would be
-// inert, but the allowlist stays scoped to these paths so the documented
-// policy for every other route never changes shape.
-const INLINE_CRITICAL_CSS_PATHS: ReadonlySet<string> = new Set([
-  "/",
-  "/about",
-  "/faq",
-  "/rules",
-  "/privacy",
-]);
-
-export function isContentLeafPath(path: string): boolean {
-  return INLINE_CRITICAL_CSS_PATHS.has(path) && path !== "/";
-}
-
-export function isInlineCriticalCssPath(path: string): boolean {
-  return INLINE_CRITICAL_CSS_PATHS.has(path);
-}
-
-// Per-route twin of the static secureHeaders() policy in src/index.tsx: on an
-// inline-critical path (/ plus the content leaves), widen the already-emitted
-// `style-src 'self'` with the inlined block's hash. Runs inside the existing
-// header wrapper after
-// secureHeaders (same pattern as robotsTag), so no extra middleware is
-// registered. String replacement keeps the directive order byte-identical to
-// securityHeadersFor for the same path.
-export function leafInlineStyleCsp(c: Context): void {
-  if (!isInlineCriticalCssPath(c.req.path)) return;
-  const csp = c.res.headers.get("Content-Security-Policy");
-  if (!csp || !csp.includes("style-src 'self'")) return;
-  c.res.headers.set(
-    "Content-Security-Policy",
-    csp.replace("style-src 'self'", `style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`),
-  );
-}
-
 // The catastrophic Kit fallback (web/src/error.html) inlines this single
 // <style> block: the page must render branded with no stylesheet fetch, so
 // the styles cannot move to an external file. When Kit serves the fallback
@@ -112,7 +52,7 @@ export function leafInlineStyleCsp(c: Context): void {
 // itself fails), the dispatch decorates it with the production CSP, whose
 // style-src 'self' would block the inline block and leave the page on UA
 // defaults. The block is allowlisted by hash so style-src keeps no
-// 'unsafe-inline' — the same shape as the leaf allowlist above, but scoped
+// 'unsafe-inline' — the same shape as the leaf allowlist, but scoped
 // to the fallback RESPONSE (any path can fail catastrophically) instead of
 // a path list. The token adapter generates the template, constants and hash
 // together; test/kit-fallback-style.test.ts independently proves byte equality.
@@ -125,69 +65,10 @@ export function isKitFallbackDocument(body: string): boolean {
 }
 
 // Widens an emitted style-src 'self' with the fallback block's hash. String
-// replacement keeps the directive order byte-identical (the
-// leafInlineStyleCsp pattern); composes with the leaf hash on leaf paths,
-// and is a no-op when the hash is already present or style-src is absent.
+// replacement keeps the directive order byte-identical; it composes with
+// the leaf hash on leaf paths, and is a no-op when the hash is already
+// present or style-src is absent.
 export function withKitFallbackStyleCsp(csp: string): string {
   if (csp.includes(KIT_FALLBACK_STYLE_SHA256)) return csp;
   return csp.replace("style-src 'self'", `style-src 'self' 'sha256-${KIT_FALLBACK_STYLE_SHA256}'`);
-}
-
-// Framework-neutral twin of the secureHeaders() options in src/index.tsx, for
-// hosts that are not Hono (the SvelteKit spike's web/src/hooks.server.ts,
-// TOG-12247). Same names, values and order as hono's middleware emits, so a
-// page moved out of Hono keeps its headers byte-for-byte.
-// test/security-headers-builder.test.ts pins equality with app.request().
-const CSP_REPORT_ENDPOINT = "/csp-reports";
-const CSP_REPORT_GROUP = "csp-endpoint";
-
-export function securityHeadersFor(
-  request: { path: string; method: string },
-  featuredImageHosts?: string,
-): Array<[string, string]> {
-  const framed = request.path === "/join" && ["GET", "HEAD"].includes(request.method);
-  const images = operatorImageHosts(featuredImageHosts)
-    .map((host) => `https://${host}`)
-    .join(" ");
-  // Only the inline-critical pages (/ plus about/faq/rules/privacy) emit an
-  // inlined <style> block, so only they carry its hash allowlist. Every other
-  // path keeps the exact documented policy byte-identical, which the adapter
-  // _headers parity and Kit parity tests pin.
-  const leafStyle = isInlineCriticalCssPath(request.path)
-    ? [`'sha256-${LEAF_CRITICAL_CSS_SHA256}'`]
-    : [];
-  const csp = [
-    ["default-src", "'self'"],
-    ["base-uri", "'self'"],
-    ["connect-src", "'self'"],
-    ["object-src", "'none'"],
-    ["img-src", "'self'", images],
-    ["frame-src", framed ? "https://discord.com/widget" : "'none'"],
-    // Mirrors the leafInlineStyleCsp rewrite of the secureHeaders output in
-    // src/index.tsx, pinned equal by test/security-headers-builder.test.ts.
-    ["style-src", "'self'", ...leafStyle],
-    ["script-src", "'self'"],
-    ["font-src", "'self'"],
-    ["frame-ancestors", "'none'"],
-    ["form-action", "'self'"],
-    ["report-to", CSP_REPORT_GROUP],
-  ]
-    .map((directive) => directive.join(" "))
-    .join("; ");
-  return [
-    ["Cross-Origin-Embedder-Policy", "credentialless"],
-    ["Cross-Origin-Resource-Policy", "same-origin"],
-    ["Cross-Origin-Opener-Policy", "same-origin"],
-    ["Origin-Agent-Cluster", "?1"],
-    ["Referrer-Policy", SECURITY_HEADERS["Referrer-Policy"]!],
-    ["X-Content-Type-Options", SECURITY_HEADERS["X-Content-Type-Options"]!],
-    ["X-DNS-Prefetch-Control", "off"],
-    ["X-Download-Options", "noopen"],
-    ["X-Frame-Options", SECURITY_HEADERS["X-Frame-Options"]!],
-    ["X-Permitted-Cross-Domain-Policies", "none"],
-    ["X-XSS-Protection", "0"],
-    ["Content-Security-Policy", csp],
-    ["Permissions-Policy", SECURITY_HEADERS["Permissions-Policy"]!],
-    ["Reporting-Endpoints", `${CSP_REPORT_GROUP}="${CSP_REPORT_ENDPOINT}"`],
-  ];
 }
