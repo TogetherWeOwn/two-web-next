@@ -26,6 +26,16 @@ Code: `src/public-data/contracts.ts`, `src/agent-events/envelope.ts`,
 `src/events/routes-shared.ts`, `src/error-responses.tsx`,
 `src/mcp/routes.ts`. REST schema: `GET /openapi.json`.
 
+For future public REST adapters, `withMachineErrors(handler, { route, getRequestId })`
+in `src/http/machine-error.ts` passes returned responses through unchanged and
+turns throws and rejections into a no-store REST `500 internal` response. Pass
+only the registered route pattern (for example, `/api/public/events/:key`),
+never a request path. The optional `getRequestId` reads the adapter's correlation
+ID; if it is absent or invalid the wrapper generates one. The body, header and
+any emitted request alert use that same ID. Return expected refusals as
+responses. This wrapper is not wired into the live site and does not implement
+ingress, feed or MCP contracts.
+
 ## Write refusals
 
 The write surfaces (RSVP, moderator event writes, profile saves,
