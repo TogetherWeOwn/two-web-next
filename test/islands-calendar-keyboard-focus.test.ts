@@ -590,6 +590,28 @@ describe("calendar keyboard focus after failed hidden-content navigation", () =>
     expect(b.zones.content!.hidden).toBe(false);
   });
 
+  it.each(FAILURES)(
+    "a pointer grid jump does not focus a retained hash target on %s failure",
+    async (failure) => {
+      const b = browser();
+      const control = b.link("calendar-day", "/events#event-night", { "data-cal-jump": "" });
+      const card = b.node("article", { id: "event-night", tabindex: "-1" });
+      b.zones.content!.replaceChildren(control, card);
+      control.focus(); // Pointer down can focus the anchor without granting keyboard recovery.
+      b.click(control, false);
+      b.paint();
+      expect(b.focused()).toBe(b.body);
+
+      await fail(b, failure);
+
+      expect(b.zones.content!.hidden).toBe(false);
+      expect(b.zones.content!.childNodes).toEqual([control, card]);
+      expect(b.focused()).toBe(b.body);
+      expect(b.root.getAttribute("aria-busy")).toBeNull();
+      expect(b.focusListeners.size).toBe(0);
+    },
+  );
+
   it("ignores a superseded hidden origin's late failure while newer navigation owns focus", async () => {
     const { b, control } = hiddenOrigin("month");
     const second = b.link("events-view-list", "/events");
