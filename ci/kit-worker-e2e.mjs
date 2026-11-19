@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
+import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = join(repo, "web");
@@ -122,6 +123,7 @@ async function startWorker(name, main, assetsDirectory) {
     vars: {
       APP_URL: origin,
       DATABASE_URL: databaseUrl,
+      ...(args.length ? { SESSION_SECRET: FIXTURE_SECRETS.SESSION_SECRET } : {}),
       FEATURED_IMAGE_HOSTS: "",
       DISCORD_CLIENT_ID: "ci-fixture-client",
       DISCORD_CLIENT_SECRET: "ci-fixture-secret",
@@ -510,6 +512,47 @@ try {
     assert.deepEqual(fromKit.headers, fromHono.headers, `${label}: headers match direct Hono`);
     assert.equal(fromKit.body, fromHono.body, `${label}: body matches direct Hono`);
     return fromHono;
+  }
+
+  if (args.length) {
+    async function observeDataRedirect(worker, path) {
+      const response = await fetch(`${worker.origin}${path}`, { redirect: "manual" });
+      assert.equal(response.status, 302, `${path}: Hono guest redirect`);
+      assert.equal(response.headers.get("location"), "/auth/discord", `${path}: login location`);
+      const cookies = response.headers.getSetCookie();
+      assert.equal(cookies.length, 1, `${path}: one intended-login cookie`);
+      assert.ok(
+        cookies[0].startsWith(`__Host-two_login_intended=${encodeURIComponent(path)}.`),
+        `${path}: cookie carries the original path and query`,
+      );
+      assert.equal(response.headers.get("x-two-renderer"), null, `${path}: not a Kit render`);
+      const requestId = response.headers.get("x-request-id");
+      assert.ok(requestId, `${path}: request correlation survives`);
+      const headers = [...SECURITY_HEADERS, "vary"].map((name) =>
+        normalize(response.headers.get(name) ?? "", worker, requestId),
+      );
+      return { headers, cookies, body: await response.text() };
+    }
+
+    for (const path of ["/admin/__data.json?tab=events", "/members/__data.json"]) {
+      const [direct, installed] = await Promise.all([
+        observeDataRedirect(hono, path),
+        observeDataRedirect(kit, path),
+      ]);
+      assert.deepEqual(installed, direct, `${path}: installed facade preserves Hono response`);
+    }
+    console.log("PASS installed Worker preserves Hono data redirects");
+
+    const kitData = await fetch(`${origin}/admin/join-attempts/__data.json`, {
+      redirect: "manual",
+    });
+    assert.equal(kitData.status, 200, "Kit-owned data redirect remains a JSON response");
+    assert.deepEqual(await kitData.json(), {
+      type: "redirect",
+      status: 302,
+      location: "/auth/discord?next=%2Fadmin%2Fjoin-attempts",
+    });
+    console.log("PASS installed Worker preserves Kit-owned data redirects");
   }
 
   // GET and HEAD, with and without a query, across slash variants. /members/
