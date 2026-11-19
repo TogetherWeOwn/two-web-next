@@ -193,7 +193,7 @@ describe("frozen SSR display state", () => {
       });
       expect(outcome.kind).toBe("ok");
       if (outcome.kind !== "ok") throw new Error("missing render model");
-      expect(outcome.model.lifecycle).toMatchObject({ kind: "live", asOf: now.toISOString() });
+      expect(outcome.model.isOngoing).toBe(true);
       expect(outcome.model.rsvpClosed).toBeNull();
       expect(reads.neighborsFn).toHaveBeenCalledWith(expect.anything(), event, now);
       expect(reads.relatedFn).toHaveBeenCalledWith(expect.anything(), event, now);

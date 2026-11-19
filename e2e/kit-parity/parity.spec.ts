@@ -2177,12 +2177,10 @@ test("kit: archive search and keyboard focus evidence", async ({ browser }) => {
   }
 });
 
-test("Kit member event detail captures live and ended events at both widths", async ({
-  browser,
-}) => {
+test("Kit member event detail captures the ended record at both widths", async ({ browser }) => {
   expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
   const target = targets.find((item) => item.name === "kit")!;
-  const liveKey = "01J00000000000000000000993";
+  const adjacentKey = "01J00000000000000000000993";
   const endedKey = "01J00000000000000000000994";
   const nextKey = "01J00000000000000000000995";
   const userId = "900000000000000848";
@@ -2197,20 +2195,22 @@ test("Kit member event detail captures live and ended events at both widths", as
       await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
         values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(now + 7_200_000)})`;
       for (const event of [
-        { key: liveKey, start: now - 3_600_000, end: now + 3_600_000 },
-        { key: endedKey, start: now - 10_800_000, end: now - 3_600_000 },
+        { key: adjacentKey, start: now - 3_600_000, end: now + 3_600_000 },
+        { key: endedKey, start: Date.UTC(2026, 0, 1, 23), end: Date.UTC(2026, 0, 2, 1) },
       ]) {
         await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, rsvp_open)
           values (${event.key}, 'Community game night', 'Bring a favourite game and meet the community.',
             ${new Date(event.start)}, ${new Date(event.end)}, 'Community voice', 'published', true)`;
       }
-      await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 2, recurrence_index = 1
+      await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 3, recurrence_index = 1
         where event_key = ${endedKey}`;
+      await sql`update events set parent_event_id = (select id from events where event_key = ${endedKey}),
+        recurrence_index = 2 where event_key = ${adjacentKey}`;
       await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
-        select ${nextKey}, title, starts_at + interval '7 days', ends_at + interval '7 days', 'published', id, 2
+        select ${nextKey}, title, now() + interval '7 days', now() + interval '7 days 2 hours', 'published', id, 3
         from events where event_key = ${endedKey}`;
       await sql`insert into rsvps (event_id, user_id, status)
-        select id, ${userId}, 'going' from events where event_key in (${liveKey}, ${endedKey})`;
+        select id, ${userId}, 'going' from events where event_key = ${endedKey}`;
     });
     await context.addCookies([
       {
@@ -2224,63 +2224,50 @@ test("Kit member event detail captures live and ended events at both widths", as
       },
     ]);
     const page = await context.newPage();
-    for (const state of [
-      { name: "live", key: liveKey },
-      { name: "ended", key: endedKey },
-    ]) {
-      for (const viewport of [
-        { width: 1280, height: 800 },
-        { width: 390, height: 844 },
-      ]) {
-        await page.setViewportSize(viewport);
-        const response = await page.goto(`/e/${state.key}`);
-        expect(response?.status()).toBe(200);
-        expect(response?.headers()["x-two-renderer"]).toBe("kit");
-        const time = page.getByTestId("kit-event-time");
-        await expect(page.getByText("Sign out", { exact: true })).toBeVisible();
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
+      const response = await page.goto(`/e/${endedKey}`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      const time = page.getByTestId("kit-event-time");
+      const record = page.getByRole("region", { name: "Sign-up record" });
+      await expect(page.getByText("Sign out", { exact: true })).toBeVisible();
+      await expect(page.getByRole("complementary", { name: "Your seat", exact: true })).toHaveCount(
+        0,
+      );
+      await expect(page.getByTestId("event-ongoing")).toHaveCount(0);
+      await expect(time.locator('time[datetime="2026-01-02T01:00:00.000Z"]')).toHaveText(
+        "2 Jan 2026, 01:00",
+      );
+      await expect(page.getByTestId("event-series-next")).toHaveAttribute(
+        "href",
+        `/e/${adjacentKey}`,
+      );
+      await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
+      await expect(record).toContainText("No Echo for this one. 1 signed up.");
+      await expect(record.getByRole("link", { name: /^Next one:/ })).toHaveAttribute(
+        "href",
+        `/e/${nextKey}`,
+      );
+      if (width === 390) {
         await expect(
-          page.getByRole("complementary", { name: "Your seat", exact: true }),
-        ).toHaveCount(0);
-        if (state.name === "live") {
-          const seat = page.getByTestId("kit-seat-card");
-          await expect(page.getByTestId("event-ongoing")).toHaveText("Live");
-          await expect(time.locator("time").first()).toHaveText("Live");
-          await expect(time.locator("time").last()).toHaveAttribute("datetime", /^\d{4}-/);
-          await expect(time).toContainText("as of");
-          await expect(seat.getByRole("heading", { name: "You're in." })).toBeVisible();
-          await expect(seat.getByRole("button")).toHaveCount(0);
-          await expect(seat.getByRole("link")).toHaveCount(0);
-          if (viewport.width === 390) {
-            await expect(
-              page.locator(
-                ".event-layout-head:has(> [data-testid=kit-event-time]:last-child) + .event-layout-rail > [data-testid=kit-seat-card]:first-child",
-              ),
-            ).toHaveCount(1);
-          }
-        } else {
-          const record = page.getByRole("region", { name: "Sign-up record" });
-          await expect(page.getByTestId("event-ongoing")).toHaveCount(0);
-          await expect(time).toContainText("Ended");
-          await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
-          await expect(record).toContainText("No Echo for this one. 1 signed up.");
-          await expect(record.getByRole("link", { name: /^Next one:/ })).toHaveAttribute(
-            "href",
-            `/e/${nextKey}`,
-          );
-        }
-        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-          viewport.width,
-        );
-        const name = `kit-review-event-${state.name}-${viewport.width}`;
-        const path = test.info().outputPath(`${name}.png`);
-        await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
-        await test.info().attach(name, { path, contentType: "image/png" });
+          page.locator(
+            ".event-layout-head:has(> [data-testid=kit-event-time]:last-child) + .event-layout-rail > [aria-labelledby=signup-record-heading]:first-child",
+          ),
+        ).toHaveCount(1);
       }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      const name = `kit-review-event-ended-${width}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+      await test.info().attach(name, { path, contentType: "image/png" });
     }
   } finally {
     await context.close();
     await withSessionDb(async (sql) => {
-      await sql`delete from events where event_key in (${liveKey}, ${endedKey}, ${nextKey})`;
+      await sql`delete from events where event_key in (${adjacentKey}, ${endedKey}, ${nextKey})`;
       await sql`delete from web_session_grace where user_id = ${userId}`;
       await sql`delete from web_sessions where user_id = ${userId}`;
       await sql`delete from users where id = ${userId}`;

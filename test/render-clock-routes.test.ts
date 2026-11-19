@@ -101,9 +101,7 @@ let makeEnv: (flag: "true" | "false") => Env;
 type Kit = {
   bind: (env: Env) => void;
   memberReadResponse: (...args: unknown[]) => Promise<Response>;
-  detailLoad: (
-    event: unknown,
-  ) => Promise<{ model: { lifecycle: { kind: string; asOf?: string } | null } }>;
+  detailLoad: (event: unknown) => Promise<{ model: { isOngoing: boolean } }>;
   pastLoad: (event: unknown) => Promise<{ rows: { title: string }[] }>;
 };
 let kit: Kit;
@@ -194,7 +192,7 @@ const honoGet = (path: string, flag: "true" | "false") => {
 async function kitDetail(flag: "true" | "false") {
   const env = makeEnv(flag);
   kit.bind(env);
-  let data: { model: { lifecycle: { kind: string; asOf?: string } | null } } | undefined;
+  let data: { model: { isOngoing: boolean } } | undefined;
   const response = await kit.memberReadResponse(
     { method: "GET", route: "events.page" },
     { resource: "member", action: "list", route: "events.page", viewer: null },
@@ -254,10 +252,7 @@ describe("real route wiring of the fixed SSR capture clock", () => {
   it("keeps Kit e/[key] +page.server on the fixed instant at any host wall time", async () => {
     for (const wall of WALLS) {
       atWall(wall);
-      expect((await kitDetail("true")).model.lifecycle).toMatchObject({
-        kind: "live",
-        asOf: new Date(clock.SSR_CAPTURE_INSTANT).toISOString(),
-      });
+      expect((await kitDetail("true")).model.isOngoing).toBe(true);
     }
   });
 
@@ -285,7 +280,7 @@ describe("real route wiring of the fixed SSR capture clock", () => {
       expect(html).toContain(CONTROL_TITLE);
       expect(html).not.toContain(FIXED_TITLE);
 
-      expect((await kitDetail("false")).model.lifecycle?.kind).not.toBe("live");
+      expect((await kitDetail("false")).model.isOngoing).toBe(false);
       const titles = (await kitPast("false")).rows.map((row) => row.title);
       expect(titles).toContain(CONTROL_TITLE);
       expect(titles).not.toContain(FIXED_TITLE);

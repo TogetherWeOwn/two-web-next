@@ -390,6 +390,17 @@ describe("Kit review attendee navigation", () => {
   });
 });
 
+it("shows the ended record data in moderator review without enabling RSVP", async () => {
+  const ended = {
+    ...event,
+    startsAt: new Date("2030-01-09T23:00:00Z"),
+    endsAt: new Date("2030-01-10T01:00:00Z"),
+  };
+  const { model } = await resolveOk("?review=1", store({}, ended));
+  expect(model.lifecycle).toMatchObject({ date: "9 Jan 2030", endTime: "10 Jan 2030, 01:00" });
+  expect(model.detailHtml.rsvp).toContain("RSVP is disabled in preview.");
+});
+
 describe("Kit review read selection", () => {
   const unreadable: PublicEvent = {
     ...event,

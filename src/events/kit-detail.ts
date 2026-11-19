@@ -70,7 +70,6 @@ import {
   type EventNeighbors,
   type EventSeriesContext,
   type PublicEvent,
-  type SeriesEventRef,
   type ViewerRsvp,
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
@@ -89,7 +88,7 @@ export interface KitEventDetailStore {
   /** Series run read. Optional so existing fakes keep compiling: the resolver
    * falls back to the shared read, which skips standalone events with zero
    * queries and fails open everywhere else. */
-  seriesFn?: (db: Db, event: SeriesEventRef) => Promise<EventSeriesContext | null>;
+  seriesFn?: typeof getEventSeriesContext;
   /** Bounded attendee window for one native page: the page plus the first row
    * of the next page (lookahead, never rendered) that powers Next. */
   attendeesFn: (db: Db, eventId: number, page: number) => Promise<EventAttendee[]>;
@@ -198,10 +197,11 @@ export interface KitEventDetailModel {
   status: string;
   isDraft: boolean;
   isPast: boolean;
-  lifecycle:
-    | { kind: "live"; since: string; asOf: string; asOfText: string }
-    | { kind: "ended"; date: string; endTime: string; next: { key: string; date: string } | null }
-    | null;
+  /** Server snapshot at the render instant (`isOngoing`): the "Happening now"
+   * hero badge. Never a client clock; RSVP verdicts are unaffected. Optional
+   * so a pre-existing fixture without the flag reads as not ongoing. */
+  isOngoing?: boolean;
+  lifecycle: { date: string; endTime: string; next: { key: string; date: string } | null } | null;
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
@@ -343,7 +343,7 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
     getReviewEventFn: (db, key) => getEventForModeratorReview(db, key),
     neighborsFn: getEventNeighbors,
     relatedFn: listRelatedEvents,
-    seriesFn: (db, event) => getEventSeriesContext(db, event),
+    seriesFn: getEventSeriesContext,
     attendeesFn: async (db, eventId, page) => {
       // Same bounded window as the served handler: the requested page plus
       // the first row of the next page (lookahead, never rendered) that
@@ -390,9 +390,8 @@ function detailLifecycle(
   timeZone: string,
   next: EventLink | null | undefined,
 ): KitEventDetailModel["lifecycle"] {
-  const live = isOngoing(event, now);
   const ended = (event.status === "past" || event.status === "published") && event.endsAt <= now;
-  if ((!live && !ended) || !instantIso(event.startsAt) || !instantIso(event.endsAt)) return null;
+  if (!ended || !instantIso(event.startsAt) || !instantIso(event.endsAt)) return null;
   const date = new Intl.DateTimeFormat("en-GB", {
     timeZone,
     day: "numeric",
@@ -400,32 +399,23 @@ function detailLifecycle(
     year: "numeric",
   });
   const clock = new Intl.DateTimeFormat("en-GB", { timeZone, timeStyle: "short" });
-  if (live) {
-    const startDate = date.format(event.startsAt);
-    const asOfDate = date.format(now);
-    return {
-      kind: "live",
-      since: clock.format(event.startsAt),
-      asOf: now.toISOString(),
-      asOfText: `${startDate === asOfDate ? "" : `${asOfDate}, `}${clock.format(now)}`,
-    };
-  }
+  const startDate = date.format(event.startsAt);
+  const endDate = date.format(event.endsAt);
+  const endTime = clock.format(event.endsAt);
   return {
-    kind: "ended",
-    date: date.format(event.startsAt),
-    endTime: clock.format(event.endsAt),
-    next:
-      next && next.startsAt > now
-        ? {
-            key: next.eventKey,
-            date: new Intl.DateTimeFormat("en-GB", {
-              timeZone: isValidZone(next.timezone) ? next.timezone : "UTC",
-              weekday: "short",
-              day: "numeric",
-              month: "short",
-            }).format(next.startsAt),
-          }
-        : null,
+    date: startDate,
+    endTime: startDate === endDate ? endTime : `${endDate}, ${endTime}`,
+    next: next
+      ? {
+          key: next.eventKey,
+          date: new Intl.DateTimeFormat("en-GB", {
+            timeZone: isValidZone(next.timezone) ? next.timezone : "UTC",
+            weekday: "short",
+            day: "numeric",
+            month: "short",
+          }).format(next.startsAt),
+        }
+      : null,
   };
 }
 
@@ -577,9 +567,7 @@ export async function resolveKitEventDetail(
         (related) => related,
         (): EventLink[] => [],
       );
-      const seriesSettled = (
-        store.seriesFn ? store.seriesFn(db, event) : getEventSeriesContext(db, event)
-      ).then(
+      const seriesSettled = (store.seriesFn ?? getEventSeriesContext)(db, event, now).then(
         (series) => series,
         (): EventSeriesContext | null => null,
       );
@@ -677,7 +665,8 @@ export async function resolveKitEventDetail(
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
-          lifecycle: review ? null : detailLifecycle(event, now, zoneLabel, series?.next),
+          isOngoing: isOngoing(event, now),
+          lifecycle: detailLifecycle(event, now, zoneLabel, series?.upcoming),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,

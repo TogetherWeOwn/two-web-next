@@ -924,8 +924,7 @@ describe("Kit detail presentation", () => {
       html.push(renderDetail(outcome.model as unknown as Record<string, unknown>));
       expect(Date.now()).toBe(new Date(wall).getTime());
     }
-    expect(html[0]).toContain('data-testid="event-ongoing"');
-    expect(html[0]).toContain('<time datetime="2098-12-31T20:00:00.000Z">20:00</time>');
+    expect(html[0]).toContain("Happening now");
     expect(html[0]).toBe(html[1]);
   });
 
