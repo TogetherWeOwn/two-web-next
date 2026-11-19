@@ -116,6 +116,7 @@ async function bundle(entry, fault) {
     platform: "browser",
     target: "es2022",
     conditions: ["workerd", "worker", "browser"],
+    alias: { stream: "node:stream" },
     external: ["node:*", "cloudflare:*"],
     logLevel: "silent",
     plugins: fault ? [throwingHooks] : [],
@@ -265,9 +266,8 @@ describe("Kit built Worker fatal path", () => {
       assert.equal(sha256(fs.readFileSync(join(assets, COMPANION_NAME))), evidence.adapterSha256);
     } catch (error) {
       if (Number.isInteger(error.errno)) evidence.setupErrno = error.errno;
-      const problem = error.errors?.[0]?.text;
-      const missing = /^Could not resolve "([@#.\w][\w@./-]{0,99})"$/.exec(problem);
-      if (problem) evidence.bundleError = missing?.[1] ?? "other esbuild error";
+      const missing = /^Could not resolve "([@#.\w][\w@./-]{0,99})"$/.exec(error.errors?.[0]?.text);
+      if (error.errors) evidence.bundleError = missing?.[1] ?? "other esbuild error";
       throw new Error(
         error.code === "ERR_ASSERTION" ? error.message.split("\n", 1)[0] : "fixture setup failed",
       );
