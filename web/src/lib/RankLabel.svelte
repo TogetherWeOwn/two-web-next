@@ -12,9 +12,9 @@ const arcs = [
 </script>
 
 <span class="rank-label">
-  <svg class:large viewBox="0 0 44 44" aria-hidden="true">
+  <svg width={large ? 44 : 20} height={large ? 44 : 20} viewBox="0 0 44 44" aria-hidden="true">
     <g fill="none" stroke-width="4.5">
-      {#each arcs as arc, index}
+      {#each arcs as arc, index (arc)}
         <path d={arc} class:lit={index < rank} />
       {/each}
     </g>
@@ -23,9 +23,8 @@ const arcs = [
 </span>
 
 <style>
-  .rank-label { display: inline-flex; align-items: center; gap: var(--two-space-2); }
-  svg { width: 20px; height: 20px; flex: none; }
-  svg.large { width: 44px; height: 44px; }
+  .rank-label { display: inline-flex; align-items: center; gap: var(--space-2, var(--two-space-2)); }
+  svg { flex: none; }
   path { stroke: var(--two-color-rank-arc-off); }
   path.lit:nth-child(1) { stroke: var(--two-color-rank-arc-1); }
   path.lit:nth-child(2) { stroke: var(--two-color-rank-arc-2); }
