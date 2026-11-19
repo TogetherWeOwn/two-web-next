@@ -57,6 +57,16 @@ html body {
  * The light ink is set directly on those elements: overriding --muted on the
  * shell would also recolor the dashboard's light resource cards
  * (.card p uses var(--muted) on #fffdf8), dropping them to 1.81:1. */
+.kit-admin .brand {
+  color: var(--color-lobby-ink);
+  outline-color: currentColor;
+}
+.kit-admin :is(a.reconciliation-focus, .reconciliation-error a):focus-visible {
+  outline-color: var(--color-lobby-focus);
+}
+.kit-admin :is(.facts .card h2 a, p.notice) {
+  color: var(--ink);
+}
 .kit-admin :is(.field .hint, .hint) {
   color: var(--color-lobby-muted);
 }
