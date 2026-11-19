@@ -34,7 +34,9 @@ afterEach(() => vi.restoreAllMocks());
 
 it("requires a moderator before reading the upload, throttling or resolving", async () => {
   expect(await post(form, { status: "guest", session: null })).toEqual({ status: 401 });
-  expect(await post(form, { status: "authenticated", session: { ...MEMBER, avatar: null } })).toEqual({
+  expect(
+    await post(form, { status: "authenticated", session: { ...MEMBER, avatar: null } }),
+  ).toEqual({
     status: 403,
   });
   expect(await post(form, { status: "unknown", session: null })).toEqual({ status: 503 });
