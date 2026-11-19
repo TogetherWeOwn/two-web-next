@@ -50,8 +50,12 @@ test('runtime setup uses the locked module and fails closed in both capture jobs
   const workflow = await fs.readFile(path.join(__dirname, '../../.github/workflows/featured-offline-proof.yml'), 'utf8');
   const manifest = JSON.parse(await fs.readFile(path.join(__dirname, 'runtime/package.json'), 'utf8'));
   const lock = JSON.parse(await fs.readFile(path.join(__dirname, 'runtime/package-lock.json'), 'utf8'));
-  assert.equal(manifest.dependencies.playwright, '1.58.2');
+  assert.equal(manifest.private, true);
+  assert.deepEqual(manifest.dependencies, { playwright: '1.58.2' });
   assert.deepEqual(lock.packages[''].dependencies, manifest.dependencies);
+  for (const pkg of ['playwright', 'playwright-core']) {
+    assert.equal(lock.packages[`node_modules/${pkg}`].version, manifest.dependencies.playwright);
+  }
   for (const pkg of ['playwright', 'playwright-core', 'fsevents']) {
     assert.match(lock.packages[`node_modules/${pkg}`].integrity, /^sha512-/);
     assert.match(lock.packages[`node_modules/${pkg}`].resolved, /^https:\/\/registry\.npmjs\.org\//);
@@ -67,7 +71,12 @@ test('runtime setup uses the locked module and fails closed in both capture jobs
       const bin = path.join(dir, 'bin');
       await fs.mkdir(bin);
       await fs.writeFile(path.join(bin, 'git'), '#!/bin/sh\nprintf "expected\\n"\n', { mode: 0o755 });
-      await fs.writeFile(path.join(bin, 'npm'), `#!/bin/sh\nexit ${fail ? 1 : 0}\n`, { mode: 0o755 });
+      await fs.writeFile(path.join(bin, 'npm'), `#!/bin/sh
+[ "$1" = ci ] && [ "$2" = --prefix ] || exit 2
+cmp -s ci/featured-proof/runtime/package.json "$3/package.json" || exit 3
+cmp -s ci/featured-proof/runtime/package-lock.json "$3/package-lock.json" || exit 4
+exit ${fail ? 1 : 0}
+`, { mode: 0o755 });
       await fs.writeFile(path.join(bin, 'node'), '#!/bin/sh\nprintf "%s" "${PROOF_SETUP_FAILURE:-capture}" > "$MARKER"\n[ -z "$PROOF_SETUP_FAILURE" ]\n', { mode: 0o755 });
       const marker = path.join(dir, 'marker');
       const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', `export PATH="$MOCK_BIN:$PATH"\n${script}`], {
