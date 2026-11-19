@@ -28,6 +28,7 @@ import { withStreamedBody } from "./html-stream";
 import { applySingleValidator } from "./http/conditional";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
+import type { RecoveryRender } from "./recovery-outcome";
 import { isKitNoticeDocument, readKitRestoredWrite } from "./kit-restored-write";
 import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 import { type MemberRead, memberReadResponse } from "./member-reads";
@@ -581,7 +582,7 @@ export interface HookDispatchDeps {
   // Join remains Hono-owned outside the loopback parity fixture.
   fixtureJoin?: boolean;
   // Recovery retains Hono middleware and controller; only SSR is delegated.
-  recoveryPage?: (event: HookEventLike) => Promise<Response>;
+  recoveryPage?: (request: Request, render: RecoveryRender) => Promise<Response>;
   fixtureAdminDashboard?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
@@ -972,7 +973,14 @@ async function dispatchOwnedRequest(
     if (event.isDataRequest || event.route?.id !== route.path || !deps.recoveryPage) {
       return deps.honoFetch(event.request);
     }
-    return deps.recoveryPage(event);
+    return deps.recoveryPage(event.request, async (recovery, requestId) => {
+      event.locals = { ...(event.locals as Record<string, unknown>), recovery, requestId };
+      const response = await deps.resolve(event);
+      if (response.status === 200 && response.headers.get("content-type")?.includes("text/html")) {
+        response.headers.set(KIT_RENDERER_HEADER, KIT_RENDERER_VALUE);
+      }
+      return response;
+    });
   }
   // Kit request correlation (Hono requestLog parity): admit the validated
   // edge id (cf-ray) or mint a ULID, ignoring any client-sent x-request-id.

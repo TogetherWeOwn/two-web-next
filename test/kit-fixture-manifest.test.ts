@@ -343,7 +343,7 @@ it.each(["GET", "HEAD"])(
       honoFetch: vi.fn(async () => new Response(null, { status: 404 })),
     };
     expect(await dispatchHookRequest(event, deps)).toBe(refusal);
-    expect(recoveryPage).toHaveBeenCalledExactlyOnceWith(event);
+    expect(recoveryPage).toHaveBeenCalledExactlyOnceWith(request, expect.any(Function));
     expect(deps.sessionFor).not.toHaveBeenCalled();
     expect(deps.resolve).not.toHaveBeenCalled();
     expect(deps.honoFetch).not.toHaveBeenCalled();
