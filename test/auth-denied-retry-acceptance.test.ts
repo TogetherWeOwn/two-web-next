@@ -38,6 +38,7 @@ import {
   FALLBACK_RANKS,
   HOME_JOIN_RESULT_COPY,
   HOME_NOTICES,
+  JOIN_INTRO,
   applyHomeResponsePolicy,
 } from "../src/home-copy";
 import { Home, type Notice } from "../src/pages";
@@ -142,7 +143,7 @@ function baseData(overrides: Record<string, unknown> = {}): Record<string, unkno
     eventsUnavailable: false,
     featured: [],
     imageHosts: "",
-    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
+    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO },
     ...overrides,
   };
 }
