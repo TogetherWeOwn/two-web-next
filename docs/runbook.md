@@ -427,10 +427,10 @@ binding isolation before any remote mutation.
    deploy run link and each applicable `Verify staging Kit … renderer` result.
    `workflow_dispatch` uses the same exact-SHA CI gate, staging migration,
    Kit build, Tail-first deployment, queue handoff, revision verification and
-   smoke path as the automatic workflow. This is the supported route-selection
-   path; `hono` is the default and disables all Kit routes. The next automatic
-   main-CI deployment resets the selection to `hono`. Do not use local
-   `npm run deploy` or direct `wrangler deploy` for the Kit staging Worker:
+   smoke path as the automatic workflow. The manual choice applies only to that
+   run; the next automatic deploy uses the staging environment setting above.
+   Do not use local `npm run deploy` or direct `wrangler deploy` for the Kit
+   staging Worker:
    those commands do not select the reviewed Kit staging config or preserve
    its exact-SHA workflow gates.
 5. Capture the resulting deployment/version IDs and workflow URL. On staging
