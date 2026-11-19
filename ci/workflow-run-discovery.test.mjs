@@ -3,7 +3,109 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { Pair, Scalar, YAMLMap, YAMLSeq } from "yaml";
 import { enumerateInvocationOccurrences } from "./invocation-occurrences.mjs";
+import {
+  observeWorkflowPrerequisites,
+  requiresPriorStepSuccess,
+} from "./workflow-required-success.mjs";
 import { discoverWorkflowRuns, workflowRunPlainData } from "./workflow-run-discovery.mjs";
+
+function installDependency(install, consumer, preceding = []) {
+  const runs = discoverWorkflowRuns(
+    "ci.yml",
+    JSON.stringify({
+      jobs: {
+        other: { steps: [{ id: "other-install", run: "npm ci" }] },
+        browser: {
+          steps: [
+            { id: "install", run: "npm ci", ...install },
+            ...preceding,
+            { run: "npm run browser", ...consumer },
+          ],
+        },
+      },
+    }),
+  );
+  const terminal = workflowRunPlainData(runs.at(-1));
+  assert.equal(terminal.origin.job, 1);
+  assert.equal(requiresPriorStepSuccess(terminal, terminal.origin.step), false);
+  return requiresPriorStepSuccess(terminal, 0);
+}
+
+test("requires an unskippable and unmasked install under default success checks", () => {
+  const dispatch = "github.event_name == 'workflow_dispatch' && inputs.capture != ''";
+  assert.equal(installDependency({}, {}), true);
+  assert.equal(installDependency({}, { if: dispatch }), true);
+  assert.equal(installDependency({}, { if: "${{ success() && !cancelled() }}" }), true);
+  assert.equal(installDependency({}, { if: "${{ !cancelled() }}" }), false);
+  assert.equal(installDependency({}, { if: "always()" }), false);
+  assert.equal(installDependency({ if: dispatch }, {}), false);
+  assert.equal(installDependency({ "continue-on-error": true }, {}), false);
+  assert.equal(installDependency({ "continue-on-error": "${{ inputs.ignore }}" }, {}), false);
+});
+
+test("accepts only a mandatory raw outcome from the selected earlier step", () => {
+  const outcome = "steps.install.outcome == 'success'";
+  const install = { if: "inputs.install != ''", "continue-on-error": true };
+  for (const predicate of [`!cancelled() && ${outcome}`, `${outcome} && !cancelled()`]) {
+    assert.equal(installDependency(install, { if: predicate }), true);
+  }
+  for (const predicate of [
+    `!cancelled() && ${outcome.replace("outcome", "conclusion")}`,
+    `!cancelled() && ${outcome.replace("steps.install", "steps.other-install")}`,
+    `!cancelled() || ${outcome}`,
+    `${outcome} || !cancelled()`,
+    `!(${outcome})`,
+  ]) {
+    assert.equal(installDependency(install, { if: predicate }), false, predicate);
+  }
+  const duplicate = [{ id: "Install", run: "npm run build" }];
+  assert.equal(installDependency(install, { if: outcome }, duplicate), false);
+  assert.equal(installDependency({}, { if: outcome }, duplicate), false);
+});
+
+test("binds the browser-smoke checkout and root install to the selected consumer", () => {
+  const name = "e2e.yml";
+  const text = readFileSync(new URL(`../.github/workflows/${name}`, import.meta.url), "utf8");
+  const runs = discoverWorkflowRuns(name, text);
+  const install = runs.find(({ run }) => run === "npm ci --include=dev --no-audit --no-fund");
+  assert.ok(install);
+  const terminal = (name) => {
+    const run = runs.find(({ step }) => step.get("name") === name);
+    assert.ok(run, name);
+    return run;
+  };
+  const visual = terminal("Kit visual regression");
+  assert.deepEqual(observeWorkflowPrerequisites(visual, install, 0), {
+    checkout: { step: 0, uses: install.precedingSteps[0].get("uses") },
+    install: { step: install.origin.step, dependency: "required-success" },
+  });
+  assert.throws(() => observeWorkflowPrerequisites(visual, install, 1), /pinned checkout/);
+  const other = discoverWorkflowRuns(name, text).find(({ run }) => run === install.run);
+  assert.throws(() => observeWorkflowPrerequisites(visual, other, 0), /same job/);
+  for (const name of [
+    "Visual regression",
+    "Critical browser journeys",
+    "Kit journey parity (Hono vs built Kit Worker)",
+  ]) {
+    assert.throws(
+      () => observeWorkflowPrerequisites(terminal(name), install, 0),
+      /terminal does not require a successful install/,
+    );
+  }
+
+  // A dispatch-only checkout can be skipped without failing the job.
+  const conditional = text.replace(
+    "      - uses: actions/setup-node@",
+    "        if: github.event_name == 'workflow_dispatch'\n      - uses: actions/setup-node@",
+  );
+  const guarded = discoverWorkflowRuns(name, conditional);
+  const guardedInstall = guarded.find(({ run }) => run === install.run);
+  const guardedVisual = guarded.find(({ step }) => step.get("name") === "Kit visual regression");
+  assert.throws(
+    () => observeWorkflowPrerequisites(guardedVisual, guardedInstall, 0),
+    /pinned checkout/,
+  );
+});
 
 test("discovers decoded workflow runs with distinct jobs and preceding steps", () => {
   const runs = discoverWorkflowRuns(
