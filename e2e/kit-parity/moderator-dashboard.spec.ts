@@ -119,6 +119,8 @@ for (const { size } of PARITY_VIEWPORTS) {
         }
         await check("open", open, 200, "event.upsert");
         await expect(page.getByText("Delivery was not confirmed.")).toBeVisible();
+        await page.getByRole("button", { name: "Stamp resolved" }).scrollIntoViewIfNeeded();
+        await capture("reconciliation-open-form");
         await check("resolved", resolved, 200, "announcement.post");
         await expect(page.getByText("Superseded")).toBeVisible();
         await check("missing", `${list}/not-a-key`, 404, "Reconciliation record not found");
@@ -167,8 +169,10 @@ for (const { size } of PARITY_VIEWPORTS) {
         const response = await saved;
         expect(response.status()).toBe(303);
         expect(response.headers().location).toBe(open);
-        await expect(page.getByText("Confirmed", { exact: true })).toBeVisible();
+        const conclusion = page.getByText("Confirmed", { exact: true });
+        await expect(conclusion).toBeVisible();
         await expectReadOnlyLayout(page);
+        await conclusion.scrollIntoViewIfNeeded();
         await capture("reconciliation-recorded-resolution");
 
         await submitFixture("not_applied", 409, "Resolution not recorded", "stale-resolution");
