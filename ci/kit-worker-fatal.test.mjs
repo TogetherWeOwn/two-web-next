@@ -51,9 +51,8 @@ async function install() {
   evidence.checkout = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   assert.match(evidence.checkout, /^[a-f0-9]{40}$/);
   assert.equal(evidence.checkout, process.env.EXPECTED_HEAD_SHA, "requires exact-head checkout");
-  // Keep the adapter's relative imports intact across the three siblings.
+  // Copy the three siblings to fresh paths so their relative imports still resolve.
   assets = join(root, "cloudflare");
-  fs.mkdirSync(assets, { mode: 0o700 });
   for (const name of ["cloudflare", "cloudflare-tmp", "output"]) {
     evidence.lastCopyStep = `copy ${name}`;
     const source = join(dirname(DEFAULT_DIR), name);
@@ -67,6 +66,7 @@ async function install() {
     fs.cpSync(source, join(root, name), { recursive: true, force: false, errorOnExist: true });
   }
   evidence.lastCopyStep = "verify copied adapter";
+  fs.chmodSync(assets, 0o700);
   const entry = join(assets, ENTRY_NAME);
   const original = fs.readFileSync(join(DEFAULT_DIR, ENTRY_NAME));
   evidence.stockAdapterSha256 = sha256(original);
