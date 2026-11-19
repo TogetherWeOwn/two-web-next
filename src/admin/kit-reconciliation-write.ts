@@ -25,17 +25,17 @@ export async function writeKitReconciliation(
   }
 
   // Adapt the shared Hono body cap and throttle without registering a Hono route.
-  const context = new Context<{ Bindings: Env }>(request, { env });
-  const refused = await cap(context, () => Promise.resolve());
+  const c = new Context<{ Bindings: Env }>(request, { env });
+  const refused = await cap(c, () => Promise.resolve());
   if (refused) return { status: refused.status };
-  const limited = await throttleGuard(context, "admin-write", WRITE_THROTTLE_PER_MINUTE);
+  const limited = await throttleGuard(c, "admin-write", WRITE_THROTTLE_PER_MINUTE);
   if (limited) {
     return { status: limited.status, retryAfter: limited.headers.get("retry-after") ?? undefined };
   }
 
   let form: FormData;
   try {
-    form = await context.req.raw.formData();
+    form = await c.req.raw.formData();
   } catch {
     return { status: 400 };
   }
