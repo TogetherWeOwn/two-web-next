@@ -86,6 +86,7 @@ html body {
 .kit-admin .notice[data-admin-validation-summary] a {
   color: var(--color-lobby-accent);
 }
-.kit-admin [data-event-editor][data-event-draft] .field .error {
+.kit-admin [data-event-editor][data-event-draft] .field .error,
+.kit-admin [data-event-editor] [data-event-text-limit] + .error {
   color: var(--color-danger);
 }

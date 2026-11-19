@@ -202,6 +202,7 @@ describe("Kit admin contrast", () => {
       "event-new",
       "event-new-populated",
       "event-new-invalid",
+      "event-new-text-limit",
       "event-edit",
       "event-edit-populated",
       "event-edit-errors",
@@ -211,7 +212,8 @@ describe("Kit admin contrast", () => {
       "dashboard",
     ]) {
       test(`Kit admin contrast: ${name} at ${width}`, async () => {
-        const f = fixtures.find((fixture) => fixture.name === name);
+        const isTextLimit = name === "event-new-text-limit";
+        const f = fixtures.find((fixture) => fixture.name === (isTextLimit ? "event-new" : name));
         const isDashboard = name === "dashboard";
         const isInvalid = name.endsWith("-invalid");
         const context = await browser.newContext({
@@ -272,8 +274,16 @@ describe("Kit admin contrast", () => {
             assert.equal(await notes.count(), 1);
             assert.equal(
               await notes.inputValue(),
-              name === "event-new" ? "" : "Step-free entrance.",
+              name === "event-new" || isTextLimit ? "" : "Step-free entrance.",
             );
+            if (isTextLimit) {
+              const error = page.locator("#f-accessibility-notes-limit-error");
+              await error.waitFor({ state: "attached" });
+              assert.equal(await error.isVisible(), false);
+              await notes.fill("🎮".repeat(1001));
+              assert.equal(await error.isVisible(), true);
+              assert.equal(await notes.getAttribute("aria-invalid"), "true");
+            }
             if (name === "event-new-invalid") {
               assert.equal(await notes.getAttribute("aria-invalid"), "true");
               assert.equal(
@@ -317,7 +327,8 @@ describe("Kit admin contrast", () => {
           }
           const summarySelector = "[data-admin-validation-summary]";
           const fieldErrorSelector = ".field .error";
-          if (isInvalid) axe.include(summarySelector).include(fieldErrorSelector);
+          if (isInvalid) axe.include(summarySelector);
+          if (isInvalid || isTextLimit) axe.include(fieldErrorSelector);
           const result = await axe.withRules(["color-contrast"]).analyze();
           const measured = await page
             .locator(
@@ -335,6 +346,13 @@ describe("Kit admin contrast", () => {
                 })),
               isDashboard ? ".card" : ".notice, fieldset",
             );
+          if (isTextLimit) {
+            assert.ok(
+              measured.some(
+                ({ text }) => text === "Keep the accessibility_notes to 1000 characters.",
+              ),
+            );
+          }
           if (isInvalid) {
             const texts = measured.map((item) => item.text);
             assert.ok(texts.includes("Check the highlighted fields and try again."));
@@ -369,6 +387,15 @@ describe("Kit admin contrast", () => {
             })),
             [],
           );
+          if (isTextLimit) {
+            const notes = page.locator("#f-accessibility-notes");
+            await notes.fill("🎮".repeat(1000));
+            assert.equal(
+              await page.locator("#f-accessibility-notes-limit-error").isVisible(),
+              false,
+            );
+            assert.equal(await notes.getAttribute("aria-invalid"), null);
+          }
           if (isInvalid) {
             for (const token of ["--color-danger", "--color-lobby-accent"]) {
               assert.notEqual(
