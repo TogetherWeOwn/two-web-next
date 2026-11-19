@@ -1,5 +1,5 @@
-// Inactive installer for the Kit Worker response facade. Nothing calls it: no
-// Vite, package script or Wrangler wiring runs it yet.
+// The hosted XFS proof and loopback fixture call this installer explicitly.
+// Ordinary builds, preview and deployment do not run it.
 // Design credit: Rick7C2, draft #2092 at eb1ba5d47e6d5a35a0a6deb2b7532b4c045865f3.
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
