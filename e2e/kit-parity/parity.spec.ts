@@ -1900,7 +1900,6 @@ test("Kit calendar styles survive a swap into the old document", async ({ page }
   await expect(page.locator('link[href="/kit-events-controls.css"]')).toHaveCount(0);
   const html = page.locator("html");
   await html.evaluate((element) => element.setAttribute("data-rollout-shell", "old"));
-
   await page.getByTestId("events-view-calendar").click();
   const selected = page.locator("nav.segments").getByTestId("events-view-calendar");
   await expect(selected).toHaveAttribute("aria-current", "page");
@@ -1910,9 +1909,7 @@ test("Kit calendar styles survive a swap into the old document", async ({ page }
 });
 
 test("cross-target: normalized events-calendar sections match", async ({ playwright, page }) => {
-  // Compare parsed SSR, not serializer whitespace, attribute order, or
-  // Svelte markers. The reviewed segmented view links have a nav wrapper;
-  // normalize that wrapper and its stylesheet, leaving the links and selection intact.
+  // Normalize serializer noise and the Kit wrapper, not the tabs' links or selection.
   const calendarSection = async (html: string) =>
     normalizeSection(
       await page.evaluate((html) => {
@@ -1921,9 +1918,7 @@ test("cross-target: normalized events-calendar sections match", async ({ playwri
         if (!section) throw new Error("Missing calendar section");
         const segments = section.querySelector('nav.segments[aria-label="How to show the events"]');
         if (segments) {
-          section
-            .querySelector('link[rel="stylesheet"][href="/kit-events-controls.css"]')
-            ?.remove();
+          section.querySelector('link[rel=stylesheet][href="/kit-events-controls.css"]')?.remove();
           const group = document.createElement("div");
           group.className = "schedule-views";
           group.setAttribute("role", "group");

@@ -97,13 +97,13 @@ beforeAll(async () => {
 beforeEach(() => {
   seams = {
     HttpError,
-    model: vi.fn(async () => ({
-      state: { view: "list", month: "2026-10", q: "", past: false, page: 1 },
-      upcoming: [gathering({ title: "Solo <practice>", proofMarker: "not-public-proof" })],
+    model: vi.fn(async ({ input: { q, page } }) => ({
+      state: { view: "list", month: "2026-10", q, past: false, page },
+      upcoming: page === 2 ? [] : [gathering({ title: "<drill>", proofMarker: "not-public" })],
       past: [],
       zone: "Europe/London",
       now: new Date("2026-10-13T12:00:00Z"),
-      totalPages: 1,
+      totalPages: page === 2 ? 2 : 1,
       emptyState: null,
       robots: undefined,
       discordFailed: false,
@@ -123,13 +123,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function requestEvent({
-  flash = false,
-  method = "GET",
-  island = false,
-  restoredWrite = false,
-  search = "",
-} = {}) {
+function requestEvent(options = {}) {
+  const { flash, method = "GET", island, restoredWrite, search = "" } = options;
   const request = new Request(`https://example.test/events${search}`, {
     method,
     headers: {
@@ -232,9 +227,9 @@ describe("Kit events endpoint flash-consumption controls", () => {
     const body = await response.text();
     expect(body).toContain('data-testid="events-calendar"');
     expect(body).toMatch(/<nav\b[^>]*class="segments"/);
-    expect(body).toContain("Solo &lt;practice");
-    expect(body).not.toContain("<practice>");
-    expect(body).not.toContain("not-public-proof");
+    expect(body).toContain("&lt;drill");
+    expect(body).not.toContain("<drill>");
+    expect(body).not.toContain("not-public");
     expect(body).toContain('<link rel="stylesheet" href="/schedule-theme.css"');
     expect(body).toContain('<link rel="stylesheet" href="/kit-events-controls.css"');
     expect(body).toContain('src="/islands/events-calendar.js"');
@@ -273,20 +268,24 @@ describe("Kit events endpoint flash-consumption controls", () => {
     expect(deleteCookie).not.toHaveBeenCalled();
   });
 
-  it("keeps the full island document and swaps exactly the existing zones", async () => {
+  it("renders an unreadable list page in the same full-document swap zones", async () => {
     const { event, deleteCookie } = requestEvent({
       flash: true,
       island: true,
       restoredWrite: true,
+      search: "?q=Paged&page=2",
     });
     const body = await (await GET(event)).text();
+    expect(body).toContain('data-testid="events-page-unreadable">Events on page 2 can');
+    expect(body).toContain('data-testid="events-search-status">Events on page 2 can');
+    expect(body).toContain('href="/events?q=Paged" data-testid="events-pager-first"');
+    expect(body).not.toContain('data-testid="events-empty-search"');
     expect(body).toMatch(/^<!doctype html>/i);
     expect(body).toContain('data-island="events-calendar"');
     const zones = Array.from(body.matchAll(/data-cal-zone="([^"]+)"/g), (match) => match[1]);
     expect(zones).toEqual(["head", "subscribe", "actions", "miss", "content"]);
-    expect(body).toMatch(
-      /data-cal-zone="head">\s*<link rel="stylesheet" href="\/kit-events-controls\.css"/,
-    );
+    const head = body.split('data-cal-zone="head">')[1]?.trimStart();
+    expect(head).toMatch(/^<link rel="stylesheet" href="\/kit-events-controls\.css"/);
     expect(body).not.toContain('data-testid="auth-error"');
     expect(body).not.toContain('data-testid="join-result"');
     expect(deleteCookie).not.toHaveBeenCalled();
