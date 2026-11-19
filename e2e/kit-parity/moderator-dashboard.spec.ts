@@ -66,6 +66,12 @@ for (const { size } of PARITY_VIEWPORTS) {
       try {
         await check("populated", list, 200, "Reconciliation");
         await expect(page.locator(`a[href='${resolved}']`)).toBeVisible();
+        await page.getByRole("link", { name: "Back to the dashboard" }).focus();
+        for (const name of ["Open intents", "Recently resolved"]) {
+          await page.keyboard.press("Tab");
+          await expect(page.getByRole("region", { name })).toBeFocused();
+          await page.keyboard.press("Tab");
+        }
         await check("open", open, 200, "event.upsert");
         await expect(page.getByText("Delivery was not confirmed.")).toBeVisible();
         await check("resolved", resolved, 200, "announcement.post");
@@ -88,6 +94,7 @@ for (const { size } of PARITY_VIEWPORTS) {
           ["detail-unavailable", open],
         ] as const) {
           await check(name, path, 503, "Admin temporarily unavailable");
+          await expect(page.getByText("Retry loading")).toHaveAttribute("href", path);
           await expect(page.locator("body")).not.toContainText(
             /synthetic_open|synthetic_resolved|synthetic receipt failure/,
           );

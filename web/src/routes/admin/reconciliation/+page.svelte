@@ -19,7 +19,7 @@ let { data }: PageProps = $props();
     {@const records = resolved ? data.resolved : data.open}
     <h2 {id}>{resolved ? "Recently resolved" : "Open intents"}</h2>
     {#if records.length}
-      <section class="admin-table-scroll" aria-labelledby={id}>
+      <div class="admin-table-scroll" role="region" aria-labelledby={id} tabindex="0">
         <table class="admin-table">
           <thead><tr>
             <th scope="col">Change</th>
@@ -41,7 +41,7 @@ let { data }: PageProps = $props();
             {/each}
           </tbody>
         </table>
-      </section>
+      </div>
     {:else}
       <p>No {resolved ? "resolved" : "open"} intents recorded.</p>
     {/if}

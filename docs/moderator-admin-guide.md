@@ -795,12 +795,11 @@ or join-attempt mutation screen here.
 ## Inspect a recorded reconciliation intent (Kit fixture only)
 
 **Reconciliation** is on the Kit fixture dashboard, not the deployed dashboard.
-Open it to see up to 100 open intents and 50 recently resolved intents. Access
-is recorded before any rows appear. This shows recorded intents only: an
-exhausted retry can stay in the sync ledger without an intent. An empty list
-is not an all-clear. Check Discord independently; no shown or missing record
-proves delivery. The viewer does not record intents, change the queue, resolve
-records, or send or retry bot changes.
+Access is recorded before showing up to 100 open and 50 recently resolved
+intents. An exhausted retry can stay in the sync ledger without an intent, so an
+empty list is not an all-clear. Check Discord independently to verify delivery.
+The viewer does not record intents, change the queue, resolve records, or send
+or retry bot changes.
 
 ## Member deletion requests
 

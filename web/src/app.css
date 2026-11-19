@@ -52,7 +52,7 @@ html body {
   color: var(--color-lobby-ink);
 }
 
-/* Hono keeps its light admin palette. Kit's shared admin chrome adapts
+/* Hono keeps its light admin palette. Kit's shared admin chrome adapts only
  * help/footer ink and the repeat surface to the root layout's dark canvas.
  * The light ink is set directly on those elements: overriding --muted on the
  * shell would also recolor the dashboard's light resource cards
