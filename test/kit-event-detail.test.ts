@@ -914,7 +914,7 @@ describe("Kit detail presentation", () => {
           event: {
             ...row(),
             goingCount: 3,
-            startsAt: new Date("2098-12-31T19:00:00Z"),
+            startsAt: new Date("-000001-12-31T19:00:00Z"),
             endsAt: new Date("2098-12-31T21:00:00Z"),
           } as PublicEvent,
         }),
@@ -924,6 +924,7 @@ describe("Kit detail presentation", () => {
       html.push(renderDetail(outcome.model as unknown as Record<string, unknown>));
       expect(Date.now()).toBe(new Date(wall).getTime());
     }
+    expect(html[0]).toContain('id="kit-live-refresh"');
     expect(html[0]).toContain('data-as-of="2098-12-31T20:00:00.000Z"');
     expect(html[0]).toContain('data-stale-at="2098-12-31T20:05:00.000Z"');
     expect(html[0]).toBe(html[1]);

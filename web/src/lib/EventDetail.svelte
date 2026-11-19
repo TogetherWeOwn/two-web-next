@@ -29,15 +29,14 @@ const savedLive = $derived(
 // This route is csr=false. Share one native-island block in execution order;
 // every deferred script runs after parsing, with all of its mount nodes present.
 const detailIslands = $derived([
-  ...(live ? ["kit-live-event-time"] : ["event-device-timezone", "event-time-from-now"]),
+  live ? "kit-live-event-time" : "event-device-timezone",
+  ...(live ? [] : ["event-time-from-now"]),
   "rsvp-button",
   "copy-link",
   "event-share",
   "going-count",
   "attendees-live",
-]
-  .map((name) => `<script src="/islands/${name}.js" defer></` + "script>")
-  .join(""));
+]);
 </script>
 
 {#snippet liveTag(testid?: string)}
@@ -153,8 +152,8 @@ const detailIslands = $derived([
   {/if}
   {#if live}
     <div class="lifecycle-time" data-testid="kit-event-time">
-      <TimeBlock start={model.timeDatetime} end={model.endsAt} asOf={live.asOf} state="live" stale={false}
-        serverLive={{ eventZone: model.zoneLabel, endLabel: model.endsWhenText }} />
+      <TimeBlock start={new Date(model.timeDatetime)} end={new Date(model.endsAt)} asOf={new Date(live.asOf)}
+        state="live" stale={false} viewerZone={model.zoneLabel} serverLive={{ endLabel: model.endsWhenText }} />
     </div>
   {:else}
     {@html model.detailHtml.metadata}
@@ -270,7 +269,7 @@ const detailIslands = $derived([
   {@html model.detailHtml.roster}
   </div>
   </div>
-  {@html detailIslands}
+  {@html detailIslands.map((name) => `<script src="/islands/${name}.js" defer></` + "script>").join("")}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
   <div class="event-discovery">{@render eventPagination(model.series, true)}{@render eventPagination(model.neighbors, false)}

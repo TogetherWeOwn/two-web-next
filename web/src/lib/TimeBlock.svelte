@@ -3,13 +3,12 @@ import { onMount } from "svelte";
 import { structuredTime, toInstant, type Instant } from "./structured-time";
 import TextLink from "./TextLink.svelte";
 
-// Only a no-store SSR caller with its own native watcher may opt into a dated
-// Live snapshot before mount. All other callers start withdrawn on the server.
+// Only no-store SSR callers with a native watcher may opt into a dated Live snapshot.
 let {
   start,
   end,
   echoFrozen = false,
-  viewerZone: preferredZone,
+  viewerZone,
   state: eventState,
   asOf,
   stale = true,
@@ -26,12 +25,11 @@ let {
   stale?: boolean;
   roomCount?: number;
   refreshHref?: string;
-  serverLive?: { eventZone: string; endLabel: string };
+  serverLive?: { endLabel: string };
 } = $props();
 
 let mounted = $state(false);
 let browserZone = $state<string | undefined>();
-let viewerZone = $derived((eventState === "live" && serverLive?.eventZone) || preferredZone);
 let time = $derived(structuredTime(start, viewerZone || browserZone));
 let endedTime = $derived(structuredTime(end, viewerZone || browserZone));
 let snapshot = $derived(structuredTime(asOf, viewerZone || browserZone));
@@ -48,13 +46,12 @@ let shortDate = $derived(
 let snapshotInstant = $derived(toInstant(asOf));
 let offsets = $derived.by(() => {
   if (eventState !== "live" || !time || !startInstant || !snapshotInstant) return null;
-  const formatter = new Intl.DateTimeFormat("en-GB", { timeZone: time.zone, timeZoneName: "shortOffset" });
-  const offset = (at: Date) => formatter.formatToParts(at).find((part) => part.type === "timeZoneName")?.value;
-  const startOffset = offset(startInstant);
-  const snapshotOffset = offset(snapshotInstant);
-  return startOffset && snapshotOffset && startOffset !== snapshotOffset ? { startOffset, snapshotOffset } : null;
+  const fmt = new Intl.DateTimeFormat("en", { timeZone: time.zone, timeZoneName: "shortOffset" });
+  const offset = (d: Date) => fmt.formatToParts(d).find((p) => p.type === "timeZoneName")?.value;
+  const [start, snapshot] = [startInstant, snapshotInstant].map(offset);
+  return start && snapshot && start !== snapshot ? { start, snapshot } : null;
 });
-let sinceLabel = $derived(offsets ? `${time?.localTime} ${offsets.startOffset}` : time?.localTime);
+let sinceLabel = $derived(offsets ? `${time?.localTime} ${offsets.start}` : time?.localTime);
 let snapshotLabel = $derived.by(() => {
   if (!time || !snapshot || !startInstant || !snapshotInstant) return "";
   const dateKey = new Intl.DateTimeFormat("en-GB", {
@@ -68,7 +65,7 @@ let snapshotLabel = $derived.by(() => {
     day: "numeric",
     month: "short",
   });
-  const clock = offsets ? `${snapshot.localTime} ${offsets.snapshotOffset}` : snapshot.localTime;
+  const clock = offsets ? `${snapshot.localTime} ${offsets.snapshot}` : snapshot.localTime;
   return dateKey.format(startInstant) === dateKey.format(snapshotInstant)
     ? clock
     : `${date.format(snapshotInstant)} ${clock}`;
@@ -115,7 +112,7 @@ onMount(() => {
     <div class="details">
       <div>{time.localDate}{#if eventState !== "live" || !serverLive}{#if (viewerZone || browserZone) && time.zone === (viewerZone || browserZone)}, your time{#if browserZone && !viewerZone}{" (from your browser)"}{/if}{:else}, UTC fallback{/if}{/if}</div>
       <div class="anchor">
-        {time.zone}{" · "}{time.utcTime} UTC{#if nativeLive}<span data-live-fresh>{" · "}since {sinceLabel}</span>{:else if eventState === "upcoming" && countdown && !withdrawn}{" · "}{countdown}{:else if eventState === "live" && !withdrawn}{" · "}since {sinceLabel}{#if roomCount !== undefined && Number.isSafeInteger(roomCount) && roomCount >= 0}{" · "}{roomCount} in the room{/if}{:else if eventState === "ended"}{" · "}{endedTime ? `ended ${endedTime.localTime}` : "Ended"}{#if echoFrozen}{" · "}Echo frozen{/if}{:else if eventState === "cancelled"}{" · "}Cancelled{/if}{#if hasClaim && snapshot}{" · "}{#if nativeLive}<span data-live-fresh>as of</span><span hidden data-live-stale>live as of</span>{:else}{withdrawn && eventState === "live" ? "live as of" : "as of"}{/if} <time datetime={snapshot.datetime}>{snapshotLabel}</time>{#if nativeLive}<span id="kit-live-refresh"></span>{:else if withdrawn && refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{:else if eventState === "live" && !snapshot}{" · "}Live status unavailable{#if refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{/if}
+        {time.zone}{" · "}{time.utcTime} UTC{#if nativeLive}<span data-live-fresh>{" · "}since {sinceLabel}</span>{:else if eventState === "upcoming" && countdown && !withdrawn}{" · "}{countdown}{:else if eventState === "live" && !withdrawn}{" · "}since {sinceLabel}{#if roomCount !== undefined && Number.isSafeInteger(roomCount) && roomCount >= 0}{" · "}{roomCount} in the room{/if}{:else if eventState === "ended"}{" · "}{endedTime ? `ended ${endedTime.localTime}` : "Ended"}{#if echoFrozen}{" · "}Echo frozen{/if}{:else if eventState === "cancelled"}{" · "}Cancelled{/if}{#if hasClaim && snapshot}{" · "}{#if nativeLive}<span data-live-fresh>as of</span><span hidden data-live-stale>live as of</span> <time datetime={snapshot.datetime}>{snapshotLabel}</time><span id="kit-live-refresh"></span>{:else}{withdrawn && eventState === "live" ? "live as of" : "as of"} <time datetime={snapshot.datetime}>{snapshotLabel}</time>{#if withdrawn && refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{/if}{:else if eventState === "live" && !snapshot}{" · "}Live status unavailable{#if refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{/if}
       </div>
       {#if eventState === "live" && serverLive && endedTime}<p>Ends <time datetime={endedTime.datetime}>{serverLive.endLabel}</time></p>{/if}
     </div>

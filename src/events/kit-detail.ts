@@ -199,7 +199,9 @@ export interface KitEventDetailModel {
   status: string;
   isDraft: boolean;
   isPast: boolean;
-  /** Server snapshot; client expiry never changes the RSVP verdict. */
+  /** Server snapshot at the render instant (`isOngoing`): the "Happening now"
+   * interval. Never a client clock; RSVP verdicts are unaffected. Optional
+   * so a pre-existing fixture without the flag reads as not ongoing. */
   isOngoing?: boolean;
   liveTime?: { asOf: string; staleAt: string };
   goingCount: number;
