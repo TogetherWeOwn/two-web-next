@@ -1883,9 +1883,24 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     const spots = enhancedPage.getByTestId("event-spots-left");
     await expect(enhancedCard.getByRole("heading", { name: "1 of 2 in" })).toBeVisible();
     await expect(lineup).toBeHidden();
+    // Fail the first count read only; RSVP and the manual retry hit the real fixture.
+    await enhancedPage.route(
+      `${target.origin}/events.json?event_key=${openKey}`,
+      (route) => route.fulfill({ status: 503 }),
+      { times: 1 },
+    );
     await enhancedCard.getByRole("button", { name: "I'm in" }).click();
     await expect(enhancedCard.getByTestId("rsvp-confirmed")).toBeVisible();
     await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    const stale = lineup.getByTestId("event-going-count-stale");
+    await expect(stale).toBeVisible();
+    await expect(stale).toContainText(
+      "Going count could not refresh. Showing the last saved count.",
+    );
+    const retry = stale.getByRole("button", { name: "Try again" });
+    await expect(retry).toBeVisible();
+    await retry.click();
+    await expect(stale).toHaveCount(0);
     await expect(lineup.locator("[data-count]")).toHaveText("1 of 2 going");
     await expect(spots).toBeVisible();
     await expect(spots).toHaveText("Full");
