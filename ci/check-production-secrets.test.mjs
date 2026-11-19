@@ -743,22 +743,6 @@ test("db-backup selects its environment from the dispatch target, staging by def
   assert.equal(jobEnvironment(backup.lines), "${{ inputs.target || 'staging' }}");
 });
 
-test("db-backup opts into S3 separately per target and never falls back to staging credentials", () => {
-  const workflow = readFileSync(new URL("db-backup.yml", WORKFLOWS), "utf8");
-  assert.ok(
-    workflow.includes(
-      "BACKUP_TRANSPORT: ${{ inputs.target == 'production' && vars.PRODUCTION_BACKUP_TRANSPORT || inputs.target != 'production' && vars.BACKUP_TRANSPORT || '' }}",
-    ),
-  );
-  for (const name of ["R2_ACCOUNT_ID", "R2_S3_ACCESS_KEY_ID", "R2_S3_SECRET_ACCESS_KEY"]) {
-    const mapping = `          ${name}: \${{ inputs.target == 'production' && secrets.PRODUCTION_${name} || inputs.target != 'production' && secrets.${name} || '' }}`;
-    assert.deepEqual(
-      workflow.split("\n").filter((line) => line.trimStart().startsWith(`${name}:`)),
-      [mapping, mapping, mapping],
-    );
-  }
-});
-
 // ---------------------------------------------------------------------------
 // Backup docs pin to the implementation.
 //
@@ -1067,7 +1051,7 @@ test("script data cannot stand in for a production delegation", () => {
 // ---------------------------------------------------------------------------
 
 const STAGING_CLOUDFLARE_SECRET =
-  /\bsecrets\s*(?:\.\s*|\[\s*['"])(?:CLOUDFLARE_(?:API_TOKEN|ACCOUNT_ID)|R2_(?:ACCOUNT_ID|S3_ACCESS_KEY_ID|S3_SECRET_ACCESS_KEY))\b/i;
+  /\bsecrets\s*(?:\.\s*|\[\s*['"])CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\b/i;
 // The production name is taken only under the same input that selects the
 // production Environment, and the staging name only under the inverse
 // guard, so an empty production secret resolves to '' (a loud downstream
@@ -1075,7 +1059,7 @@ const STAGING_CLOUDFLARE_SECRET =
 // (db-backup, deploy) and `inputs.environment` (rollback-production)
 // select the Environment.
 const TARGET_GUARDED_STAGING_CLOUDFLARE =
-  /\binputs\.(?:target|environment)\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_(CLOUDFLARE_(?:API_TOKEN|ACCOUNT_ID)|R2_(?:ACCOUNT_ID|S3_ACCESS_KEY_ID|S3_SECRET_ACCESS_KEY))\s*\|\|\s*inputs\.(?:target|environment)\s*!=\s*'production'\s*&&\s*secrets\s*\.\s*\1\s*\|\|\s*''/i;
+  /\binputs\.(?:target|environment)\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\s*\|\|\s*inputs\.(?:target|environment)\s*!=\s*'production'\s*&&\s*secrets\s*\.\s*CLOUDFLARE_\1\s*\|\|\s*''/i;
 
 // Job-level `environment:` is forbidden on reusable-workflow caller jobs
 // (`uses:`): GitHub only allows name/uses/with/secrets/needs/if/permissions

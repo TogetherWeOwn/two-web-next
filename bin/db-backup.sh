@@ -22,9 +22,9 @@
 # dumps and must never receive them.
 #
 # Deletion hygiene: wrangler has no `r2 object list`, so `rotate` and `check`
-# resolve the key set by downloading the remote manifest
-# (`neon/<branch>-<branch>/MANIFEST.txt`, written by every backup) over either
-# transport. The manifest is admitted before any remote
+# resolve the key set by downloading the checked-in-nearby remote manifest
+# (`neon/<branch>-<branch>/MANIFEST.txt`, written by every backup) with
+# the selected transport. The manifest is admitted before any remote
 # mutation (bin/backup/manifest-helper): only an explicit missing-key
 # diagnostic initializes a first backup; any other read failure refuses, and
 # every line must be a valid archive/receipt key of the selected branch. No secret or token is ever passed on argv or
@@ -52,8 +52,8 @@
 #     by default) and either previews or applies it. Bare `rotate` and
 #     `--dry-run` are identical nonmutating previews printing exact disjoint
 #     keep:/delete: archive lines and changing nothing. Only `--apply` deletes
-#     the planned archives (plus manifest-registered receipts), then rewrites
-#     the manifest;
+#     the planned archives (plus manifest-registered receipts) via
+#     the selected transport, then rewrites the manifest;
 #     apply is idempotent across partial-failure retries. `--json` emits a
 #     byte-stable version-1 plan document with mode, policy, keep/delete,
 #     actions and a safe nextAction instead of text lines.
@@ -70,10 +70,10 @@
 # DATABASE_URL is a hard error, so a half-configured box can never silently
 # dump the wrong database. Tests run against agent-testdb only, never prod.
 #
-# Needs: pg_dump (CI: postgres:18 image service / apt), and either wrangler
-# with CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID (default) or AWS CLI v2
-# with R2_ACCOUNT_ID + R2_S3_ACCESS_KEY_ID + R2_S3_SECRET_ACCESS_KEY (S3).
-# BACKUP_TRANSPORT=wrangler|s3 selects the transport; unset/empty uses wrangler.
+# Needs: pg_dump (CI: postgres:18 image service / apt), wrangler with
+# CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID.
+# With BACKUP_TRANSPORT=s3, use AWS CLI v2 and its R2 credentials instead:
+# R2_ACCOUNT_ID, R2_S3_ACCESS_KEY_ID, and R2_S3_SECRET_ACCESS_KEY.
 #
 # Env overrides (mirroring two-web pg-backup.sh):
 #   BACKUP_KEEP_DAILY (default 7, supported 1..365),
@@ -223,9 +223,8 @@ case "$BACKUP_TRANSPORT" in
       default) s3_label='' ;;
       *) echo 'db-backup: invalid S3 backup jurisdiction' >&2; exit 1 ;;
     esac
-    if ! (set +x; [[ ${R2_ACCOUNT_ID:-} =~ ^[a-f0-9]{32}$ && -n ${R2_S3_ACCESS_KEY_ID:-} && -n ${R2_S3_SECRET_ACCESS_KEY:-} ]]); then
-      echo 'db-backup: S3 requires a valid R2_ACCOUNT_ID and both R2_S3 credentials' >&2
-      exit 1
+    if ! [[ ${R2_ACCOUNT_ID:-} =~ ^[a-f0-9]{32}$ && ${R2_S3_ACCESS_KEY_ID:+set} && ${R2_S3_SECRET_ACCESS_KEY:+set} ]]; then
+      echo 'db-backup: S3 requires a valid R2_ACCOUNT_ID and both R2_S3 credentials' >&2; exit 1
     fi
     command -v "${AWS_BIN:-aws}" >/dev/null || { echo 'db-backup: AWS CLI not found' >&2; exit 1; }
     ;;
@@ -235,8 +234,8 @@ esac
 r2_aws() (
   set +x
   unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
-  AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
-    AWS_CLI_ERROR_FORMAT=legacy \
+  AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null \
+    AWS_EC2_METADATA_DISABLED=true AWS_CLI_ERROR_FORMAT=legacy \
     AWS_ACCESS_KEY_ID="$R2_S3_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_S3_SECRET_ACCESS_KEY" \
     AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
     "${AWS_BIN:-aws}" --no-cli-pager --no-cli-auto-prompt --region auto \
@@ -247,52 +246,50 @@ obj_put() {
   local key="$1" file="$2" bytes
   if [ "$BACKUP_TRANSPORT" = wrangler ]; then
     wr r2 object put "$BACKUP_BUCKET/$key" --file "$file" --remote --force --jurisdiction "$BACKUP_JURISDICTION"
+    return $?
+  fi
+  # Use the AWS CLI's default 8 MiB multipart threshold for archive uploads.
+  bytes="$(wc -c < "$file")" || return 1
+  if [[ $key == *.dump ]] && [ "$bytes" -ge 8388608 ]; then
+    r2_aws s3 cp "$file" "s3://$BACKUP_BUCKET/$key" --only-show-errors
   else
-    # Use the AWS CLI's default 8 MiB multipart threshold for archive uploads.
-    bytes="$(wc -c < "$file")" || return 1
-    if [[ $key == *.dump ]] && [ "$bytes" -ge 8388608 ]; then
-      r2_aws s3 cp "$file" "s3://$BACKUP_BUCKET/$key" --only-show-errors
-    else
-      r2_aws s3api put-object --bucket "$BACKUP_BUCKET" --key "$key" --body "$file"
-    fi
-  fi >/dev/null
-}
+    r2_aws s3api put-object --bucket "$BACKUP_BUCKET" --key "$key" --body "$file"
+  fi
+} >/dev/null
 
 obj_get() {
-  local key="$1" file="$2"
-  rm -f -- "$file" || return 1
+  rm -f -- "$2" || return 1
   if [ "$BACKUP_TRANSPORT" = wrangler ]; then
-    wr r2 object get "$BACKUP_BUCKET/$key" --file "$file" --remote --jurisdiction "$BACKUP_JURISDICTION"
+    wr r2 object get "$BACKUP_BUCKET/$1" --file "$2" --remote --jurisdiction "$BACKUP_JURISDICTION"
   else
-    r2_aws s3api get-object --bucket "$BACKUP_BUCKET" --key "$key" "$file"
+    r2_aws s3api get-object --bucket "$BACKUP_BUCKET" --key "$1" "$2"
   fi
 } >/dev/null 2>"$2.stderr"
 
 obj_delete() {
-  local key="$1"
   if [ "$BACKUP_TRANSPORT" = wrangler ]; then
-    wr r2 object delete "$BACKUP_BUCKET/$key" --remote --force --jurisdiction "$BACKUP_JURISDICTION"
+    wr r2 object delete "$BACKUP_BUCKET/$1" --remote --force --jurisdiction "$BACKUP_JURISDICTION"
   else
-    r2_aws s3api delete-object --bucket "$BACKUP_BUCKET" --key "$key"
-  fi >/dev/null
-}
+    r2_aws s3api delete-object --bucket "$BACKUP_BUCKET" --key "$1"
+  fi
+} >/dev/null
 
 obj_missing() {
   local file="$1" error
   [ ! -s "$file" ] || return 1
   if [ "$BACKUP_TRANSPORT" = wrangler ]; then
     python3 "$ROOT/bin/backup/manifest-helper" missing "$file.stderr"
-  else
-    error="$(<"$file.stderr")"
-    # AWS CLI v2 wraps its legacy diagnostic in newlines. Strip only the
-    # leading newline (command substitution strips the trailing ones).
-    error="${error#$'\n'}"
-    [[ $error != *$'\n'* && $error =~ ^An\ error\ occurred\ \((NoSuchKey|404)\)\ when\ calling\ the\ GetObject\ operation:.*$ ]]
+    return $?
   fi
+  # Strip the AWS CLI legacy diagnostic's single leading newline.
+  error="$(<"$file.stderr")"
+  error="${error#$'\n'}"
+  [[ $error != *$'\n'* && $error =~ ^An\ error\ occurred\ \((NoSuchKey|404)\)\ when\ calling\ the\ GetObject\ operation:.*$ ]]
 }
 
 # Rewrite the remote manifest from the local list of keys (one per line,
-# sorted). The manifest is the rotation/check source of truth.
+# sorted). The manifest is the rotation/check source of truth because wrangler
+# has no `r2 object list`.
 admit_manifest() {
   python3 "$ROOT/bin/backup/manifest-helper" "$1" "$(prefix)" "$2" "${@:3}"
 }
@@ -482,15 +479,11 @@ delete_archive_pair() {
   receipt="$(receipt_key "$key")"
   probe="$workdir/probe.tmp"
   for target in "$key" "$receipt"; do
-    if [ "$target" = "$receipt" ] && ! grep -qxF "$receipt" "$manifest"; then
-      break
-    fi
-    if ! obj_delete "$target" 2>/dev/null; then
-      if obj_get "$target" "$probe" || ! obj_missing "$probe"; then
-        echo "db-backup: delete failed: $target" >&2
-        rm -f "$probe" "$probe.stderr"
-        return 1
-      fi
+    if [ "$target" = "$receipt" ] && ! grep -qxF "$receipt" "$manifest"; then break; fi
+    if ! obj_delete "$target" 2>/dev/null && { obj_get "$target" "$probe" || ! obj_missing "$probe"; }; then
+      echo "db-backup: delete failed: $target" >&2
+      rm -f "$probe" "$probe.stderr"
+      return 1
     fi
   done
   rm -f "$probe" "$probe.stderr"

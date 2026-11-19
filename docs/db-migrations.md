@@ -292,11 +292,10 @@ with `target: production`, behind the `production` Environment:
 
 - Script: `bin/db-backup.sh` (`backup` | `promote-weekly` |
   `rotate` | `check`). Connection comes from `DATABASE_URL` env only —
-  never argv, never logs. Wrangler is the default transport; `BACKUP_TRANSPORT=s3`
-  uses the AWS CLI v2 with region `auto` and bucket-scoped R2 S3 credentials.
-  The default `BACKUP_JURISDICTION=eu` selects Wrangler's `--jurisdiction eu`
-  or the `.eu.r2.cloudflarestorage.com` S3 endpoint. The bucket default remains
-  `two-web-next-backups` (overridable via `BACKUP_BUCKET`).
+  never argv, never logs. Every `wrangler r2 object` call passes
+  `--jurisdiction eu` (overridable via `BACKUP_JURISDICTION`, default
+  `eu`); the bucket default is `two-web-next-backups` (overridable via
+  `BACKUP_BUCKET`).
 - `paperclip-backups` is explicitly out of scope for member-data dumps
   (jurisdiction `default` / location `ENAM`; must never receive them).
 - Schedule: `.github/workflows/db-backup.yml` — nightly `03:17Z` cron
@@ -313,14 +312,6 @@ with `target: production`, behind the `production` Environment:
   `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` (staging Environment), or
   `PRODUCTION_CLOUDFLARE_API_TOKEN` / `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`
   (production Environment) behind the same `inputs.target` guard.
-  Set the `BACKUP_TRANSPORT` repository variable to `s3` to opt in for
-  staging only. Production uses `PRODUCTION_BACKUP_TRANSPORT` independently;
-  leave it unset until production cutover is approved. For S3, the staging
-  Environment needs `R2_ACCOUNT_ID`, `R2_S3_ACCESS_KEY_ID`, and
-  `R2_S3_SECRET_ACCESS_KEY`; the production Environment needs the corresponding
-  `PRODUCTION_` secrets. An unset transport variable uses Wrangler. Verify a
-  staging dispatch and a separately approved production dispatch with read-back
-  before narrowing the existing Cloudflare API token.
 - Branch/target correspondence: `branch` must be empty (defaults to `target`),
   equal to `target`, or `test-*`; staging↔production swaps and other overrides
   refuse before provisioning or I/O. Local operators must declare
