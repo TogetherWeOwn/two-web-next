@@ -2223,7 +2223,7 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
       const rsvp = noJs.getByRole("button", { name: "I'm in", exact: true });
       await expect(rsvp).toBeEnabled();
       await rsvp.scrollIntoViewIfNeeded();
-      const ends = noJs.locator("p:visible").filter({ hasText: /^Ends / }).last();
+      const ends = noJs.locator("p:visible", { hasText: /^Ends / }).last();
       await expect(ends.locator("time")).toHaveAttribute("datetime", end.toISOString());
       await expect(ends).toBeInViewport();
       const ordered = await ends.evaluate((line) => {
