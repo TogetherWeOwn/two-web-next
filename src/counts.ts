@@ -134,10 +134,12 @@ const readHomeSnapshot = cachedRead<StoredHomeSnapshot | null>("counts.home", nu
   `;
   const row = rows[0];
   const raw = row?.counts_updated_at;
+  // The view returns UTC ISO text; parsing a zone-free string would use local time.
   const updatedAt =
     raw instanceof Date
       ? raw.getTime()
-      : typeof raw === "string" && raw.trim()
+      : typeof raw === "string" &&
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$/.test(raw)
         ? Date.parse(raw)
         : NaN;
   const memberCount = count(row?.human_member_count);

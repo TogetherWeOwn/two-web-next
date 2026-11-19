@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
+import { expectedMarkerFor } from "./kit-parity-gates.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = join(repo, "web");
@@ -194,6 +195,25 @@ try {
     "archive load reads the empty disposable event database",
   );
   console.log("PASS generated Worker archive request");
+
+  const manifest = await readFile(join(repo, "src/route-ownership.ts"), "utf8");
+  const homeMarker = expectedMarkerFor(manifest, "/");
+  const home = await fetch(`${origin}/`);
+  const homeHtml = await home.text();
+  assert.equal(home.status, 200, "guest home GET renders");
+  assert.equal(home.headers.get("x-two-renderer"), homeMarker, "home GET follows the manifest");
+  assert.equal(home.headers.get("cache-control"), "private, no-store");
+  assert.match(homeHtml, /<h1 id="home-heading">The lobby is open\.<\/h1>/);
+  // No session-secret binding: a guest still gets the safe invite fallback.
+  assert.match(homeHtml, /href="\/discord"[^>]*data-testid="discord-join"/);
+  assert.doesNotMatch(homeHtml, /data-testid="join"/);
+  assert.doesNotMatch(homeHtml, /data-testid="(?:home-standing|home-event-own-rsvp)"/);
+  const headHome = await fetch(`${origin}/`, { method: "HEAD" });
+  assert.equal(headHome.status, home.status);
+  assert.equal(headHome.headers.get("x-two-renderer"), homeMarker, "home HEAD follows GET");
+  assert.equal(headHome.headers.get("cache-control"), "private, no-store");
+  assert.equal(await headHome.text(), "", "HEAD has no response body");
+  console.log("PASS generated Worker guest home GET and HEAD");
 
   // Content leaves keep #808's zero-stylesheet contract on the served
   // worker. The unit parity harness renders pages without +layout.svelte,
@@ -538,6 +558,11 @@ try {
     }
     await assertParity(`OPTIONS ${path}`, path, { method: "OPTIONS" });
   }
+  await assertParity("POST / stays with Hono", "/", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: "{}",
+  });
   const postApiX = await assertParity("POST /api/x/", "/api/x/", {
     method: "POST",
     headers: jsonHeaders,

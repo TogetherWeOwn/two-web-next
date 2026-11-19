@@ -81,10 +81,10 @@ describe("static leaves enablement acceptance (shipped manifest)", () => {
     }
   });
 
-  it("ships the full manifest with the three Kit-owned entries enabled", () => {
+  it("preserves the full method-aware route manifest", () => {
     const homeReads = { resource: "member", action: "list", route: "home" };
     expect(ROUTE_MANIFEST).toEqual([
-      { method: "GET", path: "/", enabled: false, reads: homeReads },
+      { method: "GET", path: "/", enabled: true, reads: homeReads },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/events", enabled: true, reads: "public" },
       { method: "GET", path: "/about", enabled: true, reads: "public" },

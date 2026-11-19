@@ -85,13 +85,25 @@ describe("home counts snapshot", () => {
       memberCount: 84,
     });
     expect(state.queries).toHaveLength(1);
+    expect(state.queries[0]).toMatch(/FROM web_v1\.live_counts LIMIT 1\s*$/);
   });
 
-  it.each([null, "", "invalid", new Date(NaN), 123, new Date(NOW + 1)])(
+  it.each([null, "", "invalid", "2026-09-29T12:00:00", new Date(NaN), 123, new Date(NOW + 1)])(
     "does not invent a snapshot for an invalid or future timestamp %s",
     async (timestamp) => {
       state.live[0]!.counts_updated_at = timestamp;
       expect(await counts.readHomeCountsSnapshot(env)).toBeNull();
+    },
+  );
+
+  it.each(["2026-09-30T12:00:00.000Z", "2026-09-30T12:00:00+00:00"])(
+    "accepts an explicitly UTC view timestamp %s",
+    async (timestamp) => {
+      state.live[0]!.counts_updated_at = timestamp;
+      expect(await counts.readHomeCountsSnapshot(env)).toMatchObject({
+        observedAt: new Date(NOW).toISOString(),
+        stale: false,
+      });
     },
   );
 

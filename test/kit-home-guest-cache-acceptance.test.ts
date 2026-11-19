@@ -774,8 +774,7 @@ describe("Kit home guest cache: shared sourcing, no duplicate retire path", () =
     }
   });
 
-  it("leaves GET / ownership on Hono", () => {
-    // Cache sourcing lands before the flip; the flip itself is out of scope.
-    expect(read(MANIFEST)).toMatch(/method:\s*"GET",\s*path:\s*"\/",\s*enabled:\s*false/);
+  it("enables GET / with the shared cached panels", () => {
+    expect(read(MANIFEST)).toMatch(/method:\s*"GET",\s*path:\s*"\/",\s*enabled:\s*true/);
   });
 });

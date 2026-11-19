@@ -1,3 +1,5 @@
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import { getMemberHomeRsvps, MEMBER_HOME_RSVP_MAX_EVENTS } from "../src/events/member-home-rsvps";
@@ -7,7 +9,7 @@ const OTHER = "100000000000000102";
 const SYNCED = new Date("2099-01-01T00:00:00Z");
 
 function fakeDb(rows: unknown[]) {
-  const where = vi.fn(async () => rows);
+  const where = vi.fn(async (_predicate: SQL) => rows);
   const select = vi.fn(() => ({ from: () => ({ innerJoin: () => ({ where }) }) }));
   return { db: { select } as unknown as Db, select, where };
 }
@@ -55,9 +57,9 @@ describe("getMemberHomeRsvps (synthetic rows, mocked db)", () => {
     expect(select).not.toHaveBeenCalled();
   });
 
-  it("bounds results to the first distinct requested event keys", async () => {
+  it("bounds the query and results to the first distinct requested event keys", async () => {
     const ids = Array.from({ length: MEMBER_HOME_RSVP_MAX_EVENTS + 20 }, (_, i) => `k${i}`);
-    const { db, select } = fakeDb([
+    const { db, select, where } = fakeDb([
       { userId: VIEWER, eventKey: "k0", status: "going", syncedToDiscordAt: null },
       {
         userId: VIEWER,
@@ -69,6 +71,9 @@ describe("getMemberHomeRsvps (synthetic rows, mocked db)", () => {
     ]);
     const answers = await getMemberHomeRsvps(db, VIEWER, ["k0", "k0", ...ids]);
     expect(select).toHaveBeenCalledTimes(1);
+    const predicate = new PgDialect().sqlToQuery(where.mock.calls[0]![0]);
+    expect(predicate.sql).toContain('"events"."event_key" in (');
+    expect(predicate.params).toEqual([VIEWER, ...ids.slice(0, MEMBER_HOME_RSVP_MAX_EVENTS)]);
     expect([...answers.keys()]).toEqual(["k0"]);
   });
 });

@@ -22,6 +22,15 @@ import { sectionOf } from "./kit-section-contract.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 
 export const PARITY_ROUTES = [
+  // Home content is live and viewer-specific; compare structural guest
+  // contracts, not bytes from independent databases.
+  {
+    path: "/",
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "home",
+    compareSection: null,
+  },
   {
     path: "/events/past",
     expectStatus: 200,
@@ -587,6 +596,19 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
       failures.push(`${label}: archive never indexes`);
     if (!html.includes('<script src="/islands/past-events.js"'))
       failures.push(`${label}: shared island binder`);
+  } else if (contract === "home") {
+    if (!/<h1\b[^>]*>\s*The lobby is open\.\s*<\/h1>/i.test(html))
+      failures.push(`${label}: home heading present`);
+    const oauthJoin =
+      /<a\b(?=[^>]*\shref="\/auth\/discord")(?=[^>]*\sdata-testid="join")[^>]*>\s*Join with Discord\s*<\/a>/i;
+    const inviteFallback =
+      /<a\b(?=[^>]*\shref="\/discord")(?=[^>]*\sdata-testid="discord-join")[^>]*>\s*Join with an invite link\s*<\/a>/i;
+    if (!oauthJoin.test(html) && !inviteFallback.test(html))
+      failures.push(`${label}: guest join action or session-unavailable invite fallback present`);
+    if (/data-testid="(?:home-standing|home-event-own-rsvp)"/.test(html))
+      failures.push(`${label}: guest home must not show member RSVP data`);
+    if ((get("cache-control") ?? "") !== "private, no-store")
+      failures.push(`${label}: home is private, no-store`);
   } else if (contract === "join") {
     failures.push(...assertJoinContract(label, html, get, expected));
   } else if (contract === "recovery") {
@@ -2148,6 +2170,70 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
         `unit: leaves mutant ${contract} private-cache fails`,
         privateFailures.length > 0 ? "passed" : "failed",
         privateFailures.length > 0 ? null : "mutant was NOT detected",
+      );
+    }
+  }
+
+  // Exercise the home contract in CI even when preview credentials are absent.
+  if (parseManifestEntries(manifestSource).some((entry) => entry.path === "/")) {
+    const homeMarker = expectedMarkerFor(manifestSource, "/");
+    const homeShell =
+      `<html><head><link rel="canonical" href="https://next.togetherweown.com/"></head>` +
+      `<body><a class="skip-link" href="#main">Skip</a><nav aria-label="Primary"></nav>` +
+      `<main id="main"><h1 id="home-heading">The lobby is open.</h1>` +
+      `<a href="/auth/discord" data-testid="join">Join with Discord</a></main>` +
+      `<p>Welcome, guest</p></body></html>`;
+    const checkHome = (html, cache = "private, no-store") =>
+      assertRouteContract({
+        label: "unit/home",
+        html,
+        headers: headerMap({
+          "content-type": "text/html",
+          "x-two-renderer": homeMarker,
+          "cache-control": cache,
+        }),
+        status: 200,
+        expected: { status: 200, marker: homeMarker, contract: "home" },
+      });
+    const fallbackShell = homeShell.replace(
+      '<a href="/auth/discord" data-testid="join">Join with Discord</a>',
+      '<a href="/discord" data-testid="discord-join">Join with an invite link</a>',
+    );
+    for (const [name, html] of [
+      ["good fixture", homeShell],
+      ["invite fallback", fallbackShell],
+    ]) {
+      const failures = checkHome(html);
+      push(
+        `unit: home ${name} passes`,
+        failures.length ? "failed" : "passed",
+        failures.join("; ") || null,
+      );
+    }
+    for (const [name, html, cache] of [
+      ["heading", homeShell.replace("The lobby is open.", "Welcome"), "private, no-store"],
+      [
+        "join",
+        homeShell.replace('href="/auth/discord"', 'href="https://evil.test/"'),
+        "private, no-store",
+      ],
+      [
+        "invite fallback",
+        fallbackShell.replace('href="/discord"', 'href="/join"'),
+        "private, no-store",
+      ],
+      [
+        "own RSVP",
+        homeShell.replace("</main>", '<p data-testid="home-standing">Own RSVP</p></main>'),
+        "private, no-store",
+      ],
+      ["shared-cache", homeShell, "public, max-age=60"],
+    ]) {
+      const failures = checkHome(html, cache);
+      push(
+        `unit: home mutant ${name} fails`,
+        failures.length ? "passed" : "failed",
+        failures.length ? null : "mutant was NOT detected",
       );
     }
   }

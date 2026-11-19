@@ -503,13 +503,28 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest keeps the homepage, privacy, rules, join and recover on Hono, assigns the public archive, events list, hot-zones, about and faq leaves, member board and join-attempts list and detail to Kit, and holds the admin dashboard, featured list, create and edit forms, activity log, event-create and event-edit forms and profile reads on Hono", () => {
+  it("limits a home cutover to GET and HEAD and restores Hono on rollback", () => {
+    const home = ROUTE_MANIFEST.find((entry) => entry.method === "GET" && entry.path === "/")!;
+    const enabledHome = { ...home, enabled: true };
+    const get = new Request(new URL("/", APP_URL));
+    const head = new Request(new URL("/", APP_URL), { method: "HEAD" });
+    const post = new Request(new URL("/", APP_URL), { method: "POST" });
+
+    expect(decideRoute(get, [enabledHome])).toBe(enabledHome);
+    expect(decideRoute(head, [enabledHome])).toBe(enabledHome);
+    expect(enabledHome.reads).toEqual({ resource: "member", action: "list", route: "home" });
+    expect(decideRoute(post, [enabledHome])).toBeUndefined();
+    expect(decideRoute(get, [{ ...enabledHome, enabled: false }])).toBeUndefined();
+    expect(decideRoute(head, [{ ...enabledHome, enabled: false }])).toBeUndefined();
+  });
+
+  it("the shipped manifest assigns the home and selected reads to Kit without widening ownership", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       {
         method: "GET",
         path: "/",
-        enabled: false,
+        enabled: true,
         reads: { resource: "member", action: "list", route: "home" },
       },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
@@ -658,5 +673,36 @@ describe("decideRoute", () => {
     expect(
       decideRoute(new Request(new URL("/auth/recover", APP_URL)), ROUTE_MANIFEST),
     ).toBeUndefined();
+  });
+});
+
+describe("Kit home flash release", () => {
+  it("does not release the home flash deletion when the member audit fails", async () => {
+    const home = ROUTE_MANIFEST.find((entry) => entry.method === "GET" && entry.path === "/")!;
+    const event = eventFor("/");
+    event.route = { id: "/" };
+    const deletion = "__Host-two_join_result=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax";
+    // A different subject forces an audit; an own-only RSVP read does not.
+    const resolve = vi.fn(async () => {
+      await readOwners([SUBJECT], null);
+      return new Response("home", {
+        headers: { "content-type": "text/html", "set-cookie": deletion },
+      });
+    });
+    const refused = await dispatchHookRequest(
+      event,
+      depsFor({ manifest: [{ ...home, enabled: true }], resolve, accessSink: async () => null }),
+    );
+    expect(resolve).toHaveBeenCalledOnce();
+    await expectSanitizedRefusal(refused);
+    expect(refused.headers.getSetCookie()).toEqual([]);
+
+    const { sink } = recording();
+    const released = await dispatchHookRequest(
+      eventFor("/"),
+      depsFor({ manifest: [{ ...home, enabled: true }], resolve, accessSink: async () => sink }),
+    );
+    expect(released.status).toBe(200);
+    expect(released.headers.getSetCookie()).toContain(deletion);
   });
 });

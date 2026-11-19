@@ -4,13 +4,14 @@ Card 9/43 of the SvelteKit migration. These gates prove every migrated Kit
 route renders the Hono contract before it owns traffic. They flip with
 `src/route-ownership.ts` `ROUTE_MANIFEST.enabled`, never with a hard-coded
 renderer name: disabling an entry rolls the route back to Hono and the gates
-expect Hono for the right reason.
+expect Hono for the right reason. This table describes the default Kit Worker
+manifest, not production deployment or the restrictive staging rollout manifest.
 
 ## Route inventory
 
 | Route | Kit handler | Reads | Owner today |
 | --- | --- | --- | --- |
-| `GET /` | `web/src/routes/+page.svelte` (`csr=false`, shared `src/home-copy` + readers, no island) | public | Hono (`enabled: false`) |
+| `GET /` | `web/src/routes/+page.svelte` (`csr=false`, shared `src/home-copy` + readers, no island) | member/list (`home`; viewer's own RSVPs only) | Kit (`enabled: true`; HEAD follows GET, POST stays with Hono) |
 | `GET /events/past` | `web/src/routes/events/past/+page.svelte` (`csr=false`, shared `/islands/past-events.js`) | public | Kit (`enabled: true`) |
 | `GET /events` | `web/src/routes/events/+server.ts` (no Svelte page, so no client entries/node; Hono calendar screen bytes via `src/kit-events-html.tsx`, shared `/islands/events-calendar.js`; `POST /events` and `/events.json` stay Hono) | public | Kit (`enabled: true`) |
 | `GET /about` | `web/src/routes/about/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/about-content.ts`) | public | Kit (`enabled: true`) |
@@ -68,8 +69,8 @@ claim of journey parity:
 2. `node ci/kit-preview-e2e.mjs` (archive route only: section contract,
    Hono pg-proxy bundle vs Kit SSR bundle, plus the browser shell fixture)
 3. `node ci/kit-parity-gates.mjs` (unit by default, preview when both
-   preview URLs are set; unit mode exercises the hot-zone and
-   member-board contract branches on canonical fixtures — per-entry
+   preview URLs are set; unit mode exercises the home OAuth and invite-fallback
+   states and the hot-zone and member-board branches on fixtures — per-entry
    iteration over every `PARITY_ROUTES` entry, including the four
    hot-zone paths, `?page=2` and the admission variants, happens only
    in preview mode)
