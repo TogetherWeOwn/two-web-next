@@ -72,7 +72,10 @@ beforeAll(async () => {
   await build({
     stdin: {
       contents: [
-        `export { load } from ${JSON.stringify(routePath)};`,
+        `import { env } from "cloudflare:workers";`,
+        `import { load as routeLoad } from ${JSON.stringify(routePath)};`,
+        `import { prepareKitHomePanels } from ${JSON.stringify(join(root, "src/kit-home-panels.ts"))};`,
+        `export const load = async (args) => routeLoad({ ...args, locals: { ...args.locals, homePanels: await prepareKitHomePanels(env, args.request) } });`,
         `export { __resetHomeGuestCacheForTests as resetHomeGuestCache } from ${JSON.stringify(homeCachePath)};`,
         ``,
       ].join("\n"),
@@ -90,6 +93,24 @@ beforeAll(async () => {
       {
         name: "kit-home-featured-dto-env",
         setup(plugin) {
+          plugin.onResolve({ filter: /^postgres$/ }, () => ({
+            path: "kit-home-bot-postgres",
+            namespace: "kit-home-featured-dto",
+          }));
+          plugin.onLoad(
+            { filter: /^kit-home-bot-postgres$/, namespace: "kit-home-featured-dto" },
+            () => ({
+              contents: `export default (url) => {
+                if (url !== "postgres://fixture.test/home-counts") throw new Error("Unexpected database");
+                return Object.assign(
+                  async (sql) => sql.join("").includes("web_v1.live_counts")
+                    ? [globalThis[${JSON.stringify(ENV_KEY)}].TEST_COUNTS_ROW] : [],
+                  { end: async () => {} },
+                );
+              };`,
+              loader: "js",
+            }),
+          );
           plugin.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
             path: "kit-home-featured-dto-env",
             namespace: "kit-home-featured-dto",
@@ -140,7 +161,10 @@ function featuredRow(id: number, title: string, startsAt: string | null, endsAt:
   return [id, title, `Featured body ${id}`, null, null, null, startsAt, endsAt];
 }
 
-function fixture(featuredRows: unknown[][], options: { failMemberRsvps?: boolean } = {}) {
+function fixture(
+  featuredRows: unknown[][],
+  options: { failMemberRsvps?: boolean; rsvpUserId?: string; observedAt?: string } = {},
+) {
   let memberRsvpQueries = 0;
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
   const eventStartsAt = new Date(Date.now() + 3600_000);
@@ -179,6 +203,8 @@ function fixture(featuredRows: unknown[][], options: { failMemberRsvps?: boolean
       if (sql.includes('inner join "events"')) {
         memberRsvpQueries++;
         if (options.failMemberRsvps) throw new Error("RSVP read failed");
+        if (options.rsvpUserId)
+          return { rows: [[options.rsvpUserId, event.eventKey, "going", null]] };
       }
       return { rows: [] };
     }
@@ -200,7 +226,19 @@ function fixture(featuredRows: unknown[][], options: { failMemberRsvps?: boolean
     upcoming: async () => [],
     lastReadFailed: () => false,
   };
-  const env = { ...baseEnv, ADMIN_DB: db, DISCORD_EVENTS: discord } as Env;
+  const env = {
+    ...baseEnv,
+    ADMIN_DB: db,
+    DISCORD_EVENTS: discord,
+    ...(options.observedAt && {
+      BOT_DATABASE_URL: "postgres://fixture.test/home-counts",
+      TEST_COUNTS_ROW: {
+        human_member_count: 42,
+        online_count: 0,
+        counts_updated_at: options.observedAt,
+      },
+    }),
+  } as Env;
   return { db, env, use: () => setSharedEnv(env), memberRsvpQueries: () => memberRsvpQueries };
 }
 
@@ -236,6 +274,22 @@ describe("Kit home featured DTO: cached shape matches the direct reader", () => 
 
     const member = await load(loadArgs(memberLocals));
     expect(member.upcomingEvents[0]?.organizer_name).toBe("Synthetic Host");
+  });
+
+  it("returns populated counts and only the authenticated member's matching RSVP", async () => {
+    const observedAt = new Date(Date.now() - 1_000).toISOString();
+    const f = fixture([], { observedAt, rsvpUserId: memberLocals.session.userId });
+    f.use();
+    const guest = await load(loadArgs());
+    const member = await load(loadArgs(memberLocals));
+    const snapshot = { memberCount: 42, onlineCount: 0, observedAt, stale: false };
+    expect(guest.countsSnapshot).toEqual(snapshot);
+    expect(guest.memberRsvps).toEqual([]);
+    expect(member.countsSnapshot).toEqual(snapshot);
+    expect(member.memberRsvps).toEqual([
+      { eventKey: "game-night-1", status: "going", syncedToDiscordAt: null },
+    ]);
+    expect(f.memberRsvpQueries()).toBe(1);
   });
 
   it("propagates an authenticated member RSVP read failure from the load", async () => {

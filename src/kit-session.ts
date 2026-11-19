@@ -15,8 +15,8 @@
 // probe below, attached by the hook only to successful moderator admin
 // responses or audited full member documents. Renewal stays route-specific:
 // Hono's readSession rotates its page views (no blanket rotating layout load;
-// fragments and JSON keep nonrotating reads), the Kit event detail renews
-// through kitEventDetailRotationFor, and Kit admin reads rotate through
+// fragments and JSON keep nonrotating reads), Kit home and event detail
+// renew through kitDocumentRotationFor, and Kit admin reads rotate through
 // kitAdminRenewalFor, which the hook core calls only after the
 // member-read boundary releases a successful GET. Logout stays the
 // authoritative Hono POST /logout. This module only peeks flashes. Profile
@@ -304,7 +304,7 @@ export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<Ki
 }
 
 /**
- * Sliding renewal for the native Kit event detail (src/events/kit-detail.ts):
+ * Sliding renewal for Kit home and event detail documents:
  * the post-release twin of Hono's readSession rotation. The hook core calls
  * this only after the member-read boundary releases a successful GET, so a
  * refused, failed, throttled or redirected read never burns the presented
@@ -322,9 +322,7 @@ export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<Ki
  * statement, so a throw leaves the old row live and the next read retries).
  * Anonymous callers get null with zero store writes.
  */
-export function kitEventDetailRotationFor(
-  env: Env,
-): (event: HookEventLike) => Promise<string | null> {
+export function kitDocumentRotationFor(env: Env): (event: HookEventLike) => Promise<string | null> {
   return async (event) => {
     const locals = event.locals as Partial<KitLocals> | undefined;
     const bits = locals?.status === "authenticated" ? locals.session : null;

@@ -1,4 +1,5 @@
 import type { Env as AppEnv } from "../../src/env";
+import type { KitHomePanels } from "../../src/kit-home-panels";
 import type { KitLocals } from "../../src/kit-session";
 import type { EventGoneModel, EventMissingModel } from "../../src/kit-event-states";
 
@@ -11,14 +12,15 @@ declare global {
   namespace App {
     // Populated by the read-only session bridge on Kit-owned requests only
     // Hono-owned requests skip the bridge, so every field stays
-    // optional. Rotation, logout and OAuth stay Hono-owned: Kit reads these
-    // locals but never writes session cookies from them.
+    // optional. Loaders never rotate a session; only the hook can renew a
+    // released document. Logout and OAuth stay Hono-owned.
     interface Locals {
       session?: KitLocals["session"];
       status?: KitLocals["status"];
       returnTo?: KitLocals["returnTo"];
       joinResult?: KitLocals["joinResult"];
       expiredWrite?: KitLocals["expiredWrite"];
+      homePanels?: KitHomePanels;
       // Signature-verified display bit; never the signed write destination.
       restoredWrite?: boolean;
       // Validated request id the Kit hook merged before resolve (Hono

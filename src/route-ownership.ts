@@ -26,6 +26,7 @@ import { STAGING_APP_URL } from "./qa";
 import { newRequestId, safeRequestId } from "./request-log";
 import { withStreamedBody } from "./html-stream";
 import { transformContentLeafChunk } from "./kit-content-chunk";
+import type { KitHomePanels } from "./kit-home-panels";
 import type { KitLocals } from "./kit-session";
 import { isKitNoticeDocument, readKitRestoredWrite } from "./kit-restored-write";
 import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
@@ -555,6 +556,9 @@ export interface HookDispatchDeps {
   // resolve, so Kit loads share one session decision. Absent by default:
   // without it the dispatch behaves exactly as before.
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
+  // Fixed, viewer-invariant home panels. No session or resolve callback.
+  homePanelsFor?: (request: Request) => Promise<KitHomePanels>;
+  homeRenewalFor?: (event: HookEventLike) => Promise<string | null>;
   // The member-document proof is supplied only after audit release and full-HTML
   // classification below; callers without it retain the moderator admin scope.
   authStatusCookieFor?: (
@@ -1015,7 +1019,11 @@ async function dispatchOwnedRequest(
         requestId,
       );
     } else {
-      await bridgeSession();
+      const [, homePanels] = await Promise.all([
+        bridgeSession(),
+        route.path === "/" ? deps.homePanelsFor?.(event.request) : undefined,
+      ]);
+      if (homePanels) event.locals = { ...(event.locals as object), homePanels };
       response = await renderMemberRead(event, reads, deps, (released) => {
         releasedMemberResponse = released;
       });
@@ -1096,15 +1104,28 @@ async function dispatchOwnedRequest(
       });
     }
   }
-  // Sliding renewal for the released Kit event detail, at the same
+  // Sliding renewal for the released Kit home and event detail, at the same
   // post-response position as the probe append above. A rotation that loses
   // its race resolves to no cookie (the next read retries with a live
   // bearer); a rotation store failure warns and likewise renews nothing —
   // the already-rendered member page still stands, and the old row stays
   // live because rotate is one atomic statement.
-  if (deps.eventDetailRotationFor && releasedEventDetailRenewsSession(route, event, response)) {
+  const renewHome =
+    route.path === "/" &&
+    response === releasedMemberResponse &&
+    event.request.method === "GET" &&
+    !event.isDataRequest &&
+    response.status === 200 &&
+    response.headers.get("content-type")?.includes("text/html") &&
+    locals?.status === "authenticated";
+  const documentRotationFor = renewHome
+    ? deps.homeRenewalFor
+    : releasedEventDetailRenewsSession(route, event, response)
+      ? deps.eventDetailRotationFor
+      : undefined;
+  if (documentRotationFor) {
     try {
-      const cookie = await deps.eventDetailRotationFor(event);
+      const cookie = await documentRotationFor(event);
       if (cookie) {
         const headers = new Headers(response.headers);
         headers.append("set-cookie", cookie);
@@ -1115,7 +1136,7 @@ async function dispatchOwnedRequest(
         });
       }
     } catch (err) {
-      console.warn("kit event-detail rotation unavailable; rendering without renewal.", {
+      console.warn("kit document rotation unavailable; rendering without renewal.", {
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
     }
