@@ -45,6 +45,7 @@ export async function renderEventsHtml(
       emptyState={data.emptyState}
       robots={data.robots}
       discordFailed={data.discordFailed}
+      discordSnapshotAt={data.discordSnapshotAt}
       games={data.games}
       gameFilter={data.gameFilter}
       member={data.member}

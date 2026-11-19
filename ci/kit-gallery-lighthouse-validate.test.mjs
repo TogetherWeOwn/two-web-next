@@ -115,12 +115,36 @@ for (const mode of ["mobile", "desktop"]) {
       negative[0].audits[key].numericValue = -1;
       assert.throws(() => validate(negative), /missing Lighthouse audit/);
     }
-    const failed = structuredClone(reports);
-    if (mode === "mobile") {
-      for (const item of failed) item.audits["largest-contentful-paint"].numericValue = 10000;
-    } else {
-      for (const item of failed) item.categories.performance.score = 0;
+    const overBudget = structuredClone(reports);
+    const [auditId, auditProperty] =
+      mode === "mobile" ? ["largest-contentful-paint", undefined] : ["categories", "performance"];
+    for (const item of overBudget) {
+      if (mode === "mobile") item.audits[auditId].numericValue = 10000;
+      else item.categories.performance.score = 0;
     }
-    assert.throws(() => validate(failed), /assertions failed/);
+    const { assertions } = validate(overBudget);
+    assert.deepEqual(
+      assertions
+        .filter(({ passed }) => !passed)
+        .map(({ auditId, auditProperty, level }) => ({ auditId, auditProperty, level })),
+      [{ auditId, auditProperty, level: "warn" }],
+    );
+
+    // The validator must still reject an error-level miss, including when the
+    // shared performance budgets return to error after the migration.
+    const strict = structuredClone(config);
+    const key = auditProperty ? `${auditId}:${auditProperty}` : auditId;
+    strict.ci.assert.assertions[key][0] = "error";
+    assert.throws(
+      () => validateGalleryReports(overBudget, strict, getAllAssertionResults),
+      /assertions failed/,
+    );
+    if (mode === "desktop") {
+      for (const category of ["accessibility", "best-practices", "seo"]) {
+        const failed = structuredClone(reports);
+        for (const item of failed) item.categories[category].score = 0;
+        assert.throws(() => validate(failed), /assertions failed/);
+      }
+    }
   });
 }

@@ -67,9 +67,9 @@ let {
     {/if}
   </div>
 {:else if kind === "error" || kind === "partial"}
-  <div role={kind === "error" ? "alert" : "status"} data-testid={kind === "error" ? EVENTS_EMPTY_ERROR_TESTID : EVENTS_PARTIAL_TESTID}>
+  <div data-testid={kind === "error" ? EVENTS_EMPTY_ERROR_TESTID : EVENTS_PARTIAL_TESTID}>
     {#if kind === "error"}<h2>{EVENTS_EMPTY_COPY.errorTitle}</h2><p>{EVENTS_EMPTY_COPY.errorBody}</p>{:else}<p>{EVENTS_PARTIAL_COPY.notice}</p>{/if}
-    <p><a href={calendarUrl(state)} data-testid={EVENTS_RETRY_TESTID}>{EVENTS_EMPTY_COPY.retry}</a>{" "}<a href={inviteUrl} data-testid={DISCORD_JOIN_TESTID}>{EVENTS_EMPTY_COPY.join}</a></p>
+    <div class="schedule-recovery-actions"><a href={calendarUrl(state)} data-testid={EVENTS_RETRY_TESTID}>{EVENTS_EMPTY_COPY.retry}</a><a href={inviteUrl} data-testid={DISCORD_JOIN_TESTID}>{EVENTS_EMPTY_COPY.join}</a></div>
   </div>
 {:else}
   <div data-testid={EVENTS_EMPTY_SEARCH_TESTID}>
