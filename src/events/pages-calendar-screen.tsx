@@ -40,7 +40,7 @@ import {
 import { MonthGrid } from "./pages-calendar-grid";
 import { CalendarList, PastDrawer } from "./pages-calendar-list";
 import type { CalRow } from "./pages-calendar-row";
-import { deriveCalendarScreenState } from "./calendar-screen-state";
+import { calendarDiscordReadMarker, deriveCalendarScreenState } from "./calendar-screen-state";
 
 /**
  * The events calendar island (legacy Livewire EventsCalendar): one rowset
@@ -63,6 +63,7 @@ export const EventsCalendarPage: FC<{
   totalPages: number;
   emptyState: CalendarEmptyState;
   discordFailed: boolean;
+  discordSnapshotAt?: number | null;
   /** Distinct published games backing the facet select. */
   games: string[];
   /** Effective facet: the canonical stored game, or null when unfiltered. */
@@ -93,6 +94,7 @@ export const EventsCalendarPage: FC<{
   totalPages,
   emptyState,
   discordFailed,
+  discordSnapshotAt,
   games,
   gameFilter,
   member,
@@ -142,6 +144,7 @@ export const EventsCalendarPage: FC<{
       <section
         data-island={EVENTS_CALENDAR_ISLAND}
         data-testid={EVENTS_CALENDAR_TESTID}
+        data-discord-read={calendarDiscordReadMarker(discordSnapshotAt, discordFailed)}
         data-view={state.view}
         data-month={state.month}
         data-past={state.past ? "1" : ""}

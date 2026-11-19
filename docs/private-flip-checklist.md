@@ -8,7 +8,7 @@ proof of the state of any private runner fleet.
 ## Runner separation (verify, already in code)
 
 - Every direct job uses a literal `ubuntu-latest` label, except jobs pinned to
-  `ubuntu-24.04` for visual evidence, recovery, or XFS. The contract rejects
+  `ubuntu-24.04` in `test/workflow-runners.test.ts`. The contract rejects
   runner groups, self-hosted and larger runners, and selectors that depend on
   visibility, events, or variables.
 - Checked-in jobs select GitHub-hosted runners for all events and both
