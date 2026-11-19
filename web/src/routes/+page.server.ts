@@ -11,6 +11,7 @@ import {
   HOME_NOTICES,
   JOIN_INTRO,
   applyHomeResponsePolicy,
+  homeSessionFor,
 } from "../../../src/home-copy";
 import { inviteDestination } from "../../../src/invite";
 import { JOIN_RESULT_COOKIE } from "../../../src/return-journey";
@@ -27,15 +28,7 @@ export const csr = false;
 // RSVP read propagates rather than pretending the member has no answer. The
 // response stays viewer-specific (private, no-store).
 export const load: PageServerLoad = async ({ url, request, locals, cookies, setHeaders }) => {
-  // Framework-free decisions plus the viewer-specific response policy
-  // (src/home-copy.ts applyHomeResponsePolicy, mirroring Hono): an outage is
-  // never reported as a logout — unknown renders the guest header with the
-  // invite-link hero — ?n= validates to the six keys, a failure notice drops a
-  // stale success flash, the first GET that can render the banner deletes the
-  // one-shot cookie even when the banner is suppressed, and every response
-  // stays private, no-store. While this entry is disabled the hook sends GET /
-  // to Hono, which consumes it there; once enabled, this load is the consumer.
-  const session = locals.status === "authenticated" ? (locals.session ?? null) : null;
+  const session = homeSessionFor(locals);
   // Keep the legacy counts contract while supplying the validated observation
   // separately for the Ember home. Neither read throws when the bot DB is down.
   const countsPromise = Promise.all([readCounts(env), readHomeCountsSnapshot(env)]);

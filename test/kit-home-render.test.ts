@@ -77,14 +77,15 @@ describe("Kit home SSR render: session-aware header and hero", () => {
     }
   });
 
-  it("does not infer quiet voice or a busiest evening from online counts", () => {
-    for (const stale of [false, true]) {
+  it.each([false, true])(
+    "shows zero online without inferring voice activity (stale=%s)",
+    (stale) => {
       const html = renderPage(
         baseData({
           countsSnapshot: {
             memberCount: 42,
             onlineCount: 0,
-            observedAt: "2026-09-30T12:00:00.000Z",
+            observedAt: "2026-09-30T12:00:00.001Z",
             stale,
           },
           upcomingEvents: [fullnessEvent({ title: "Synthetic game night" })],
@@ -95,26 +96,16 @@ describe("Kit home SSR render: session-aware header and hero", () => {
       expect(html).not.toContain("It's quiet right now");
       expect(html).not.toContain("evenings are busiest");
       expect(html).not.toContain("In voice now");
-    }
-  });
-
-  it("labels a stale snapshot with its observation time and preserves zero online", () => {
-    const html = renderPage(
-      baseData({
-        countsSnapshot: {
-          memberCount: 42,
-          onlineCount: 0,
-          observedAt: "2026-09-30T12:00:00.001Z",
-          stale: true,
-        },
-      }),
-    );
-    expect(html).toContain('data-stale="true"');
-    expect(html).toContain("0</strong> online");
-    expect(html).toContain("Last seen");
-    expect(html).toContain('datetime="2026-09-30T12:00:00.001Z"');
-    expect(html).toContain("2026-09-30 12:00:00.001 UTC");
-  });
+      if (stale) {
+        expect(html).toContain('data-stale="true"');
+        expect(html).toContain("Last seen");
+        expect(html).toContain('datetime="2026-09-30T12:00:00.001Z"');
+        expect(html).toContain("2026-09-30 12:00:00.001 UTC");
+      } else {
+        expect(html).not.toContain("Last seen");
+      }
+    },
+  );
 
   it("renders the guest header with the Discord join entry point", () => {
     const html = renderPage(baseData());
@@ -386,34 +377,31 @@ function fullnessRow(html: string, key: string): string {
 }
 
 describe("Kit home SSR render: member standing", () => {
-  it("shows the earliest future own RSVP without exposing it to guests", () => {
+  it("marks matching answers and highlights the earliest future own RSVP only for members", () => {
     const upcomingEvents = [
-      fullnessEvent({
-        eventKey: "later",
-        title: "Later",
-        startsAt: new Date("2031-01-01T20:00:00Z"),
-      }),
-      fullnessEvent({
-        eventKey: "first",
-        title: "First",
-        startsAt: new Date("2030-01-01T20:00:00Z"),
-      }),
+      fullnessEvent({ eventKey: "later", startsAt: new Date("2031-01-01T20:00:00Z") }),
+      fullnessEvent({ eventKey: "first", startsAt: new Date("2030-01-01T20:00:00Z") }),
       fullnessEvent({ eventKey: "past", startsAt: new Date("2020-01-01T20:00:00Z") }),
+      fullnessEvent({ eventKey: "not-going" }),
     ];
     const memberRsvps = [
       { eventKey: "later", status: "going" },
       { eventKey: "first", status: "waitlisted" },
       { eventKey: "past", status: "going" },
+      { eventKey: "not-going", status: "not_going" },
     ];
     const html = renderPage(baseData({ session: memberSession, upcomingEvents, memberRsvps }));
+    expect(fullnessRow(html, "later")).toContain("You're going.");
+    expect(fullnessRow(html, "first")).toContain("You're on the waitlist.");
+    expect(fullnessRow(html, "not-going")).not.toContain("home-event-own-rsvp");
     const standing = html.split('data-testid="home-standing"')[1]!.split("</section>")[0]!;
     expect(standing).toContain('href="/e/first"');
     expect(standing).toContain("You're on the waitlist.");
     expect(standing).not.toContain('href="/e/later"');
     for (const session of [null, nonMemberSession]) {
-      expect(renderPage(baseData({ session, upcomingEvents, memberRsvps }))).not.toContain(
-        'data-testid="home-standing"',
-      );
+      const guestHtml = renderPage(baseData({ session, upcomingEvents, memberRsvps }));
+      expect(guestHtml).not.toContain('data-testid="home-standing"');
+      expect(guestHtml).not.toContain("home-event-own-rsvp");
     }
     expect(
       renderPage(baseData({ session: memberSession, upcomingEvents, memberRsvps: [] })),
@@ -422,27 +410,6 @@ describe("Kit home SSR render: member standing", () => {
 });
 
 describe("Kit home SSR render: teaser fullness verdict (owned pins)", () => {
-  it("marks only the member's matching going or waitlisted event", () => {
-    const upcomingEvents = [
-      fullnessEvent({ eventKey: "going-night" }),
-      fullnessEvent({ eventKey: "waitlist-night" }),
-      fullnessEvent({ eventKey: "other-night" }),
-    ];
-    const memberRsvps = [
-      { eventKey: "going-night", status: "going", syncedToDiscordAt: null },
-      { eventKey: "waitlist-night", status: "waitlisted", syncedToDiscordAt: null },
-      { eventKey: "other-night", status: "not_going", syncedToDiscordAt: null },
-    ];
-    const html = renderPage(baseData({ session: memberSession, upcomingEvents, memberRsvps }));
-    expect(fullnessRow(html, "going-night")).toContain("You're going.");
-    expect(fullnessRow(html, "waitlist-night")).toContain("You're on the waitlist.");
-    expect(fullnessRow(html, "other-night")).not.toContain("home-event-own-rsvp");
-    for (const session of [null, nonMemberSession]) {
-      const guestHtml = renderPage(baseData({ session, upcomingEvents, memberRsvps }));
-      expect(guestHtml).not.toContain("home-event-own-rsvp");
-    }
-  });
-
   it("marks a teaser row full from occupancy even when the named count has room", () => {
     // One nameless going row holds the last seat: the verdict reads
     // occupancy, never the attributable count alone, so the Kit teaser

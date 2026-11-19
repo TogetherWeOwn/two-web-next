@@ -65,8 +65,9 @@ beforeEach(() => {
 
 describe("hooks.server route ownership wiring", () => {
   it("ships the native archive, events list, about/faq leaves and join-attempts pair enabled with the homepage, privacy, rules, join, recover, remaining admin and profile reads still on Hono", () => {
+    const homeReads = { resource: "member", action: "list", route: "home" };
     expect(ROUTE_MANIFEST).toEqual([
-      { method: "GET", path: "/", enabled: false, reads: "public" },
+      { method: "GET", path: "/", enabled: false, reads: homeReads },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/events", enabled: true, reads: "public" },
       { method: "GET", path: "/about", enabled: true, reads: "public" },

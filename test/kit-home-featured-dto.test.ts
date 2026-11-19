@@ -204,16 +204,27 @@ function fixture(featuredRows: unknown[][], options: { failMemberRsvps?: boolean
   return { db, env, use: () => setSharedEnv(env), memberRsvpQueries: () => memberRsvpQueries };
 }
 
-function loadArgs(): KitHomeLoadArgs {
+function loadArgs(locals: KitHomeLoadArgs["locals"] = { status: "guest" }): KitHomeLoadArgs {
   const url = new URL("https://example.test/");
   return {
     url,
     request: new Request(url, { method: "GET" }),
-    locals: { status: "guest" },
+    locals,
     cookies: { delete: () => {} },
     setHeaders: () => {},
   };
 }
+
+const memberLocals = {
+  status: "authenticated",
+  session: {
+    userId: "123456789012345678",
+    username: "Member",
+    avatar: null,
+    member: true,
+    moderator: false,
+  },
+} satisfies KitHomeLoadArgs["locals"];
 
 describe("Kit home featured DTO: cached shape matches the direct reader", () => {
   it("redacts host names from guest load data without changing the cached member view", async () => {
@@ -223,40 +234,18 @@ describe("Kit home featured DTO: cached shape matches the direct reader", () => 
     expect(guest.upcomingEvents).toHaveLength(1);
     expect(JSON.stringify(guest.upcomingEvents)).not.toContain("Synthetic Host");
 
-    const args = loadArgs();
-    args.locals = {
-      status: "authenticated",
-      session: {
-        userId: "123456789012345678",
-        username: "Member",
-        avatar: null,
-        member: true,
-        moderator: false,
-      },
-    };
-    const member = await load(args);
+    const member = await load(loadArgs(memberLocals));
     expect(member.upcomingEvents[0]?.organizer_name).toBe("Synthetic Host");
   });
 
   it("propagates an authenticated member RSVP read failure from the load", async () => {
     const f = fixture([], { failMemberRsvps: true });
     f.use();
-    const args = loadArgs();
-    args.locals = {
-      status: "authenticated",
-      session: {
-        userId: "123456789012345678",
-        username: "Member",
-        avatar: null,
-        member: true,
-        moderator: false,
-      },
-      joinResult: "added",
-    };
+    const args = loadArgs({ ...memberLocals, joinResult: "added" });
     const deleteCookie = vi.fn();
     args.cookies.delete = deleteCookie;
 
-    await expect(load(args)).rejects.toThrow("RSVP read failed");
+    await expect(load(args)).rejects.toMatchObject({ cause: { message: "RSVP read failed" } });
     expect(f.memberRsvpQueries()).toBe(1);
     expect(deleteCookie).not.toHaveBeenCalled();
   });
