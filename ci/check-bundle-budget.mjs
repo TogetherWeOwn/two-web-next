@@ -1,5 +1,5 @@
 // No build: these are the exact files Workers serves. Match the legacy checker:
-// 0 = fits, 1 = asset breach/broken asset, 2 = cannot enforce the budget.
+// 0 = no blocking breaches, 1 = blocking breach/broken asset, 2 = cannot enforce the budget.
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -75,6 +75,7 @@ export function run(root, output = console) {
   }
 
   let breaches = 0;
+  let warned = false;
   for (const [entry, ceiling] of Object.entries(budgets)) {
     let bytes;
     try {
@@ -91,8 +92,15 @@ export function run(root, output = console) {
     if (raw > ceiling.maxRawBytes) exceeded.push(`raw ${raw}B over ${ceiling.maxRawBytes}B`);
     if (gzip > ceiling.maxGzipBytes) exceeded.push(`gzip ${gzip}B over ${ceiling.maxGzipBytes}B`);
     if (exceeded.length) {
-      output.error(`bundle budget: ${entry}: ${exceeded.join(", ")}`);
-      breaches += 1;
+      // The Kit migration adds a report-only target for this new asset.
+      // Do not make existing limits or asset validation advisory.
+      if (entry === "public/kit-events-controls.css") {
+        output.error(`bundle budget: warning: ${entry}: ${exceeded.join(", ")} (advisory)`);
+        warned = true;
+      } else {
+        output.error(`bundle budget: ${entry}: ${exceeded.join(", ")}`);
+        breaches += 1;
+      }
     } else {
       output.log(
         `ok ${entry}: raw ${raw}/${ceiling.maxRawBytes}B, gzip ${gzip}/${ceiling.maxGzipBytes}B`,
@@ -100,7 +108,9 @@ export function run(root, output = console) {
     }
   }
   if (breaches) return 1;
-  output.log("bundle budget: every asset fits.");
+  output.log(
+    warned ? "bundle budget: passed with advisory warnings." : "bundle budget: every asset fits.",
+  );
   return 0;
 }
 

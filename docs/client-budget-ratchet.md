@@ -46,6 +46,20 @@ If a commit races an unsupported promotion, return the PR to draft, retain the
 body hold, drain writers, and independently promote the settled head again so
 normal workflows are triggered. Do not substitute the previous head's checks.
 
+## Route performance during the Ember and SvelteKit migration
+
+Shipping CI runs `node ci/check-kit-route-perf.mjs --report-only`. It compares
+measured routes with the replayed approved plan. A route without an approved
+ceiling, or a JS/CSS raw byte, gzip byte or file-count overage, is advisory. The
+step exits 0 and includes warnings and measurements in its JSON log and job
+summary. New routes do not need budget entries. Unreadable, malformed or
+inconsistent measurement evidence still fails the step (exit 2).
+
+The trusted-main lowering workflow still uses the default strict mode. It
+requires the live budget and measured route inventory to match the approved
+plan before it can propose lower ceilings. The report-only output does not feed
+that workflow or amend its approved history.
+
 ## Route evidence and layout resets
 
 REA source: the installed SvelteKit

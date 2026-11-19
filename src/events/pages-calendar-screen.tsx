@@ -56,6 +56,7 @@ export const EventsCalendarPage: FC<{
   upcoming: CalRow[];
   past: PublicEvent[];
   pastMayBeTruncated?: boolean;
+  monthReadMayBeIncomplete?: boolean;
   zone: string;
   now: Date;
   /** Upcoming-list pages; the month grid is month-scoped and ignores it. */
@@ -86,6 +87,7 @@ export const EventsCalendarPage: FC<{
   upcoming,
   past,
   pastMayBeTruncated,
+  monthReadMayBeIncomplete,
   zone,
   now,
   totalPages,
@@ -102,19 +104,29 @@ export const EventsCalendarPage: FC<{
   joinResult = null,
   markdownAlternate = null,
 }) => {
-  const { searching, showPast, hasVisibleResults, outOfRange, searchMiss, weeks, monthEmpty } =
-    deriveCalendarScreenState({
-      state,
-      upcoming,
-      past,
-      pastMayBeTruncated,
-      zone,
-      now,
-      totalPages,
-      emptyState,
-      discordFailed,
-      gameFilter,
-    });
+  const {
+    searching,
+    showPast,
+    hasVisibleResults,
+    outOfRange,
+    pageUnreadable,
+    searchMiss,
+    weeks,
+    monthEmpty,
+  } = deriveCalendarScreenState({
+    state,
+    upcoming,
+    past,
+    pastMayBeTruncated,
+    monthReadMayBeIncomplete,
+    zone,
+    now,
+    totalPages,
+    emptyState,
+    discordFailed,
+    gameFilter,
+  });
+  const hasResultsOrPageNotice = hasVisibleResults || outOfRange || pageUnreadable;
   const url = calendarUrl(state);
   return (
     <ScheduleShell
@@ -163,8 +175,9 @@ export const EventsCalendarPage: FC<{
           pastCount={past.length}
           searching={searching}
           emptyState={emptyState}
-          hasVisibleResults={hasVisibleResults}
-          outOfRange={outOfRange}
+          hasSearchResults={hasResultsOrPageNotice}
+          pageUnreadable={pageUnreadable}
+          searchMiss={searchMiss}
           gameFilter={gameFilter}
           discordFailed={discordFailed}
         />
@@ -210,14 +223,14 @@ export const EventsCalendarPage: FC<{
         <div data-cal-zone="content" data-testid={EVENTS_CONTENT_TESTID}>
           {/* Partial source: healthy rows stay useful beside the notice. An
               empty state (including the failed-empty error) takes precedence,
-              and an out-of-range page keeps its turns back into the schedule.
+              and a page notice keeps its turns back into the schedule.
               The month grid renders whenever there is no empty state, so an
               empty month of a non-empty schedule carries the notice too —
               without it the month would read as definitively empty. Inside
               the swapped zone so fragment turns add/remove the notice. */}
           {discordFailed &&
           emptyState === null &&
-          (hasVisibleResults || outOfRange || state.view === "calendar") ? (
+          (hasResultsOrPageNotice || state.view === "calendar") ? (
             <PartialSourceNotice url={url} inviteUrl={inviteUrl} />
           ) : null}
 
@@ -229,7 +242,7 @@ export const EventsCalendarPage: FC<{
             <EmptyGap past={past} zone={zone} />
           ) : null}
 
-          {emptyState === null && (hasVisibleResults || outOfRange) && state.view === "list" ? (
+          {emptyState === null && hasResultsOrPageNotice && state.view === "list" ? (
             <CalendarList
               state={state}
               upcoming={upcoming}
@@ -238,6 +251,7 @@ export const EventsCalendarPage: FC<{
               now={now}
               totalPages={totalPages}
               outOfRange={outOfRange}
+              pageUnreadable={pageUnreadable}
               showPast={showPast}
               member={member}
               inviteUrl={inviteUrl}
@@ -273,7 +287,7 @@ export const EventsCalendarPage: FC<{
 
           {monthEmpty ? (
             <div data-testid={CALENDAR_MONTH_EMPTY_TESTID}>
-              <p>{calendarMonthEmptyCopy(state.month)}</p>
+              <p>{calendarMonthEmptyCopy(state.month, gameFilter)}</p>
               <p>
                 <a href={calendarUrl({ ...state, view: "list" })}>
                   {CALENDAR_MONTH_EMPTY_RECOVERY_COPY}
