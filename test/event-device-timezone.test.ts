@@ -439,7 +439,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
 
     async function invariant(page: Page, clock: ClockCase) {
       return page.evaluate((instant) => {
-        const host = document.querySelector(`time[datetime="${instant}"]`);
+        const host = document.querySelector(`.event-meta time[datetime="${instant}"]`);
         return {
           host: host?.outerHTML,
           calendar: [
@@ -540,18 +540,18 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
     for (const view of VIEWS) {
       it(`${view}: positive control, real no-JS browser keeps host schedule and links usable`, async () => {
         const { page, errors } = await open(view, CASES[0], undefined, false);
-        expect(await page.locator(`time[datetime="${CASES[0].instant}"]`).first().innerText()).toBe(
-          CASES[0].hostText,
-        );
+        expect(
+          await page.locator(`.event-meta time[datetime="${CASES[0].instant}"]`).innerText(),
+        ).toBe(CASES[0].hostText);
         expect(await page.locator('[data-testid="event-ics"]').count()).toBe(1);
         expect(await page.locator('[data-testid="event-google-calendar"]').count()).toBe(1);
         expect(errors).toEqual([]);
       });
       it(`${view}: page load does not convert, steal focus, or change the machine instant`, async () => {
         const { page, errors } = await open(view, CASES[0]);
-        expect(await page.locator(`time[datetime="${CASES[0].instant}"]`).first().innerText()).toBe(
-          CASES[0].hostText,
-        );
+        expect(
+          await page.locator(`.event-meta time[datetime="${CASES[0].instant}"]`).innerText(),
+        ).toBe(CASES[0].hostText);
         expect(await page.locator("body").innerText()).not.toContain(CASES[0].device);
         expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("BODY");
         expect(errors).toEqual([]);

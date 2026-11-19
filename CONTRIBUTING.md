@@ -261,7 +261,15 @@ script is unit-tested beside it: `python3 -m unittest discover -s .github/script
 ### Secret-scan allowlists
 
 The required `gitleaks` job (also in `pr-gates.yml`) scans the full history
-reachable from the PR head. On a pull request it applies the base branch's
+reachable from the checked-out commit. On pull requests, this starts at GitHub's
+PR merge commit, not the submitted branch tip. The scan forces text diffs and
+compares each merge with its first parent, including conflict resolutions.
+That comparison can report content inherited from another parent under the
+merge SHA. Use commit-scoped ignore fingerprints to limit an exception to one
+occurrence. A fingerprint scoped to the original commit does not also exempt
+the merge occurrence.
+
+On a pull request the job applies the base branch's
 `.gitleaks.toml` and `.gitleaksignore` and ignores inline `gitleaks:allow`
 comments, so a PR cannot allowlist its own leak. If a change legitimately needs a
 new allowlist entry, merge that entry first as a small, separately reviewed PR;

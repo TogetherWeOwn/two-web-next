@@ -484,11 +484,16 @@ for (const twin of ["Hono", "Kit"]) {
         now: "2030-03-10T09:00:00.000Z",
         serverTime: new Date("2030-03-11T00:00:00.000Z"),
       });
+      const closed =
+        twin === "Kit"
+          ? opened.page.getByRole("region", { name: "Sign-up record", exact: true })
+          : opened.page.getByTestId("rsvp-closed");
       assert.equal(await opened.page.getByTestId("rsvp-going").count(), 0);
-      assert.equal(await opened.page.getByTestId("rsvp-closed").count(), 1);
+      assert.equal(await closed.count(), 1);
       const before = await authority(opened.page);
       await activate(opened.page);
       assert.deepEqual(await authority(opened.page), before);
+      assert.equal(await closed.count(), 1);
       await quiet(opened);
     });
 

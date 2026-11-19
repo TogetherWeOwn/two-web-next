@@ -12,6 +12,7 @@ import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
   expectedKitMarker,
+  HONO_ORIGIN,
   kitFixtureOwnsEventDetail,
   kitFixtureOwnsMemberBoard,
   kitFixtureSessionSecret,
@@ -1884,7 +1885,61 @@ test("cross-target: normalized archive sections match", async () => {
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
-test("cross-target: normalized events-calendar sections match", async ({ playwright }) => {
+test("Kit calendar styles survive a swap into the old document", async ({ page }) => {
+  // Serve the old Hono shell without the new aliases; the island fetches from Kit.
+  const old = await page.request.get(`${HONO_ORIGIN}/events`, { maxRedirects: 0 });
+  expect(old.status()).toBe(200);
+  await page.route(`${KIT_ORIGIN}/events`, (route) => route.fulfill({ response: old }), {
+    times: 1,
+  });
+  await page.route(`${KIT_ORIGIN}/theme-tokens.css`, (route) =>
+    route.fulfill({ contentType: "text/css", body: "" }),
+  );
+  await page.goto(`${KIT_ORIGIN}/events`);
+  await expect(page.locator(".schedule-views")).toBeVisible();
+  await expect(page.locator('link[href="/kit-events-controls.css"]')).toHaveCount(0);
+  const html = page.locator("html");
+  await html.evaluate((element) => element.setAttribute("data-rollout-shell", "old"));
+  await page.getByTestId("events-view-calendar").click();
+  const selected = page.locator("nav.segments").getByTestId("events-view-calendar");
+  await expect(selected).toHaveAttribute("aria-current", "page");
+  await expect(selected).toHaveCSS("gap", "8px");
+  await expect(selected).toHaveCSS("background-color", "rgb(46, 36, 32)");
+  await expect(html).toHaveAttribute("data-rollout-shell", "old");
+});
+
+test("cross-target: normalized events-calendar sections match", async ({ playwright, page }) => {
+  // Normalize serializer noise and the Kit wrapper, not the tabs' links or selection.
+  const calendarSection = async (html: string) =>
+    normalizeSection(
+      await page.evaluate((html) => {
+        const document = new DOMParser().parseFromString(html, "text/html");
+        const section = document.querySelector('section[data-testid="events-calendar"]');
+        if (!section) throw new Error("Missing calendar section");
+        const segments = section.querySelector('nav.segments[aria-label="How to show the events"]');
+        if (segments) {
+          section.querySelector('link[rel=stylesheet][href="/kit-events-controls.css"]')?.remove();
+          const group = document.createElement("div");
+          group.className = "schedule-views";
+          group.setAttribute("role", "group");
+          group.setAttribute("aria-label", "How to show the events");
+          while (segments.firstChild) group.appendChild(segments.firstChild);
+          segments.replaceWith(group);
+        }
+        for (const element of [section, ...section.querySelectorAll("*")]) {
+          const attrs = [...element.attributes].sort((a, b) => a.name.localeCompare(b.name));
+          for (const { name, value } of attrs) {
+            element.removeAttribute(name);
+            element.setAttribute(name, value);
+          }
+        }
+        const comments = document.createTreeWalker(section, NodeFilter.SHOW_COMMENT);
+        const markers: Node[] = [];
+        while (comments.nextNode()) markers.push(comments.currentNode);
+        for (const marker of markers) marker.parentNode?.removeChild(marker);
+        return section.outerHTML;
+      }, html),
+    );
   const bodies = new Map<string, string>();
   for (const target of targets) {
     // A fresh jar prevents authentication by the shared QA-login cookie.
@@ -1911,14 +1966,12 @@ test("cross-target: normalized events-calendar sections match", async ({ playwri
   }
   // Non-vacuous equality: the compared sections carry the seeded row, so
   // two empty lists cannot pass for parity.
-  expect(
-    sectionOf(bodies.get("hono")!, "events-calendar"),
-    "Hono events-calendar section carries the seeded row",
-  ).toContain("E2E Community Night");
-  expect(
-    sectionOf(bodies.get("kit")!, "events-calendar"),
-    "Kit section matches Hono section after origin normalization",
-  ).toBe(sectionOf(bodies.get("hono")!, "events-calendar"));
+  const hono = await calendarSection(bodies.get("hono")!);
+  const kit = await calendarSection(bodies.get("kit")!);
+  expect(hono, "Hono events-calendar section carries the seeded row").toContain(
+    "E2E Community Night",
+  );
+  expect(kit, "Kit matches the Hono calendar contract after normalization").toBe(hono);
 });
 
 test("cross-target: normalized member-board tables match", async () => {
@@ -2121,6 +2174,117 @@ test("kit: archive search and keyboard focus evidence", async ({ browser }) => {
     }
   } finally {
     await context.close();
+  }
+});
+
+test("Kit member event detail captures the ended record at both widths", async ({ browser }) => {
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const target = targets.find((item) => item.name === "kit")!;
+  const adjacentKey = "01J00000000000000000000993";
+  const endedKey = "01J00000000000000000000994";
+  const nextKey = "01J00000000000000000000995";
+  const laterKey = "01J00000000000000000000996";
+  const historicalKey = "01J00000000000000000000997";
+  const unreadableKey = "01J00000000000000000000998";
+  const userId = "900000000000000848";
+  const bearer = `two_${randomBytes(32).toString("base64url")}`;
+  const hash = createHash("sha256").update(bearer).digest("hex");
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
+  const now = Date.now();
+  const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into users (id, username, member) values (${userId}, 'Seat fixture', true)`;
+      await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+        values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(now + 7_200_000)})`;
+      for (const event of [
+        { key: adjacentKey, start: now - 3_600_000, end: now + 3_600_000 },
+        { key: endedKey, start: Date.UTC(2026, 0, 2, 4), end: Date.UTC(2026, 0, 2, 6) },
+      ]) {
+        await sql`insert into events (event_key, title, description, starts_at, ends_at, timezone, location, status, rsvp_open)
+          values (${event.key}, 'Community game night', 'Bring a favourite game and meet the community.',
+            ${new Date(event.start)}, ${new Date(event.end)}, 'America/New_York', 'Community voice', 'published', true)`;
+      }
+      await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 6, recurrence_index = 1
+        where event_key = ${endedKey}`;
+      await sql`update events set parent_event_id = (select id from events where event_key = ${endedKey}),
+        recurrence_index = 2 where event_key = ${adjacentKey}`;
+      for (const sibling of [
+        { key: laterKey, days: 14, status: "published", index: 3 },
+        { key: nextKey, days: 7, status: "published", index: 4 },
+        { key: historicalKey, days: 1, status: "past", index: 5 },
+      ]) {
+        const startsAt = now + sibling.days * 86_400_000;
+        await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
+          select ${sibling.key}, title, ${new Date(startsAt)}, ${new Date(startsAt + 7_200_000)},
+            ${sibling.status}, id, ${sibling.index} from events where event_key = ${endedKey}`;
+      }
+      await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
+        select ${unreadableKey}, title, ${new Date(now + 172_800_000)}, 'infinity'::timestamptz,
+          'published', id, 6 from events where event_key = ${endedKey}`;
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, ${userId}, 'going' from events where event_key = ${endedKey}`;
+    });
+    await context.addCookies([
+      {
+        name: "__Host-two_session",
+        value: `${bearer}.${signature}`,
+        domain: new URL(target.origin).hostname,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    ]);
+    const page = await context.newPage();
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
+      const response = await page.goto(`/e/${endedKey}`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      const time = page.getByTestId("kit-event-time");
+      const record = page.getByRole("region", { name: "Sign-up record" });
+      await expect(page.getByText("Sign out", { exact: true })).toBeVisible();
+      await expect(page.getByRole("complementary", { name: "Your seat", exact: true })).toHaveCount(
+        0,
+      );
+      await expect(page.getByTestId("event-ongoing")).toHaveCount(0);
+      await expect(time.locator('time[datetime="2026-01-02T06:00:00.000Z"]')).toHaveText(
+        "2 Jan 2026, 01:00",
+      );
+      await expect(page.getByTestId("event-series-next")).toHaveAttribute(
+        "href",
+        `/e/${adjacentKey}`,
+      );
+      await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
+      await expect(record).toContainText("No Echo for this one. 1 signed up.");
+      await expect(record.getByRole("link", { name: /^Next one:/ })).toHaveAttribute(
+        "href",
+        `/e/${nextKey}`,
+      );
+      if (width === 390) {
+        await expect(
+          page.locator(
+            ".event-layout-head:has(> [data-testid=kit-event-time]:last-child) + .event-layout-rail > [aria-labelledby=signup-record-heading]:first-child",
+          ),
+        ).toHaveCount(1);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      const name = `kit-review-event-ended-${width}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    }
+  } finally {
+    await context.close();
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key in (${adjacentKey}, ${endedKey}, ${nextKey}, ${laterKey}, ${historicalKey}, ${unreadableKey})`;
+      await sql`delete from web_session_grace where user_id = ${userId}`;
+      await sql`delete from web_sessions where user_id = ${userId}`;
+      await sql`delete from users where id = ${userId}`;
+    });
   }
 });
 

@@ -189,6 +189,7 @@ export function registerCalendarRoutes(
           emptyState={emptyState}
           robots={robots}
           discordFailed={discordFailed}
+          discordSnapshotAt={model.discordSnapshotAt}
           games={games}
           gameFilter={gameFilter}
           member={session?.member ?? false}

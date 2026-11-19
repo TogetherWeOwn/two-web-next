@@ -1029,8 +1029,8 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
     async function invariant(page: Page, range: RangeCase) {
       return page.evaluate(
         ({ start, end }: { start: string; end: string }) => {
-          const hostStarts = document.querySelector(`time[datetime="${start}"]`);
-          const hostEnds = document.querySelector(`time[datetime="${end}"]`);
+          const hostStarts = document.querySelector(`.event-meta time[datetime="${start}"]`);
+          const hostEnds = document.querySelector(`.event-meta time[datetime="${end}"]`);
           return {
             hostStarts: hostStarts?.outerHTML,
             hostEnds: hostEnds?.outerHTML,
@@ -1184,10 +1184,10 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       it(`${view}: positive control, real no-JS browser keeps host schedule and links usable`, async () => {
         const range = CASES[0];
         const { page, errors } = await open(view, range, undefined, false);
-        expect(await page.locator(`time[datetime="${range.start}"]`).first().innerText()).toBe(
+        expect(await page.locator(`.event-meta time[datetime="${range.start}"]`).innerText()).toBe(
           range.hostStart,
         );
-        expect(await page.locator(`time[datetime="${range.end}"]`).first().innerText()).toBe(
+        expect(await page.locator(`.event-meta time[datetime="${range.end}"]`).innerText()).toBe(
           range.hostEnd,
         );
         expect(await page.locator('[data-testid="event-ics"]').count()).toBe(1);
@@ -1228,9 +1228,9 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
           expect(body).not.toContain("e.g. Europe/London");
           expect(body).not.toContain("Compare times");
           // Original controls stay true: host schedule and calendar links remain visible.
-          expect(await page.locator(`time[datetime="${range.start}"]`).first().isVisible()).toBe(
-            true,
-          );
+          expect(
+            await page.locator(`.event-meta time[datetime="${range.start}"]`).isVisible(),
+          ).toBe(true);
           expect(errors).toEqual([]);
         }
       });
@@ -1252,7 +1252,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       it(`${view}: page load does not convert, steal focus, or change the machine instant`, async () => {
         const range = CASES[0];
         const { page, errors } = await open(view, range);
-        expect(await page.locator(`time[datetime="${range.start}"]`).first().innerText()).toBe(
+        expect(await page.locator(`.event-meta time[datetime="${range.start}"]`).innerText()).toBe(
           range.hostStart,
         );
         expect(await page.getByTestId(STATUS_TESTID).innerText()).toBe("");

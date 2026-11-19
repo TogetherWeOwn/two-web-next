@@ -549,35 +549,46 @@ for (const p of profiles) {
       }
     });
 
-    it("CONTROL: a complete genuine assertion breach stays red with no noise retry", async () => {
+    it("CONTROL: a complete genuine assertion miss honors severity without a retry", async () => {
+      const mobile = p.kind === "mobile";
       const reports = full(p);
       for (const r of reports) {
-        if (p.kind === "mobile") r.audits["server-response-time"].numericValue = 754.261;
+        if (mobile) r.audits["server-response-time"].numericValue = 754.261;
         else r.categories.accessibility.score = 0.5;
       }
-      const assertConfig =
-        p.kind === "mobile"
-          ? require("../ci/lighthouserc.cjs").ci.assert
-          : require("../ci/lighthouserc.quality.cjs").ci.assert;
+      const assertConfig = mobile
+        ? require("../ci/lighthouserc.cjs").ci.assert
+        : require("../ci/lighthouserc.quality.cjs").ci.assert;
       const assertions = getAllAssertionResults(assertConfig, reports);
-      expect(assertions.some((a) => a.passed === false && a.level === "error")).toBe(true);
+      expect(assertions).toContainEqual(
+        expect.objectContaining({
+          ...(mobile
+            ? { auditId: "server-response-time" }
+            : { auditId: "categories", auditProperty: "accessibility" }),
+          level: mobile ? "warn" : "error",
+          passed: false,
+        }),
+      );
       const result = await runCollector(p, [
         {
           reports,
           assertions,
-          exitCode: 1,
-          output: "Assertion failed. Exiting with status code 1.",
+          exitCode: mobile ? 0 : 1,
+          output: mobile
+            ? "All results processed!"
+            : "Assertion failed. Exiting with status code 1.",
         },
       ]);
-      expect(result.code).toBe(1);
+      expect(result.code).toBe(mobile ? 0 : 1);
       expect(result.calls).toBe(1);
-      expect(result.diagnosis).toMatch(/BUDGET BREACH/);
       expect(result.diagnosis).not.toMatch(/COLLECT FAILURE|transient\/infra suspected/);
-      if (p.kind === "mobile") {
-        expect(result.summary.rows.find((r) => r.path === "/events").verdict).toBe("fail");
-        expect(
-          result.summary.rows.find((r) => r.path === "/events").medians["server-response-time"],
-        ).toBe(754.261);
+      if (mobile) {
+        expect(result.diagnosis).toBe("");
+        const events = result.summary.rows.find((r) => r.path === "/events");
+        expect(events.verdict).toBe("warn");
+        expect(events.medians["server-response-time"]).toBe(754.261);
+      } else {
+        expect(result.diagnosis).toMatch(/BUDGET BREACH/);
       }
     });
   });

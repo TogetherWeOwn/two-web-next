@@ -1,0 +1,14 @@
+id: http-no-hono-jsx
+snapshots:
+  <div />:
+    labels:
+      - source: <div />
+        style: primary
+        start: 0
+        end: 7
+  <div>text</div>:
+    labels:
+      - source: <div>text</div>
+        style: primary
+        start: 0
+        end: 15
