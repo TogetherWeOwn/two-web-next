@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readHeredocBody } from "./shell-heredoc-body.mjs";
 import { logicalCursor, parseHeredocOpener } from "./shell-heredoc-opener.mjs";
+import { readActionsExpression, readInventoryExpansion } from "./shell-inventory-expansion.mjs";
 
 const ASSIGNMENT = /^[A-Za-z_]\w*\+?=/;
 const LIST_PREFIX = /^(?:if|then|else|elif|while|until|do|done|fi|esac|[{}!])$/;
@@ -20,6 +21,34 @@ function skipContinuations(text, p) {
 // The unmasked view is idempotent. Strict mode rejects open quotes and heredocs
 // swallowing test commands, even when that text would otherwise be masked.
 export function normalizeShell(text, { strict = false, mask = false } = {}) {
+  return scanShell(text, { strict, mask });
+}
+
+// Opt-in inventory lexical view. Ranges are half-open canonical string offsets.
+// Only heredoc data and closers are masked. Dynamic ranges are unresolved, not
+// evidence of an invocation, argument value, or the dispatch of a literal head.
+export function normalizeInventoryShell(text) {
+  const ranges = [];
+  const canonical = scanShell(text, { strict: true, ranges });
+  const parts = [];
+  let offset = 0;
+  for (const { kind, start, end } of ranges) {
+    if (kind !== "heredoc-body" && kind !== "heredoc-closer") continue;
+    parts.push(
+      canonical.slice(offset, start),
+      canonical.slice(start, end).replace(/[^\r\n]|\r(?!\n)/g, " "),
+    );
+    offset = end;
+  }
+  parts.push(canonical.slice(offset));
+  return { canonical, masked: parts.join(""), ranges };
+}
+
+function rejectActionsExpression(text) {
+  assert.ok(!text.includes("${{"), "unsupported Actions expression boundary");
+}
+
+function scanShell(text, { strict, mask = false, ranges }) {
   let out = "";
   let quote = null;
   let wordStart = -1;
@@ -27,7 +56,16 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
   let redirectOperand = false;
   let modifier = false;
   let arithmetic = 0;
+  let arithmeticStart = 0;
   const pending = [];
+  function addRange(kind, start, end) {
+    if (start < end) ranges.push({ kind, start, end });
+  }
+  function appendExpansion({ kind, spelling, end }) {
+    addRange(kind, out.length, out.length + spelling.length);
+    out += spelling;
+    return end - 1;
+  }
   const wordAt = (end) => text.slice(wordStart, end).replace(/\\\r?\n/g, "");
   function finishWord(end, ioNumber) {
     if (wordStart < 0) return;
@@ -50,7 +88,10 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
       assert.ok(!badCloser && !/[\n\\'"`$#]/.test(c), "unsupported arithmetic shell syntax");
       out += c;
       if (c === "(") arithmetic++;
-      else if (c === ")") arithmetic--;
+      else if (c === ")") {
+        arithmetic--;
+        if (ranges && arithmetic === 0) addRange("arithmetic", arithmeticStart, out.length);
+      }
       continue;
     }
     if (c === "\\" && quote !== "'") {
@@ -63,8 +104,15 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
     const tokenStart = wordStart < 0;
     if (!quote && c === "#" && tokenStart) {
       const end = text.indexOf("\n", i);
+      if (ranges) rejectActionsExpression(text.slice(i, end === -1 ? undefined : end));
       if (end === -1) break;
+      if (ranges && text[end - 1] === "\r") out += "\r";
       i = end - 1;
+      continue;
+    }
+    if (ranges && text.startsWith("${{", i)) {
+      if (tokenStart) wordStart = i;
+      i = appendExpansion(readActionsExpression(text, i));
       continue;
     }
     const next = "<>&$(".includes(c) ? skipContinuations(text, i + 1) : i + 1;
@@ -86,6 +134,15 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
     }
     assert.ok(c !== "`" || quote === "'", "unsupported command substitution");
     const expansion = c === "$" && quote !== "'";
+    if (ranges && expansion) {
+      assert.ok(quote || text[next] !== '"', "unsupported locale-translated shell quote");
+      assert.ok(!text.startsWith("${{", next), "unsupported Actions expression boundary");
+      const span = readInventoryExpansion(text, i, next, quote);
+      if (span) {
+        i = appendExpansion(span);
+        continue;
+      }
+    }
     if (expansion || (!quote && c === "(")) {
       assert.ok(!expansion || text[next] !== "'" || quote, "unsupported ANSI-C shell quote");
       assert.ok(!expansion || !["{", "["].includes(text[next]), "unsupported parameter expansion");
@@ -95,6 +152,7 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
       } else if (text[next] === "(") {
         i = expansion ? skipContinuations(text, next + 1) : next;
         assert.equal(text[i], "(", "unsupported command substitution");
+        arithmeticStart = out.length;
         out += expansion ? "$((" : "((";
         arithmetic = 2;
         continue;
@@ -105,12 +163,25 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
       let pos = i + 1;
       for (const opener of pending.splice(0)) {
         const body = readHeredocBody(text, pos, opener);
+        if (ranges) assert.equal(body.status, "closed", "unterminated inventory heredoc");
         if (strict && body.status === "unterminated" && TEST_COMMAND.test(body.logicalBody)) {
           assert.fail(
             `unterminated heredoc <<${opener.marker} swallows a playwright or npm run command: ${ROOT_CWD_REMEDIATION}`,
           );
         }
         const raw = text.slice(body.body.start, body.nextOffset);
+        if (ranges) {
+          rejectActionsExpression(raw);
+          // An unquoted body can execute expansions even though its text is
+          // not a shell command list. Don't mask syntax this mode cannot model.
+          assert.ok(
+            opener.quoted || !/`|\$[({\[]/.test(body.logicalBody),
+            "unsupported inventory heredoc expansion",
+          );
+          const closer = out.length + body.body.end - body.body.start;
+          addRange("heredoc-body", out.length, closer);
+          addRange("heredoc-closer", closer, out.length + raw.length);
+        }
         out += mask ? raw.replace(/[^\n]/g, " ") : raw;
         pos = body.nextOffset;
       }
@@ -129,6 +200,7 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
             !(opener.spelling.endsWith("\r") && text[opener.end] === "\n"),
             "unsupported ambiguous heredoc delimiter",
           );
+          if (ranges) rejectActionsExpression(text.slice(i, opener.end));
           pending.push(opener);
           out += opener.spelling;
           i = opener.end - 1;
@@ -143,10 +215,14 @@ export function normalizeShell(text, { strict = false, mask = false } = {}) {
       }
     }
     out += text[i];
-    if (c === "\\" && quote !== "'" && i + 1 < text.length) out += text[++i];
-    else if (c === quote) quote = null;
+    if (c === "\\" && quote !== "'" && i + 1 < text.length) {
+      if (ranges)
+        assert.ok(!text.startsWith("${{", i + 1), "unsupported Actions expression boundary");
+      out += text[++i];
+    } else if (c === quote) quote = null;
     else if (!quote && (c === "'" || c === '"')) quote = c;
   }
+  if (ranges) assert.equal(pending.length, 0, "unterminated inventory heredoc");
   assert.equal(arithmetic, 0, "unterminated arithmetic shell syntax");
   if (strict) assert.equal(quote, null, "unterminated shell quote");
   return out;

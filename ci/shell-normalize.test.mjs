@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { normalizeShell } from "./shell-normalize.mjs";
+import { normalizeInventoryShell, normalizeShell } from "./shell-normalize.mjs";
 
 function check(input, expected) {
   const normalized = normalizeShell(input, { strict: true });
@@ -242,4 +242,123 @@ test("malformed openers and unsupported arithmetic fail closed", () => {
     /unterminated heredoc/,
   );
   assert.doesNotThrow(() => normalizeShell("cat <<EOF\nnpm run e2e\n", { mask: true }));
+});
+
+// Match the migration-numbering workflow's assignment, with a dummy variable.
+const PIPELINE = `$(printf 'x-access-token:%s' "\${DUMMY_TOKEN:?}" | base64 -w0)`;
+
+test("inventory mode preserves the bounded pipeline and masks only aligned heredoc ranges", () => {
+  for (const eol of ["\n", "\r\n"]) {
+    const join = `\\${eol}`;
+    const body = `🧪 cd web; $(npm run decoy)${eol}`;
+    const closer = `END${eol}`;
+    const suffix = `npm run real${eol}`;
+    const continued = PIPELINE.replace("printf", `pri${join}ntf`).replace(":?}", `:${join}?}`);
+    const source = `# note${eol}auth="${continued}"${eol}cat <<'END'${eol}${body}${closer}${suffix}`;
+    const prefix = `${eol}auth="${PIPELINE}"${eol}cat <<'END'${eol}`;
+    const view = normalizeInventoryShell(source);
+    assert.equal(view.canonical, `${prefix}${body}${closer}${suffix}`);
+    assert.equal(
+      view.masked,
+      `${prefix}${" ".repeat(body.length - eol.length)}${eol}   ${eol}${suffix}`,
+    );
+    assert.deepEqual(view.ranges, [
+      {
+        kind: "command-substitution",
+        start: `${eol}auth="`.length,
+        end: `${eol}auth="${PIPELINE}`.length,
+      },
+      { kind: "heredoc-body", start: prefix.length, end: prefix.length + body.length },
+      {
+        kind: "heredoc-closer",
+        start: prefix.length + body.length,
+        end: prefix.length + body.length + closer.length,
+      },
+    ]);
+    assert.deepEqual(normalizeInventoryShell(view.canonical), view);
+    assert.throws(() => normalizeShell(source), /unsupported command substitution/);
+  }
+});
+
+test("inventory mode marks dynamic operands without changing their spelling", () => {
+  const actions = "${{ format('}} {0}', inputs.pattern) }}";
+  const literal = "'$literal ${NOT_LIVE:?}' \\$escaped";
+  const source = `npm run "\${NAME:?}" -- --grep="$FOO" 'x${actions}y' ${literal} $((8 << 1)) $$ $1`;
+  const { canonical, masked, ranges } = normalizeInventoryShell(source);
+  assert.equal(canonical, source);
+  assert.equal(masked, source);
+  assert.deepEqual(
+    ranges.map(({ kind, start, end }) => [kind, masked.slice(start, end)]),
+    [
+      ["required-parameter", "${NAME:?}"],
+      ["parameter", "$FOO"],
+      ["actions-expression", actions],
+      ["arithmetic", "$((8 << 1))"],
+      ["parameter", "$$"],
+      ["parameter", "$1"],
+    ],
+  );
+  assert.throws(() => normalizeShell('echo "${NAME:?}"'), /unsupported parameter expansion/);
+});
+
+test("inventory mode rejects any substitution outside the literal pipeline profile", () => {
+  for (const expansion of [
+    "$(mktemp -d)",
+    "$(npm run e2e)",
+    "$(npx playwright test)",
+    PIPELINE.replace("printf", '"$FORMATTER"'),
+    PIPELINE.replace("printf", "env printf"),
+    PIPELINE.replace("base64", "command base64"),
+    PIPELINE.replace("base64", "./base64"),
+    PIPELINE.replace(" | ", " |& "),
+    PIPELINE.replace(" | ", " || "),
+    PIPELINE.replace(" | ", " <<EOF | "),
+    PIPELINE.replace(" | ", " |\n"),
+    PIPELINE.replace("-w0", "-w0; npm run e2e"),
+    PIPELINE.replace(":?}", ":-$(npm run e2e)}"),
+    PIPELINE.replace(":?}", ":?unexpected)}"),
+    PIPELINE.replace("x-access-token:%s", "x-access-token:)%s"),
+    PIPELINE.replace("-w0", "-w 0"),
+    PIPELINE.slice(0, -1),
+  ]) {
+    assert.throws(
+      () => normalizeInventoryShell(`auth="${expansion}"\nnpm run real`),
+      /unsupported inventory command substitution/,
+    );
+  }
+  assert.throws(
+    () => normalizeInventoryShell(`auth=${PIPELINE}`),
+    /unsupported inventory command substitution/,
+  );
+});
+
+test("inventory mode rejects unsupported expansions and uncertain masked regions", () => {
+  for (const source of [
+    "echo ${NAME:?}",
+    'echo "${NAME:-fallback}"',
+    'echo "${1:?}"',
+    'echo "${NAME:?message}"',
+    'echo "${NAME[@]}"',
+  ])
+    assert.throws(
+      () => normalizeInventoryShell(source),
+      /unsupported inventory parameter expansion/,
+    );
+  for (const source of [
+    'echo "${{ inputs.missing',
+    "echo \\${{ inputs.path }}",
+    "# ${{ inputs.comment }}",
+    "cat <<'END'\n${{ inputs.body }}\nEND\n",
+    "echo $${{ inputs.path }}",
+  ])
+    assert.throws(() => normalizeInventoryShell(source), /unsupported Actions expression boundary/);
+  assert.throws(() => normalizeInventoryShell('echo $"text"'), /unsupported locale-translated/);
+  assert.throws(
+    () => normalizeInventoryShell("cat <<END\nbody\n"),
+    /unterminated inventory heredoc/,
+  );
+  assert.throws(
+    () => normalizeInventoryShell("cat <<END\n$\\\n(npm run e2e)\nEND\n"),
+    /unsupported inventory heredoc expansion/,
+  );
 });
