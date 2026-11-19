@@ -16,6 +16,15 @@
 import { alertRequestError, exceptionClass } from "./alerts";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
+import {
+  calendarDayLongLabel,
+  effectiveZone,
+  formatEventWhen,
+  instantIso,
+  wallDateIso,
+  wallTimeHm,
+} from "./events/date-format";
+import { kitEventFacts, type KitEventFact } from "./events/kit-event-facts";
 import { canonicalEventKey, eventKeyAllowed } from "./events/keys";
 import { fmt } from "./events/pages-shared";
 import { safeRequestId } from "./request-log";
@@ -66,6 +75,9 @@ export interface EventGoneModel {
   icsUrl: string;
   markdownAlternate: string;
   upcomingUrl: string;
+  scheduled: { datetime: string; clock: string; day: string; anchor: string } | null;
+  facts: KitEventFact[];
+  nextDate: { href: string; datetime: string; whenText: string } | null;
   related: EventGoneAlternative[];
   jsonLd: string;
   siteJsonLd: string;
@@ -95,6 +107,55 @@ export type EventStateOutcome =
 
 const NOINDEX = "noindex, nofollow";
 const NO_STORE: Record<string, string> = { "cache-control": "private, no-store" };
+
+/** Public, viewer-independent projection shared by both cancelled resolvers. */
+export function eventGoneModel(
+  event: PublicEvent,
+  related: EventLink[],
+  appUrl: string,
+  upcoming?: EventLink | null,
+): EventGoneModel {
+  const datetime = instantIso(event.startsAt);
+  const zone = effectiveZone(event.timezone);
+  const nextDate =
+    upcoming &&
+    eventKeyAllowed(upcoming.eventKey, appUrl) &&
+    (canonicalEventKey(upcoming.eventKey) ?? upcoming.eventKey) === upcoming.eventKey
+      ? {
+          href: `/e/${upcoming.eventKey}`,
+          datetime: upcoming.startsAt.toISOString(),
+          whenText: formatEventWhen(upcoming.startsAt, upcoming.timezone),
+        }
+      : null;
+  return {
+    title: event.title,
+    game: event.game,
+    eventKey: event.eventKey,
+    existingResponses: event.goingCount,
+    icsUrl: `/events/${event.eventKey}.ics`,
+    markdownAlternate: `/e/${event.eventKey}.md`,
+    upcomingUrl: "/events",
+    scheduled: datetime
+      ? {
+          datetime,
+          clock: wallTimeHm(event.startsAt, zone),
+          day: calendarDayLongLabel(wallDateIso(event.startsAt, zone)),
+          anchor: `${zone} · ${wallTimeHm(event.startsAt, "UTC")} UTC`,
+        }
+      : null,
+    facts: kitEventFacts({ organizerName: event.organizer_name ?? null, game: event.game }),
+    nextDate,
+    related: related.map((link) => ({
+      key: link.eventKey,
+      title: link.title,
+      whenText: fmt(link.startsAt, link.timezone),
+      datetime: link.startsAt.toISOString(),
+      location: link.location,
+    })),
+    jsonLd: eventJsonLd(event, appUrl),
+    siteJsonLd: siteJsonLd(appUrl),
+  };
+}
 
 function missingSuggestion(s: SuggestedEvent): EventMissingSuggestion {
   return {
@@ -179,24 +240,7 @@ export async function resolveEventState(req: EventStateRequest): Promise<EventSt
           kind: "gone",
           status: 410,
           headers,
-          model: {
-            title: event.title,
-            game: event.game,
-            eventKey: event.eventKey,
-            existingResponses: event.goingCount,
-            icsUrl: `/events/${event.eventKey}.ics`,
-            markdownAlternate: `/e/${event.eventKey}.md`,
-            upcomingUrl: "/events",
-            related: related.map((link) => ({
-              key: link.eventKey,
-              title: link.title,
-              whenText: fmt(link.startsAt, link.timezone),
-              datetime: link.startsAt.toISOString(),
-              location: link.location,
-            })),
-            jsonLd: eventJsonLd(event, appUrl),
-            siteJsonLd: siteJsonLd(appUrl),
-          },
+          model: eventGoneModel(event, related, appUrl),
         };
       }
       // Unauthorized drafts stay forbidden. A moderator's draft view needs a

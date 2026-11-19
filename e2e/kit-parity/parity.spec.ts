@@ -2867,3 +2867,125 @@ test.describe("kit: member-board visuals", () => {
     });
   }
 });
+
+test("Kit cancelled event renders its record and next date without JavaScript", async ({
+  browser,
+}) => {
+  test.setTimeout(90_000);
+  const target = targets.find((item) => item.name === "kit")!;
+  expect(kitFixtureOwnsEventDetail()).toBe(true);
+  const prefix = "01J0000000000000000CXN000";
+  const key = (n: number) => `${prefix}${n}`;
+  const attendee = "900000000000000848";
+  const game = "Fixture tabletop";
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into users (id, username, member) values (${attendee}, 'Fixture Attendee Marker', true)`;
+      const [root] = await sql<{ id: number }[]>`
+        insert into events (event_key,title,game,description,join_instructions,starts_at,ends_at,timezone,status,recurrence_frequency,recurrence_index)
+        values (${key(1)},'Cancelled series night',${game},'Public synthetic summary','Private instructions marker',
+          '2099-03-01T18:00Z','2099-03-01T20:00Z','Asia/Kolkata','cancelled','weekly',1) returning id`;
+      await sql`insert into rsvps (event_id,user_id,status) values (${root!.id},${attendee},'going')`;
+      // Index 2 is later than 3; siblings 4–7 and unrelated row 8 must not win.
+      await sql`insert into events (event_key,title,game,starts_at,ends_at,timezone,status,parent_event_id,recurrence_index) values
+        (${key(2)},'Later sibling',${game},'2099-03-22T18:00Z','2099-03-22T20:00Z','UTC','published',${root!.id},2),
+        (${key(3)},'Next sibling',${game},'2099-03-15T18:00Z','2099-03-15T20:00Z','Pacific/Auckland','published',${root!.id},3),
+        (${key(4)},'Unpublished sibling',${game},'2099-03-08T18:00Z','2099-03-08T20:00Z','UTC','draft',${root!.id},4),
+        (${key(5)},'Cancelled sibling',${game},'2099-03-09T18:00Z','2099-03-09T20:00Z','UTC','cancelled',${root!.id},5),
+        (${key(6)},'Historical sibling',${game},'2099-03-10T18:00Z','2099-03-10T20:00Z','UTC','past',${root!.id},6),
+        (${key(7)},'Invalid sibling',null,'2099-03-11T18:00Z','infinity','UTC','published',${root!.id},7),
+        (${key(8)},'Other event',${game},'2099-03-05T18:00Z','2099-03-05T20:00Z','UTC','published',null,null),
+        (${key(9)},'Standalone cancellation',${game},'2099-04-01T18:00Z','2099-04-01T20:00Z','UTC','cancelled',null,null)`;
+      await sql`update events set description = 'Draft description marker' where event_key = ${key(4)}`;
+    });
+    const privateMarkers =
+      /Fixture Attendee Marker|Private instructions marker|Draft description marker|data-rsvp-form/;
+    const signed = await api(target).get(`/e/${key(1)}`, {
+      headers: { Cookie: await memberCookie(target) },
+    });
+    expect(signed.status()).toBe(410);
+    expect(await signed.text()).not.toMatch(privateMarkers);
+    for (const viewport of [
+      { width: 1280, height: 800 },
+      { width: 390, height: 844 },
+    ]) {
+      const context = await browser.newContext({
+        baseURL: target.origin,
+        viewport,
+        javaScriptEnabled: false,
+      });
+      try {
+        const page = await context.newPage();
+        for (const state of ["guest", "fallback"]) {
+          const fallback = state === "fallback";
+          const eventKey = key(fallback ? 9 : 1);
+          const response = await page.goto(`/e/${eventKey}`);
+          expect(response?.status()).toBe(410);
+          expect(response!.headers()).toMatchObject({
+            "x-two-renderer": "kit",
+            "cache-control": "private, no-store",
+            "x-robots-tag": "noindex, nofollow",
+          });
+          expect(await response!.text()).not.toMatch(privateMarkers);
+          await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
+          const actions =
+            'main form, aside[aria-label="Your seat"], [data-testid="event-join-pitch"]';
+          await expect(page.locator(actions)).toHaveCount(0);
+          await expect(page.getByTestId("event-cancelled")).toHaveText("Cancelled");
+          await expect(page.getByTestId("event-cancelled-ics")).toHaveAttribute(
+            "href",
+            `/events/${eventKey}.ics`,
+          );
+          const alternatives = page.getByTestId("event-cancelled-alternatives");
+          await expect(alternatives.getByRole("link", { name: "Other event" })).toBeVisible();
+          const next = page.getByRole("link", { name: "See the next date" });
+          const record = page.getByTestId("event-cancelled-record");
+          if (fallback) {
+            await expect(next).toHaveCount(0);
+            await expect(record.locator("time")).toHaveCount(0);
+          } else {
+            const time = page.getByTestId("event-cancelled-time");
+            const facts = page.getByTestId("kit-event-facts");
+            await expect(time).toHaveAttribute("datetime", "2099-03-01T18:00:00.000Z");
+            await expect(time.locator("s")).toHaveText("23:30");
+            await expect(time.locator("..")).toContainText("Asia/Kolkata · 18:00 UTC");
+            await expect(next).toHaveAttribute("href", `/e/${key(3)}`);
+            const nextTime = record.locator("time");
+            await expect(nextTime).toHaveAttribute("datetime", "2099-03-15T18:00:00.000Z");
+            await expect(record).toContainText(/Next one:.*16 March 2099.*07:00/);
+            if (viewport.width === 390) {
+              const ids = ["event-cancelled-time", "event-cancelled-record", "kit-event-facts"];
+              const nodes = page.locator(ids.map((id) => `[data-testid="${id}"]`).join(","));
+              expect(
+                await nodes.evaluateAll((items) =>
+                  items.map((item) => item.getAttribute("data-testid")),
+                ),
+              ).toEqual(ids);
+              const boxes = await Promise.all(
+                [time, record, facts].map((node) => node.boundingBox()),
+              );
+              expect(boxes[0]!.y).toBeLessThan(boxes[1]!.y);
+              expect(boxes[1]!.y).toBeLessThan(boxes[2]!.y);
+            } else {
+              expect((await record.boundingBox())!.x).toBeGreaterThan(
+                (await time.boundingBox())!.x,
+              );
+            }
+          }
+          const name = `kit-review-cancelled-record-${state}-${viewport.width}`;
+          const path = test.info().outputPath(`${name}.png`);
+          await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+          await test.info().attach(name, { path, contentType: "image/png" });
+        }
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await withSessionDb(async (sql) => {
+      await sql`delete from rsvps where user_id = ${attendee}`;
+      await sql`delete from events where event_key like ${`${prefix}%`}`;
+      await sql`delete from users where id = ${attendee}`;
+    });
+  }
+});
