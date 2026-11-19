@@ -90,6 +90,9 @@ export async function assertHomeEvidence(page, state) {
   );
   assert.equal(await count("member-count"), state === "missingCounts" ? 0 : 1, `${state}: counts`);
   assert.equal(await count("notice"), state === "joinFailed" ? 1 : 0, `${state}: notice`);
+  assert.equal(await page.getByTestId("home-highlights").locator("li").count(), 4);
+  if (!session?.member && state !== "sessionOutage" && state !== "joinFailed")
+    assert.match(await page.getByTestId("join-band").innerText(), /Approve once with Discord/);
   assert.equal(
     await count("join-result"),
     ["joinAdded", "alreadyMember"].includes(state) ? 1 : 0,

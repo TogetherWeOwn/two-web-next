@@ -105,6 +105,21 @@ describe("Kit home SSR render: session-aware header and hero", () => {
   });
 });
 
+describe("Kit home SSR render: highlights", () => {
+  it("renders four sourced highlights and preserves the community links", () => {
+    const html = renderPage(baseData());
+    const highlights = html.split('data-testid="home-highlights"')[1]!.split("</ul>")[0]!;
+    expect(highlights.match(/<li>/g)).toHaveLength(4);
+    expect(html).toContain('id="community-heading"');
+    expect(html).toContain('id="discord-heading"');
+    expect(html).toContain('href="/join#join-heading" data-testid="home-widget-link"');
+    expect(html).toContain('href="/discord" data-testid="home-discord-invite"');
+    for (const unsupported of ["Raid Night", "Grand Prix", "resets each month", "public log"]) {
+      expect(html).not.toContain(unsupported);
+    }
+  });
+});
+
 describe("Kit home SSR render: join band", () => {
   function band(html: string): string {
     return html.split('<section class="join-band"')[1]?.split("</section>")[0] ?? "";
