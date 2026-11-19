@@ -64,8 +64,5 @@ done
 printf 'Kit Worker ready on the fixture origin\n'
 timeout -k 5s 90s node ci/kit-activity-log-assert.mjs </dev/null 2>/dev/null &
 browser=$!
-if ! wait "$browser"; then
-  printf '::error::Activity-log diagnostic did not pass\n'
-  exit 1
-fi
+quiet 'activity-log diagnostic' wait "$browser"
 browser=
