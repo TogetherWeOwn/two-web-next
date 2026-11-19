@@ -12,6 +12,7 @@ import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
   expectedKitMarker,
+  HONO_ORIGIN,
   kitFixtureOwnsEventDetail,
   kitFixtureOwnsMemberBoard,
   kitFixtureSessionSecret,
@@ -1884,7 +1885,61 @@ test("cross-target: normalized archive sections match", async () => {
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
-test("cross-target: normalized events-calendar sections match", async ({ playwright }) => {
+test("Kit calendar styles survive a swap into the old document", async ({ page }) => {
+  // Serve the old Hono shell without the new aliases; the island fetches from Kit.
+  const old = await page.request.get(`${HONO_ORIGIN}/events`, { maxRedirects: 0 });
+  expect(old.status()).toBe(200);
+  await page.route(`${KIT_ORIGIN}/events`, (route) => route.fulfill({ response: old }), {
+    times: 1,
+  });
+  await page.route(`${KIT_ORIGIN}/theme-tokens.css`, (route) =>
+    route.fulfill({ contentType: "text/css", body: "" }),
+  );
+  await page.goto(`${KIT_ORIGIN}/events`);
+  await expect(page.locator(".schedule-views")).toBeVisible();
+  await expect(page.locator('link[href="/kit-events-controls.css"]')).toHaveCount(0);
+  const html = page.locator("html");
+  await html.evaluate((element) => element.setAttribute("data-rollout-shell", "old"));
+  await page.getByTestId("events-view-calendar").click();
+  const selected = page.locator("nav.segments").getByTestId("events-view-calendar");
+  await expect(selected).toHaveAttribute("aria-current", "page");
+  await expect(selected).toHaveCSS("gap", "8px");
+  await expect(selected).toHaveCSS("background-color", "rgb(46, 36, 32)");
+  await expect(html).toHaveAttribute("data-rollout-shell", "old");
+});
+
+test("cross-target: normalized events-calendar sections match", async ({ playwright, page }) => {
+  // Normalize serializer noise and the Kit wrapper, not the tabs' links or selection.
+  const calendarSection = async (html: string) =>
+    normalizeSection(
+      await page.evaluate((html) => {
+        const document = new DOMParser().parseFromString(html, "text/html");
+        const section = document.querySelector('section[data-testid="events-calendar"]');
+        if (!section) throw new Error("Missing calendar section");
+        const segments = section.querySelector('nav.segments[aria-label="How to show the events"]');
+        if (segments) {
+          section.querySelector('link[rel=stylesheet][href="/kit-events-controls.css"]')?.remove();
+          const group = document.createElement("div");
+          group.className = "schedule-views";
+          group.setAttribute("role", "group");
+          group.setAttribute("aria-label", "How to show the events");
+          while (segments.firstChild) group.appendChild(segments.firstChild);
+          segments.replaceWith(group);
+        }
+        for (const element of [section, ...section.querySelectorAll("*")]) {
+          const attrs = [...element.attributes].sort((a, b) => a.name.localeCompare(b.name));
+          for (const { name, value } of attrs) {
+            element.removeAttribute(name);
+            element.setAttribute(name, value);
+          }
+        }
+        const comments = document.createTreeWalker(section, NodeFilter.SHOW_COMMENT);
+        const markers: Node[] = [];
+        while (comments.nextNode()) markers.push(comments.currentNode);
+        for (const marker of markers) marker.parentNode?.removeChild(marker);
+        return section.outerHTML;
+      }, html),
+    );
   const bodies = new Map<string, string>();
   for (const target of targets) {
     // A fresh jar prevents authentication by the shared QA-login cookie.
@@ -1911,14 +1966,12 @@ test("cross-target: normalized events-calendar sections match", async ({ playwri
   }
   // Non-vacuous equality: the compared sections carry the seeded row, so
   // two empty lists cannot pass for parity.
-  expect(
-    sectionOf(bodies.get("hono")!, "events-calendar"),
-    "Hono events-calendar section carries the seeded row",
-  ).toContain("E2E Community Night");
-  expect(
-    sectionOf(bodies.get("kit")!, "events-calendar"),
-    "Kit section matches Hono section after origin normalization",
-  ).toBe(sectionOf(bodies.get("hono")!, "events-calendar"));
+  const hono = await calendarSection(bodies.get("hono")!);
+  const kit = await calendarSection(bodies.get("kit")!);
+  expect(hono, "Hono events-calendar section carries the seeded row").toContain(
+    "E2E Community Night",
+  );
+  expect(kit, "Kit matches the Hono calendar contract after normalization").toBe(hono);
 });
 
 test("cross-target: normalized member-board tables match", async () => {

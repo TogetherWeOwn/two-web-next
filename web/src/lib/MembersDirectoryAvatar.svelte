@@ -7,7 +7,7 @@ let color = $derived(
 );
 </script>
 
-<span class="directory-avatar" class:compact style:background-color={`var(--two-color-avatar-${color})`} aria-hidden="true">
+<span class="directory-avatar" class:compact data-tone={color} aria-hidden="true">
   {initials}
   {#if src && src !== failedSrc}
     <img {src} alt="" loading="lazy" onerror={() => { failedSrc = src; }} />
@@ -27,6 +27,18 @@ let color = $derived(
     color: var(--two-color-avatar-text);
     font: var(--font-weight-semibold) var(--text-label)/1 var(--font-ui);
   }
+  [data-tone="0"] { background-color: var(--two-color-avatar-0); }
+  [data-tone="1"] { background-color: var(--two-color-avatar-1); }
+  [data-tone="2"] { background-color: var(--two-color-avatar-2); }
+  [data-tone="3"] { background-color: var(--two-color-avatar-3); }
+  [data-tone="4"] { background-color: var(--two-color-avatar-4); }
+  [data-tone="5"] { background-color: var(--two-color-avatar-5); }
+  [data-tone="6"] { background-color: var(--two-color-avatar-6); }
+  [data-tone="7"] { background-color: var(--two-color-avatar-7); }
+  [data-tone="8"] { background-color: var(--two-color-avatar-8); }
+  [data-tone="9"] { background-color: var(--two-color-avatar-9); }
+  [data-tone="10"] { background-color: var(--two-color-avatar-10); }
+  [data-tone="11"] { background-color: var(--two-color-avatar-11); }
   .compact { inline-size: var(--two-size-avatar-md); block-size: var(--two-size-avatar-md); }
   img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
   @media (forced-colors: active) { .directory-avatar { border: 1px solid CanvasText; } }

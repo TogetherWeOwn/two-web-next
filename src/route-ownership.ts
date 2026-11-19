@@ -261,8 +261,8 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
 ];
 
 // Fixture-only manifest for executed parity journeys. The generated loopback
-// worker can enable the member board, live event detail, and join entries for
-// their Kit journeys. Flags are honoured only for an HTTP loopback APP_URL;
+// worker can enable individual entries for their Kit journeys.
+// Flags are honoured only for an HTTP loopback APP_URL;
 // deployed Workers retain the shipped manifest. No flag mutates that manifest.
 // The fixture exercises the actual Kit dispatcher rather than a second render
 // implementation. Each override is restricted to its exact method and path;
@@ -273,11 +273,13 @@ export function fixtureManifestFor(env: {
   KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
   KIT_PARITY_FIXTURE_JOIN?: string;
+  KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
 }): OwnedRoute[] | undefined {
   const wantBoard = env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true";
   const wantDetail = env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true";
   const wantJoin = env.KIT_PARITY_FIXTURE_JOIN === "true";
-  if (!wantBoard && !wantDetail && !wantJoin) return undefined;
+  const wantDashboard = env.KIT_PARITY_FIXTURE_ADMIN_DASHBOARD === "true";
+  if (!wantBoard && !wantDetail && !wantJoin && !wantDashboard) return undefined;
   let app: URL;
   try {
     app = new URL(env.APP_URL ?? "");
@@ -294,21 +296,25 @@ export function fixtureManifestFor(env: {
       return { ...entry, enabled: true };
     if (wantJoin && entry.method === "GET" && entry.path === "/join")
       return { ...entry, enabled: true };
+    if (wantDashboard && entry.method === "GET" && entry.path === "/admin")
+      return { ...entry, enabled: true };
     return entry;
   });
 }
 
 // Staging Kit starts with every route on Hono. The reviewed deploy workflow
-// may enable only the archive and static page families, while all other routes
-// stay Hono-owned even when the shared manifest enables them for preview/local
-// parity. The staging hostname or any rollout flag selects this restrictive
-// manifest, even with a misconfigured APP_URL. Only the exact staging APP_URL
-// can enable a family; absent, malformed and unknown flags keep it disabled.
+// may opt into only the exact GET entries listed below, and only if the shared
+// manifest enables them. The staging hostname or any rollout flag selects this
+// restrictive manifest, even with a misconfigured APP_URL. Only the exact
+// staging APP_URL can enable a family; absent or malformed flags keep it off.
 export function stagingManifestFor(
   env: {
     APP_URL?: string;
     KIT_ROUTE_ARCHIVE?: string;
     KIT_ROUTE_STATIC?: string;
+    KIT_ROUTE_EVENTS?: string;
+    KIT_ROUTE_HOME?: string;
+    KIT_ROUTE_JOIN?: string;
   },
   routes: OwnedRoute[] = ROUTE_MANIFEST,
 ): OwnedRoute[] | undefined {
@@ -319,19 +325,29 @@ export function stagingManifestFor(
     // With rollout flags present an invalid URL must not select the preview manifest.
     app = undefined;
   }
-  const hasRolloutFlags = env.KIT_ROUTE_ARCHIVE !== undefined || env.KIT_ROUTE_STATIC !== undefined;
+  const hasRolloutFlags =
+    env.KIT_ROUTE_ARCHIVE !== undefined ||
+    env.KIT_ROUTE_STATIC !== undefined ||
+    env.KIT_ROUTE_EVENTS !== undefined ||
+    env.KIT_ROUTE_HOME !== undefined ||
+    env.KIT_ROUTE_JOIN !== undefined;
   if (app?.hostname !== new URL(STAGING_APP_URL).hostname && !hasRolloutFlags) return undefined;
 
   const archiveEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_ARCHIVE === "true";
   // Static pages are the second cumulative rollout stage; they cannot precede
   // the archive family even if a Worker variable is set out of band.
   const staticEnabled = archiveEnabled && env.KIT_ROUTE_STATIC === "true";
+  const eventsEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_EVENTS === "true";
+  const homeEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_HOME === "true";
+  const joinEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_JOIN === "true";
   return routes.map((entry) => {
     const familyEnabled =
-      (entry.method === "GET" && entry.path === "/events/past" && archiveEnabled) ||
-      (entry.method === "GET" &&
-        (entry.path === "/about" || entry.path === "/faq") &&
-        staticEnabled);
+      entry.method === "GET" &&
+      ((entry.path === "/events" && eventsEnabled) ||
+        (entry.path === "/" && homeEnabled) ||
+        (entry.path === "/join" && joinEnabled) ||
+        (entry.path === "/events/past" && archiveEnabled) ||
+        ((entry.path === "/about" || entry.path === "/faq") && staticEnabled));
     return { ...entry, enabled: entry.enabled && familyEnabled };
   });
 }
@@ -515,6 +531,9 @@ export interface HookDispatchDeps {
   // values keep every route on Hono. Preview/local parity stays unchanged.
   kitRouteArchive?: string;
   kitRouteStatic?: string;
+  kitRouteEvents?: string;
+  kitRouteHome?: string;
+  kitRouteJoin?: string;
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
@@ -532,6 +551,7 @@ export interface HookDispatchDeps {
   fixtureEventDetail?: boolean;
   // Join remains Hono-owned outside the loopback parity fixture.
   fixtureJoin?: boolean;
+  fixtureAdminDashboard?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
@@ -899,11 +919,21 @@ async function dispatchOwnedRequest(
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
         KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
         KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
+        // Use the original URL: Kit strips the data suffix from event.url.
+        KIT_PARITY_FIXTURE_ADMIN_DASHBOARD:
+          deps.fixtureAdminDashboard &&
+          event.request.method === "GET" &&
+          new URL(event.request.url).pathname === "/admin"
+            ? "true"
+            : undefined,
       }) ??
       stagingManifestFor({
         APP_URL: deps.appUrl,
         KIT_ROUTE_ARCHIVE: deps.kitRouteArchive,
         KIT_ROUTE_STATIC: deps.kitRouteStatic,
+        KIT_ROUTE_EVENTS: deps.kitRouteEvents,
+        KIT_ROUTE_HOME: deps.kitRouteHome,
+        KIT_ROUTE_JOIN: deps.kitRouteJoin,
       }) ??
       ROUTE_MANIFEST,
     event.url,

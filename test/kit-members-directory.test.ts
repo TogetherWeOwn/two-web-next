@@ -1,9 +1,27 @@
-import { describe, expect, it } from "vitest";
-import {
-  type DirectoryFixtureMember,
-  MEMBER_SEARCH_LIMIT,
-  projectMembersDirectory,
-} from "../web/src/lib/members-directory";
+import { fileURLToPath, URL } from "node:url";
+import { build } from "esbuild";
+import { beforeAll, describe, expect, it } from "vitest";
+import type { DirectoryFixtureMember } from "../web/src/lib/members-directory";
+
+type DirectoryModule = typeof import("../web/src/lib/members-directory");
+let projectMembersDirectory: DirectoryModule["projectMembersDirectory"];
+let memberSearchLimit: DirectoryModule["MEMBER_SEARCH_LIMIT"];
+
+beforeAll(async () => {
+  // Bundle the real Kit module without asking root Vitest to resolve Kit's $app/tsconfig.
+  const { outputFiles } = await build({
+    entryPoints: [fileURLToPath(new URL("../web/src/lib/members-directory.ts", import.meta.url))],
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    write: false,
+    tsconfigRaw: {},
+  });
+  const encoded = Buffer.from(outputFiles[0]!.text).toString("base64");
+  ({ projectMembersDirectory, MEMBER_SEARCH_LIMIT: memberSearchLimit } = await import(
+    `data:text/javascript;base64,${encoded}`
+  ));
+});
 
 const counts = { members: 814, attendedThisMonth: 212 };
 const weekStartsAt = Date.parse("2030-04-08T00:00:00Z");
@@ -37,9 +55,9 @@ const roster = [
   }),
 ];
 
-function view(query = "", members: readonly DirectoryFixtureMember[] = roster) {
+function view(query = "", members: readonly DirectoryFixtureMember[] = roster, at = snapshotAt) {
   const projection = projectMembersDirectory(
-    { audience: "member", counts, members, weekStartsAt, snapshotAt },
+    { audience: "member", counts, members, weekStartsAt, snapshotAt: at },
     new URLSearchParams(query),
   );
   if (projection.audience !== "member") throw new Error("Expected member projection");
@@ -102,8 +120,9 @@ describe("route-free Kit members directory projection", () => {
   it("omits opted-out members from rows, search, welcomes and organisers", () => {
     const visible = newcomer("VisibleFixture", snapshotAt);
     const hidden = newcomer("OptedOutFixture", snapshotAt, true);
-    const projection = view("filter=everyone", [visible, hidden]);
-    expect(names(projection)).toEqual([visible.name]);
+    const ordinary = fixture("WithoutOrganizerRole");
+    const projection = view("filter=everyone", [visible, hidden, ordinary]);
+    expect(names(projection)).toEqual([visible.name, ordinary.name]);
     expect(projection.newcomers.map(({ name }) => name)).toEqual([visible.name]);
     expect(projection.organizers.map(({ name }) => name)).toEqual([visible.name]);
     expect(view("q=optedout", [visible, hidden]).resultCount).toBe(0);
@@ -137,6 +156,20 @@ describe("route-free Kit members directory projection", () => {
     expect(projection.organizers).toHaveLength(4);
   });
 
+  it("includes the last instant of the selected week but no later or invalid joins", () => {
+    const nextWeek = weekStartsAt + 7 * day;
+    const members = [
+      newcomer("FirstFixture", weekStartsAt),
+      newcomer("LastFixture", nextWeek - 1),
+      newcomer("NextWeekFixture", nextWeek),
+      newcomer("InvalidFixture", NaN),
+    ];
+    expect(view("", members, nextWeek + day).newcomers.map(({ name }) => name)).toEqual([
+      "LastFixture",
+      "FirstFixture",
+    ]);
+  });
+
   it("projects only one page before transfer and normalizes out-of-range selections", () => {
     const members = Array.from({ length: 21 }, (_, i) =>
       fixture(`PagedFixture${i}`, { lastActivityAt: i }),
@@ -149,9 +182,61 @@ describe("route-free Kit members directory projection", () => {
     });
     expect(first.rows).toHaveLength(20);
     expect(first.rows[0]?.name).toBe("PagedFixture20");
+    const invalidPages = [
+      "1.5",
+      "2.0000000000000001",
+      "0x2",
+      "2e0",
+      "Infinity",
+      "abc",
+      "9007199254740992",
+    ];
+    for (const page of invalidPages) {
+      const invalid = view(`page=${page}`, members);
+      expect(invalid.selection.page).toBe(1);
+      expect(names(invalid)).toEqual(names(first));
+    }
+    const second = view("page=2", members);
+    expect(second.selection.page).toBe(2);
+    expect(names(second)).toEqual(["PagedFixture0"]);
     expect(names(view("page=100000", members))).toEqual(["PagedFixture0"]);
-    expect(view(`q=${"x".repeat(MEMBER_SEARCH_LIMIT + 1)}`).selection.query).toHaveLength(
-      MEMBER_SEARCH_LIMIT,
-    );
+    expect(view("page=2", members.slice(0, 20))).toMatchObject({
+      selection: { page: 1 },
+      resultCount: 20,
+      pageCount: 1,
+    });
+  });
+
+  it("matches at the search limit and truncates a query one character over it", () => {
+    const prefix = "x".repeat(memberSearchLimit - 1);
+    const query = `${prefix}a`;
+    const members = [
+      fixture("ExactMatch", { handle: query }),
+      fixture("NearMatch", { handle: `${prefix}b` }),
+    ];
+    const exact = view(`q=${query}`, members);
+    expect(exact.selection.query).toBe(query);
+    expect(names(exact)).toEqual(["ExactMatch"]);
+    expect(view(`q=${query}z`, members)).toEqual(exact);
+  });
+
+  it("normalizes equivalent queries before the limit and keeps supplementary characters whole", () => {
+    const prefix = "x".repeat(memberSearchLimit - 1);
+    const members = [fixture(`${prefix}é`), fixture(`${prefix}🎮`), fixture(`${prefix}z`)];
+    for (const [input, expected] of [
+      ["é", "é"],
+      ["é", "é"],
+      ["🎮z", "🎮"],
+    ]) {
+      const projection = view(`q=${encodeURIComponent(prefix + input)}`, members);
+      expect(projection.selection.query).toBe(prefix + expected);
+      expect(names(projection)).toEqual([prefix + expected]);
+    }
+  });
+
+  it("matches Greek sigma across name and handle substring boundaries", () => {
+    const members = [fixture("ΟΣΚΑΡ"), fixture("HandleFixture", { handle: "ΟΣΚΑΡ" })];
+    expect(names(view(`q=${encodeURIComponent("ΟΣ")}`, members))).toContain("ΟΣΚΑΡ");
+    expect(names(view(`q=${encodeURIComponent("@ος")}`, members))).toContain("HandleFixture");
   });
 });

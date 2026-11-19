@@ -5,7 +5,7 @@
 // the source-grep suite missed: a hardcoded sessionUnavailable, a skipped
 // flash precedence, and `{:else if session}` in the hero.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "../src/home-copy";
+import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
 import { createKitSsrRenderer, type RenderPage } from "./helpers/kit-ssr-render";
 
 let renderPage: RenderPage;
@@ -29,7 +29,7 @@ function baseData(overrides: Record<string, unknown> = {}): Record<string, unkno
     eventsUnavailable: false,
     featured: [],
     imageHosts: "",
-    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
+    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO },
     ...overrides,
   };
 }
@@ -102,6 +102,59 @@ describe("Kit home SSR render: session-aware header and hero", () => {
     const html = renderPage(baseData({ sessionUnavailable: true, eventsUnavailable: false }));
     expect(html).toContain("Welcome, guest");
     expect(html).toContain('data-testid="discord-join">Join with an invite link</a>');
+  });
+});
+
+describe("Kit home SSR render: highlights", () => {
+  it("renders four sourced highlights and preserves the community links", () => {
+    const html = renderPage(baseData());
+    const highlights = html.split('data-testid="home-highlights"')[1]!.split("</ul>")[0]!;
+    expect(highlights.match(/<li>/g)).toHaveLength(4);
+    expect(html).toContain('id="community-heading"');
+    expect(html).toContain('id="discord-heading"');
+    expect(html).toContain('href="/join#join-heading" data-testid="home-widget-link"');
+    expect(html).toContain('href="/discord" data-testid="home-discord-invite"');
+    for (const unsupported of ["Raid Night", "Grand Prix", "resets each month", "public log"]) {
+      expect(html).not.toContain(unsupported);
+    }
+  });
+});
+
+describe("Kit home SSR render: join band", () => {
+  function band(html: string): string {
+    return html.split('<section class="join-band"')[1]?.split("</section>")[0] ?? "";
+  }
+
+  it("offers the shared introduction and sign-in to guests and non-members", () => {
+    for (const session of [null, nonMemberSession]) {
+      const content = band(renderPage(baseData({ session })));
+      expect(content).toContain("Pull up a");
+      expect(content).toContain(JOIN_INTRO);
+      expect(content).toContain('href="/auth/discord" data-testid="join-band-join"');
+    }
+  });
+
+  it("suppresses the whole band for members, even after join failure", () => {
+    for (const notice of [null, "join_failed"]) {
+      expect(band(renderPage(baseData({ session: memberSession, notice })))).toBe("");
+    }
+  });
+
+  it("prioritizes the outage invite over a join failure", () => {
+    const content = band(renderPage(baseData({ sessionUnavailable: true, notice: "join_failed" })));
+    expect(content).toContain("Sign-in isn't answering right now.");
+    expect(content).toContain('href="/discord" data-testid="join-band-invite"');
+    expect(content).not.toContain('data-testid="join-band-join"');
+    expect(content).not.toContain("The bot couldn't add you");
+  });
+
+  it("offers the configured invite after a healthy non-member join failure", () => {
+    const content = band(
+      renderPage(baseData({ session: nonMemberSession, notice: "join_failed" })),
+    );
+    expect(content).toContain("The bot couldn't add you just now.");
+    expect(content).toContain(`href="${INVITE_URL}" data-testid="join-band-invite"`);
+    expect(content).not.toContain('data-testid="join-band-join"');
   });
 });
 
