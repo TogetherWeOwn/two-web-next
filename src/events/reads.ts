@@ -1000,6 +1000,7 @@ export async function getEventSeriesContext(
   if (!now) return { hosts, previous, next };
   const upcoming = run
     .filter((row) => row.id !== event.id && row.status === "published" && row.startsAt > now)
+    .filter(isRenderableEventWindow)
     .sort((a, b) => +a.startsAt - +b.startsAt)[0];
   return { hosts, previous, next, upcoming: upcoming ? toLink(upcoming) : null };
 }

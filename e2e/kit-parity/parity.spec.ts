@@ -2185,6 +2185,7 @@ test("Kit member event detail captures the ended record at both widths", async (
   const nextKey = "01J00000000000000000000995";
   const laterKey = "01J00000000000000000000996";
   const historicalKey = "01J00000000000000000000997";
+  const unreadableKey = "01J00000000000000000000998";
   const userId = "900000000000000848";
   const bearer = `two_${randomBytes(32).toString("base64url")}`;
   const hash = createHash("sha256").update(bearer).digest("hex");
@@ -2198,13 +2199,13 @@ test("Kit member event detail captures the ended record at both widths", async (
         values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(now + 7_200_000)})`;
       for (const event of [
         { key: adjacentKey, start: now - 3_600_000, end: now + 3_600_000 },
-        { key: endedKey, start: Date.UTC(2026, 0, 1, 23), end: Date.UTC(2026, 0, 2, 1) },
+        { key: endedKey, start: Date.UTC(2026, 0, 2, 4), end: Date.UTC(2026, 0, 2, 6) },
       ]) {
-        await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, rsvp_open)
+        await sql`insert into events (event_key, title, description, starts_at, ends_at, timezone, location, status, rsvp_open)
           values (${event.key}, 'Community game night', 'Bring a favourite game and meet the community.',
-            ${new Date(event.start)}, ${new Date(event.end)}, 'Community voice', 'published', true)`;
+            ${new Date(event.start)}, ${new Date(event.end)}, 'America/New_York', 'Community voice', 'published', true)`;
       }
-      await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 5, recurrence_index = 1
+      await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 6, recurrence_index = 1
         where event_key = ${endedKey}`;
       await sql`update events set parent_event_id = (select id from events where event_key = ${endedKey}),
         recurrence_index = 2 where event_key = ${adjacentKey}`;
@@ -2218,6 +2219,9 @@ test("Kit member event detail captures the ended record at both widths", async (
           select ${sibling.key}, title, ${new Date(startsAt)}, ${new Date(startsAt + 7_200_000)},
             ${sibling.status}, id, ${sibling.index} from events where event_key = ${endedKey}`;
       }
+      await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
+        select ${unreadableKey}, title, ${new Date(now + 172_800_000)}, 'infinity'::timestamptz,
+          'published', id, 6 from events where event_key = ${endedKey}`;
       await sql`insert into rsvps (event_id, user_id, status)
         select id, ${userId}, 'going' from events where event_key = ${endedKey}`;
     });
@@ -2245,7 +2249,7 @@ test("Kit member event detail captures the ended record at both widths", async (
         0,
       );
       await expect(page.getByTestId("event-ongoing")).toHaveCount(0);
-      await expect(time.locator('time[datetime="2026-01-02T01:00:00.000Z"]')).toHaveText(
+      await expect(time.locator('time[datetime="2026-01-02T06:00:00.000Z"]')).toHaveText(
         "2 Jan 2026, 01:00",
       );
       await expect(page.getByTestId("event-series-next")).toHaveAttribute(
@@ -2276,7 +2280,7 @@ test("Kit member event detail captures the ended record at both widths", async (
   } finally {
     await context.close();
     await withSessionDb(async (sql) => {
-      await sql`delete from events where event_key in (${adjacentKey}, ${endedKey}, ${nextKey}, ${laterKey}, ${historicalKey})`;
+      await sql`delete from events where event_key in (${adjacentKey}, ${endedKey}, ${nextKey}, ${laterKey}, ${historicalKey}, ${unreadableKey})`;
       await sql`delete from web_session_grace where user_id = ${userId}`;
       await sql`delete from web_sessions where user_id = ${userId}`;
       await sql`delete from users where id = ${userId}`;
