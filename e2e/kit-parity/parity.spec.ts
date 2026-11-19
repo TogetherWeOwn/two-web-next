@@ -2882,8 +2882,8 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
     await withSessionDb(async (sql) => {
       await sql`insert into users (id, username, member) values (${attendee}, 'Fixture Attendee Marker', true)`;
       const [root] = await sql<{ id: number }[]>`
-        insert into events (event_key,title,game,description,join_instructions,starts_at,ends_at,timezone,status,recurrence_frequency,recurrence_index)
-        values (${key(1)},'Cancelled series night',${game},'Public synthetic summary','Private instructions marker',
+        insert into events (event_key,title,game,organizer_name,description,join_instructions,starts_at,ends_at,timezone,status,recurrence_frequency,recurrence_index)
+        values (${key(1)},'Cancelled series night',${game},'Fixture Public Host','Public synthetic summary','Private instructions marker',
           '2099-03-01T18:00Z','2099-03-01T20:00Z','Asia/Kolkata','cancelled','weekly',1) returning id`;
       await sql`insert into rsvps (event_id,user_id,status) values (${root!.id},${attendee},'going')`;
       await sql`insert into events (event_key,title,game,starts_at,ends_at,timezone,status,parent_event_id,recurrence_index) values
@@ -2893,24 +2893,21 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
         (${key(5)},'Cancelled sibling',${game},'2099-03-09T18:00Z','2099-03-09T20:00Z','UTC','cancelled',${root!.id},5),
         (${key(6)},'Historical sibling',${game},'2099-03-10T18:00Z','2099-03-10T20:00Z','UTC','past',${root!.id},6),
         (${key(7)},'Invalid sibling',null,'2099-03-11T18:00Z','infinity','UTC','published',${root!.id},7),
+        (${`${prefix}a`},'Unroutable sibling',null,'2099-03-12T18:00Z','2099-03-12T20:00Z','UTC','published',${root!.id},8),
         (${key(8)},'Other event',${game},'2099-03-05T18:00Z','2099-03-05T20:00Z','UTC','published',null,null),
         (${key(9)},'Standalone cancellation',${game},'2099-04-01T18:00Z','2099-04-01T20:00Z','UTC','cancelled',null,null)`;
       await sql`update events set description = 'Draft description marker' where event_key = ${key(4)}`;
     });
     const privateMarkers =
       /Fixture Attendee Marker|Private instructions marker|Draft description marker|data-rsvp-form/;
-    const signed = await api(target).get(`/e/${key(1)}`, {
-      headers: { Cookie: await memberCookie(target) },
-    });
+    const Cookie = await memberCookie(target);
+    const signed = await api(target).get(`/e/${key(1)}`, { headers: { Cookie } });
     expect(signed.status()).toBe(410);
     expect(await signed.text()).not.toMatch(privateMarkers);
-    for (const viewport of [
-      { width: 1280, height: 800 },
-      { width: 390, height: 844 },
-    ]) {
+    for (const width of [1280, 390]) {
       const context = await browser.newContext({
         baseURL: target.origin,
-        viewport,
+        viewport: { width, height: width === 390 ? 844 : 800 },
         javaScriptEnabled: false,
       });
       try {
@@ -2931,10 +2928,8 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
             'main form, aside[aria-label="Your seat"], [data-testid="event-join-pitch"]';
           await expect(page.locator(actions)).toHaveCount(0);
           await expect(page.getByTestId("event-cancelled")).toHaveText("Cancelled");
-          await expect(page.getByTestId("event-cancelled-ics")).toHaveAttribute(
-            "href",
-            `/events/${eventKey}.ics`,
-          );
+          const calendar = page.getByTestId("event-cancelled-ics");
+          await expect(calendar).toHaveAttribute("href", `/events/${eventKey}.ics`);
           const alternatives = page.getByTestId("event-cancelled-alternatives");
           await expect(alternatives.getByRole("link", { name: "Other event" })).toBeVisible();
           const next = page.getByRole("link", { name: "See the next date" });
@@ -2945,6 +2940,7 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
           } else {
             const time = page.getByTestId("event-cancelled-time");
             const facts = page.getByTestId("kit-event-facts");
+            await expect(facts.getByText("Fixture Public Host", { exact: true })).toBeVisible();
             await expect(time).toHaveAttribute("datetime", "2099-03-01T18:00:00.000Z");
             await expect(time.locator("s")).toHaveText("23:30");
             await expect(time.locator("..")).toContainText("Asia/Kolkata · 18:00 UTC");
@@ -2952,14 +2948,13 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
             const nextTime = record.locator("time");
             await expect(nextTime).toHaveAttribute("datetime", "2099-03-15T18:00:00.000Z");
             await expect(record).toContainText(/Next one:.*16 March 2099.*07:00/);
-            if (viewport.width === 390) {
+            if (width === 390) {
               const ids = ["event-cancelled-time", "event-cancelled-record", "kit-event-facts"];
               const nodes = page.locator(ids.map((id) => `[data-testid="${id}"]`).join(","));
-              expect(
-                await nodes.evaluateAll((items) =>
-                  items.map((item) => item.getAttribute("data-testid")),
-                ),
-              ).toEqual(ids);
+              const order = await nodes.evaluateAll((els) =>
+                els.map((el) => el.getAttribute("data-testid")),
+              );
+              expect(order).toEqual(ids);
               const boxes = await Promise.all(
                 [time, record, facts].map((node) => node.boundingBox()),
               );
@@ -2971,7 +2966,7 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
               );
             }
           }
-          const name = `kit-review-cancelled-record-${state}-${viewport.width}`;
+          const name = `kit-review-cancelled-record-${state}-${width}`;
           const path = test.info().outputPath(`${name}.png`);
           await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
           await test.info().attach(name, { path, contentType: "image/png" });

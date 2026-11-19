@@ -1589,10 +1589,13 @@ describe("event-detail gone presentation", () => {
     const store = fakeStore({
       event: { ...row({ status: "cancelled", recurrenceIndex: 1 }), goingCount: 3 } as PublicEvent,
     });
-    const fail = vi.fn(async () => {
-      throw new Error("optional read down");
+    const fail = vi.fn().mockRejectedValue(new Error("optional read down"));
+    const upcoming = RELATED[0]!;
+    const { outcome } = await resolve(KEY, {
+      ...store,
+      seriesFn: async () => ({ hosts: [], previous: null, next: null, upcoming }),
+      [read]: fail,
     });
-    const { outcome } = await resolve(KEY, { ...store, seriesFn: async () => null, [read]: fail });
     expect(fail).toHaveBeenCalledOnce();
     expect(outcome.kind).toBe("gone");
     if (outcome.kind !== "gone") throw new Error("unreachable");
@@ -1601,7 +1604,8 @@ describe("event-detail gone presentation", () => {
     expect(outcome.model.related.map(({ key }) => key)).toEqual(
       read === "relatedFn" ? [] : RELATED.map(({ eventKey }) => eventKey),
     );
-    expect(outcome.model.nextDate).toBeNull();
+    const nextHref = read === "relatedFn" ? `/e/${upcoming.eventKey}` : undefined;
+    expect(outcome.model.nextDate?.href).toBe(nextHref);
     expect(outcome.model.title).toBe("Chess night");
   });
 

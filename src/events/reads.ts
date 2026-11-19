@@ -896,6 +896,7 @@ export async function getEventSeriesContext(
   db: Db,
   event: SeriesEventRef,
   now?: Date,
+  acceptUpcomingKey?: (key: string) => boolean,
 ): Promise<EventSeriesContext | null> {
   // Standalone fast path: no series pointer, rule, or index means no run to
   // read, so the detail skips the query entirely (zero reads, not one empty).
@@ -1000,7 +1001,7 @@ export async function getEventSeriesContext(
   if (!now) return { hosts, previous, next };
   const upcoming = run
     .filter((row) => row.id !== event.id && row.status === "published" && row.startsAt > now)
-    .filter(isRenderableEventWindow)
+    .filter((row) => isRenderableEventWindow(row) && (acceptUpcomingKey?.(row.eventKey) ?? true))
     .sort((a, b) => +a.startsAt - +b.startsAt)[0];
   return { hosts, previous, next, upcoming: upcoming ? toLink(upcoming) : null };
 }

@@ -117,16 +117,6 @@ export function eventGoneModel(
 ): EventGoneModel {
   const datetime = instantIso(event.startsAt);
   const zone = effectiveZone(event.timezone);
-  const nextDate =
-    upcoming &&
-    eventKeyAllowed(upcoming.eventKey, appUrl) &&
-    (canonicalEventKey(upcoming.eventKey) ?? upcoming.eventKey) === upcoming.eventKey
-      ? {
-          href: `/e/${upcoming.eventKey}`,
-          datetime: upcoming.startsAt.toISOString(),
-          whenText: formatEventWhen(upcoming.startsAt, upcoming.timezone),
-        }
-      : null;
   return {
     title: event.title,
     game: event.game,
@@ -144,7 +134,13 @@ export function eventGoneModel(
         }
       : null,
     facts: kitEventFacts({ organizerName: event.organizer_name ?? null, game: event.game }),
-    nextDate,
+    nextDate: upcoming
+      ? {
+          href: `/e/${upcoming.eventKey}`,
+          datetime: upcoming.startsAt.toISOString(),
+          whenText: formatEventWhen(upcoming.startsAt, upcoming.timezone),
+        }
+      : null,
     related: related.map((link) => ({
       key: link.eventKey,
       title: link.title,

@@ -343,7 +343,7 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
     getReviewEventFn: (db, key) => getEventForModeratorReview(db, key),
     neighborsFn: getEventNeighbors,
     relatedFn: listRelatedEvents,
-    seriesFn: (db, event, now) => getEventSeriesContext(db, event, now),
+    seriesFn: getEventSeriesContext,
     attendeesFn: async (db, eventId, page) => {
       // Same bounded window as the served handler: the requested page plus
       // the first row of the next page (lookahead, never rendered) that
@@ -506,8 +506,10 @@ export async function resolveKitEventDetail(
         }
         let upcoming: EventLink | null = null;
         try {
-          const series = await (store.seriesFn ?? getEventSeriesContext)(db, event, now);
-          upcoming = series?.upcoming ?? null;
+          const acceptKey = (key: string) =>
+            eventKeyAllowed(key, appUrl) && (canonicalEventKey(key) ?? key) === key;
+          const readSeries = store.seriesFn ?? getEventSeriesContext;
+          upcoming = (await readSeries(db, event, now, acceptKey))?.upcoming ?? null;
         } catch (err) {
           console.warn("Event next date unavailable; serving cancellation without it.", {
             request_id: safeRequestId(requestId),
