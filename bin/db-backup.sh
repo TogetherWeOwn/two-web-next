@@ -22,9 +22,9 @@
 # dumps and must never receive them.
 #
 # Deletion hygiene: wrangler has no `r2 object list`, so `rotate` and `check`
-# resolve the key set by downloading the checked-in-nearby remote manifest
-# (`neon/<branch>-<branch>/MANIFEST.txt`, written by every backup) with
-# `wrangler r2 object get`. The manifest is admitted before any remote
+# resolve the key set by downloading the remote manifest
+# (`neon/<branch>-<branch>/MANIFEST.txt`, written by every backup) over either
+# transport. The manifest is admitted before any remote
 # mutation (bin/backup/manifest-helper): only an explicit missing-key
 # diagnostic initializes a first backup; any other read failure refuses, and
 # every line must be a valid archive/receipt key of the selected branch. No secret or token is ever passed on argv or
@@ -52,8 +52,8 @@
 #     by default) and either previews or applies it. Bare `rotate` and
 #     `--dry-run` are identical nonmutating previews printing exact disjoint
 #     keep:/delete: archive lines and changing nothing. Only `--apply` deletes
-#     the planned archives (plus manifest-registered receipts) via
-#     `wrangler r2 object delete --remote --force`, then rewrites the manifest;
+#     the planned archives (plus manifest-registered receipts), then rewrites
+#     the manifest;
 #     apply is idempotent across partial-failure retries. `--json` emits a
 #     byte-stable version-1 plan document with mode, policy, keep/delete,
 #     actions and a safe nextAction instead of text lines.
@@ -70,8 +70,10 @@
 # DATABASE_URL is a hard error, so a half-configured box can never silently
 # dump the wrong database. Tests run against agent-testdb only, never prod.
 #
-# Needs: pg_dump (CI: postgres:18 image service / apt), wrangler with
-# CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID.
+# Needs: pg_dump (CI: postgres:18 image service / apt), and either wrangler
+# with CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID (default) or AWS CLI v2
+# with R2_ACCOUNT_ID + R2_S3_ACCESS_KEY_ID + R2_S3_SECRET_ACCESS_KEY (S3).
+# BACKUP_TRANSPORT=wrangler|s3 selects the transport; unset/empty uses wrangler.
 #
 # Env overrides (mirroring two-web pg-backup.sh):
 #   BACKUP_KEEP_DAILY (default 7, supported 1..365),
@@ -212,9 +214,81 @@ wr() {
   fi
 }
 
+BACKUP_TRANSPORT="${BACKUP_TRANSPORT:-wrangler}"
+case "$BACKUP_TRANSPORT" in
+  wrangler) ;;
+  s3)
+    case "$BACKUP_JURISDICTION" in
+      eu|fedramp) s3_label=".$BACKUP_JURISDICTION" ;;
+      default) s3_label='' ;;
+      *) echo 'db-backup: invalid S3 backup jurisdiction' >&2; exit 1 ;;
+    esac
+    if ! (set +x; [[ ${R2_ACCOUNT_ID:-} =~ ^[a-f0-9]{32}$ && -n ${R2_S3_ACCESS_KEY_ID:-} && -n ${R2_S3_SECRET_ACCESS_KEY:-} ]]); then
+      echo 'db-backup: S3 requires a valid R2_ACCOUNT_ID and both R2_S3 credentials' >&2
+      exit 1
+    fi
+    command -v "${AWS_BIN:-aws}" >/dev/null || { echo 'db-backup: AWS CLI not found' >&2; exit 1; }
+    ;;
+  *) echo 'db-backup: invalid BACKUP_TRANSPORT (expected wrangler or s3)' >&2; exit 1 ;;
+esac
+
+r2_aws() (
+  set +x
+  unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
+  AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
+    AWS_ACCESS_KEY_ID="$R2_S3_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_S3_SECRET_ACCESS_KEY" \
+    AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
+    "${AWS_BIN:-aws}" --no-cli-pager --no-cli-auto-prompt --region auto \
+    --endpoint-url "https://${R2_ACCOUNT_ID}${s3_label}.r2.cloudflarestorage.com" "$@"
+)
+
+obj_put() {
+  local key="$1" file="$2" bytes
+  if [ "$BACKUP_TRANSPORT" = wrangler ]; then
+    wr r2 object put "$BACKUP_BUCKET/$key" --file "$file" --remote --force --jurisdiction "$BACKUP_JURISDICTION"
+  else
+    # Use the AWS CLI's default 8 MiB multipart threshold for archive uploads.
+    bytes="$(wc -c < "$file")" || return 1
+    if [[ $key == *.dump ]] && [ "$bytes" -ge 8388608 ]; then
+      r2_aws s3 cp "$file" "s3://$BACKUP_BUCKET/$key" --only-show-errors
+    else
+      r2_aws s3api put-object --bucket "$BACKUP_BUCKET" --key "$key" --body "$file"
+    fi
+  fi >/dev/null
+}
+
+obj_get() {
+  local key="$1" file="$2"
+  rm -f -- "$file" || return 1
+  if [ "$BACKUP_TRANSPORT" = wrangler ]; then
+    wr r2 object get "$BACKUP_BUCKET/$key" --file "$file" --remote --jurisdiction "$BACKUP_JURISDICTION"
+  else
+    r2_aws s3api get-object --bucket "$BACKUP_BUCKET" --key "$key" "$file"
+  fi
+} >/dev/null 2>"$2.stderr"
+
+obj_delete() {
+  local key="$1"
+  if [ "$BACKUP_TRANSPORT" = wrangler ]; then
+    wr r2 object delete "$BACKUP_BUCKET/$key" --remote --force --jurisdiction "$BACKUP_JURISDICTION"
+  else
+    r2_aws s3api delete-object --bucket "$BACKUP_BUCKET" --key "$key"
+  fi >/dev/null
+}
+
+obj_missing() {
+  local file="$1" error
+  [ ! -s "$file" ] || return 1
+  if [ "$BACKUP_TRANSPORT" = wrangler ]; then
+    python3 "$ROOT/bin/backup/manifest-helper" missing "$file.stderr"
+  else
+    error="$(<"$file.stderr")"
+    [[ $error != *$'\n'* && $error =~ ^An\ error\ occurred\ \((NoSuchKey|404)\)\ when\ calling\ the\ GetObject\ operation:.*$ ]]
+  fi
+}
+
 # Rewrite the remote manifest from the local list of keys (one per line,
-# sorted). The manifest is the rotation/check source of truth because wrangler
-# has no `r2 object list`.
+# sorted). The manifest is the rotation/check source of truth.
 admit_manifest() {
   python3 "$ROOT/bin/backup/manifest-helper" "$1" "$(prefix)" "$2" "${@:3}"
 }
@@ -224,17 +298,16 @@ write_manifest() {
   admit_manifest validate "$keys_file"
   tmp="$(mktemp)"
   sort "$keys_file" > "$tmp"
-  wr r2 object put "$BACKUP_BUCKET/$(manifest_key)" --file "$tmp" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
+  obj_put "$(manifest_key)" "$tmp"
   rm -f "$tmp"
 }
 
 fetch_manifest() {
   local out="$1" allow_missing="${2:-0}"
-  if wr r2 object get "$BACKUP_BUCKET/$(manifest_key)" --file "$out" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>"$out.stderr"; then
+  if obj_get "$(manifest_key)" "$out"; then
     admit_manifest validate "$out"
-  elif [ "$allow_missing" = 1 ] && python3 "$ROOT/bin/backup/manifest-helper" missing "$out.stderr"; then
-    # Only an explicit missing-object diagnostic initializes first use. A failed
-    # GET may create partial output; discard it instead of admitting its bytes.
+  elif [ "$allow_missing" = 1 ] && obj_missing "$out"; then
+    # Only a confirmed missing object with no partial bytes initializes first use.
     : > "$out"
   else
     echo "db-backup: manifest read failed; refusing remote mutation" >&2
@@ -332,11 +405,11 @@ upload_verified() {
   local key="$1" archive="$2" dir="$3" receipt
   receipt="$(receipt_key "$key")"
   integrity write "$archive" "$key" "$dir/receipt.json"
-  wr r2 object put "$BACKUP_BUCKET/$key" --file "$archive" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
-  wr r2 object get "$BACKUP_BUCKET/$key" --file "$dir/read-back.dump" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
+  obj_put "$key" "$archive"
+  obj_get "$key" "$dir/read-back.dump" || { echo "db-backup: archive read-back failed: $key" >&2; exit 1; }
   integrity verify "$dir/read-back.dump" "$key" "$dir/receipt.json"
-  wr r2 object put "$BACKUP_BUCKET/$receipt" --file "$dir/receipt.json" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
-  wr r2 object get "$BACKUP_BUCKET/$receipt" --file "$dir/read-back.json" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
+  obj_put "$receipt" "$dir/receipt.json"
+  obj_get "$receipt" "$dir/read-back.json" || { echo "db-backup: receipt read-back failed: $key" >&2; exit 1; }
   cmp -s "$dir/receipt.json" "$dir/read-back.json" || { echo "db-backup: receipt read-back failed: $key" >&2; exit 1; }
 }
 
@@ -382,8 +455,8 @@ do_promote_weekly() {
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   weekly="${src%.dump}-weekly-${ts}.dump"
   admit_manifest append "$dir/MANIFEST.txt" "$weekly" "$(receipt_key "$weekly")"
-  wr r2 object get "$BACKUP_BUCKET/$src" --file "$dir/dl.dump" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
-  if ! wr r2 object get "$BACKUP_BUCKET/$(receipt_key "$src")" --file "$dir/source.json" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>&1; then
+  obj_get "$src" "$dir/dl.dump" || { echo "db-backup: archive read failed: $src" >&2; exit 1; }
+  if ! obj_get "$(receipt_key "$src")" "$dir/source.json"; then
     echo "db-backup: unverified: $src (receipt unavailable); refusing promotion" >&2
     exit 1
   fi
@@ -401,31 +474,22 @@ do_promote_weekly() {
 # confirmed by the explicit missing-key diagnostic) counts as done; any other
 # probe outcome after a failed delete fails.
 delete_archive_pair() {
-  local key="$1" manifest="$2" workdir="$3" receipt probe probe_stderr
+  local key="$1" manifest="$2" workdir="$3" receipt probe target
   receipt="$(receipt_key "$key")"
   probe="$workdir/probe.tmp"
-  probe_stderr="$workdir/probe.stderr"
-  if ! wr r2 object delete "$BACKUP_BUCKET/$key" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>&1; then
-    if wr r2 object get "$BACKUP_BUCKET/$key" --file "$probe" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>"$probe_stderr" \
-       || ! python3 "$ROOT/bin/backup/manifest-helper" missing "$probe_stderr"; then
-      echo "db-backup: delete failed: $key" >&2
-      rm -f "$probe" "$probe_stderr"
-      return 1
+  for target in "$key" "$receipt"; do
+    if [ "$target" = "$receipt" ] && ! grep -qxF "$receipt" "$manifest"; then
+      break
     fi
-    rm -f "$probe" "$probe_stderr"
-  fi
-  if grep -qxF "$receipt" "$manifest"; then
-    if ! wr r2 object delete "$BACKUP_BUCKET/$receipt" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>&1; then
-      if wr r2 object get "$BACKUP_BUCKET/$receipt" --file "$probe" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>"$probe_stderr" \
-         || ! python3 "$ROOT/bin/backup/manifest-helper" missing "$probe_stderr"; then
-        echo "db-backup: delete failed: $receipt" >&2
-        rm -f "$probe" "$probe_stderr"
+    if ! obj_delete "$target" 2>/dev/null; then
+      if obj_get "$target" "$probe" || ! obj_missing "$probe"; then
+        echo "db-backup: delete failed: $target" >&2
+        rm -f "$probe" "$probe.stderr"
         return 1
       fi
-      rm -f "$probe" "$probe_stderr"
     fi
-  fi
-  rm -f "$probe" "$probe_stderr"
+  done
+  rm -f "$probe" "$probe.stderr"
   echo "delete: $key"
   return 0
 }
@@ -567,13 +631,17 @@ do_check() {
         continue ;;
     esac
     receipt="$(receipt_key "$key")"
-    if ! wr r2 object get "$BACKUP_BUCKET/$key" --file "$dir/check.dump" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>&1; then
-      echo "missing: $key" >&2
+    if ! obj_get "$key" "$dir/check.dump"; then
+      if obj_missing "$dir/check.dump"; then
+        echo "missing: $key" >&2
+      else
+        echo "db-backup: archive read failed: $key" >&2
+      fi
       failed=1
-    elif ! wr r2 object get "$BACKUP_BUCKET/$receipt" --file "$dir/check.json" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>&1; then
+    elif ! obj_get "$receipt" "$dir/check.json"; then
       echo "unverified: $key (receipt unavailable)"
       unverified=$((unverified + 1))
-      if [ "$REQUIRE_VERIFIED" = 1 ] || grep -qxF "$receipt" "$dir/MANIFEST.txt"; then
+      if ! obj_missing "$dir/check.json" || [ "$REQUIRE_VERIFIED" = 1 ] || grep -qxF "$receipt" "$dir/MANIFEST.txt"; then
         failed=1
       fi
     elif integrity verify "$dir/check.dump" "$key" "$dir/check.json"; then
