@@ -53,6 +53,12 @@ it("rejects over-cap and invalid bodies without resolving", async () => {
   expect(factory).not.toHaveBeenCalled();
 });
 
+it("accepts a valid form at exactly the action cap", async () => {
+  const body = form.padEnd(BODY_LIMIT_BYTES.action, "&");
+  expect(await post(body)).toEqual({ status: 303 });
+  expect(resolve).toHaveBeenCalledExactlyOnceWith(key, "confirmed");
+});
+
 it("spends the shared admin-write budget before calling the audited service", async () => {
   throttle.mockResolvedValueOnce(
     new Response(null, { status: 429, headers: { "retry-after": "5" } }),
