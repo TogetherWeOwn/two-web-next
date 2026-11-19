@@ -2177,6 +2177,124 @@ test("kit: archive search and keyboard focus evidence", async ({ browser }) => {
   }
 });
 
+test("Kit saved live snapshot expires without changing the RSVP", async ({ browser }) => {
+  test.setTimeout(60_000);
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const target = targets.find((item) => item.name === "kit")!;
+  const key = "01J00000000000000000000993";
+  const userId = "900000000000000848";
+  const bearer = `two_${randomBytes(32).toString("base64url")}`;
+  const hash = createHash("sha256").update(bearer).digest("hex");
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
+  const now = Date.now();
+  const end = new Date(now + 3_600_000);
+  const path = `/e/${key}?attendees=1`;
+  const plain = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  const enhanced = await browser.newContext({ baseURL: target.origin });
+  const sizes = [
+    { width: 1280, height: 800 },
+    { width: 390, height: 844 },
+  ];
+  async function capture(page: Page, name: string) {
+    const screenshot = test.info().outputPath(`${name}.png`);
+    await page.screenshot({ path: screenshot, animations: "disabled", caret: "hide" });
+    await test.info().attach(name, { path: screenshot, contentType: "image/png" });
+  }
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into users (id, username, member) values (${userId}, 'Seat fixture', true)`;
+      await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+        values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(now + 7_200_000)})`;
+      await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, rsvp_open)
+        values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
+          ${new Date(now - 3_600_000)}, ${end}, 'Community voice', 'published', true)`;
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, ${userId}, 'going' from events where event_key = ${key}`;
+    });
+    await plain.addCookies([
+      {
+        name: "__Host-two_session",
+        value: `${bearer}.${signature}`,
+        domain: new URL(target.origin).hostname,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    ]);
+    const noJs = await plain.newPage();
+    await noJs.goto(path);
+    await expect(noJs.getByTestId("rsvp-syncing")).toBeVisible();
+    await withSessionDb(async (sql) => {
+      await sql`update rsvps set synced_to_discord_at = ${new Date(now)} where user_id = ${userId}`;
+    });
+    for (const viewport of sizes) {
+      await noJs.setViewportSize(viewport);
+      const response = await noJs.reload();
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      const time = noJs.getByTestId("kit-event-time");
+      const seat = noJs.getByTestId("kit-seat-card");
+      await expect(noJs.getByTestId("event-ongoing")).toHaveText("Live");
+      await expect(time).toContainText("as of");
+      await expect(time.locator("time").last()).toHaveAttribute("datetime", end.toISOString());
+      await expect(seat.getByRole("heading", { name: "You're in." })).toBeVisible();
+      await expect(seat.getByTestId("rsvp-synced")).toHaveText("Synced to Discord.");
+      await expect(seat.getByRole("button").or(seat.getByRole("link"))).toHaveCount(0);
+      await expect(noJs.getByRole("complementary", { name: "Your seat", exact: true })).toHaveCount(
+        0,
+      );
+      await expect(noJs.getByRole("link", { name: "Refresh the event time" })).toHaveCount(0);
+      await capture(noJs, `kit-review-event-live-${viewport.width}`);
+    }
+    await enhanced.addCookies(await plain.cookies());
+    const page = await enhanced.newPage();
+    await page.goto(`${path}#snapshot`);
+    const live = page.getByTestId("event-ongoing");
+    await expect(live).toBeVisible();
+    const deadline = Date.parse(
+      (await page.locator("#kit-live-snapshot").getAttribute("data-stale-at"))!,
+    );
+    await page.evaluate((ms) => {
+      Date.now = () => ms;
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+    }, deadline - 1);
+    await expect(live).toBeVisible();
+    await page.bringToFront();
+    await page.evaluate((ms) => {
+      Date.now = () => ms;
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, deadline);
+    await expect(page.locator("[data-live-fresh]:visible")).toHaveCount(0);
+    await expect(page.getByText("Stale", { exact: true })).toHaveCount(2);
+    await expect(page.getByRole("link", { name: "Refresh the event time" })).toHaveAttribute(
+      "href",
+      `${target.origin}${path}`,
+    );
+    await expect(page.getByTestId("rsvp-synced")).toBeVisible();
+    await expect(page.getByTestId("kit-event-time")).toContainText("live as of");
+    for (const viewport of sizes) {
+      await page.setViewportSize(viewport);
+      await capture(page, `kit-review-event-stale-${viewport.width}`);
+    }
+    await page.addInitScript(() => {
+      Date.now = () => 1;
+    });
+    await page.reload();
+    await expect(live).toBeHidden();
+    await expect(page.getByRole("link", { name: "Refresh the event time" })).toBeVisible();
+    await expect(page.getByTestId("rsvp-synced")).toBeVisible();
+  } finally {
+    await Promise.all([plain.close(), enhanced.close()]);
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key = ${key}`;
+      await sql`delete from web_session_grace where user_id = ${userId}`;
+      await sql`delete from web_sessions where user_id = ${userId}`;
+      await sql`delete from users where id = ${userId}`;
+    });
+  }
+});
+
 // Successful archive page turns with browser history restoration.
 //
 // Isolated deterministic fixture: 24 dated rows plus the seeded past night

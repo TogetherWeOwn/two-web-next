@@ -71,9 +71,17 @@ function minifyBytes(entry, root) {
   // .js extension silently dropped the "use strict" prefix.
   const args = entry.endsWith(".css")
     ? ["--loader:.css=css", "--minify", source]
-    : entry === "public/islands/event-device-timezone.js"
-      ? ["--bundle", "--format=iife", "--minify", source]
-      : ["--minify", source];
+    : entry === "public/islands/kit-live-event-time.js"
+      ? [
+          "--bundle",
+          "--format=iife",
+          "--minify",
+          `--tsconfig=${join(root, "tsconfig.json")}`,
+          source,
+        ]
+      : entry === "public/islands/event-device-timezone.js"
+        ? ["--bundle", "--format=iife", "--minify", source]
+        : ["--minify", source];
   return execFileSync(esbuild, args, { maxBuffer: 16 * 1024 * 1024 });
 }
 
@@ -213,6 +221,11 @@ function selftest() {
     cpSync(join(repoRoot, "assets"), join(scratch, "assets"), { recursive: true });
     cpSync(join(repoRoot, "public"), join(scratch, "public"), { recursive: true });
     cpSync(join(repoRoot, "vendor"), join(scratch, "vendor"), { recursive: true });
+    const clockDir = "web/src/lib";
+    mkdirSync(join(scratch, clockDir), { recursive: true });
+    for (const name of ["time-freshness.ts", "time-freshness-clock.ts"]) {
+      copyFileSync(join(repoRoot, clockDir, name), join(scratch, clockDir, name));
+    }
     for (const path of [...HONO_CONSUMERS, ...ARTIFACTS]) {
       mkdirSync(dirname(join(scratch, path)), { recursive: true });
       copyFileSync(join(repoRoot, path), join(scratch, path));

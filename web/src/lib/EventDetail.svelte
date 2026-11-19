@@ -1,35 +1,50 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
+import Tag from "#lib/Tag.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
 import { kitEventFacts } from "../../../src/events/kit-event-facts";
-import { ONGOING_COPY } from "../../../src/events/ongoing";
 import { isPublicJoinUrl } from "../../../src/events/public-join-url";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
-import { EVENT_ONGOING_TESTID } from "../../../src/islands/contracts";
+import {
+  EVENT_ONGOING_TESTID,
+  RSVP_COPY,
+  RSVP_SYNCED_TESTID,
+  RSVP_SYNCING_TESTID,
+} from "../../../src/islands/contracts";
 
 // Member metadata, RSVP and roster are escaped server leaves shared with Hono.
 // Mutation ownership and native island mounts stay unchanged; this route is csr=false.
 let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrite?: boolean } =
   $props();
 const facts = $derived(kitEventFacts(model));
+const live = $derived(model.liveTime);
+const savedLive = $derived(
+  live && !model.review && model.viewerMember && model.answer?.status === "going",
+);
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
 // This route is csr=false. Share one native-island block in execution order;
 // every deferred script runs after parsing, with all of its mount nodes present.
-const detailIslands = [
-  "event-device-timezone",
-  "event-time-from-now",
-  "rsvp-button",
-  "copy-link",
-  "event-share",
-  "going-count",
-  "attendees-live",
-]
-  .map((name) => `<script src="/islands/${name}.js" defer></` + "script>")
-  .join("");
+const detailIslands = $derived(
+  [
+    ...(live ? ["kit-live-event-time"] : ["event-device-timezone", "event-time-from-now"]),
+    "rsvp-button",
+    "copy-link",
+    "event-share",
+    "going-count",
+    "attendees-live",
+  ]
+    .map((name) => `<script src="/islands/${name}.js" defer></` + "script>")
+    .join(""),
+);
 </script>
+
+{#snippet liveTag(testid?: string)}
+  <span data-live-fresh data-testid={testid}><Tag variant="live">Live</Tag></span>
+  <span hidden data-live-stale><Tag variant="warn">Stale</Tag></span>
+{/snippet}
 
 <svelte:head>
   {#if model.markdownAlternate}
@@ -100,7 +115,8 @@ const detailIslands = [
   loginReturnTo={model.path}
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
-  <div class="event-layout">
+  <div class="event-layout" id={live ? "kit-live-snapshot" : undefined}
+    data-as-of={live?.asOf} data-stale-at={live?.staleAt}>
   <div class="event-layout-head">
   <nav class="event-back" aria-label="Event calendar">
     <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
@@ -118,8 +134,11 @@ const detailIslands = [
     {#if model.status === "cancelled"}
       <p class="notice" role="status" data-testid="event-cancelled">Cancelled</p>
     {/if}
-    {#if model.isOngoing}
-      <p class="notice" data-testid={EVENT_ONGOING_TESTID}>{ONGOING_COPY}</p>
+    {#if live}
+      <div class="lifecycle-tags">
+        {@render liveTag(EVENT_ONGOING_TESTID)}
+        {#if savedLive}<Tag variant="you">You're in</Tag>{/if}
+      </div>
     {/if}
     <h1 data-waitlist-position={model.waitlistPosition ?? ""}>{model.title}</h1>
   </section>
@@ -133,9 +152,35 @@ const detailIslands = [
       {/if}
     </p>
   {/if}
-  {@html model.detailHtml.metadata}
+  {#if live}
+    <div class="lifecycle-time" data-testid="kit-event-time">
+      <time class="lifecycle-figure" datetime={model.timeDatetime}>
+        <span data-live-fresh>Live</span><span hidden data-live-stale>{live.since}</span>
+      </time>
+      <div>
+        <p>
+          <span data-live-fresh>Since {live.since} · {model.zoneLabel} · as of</span>
+          <span hidden data-live-stale>{model.zoneLabel} · {live.utc} UTC · live as of</span>
+          <time datetime={live.asOf}>{live.asOfText}</time><span id="kit-live-refresh"></span>
+        </p>
+        <p>Ends <time datetime={model.endsAt}>{model.endsWhenText}</time></p>
+      </div>
+    </div>
+  {:else}
+    {@html model.detailHtml.metadata}
+  {/if}
   </div>
   <div class="event-layout-rail">
+    {#if savedLive}
+      <section class="seat-card" aria-labelledby="seat-card-heading" data-testid="kit-seat-card">
+        <div class="seat-card-head"><h2 id="seat-card-heading">You're in.</h2>{@render liveTag()}</div>
+        {#if model.answer?.syncedToDiscordAt}
+          <p class="seat-card-note" data-testid={RSVP_SYNCED_TESTID}>{RSVP_COPY.synced}</p>
+        {:else}
+          <p class="seat-card-note" role="status" data-testid={RSVP_SYNCING_TESTID}>{RSVP_COPY.syncing}</p>
+        {/if}
+      </section>
+    {:else}
     <section class="seat-card" aria-labelledby={model.seatCard.heading ? 'seat-card-heading' : undefined} aria-label={model.seatCard.heading ? undefined : 'RSVP'} data-testid="kit-seat-card">
       {#if model.seatCard.heading}
         <div class="seat-card-head">
@@ -143,9 +188,13 @@ const detailIslands = [
           {#if model.seatCard.tag}<span class="seat-card-tag">{model.seatCard.tag.text}</span>{/if}
         </div>
       {/if}
+      {#if live && !model.review}
+        <p class="seat-card-note live-rsvp-end">Ends <time datetime={model.endsAt}>{model.endsWhenText}</time></p>
+      {/if}
       <div class="event-rsvp">{@html model.detailHtml.rsvp}</div>
       {#if model.seatCard.note}<p class="seat-card-note">{model.seatCard.note}</p>{/if}
     </section>
+    {/if}
     {#if facts.length > 0}
       <section class="event-facts" aria-label="Event facts" data-testid="kit-event-facts">
         <dl>
@@ -167,6 +216,7 @@ const detailIslands = [
     {@html model.detailHtml.share}
   </div>
   <div class="event-layout-body">
+  {#if live}{@html model.detailHtml.metadata}{/if}
   <div class="event-detail-grid">
     <div>
       {#if model.description}
@@ -268,6 +318,15 @@ const detailIslands = [
 
 <style>
   .event-layout-head { grid-area: head; min-width: 0; }
+  .lifecycle-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .lifecycle-time { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-4); padding-top: var(--space-7); margin-bottom: var(--space-4); border-top: 1px solid var(--color-hair2); }
+  .lifecycle-figure { font-size: var(--text-figure); line-height: 1; font-variant-numeric: tabular-nums; }
+  .lifecycle-time p { margin: 0; color: var(--color-t3); font: var(--text-small) / var(--leading-label) var(--font-data); }
+  @media (max-width: 820px) {
+    .lifecycle-time { flex-direction: column; }
+    .lifecycle-figure { font-size: var(--text-figure-compact); }
+    .live-rsvp-end { display: none; }
+  }
   .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
   .event-layout-rail :global(> section) { border: 0; }
   .event-layout-rail :global(> .event-share) { padding: 0; margin-top: var(--space-2); }
@@ -287,6 +346,7 @@ const detailIslands = [
   .event-facts dd p { margin: 0; }
   .seat-card-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-inset-tight); }
   .seat-card-head h2 { margin: 0; font-size: var(--text-title); font-weight: var(--font-weight-semibold); line-height: var(--leading-title); }
+  .live-rsvp-end { margin-bottom: var(--space-inset-tight); }
   .seat-card-tag { padding: var(--space-inset-tag-y) var(--space-inset-tag-x); border-radius: var(--radius-s); color: var(--color-warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-warn) 45%, transparent); font: var(--text-label) / var(--leading-label) var(--font-data); letter-spacing: var(--tracking-label); text-transform: uppercase; }
   .seat-card-note { margin: var(--space-inset-tight) 0 0; font-size: var(--text-small); color: var(--color-t2); }
   :global(.event-theme) .seat-card :global(.event-rsvp) { display: block; margin: 0; }

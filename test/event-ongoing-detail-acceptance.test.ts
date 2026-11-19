@@ -107,8 +107,14 @@ for (const twin of ["Hono", "Kit"] as const) {
       const result = await detailSnapshot(twin, row, kit, now);
       expect(result.status).toBe(200);
       const visibleHero = visibleText(hero(result.html));
-      expect.soft(ONGOING.test(visibleHero), visibleHero).toBe(ongoing);
+      const liveLabel = twin === "Kit" ? /\bLive\b/ : ONGOING;
+      expect.soft(liveLabel.test(visibleHero), visibleHero).toBe(ongoing);
       expect.soft(visibleText(document(result.html))).toMatch(availability);
+      if (twin === "Kit" && ongoing && result.html.includes('data-testid="rsvp-going"')) {
+        expect(result.html).toMatch(
+          /class="seat-card-note live-rsvp-end[^>]*>Ends <time[^>]*>[\s\S]*data-testid="rsvp-going"/,
+        );
+      }
       if (now >= END) {
         expect.soft(visibleText(document(result.html))).not.toMatch(TWO_LEFT);
         expect.soft(result.html).not.toMatch(/data-testid="(?:rsvp-going|waitlist-join)"/);
@@ -135,23 +141,29 @@ for (const twin of ["Hono", "Kit"] as const) {
       }
     });
 
-    it("CONTROL: an ongoing render uses only existing static islands, no fetch or new handlers", async () => {
+    it("CONTROL: live detail reuses the timezone island slot without fetch or inline handlers", async () => {
       const fetch = vi
         .spyOn(globalThis, "fetch")
         .mockRejectedValue(new Error("No network allowed"));
       const result = await detailSnapshot(twin, ongoingEvent(), kit, MID);
       expect(result.status).toBe(200);
       const surface = clientSurface(result.html);
-      expect(surface.scripts.map((script) => script.src).sort()).toEqual([
-        "/islands/attendees-live.js",
-        ...(twin === "Hono" ? ["/islands/auth-status.js"] : []),
-        "/islands/copy-link.js",
-        "/islands/event-device-timezone.js",
-        "/islands/event-share.js",
-        "/islands/event-time-from-now.js",
-        "/islands/going-count.js",
-        "/islands/rsvp-button.js",
-      ]);
+      expect(surface.scripts.map((script) => script.src).sort()).toEqual(
+        [
+          "/islands/attendees-live.js",
+          "/islands/copy-link.js",
+          "/islands/event-share.js",
+          "/islands/going-count.js",
+          "/islands/rsvp-button.js",
+          ...(twin === "Hono"
+            ? [
+                "/islands/auth-status.js",
+                "/islands/event-device-timezone.js",
+                "/islands/event-time-from-now.js",
+              ]
+            : ["/islands/kit-live-event-time.js"]),
+        ].sort(),
+      );
       expect(surface.scripts.every((script) => script.body === "")).toBe(true);
       expect(surface.handlers).toEqual([]);
       expect(fetch).not.toHaveBeenCalled();

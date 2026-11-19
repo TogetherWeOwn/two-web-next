@@ -1,3 +1,4 @@
+import { timeStaleAt } from "../../web/src/lib/time-freshness-clock";
 // Kit read model for the live GET /e/:key detail: published, past and
 // moderator draft rows with member-only attendee disclosure.
 //
@@ -48,6 +49,8 @@ import {
   formatEventWhen,
   instantIso,
   isValidZone,
+  wallDateIso,
+  wallTimeHm,
 } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
@@ -198,10 +201,15 @@ export interface KitEventDetailModel {
   status: string;
   isDraft: boolean;
   isPast: boolean;
-  /** Server snapshot at the render instant (`isOngoing`): the "Happening now"
-   * hero badge. Never a client clock; RSVP verdicts are unaffected. Optional
-   * so a pre-existing fixture without the flag reads as not ongoing. */
+  /** Server snapshot; client expiry never changes the RSVP verdict. */
   isOngoing?: boolean;
+  liveTime?: {
+    asOf: string;
+    asOfText: string;
+    staleAt: string;
+    since: string;
+    utc: string;
+  };
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
@@ -381,6 +389,26 @@ function toLink(link: EventLink, now: Date): KitEventDetailLink {
     location: link.location,
     game: link.game || null,
     availability: eventLinkAvailability(link, now),
+  };
+}
+
+function liveDetailTime(
+  event: PublicEvent,
+  now: Date,
+  zone: string,
+): KitEventDetailModel["liveTime"] {
+  if (!isOngoing(event, now)) return undefined;
+  const staleAt = timeStaleAt("live", +now, +event.startsAt, +event.endsAt);
+  if (staleAt === null || !Number.isFinite(staleAt)) return undefined;
+  const clock = wallTimeHm(now, zone);
+  const sameDay = wallDateIso(event.startsAt, zone) === wallDateIso(now, zone);
+  const date = new Intl.DateTimeFormat("en-GB", { timeZone: zone, dateStyle: "medium" });
+  return {
+    asOf: now.toISOString(),
+    asOfText: sameDay ? clock : `${date.format(now)}, ${clock}`,
+    staleAt: new Date(staleAt).toISOString(),
+    since: wallTimeHm(event.startsAt, zone),
+    utc: wallTimeHm(event.startsAt, "UTC"),
   };
 }
 
@@ -588,6 +616,8 @@ export async function resolveKitEventDetail(
       const pagePath = `/e/${event.eventKey}`;
       const pageCanonical = canonicalUrl(appUrl, pagePath);
       const review = wantsReview ? savedEventReview(event, now, search) : null;
+      const zoneLabel = isValidZone(event.timezone) ? event.timezone : "UTC";
+      const liveTime = liveDetailTime(event, now, zoneLabel);
       const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
@@ -631,7 +661,8 @@ export async function resolveKitEventDetail(
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
-          isOngoing: isOngoing(event, now),
+          isOngoing: Boolean(liveTime),
+          ...(liveTime ? { liveTime } : {}),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,
@@ -663,7 +694,7 @@ export async function resolveKitEventDetail(
           whenText: formatDetailWhen(event.startsAt, event.timezone),
           endsWhenText: formatDetailWhen(event.endsAt, event.timezone),
           durationText: formatElapsedDuration(event.endsAt.getTime() - event.startsAt.getTime()),
-          zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
+          zoneLabel,
           timeDatetime: instantIso(event.startsAt),
           attendees,
           attendeesPaging,

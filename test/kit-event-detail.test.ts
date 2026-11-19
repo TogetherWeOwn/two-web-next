@@ -924,8 +924,36 @@ describe("Kit detail presentation", () => {
       html.push(renderDetail(outcome.model as unknown as Record<string, unknown>));
       expect(Date.now()).toBe(new Date(wall).getTime());
     }
-    expect(html[0]).toContain("Happening now");
+    expect(html[0]).toContain('data-as-of="2098-12-31T20:00:00.000Z"');
+    expect(html[0]).toContain('data-stale-at="2098-12-31T20:05:00.000Z"');
     expect(html[0]).toBe(html[1]);
+  });
+
+  it("shows live timing in published review without enabling RSVP", async () => {
+    const event = { ...row(), goingCount: 0, goingOccupancy: 0 };
+    const render = (now: Date) =>
+      resolveKitEventDetail({
+        key: KEY,
+        path: `/e/${KEY}`,
+        search: "?review=1",
+        env,
+        session: memberSession(MOD_ID, true),
+        joinResult: null,
+        setHeaders: () => {},
+        store: fakeStore({ event }),
+        now,
+      });
+    const last = await render(new Date(+event.endsAt - 1));
+    expect(last.kind).toBe("ok");
+    if (last.kind !== "ok") throw new Error(last.kind);
+    expect(last.model.liveTime?.staleAt).toBe(event.endsAt.toISOString());
+    expect(last.model.review?.actions).toContain("Back to edit");
+    expect(last.model.detailHtml.rsvp).toContain("disabled");
+    const end = await render(event.endsAt);
+    expect(end.kind).toBe("ok");
+    if (end.kind !== "ok") throw new Error(end.kind);
+    expect(end.model.liveTime).toBeUndefined();
+    expect(end.model.rsvpClosed).toBe("past");
   });
 
   function freezeRosterClock() {
