@@ -21,10 +21,64 @@ import {
   normalizeHeaders,
   normalizeSetCookie,
 } from "./normalize.mjs";
+import { readWranglerConfig } from "../wrangler-config.mjs";
+import { comparePreHookAssets, productionTargets } from "./production.mjs";
 import { signedCookieNames } from "./signed-cookies.mjs";
 import { buildVectors, concretePath, listPublicFiles, slug } from "./vectors.mjs";
 
 const repo = join(import.meta.dirname, "../..");
+test("production replay refuses missing/on flags, mismatched origin and wrong output shape", () => {
+  const config = (path) => readWranglerConfig(readFileSync(join(repo, path), "utf8"));
+  const root = config("wrangler.jsonc");
+  const kit = config("web/wrangler.production.jsonc");
+  const targets = productionTargets(root, kit);
+  assert.equal(targets.hono.vars.APP_URL, root.env.production.vars.APP_URL);
+  const candidate = targets.kit("installed-entry", "installed-assets");
+  assert.equal(candidate.main, "installed-entry");
+  assert.equal(candidate.assets.directory, "installed-assets");
+  for (const target of [targets.hono, candidate]) {
+    for (const key of ["hyperdrive", "routes", "tail_consumers", "triggers"])
+      assert.ok(!(key in target), `${key} must not enter local replay`);
+  }
+  for (const [flag, value] of Object.entries(kit.vars)) {
+    if (!flag.startsWith("KIT_ROUTE_")) continue;
+    assert.equal(value, "false");
+    for (const invalid of [undefined, true, false, "true"]) {
+      assert.throws(
+        () => productionTargets(root, { ...kit, vars: { ...kit.vars, [flag]: invalid } }),
+        new RegExp(`${flag}=false`),
+      );
+    }
+  }
+  assert.throws(
+    () =>
+      productionTargets(root, { ...kit, vars: { ...kit.vars, APP_URL: "https://example.org" } }),
+    /production origin/,
+  );
+  assert.throws(() => productionTargets(root, { ...kit, main: "stock.js" }), /_worker\.js/);
+});
+
+test("pre-hook assets require GET and HEAD, success and present security headers", () => {
+  const path = "/_app/version.json";
+  const name = "content-security-policy";
+  const row = (status, headers) => ({ response: { status, headers } });
+  const safe = { [name]: "default-src 'self'" };
+  const recording = (vectors) => new Map([[`static/${slug(path)}`, vectors]]);
+  const hono = recording({ GET: row(404, safe), HEAD: row(404, safe) });
+  const good = recording({ GET: row(200, safe), HEAD: row(200, safe) });
+  assert.equal(comparePreHookAssets(hono, good, [path], [name]).failures.length, 0);
+  const bad = recording({ GET: row(404, {}) });
+  assert.deepEqual(
+    comparePreHookAssets(hono, bad, [path], [name]).failures.map(({ field }) => field),
+    ["status", `headers.${name}`, "missing"],
+  );
+  const missingOnBoth = recording({ GET: row(200, {}), HEAD: row(200, {}) });
+  assert.equal(
+    comparePreHookAssets(missingOnBoth, missingOnBoth, [path], [name]).failures.length,
+    2,
+  );
+});
+
 const inventory = JSON.parse(
   readFileSync(join(repo, "test/fixtures/route-inventory.json"), "utf8"),
 );
