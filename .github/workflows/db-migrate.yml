@@ -21,6 +21,7 @@ on:
         default: staging
         required: false
 
+# Checkout and fetch the migration numbering baseline.
 permissions:
   contents: read
 
@@ -32,6 +33,7 @@ concurrency:
 
 jobs:
   migrate:
+    name: migrate
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Required reviewers, prevent-self-review and main-only branch policy must

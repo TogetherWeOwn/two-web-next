@@ -16,8 +16,12 @@ import {
   PAST_EVENTS_PAGER_TESTID,
   PAST_EVENTS_SEARCH_MISS_TESTID,
   PAST_EVENTS_TESTID,
+  PAST_EVENTS_UNREADABLE_TESTID,
   goingCountText,
+  pastEventsHasNewer,
   pastEventsOutOfRangeCopy,
+  pastEventsState,
+  pastEventsUnreadableCopy,
   pastEventsUrl,
 } from "../islands/contracts";
 import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
@@ -76,6 +80,47 @@ const Card: FC<{ e: PublicEvent; q: string; archive: ArchiveContext }> = ({ e, q
       <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
     </li>
   );
+};
+
+const ArchiveResultsState: FC<{
+  rowCount: number;
+  page: number;
+  hasMore: boolean;
+  totalPages: number;
+  q: string;
+}> = ({ rowCount, page, hasMore, totalPages, q }) => {
+  switch (pastEventsState(page, totalPages, rowCount, q)) {
+    case "search-miss":
+      return (
+        <p role="status" data-testid={PAST_EVENTS_SEARCH_MISS_TESTID}>
+          No past events match “{q}”. <a href="/events/past">Clear search</a>
+        </p>
+      );
+    case "empty":
+      return (
+        <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
+          <p>{PAST_EVENTS_COPY.empty}</p>
+          <p>
+            <a href="/join">{PAST_EVENTS_COPY.join}</a>
+          </p>
+        </div>
+      );
+    case "out-of-range":
+      return (
+        <p role="status" data-testid={PAST_EVENTS_OUT_OF_RANGE_TESTID}>
+          {pastEventsOutOfRangeCopy(page, totalPages)}{" "}
+          <a href={pastEventsUrl(1, q)}>Back to page 1</a>
+        </p>
+      );
+    case "unreadable":
+      return (
+        <p role="status" data-testid={PAST_EVENTS_UNREADABLE_TESTID}>
+          {pastEventsUnreadableCopy(page, totalPages, hasMore)}
+        </p>
+      );
+    case "populated":
+      return null;
+  }
 };
 
 export const PastEventsPage: FC<{
@@ -145,25 +190,13 @@ export const PastEventsPage: FC<{
             Past events matching “{q}”. <a href="/events/past">Clear search</a>
           </p>
         ) : null}
-        {rows.length === 0 ? (
-          totalPages === 0 && q ? (
-            <p role="status" data-testid={PAST_EVENTS_SEARCH_MISS_TESTID}>
-              No past events match “{q}”. <a href="/events/past">Clear search</a>
-            </p>
-          ) : totalPages === 0 ? (
-            <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
-              <p>{PAST_EVENTS_COPY.empty}</p>
-              <p>
-                <a href="/join">{PAST_EVENTS_COPY.join}</a>
-              </p>
-            </div>
-          ) : (
-            <p role="status" data-testid={PAST_EVENTS_OUT_OF_RANGE_TESTID}>
-              {pastEventsOutOfRangeCopy(page, totalPages)}{" "}
-              <a href={pastEventsUrl(1, q)}>Back to page 1</a>
-            </p>
-          )
-        ) : null}
+        <ArchiveResultsState
+          rowCount={rows.length}
+          page={page}
+          hasMore={hasMore}
+          totalPages={totalPages}
+          q={q}
+        />
       </div>
       <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>
         {rows.map((e) => (
@@ -171,7 +204,7 @@ export const PastEventsPage: FC<{
         ))}
       </ul>
       <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>
-        {page > 1 && totalPages > 0 ? (
+        {pastEventsHasNewer(page, totalPages) ? (
           <a
             data-testid={PAST_EVENTS_PAGER_NEWER_TESTID}
             data-archive-page

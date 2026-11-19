@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +13,11 @@ import diagnosticsConfig from "./lighthouse-diagnostics.config.mjs";
 import { navigationMetadata } from "../test/lighthouse-navigation-fixtures.mjs";
 import DocumentTiming, { documentTiming } from "./lighthouse-document-timing.mjs";
 import { UP_TIMEOUT_MS, main as mobile } from "./lighthouse-origin-run.mjs";
-import { main as desktop, loadCollectedLhrs } from "./lighthouse-quality-run.mjs";
+import {
+  clearAttemptEvidence,
+  main as desktop,
+  loadCollectedLhrs,
+} from "./lighthouse-quality-run.mjs";
 
 test("diagnostic audit is additive and does not change scoring, gathers, mobile settings or existing audits", async () => {
   const flags = require("./lighthouserc.cjs").ci.collect.settings;
@@ -139,6 +143,43 @@ test("all mobile samples and assertions survive a complete desktop collect witho
   assert.ok(
     loadCollectedLhrs(dir).every((r) => r.audits["server-response-time"].numericValue === 25),
   );
+});
+
+test("fixture snapshot retains the final mobile attempt when desktop reuses the raw paths", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "lh-fixture-snapshot-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const clear = () => clearAttemptEvidence({ lhciDir: dir, qualityDir: join(dir, "reports") });
+  await writeFile(join(dir, "lhr-100.json"), "short mobile attempt");
+  clear();
+
+  const final = [
+    ["lhr-200.json", '{"fetchTime":"first"}'],
+    ["lhr-200-1.json", '{"fetchTime":"second"}'],
+    ["lhr-201.json", '{"fetchTime":"third"}'],
+    ["assertion-results.json", "[]"],
+  ];
+  for (const [name, body] of final) await writeFile(join(dir, name), body);
+  await writeFile(join(dir, "lhr-200.html"), "HTML report");
+  await writeFile(join(dir, "lhr-200-1-1.json"), "not a raw report name");
+  await writeFile(join(dir, "manifest.json"), "representative reports only");
+  await symlink("lhr-200.json", join(dir, "lhr-202.json"));
+  const nested = join(dir, "lhr-203.json");
+  await mkdir(nested);
+  await writeFile(join(nested, "lhr-204.json"), "nested report");
+  const args = [
+    fileURLToPath(new URL("./lighthouse-preserve-mobile.sh", import.meta.url)),
+    dir,
+    "mobile-fixture",
+  ];
+  childProcess.execFileSync("bash", args);
+  clear();
+  for (const [name] of final) await writeFile(join(dir, name), "desktop output");
+  assert.equal(childProcess.spawnSync("bash", args).status, 1);
+
+  const snapshot = join(dir, "mobile-fixture");
+  assert.deepEqual((await readdir(snapshot)).sort(), final.map(([name]) => name).sort());
+  for (const [name, body] of final)
+    assert.equal(await readFile(join(snapshot, name), "utf8"), body);
 });
 
 test("754.261ms server median remains red with no retry and survives desktop cleanup", async (t) => {
