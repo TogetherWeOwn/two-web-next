@@ -84,22 +84,32 @@ describe("workflow source argument boundaries", () => {
     const action: { runs: { steps: Step[] } } = parse(
       readFileSync(".github/actions/gradual-promote/action.yml", "utf8"),
     );
-    const helper = /(?:gradual-promote|pre-promotion-check|error-rate-gate)\.mjs/g;
+    const promotionHelpers = ["gradual-promote.mjs", "pre-promotion-check.mjs"];
+    const helpersByStep = {
+      "rollback-target": ["gradual-promote.mjs"],
+      "promoted-version": ["gradual-promote.mjs"],
+      "deploy-5": promotionHelpers,
+      "error-rate-5": ["error-rate-gate.mjs"],
+      "deploy-50": promotionHelpers,
+      "error-rate-50": ["error-rate-gate.mjs"],
+      "deploy-100": promotionHelpers,
+      "error-rate-100": ["error-rate-gate.mjs"],
+    };
     const env = {
       ACTION_PATH: "/fixture/action with spaces",
       WORKER_NAME: "fixture worker",
       VERSION_TAG: "build tag 123",
       PREV_VERSION: "previous version",
     };
-    const steps = action.runs.steps.filter(({ run }) => run?.match(helper));
-    expect(steps.length).toBeGreaterThan(0);
-    for (const step of steps) {
-      expect(step.env?.ACTION_PATH, step.name).toBe("${{ github.action_path }}");
-      const calls = shellArguments(step.run, env).filter(({ command }) => command === "node");
+    for (const [id, helpers] of Object.entries(helpersByStep)) {
+      const step = action.runs.steps.find((step) => step.id === id);
+      expect(step, id).toBeDefined();
+      expect(step?.env?.ACTION_PATH, id).toBe("${{ github.action_path }}");
+      const calls = shellArguments(step?.run, env).filter(({ command }) => command === "node");
       expect(
         calls.map(({ args }) => args[0]),
-        step.name,
-      ).toEqual((step.run?.match(helper) ?? []).map((name) => `${env.ACTION_PATH}/${name}`));
+        id,
+      ).toEqual(helpers.map((name) => `${env.ACTION_PATH}/${name}`));
       for (const { args } of calls) {
         if (args[1] === "--resolve-tag") expect(args.slice(2)).toEqual([env.VERSION_TAG]);
         if (args[1] === "--deploy-spec") {
