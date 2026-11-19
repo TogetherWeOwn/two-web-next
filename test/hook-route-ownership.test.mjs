@@ -580,7 +580,9 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("kitEventsSessionFor(env)");
     expect(source).toContain("kitEventsJourneyFor(env)");
     expect(source).toContain("journeyFor: kitEventsJourneyFor(env),\n        requestId,");
-    expect(source).toContain("honoFetch,");
+    expect(source).toContain(
+      "honoFetch: (request) => {\n      honoOwned = true;\n      return honoFetch(request);",
+    );
     // The content-leaf zero-stylesheet strip travels as a resolve option:
     // the hook must forward it untouched. Dropping the second argument
     // serves the layout stylesheet on /about and /faq while every dispatch
