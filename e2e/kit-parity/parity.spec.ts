@@ -2203,8 +2203,9 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
   async function capture(page: Page, name: string) {
     const size = page.viewportSize()?.width === 390 ? "40px" : "89.6px";
     await expect(page.locator(".lifecycle-time .time-block > time")).toHaveCSS("font-size", size);
-    const body = await page.screenshot({ animations: "disabled", caret: "hide" });
-    await test.info().attach(name, { body, contentType: "image/png" });
+    const screenshot = test.info().outputPath(`${name}.png`);
+    await page.screenshot({ path: screenshot, animations: "disabled", caret: "hide" });
+    await test.info().attach(name, { path: screenshot, contentType: "image/png" });
   }
   try {
     await withSessionDb(async (sql) => {
@@ -2275,9 +2276,7 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
       await expect(seat.getByRole("heading", { name: "You're in." })).toBeVisible();
       await expect(seat.getByTestId("rsvp-synced")).toHaveText("Synced to Discord.");
       await expect(seat.getByRole("button").or(seat.getByRole("link"))).toHaveCount(0);
-      await expect(noJs.getByRole("complementary", { name: "Your seat", exact: true })).toHaveCount(
-        0,
-      );
+      await expect(noJs.getByRole("complementary", { name: /^Your seat$/ })).toHaveCount(0);
       await expect(noJs.getByRole("link", { name: "Refresh the event time" })).toHaveCount(0);
       await capture(noJs, `kit-review-event-live-${viewport.width}`);
     }
