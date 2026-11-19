@@ -57,7 +57,6 @@ export function partialModel(overrides: Partial<CalendarPageModel> = {}): Calend
     totalPages: 3,
     emptyState: null,
     discordFailed: true,
-    discordSnapshotAt: 1,
     games: [],
     gameFilter: null,
     ...overrides,

@@ -93,6 +93,8 @@ export interface CalendarPageModel {
   emptyState: ReturnType<typeof calendarEmptyState>;
   robots?: string;
   discordFailed: boolean;
+  /** Persisted Discord success epoch (ms), or 0 for a known cold failure. */
+  discordSnapshotAt?: number | null;
   /** Distinct published games backing the facet select (one bounded read). */
   games: string[];
   /** Effective facet: the canonical stored game, or null when unfiltered. */
@@ -175,6 +177,7 @@ export async function loadCalendarPageModel(args: {
   };
   const transients = await (phases ? phases.measure("discord_dedupe", dedupe) : dedupe());
   const discordFailed = discord.lastReadFailed();
+  const discordSnapshotAt = discord.lastReadSnapshotAt?.();
 
   const probe = mergeCalendarRows(
     pageRows,
@@ -261,6 +264,7 @@ export async function loadCalendarPageModel(args: {
     emptyState,
     robots,
     discordFailed,
+    ...(discordSnapshotAt === undefined ? {} : { discordSnapshotAt }),
     games,
     gameFilter,
   };

@@ -373,16 +373,13 @@ test("a superseded failed-source response cannot overwrite a recovered committed
   expect(f.traffic.map((entry) => entry.island)).toEqual([false, true, true]);
 });
 
-const scheduleCss = readFileSync(
-  new NodeURL("../public/schedule-theme.css", import.meta.url),
-  "utf8",
-);
+const gridCss = readFileSync(new NodeURL("../public/schedule-theme.css", import.meta.url), "utf8");
 
 test("a failed month read restores the grid tab stop after resizing during loading", async ({
   page,
   context,
 }) => {
-  const f = await fixture(context, scheduleCss);
+  const f = await fixture(context, gridCss);
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(PARTIAL_ORIGIN + monthPath);
   const scroll = page.getByTestId("events-calendar-scroll");
@@ -409,7 +406,7 @@ test("partial calendar keeps retry before invite and shows grid scroll cues only
   page,
   context,
 }) => {
-  await fixture(context, scheduleCss);
+  await fixture(context, gridCss);
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(PARTIAL_ORIGIN + monthPath);
 
