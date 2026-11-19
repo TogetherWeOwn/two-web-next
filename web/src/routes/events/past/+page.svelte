@@ -15,7 +15,11 @@ import {
   PAST_EVENTS_PAGER_TESTID,
   PAST_EVENTS_SEARCH_MISS_TESTID,
   PAST_EVENTS_TESTID,
+  PAST_EVENTS_UNREADABLE_TESTID,
+  pastEventsHasNewer,
   pastEventsOutOfRangeCopy,
+  pastEventsState,
+  pastEventsUnreadableCopy,
   pastEventsUrl,
 } from "../../../../../src/islands/contracts";
 import { feedUrl, rssUrl, webcalUrl } from "../../../../../src/events/feeds";
@@ -28,6 +32,7 @@ import type { PageProps } from "./$types";
 let { data }: PageProps = $props();
 const { rows, page, hasMore, totalPages, appUrl, q = "" } = $derived(data);
 const destination = $derived(pastEventsUrl(page, q));
+const state = $derived(pastEventsState(page, totalPages, rows.length, q));
 const calendarFeedUrl = $derived(feedUrl(appUrl));
 // A component-level <script> is Svelte's own; the island tags are emitted as markup.
 const islands =
@@ -85,21 +90,21 @@ const islands =
     </form>
     <div data-archive-state>
       {#if q}<p role="status">Past events matching “{q}”. <a href="/events/past">Clear search</a></p>{/if}
-      {#if rows.length === 0}
-        {#if totalPages === 0 && q}
-          <p role="status" data-testid={PAST_EVENTS_SEARCH_MISS_TESTID}>No past events match “{q}”. <a href="/events/past">Clear search</a></p>
-        {:else if totalPages === 0}
-          <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
-            <p>{PAST_EVENTS_COPY.empty}</p>
-            <p><a href="/join">{PAST_EVENTS_COPY.join}</a></p>
-          </div>
-        {:else}
-          <p role="status" data-testid={PAST_EVENTS_OUT_OF_RANGE_TESTID}>{pastEventsOutOfRangeCopy(page, totalPages)}{" "}<a href={pastEventsUrl(1, q)}>Back to page 1</a></p>
-        {/if}
+      {#if state === "search-miss"}
+        <p role="status" data-testid={PAST_EVENTS_SEARCH_MISS_TESTID}>No past events match “{q}”. <a href="/events/past">Clear search</a></p>
+      {:else if state === "empty"}
+        <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
+          <p>{PAST_EVENTS_COPY.empty}</p>
+          <p><a href="/join">{PAST_EVENTS_COPY.join}</a></p>
+        </div>
+      {:else if state === "out-of-range"}
+        <p role="status" data-testid={PAST_EVENTS_OUT_OF_RANGE_TESTID}>{pastEventsOutOfRangeCopy(page, totalPages)}{" "}<a href={pastEventsUrl(1, q)}>Back to page 1</a></p>
+      {:else if state === "unreadable"}
+        <p role="status" data-testid={PAST_EVENTS_UNREADABLE_TESTID}>{pastEventsUnreadableCopy(page, totalPages, hasMore)}</p>
       {/if}
     </div>
     <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{#if import.meta.env?.SSR !== false}{#each rows as e (e.eventKey)}<EventCard {e} {q} archive={{ page, q }} />{/each}{/if}</ul>
-    <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>{#if page > 1 && totalPages > 0}<a data-testid={PAST_EVENTS_PAGER_NEWER_TESTID} data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>Newer</a>{/if}{" "}{#if totalPages > 0}<span>{`Page ${page} of ${totalPages}`}</span>{/if}{" "}{#if hasMore}<a data-testid={PAST_EVENTS_PAGER_OLDER_TESTID} data-archive-page href={pastEventsUrl(page + 1, q)}>Older</a>{/if}</nav>
+    <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>{#if pastEventsHasNewer(page, totalPages)}<a data-testid={PAST_EVENTS_PAGER_NEWER_TESTID} data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>Newer</a>{/if}{" "}{#if totalPages > 0}<span>{`Page ${page} of ${totalPages}`}</span>{/if}{" "}{#if hasMore}<a data-testid={PAST_EVENTS_PAGER_OLDER_TESTID} data-archive-page href={pastEventsUrl(page + 1, q)}>Older</a>{/if}</nav>
     <p><a data-testid={PAST_EVENTS_BACK_TESTID} href="/events">Back to upcoming events</a></p>
     <p role="status" data-archive-feedback></p>
   </section>

@@ -23,6 +23,7 @@ const island = readFileSync(
 const notice = (page: Page) =>
   page.locator('[role="status"], [role="alert"]').filter({ hasText: MISSING_DISCORD });
 const root = (page: Page) => page.getByTestId("events-calendar");
+const monthPath = "/events?past=1&view=calendar&month=2099-05";
 
 function expectSameState(href: string, path: string) {
   const actual = new URL(href, PARTIAL_ORIGIN);
@@ -134,9 +135,27 @@ test("complete fixture turns keep the input identity, focus and canonical rows w
   expect(f.escaped).toEqual([]);
 });
 
+test.describe("without JavaScript", () => {
+  test.use({ javaScriptEnabled: false });
+
+  test("Tab reaches the named month grid region", async ({ context, page }) => {
+    await fixture(context);
+    await page.goto(PARTIAL_ORIGIN + monthPath);
+    const region = root(page).getByRole("region", {
+      name: "Events calendar; scroll horizontally to see all days",
+      exact: true,
+    });
+    await expect(region.getByTestId("events-calendar-grid")).toBeVisible();
+    await expect(region).toHaveAttribute("tabindex", "0");
+    await root(page).getByTestId("calendar-month-jump-submit").focus();
+    await page.keyboard.press("Tab");
+    await expect(region).toBeFocused();
+  });
+});
+
 for (const { view, path } of [
   { view: "list", path: PARTIAL_PATH },
-  { view: "calendar", path: "/events?past=1&view=calendar&month=2099-05" },
+  { view: "calendar", path: monthPath },
   { view: "search", path: "/events?q=chess&past=1&page=2" },
 ]) {
   test(`partial ${view} supports a same-state keyboard retry and invite with JavaScript disabled`, async ({

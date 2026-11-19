@@ -908,8 +908,12 @@ describe("performance CI", () => {
     expect(ciOk).toContain("\n    if: ${{ !cancelled() }}\n");
     expect(performanceGate).toContain(`if: ${performanceGateCondition}`);
     expect(performanceGate).toContain(
-      'run: node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"',
+      "env:\n          LIGHTHOUSE_RESULT: ${{ needs.lighthouse.result }}\n          BUDGET_RESULT: ${{ needs.bundle-budget.result }}",
     );
+    expect(performanceGate).toContain(
+      'run: node ci/require-performance.mjs "$LIGHTHOUSE_RESULT" "$BUDGET_RESULT"',
+    );
+    expect(performanceGate.match(/^        run:.*$/m)?.[0]).not.toContain("${{");
     expect(checkoutStep).toContain(`\n        if: ${performanceGateCondition}\n`);
     expect(setupNodeStep).toContain(`\n        if: ${performanceGateCondition}\n`);
     // check starts from scope alone and keeps the gate's selftests.

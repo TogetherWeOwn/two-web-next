@@ -12,9 +12,11 @@ on:
     - cron: "41 3 * * *"
   workflow_dispatch:
 
+# The reusable rollback workflow cannot elevate the caller token. Only its
+# production path reads Environment protection; both drill legs target staging.
 permissions:
   contents: read
-  actions: read
+  actions: read # Let rollback and restore read exact-SHA CI runs and jobs.
 
 # Own staging from plan through restore, not just during each mutation leg.
 concurrency:
@@ -29,8 +31,7 @@ jobs:
     # Staging-only drill: bind the staging Environment so the staging
     # Cloudflare secrets below resolve under its branch policy.
     environment: staging
-    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     outputs:
       live: ${{ steps.versions.outputs.live }}
@@ -128,7 +129,7 @@ jobs:
     # the previous version and the restore brought the live version back.
     needs: [plan, rollback, restore]
     if: ${{ always() }}
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require both legs

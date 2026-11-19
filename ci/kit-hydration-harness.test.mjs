@@ -1,26 +1,27 @@
 import assert from "node:assert/strict";
+import { Server } from "node:net";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { bundleKitFixture, serveKitFixture } from "./kit-hydration-harness.mjs";
+import { compileKitFixture, serveKitFixture } from "./kit-hydration-harness.mjs";
 
-test("fixture compiler returns independent server and client bundles", async () => {
-  const fixture = fileURLToPath(
-    new URL("../test/fixtures/kit-browser-harness.svelte", import.meta.url),
-  );
-  const source = `import Fixture from ${JSON.stringify(fixture)}; export default Fixture;`;
-  const server = await bundleKitFixture("server", source);
-  const client = await bundleKitFixture("client", source);
-  assert.match(server.code, /Café fixture/);
-  assert.equal(server.css, "");
-  assert.match(client.code, /Café fixture/);
-  assert.match(client.css, /12,\s*34,\s*56/);
+const fixture = fileURLToPath(
+  new URL("../test/fixtures/kit-browser-harness.svelte", import.meta.url),
+);
+
+test("fixture compiler returns SSR, CSS and hydration code without a server", async (t) => {
+  const listen = t.mock.method(Server.prototype, "listen", () => {
+    throw new Error("Fixture compilation must not start a listener");
+  });
+  const { body, head, css, js } = await compileKitFixture({ fixture });
+  assert.equal(listen.mock.callCount(), 0);
+  assert.match(body, /Count: 0/);
+  assert.match(head, /<title>Café fixture<\/title>/);
+  assert.match(css, /color: rgb\(12, 34, 56\)/);
+  assert.match(js, /dataset\.hydrated/);
 });
 
 test("fixture serves SSR, hydrates, styles and closes", { timeout: 120000 }, async () => {
-  const fixture = fileURLToPath(
-    new URL("../test/fixtures/kit-browser-harness.svelte", import.meta.url),
-  );
   const server = await serveKitFixture({ fixture });
   let browser;
   try {

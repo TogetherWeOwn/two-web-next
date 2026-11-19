@@ -61,16 +61,12 @@ export function fixedDateBanner(now) {
 // This is not a hostile-code sandbox: other transports, including WebRTC, are not
 // universally denied or observed by `unexpected`. Use disposable CI without
 // production credentials; an empty `unexpected` only covers routed requests.
-// `now` (epoch ms) fixes the clock seen by the bundled server render only.
+/**
+ * `now` (epoch ms) fixes the server clock; `timezoneId` overrides only the browser timezone.
+ * @param {{ source?: string, page: string, search?: string, now?: number, javaScriptEnabled?: boolean, timezoneId?: string }} options
+ */
 export async function withKitOfflineBrowser(
-  {
-    source,
-    page: fixture,
-    search = "",
-    now = undefined,
-    javaScriptEnabled = false,
-    timezoneId = undefined,
-  },
+  { source, page: fixture, search = "", now = undefined, javaScriptEnabled = false, timezoneId },
   callback,
 ) {
   if (typeof search !== "string" || (search && !search.startsWith("?")) || search.includes("#")) {

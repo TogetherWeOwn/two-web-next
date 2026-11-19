@@ -165,7 +165,7 @@ beforeAll(async () => {
     [/src\/kit-session$/, "session"],
     [/\/events\/discord-transients$/, "discord"],
     [/\/events\/page-models\.server$/, "model"],
-    [/src\/kit-events-html$/, "renderer"],
+    [/lib\/server\/render-events-html$/, "renderer"],
     [/src\/return-journey$/, "journey"],
   ]));
   ({ load: pastLoad } = await bundleRoute("events/past/+page.server.ts", [

@@ -12,7 +12,7 @@ let watcher: ReturnType<typeof watchTimeSnapshot>;
 onMount(() => {
   _stale = false;
   watcher = watchTimeSnapshot(
-    { asOf: Date.parse(asOf), staleAt: Date.parse(asOf) + 60_000, responseStart: 0 },
+    { asOf: Date.parse(asOf), staleAt: Date.parse(asOf) + 60_000, responseStart: 0, snapshotAgeAtResponseStart: 0 },
     () => {
       _stale = true;
     },
@@ -28,6 +28,7 @@ function _replace() {
     asOf: Date.parse(asOf),
     staleAt: Date.parse(asOf) + 60_000,
     responseStart: performance.now(),
+    snapshotAgeAtResponseStart: 0,
   });
 }
 </script>

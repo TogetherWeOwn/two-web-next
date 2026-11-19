@@ -111,7 +111,10 @@ export default {
       mapped,
       {
         ...env,
-        DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
+        DISCORD_EVENTS: {
+          upcoming: async () => [],
+          lastReadFailed: () => request.headers.get("x-e2e-discord-read") === "failed",
+        },
       } as JobsEnv,
       ctx,
     );
