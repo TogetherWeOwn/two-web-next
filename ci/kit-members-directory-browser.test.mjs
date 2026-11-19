@@ -12,10 +12,14 @@ const required = {
   "empty-e2": "?state=e2",
   "empty-e3": "?state=e3&filter=guides",
   "no-results": "?filter=guides&q=zz",
-  guest: "?state=guest",
   "no-newcomers": "?state=nonew",
+  guest: "?state=guest",
 };
 const extra = [
+  "?filter=everyone",
+  "?filter=guides",
+  "?state=e2&filter=everyone",
+  "?state=e3&filter=everyone",
   "?q=quiet",
   "?q=%40quiet_inactive",
   "?q=hidden",
@@ -70,7 +74,6 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
       // Guest: counts only, no synthetic member data anywhere in the HTML.
       assert.doesNotMatch(html.guest, names);
       assert.match(html.guest, /814 members · 212 came to something this month/);
-      await open(required.guest);
       assert.doesNotMatch(
         await page.getByRole("main").innerText(),
         /Joined this week|Who runs this/i,
@@ -82,18 +85,35 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
         assert.match(await open(search), /Quiet Inactive Fixture/);
       assert.doesNotMatch(await open("?q=hidden"), /Hidden Opt Out/);
       assert.match(await open("?state=nooptout&q=hidden"), /Hidden Opt Out/);
-      // Without opt-outs the full listing, strip and rail render.
-      const all = await open("?state=nooptout");
-      assert.match(all, /Hidden Opt Out Alias/);
-      // Pagination: 20 per page, clamped past the end.
-      const first = await open("?state=many");
-      const second = await open("?state=many&page=2");
-      const last = await open("?state=many&page=9");
-      assert.match(first, /Fixture Member 1(?!\d)/);
-      assert.doesNotMatch(first, /Fixture Member 21(?!\d)/);
-      assert.match(second, /Fixture Member 21(?!\d)/);
-      assert.doesNotMatch(second, /Fixture Member 1(?!\d)/);
-      assert.match(last, /Fixture Member 45(?!\d)/);
+      assert.match(await open("?state=nooptout"), /Hidden Opt Out Alias/);
+      // Follow the server-rendered filter and recovery links.
+      const list = page.getByRole("list", { name: "Members", exact: true });
+      const filters = page.getByRole("navigation", { name: "Which members" });
+      await open(required.default);
+      for (const [start, label, selected, count, member] of [
+        [null, /^Everyone\b/, /^Everyone\b/, 8, "Quiet Inactive Fixture"],
+        [null, /^Guides\b/, /^Guides\b/, 1, "Fixture Member 7"],
+        [null, /^Active\b/, /^Active\b/, 7, "Fixture Member 1"],
+        [required["no-results"], "Clear search", /^Guides\b/, 1, "Fixture Member 7"],
+        [required["empty-e2"], "Show everyone", /^Everyone\b/, 2, "Fixture Member 1"],
+        [required["empty-e3"], "Show everyone", /^Everyone\b/, 2, "Fixture Member 2"],
+      ]) {
+        if (start) await open(start);
+        await (start ? page : filters).getByRole("link", { name: label }).click();
+        assert.match(await filters.locator('[aria-current="page"]').innerText(), selected);
+        assert.equal(await list.getByRole("listitem").count(), count);
+        assert.equal(await list.getByRole("link", { name: member, exact: true }).count(), 1);
+      }
+      // Pagination: follow both links, then directly request an out-of-range page.
+      await open("?state=many");
+      const pager = page.getByRole("navigation", { name: "Member pages" });
+      await pager.getByRole("link", { name: "Next page" }).click();
+      assert.match(await list.innerText(), /Fixture Member 21(?!\d)/);
+      assert.doesNotMatch(await list.innerText(), /Fixture Member 1(?!\d)/);
+      await pager.getByRole("link", { name: "Previous page" }).click();
+      assert.match(await list.innerText(), /Fixture Member 1(?!\d)/);
+      assert.doesNotMatch(await list.innerText(), /Fixture Member 21(?!\d)/);
+      assert.match(await open("?state=many&page=9"), /Fixture Member 45(?!\d)/);
 
       // Click helpers can scroll controls back into view, hiding a sticky overlap.
       for (const { width, height } of [
@@ -132,7 +152,7 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
       await page.setViewportSize({ width: 1280, height: 800 });
       await open("");
       assert.match((await page.locator("h1").textContent()) ?? "", /here\. Say hi/);
-      const rows = page.getByRole("list", { name: "Members", exact: true }).getByRole("listitem");
+      const rows = list.getByRole("listitem");
       const gameColumnStart = (name) =>
         rows
           .filter({ has: page.getByRole("link", { name, exact: true }) })
