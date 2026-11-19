@@ -2,12 +2,12 @@
 # Offline self-test for gitleaks-scan.sh: a pull request or merge-queue commit
 # must not be able to silence the secret scan that gates it.
 #
-# Builds throwaway git repos (a "base" commit on main plus a PR commit on top,
-# with refs/remotes/origin/main standing in for the fetched base branch) and
-# runs the real wrapper with the real gitleaks binary. The planted token is
-# synthetic: it is derived at run time from a hash, so neither this file nor
-# the repo history contains a string that looks like a credential. Nothing here
-# touches the network, a real credential or the workspace under test.
+# Builds throwaway git repos (with refs/remotes/origin/main standing in for
+# the fetched base branch) and runs the real wrapper with the real gitleaks
+# binary. The planted token is synthetic and derived at run time from a hash,
+# so neither this file nor the repo history contains a string that looks like
+# a credential. Nothing here touches the network, a real credential or the
+# workspace under test.
 #
 # Usage: GITLEAKS_BIN=/path/to/gitleaks .github/scripts/test-gitleaks-scan.sh
 set -euo pipefail
@@ -116,6 +116,34 @@ base_commit
 plant_token
 pr_commit
 expect "pr: planted token is detected" 1 "$(scan_rc pull_request)"
+
+new_repo pr-no-diff
+write_stock_config
+base_commit
+printf 'fixture.txt -diff\n' > "${repo}/.gitattributes"
+plant_token
+pr_commit
+expect "pr: planted token in a -diff file is detected" 1 "$(scan_rc pull_request)"
+
+new_repo pr-merge-resolution
+write_stock_config
+printf 'base value\n' > "${repo}/fixture.txt"
+base_commit
+# Both parents change the same line without adding a token.
+git -C "${repo}" switch -q -c topic
+printf 'topic value\n' > "${repo}/fixture.txt"
+pr_commit
+git -C "${repo}" switch -q main
+printf 'main value\n' > "${repo}/fixture.txt"
+base_commit
+if git -C "${repo}" -c rerere.enabled=false merge --no-edit topic ||
+  [[ -z "$(git -C "${repo}" ls-files -u -- fixture.txt)" ]]; then
+  echo 'FAIL pr: expected a merge conflict in fixture.txt' >&2
+  exit 1
+fi
+plant_token
+pr_commit
+expect "pr: planted token added only in the merge resolution is detected" 1 "$(scan_rc pull_request)"
 
 # -- the bypasses a PR could add itself ---------------------------------------
 new_repo pr-config
