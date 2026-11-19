@@ -15,6 +15,7 @@ import {
 import { canonicalUrl } from "../../../src/seo";
 import { siteJsonLd } from "../../../src/seo-json-ld";
 import type { PageProps } from "./$types";
+import "./home-join-band.css";
 
 // Markup contract of Home (src/screens/home.tsx): session-aware header,
 // notice slot, hero, counts, featured, community panels, ladder, events and
@@ -35,7 +36,7 @@ const {
   featured,
   imageHosts,
 } = $derived(data);
-const { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS } = $derived(data.homeCopy);
+const { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO } = $derived(data.homeCopy);
 const canonical = $derived(canonicalUrl(appUrl, "/"));
 // The load validates ?n= through parseHomeNotice, so by render time the key
 // is one of the six — the cast only recovers what $derived destructuring widens.
@@ -268,5 +269,24 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
       </p>
     {/if}
   </section>
+  {#if !session?.member}
+    <section class="join-band" aria-labelledby="join-band-heading" data-testid="join-band">
+      <div>
+        <h2 id="join-band-heading">Pull up a <em>chair.</em></h2>
+        {#if sessionUnavailable}
+          <p>Sign-in isn't answering right now. The invite link still gets you into the server.</p>
+        {:else if notice === "join_failed"}
+          <p>The bot couldn't add you just now. The invite link still gets you in.</p>
+        {:else}
+          <p>{JOIN_INTRO}</p>
+        {/if}
+      </div>
+      {#if sessionUnavailable || notice === "join_failed"}
+        <a class="join-band-btn" href={sessionUnavailable ? "/discord" : inviteUrl} data-testid="join-band-invite">Join with an invite link</a>
+      {:else}
+        <a class="join-band-btn" href="/auth/discord" data-testid="join-band-join">Join with Discord</a>
+      {/if}
+    </section>
+  {/if}
   <JsonLd testid="site-jsonld" json={siteGraph} />
 </Shell>
