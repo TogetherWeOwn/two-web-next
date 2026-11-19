@@ -3,9 +3,11 @@ import { isPromise, isProxy } from "node:util/types";
 // Enumerate already-parsed commands without executing them or interpreting shell
 // syntax. Each command's ordered edges carry their original source locations.
 // The optional synchronous projector receives copies of plain records and arrays,
-// not YAML AST nodes. Projection does not establish execution safety.
-export function enumerateInvocationOccurrences(workflowCommands, scripts, project) {
+// not YAML AST nodes. Optional ancestry includes parent commands and child script
+// indexes for prefix inspection. Projection does not establish execution safety.
+export function enumerateInvocationOccurrences(workflowCommands, scripts, project, options = {}) {
   const occurrences = [];
+  const includeAncestry = project !== undefined && options.includeAncestry === true;
   const maxWork = 10_000;
   const maxDepth = 128;
   let work = 0;
@@ -61,7 +63,7 @@ export function enumerateInvocationOccurrences(workflowCommands, scripts, projec
     return copy;
   }
 
-  function visit(command, root, edges, stack) {
+  function visit(command, root, edges, stack, ancestry) {
     if (++work > maxWork) throw new Error("npm invocation expansion limit exceeded");
     if (project === undefined) {
       occurrences.push({ origin: root.origin, command: command.location, npmEdges: edges });
@@ -73,7 +75,10 @@ export function enumerateInvocationOccurrences(workflowCommands, scripts, projec
         command: source.location,
         npmEdges: edges,
       });
-      const result = project(occurrence, source, workflow);
+      // The ancestry array and frames spend budget, but depth starts at each parent command.
+      const result = includeAncestry
+        ? project(occurrence, source, workflow, clone(ancestry, new WeakMap(), -2))
+        : project(occurrence, source, workflow);
       if (isPromise(result)) {
         // The synchronous refusal is authoritative; drain the promise rejection.
         void result.catch(() => undefined);
@@ -96,12 +101,17 @@ export function enumerateInvocationOccurrences(workflowCommands, scripts, projec
       const nextStack = new Set(stack);
       nextStack.add(edge.script);
       const nextEdges = [...edges, { ...edge }];
-      for (const nested of scripts[edge.script]) visit(nested, root, nextEdges, nextStack);
+      let index = 0;
+      for (const nested of scripts[edge.script]) {
+        const nextAncestry = includeAncestry ? [...ancestry, { command, index }] : ancestry;
+        visit(nested, root, nextEdges, nextStack, nextAncestry);
+        index++;
+      }
     }
   }
 
   for (const command of workflowCommands) {
-    visit(command, command, [], new Set());
+    visit(command, command, [], new Set(), []);
   }
   return occurrences;
 }

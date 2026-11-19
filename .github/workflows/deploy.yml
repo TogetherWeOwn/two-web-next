@@ -20,6 +20,7 @@ on:
           - hono
           - archive
           - archive-static
+          - events
 
 permissions:
   contents: read
@@ -211,12 +212,13 @@ jobs:
         # one. The detach step below removes them explicitly before the jobs
         # Worker attaches, so two consumers never exist. Route flags come only
         # from the validated workflow input and default to Hono ownership.
-        run: npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}" --var "KIT_ROUTE_ARCHIVE:$KIT_ROUTE_ARCHIVE" --var "KIT_ROUTE_STATIC:$KIT_ROUTE_STATIC"
+        run: npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}" --var "KIT_ROUTE_ARCHIVE:$KIT_ROUTE_ARCHIVE" --var "KIT_ROUTE_STATIC:$KIT_ROUTE_STATIC" --var "KIT_ROUTE_EVENTS:$KIT_ROUTE_EVENTS"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           KIT_ROUTE_ARCHIVE: ${{ steps.kit-route-flags.outputs.archive }}
           KIT_ROUTE_STATIC: ${{ steps.kit-route-flags.outputs.static }}
+          KIT_ROUTE_EVENTS: ${{ steps.kit-route-flags.outputs.events || 'false' }}
           # workflow_run's github.sha is main's tip; tag the CI-verified checkout.
           DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       - name: Re-verify exact-SHA full CI before detaching web consumers
@@ -283,6 +285,11 @@ jobs:
         run: node bin/version-check.mjs https://next.togetherweown.com "$DEPLOY_SHA"
         env:
           DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      - name: Verify staging Kit events renderer
+        # Runs after revision verification even when unchanged files would skip
+        # normal smoke. The explicit route opt-in needs its own live evidence.
+        if: steps.kit-route-flags.outputs.events == 'true'
+        run: node ci/staging-kit-events-check.mjs
       # Post-deploy smoke scope (mirrors e2e-staging.yml): a deploy whose
       # head commit only touches docs prose or the `test/` unit tree the
       # checkers never execute skips the smoke steps below — the full suite,
