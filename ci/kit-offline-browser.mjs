@@ -141,7 +141,7 @@ export async function withKitOfflineBrowser(input, callback) {
           const isMenu = url.pathname === "/islands/site-header-menu.js";
           const directory = isAppAsset ? join(output, "client") : join(root, "public");
           const asset = await readFixtureAsset(directory, url.pathname, {
-            allowJavaScript: javaScriptEnabled && (headerMenu ? isMenu : isAppAsset),
+            allowJavaScript: javaScriptEnabled && (isMenu || (isAppAsset && !headerMenu)),
           });
           if (asset) return route.fulfill(asset);
         }

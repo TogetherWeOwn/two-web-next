@@ -30,7 +30,6 @@ let {
   authenticated?: boolean;
   menuFallbackOnly?: boolean;
 } = $props();
-
 const menuIsland = '<script src="/islands/site-header-menu.js" defer></' + "script>";
 </script>
 

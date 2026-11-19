@@ -142,7 +142,9 @@ for (const view of SHARE_VIEWS) {
         view === "Hono" && options.viewer !== "guest"
           ? [...EXISTING_SCRIPTS, "/islands/auth-status.js"].sort()
           : EXISTING_SCRIPTS;
-      expect(scripts.flatMap((node) => attr(node, "src") ?? []).sort()).toEqual(expectedScripts);
+      expect(scripts.flatMap((node) => attr(node, "src") ?? []).sort()).toEqual(
+        view === "Kit" ? [...expectedScripts, "/islands/site-header-menu.js"] : expectedScripts,
+      );
       for (const node of scripts.filter((node) => attr(node, "src") === undefined)) {
         expect(attr(node, "type")).toBe("application/ld+json");
       }

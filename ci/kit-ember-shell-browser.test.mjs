@@ -9,7 +9,7 @@ const mobile = { width: 390, height: 844 };
 const member = "?state=member&auth=1";
 const menu = (page, role = "button") => page.getByRole(role, { name: "Menu", exact: true });
 const shot = (page, name) =>
-  page.screenshot({ path: `artifacts/kit-ember-shell/${name}.png`, fullPage: true });
+  page.screenshot({ path: `artifacts/kit-ember-shell/${name}.png`, animations: "disabled" });
 const source = () =>
   readFile(new URL("../test/fixtures/kit-ember-shell-route.svelte", import.meta.url), "utf8");
 
@@ -106,12 +106,13 @@ test("built Ember shell preserves its landmarks and account states without JavaS
             await shot(page, `nojs-${state}-open-390`);
           }
           if (state === "member") {
-            const id = viewport.width === 390 ? "menu-signout" : "signout";
-            const logout = new URL("/logout", page.url()).href;
-            await page.route(logout, (route) => route.fulfill({ status: 204 }), { times: 1 });
-            const post = page.waitForRequest(logout);
-            await page.getByTestId(id).click();
-            assert.equal((await post).method(), "POST");
+            const button = page.getByTestId(viewport.width === 390 ? "menu-signout" : "signout");
+            const location = page.url();
+            const logout = new URL("/logout", location).href;
+            await page.route(logout, (route) => route.fulfill({ body: "OK" }), { times: 1 });
+            const [post] = await Promise.all([page.waitForRequest(logout), button.click()]);
+            assert.equal(post.method(), "POST");
+            await page.goto(location);
           }
           if (viewport.width === 390) {
             await sheet.getByRole("link", { name: "Close menu" }).click();
@@ -137,8 +138,8 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     assert.match(html, /<script src="\/islands\/site-header-menu\.js" defer>/);
     assert.doesNotMatch(html, /_app\/immutable\/(entry|nodes)/);
     await page.setViewportSize(mobile);
-    await shot(page, "enhanced-closed-390");
     await toggle.focus();
+    await shot(page, "enhanced-closed-390");
     for (let i = 0; i < 10; i++) {
       await key("Tab");
       assert.equal(await sheet.locator(":focus").count(), 0);
@@ -155,15 +156,13 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     }
     const axe = new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]);
     assert.deepEqual((await axe.analyze()).violations, []);
-    for (const close of ["Escape", "Enter"]) {
-      if (close === "Enter") await toggle.press("Enter");
-      await key(close === "Escape" ? close : "Shift+Tab");
-      if (close === "Enter") await key(close);
+    for (const close of [() => key("Escape"), () => toggle.press("Enter")]) {
+      await close();
       await expect(toggle).toBeFocused();
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
       await expect(inert).toHaveCount(0);
+      await toggle.press("Space");
     }
-    await toggle.press("Space");
     await home.evaluate((el) => el.addEventListener("click", (event) => event.preventDefault()));
     await home.click();
     await expect(sheet).toBeHidden();
@@ -179,6 +178,8 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await shot(page, "enhanced-open-320");
     await page.setViewportSize(mobile);
+    const board = sheet.getByRole("link", { name: "Leaderboard" });
+    const account = sheet.getByRole("navigation", { name: "Account" });
     for (const [name, search, count, current] of [
       ["guest", "?state=guest", 0, "page"],
       ["member", member, 1, "location"],
@@ -191,12 +192,8 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
       await expect(sheet.getByRole("link", { name: "Profile", exact: true })).toHaveCount(count);
       await expect(sheet.getByRole("button", { name: "Sign out" })).toHaveCount(count);
       await expect(sheet.locator("[aria-current]")).toHaveAttribute("aria-current", current);
-      await expect(sheet.getByRole("link", { name: "Leaderboard" })).toHaveCount(
-        Number(current === "location"),
-      );
-      await expect(sheet.getByRole("navigation", { name: "Account" })).toHaveCount(
-        Number(name !== "hidden"),
-      );
+      await expect(board).toHaveCount(Number(current === "location"));
+      await expect(account).toHaveCount(Number(name !== "hidden"));
       await shot(page, `${name}-menu-open-390`);
     }
     await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });

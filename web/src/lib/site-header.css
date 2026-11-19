@@ -4,7 +4,6 @@
 [data-kit-site-header] :is(.menu-brand, .menu-toggle, .menu-close, .menu-account-actions) {
   display: none;
 }
-
 @media (max-width: 820px) {
   :root:has([data-kit-site-header]) {
     scroll-padding-top: 60px;

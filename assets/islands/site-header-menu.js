@@ -20,7 +20,6 @@
     if (open) items()[0]?.focus();
     else if (restore) trigger.focus();
   }
-
   header.setAttribute("data-menu-ready", "");
   trigger.setAttribute("role", "button");
   trigger.setAttribute("aria-expanded", "false");
