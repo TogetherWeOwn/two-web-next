@@ -17,6 +17,7 @@
 // read, draft stays forbidden without the moderator bit, an indeterminate
 // session is unavailable (never a false logout, never a guest render of
 // member state), and every database failure is a 503 before bytes.
+import { timeStaleAt } from "../../lib/time-freshness-clock";
 import { dbFor } from "../admin/db";
 import { savedEventReview } from "../admin/event-saved-review";
 import {
@@ -198,10 +199,11 @@ export interface KitEventDetailModel {
   isDraft: boolean;
   isPast: boolean;
   /** Server snapshot at the render instant (`isOngoing`): the "Happening now"
-   * hero badge. Never a client clock; RSVP verdicts are unaffected. Optional
+   * interval. Never a client clock; RSVP verdicts are unaffected. Optional
    * so a pre-existing fixture without the flag reads as not ongoing. */
   isOngoing?: boolean;
   lifecycle: { date: string; endTime: string; next: { key: string; date: string } | null } | null;
+  liveTime?: { asOf: string; staleAt: string };
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
@@ -417,6 +419,13 @@ function detailLifecycle(
   };
 }
 
+function liveDetailTime(event: PublicEvent, now: Date): KitEventDetailModel["liveTime"] {
+  if (!isOngoing(event, now)) return undefined;
+  const staleAt = timeStaleAt("live", +now, +event.startsAt, +event.endsAt);
+  if (staleAt === null || !Number.isFinite(staleAt)) return undefined;
+  return { asOf: now.toISOString(), staleAt: new Date(staleAt).toISOString() };
+}
+
 // A code bug (no branded status) must never look like a downstream outage:
 // emit the leak-free error.alert diagnostic before answering the unavailable
 // outcome, mirroring the Kit hot-zone boundary (src/kit-hotzones.ts) and the
@@ -621,6 +630,7 @@ export async function resolveKitEventDetail(
       const pageCanonical = canonicalUrl(appUrl, pagePath);
       const review = wantsReview ? savedEventReview(event, now, search) : null;
       const zoneLabel = isValidZone(event.timezone) ? event.timezone : "UTC";
+      const liveTime = liveDetailTime(event, now);
       const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
@@ -664,8 +674,9 @@ export async function resolveKitEventDetail(
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
-          isOngoing: isOngoing(event, now),
+          isOngoing: Boolean(liveTime),
           lifecycle: ended ? detailLifecycle(event, zoneLabel, series?.upcoming) : null,
+          ...(liveTime ? { liveTime } : {}),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,

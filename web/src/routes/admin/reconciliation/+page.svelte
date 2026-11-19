@@ -9,8 +9,8 @@ let { data }: PageProps = $props();
 <AdminShell title="Reconciliation">
   <p><a href="/admin" class="reconciliation-focus">Back to the dashboard</a></p>
   <h1>Reconciliation</h1>
-  <p>This read-only view shows recorded intents only. Some unconfirmed bot changes may not
-    appear here. Check Discord independently to verify delivery.</p>
+  <p>This view shows recorded intents only. Some unconfirmed bot changes may not
+    appear here. Check Discord independently before recording a resolution.</p>
   {#each [false, true] as resolved (resolved)}
     {@const id = resolved ? "reconciliation-resolved" : "reconciliation-open"}
     {@const records = resolved ? data.resolved : data.open}

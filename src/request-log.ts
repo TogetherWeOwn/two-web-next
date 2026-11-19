@@ -1,6 +1,7 @@
 import type { Context, Next } from "hono";
 import { matchedRoutes } from "hono/route";
 import { selectRequestId } from "./http/request-log";
+import { selectRouteLabel } from "./http/route-labels";
 import { currentReleaseFields, setReleaseMetadata } from "./release-tag";
 import { STAGING_APP_URL } from "./qa";
 
@@ -59,15 +60,11 @@ declare module "hono" {
 
 /** Registered patterns include mount prefixes, but never resolved params. */
 export function requestRoute(c: Context): string {
-  // routeIndex is the handler that responded, so /events/new is not logged as
-  // a later /events/:key. A wildcard guard or 404 names the first endpoint the
-  // router would run, and wildcard-only matches get one constant label, never
-  // the user-supplied path (or an identity).
-  // Source: https://hono.dev/docs/helpers/route#matchedroutes
-  const paths = matchedRoutes(c).map((r) => r.path);
-  const responded = paths[c.req.routeIndex];
-  if (responded && !responded.endsWith("*")) return responded;
-  return paths.find((path) => !path.endsWith("*")) ?? "unmatched";
+  // The current handler can differ from the first match when it calls next().
+  return selectRouteLabel(
+    matchedRoutes(c).map((route) => route.path),
+    c.req.routeIndex,
+  );
 }
 
 export async function requestLog(c: Context, next: Next): Promise<void> {
