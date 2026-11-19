@@ -30,6 +30,12 @@ async function isolatedPage(browser: Browser, target: (typeof targets)[number]) 
 async function captureJoin(page: Page, state: string) {
   for (const { name, size } of PARITY_VIEWPORTS) {
     await page.setViewportSize(size);
+    if (state === "kit-guest" && name === "mobile") {
+      const lede = await page.locator(".join-lede").boundingBox();
+      const card = await page.locator(".join-lede + .join-card").boundingBox();
+      if (!lede || !card) throw new Error("The mobile Join card must follow the lede.");
+      expect(card.y).toBeGreaterThanOrEqual(lede.y + lede.height);
+    }
     const label = `kit-review-join-${state}-${name}`;
     const path = test.info().outputPath(`${label}.png`);
     await page.screenshot({ path, animations: "disabled", scale: "css" });
@@ -60,7 +66,7 @@ for (const target of targets) {
         "href",
         `/join/discord?next=${encodeURIComponent(returnTo)}`,
       );
-      if (target.name === "kit") await captureJoin(page, "kit-guest");
+      await captureJoin(page, `${target.name}-guest`);
       await cta.click();
       const oauth = await oauthResponse;
       expect(oauth.status()).toBe(302);
