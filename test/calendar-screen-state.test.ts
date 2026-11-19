@@ -110,10 +110,13 @@ describe("deriveCalendarScreenState", () => {
     expect(empty({ past: [event("2030-06-03T10:00:00Z", "2030-06-03T11:00:00Z")] })).toBe(false);
     // A spillover-only row does not occupy the month.
     expect(empty({ upcoming: [event("2030-05-31T10:00:00Z", "2030-05-31T11:00:00Z")] })).toBe(true);
-    // Truncated past blocks the claim for the wall month, not for a future one.
+    // A capped read doesn't prove absence, even when it plots no rows.
+    expect(empty({ monthReadMayBeIncomplete: true })).toBe(false);
     expect(empty({ pastMayBeTruncated: true })).toBe(false);
-    expect(empty({ pastMayBeTruncated: true, state: { ...calState, month: "2030-07" } })).toBe(
-      true,
-    );
+    const july = { ...calState, month: "2030-07" };
+    // With no retained starts, the truncated drawer doesn't bound unseen rows.
+    expect(empty({ pastMayBeTruncated: true, state: july })).toBe(false);
+    const past = [event("2030-06-03T10:00:00Z", "2030-06-03T11:00:00Z")];
+    expect(empty({ pastMayBeTruncated: true, state: july, past })).toBe(true);
   });
 });

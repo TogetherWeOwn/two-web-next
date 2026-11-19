@@ -57,12 +57,6 @@ export default {
     const client = postgres(url.href, options);
     const sessionClient = postgres(url.href, options);
     try {
-      const adminDb = auditReadDatabase(
-        drizzle(client, { schema: { ...schema, ...adminSchema } }),
-        readState,
-      );
-      // The reconciliation service uses raw postgres.js timestamp parsers.
-      adminDb.$client = sessionClient;
       const bindings = {
         ...env,
         OPS_CONTROL_TOKEN: A11Y_OPS_CONTROL_TOKEN,
@@ -70,7 +64,10 @@ export default {
         FREEZE_BANNER_ENABLED:
           request.headers.get("x-a11y-freeze-banner") === "true" ? "true" : "false",
         A11Y_READ_STATE: readState,
-        ADMIN_DB: adminDb,
+        ADMIN_DB: auditReadDatabase(
+          drizzle(client, { schema: { ...schema, ...adminSchema } }),
+          readState,
+        ),
         SESSION_STORE: createPostgresSessionStore(sessionClient as unknown as Sql),
         DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
       };

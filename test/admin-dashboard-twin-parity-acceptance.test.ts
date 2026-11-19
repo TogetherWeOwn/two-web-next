@@ -164,7 +164,6 @@ const cards = [
   { title: "Activity log", href: "/admin/activity-log" },
   { title: "Join attempts", href: "/admin/join-attempts" },
 ];
-const honoCards = [...cards, { title: "Reconciliation", href: "/admin/reconciliation" }];
 const widgets = [
   {
     id: "join-funnel",
@@ -183,16 +182,15 @@ const widgets = [
 for (const renderer of renderers) {
   describe(`${renderer.name} dashboard shared card/table acceptance`, () => {
     it.each<State>(["populated", "empty", "unavailable"])(
-      "offers the renderer's resource cards even when analytics are %s",
+      "offers all four resource cards even when analytics are %s",
       (state) => {
         const links = elements(renderer.render(state), "li")
           .filter((item) => attr(item, "class")?.split(/\s+/).includes("card"))
           .flatMap((item) => elements(item.body, "h2"))
           .flatMap((heading) => elements(heading.body, "a"))
           .map((link) => ({ title: text(link.body), href: attr(link, "href") }));
-        const expected = renderer.name === "Hono" ? honoCards : cards;
-        expect(links).toHaveLength(expected.length);
-        expect(links).toEqual(expect.arrayContaining(expected));
+        expect(links).toHaveLength(4);
+        expect(links).toEqual(expect.arrayContaining(cards));
       },
     );
 

@@ -136,9 +136,13 @@ when any planned URL is short of its three samples, and never when full
 evidence failed an assertion. Every run writes `.lighthouseci/perf-collect.log`
 and, on failure, `.lighthouseci/perf-collect-diagnosis.md` (COLLECT FAILURE,
 BUDGET BREACH or an unclassified step failure). Both ship in the
-`lighthouse-<sha>` artifact. Its selftest evaluates the real mobile assertions
-over synthetic reports: a short collect retries, and an LCP over budget fails
-without a retry.
+`lighthouse-<sha>` artifact. In that artifact, `mobile-fixture/` holds the raw
+`lhr-*.json` reports and available `assertion-results.json` from the final mobile
+attempt, copied before desktop collection. The top-level LHRs are desktop; the
+mobile `reports/` manifest points to representative reports, not independent
+samples. The snapshot is evidence only and does not change either gate's verdict.
+The mobile runner's selftest evaluates the real assertions over synthetic
+reports: a short collect retries, and an LCP over budget fails without a retry.
 
 LHCI starts/stops the fixture worker itself, listening only on `127.0.0.1:8787`.
 Do not run another service on that port. The dedicated Wrangler config has no

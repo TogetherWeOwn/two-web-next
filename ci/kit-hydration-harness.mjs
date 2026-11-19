@@ -10,8 +10,9 @@ const { compile } = createRequire(new URL("../web/package.json", import.meta.url
   "svelte/compiler",
 );
 
-// The caller owns the returned server and must close it, including on assertion failures.
-export async function serveKitFixture({ fixture, styles = "", bodyClass = "", routes = {} }) {
+// Compile a trusted Svelte fixture without starting a server. The client bundle
+// hydrates the server-rendered body inside #fixture.
+export async function compileKitFixture({ fixture }) {
   let css = "";
   async function bundle(generate, contents) {
     const result = await build({
@@ -49,6 +50,12 @@ export async function serveKitFixture({ fixture, styles = "", bodyClass = "", ro
     "client",
     `import { hydrate } from 'svelte'; import Fixture from ${modulePath}; hydrate(Fixture, { target: document.getElementById('fixture'), recover: false }); document.documentElement.dataset.hydrated = 'true';`,
   );
+  return { body, head, css, js };
+}
+
+// The caller owns the returned server and must close it, including on assertion failures.
+export async function serveKitFixture({ fixture, styles = "", bodyClass = "", routes = {} }) {
+  const { body, head, css, js } = await compileKitFixture({ fixture });
   const server = createServer((request, response) => {
     if (request.url === "/style.css") {
       response.writeHead(200, { "content-type": "text/css" }).end(styles + css);

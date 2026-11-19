@@ -42,12 +42,6 @@ export const AdminDashboard: FC<{
           </h2>
           <p>Every join try, outcome and refusal. Read-only.</p>
         </li>
-        <li class="card">
-          <h2>
-            <a href="/admin/reconciliation">Reconciliation</a>
-          </h2>
-          <p>Review unconfirmed bot changes. Read-only.</p>
-        </li>
       </ul>
       {funnel ? (
         <section data-testid="join-funnel" aria-labelledby="join-funnel-heading">

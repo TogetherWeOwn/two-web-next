@@ -39,8 +39,6 @@ export const HTML_READS = [
   "/admin/featured/:id",
   "/admin/join-attempts",
   "/admin/join-attempts/:id",
-  "/admin/reconciliation",
-  "/admin/reconciliation/:key",
 ];
 
 // Bearer-only operational HTML needs a precise local upstream fixture, not the
@@ -93,16 +91,12 @@ export const NON_HTML_READS = [
   "/openapi.json", // Static OpenAPI document, never an HTML page.
 ];
 
-const RECONCILIATION_KEY = "30000000-0000-0000-0000-000000000001";
-
 export const concretePath = (pattern: string) =>
-  pattern === "/admin/reconciliation/:key"
-    ? `/admin/reconciliation/${RECONCILIATION_KEY}`
-    : pattern
-        .replace(":key", EVENT_KEY)
-        .replace(":user", MEMBER_ID)
-        .replace(":id", "1")
-        .replace(":signal", "joins");
+  pattern
+    .replace(":key", EVENT_KEY)
+    .replace(":user", MEMBER_ID)
+    .replace(":id", "1")
+    .replace(":signal", "joins");
 
 export function pageShellFixture(status = "published") {
   const now = new Date("2030-01-01T20:00:00Z");
@@ -279,30 +273,7 @@ export function pageShellFixture(status = "published") {
     DISCORD_BOT_TOKEN: "",
     SESSION_SECRET: "fixture-session-secret-at-least-32-bytes-long",
     SESSION_STORE: sessions,
-    ADMIN_DB: Object.assign(db, {
-      $client: {
-        begin: async (fn: (query: (strings: TemplateStringsArray) => unknown[]) => unknown) =>
-          fn((strings) =>
-            strings[0]?.includes("from bot_reconciliation_intents") &&
-            !strings[0].includes("resolved_at is not null")
-              ? [
-                  {
-                    idempotency_key: RECONCILIATION_KEY,
-                    verb: "event.upsert",
-                    subject: "event:42",
-                    first_seen_at_ms: now.getTime(),
-                    last_attempt_at_ms: now.getTime(),
-                    attempts: 1,
-                    last_code: null,
-                    last_status: null,
-                    resolved_at_ms: null,
-                    resolution: null,
-                  },
-                ]
-              : [],
-          ),
-      },
-    }) as unknown as Db,
+    ADMIN_DB: db as unknown as Db,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
   } as Env;
   const cookie = async () => {

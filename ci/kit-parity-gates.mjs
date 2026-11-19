@@ -708,8 +708,7 @@ function assertJoinContract(label, html, get, expected) {
   return failures;
 }
 
-// Events-list contract (src/events/pages-calendar-screen.tsx via
-// src/kit-events-html.tsx): the native endpoint renders the Hono calendar
+// Events-list contract: both routes render the calendar
 // screen, so the island identity, view toggles, search form, archive and
 // subscribe links and markdown alternate ride both renderers. Rows are live
 // reads (staging is often empty), so cards are never required here — the
