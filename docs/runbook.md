@@ -1439,15 +1439,20 @@ live fix or a credential swap.
   unauthenticated, GET-only, no database client. OAuth start/callback
   routes can record throttles, and OAuth starts can issue or sweep one-use
   journey records, so run it only inside this watch, never as a casual probe.
-- Lighthouse against the production origin once within 24h, held to the
-  repo thresholds in [ci/lighthouserc.cjs](../ci/lighthouserc.cjs) (LCP,
-  CLS, server response time); thresholds are never relaxed to turn a
-  build green.
-  Run `npm run lighthouse:origin -- https://togetherweown.com` or
-  dispatch the [watch-lighthouse](../.github/workflows/watch-lighthouse.yml)
-  workflow with the origin choice; both are GET-only and take the budgets
-  from `ci/lighthouserc.cjs`. A Chrome harness crash (no assertion
-  result) is rerun once, never read as a pass.
+- Lighthouse against the production origin once within 24h. Run
+  `npm run lighthouse:origin -- https://togetherweown.com` or dispatch the
+  [watch-lighthouse](../.github/workflows/watch-lighthouse.yml) workflow with
+  the origin choice; both are GET-only and use the unchanged thresholds in
+  [ci/lighthouserc.cjs](../ci/lighthouserc.cjs). During the Ember and SvelteKit
+  migration, a performance miss can leave the run green. Open the per-route
+  run summary or `watch-summary.md` in the evidence artifact (under
+  `.lighthouseci/` for a direct run). Record the evidence link and each
+  measured route's verdict on the incident or release card. For a `warn`,
+  record the metric, measured value and threshold: it is a measured budget
+  miss, not proof of compliance. Incomplete collection or missing assertion
+  evidence is not a measured verdict. Check `origin-collect-diagnosis.md`
+  when present; a Chrome harness crash (no assertion result) is rerun once,
+  never read as a pass.
 - Playwright GET-only guest journeys (homepage, static leaves, events
   list, one published event, robots/sitemap): no sign-in, no RSVP, no
   join, no writes of any kind.
@@ -1471,7 +1476,9 @@ once within the first 24h.
 
 **Exit criteria:** 48h elapse with no Sev-1 — no pager storm, `/up` 200
 with `db:ok` and zero pending migrations throughout, after-gates green,
-Lighthouse and guest journeys within budget. The DevOps & Reliability
+and guest journeys within budget. Verify Lighthouse is within budget from
+complete per-route evidence, not the workflow status. A reported miss or
+incomplete evidence does not meet this criterion. The DevOps & Reliability
 Engineer records the exit on the incident or release card. If a freeze was
 separately declared for this window, its authorized owner lifts it only
 under that declaration's terms; watch exit alone does not lift a freeze.
