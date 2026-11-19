@@ -74,13 +74,16 @@ stage, the author merges. Every required check must be green on that head and
 every review finding must be fixed or answered with evidence. Pin the merge to
 that SHA; do not approve a final stage and leave an open PR for the author.
 
-A merge to `main` reaches production through CI, staging deploy, e2e-staging and
-automatic production promotion, so it needs a fresh Release Manager
-`request_confirmation` for that PR's exact head on a child confirmation card
-assigned and addressed to the Release Manager. Every other production deploy,
-including manual dispatch or promotion, also needs Release Manager confirmation.
-Any push changes the head and requires a new exact-head confirmation. Record the
-confirmation and pinned squash SHA in the release log.
+A merge to `main` does not reach production on its own. Automatic promotion in
+[deploy-production.yml](.github/workflows/deploy-production.yml) promotes only
+the soaked staging SHA that equals `PRODUCTION_ACCEPTED_SHA`, which the Release
+Manager sets once per release (`ci/resolve-promotion-sha.mjs`). So ordinary PRs
+need **no per-PR Release Manager confirmation** before merge. Exception: a PR that
+changes `.github/workflows/**`, `ci/resolve-promotion-sha.mjs`, deploy, wrangler
+or binding config can change what reaches production, so it needs an exact-head
+Release Manager `request_confirmation` on its own card before merge. Every
+production deploy, including manual dispatch, still needs Release Manager
+acceptance.
 
 ### Merge and production staging evidence
 
@@ -102,16 +105,14 @@ Before merge, require:
    security reviews, rulesets and native review stages are complete.
    Record exact-head GitHub Actions run/job links and conclusions; local output
    does not replace required Actions evidence.
-2. **Fresh production confirmation.** Obtain a new per-PR exact-head Release
-   Manager `request_confirmation` on a child card assigned and addressed to the
-   Release Manager. Include the migration ledger evidence or "no migration",
-   known-good rollback target, and the automatic post-merge staging path. The
-   staging item is met by that path, not by a claimed pass for the unmerged head.
-   Any push requires a new exact-head confirmation.
+2. **Release Manager confirmation only for promotion-path PRs.** Only PRs that
+   touch `.github/workflows/**`, `ci/resolve-promotion-sha.mjs`, deploy, wrangler
+   or binding config need an exact-head Release Manager confirmation before merge.
+   Everything else is gated at release time by `PRODUCTION_ACCEPTED_SHA`.
 3. **Pinned handoff and retained safeguards.** The final-stage reviewer, or the
    author when no native review stage applies, squash-merges only the reviewed
-   and confirmed head, with the merge pinned to that SHA. Record the
-   confirmation and squash SHA in the release log. Incident, freeze and hold
+   head (and confirmed, for promotion-path PRs), with the merge pinned to that SHA. Record the
+   squash SHA (and any confirmation) in the release log. Incident, freeze and hold
    safeguards, identity/capability holds and rollback requirements still apply.
    An otherwise mergeable PR need not be restacked solely because `main` moved.
 
