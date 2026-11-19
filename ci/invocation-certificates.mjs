@@ -134,6 +134,7 @@ function validateContext(reviewed, observed, terminal) {
         item.outcome !== "success" ||
         item.dependency !== "required-success" ||
         item.scriptsPolicy !== "ignore-scripts=true" ||
+        item.shrinkwrapAbsent !== true ||
         item.npmConfig?.includeDev !== true ||
         item.npmConfig.installStrategy !== "hoisted" ||
         !Array.isArray(item.npmConfig.unknownSettings) ||
@@ -238,9 +239,12 @@ function validateEffects(reviewed, observed, terminal) {
       snapshot.set(path, sha256);
     }
   }
+  const shrinkwrap = under(install.root, "npm-shrinkwrap.json");
+  if (snapshot.has(shrinkwrap)) fail("conflicting shrinkwrap evidence");
   const protectedPaths = [
     under(install.root, "node_modules"),
     under(install.root, ".npmrc"),
+    shrinkwrap,
     ...snapshot.keys(),
     ...loader.resolutionPaths,
   ];
@@ -266,8 +270,8 @@ function validateEffects(reviewed, observed, terminal) {
       !location(expected.run) ||
       expected.step !== effect.step ||
       expected.run !== effect.run ||
-      before(terminal, effect) ||
-      (previous && before(effect, previous)) ||
+      !before(effect, terminal) ||
+      (previous && !before(previous, effect)) ||
       !["audited", "checkout", "install"].includes(expected.kind) ||
       expected.kind !== effect.kind ||
       !text(expected.audit) ||
@@ -321,8 +325,12 @@ function validateEffects(reviewed, observed, terminal) {
 // Records and observations must describe exactly the same set of occurrences.
 // The caller must independently derive effective settings, the complete prefix
 // and its writes, and the canonical resolution closure (including absent
-// candidates in resolutionPaths). This checks a reviewed static contract;
-// install.outcome is the required outcome, not an observation of execution.
+// candidates in resolutionPaths). Effects must have distinct (step, run)
+// positions strictly before the terminal; site labels do not establish order.
+// Only package-lock.json is supported: the caller must verify the absence of
+// the higher-priority npm-shrinkwrap.json at the install root.
+// This checks a reviewed static contract; install.outcome is the required
+// outcome, not an observation of execution.
 export function validateInvocationCertificates(occurrences, records) {
   if (!Array.isArray(occurrences) || !Array.isArray(records))
     fail("expected occurrence and record arrays");

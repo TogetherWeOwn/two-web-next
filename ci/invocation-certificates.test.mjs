@@ -25,6 +25,7 @@ function fixture() {
       outcome: "success",
       dependency: "required-success",
       scriptsPolicy: "ignore-scripts=true",
+      shrinkwrapAbsent: true,
       npmConfig: { includeDev: true, installStrategy: "hoisted", unknownSettings: [] },
       argv: ["ci", "--include=dev", "--no-fund"],
       inputs: [pin("package-lock.json"), pin("package.json"), pin(".npmrc")],
@@ -310,6 +311,41 @@ test("protects an absent npm config from preceding writes", () => {
   validate(record);
   effects[0].writes.push("file:.npmrc");
   assert.throws(() => validate(record), /invalid effect write/);
+});
+
+test("requires an absent shrinkwrap and protects its path before install", () => {
+  const record = fixture();
+  validate(record);
+  const { install, effects } = record.context;
+  for (const value of [undefined, false]) {
+    const changed = copy(record);
+    changed.context.install.shrinkwrapAbsent = value;
+    assert.throws(() => validate(changed), /invalid install evidence/);
+    assert.throws(() => validate(record, changed), /invalid install evidence/);
+    assert.throws(() => validate(changed, record), /invalid install evidence/);
+  }
+  install.inputs.push(pin("npm-shrinkwrap.json"));
+  assert.throws(() => validate(record), /conflicting shrinkwrap evidence/);
+  install.inputs.pop();
+  effects[0].writes.push("file:npm-shrinkwrap.json");
+  assert.throws(() => validate(record), /invalid effect write/);
+});
+
+test("requires strictly ordered effects before the invocation", () => {
+  const record = fixture();
+  const { effects } = record.context;
+  const last = { ...copy(effects[0]), site: "test:prepare", step: record.identity.step, run: 1 };
+  effects.push(last);
+  validate(record);
+  last.run = record.identity.run;
+  assert.throws(() => validate(record), /invalid effects/);
+  last.run = record.identity.run + 1;
+  assert.throws(() => validate(record), /invalid effects/);
+  last.step = effects[1].step;
+  last.run = effects[1].run;
+  assert.throws(() => validate(record), /invalid effects/);
+  effects.splice(1, 2, last, effects[1]);
+  assert.throws(() => validate(record), /invalid effects/);
 });
 
 test("rejects changed or incomplete ordered effect evidence", () => {
