@@ -159,6 +159,7 @@ function kitModel(over: Partial<KitEventDetailModel> = {}): KitEventDetailModel 
     status: "published",
     isDraft: false,
     isPast: false,
+    lifecycle: null,
     goingCount: 1,
     goingOccupancy: 1,
     capacity: 10,

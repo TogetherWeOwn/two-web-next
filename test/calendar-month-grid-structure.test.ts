@@ -18,15 +18,18 @@ it("keeps the month table inside the focusable region after the jump form", asyn
   expect(siblings.map((node) => node.tagName)).toEqual(["p", "form", "div"]);
   expect(siblings[1]!.attrs).toContainEqual({ name: "data-testid", value: "calendar-month-jump" });
 
-  const region = siblings[2]!;
-  expect(Object.fromEntries(region.attrs.map(({ name, value }) => [name, value]))).toMatchObject({
+  const container = siblings[2]!;
+  const [frame] = container.childNodes.filter(isElementNode);
+  const [hint, region] = frame!.childNodes.filter(isElementNode);
+  expect(serialize(hint!)).toBe("Scroll sideways for Fri–Sun →");
+  expect(Object.fromEntries(region!.attrs.map(({ name, value }) => [name, value]))).toMatchObject({
     role: "region",
-    "aria-label": "Events calendar; scroll horizontally to see all days",
+    "aria-label": "Events calendar",
     tabindex: "0",
     "data-testid": "events-calendar-scroll",
   });
 
-  const tables = region.childNodes.filter(isElementNode);
+  const tables = region!.childNodes.filter(isElementNode);
   expect(tables.map((node) => node.tagName)).toEqual(["table"]);
   const table = tables[0]!;
   expect(table.attrs).toContainEqual({ name: "data-testid", value: "events-calendar-grid" });

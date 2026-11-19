@@ -19,6 +19,7 @@ import {
 let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrite?: boolean } =
   $props();
 const facts = $derived(kitEventFacts(model));
+const lifecycle = $derived(model.lifecycle);
 const live = $derived(model.liveTime);
 const savedLive = $derived(
   live && !model.review && model.viewerMember && model.answer?.status === "going",
@@ -126,7 +127,9 @@ const detailIslands = $derived([
     {#if model.isDraft}
       <p class="notice" data-testid="event-draft">Draft</p>
     {/if}
-    {#if model.isPast}
+    {#if lifecycle}
+      <div data-testid="event-past"><Tag>Sign-up record</Tag></div>
+    {:else if model.isPast}
       <p class="notice" data-testid="event-past">Past event</p>
     {/if}
     {#if model.status === "cancelled"}
@@ -150,8 +153,13 @@ const detailIslands = $derived([
       {/if}
     </p>
   {/if}
-  {#if live}
+  {#if lifecycle}
     <div class="lifecycle-time" data-testid="kit-event-time">
+      <time class="lifecycle-figure" datetime={model.timeDatetime}>{lifecycle.date}</time>
+      <p>Ended <time datetime={model.endsAt}>{lifecycle.endTime}</time> · {model.zoneLabel}</p>
+    </div>
+  {:else if live}
+    <div class="live-time" data-testid="kit-event-time">
       <TimeBlock start={new Date(model.timeDatetime)} end={new Date(model.endsAt)} asOf={new Date(live.asOf)}
         state="live" stale={false} viewerZone={model.zoneLabel} serverLive={{ endLabel: model.endsWhenText }} />
     </div>
@@ -160,7 +168,14 @@ const detailIslands = $derived([
   {/if}
   </div>
   <div class="event-layout-rail">
-    {#if savedLive}
+    {#if lifecycle}
+      <section class="seat-card" aria-labelledby="signup-record-heading">
+        <div class="seat-card-head"><h2 id="signup-record-heading">Sign-up record</h2></div>
+        <p class="seat-card-note">No Echo for this one. {model.goingCount} signed up.</p>
+        {#if lifecycle.next}<p><a href="/e/{lifecycle.next.key}">Next one: {lifecycle.next.date}</a></p>{/if}
+      </section>
+      {#if model.viewerModerator && model.review}{@html model.review.rsvp}{/if}
+    {:else if savedLive}
       <section class="seat-card" aria-labelledby="seat-card-heading" data-testid="kit-seat-card">
         <div class="seat-card-head"><h2 id="seat-card-heading">You're in.</h2>{@render liveTag()}</div>
         {#if model.answer?.syncedToDiscordAt}
@@ -205,7 +220,7 @@ const detailIslands = $derived([
     {@html model.detailHtml.share}
   </div>
   <div class="event-layout-body">
-  {#if live}{@html model.detailHtml.metadata}{/if}
+  {#if lifecycle || live}{@html model.detailHtml.metadata}{/if}
   <div class="event-detail-grid">
     <div>
       {#if model.description}
@@ -307,9 +322,17 @@ const detailIslands = $derived([
 
 <style>
   .event-layout-head { grid-area: head; min-width: 0; }
+  .lifecycle-time { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-4); padding-top: var(--space-7); margin-bottom: var(--space-4); border-top: 1px solid var(--color-hair2); }
+  .lifecycle-figure { font-size: var(--text-figure); line-height: 1; font-variant-numeric: tabular-nums; }
+  .lifecycle-time p { margin: 0; color: var(--color-t3); font: var(--text-small) / var(--leading-label) var(--font-data); }
   .lifecycle-tags { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
-  .lifecycle-time { margin-bottom: var(--space-4); --two-color-hair-2: var(--color-hair2); --two-color-text-primary: var(--color-t1); --two-color-text-tertiary: var(--color-t3); --two-space-inset-card-lg: var(--space-inset-card-lg); --two-space-4: var(--space-4); --two-font-display: var(--font-display); --two-font-data: var(--font-data); --two-font-size-figure: var(--text-figure); --two-font-size-body-reading: var(--text-body-reading); --two-font-size-label: var(--text-label); --two-font-weight-display: var(--font-weight-display); --two-tracking-figure: var(--tracking-figure); }
-  @media (max-width: 820px) { .lifecycle-time { --two-font-size-figure: var(--text-figure-compact); } .live-rsvp-end { display: none; } }
+  .live-time { margin-bottom: var(--space-4); --two-color-hair-2: var(--color-hair2); --two-color-text-primary: var(--color-t1); --two-color-text-tertiary: var(--color-t3); --two-space-inset-card-lg: var(--space-inset-card-lg); --two-space-4: var(--space-4); --two-font-display: var(--font-display); --two-font-data: var(--font-data); --two-font-size-figure: var(--text-figure); --two-font-size-body-reading: var(--text-body-reading); --two-font-size-label: var(--text-label); --two-font-weight-display: var(--font-weight-display); --two-tracking-figure: var(--tracking-figure); }
+  @media (max-width: 820px) {
+    .lifecycle-time { flex-direction: column; }
+    .lifecycle-figure { font-size: var(--text-figure-compact); }
+    .live-time { --two-font-size-figure: var(--text-figure-compact); }
+    .live-rsvp-end { display: none; }
+  }
   .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
   .event-layout-rail :global(> section) { border: 0; }
   .event-layout-rail :global(> .event-share) { padding: 0; margin-top: var(--space-2); }

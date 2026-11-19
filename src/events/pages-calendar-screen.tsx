@@ -182,6 +182,7 @@ export const EventsCalendarPage: FC<{
           pageUnreadable={pageUnreadable}
           searchMiss={searchMiss}
           gameFilter={gameFilter}
+          discordFailed={discordFailed}
         />
 
         <CalendarHead state={state} appUrl={appUrl} gameFilter={gameFilter} />

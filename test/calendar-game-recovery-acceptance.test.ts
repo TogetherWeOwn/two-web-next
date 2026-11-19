@@ -152,7 +152,7 @@ for (const twin of GAME_TWINS) {
         } else {
           expect(html).toContain("Chess fixture night");
           expect(html).not.toContain("Go fixture night");
-          expect(html).toMatch(/role="(?:status|alert)"[^>]*>[\s\S]*?Discord/);
+          expect(html).toMatch(/data-testid="events-partial-source"[^>]*>[\s\S]*?Discord/);
         }
         expect(f.discordCalls).toHaveLength(1);
       },

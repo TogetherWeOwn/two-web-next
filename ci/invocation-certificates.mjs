@@ -233,6 +233,40 @@ function validateContext(reviewed, observed, terminal) {
   validateEffects(reviewed, observed, terminal);
 }
 
+// The caller must prove each GITHUB_ENV write emits exactly one NAME=value line
+// with a nonempty [A-Za-z0-9._:/@+-] value, bounded in bytes on all admitted paths.
+// It must also audit every use of the key: an application prefix alone proves nothing.
+function validateEnvWrites(names, expected = [], observed = []) {
+  if (
+    new Set(names).size !== names.length ||
+    !Array.isArray(expected) ||
+    !Array.isArray(observed) ||
+    expected.length !== names.length ||
+    observed.length !== names.length
+  ) {
+    fail("invalid environment write evidence");
+  }
+  for (const [i, name] of names.entries()) {
+    const actual = observed[i];
+    if (
+      !/^(?:APP|E2E)_[A-Z][A-Z0-9_]{0,62}$/.test(name) ||
+      [expected[i], actual].some(
+        (entry) =>
+          !entry ||
+          Object.keys(entry).length !== 3 ||
+          entry.name !== name ||
+          entry.format !== "github-env-ascii-token" ||
+          !Number.isSafeInteger(entry.maxBytes) ||
+          entry.maxBytes < 1 ||
+          entry.maxBytes > 4096 ||
+          entry.maxBytes !== actual?.maxBytes,
+      )
+    ) {
+      fail("invalid environment write evidence");
+    }
+  }
+}
+
 function validateEffects(reviewed, observed, terminal) {
   if (!Array.isArray(reviewed.effects) || !Array.isArray(observed.effects))
     fail("missing effects evidence");
@@ -264,6 +298,7 @@ function validateEffects(reviewed, observed, terminal) {
   ];
   const related = (a, b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
   const sites = new Set();
+  let checkouts = 0;
   let installs = 0;
   let previous = null;
   for (let i = 0; i < reviewed.effects.length; i++) {
@@ -283,7 +318,7 @@ function validateEffects(reviewed, observed, terminal) {
       expected.run !== effect.run ||
       !before(effect, terminal) ||
       (previous && !before(previous, effect)) ||
-      !["audited", "install"].includes(expected.kind) ||
+      !["audited", "checkout", "install"].includes(expected.kind) ||
       expected.kind !== effect.kind ||
       !text(expected.audit) ||
       effect.audit !== expected.audit ||
@@ -297,7 +332,27 @@ function validateEffects(reviewed, observed, terminal) {
     }
     sites.add(effect.site);
     previous = effect;
-    if (effect.kind === "install") {
+    if (
+      [expected, effect].some(
+        (item) =>
+          (item.kind !== "checkout" && item.checkout !== undefined) ||
+          (item.kind !== "audited" && item.envWrites !== undefined),
+      )
+    ) {
+      fail("invalid effects evidence");
+    }
+    if (effect.kind === "checkout") {
+      if (
+        ++checkouts > 1 ||
+        !before(effect, install) ||
+        effect.checkout !== install.checkout ||
+        expected.checkout !== effect.checkout ||
+        effect.writes.length !== 1 ||
+        effect.writes[0] !== "checkout"
+      ) {
+        fail("invalid checkout effect");
+      }
+    } else if (effect.kind === "install") {
       if (
         ++installs > 1 ||
         effect.step !== install.step ||
@@ -307,12 +362,18 @@ function validateEffects(reviewed, observed, terminal) {
         fail("invalid install effect");
       }
     } else {
+      const names = [];
       for (const write of effect.writes) {
-        const file = write.startsWith("file:") ? write.slice(5) : null;
-        if (!repoPath(file) || protectedPaths.some((path) => related(file, path))) {
-          fail("invalid effect write");
+        if (write.startsWith("env:")) {
+          names.push(write.slice(4));
+        } else {
+          const file = write.startsWith("file:") ? write.slice(5) : null;
+          if (!repoPath(file) || protectedPaths.some((path) => related(file, path))) {
+            fail("invalid effect write");
+          }
         }
       }
+      validateEnvWrites(names, expected.envWrites, effect.envWrites);
     }
   }
   if (installs !== 1) fail("missing install effect");
@@ -322,7 +383,11 @@ function validateEffects(reviewed, observed, terminal) {
 // The caller must independently derive effective settings, the complete prefix
 // and its writes, and the canonical resolution closure (including absent
 // candidates in resolutionPaths). Effects must have distinct (step, run)
-// positions strictly before the terminal; checkout and env writes are unsupported.
+// positions strictly before the terminal. If the prefix contains a checkout, the
+// caller must audit its action/ref/path and prove that its required success yields
+// the pinned snapshot. The checkout identity is shared by checkout/install/loader.
+// An audited effect lists env:NAME writes in writes and provides matching envWrites
+// entries in that order on both sides. Record bounds, never actual environment values.
 // Edges share the pinned install manifest. Config file resolution stays caller-owned.
 // Only package-lock.json is supported: the caller must verify the absence of
 // the higher-priority npm-shrinkwrap.json at the install root.
