@@ -6,8 +6,11 @@ import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { recordAccess } from "../src/admin/store";
-import { memberDataAccessLogs } from "../src/db/admin-schema";
+import { events, memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
+import { observeMemberReads } from "../src/db/member-reads";
+import { getMemberHomeRsvps } from "../src/events/member-home-rsvps";
+import { memberReadResponse } from "../src/member-reads";
 import { users } from "../src/db/schema";
 import { profilesApp } from "../src/profiles/routes";
 import { createDbProfileStore } from "../src/profiles/store";
@@ -61,6 +64,82 @@ describe.skipIf(!process.env.DATABASE_URL)(
     });
     afterEach(() => fixture?.reset());
     afterAll(() => fixture?.dispose());
+
+    it("reads only the viewer's requested home RSVPs inside the observed boundary", async () => {
+      const viewer = "100000000000000101";
+      const other = "100000000000000102";
+      const noAnswer = "100000000000000103";
+      const inserted = await db
+        .insert(events)
+        .values([
+          {
+            eventKey: "home-requested",
+            title: "Requested",
+            startsAt: new Date("2099-01-01T20:00:00Z"),
+            endsAt: new Date("2099-01-01T22:00:00Z"),
+          },
+          {
+            eventKey: "home-hidden",
+            title: "Not requested",
+            startsAt: new Date("2099-01-02T20:00:00Z"),
+            endsAt: new Date("2099-01-02T22:00:00Z"),
+          },
+        ])
+        .returning();
+      await db.insert(rsvps).values([
+        { eventId: inserted[0]!.id, userId: viewer, status: "going" },
+        { eventId: inserted[0]!.id, userId: other, status: "waitlisted" },
+        { eventId: inserted[1]!.id, userId: viewer, status: "going" },
+      ]);
+      const sink = vi.fn(async () => true);
+      const release = (id: string) =>
+        memberReadResponse(
+          { method: "GET", route: "home" },
+          () => ({ resource: "member", action: "list", route: "home", viewer: id }),
+          sink,
+          async () => {
+            const answers = await getMemberHomeRsvps(observeMemberReads(db), id, [
+              "home-requested",
+            ]);
+            return new Response(JSON.stringify([...answers]));
+          },
+        );
+
+      const first = await release(viewer);
+      expect(first.status).toBe(200);
+      expect(first.headers.get("cache-control")).toBe("private, no-store");
+      expect(await first.json()).toEqual([
+        ["home-requested", { status: "going", syncedToDiscordAt: null }],
+      ]);
+      const second = await release(other);
+      expect(second.status).toBe(200);
+      expect(await second.json()).toEqual([
+        ["home-requested", { status: "waitlisted", syncedToDiscordAt: null }],
+      ]);
+      const empty = await release(noAnswer);
+      expect(empty.status).toBe(200);
+      expect(empty.headers.get("cache-control")).toBe("private, no-store");
+      expect(await empty.json()).toEqual([]);
+      // If SQL retrieves another owner, the observed adapter captures that owner
+      // before projection filtering and the boundary invokes the audit sink.
+      expect(sink).not.toHaveBeenCalled();
+
+      // Positive control: the same adapter must report a different retrieved owner.
+      const crossViewer = await memberReadResponse(
+        { method: "GET", route: "home" },
+        () => ({ resource: "member", action: "list", route: "home", viewer }),
+        sink,
+        async () => {
+          const answers = await getMemberHomeRsvps(observeMemberReads(db), other, [
+            "home-requested",
+          ]);
+          return new Response(JSON.stringify([...answers]));
+        },
+      );
+      expect(crossViewer.status).toBe(200);
+      expect(sink).toHaveBeenCalledOnce();
+      expect(sink).toHaveBeenCalledWith(expect.objectContaining({ subjectUserIds: [other] }));
+    });
 
     it.each([false, true])(
       "HTML and JSON Accept views log exactly once with profile row=%s",
