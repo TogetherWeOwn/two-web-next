@@ -76,6 +76,10 @@ snapshots:
         style: primary
         start: 26
         end: 37
+      - source: import
+        style: secondary
+        start: 19
+        end: 25
       - source: import('hono/cors')
         style: secondary
         start: 19
@@ -90,6 +94,10 @@ snapshots:
         style: primary
         start: 21
         end: 27
+      - source: require
+        style: secondary
+        start: 13
+        end: 20
       - source: require('hono')
         style: secondary
         start: 13
@@ -104,6 +112,10 @@ snapshots:
         style: primary
         start: 21
         end: 32
+      - source: require
+        style: secondary
+        start: 13
+        end: 20
       - source: require('hono/cors')
         style: secondary
         start: 13
