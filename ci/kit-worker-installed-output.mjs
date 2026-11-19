@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { copyFile, cp, lstat, mkdir, mkdtemp, readFile, symlink } from "node:fs/promises";
+import { copyFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { admitKitLockRoot } from "../web/scripts/kit-lock-admission.mjs";
 
@@ -34,14 +34,19 @@ export async function prepareInstalledKitWorker(repo) {
     await mkdir(kitBuild, { recursive: true, mode: 0o700 });
     for (const name of ["cloudflare", "cloudflare-tmp", "output"]) {
       const source = join(stockBuild, name);
+      const destination = join(kitBuild, name);
       assert.ok((await lstat(source)).isDirectory(), `missing Kit build directory ${name}`);
-      await mkdir(join(kitBuild, name), { mode: 0o700 });
-      await cp(source, join(kitBuild, name), {
-        recursive: true,
-        force: false,
-        errorOnExist: true,
-        filter: regularBuildPath,
-      });
+      // Copy children into a private directory; copying the directory itself
+      // would either collide or inherit the stock directory's mode.
+      await mkdir(destination, { mode: 0o700 });
+      for (const entry of await readdir(source)) {
+        await cp(join(source, entry), join(destination, entry), {
+          recursive: true,
+          force: false,
+          errorOnExist: true,
+          filter: regularBuildPath,
+        });
+      }
     }
     // Keep the same ESM package scopes and resolve against the job's locked
     // dependencies. These links are outside the generated tree and assets.
