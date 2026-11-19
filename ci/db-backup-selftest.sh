@@ -211,25 +211,44 @@ done
 ! grep -vxF "get-object $MANIFEST" "$STUB_LOG" || fail "failed S3 manifest read mutated storage"
 ok "forbidden, wrong bucket, transport and partial reads never initialize the S3 manifest"
 
-S3_OUT="$(STUB_LARGE=1 STUB_ABSENT_CODE=404 "$BIN" backup staging)"
+S3_OUT="$(STUB_LARGE=1 "$BIN" backup staging)"
 grep -qxF "multipart ${S3_OUT#backup: }" "$STUB_LOG" || fail "large dump did not use multipart upload"
 "$BIN" promote-weekly staging >/dev/null
 "$BIN" check staging --require-verified >/dev/null
-ok "S3 backup initializes on 404 and verifies multipart dump, receipt and weekly copy"
+ok "S3 backup initializes on NoSuchKey and verifies multipart dump, receipt and weekly copy"
 
 manifest="$STUB_R2/$MANIFEST"
+cp "$manifest" "$T/s3-before"
+: > "$STUB_LOG"
+expect_failure env STUB_FAIL_KEY="$MANIFEST" STUB_GET_ERROR=404 "$BIN" backup staging
+grep -qxF 'db-backup: manifest read failed; refusing remote mutation' "$T/err" || fail "generic 404 was treated as absence"
+[ "$(<"$STUB_LOG")" = "get-object $MANIFEST" ] && cmp "$manifest" "$T/s3-before" || fail "generic 404 changed storage"
+ok "S3 backup rejects an ambiguous 404 without changing the existing inventory"
+
 absent=neon/staging-staging-20240101T000000Z.dump
 old=neon/staging-staging-20240102T000000Z.dump
 printf 'old\n' > "$STUB_R2/$old"
+printf '%s\n' "$old" >> "$manifest"
+"$BIN" check staging >/dev/null
+expect_failure env STUB_FAIL_KEY="$old.digest.json" STUB_GET_ERROR=403 "$BIN" check staging
+grep -qxF 'db-backup: check failed' "$T/err" || fail "legacy receipt error did not fail check"
+ok "S3 legacy check tolerates an absent receipt but refuses an unreadable one"
+
+printf '%s\n' "$absent" "$absent.digest.json" "$old.digest.json" >> "$manifest"
 printf 'unused receipt\n' > "$STUB_R2/$old.digest.json"
-printf '%s\n' "$absent" "$old" "$old.digest.json" >> "$manifest"
 cp "$manifest" "$T/s3-before"
-expect_failure env BACKUP_KEEP_DAILY=1 STUB_FAIL_KEY="$absent" STUB_GET_ERROR=403 "$BIN" rotate staging --apply
-cmp "$manifest" "$T/s3-before" && [ -f "$STUB_R2/$old" ] || fail "forbidden delete probe changed retention"
+export STUB_DELETE_FAILURE_KEY="$absent"
+for error in 403 404; do
+  expect_failure env BACKUP_KEEP_DAILY=1 STUB_FAIL_KEY="$absent" STUB_GET_ERROR="$error" "$BIN" rotate staging --apply
+  cmp "$manifest" "$T/s3-before" && [ -f "$STUB_R2/$old" ] || fail "$error delete probe changed retention"
+done
 BACKUP_KEEP_DAILY=1 "$BIN" rotate staging --apply >/dev/null
+unset STUB_DELETE_FAILURE_KEY
+grep -qxF "delete-object $absent.digest.json" "$STUB_LOG" || fail "rotation did not delete an already absent receipt"
+! grep -qxF "get-object $absent.digest.json" "$STUB_LOG" || fail "rotation probed after a successful delete"
 [ ! -e "$STUB_R2/$old" ] && [ ! -e "$STUB_R2/$old.digest.json" ] || fail "S3 rotation left an old pair"
 "$BIN" check staging --require-verified >/dev/null
-ok "S3 rotation refuses a forbidden delete probe and resumes on NoSuchKey"
+ok "S3 rotation preserves inventory on ambiguous probes and accepts idempotent deletes"
 
 for suffix in .dump .digest.json; do
   expect_failure env STUB_CORRUPT_SUFFIX="$suffix" "$BIN" backup test-s3

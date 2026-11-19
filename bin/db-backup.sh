@@ -281,10 +281,11 @@ obj_missing() {
     python3 "$ROOT/bin/backup/manifest-helper" missing "$file.stderr"
     return $?
   fi
-  # Strip the AWS CLI legacy diagnostic's single leading newline.
+  # A bare HTTP 404 does not identify the missing resource. Match only the S3
+  # NoSuchKey diagnostic after stripping its legacy single leading newline.
   error="$(<"$file.stderr")"
   error="${error#$'\n'}"
-  [[ $error != *$'\n'* && $error =~ ^An\ error\ occurred\ \((NoSuchKey|404)\)\ when\ calling\ the\ GetObject\ operation:.*$ ]]
+  [[ $error != *$'\n'* && $error =~ ^An\ error\ occurred\ \(NoSuchKey\)\ when\ calling\ the\ GetObject\ operation:.*$ ]]
 }
 
 # Rewrite the remote manifest from the local list of keys (one per line,

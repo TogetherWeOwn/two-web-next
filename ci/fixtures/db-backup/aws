@@ -25,13 +25,13 @@ case "$op" in
     [[ $# = 7 ]]; file="$7"
     if [[ $key = "${STUB_FAIL_KEY:-}" ]]; then
       case "$STUB_GET_ERROR" in
-        partial) printf 'partial\n' > "$file"; code=404 ;;
+        partial) printf 'partial\n' > "$file"; code=NoSuchKey ;;
         transport) echo 'Connection closed without a response' >&2; exit 255 ;;
-        noisy) echo 'Connection closed without a response' >&2; code=404 ;;
+        noisy) echo 'Connection closed without a response' >&2; code=NoSuchKey ;;
         *) code="$STUB_GET_ERROR" ;;
       esac
     elif [[ ! -f $dest ]]; then
-      code="${STUB_ABSENT_CODE:-NoSuchKey}"
+      code=NoSuchKey
     else
       cp "$dest" "$file"
       if [[ -n ${STUB_CORRUPT_SUFFIX:-} && $key = *"$STUB_CORRUPT_SUFFIX" ]]; then
@@ -42,7 +42,7 @@ case "$op" in
     printf '\nAn error occurred (%s) when calling the GetObject operation: fixture\n' "$code" >&2
     exit 254 ;;
   delete-object)
-    [[ $# = 6 && -f $dest ]]
-    rm "$dest" ;;
+    [[ $# = 6 && $key != "${STUB_DELETE_FAILURE_KEY:-}" ]]
+    rm -f "$dest" ;;
   *) exit 2 ;;
 esac
