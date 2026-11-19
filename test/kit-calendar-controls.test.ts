@@ -141,7 +141,7 @@ export const bodies = Object.fromEntries(${JSON.stringify(SCENARIOS)}.map((scena
     expect(text(b.gameOnly!, "events-search-status")).toBe(`Showing events for ${T}.`);
     expect(b.gameOnly).not.toContain("events-search-clear");
     expect(href(b.gameOnly!, "events-subscribe")).toBe(`webcal://${FEED.slice(8)}`);
-    expect(text(b.error!, "events-search-status")).toBe("");
+    expect(text(b.error!, "events-search-status")).toBe("We couldn't load the calendar.");
     expect(href(b.error!, "events-search-clear")).toBe(`/events?${G}&past=1`);
   } finally {
     rmSync(scratch, { recursive: true, force: true });

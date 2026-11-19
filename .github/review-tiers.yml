@@ -179,6 +179,7 @@ tiers:
     # editing it redirects vulnerability reports, a trust-boundary effect.
     - "src/security-txt.ts"
     - "src/headers.ts"
+    - "src/http/secure-headers.ts"
     - "src/csp-report-body.ts"
     - "src/csp-report-uri.ts"
     - "src/csp-reports.ts"

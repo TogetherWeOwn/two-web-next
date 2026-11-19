@@ -11,7 +11,7 @@ export function adminReadRetryHref(
     const readPath =
       boundary === "join-attempts"
         ? /^\/admin\/join-attempts(?:\/[1-9][0-9]*)?$/
-        : /^\/admin(?:\/(?:events(?:\/[a-zA-Z0-9_-]+)?|featured(?:\/[1-9][0-9]*)?|activity-log))?$/;
+        : /^\/admin(?:\/(?:events(?:\/[a-zA-Z0-9_-]+)?|featured(?:\/[1-9][0-9]*)?|activity-log|reconciliation(?:\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})?))?$/;
     if (
       !readPath.test(pathname) ||
       /\/(?:delete|destroy|logout|redispatch)(?:\/|$)/i.test(pathname)

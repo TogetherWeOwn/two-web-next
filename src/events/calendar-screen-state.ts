@@ -17,6 +17,11 @@ import {
 import { type CalRow, isTransient, rowZone } from "./pages-calendar-row";
 import type { PublicEvent } from "./reads";
 
+/** A failure fences its generation: only a newer persisted success sorts after it. */
+export function calendarDiscordReadMarker(epoch: number | null | undefined, failed: boolean) {
+  return epoch == null ? (failed ? -1 : 0) : epoch * 2 + Number(failed);
+}
+
 export interface CalendarScreenStateInput {
   state: CalendarState;
   upcoming: CalRow[];

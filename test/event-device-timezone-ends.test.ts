@@ -711,8 +711,8 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       await browserStructure(page, clock);
       return page.evaluate(
         ({ start, end }: { start: string; end: string }) => {
-          const hostStarts = document.querySelector(`time[datetime="${start}"]`);
-          const hostEnds = document.querySelector(`time[datetime="${end}"]`);
+          const hostStarts = document.querySelector(`.event-meta time[datetime="${start}"]`);
+          const hostEnds = document.querySelector(`.event-meta time[datetime="${end}"]`);
           return {
             hostStarts: hostStarts?.outerHTML,
             hostEnds: hostEnds?.outerHTML,
@@ -817,14 +817,11 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
     for (const view of VIEWS) {
       it(`${view}: positive control, real no-JS browser keeps both host instants and hidden actions`, async () => {
         const { page, errors } = await open(view, CASES[0], undefined, false);
-        expect(await page.locator(`time[datetime="${CASES[0].instant}"]`).first().innerText()).toBe(
-          CASES[0].hostText,
-        );
         expect(
-          await page
-            .locator(`time[datetime="${startIso(CASES[0])}"]`)
-            .first()
-            .count(),
+          await page.locator(`.event-meta time[datetime="${CASES[0].instant}"]`).innerText(),
+        ).toBe(CASES[0].hostText);
+        expect(
+          await page.locator(`.event-meta time[datetime="${startIso(CASES[0])}"]`).count(),
         ).toBe(1);
         expect(await page.locator("dd[data-event-device-timezone] button[hidden]").count()).toBe(2);
         expect(await page.locator('[data-testid="event-ics"]').count()).toBe(1);
@@ -833,9 +830,9 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       });
       it(`${view}: page load does not convert, steal focus, or change the machine instant`, async () => {
         const { page, errors } = await open(view, CASES[0]);
-        expect(await page.locator(`time[datetime="${CASES[0].instant}"]`).first().innerText()).toBe(
-          CASES[0].hostText,
-        );
+        expect(
+          await page.locator(`.event-meta time[datetime="${CASES[0].instant}"]`).innerText(),
+        ).toBe(CASES[0].hostText);
         expect(await page.locator("body").innerText()).not.toContain(CASES[0].device);
         expect(await page.getByTestId(STARTS_STATUS_TESTID).innerText()).toBe("");
         expect(await page.getByTestId(ENDS_STATUS_TESTID).innerText()).toBe("");

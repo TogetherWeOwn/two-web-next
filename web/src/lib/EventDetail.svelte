@@ -1,6 +1,7 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
+import Tag from "#lib/Tag.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
 import { kitEventFacts } from "../../../src/events/kit-event-facts";
 import { ONGOING_COPY } from "../../../src/events/ongoing";
@@ -13,6 +14,7 @@ import { EVENT_ONGOING_TESTID } from "../../../src/islands/contracts";
 let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrite?: boolean } =
   $props();
 const facts = $derived(kitEventFacts(model));
+const lifecycle = $derived(model.lifecycle);
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
@@ -112,7 +114,9 @@ const detailIslands = [
     {#if model.isDraft}
       <p class="notice" data-testid="event-draft">Draft</p>
     {/if}
-    {#if model.isPast}
+    {#if lifecycle}
+      <div data-testid="event-past"><Tag>Sign-up record</Tag></div>
+    {:else if model.isPast}
       <p class="notice" data-testid="event-past">Past event</p>
     {/if}
     {#if model.status === "cancelled"}
@@ -133,9 +137,24 @@ const detailIslands = [
       {/if}
     </p>
   {/if}
-  {@html model.detailHtml.metadata}
+  {#if lifecycle}
+    <div class="lifecycle-time" data-testid="kit-event-time">
+      <time class="lifecycle-figure" datetime={model.timeDatetime}>{lifecycle.date}</time>
+      <p>Ended <time datetime={model.endsAt}>{lifecycle.endTime}</time> · {model.zoneLabel}</p>
+    </div>
+  {:else}
+    {@html model.detailHtml.metadata}
+  {/if}
   </div>
   <div class="event-layout-rail">
+    {#if lifecycle}
+      <section class="seat-card" aria-labelledby="signup-record-heading">
+        <div class="seat-card-head"><h2 id="signup-record-heading">Sign-up record</h2></div>
+        <p class="seat-card-note">No Echo for this one. {model.goingCount} signed up.</p>
+        {#if lifecycle.next}<p><a href="/e/{lifecycle.next.key}">Next one: {lifecycle.next.date}</a></p>{/if}
+      </section>
+      {#if model.viewerModerator && model.review}{@html model.review.rsvp}{/if}
+    {:else}
     <section class="seat-card" aria-labelledby={model.seatCard.heading ? 'seat-card-heading' : undefined} aria-label={model.seatCard.heading ? undefined : 'RSVP'} data-testid="kit-seat-card">
       {#if model.seatCard.heading}
         <div class="seat-card-head">
@@ -146,6 +165,7 @@ const detailIslands = [
       <div class="event-rsvp">{@html model.detailHtml.rsvp}</div>
       {#if model.seatCard.note}<p class="seat-card-note">{model.seatCard.note}</p>{/if}
     </section>
+    {/if}
     {#if facts.length > 0}
       <section class="event-facts" aria-label="Event facts" data-testid="kit-event-facts">
         <dl>
@@ -167,6 +187,7 @@ const detailIslands = [
     {@html model.detailHtml.share}
   </div>
   <div class="event-layout-body">
+  {#if lifecycle}{@html model.detailHtml.metadata}{/if}
   <div class="event-detail-grid">
     <div>
       {#if model.description}
@@ -268,6 +289,13 @@ const detailIslands = [
 
 <style>
   .event-layout-head { grid-area: head; min-width: 0; }
+  .lifecycle-time { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-4); padding-top: var(--space-7); margin-bottom: var(--space-4); border-top: 1px solid var(--color-hair2); }
+  .lifecycle-figure { font-size: var(--text-figure); line-height: 1; font-variant-numeric: tabular-nums; }
+  .lifecycle-time p { margin: 0; color: var(--color-t3); font: var(--text-small) / var(--leading-label) var(--font-data); }
+  @media (max-width: 820px) {
+    .lifecycle-time { flex-direction: column; }
+    .lifecycle-figure { font-size: var(--text-figure-compact); }
+  }
   .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
   .event-layout-rail :global(> section) { border: 0; }
   .event-layout-rail :global(> .event-share) { padding: 0; margin-top: var(--space-2); }

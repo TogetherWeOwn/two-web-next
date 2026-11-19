@@ -67,10 +67,11 @@ queue envelope fields (`warn_at: 20`, `critical_at: 100` reported from
 
 ### Latency p95
 
-Lab budgets in `ci/lighthouserc.cjs` (LCP 2000 ms error, observed TTFB
-600 ms error, FCP 1800 ms warning, TBT 300 ms warning) gate releases; the
-rows below are production watch tripwires on `http.request duration_ms`,
-not release gates.
+The [Lighthouse lab budgets](performance-budgets.md#threshold-policy) are
+separate from the production watch tripwires on `http.request duration_ms`
+below. During the Ember and SvelteKit migration, performance misses are
+reported as warnings. Follow the [watch runbook](runbook.md#48h-post-flip-watch)
+for per-route budget evidence; a green workflow does not prove compliance.
 
 | Signal | Ticket | Page | Owner | Silence expiry |
 | --- | --- | --- | --- | --- |

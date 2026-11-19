@@ -8,6 +8,7 @@
   "use strict";
   var root = document.querySelector('[data-island="events-calendar"]');
   if (!root) return;
+  var discordRead = Math.max(+root.dataset.discordRead || 0, 0);
 
   var ZONE_SELECTOR = "[data-cal-zone]";
   var CONTENT_SELECTOR = '[data-cal-zone="content"]';
@@ -46,6 +47,16 @@
     })
   )
     return;
+
+  // Keep the server-rendered tab stop only when the grid can scroll.
+  function syncGridTabStop() {
+    var scroll = root.querySelector('[data-testid="events-calendar-scroll"]');
+    if (!scroll) return;
+    if (scroll.scrollWidth > scroll.clientWidth) scroll.setAttribute("tabindex", "0");
+    else scroll.removeAttribute("tabindex");
+  }
+  window.addEventListener("resize", syncGridTabStop);
+  syncGridTabStop();
 
   var DEBOUNCE_MS = 300;
   var searchMaxLength = Number(root.dataset.searchMaxLength);
@@ -264,7 +275,10 @@
     var content = root.querySelector(CONTENT_SELECTOR);
     if (content) content.hidden = on;
     root.setAttribute("aria-busy", on ? "true" : "false");
-    if (!on) root.removeAttribute("aria-busy");
+    if (!on) {
+      root.removeAttribute("aria-busy");
+      syncGridTabStop();
+    }
   }
 
   // URLs change across month steps; the control's test ID or label is stable.
@@ -468,12 +482,21 @@
       // the next submit re-enters the fragment flow. A no-op when the zones
       // carry no form (e.g. the list view) or the node is already wired.
       wireJumpForm();
+      // Odd reads fence their generation. Unknown reads disarm recovery without forgetting the fence.
+      var read = +next.dataset.discordRead;
+      var newerRead = read > Math.abs(discordRead);
+      var discordRecovered = newerRead && discordRead % 2 === 1 && read % 2 === 0;
+      if (newerRead) discordRead = read;
+      else if (!(read >= 0) && discordRead > 0) discordRead = -discordRead;
       root.dataset.view = next.dataset.view;
       root.dataset.month = next.dataset.month;
       root.dataset.past = next.dataset.past;
       live.forEach(function (node, i) {
         var source = page.querySelector('[data-testid="' + LIVE_TESTIDS[i] + '"]');
-        if (source) node.textContent = source.textContent;
+        if (source)
+          node.textContent =
+            source.textContent +
+            (i === 1 && discordRecovered ? " Discord events are available again." : "");
       });
       var sourceGame = page.querySelector('select[name="game"]');
       // The admitted page owns this scope even when newer drafts keep the select.
