@@ -30,6 +30,7 @@ const callbackRecoveryStates = {
   joinBotFailed: {
     title: "We couldn't add you automatically",
     message: "The bot will give you your rank when it's back.",
+    supportReference: "fixture <em>42</em> & queued",
   },
   joinExpired: {
     title: "Join approval expired",
@@ -141,9 +142,15 @@ export async function assertJoinEvidence(page, state, shell) {
     return;
   }
   if (Object.hasOwn(callbackRecoveryStates, state)) {
-    const { title, message } = callbackRecoveryStates[state];
+    const { title, message, supportReference } = callbackRecoveryStates[state];
     assert.equal(await page.locator("#recovery-heading").textContent(), title);
     assert.equal(await page.locator(".recovery-hero .lead").textContent(), message);
+    const reference = page.getByTestId("error-support-reference");
+    assert.equal(await reference.count(), supportReference ? 1 : 0);
+    if (supportReference) {
+      assert.equal(await reference.textContent(), supportReference);
+      assert.equal(await reference.locator("*").count(), 0);
+    }
     const retry = page.getByTestId("recovery-retry");
     assert.equal(await retry.textContent(), joinRetry.retryLabel);
     assert.equal(await retry.getAttribute("href"), joinRetry.retryUrl);

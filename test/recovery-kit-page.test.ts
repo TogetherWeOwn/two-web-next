@@ -457,7 +457,7 @@ describe("Kit GET /auth/recover markup contract (Recovery shell parity)", () => 
     expect(lib).not.toMatch(/getSignedCookie|readSession|dbFor|ADMIN_DB|SESSION_STORE|fetch\(/);
   });
 
-  it("renders an optional support reference as escaped text like Hono", () => {
+  it("pins the optional support reference markup", () => {
     expect(lib).toContain('import type { RecoveryModel } from "../../../src/recovery-outcome"');
     expect(lib).toContain("{#if supportReference}");
     expect(lib).toContain('data-testid="error-support-reference">{supportReference}</code>');
