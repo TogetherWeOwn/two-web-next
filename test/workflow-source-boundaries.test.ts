@@ -53,30 +53,57 @@ if (command === "node") {
 }
 
 describe("workflow source argument boundaries", () => {
-  it("passes all three staging Kit route flags as single Wrangler arguments", () => {
-    const step = workflow("deploy").jobs["deploy-staging"]?.steps?.find(
-      ({ name }) => name === "Deploy to Cloudflare Workers",
+  it.each([
+    [
+      "values with shell metacharacters",
+      {
+        KIT_ROUTE_ARCHIVE: "archive with spaces",
+        KIT_ROUTE_STATIC: "static\twith a tab",
+        KIT_ROUTE_EVENTS: 'events with "quotes"\nand a newline',
+        KIT_ROUTE_HOME: "home with 'single quotes'",
+        KIT_ROUTE_JOIN: 'join with "double quotes"\tand a tab',
+      },
+    ],
+    [
+      "the default-off Hono values",
+      {
+        KIT_ROUTE_ARCHIVE: "false",
+        KIT_ROUTE_STATIC: "false",
+        KIT_ROUTE_EVENTS: "false",
+        KIT_ROUTE_HOME: "false",
+        KIT_ROUTE_JOIN: "false",
+      },
+    ],
+  ])("passes all five staging Kit route flags as single Wrangler arguments for %s", (_, flags) => {
+    const steps = workflow("deploy").jobs["deploy-staging"]?.steps;
+    const selector = steps?.find(({ id }) => id === "kit-route-flags");
+    expect(selector?.env?.KIT_ROUTE_FAMILY).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.kit_route_family || 'hono' }}",
     );
+    const step = steps?.find(({ name }) => name === "Deploy to Cloudflare Workers");
     expect(step?.env).toMatchObject({
       KIT_ROUTE_ARCHIVE: "${{ steps.kit-route-flags.outputs.archive }}",
       KIT_ROUTE_STATIC: "${{ steps.kit-route-flags.outputs.static }}",
       KIT_ROUTE_EVENTS: "${{ steps.kit-route-flags.outputs.events || 'false' }}",
+      KIT_ROUTE_HOME: "${{ steps.kit-route-flags.outputs.home || 'false' }}",
+      KIT_ROUTE_JOIN: "${{ steps.kit-route-flags.outputs.join || 'false' }}",
     });
-    const flags = {
-      KIT_ROUTE_ARCHIVE: "archive with spaces",
-      KIT_ROUTE_STATIC: "static\twith a tab",
-      KIT_ROUTE_EVENTS: 'events with "quotes"\nand a newline',
-    };
-    const calls = shellArguments(step?.run, { DEPLOY_SHA: "a".repeat(40), ...flags });
+    const sha = "a".repeat(40);
+    const calls = shellArguments(step?.run, { DEPLOY_SHA: sha, ...flags });
     expect(calls).toHaveLength(1);
     const [call] = calls;
     expect(call?.command).toBe("npx");
     const args = call?.args ?? [];
-    expect(args.slice(0, 2)).toEqual(["wrangler", "deploy"]);
-    expect(args.flatMap((arg, i) => (arg === "--var" ? [args[i + 1]] : [])).sort()).toEqual(
-      Object.entries(flags)
-        .map(([name, value]) => `${name}:${value}`)
-        .sort(),
+    expect(args.slice(0, 6)).toEqual([
+      "wrangler",
+      "deploy",
+      "--config",
+      "web/wrangler.staging.jsonc",
+      "--tag",
+      sha,
+    ]);
+    expect(args.slice(6)).toEqual(
+      Object.entries(flags).flatMap(([name, value]) => ["--var", `${name}:${value}`]),
     );
   });
 
