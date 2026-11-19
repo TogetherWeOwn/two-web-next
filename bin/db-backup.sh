@@ -236,6 +236,7 @@ r2_aws() (
   set +x
   unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
   AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
+    AWS_CLI_ERROR_FORMAT=legacy \
     AWS_ACCESS_KEY_ID="$R2_S3_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_S3_SECRET_ACCESS_KEY" \
     AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
     "${AWS_BIN:-aws}" --no-cli-pager --no-cli-auto-prompt --region auto \
@@ -283,6 +284,9 @@ obj_missing() {
     python3 "$ROOT/bin/backup/manifest-helper" missing "$file.stderr"
   else
     error="$(<"$file.stderr")"
+    # AWS CLI v2 wraps its legacy diagnostic in newlines. Strip only the
+    # leading newline (command substitution strips the trailing ones).
+    error="${error#$'\n'}"
     [[ $error != *$'\n'* && $error =~ ^An\ error\ occurred\ \((NoSuchKey|404)\)\ when\ calling\ the\ GetObject\ operation:.*$ ]]
   fi
 }

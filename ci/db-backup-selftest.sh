@@ -201,6 +201,7 @@ cat > "$T/aws-stub" <<'STUB'
 set -euo pipefail
 [[ $AWS_ACCESS_KEY_ID = fixture-access && $AWS_SECRET_ACCESS_KEY = fixture-secret ]]
 [[ ! -v AWS_SESSION_TOKEN && ! -v AWS_PROFILE && $AWS_CONFIG_FILE = /dev/null ]]
+[[ $AWS_CLI_ERROR_FORMAT = legacy ]]
 [[ $1 = --no-cli-pager && $2 = --no-cli-auto-prompt && $3 = --region && $4 = auto ]]
 [[ $5 = --endpoint-url && $6 = "https://$R2_ACCOUNT_ID.eu.r2.cloudflarestorage.com" ]]
 shift 6
@@ -224,6 +225,7 @@ case "$op" in
       case "$STUB_GET_ERROR" in
         partial) printf 'partial\n' > "$file"; code=404 ;;
         transport) echo 'Connection closed without a response' >&2; exit 255 ;;
+        noisy) echo 'Connection closed without a response' >&2; code=404 ;;
         *) code="$STUB_GET_ERROR" ;;
       esac
     elif [[ ! -f $dest ]]; then
@@ -235,7 +237,7 @@ case "$op" in
       fi
       exit 0
     fi
-    printf 'An error occurred (%s) when calling the GetObject operation: fixture\n' "$code" >&2
+    printf '\nAn error occurred (%s) when calling the GetObject operation: fixture\n' "$code" >&2
     exit 254 ;;
   delete-object)
     [[ $# = 6 && -f $dest ]]
@@ -258,7 +260,7 @@ expect_failure env R2_S3_SECRET_ACCESS_KEY= "$BIN" backup staging
 [ ! -e "$STUB_DUMP_LOG" ] && [ ! -e "$STUB_LOG" ] || fail "invalid S3 setup connected"
 ok "invalid transport or incomplete S3 credentials refuse before dump and storage"
 
-for error in 403 NoSuchBucket transport partial; do
+for error in 403 NoSuchBucket transport noisy partial; do
   expect_failure env STUB_FAIL_KEY="$MANIFEST" STUB_GET_ERROR="$error" "$BIN" backup staging
   grep -qxF 'db-backup: manifest read failed; refusing remote mutation' "$T/err" || fail "unexpected $error failure"
 done
