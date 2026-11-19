@@ -196,6 +196,7 @@ test("requires separate certificates for every same-config occurrence in either 
   ]) {
     const sibling = copy(good);
     distinguish(sibling.identity);
+    sibling.context.install.job = sibling.identity.job;
     for (const observed of [
       [good, sibling],
       [sibling, good],
