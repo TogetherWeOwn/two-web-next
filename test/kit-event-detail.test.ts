@@ -1029,7 +1029,7 @@ describe("Kit detail presentation", () => {
     [
       "ended event",
       { startsAt: new Date("2020-01-10T20:00:00Z"), endsAt: new Date("2020-01-10T22:00:00Z") },
-      "This one has been and gone",
+      /<h2 id="signup-record-heading"[^>]*>Sign-up record<\/h2>/,
       false,
     ],
     ["paused RSVPs", { rsvpOpen: false }, "RSVPs are paused for this event", false],
@@ -1054,7 +1054,8 @@ describe("Kit detail presentation", () => {
       if (outcome.kind !== "ok") throw new Error("unreachable");
       const { renderDetail } = await buildKitEventDetailBundle();
       const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
-      expect(html).toContain(verdict);
+      if (typeof verdict === "string") expect(html).toContain(verdict);
+      else expect(html).toMatch(verdict);
       expect(html).toContain('data-testid="event-roster-empty"');
       expect(html).toContain("No one is listed as going yet.");
       expect(html).not.toMatch(/No RSVPs(\.| yet)/);
@@ -1067,7 +1068,7 @@ describe("Kit detail presentation", () => {
     [
       "ended event",
       { startsAt: new Date("2020-01-10T20:00:00Z"), endsAt: new Date("2020-01-10T22:00:00Z") },
-      "This one has been and gone",
+      /<h2 id="signup-record-heading"[^>]*>Sign-up record<\/h2>/,
     ],
     ["paused RSVPs", { rsvpOpen: false }, "Log in with Discord"],
   ])(
@@ -1088,7 +1089,8 @@ describe("Kit detail presentation", () => {
       if (outcome.kind !== "ok") throw new Error("unreachable");
       const { renderDetail } = await buildKitEventDetailBundle();
       const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
-      expect(html).toContain(rsvpCopy);
+      if (typeof rsvpCopy === "string") expect(html).toContain(rsvpCopy);
+      else expect(html).toMatch(rsvpCopy);
       expect(html).toContain('data-testid="event-roster-guest-nudge"');
       expect(html).toContain("No one is listed as going yet.");
       expect(html).not.toMatch(/No RSVPs(\.| yet)/);
@@ -1232,17 +1234,28 @@ describe("Kit detail presentation", () => {
     const pastHtml = renderDetail(past.outcome.model as unknown as Record<string, unknown>);
     expect(pastHtml).toContain('data-testid="event-past"');
     expect(pastHtml).toContain("text/markdown");
-    // A past row closes RSVP for members, exactly as the served button does.
+    // An ended past row still closes RSVP for members, but shows the sign-up record.
     const pastMember = await resolve(
       KEY,
-      fakeStore({ event: { ...row({ status: "past" }), goingCount: 3 } as PublicEvent }),
+      fakeStore({
+        event: {
+          ...row({
+            status: "past",
+            startsAt: new Date("2020-01-01T20:00:00Z"),
+            endsAt: new Date("2020-01-01T22:00:00Z"),
+          }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
       memberSession(),
     );
     if (pastMember.outcome.kind !== "ok") throw new Error("unreachable");
     const pastMemberHtml = renderDetail(
       pastMember.outcome.model as unknown as Record<string, unknown>,
     );
-    expect(pastMemberHtml).toContain('data-testid="rsvp-closed"');
+    expect(pastMemberHtml).toContain("No Echo for this one. 3 signed up.");
+    expect(pastMemberHtml).not.toContain(`action="/e/${KEY}/rsvp"`);
+    expect(pastMemberHtml).not.toContain("Next one:");
   });
 
   // The host/join fields are independently optional, so each one renders on
