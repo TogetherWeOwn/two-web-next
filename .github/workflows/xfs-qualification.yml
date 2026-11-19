@@ -98,16 +98,20 @@ jobs:
           path: artifacts/kit-worker-fatal/
           if-no-files-found: error
           retention-days: 14
+      - name: Prepare disposable runtime role
+        env:
+          DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Migrate loopback Postgres and check migration history
         env:
-          DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports[5432] }}/two_web_next
+          DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: |
           npm run db:migrate
           npm run db:check
       - name: Run Kit and Hono against the installed XFS output
         shell: bash
         env:
-          KIT_WORKER_TEST_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports[5432] }}/two_web_next
+          KIT_WORKER_TEST_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: |
           result=0
           bash ci/xfs-qualification-fixture.sh bash ci/kit-worker-installed-output.sh \
