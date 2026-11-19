@@ -17,6 +17,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripEmberDelta } from "./kit-archive-delta.mjs";
 import { sectionOf } from "./kit-section-contract.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 
@@ -707,8 +708,7 @@ function assertJoinContract(label, html, get, expected) {
   return failures;
 }
 
-// Events-list contract (src/events/pages-calendar-screen.tsx via
-// src/kit-events-html.tsx): the native endpoint renders the Hono calendar
+// Events-list contract: both routes render the calendar
 // screen, so the island identity, view toggles, search form, archive and
 // subscribe links and markdown alternate ride both renderers. Rows are live
 // reads (staging is often empty), so cards are never required here — the
@@ -2482,8 +2482,10 @@ async function runPreviewMode(
       let same = false;
       let reason = "section HTML differs";
       try {
+        const kitComparable = route.contract === "archive" ? stripEmberDelta(kitHtml) : kitHtml;
         same =
-          sectionOf(kitHtml, route.compareSection) === sectionOf(honoHtml, route.compareSection);
+          sectionOf(kitComparable, route.compareSection) ===
+          sectionOf(honoHtml, route.compareSection);
         if (same) reason = null;
       } catch (error) {
         reason = String(error?.message ?? error).slice(0, 200);

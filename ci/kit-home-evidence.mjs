@@ -10,9 +10,21 @@ const member = {
   member: true,
   moderator: false,
 };
+const event = {
+  source: "canonical",
+  eventKey: "game-night-1",
+  title: "Game night",
+  startsAt: "2026-10-20T19:00:00.000Z",
+  timezone: "UTC",
+  location: "Online",
+  goingCount: 3,
+  capacity: null,
+};
 const states = {
   guest: {},
   member: { session: member },
+  guestEvents: { upcomingEvents: [event] },
+  memberEvents: { session: member, upcomingEvents: [event] },
   nonmember: { session: { ...member, userId: "player-1", username: "Player", member: false } },
   sessionOutage: { sessionUnavailable: true },
   eventsOutage: { eventsUnavailable: true },
@@ -42,9 +54,10 @@ export function homeEvidencePage(state) {
   };
   return `<script>
 import Home from '../+page.svelte';
-import { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS } from '../../../../src/home-copy';
+import { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO } from '../../../../src/home-copy';
 const data = ${JSON.stringify(data)};
-data.homeCopy = { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS };
+data.upcomingEvents = data.upcomingEvents.map(event => ({ ...event, startsAt: new Date(event.startsAt) }));
+data.homeCopy = { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO };
 </script>
 <Home {data} />`;
 }
@@ -53,6 +66,22 @@ export async function assertHomeEvidence(page, state) {
   if (!Object.hasOwn(states, state)) throw new Error(`Unknown home evidence state: ${state}`);
   const count = (id) => page.getByTestId(id).count();
   const session = states[state].session;
+  assert.equal(await count("join-band"), session?.member ? 0 : 1, `${state}: join band`);
+  if (!session?.member) {
+    const fallback = state === "sessionOutage" || state === "joinFailed";
+    const cta = page.getByTestId(fallback ? "join-band-invite" : "join-band-join");
+    assert.equal(await count(fallback ? "join-band-join" : "join-band-invite"), 0);
+    assert.equal(
+      await cta.getAttribute("href"),
+      state === "sessionOutage"
+        ? "/discord"
+        : state === "joinFailed"
+          ? "https://discord.gg/invite"
+          : "/auth/discord",
+      `${state}: join band destination`,
+    );
+    assert.match(await page.getByTestId("join-band").innerText(), /Pull up a chair\./);
+  }
   assert.equal(await count("signin"), session ? 0 : 1, `${state}: guest header`);
   assert.equal(
     await count("join"),
@@ -61,6 +90,9 @@ export async function assertHomeEvidence(page, state) {
   );
   assert.equal(await count("member-count"), state === "missingCounts" ? 0 : 1, `${state}: counts`);
   assert.equal(await count("notice"), state === "joinFailed" ? 1 : 0, `${state}: notice`);
+  assert.equal(await page.getByTestId("home-highlights").locator("li").count(), 4);
+  if (!session?.member && state !== "sessionOutage" && state !== "joinFailed")
+    assert.match(await page.getByTestId("join-band").innerText(), /Approve once with Discord/);
   assert.equal(
     await count("join-result"),
     ["joinAdded", "alreadyMember"].includes(state) ? 1 : 0,
@@ -76,10 +108,15 @@ export async function assertHomeEvidence(page, state) {
     ["sessionOutage", "eventsOutage"].includes(state) ? 1 : 0,
     `${state}: fallback`,
   );
-  assert.equal(
-    await page.getByTestId("home-events-empty").getAttribute("data-state"),
-    state === "eventsOutage" ? "unavailable" : "empty",
-  );
+  if (states[state].upcomingEvents) {
+    assert.equal(await count("home-events-list"), 1, `${state}: event list`);
+    assert.match(await page.getByTestId("home-events-list").innerText(), /Game night/);
+  } else {
+    assert.equal(
+      await page.getByTestId("home-events-empty").getAttribute("data-state"),
+      state === "eventsOutage" ? "unavailable" : "empty",
+    );
+  }
   if (session?.member)
     assert.equal(
       await page

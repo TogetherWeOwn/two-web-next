@@ -185,13 +185,16 @@ export function archiveReadFixture() {
     const limit = Number(params.at(sql.includes(" offset ") ? -2 : -1));
     const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
     return {
-      rows: selected
-        .slice(offset, offset + limit)
-        .map((row) =>
-          columns.map((key) =>
-            row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key],
-          ),
-        ),
+      rows: selected.slice(offset, offset + limit).map((row) =>
+        columns.map((key) => {
+          const value = row[key];
+          if (!(value instanceof Date)) return value;
+          // Model a finite PostgreSQL timestamp whose JS Date cannot be formatted.
+          return Number.isFinite(value.getTime())
+            ? value.toISOString()
+            : "280000-06-01 20:00:00+00";
+        }),
+      ),
     };
   }) as unknown as Db;
   return {

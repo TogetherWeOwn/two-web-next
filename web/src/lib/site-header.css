@@ -1,1 +1,12 @@
-/* Reserved for Kit site header styles. */
+@media (max-width: 820px) {
+  :root {
+    scroll-padding-top: 12rem;
+  }
+
+  [data-kit-site-header] {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--color-page);
+  }
+}

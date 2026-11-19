@@ -1,12 +1,10 @@
-// Kit content leaves must not preload the Mona Sans webfont.
-// Staging mobile LCP on /about, /faq, /rules and /privacy measured 2197–2255
-// ms against the 2000 ms budget while FCP sat at 1687–1750 ms: the display
-// webfont arrives after first paint and its swap re-lays-out the leaf, so the
-// largest text block repaints late and becomes LCP. The Hono shell
-// (src/page-shell.tsx) already skips the Mona Sans preload for theme "content";
-// the SvelteKit twin (web/src/lib/SiteMetadata.svelte) must agree, or enabling
-// the Kit routes reintroduces the same unused high-priority fetch on the same
-// mobile-LCP pages.
+// Kit content leaves render the display face through the optional content face
+// and must not preload the Mona Sans webfont.
+// Staging mobile LCP measured 2197–2255 ms against the 2000 ms budget while
+// FCP sat at 1687–1750 ms: the swap face arrives after first paint and its
+// swap re-lays-out the leaf (see the Hono twin's pin test). The SvelteKit twin
+// (web/src/lib/SiteMetadata.svelte) must agree with the Hono shell
+// (src/page-shell.tsx continues to skip the preload for theme "content").
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -121,6 +119,8 @@ describe("Kit content shell preloads no Mona Sans webfont", () => {
       expect(html).not.toContain("<style>");
     }
   });
+
+  // The inlined constant's display rules and token are pinned in content-leaf-no-webfont.test.ts.
 
   it("ships the content face with font-display: optional over the same file as the main face", () => {
     const faces = [...stripComments(LEAF_CRITICAL_CSS).matchAll(/@font-face\s*\{([^}]*)\}/g)].map(

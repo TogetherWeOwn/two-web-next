@@ -33,7 +33,20 @@
 .events-page .schedule-month-nav a{padding:.5rem 1rem;border:1px solid var(--line);}
 .events-page [data-testid=calendar-month-jump]{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;margin:1rem 0;}
 .events-page input[type=month]{min-height:44px;max-width:100%;padding:.5rem;border:1px solid var(--line);background:var(--surface);color:var(--ink);color-scheme:dark;font:inherit;}
+.events-page .schedule-recovery-actions{display:flex;flex-wrap:wrap;align-items:center;gap:var(--two-space-3,12px) var(--two-space-6,24px);margin-top:var(--two-space-3,12px)}
+.events-page .schedule-recovery-actions a{padding-block:var(--two-space-2,8px)}
+.events-page .schedule-month-container{container-type:inline-size;min-width:0}
+.events-page .schedule-month-frame{position:relative}
+.events-page .schedule-month-frame::after{display:none}
+.events-page .schedule-month-hint{display:none;color:var(--two-color-text-tertiary,var(--muted));font-size:var(--two-font-size-label,12px);margin:0 0 var(--two-space-3,12px)}
 .events-page [data-testid=events-calendar-scroll]{overflow-x:auto;}
+@container (width < 42rem){
+  .events-page [data-testid=events-calendar-scroll] table{margin-inline-end:var(--two-space-7,32px)}
+  .events-page .schedule-month-hint{display:block}
+  .events-page .schedule-month-frame::after{content:"";display:block;position:absolute;inset-block:2em 0;inset-inline-end:0;width:var(--two-space-7,32px);background:linear-gradient(to right,transparent,var(--two-color-ground-0,var(--paper)));pointer-events:none}
+  .events-page .schedule-month-frame:dir(rtl)::after{background:linear-gradient(to left,transparent,var(--two-color-ground-0,var(--paper)))}
+}
+@media (forced-colors:active){.events-page .schedule-month-frame::after{display:none}}
 .events-page [data-hotzone-scroll]{overflow-x:auto;max-width:100%;}
 .events-page table{width:100%;min-width:42rem;table-layout:fixed;border-collapse:collapse;background:var(--surface);}
 .events-page :is(th, td){border:1px solid var(--line);padding:.65rem;vertical-align:top;}

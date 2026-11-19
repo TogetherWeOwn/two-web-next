@@ -430,11 +430,8 @@ describe("source-managed moderator deployment preflight", () => {
 });
 
 describe("staging smoke workflow safety", () => {
-  it("routes runners by repo visibility with a job-private container", () => {
-    // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
-    expect(smoke).toContain(
-      `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`,
-    );
+  it("uses a hosted runner with a job-private container", () => {
+    expect(smoke).toContain("runs-on: ubuntu-latest\n");
     expect(smoke).toContain("image: node:24-bookworm");
     expect(smoke.split("ubuntu-latest")).toHaveLength(2);
   });
@@ -528,7 +525,7 @@ describe("production deployment preserves configured triggers", () => {
       'npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"',
     );
     const gradual = workflow.indexOf(
-      "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@2ef8ad6447e11d019ac3098bcfd011193b75266a",
     );
 
     expect(upload).toBeGreaterThan(-1);
@@ -538,14 +535,16 @@ describe("production deployment preserves configured triggers", () => {
     // from the action's own path, never caller-relative, so every repo runs
     // the same traffic math with no copy.
     expect(action).not.toContain("node ci/gradual-promote.mjs");
+    expect(action).not.toContain('"${{ github.action_path }}/');
+    expect(action.match(/ACTION_PATH: \$\{\{ github\.action_path \}\}/g)).toHaveLength(8);
     for (const percentage of [5, 50]) {
       expect(action).toContain(
-        '"${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" ' +
+        '"$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" ' +
           `${percentage} "$PREV_VERSION"`,
       );
     }
     expect(action).toContain(
-      '"${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION"',
+      '"$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION"',
     );
     expect(action).toContain("npx wrangler versions deploy --env production");
     expect(workflow).not.toContain("wrangler triggers deploy");

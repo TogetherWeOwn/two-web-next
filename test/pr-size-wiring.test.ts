@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 // The PR-size labeller is advisory only: these pins keep it that way. The
 // advisory job names must never join the required set; `pr-size-gate` is the
@@ -9,10 +10,15 @@ import { describe, expect, it } from "vitest";
 // the org `.github` repository and runs from there at a pinned SHA, so this
 // repo keeps no script copy a pull request could modify or delete to silence
 // its own label; behaviour is tested centrally next to the script.
-const workflow = readFileSync(".github/workflows/pr-size.yml", "utf8");
+const workflowSource = readFileSync(".github/workflows/pr-size.yml", "utf8");
+const workflow = workflowSource.replace(
+  /^(      (?:issues|pull-requests): (?:read|write))[ \t]+#[^\n]*$/gm,
+  "$1",
+);
 const contributing = readFileSync("CONTRIBUTING.md", "utf8");
-const job = (id: string) =>
-  workflow.split(new RegExp(`\\n  ${id}:\\n`))[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";
+const job = (id: string, source = workflow) =>
+  source.split(new RegExp(`\\n  ${id}:\\n`))[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";
+const PERMISSION_BLOCK = /^    permissions:\n([\s\S]*?)(?=^    [A-Za-z][A-Za-z0-9_-]*:)/m;
 const CENTRAL = "TogetherWeOwn/.github/.github/workflows";
 const REVIEWED_CENTRAL_SHA = "ac9ce8d63e0cebd19ede904ac79137190c329964";
 
@@ -31,14 +37,13 @@ describe("pr-size advisory wiring", () => {
     expect(workflow.match(/^permissions:/gm)).toHaveLength(1);
     const topLevel = workflow.match(/^permissions:\n([\s\S]*?)(?=^[A-Za-z][A-Za-z0-9_-]*:)/m)?.[1];
     expect(topLevel?.trim()).toBe("contents: read");
-    for (const id of ["pr-size", "pr-size-gate"]) {
+    for (const id of ["pr-size", "pr-size-gate", "pr-size-weekly"]) {
       const callerJob = job(id);
       expect(callerJob.match(/^    permissions:/gm)).toHaveLength(1);
-      const callerPermissions = callerJob.match(
-        /^    permissions:\n([\s\S]*?)(?=^    [A-Za-z][A-Za-z0-9_-]*:)/m,
-      )?.[1];
+      const callerPermissions = callerJob.match(PERMISSION_BLOCK)?.[1];
+      const access = id === "pr-size-weekly" ? "read" : "write";
       expect(callerPermissions?.trimEnd()).toBe(
-        "      contents: read\n      issues: write\n      pull-requests: write",
+        `      contents: read\n      issues: ${access}\n      pull-requests: ${access}`,
       );
     }
     expect(job("pr-size-weekly")).not.toMatch(/\bwrite\b/);
@@ -50,6 +55,27 @@ describe("pr-size advisory wiring", () => {
       "pr-size-weekly",
     ]);
     expect(workflow.match(/\bwrite\b/g)).toHaveLength(4);
+  });
+
+  it("documents each non-contents grant on its own permission line", () => {
+    const { jobs } = parse(workflowSource);
+    for (const [id, access] of [
+      ["pr-size", "write"],
+      ["pr-size-gate", "write"],
+      ["pr-size-weekly", "read"],
+    ] as const) {
+      expect(jobs[id].permissions).toEqual({
+        contents: "read",
+        issues: access,
+        "pull-requests": access,
+      });
+      const callerPermissions = job(id, workflowSource).match(PERMISSION_BLOCK)?.[1];
+      for (const scope of ["issues", "pull-requests"]) {
+        expect(callerPermissions).toMatch(
+          new RegExp(`^      ${scope}: ${access}[ \\t]+#[ \\t]*\\S`, "m"),
+        );
+      }
+    }
   });
 
   it("calls the central reusables at one pinned full SHA", () => {

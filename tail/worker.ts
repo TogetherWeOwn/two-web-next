@@ -389,6 +389,8 @@ export const ALERT_ROUTES = new Set([
   "/admin/queue/failed/:id/preview",
   "/admin/queue/failed/:id/redispatch",
   "/admin/queue/source-evidence/:id",
+  "/admin/reconciliation",
+  "/admin/reconciliation/:key",
   "/api/agent-events",
   "/api/public/community",
   "/api/public/events",

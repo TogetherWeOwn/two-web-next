@@ -280,6 +280,95 @@ describe("fixtureManifestFor (Kit parity fixture only)", () => {
   });
 });
 
+describe("fixtureManifestFor (join)", () => {
+  it("enables only join on HTTP loopback without changing the shipped manifest", () => {
+    expect(
+      fixtureManifestFor({ APP_URL: "http://localhost:8788", KIT_PARITY_FIXTURE_JOIN: "false" }),
+    ).toBeUndefined();
+    for (const APP_URL of [
+      "https://localhost:8788",
+      "https://next.togetherweown.com",
+      "http://example.com",
+    ]) {
+      expect(fixtureManifestFor({ APP_URL, KIT_PARITY_FIXTURE_JOIN: "true" })).toBeUndefined();
+    }
+    const manifest = fixtureManifestFor({
+      APP_URL: "http://127.0.0.1:8788",
+      KIT_PARITY_FIXTURE_JOIN: "true",
+    })!;
+    expect(ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === "/join")?.enabled).toBe(
+      false,
+    );
+    expect(manifest.find((e) => e.method === "GET" && e.path === "/join")?.enabled).toBe(true);
+    expect(manifest.filter((e, i) => e !== ROUTE_MANIFEST[i]).map((e) => e.path)).toEqual([
+      "/join",
+    ]);
+  });
+
+  it("dispatches join through Kit only with the loopback fixture flag", async () => {
+    const request = new Request("http://127.0.0.1:8788/join?next=%2Fevents", {
+      headers: { host: "127.0.0.1:8788" },
+    });
+    const resolve = vi.fn(async () => new Response("kit join"));
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    const res = await dispatchHookRequest(
+      { request, url: new URL(request.url), route: { id: "/join" } },
+      { appUrl: "http://127.0.0.1:8788", honoFetch, resolve, fixtureJoin: true },
+    );
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(honoFetch).not.toHaveBeenCalled();
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(await res.text()).toBe("kit join");
+  });
+});
+
+describe("fixtureManifestFor (moderator dashboard)", () => {
+  const loopback = "http://127.0.0.1:8788";
+  const dashboardFlag = { KIT_PARITY_FIXTURE_ADMIN_DASHBOARD: "true" };
+
+  it("changes only the disabled dashboard entry on HTTP loopback", () => {
+    for (const APP_URL of ["https://127.0.0.1:8788", "http://example.com"]) {
+      expect(fixtureManifestFor({ APP_URL, ...dashboardFlag })).toBeUndefined();
+    }
+    const manifest = fixtureManifestFor({ APP_URL: loopback, ...dashboardFlag });
+    const dashboard = ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === "/admin");
+    expect(dashboard?.enabled).toBe(false);
+    expect(manifest?.filter((e, i) => e !== ROUTE_MANIFEST[i])).toEqual([
+      { ...dashboard, enabled: true },
+    ]);
+  });
+
+  it.each([
+    [loopback, "HEAD", "/admin", true],
+    [loopback, "POST", "/admin", true],
+    [loopback, "GET", "/admin/featured", true],
+    [loopback, "GET", "/admin", false],
+    ["https://next.togetherweown.com", "GET", "/admin", true],
+  ] as const)("keeps %s %s %s on Hono (fixture flag %s)", async (appUrl, method, path, flag) => {
+    const request = new Request(appUrl + path, { method });
+    const resolve = vi.fn(async () => new Response("kit"));
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    await dispatchHookRequest(
+      { request, url: new URL(request.url), route: { id: path } },
+      { appUrl, resolve, honoFetch, fixtureAdminDashboard: flag },
+    );
+    expect(honoFetch).toHaveBeenCalledExactlyOnceWith(request);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("keeps a normalized dashboard data request on Hono", async () => {
+    const request = new Request(`${loopback}/admin/__data.json`);
+    const resolve = vi.fn(async () => new Response("kit"));
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    await dispatchHookRequest(
+      { request, url: new URL(`${loopback}/admin`), route: { id: "/admin" }, isDataRequest: true },
+      { appUrl: loopback, resolve, honoFetch, fixtureAdminDashboard: true },
+    );
+    expect(honoFetch).toHaveBeenCalledExactlyOnceWith(request);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+});
+
 describe("fixtureManifestFor (event-detail RSVP companion)", () => {
   it("returns no override without either fixture flag", () => {
     expect(fixtureManifestFor({ APP_URL: "http://127.0.0.1:8788" })).toBeUndefined();

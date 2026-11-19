@@ -39,6 +39,9 @@ const base: Handle = async ({ event, resolve }) => {
     sessionSecret: env.SESSION_SECRET,
     kitRouteArchive: env.KIT_ROUTE_ARCHIVE,
     kitRouteStatic: env.KIT_ROUTE_STATIC,
+    kitRouteEvents: env.KIT_ROUTE_EVENTS,
+    kitRouteHome: env.KIT_ROUTE_HOME,
+    kitRouteJoin: env.KIT_ROUTE_JOIN,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,
     honoFetch,
     // Forwards the core's resolve options untouched: content-leaf renders
@@ -73,6 +76,8 @@ const base: Handle = async ({ event, resolve }) => {
     // entry back restores Hono.
     fixtureMemberBoard: env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true",
     fixtureEventDetail: env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true",
+    fixtureJoin: env.KIT_PARITY_FIXTURE_JOIN === "true",
+    fixtureAdminDashboard: env.KIT_PARITY_FIXTURE_ADMIN_DASHBOARD === "true",
     // The member board's anonymous view log, written only after the
     // member-read boundary released a 200 (no-op for every other route).
     afterMemberRead: (event, response) =>

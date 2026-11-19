@@ -267,6 +267,13 @@ describe("tier-0 calendar input resolver", () => {
   const maybeText = fc.oneof(fc.constant(undefined), fc.constant(null), fc.string());
 
   it("bounds the query, forces list view while searching, and passes the rest through", () => {
+    const calendar = {
+      view: "calendar",
+      past: undefined,
+      page: undefined,
+      event: undefined,
+      month: undefined,
+    };
     fc.assert(
       fc.property(
         fc.record({
@@ -279,11 +286,14 @@ describe("tier-0 calendar input resolver", () => {
         }),
         (input) => {
           const resolved = resolveCalendarInput(input);
-          const q = input.q ?? "";
-          expect(resolved.q).toBe(q);
-          expect(resolved.queryTooLong).toBe([...q].length > MAX_QUERY_LENGTH);
-          expect(resolved.searching).toBe(!resolved.queryTooLong && matchQuery(q) !== null);
-          if (resolved.searching) expect(resolved.view).toBe("list");
+          const raw = input.q ?? "";
+          const stripped = raw.replaceAll("\0", "");
+          const tooLong = [...raw].length > MAX_QUERY_LENGTH;
+          const searching = !tooLong && stripped.trim() !== "";
+          expect(resolved.q).toBe(searching ? stripped : "");
+          expect(resolved.queryTooLong).toBe(tooLong);
+          expect(resolved.searching).toBe(searching);
+          if (searching) expect(resolved.view).toBe("list");
           else expect(resolved.view).toBe(input.view === "calendar" ? "calendar" : "list");
           expect(["list", "calendar"]).toContain(resolved.view);
           expect(resolved.past).toBe(input.past === "1");
@@ -291,7 +301,16 @@ describe("tier-0 calendar input resolver", () => {
           expect(resolved.month).toBe(input.month ?? null);
         },
       ),
-      OPTIONS,
+      {
+        ...OPTIONS,
+        examples: [
+          [{ ...calendar, q: " \t " }],
+          [{ ...calendar, q: "\0\0" }],
+          [{ ...calendar, q: " \0raid " }],
+          [{ ...calendar, q: "x".repeat(MAX_QUERY_LENGTH + 1) }],
+          [{ ...calendar, q: `${"\0".repeat(MAX_QUERY_LENGTH)}x` }],
+        ],
+      },
     );
   });
 

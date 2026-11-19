@@ -119,6 +119,47 @@ globalThis.fetch = async (input) => {
   assert.match(output, /sections match/);
 });
 
+test("preview archive compares validated Kit chrome and rejects mutations", () => {
+  const heading = '<h2><a href="/events/example">Example</a></h2>';
+  const glyph =
+    '<svg class="state-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
+    '<circle cx="8" cy="8" r="8" fill="currentColor"></circle></svg>';
+  const chrome = `<div class="event-title">${glyph}${heading}<span class="event-state">Sign-up record</span></div>`;
+  const page = (title) =>
+    `<section data-testid="past-events"><ul><li data-testid="event-card">` +
+    `<div class="schedule-info">${title}<p>Details</p></div></li></ul></section>`;
+  const hono = page(heading);
+  for (const [name, kit, expected] of [
+    ["equivalent", page(chrome), "passed"],
+    ["malformed chrome", page(chrome.replace('r="8"', 'r="7"')), "failed"],
+    ["residual divergence", page(chrome).replace("Details", "Different"), "failed"],
+  ]) {
+    const stub = `
+const kit = ${JSON.stringify(kit)};
+const hono = ${JSON.stringify(hono)};
+globalThis.fetch = async (input) => {
+  const url = new URL(String(input.url ?? input));
+  return new Response(url.host === "kit.invalid.workers.dev" ? kit : hono, { status: 200 });
+};
+`;
+    const { status, output } = runScript({
+      env: {
+        KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+        HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+      },
+      stub,
+    });
+    for (const path of ["/events/past", "/events/past?page=2"]) {
+      assert.ok(
+        output.includes(` - [${expected}] preview ${path}: sections match`),
+        `${name}: ${path}\n${output}`,
+      );
+    }
+    // Other routes deliberately receive minimal fixtures; failures still propagate.
+    assert.equal(status, 1, `${name}: expected nonzero ledger exit\n${output}`);
+  }
+});
+
 test("allowlist admits staging and preview hosts only", () => {
   assert.equal(isAllowlistedHost("next.togetherweown.com"), true);
   assert.equal(isAllowlistedHost("two-web-next-kit-preview.5150.workers.dev"), true);

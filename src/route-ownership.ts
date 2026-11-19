@@ -25,6 +25,7 @@ import {
 import { STAGING_APP_URL } from "./qa";
 import { newRequestId, safeRequestId } from "./request-log";
 import { withStreamedBody } from "./html-stream";
+import { applySingleValidator } from "./http/conditional";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { isKitNoticeDocument, readKitRestoredWrite } from "./kit-restored-write";
@@ -260,26 +261,29 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   },
 ];
 
-// Fixture-only manifest for the executed parity journeys (member board +
-// live event detail). The shipped manifest held /leaderboards/members on Hono
-// until the fresh privacy verdict, so the Playwright Kit fixture
-// (ci/kit-worker-dev.mjs) could otherwise only ever compare Hono against
-// Hono; the live detail entry stays disabled until the RSVP companion passes,
-// so the same fixture enables it for its executed journey. The fixture sets
-// KIT_PARITY_FIXTURE_MEMBER_BOARD=true and/or
-// KIT_PARITY_FIXTURE_EVENT_DETAIL=true on its own generated loopback worker;
-// this helper honours them only for an http loopback APP_URL, so a deployed
-// Kit Worker (preview workers.dev, staging, production) can never enable
-// either route through them. Returns undefined when neither flag is set, which
-// leaves dispatch on the shipped manifest untouched and unmutated.
+// Fixture-only manifest for executed parity journeys. The generated loopback
+// worker can enable specific routes for their Kit journeys and captures.
+// Flags are honoured only for an HTTP loopback APP_URL;
+// deployed Workers retain the shipped manifest. No flag mutates that manifest.
+// The fixture exercises the actual Kit dispatcher rather than a second render
+// implementation. Each override is restricted to its exact method and path;
+// absent flags leave the manifest unchanged, including the disabled join route.
+// An invalid or non-loopback APP_URL also leaves production ownership unchanged.
 export function fixtureManifestFor(env: {
   APP_URL?: string;
   KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
+  KIT_PARITY_FIXTURE_JOIN?: string;
+  KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
+  includeReconciliation?: boolean;
 }): OwnedRoute[] | undefined {
   const wantBoard = env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true";
   const wantDetail = env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true";
-  if (!wantBoard && !wantDetail) return undefined;
+  const wantJoin = env.KIT_PARITY_FIXTURE_JOIN === "true";
+  const wantDashboard = env.KIT_PARITY_FIXTURE_ADMIN_DASHBOARD === "true";
+  const wantReconciliation = env.includeReconciliation === true;
+  if (!wantBoard && !wantDetail && !wantJoin && !wantDashboard && !wantReconciliation)
+    return undefined;
   let app: URL;
   try {
     app = new URL(env.APP_URL ?? "");
@@ -289,26 +293,57 @@ export function fixtureManifestFor(env: {
   if (app.protocol !== "http:") return undefined;
   // URL keeps the brackets on an IPv6 hostname ("[::1]").
   if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(app.hostname)) return undefined;
-  return ROUTE_MANIFEST.map((entry) => {
+  const routes = ROUTE_MANIFEST.map((entry) => {
     if (wantBoard && entry.method === "GET" && entry.path === "/leaderboards/members")
       return { ...entry, enabled: true };
     if (wantDetail && entry.method === "GET" && entry.path === "/e/:key")
       return { ...entry, enabled: true };
+    if (wantJoin && entry.method === "GET" && entry.path === "/join")
+      return { ...entry, enabled: true };
+    if (wantDashboard && entry.method === "GET" && entry.path === "/admin")
+      return { ...entry, enabled: true };
     return entry;
   });
+  // These Kit-only evidence routes have no Hono twin.
+  // Build them from fixture data, separate from the shipped manifest literals.
+  if (wantReconciliation) {
+    const detailPath = "/admin/reconciliation/:key";
+    const reads = [
+      ["/admin/reconciliation", "list", "admin.reconciliation.index"],
+      [detailPath, "view", "admin.reconciliation.show"],
+    ] as const;
+    for (const [path, action, route] of reads) {
+      routes.push({
+        method: "GET",
+        path,
+        enabled: true,
+        reads: { resource: "reconciliation", action, route },
+      });
+    }
+    routes.push({
+      method: "POST",
+      path: detailPath,
+      enabled: true,
+      // The service audits the submit; the detail boundary keeps its response private.
+      reads: { resource: "reconciliation", action: "view", route: "admin.reconciliation.show" },
+    });
+  }
+  return routes;
 }
 
 // Staging Kit starts with every route on Hono. The reviewed deploy workflow
-// may enable only the archive and static page families, while all other routes
-// stay Hono-owned even when the shared manifest enables them for preview/local
-// parity. The staging hostname or any rollout flag selects this restrictive
-// manifest, even with a misconfigured APP_URL. Only the exact staging APP_URL
-// can enable a family; absent, malformed and unknown flags keep it disabled.
+// may opt into only the exact GET entries listed below, and only if the shared
+// manifest enables them. The staging hostname or any rollout flag selects this
+// restrictive manifest, even with a misconfigured APP_URL. Only the exact
+// staging APP_URL can enable a family; absent or malformed flags keep it off.
 export function stagingManifestFor(
   env: {
     APP_URL?: string;
     KIT_ROUTE_ARCHIVE?: string;
     KIT_ROUTE_STATIC?: string;
+    KIT_ROUTE_EVENTS?: string;
+    KIT_ROUTE_HOME?: string;
+    KIT_ROUTE_JOIN?: string;
   },
   routes: OwnedRoute[] = ROUTE_MANIFEST,
 ): OwnedRoute[] | undefined {
@@ -319,19 +354,29 @@ export function stagingManifestFor(
     // With rollout flags present an invalid URL must not select the preview manifest.
     app = undefined;
   }
-  const hasRolloutFlags = env.KIT_ROUTE_ARCHIVE !== undefined || env.KIT_ROUTE_STATIC !== undefined;
+  const hasRolloutFlags =
+    env.KIT_ROUTE_ARCHIVE !== undefined ||
+    env.KIT_ROUTE_STATIC !== undefined ||
+    env.KIT_ROUTE_EVENTS !== undefined ||
+    env.KIT_ROUTE_HOME !== undefined ||
+    env.KIT_ROUTE_JOIN !== undefined;
   if (app?.hostname !== new URL(STAGING_APP_URL).hostname && !hasRolloutFlags) return undefined;
 
   const archiveEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_ARCHIVE === "true";
   // Static pages are the second cumulative rollout stage; they cannot precede
   // the archive family even if a Worker variable is set out of band.
   const staticEnabled = archiveEnabled && env.KIT_ROUTE_STATIC === "true";
+  const eventsEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_EVENTS === "true";
+  const homeEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_HOME === "true";
+  const joinEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_JOIN === "true";
   return routes.map((entry) => {
     const familyEnabled =
-      (entry.method === "GET" && entry.path === "/events/past" && archiveEnabled) ||
-      (entry.method === "GET" &&
-        (entry.path === "/about" || entry.path === "/faq") &&
-        staticEnabled);
+      entry.method === "GET" &&
+      ((entry.path === "/events" && eventsEnabled) ||
+        (entry.path === "/" && homeEnabled) ||
+        (entry.path === "/join" && joinEnabled) ||
+        (entry.path === "/events/past" && archiveEnabled) ||
+        ((entry.path === "/about" || entry.path === "/faq") && staticEnabled));
     return { ...entry, enabled: entry.enabled && familyEnabled };
   });
 }
@@ -515,6 +560,9 @@ export interface HookDispatchDeps {
   // values keep every route on Hono. Preview/local parity stays unchanged.
   kitRouteArchive?: string;
   kitRouteStatic?: string;
+  kitRouteEvents?: string;
+  kitRouteHome?: string;
+  kitRouteJoin?: string;
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
@@ -522,16 +570,17 @@ export interface HookDispatchDeps {
   // one: the hook forwards only the loopback parity-fixture flag below and
   // the core alone turns flag + appUrl into the fixture route choice.
   manifest?: OwnedRoute[];
-  // Loopback Kit parity fixture flags, forwarded from env by the hook as
-  // plain booleans (KIT_PARITY_FIXTURE_MEMBER_BOARD / _EVENT_DETAIL ===
-  // "true"). Honoured only through fixtureManifestFor: exact flags plus an
-  // http loopback appUrl, so a deployed Worker can never enable either route
-  // through them. Absent or false leaves the shipped ROUTE_MANIFEST untouched.
+  // Loopback Kit parity fixture flags, forwarded from env as booleans.
+  // fixtureManifestFor requires an HTTP loopback appUrl; deployed Workers
+  // cannot enable routes through these flags or mutate ROUTE_MANIFEST.
   fixtureMemberBoard?: boolean;
   // Live event-detail fixture flag for the RSVP companion's executed journey:
   // same loopback-only honouring as the board flag above. The shipped detail
   // entry stays disabled; the fixture worker alone enables it.
   fixtureEventDetail?: boolean;
+  // Join remains Hono-owned outside the loopback parity fixture.
+  fixtureJoin?: boolean;
+  fixtureAdminDashboard?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
@@ -870,14 +919,7 @@ export async function dispatchHookRequest(
   deps: HookDispatchDeps,
 ): Promise<Response> {
   const response = await dispatchOwnedRequest(event, deps);
-  // Match Kit's post-hook ETag check before it can discard response headers.
-  const etag = response.headers.get("etag");
-  let validator = event.request.headers.get("if-none-match");
-  if (validator?.startsWith('W/"')) validator = validator.slice(2);
-  if (response.status === 200 && etag !== null && validator === etag) {
-    return new Response(null, { status: 304, headers: response.headers });
-  }
-  return response;
+  return applySingleValidator(event.request, response);
 }
 
 async function dispatchOwnedRequest(
@@ -898,11 +940,23 @@ async function dispatchOwnedRequest(
         APP_URL: deps.appUrl,
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
         KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
+        KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
+        includeReconciliation: deps.fixtureAdminDashboard,
+        // Use the original URL: Kit strips the data suffix from event.url.
+        KIT_PARITY_FIXTURE_ADMIN_DASHBOARD:
+          deps.fixtureAdminDashboard &&
+          event.request.method === "GET" &&
+          new URL(event.request.url).pathname === "/admin"
+            ? "true"
+            : undefined,
       }) ??
       stagingManifestFor({
         APP_URL: deps.appUrl,
         KIT_ROUTE_ARCHIVE: deps.kitRouteArchive,
         KIT_ROUTE_STATIC: deps.kitRouteStatic,
+        KIT_ROUTE_EVENTS: deps.kitRouteEvents,
+        KIT_ROUTE_HOME: deps.kitRouteHome,
+        KIT_ROUTE_JOIN: deps.kitRouteJoin,
       }) ??
       ROUTE_MANIFEST,
     event.url,
@@ -941,9 +995,8 @@ async function dispatchOwnedRequest(
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
   // closed to guest-equivalent locals, exactly as if no bridge were wired.
   // It runs outside the member-read boundary: its session read is not member data.
-  // Deferred as a closure because the live detail wrapper runs before it (see
-  // below): the bridge still precedes every render, but a throttled detail
-  // client never reaches it.
+  // Deferred for the live detail wrapper: the bridge still precedes every
+  // render, but a throttled detail client never reaches it.
   const bridgeSession = async (): Promise<void> => {
     if (!deps.sessionFor) return;
     try {

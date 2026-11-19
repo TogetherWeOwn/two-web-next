@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { URL } from "node:url";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import { selectRouteLabel } from "../src/http/route-labels";
 import app from "../src/index";
 import { assertTargetArtifacts } from "./helpers/route-kit-artifacts";
 import { assertRouteClassification } from "./helpers/route-kit-classification";
@@ -89,6 +90,18 @@ describe("proposed Kit route snapshot", () => {
         expect.objectContaining({ method: "ALL", path: "/admin/queue/*", kind: "middleware" }),
       ]),
     });
+  });
+
+  it("preserves label selection for every mounted registration pattern", () => {
+    // The map above checks registration rows, including middleware. A row is
+    // only a candidate label; it does not say which handler answered a request.
+    for (const { method, path } of routeInventory(app)) {
+      const patterns = ["/*", path];
+      const expected = path.endsWith("*") ? "unmatched" : path;
+      expect(selectRouteLabel(patterns, 1), `${method} ${path}: responder`).toBe(expected);
+      expect(selectRouteLabel(patterns, 0), `${method} ${path}: fallback`).toBe(expected);
+    }
+    expect(selectRouteLabel([], -1)).toBe("unmatched");
   });
 
   it("accepts reviewed auth labels with numeric segments", () => {

@@ -227,6 +227,21 @@ describe("exact public series SELECT classification", () => {
     expect(() => validateNonSensitiveRead("events", SERIES_SELECT, computedFields)).not.toThrow();
   });
 
+  it("admits only the additional public status column for the ended record", () => {
+    const ended = SERIES_SELECT.replace('"recurrence_index",', '"recurrence_index", "status",');
+    expect(() => validateNonSensitiveRead("events", ended, computedFields)).not.toThrow();
+    for (const statement of [
+      ended.replace('"status", (', '"status", "join_url", ('),
+      ended.replace('"events"."status" in ($8, $9) and ', ""),
+      ended.replace(" limit $12", ""),
+    ]) {
+      expect(statement).not.toBe(ended);
+      expect(() => validateNonSensitiveRead("events", statement, computedFields)).toThrow(
+        MemberReadRefused,
+      );
+    }
+  });
+
   it("normalizes whitespace without widening the statement", () => {
     const spaced = ` \n${SERIES_SELECT.replaceAll(" ", " \n\t ")}\n `;
     expect(() => validateNonSensitiveRead("events", spaced, computedFields)).not.toThrow();

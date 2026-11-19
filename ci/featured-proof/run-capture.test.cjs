@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { capture, verifyInputs, verifyOutputs, hashes, sourceHead, viewports, names } = require('./run-capture.cjs');
 const fixtures = path.join(__dirname, 'fixtures');
 
@@ -34,16 +35,64 @@ async function writeOutput(dir, report = reportFixture()) {
   for (const r of report.results) await fs.writeFile(path.join(dir, r.screenshot), png);
 }
 
-test('both capture jobs route runners by repo visibility and event, and retain the pinned browser container', async () => {
+test('both capture jobs use hosted runners and retain the pinned browser container', async () => {
   const workflow = await fs.readFile(path.join(__dirname, '../../.github/workflows/featured-offline-proof.yml'), 'utf8');
   for (const job of ['capture', 'current-source']) {
     const block = workflow.split(`  ${job}:\n`)[1]?.split(/\n  [a-z-]+:\n/)[0];
     assert.ok(block, `${job} exists`);
-    // Self-hosted only for non-PR events while private; pull_request and
-    // merge_group runs always stay GitHub-hosted (runner separation).
-    assert.ok(block.includes(`runs-on: \${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`));
+    assert.ok(block.includes('runs-on: ubuntu-latest\n'));
     assert.match(block, /image: mcr\.microsoft\.com\/playwright:v1\.58\.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d/);
-    assert.equal(block.split('ubuntu-latest').length - 1, 1, 'ubuntu-latest only as the hosted fallback');
+    assert.equal(block.split('ubuntu-latest').length - 1, 1, 'ubuntu-latest only as the runner label');
+  }
+});
+
+test('runtime setup uses the locked module and fails closed in both capture jobs', async t => {
+  const workflow = await fs.readFile(path.join(__dirname, '../../.github/workflows/featured-offline-proof.yml'), 'utf8');
+  const manifest = JSON.parse(await fs.readFile(path.join(__dirname, 'runtime/package.json'), 'utf8'));
+  const lock = JSON.parse(await fs.readFile(path.join(__dirname, 'runtime/package-lock.json'), 'utf8'));
+  assert.equal(manifest.private, true);
+  assert.deepEqual(manifest.dependencies, { playwright: '1.58.2' });
+  assert.deepEqual(lock.packages[''].dependencies, manifest.dependencies);
+  for (const pkg of ['playwright', 'playwright-core']) {
+    assert.equal(lock.packages[`node_modules/${pkg}`].version, manifest.dependencies.playwright);
+  }
+  for (const pkg of ['playwright', 'playwright-core', 'fsevents']) {
+    assert.match(lock.packages[`node_modules/${pkg}`].integrity, /^sha512-/);
+    assert.match(lock.packages[`node_modules/${pkg}`].resolved, /^https:\/\/registry\.npmjs\.org\//);
+  }
+  for (const [job, step] of [['capture', 'Capture unchanged fixtures with pinned container dependency'],
+    ['current-source', 'Capture twelve current-source views with no app, database or network']]) {
+    const block = workflow.split(`  ${job}:\n`)[1].split(/\n  [a-z-]+:\n/)[0];
+    const script = block.split(`      - name: ${step}\n`)[1].split('        run: |\n')[1].split(/\n      - name:/)[0]
+      .split('\n').map(line => line.replace(/^ {10}/, '')).join('\n');
+    assert.match(script, /npm ci --prefix "\$RUNNER_TEMP\/featured-runtime" --ignore-scripts --no-audit --no-fund/);
+    for (const fail of [false, true]) {
+      const dir = await scratch(t);
+      const bin = path.join(dir, 'bin');
+      await fs.mkdir(bin);
+      await fs.writeFile(path.join(bin, 'git'), '#!/bin/sh\nprintf "expected\\n"\n', { mode: 0o755 });
+      await fs.writeFile(path.join(bin, 'npm'), `#!/bin/sh
+[ "$1" = ci ] && [ "$2" = --prefix ] || exit 2
+cmp -s ci/featured-proof/runtime/package.json "$3/package.json" || exit 3
+cmp -s ci/featured-proof/runtime/package-lock.json "$3/package-lock.json" || exit 4
+exit ${fail ? 1 : 0}
+`, { mode: 0o755 });
+      await fs.writeFile(path.join(bin, 'node'), '#!/bin/sh\nprintf "%s" "${PROOF_SETUP_FAILURE:-capture}" > "$MARKER"\n[ -z "$PROOF_SETUP_FAILURE" ]\n', { mode: 0o755 });
+      const marker = path.join(dir, 'marker');
+      const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', `export PATH="$MOCK_BIN:$PATH"\n${script}`], {
+        cwd: path.join(__dirname, '../..'),
+        env: { ...process.env, MOCK_BIN: bin, RUNNER_TEMP: dir,
+          GITHUB_WORKSPACE: process.cwd(), PROOF_CHECKOUT_HEAD: 'expected', MARKER: marker },
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, fail ? 1 : 0, `${job}: ${result.stderr}`);
+      if (job === 'capture' || !fail) {
+        const markerText = await fs.readFile(marker, 'utf8');
+        assert.equal(markerText, fail ? 'Pinned Playwright module setup failed; capture not executed' : 'capture');
+      } else {
+        await assert.rejects(fs.access(marker));
+      }
+    }
   }
 });
 
