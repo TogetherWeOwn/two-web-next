@@ -410,7 +410,7 @@ export async function record({
       );
       dirs.push(dir);
     }
-    return { dirs, meta };
+    return { dirs, meta: { ...meta, coverage } };
   } finally {
     await admin.unsafe(`drop database if exists ${template} with (force)`);
     await admin.end();
