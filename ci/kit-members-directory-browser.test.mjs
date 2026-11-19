@@ -95,8 +95,9 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
       assert.doesNotMatch(second, /Fixture Member 1(?!\d)/);
       assert.match(last, /Fixture Member 45(?!\d)/);
 
-      // Keyboard: Tab reaches the search field and Enter submits it without JavaScript.
       await open("");
+      assert.match((await page.locator("h1").textContent()) ?? "", /here\. Say hi/);
+      // Keyboard: Tab reaches the search field and Enter submits it without JavaScript.
       await page.setViewportSize({ width: 1280, height: 800 });
       let focused = false;
       for (let i = 0; i < 40 && !focused; i++) {
