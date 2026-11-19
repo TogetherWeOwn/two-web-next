@@ -40,6 +40,8 @@ const base: Handle = async ({ event, resolve }) => {
     kitRouteArchive: env.KIT_ROUTE_ARCHIVE,
     kitRouteStatic: env.KIT_ROUTE_STATIC,
     kitRouteEvents: env.KIT_ROUTE_EVENTS,
+    kitRouteHome: env.KIT_ROUTE_HOME,
+    kitRouteJoin: env.KIT_ROUTE_JOIN,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,
     honoFetch,
     // Forwards the core's resolve options untouched: content-leaf renders

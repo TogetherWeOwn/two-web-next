@@ -385,12 +385,15 @@ binding isolation before any remote mutation.
    archive route, dispatch the same workflow from `main` with
    `kit_route_family=archive` (only `GET /events/past`); choose
    `kit_route_family=archive-static` to cumulatively add `GET /about` and
-   `GET /faq`. Choose `kit_route_family=events` for the `/events` list alone;
-   `/events/past`, the static pages and `/e/:key` stay on Hono. The dispatch
-   fails unless a fresh `GET /events` returns HTTP 200 with `x-two-renderer: kit`
-   after revision verification. `hono` disables every Kit route family, and missing or
-   unrecognized runtime flags fail closed to Hono. The next automatic main-CI
-   deployment resets the selection to `hono`.
+   `GET /faq`. Choose `events`, `home` or `join` for only `/events`, `/` or
+   `/join` respectively, or `ember-pages` for those three together. Only
+   enabled GET manifest entries can move; HEAD follows GET, and the flags
+   never opt in event detail, OAuth, recovery or write methods. Select `home`
+   or `join` only after its page PR enables the corresponding manifest entry;
+   `ember-pages` requires all three entries. After revision verification, the
+   workflow checks each selected Ember page with an unauthenticated GET that
+   does not follow redirects. It fails unless the response is HTTP 200 with
+   `x-two-renderer: kit`. Missing or malformed flags fail closed to Hono.
 
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
    ([smoke checker](../bin/smoke.mjs)), covering 24 public routes: `/up`
@@ -418,9 +421,9 @@ binding isolation before any remote mutation.
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
    queue readiness only warns and `unknown` passes there.
 4. To select a route family explicitly, use Actions → `deploy` → Run workflow
-   on branch `main`, then choose `hono`, `archive`, `archive-static`, or `events`.
-   For an events rollout, record the exact deployed commit, the deploy run link
-   and the `Verify staging Kit events renderer` result together.
+   on branch `main`, then choose `hono`, `archive`, `archive-static`, `events`,
+   `home`, `join`, or `ember-pages`. Record the exact deployed commit, the deploy
+   run link and each applicable `Verify staging Kit … renderer` result together.
    `workflow_dispatch` uses the same exact-SHA CI gate, staging migration,
    Kit build, Tail-first deployment, queue handoff, revision verification and
    smoke path as the automatic workflow. This is the supported route-selection

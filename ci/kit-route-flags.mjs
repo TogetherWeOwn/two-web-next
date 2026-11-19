@@ -4,18 +4,22 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export function kitRouteFlagsForFamily(family) {
-  switch (family || "hono") {
-    case "hono":
-      return { archive: "false", static: "false", events: "false" };
-    case "archive":
-      return { archive: "true", static: "false", events: "false" };
-    case "archive-static":
-      return { archive: "true", static: "true", events: "false" };
-    case "events":
-      return { archive: "false", static: "false", events: "true" };
-    default:
-      throw new Error("Unsupported Kit route family");
+  const selection = family || "hono";
+  if (
+    !["hono", "archive", "archive-static", "events", "home", "join", "ember-pages"].includes(
+      selection,
+    )
+  ) {
+    throw new Error("Unsupported Kit route family");
   }
+  const ember = selection === "ember-pages";
+  return {
+    archive: String(selection === "archive" || selection === "archive-static"),
+    static: String(selection === "archive-static"),
+    events: String(selection === "events" || ember),
+    home: String(selection === "home" || ember),
+    join: String(selection === "join" || ember),
+  };
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
@@ -24,7 +28,9 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     if (!process.env.GITHUB_OUTPUT) throw new Error("Missing workflow output path");
     appendFileSync(
       process.env.GITHUB_OUTPUT,
-      `archive=${flags.archive}\nstatic=${flags.static}\nevents=${flags.events}\n`,
+      Object.entries(flags)
+        .map(([key, value]) => `${key}=${value}\n`)
+        .join(""),
       "utf8",
     );
   } catch (error) {
