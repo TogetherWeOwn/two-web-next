@@ -1,0 +1,115 @@
+name: Kit activity-log diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_head:
+        description: Exact reviewed harness PR head from the merge handoff (not a checkout ref)
+        required: true
+        type: string
+      squash_sha:
+        description: Harness PR squash commit from the merge handoff (not a checkout ref)
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  APP_SHA: b2025dceb93efbc0cac0a7149afe7ded42269afb
+
+jobs:
+  provenance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Verify protected main, reviewed harness bytes, and fixed application head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROTECTED: ${{ github.ref_protected }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          REVIEWED_HEAD: ${{ inputs.reviewed_head }}
+          SQUASH_SHA: ${{ inputs.squash_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'echo "::error::Diagnostic provenance refused"' ERR
+          [[ "$GITHUB_REPOSITORY" == TogetherWeOwn/two-web-next && "$GITHUB_REF" == refs/heads/main &&
+             "$PROTECTED" == true && "$WORKFLOW_SHA" == "$GITHUB_SHA" && "$GITHUB_RUN_ATTEMPT" == 1 ]] || false
+          [[ "$REVIEWED_HEAD" =~ ^[a-f0-9]{40}$ && "$SQUASH_SHA" =~ ^[a-f0-9]{40}$ ]] || false
+          api="repos/$GITHUB_REPOSITORY"
+          [[ "$(gh api "$api" --jq .default_branch)" == main ]]
+          [[ "$(gh api "$api/commits/$SQUASH_SHA" --jq '.parents | length')" == 1 ]]
+          gh api "$api/commits/$SQUASH_SHA/pulls" |
+            jq -e --arg head "$REVIEWED_HEAD" --arg squash "$SQUASH_SHA" --arg repo "$GITHUB_REPOSITORY" '
+              [.[] | select(.merged_at != null and .base.ref == "main" and .base.repo.full_name == $repo
+                and .head.sha == $head and .merge_commit_sha == $squash)] | length == 1' >/dev/null
+          status=$(gh api "$api/compare/$SQUASH_SHA...$WORKFLOW_SHA?per_page=1" --jq .status)
+          [[ "$status" == ahead || "$status" == identical ]] || false
+          for file in .github/workflows/kit-activity-log-diagnostic.yml ci/kit-activity-log-run.sh \
+            ci/kit-activity-log-overlay.mjs ci/kit-activity-log-assert.mjs; do
+            pinned=$(gh api "$api/contents/$file?ref=$REVIEWED_HEAD" --jq 'select(.type == "file") | .sha')
+            [[ "$pinned" =~ ^[a-f0-9]{40}$ ]] || false
+            for sha in "$SQUASH_SHA" "$WORKFLOW_SHA"; do
+              [[ "$(gh api "$api/contents/$file?ref=$sha" --jq 'select(.type == "file") | .sha')" == "$pinned" ]] || false
+            done
+          done
+          gh api "$api/pulls/2494" |
+            jq -e --arg app "$APP_SHA" --arg repo "$GITHUB_REPOSITORY" \
+              '.state == "open" and .draft and .head.sha == $app and .head.repo.full_name == $repo and .base.ref == "main"' >/dev/null
+          printf 'Workflow %s; reviewed harness %s; squash %s; application %s\n' \
+            "$WORKFLOW_SHA" "$REVIEWED_HEAD" "$SQUASH_SHA" "$APP_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+  browser:
+    needs: provenance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
+        env:
+          POSTGRES_USER: agent_test
+          POSTGRES_DB: two_web_next
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_INITDB_ARGS: -c shared_preload_libraries=pg_stat_statements
+        ports:
+          - "127.0.0.1:5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U agent_test -d two_web_next"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Check out verified workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: harness
+          persist-credentials: false
+      - name: Check out fixed application source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.APP_SHA }}
+          path: app
+          persist-credentials: false
+      - name: Verify both checked-out commits before running source
+        shell: bash
+        run: |
+          test "$(git -C harness rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C app rev-parse HEAD)" = "$APP_SHA"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Run loopback-only diagnostic
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          exec env -i PATH="$PATH" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_ACTIONS="$GITHUB_ACTIONS" \
+            RUNNER_OS="$RUNNER_OS" RUNNER_TEMP="$RUNNER_TEMP" bash harness/ci/kit-activity-log-run.sh
+      - name: Clear fixture state
+        if: always()
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/kit-activity-log" "$GITHUB_WORKSPACE/app"
