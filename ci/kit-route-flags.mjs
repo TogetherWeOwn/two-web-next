@@ -3,9 +3,10 @@ import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+const families = ["hono", "archive", "archive-static", "events", "home", "join", "ember-pages"];
+
 export function kitRouteFlagsForFamily(family) {
   const selection = family || "hono";
-  const families = ["hono", "archive", "archive-static", "events", "home", "join", "ember-pages"];
   if (!families.includes(selection)) throw new Error("Unsupported Kit route family");
   const ember = selection === "ember-pages";
   return {
@@ -32,7 +33,12 @@ export async function requireEnabledEmberRoutes(flags, routes) {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   try {
-    const flags = kitRouteFlagsForFamily(process.env.KIT_ROUTE_FAMILY);
+    const { GITHUB_EVENT_NAME, KIT_ROUTE_FAMILY, KIT_STAGING_ROUTE_FAMILY } = process.env;
+    const family =
+      GITHUB_EVENT_NAME === "workflow_run"
+        ? families.find((allowed) => allowed === KIT_STAGING_ROUTE_FAMILY)
+        : KIT_ROUTE_FAMILY;
+    const flags = kitRouteFlagsForFamily(family);
     await requireEnabledEmberRoutes(flags);
     if (!process.env.GITHUB_OUTPUT) throw new Error("Missing workflow output path");
     appendFileSync(
