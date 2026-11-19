@@ -6,7 +6,8 @@ import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
 import { loadCalendarPageModel, resolveCalendarInput } from "../src/events/page-models.server";
 import { listCalendarPast, listUpcoming, listUpcomingForMonth } from "../src/events/reads";
 import { registerEventRoutes } from "../src/events/routes";
-import { MISSING_DISCORD, partialEvent, partialHtml, partialModel } from "./helpers/calendar-discord-partial";
+import { MISSING_DISCORD, partialModel } from "./helpers/calendar-discord-partial";
+import { partialEvent, partialHtml } from "./helpers/calendar-discord-partial";
 
 // Read seams remove external SQL only; the model, Hono route and Kit screen
 // stay real. These implementation-owned cases supplement the independent

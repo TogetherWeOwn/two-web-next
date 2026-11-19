@@ -86,9 +86,7 @@ export const CalendarLiveRegions: FC<{
             : gameFilter !== null
               ? eventsGameFilterCopy(gameFilter)
               : ""}
-      {discordFailed &&
-      emptyState === null &&
-      (hasSearchResults || state.view === "calendar")
+      {discordFailed && emptyState === null && (hasSearchResults || state.view === "calendar")
         ? ` ${EVENTS_PARTIAL_COPY.notice}`
         : ""}
     </p>

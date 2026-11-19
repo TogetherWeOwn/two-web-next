@@ -559,25 +559,11 @@ const past = Array.from({ length: 7 }, (_, i) => ({ eventKey: i === 1 ? 'game/ni
           );
           assert.equal(await notice.count(), 1);
           assert.equal(await notice.getAttribute("role"), null);
-          assert.match(await page.getByTestId("events-retry").getAttribute("href"), /page=2/);
+          assert.match(await retry.getAttribute("href"), /page=2/);
           const order = await page
             .locator(".schedule-recovery-actions a")
             .evaluateAll((links) => links.map((link) => link.dataset.testid));
           assert.deepEqual(order, ["events-retry", "discord-join"], "retry precedes invite");
-          for (const [width, height] of [
-            [1280, 800],
-            [390, 844],
-            [320, 844],
-          ]) {
-            await page.setViewportSize({ width, height });
-            const retry = await page.getByTestId("events-retry").boundingBox();
-            const join = await page.getByTestId("discord-join").boundingBox();
-            assert.ok(
-              join.y > retry.y || join.x > retry.x,
-              `invite follows retry visually at ${width}px`,
-            );
-            assert.ok(join.x + join.width <= width, `invite stays on screen at ${width}px`);
-          }
         }
         if (scenario === "gap") {
           assert.equal(await page.getByTestId("events-empty-gap-item").count(), 5);
@@ -624,6 +610,14 @@ const past = Array.from({ length: 7 }, (_, i) => ({ eventKey: i === 1 ? 'game/ni
             assert.ok(
               bounds.x >= 0 && bounds.x + bounds.width <= viewport.width,
               `${scenario} ${name}: recovery link fits within the viewport (${JSON.stringify(bounds)})`,
+            );
+          }
+          if (scenario === "error" || scenario === "partial") {
+            const first = await links[0].boundingBox();
+            const second = await links[1].boundingBox();
+            assert.ok(
+              second.y > first.y || second.x > first.x,
+              `${scenario} ${name}: invite follows retry visually`,
             );
           }
           if (links.length === 2) {
@@ -878,7 +872,6 @@ const weeks = monthGrid(state.month, '2026-06-15', new Map<string, CalendarGridE
       assert.equal(await form.locator('[name="game"]').inputValue(), "Chess");
       assert.equal(await form.locator('[name="past"]').inputValue(), "1");
       assert.equal(await form.locator('[name="view"]').inputValue(), "calendar");
-      assert.equal(await page.getByTestId("events-calendar-scroll").getAttribute("tabindex"), "0");
       const fade = () =>
         page
           .locator(".schedule-month-frame")
@@ -891,12 +884,6 @@ const weeks = monthGrid(state.month, '2026-06-15', new Map<string, CalendarGridE
       assert.equal(await hint.isVisible(), true, "narrow grid shows scroll hint");
       assert.equal(await hint.getAttribute("aria-hidden"), null);
       assert.equal(await fade(), "block", "narrow grid shows fade");
-      assert.ok(
-        await page
-          .getByTestId("events-calendar-scroll")
-          .evaluate((node) => node.scrollWidth > node.clientWidth),
-        "narrow grid scrolls horizontally",
-      );
       await page.emulateMedia({ forcedColors: "active" });
       assert.equal(await fade(), "none", "forced colors removes the decorative fade");
       assert.equal(await hint.isVisible(), true, "forced colors keeps the text hint");

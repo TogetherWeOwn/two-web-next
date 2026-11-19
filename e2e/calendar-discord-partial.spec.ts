@@ -357,8 +357,7 @@ test("a superseded failed-source response cannot overwrite a recovered committed
   expect(f.traffic.map((entry) => entry.island)).toEqual([false, true, true]);
 });
 
-// Real shipped schedule stylesheet over the synthetic fixture. Covers the
-// recovery-link order and the narrow/wide/forced-colors month grid cues.
+// Exercise the synthetic fixture with the shipped schedule stylesheet.
 const scheduleCss = readFileSync(
   new NodeURL("../public/schedule-theme.css", import.meta.url),
   "utf8",

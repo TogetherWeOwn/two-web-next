@@ -502,7 +502,8 @@
         var source = page.querySelector('[data-testid="' + LIVE_TESTIDS[i] + '"]');
         if (source) {
           node.textContent = source.textContent;
-          if (i === 1 && discordRecovered) node.textContent += " Discord events are available again.";
+          if (i === 1 && discordRecovered)
+            node.textContent += " Discord events are available again.";
         }
       });
       var sourceGame = page.querySelector('select[name="game"]');
