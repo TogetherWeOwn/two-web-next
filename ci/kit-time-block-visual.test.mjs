@@ -16,7 +16,7 @@ test("built Kit time block renders required states with and without JavaScript",
     await withKitOfflineBrowser(options, async ({ page, html }) => {
       assert.match(html, /_app\/immutable\/assets\/[^" ]+\.css/);
       const blocks = page.locator(".time-block");
-      assert.equal(await blocks.count(), 6);
+      assert.equal(await blocks.count(), 7);
       assert.equal(
         await blocks.first().evaluate((block) => getComputedStyle(block).display),
         "flex",
@@ -34,8 +34,9 @@ test("built Kit time block renders required states with and without JavaScript",
       assert.notEqual(await blocks.nth(2).locator(":scope > time").innerText(), "Live");
       assert.doesNotMatch(await blocks.nth(2).innerText(), /since 19:30|8 in the room/);
       assert.match(await blocks.nth(3).innerText(), /Echo frozen/);
-      assert.match(await blocks.nth(4).innerText(), /Cancelled/);
-      assert.match(await blocks.nth(5).innerText(), /Time to be confirmed/);
+      assert.match(await blocks.nth(4).innerText(), /\bEnded\s*$/);
+      assert.match(await blocks.nth(5).innerText(), /Cancelled/);
+      assert.match(await blocks.nth(6).innerText(), /Time to be confirmed/);
       for (const viewport of [
         { width: 1280, height: 800 },
         { width: 390, height: 844 },

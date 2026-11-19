@@ -45,7 +45,7 @@ describe("TimeBlock server output", () => {
       base,
       { ...base, state: "live" },
       { ...base, state: "live", asOf: "invalid" },
-      { ...base, state: "ended" },
+      { ...base, state: "ended", echoFrozen: true },
       { ...base, state: "cancelled" },
     ]) {
       const html = render(props);
@@ -61,7 +61,9 @@ describe("TimeBlock server output", () => {
         { ...base, state: "live", asOf: "invalid" },
         "19:30 UTC · Live status unavailable · Refresh",
       ],
-      [{ ...base, state: "ended" }, "19:30 UTC · Ended · Echo frozen"],
+      [{ ...base, state: "ended" }, "19:30 UTC · Ended"],
+      [{ ...base, state: "ended", echoFrozen: true }, "19:30 UTC · Ended · Echo frozen"],
+      [{ ...base, state: "ended", end: "2026-11-07T21:00:00Z" }, "19:30 UTC · ended 21:00"],
       [{ ...base, state: "cancelled" }, "19:30 UTC · Cancelled"],
     ] as const;
     for (const [props, expected] of cases) {
@@ -72,6 +74,7 @@ describe("TimeBlock server output", () => {
         .join("")
         .replace(/&nbsp;|&#160;|&#x0*a0;/gi, " ");
       expect(text).toContain(expected);
+      expect(text.includes("Echo frozen")).toBe(expected.includes("Echo frozen"));
       expect(text).not.toMatch(/\s ·/);
     }
   });
@@ -92,9 +95,9 @@ describe("TimeBlock server output", () => {
   });
 
   it("renders ended, cancelled and invalid states safely", () => {
-    expect(render({ ...base, state: "ended", end: "2026-11-07T21:00:00Z" })).toContain(
-      "Echo frozen",
-    );
+    expect(
+      render({ ...base, state: "ended", end: "2026-11-07T21:00:00Z", echoFrozen: true }),
+    ).toContain("Echo frozen");
     expect(render({ ...base, state: "cancelled" })).toContain("Cancelled");
     const invalid = render({ ...base, start: "invalid" });
     expect(invalid).toContain("Time to be confirmed");
@@ -110,7 +113,7 @@ describe("TimeBlock server output", () => {
     });
     expect(html).toContain("8 Nov");
     expect(html).toContain("Ended");
-    expect(html).toContain("Echo frozen");
+    expect(html).not.toContain("Echo frozen");
     expect(html).not.toContain("href=");
   });
 
