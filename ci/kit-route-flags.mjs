@@ -5,13 +5,8 @@ import { pathToFileURL } from "node:url";
 
 export function kitRouteFlagsForFamily(family) {
   const selection = family || "hono";
-  if (
-    !["hono", "archive", "archive-static", "events", "home", "join", "ember-pages"].includes(
-      selection,
-    )
-  ) {
-    throw new Error("Unsupported Kit route family");
-  }
+  const families = ["hono", "archive", "archive-static", "events", "home", "join", "ember-pages"];
+  if (!families.includes(selection)) throw new Error("Unsupported Kit route family");
   const ember = selection === "ember-pages";
   return {
     archive: String(selection === "archive" || selection === "archive-static"),
@@ -22,9 +17,23 @@ export function kitRouteFlagsForFamily(family) {
   };
 }
 
+export async function requireEnabledEmberRoutes(flags, routes) {
+  const selected = Object.entries({ events: "/events", home: "/", join: "/join" }).filter(
+    ([flag]) => flags[flag] === "true",
+  );
+  if (!selected.length) return;
+  const manifest = routes ?? (await import("../src/route-ownership.ts")).ROUTE_MANIFEST;
+  for (const [, path] of selected) {
+    if (!manifest.some((entry) => entry.method === "GET" && entry.path === path && entry.enabled)) {
+      throw new Error(`GET ${path} is not enabled in the Kit route manifest`);
+    }
+  }
+}
+
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   try {
     const flags = kitRouteFlagsForFamily(process.env.KIT_ROUTE_FAMILY);
+    await requireEnabledEmberRoutes(flags);
     if (!process.env.GITHUB_OUTPUT) throw new Error("Missing workflow output path");
     appendFileSync(
       process.env.GITHUB_OUTPUT,

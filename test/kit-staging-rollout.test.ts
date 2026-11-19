@@ -45,12 +45,12 @@ function stagingDeps(flags: RolloutFlags = {}) {
   };
 }
 
-async function dispatchAt(path: string, flags: RolloutFlags = {}, appUrl = STAGING_APP_URL) {
-  const request = new Request(new URL(path, appUrl), {
-    headers: { host: new URL(appUrl).host },
+async function dispatchAt(path: string, flags: RolloutFlags = {}) {
+  const request = new Request(new URL(path, STAGING_APP_URL), {
+    headers: { host: new URL(STAGING_APP_URL).host },
   });
   const event = { request, url: new URL(request.url), route: { id: path } };
-  const deps = { ...stagingDeps(flags), appUrl };
+  const deps = stagingDeps(flags);
   const response = await dispatchHookRequest(event, deps);
   return { deps, response };
 }
@@ -245,18 +245,11 @@ describe("Kit staging route rollout", () => {
 
 describe("staging home and join opt-ins", () => {
   // Use enabled fixture entries to exercise opt-in before the page PRs land.
+  const pages = ["/", "/join", "/events", "/events/past", "/about"];
+  const excluded = ["/join/discord", "/join/callback", "/auth/recover", "/e/:key"];
   const routes: typeof ROUTE_MANIFEST = [
-    { method: "GET", path: "/", enabled: true },
-    { method: "GET", path: "/join", enabled: true },
-    { method: "GET", path: "/events", enabled: true },
-    { method: "GET", path: "/events/past", enabled: true },
-    { method: "GET", path: "/about", enabled: true },
-    { method: "GET", path: "/join/discord", enabled: true },
-    { method: "GET", path: "/join/callback", enabled: true },
-    { method: "GET", path: "/auth/recover", enabled: true },
-    { method: "GET", path: "/e/:key", enabled: true },
-    { method: "POST", path: "/", enabled: true },
-    { method: "POST", path: "/join", enabled: true },
+    ...[...pages, ...excluded].map((path) => ({ method: "GET", path, enabled: true })),
+    ...["/", "/join"].map((path) => ({ method: "POST", path, enabled: true })),
   ];
 
   it.each([
@@ -275,33 +268,36 @@ describe("staging home and join opt-ins", () => {
     const disabled = stagingManifestFor(env, [{ method: "GET", path, enabled: false }]);
     expect(resolveRouteOwner({ method: "GET", path }, disabled)).toBe("hono");
 
-    for (const appUrl of ["https://togetherweown.com", `${STAGING_APP_URL}/`, "not a URL"]) {
-      expect(stagingManifestFor({ ...env, APP_URL: appUrl }, routes)?.some((r) => r.enabled)).toBe(
-        false,
-      );
-    }
-    for (const value of [undefined, "false", "TRUE", "true ", "1"]) {
-      expect(stagingManifestFor({ ...env, [flag]: value }, routes)?.some((r) => r.enabled)).toBe(
+    const invalid = [
+      ...["https://togetherweown.com", `${STAGING_APP_URL}/`, "not a URL"].map((APP_URL) => ({
+        APP_URL,
+      })),
+      ...[undefined, "false", "TRUE", "true ", "1"].map((value) => ({ [flag]: value })),
+    ];
+    for (const override of invalid) {
+      expect(stagingManifestFor({ ...env, ...override }, routes)?.some((r) => r.enabled)).toBe(
         false,
       );
     }
   });
 
-  it.each([{ home: "true" }, { join: "true" }])(
-    "forwards each flag through the dispatcher and fails closed outside staging (%j)",
-    async (flags) => {
-      const { deps } = await dispatchAt("/events/past", flags, "https://preview.example.test");
-      expect(deps.honoFetch).toHaveBeenCalledOnce();
-      expect(deps.resolve).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps the shipped pages on Hono with their flags off", async () => {
-    for (const path of ["/", "/join"]) {
-      const { deps, response } = await dispatchAt(path, { home: "false", join: "false" });
-      expect(deps.honoFetch, path).toHaveBeenCalledOnce();
-      expect(deps.resolve, path).not.toHaveBeenCalled();
-      expect(response.headers.get(KIT_RENDERER_HEADER), path).toBeNull();
+  it.each([
+    ["/", "home"],
+    ["/join", "join"],
+  ] as const)("dispatches enabled GET %s to Kit only when opted in", async (path, flag) => {
+    const entry = ROUTE_MANIFEST.find((route) => route.method === "GET" && route.path === path);
+    if (!entry) throw new Error(`Missing GET ${path} manifest entry`);
+    const prior = entry.enabled;
+    entry.enabled = true;
+    try {
+      const off = await dispatchAt(path, { [flag]: "false" });
+      expect(off.deps.honoFetch).toHaveBeenCalledOnce();
+      expect(off.response.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+      const on = await dispatchAt(path, { [flag]: "true" });
+      expect(on.deps.honoFetch).not.toHaveBeenCalled();
+      expect(on.response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    } finally {
+      entry.enabled = prior;
     }
   });
 });

@@ -98,7 +98,7 @@ jobs:
         id: kit-route-flags
         env:
           KIT_ROUTE_FAMILY: ${{ github.event_name == 'workflow_dispatch' && inputs.kit_route_family || 'hono' }}
-        run: node ci/kit-route-flags.mjs
+        run: node --import tsx ci/kit-route-flags.mjs
       # No test re-run here: the exact-SHA gate above (re-checked before each
       # mutation below) requires full CI, which already ran every `npm run
       # check` part on this commit. A second copy outgrew this job's timeout.

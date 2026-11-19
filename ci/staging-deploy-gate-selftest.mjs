@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { kitRouteFlagsForFamily } from "./kit-route-flags.mjs";
+import { kitRouteFlagsForFamily, requireEnabledEmberRoutes } from "./kit-route-flags.mjs";
 import { deploymentTarget, requireSuccessfulCi } from "./staging-deploy-gate.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -170,7 +170,15 @@ function executeStaging(ctx, evidence, changes = {}, routeFamily = "hono") {
   }
 }
 
-test("Kit route-family selection emits validated flags and fails closed", () => {
+const emberRoutes = [
+  ["events", "/events"],
+  ["home", "/"],
+  ["join", "/join"],
+];
+
+test("Kit route-family selection emits validated flags and fails closed", async () => {
+  const { tsImport } = await import("tsx/esm/api");
+  const { ROUTE_MANIFEST } = await tsImport("../src/route-ownership.ts", import.meta.url);
   const dir = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-route-flags-"),
   );
@@ -184,85 +192,100 @@ test("Kit route-family selection emits validated flags and fails closed", () => 
       ["home", ["home"]],
       ["join", ["join"]],
       ["ember-pages", ["events", "home", "join"]],
+      ["all", null],
     ]) {
+      const disabled = emberRoutes.some(
+        ([flag, path]) =>
+          expected?.includes(flag) &&
+          !ROUTE_MANIFEST.some(
+            (entry) => entry.method === "GET" && entry.path === path && entry.enabled,
+          ),
+      );
       const output = join(dir, "github-output");
       writeFileSync(output, "");
-      const result = spawnSync(process.execPath, [join(root, "ci/kit-route-flags.mjs")], {
+      const result = spawnSync(process.execPath, ["--import", "tsx", "ci/kit-route-flags.mjs"], {
+        cwd: root,
         encoding: "utf8",
         env: { ...process.env, GITHUB_OUTPUT: output, KIT_ROUTE_FAMILY: family },
       });
-      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.status, expected && !disabled ? 0 : 1, result.stderr);
       assert.equal(
         readFileSync(output, "utf8"),
-        ["archive", "static", "events", "home", "join"]
-          .map((name) => `${name}=${expected.includes(name)}\n`)
-          .join(""),
+        expected && !disabled
+          ? ["archive", "static", "events", "home", "join"]
+              .map((name) => `${name}=${expected.includes(name)}\n`)
+              .join("")
+          : "",
       );
     }
-    const output = join(dir, "github-output");
-    writeFileSync(output, "");
-    const invalid = spawnSync(process.execPath, [join(root, "ci/kit-route-flags.mjs")], {
-      encoding: "utf8",
-      env: { ...process.env, GITHUB_OUTPUT: output, KIT_ROUTE_FAMILY: "all" },
-    });
-    assert.equal(invalid.status, 1);
-    assert.equal(readFileSync(output, "utf8"), "");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-for (const [flag, path] of [
-  ["events", "/events"],
-  ["home", "/"],
-  ["join", "/join"],
-]) {
-  test(`the ${flag} opt-in probes the exact staging GET after revision verification`, () => {
-    const probeName = `- name: Verify staging Kit ${flag} renderer`;
-    const probeOffset = workflow.indexOf(probeName);
+test("the combined selection refuses any disabled or non-GET Ember entry", async () => {
+  const flags = kitRouteFlagsForFamily("ember-pages");
+  const routes = emberRoutes.map(([, path]) => ({ method: "GET", path, enabled: true }));
+  await requireEnabledEmberRoutes(flags, routes);
+  for (const entry of routes) {
+    const rest = routes.filter((route) => route !== entry);
+    for (const invalid of [[], [{ ...entry, method: "POST" }], [{ ...entry, enabled: false }]]) {
+      await assert.rejects(requireEnabledEmberRoutes(flags, [...rest, ...invalid]), /not enabled/);
+    }
+  }
+});
+
+test("each Ember opt-in probes the exact staging GET after revision verification", () => {
+  const preflight = workflow.indexOf("run: node --import tsx ci/kit-route-flags.mjs");
+  assert.ok(preflight > workflow.indexOf("- name: Require successful exact-SHA full CI"));
+  assert.ok(preflight < workflow.indexOf("- name: Plan staging web migrations"));
+  for (const [flag, path] of emberRoutes) {
+    const probeOffset = workflow.indexOf(`- name: Verify staging Kit ${flag} renderer`);
     assert.ok(probeOffset > workflow.indexOf("- name: Verify deployed revision"));
     assert.ok(probeOffset < workflow.indexOf("- name: Scope post-deploy smoke"));
-    const probe = workflow
-      .slice(probeOffset)
-      .split(/\n      - /)[0]
-      .split("\n");
-    assert.ok(probe.includes(`        if: steps.kit-route-flags.outputs.${flag} == 'true'`));
-    assert.ok(probe.includes(`        run: node ci/staging-kit-route-check.mjs ${path}`));
-
-    for (const [status, marker, expected] of [
-      [200, "kit", 0],
-      [200, null, 1],
-      [200, "hono", 1],
-      [302, "kit", 1],
-      [503, "kit", 1],
-    ]) {
-      const stub = `globalThis.fetch = async (url, options) => {
-        if (url !== "https://next.togetherweown.com${path}" || options.method !== "GET" ||
-            options.credentials !== "omit" || options.headers ||
-            options.redirect !== "manual" || options.cache !== "no-store" || !options.signal) {
-          throw new Error("Unexpected probe request");
-        }
-        return new Response(null, {status: ${status}, headers: ${JSON.stringify(marker ? { "x-two-renderer": marker } : {})}});
-      };`;
-      const result = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          `data:text/javascript,${encodeURIComponent(stub)}`,
-          "ci/staging-kit-route-check.mjs",
-          path,
-        ],
-        { cwd: root, encoding: "utf8", timeout: 5_000 },
-      );
-      assert.equal(result.status, expected, `${status} / ${marker}: ${result.stderr}`);
-      if (expected === 0) assert.match(result.stdout, /HTTP 200, x-two-renderer: kit/);
-      else {
-        assert.equal(result.stdout, "");
-        assert.match(result.stderr, status === 200 ? /did not return/ : /expected 200/);
+    const probe = workflow.slice(probeOffset).split("\n      - ")[0];
+    assert.ok(
+      probe.split("\n").includes(`        if: steps.kit-route-flags.outputs.${flag} == 'true'`),
+    );
+    assert.ok(
+      probe.split("\n").includes(`        run: node ci/staging-kit-route-check.mjs ${path}`),
+    );
+  }
+  const cases = emberRoutes.flatMap(([, path]) => [
+    [path, 200, "kit", 0],
+    [path, 200, null, 1],
+    [path, 200, "hono", 1],
+    [path, 302, "kit", 1],
+    [path, 503, "kit", 1],
+  ]);
+  for (const [path, status, marker, expected] of [...cases, ["/join/callback", 200, "kit", 1]]) {
+    const stub = `globalThis.fetch = async (url, options) => {
+      if (url !== "https://next.togetherweown.com${path}" || options.method !== "GET" ||
+          options.credentials !== "omit" || options.headers ||
+          options.redirect !== "manual" || options.cache !== "no-store" || !options.signal) {
+        throw new Error("Unexpected probe request");
       }
+      return new Response(null, {status: ${status}, headers: ${JSON.stringify(marker ? { "x-two-renderer": marker } : {})}});
+    };`;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        `data:text/javascript,${encodeURIComponent(stub)}`,
+        "ci/staging-kit-route-check.mjs",
+        path,
+      ],
+      { cwd: root, encoding: "utf8", timeout: 5_000 },
+    );
+    assert.equal(result.status, expected, `${status} / ${marker}: ${result.stderr}`);
+    if (expected === 0) assert.match(result.stdout, /HTTP 200, x-two-renderer: kit/);
+    else {
+      assert.equal(result.stdout, "");
+      const refusal = path === "/join/callback" ? /Unsupported Kit probe path/ : null;
+      assert.match(result.stderr, refusal ?? (status === 200 ? /did not return/ : /expected 200/));
     }
-  });
-}
+  }
+});
 
 const denied = [
   [
@@ -647,7 +670,7 @@ test("workflow wires the tested gate before both mutations and preserves staging
     workflow,
     /KIT_ROUTE_FAMILY: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.kit_route_family \|\| 'hono' \}\}/,
   );
-  assert.match(workflow, /run: node ci\/kit-route-flags\.mjs/);
+  assert.match(workflow, /run: node --import tsx ci\/kit-route-flags\.mjs/);
   assert.match(workflow, /run: npm run build --prefix web/);
   assert.match(workerDeployCommand, /--config web\/wrangler\.staging\.jsonc/);
   assert.match(

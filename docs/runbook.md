@@ -385,15 +385,13 @@ binding isolation before any remote mutation.
    archive route, dispatch the same workflow from `main` with
    `kit_route_family=archive` (only `GET /events/past`); choose
    `kit_route_family=archive-static` to cumulatively add `GET /about` and
-   `GET /faq`. Choose `events`, `home` or `join` for only `/events`, `/` or
-   `/join` respectively, or `ember-pages` for those three together. Only
-   enabled GET manifest entries can move; HEAD follows GET, and the flags
-   never opt in event detail, OAuth, recovery or write methods. Select `home`
-   or `join` only after its page PR enables the corresponding manifest entry;
-   `ember-pages` requires all three entries. After revision verification, the
-   workflow checks each selected Ember page with an unauthenticated GET that
-   does not follow redirects. It fails unless the response is HTTP 200 with
-   `x-two-renderer: kit`. Missing or malformed flags fail closed to Hono.
+   `GET /faq`. Choose `events`, `home` or `join` for `/events`, `/` or
+   `/join`, or `ember-pages` for all three. Disabled Ember GET entries block
+   selection before migrations or Worker mutations. HEAD follows GET; event
+   detail, OAuth, recovery and write methods are unaffected. After revision
+   verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
+   to an unauthenticated GET that does not follow redirects. Missing or
+   malformed flags fail closed to Hono.
 
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
    ([smoke checker](../bin/smoke.mjs)), covering 24 public routes: `/up`
