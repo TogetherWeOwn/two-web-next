@@ -166,6 +166,16 @@
       "reads": "join_attempts/view (audited)"
     },
     {
+      "route": "GET /admin/reconciliation",
+      "binding": "web/src/routes/admin/reconciliation/+page.server.ts",
+      "reads": "reconciliation list (audited)"
+    },
+    {
+      "route": "GET /admin/reconciliation/:key",
+      "binding": "web/src/routes/admin/reconciliation/[key]/+page.server.ts",
+      "reads": "reconciliation view (audited)"
+    },
+    {
       "route": "GET /admin/featured",
       "binding": "web/src/routes/admin/featured/+page.server.ts",
       "reads": "featured list (audited)"

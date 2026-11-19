@@ -261,7 +261,7 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
 ];
 
 // Fixture-only manifest for executed parity journeys. The generated loopback
-// worker can enable individual entries for their Kit journeys.
+// worker can enable specific routes for their Kit journeys and captures.
 // Flags are honoured only for an HTTP loopback APP_URL;
 // deployed Workers retain the shipped manifest. No flag mutates that manifest.
 // The fixture exercises the actual Kit dispatcher rather than a second render
@@ -274,12 +274,15 @@ export function fixtureManifestFor(env: {
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
   KIT_PARITY_FIXTURE_JOIN?: string;
   KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
+  includeReconciliation?: boolean;
 }): OwnedRoute[] | undefined {
   const wantBoard = env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true";
   const wantDetail = env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true";
   const wantJoin = env.KIT_PARITY_FIXTURE_JOIN === "true";
   const wantDashboard = env.KIT_PARITY_FIXTURE_ADMIN_DASHBOARD === "true";
-  if (!wantBoard && !wantDetail && !wantJoin && !wantDashboard) return undefined;
+  const wantReconciliation = env.includeReconciliation === true;
+  if (!wantBoard && !wantDetail && !wantJoin && !wantDashboard && !wantReconciliation)
+    return undefined;
   let app: URL;
   try {
     app = new URL(env.APP_URL ?? "");
@@ -289,7 +292,7 @@ export function fixtureManifestFor(env: {
   if (app.protocol !== "http:") return undefined;
   // URL keeps the brackets on an IPv6 hostname ("[::1]").
   if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(app.hostname)) return undefined;
-  return ROUTE_MANIFEST.map((entry) => {
+  const routes = ROUTE_MANIFEST.map((entry) => {
     if (wantBoard && entry.method === "GET" && entry.path === "/leaderboards/members")
       return { ...entry, enabled: true };
     if (wantDetail && entry.method === "GET" && entry.path === "/e/:key")
@@ -300,6 +303,23 @@ export function fixtureManifestFor(env: {
       return { ...entry, enabled: true };
     return entry;
   });
+  // These Kit-only evidence routes have no Hono twin.
+  // Build them from fixture data, separate from the shipped manifest literals.
+  if (wantReconciliation) {
+    const reads = [
+      ["/admin/reconciliation", "list", "admin.reconciliation.index"],
+      ["/admin/reconciliation/:key", "view", "admin.reconciliation.show"],
+    ] as const;
+    for (const [path, action, route] of reads) {
+      routes.push({
+        method: "GET",
+        path,
+        enabled: true,
+        reads: { resource: "reconciliation", action, route },
+      });
+    }
+  }
+  return routes;
 }
 
 // Staging Kit starts with every route on Hono. The reviewed deploy workflow
@@ -919,6 +939,7 @@ async function dispatchOwnedRequest(
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
         KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
         KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
+        includeReconciliation: deps.fixtureAdminDashboard,
         // Use the original URL: Kit strips the data suffix from event.url.
         KIT_PARITY_FIXTURE_ADMIN_DASHBOARD:
           deps.fixtureAdminDashboard &&

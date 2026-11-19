@@ -792,6 +792,13 @@ an otherwise usable panel with empty counts.
 There is no member-access-log viewer, user editor, role/ban manager
 or join-attempt mutation screen here.
 
+## Inspect a recorded reconciliation intent (Kit fixture only)
+
+On the Kit fixture dashboard only, **Reconciliation** logs access before showing
+up to 100 open and 50 recently resolved intents. Exhausted retries can stay in
+the sync ledger without an intent; check Discord to verify delivery. This viewer
+cannot create or resolve intents, change the queue, or send or retry bot changes.
+
 ## Member deletion requests
 
 Members can ask anytime to be removed, by DM to a moderator or through a
