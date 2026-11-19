@@ -380,17 +380,21 @@ binding isolation before any remote mutation.
    then deploys the jobs Worker. A
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
-   The automatic `workflow_run` path always deploys with `hono`, so every route
-   starts and returns to Hono on an ordinary main-CI deploy. To opt into the
-   archive route, dispatch the same workflow from `main` with
-   `kit_route_family=archive` (only `GET /events/past`); choose
-   `kit_route_family=archive-static` to cumulatively add `GET /about` and
-   `GET /faq`. Choose `events`, `home` or `join` for `/events`, `/` or
-   `/join`, or `ember-pages` for all three. Disabled Ember GET entries block
+   Automatic `workflow_run` deploys use `KIT_STAGING_ROUTE_FAMILY` from the
+   GitHub `staging` Environment. Set it only there, not at repository or
+   organization scope. An unset or unrecognized value selects `hono`. Manual
+   dispatch from `main` uses only `kit_route_family`, which defaults to `hono`;
+   it does not change the next automatic deploy. Choose `archive` for only
+   `GET /events/past`, or `archive-static` to add `GET /about` and `GET /faq`.
+   Choose `events`, `home` or `join` for `/events`, `/` or `/join`, or
+   `ember-pages` for all three. Disabled Ember GET entries block
    selection before migrations or Worker mutations. HEAD follows GET; event
    detail, OAuth, recovery and write methods are unaffected. After revision
    verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
-   to an unauthenticated GET that does not follow redirects. Missing or
+   to an unauthenticated GET that does not follow redirects. After changing the
+   variable to `events`, confirm the next normal deploy passes
+   `node ci/staging-kit-route-check.mjs /events`. Set the variable to `hono` or
+   remove it to restore Hono on subsequent automatic deploys. Missing or
    malformed flags fail closed to Hono.
 
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
@@ -423,10 +427,10 @@ binding isolation before any remote mutation.
    deploy run link and each applicable `Verify staging Kit … renderer` result.
    `workflow_dispatch` uses the same exact-SHA CI gate, staging migration,
    Kit build, Tail-first deployment, queue handoff, revision verification and
-   smoke path as the automatic workflow. This is the supported route-selection
-   path; `hono` is the default and disables all Kit routes. The next automatic
-   main-CI deployment resets the selection to `hono`. Do not use local
-   `npm run deploy` or direct `wrangler deploy` for the Kit staging Worker:
+   smoke path as the automatic workflow. The manual choice applies only to that
+   run; the next automatic deploy uses the staging environment setting above.
+   Do not use local `npm run deploy` or direct `wrangler deploy` for the Kit
+   staging Worker:
    those commands do not select the reviewed Kit staging config or preserve
    its exact-SHA workflow gates.
 5. Capture the resulting deployment/version IDs and workflow URL. On staging
