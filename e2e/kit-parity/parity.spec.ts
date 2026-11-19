@@ -2886,7 +2886,6 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
         values (${key(1)},'Cancelled series night',${game},'Public synthetic summary','Private instructions marker',
           '2099-03-01T18:00Z','2099-03-01T20:00Z','Asia/Kolkata','cancelled','weekly',1) returning id`;
       await sql`insert into rsvps (event_id,user_id,status) values (${root!.id},${attendee},'going')`;
-      // Index 2 is later than 3; siblings 4–7 and unrelated row 8 must not win.
       await sql`insert into events (event_key,title,game,starts_at,ends_at,timezone,status,parent_event_id,recurrence_index) values
         (${key(2)},'Later sibling',${game},'2099-03-22T18:00Z','2099-03-22T20:00Z','UTC','published',${root!.id},2),
         (${key(3)},'Next sibling',${game},'2099-03-15T18:00Z','2099-03-15T20:00Z','Pacific/Auckland','published',${root!.id},3),

@@ -28,11 +28,11 @@ import type { Db } from "../db/index";
 import type { Env } from "../env";
 import { RSVP_COPY, type RsvpClosedReason } from "../islands/contracts";
 import type { KitRequestSession } from "../kit-session";
-import {
-  eventGoneModel,
-  type EventGoneModel,
-  type EventMissingModel,
-  type EventMissingSuggestion,
+import { eventGoneModel } from "../kit-event-states";
+import type {
+  EventGoneModel,
+  EventMissingModel,
+  EventMissingSuggestion,
 } from "../kit-event-states";
 import { MAX_RETURN_DESTINATION_BYTES } from "../join/service";
 import { kitPublicReadGuard } from "../kit-past-events";
