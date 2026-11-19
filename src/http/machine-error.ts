@@ -15,7 +15,7 @@ export function withMachineErrors<Event extends { request: Request }>(
   }: {
     /** A registered route pattern supplied by the adapter, never the request URL or path. */
     route: string;
-    /** The adapter's existing correlation ID, if any. */
+    /** The adapter's existing correlation ID, if available. A failed lookup generates a new ID. */
     getRequestId?: (event: Event) => unknown;
   },
 ): (event: Event) => Promise<Response> {
@@ -23,7 +23,14 @@ export function withMachineErrors<Event extends { request: Request }>(
     try {
       return await handler(event);
     } catch (err) {
-      const requestId = selectRequestId(getRequestId?.(event));
+      let candidate: unknown;
+      try {
+        candidate = getRequestId?.(event);
+      } catch {
+        // ID lookup is best effort; report the original handler error.
+        candidate = undefined;
+      }
+      const requestId = selectRequestId(candidate);
       const context = { method: event.request.method, route, requestId };
       try {
         alertRequestError(err, context);

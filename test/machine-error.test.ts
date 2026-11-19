@@ -91,6 +91,36 @@ describe("withMachineErrors (public REST)", () => {
     },
   );
 
+  it("generates a correlation ID when the adapter's ID lookup throws", async () => {
+    const log = captureAlert();
+    const wrapped = withMachineErrors(() => Promise.reject(new TypeError("handler detail")), {
+      route,
+      getRequestId: () => {
+        throw new Error("adapter detail");
+      },
+    });
+    const response = await wrapped({ request });
+    const generated = response.headers.get("x-request-id");
+    expect(generated).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+    expect(response.status).toBe(500);
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
+    expect(await response.json()).toEqual({
+      error: {
+        code: "internal",
+        message: "Event data could not be read.",
+        request_id: generated,
+        next: "Retry the read shortly.",
+      },
+    });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0]?.[0])).toMatchObject({
+      exception: "TypeError",
+      route,
+      request_id: generated,
+    });
+    expect(log.mock.calls[0]?.[0]).not.toMatch(/handler detail|adapter detail/);
+  });
+
   it("still returns the REST 500 if the thrown value cannot be inspected", async () => {
     const log = captureAlert();
     const wrapped = withMachineErrors(
