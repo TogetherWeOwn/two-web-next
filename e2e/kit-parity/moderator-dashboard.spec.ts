@@ -15,7 +15,6 @@ async function expectReadOnlyLayout(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 }
 
-// Comparison captures, not visual baselines or replacements for existing axe gates.
 for (const { name } of parityTargets()) {
   for (const { size } of PARITY_VIEWPORTS) {
     test(`${name} moderator dashboard at ${size.width}×${size.height}`, async ({ browser }) => {
@@ -43,6 +42,8 @@ for (const { size } of PARITY_VIEWPORTS) {
         await navigate(path, status, heading);
         await expectReadOnlyLayout(page);
         expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+        const back = path === list ? "Back to the dashboard" : "Back to reconciliation";
+        await expect(page.getByRole("link", { name: back, exact: true })).toBeVisible();
         await capture(`reconciliation-${name}`);
         await page.keyboard.press("Tab");
         for (const link of await page.getByRole("link", { name: /^(Back to|Retry)/ }).all()) {
@@ -78,7 +79,6 @@ for (const { size } of PARITY_VIEWPORTS) {
         await check("resolved", resolved, 200, "announcement.post");
         await expect(page.getByText("Superseded")).toBeVisible();
         await check("missing", `${list}/not-a-key`, 404, "Reconciliation record not found");
-
         // Fail the second list receipt and the detail receipt, not the open read.
         await sql.begin(async (tx) => {
           await tx`create function e2e_reconciliation_receipt_fail() returns trigger language plpgsql as $$
