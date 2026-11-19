@@ -446,7 +446,7 @@ describe("Hono cancelled detail (RED: existing responses, no capacity)", () => {
 describe("Kit past detail (RED: final attendance, no spots line)", () => {
   it.each(CASES)("shows the going count with no spots/full line ($name)", async (counts) => {
     const html = await kitDetailHtml("past", counts);
-    expect(html).toContain('<h2 id="signup-record-heading">Sign-up record</h2>');
+    expect(html).toMatch(/<h2 id="signup-record-heading"[^>]*>Sign-up record<\/h2>/);
     await expectPastLineup(html, counts);
   });
 });
