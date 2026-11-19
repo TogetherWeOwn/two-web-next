@@ -5,6 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import * as fs from "node:fs";
+import { builtinModules } from "node:module";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -104,7 +105,7 @@ const throwingHooks = {
 };
 
 async function bundle(entry, fault) {
-  // The XFS copy has no node_modules ancestors. Resolve from the locked workspaces.
+  // Resolve packages from the locked workspaces and leave builtins to Wrangler.
   evidence.lastBundle = fault ? "fatal" : "parity";
   const outfile = join(scratch, `${evidence.lastBundle}.mjs`);
   await build({
@@ -116,8 +117,7 @@ async function bundle(entry, fault) {
     platform: "browser",
     target: "es2022",
     conditions: ["workerd", "worker", "browser"],
-    alias: { stream: "node:stream" },
-    external: ["node:*", "cloudflare:*"],
+    external: [...builtinModules, "node:*", "cloudflare:*"],
     logLevel: "silent",
     plugins: fault ? [throwingHooks] : [],
   });
