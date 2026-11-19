@@ -65,7 +65,6 @@ async function install() {
     );
     fs.cpSync(source, join(root, name), { recursive: true, force: false, errorOnExist: true });
   }
-  evidence.lastCopyStep = "verify copied adapter";
   fs.chmodSync(assets, 0o700);
   const entry = join(assets, ENTRY_NAME);
   const original = fs.readFileSync(join(DEFAULT_DIR, ENTRY_NAME));
@@ -81,12 +80,11 @@ async function install() {
   assert.equal(installed.facadeSha256, evidence.entrySha256);
   const marker = `${FACADE_MARKER} companion=${COMPANION_NAME} sha256=${evidence.adapterSha256}\n`;
   assert.ok(facade.toString().startsWith(marker), "entry must be the installed facade");
-  const pair = [size(facade), size(adapter)];
+  const pair = { facade: size(facade), adapter: size(adapter) };
   evidence.entryPairBytes = {
-    facade: pair[0],
-    adapter: pair[1],
-    raw: pair[0].raw + pair[1].raw,
-    gzip: pair[0].gzip + pair[1].gzip,
+    ...pair,
+    raw: pair.facade.raw + pair.adapter.raw,
+    gzip: pair.facade.gzip + pair.adapter.gzip,
   };
   return entry;
 }
@@ -141,27 +139,31 @@ async function start(name, main) {
       main,
       compatibility_date: "2026-09-29",
       compatibility_flags: ["nodejs_compat"],
-      dev: { ip: "127.0.0.1", port, inspector_port: 0 },
       assets: { directory: assets, binding: "ASSETS", run_worker_first: true },
       vars: { APP_URL: `https://${APEX}`, FEATURED_IMAGE_HOSTS: "", DISCORD_INVITE_URL: INVITE },
     }),
   );
-  const child = spawn(
-    join(deps[0], ".bin/wrangler"),
-    ["dev", "--config", config, "--local", "--log-level", "error"],
-    {
-      env: {
-        PATH: process.env.PATH ?? "",
-        HOME: scratch,
-        XDG_CONFIG_HOME: scratch,
-        NODE_PATH: deps.join(delimiter),
-        WRANGLER_SEND_METRICS: "false",
-        CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
-        CLOUDFLARE_INCLUDE_PROCESS_ENV: "false",
-      },
-      stdio: "ignore",
+  const args = ["dev", "--config", config, "--local", "--ip", "127.0.0.1"];
+  args.push("--port", String(port), "--inspector-port", "0", "--log-level", "error");
+  args.push("--persist-to", join(scratch, `${name}-state`));
+  const child = spawn(join(deps[0], ".bin/wrangler"), args, {
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOME: scratch,
+      XDG_CONFIG_HOME: scratch,
+      NODE_PATH: deps.join(delimiter),
+      WRANGLER_SEND_METRICS: "false",
+      CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "false",
     },
-  );
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const readiness = { name };
+  evidence.readiness = readiness;
+  child.stderr.on("data", (chunk) => {
+    const tags = ["Could not resolve", "Error reloading local server", "EADDRINUSE"];
+    readiness.wranglerError ??= tags.find((tag) => chunk.includes(tag));
+  });
   let exited = false;
   const closed = new Promise((done) =>
     child.once("close", () => {
@@ -169,9 +171,8 @@ async function start(name, main) {
       done();
     }),
   );
-  let spawnFailed = false;
-  child.on("error", () => {
-    spawnFailed = true;
+  child.once("error", () => {
+    readiness.spawnFailed = true;
   });
   runtimes.push(async () => {
     if (!exited) child.kill("SIGTERM");
@@ -191,10 +192,10 @@ async function start(name, main) {
   const deadline = Date.now() + 60_000;
   const expected = fs.readFileSync(join(assets, STATIC), "utf8");
   while (Date.now() < deadline) {
-    assert.ok(!spawnFailed && !exited, `${name} exited before readiness`);
+    assert.ok(!readiness.spawnFailed && !exited, `${name} exited before readiness`);
     try {
       const res = await fetchWorker(STATIC);
-      evidence.readiness = { name, status: res.status };
+      readiness.status = res.status;
       if ((await res.text()) === expected && res.status === 200) return fetchWorker;
     } catch (error) {
       if (
