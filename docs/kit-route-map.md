@@ -19,9 +19,11 @@ classifications. API rows use the closed API slice and family allocation; page
 cutovers and cross-family controls instead identify their responsible source and
 owner without inventing a dispatch family. Middleware registrations are separate from endpoints. The RSVP
 `ALL` registration and explicit admin 405 handlers are method fallbacks, not
-middleware. The snapshot test checks registration drift and auth labels, but
-does not validate classifications. The completion declaration guard checks mapped
-target files for attempted completion; classification validation remains follow-up work.
+middleware. The snapshot test checks registration drift, auth labels and the
+closed classification vocabulary: API slice/family pairs, page and shared
+sources, and endpoint, middleware or method-refusal shape. It does not prove
+that each individual allocation is correct or that any response branch was
+executed. The completion declaration guard still checks mapped target files.
 Completed page sources also need their server-load
 files; `/events` is an HTML-rendering endpoint rather than a Kit page. No slice
 is certified complete by this snapshot, even if its target files exist.

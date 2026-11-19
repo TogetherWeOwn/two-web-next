@@ -6,6 +6,7 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import app from "../src/index";
 import { assertTargetArtifacts } from "./helpers/route-kit-artifacts";
+import { assertRouteClassification } from "./helpers/route-kit-classification";
 import { assertCompletionDeclarations } from "./helpers/route-kit-completion";
 import {
   assertRouteInventory,
@@ -50,19 +51,74 @@ function assertMapCoverage(actual: RouteInventoryEntry[], map: unknown) {
     ) {
       throw new Error(`Invalid route map row: ${index}`);
     }
+    assertRouteClassification(row, row.method, row.path);
     return { method: row.method, path: row.path, auth: row.auth };
   });
   assertRouteInventory(actual, rows);
 }
+
+const fixtureClassification = {
+  kind: "endpoint",
+  scope: "api",
+  slice: "API-3",
+  family: "ops",
+  hono405: false,
+};
 
 describe("proposed Kit route snapshot", () => {
   it("matches mounted registration methods, paths and reviewed auth labels", () => {
     assertMapCoverage(routeInventory(app), snapshot);
   });
 
+  it("keeps distinct method and ownership boundaries in the planning map", () => {
+    expect(snapshot).toMatchObject({
+      rows: expect.arrayContaining([
+        expect.objectContaining({
+          method: "POST",
+          path: "/csp-reports",
+          slice: "API-3",
+          family: "ops",
+        }),
+        expect.objectContaining({ method: "GET", path: "/events", scope: "page-cutover" }),
+        expect.objectContaining({ method: "POST", path: "/events", slice: "API-7" }),
+        expect.objectContaining({
+          method: "ALL",
+          path: "/events/:key/rsvp",
+          kind: "method-fallback",
+        }),
+        expect.objectContaining({ method: "ALL", path: "/admin/queue/*", kind: "middleware" }),
+      ]),
+    });
+  });
+
   it("accepts reviewed auth labels with numeric segments", () => {
-    const row = { method: "GET", path: "/fixture", auth: "public-draft-403" };
+    const row = {
+      method: "GET",
+      path: "/fixture",
+      auth: "public-draft-403",
+      ...fixtureClassification,
+    };
     expect(() => assertMapCoverage([row], { ...snapshotObject(), rows: [row] })).not.toThrow();
+  });
+
+  it("refuses invalid scope, family, and registration kind even with matching route identity", () => {
+    const identity = { method: "GET", path: "/fixture", auth: "public" };
+    const row = { ...identity, ...fixtureClassification };
+    for (const invalid of [
+      identity,
+      { ...row, scope: "unknown" },
+      { ...row, slice: "API-10" },
+      { ...row, family: "machine" },
+      { ...row, scope: "page-cutover", slice: null, family: null, source: "unknown" },
+      { ...row, scope: "cross-family", slice: null, family: null },
+      { ...row, kind: "middleware" },
+      { ...row, kind: "method-fallback" },
+      { ...row, hono405: true },
+    ]) {
+      expect(() => assertMapCoverage([identity], { ...snapshotObject(), rows: [invalid] })).toThrow(
+        "Invalid route classification: GET /fixture",
+      );
+    }
   });
 
   it("rejects a newly mounted registration absent from the map", () => {
@@ -79,7 +135,7 @@ describe("proposed Kit route snapshot", () => {
     const router = new Hono();
     router.get("/fixture", (c) => c.text("fixture"));
     const actual = routeInventory(router);
-    const row = { method: "GET", path: "/fixture", auth: "public" };
+    const row = { method: "GET", path: "/fixture", auth: "public", ...fixtureClassification };
     const check = (rows: unknown[]) => () =>
       assertMapCoverage(actual, { ...snapshotObject(), rows });
     expect(check([{ ...row, path: "/stale" }])).toThrow("Removed route: GET /stale");

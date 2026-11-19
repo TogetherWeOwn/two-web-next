@@ -1,11 +1,5 @@
 import { assertTargetArtifacts } from "./route-kit-artifacts";
-
-const apiSlices = new Set(["API-3", "API-4", "API-5", "API-6", "API-7", "API-8", "API-9"]);
-const sources = new Set([
-  "docs/adr/0001-sveltekit-page-renderer.md#page-families-move-to-kit-before-m0",
-  "src/index.tsx admin middleware chain; API-0b",
-  "src/index.tsx global middleware chain; API-0b",
-]);
+import { isApiSlice, isCompletionSource } from "./route-kit-classification";
 
 type Row = { scope?: unknown; slice?: unknown; source?: unknown; target?: unknown };
 type Context = { sha: string; run: string; attempt: string; inputs: string };
@@ -93,10 +87,14 @@ export function assertCompletionDeclarations(
     throw new Error("Invalid completion declarations");
   }
 
-  const select = (claims: unknown[], allowed: Set<string>, field: "slice" | "source") => {
+  const select = (
+    claims: unknown[],
+    allowed: (claim: string) => boolean,
+    field: "slice" | "source",
+  ) => {
     const seen = new Set<string>();
     for (const claim of claims) {
-      if (typeof claim !== "string" || !allowed.has(claim) || seen.has(claim)) {
+      if (typeof claim !== "string" || !allowed(claim) || seen.has(claim)) {
         throw new Error(`Unknown, empty or duplicate ${field} claim`);
       }
       seen.add(claim);
@@ -110,8 +108,8 @@ export function assertCompletionDeclarations(
       for (const row of matching) assertCaseEvidence(claim, rows.indexOf(row), evidence);
     }
   };
-  select(value.apiSlices, apiSlices, "slice");
-  select(value.sources, sources, "source");
+  select(value.apiSlices, isApiSlice, "slice");
+  select(value.sources, isCompletionSource, "source");
   // Retirement additionally needs independent zero-registration and dependency scans.
   if (value.api10) throw new Error("Completion requires audited case-level evidence");
 }
