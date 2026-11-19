@@ -95,6 +95,11 @@ describe("workflow source argument boundaries", () => {
       "deploy-100": promotionHelpers,
       "error-rate-100": ["error-rate-gate.mjs"],
     };
+    const helperPath =
+      /\$(?:ACTION_PATH|\{ACTION_PATH\})\/|\b(?:gradual-promote|pre-promotion-check|error-rate-gate)\.mjs\b/;
+    const callers = action.runs.steps.filter(({ run }) => helperPath.test(run ?? ""));
+    expect(callers.map(({ id }) => id).sort()).toEqual(Object.keys(helpersByStep).sort());
+
     const env = {
       ACTION_PATH: "/fixture/action with spaces",
       WORKER_NAME: "fixture worker",
