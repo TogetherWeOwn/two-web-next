@@ -414,13 +414,19 @@ npm run check                    # lint + format + typecheck + config drift + te
 #### AI contributors: exact-head GitHub Actions
 
 Full suites and CI gates run only on GitHub Actions for the exact PR head.
-Push to the PR branch, open or keep the PR as a draft while incomplete, and
-record exact-head Actions run/job links and conclusions in Verification before
-marking ready. Changes to `src/`, `test/` or migrations still require the full
-gate; draft or scope-skipped jobs are not a full-suite pass. If the draft run
-skips heavy steps, dispatch the existing CI workflow on that PR branch for full
-verification. Every required check, database-safety rule, native review and
-release gate remains in force.
+Keep the PR in draft until implementation is complete and the checks that run
+on drafts pass on that head. Record their run/job links and conclusions and all
+other required before-ready evidence in Verification. If a draft check does not
+produce required changed-behavior proof, use the relevant focused Actions
+workflow where available. Do not dispatch full CI just because the draft skips
+heavy jobs.
+
+Mark that head ready to trigger the normal PR CI and E2E runs. Before submitting
+for native review, verify the required checks passed on that same head and
+record the run/job links and conclusions in Verification. Changes to `src/`,
+`test/` or migrations still require the full gate; draft or scope-skipped jobs
+are not a full-suite pass. Every required check, database-safety rule, native
+review and release gate remains in force.
 
 Local agent test execution is limited to the bounded pre-push fixture checks
 below and, when Actions cannot run it, an authorized focused reproduction of
