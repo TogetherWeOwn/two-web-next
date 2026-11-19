@@ -340,7 +340,10 @@ describe("recovery outcomes through the injected renderer", () => {
   ])("returns to the requested page after Discord add status %i", async (joinStatus, outcome) => {
     const { fake, env: e } = isolated();
     mockDiscord({ joinStatus });
-    const { state, cookie } = await startJoin(e, "?source=web-homepage&next=%2Fevents%3Fview%3Dlist");
+    const { state, cookie } = await startJoin(
+      e,
+      "?source=web-homepage&next=%2Fevents%3Fview%3Dlist",
+    );
     const res = await app.request(
       `/join/callback?code=abc&state=${state}`,
       { headers: { cookie } },
