@@ -8,16 +8,7 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 };
 
-// The only pages whose shell inlines the stylesheets instead of linking
-// them (theme="content" plus the homepage's inlineCriticalCss flag in
-// src/page-shell.tsx): the stylesheets must be inlined to remove their
-// render-blocking requests on slow mobile audits, and the inlined block is
-// allowlisted by hash so style-src keeps no 'unsafe-inline'. "/" reuses the
-// exact leaf bundle byte for byte (same LEAF_CRITICAL_CSS hash, no generator
-// change); recovery/error shells keep theme="home" without the flag and stay
-// on external stylesheets. Any other response carrying the hash would be
-// inert, but the allowlist stays scoped to these paths so the documented
-// policy for every other route never changes shape.
+// Only the homepage and content leaves inline the critical CSS bundle.
 const INLINE_CRITICAL_CSS_PATHS: ReadonlySet<string> = new Set([
   "/",
   "/about",
@@ -26,21 +17,14 @@ const INLINE_CRITICAL_CSS_PATHS: ReadonlySet<string> = new Set([
   "/privacy",
 ]);
 
-export function isContentLeafPath(path: string): boolean {
-  return INLINE_CRITICAL_CSS_PATHS.has(path) && path !== "/";
-}
-
-function isInlineCriticalCssPath(path: string): boolean {
+export function isInlineCriticalCssPath(path: string): boolean {
   return INLINE_CRITICAL_CSS_PATHS.has(path);
 }
 
-// Use report-to with Reporting-Endpoints, not the deprecated report-uri
-// directive or Report-To header (which requires an absolute HTTPS URL).
 const CSP_REPORT_ENDPOINT = "/csp-reports";
 const CSP_REPORT_GROUP = "csp-endpoint";
 
-// Both renderers use this policy. HSTS is deliberately absent: Cloudflare
-// owns it, and sending it from the app could pin local dev to HTTPS.
+// Kit mirrors Hono's wire policy here. HSTS stays at the Cloudflare edge.
 export function securityHeadersFor(
   request: { path: string; method: string },
   featuredImageHosts?: string,
