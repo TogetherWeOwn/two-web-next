@@ -338,8 +338,11 @@ const detailIslands = [
   .seat-card > .seat-action { width: 100%; margin-top: var(--space-3); }
   @media (forced-colors: active) { .seat-action { border: 1px solid ButtonText; } }
   .seat-open-fallback { display: none; }
-  /* An in-place RSVP can invalidate the SSR snapshot. The shared island still
-     owns live feedback; fall back to its neutral card until the next render. */
+  /* C5 owns the initial availability. After an inline write the lineup badge
+     takes over, even if the inline join control later returns. */
+  .event-layout :global([data-event-lineup]:has([data-seat-refresh]:not([data-seat-refresh="ready"]))) { display: none; }
+  .event-layout :global([data-seat-refresh] [data-spots]:not([hidden]))::before { content: " · "; }
+  .event-layout:has(:global([data-seat-refresh]:not([data-seat-refresh="initial"]))),
   .event-layout:not(:has(:global([data-testid="rsvp-going"]))),
   .event-layout:has(:global([data-island="rsvp-button"][data-outcome-unknown])) {
     .seat-open-snapshot { display: none; }
@@ -374,6 +377,7 @@ const detailIslands = [
     .event-seat-bar form { flex: none; margin: 0; }
     /* The inline island can update without navigation. Never offer a stale B4
        snapshot beside a changed or unconfirmed answer; native B4 POSTs reload. */
+    .event-layout:has(:global([data-seat-refresh]:not([data-seat-refresh="initial"]))) ~ .event-seat-bar[data-state="open"],
     .event-layout:not(:has(:global([data-testid="rsvp-going"]:enabled))) ~ .event-seat-bar[data-state="open"],
     .event-layout:not(:has(:global([data-testid="rsvp-withdraw"]:enabled))) ~ .event-seat-bar[data-state="saved"] { display: none; }
   }

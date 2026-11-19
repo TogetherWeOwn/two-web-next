@@ -227,8 +227,9 @@ describe("shared event detail server leaves", () => {
     const forcedOpen = withEventDetailHtml({ ...ended.model, rsvpClosed: null });
     expect(forcedOpen.detailHtml.rsvp).toContain("data-rsvp-form");
     expect(forcedOpen.detailHtml.rsvp).not.toContain("rsvp-closed");
-    // With no ongoing verdict, the open-seat card owns the count instead.
-    expect(forcedOpen.detailHtml.metadata).not.toContain('data-testid="event-spots-left"');
+    // The open-seat card owns the initial count; the lineup can still refresh.
+    expect(forcedOpen.detailHtml.metadata).toContain('data-seat-refresh="initial"');
+    expect(forcedOpen.detailHtml.metadata).toContain('data-testid="event-spots-left"');
     expect(kitSeatActionBar(forcedOpen)).toMatchObject({ state: "open", title: "0 of 10 in" });
   });
 
@@ -249,7 +250,8 @@ describe("shared event detail server leaves", () => {
       action: `/e/${KEY}/rsvp?attendees=2`,
     });
     expect(model.detailHtml.rsvp).toContain(`/e/${KEY}/rsvp?attendees=2`);
-    expect(model.detailHtml.metadata).not.toContain("event-spots-left");
+    expect(model.detailHtml.metadata).toContain('data-seat-refresh="initial"');
+    expect(model.detailHtml.metadata).toContain("data-spots>8 of 10 spots left</span>");
     expect(kitSeatActionBar({ ...model, capacity: null })?.title).toBe("1 going");
     expect(kitSeatActionBar({ ...model, goingOccupancy: 10 })).toBeNull();
     expect(kitSeatActionBar({ ...model, rsvpOpen: false })).toBeNull();

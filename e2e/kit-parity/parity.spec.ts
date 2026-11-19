@@ -1845,7 +1845,8 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
             "href",
             `/events/${openKey}.ics`,
           );
-          await expect(page.getByTestId("event-spots-left")).toHaveCount(0);
+          await expect(page.getByTestId("event-going-count")).toBeHidden();
+          await expect(page.getByTestId("event-spots-left")).toBeHidden();
           if (viewport.width === 390) {
             const time = page.locator(".event-layout-head > dl:last-child");
             await expect(time.locator("time[datetime]").first()).toHaveAttribute(
@@ -1911,29 +1912,49 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     await footer.getByRole("link", { name: "House rules" }).focus();
     await page.keyboard.press("Tab");
     await expect(lastLink).toBeFocused();
+    const expectPrivacyClear = async () => {
+      const lastBounds = (await lastLink.boundingBox())!;
+      const barBounds = (await bar.boundingBox())!;
+      expect(lastBounds.y).toBeGreaterThanOrEqual(0);
+      expect(lastBounds.y + lastBounds.height).toBeLessThanOrEqual(barBounds.y);
+    };
+    await expectPrivacyClear();
     await lastLink.evaluate((link) => link.scrollIntoView({ block: "end" }));
-    const lastBounds = (await lastLink.boundingBox())!;
-    const barBounds = (await bar.boundingBox())!;
-    expect(lastBounds.y + lastBounds.height).toBeLessThanOrEqual(barBounds.y);
+    await expectPrivacyClear();
 
     // Drive the shipped island in place before exercising the native form.
     await enhanced.addCookies(await context.cookies());
     const enhancedPage = await enhanced.newPage();
-    await enhancedPage.route(`**/events/${openKey}/rsvp`, async (route) => {
-      if (route.request().method() === "PUT") {
-        await route.fulfill({ status: 201, json: { data: { status: "going" } } });
-      } else {
-        await route.abort("failed");
-      }
+    await withSessionDb(async (sql) => {
+      // No users row: this RSVP holds a seat but is not listed in the lineup.
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, '900000000000000848', 'going' from events where event_key = ${openKey}`;
     });
     await enhancedPage.goto(`/e/${openKey}`);
     const enhancedCard = enhancedPage.getByTestId("kit-seat-card");
     const enhancedBar = enhancedPage.getByRole("complementary", { name: "Your seat" });
-    await expect(enhancedBar).toBeVisible();
+    const lineup = enhancedPage.getByTestId("event-going-count");
+    const spots = enhancedPage.getByTestId("event-spots-left");
+    await expect(enhancedCard.getByRole("heading", { name: "1 of 2 in" })).toBeVisible();
+    await expect(enhancedBar).toContainText("1 of 2 in");
+    await expect(lineup).toBeHidden();
     await enhancedCard.getByRole("button", { name: "I'm in" }).click();
     await expect(enhancedCard.getByTestId("rsvp-confirmed")).toBeVisible();
     await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
-    await expect(enhancedCard.getByRole("heading", { name: "0 of 2 in" })).toHaveCount(0);
+    await expect(lineup.locator("[data-count]")).toHaveText("1 of 2 going");
+    await expect(spots).toBeVisible();
+    await expect(spots).toHaveText("Full");
+    await expect(enhancedBar).toHaveCount(0);
+
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = 3 where event_key = ${openKey}`;
+    });
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(enhancedCard.getByTestId("rsvp-going")).toBeEnabled();
+    await expect(lineup.locator("[data-count]")).toHaveText("0 of 3 going");
+    await expect(spots).toHaveText("2 of 3 spots left");
+    await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    await expect(enhancedCard.getByRole("heading", { name: "1 of 2 in" })).toHaveCount(0);
     await expect(enhancedBar).toHaveCount(0);
 
     const post = page.waitForResponse(
@@ -1954,6 +1975,7 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     // Reload from the real saved row, then lose the enhanced withdrawal response.
     await enhancedPage.reload();
     await expect(enhancedBar).toContainText("You're in");
+    await enhancedPage.route(`**/events/${openKey}/rsvp`, (route) => route.abort("failed"));
     await enhancedCard.getByTestId("rsvp-withdraw").click();
     await expect(enhancedCard.getByTestId("rsvp-unknown")).toHaveAttribute("role", "alert");
     await expect(enhancedBar).toHaveCount(0);
