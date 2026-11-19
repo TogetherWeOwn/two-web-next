@@ -1,3 +1,8 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { Hono } from "hono";
@@ -6,8 +11,44 @@ import { events } from "../../src/db/admin-schema";
 import type { Env } from "../../src/env";
 import { registerEventRoutes } from "../../src/events/routes";
 import { loadEventsPage } from "../../src/kit-events";
-import { renderEventsHtml } from "../../src/kit-events-html";
 import { partialEvent } from "./calendar-discord-partial";
+
+type KitRender = typeof import("../../web/src/lib/server/render-events-html").renderEventsHtml;
+const root = fileURLToPath(new URL("../../", import.meta.url).href);
+const webRequire = createRequire(new URL("../../web/package.json", import.meta.url).href);
+let loaded: Promise<KitRender> | undefined;
+
+// Bundle the actual Kit SSR adapter once per test worker.
+export function renderKitEvents(...args: Parameters<KitRender>): ReturnType<KitRender> {
+  loaded ??= (async () => {
+    const { compile } = webRequire("svelte/compiler");
+    const { outputFiles } = await build({
+      entryPoints: [join(root, "web/src/lib/server/render-events-html.tsx")],
+      nodePaths: [join(root, "web/node_modules")],
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      write: false,
+      tsconfigRaw: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "hono/jsx" } },
+      plugins: [
+        {
+          name: "kit-events-renderer",
+          setup(plugin) {
+            plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => ({
+              contents: compile(readFileSync(path, "utf8"), { generate: "server", filename: path })
+                .js.code,
+              loader: "js",
+              resolveDir: dirname(path),
+            }));
+          },
+        },
+      ],
+    });
+    const bundleUrl = `data:text/javascript;base64,${Buffer.from(outputFiles[0]!.text).toString("base64")}`;
+    return ((await import(bundleUrl)) as { renderEventsHtml: KitRender }).renderEventsHtml;
+  })();
+  return loaded.then((render) => render(...args));
+}
 
 export const GAME_ORIGIN = "https://calendar.example.test";
 export const GAME_ENTRY = "/events?view=list&month=2099-05&game=Chess";
@@ -151,7 +192,7 @@ export function gameRecoveryFixture(
         journeyForFn: async () => null,
         discordForFn: () => source,
       });
-      const rendered = await renderEventsHtml(data as never, collected);
+      const rendered = await renderKitEvents(data as never, collected);
       return new Response(rendered.body, { status: rendered.status, headers: rendered.headers });
     },
   };

@@ -362,7 +362,6 @@ const scheduleCss = readFileSync(
   new NodeURL("../public/schedule-theme.css", import.meta.url),
   "utf8",
 );
-const CALENDAR_PATH = "/events?past=1&view=calendar&month=2099-05";
 
 test("a failed month read restores the grid tab stop after resizing during loading", async ({
   page,
@@ -373,7 +372,7 @@ test("a failed month read restores the grid tab stop after resizing during loadi
     route.fulfill({ contentType: "text/css", body: scheduleCss }),
   );
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto(PARTIAL_ORIGIN + CALENDAR_PATH);
+  await page.goto(PARTIAL_ORIGIN + monthPath);
   const scroll = page.getByTestId("events-calendar-scroll");
   await expect(scroll).not.toHaveAttribute("tabindex");
 
@@ -403,7 +402,7 @@ test("partial calendar keeps retry before invite and shows grid scroll cues only
     route.fulfill({ contentType: "text/css", body: scheduleCss }),
   );
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto(PARTIAL_ORIGIN + CALENDAR_PATH);
+  await page.goto(PARTIAL_ORIGIN + monthPath);
 
   const actions = notice(page).locator(".schedule-recovery-actions");
   await expect(actions.locator("a")).toHaveCount(2);
@@ -431,6 +430,9 @@ test("partial calendar keeps retry before invite and shows grid scroll cues only
   expect(await afterDisplay(page)).toBe("block");
   expect(await scroll.evaluate((n) => n.scrollWidth > n.clientWidth)).toBe(true);
   await expect(scroll).toHaveAttribute("tabindex", "0");
+  await scroll.focus();
+  await scroll.press("ArrowRight");
+  await expect.poll(() => scroll.evaluate((n) => n.scrollLeft)).toBeGreaterThan(0);
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(scroll).not.toHaveAttribute("tabindex");
   await page.getByRole("link", { name: "Next month" }).click();
