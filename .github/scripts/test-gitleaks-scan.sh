@@ -95,6 +95,25 @@ expect() {
   fi
 }
 
+# Exit 1 can also mean a scan error. Require the redacted finding at HEAD.
+expect_fixture() {
+  local rc fingerprint log="${work}/last-plain.log"
+  fingerprint="$(git -C "${repo}" rev-parse HEAD):fixture.txt:github-pat:1"
+  rc="$(scan_rc pull_request)"
+  # Gitleaks can style the verbose Secret field even when output is redirected.
+  sed -E $'s/\033\\[[0-9;]*m//g' "${work}/last.log" > "${log}"
+  cases=$((cases + 1))
+  if [[ "${rc}" == 1 ]] &&
+    grep -Eq '^Secret:[[:blank:]]+REDACTED$' "${log}" &&
+    grep -Fxq "$(printf '%-12s %s' 'Fingerprint:' "${fingerprint}")" "${log}" &&
+    ! grep -Fq -- "${token}" "${log}"; then
+    printf 'ok   %s (exit 1, redacted github-pat finding in fixture.txt)\n' "$1"
+  else
+    failures=$((failures + 1))
+    printf 'FAIL %s: expected exit 1 and redacted finding %s, got exit %s\n' "$1" "${fingerprint}" "${rc}"
+  fi
+}
+
 # fingerprint_of CONFIG: gitleaks fingerprint of the planted finding in ${repo}.
 fingerprint_of() {
   (cd "${repo}" && "${GITLEAKS_BIN}" git . --config "$1" --log-opts=HEAD --no-banner \
@@ -115,7 +134,7 @@ write_stock_config
 base_commit
 plant_token
 pr_commit
-expect "pr: planted token is detected" 1 "$(scan_rc pull_request)"
+expect_fixture "pr: planted token is detected"
 
 new_repo pr-no-diff
 write_stock_config
@@ -123,7 +142,7 @@ base_commit
 printf 'fixture.txt -diff\n' > "${repo}/.gitattributes"
 plant_token
 pr_commit
-expect "pr: planted token in a -diff file is detected" 1 "$(scan_rc pull_request)"
+expect_fixture "pr: planted token in a -diff file is detected"
 
 new_repo pr-merge-resolution
 write_stock_config
@@ -143,7 +162,7 @@ if git -C "${repo}" -c rerere.enabled=false merge --no-edit topic ||
 fi
 plant_token
 pr_commit
-expect "pr: planted token added only in the merge resolution is detected" 1 "$(scan_rc pull_request)"
+expect_fixture "pr: planted token added only in the merge resolution is detected"
 
 # -- the bypasses a PR could add itself ---------------------------------------
 new_repo pr-config
