@@ -18,6 +18,8 @@ import app from "../src/index";
 import { isTrustedHost, normalizeHost, trustedHost } from "../src/trust-hosts";
 import * as adminDb from "../src/admin/db";
 import type { Env } from "../src/env";
+import * as hostDecisions from "../src/http/trust-hosts";
+import { fetchApp } from "./helpers/fetch-app";
 
 const base: Env = {
   APP_URL: "https://next.example.test",
@@ -38,6 +40,38 @@ const staging = (token?: string): Env => ({
   ...(token ? { QA_AUTH_TOKEN: token } : {}),
 });
 const production: Env = { ...base, APP_URL: "https://togetherweown.com" };
+
+describe("framework-neutral host decisions", () => {
+  it("retains the adapter exports", () => {
+    expect(hostDecisions.normalizeHost).toBe(normalizeHost);
+    expect(hostDecisions.trustedHost).toBe(trustedHost);
+    expect(hostDecisions.isTrustedHost).toBe(isTrustedHost);
+  });
+
+  it.each([
+    ["https://next.example.test", null, true],
+    ["https://next.example.test", "NEXT.EXAMPLE.TEST:65535", true],
+    ["https://next.example.test", "next.example.test:65536", false],
+    ["https://next.example.test", "next.example.test,evil.example.test", false],
+    ["https://evil.example.test", "next.example.test", false],
+  ])("matches the fetch boundary for URL %s and Host %s", async (url, host, allowed) => {
+    const fetch = vi.fn(async () => new Response("asset"));
+    const headers = new Headers({ "x-forwarded-host": EVIL });
+    if (host !== null) headers.set("host", host);
+    const res = await fetchApp(
+      new Request(`${url}/styles.css`, { headers }),
+      { ...base, ASSETS: { fetch } },
+      {} as ExecutionContext,
+    );
+    expect(hostDecisions.isTrustedHost(base.APP_URL, [host, new URL(url).host])).toBe(allowed);
+    expect(res.status).toBe(allowed ? 200 : 404);
+    expect(fetch).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    if (!allowed) {
+      expect(res.headers.get("cache-control")).toBe("no-store, private");
+      expect(await res.text()).toContain("We cannot find that page");
+    }
+  });
+});
 
 describe("unit: host matching", () => {
   it("trustedHost takes the APP_URL hostname, lowercased; garbage fails closed", () => {

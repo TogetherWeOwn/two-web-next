@@ -44,8 +44,7 @@ on:
 
 permissions:
   contents: read
-  # The scope job lists the PR's changed files via the API.
-  pull-requests: read
+  pull-requests: read # The scope job lists changed PR files via the API.
 
 # Schedule and dispatch runs get their own groups (as in ci.yml): with the
 # default queue a newly queued run cancels any pending run in its group, so a
@@ -173,7 +172,7 @@ jobs:
     timeout-minutes: 25
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_USER: agent_test
           POSTGRES_DB: two_web_next
@@ -199,6 +198,8 @@ jobs:
         run: npm run generate:first-party
       - name: Verify CI isolation
         run: node e2e/prepare.mjs
+      - name: Prepare disposable runtime role
+        run: psql -h 127.0.0.1 -U agent_test -d two_web_next -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Apply migrations to disposable Postgres
         run: npm run db:migrate
       - name: Seed journey fixtures
@@ -329,6 +330,14 @@ jobs:
         id: visual
         if: ${{ !cancelled() }}
         run: npx playwright test --config playwright.visual.config.ts
+      - name: Retain visual report
+        if: ${{ always() && steps.visual.outcome != 'skipped' && !(github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'test/rsvp-pending-control-')) }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: visual-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: playwright-report-visual/
+          if-no-files-found: error
+          retention-days: 7
       - name: Critical browser journeys
         if: ${{ !cancelled() }}
         run: npm run e2e
@@ -363,6 +372,7 @@ jobs:
         run: >-
           npx playwright test --config playwright.kit-parity.config.ts
           e2e/kit-parity/parity.spec.ts e2e/kit-parity/auth-boundaries.spec.ts
+          e2e/kit-parity/moderator-dashboard.spec.ts
       - name: Kit parity ledger (no quiet green)
         if: ${{ !cancelled() }}
         run: node ci/check-kit-parity.mjs
@@ -415,7 +425,10 @@ jobs:
           name: saved-review-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             test-results/**/attachments/hono-review-*.png
+            test-results/**/attachments/kit-review-*.png
             test-results-kit-parity/**/attachments/kit-review-*.png
+            test-results-kit-parity/**/attachments/hono-review-moderator-*.png
+            test-results-kit-visual/**/attachments/kit-review-calendar-*.png
           if-no-files-found: error
           retention-days: 7
       - name: Waitlist roster screenshot evidence

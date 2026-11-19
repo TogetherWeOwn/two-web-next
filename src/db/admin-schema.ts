@@ -129,6 +129,7 @@ export const eventSyncAttempts = pgTable(
     mirroredAt: timestamp("mirrored_at", { withTimezone: true }).notNull(),
     state: text("state").notNull().default("pending"),
     requestAttempts: integer("request_attempts").notNull().default(0),
+    claimStartedAt: timestamp("claim_started_at", { withTimezone: true }).notNull().defaultNow(),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow(),
     // Terminal-intent marker: a definitive refusal records its redacted reason
     // here while state stays pending, so the pending-slot unique index keeps

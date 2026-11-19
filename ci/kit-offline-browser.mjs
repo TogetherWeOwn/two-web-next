@@ -1,14 +1,80 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { chromium } from "playwright";
 import { withKitBrowserFixture } from "./kit-browser-fixture.mjs";
 
-// Build and render the supplied page without allowing browser network access.
-export async function withKitOfflineBrowser({ source, page: fixture }, callback) {
-  return withKitBrowserFixture({ source, page: fixture }, async ({ root, output }) => {
+const assetTypes = new Map([
+  [".css", "text/css"],
+  [".woff", "font/woff"],
+  [".woff2", "font/woff2"],
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".webp", "image/webp"],
+  [".svg", "image/svg+xml"],
+  [".ico", "image/x-icon"],
+]);
+
+// Resolve both the requested file and its root, so symlinks cannot escape.
+export async function readFixtureAsset(directory, pathname, { allowJavaScript = false } = {}) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  const extension = extname(decoded).toLowerCase();
+  const type =
+    allowJavaScript && extension === ".js" ? "text/javascript" : assetTypes.get(extension);
+  if (!type || !decoded.startsWith("/") || decoded.includes("\\") || decoded.includes("\0"))
+    return null;
+  if (decoded.split("/").some((part) => part === "." || part === "..")) return null;
+  try {
+    const root = await realpath(directory);
+    const candidate = await realpath(resolve(root, `.${decoded}`));
+    const rel = relative(root, candidate);
+    if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+    return { contentType: type, body: await readFile(candidate) };
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR", "EISDIR"].includes(error.code)) return null;
+    throw error;
+  }
+}
+
+// Module-scope `Date` for the bundled server only; the process global is untouched.
+export function fixedDateBanner(now) {
+  if (!Number.isSafeInteger(now) || Number.isNaN(new Date(now).getTime())) {
+    throw new Error("Fixture now must be epoch milliseconds");
+  }
+  return `const Date = new Proxy(globalThis.Date, {
+  construct: (target, args, newTarget) =>
+    Reflect.construct(target, args.length ? args : [${now}], newTarget === Date ? target : newTarget),
+  apply: (target) => new target(${now}).toString(),
+  get: (target, key) => (key === "now" ? () => ${now} : Reflect.get(target, key, target)),
+});`;
+}
+
+// Render trusted repository fixtures with in-memory assets and routed HTTP/WebSocket denial.
+// This is not a hostile-code sandbox: other transports, including WebRTC, are not
+// universally denied or observed by `unexpected`. Use disposable CI without
+// production credentials; an empty `unexpected` only covers routed requests.
+/**
+ * `now` (epoch ms) fixes the server clock; `timezoneId` overrides only the browser timezone.
+ * @param {{ source?: string, page: string, search?: string, now?: number, javaScriptEnabled?: boolean, timezoneId?: string }} options
+ */
+export async function withKitOfflineBrowser(
+  { source, page: fixture, search = "", now = undefined, javaScriptEnabled = false, timezoneId },
+  callback,
+) {
+  if (typeof search !== "string" || (search && !search.startsWith("?")) || search.includes("#")) {
+    throw new Error("Fixture search must be a query string");
+  }
+  const banner = now === undefined ? undefined : fixedDateBanner(now);
+  const options = { source, page: fixture, csr: javaScriptEnabled };
+  return withKitBrowserFixture(options, async ({ root, output }) => {
     const entry = join(root, "fixture-server.mjs");
     await build({
       stdin: {
@@ -20,6 +86,7 @@ export async function withKitOfflineBrowser({ source, page: fixture }, callback)
       bundle: true,
       platform: "node",
       format: "esm",
+      ...(banner && { banner: { js: banner } }),
       plugins: [
         {
           name: "offline-fixture",
@@ -44,35 +111,46 @@ export async function withKitOfflineBrowser({ source, page: fixture }, callback)
     await server.init({ env: {}, read: (file) => readFile(join(output, "client", file)) });
     const origin = "http://kit-fixture.test";
     const path = "/__browser_fixture__";
-    const response = await server.respond(new Request(origin + path), {
+    const fixtureUrl = new URL(path + search, origin).href;
+    const response = await server.respond(new Request(fixtureUrl), {
       getClientAddress: () => "127.0.0.1",
     });
     assert.equal(response.status, 200);
     const html = await response.text();
     const browser = await chromium.launch({ headless: true });
     try {
-      const context = await browser.newContext({ javaScriptEnabled: false });
+      const context = await browser.newContext({
+        javaScriptEnabled,
+        serviceWorkers: "block",
+        timezoneId,
+      });
       const unexpected = [];
+      await context.routeWebSocket("**/*", (socket) => {
+        unexpected.push(socket.url());
+        socket.close();
+      });
       await context.route("**/*", async (route) => {
         const url = new URL(route.request().url());
         if (url.origin === origin && route.request().method() === "GET") {
-          if (url.pathname === path) return route.fulfill({ contentType: "text/html", body: html });
-          const directory = join(output, "client");
-          const asset = resolve(directory, url.pathname.slice(1));
-          if (
-            asset.startsWith(`${directory}/`) &&
-            url.pathname.startsWith("/_app/") &&
-            asset.endsWith(".css")
-          ) {
-            return route.fulfill({ contentType: "text/css", body: await readFile(asset) });
-          }
+          if (url.href === fixtureUrl)
+            return route.fulfill({
+              contentType: "text/html",
+              headers: { "content-security-policy": "worker-src 'none'; frame-src 'none'" },
+              body: html,
+            });
+          const isAppAsset = url.pathname.startsWith("/_app/");
+          const directory = isAppAsset ? join(output, "client") : join(root, "public");
+          const asset = await readFixtureAsset(directory, url.pathname, {
+            allowJavaScript: isAppAsset && javaScriptEnabled,
+          });
+          if (asset) return route.fulfill(asset);
         }
         unexpected.push(route.request().url());
         return route.abort();
       });
       const page = await context.newPage();
       try {
-        await page.goto(origin + path);
+        await page.goto(fixtureUrl);
         return await callback({ page, html, unexpected: [...unexpected] });
       } finally {
         await context.close();

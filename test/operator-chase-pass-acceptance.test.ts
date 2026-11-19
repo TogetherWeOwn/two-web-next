@@ -5,7 +5,7 @@
 // this file pins pass-count forensics only.
 //
 // Contract for the build:
-// - eraseMember apply returns its six table counts plus `passes` (number of
+// - eraseMember apply returns its table counts plus `passes` (number of
 //   session-chase passes executed) and `deletesPerPass` (session rows deleted
 //   in each pass, in order). Dry-run returns `passes: 0` and
 //   `deletesPerPass: []` (no chase ran). passes === deletesPerPass.length and
@@ -101,6 +101,9 @@ function makeEraseDouble(opts: {
     if (text.startsWith("delete from rsvps")) return rows(opts.rsvps ?? 0);
     if (text.startsWith("delete from web_session_grace")) return rows(opts.grace ?? 0);
     if (text.startsWith("delete from join_attempts")) return rows(opts.attempts ?? 0);
+    if (text.startsWith("delete from event_echo_members")) return rows(0);
+    if (text.startsWith("select count") && text.includes("from event_echo_members"))
+      return [{ n: 0 }];
     if (text.startsWith("select count") && text.includes("from web_sessions")) {
       const remaining = opts.sessionRemainings?.[pass] ?? 0;
       pass++;

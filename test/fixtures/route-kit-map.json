@@ -2,6 +2,7 @@
   "schema": 1,
   "status": "planning-only",
   "live": false,
+  "completion": { "apiSlices": [], "sources": [], "api10": false },
   "note": "Proposed Kit targets for a source-preparation snapshot; target files do not establish traffic ownership. Middleware and method fallbacks are classified separately.",
   "rows": [
     {
@@ -582,8 +583,8 @@
       "kind": "endpoint",
       "scope": "api",
       "target": "web/src/routes/auth/discord/redirect/+server.ts",
-      "slice": "API-3",
-      "family": "ops",
+      "slice": "API-6",
+      "family": "auth",
       "hono405": false,
       "etag": false,
       "pageAndEndpoint": false,

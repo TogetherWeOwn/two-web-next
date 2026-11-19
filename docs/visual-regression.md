@@ -97,7 +97,10 @@ Sans weight file with the shipped Instrument Serif italic file. It attaches the
 exact CDP font records as `font-identity-observations.json`; names are observations,
 not fixed assumptions about Chromium's internal font names.
 Brand callers select the alias only on the content root and verify glyphs/stability.
-Cold scenarios stay unmodified: hold the font response, prove painted fallback, then verify no late swap or geometry shift.
+In controlled cold scenarios, hold the font response, prove painted fallback, and check stability.
+
+[`real-font-capture.visual.ts`](../e2e/visual/real-font-capture.visual.ts) uses fresh guest contexts, optionally warmed by visiting `/`. No font is forced or intercepted.
+The visual report retains viewport and selected compositor PNGs, plus heading, timing and network JSON for 7 days. Frame comparisons cover the sampled heading only; fixture cache observations do not prove deployed behavior.
 
 ## When a diff is intentional
 

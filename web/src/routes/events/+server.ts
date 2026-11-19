@@ -4,15 +4,14 @@ import type { RequestHandler } from "./$types";
 import { dbFor } from "../../../../src/admin/db";
 import { discordEventsSource } from "../../../../src/events/discord-transients";
 import { loadEventsPage } from "../../../../src/kit-events";
-import { renderEventsHtml } from "../../../../src/kit-events-html";
+import { renderEventsHtml } from "../../lib/server/render-events-html";
 import { kitEventsJourneyFor, kitEventsSessionFor } from "../../../../src/kit-session";
 import { JOIN_RESULT_COOKIE } from "../../../../src/return-journey";
 
 export const trailingSlash = "ignore";
 
-// Endpoint rendering, not a Svelte page: the HTML comes from the Hono
-// calendar screen through renderEventsHtml, so this route emits no client
-// entries/node while the hook dispatch keeps the Hono guard/cache/422/503
+// Server-rendered Svelte inside the shared document shell: this endpoint has
+// no client entry while the hook dispatch keeps the Hono guard/cache/422/503
 // contract. Only GET is listed in the manifest (HEAD follows it); any other
 // method never reaches here because decideRoute matches the entry GET-only
 // and the hook hands the rest to Hono, so POST /events stays Hono-owned.
@@ -44,6 +43,7 @@ export const GET: RequestHandler = async ({ request, cookies, url, locals, setHe
       data,
       collected,
       locals.restoredWrite === true && !island,
+      request.headers.get("x-two-island") === "events-calendar",
     );
     const response = new Response(rendered.body, {
       status: rendered.status,

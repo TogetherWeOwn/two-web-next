@@ -317,6 +317,7 @@ exactly once.
 | `src/hotzones/` | events |
 | `src/html-outcome.ts` | entry |
 | `src/html-stream.ts` | http-guard |
+| `src/http/` | observability |
 | `src/image-policy.ts` | content |
 | `src/index.tsx` | entry |
 | `src/invite-fallback.ts` | join |
@@ -337,6 +338,8 @@ exactly once.
 | `src/kit-past-events.ts` | events |
 | `src/kit-restored-write.ts` | entry |
 | `src/kit-session.ts` | auth |
+| `src/kit-worker-facade.ts` | http-guard |
+| `src/kit-worker-response.ts` | http-guard |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
 | `src/log-budget.ts` | observability |

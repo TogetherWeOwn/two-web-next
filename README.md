@@ -139,8 +139,10 @@ snapshots. The events module is preparatory and is not used by any served page. 
 `ci/build-ember-tokens.mjs` adapter builds the Hono and Kit token sheets from
 the pinned vendored design-kit CSS and needs the locked esbuild installed to
 compact served sheets. It composes scoped roles with `assets/styles.css` and
-`assets/theme.css`; all three existing Hono sheets keep their original raw and
-gzip ceilings, without extra requests or changes to unthemed legacy pages.
+`assets/theme.css`; the separate bundle budgets retain their raw and gzip
+ceilings, without extra requests or changes to unthemed legacy pages. The
+homepage theme test reports its 13,000-byte shared-theme ceiling as advisory;
+source/generated integrity and other budget and correctness gates remain hard.
 The explicit preparation command **checks** the tracked adapters before
 generating ignored critical CSS. It fails without repairing stale committed
 output, so preparation cannot mask drift before CI checks it. The redundant
@@ -483,6 +485,16 @@ matching dispatch SHA selects the existing separately authorized recovery
 route; `migrations_applied` never bypasses default ancestry admission. See the
 [ancestry contract](docs/runbook.md#default-promotion-ancestry-admission).
 
+For automatic promotion, the Release Manager accepts the exact release SHA and
+asks the authorized Operator to set the repository Actions variable
+`PRODUCTION_ACCEPTED_SHA` to that full lowercase SHA; the Release Manager can
+ask the Operator to clear it. The resolver first selects the eligible candidate,
+then requires exact equality with the variable: absent, empty or unequal values
+skip cleanly, without searching for an older accepted candidate. The variable is
+a job-time snapshot; clearing it does not revoke a run that already started.
+Manual dispatch is unchanged, and all existing promotion and release gates remain
+in force. See the [deployment procedure](docs/runbook.md#deploy-and-record-the-rollback-pointer).
+
 Automatic runs promote only a first-attempt staging green that soaked 30
 minutes, with no red or re-run staging run on that commit or a newer one
 (a red staging gate is fixed forward on a new commit, never re-run until
@@ -697,7 +709,7 @@ Owner+Moderator pair (staging guild `1545644954272137297`:
 `1546211363578191873,1545648550329851946`; production guild
 `326474832151838730`: `1546777855801954408,1546777856984481792`) before deployment.
 The staging workflow deploys `web/wrangler.staging.jsonc` and supplies only the
-validated `KIT_ROUTE_ARCHIVE` and `KIT_ROUTE_STATIC` route flags with `--var`;
+validated [staging route flags](docs/config.md) with `--var`;
 it does not override either moderator var. A separate GitHub moderator secret
 cannot make the gate pass. `keep_vars` retains unrelated remote plaintext vars,
 and Wrangler retains remote secrets. No binding values are read back or copied.
@@ -708,8 +720,7 @@ that belongs to the other guild — role IDs are guild-scoped, so a production
 pair in the staging config matches nobody while looking configured.
 
 The live smoke runs manually via the `staging-smoke` workflow in a job container
-(`[self-hosted, two-selfhosted]` while the repo is private, GitHub-hosted while
-public; TOG-12326). It posts a real announcement to a throwaway channel and
+on a GitHub-hosted runner in either repository visibility. It posts a real announcement to a throwaway channel and
 creates a real staging event. Dispatch only after
 the existing staging isolation/HMAC prerequisites and independent review clear.
 Pass `--announcement-only` (workflow input `announcement_only`) to run only

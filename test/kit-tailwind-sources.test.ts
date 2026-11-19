@@ -27,7 +27,18 @@ const localClasses = new Set([
 type Node = { type?: string; [key: string]: unknown };
 type Limits = { bytes: number; nodes: number; depth: number; work: number };
 const defaults: Limits = { bytes: 1024 * 1024, nodes: 10000, depth: 128, work: 2_000_000 };
-const excluded = ["visible", "relative", "static", "block", "hidden", "table"];
+const excluded = [
+  "visible",
+  "relative",
+  "static",
+  "block",
+  "hidden",
+  "table",
+  "inline",
+  "outline",
+  "flex",
+  "flex-wrap",
+];
 const targets = excluded.map((name) => [name, targetMatcher(name)] as const);
 
 // Only literal attributes are certified here. Dynamic output and forwarding
@@ -108,6 +119,10 @@ describe("Kit utility source boundary", () => {
     expect(css).toMatch(/@import "tailwindcss\/utilities\.css" layer\(utilities\) source\(none\);/);
     expect(css).toContain('@source "./**/*.svelte";');
     expect(css).toContain('@source not "./lib/SiteMetadata.svelte";');
+    expect(css).toContain('@source not "./lib/SkipLink.svelte";');
+    expect(css).toContain('@source not "./lib/Chip.svelte";');
+    expect(css).toContain('@source not "./lib/SegmentedControl.svelte";');
+    expect(css).toContain('@source not "./lib/StructuredTime.svelte";');
     expect(css).toContain('@source not "./routes/admin/join-attempts";');
   });
 
@@ -128,9 +143,18 @@ describe("Kit utility source boundary", () => {
     }
   });
 
+  it("keeps the skip-link exclusion limited to class-free markup", () => {
+    const skipLink = readFileSync("web/src/lib/SkipLink.svelte", "utf8");
+    const markup = skipLink.split("<style>")[0] ?? "";
+    expect(markup).toContain('<a href="#main">');
+    expect(markup).not.toMatch(/\bclass\s*[:=]/);
+    expect(localViolations(skipLink)).toEqual([]);
+  });
+
   it("allows only known local classes in whole-file-excluded components", () => {
     const files = [
       "web/src/lib/SiteMetadata.svelte",
+      "web/src/lib/SkipLink.svelte",
       ...globSync("web/src/routes/admin/join-attempts/**/*.svelte"),
     ];
     expect(files.length).toBeGreaterThan(3);
@@ -143,6 +167,19 @@ describe("Kit utility source boundary", () => {
       }
       expect(localViolations(source, defaults, metadata), path).toEqual([]);
     }
+  });
+
+  it("keeps excluded filter primitives free of utility classes and class forwarding", () => {
+    const chip = readFileSync("web/src/lib/Chip.svelte", "utf8");
+    const segments = readFileSync("web/src/lib/SegmentedControl.svelte", "utf8");
+    expect([...classUses(chip).tokens]).toEqual(["count"]);
+    expect(classUses(chip).unknown).toEqual(["rendered snippet"]);
+    expect(chip).toContain("{@render children()}");
+    expect([...classUses(segments).tokens]).toEqual(["segments", "count"]);
+    expect(classUses(segments).unknown).toEqual([]);
+    const structuredTime = readFileSync("web/src/lib/StructuredTime.svelte", "utf8");
+    expect([...classUses(structuredTime).tokens]).toEqual(["row-time", "line1", "word", "line2"]);
+    expect(classUses(structuredTime).unknown).toEqual([]);
   });
 
   it("recognizes literal classes and rejects local unknowns", () => {

@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
 import "../app.css";
+import "../lib/site-header.css";
 
 // Shared Kit layout: pulls the Tailwind v4 pipeline and the single Open
 // Lobby token file (src/app.css) into every Kit page. Per-page chrome

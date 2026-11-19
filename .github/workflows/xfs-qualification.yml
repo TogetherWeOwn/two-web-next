@@ -1,0 +1,89 @@
+name: XFS qualification fixture
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fixture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22.23.0, 24]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - name: Install XFS tools on the disposable runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xfsprogs
+      - name: Prove mounts and successful cleanup
+        run: bash ci/xfs-qualification-fixture.sh node ci/xfs-qualification-fixture.test.mjs
+      - name: Qualify public lock helper on real mounts
+        run: bash ci/xfs-qualification-fixture.sh node ci/kit-lock-xfs.test.mjs
+      - name: Prove cleanup after command failure
+        shell: bash
+        run: |
+          set +e
+          bash ci/xfs-qualification-fixture.sh node ci/xfs-qualification-fixture.test.mjs fail
+          result=$?
+          set -e
+          test "$result" -eq 42
+
+  kit-fatal-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install locked tooling and XFS tools on the disposable runner
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xfsprogs
+          npm ci --include=dev --ignore-scripts --no-audit --no-fund
+          npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Build stock Kit output
+        run: npm run build --prefix web
+      - name: Prove installed Kit Worker fatal path and cleanup
+        id: fatal
+        shell: bash
+        run: |
+          mkdir -p artifacts/kit-worker-fatal
+          bash ci/xfs-qualification-fixture.sh node --import tsx --test --test-timeout=180000 \
+            --test-reporter=tap --test-reporter-destination=artifacts/kit-worker-fatal/report.tap \
+            ci/kit-worker-fatal.test.mjs | tee artifacts/kit-worker-fatal/cleanup.log
+          grep -Fx 'Fixture mounts and backing file removed' artifacts/kit-worker-fatal/cleanup.log
+          node ci/rsvp-focus-require-executed.mjs artifacts/kit-worker-fatal/report.tap "Kit built Worker fatal path" 7
+      - name: Retain Kit proof evidence
+        if: always() && steps.fatal.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-worker-fatal-${{ env.EXPECTED_HEAD_SHA }}
+          path: artifacts/kit-worker-fatal/
+          if-no-files-found: error
+          retention-days: 14

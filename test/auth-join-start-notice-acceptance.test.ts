@@ -402,7 +402,7 @@ describe("acceptance: Kit /join renders the banner (RED for exact)", () => {
     const html = renderKitJoin(joinBaseData({ notice: "start-failed" }));
     const main = html.indexOf("<main");
     const banner = html.indexOf('data-testid="join-start-notice"');
-    const layout = html.indexOf("join-layout");
+    const layout = html.indexOf("ember-join");
     expect(main).toBeGreaterThan(-1);
     expect(banner).toBeGreaterThan(main);
     expect(layout).toBeGreaterThan(banner);

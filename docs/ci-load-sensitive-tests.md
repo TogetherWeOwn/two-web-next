@@ -1,11 +1,8 @@
 # Load-sensitive tests in `check`
 
-`check` runs the full coverage suite serially. While the repo is public it runs
-on GitHub-hosted Linux, because the org's self-hosted runner group refuses public
-repos (TOG-12326); while private it runs on the shared self-hosted runners
-(`[self-hosted, two-selfhosted]`). The slowest of those (ci-rbx1) take 17-20
-minutes for a green run, about 4-5x a hosted runner, so wall-clock limits
-written for a laptop fail under normal queue load (TOG-12177).
+`check` runs the full coverage suite serially on GitHub-hosted Linux in both
+repository visibilities. The existing timeouts also account for host load; a
+wall-clock limit written for a laptop can fail under normal CI load.
 
 ## Budgets
 
@@ -108,6 +105,7 @@ timing check to fake timers; do not retry the job until it passes.
 
 | Test | Limit | Why it stays |
 | --- | --- | --- |
+| `test/hot-path-indexes.test.ts` (1× 15 s) | 15 s per test | Bounds the event-scoped offer regression across both RSVP fixture sizes and transactional rollback |
 | `test/up-db.test.ts` (5× 10 s) | 10 s per test; elapsed `< 3500`/`< 4000` ms | Asserts the up-probe's own DB deadlines |
 | `test/db-ping-cli.test.mjs` (1× 10 s) | 10 s; elapsed `< 500`/`< 2500` ms | Asserts the CLI's probe and cleanup deadlines |
 | `test/counts-worker.test.ts` (4× 10 s) | 10 s per test | Bounds the miniflare counts Worker runs |

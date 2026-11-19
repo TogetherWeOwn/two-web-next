@@ -26,6 +26,7 @@ let kitCss: { build: (candidates: string[]) => string };
 test.use({ javaScriptEnabled: false, serviceWorkers: "block", timezoneId: "America/Los_Angeles" });
 test.beforeAll(async () => {
   kit = await compilePeriodKit();
+  expect(kit.css).toContain(readFileSync(join(root, "web/src/lib/site-header.css"), "utf8"));
   sharedCss = ["styles.css", "theme.css", "schedule-theme.css"]
     .map((path) => readFileSync(join(root, "public", path), "utf8"))
     .join("\n");

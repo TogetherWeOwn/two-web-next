@@ -218,22 +218,36 @@ async function open(
     expect(reads.every((read) => read.method === "GET")).toBe(true);
     if (javaScriptEnabled) {
       expect(calendarLoads).toBe(1);
-      // Both route twins render the shared calendar shell. It may deliver the
-      // schedule rules externally or inline; check their actual cascade instead.
-      const styles = await page.locator(".events-page").evaluate((root) => {
-        const views = root.querySelector(".schedule-views")!;
-        const filter = root.querySelector(".schedule-game-filter")!;
+      // Kit's compatibility renderer uses the legacy controls. Select the
+      // expectation by the rendered structure, not by the route twin's name.
+      const { native, styles } = await page.locator(".events-page").evaluate((root) => {
+        const views = root.querySelectorAll(".schedule-views, .segments");
+        const filters = root.querySelectorAll(".schedule-game-filter");
+        if (views.length !== 1 || filters.length !== 1) {
+          throw new Error(
+            `Expected one calendar view control and one game filter; found ${views.length} and ${filters.length}`,
+          );
+        }
+        const view = views[0]!;
+        const native = view.matches("nav.segments:not(.schedule-views)");
+        if (!native && !view.matches('div.schedule-views[role="group"]:not(.segments)')) {
+          throw new Error("Unexpected calendar view control structure");
+        }
         return {
-          views: getComputedStyle(views).display,
-          border: getComputedStyle(views).borderTop,
-          filter: getComputedStyle(filter).display,
-          alignment: getComputedStyle(filter).alignItems,
+          native,
+          styles: {
+            views: getComputedStyle(view).display,
+            border: getComputedStyle(view).borderTop,
+            filter: getComputedStyle(filters[0]!).display,
+            alignment: getComputedStyle(filters[0]!).alignItems,
+          },
         };
       });
-      expect(styles).toEqual({
+      expect(styles, "calendar control styles").toEqual({
+        // The native view control and game filter declare inline-flex, but
+        // Chromium blockifies both as direct children of flex containers.
         views: "flex",
-        border: "1px solid rgb(133, 118, 107)",
-        // The inline-flex filter is blockified as a child of the flex search form.
+        border: native ? "1px solid rgba(255, 236, 220, 0.08)" : "1px solid rgb(133, 118, 107)",
         filter: "flex",
         alignment: "center",
       });
@@ -274,7 +288,7 @@ for (const twin of GAME_TWINS) {
       await h.page.evaluate(() => {
         for (const sheet of Array.from(document.styleSheets)) sheet.disabled = true;
       });
-      await expect(h.clean()).rejects.toThrow();
+      await expect(h.clean()).rejects.toThrow(/calendar control styles/);
     });
 
     it("rejects an aborted required non-calendar island", async () => {

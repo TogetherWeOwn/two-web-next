@@ -23,8 +23,9 @@ import { SiteHeader } from "../src/pages";
 import type { Session } from "../src/env";
 import type { Env } from "../src/env";
 import { aboutPageData } from "../src/about-content";
-import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "../src/home-copy";
+import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
 import { withEventDetailHtml, type DetailLeavesModel } from "../src/events/detail-leaves";
+import { kitSeatCard } from "../src/events/kit-detail";
 import { loginUrl } from "../src/islands/contracts";
 import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 import { renderEventsHtml } from "../src/kit-events-html";
@@ -161,7 +162,7 @@ const baseHomeData = (overrides: Record<string, unknown> = {}): Record<string, u
   eventsUnavailable: false,
   featured: [],
   imageHosts: "",
-  homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
+  homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO },
   ...overrides,
 });
 
@@ -230,8 +231,13 @@ const rawDetailModel = (
   ...overrides,
 });
 
-const baseDetailModel = (overrides: Record<string, unknown> = {}): Record<string, unknown> =>
-  withEventDetailHtml(rawDetailModel(overrides));
+const baseDetailModel = (overrides: Record<string, unknown> = {}): Record<string, unknown> => {
+  const model = rawDetailModel(overrides);
+  return {
+    ...withEventDetailHtml(model),
+    seatCard: kitSeatCard(model.rsvpClosed, model.viewerMember, model.rsvpOpen, false),
+  };
+};
 
 const baseGoneModel = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   title: "Cancelled game night",

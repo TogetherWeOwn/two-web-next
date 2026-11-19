@@ -495,8 +495,9 @@ describe.skipIf(!url)("events import separation on disposable test schemas", () 
 
   async function snapshot(sql: ReturnType<typeof postgres>) {
     return {
-      events: await sql`select * from events order by id`,
-      rsvps: await sql`select * from rsvps order by id`,
+      // Some cases add and remove columns between snapshots on the same connection.
+      events: await sql`select * from events order by id`.simple(),
+      rsvps: await sql`select * from rsvps order by id`.simple(),
       users: await sql`select * from users order by id`,
       eventsSequence: await sql`select last_value, is_called from events_id_seq`,
       rsvpsSequence: await sql`select last_value, is_called from rsvps_id_seq`,

@@ -44,8 +44,10 @@ function withScratch(fn) {
       mkdirSync(dirname(join(root, path)), { recursive: true });
       cpSync(join(ROOT, path), join(root, path));
     }
+    cpSync(join(ROOT, "assets/kit-home-hero.css"), join(root, "assets/kit-home-hero.css"));
     mkdirSync(join(root, "public"), { recursive: true });
-    mkdirSync(join(root, "web/src"), { recursive: true });
+    mkdirSync(join(root, "web/src/lib"), { recursive: true });
+    cpSync(join(ROOT, "web/src/lib/site-header.css"), join(root, "web/src/lib/site-header.css"));
     mkdirSync(join(root, "src"), { recursive: true });
     for (const path of CHROME_CONSUMERS) cpSync(join(ROOT, path), join(root, path));
     return fn(root);
@@ -108,8 +110,29 @@ test("Hono exposes each consumed role once and omits unread roles", () => {
     const consumed = new RegExp(`var\\(\\s*--${alias}(?=[\\s,)])`).test(consumers);
     assert.equal([...css.matchAll(new RegExp(`--${alias}:`, "g"))].length, consumed ? 1 : 0, alias);
   }
+  const facade = outputs.get("public/theme-tokens.css");
+  const base = facade.match(/^\.base-theme\{([^}]+)\}/)?.[1];
+  const schedule = facade.match(
+    /\.base-theme\.schedule-theme,\.base-theme\[data-theme=schedule\]\{([^}]+)\}/,
+  )?.[1];
+  assert.ok(base && schedule, "the facade has separate base and schedule rules");
+  for (const alias of [
+    "g1",
+    "g3",
+    "hair1",
+    "t1",
+    "space-1",
+    "space-2",
+    "space-4",
+    "radius-pill",
+    "font-size-small",
+    "font-weight-medium",
+  ]) {
+    assert.ok(schedule.includes(`--${alias}:`), `${alias} is available in the schedule theme`);
+    assert.ok(!base.includes(`--${alias}:`), `${alias} is absent from the base theme`);
+  }
+  assert.ok(!facade.includes("--hair2:"));
   for (const alias of ["hair1", "hair2"]) {
-    assert.ok(!outputs.get("public/theme-tokens.css").includes(`--${alias}:`));
     assert.ok(!outputs.get("public/theme.css").includes(`--${alias}:`));
     assert.ok(!outputs.get("web/src/ember-theme.css").includes(`--${alias}:`));
     assert.ok(outputs.get("web/src/ember-theme.css").includes(`--color-${alias}:`));
@@ -127,10 +150,11 @@ test("new authored role reads regenerate aliases and reject stale artifacts", ()
       build(root);
       const file = join(root, path);
       const before = readFileSync(file, "utf8");
-      writeFileSync(file, `${before}\n.probe{padding:var( --space-4 )}`);
+      writeFileSync(file, `${before}\n.probe{padding:var( --space-3 )}`);
       assert.throws(() => check(root), /generated token drift/);
-      const styles = generate(root).get("public/styles.css");
-      assert.equal([...styles.matchAll(/--space-4:16px/g)].length, 1, path);
+      const sheet = path === "public/kit-events-controls.css" ? "theme-tokens" : "styles";
+      const css = generate(root).get(`public/${sheet}.css`);
+      assert.equal([...css.matchAll(/--space-3:12px/g)].length, 1, path);
       writeFileSync(file, before);
     }
   });
@@ -334,6 +358,7 @@ for (const [directory, hooks] of [
           "web/package.json",
           "ci/build-ember-tokens.mjs",
           "ci/build-leaf-css.mjs",
+          "ci/css-dictionary.mjs",
           "ci/build-events-css.mjs",
           "public/styles.css",
           "public/schedule-theme.css",
@@ -402,6 +427,7 @@ for (const [bundle, constant] of [
     withScratch((root) => {
       mkdirSync(join(root, "ci"));
       cpSync(join(ROOT, `ci/build-${bundle}-css.mjs`), join(root, `ci/build-${bundle}-css.mjs`));
+      cpSync(join(ROOT, "ci/css-dictionary.mjs"), join(root, "ci/css-dictionary.mjs"));
       for (const name of ["styles.css", "theme-tokens.css", "theme.css", "schedule-theme.css"]) {
         writeFileSync(join(root, "public", name), `/* ${name} */`);
       }
@@ -533,9 +559,13 @@ test("a consumed UI stack does not depend on an omitted display alias", () => {
   withScratch((root) => {
     for (const path of HONO_CONSUMERS) {
       const file = join(root, path);
+      // No-display simulation: the authored content-theme override declares
+      // the alias itself, so neutralize it alongside the var() reads.
       writeFileSync(
         file,
-        readFileSync(file, "utf8").replaceAll("var(--font-display)", "system-ui"),
+        readFileSync(file, "utf8")
+          .replaceAll("var(--font-display)", "system-ui")
+          .replace(/\.base-theme\.content-theme\s*\{[^}]*\}/, ""),
       );
     }
     const css = generate(root).get("public/theme.css");
@@ -572,7 +602,7 @@ test("Kit exposes every utility role and Hono keeps only consumed author aliases
   const served = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"]
     .map((path) => outputs.get(path))
     .join("\n");
-  assert.ok(!css.includes("@theme static"), "unused utilities are not forced into the bundle");
+  assert.ok(css.includes("@theme static"), "theme variables survive without utility references");
   for (const [alias] of ROLES) {
     const utility =
       /^(g\d|hair\d|t\d|ember|on-accent|accent-hi|border|live|echo|ok|danger|warn|focus-ring)/.test(

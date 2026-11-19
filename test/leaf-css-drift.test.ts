@@ -5,14 +5,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { URL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseLeafModule } from "../ci/leaf-css-parser.mjs";
+import { decodeCssDictionary } from "../src/css-dictionary";
 import { Layout } from "../src/pages";
 import { LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 import type { Env } from "../src/env";
 import app from "./app";
 
-const cssPath = (entry: string) =>
-  readFileSync(new URL(`../public/${entry}`, import.meta.url), "utf8");
-const SOURCES = ["styles.css", "theme-tokens.css", "theme.css"];
+const cssPath = (entry: string) => readFileSync(new URL(`../${entry}`, import.meta.url), "utf8");
+const SOURCES = [
+  "public/styles.css",
+  "public/theme-tokens.css",
+  "public/theme.css",
+  "web/src/lib/site-header.css",
+];
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -42,41 +48,41 @@ describe("content-leaf inlined CSS", () => {
   it.each([
     [
       "repeated tokens and escaped text",
-      ['.base-theme .base-theme { content: "雪\\\\path"; }\n', "a {}", "b {}\n"],
+      ['.base-theme .base-theme { content: "雪\\\\path"; }\n', "a {}", "b {}\n", "d {}"],
       true,
     ],
-    ["no tokens", ["a {}", "b {}", "c {}"], true],
-    ["sentinel collision", [".base-theme ~ p {}", "b {}", "c {}"], false],
+    ["no tokens", ["a {}", "b {}", "c {}", "d {}"], true],
+    ["former sentinel", [".base-theme ~ p {}", "b {}", "c {}", "d {}"], true],
+    ["repeated rules", [".card { margin: 0 auto; }\n".repeat(12), "b {}", "c {}", "d {}"], true],
+    ["reserved marker", ["a {}", "b \u0080 {}", "c {}", "d {}"], false],
+    ["last reserved marker", ["a {}", "b Ï {}", "c {}", "d {}"], false],
+    ["oversized input", ["a {}\n".repeat(20_001), "b {}", "c {}", "d {}"], false],
   ])("executes generated initializer for %s", (_name, sources, packed) => {
     const dir = mkdtempSync(join(tmpdir(), "leaf-css-generator-"));
     try {
-      for (const sub of ["ci", "public", "src"]) mkdirSync(join(dir, sub));
-      writeFileSync(
-        join(dir, "ci/build-leaf-css.mjs"),
-        readFileSync(new URL("../ci/build-leaf-css.mjs", import.meta.url)),
-      );
-      SOURCES.forEach((entry, i) => writeFileSync(join(dir, "public", entry), sources[i]!));
+      for (const sub of ["ci", "public", "src", "web/src/lib"])
+        mkdirSync(join(dir, sub), { recursive: true });
+      for (const file of ["build-leaf-css.mjs", "css-dictionary.mjs"]) {
+        writeFileSync(
+          join(dir, "ci", file),
+          readFileSync(new URL(`../ci/${file}`, import.meta.url)),
+        );
+      }
+      SOURCES.forEach((entry, i) => writeFileSync(join(dir, entry), sources[i]!));
       execFileSync(process.execPath, [join(dir, "ci/build-leaf-css.mjs")], { timeout: 10000 });
       const generated = readFileSync(join(dir, "src/leaf-critical-css.ts"), "utf8");
-      expect(generated.includes('.split("~").join(".base-theme")')).toBe(packed);
-      // This fixture runs only generator-produced code; security readers never evaluate it.
-      const js = generated.replaceAll(": string =", " =");
-      const modulePath = join(dir, "src/fixture.mjs");
-      writeFileSync(modulePath, js);
-      const output = execFileSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          `import { LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256 } from ${JSON.stringify(new URL(`file://${modulePath}`).href)}; console.log(JSON.stringify([LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256]));`,
-        ],
-        { encoding: "utf8", timeout: 10000 },
-      );
+      expect(generated.includes("decodeCssDictionary(")).toBe(packed);
+      expect(generated).not.toContain('.split("~")');
       const css = sources.join("\n");
-      expect(JSON.parse(output)).toEqual([
-        css,
-        createHash("sha256").update(css, "utf8").digest("base64"),
-      ]);
+      const sha256 = createHash("sha256").update(css, "utf8").digest("base64");
+      expect(parseLeafModule(generated)).toEqual({ css, sha256 });
+      if (packed) {
+        const call = /decodeCssDictionary\(("(?:[^"\\]|\\.)*"), (\[.*\])\);\n/.exec(generated);
+        expect(call).not.toBeNull();
+        const dictionary = JSON.parse(call![2]!) as string[];
+        expect(decodeCssDictionary(JSON.parse(call![1]!), dictionary)).toBe(css);
+        if (_name === "repeated rules") expect(dictionary.length).toBeGreaterThan(0);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -85,14 +91,15 @@ describe("content-leaf inlined CSS", () => {
   it("rejects a closing style tag in generator input", () => {
     const dir = mkdtempSync(join(tmpdir(), "leaf-css-generator-"));
     try {
-      for (const sub of ["ci", "public", "src"]) mkdirSync(join(dir, sub));
-      writeFileSync(
-        join(dir, "ci/build-leaf-css.mjs"),
-        readFileSync(new URL("../ci/build-leaf-css.mjs", import.meta.url)),
-      );
-      SOURCES.forEach((entry, i) =>
-        writeFileSync(join(dir, "public", entry), i === 1 ? "</StYlE>" : "a {}"),
-      );
+      for (const sub of ["ci", "public", "src", "web/src/lib"])
+        mkdirSync(join(dir, sub), { recursive: true });
+      for (const file of ["build-leaf-css.mjs", "css-dictionary.mjs"]) {
+        writeFileSync(
+          join(dir, "ci", file),
+          readFileSync(new URL(`../ci/${file}`, import.meta.url)),
+        );
+      }
+      SOURCES.forEach((entry, i) => writeFileSync(join(dir, entry), i === 1 ? "</StYlE>" : "a {}"));
       const result = spawnSync(process.execPath, [join(dir, "ci/build-leaf-css.mjs")], {
         encoding: "utf8",
         timeout: 10000,
@@ -104,7 +111,7 @@ describe("content-leaf inlined CSS", () => {
     }
   });
 
-  it("matches the three concatenated stylesheets byte for byte", () => {
+  it("matches the four concatenated stylesheets byte for byte", () => {
     const concatenated = SOURCES.map(cssPath).join("\n");
     expect(LEAF_CRITICAL_CSS).toBe(concatenated);
   });
@@ -124,8 +131,8 @@ describe("content-leaf inlined CSS", () => {
     expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
     expect(html).not.toContain('rel="stylesheet"');
     expect(html).not.toMatch(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")/);
-    // Content leaves render no Display text, so the font is
-    // neither used nor preloaded there (its late swap became mobile LCP).
+    // Content leaves render the display face through the optional content
+    // face, so it is rendered without a preload (a late swap became mobile LCP).
     expect(html).not.toContain('.woff2" as="font"');
   });
 

@@ -136,9 +136,13 @@ when any planned URL is short of its three samples, and never when full
 evidence failed an assertion. Every run writes `.lighthouseci/perf-collect.log`
 and, on failure, `.lighthouseci/perf-collect-diagnosis.md` (COLLECT FAILURE,
 BUDGET BREACH or an unclassified step failure). Both ship in the
-`lighthouse-<sha>` artifact. Its selftest evaluates the real mobile assertions
-over synthetic reports: a short collect retries, and an LCP over budget fails
-without a retry.
+`lighthouse-<sha>` artifact. In that artifact, `mobile-fixture/` holds the raw
+`lhr-*.json` reports and available `assertion-results.json` from the final mobile
+attempt, copied before desktop collection. The top-level LHRs are desktop; the
+mobile `reports/` manifest points to representative reports, not independent
+samples. The snapshot is evidence only and does not change either gate's verdict.
+The mobile runner's selftest evaluates the real assertions over synthetic
+reports: a short collect retries, and an LCP over budget fails without a retry.
 
 LHCI starts/stops the fixture worker itself, listening only on `127.0.0.1:8787`.
 Do not run another service on that port. The dedicated Wrangler config has no
@@ -198,8 +202,8 @@ executed gates. For screenshot/spec discovery, see the
 | `kit.worker`, `kit.server.js`, `kit.client.js`, `kit.client.css` | `node ci/check-kit-perf.mjs --dry-run --format json` | Existing `web/.svelte-kit/` build outputs plus the `ci/budgets/kit/` fragments; the same versioned budget-report shape |
 | Web standards route/check IDs | `node ci/web-standards.mjs --dry-run --format json` | Planned routes and stable check IDs only, not an execution verdict; real local Hono Lighthouse reports use `lighthouse-<sha>` from `ci.yml` |
 
-The bundle checkers exit 0 for a measured fit, 1 for a breach, 2 when enforcement
-is impossible. `--dry-run` reads the same existing bytes as normal measurement;
+The Hono Worker checker exits 0 for a fit and 1 for a breach. Kit exits 0 for a fit or
+advisory byte/count overages with measurements and ceilings; both exit 2 if unable to enforce. `--dry-run` reads the same existing bytes as normal measurement;
 it does not create missing evidence or prove that a build belongs to HEAD. If
 outputs are missing or stale, build the checked-out revision using the existing
 [Hono bundle command](#local-verification) or
