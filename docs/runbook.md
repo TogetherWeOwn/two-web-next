@@ -1444,14 +1444,19 @@ live fix or a credential swap.
   [watch-lighthouse](../.github/workflows/watch-lighthouse.yml) workflow with
   the origin choice; both are GET-only and use the unchanged thresholds in
   [ci/lighthouserc.cjs](../ci/lighthouserc.cjs). During the Ember and SvelteKit
-  migration, a performance miss can leave the run green. Open the per-route
-  run summary or `watch-summary.md` in the evidence artifact (under
-  `.lighthouseci/` for a direct run). Record the evidence link and each
-  measured route's verdict on the incident or release card. For a `warn`,
-  record the metric, measured value and threshold: it is a measured budget
-  miss, not proof of compliance. Incomplete collection or missing assertion
-  evidence is not a measured verdict. Check `origin-collect-diagnosis.md`
-  when present; a Chrome harness crash (no assertion result) is rerun once,
+  migration, a performance miss can leave the run green. Use `watch-summary.md`
+  for per-route sample completeness, not as proof of a pass. In the evidence
+  artifact (`.lighthouseci/` for a direct run), open `manifest.json` and
+  `assertion-results.json` in `mobile-attempts/attempt-N/`, where `N` is the
+  final attempt reported in the run log.
+  The budget criterion requires complete collection and valid final-attempt
+  assertion results with zero misses. An empty result array is valid; a
+  missing or unreadable result file, `assertions: "unknown"` in the manifest,
+  or results from an earlier attempt cannot establish a pass.
+  Record the evidence link and each measured route's verdict on the incident
+  or release card. For a `warn`, record the metric, measured value and
+  threshold: it is a budget miss. Check `origin-collect-diagnosis.md` when
+  present; a Chrome harness crash (no assertion result) is rerun once,
   never read as a pass.
 - Playwright GET-only guest journeys (homepage, static leaves, events
   list, one published event, robots/sitemap): no sign-in, no RSVP, no
