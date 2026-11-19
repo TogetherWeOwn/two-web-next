@@ -1,11 +1,45 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
+
+const reviewViewports = [
+  { width: 1280, height: 800 },
+  { width: 390, height: 844 },
+  { width: 320, height: 844 },
+];
+
+async function attachReviewScreenshot(page: Page, name: string) {
+  const path = test.info().outputPath(`${name}.png`);
+  await page.screenshot({ path, fullPage: true, animations: "disabled" });
+  await test.info().attach(name, { path, contentType: "image/png" });
+}
+
+test("capture Worker recovery states for review", async ({ page, context }) => {
+  await context.setExtraHTTPHeaders({ "x-e2e-discord-read": "failed" });
+  const states = [
+    // Keep the partial response separate from the healthy month in the anonymous cache.
+    [
+      "partial",
+      "/events?view=calendar&month=2099-05&e2e-recovery=partial",
+      "events-partial-source",
+    ],
+    // A deliberately unmatched search leaves no canonical rows for the error state.
+    ["error", "/events?q=e2e-no-matching-event-7319", "events-empty-error"],
+  ] as const;
+  for (const [state, url, testId] of states) {
+    for (const viewport of reviewViewports) {
+      await page.setViewportSize(viewport);
+      await page.goto(url);
+      await expect(page.getByTestId(testId)).toBeVisible();
+      await attachReviewScreenshot(page, `hono-review-worker-${state}-${viewport.width}`);
+    }
+  }
+});
 
 // Public calendar-month journey: the CI seed (e2e/seed.mjs) publishes one
 // fixture in each of two far-future months, and a real browser drives
 // /events?view=calendar&month=<non-default month> as a guest, with no
 // session. Proves the chosen month's events render and the other month's do
-// not, with the month state asserted before any screenshot/axe step (this
-// spec takes neither).
+// not, with the month state asserted before the review screenshots.
 //
 // Zero QA logins by design: POST /auth/qa/:identity shares the `qa-login`
 // throttle (10/min per runner IP, src/throttle.ts) across the whole
@@ -28,6 +62,19 @@ test("calendar month view shows the chosen month and hides the other month", asy
   // screenshot or axe step runs before these assertions.
   await expect(grid).toContainText("E2E Calendar May");
   await expect(grid).not.toContainText("E2E Calendar June");
+
+  const scroll = page.getByTestId("events-calendar-scroll");
+  const originalViewport = page.viewportSize();
+  for (const viewport of reviewViewports) {
+    await page.setViewportSize(viewport);
+    for (const position of ["start", "end"] as const) {
+      await scroll.evaluate((element, end) => {
+        element.scrollLeft = end ? element.scrollWidth : 0;
+      }, position === "end");
+      await attachReviewScreenshot(page, `hono-review-calendar-${viewport.width}-${position}`);
+    }
+  }
+  if (originalViewport) await page.setViewportSize(originalViewport);
 
   // The month param drives the render in both directions.
   await page.goto("/events?view=calendar&month=2099-06");

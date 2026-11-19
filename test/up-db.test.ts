@@ -24,7 +24,7 @@ function scopedHealthSql(
           (slow === "ping" && query.startsWith("SELECT clock_timestamp"))
           ? "SELECT pg_sleep(10)"
           : query.replaceAll("drizzle.__drizzle_migrations", `"${schema}".__drizzle_migrations`),
-        values as Parameters<Sql["unsafe"]>[1],
+        values as postgres.ParameterOrJSON<never>[],
         { prepare: true },
       );
       if (query.includes("set_config")) await afterSetup?.();

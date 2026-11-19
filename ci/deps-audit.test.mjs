@@ -21,10 +21,15 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   auditOneLockfile,
+  auditRetryDelaysMs,
+  auditTimeoutMs,
   evaluateAudit,
   isOutageTolerantEvent,
   RegistryTransportExhausted,
 } from "./deps-audit.mjs";
+
+const prodEntry = fileURLToPath(new URL("./deps-audit.mjs", import.meta.url));
+const selftestEntry = fileURLToPath(new URL("./deps-audit-selftest.mjs", import.meta.url));
 
 const fixture = (name) =>
   JSON.parse(readFileSync(new URL(`./fixtures/deps-audit/${name}.json`, import.meta.url), "utf8"));
@@ -36,6 +41,35 @@ const validException = () => {
   allowlist.exceptions[0].expires = "2026-10-01";
   return allowlist;
 };
+
+test("production audit defaults stay at a 120s bound and 5s/15s retries, frozen", () => {
+  assert.equal(auditTimeoutMs, 120_000);
+  assert.deepEqual(auditRetryDelaysMs, [5_000, 15_000]);
+  assert.throws(() => {
+    auditRetryDelaysMs[0] = 1;
+  }, TypeError);
+});
+
+test("production entry exposes no environment or argument seam for retry pacing", () => {
+  const source = readFileSync(prodEntry, "utf8");
+  const envReads = [...source.matchAll(/process\.env\.([A-Z_]+)/g)].map((match) => match[1]);
+  assert.deepEqual(
+    [...new Set(envReads)].sort(),
+    ["GITHUB_EVENT_NAME", "NODE_OPTIONS", "PAPERCLIP_RUN_SCRATCH_DIR", "PAPERCLIP_SCRATCH_DIR"],
+    "the production CLI must not read any variable that could alter retry pacing",
+  );
+  assert.deepEqual(
+    [...source.matchAll(/process\.argv\[(.+?)\]/g)].map((match) => match[1]),
+    ["1", "1"],
+    "the production CLI must ignore extra arguments",
+  );
+  assert.equal(
+    (source.match(/\brunAudit\(/g) ?? []).length,
+    2,
+    "runAudit is declared once and called once",
+  );
+  assert.match(source, /\n\s+runAudit\(\);\n/, "the production CLI must call runAudit() bare");
+});
 
 test("clean fixture passes", () => {
   assert.deepEqual(evaluate(fixture("clean")), { blocked: [], allowed: [], nonBlocking: [] });
@@ -389,6 +423,10 @@ async function withRegistry(run) {
     mkdirSync(join(dir, "ci"));
     copyFileSync(new URL("./deps-audit.mjs", import.meta.url), join(dir, "ci/deps-audit.mjs"));
     copyFileSync(
+      new URL("./deps-audit-selftest.mjs", import.meta.url),
+      join(dir, "ci/deps-audit-selftest.mjs"),
+    );
+    copyFileSync(
       new URL("./deps-audit-registry.cjs", import.meta.url),
       join(dir, "ci/deps-audit-registry.cjs"),
     );
@@ -450,8 +488,9 @@ async function withRegistry(run) {
       const child = spawn(command, args, {
         cwd: dir,
         env: { ...env, ...overrides },
-        // Transport cases exhaust 3 gate attempts per lockfile (5s+15s backoff
-        // each); fast cases are unaffected by the headroom.
+        // gate() runs the production entry: transport cases exhaust 3 attempts
+        // per lockfile with the 5s+15s backoff. gateFast() runs the selftest
+        // entry (same policy code, 50ms/150ms backoff) for exhaustion cases.
         timeout: 120_000,
       });
       let stdout = "",
@@ -472,6 +511,8 @@ async function withRegistry(run) {
       setAllowlist: (allowlist) =>
         writeFileSync(join(dir, "ci/deps-audit-allowlist.json"), JSON.stringify(allowlist)),
       gate: (overrides) => execute(process.execPath, [join(dir, "ci/deps-audit.mjs")], overrides),
+      gateFast: (overrides) =>
+        execute(process.execPath, [join(dir, "ci/deps-audit-selftest.mjs")], overrides),
       // Real npm and preload; only the exported timeout/backoff seams are shortened.
       oneAudit: (timeoutMs = 10_000) =>
         execute(
@@ -734,13 +775,14 @@ test("real npm missing advisory severity cannot inherit an exact high exception"
 });
 
 test("real npm validates chunked/compressed registry data and rejects unchecked responses", {
-  // The 503 case now exhausts 3 gate attempts per lockfile (5s+15s backoff each)
-  // before failing closed; withRegistry explicitly unsets GITHUB_EVENT_NAME so
-  // bare gate() calls never inherit a CI runner's outage-tolerant event.
-  // Truncated may also exhaust if npm reports it as a transport error.
-  timeout: 240_000,
+  // Exhaustion cases run through the selftest entry (same gate code, short
+  // backoff): 503 and possibly the truncated case retry 3 attempts per
+  // lockfile before failing closed; withRegistry explicitly unsets
+  // GITHUB_EVENT_NAME so bare gate() calls never inherit a CI runner's
+  // outage-tolerant event. Fast cases still use the production entry.
+  timeout: 120_000,
 }, async () => {
-  await withRegistry(async ({ advisory, gate }) => {
+  await withRegistry(async ({ advisory, gate, gateFast }) => {
     for (const encoding of ["gzip", "x-gzip", "deflate", "x-deflate", "br"]) {
       advisory.encoding = encoding;
       advisory.response = {};
@@ -763,7 +805,7 @@ test("real npm validates chunked/compressed registry data and rejects unchecked 
       { raw: "not JSON" },
     ]) {
       Object.assign(advisory, options);
-      const result = await gate({ npm_config_fetch_retries: "0" });
+      const result = await gateFast({ npm_config_fetch_retries: "0" });
       assert.equal(result.status, 1, `${JSON.stringify(options)}: ${result.stdout}`);
       for (const key of Object.keys(options)) delete advisory[key];
     }
@@ -813,7 +855,6 @@ exit "$AUDIT_STATUS"
       [JSON.stringify(malformedCounters), 0, 1],
       ["not json", 0, 1],
       [JSON.stringify({ error: { code: "E401" } }), 1, 1],
-      [JSON.stringify(fixture("clean")), 2, 1],
       ...[
         "",
         "not JSON",
@@ -847,6 +888,34 @@ exit "$AUDIT_STATUS"
         "owned cache must be removed on success and failure",
       );
     }
+    // A crash exit (npm status 2) is not registry transport evidence: it
+    // retries all 3 attempts and fails closed. Run it through the selftest
+    // entry so the production 5s/15s backoff does not stall the suite; the
+    // production entry still retries (see the env/argv seam tests below).
+    const before = readFileSync(trace, "utf8").trim().split("\n").length;
+    const exhausted = spawnSync(process.execPath, [selftestEntry], {
+      env: {
+        ...process.env,
+        PATH: dir,
+        PAPERCLIP_RUN_SCRATCH_DIR: dir,
+        AUDIT_CACHE_TRACE: trace,
+        AUDIT_FIXTURE: JSON.stringify(fixture("clean")),
+        AUDIT_STATUS: "2",
+        AUDIT_BOUNDARY: validated,
+      },
+      encoding: "utf8",
+    });
+    assert.equal(exhausted.status, 1, exhausted.stderr);
+    const caches = readFileSync(trace, "utf8").trim().split("\n");
+    // A non-transport exhaustion is not outage-eligible, so the run aborts
+    // after the first lockfile's 3 attempts and never reaches "web".
+    assert.equal(caches.length, before + 3, "3 attempts before a non-transport failure aborts");
+    assert.equal(
+      (exhausted.stderr.match(/retrying in/g) ?? []).length,
+      2,
+      "two retries before a non-transport exhaustion fails closed",
+    );
+    assert.doesNotMatch(exhausted.stderr, /retrying in (5000|15000)ms/);
     rmSync(npm);
     const missing = spawnSync(process.execPath, [script], {
       env: { ...process.env, PATH: dir, PAPERCLIP_RUN_SCRATCH_DIR: dir },
@@ -1282,9 +1351,58 @@ exit 0
       encoding: "utf8",
     });
     assert.equal(run.status, 0, run.stderr);
-    assert.match(run.stderr, /attempt 1 of 3 did not complete; retrying/);
+    assert.match(run.stderr, /attempt 1 of 3 did not complete; retrying in 5000ms/);
     // Root attempt 1 fails, root attempt 2 succeeds, web attempt 1 succeeds.
     assert.equal(readFileSync(count, "utf8"), "3");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("production CLI ignores environment and argument attempts to shorten retries", () => {
+  // Adversarial seam probe: the only short-backoff entry is the selftest file,
+  // and nothing the caller controls may select it. A crash first attempt must
+  // still retry after the production 5000ms delay even when plausible override
+  // variables are set or extra argv is supplied.
+  const dir = mkdtempSync(
+    join(
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
+      "deps-audit-seam-",
+    ),
+  );
+  try {
+    const npm = join(dir, "npm");
+    writeFileSync(
+      npm,
+      `#!/bin/sh
+printf '%s' "$AUDIT_FIXTURE"
+printf '%s' "$AUDIT_BOUNDARY" >&3
+exit "$AUDIT_STATUS"
+`,
+    );
+    chmodSync(npm, 0o700);
+    const run = spawnSync(
+      process.execPath,
+      [prodEntry, "--retry-delays-ms=0", "--selftest", "--fast"],
+      {
+        env: {
+          ...process.env,
+          PATH: dir,
+          PAPERCLIP_RUN_SCRATCH_DIR: dir,
+          DEPS_AUDIT_SELFTEST: "1",
+          DEPS_AUDIT_RETRY_DELAYS_MS: "0",
+          DEPS_AUDIT_RETRY_MS: "0",
+          DEPS_AUDIT_FAST: "1",
+          AUDIT_FIXTURE: JSON.stringify(fixture("clean")),
+          AUDIT_STATUS: "2",
+          AUDIT_BOUNDARY: validBoundary,
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(run.status, 1, run.stderr);
+    assert.match(run.stderr, /attempt 1 of 3 did not complete; retrying in 5000ms/);
+    assert.match(run.stderr, /attempt 2 of 3 did not complete; retrying in 15000ms/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1836,6 +1954,10 @@ async function withBlockedRegistry(run) {
     mkdirSync(join(dir, "ci"));
     copyFileSync(new URL("./deps-audit.mjs", import.meta.url), join(dir, "ci/deps-audit.mjs"));
     copyFileSync(
+      new URL("./deps-audit-selftest.mjs", import.meta.url),
+      join(dir, "ci/deps-audit-selftest.mjs"),
+    );
+    copyFileSync(
       new URL("./deps-audit-registry.cjs", import.meta.url),
       join(dir, "ci/deps-audit-registry.cjs"),
     );
@@ -1887,10 +2009,11 @@ async function withBlockedRegistry(run) {
     };
     delete env.npm_config_offline;
     delete env.NPM_CONFIG_OFFLINE;
+    // Selftest entry: same gate code (3 attempts, same classification, same
+    // output) but a millisecond backoff, so exhaustion stays fast.
     const gate = (overrides = {}) =>
       new Promise((resolve, reject) => {
-        // Two lockfiles x (3 fast attempts + 5s/15s backoff) take ~45s.
-        const child = spawn(process.execPath, [join(dir, "ci/deps-audit.mjs")], {
+        const child = spawn(process.execPath, [join(dir, "ci/deps-audit-selftest.mjs")], {
           cwd: dir,
           env: { ...env, ...overrides },
           timeout: 120_000,
@@ -1914,7 +2037,7 @@ async function withBlockedRegistry(run) {
 
 for (const event of ["pull_request", "merge_group"]) {
   test(`blocked registry warns with exit 0 on ${event} after 3 attempts per lockfile`, {
-    timeout: 150_000,
+    timeout: 60_000,
   }, async () => {
     await withBlockedRegistry(async ({ gate }) => {
       const result = await gate({ GITHUB_EVENT_NAME: event });
@@ -1933,13 +2056,17 @@ for (const event of ["pull_request", "merge_group"]) {
       assert.ok(!result.stdout.includes("http://"), "result JSON must be redacted");
       const retries = result.stderr.match(/retrying in/g) ?? [];
       assert.equal(retries.length, 4, "two retries per lockfile before exhaustion");
+      // Selftest backoff only: production delays must not appear here.
+      assert.equal((result.stderr.match(/retrying in 50ms/g) ?? []).length, 2);
+      assert.equal((result.stderr.match(/retrying in 150ms/g) ?? []).length, 2);
+      assert.doesNotMatch(result.stderr, /retrying in (5000|15000)ms/);
     });
   });
 }
 
 for (const event of ["push", "schedule"]) {
   test(`blocked registry fails closed on ${event} after 3 attempts per lockfile`, {
-    timeout: 150_000,
+    timeout: 60_000,
   }, async () => {
     await withBlockedRegistry(async ({ gate }) => {
       const result = await gate({ GITHUB_EVENT_NAME: event });
@@ -1954,12 +2081,15 @@ for (const event of ["push", "schedule"]) {
       }
       const retries = result.stderr.match(/retrying in/g) ?? [];
       assert.equal(retries.length, 4, "two retries per lockfile before exhaustion");
+      assert.equal((result.stderr.match(/retrying in 50ms/g) ?? []).length, 2);
+      assert.equal((result.stderr.match(/retrying in 150ms/g) ?? []).length, 2);
+      assert.doesNotMatch(result.stderr, /retrying in (5000|15000)ms/);
     });
   });
 }
 
 test("outage in one lockfile still blocks on an advisory in the other", {
-  timeout: 90_000,
+  timeout: 60_000,
 }, () => {
   const dir = mkdtempSync(
     join(
@@ -1970,6 +2100,10 @@ test("outage in one lockfile still blocks on an advisory in the other", {
   try {
     mkdirSync(join(dir, "ci"));
     copyFileSync(new URL("./deps-audit.mjs", import.meta.url), join(dir, "ci/deps-audit.mjs"));
+    copyFileSync(
+      new URL("./deps-audit-selftest.mjs", import.meta.url),
+      join(dir, "ci/deps-audit-selftest.mjs"),
+    );
     copyFileSync(
       new URL("./deps-audit-registry.cjs", import.meta.url),
       join(dir, "ci/deps-audit-registry.cjs"),
@@ -1989,7 +2123,7 @@ esac
 `,
     );
     chmodSync(npm, 0o700);
-    const run = spawnSync(process.execPath, [join(dir, "ci/deps-audit.mjs")], {
+    const run = spawnSync(process.execPath, [join(dir, "ci/deps-audit-selftest.mjs")], {
       env: {
         ...process.env,
         PATH: `${dir}:${process.env.PATH ?? ""}`,

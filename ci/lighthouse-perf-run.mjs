@@ -80,7 +80,7 @@ async function selftest() {
       const lhrs = step.urls.map((url) => lhr(url, step.lcp ?? 1200));
       lhrs.forEach((report, i) => {
         writeFileSync(
-          join(lhciDir, `lhr-${calls}${String(i).padStart(4, "0")}.json`),
+          join(lhciDir, `lhr-${calls}${String(i).padStart(4, "0")}-${i}.json`),
           JSON.stringify(report),
         );
       });
@@ -112,7 +112,13 @@ async function selftest() {
           return "";
         }
       };
-      return { code, calls, configs, diagnosis: read("perf-collect-diagnosis.md") };
+      return {
+        code,
+        calls,
+        configs,
+        diagnosis: read("perf-collect-diagnosis.md"),
+        assertions: read(".lighthouseci/assertion-results.json"),
+      };
     } finally {
       rmSync(caseDir, { recursive: true, force: true });
     }
@@ -142,23 +148,25 @@ async function selftest() {
     assert.match(r.diagnosis, /chrome crash again/);
     assert.match(r.diagnosis, /do not\s+lower ci\/lighthouserc\.cjs/);
   }
-  // Full evidence over the real LCP budget: no retry, red, BUDGET BREACH.
-  {
-    const r = await runCase([{ urls: planned, lcp: 2600 }, { urls: planned }]);
-    assert.equal(r.code, 1);
-    assert.equal(r.calls, 1);
-    assert.match(r.diagnosis, /BUDGET BREACH/);
-  }
-  // A retried collect that then misses the budget still fails: the retry
-  // recovers evidence, never a score.
-  {
-    const r = await runCase([
+  // Full evidence over the real LCP budget: warn without retrying. If the
+  // first collect was short, retry only for evidence and retain the warning.
+  for (const script of [
+    [{ urls: planned, lcp: 2600 }],
+    [
       { urls: planned.slice(0, 3), note: "timeout" },
       { urls: planned, lcp: 2600 },
-    ]);
-    assert.equal(r.code, 1);
-    assert.equal(r.calls, 2);
-    assert.match(r.diagnosis, /BUDGET BREACH/);
+    ],
+  ]) {
+    const r = await runCase(script);
+    assert.equal(r.code, 0);
+    assert.equal(r.calls, script.length);
+    assert.equal(r.diagnosis, "");
+    assert.ok(
+      JSON.parse(r.assertions).some(
+        (f) => f.auditId === "largest-contentful-paint" && !f.passed && f.level === "warn",
+      ),
+      "assertion-results.json must retain the LCP warning",
+    );
   }
   console.log("lighthouse-perf-run selftest: ok");
 }

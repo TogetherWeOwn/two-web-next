@@ -6,12 +6,19 @@ import { fileURLToPath } from "node:url";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetAnonEventCacheForTests } from "../../src/events/anon-cache";
-import { PAST_EVENTS_COPY, PAST_EVENTS_OUT_OF_RANGE_TESTID } from "../../src/islands/contracts";
+import type { PublicEvent } from "../../src/events/reads";
+import {
+  PAST_EVENTS_COPY,
+  PAST_EVENTS_OUT_OF_RANGE_TESTID,
+  PAST_EVENTS_PAGE_SIZE,
+  PAST_EVENTS_UNREADABLE_TESTID,
+} from "../../src/islands/contracts";
 import {
   ARCHIVE_NOW,
   ARCHIVE_ORIGIN,
   ARCHIVE_QUERY,
   archiveReadFixture,
+  archiveRow,
   archiveTwins,
   compileArchiveKit,
   firstMatchKeys,
@@ -70,8 +77,10 @@ export function registerPastArchiveBrowserAcceptance(getBrowser: () => Browser):
       width: number,
       javaScriptEnabled: boolean,
       path: string,
+      rows?: PublicEvent[],
     ) {
       const source = archiveReadFixture();
+      if (rows) source.replaceRows(rows);
       const requests: { url: string; resource: string }[] = [];
       context = await getBrowser().newContext({
         javaScriptEnabled,
@@ -155,6 +164,34 @@ export function registerPastArchiveBrowserAcceptance(getBrowser: () => Browser):
           const pasted = await context!.newPage();
           await pasted.goto(copied);
           expect(await keysOnPage(pasted)).toEqual(lastMatchKeys);
+        });
+
+        it(`${label}: fragment turns show and clear an unreadable result page`, async () => {
+          const rows = Array.from({ length: PAST_EVENTS_PAGE_SIZE * 2 + 1 }, (_, index) => {
+            const id = PAST_EVENTS_PAGE_SIZE * 2 + 1 - index;
+            const unreadable = index >= PAST_EVENTS_PAGE_SIZE && id > 1;
+            return archiveRow(id, unreadable ? { endsAt: new Date(Number.NaN) } : {});
+          });
+          const expectedNewer = rows.slice(0, PAST_EVENTS_PAGE_SIZE).map((row) => row.eventKey);
+          const { page, requests } = await open(twin, width, true, queryPath(), rows);
+          const unreadable = page.getByTestId(PAST_EVENTS_UNREADABLE_TESTID);
+          expect(await keysOnPage(page)).toEqual(expectedNewer);
+          await page.evaluate("window.__archiveAcceptance = 'same document'");
+
+          const pager = page.getByRole("navigation", { name: "Past event pages" });
+          await pager.getByRole("link", { name: "Older" }).click();
+          await unreadable.waitFor();
+          expect(await keysOnPage(page)).toEqual([]);
+          expect(await page.locator("[data-archive-list]").isHidden()).toBe(true);
+          expect(await pager.textContent()).toContain("Page 2 of 3");
+          expect(new URL(page.url()).searchParams.get("q")).toBe(ARCHIVE_QUERY);
+
+          await pager.getByRole("link", { name: "Newer" }).click();
+          await unreadable.waitFor({ state: "detached" });
+          expect(await keysOnPage(page)).toEqual(expectedNewer);
+          expect(await page.locator("[data-archive-list]").isVisible()).toBe(true);
+          expect(await page.evaluate("window.__archiveAcceptance")).toBe("same document");
+          expect(requests.filter((request) => request.resource === "fetch")).toHaveLength(2);
         });
 
         it(`${label}: native no-JS paging reaches every match and intentional clear restores the archive`, async () => {

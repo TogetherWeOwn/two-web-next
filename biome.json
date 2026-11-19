@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.6.2/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.7/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -80,6 +80,10 @@
       "includes": ["vendor/design-kit/**"],
       "formatter": { "enabled": false },
       "linter": { "enabled": false }
+    },
+    {
+      "includes": ["test/fixtures/bot-site-contract-v2.json"],
+      "formatter": { "enabled": false }
     },
     {
       "includes": [

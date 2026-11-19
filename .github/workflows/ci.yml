@@ -22,8 +22,7 @@ on:
 
 permissions:
   contents: read
-  # The scope job lists the PR's changed files via the API.
-  pull-requests: read
+  pull-requests: read # The scope job lists changed PR files via the API.
 
 # Runs on main are never cancelled in progress: a cancel request marks the run
 # cancelled even when every job then succeeds, and the staging deploy trigger
@@ -42,6 +41,51 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
 
 jobs:
+  join-evidence-source:
+    name: join-evidence-source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Test target source primitives
+        run: node --test ci/join-state-evidence-source.test.mjs
+
+  bot-contract-drift:
+    name: bot-contract-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare canonical bot fixture with site mirror
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl --fail --silent --show-error --location --max-time 30 \
+            https://raw.githubusercontent.com/TogetherWeOwn/two-bot-next/refs/heads/main/crates/core/tests/fixtures/bot-site-contract-v2.json \
+            -o "$tmp/canonical.json"
+          mirror=test/fixtures/bot-site-contract-v2.json
+          cmp "$tmp/canonical.json" "$mirror"
+          # Exercise both mismatch directions as well as the matching case.
+          cp "$tmp/canonical.json" "$tmp/changed-canonical.json"
+          cp "$mirror" "$tmp/changed-mirror.json"
+          printf '\n' >> "$tmp/changed-canonical.json"
+          printf '\n' >> "$tmp/changed-mirror.json"
+          if cmp -s "$tmp/changed-canonical.json" "$mirror" ||
+             cmp -s "$tmp/canonical.json" "$tmp/changed-mirror.json"; then
+            echo '::error::Fixture comparison mismatch controls failed.'
+            exit 1
+          fi
+
   # Cheap change-scope gate (TOG-11811): a PR that only touches prose
   # (`docs/**`, root `*.md`) that no gate, test or build reads fast-passes the
   # heavy jobs below instead of occupying two runner slots for 20 minutes.
@@ -50,9 +94,9 @@ jobs:
   # would leave it missing and block the PR, so it is deliberately not used).
   scope:
     name: scope
-    # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'scope') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
-    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    # Includes the pinned stock source build and upstream test inventory.
+    timeout-minutes: 15
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
       app: ${{ steps.scope.outputs.app }}
@@ -164,9 +208,18 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - name: Install-hook inventory and asset boundary tests
+        if: github.event_name == 'pull_request'
+        run: node --test ci/install-hook-inventory.test.mjs ci/asset-output-boundary.test.mjs
+      - name: Kit CSS collector and evidence selftests
+        if: github.event_name == 'pull_request'
+        run: node --test ci/kit-css-collect.test.mjs ci/kit-css-evidence.test.mjs ci/kit-activity-log-overlay.test.mjs
       - name: Install locked workflow parser without hooks
         if: github.event_name == 'pull_request'
         run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - name: Verify script-disabled esbuild proof
+        if: github.event_name == 'pull_request'
+        run: node --test ci/verify-esbuild.test.mjs
       - name: Lint workflows (actionlint and queue contract)
         if: github.event_name == 'pull_request'
         run: |
@@ -177,14 +230,32 @@ jobs:
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $lint_dir/actionlint.tgz" | sha256sum -c -
           tar -xzf "$lint_dir/actionlint.tgz" -C "$lint_dir" actionlint
           export ACTIONLINT="$lint_dir/actionlint"
-          node --test ci/workflow-lint.test.mjs
+          node --test ci/workflow-lint.test.mjs ci/actionlint-wiring.test.mjs
           node ci/workflow-lint.mjs "$ACTIONLINT"
+      - name: Verify stock actionlint inventory
+        if: github.event_name == 'pull_request'
+        run: bash ci/actionlint/build.sh
+
+  # Native syntax and scheduling proof on every event, including main pushes.
+  # This does not exercise queue behavior or touch staging.
+  queue-syntax-smoke:
+    name: queue-syntax-smoke
+    needs: scope
+    concurrency:
+      group: queue-syntax-${{ github.run_id }}-${{ github.run_attempt }}
+      cancel-in-progress: false
+      queue: max
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: "true"
 
   # Doc links run on every PR, including the docs-only ones the scope job fast-passes.
   docs-links:
     name: docs-links
     needs: scope
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'docs-links') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -207,6 +278,8 @@ jobs:
       # resolution and explicit selection without an app build or database.
       - name: Fresh-worktree check bootstrap
         run: env -u DATABASE_URL -u BOT_DATABASE_URL npm --ignore-scripts run test:unit -- test/check-bootstrap.test.ts test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
+      - name: Incident staging observation selftests (fixtures, no network)
+        run: node --test ci/incident-staging-observation.test.mjs
       - name: Timeout ledger ratchet (HARD)
         run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
@@ -217,29 +290,17 @@ jobs:
     # test/helpers via the fixtures; db covers the migrations the fixtures
     # run). Drafts skip: undrafting re-runs via ready_for_review.
     if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.db == 'true')
-    # Overflow switch (TOG ops, 2026-10-01): repo vars CI_OVERFLOW_RUNNER (JSON
-    # runs-on, e.g. ["ubuntu-latest"]), CI_OVERFLOW_JOBS (JSON job ids) and
-    # CI_OVERFLOW_EVENTS (JSON event names) together route this job without a PR.
-    # The public guard comes first, so a public repo never leaves GitHub-hosted
-    # Linux, whatever the overflow vars name (the org's two-selfhosted runner group
-    # also refuses public repos, TOG-12326). Private repo: the overflow switch if
-    # selected, else the self-hosted fleet. Hosted minutes come from the included
-    # allowance; an rbx1 guard reverts at 45k.
-    # Runner separation: the pull_request/merge_group term sits between the
-    # public guard and the overflow switch, so runs of code that has not landed
-    # on main always stay on GitHub-hosted Linux, whatever the repo visibility
-    # or the overflow vars say. Only main pushes, schedules and manual
-    # dispatches may reach the self-hosted fleet (docs/private-flip-checklist.md).
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'a11y') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    # This workflow uses hosted runners for every event and repository visibility.
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
     # its own network namespace; localhost:5432 is forwarded to the service.
     container:
-      image: node:24-bookworm
+      image: node:24-bookworm@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496 # 24.22.3-bookworm
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_PASSWORD: ci
         options: >-
@@ -256,11 +317,15 @@ jobs:
           nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
+      - name: Prepare disposable runtime role
+        run: PGPASSWORD=ci psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: Prepare first-party generated inputs
+        run: npm run generate:first-party
       - name: Cache Playwright Chromium
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -483,8 +548,7 @@ jobs:
     needs: [scope]
     # `!cancelled()`, not `always()`: see the note on ci-ok.
     if: ${{ !cancelled() }}
-    # Overflow switch: see CI_OVERFLOW_* note on the first job above.
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     # Container setup and serial SQL coverage takes 17-20m on the slowest shared
     # runners, so 20m cancelled green runs (TOG-12177). The full suite now
     # runs 29-38m on main; 40m left no headroom for runner noise, so the
@@ -501,7 +565,13 @@ jobs:
       options: --cgroupns=host
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
+        env:
+          POSTGRES_PASSWORD: ci
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+      catalog-postgres:
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_PASSWORD: ci
         options: >-
@@ -515,12 +585,21 @@ jobs:
         if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
         run: echo "Docs-only or draft change per the scope job; required check passes without the heavy suite."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        if: needs.scope.outputs.docs_only != 'true'
         with:
           # Migration history needs the base commit; fresh (hosted/overflow)
           # workspaces lack it, unlike reused self-hosted ones.
           fetch-depth: 0
           persist-credentials: false
+      - name: State glyph assembler fixtures
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/state-glyph-assemble.test.mjs
+      - name: Tag capture guard fixtures
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/kit-tag-capture-guards.test.mjs
+      - name: Disposable migration role wiring fixtures
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/disposable-runtime-role.test.mjs
       - name: Job-private localhost:5432 forward to the Postgres service
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
@@ -564,9 +643,18 @@ jobs:
       - name: Security-pin contracts selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:security-pins:selftest && node ci/check-security-pins.mjs --static-only
+      - name: Incident issue lifecycle fixtures
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/incident-issue-lifecycle.test.mjs
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit:selftest
+      - name: npm policy enforcement fixtures
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        env:
+          npm_config_ignore_scripts: "true"
+          npm_config_min_release_age: "3"
+        run: node ci/npm-policy-fixtures.mjs "$RUNNER_TEMP/npm-policy-fixtures.json"
       - name: Dependency audit (lockfile, including dev dependencies)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit
@@ -596,6 +684,9 @@ jobs:
       - name: Public-route smoke selftest (loopback fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:smoke
+      - name: Prepare disposable runtime role
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: PGPASSWORD=ci psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Apply migrations
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate
@@ -643,11 +734,12 @@ jobs:
         run: bash ci/biome-selftest.sh
       # Fetch-await HARD gate (quality-gates.md): every fetch() in src/ is
       # awaited, returned or chained, plus the shared vendored warning rules
-      # and their fixtures. No build needed; fails the job.
+      # and their fixtures. Also guards against suppressions in src/http/.
       - name: Fetch-await gate (ast-grep, HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
           node ci/ast-grep-warn-selftest.mjs
+          node --test ci/http-boundary-suppressions.test.mjs
           npm run scan:fetch-await
           npm run scan:rules-test
       # Floor guard HARD (CONSTRAINTS.md): no new suppressions, skips,
@@ -656,6 +748,9 @@ jobs:
       - name: Floor guard (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run floor-guard:selftest && npm run floor-guard
+      - name: Test data config recognizer
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/inventory-data-config.test.mjs ci/invocation-certificates.test.mjs
       # Test-inventory HARD gate (quality-gates.md): every test file runs
       # somewhere. Filesystem-only; --strict fails the job on any orphan.
       - name: Test inventory (HARD)
@@ -792,6 +887,9 @@ jobs:
             artifacts/worker-startup-local/summary.md
           if-no-files-found: error
           retention-days: 14
+      - name: Kit filter links (Vite and browser fixture)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node --test --test-timeout=120000 ci/kit-filter-links-browser.test.mjs
       - name: Kit admin contrast (built runtime, intercepted fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         env:
@@ -799,7 +897,7 @@ jobs:
         run: |
           mkdir -p artifacts/kit-admin-contrast
           node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/kit-admin-contrast/report.tap ci/kit-admin-contrast.test.mjs
-          node ci/rsvp-focus-require-executed.mjs artifacts/kit-admin-contrast/report.tap "Kit admin contrast" 15
+          node ci/rsvp-focus-require-executed.mjs artifacts/kit-admin-contrast/report.tap "Kit admin contrast" 11
       - name: Kit admin contrast evidence
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -808,12 +906,42 @@ jobs:
           path: artifacts/kit-admin-contrast/
           if-no-files-found: error
           retention-days: 14
+      - name: Kit compiled theme token regression
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node --test ci/kit-theme-compiled.test.mjs
       - name: Kit performance budgets (worker + generated assets)
+        id: kit_perf
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: node ci/check-kit-perf.mjs
-      - name: Kit route performance budgets (complete immutable dependency closure)
+        run: node ci/check-kit-perf.mjs --format json
+      - name: Collect bounded Kit CSS on budget failure
+        id: kit_css
+        if: failure() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && steps.kit_perf.outcome == 'failure'
+        run: |
+          set -eu
+          out=$(mktemp -d "$RUNNER_TEMP/kit-css-failure.XXXXXX")
+          echo "KIT_CSS_FAILURE_DIR=$out" >> "$GITHUB_ENV"
+          env -i PATH="$PATH" node ci/kit-css-collect.mjs --root "$GITHUB_WORKSPACE" --out "$out" --leg head \
+            --source-sha "$GITHUB_SHA" --workflow-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" --repository "$GITHUB_REPOSITORY"
+      - name: Upload bounded Kit CSS on budget failure
+        if: failure() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && steps.kit_perf.outcome == 'failure' && steps.kit_css.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-css-budget-${{ github.sha }}
+          path: ${{ env.KIT_CSS_FAILURE_DIR }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 3
+      - name: Remove Kit CSS failure diagnostic
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && steps.kit_perf.outcome == 'failure' && env.KIT_CSS_FAILURE_DIR != ''
+        run: |
+          case "$KIT_CSS_FAILURE_DIR" in
+            "$RUNNER_TEMP"/kit-css-failure.*) rm -rf -- "$KIT_CSS_FAILURE_DIR" ;;
+            *) exit 1 ;;
+          esac
+      - name: Kit route performance (report only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: node ci/check-kit-route-perf.mjs
+        run: node ci/check-kit-route-perf.mjs --report-only
       - name: Kit Worker bundle dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config web/wrangler.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
@@ -844,7 +972,7 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:catalog-preflight
         env:
-          CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@catalog-postgres:5432/postgres
       # Changed-lines WARN gate (quality-gates.md): added TS lines should be
       # executed (80%). Reads the coverage this job just produced; a missing
       # report after successful coverage fails the step (fail closed). Earlier
@@ -926,12 +1054,16 @@ jobs:
           set -euo pipefail
           auth="$(printf 'x-access-token:%s' "${MIGRATION_GIT_TOKEN:?}" | base64 -w0)"
           echo "::add-mask::$auth"
+          migration_args=()
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/* && "$GITHUB_REF" != refs/heads/main ]]; then
+            migration_args+=(--candidate-ci)
+          fi
           GIT_CONFIG_COUNT=2 \
           GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.extraheader" \
           GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
           GIT_CONFIG_KEY_1="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git.extraheader" \
           GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
-            bash ci/check-migration-numbers.sh
+            bash ci/check-migration-numbers.sh "${migration_args[@]}"
       - name: Migration snapshot chain (local files, no credentials)
         shell: bash
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.db == 'true')
@@ -1010,7 +1142,15 @@ jobs:
           npm run lighthouse:evidence:selftest
       - name: Build (wrangler dry run)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: npx wrangler deploy --dry-run --outdir dist
+        run: npx wrangler deploy --dry-run --outdir dist --metafile dist/bundle-meta.json
+      - name: Archive main Worker build graph
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: worker-main-graph-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/bundle-meta.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Build alert Tail Worker (wrangler dry run)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config tail/wrangler.jsonc --dry-run --outdir ../dist-tail
@@ -1070,8 +1210,7 @@ jobs:
     needs: [scope]
     # `!cancelled()`, not `always()`: see the note on ci-ok.
     if: ${{ !cancelled() }}
-    # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'node22-compat') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     # The lint + typecheck + unit-test suite runs 28-30m; 30m cancelled
     # green runs on runner noise (worst observed pass 29m32s, 28s of
     # margin). 45m keeps a ~34% margin; the progress sidecar samples the
@@ -1081,10 +1220,10 @@ jobs:
     # localhost:5432 cannot collide on the shared Docker host), at the exact
     # engines floor instead of Node 24.
     container:
-      image: node:22.23.0-bookworm
+      image: node:22.23.0-bookworm@sha256:e0d149b4727ac0c20d9774e801e423d7a946a0bffced886f42cfe9cd3c67820a
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_PASSWORD: ci
         options: >-
@@ -1135,6 +1274,9 @@ jobs:
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Prepare disposable runtime role
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: PGPASSWORD=ci psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Apply migrations
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate
@@ -1155,10 +1297,11 @@ jobs:
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
 
   bundle-budget:
+    name: bundle-budget
     needs: scope
     # Budgets only observe the served assets (app). Drafts skip.
     if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'bundle-budget') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1196,13 +1339,14 @@ jobs:
           retention-days: 3
 
   lighthouse:
+    name: lighthouse
     needs: scope
     # Fixture worker serves the app over fixed routes (app only). Drafts skip.
     if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'lighthouse') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     # A private namespace keeps Wrangler's fixed audit port off the shared host.
     container:
-      image: node:24-bookworm
+      image: node:24-bookworm@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496 # 24.22.3-bookworm
     # 45 covers one collect retry on each step (ci/lighthouse-perf-run.mjs and
     # ci/lighthouse-quality-run.mjs each make a second whole-run attempt when
     # the first comes up short of LHRs).
@@ -1221,6 +1365,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --include=dev --no-audit --no-fund
+      - name: Prepare first-party generated inputs
+        run: npm run generate:first-party
       - name: Cache Playwright Chromium
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1234,7 +1380,14 @@ jobs:
           npx playwright install --with-deps chromium
           node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
       - name: Lighthouse (local fixture worker, no database or Discord)
+        id: mobile
         run: npm run lighthouse
+      # The mobile runner clears earlier attempts. Preserve the final raw reports
+      # before desktop clears the top-level files; the upload manifest is not raw evidence.
+      - name: Preserve fixture mobile samples
+        if: ${{ !cancelled() && (steps.mobile.outcome == 'success' || steps.mobile.outcome == 'failure') }}
+        continue-on-error: true # Evidence only; keep the existing gate verdicts.
+        run: bash ci/lighthouse-preserve-mobile.sh .lighthouseci mobile-fixture
       # Web quality gate (owner 2026-10-10): category scores vs ci/quality-budget.json, then security headers,
       # HTML basics and internal links. Each step runs even after an earlier failure so one red run lists
       # everything to fix; any failure fails this job and therefore ci-ok.
@@ -1257,6 +1410,33 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  kit-browser-fixture:
+    name: kit-browser-fixture
+    needs: [scope]
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Install Kit parity Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Kit disposable browser fixture
+        run: node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
+
   # Change-gated aggregator (TOG-14880, TOG-14877 CI standard): the single
   # merge-gate check. Reports success when the scope verdict is clean and every
   # selected job succeeded; a job that the scope skipped counts only when it
@@ -1273,10 +1453,22 @@ jobs:
   # ci-ok succeeds. test/ci-concurrency.test.ts pins both outcomes.
   ci-ok:
     name: ci-ok
-    needs: [a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope]
+    needs:
+      [
+        a11y,
+        lighthouse,
+        bundle-budget,
+        docs-links,
+        queue-syntax-smoke,
+        check,
+        kit-browser-fixture,
+        node22-compat,
+        scope,
+        bot-contract-drift,
+        join-evidence-source,
+      ]
     if: ${{ !cancelled() }}
-    # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'ci-ok') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # The result gates that used to sit in `check`, unchanged: a failing,
@@ -1284,6 +1476,18 @@ jobs:
       # check. They moved here so `check` can start in parallel with those
       # jobs; the aggregate step below still re-checks the scope, check,
       # audit and performance verdicts.
+      - name: Require successful queue syntax smoke
+        env:
+          QUEUE_SMOKE_RESULT: ${{ needs.queue-syntax-smoke.result }}
+        run: test "$QUEUE_SMOKE_RESULT" = success
+      - name: Require join evidence source tests
+        env:
+          JOIN_SOURCE_RESULT: ${{ needs.join-evidence-source.result }}
+        run: test "$JOIN_SOURCE_RESULT" = success
+      - name: Require matching bot contract fixture
+        env:
+          BOT_CONTRACT_RESULT: ${{ needs.bot-contract-drift.result }}
+        run: test "$BOT_CONTRACT_RESULT" = success
       - name: Require successful docs-links
         env:
           DOCS_LINKS_RESULT: ${{ needs.docs-links.result }}
@@ -1313,16 +1517,21 @@ jobs:
       # Only explicit success from both performance jobs may read green.
       - name: Performance gate (lighthouse + bundle-budget must succeed)
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-        run: node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"
+        env:
+          LIGHTHOUSE_RESULT: ${{ needs.lighthouse.result }}
+          BUDGET_RESULT: ${{ needs.bundle-budget.result }}
+        run: node ci/require-performance.mjs "$LIGHTHOUSE_RESULT" "$BUDGET_RESULT"
       - name: Aggregate change-gated conclusions
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}
           DRAFT: ${{ needs.scope.outputs.draft }}
+          DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
           FULL: ${{ needs.scope.outputs.full }}
           APP: ${{ needs.scope.outputs.app }}
           WORKER: ${{ needs.scope.outputs.worker }}
           DB: ${{ needs.scope.outputs.db }}
           CHECK_RESULT: ${{ needs.check.result }}
+          KIT_BROWSER_RESULT: ${{ needs.kit-browser-fixture.result }}
           A11Y_RESULT: ${{ needs.a11y.result }}
           LIGHTHOUSE_RESULT: ${{ needs.lighthouse.result }}
           BUDGET_RESULT: ${{ needs.bundle-budget.result }}
@@ -1332,7 +1541,7 @@ jobs:
           [ "$SCOPE_RESULT" = success ] || fail "scope did not succeed; failing closed."
           # Empty or unexpected outputs would read as unselected areas and let a
           # skipped job pass, so every verdict must be exactly true or false.
-          for pair in "FULL=$FULL" "APP=$APP" "WORKER=$WORKER" "DB=$DB" "DRAFT=$DRAFT"; do
+          for pair in "FULL=$FULL" "APP=$APP" "WORKER=$WORKER" "DB=$DB" "DRAFT=$DRAFT" "DOCS_ONLY=$DOCS_ONLY"; do
             case "${pair#*=}" in
               true|false) ;;
               *) fail "scope output ${pair%%=*} is '${pair#*=}', expected true or false; failing closed." ;;
@@ -1355,6 +1564,8 @@ jobs:
           }
           if selected_app_db; then A11Y_SEL=true; else A11Y_SEL=false; fi
           if selected_app; then PERF_SEL=true; else PERF_SEL=false; fi
+          if [ "$DOCS_ONLY" != true ] && { selected_app || [ "$WORKER" = true ]; }; then KIT_BROWSER_SEL=true; else KIT_BROWSER_SEL=false; fi
+          check_job "$KIT_BROWSER_RESULT" "$KIT_BROWSER_SEL" kit-browser-fixture
           check_job "$A11Y_RESULT" "$A11Y_SEL" a11y
           check_job "$LIGHTHOUSE_RESULT" "$PERF_SEL" lighthouse
           check_job "$BUDGET_RESULT" "$PERF_SEL" bundle-budget

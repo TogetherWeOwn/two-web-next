@@ -33,9 +33,12 @@ test("local startup measurement is hard-wired after selftests and before Kit run
   assert(selftests.run.includes("ci/check-worker-startup.test.mjs"));
   assert(selftests.run.includes("ci/worker-startup-ci-wiring.test.mjs"));
   assert(steps.indexOf(selftests) < steps.indexOf(diagnostic));
-  assert(
-    steps.indexOf(diagnostic) < steps.findIndex((s) => s.run === "node ci/check-kit-perf.mjs"),
+  const kitBudget = steps.find(
+    (s) => s.name === "Kit performance budgets (worker + generated assets)",
   );
+  assert(kitBudget);
+  assert.equal(kitBudget.run, "node ci/check-kit-perf.mjs --format json");
+  assert(steps.indexOf(diagnostic) < steps.indexOf(kitBudget));
   assert(diagnostic.if.includes("needs.scope.outputs.worker == 'true'"));
   assert(diagnostic.if.includes("needs.scope.outputs.draft != 'true'"));
 });

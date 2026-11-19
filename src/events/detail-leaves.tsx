@@ -43,6 +43,7 @@ export interface DetailLeavesModel
   extends DetailMetadataModel,
     DetailRosterModel,
     DetailShareModel {
+  isOngoing?: boolean;
   rsvpOpen: boolean;
   rsvpClosed: RsvpClosedReason | null;
   answer: ViewerRsvp | null;
@@ -138,7 +139,10 @@ export const EventMetadata: FC<{
   showTimeFromNow: boolean;
   showSpotsLeft: boolean;
   retainEmptyInstants?: boolean;
-}> = ({ model, showTimeFromNow, showSpotsLeft, retainEmptyInstants = false }) => (
+  /** Kit-only: the C6 facts list owns the host row (and its event-organizer
+   * hook), so the metadata list skips it. Hono never sets this. */
+  omitHost?: boolean;
+}> = ({ model, showTimeFromNow, showSpotsLeft, retainEmptyInstants = false, omitHost = false }) => (
   <dl class="event-meta" aria-label="Event details">
     <div>
       <dt>Starts</dt>
@@ -213,7 +217,7 @@ export const EventMetadata: FC<{
         )}
       </dd>
     </div>
-    {model.organizerName ? (
+    {model.organizerName && !omitHost ? (
       <div>
         <dt>Hosted by</dt>
         <dd>
@@ -367,8 +371,9 @@ export function withEventDetailHtml<T extends DetailLeavesModel>(
       metadata: (
         <EventMetadata
           model={model}
-          showTimeFromNow={model.status !== "draft"}
+          showTimeFromNow={model.status !== "draft" && !model.isOngoing}
           retainEmptyInstants
+          omitHost={Boolean(model.organizerName?.trim())}
           showSpotsLeft={
             model.status !== "past" && model.status !== "cancelled" && model.rsvpClosed !== "past"
           }

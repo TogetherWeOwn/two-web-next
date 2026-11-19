@@ -76,7 +76,7 @@ describe("Kit GET /join response policy", () => {
     expect(deleted).toEqual([]);
   });
 
-  it("keeps a presence snapshot on the shared 60-second TTL", async () => {
+  it("does not store a presence snapshot response", async () => {
     const snapshot = {
       guildId: "326474832151838730",
       name: "Together We Own",
@@ -93,7 +93,7 @@ describe("Kit GET /join response policy", () => {
 
     await expect(journey).resolves.toEqual({ joinResult: null });
     expect(headers).toEqual({
-      "cache-control": "public, max-age=60",
+      "cache-control": "no-store",
       vary: "Cookie",
     });
     expect(deleted).toEqual([]);

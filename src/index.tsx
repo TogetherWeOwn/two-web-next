@@ -61,6 +61,7 @@ import { trustHosts } from "./trust-hosts";
 import { authStatusScript, enableAuthStatus } from "./auth-status";
 import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
+import { withStreamedBody } from "./html-stream";
 import { webmcpPilot } from "./webmcp-pilot";
 
 export { faqLastReviewed } from "./faq-last-reviewed";
@@ -72,6 +73,21 @@ export { rulesLastUpdated } from "./rules-last-updated";
 export const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Wire encoding, outermost (TWO-7591): staged edge probes showed every HTML
+// response leaving with a fixed Content-Length plus `cache-control:
+// no-transform`, the platform's untransformable-body marker, so Lighthouse
+// saw raw HTML while CSS/JSON compressed. Streaming the final response body
+// drops the declared length so the edge applies its own br/gzip negotiation.
+// Registered before requestLog so its post-next wrap sees the fully settled
+// response; Hono's header-merge copy preserves the streamed body and the
+// automatic encodeBody default. Same seam serves the Kit worker's Hono
+// fallback via honoFetch; Kit-resolved pages stream in route-ownership's
+// decorateKitResponse so hooks.server.ts stays a pure env binding.
+app.use("*", async (c, next) => {
+  await next();
+  c.res = withStreamedBody(c.res);
+});
 
 // The violation sink (TOG-10107): the CSP report-to directive selects the
 // Reporting-Endpoints group. No report-uri: it is deprecated (ZAP 10055
@@ -640,16 +656,16 @@ registerJoinRoutes(
       // the static page keeps its shared-cache TTL only when there is nothing
       // to consume (otherwise a guest could read another member's banner).
       // Vary stays on every variant: the representation depends on the flash
-      // cookie even when this view has nothing to consume. A rendered presence
-      // snapshot says "now", so it keeps only a 60 s shared-cache TTL to match
-      // the widget verdict TTL; the static page without presence keeps 3600 s.
+      // cookie even when this view has nothing to consume. A presence snapshot
+      // can already be old at render time, so never cache the response; the
+      // static page without presence keeps its 3600 s TTL.
       const joinResult = await takeJoinResult(c);
       c.header(
         "cache-control",
         joinResult
           ? "private, no-store"
           : props.widgetSnapshot
-            ? "public, max-age=60"
+            ? "no-store"
             : "public, max-age=3600",
       );
       c.header("vary", "Cookie");

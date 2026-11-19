@@ -1,33 +1,49 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
+import Tag from "#lib/Tag.svelte";
+import TimeBlock from "#lib/TimeBlock.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
-import { ONGOING_COPY } from "../../../src/events/ongoing";
+import { kitEventFacts } from "../../../src/events/kit-event-facts";
 import { isPublicJoinUrl } from "../../../src/events/public-join-url";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
-import { EVENT_ONGOING_TESTID } from "../../../src/islands/contracts";
+import {
+  EVENT_ONGOING_TESTID,
+  RSVP_COPY,
+  RSVP_SYNCED_TESTID,
+  RSVP_SYNCING_TESTID,
+} from "../../../src/islands/contracts";
 
 // Member metadata, RSVP and roster are escaped server leaves shared with Hono.
 // Mutation ownership and native island mounts stay unchanged; this route is csr=false.
 let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrite?: boolean } =
   $props();
+const facts = $derived(kitEventFacts(model));
+const lifecycle = $derived(model.lifecycle);
+const live = $derived(model.liveTime);
+const savedLive = $derived(
+  live && !model.review && model.viewerMember && model.answer?.status === "going",
+);
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
 // This route is csr=false. Share one native-island block in execution order;
 // every deferred script runs after parsing, with all of its mount nodes present.
-const detailIslands = [
-  "event-device-timezone",
-  "event-time-from-now",
+const detailIslands = $derived([
+  live ? "kit-live-event-time" : "event-device-timezone",
+  ...(live ? [] : ["event-time-from-now"]),
   "rsvp-button",
   "copy-link",
   "event-share",
   "going-count",
   "attendees-live",
-]
-  .map((name) => `<script src="/islands/${name}.js" defer></` + "script>")
-  .join("");
+]);
 </script>
+
+{#snippet liveTag(testid?: string)}
+  <span data-live-fresh data-testid={testid}><Tag variant="live">Live</Tag></span>
+  <span hidden data-live-stale><Tag variant="warn">Stale</Tag></span>
+{/snippet}
 
 <svelte:head>
   {#if model.markdownAlternate}
@@ -98,6 +114,9 @@ const detailIslands = [
   loginReturnTo={model.path}
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
+  <div class="event-layout" id={live ? "kit-live-snapshot" : undefined}
+    data-as-of={live?.asOf} data-stale-at={live?.staleAt}>
+  <div class="event-layout-head">
   <nav class="event-back" aria-label="Event calendar">
     <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
   </nav>
@@ -108,14 +127,19 @@ const detailIslands = [
     {#if model.isDraft}
       <p class="notice" data-testid="event-draft">Draft</p>
     {/if}
-    {#if model.isPast}
+    {#if lifecycle}
+      <div data-testid="event-past"><Tag>Sign-up record</Tag></div>
+    {:else if model.isPast}
       <p class="notice" data-testid="event-past">Past event</p>
     {/if}
     {#if model.status === "cancelled"}
       <p class="notice" role="status" data-testid="event-cancelled">Cancelled</p>
     {/if}
-    {#if model.isOngoing}
-      <p class="notice" data-testid={EVENT_ONGOING_TESTID}>{ONGOING_COPY}</p>
+    {#if live}
+      <div class="lifecycle-tags">
+        {@render liveTag(EVENT_ONGOING_TESTID)}
+        {#if savedLive}<Tag variant="you">You're in</Tag>{/if}
+      </div>
     {/if}
     <h1 data-waitlist-position={model.waitlistPosition ?? ""}>{model.title}</h1>
   </section>
@@ -129,10 +153,74 @@ const detailIslands = [
       {/if}
     </p>
   {/if}
-  {@html model.detailHtml.metadata}
-  <div class="event-rsvp">
-    {@html model.detailHtml.rsvp}
+  {#if lifecycle}
+    <div class="lifecycle-time" data-testid="kit-event-time">
+      <time class="lifecycle-figure" datetime={model.timeDatetime}>{lifecycle.date}</time>
+      <p>Ended <time datetime={model.endsAt}>{lifecycle.endTime}</time> · {model.zoneLabel}</p>
+    </div>
+  {:else if live}
+    <div class="live-time" data-testid="kit-event-time">
+      <TimeBlock start={new Date(model.timeDatetime)} end={new Date(model.endsAt)} asOf={new Date(live.asOf)}
+        state="live" stale={false} viewerZone={model.zoneLabel} serverLive={{ endLabel: model.endsWhenText }} />
+    </div>
+  {:else}
+    {@html model.detailHtml.metadata}
+  {/if}
   </div>
+  <div class="event-layout-rail">
+    {#if lifecycle}
+      <section class="seat-card" aria-labelledby="signup-record-heading">
+        <div class="seat-card-head"><h2 id="signup-record-heading">Sign-up record</h2></div>
+        <p class="seat-card-note">No Echo for this one. {model.goingCount} signed up.</p>
+        {#if lifecycle.next}<p><a href="/e/{lifecycle.next.key}">Next one: {lifecycle.next.date}</a></p>{/if}
+      </section>
+      {#if model.viewerModerator && model.review}{@html model.review.rsvp}{/if}
+    {:else if savedLive}
+      <section class="seat-card" aria-labelledby="seat-card-heading" data-testid="kit-seat-card">
+        <div class="seat-card-head"><h2 id="seat-card-heading">You're in.</h2>{@render liveTag()}</div>
+        {#if model.answer?.syncedToDiscordAt}
+          <p class="seat-card-note" data-testid={RSVP_SYNCED_TESTID}>{RSVP_COPY.synced}</p>
+        {:else}
+          <p class="seat-card-note" role="status" data-testid={RSVP_SYNCING_TESTID}>{RSVP_COPY.syncing}</p>
+        {/if}
+      </section>
+    {:else}
+    <section class="seat-card" aria-labelledby={model.seatCard.heading ? 'seat-card-heading' : undefined} aria-label={model.seatCard.heading ? undefined : 'RSVP'} data-testid="kit-seat-card">
+      {#if model.seatCard.heading}
+        <div class="seat-card-head">
+          <h2 id="seat-card-heading">{model.seatCard.heading}</h2>
+          {#if model.seatCard.tag}<span class="seat-card-tag">{model.seatCard.tag.text}</span>{/if}
+        </div>
+      {/if}
+      {#if live && !model.review}
+        <p class="seat-card-note live-rsvp-end">Ends <time datetime={model.endsAt}>{model.endsWhenText}</time></p>
+      {/if}
+      <div class="event-rsvp">{@html model.detailHtml.rsvp}</div>
+      {#if model.seatCard.note}<p class="seat-card-note">{model.seatCard.note}</p>{/if}
+    </section>
+    {/if}
+    {#if facts.length > 0}
+      <section class="event-facts" aria-label="Event facts" data-testid="kit-event-facts">
+        <dl>
+          {#each facts as fact (fact.key)}
+            <div>
+              <dt>{fact.key}</dt>
+              <dd>
+                {#if fact.key === "Host"}
+                  <p data-testid="event-organizer">{fact.value}</p>
+                {:else}
+                  {fact.value}
+                {/if}
+              </dd>
+            </div>
+          {/each}
+        </dl>
+      </section>
+    {/if}
+    {@html model.detailHtml.share}
+  </div>
+  <div class="event-layout-body">
+  {#if lifecycle || live}{@html model.detailHtml.metadata}{/if}
   <div class="event-detail-grid">
     <div>
       {#if model.description}
@@ -192,10 +280,11 @@ const detailIslands = [
         </section>
       {/if}
     </div>
-    {@html model.detailHtml.share}
   </div>
   {@html model.detailHtml.roster}
-  {@html detailIslands}
+  </div>
+  </div>
+  {@html detailIslands.map((name) => `<script src="/islands/${name}.js" defer></` + "script>").join("")}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
   <div class="event-discovery">{@render eventPagination(model.series, true)}{@render eventPagination(model.neighbors, false)}
@@ -230,3 +319,50 @@ const detailIslands = [
   </div>
   {#if model.viewerModerator && model.review}{@html model.review.actions}{/if}
 </Shell>
+
+<style>
+  .event-layout-head { grid-area: head; min-width: 0; }
+  .lifecycle-time { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-4); padding-top: var(--space-7); margin-bottom: var(--space-4); border-top: 1px solid var(--color-hair2); }
+  .lifecycle-figure { font-size: var(--text-figure); line-height: 1; font-variant-numeric: tabular-nums; }
+  .lifecycle-time p { margin: 0; color: var(--color-t3); font: var(--text-small) / var(--leading-label) var(--font-data); }
+  .lifecycle-tags { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
+  .live-time { margin-bottom: var(--space-4); --two-color-hair-2: var(--color-hair2); --two-color-text-primary: var(--color-t1); --two-color-text-tertiary: var(--color-t3); --two-space-inset-card-lg: var(--space-inset-card-lg); --two-space-4: var(--space-4); --two-font-display: var(--font-display); --two-font-data: var(--font-data); --two-font-size-figure: var(--text-figure); --two-font-size-body-reading: var(--text-body-reading); --two-font-size-label: var(--text-label); --two-font-weight-display: var(--font-weight-display); --two-tracking-figure: var(--tracking-figure); }
+  @media (max-width: 820px) {
+    .lifecycle-time { flex-direction: column; }
+    .lifecycle-figure { font-size: var(--text-figure-compact); }
+    .live-time { --two-font-size-figure: var(--text-figure-compact); }
+    .live-rsvp-end { display: none; }
+  }
+  .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+  .event-layout-rail :global(> section) { border: 0; }
+  .event-layout-rail :global(> .event-share) { padding: 0; margin-top: var(--space-2); }
+  .event-layout-body { grid-area: body; min-width: 0; }
+  .seat-card {
+    background: var(--color-g2);
+    border: 0;
+    border-radius: var(--radius-l);
+    padding: var(--space-inset-card);
+  }
+  .event-facts { background: var(--color-g2); border-radius: var(--radius-l); padding: var(--space-2) var(--space-inset-card); }
+  .event-facts dl { margin: 0; }
+  .event-facts dl > div { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-4); padding: var(--space-inset-tight) 0; }
+  .event-facts dl > div + div { border-top: 1px solid var(--color-hair1); }
+  .event-facts dt { margin: 0; color: var(--color-t3); font: var(--text-label) / var(--leading-label) var(--font-data); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+  .event-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; text-align: right; color: var(--color-t1); font-size: var(--text-ui); }
+  .event-facts dd p { margin: 0; }
+  .seat-card-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-inset-tight); }
+  .seat-card-head h2 { margin: 0; font-size: var(--text-title); font-weight: var(--font-weight-semibold); line-height: var(--leading-title); }
+  .seat-card-tag { padding: var(--space-inset-tag-y) var(--space-inset-tag-x); border-radius: var(--radius-s); color: var(--color-warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-warn) 45%, transparent); font: var(--text-label) / var(--leading-label) var(--font-data); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+  .seat-card-note { margin: var(--space-inset-tight) 0 0; font-size: var(--text-small); color: var(--color-t2); }
+  :global(.event-theme) .seat-card :global(.event-rsvp) { display: block; margin: 0; }
+  :global(.event-theme) .seat-card :global(.event-rsvp > section),
+  :global(.event-theme) .seat-card :global(.event-rsvp form) { align-items: stretch; gap: var(--space-inset-tight); text-align: left; }
+  :global(.event-theme) .seat-card :global(.event-rsvp > section > a),
+  :global(.event-theme) .seat-card :global(.event-rsvp button) { width: 100%; box-sizing: border-box; }
+  :global(.event-theme) .event-detail-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  /* Kit breakpoint.compact-max, layout.rail.seat, and layout.sticky-offset. */
+  @media (min-width: 821px) {
+    .event-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "head rail" "body rail"; column-gap: var(--space-9); align-items: start; }
+    .event-layout-rail { position: sticky; top: 92px; }
+  }
+</style>

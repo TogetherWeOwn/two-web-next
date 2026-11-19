@@ -212,7 +212,13 @@ else
   fi
 fi
 
-for i in $(seq 1 "$shards"); do wait_postgres "$i"; done
+step "prepare first-party generated inputs"
+in_node 1 "npm run generate:first-party"
+
+for i in $(seq 1 "$shards"); do
+  wait_postgres "$i"
+  docker exec -i "$run_id-$i-pg" psql -U agent_test -d "$db" -v ON_ERROR_STOP=1 < ci/disposable-runtime-role.sql
+done
 
 step "apply migrations"
 pids=()

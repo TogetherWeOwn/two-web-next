@@ -4,27 +4,12 @@
 // source cannot catch a wrong branch — these renders fail the three mutants
 // the source-grep suite missed: a hardcoded sessionUnavailable, a skipped
 // flash precedence, and `{:else if session}` in the hero.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "../src/home-copy";
-
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const webRequire = createRequire(join(root, "web/package.json"));
-// svelte lives in the web workspace only; the root workspace never sees it,
-// so the compiler type is structural (no svelte types in the root tsconfig).
-const { compile } = webRequire("svelte/compiler") as {
-  compile: (source: string, options: Record<string, unknown>) => { js: { code: string } };
-};
-
-type RenderPage = (data: Record<string, unknown>) => string;
+import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
+import { createKitSsrRenderer, type RenderPage } from "./helpers/kit-ssr-render";
 
 let renderPage: RenderPage;
-let scratch = "";
+let cleanup: (() => void) | undefined;
 
 const INVITE_URL = "https://discord.gg/invite";
 const APP_URL = "https://example.test";
@@ -44,7 +29,7 @@ function baseData(overrides: Record<string, unknown> = {}): Record<string, unkno
     eventsUnavailable: false,
     featured: [],
     imageHosts: "",
-    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
+    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO },
     ...overrides,
   };
 }
@@ -65,58 +50,27 @@ const nonMemberSession = {
 };
 
 beforeAll(async () => {
-  scratch = mkdtempSync(join(tmpdir(), "kit-home-render-"));
-  const entry = join(scratch, "kit-home-render-entry.mjs");
-  writeFileSync(
-    entry,
-    `
-import { render } from "svelte/server";
-import Page from ${JSON.stringify(join(root, "web/src/routes/+page.svelte"))};
-export function renderPage(data) {
-  const { head, body } = render(Page, { props: { data } });
-  return "<head>" + head + "</head><body>" + body + "</body>";
-}
-`,
-  );
-  const outfile = join(scratch, "kit-home-render-bundle.mjs");
-  await build({
-    entryPoints: [entry],
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    outfile,
-    logLevel: "warning",
-    absWorkingDir: root,
-    nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
-    alias: { "#lib": join(root, "web/src/lib/") },
-    plugins: [
-      {
-        name: "kit-home-render-svelte-ssr",
-        setup(plugin) {
-          plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
-            const source = readFileSync(args.path, "utf8");
-            const { js } = compile(source, {
-              generate: "server",
-              dev: false,
-              filename: args.path,
-            });
-            return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
-          });
-        },
-      },
-    ],
-  });
-  const mod = (await import(pathToFileURL(outfile).href)) as unknown as {
-    renderPage: RenderPage;
-  };
-  renderPage = mod.renderPage;
+  ({ renderPage, cleanup } = await createKitSsrRenderer("web/src/routes/+page.svelte"));
 }, 60000);
 
 afterAll(() => {
-  if (scratch) rmSync(scratch, { recursive: true, force: true });
+  cleanup?.();
 });
 
 describe("Kit home SSR render: session-aware header and hero", () => {
+  it("keeps the hero truthful without voice or personal RSVP data", () => {
+    for (const session of [null, memberSession]) {
+      const html = renderPage(baseData({ session }));
+      const hero = html.split('<section class="hero')[1]!.split("</section>")[0]!;
+      expect(hero).toContain('id="home-heading"');
+      expect(hero).toContain("The lobby is open.");
+      expect(hero).toContain('data-testid="member-count"');
+      expect(hero).not.toContain("In voice now");
+      expect(hero).not.toContain("Pull me into");
+      expect(hero).not.toContain("You're in for");
+    }
+  });
+
   it("renders the guest header with the Discord join entry point", () => {
     const html = renderPage(baseData());
     expect(html).toContain('data-testid="signin"');
@@ -148,6 +102,59 @@ describe("Kit home SSR render: session-aware header and hero", () => {
     const html = renderPage(baseData({ sessionUnavailable: true, eventsUnavailable: false }));
     expect(html).toContain("Welcome, guest");
     expect(html).toContain('data-testid="discord-join">Join with an invite link</a>');
+  });
+});
+
+describe("Kit home SSR render: highlights", () => {
+  it("renders four sourced highlights and preserves the community links", () => {
+    const html = renderPage(baseData());
+    const highlights = html.split('data-testid="home-highlights"')[1]!.split("</ul>")[0]!;
+    expect(highlights.match(/<li>/g)).toHaveLength(4);
+    expect(html).toContain('id="community-heading"');
+    expect(html).toContain('id="discord-heading"');
+    expect(html).toContain('href="/join#join-heading" data-testid="home-widget-link"');
+    expect(html).toContain('href="/discord" data-testid="home-discord-invite"');
+    for (const unsupported of ["Raid Night", "Grand Prix", "resets each month", "public log"]) {
+      expect(html).not.toContain(unsupported);
+    }
+  });
+});
+
+describe("Kit home SSR render: join band", () => {
+  function band(html: string): string {
+    return html.split('<section class="join-band"')[1]?.split("</section>")[0] ?? "";
+  }
+
+  it("offers the shared introduction and sign-in to guests and non-members", () => {
+    for (const session of [null, nonMemberSession]) {
+      const content = band(renderPage(baseData({ session })));
+      expect(content).toContain("Pull up a");
+      expect(content).toContain(JOIN_INTRO);
+      expect(content).toContain('href="/auth/discord" data-testid="join-band-join"');
+    }
+  });
+
+  it("suppresses the whole band for members, even after join failure", () => {
+    for (const notice of [null, "join_failed"]) {
+      expect(band(renderPage(baseData({ session: memberSession, notice })))).toBe("");
+    }
+  });
+
+  it("prioritizes the outage invite over a join failure", () => {
+    const content = band(renderPage(baseData({ sessionUnavailable: true, notice: "join_failed" })));
+    expect(content).toContain("Sign-in isn't answering right now.");
+    expect(content).toContain('href="/discord" data-testid="join-band-invite"');
+    expect(content).not.toContain('data-testid="join-band-join"');
+    expect(content).not.toContain("The bot couldn't add you");
+  });
+
+  it("offers the configured invite after a healthy non-member join failure", () => {
+    const content = band(
+      renderPage(baseData({ session: nonMemberSession, notice: "join_failed" })),
+    );
+    expect(content).toContain("The bot couldn't add you just now.");
+    expect(content).toContain(`href="${INVITE_URL}" data-testid="join-band-invite"`);
+    expect(content).not.toContain('data-testid="join-band-join"');
   });
 });
 
@@ -238,6 +245,29 @@ describe("Kit home SSR render: independently degraded panels", () => {
     expect(html).toContain("3 going");
   });
 
+  it("renders the event band for guests and members without invented live or personal state", () => {
+    const upcomingEvents = [
+      {
+        source: "discord",
+        discordId: "123",
+        title: "Community night",
+        startsAt: new Date(Date.UTC(2030, 6, 20, 19)),
+        timezone: "UTC",
+        location: "Online",
+      },
+    ];
+    for (const session of [null, memberSession]) {
+      const html = renderPage(baseData({ session, upcomingEvents }));
+      expect(html).toContain("What’s on.");
+      expect(html).toContain("Come along.");
+      expect(html).toContain("Community night");
+      expect(html).toContain(`href="${INVITE_URL}" data-testid="home-event-discord"`);
+      expect(html).toContain("RSVP in Discord");
+      expect(html).not.toContain("You’re in");
+      expect(html).not.toContain("Pull me in");
+    }
+  });
+
   it("keeps the exact Hono title, canonical URL and JSON-LD marker", () => {
     const html = renderPage(baseData());
     expect(html).toContain("Together We Own — the lobby is open");
@@ -280,7 +310,9 @@ function fullnessEvent(overrides: Record<string, unknown> = {}): Record<string, 
 
 /** The one teaser row linking `key`, so a sibling's marker cannot satisfy the pin. */
 function fullnessRow(html: string, key: string): string {
-  const hit = html.split('<li class="card"').find((chunk) => chunk.includes(`/e/${key}"`));
+  const hit = [...html.matchAll(/<li class="card(?:\s[^"]*)?"[^>]*>[\s\S]*?<\/li>/g)].find(
+    ([row]) => row.includes(`/e/${key}"`),
+  )?.[0];
   if (!hit) throw new Error(`no teaser row for ${key}`);
   return hit.split("</li>")[0]!;
 }
@@ -317,6 +349,64 @@ describe("Kit home SSR render: teaser fullness verdict (owned pins)", () => {
     const row = fullnessRow(html, "open-night");
     expect(row).toContain("1 of 4 going");
     expect(row).not.toContain("event-spots-left");
+  });
+
+  it("renders trimmed details and one prioritized availability verdict", () => {
+    const cases = [
+      [{ endsAt: new Date(0), rsvpOpen: false, capacity: 1 }, "Ended"],
+      [{ rsvpOpen: false, capacity: 1 }, "RSVPs paused"],
+      [{ capacity: 1 }, "Full"],
+      [{ capacity: 2 }, "1 seat left"],
+      [{ capacity: 4 }, "3 seats left"],
+      [{ capacity: null }, "No seat limit"],
+    ] as const;
+    for (const [fields, verdict] of cases) {
+      const html = renderPage(
+        baseData({
+          upcomingEvents: [
+            fullnessEvent({
+              game: "  Wingspan  ",
+              organizer_name: "  Riley  ",
+              location: "Table 2",
+              ...fields,
+            }),
+          ],
+        }),
+      );
+      const row = fullnessRow(html, "game-night-1");
+      expect(row).toContain(">Wingspan</p>");
+      expect(row).toContain('data-testid="event-card-host">Hosted by Riley</p>');
+      expect(row.indexOf("Wingspan")).toBeLessThan(row.indexOf("Hosted by Riley"));
+      expect(row.indexOf("Hosted by Riley")).toBeLessThan(row.indexOf("Table 2"));
+      expect(row).toContain(`>${verdict}</span>`);
+      expect(
+        row.match(/data-testid="(?:event-schedule-availability|event-spots-left)"/g),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("omits blank details and keeps Discord availability separate from seat math", () => {
+    const html = renderPage(
+      baseData({
+        upcomingEvents: [
+          fullnessEvent({ game: "  ", organizer_name: "  " }),
+          {
+            source: "discord",
+            discordId: "123",
+            title: "Discord night",
+            startsAt: new Date(Date.UTC(2030, 6, 20, 19)),
+            timezone: "UTC",
+            location: null,
+          },
+        ],
+      }),
+    );
+    const row = fullnessRow(html, "game-night-1");
+    expect(row).not.toContain("event-card-host");
+    expect(row).not.toContain("Game TBA");
+    expect(html).toContain(
+      'RSVP in Discord · <span data-testid="event-schedule-availability">Discord-managed</span>',
+    );
   });
 
   it("falls back to the named count for older fixtures without occupancy", () => {

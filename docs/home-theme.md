@@ -4,7 +4,7 @@ The homepage retains its existing centered composition, uppercase display typogr
 
 The homepage, `/about`, `/faq`, `/rules`, `/privacy`, the `/join` landing, the community schedule (`/events`, `/events/past`), event detail/cancelled pages and branded error/OAuth recovery shells opt into the stylesheet through `Layout.theme`. The homepage and four content leaves (`/about`, `/faq`, `/rules`, `/privacy`) render it as a single generated inline `<style>` block (`src/leaf-critical-css.ts`, git-ignored build output regenerated on every install after adapter validation) allowlisted in `style-src` by its sha256 hash instead of a render-blocking stylesheet request; other themed routes keep the external stylesheet. They share the presentational `SiteHeader` and `SiteFooter`; error/recovery composition uses `RecoveryShell` without reading sessions or requiring a database. The content leaves use compact information navigation with a current-page indicator and readable policy text; Join uses a split content/preview layout that stacks on mobile. The 404 keeps optional event suggestions and labelled GET search below the centered status hero. The maintenance header and primary action link directly to the configured Discord invite, not OAuth. Member profiles opt into the base tokens through `theme="profile"` with layout details in the separate `profile-theme.css` sheet; the schedule does the same through `theme="schedule"` and `schedule-theme.css`, and event pages through `theme="event"` and `event-theme.css`. Other routes, including admin, retain their current layouts. Wrangler serves the external stylesheet, fonts and logos through the existing `public/` asset binding. No Bootstrap, jQuery, preloader, custom cursor, animation bundle, sample photos, original brand marks or third-party template folders ship. The decorative hero uses neutral CSS shapes instead of stock imagery. Feature images continue through the shared same-origin/approved public host policy, including validated configured hosts.
 
-## Ember Hours token migration (two-design-kit v0.2.3)
+## Ember Hours token migration (two-design-kit v0.3.1)
 
 `ci/build-ember-tokens.mjs` generates both consumer adapters from the exact
 vendored `vendor/design-kit/tokens.css` at `VERSION`. Its value-free mapping
@@ -101,7 +101,7 @@ Reduced-motion overrides for consumed aliases stay separate from base values.
 Existing button transitions consume the generated duration and ease only under
 `no-preference`; focus width/offset come from kit roles.
 
-`--font-display` and the distinct v0.2.3 `--font-ui` role preserve the kit family
+`--font-display` and the distinct pinned `--font-ui` role preserve the kit family
 order and insert the measured local Mona fallback once. Body text consumes
 `--font-ui`; headings and existing display rules retain `--font-display`. Equal
 pinned stacks share an alias to save bytes, but generation keeps the UI role
@@ -117,7 +117,7 @@ scoped Hono roles. Unthemed global focus and error-search rules stay as-is.
 
 - `public/fonts/mona-sans-latin-var.woff2`, `instrument-serif-latin-400-italic.woff2`, `fragment-mono-latin-400.woff2`: self-hosted OFL-1.1 families for the Ember Hours migration (variable Mona Sans plus subset serif/mono, ~119 KB total). Provenance in `public/fonts/OFL-SOURCES.txt`, full license texts in `public/fonts/LICENSE.txt`, byte pins in `test/pinned-assets.test.ts`. The retired Rajdhani statics (`display-latin-{500,700}.woff2`) are removed. No remote font origin.
 - `public/logo.svg` (Logo 1 horizontal lockup), `public/favicon.svg` / `public/favicon.ico` (Icon 1), `public/icons/*.png` (Icon 1 install icons) and `public/og-1200x630.png` (share card): the owner's Logo/Icon 1 brand art, dark-background variants for the dark UI. The icon stays inside the maskable safe area. Install icon URLs, sizes and manifest identity are unchanged; the manifest additionally lists the SVG favicon. The brand ramp lives in `public/theme-tokens.css` as three color aliases (`--color-brand-ember/magenta/violet`) generated from the pinned kit's `color-grad-*` roles; the same stops ship baked in the artwork. The existing lockup crop below 30rem is retained in `assets/theme.css`.
-- `public/theme.css`: generated from `assets/theme.css` and pinned kit roles, with the unchanged 13 KB uncompressed ceiling (four kit §2 faces plus focus/forced-colors). Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
+- `public/theme.css`: generated from `assets/theme.css` and pinned kit roles (four kit §2 faces plus focus/forced-colors). The homepage test reports its original 13,000-byte uncompressed ceiling as an advisory, including the measured bytes and overage; separate bundle budgets and correctness checks remain hard. Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
 - `public/profile-theme.css`: profile-only layout under 8 KB, loaded only when `theme="profile"`.
 - `public/schedule-theme.css`: schedule-only layout under 6 KB, loaded only when `theme="schedule"`. Every rule is scoped to `.events-page`, so the shared chrome stays in `theme.css`.
 

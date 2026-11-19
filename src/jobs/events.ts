@@ -5,6 +5,7 @@ import { drizzleOver } from "../db/proxy";
 import { materializeMissingInstances } from "../admin/store";
 import { LEDGER_DB_LOCK_TIMEOUT_MS, LEDGER_DB_TIMEOUT_MS, SYNC_EVENT } from "./constants";
 import { queueExceptionClass } from "./queue-error";
+import { SYNC_RECONCILIATION_MARKER } from "./reconciliation";
 import type { EventStore, EventUpsert, StaleEventKeysPage, SyncAttempt, TxClient } from "./types";
 
 type AttemptRow = {
@@ -125,11 +126,14 @@ export function pgEventStore(
         return result;
       });
     };
-    const pool = sql as unknown as {
+    const client = sql as unknown as {
       begin?: (fn: (tx: TxClient) => Promise<T>) => Promise<T>;
+      savepoint?: unknown;
     };
     try {
-      return await (typeof pool.begin === "function" ? pool.begin(bounded) : boundedExisting(sql));
+      return await (typeof client.savepoint === "function" || typeof client.begin !== "function"
+        ? boundedExisting(sql)
+        : client.begin(bounded));
     } catch (error) {
       // SQL diagnostics can contain credentials or member data. Preserve the
       // rejection for the caller's per-message disposition, not its message.
@@ -282,6 +286,7 @@ export function pgEventStore(
         await sql`with settled as (
         update event_sync_attempts set state = 'succeeded'
         where idempotency_key = ${attempt.idempotencyKey}::uuid and state = 'pending'
+          and (terminal_reason is null or terminal_reason <> ${SYNC_RECONCILIATION_MARKER})
         returning event_id, revision, mirrored_at
       ), mirrored as (
         update events set discord_event_id = coalesce(${discordEventId}, discord_event_id),
@@ -311,6 +316,7 @@ export function pgEventStore(
         from event_sync_attempts a join events e on e.id = a.event_id
         where a.idempotency_key = ${attempt.idempotencyKey}::uuid and a.state = 'pending'
           and a.request_attempts < ${SYNC_EVENT.tries} and a.next_attempt_at <= ${now}
+          and a.terminal_reason is null
         for update of a, e
       ) update event_sync_attempts a
         set state = case when candidate.obsolete then 'obsolete' else a.state end,
@@ -326,7 +332,8 @@ export function pgEventStore(
         // The claim count fences a late result from an earlier claimed request.
         await sql`update event_sync_attempts set next_attempt_at = ${nextAttemptAt}
         where idempotency_key = ${attempt.idempotencyKey}::uuid and state = 'pending'
-          and request_attempts = ${attempt.requestAttempts}`;
+          and request_attempts = ${attempt.requestAttempts}
+          and (terminal_reason is null or terminal_reason <> ${SYNC_RECONCILIATION_MARKER})`;
       });
     },
     async failSync(idempotencyKey) {
@@ -342,15 +349,17 @@ export function pgEventStore(
       };
       if (typeof pool.begin === "function") {
         await pool.begin(async (tx) => {
-          await tx`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
+          await setSyncTimeouts(tx);
           await tx`update event_sync_attempts set state = 'failed'
-            where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
+            where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'
+                and (terminal_reason is null or terminal_reason <> ${SYNC_RECONCILIATION_MARKER})`;
         });
         return;
       }
-      await sql`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
+      await setSyncTimeouts(sql);
       await sql`update event_sync_attempts set state = 'failed'
-        where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
+        where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'
+                and (terminal_reason is null or terminal_reason <> ${SYNC_RECONCILIATION_MARKER})`;
     },
     async noteTerminalIntent(idempotencyKey, reason) {
       // Terminal-intent marker, not settlement: the live row stays pending so
@@ -363,13 +372,13 @@ export function pgEventStore(
       };
       if (typeof pool.begin === "function") {
         await pool.begin(async (tx) => {
-          await tx`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
+          await setSyncTimeouts(tx);
           await tx`update event_sync_attempts set terminal_reason = ${reason}
             where idempotency_key = ${idempotencyKey}::uuid and state = 'pending' and terminal_reason is null`;
         });
         return;
       }
-      await sql`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
+      await setSyncTimeouts(sql);
       await sql`update event_sync_attempts set terminal_reason = ${reason}
         where idempotency_key = ${idempotencyKey}::uuid and state = 'pending' and terminal_reason is null`;
     },

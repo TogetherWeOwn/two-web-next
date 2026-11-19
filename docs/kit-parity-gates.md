@@ -12,7 +12,7 @@ expect Hono for the right reason.
 | --- | --- | --- | --- |
 | `GET /` | `web/src/routes/+page.svelte` (`csr=false`, shared `src/home-copy` + readers, no island) | public | Hono (`enabled: false`) |
 | `GET /events/past` | `web/src/routes/events/past/+page.svelte` (`csr=false`, shared `/islands/past-events.js`) | public | Kit (`enabled: true`) |
-| `GET /events` | `web/src/routes/events/+server.ts` (no Svelte page, so no client entries/node; Hono calendar screen bytes via `src/kit-events-html.tsx`, shared `/islands/events-calendar.js`; `POST /events` and `/events.json` stay Hono) | public | Kit (`enabled: true`) |
+| `GET /events` | `web/src/routes/events/+server.ts` (server-only `CalendarScreen.svelte` in the shared document shell; no client entry, same `/islands/events-calendar.js`; `POST /events` and `/events.json` stay Hono) | public | Kit (`enabled: true`) |
 | `GET /about` | `web/src/routes/about/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/about-content.ts`) | public | Kit (`enabled: true`) |
 | `GET /privacy` | `web/src/routes/privacy/+page.svelte` (`csr=false`, shared `POLICY_MARKDOWN`/`POLICY_VERSION` source, no island) | public | Hono (`enabled: false`) |
 | `GET /rules` | `web/src/routes/rules/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/rules-content.ts`) | public | Hono (`enabled: false`) |
@@ -437,6 +437,10 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
 
 ## Performance gates (`ci/check-kit-perf.mjs`, `ci/budgets/kit/`)
 
+The owner decision of 2026-11-14 makes deployed-origin Lighthouse budgets
+report-only until the Ember and SvelteKit migration is complete. Staging still
+requires origin web-standards; Kit byte/count overages are advisory, not other gates.
+
 Measured baseline 2026-10-12, ceilings at measured ×1.25 (raw to 512B, gzip
 to 256B — the repository rule in `ci/budgets/README.md`):
 
@@ -447,7 +451,7 @@ to 256B — the repository rule in `ci/budgets/README.md`):
   bundle, which is exactly what should shrink as routes go native.
 - Client `_app/immutable` JS/CSS: totals plus file-count caps (hashed
   filenames would churn per-file ceilings).
-- A new chunk fails closed instead of escaping enforcement. Raising a
+- New chunks are counted; overages warn with measurements; incomplete inventory fails (exit 2). Raising a
   ceiling needs an explicit decision explaining the growth; never relax a
   budget to make CI green.
 - `startup.maxMs` (60s, the same cold-start bound as

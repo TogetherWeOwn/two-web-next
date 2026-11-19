@@ -186,10 +186,26 @@ test("the required ci-ok gate runs after a non-green audit and rejects every non
   // check no longer waits on the audit; the guard below lives in ci-ok.
   assert.match(check, /\n    needs: \[scope\]\n/);
   const ciOk = workflow.split("\n  ci-ok:\n")[1];
-  assert.match(
-    ciOk,
-    /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
-  );
+  const needs = ciOk.match(/\n    needs:\s*\[([^\]]*)\]/)?.[1];
+  assert(needs, "ci-ok must declare its dependencies");
+  const dependencies = needs
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  for (const required of [
+    "a11y",
+    "lighthouse",
+    "bundle-budget",
+    "docs-links",
+    "queue-syntax-smoke",
+    "check",
+    "kit-browser-fixture",
+    "node22-compat",
+    "scope",
+    "bot-contract-drift",
+  ]) {
+    assert(dependencies.includes(required), `ci-ok must depend on ${required}`);
+  }
   assert.match(ciOk, /\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   assert.match(ciOk, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);
   const guard = ciOk.match(
@@ -259,7 +275,7 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
     "bash ci/db-backup-selftest.sh",
     "bash ci/check-migration-numbers.sh",
     "node --test ci/production-deploy-gate.test.mjs",
-    "npx wrangler deploy --dry-run --outdir dist",
+    "npx wrangler deploy --dry-run --outdir dist --metafile dist/bundle-meta.json",
     "npx wrangler deploy --dry-run --env production --outdir dist-production --metafile dist-production/bundle-meta.json",
     "npm run test:inventory:selftest && npm run test:inventory -- --strict",
   ]) {
@@ -270,7 +286,7 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
         // Keep the real gate as the final command of a fail-fast run block.
         (command === "bash ci/check-migration-numbers.sh" &&
           /\n        run: \|\n          set -euo pipefail\n/.test(entry) &&
-          entry.trimEnd().endsWith(`\n            ${command}`)),
+          entry.trimEnd().endsWith(`\n            ${command} "\${migration_args[@]}"`)),
     );
     assert(step, `Required gate missing: ${command}`);
     // The docs-only/draft scope gate (TOG-11811/TOG-14880) is the one sanctioned

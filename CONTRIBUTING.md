@@ -52,9 +52,11 @@ The repository rulesets enforce the following on `main`:
 
 - `protect-main`: changes arrive through a pull request, the branch cannot be
   deleted or force-pushed, only squash merges are allowed, and `ci-ok`,
-  `gitleaks` and `e2e-ok` must pass on the exact head, and so must the two
-  review app checks, CodeRabbit and Devin Review. No approving review is
-  required.
+  `gitleaks`, `e2e-ok` and `pr-size-gate / gate` must pass on the exact head,
+  and so must the `Devin Review` check and the organization rulesets
+  (`pr-standards`, `CodeQL`). CodeRabbit is advisory, not a required check;
+  answer every finding, but its check does not gate the merge. No approving
+  review is required.
 
   The journeys count only through the aggregator in e2e.yml: it fails when the
   scope job fails or the browser journeys fail or are cancelled, and passes a
@@ -63,8 +65,8 @@ The repository rulesets enforce the following on `main`:
 
 - `pr-conventions`: `pr-lint` must pass.
 
-The `pr-size-gate` job's check, `pr-size-gate / gate`, joins this list after
-the caller has reported on the default branch (two-step ship; STANDARD.md).
+The `pr-size-gate` job's check, `pr-size-gate / gate`, is the required size
+gate named in the `protect-main` bullet above.
 
 Who merges: when native review stages apply, the final-stage reviewer
 squash-merges the exact reviewed head before closing the task; without a review
@@ -92,9 +94,11 @@ requirement. Do not demand paired artifact hashes or a comparison to current
 
 Before merge, require:
 
-1. **Exact-head checks and review.** All required checks listed above (`ci-ok`,
-   `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review`) pass on the
-   exact PR head. Every finding is fixed or answered with evidence, and applicable
+1. **Exact-head checks and review.** All required checks listed above
+   (`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `pr-size-gate / gate`,
+   `Devin Review`, the organization `pr-standards` workflow and `CodeQL`)
+   pass on the exact PR head. CodeRabbit is
+   advisory: answer every finding, but it is not a required check. Every finding is fixed or answered with evidence, and applicable
    security reviews, rulesets and native review stages are complete.
    Record exact-head GitHub Actions run/job links and conclusions; local output
    does not replace required Actions evidence.
@@ -156,9 +160,9 @@ and fixtures. The labeller lives once in the org
 (`CI-STANDARD.md`, "Advisory PR-size labels"); the workflow here is a thin
 caller pinned to a central SHA and passes only this repo's generated paths.
 The labeller is advisory only: it is not a required check and never blocks a
-merge. The same workflow's `pr-size-gate` job is the required size gate
-(reported as `pr-size-gate / gate` once the ruleset requires it; see Branch
-protection and required checks above). A Monday run of the same workflow
+merge. The same workflow's `pr-size-gate` job is the required size gate,
+reported as `pr-size-gate / gate` (see Branch protection and required checks
+above). A Monday run of the same workflow
 prints the weekly tally of merged pull requests per size; the labels are the
 durable record behind it.
 
@@ -179,6 +183,9 @@ worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 checks relative links and anchors on every PR. `check` runs unless its run was
 cancelled, starts from `scope` alone so it runs in parallel with the audit
 and performance jobs, and skips its heavy steps on docs-only and draft PRs.
+The independent `kit-browser-fixture` job runs alongside `check` for non-draft,
+non-docs-only full, app or worker scopes. `ci-ok` requires its success when
+selected, and fails on failure, cancellation or an unexpected skip.
 `node22-compat` reports the same way on the exact Node 22.23.0 `engines`
 floor — the version asserted in its log — running lint, typecheck and the
 unit suite, so the declared 22 range is verified beside the Node 24 jobs;
@@ -230,9 +237,13 @@ below-cutoff branch rows need `PR_STANDARDS_MODE`.
 | Advisory references in the PR title or body, or an internal reference in the branch name below the cutoff (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 
 GitHub does not enforce an approval count here, and neither does team policy.
-Independent review comes from the two review app checks, CodeRabbit and Devin
-Review, which run on the head SHA, and a new push re-runs them. The merge rule is
-the one in "Who merges" above.
+Independent review comes from Devin Review, a required check that runs on the
+head SHA and re-runs on a new push, plus CodeRabbit, whose check is advisory:
+its findings must each be fixed or answered with evidence, but the check never
+blocks the merge. Review conversations still follow the required thread
+resolution in "Branch protection and required checks", so resolve each
+conversation once it is fixed or answered. The merge rule is the one in
+"Who merges" above.
 
 `pr-lint` lives in `.github/workflows/pr-gates.yml` and runs through
 `ci/pr-lint-output.py check`: first `ci/check-pr-conventions.py` (it fails on a
@@ -250,7 +261,15 @@ script is unit-tested beside it: `python3 -m unittest discover -s .github/script
 ### Secret-scan allowlists
 
 The required `gitleaks` job (also in `pr-gates.yml`) scans the full history
-reachable from the PR head. On a pull request it applies the base branch's
+reachable from the checked-out commit. On pull requests, this starts at GitHub's
+PR merge commit, not the submitted branch tip. The scan forces text diffs and
+compares each merge with its first parent, including conflict resolutions.
+That comparison can report content inherited from another parent under the
+merge SHA. Use commit-scoped ignore fingerprints to limit an exception to one
+occurrence. A fingerprint scoped to the original commit does not also exempt
+the merge occurrence.
+
+On a pull request the job applies the base branch's
 `.gitleaks.toml` and `.gitleaksignore` and ignores inline `gitleaks:allow`
 comments, so a PR cannot allowlist its own leak. If a change legitimately needs a
 new allowlist entry, merge that entry first as a small, separately reviewed PR;
@@ -418,8 +437,9 @@ Before every push, agents verify a fresh worktree with a bounded,
 offline-fixture set of checks. GitHub Actions is the only place agents run the
 full suite, the database tests, Docker and the browser gates.
 
-Install once per worktree and reuse it unless a lockfile changes. Use `--ignore-scripts`
-so no dependency lifecycle script runs and use a per-task npm cache. `npm ci`
+Install once per worktree and reuse it unless a lockfile changes. Project npm
+configuration disables lifecycle scripts by default; keep `--ignore-scripts`
+explicit and use a per-task npm cache. `npm ci`
 uses the frozen lockfile and its integrity checks; this change does not add or
 update dependencies. Although npm 11.19 accepts `--min-release-age`, it does not
 enforce that age on locked packages installed by `npm ci`. Do not treat this
@@ -427,6 +447,7 @@ command as a package-age check. Use the Node floor stated in the README.
 
 ```sh
 nice timeout -k 10 300 npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund --cache "$PAPERCLIP_TASK_SCRATCH_DIR/npm-cache"
+nice timeout -k 10 120 npm run generate:first-party
 nice timeout -k 10 120 npm run typecheck
 nice timeout -k 10 300 env -u DATABASE_URL -u BOT_DATABASE_URL npm run test:unit -- test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
 ```

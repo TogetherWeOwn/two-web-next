@@ -1,0 +1,193 @@
+name: Kit browser fixture
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      profile_comparison_diagnostic:
+        description: Run bounded profile comparison and post-save diagnostics with retained phase markers
+        type: boolean
+        default: false
+      join_evidence:
+        description: Capture the six synthetic Join and recovery component states
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kit-browser-fixture-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  join-evidence:
+    if: github.event_name == 'workflow_dispatch' && inputs.join_evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        state: [join, joinStartFailed, joinAdded, joinAlreadyMember, joinRestoredWrite, recovery]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - run: npx --no-install playwright install --with-deps chromium
+      - name: Capture synthetic Kit component state
+        env:
+          FINAL_SHA: ${{ github.sha }}
+          STATE: ${{ matrix.state }}
+          TZ: UTC
+        run: node ci/kit-join-capture.mjs "$STATE" "artifacts/kit-join/$STATE" baseline
+      - name: Retain component evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-join-${{ matrix.state }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/kit-join/${{ matrix.state }}/
+          if-no-files-found: error
+          retention-days: 14
+  ember-shell-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+      - run: node --test ci/kit-ember-shell-browser.test.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: kit-ember-shell
+          path: artifacts/kit-ember-shell/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Check rank arc CSS under restrictive CSP
+        if: ${{ !cancelled() }}
+        run: node --test ci/kit-rank-csp.test.mjs
+      - name: Capture and audit built Kit rank labels
+        if: ${{ !cancelled() }}
+        run: node --test ci/kit-rank-visual.test.mjs
+      - name: Retain rank label fixture evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-rank-fixture
+          path: artifacts/kit-rank/
+          if-no-files-found: error
+          retention-days: 14
+  profile-comparison-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.profile_comparison_diagnostic
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: node:24-bookworm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - run: npm run generate:first-party
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npx playwright install --with-deps chromium
+      - name: Profile comparison with synchronous phase evidence
+        shell: bash
+        env:
+          A11Y_BROWSER_TESTS: "true"
+          PROFILE_COMPARISON_DIAGNOSTICS: "true"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/a11y
+          printf 'head=%s\n' "$GITHUB_SHA" > artifacts/a11y/profile-comparison-head.txt
+          timeout --kill-after=10s 180s npx --no-install vitest run test/profile-local-time-comparison-acceptance.test.ts --reporter=verbose --reporter=json --outputFile.json=artifacts/a11y/profile-local-time-comparison-acceptance.json 2>&1 | tee artifacts/a11y/profile-comparison-phases.log
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-local-time-comparison-acceptance.json "profile local time comparison in Chromium" 72
+      - name: Profile post-save with synchronous phase evidence
+        shell: bash
+        env:
+          A11Y_BROWSER_TESTS: "true"
+          PROFILE_COMPARISON_DIAGNOSTICS: "true"
+        run: |
+          set -euo pipefail
+          timeout --kill-after=10s 180s npx --no-install vitest run test/profile-local-time-save.test.ts --reporter=verbose --reporter=json --outputFile.json=artifacts/a11y/profile-local-time-save.json 2>&1 | tee artifacts/a11y/profile-save-phases.log
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-local-time-save.json "profile local time after save in Chromium" 40
+      - name: Retain partial evidence even when the process deadline fails
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: profile-comparison-diagnostic
+          path: artifacts/a11y/
+          if-no-files-found: error
+          retention-days: 14
+  fixture-browser:
+    runs-on: ubuntu-latest
+    # The browser suite step alone takes 870-945 s; 15 minutes cancelled
+    # about half of the runs before they could pass or fail.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+      - run: node --test ci/kit-hydration-harness.test.mjs ci/kit-browser-fixture.test.mjs ci/kit-browser-fixture-isolation.test.mjs ci/kit-tag-browser.test.mjs
+        env:
+          KIT_CALENDAR_EVIDENCE_DIR: artifacts/kit-calendar
+      - run: node --test ci/kit-time-block-browser.test.mjs
+      - run: node --test ci/kit-time-block-visual.test.mjs
+      - name: Retain time block fixture evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-time-block-fixture
+          path: artifacts/kit-time-block/
+          if-no-files-found: error
+          retention-days: 14
+      - run: node --test ci/kit-button-isolated-browser.test.mjs
+        if: ${{ !cancelled() }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: kit-button-screenshots
+          path: artifacts/kit-button/
+          if-no-files-found: error
+      - name: Retain calendar fixture evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-calendar-fixture
+          path: artifacts/kit-calendar/
+          if-no-files-found: error
+          retention-days: 14

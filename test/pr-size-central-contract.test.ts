@@ -9,7 +9,10 @@ import { describe, expect, it } from "vitest";
 // wiring. A head with neither fails here first, before the floor guard
 // reports the deletion; a head with both fails too, rejecting a half-finished
 // move that leaves the local copy behind as dead code.
-const workflow = readFileSync(".github/workflows/pr-size.yml", "utf8");
+const workflow = readFileSync(".github/workflows/pr-size.yml", "utf8").replace(
+  /^(      (?:issues|pull-requests): (?:read|write))[ \t]+#[^\n]*$/gm,
+  "$1",
+);
 const contributing = readFileSync("CONTRIBUTING.md", "utf8");
 const job = (id: string) =>
   workflow.split(new RegExp(`\\n  ${id}:\\n`))[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";

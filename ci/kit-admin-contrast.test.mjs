@@ -15,6 +15,7 @@ import { buildEventCreateView } from "../src/admin/kit-event-create.ts";
 import { resolveKitEventEdit } from "../src/admin/kit-event-edit.ts";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit.ts";
 import { EventFormPage, FeaturedFormPage } from "../src/admin/pages.tsx";
+import { EventEditableFields } from "../src/admin/pages/event-editable-fields.tsx";
 
 const output = resolve("web/.svelte-kit/output");
 const evidence = process.env.KIT_ADMIN_CONTRAST_EVIDENCE_DIR;
@@ -45,6 +46,22 @@ before(async () => {
   });
   assert.equal(event.kind, "ok");
   assert.equal(featured.kind, "ok");
+  const populatedEvent = await resolveKitEventEdit(
+    eventRow.eventKey,
+    {},
+    {
+      db: {},
+      get: async () => ({
+        ...eventRow,
+        accessibilityNotes: "Step-free side door; hearing loop fitted",
+        organizer_name: "Jordan",
+        join_url: "https://example.com/lobby",
+        join_instructions: "Ask for the community table on level two",
+      }),
+      list: async () => ({ rows: [], total: 0 }),
+    },
+  );
+  assert.equal(populatedEvent.kind, "ok");
   fixtures = [
     { name: "event-new", path: "/admin/events/new", data: buildEventCreateView() },
     {
@@ -57,8 +74,49 @@ before(async () => {
       path: "/admin/events/new",
       data: buildEventCreateView(
         { accessibility_notes: "Step-free entrance." },
-        { accessibility_notes: "Accessibility notes are too long." },
+        {
+          accessibility_notes: "Accessibility notes are too long.",
+          recurrence_count: "Occurrences must be between 1 and 52.",
+        },
       ),
+    },
+    {
+      name: "event-edit-populated",
+      path: `/admin/events/${eventRow.eventKey}`,
+      data: { view: populatedEvent.view },
+    },
+    {
+      name: "event-edit-errors",
+      path: `/admin/events/${eventRow.eventKey}`,
+      data: {
+        view: {
+          ...populatedEvent.view,
+          hasErrors: true,
+          errors: {
+            accessibility_notes: "Keep accessibility notes to 1000 characters.",
+            organizer_name: "Keep the organizer name to 500 characters.",
+            join_url: "Enter a valid public HTTP or HTTPS link without sign-in credentials.",
+            join_instructions: "Keep joining instructions to 5000 characters.",
+          },
+        },
+      },
+    },
+    {
+      name: "event-edit-invalid",
+      path: `/admin/events/${eventRow.eventKey}`,
+      data: {
+        view: {
+          ...event.view,
+          errors: { title: "Title is required." },
+          hasErrors: true,
+          fieldsHtml: String(
+            EventEditableFields({
+              values: event.view.values,
+              errors: { title: "Title is required." },
+            }),
+          ),
+        },
+      },
     },
     { name: "event-edit", path: `/admin/events/${eventRow.eventKey}`, data: { view: event.view } },
     { name: "featured-new", path: "/admin/featured/new", data: {} },
@@ -145,6 +203,9 @@ describe("Kit admin contrast", () => {
       "event-new-populated",
       "event-new-invalid",
       "event-edit",
+      "event-edit-populated",
+      "event-edit-errors",
+      "event-edit-invalid",
       "featured-new",
       "featured-edit",
       "dashboard",
@@ -152,6 +213,7 @@ describe("Kit admin contrast", () => {
       test(`Kit admin contrast: ${name} at ${width}`, async () => {
         const f = fixtures.find((fixture) => fixture.name === name);
         const isDashboard = name === "dashboard";
+        const isInvalid = name.endsWith("-invalid");
         const context = await browser.newContext({
           viewport: { width, height: width === 390 ? 844 : 800 },
         });
@@ -224,7 +286,23 @@ describe("Kit admin contrast", () => {
                 (await page.locator("#f-accessibility-notes-error").textContent()).trim(),
                 "Accessibility notes are too long.",
               );
+              assert.equal(await page.locator("fieldset #f-recurrence-count-error").count(), 1);
             }
+          }
+          const summary = page.locator("[data-admin-validation-summary]");
+          const summaryLink = summary.locator("a").first();
+          if (name === "event-edit-invalid") {
+            assert.equal(await page.locator("#f-title-error").count(), 1);
+            assert.equal(await summary.locator('a[href="#f-title"]').count(), 1);
+          }
+          if (isInvalid) {
+            assert.equal(await summary.evaluate((el) => el === document.activeElement), true);
+            await page.keyboard.press("Tab");
+            assert.equal(await summaryLink.evaluate((el) => el.matches(":focus-visible")), true);
+            assert.match(
+              await summaryLink.evaluate((el) => getComputedStyle(el).textDecorationLine),
+              /underline/,
+            );
           }
           const axe = new AxeBuilder({ page });
           if (isDashboard) {
@@ -237,10 +315,15 @@ describe("Kit admin contrast", () => {
           } else {
             axe.include(".hint").include("footer").include("fieldset");
           }
+          const summarySelector = "[data-admin-validation-summary]";
+          const fieldErrorSelector = ".field .error";
+          if (isInvalid) axe.include(summarySelector).include(fieldErrorSelector);
           const result = await axe.withRules(["color-contrast"]).analyze();
           const measured = await page
             .locator(
-              isDashboard ? ".card p, footer" : ".hint, footer, fieldset label, fieldset legend",
+              isDashboard
+                ? ".card p, footer"
+                : `.hint, footer, fieldset label, fieldset legend, ${summarySelector} p, ${summarySelector} a, ${fieldErrorSelector}`,
             )
             .evaluateAll(
               (elements, cardContainer) =>
@@ -250,8 +333,17 @@ describe("Kit admin contrast", () => {
                   background: getComputedStyle(el.closest(cardContainer) ?? document.body)
                     .backgroundColor,
                 })),
-              isDashboard ? ".card" : "fieldset",
+              isDashboard ? ".card" : ".notice, fieldset",
             );
+          if (isInvalid) {
+            const texts = measured.map((item) => item.text);
+            assert.ok(texts.includes("Check the highlighted fields and try again."));
+            for (const message of name === "event-new-invalid"
+              ? ["Accessibility notes are too long.", "Occurrences must be between 1 and 52."]
+              : ["Title is required."]) {
+              assert.ok(texts.includes(message), `${message} is included in the contrast evidence`);
+            }
+          }
           if (evidence) {
             await page.screenshot({ path: join(evidence, `${name}-${width}.png`), fullPage: true });
             await writeFile(
@@ -277,6 +369,39 @@ describe("Kit admin contrast", () => {
             })),
             [],
           );
+          if (isInvalid) {
+            for (const token of ["--color-danger", "--color-lobby-accent"]) {
+              assert.notEqual(
+                await page.evaluate(
+                  (property) =>
+                    getComputedStyle(document.documentElement).getPropertyValue(property).trim(),
+                  token,
+                ),
+                "",
+                `${token} is emitted by the built stylesheet`,
+              );
+            }
+            await page.emulateMedia({ forcedColors: "active" });
+            const rule = await summary.evaluate((el) => ({
+              width: getComputedStyle(el).borderLeftWidth,
+              style: getComputedStyle(el).borderLeftStyle,
+              color: getComputedStyle(el).borderLeftColor,
+              background: getComputedStyle(el).backgroundColor,
+            }));
+            assert.notEqual(rule.width, "0px");
+            assert.notEqual(rule.style, "none");
+            assert.notEqual(rule.color, rule.background);
+            assert.match(
+              await summaryLink.evaluate((el) => getComputedStyle(el).textDecorationLine),
+              /underline/,
+            );
+            if (evidence) {
+              await page.screenshot({
+                path: join(evidence, `${name}-${width}-forced-colors.png`),
+                fullPage: true,
+              });
+            }
+          }
         } finally {
           await context.close();
         }
