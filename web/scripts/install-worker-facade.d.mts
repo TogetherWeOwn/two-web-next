@@ -5,6 +5,8 @@ export const DEFAULT_DIR: string;
 export type InstallerIo = {
   writeFileSync: typeof import("node:fs").writeFileSync;
   renameSync: typeof import("node:fs").renameSync;
+  openSync: typeof import("node:fs").openSync;
+  closeSync: typeof import("node:fs").closeSync;
   undo: Partial<Pick<typeof import("node:fs"), "writeFileSync" | "renameSync" | "rmSync">>;
 };
 export function installWorkerFacade(options?: {
