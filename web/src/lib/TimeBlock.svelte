@@ -3,8 +3,7 @@ import { onMount } from "svelte";
 import { structuredTime, toInstant, type Instant } from "./structured-time";
 import TextLink from "./TextLink.svelte";
 
-// The page owns the snapshot, freshness watcher and cache policy. Start stale
-// on the server so a cached or no-JavaScript response never claims to be live.
+// Only no-store SSR callers with a native watcher may opt into a dated Live snapshot.
 let {
   start,
   end,
@@ -15,6 +14,7 @@ let {
   stale = true,
   roomCount,
   refreshHref,
+  serverLive,
 }: {
   start: Instant;
   end?: Instant;
@@ -25,6 +25,7 @@ let {
   stale?: boolean;
   roomCount?: number;
   refreshHref?: string;
+  serverLive?: { endLabel: string };
 } = $props();
 
 let mounted = $state(false);
@@ -43,6 +44,14 @@ let shortDate = $derived(
     : "",
 );
 let snapshotInstant = $derived(toInstant(asOf));
+let offsets = $derived.by(() => {
+  if (eventState !== "live" || !time || !startInstant || !snapshotInstant) return null;
+  const fmt = new Intl.DateTimeFormat("en", { timeZone: time.zone, timeZoneName: "shortOffset" });
+  const offset = (d: Date) => fmt.formatToParts(d).find((p) => p.type === "timeZoneName")?.value;
+  const [start, snapshot] = [startInstant, snapshotInstant].map(offset);
+  return start && snapshot && start !== snapshot ? { start, snapshot } : null;
+});
+let sinceLabel = $derived(offsets ? `${time?.localTime} ${offsets.start}` : time?.localTime);
 let snapshotLabel = $derived.by(() => {
   if (!time || !snapshot || !startInstant || !snapshotInstant) return "";
   const dateKey = new Intl.DateTimeFormat("en-GB", {
@@ -56,9 +65,10 @@ let snapshotLabel = $derived.by(() => {
     day: "numeric",
     month: "short",
   });
+  const clock = offsets ? `${snapshot.localTime} ${offsets.snapshot}` : snapshot.localTime;
   return dateKey.format(startInstant) === dateKey.format(snapshotInstant)
-    ? snapshot.localTime
-    : `${date.format(snapshotInstant)} ${snapshot.localTime}`;
+    ? clock
+    : `${date.format(snapshotInstant)} ${clock}`;
 });
 let remaining = $derived(
   startInstant && snapshotInstant ? startInstant.getTime() - snapshotInstant.getTime() : NaN,
@@ -74,7 +84,8 @@ let countdown = $derived(
         : `in ${Math.floor(minutes / 60)} h ${minutes % 60} m`,
 );
 let hasClaim = $derived(eventState === "live" || (eventState === "upcoming" && !!countdown));
-let withdrawn = $derived(!mounted || stale || !snapshot);
+let nativeLive = $derived(eventState === "live" && !!serverLive && !stale && !!snapshot);
+let withdrawn = $derived(!nativeLive && (!mounted || stale || !snapshot));
 // Restrict the recovery link to a same-origin path, without URL parser surprises.
 let refreshPath = $derived(
   refreshHref?.startsWith("/") &&
@@ -97,12 +108,13 @@ onMount(() => {
 
 {#if time}
   <div class="time-block" data-state={eventState}>
-    <time datetime={time.datetime} class:cancelled={eventState === "cancelled"}>{eventState === "ended" ? shortDate : eventState === "live" && !withdrawn ? "Live" : time.localTime}</time>
+    <time datetime={time.datetime} class:cancelled={eventState === "cancelled"}>{#if nativeLive}<span data-live-fresh>Live</span><span hidden data-live-stale>{time.localTime}</span>{:else}{eventState === "ended" ? shortDate : eventState === "live" && !withdrawn ? "Live" : time.localTime}{/if}</time>
     <div class="details">
-      <div>{time.localDate}{#if (viewerZone || browserZone) && time.zone === (viewerZone || browserZone)}, your time{#if browserZone && !viewerZone}{" (from your browser)"}{/if}{:else}, UTC fallback{/if}</div>
+      <div>{time.localDate}{#if eventState !== "live" || !serverLive}{#if (viewerZone || browserZone) && time.zone === (viewerZone || browserZone)}, your time{#if browserZone && !viewerZone}{" (from your browser)"}{/if}{:else}, UTC fallback{/if}{/if}</div>
       <div class="anchor">
-        {time.zone}{" · "}{time.utcTime} UTC{#if eventState === "upcoming" && countdown && !withdrawn}{" · "}{countdown}{:else if eventState === "live" && !withdrawn}{" · "}since {time.localTime}{#if roomCount !== undefined && Number.isSafeInteger(roomCount) && roomCount >= 0}{" · "}{roomCount} in the room{/if}{:else if eventState === "ended"}{" · "}{endedTime ? `ended ${endedTime.localTime}` : "Ended"}{#if echoFrozen}{" · "}Echo frozen{/if}{:else if eventState === "cancelled"}{" · "}Cancelled{/if}{#if hasClaim && snapshot}{" · "}{withdrawn && eventState === "live" ? "live as of" : "as of"} <time datetime={snapshot.datetime}>{snapshotLabel}</time>{#if withdrawn && refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{:else if eventState === "live" && !snapshot}{" · "}Live status unavailable{#if refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{/if}
+        {time.zone}{" · "}{time.utcTime} UTC{#if nativeLive}<span data-live-fresh>{" · "}since {sinceLabel}</span>{:else if eventState === "upcoming" && countdown && !withdrawn}{" · "}{countdown}{:else if eventState === "live" && !withdrawn}{" · "}since {sinceLabel}{#if roomCount !== undefined && Number.isSafeInteger(roomCount) && roomCount >= 0}{" · "}{roomCount} in the room{/if}{:else if eventState === "ended"}{" · "}{endedTime ? `ended ${endedTime.localTime}` : "Ended"}{#if echoFrozen}{" · "}Echo frozen{/if}{:else if eventState === "cancelled"}{" · "}Cancelled{/if}{#if hasClaim && snapshot}{" · "}{#if nativeLive}<span data-live-fresh>as of</span><span hidden data-live-stale>live as of</span> <time datetime={snapshot.datetime}>{snapshotLabel}</time><span id="kit-live-refresh"></span>{:else}{withdrawn && eventState === "live" ? "live as of" : "as of"} <time datetime={snapshot.datetime}>{snapshotLabel}</time>{#if withdrawn && refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{/if}{:else if eventState === "live" && !snapshot}{" · "}Live status unavailable{#if refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{/if}
       </div>
+      {#if eventState === "live" && serverLive && endedTime}<p>Ends <time datetime={endedTime.datetime}>{serverLive.endLabel}</time></p>{/if}
     </div>
   </div>
 {:else}
@@ -114,6 +126,7 @@ onMount(() => {
   .time-block > time { font-family: var(--two-font-display); font-size: var(--two-font-size-figure); font-weight: var(--two-font-weight-display); letter-spacing: var(--two-tracking-figure); font-variant-numeric: tabular-nums; }
   time.cancelled { text-decoration: line-through; }
   .details { color: var(--two-color-text-primary); font-size: var(--two-font-size-body-reading); }
+  .details p { margin: 0; }
   .anchor { color: var(--two-color-text-tertiary); font-family: var(--two-font-data); font-size: var(--two-font-size-label); }
   @media (max-width: 390px) { .details { flex-basis: 100%; } }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
