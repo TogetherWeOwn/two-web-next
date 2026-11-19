@@ -67,12 +67,11 @@ export function fixedDateBanner(now) {
  */
 export async function withKitOfflineBrowser(input, callback) {
   const { source, page: fixture, search = "", now, javaScriptEnabled = false, timezoneId } = input;
-  const { headerMenu = false } = input;
   if (typeof search !== "string" || (search && !search.startsWith("?")) || search.includes("#")) {
     throw new Error("Fixture search must be a query string");
   }
   const banner = now === undefined ? undefined : fixedDateBanner(now);
-  const options = { source, page: fixture, csr: javaScriptEnabled && !headerMenu };
+  const options = { source, page: fixture, csr: javaScriptEnabled && !input.headerMenu };
   return withKitBrowserFixture(options, async ({ root, output }) => {
     const entry = join(root, "fixture-server.mjs");
     await build({
@@ -131,7 +130,7 @@ export async function withKitOfflineBrowser(input, callback) {
       await context.route("**/*", async (route) => {
         const url = new URL(route.request().url());
         if (url.origin === origin && route.request().method() === "GET") {
-          if (url.pathname === path && (url.search === search || headerMenu))
+          if (url.pathname === path && (url.search === search || input.headerMenu))
             return route.fulfill({
               contentType: "text/html",
               headers: { "content-security-policy": "worker-src 'none'; frame-src 'none'" },
@@ -141,7 +140,7 @@ export async function withKitOfflineBrowser(input, callback) {
           const isMenu = url.pathname === "/islands/site-header-menu.js";
           const directory = isAppAsset ? join(output, "client") : join(root, "public");
           const asset = await readFixtureAsset(directory, url.pathname, {
-            allowJavaScript: javaScriptEnabled && (isMenu || (isAppAsset && !headerMenu)),
+            allowJavaScript: javaScriptEnabled && (isMenu || (isAppAsset && !input.headerMenu)),
           });
           if (asset) return route.fulfill(asset);
         }

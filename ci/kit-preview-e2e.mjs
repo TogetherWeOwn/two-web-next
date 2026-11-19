@@ -218,12 +218,10 @@ function expectShell(document) {
   const scripts = [...document.matchAll(/<script\b[^>]*>/gi)].map((match) => match[0]);
   check("one document head is assembled", count(/<head(?:\s|>)/gi) === 1);
   check("one semantic main is rendered", count(/<main(?:\s|>)/gi) === 1);
-  // No hydration or inline bootstrap: only these deferred first-party binders.
   const islands = ["site-header-menu", "copy-link", "past-events"];
   check(
     "only deferred header, copy-link and archive binders load",
-    scripts.length === islands.length &&
-      islands.every((name, i) => scripts[i] === `<script src="/islands/${name}.js" defer>`),
+    scripts.join("") === islands.map((name) => `<script src="/islands/${name}.js" defer>`).join(""),
   );
   check("one canonical URL is rendered", count(/<link rel="canonical"/g) === 1);
   check("archive shell carries the schedule theme", document.includes('data-theme="schedule"'));
@@ -272,7 +270,7 @@ async function browserShellFixtures(document) {
   const fixture = document
     .replace(/<link rel="(?:stylesheet|preload)"[^>]*\/?\s*>/g, "")
     .replace(/<link rel="(?:manifest|icon|apple-touch-icon)"[^>]*\/?\s*>/g, "")
-    .replace(/<script src="\/islands\/past-events\.js"[^>]*><\/script>/g, "")
+    .replace(/<script src="\/islands\/[^"/]+\.js" defer><\/script>/g, "")
     .replace(
       'src="/logo.svg"',
       'src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 1 1%22/%3E"',
@@ -343,6 +341,7 @@ async function browserShellFixtures(document) {
     check("skip link moves keyboard focus to main", skipTargetFocused);
 
     await page.setViewportSize({ width: 375, height: 812 });
+    await page.getByRole("link", { name: "Menu", exact: true }).click();
     const mobile = await page.evaluate(() => {
       const nav = document.querySelector(".main-nav").getBoundingClientRect();
       const links = [...document.querySelectorAll(".main-nav a")].map((link) => {
