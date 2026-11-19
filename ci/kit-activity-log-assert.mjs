@@ -1,10 +1,14 @@
 // Run from the pinned app checkout, only with the job-private Worker and Postgres.
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import postgres from "postgres";
 import { requireGithubRunner, requireTestDatabase } from "../e2e/ci-only.mjs";
+import { routeA11y, routeLighthouse } from "./kit-activity-log-metrics.mjs";
+import { collectVisuals } from "./kit-activity-log-visual.mjs";
 
+const cdpPort = 9222;
 const origin = "http://127.0.0.1:8788";
 const path = "/admin/activity-log";
 const mod = "900000000000009301";
@@ -58,7 +62,12 @@ async function main() {
         timestamptz '2098-01-01 00:00:00+00' + (case when i = 61 then 60 else i end) * interval '1 minute'
       from generate_series(1, 120) as i order by i`;
     browser = await chromium.launch({
-      args: ["--proxy-server=http://127.0.0.1:9", `--proxy-bypass-list=<-loopback>;${origin}`],
+      args: [
+        "--proxy-server=http://127.0.0.1:9",
+        `--proxy-bypass-list=<-loopback>;${origin}`,
+        "--remote-debugging-address=127.0.0.1",
+        `--remote-debugging-port=${cdpPort}`,
+      ],
     });
     const context = await browser.newContext({ serviceWorkers: "block", javaScriptEnabled: false });
     await context.route("**/*", (route) =>
@@ -120,6 +129,20 @@ async function main() {
       [[a, b], [a, b], [a, b], [a], [b]],
       "audit:subjects",
     );
+    await context.close();
+
+    // Only the fixed dataset seeded above and the original moderator session may render.
+    const record = (text) => appendFileSync(join(process.env.TMPDIR, "metrics.txt"), `${text}\n`);
+    const session = { name: cookie, value: moderatorToken, domain, path: "/", secure: true };
+    const evidence = async (page, name, url) => {
+      if (!name.endsWith("desktop.png")) return;
+      const a11y = await routeA11y(page);
+      record(`${name} ${a11y}`);
+      ok(a11y.startsWith("a11y: PASS "), "visual:a11y");
+      if (name.startsWith("populated"))
+        record(`${name} ${await routeLighthouse(page, cdpPort, url)}`);
+    };
+    await collectVisuals(browser, session, join(process.env.TMPDIR, "screenshots"), evidence);
   } finally {
     try {
       await browser?.close();
