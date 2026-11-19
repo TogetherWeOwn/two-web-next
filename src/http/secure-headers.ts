@@ -21,10 +21,12 @@ export function isInlineCriticalCssPath(path: string): boolean {
   return INLINE_CRITICAL_CSS_PATHS.has(path);
 }
 
+// report-to selects a Reporting-Endpoints group with a same-origin path.
+// The deprecated Report-To header instead requires an absolute HTTPS URL.
 const CSP_REPORT_ENDPOINT = "/csp-reports";
 const CSP_REPORT_GROUP = "csp-endpoint";
 
-// Kit mirrors Hono's wire policy here. HSTS stays at the Cloudflare edge.
+// Shared Hono and Kit wire policy. HSTS stays at the Cloudflare edge.
 export function securityHeadersFor(
   request: { path: string; method: string },
   featuredImageHosts?: string,

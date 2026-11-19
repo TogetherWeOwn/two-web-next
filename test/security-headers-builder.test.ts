@@ -3,10 +3,9 @@ import type { Env } from "../src/env";
 import { securityHeadersFor } from "../src/http/secure-headers";
 import { fetchApp } from "./helpers/fetch-app";
 
-// TOG-12247: the SvelteKit spike sets headers through securityHeadersFor()
-// instead of hono's secureHeaders(). Both must emit the same set, so a page
-// moved out of Hono cannot lose or loosen a header. The Hono app stays the
-// source of truth: drift in src/index.tsx fails here first.
+// These fetch-seam comparisons pin where Hono applies the shared policy.
+// They do not independently prove the builder's values: the CSP/COEP/SEO
+// assertions and base-to-head Hono wire recordings cover policy equivalence.
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -18,8 +17,7 @@ const env: Env = {
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
 };
 
-// Every header hono's secureHeaders() can emit, so a new one in src/index.tsx
-// (say COEP or HSTS) shows up as missing from the builder.
+// Include headers the adapter must not add, such as HSTS and Report-To.
 const SECURITY_HEADER =
   /^(cross-origin-|origin-agent-cluster$|referrer-policy$|strict-transport-security$|x-content-type-options$|x-dns-prefetch-control$|x-download-options$|x-frame-options$|x-permitted-cross-domain-policies$|x-xss-protection$|content-security-policy|permissions-policy$|reporting-endpoints$|report-to$)/;
 
@@ -34,7 +32,7 @@ const cases: Array<[string, string]> = [
   ["POST", "/api/agent-events"],
 ];
 
-describe("securityHeadersFor matches hono secureHeaders", () => {
+describe("Hono fetch applies securityHeadersFor", () => {
   for (const featured of [undefined, "cdn.example.com, img.example.com"]) {
     for (const [method, path] of cases) {
       it(`${method} ${path} (featured hosts: ${featured ?? "none"})`, async () => {

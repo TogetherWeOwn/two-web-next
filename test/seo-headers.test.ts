@@ -540,8 +540,7 @@ describe("security headers per route class", () => {
   });
 
   it("never emits Strict-Transport-Security from the app: the edge owns HSTS (TOG-8729)", async () => {
-    // Hono defaults strictTransportSecurity on; src/index.tsx explicitly
-    // disables it, so a local dev server can never pin a machine to HTTPS.
+    // The shared policy omits HSTS, so local development cannot pin HTTPS.
     for (const path of ["/", "/about", "/up"]) {
       const res = await app.request(path, {}, env);
       expect(res.headers.get("Strict-Transport-Security"), path).toBeNull();
@@ -636,9 +635,8 @@ describe("URL freeze + no soft 404s", () => {
 // | tests/Feature/HomeUpcomingEventsTest.php             | W8               |
 // | tests/Feature/FeaturedContentOnHomePageTest.php      | W8               |
 // * The nginx template has no Workers equivalent: the edge (Cloudflare)
-// owns HSTS there, so this card explicitly disables Hono's default HSTS
-// (strictTransportSecurity: false in src/index.tsx) and pins its absence
-// instead of asserting on a file that does not exist.
+// owns HSTS there, so this test pins its absence from the Worker instead of
+// asserting on a file that does not exist.
 describe("mapping table", () => {
   it("names only sections that exist in this file", async () => {
     const { readFileSync } = await import("node:fs");

@@ -1,7 +1,6 @@
 import { captureRefusal, captureResponse } from "./render-clock";
 import { type Context, Hono } from "hono";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
-import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
 import { registerAuthRoutes, SESSION_COOKIE } from "./auth/routes";
@@ -25,7 +24,6 @@ import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
-import { operatorImageHosts } from "./config-warn";
 import { Join, Home, type Notice } from "./pages";
 import { renderHtmlOutcome } from "./html-outcome";
 import { honoRecoveryRenderer } from "./recovery-hono";
@@ -36,7 +34,7 @@ import { registerHotzoneRoutes } from "./hotzones/routes";
 import { discordEventsSource } from "./events/discord-transients";
 import { dbFor } from "./admin/db";
 import { cachedFeatured, cachedHomeUpcoming } from "./home-cache";
-import { leafInlineStyleCsp, robotsTag, SECURITY_HEADERS } from "./headers";
+import { honoSecurityHeaders, robotsTag } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { registerAiFriendlyRoutes } from "./ai-friendly/routes";
 import { registerSeoLeaves } from "./seo-leaves";
@@ -89,87 +87,13 @@ app.use("*", async (c, next) => {
   c.res = withStreamedBody(c.res);
 });
 
-// The violation sink (TOG-10107): the CSP report-to directive selects the
-// Reporting-Endpoints group. No report-uri: it is deprecated (ZAP 10055
-// notices flag it) and report-to is Baseline in current browsers.
-// Omit the deprecated Report-To header: unlike Reporting-Endpoints, it
-// requires absolute HTTPS URLs, not this same-origin relative destination.
-const CSP_REPORT_ENDPOINT = "/csp-reports";
-
-// The four static headers (fonts byte-identical to SECURITY_HEADERS in
-// src/headers.ts — the tested copy; the parity test pins both sides so drift
-// fails the build). X-Frame-Options is DENY: nothing frames this site
-// (TOG-5469). Registered globally, not on a route group: the DB-free funnel
-// leaves and the mounted admin/profile sub-apps inherit it from the outer
-// dispatch. The CSP shape + report sink belong to the CSP-report slice
-// (TOG-10107) and are configured above; the staging X-Robots-Tag lives in
-// the robotsTag middleware below. Strict-Transport-Security is explicitly
-// disabled here (strictTransportSecurity: false below): the edge owns it
-// (TOG-8729) — Hono defaults it on, and emitting it from the app would pin
-// local dev machines to HTTPS. The absence is pinned in test/seo-headers.
-// One security-header wrapper (the exposure inventory in
-// test/member-exposure.test.ts pins middleware multiplicity): secureHeaders
-// plus the staging X-Robots-Tag plus the content-leaf inline-style hash.
-// Mounted sub-apps inherit all three from this outer dispatch, including
-// refusals from the same-origin guard.
-const staticSecurityHeaders = secureHeaders({
-  // Edge-owned (TOG-8729): emitting HSTS from the app would pin local dev
-  // machines to HTTPS, so the Hono default is explicitly off.
-  strictTransportSecurity: false,
-  // ZAP 90004; credentialless, not require-corp: cross-origin embeds are credential-free.
-  crossOriginEmbedderPolicy: "credentialless",
-  contentSecurityPolicy: {
-    defaultSrc: ["'self'"],
-    // Restored legacy directives (W16b TOG-11942): object-src 'none' (no
-    // <object>/<embed> anywhere in src/), base-uri 'self', connect-src
-    // 'self' (island fetch targets are same-origin paths). The remaining
-    // legacy delta — upgrade-insecure-requests — is left out: every source
-    // list is 'self' or an explicit https:// host, so an http: subresource is
-    // blocked rather than upgraded, and HTTPS itself is edge-owned (TOG-8729).
-    baseUri: ["'self'"],
-    connectSrc: ["'self'"],
-    objectSrc: ["'none'"],
-    imgSrc: [
-      "'self'",
-      (c) =>
-        operatorImageHosts((c.env as Env).FEATURED_IMAGE_HOSTS)
-          .map((host) => `https://${host}`)
-          .join(" "),
-    ],
-    // Only join reads embed the widget; other routes cannot frame anything.
-    frameSrc: [
-      (c) =>
-        c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method)
-          ? "https://discord.com/widget"
-          : "'none'",
-    ],
-    // The static policy stays 'self'-only on every route. Inline styles on /
-    // and content leaves are allowlisted per-route by leafInlineStyleCsp
-    // below; other routes keep the self-only style policy.
-    styleSrc: ["'self'"],
-    scriptSrc: ["'self'"],
-    fontSrc: ["'self'"],
-    frameAncestors: ["'none'"],
-    formAction: ["'self'"],
-    reportTo: "csp-endpoint",
-  },
-  xContentTypeOptions: SECURITY_HEADERS["X-Content-Type-Options"],
-  referrerPolicy: SECURITY_HEADERS["Referrer-Policy"],
-  xFrameOptions: SECURITY_HEADERS["X-Frame-Options"],
-  permissionsPolicy: {
-    camera: [],
-    microphone: [],
-    geolocation: [],
-  },
-  reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
-});
-
+// One outer security-header wrapper covers mounted sub-apps and guard refusals.
+// The exposure inventory in test/member-exposure.test.ts pins its multiplicity.
 app.use("*", (c, next) =>
   requestLog(c, async () => {
     try {
-      await staticSecurityHeaders(c, next);
+      await honoSecurityHeaders(c, next);
       await robotsTag(c, async () => {});
-      leafInlineStyleCsp(c);
     } catch (err) {
       // Handler errors already became responses; one thrown by this
       // post-processing would skip requestLog, so settle the final 500 here.
@@ -179,7 +103,7 @@ app.use("*", (c, next) =>
 );
 
 // TrustHosts re-expression (W16: TOG-10110): refuse foreign Host values
-// before routing. Mounted after secureHeaders (refusals leave hardened) and
+// before routing. Mounted inside the header wrapper (refusals leave hardened) and
 // before every route; absolute URLs never derive from Host (all from APP_URL).
 app.use("*", trustHosts());
 

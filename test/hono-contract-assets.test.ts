@@ -55,7 +55,16 @@ describe("Hono static asset passthrough contracts", () => {
 
   it.each(["GET", "HEAD"])("%s preserves a pinned font 304 and its ETag", async (method) => {
     const { fetch, env } = fixture(
-      new Response(null, { status: 304, headers: { etag, "cache-control": assetCache } }),
+      new Response(null, {
+        status: 304,
+        headers: {
+          etag,
+          "cache-control": assetCache,
+          "content-security-policy": "default-src 'none'",
+          "cross-origin-embedder-policy": "require-corp",
+          "x-powered-by": "asset-fixture",
+        },
+      }),
     );
     const request = requestFor("/fonts/fixture.woff2?revision=1", method, {
       "if-none-match": etag,
@@ -68,7 +77,27 @@ describe("Hono static asset passthrough contracts", () => {
     expect(res.headers.get("etag")).toBe(etag);
     expect(res.headers.get("cache-control")).toBe(PINNED_ASSET_CACHE_CONTROL);
     expect(res.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(res.headers.get("content-security-policy")).not.toContain("default-src 'none'");
+    expect(res.headers.get("cross-origin-embedder-policy")).toBe("credentialless");
+    expect(res.headers.get("reporting-endpoints")).toBe('csp-endpoint="/csp-reports"');
+    expect(res.headers.get("x-powered-by")).toBeNull();
+    expect(res.body).toBeNull();
     expect(await res.text()).toBe("");
+  });
+
+  it("decorates an immutable upstream redirect without changing its status or location", async () => {
+    const location = `${baseEnv.APP_URL}/new.css`;
+    const upstream = Response.redirect(location, 307);
+    const { fetch, env } = fixture(upstream);
+    const request = requestFor("/old.css");
+    const res = await app.fetch(request, env);
+
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(request);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe(location);
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(upstream.headers.get("x-content-type-options")).toBeNull();
+    expect(res.body).toBeNull();
   });
 
   describe.each(["/missing.css", "/fonts/missing.woff2", "/styles.css/"])(
