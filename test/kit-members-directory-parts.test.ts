@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import type { MembersDirectoryView } from "../web/src/lib/members-directory";
+import { directory, emptyDirectory, guest } from "./fixtures/kit-members-directory-view";
 import { createKitSsrRenderer, type RenderPage } from "./helpers/kit-ssr-render";
 
 let render: RenderPage;
@@ -11,30 +11,6 @@ beforeAll(async () => {
 });
 afterAll(() => cleanup?.());
 
-const counts = { members: 814, attendedThisMonth: 212 };
-// Exercise the presentation boundary; the projection has its own spec.
-const name = "Sample Comet";
-const directory = {
-  audience: "member",
-  counts,
-  selection: { filter: "active", query: "", page: 1 },
-  filterCounts: { active: 1, everyone: 1, guides: 1 },
-  resultCount: 1,
-  pageCount: 1,
-  rows: [
-    {
-      name,
-      rank: 3,
-      profileHref: "/members/sample-comet",
-      role: "Guide",
-      lastSeen: "Synthetic race · 2 d ago",
-      games: ["Example Racing"],
-    },
-  ],
-  newcomers: [{ name, day: "Today", sayHiHref: "/welcome/sample-comet" }],
-  organizers: [{ name, role: "Event host" }],
-} satisfies MembersDirectoryView;
-
 it("renders the synthetic directory identity, rank, welcome and organizer affordances", () => {
   const html = render(directory);
   expect(html).toContain('aria-label="Say hi to Sample Comet"');
@@ -43,8 +19,13 @@ it("renders the synthetic directory identity, rank, welcome and organizer afford
   expect(html).toContain("Event host");
 });
 
+it("emits an avatar tone without an inline background style", () => {
+  const html = render(directory);
+  expect(html).toContain('data-tone="6"');
+  expect(html).not.toContain('style="background-color:');
+});
+
 it("renders only aggregate counts and a sign-in action to guests", () => {
-  const guest = { audience: "guest", counts } satisfies MembersDirectoryView;
   const html = render(guest);
   expect(html).toContain("814 members · 212 came to something this month");
   expect(html).toContain('href="/auth/discord"');
@@ -52,13 +33,27 @@ it("renders only aggregate counts and a sign-in action to guests", () => {
 });
 
 it("escapes no-match text and renders the supplied Clear search link", () => {
-  const html = render({
-    ...directory,
-    selection: { filter: "guides", query: "<sample>", page: 1 },
-    resultCount: 0,
-    rows: [],
-  } satisfies MembersDirectoryView);
+  const html = render(emptyDirectory("guides", "<sample>"));
   expect(html).toMatch(/Nobody matches .*&lt;sample/);
   expect(html).not.toContain("<sample>");
   expect(html).toContain('href="?filter=guides"');
+});
+
+const limit = "🟠".repeat(32);
+it.each([
+  [limit, limit],
+  [`${limit}x`, `${limit}…`],
+])("bounds the displayed no-match query by code point (%#)", (query, shown) => {
+  expect(render(emptyDirectory("guides", query))).toContain(`Nobody matches "${shown}".`);
+});
+
+it.each([
+  ["everyone", 0, "No members to list yet.", "Find an event", "/events"],
+  ["active", 2, "No active members this month yet.", "Show everyone", "?filter=everyone"],
+  ["guides", 2, "No Guides yet.", "Show everyone", "?filter=everyone"],
+] as const)("renders the %s empty state", (filter, count, title, action, href) => {
+  const html = render(emptyDirectory(filter, "", count));
+  expect(html).toContain(title);
+  expect(html).toContain(action);
+  expect(html).toContain(`href="${href}"`);
 });
