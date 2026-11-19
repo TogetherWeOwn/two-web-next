@@ -11,11 +11,11 @@ const menu = (page, role = "button") => page.getByRole(role, { name: "Menu", exa
 const shot = (page, name) =>
   page.screenshot({ path: `artifacts/kit-ember-shell/${name}.png`, animations: "disabled" });
 const route = new URL("../test/fixtures/kit-ember-shell-route.svelte", import.meta.url);
+const source = await readFile(route, "utf8");
 
 test("built Ember shell preserves its landmarks and account states without JavaScript", {
   timeout: 720_000,
 }, async () => {
-  const source = await readFile(route, "utf8");
   await mkdir("artifacts/kit-ember-shell", { recursive: true });
   for (const state of ["guest", "member", "hidden"]) {
     await withKitOfflineBrowser(
@@ -131,7 +131,6 @@ test("built Ember shell preserves its landmarks and account states without JavaS
 test("CSR-disabled Kit header supports keyboard, account variants, and a blocked island", {
   timeout: 720_000,
 }, async () => {
-  const source = await readFile(route, "utf8");
   const options = { page: source, javaScriptEnabled: true, headerMenu: true };
   await withKitOfflineBrowser(options, async ({ page, html }) => {
     const url = page.url();
@@ -154,8 +153,9 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     await expect(inert).toHaveCount(2);
     await expect(sheet.getByText("Close menu")).toBeHidden();
     await shot(page, "keyboard-open-390");
-    const cycle = [toggle, sheet.getByTestId("signin"), toggle, home];
-    for (const [i, target] of cycle.entries()) {
+    const signIn = sheet.getByTestId("signin");
+    await expect(signIn).toHaveCSS("justify-content", "flex-start");
+    for (const [i, target] of [toggle, signIn, toggle, home].entries()) {
       await key(i < 2 ? "Shift+Tab" : "Tab");
       await expect(target).toBeFocused();
     }

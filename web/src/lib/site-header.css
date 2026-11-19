@@ -59,6 +59,7 @@
   .base-theme [data-kit-site-header] .menu-sheet :is(a, button):where(:not([hidden])) {
     display: flex;
     align-items: center;
+    justify-content: flex-start;
     width: 100%;
     min-height: 52px;
     margin: 0;
@@ -91,7 +92,6 @@
     }
   }
 }
-
 @keyframes kit-header-enter {
   from {
     opacity: 0;
