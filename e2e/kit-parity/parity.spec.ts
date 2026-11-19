@@ -578,20 +578,18 @@ for (const target of targets) {
         .join("\n");
       expect(setCookies).toContain("__Host-two_login_intended=");
       expect(setCookies).not.toContain("__Host-two_expired_write=");
-    });
 
-    test("HEAD keeps the recovery headers and signed cookie without a document body", async () => {
-      const response = await api(target).head("/auth/recover?next=%2Fprofile", {
-        headers: { "if-none-match": "*" },
+      await test.step("HEAD keeps the recovery headers and signed cookie without a body", async () => {
+        const head = await api(target).head("/auth/recover?next=%2Fprofile", {
+          headers: { "if-none-match": "*" },
+        });
+        expect(head.status()).toBe(200);
+        expect(head.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+        expect(head.headers()["cache-control"]).toBe("no-store, private");
+        expect(head.headers()["set-cookie"]).toContain("__Host-two_login_intended=");
+        expect(head.headers().etag).toBeUndefined();
+        expect(await head.text()).toBe("");
       });
-      expect(response.status()).toBe(200);
-      expect(response.headers()["x-two-renderer"] ?? null).toBe(
-        target.name === "kit" ? "kit" : null,
-      );
-      expect(response.headers()["cache-control"]).toBe("no-store, private");
-      expect(response.headers()["set-cookie"]).toContain("__Host-two_login_intended=");
-      expect(response.headers().etag).toBeUndefined();
-      expect(await response.text()).toBe("");
     });
 
     test("safe next survives onto the login retry, hostile next leaves no trace", async () => {
