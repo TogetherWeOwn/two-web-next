@@ -109,8 +109,8 @@ const workers = [];
 
 // Start one loopback Worker. The generated Kit Worker and the direct Hono
 // Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
-// fixture database and vars; only main, assets and the self origin differ.
-async function startWorker(name, main, assetsDirectory) {
+// fixture database and vars within each pair.
+async function startWorker(name, main, assetsDirectory, sessionSecret) {
   const port = await unusedPort();
   const origin = `http://127.0.0.1:${port}`;
   const config = join(scratch, `${name}.wrangler.jsonc`);
@@ -123,7 +123,7 @@ async function startWorker(name, main, assetsDirectory) {
     vars: {
       APP_URL: origin,
       DATABASE_URL: databaseUrl,
-      ...(args.length ? { SESSION_SECRET: FIXTURE_SECRETS.SESSION_SECRET } : {}),
+      ...(sessionSecret ? { SESSION_SECRET: sessionSecret } : {}),
       FEATURED_IMAGE_HOSTS: "",
       DISCORD_CLIENT_ID: "ci-fixture-client",
       DISCORD_CLIENT_SECRET: "ci-fixture-secret",
@@ -515,6 +515,22 @@ try {
   }
 
   if (args.length) {
+    // Only the data-redirect proof needs signed cookies. Leave the existing
+    // method-parity pair in its original, no-session configuration.
+    const secret = FIXTURE_SECRETS.SESSION_SECRET;
+    const kitWithSession = await startWorker("kit-session", worker, assets, secret);
+    const honoWithSession = await startWorker(
+      "hono-session",
+      join(repo, "src/worker.ts"),
+      join(repo, "public"),
+      secret,
+    );
+    await Promise.all(
+      [kitWithSession, honoWithSession].map((instance) =>
+        listen(instance.child, instance.origin, () => instance.log),
+      ),
+    );
+
     async function observeDataRedirect(worker, path) {
       const response = await fetch(`${worker.origin}${path}`, { redirect: "manual" });
       assert.equal(response.status, 302, `${path}: Hono guest redirect`);
@@ -536,14 +552,14 @@ try {
 
     for (const path of ["/admin/__data.json?tab=events", "/members/__data.json"]) {
       const [direct, installed] = await Promise.all([
-        observeDataRedirect(hono, path),
-        observeDataRedirect(kit, path),
+        observeDataRedirect(honoWithSession, path),
+        observeDataRedirect(kitWithSession, path),
       ]);
       assert.deepEqual(installed, direct, `${path}: installed facade preserves Hono response`);
     }
     console.log("PASS installed Worker preserves Hono data redirects");
 
-    const kitData = await fetch(`${origin}/admin/join-attempts/__data.json`, {
+    const kitData = await fetch(`${kitWithSession.origin}/admin/join-attempts/__data.json`, {
       redirect: "manual",
     });
     assert.equal(kitData.status, 200, "Kit-owned data redirect remains a JSON response");
