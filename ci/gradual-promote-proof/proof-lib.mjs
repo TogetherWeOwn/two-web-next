@@ -16,7 +16,7 @@ import { pathToFileURL } from "node:url";
 
 export const PROOF_WORKER_NAME = "two-gradual-promote-proof";
 export const PINNED_ACTION =
-  "TogetherWeOwn/.github/actions/gradual-promote@d427f7212f478ea3823a605edb394b0722e152b5";
+  "TogetherWeOwn/.github/actions/gradual-promote@2ef8ad6447e11d019ac3098bcfd011193b75266a";
 export const PROOF_MODES = ["ok", "fail-up"];
 export const PROOF_RUN_MODES = ["success", "rollback"];
 

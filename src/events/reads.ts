@@ -37,7 +37,7 @@ import {
   PAST_EVENTS_PAGE_SIZE,
   type DiscordTransient,
 } from "../islands/contracts";
-import { calendarZone, canonicalIntervalDays, wallDayStart } from "./date-format";
+import { calendarZone, canonicalIntervalDays, wallDayStart, wallMonth } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
 import { normalizePastPage } from "./past-page";
 export { normalizePastPage } from "./past-page";
@@ -280,14 +280,14 @@ export async function rankUpcoming(
  * so the covered range reaches into the adjacent months and the read keeps
  * exactly the rows whose finite scheduled interval overlaps a covered wall
  * day in their own zone — including starts before the leading week. SQL reads
- * the covered UTC days widened for the widest zone offset; the grid cap is a
- * pathological guard only: a real month never holds that many events. */
+ * the covered UTC days widened for the widest zone offset. The cap and any
+ * discarded windows that might touch the month qualify absence claims. */
 export async function listUpcomingForMonth(
   db: Db,
   month: string,
   now = new Date(),
   opts: CalendarReadOpts = {},
-): Promise<PublicEvent[]> {
+): Promise<PublicEvent[] & { mayBeTruncated?: boolean; discardedMayOverlapMonth?: boolean }> {
   // A bad month is an empty grid, never a 500: the route only passes
   // validated months, this keeps the read total.
   const range = calendarGridRange(month);
@@ -310,15 +310,29 @@ export async function listUpcomingForMonth(
     )
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(EVENTS_MONTH_GRID_LIMIT);
-  return withGoing(
+  let discardedMayOverlapMonth = false;
+  const monthStart = wallDayStart(`${month}-01`);
+  const visible = await withGoing(
     db,
     rows.filter((r) => {
-      if (!isRenderableEventWindow(r)) return false;
+      if (!isRenderableEventWindow(r)) {
+        // A discarded window may reach the month unless it has a known
+        // start in a later host month (e.g. in the trailing grid week).
+        const startMonth = Number.isFinite(r.startsAt.getTime())
+          ? wallDayStart(`${wallMonth(r.startsAt, r.timezone)}-01`)
+          : NaN;
+        if (!(startMonth > monthStart)) discardedMayOverlapMonth = true;
+        return false;
+      }
       return (
         canonicalIntervalDays(r.startsAt, r.endsAt, r.timezone, range.first, range.last).length > 0
       );
     }),
   );
+  return Object.assign(visible, {
+    mayBeTruncated: rows.length >= EVENTS_MONTH_GRID_LIMIT,
+    discardedMayOverlapMonth,
+  });
 }
 
 // Exclude PostgreSQL infinity starts before limits so unusable links cannot occupy slots.
@@ -327,6 +341,16 @@ const finiteEventStart = sql`isfinite(${events.startsAt})`;
 // Rendered boundaries decode PostgreSQL infinity to invalid Dates whose
 // `toISOString()`/formatting throws, so upcoming reads refuse either one.
 const finiteEventWindow = and(sql`isfinite(${events.startsAt})`, sql`isfinite(${events.endsAt})`);
+
+// PostgreSQL's BC output does not parse as a JS Date, and its upper range
+// exceeds Date's maximum. The driver truncates fractional milliseconds, so
+// values within the last representable millisecond remain decodable.
+const homeRenderableWindow = and(
+  sql`${events.startsAt} >= '0001-01-01 00:00:00+00'::timestamptz`,
+  sql`${events.startsAt} < '275760-09-13 00:00:00.001+00'::timestamptz`,
+  sql`${events.endsAt} >= '0001-01-01 00:00:00+00'::timestamptz`,
+  sql`${events.endsAt} < '275760-09-13 00:00:00.001+00'::timestamptz`,
+);
 
 // A row explicitly marked past is never upcoming, even with a future end:
 // without this the overlap read would grow a past archive. Cancelled rows
@@ -356,7 +380,14 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
     const rows = await tx
       .select()
       .from(events)
-      .where(and(eq(events.status, "published"), gte(events.endsAt, now), finiteEventWindow))
+      .where(
+        and(
+          eq(events.status, "published"),
+          gte(events.endsAt, now),
+          finiteEventWindow,
+          homeRenderableWindow,
+        ),
+      )
       .orderBy(asc(events.startsAt), asc(events.id))
       .limit(3);
     // The homepage gets public signposts and an aggregate, never creator or RSVP identities.
@@ -593,7 +624,13 @@ export async function listCalendarPast(
   db: Db,
   now = new Date(),
   opts: CalendarReadOpts = {},
-): Promise<PublicEvent[] & { mayBeTruncated?: boolean }> {
+): Promise<
+  PublicEvent[] & {
+    mayBeTruncated?: boolean;
+    hadDiscardedRows?: boolean;
+    discardedStartMonths?: Set<string>;
+  }
+> {
   const rows = await db
     .select()
     .from(events)
@@ -608,9 +645,22 @@ export async function listCalendarPast(
   // that `isfinite()` cannot see. Truncation is judged on the pre-filter
   // fetched count (like `listUpcoming`/`listPast` `hasMore`): a post-filter
   // length would misread a drawer that dropped an overflow row as complete.
-  const truncated = rows.length >= EVENTS_PAST_DRAWER_LIMIT;
-  const visible = await withGoing(db, rows.filter(isRenderableEventWindow));
-  return Object.assign(visible, { mayBeTruncated: truncated });
+  const discardedStartMonths = new Set<string>();
+  const renderable = rows.filter((row) => {
+    if (isRenderableEventWindow(row)) return true;
+    // A valid start with an unreadable end can still belong to a displayed
+    // host month. Only UTC years 0–10000 can touch the supported year range.
+    const year = row.startsAt.getUTCFullYear();
+    if (year >= 0 && year <= 10000) {
+      discardedStartMonths.add(wallMonth(row.startsAt, row.timezone));
+    }
+    return false;
+  });
+  return Object.assign(await withGoing(db, renderable), {
+    mayBeTruncated: rows.length >= EVENTS_PAST_DRAWER_LIMIT,
+    hadDiscardedRows: rows.length > renderable.length,
+    discardedStartMonths,
+  });
 }
 
 /** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */

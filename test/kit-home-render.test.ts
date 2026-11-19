@@ -105,7 +105,7 @@ describe("Kit home SSR render: session-aware header and hero", () => {
   });
 });
 
-describe("Kit home SSR render: highlights and join band", () => {
+describe("Kit home SSR render: highlights", () => {
   it("renders four sourced highlights and preserves the community links", () => {
     const html = renderPage(baseData());
     const highlights = html.split('data-testid="home-highlights"')[1]!.split("</ul>")[0]!;
@@ -118,31 +118,43 @@ describe("Kit home SSR render: highlights and join band", () => {
       expect(html).not.toContain(unsupported);
     }
   });
+});
 
-  it("offers Discord sign-in to guests and signed-in non-members", () => {
+describe("Kit home SSR render: join band", () => {
+  function band(html: string): string {
+    return html.split('<section class="join-band"')[1]?.split("</section>")[0] ?? "";
+  }
+
+  it("offers the shared introduction and sign-in to guests and non-members", () => {
     for (const session of [null, nonMemberSession]) {
-      const html = renderPage(baseData({ session }));
-      expect(html).toContain(JOIN_INTRO);
-      expect(html).toContain('href="/auth/discord" data-testid="join-band-join"');
+      const content = band(renderPage(baseData({ session })));
+      expect(content).toContain("Pull up a");
+      expect(content).toContain(JOIN_INTRO);
+      expect(content).toContain('href="/auth/discord" data-testid="join-band-join"');
     }
   });
 
-  it("omits the band for members, including with a failure notice", () => {
-    const html = renderPage(baseData({ session: memberSession, notice: "join_failed" }));
-    expect(html).not.toContain('data-testid="join-band"');
+  it("suppresses the whole band for members, even after join failure", () => {
+    for (const notice of [null, "join_failed"]) {
+      expect(band(renderPage(baseData({ session: memberSession, notice })))).toBe("");
+    }
   });
 
-  it("offers the invite route on session outage and prioritizes it over join failure", () => {
-    const html = renderPage(baseData({ sessionUnavailable: true, notice: "join_failed" }));
-    expect(html).toContain('href="/discord" data-testid="join-band-invite"');
-    expect(html).toContain("Sign-in isn't answering right now.");
-    expect(html).not.toContain('data-testid="join-band-join"');
+  it("prioritizes the outage invite over a join failure", () => {
+    const content = band(renderPage(baseData({ sessionUnavailable: true, notice: "join_failed" })));
+    expect(content).toContain("Sign-in isn't answering right now.");
+    expect(content).toContain('href="/discord" data-testid="join-band-invite"');
+    expect(content).not.toContain('data-testid="join-band-join"');
+    expect(content).not.toContain("The bot couldn't add you");
   });
 
-  it("uses the configured invite after a failed join", () => {
-    const html = renderPage(baseData({ session: nonMemberSession, notice: "join_failed" }));
-    expect(html).toContain(`href="${INVITE_URL}" data-testid="join-band-invite"`);
-    expect(html).toContain("The bot couldn't add you just now.");
+  it("offers the configured invite after a healthy non-member join failure", () => {
+    const content = band(
+      renderPage(baseData({ session: nonMemberSession, notice: "join_failed" })),
+    );
+    expect(content).toContain("The bot couldn't add you just now.");
+    expect(content).toContain(`href="${INVITE_URL}" data-testid="join-band-invite"`);
+    expect(content).not.toContain('data-testid="join-band-join"');
   });
 });
 
@@ -337,6 +349,64 @@ describe("Kit home SSR render: teaser fullness verdict (owned pins)", () => {
     const row = fullnessRow(html, "open-night");
     expect(row).toContain("1 of 4 going");
     expect(row).not.toContain("event-spots-left");
+  });
+
+  it("renders trimmed details and one prioritized availability verdict", () => {
+    const cases = [
+      [{ endsAt: new Date(0), rsvpOpen: false, capacity: 1 }, "Ended"],
+      [{ rsvpOpen: false, capacity: 1 }, "RSVPs paused"],
+      [{ capacity: 1 }, "Full"],
+      [{ capacity: 2 }, "1 seat left"],
+      [{ capacity: 4 }, "3 seats left"],
+      [{ capacity: null }, "No seat limit"],
+    ] as const;
+    for (const [fields, verdict] of cases) {
+      const html = renderPage(
+        baseData({
+          upcomingEvents: [
+            fullnessEvent({
+              game: "  Wingspan  ",
+              organizer_name: "  Riley  ",
+              location: "Table 2",
+              ...fields,
+            }),
+          ],
+        }),
+      );
+      const row = fullnessRow(html, "game-night-1");
+      expect(row).toContain(">Wingspan</p>");
+      expect(row).toContain('data-testid="event-card-host">Hosted by Riley</p>');
+      expect(row.indexOf("Wingspan")).toBeLessThan(row.indexOf("Hosted by Riley"));
+      expect(row.indexOf("Hosted by Riley")).toBeLessThan(row.indexOf("Table 2"));
+      expect(row).toContain(`>${verdict}</span>`);
+      expect(
+        row.match(/data-testid="(?:event-schedule-availability|event-spots-left)"/g),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("omits blank details and keeps Discord availability separate from seat math", () => {
+    const html = renderPage(
+      baseData({
+        upcomingEvents: [
+          fullnessEvent({ game: "  ", organizer_name: "  " }),
+          {
+            source: "discord",
+            discordId: "123",
+            title: "Discord night",
+            startsAt: new Date(Date.UTC(2030, 6, 20, 19)),
+            timezone: "UTC",
+            location: null,
+          },
+        ],
+      }),
+    );
+    const row = fullnessRow(html, "game-night-1");
+    expect(row).not.toContain("event-card-host");
+    expect(row).not.toContain("Game TBA");
+    expect(html).toContain(
+      'RSVP in Discord · <span data-testid="event-schedule-availability">Discord-managed</span>',
+    );
   });
 
   it("falls back to the named count for older fixtures without occupancy", () => {

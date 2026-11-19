@@ -75,62 +75,6 @@
   font: var(--font-weight-semibold) var(--text-title) / var(--leading-title) var(--font-display);
   text-transform: none;
 }
-:root .base-theme .join-band {
-  background: var(--ember);
-  color: var(--on-accent);
-  box-shadow: 0 0 0 100vmax var(--ember);
-  clip-path: inset(0 -100vmax);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-7);
-  padding: var(--space-10) 0;
-  margin: var(--space-section) 0 -4rem;
-}
-:root .base-theme:not(.content-theme) .join-band h2 {
-  font: var(--font-weight-semibold) var(--text-band) / 0.95 var(--font-display);
-  font-stretch: var(--font-width-band);
-  letter-spacing: -0.045em;
-  text-transform: none;
-  color: var(--on-accent);
-  margin: 0;
-}
-:root .base-theme .join-band h2 em {
-  font: var(--font-weight-regular) 1.08em var(--font-accent);
-  font-style: italic;
-}
-:root .base-theme .join-band p {
-  color: var(--on-accent);
-  font-size: var(--text-body-reading);
-  max-width: 36ch;
-  margin: var(--space-inset-room) 0 0;
-}
-:root .base-theme a.join-band-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 52px;
-  padding: 0 var(--space-inset-card-lg);
-  border-radius: var(--radius-pill);
-  background: var(--on-accent);
-  color: var(--t1);
-  font: var(--font-weight-semibold) var(--text-body) / 1 var(--font-display);
-  font-stretch: var(--font-width-button);
-  white-space: nowrap;
-  text-decoration: none;
-}
-:root .base-theme a.join-band-btn:hover {
-  background: var(--g0);
-}
-:root .base-theme .join-band :focus-visible {
-  outline: var(--focus-width) solid var(--focus-ring-on-accent);
-  outline-offset: var(--focus-offset);
-}
-@media (forced-colors: active) {
-  :root .base-theme .join-band :focus-visible {
-    outline-color: Highlight;
-  }
-}
 @media (max-width: 820px) {
   :root .base-theme .highlights {
     padding: var(--space-section-compact) 0;
@@ -143,19 +87,5 @@
   :root .base-theme .hl {
     grid-template-columns: 1fr;
     gap: var(--space-5);
-  }
-  :root .base-theme .join-band {
-    flex-direction: column;
-    align-items: flex-start;
-    padding: 48px 0;
-  }
-  :root .base-theme a.join-band-btn {
-    width: 100%;
-    white-space: normal;
-  }
-}
-@media (max-width: 48rem) {
-  :root .base-theme .join-band {
-    margin-bottom: -2rem;
   }
 }

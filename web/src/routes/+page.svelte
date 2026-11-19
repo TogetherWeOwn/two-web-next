@@ -2,6 +2,7 @@
 import "./home-presentation.css";
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
+import { seatAvailability } from "../../../src/events/pages-calendar-row";
 import type { HomeUpcomingRow } from "../../../src/events/reads";
 import { groupTeaserEvents } from "../../../src/events/teaser-groups";
 import { featuredImageSrc } from "../../../src/featured-image";
@@ -15,6 +16,7 @@ import {
 import { canonicalUrl } from "../../../src/seo";
 import { siteJsonLd } from "../../../src/seo-json-ld";
 import type { PageProps } from "./$types";
+import "./home-join-band.css";
 
 // Markup contract of Home (src/screens/home.tsx): session-aware header,
 // notice slot, hero, counts, featured, community panels, ladder, events and
@@ -45,7 +47,8 @@ const siteGraph = $derived(siteJsonLd(appUrl));
 // Same shared buckets as the Hono screen: group the capped rows at render.
 // The explicit row type recovers what $derived destructuring widens (see
 // noticeText above): without it the groups widen to the helper's input.
-const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, new Date()));
+const renderTime = new Date();
+const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, renderTime));
 </script>
 
 {#snippet guestChrome()}
@@ -223,16 +226,20 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
                 </p>
                 <div class="event-meta">
                 <h3>{event.title}</h3>
+                {#if event.source === "canonical" && event.game?.trim()}<p>{event.game.trim()}</p>{/if}
+                {#if event.source === "canonical" && event.organizer_name?.trim()}
+                  <p class="home-event-host" data-testid="event-card-host">Hosted by {event.organizer_name.trim()}</p>
+                {/if}
                 {#if event.location}<p>{event.location}</p>{/if}
                 {#if event.source === "discord"}
-                  <p>RSVP in Discord</p>
+                  <p>RSVP in Discord · <span data-testid="event-schedule-availability">Discord-managed</span></p>
                 {:else}
+                  {@const availability = event.endsAt && event.endsAt.getTime() <= renderTime.getTime()
+                    ? { state: "past", text: "Ended" }
+                    : seatAvailability(event)}
                   <p>
-                    {goingCountText(event.goingCount, event.capacity)}
-                    {#if event.capacity !== null && (event.goingOccupancy ?? event.goingCount) >= event.capacity}
-                      {" · "}
-                      <span data-testid={SPOTS_LEFT_TESTID}>Full</span>
-                    {/if}
+                    {goingCountText(event.goingCount, event.capacity)}{" · "}
+                    <span data-testid={availability.state === "full" ? SPOTS_LEFT_TESTID : "event-schedule-availability"}>{availability.text}</span>
                   </p>
                 {/if}
                 </div>
@@ -290,10 +297,8 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
           <p>{JOIN_INTRO}</p>
         {/if}
       </div>
-      {#if sessionUnavailable}
-        <a class="join-band-btn" href="/discord" data-testid="join-band-invite">Join with an invite link</a>
-      {:else if notice === "join_failed"}
-        <a class="join-band-btn" href={inviteUrl} data-testid="join-band-invite">Join with an invite link</a>
+      {#if sessionUnavailable || notice === "join_failed"}
+        <a class="join-band-btn" href={sessionUnavailable ? "/discord" : inviteUrl} data-testid="join-band-invite">Join with an invite link</a>
       {:else}
         <a class="join-band-btn" href="/auth/discord" data-testid="join-band-join">Join with Discord</a>
       {/if}

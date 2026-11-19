@@ -41,9 +41,7 @@ jobs:
   # always count as relevant (fail closed).
   scope:
     name: scope
-    # The org's two-selfhosted runner group refuses public repos:
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       relevant: ${{ steps.scope.outputs.relevant }}
@@ -95,9 +93,7 @@ jobs:
     name: census
     needs: scope
     if: needs.scope.outputs.relevant == 'true'
-    # The org's two-selfhosted runner group refuses public repos:
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: staging
     steps:

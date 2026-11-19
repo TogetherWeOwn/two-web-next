@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { Page } from "@playwright/test";
+import { existsSync } from "node:fs";
+import { expect, type Locator, type Page, type TestInfo } from "@playwright/test";
+
+/** Avoid installing a screenshot mask overlay when no targets exist. */
+export async function nonemptyMask(locator: Locator) {
+  return (await locator.count()) > 0 ? [locator] : undefined;
+}
 
 /** Load this exact face before registration; never rewrite styles or tokens. */
 export async function loadVisualFont(page: Page, options: { url: string; weight?: string }) {
@@ -77,10 +83,123 @@ export async function captureWithoutFontWait(page: Page) {
 }
 
 /** Retain the first full-page capture and both measurements: no warmup or retry. */
-export async function captureWithGeometry(page: Page, selectors: Record<string, string>) {
+export async function captureWithGeometry(
+  page: Page,
+  selectors: Record<string, string>,
+  options: Pick<
+    NonNullable<Parameters<Page["screenshot"]>[0]>,
+    "mask" | "maskColor" | "animations" | "caret" | "scale"
+  > = {},
+) {
   const before = await readCaptureGeometry(page, selectors);
-  const png = await page.screenshot({ fullPage: true });
+  const png = await page.screenshot({ ...options, fullPage: true });
   const after = await readCaptureGeometry(page, selectors);
   const dimensions = { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
   return { png, dimensions, before, after };
+}
+
+/** Check the first full-page PNG; a second capture is a stability control, not a retry. */
+export async function expectStablePublicPageCapture(
+  page: Page,
+  testInfo: TestInfo,
+  {
+    heading,
+    width,
+    snapshot,
+    afterFirst,
+  }: { heading: string; width: number; snapshot?: string; afterFirst?: () => Promise<void> },
+) {
+  if (snapshot) expect(existsSync(testInfo.snapshotPath(snapshot))).toBe(true);
+  const nodes = { heading, main: "main", footer: "footer" };
+  const options = {
+    mask: await nonemptyMask(page.locator("time")),
+    animations: "disabled" as const,
+    caret: "hide" as const,
+    scale: "css" as const,
+  };
+  const first = await captureWithGeometry(page, nodes, options);
+  await afterFirst?.();
+  await testInfo.attach("first-capture", { body: first.png, contentType: "image/png" });
+  await testInfo.attach("first-geometry", {
+    body: JSON.stringify({
+      before: first.before,
+      after: first.after,
+      dimensions: first.dimensions,
+    }),
+    contentType: "application/json",
+  });
+  expect.soft(first.after).toEqual(first.before);
+  expect.soft(first.dimensions.width).toBe(width);
+  expect.soft(first.dimensions.height).toBe(first.before.document.scrollHeight);
+  if (snapshot) expect.soft(first.png).toMatchSnapshot(snapshot, { maxDiffPixels: 300 });
+
+  const second = await captureWithGeometry(page, nodes, options);
+  await testInfo.attach("second-capture", { body: second.png, contentType: "image/png" });
+  expect.soft(second.before).toEqual(first.after);
+  expect.soft(second.after).toEqual(first.after);
+  expect.soft(second.dimensions).toEqual(first.dimensions);
+  expect.soft(second.png.equals(first.png)).toBe(true);
+  return first;
+}
+
+/** Normalize an existing display token without changing which elements use it. */
+export async function normalizeDisplayFont(
+  page: Page,
+  options: { url: string; weight?: string; root: string },
+) {
+  const face = await loadVisualFont(page, options);
+  const token = await page.locator(options.root).evaluate((element, family) => {
+    const root = element as HTMLElement;
+    const original = getComputedStyle(root)
+      .getPropertyValue("--font-display")
+      .replace(/^[\t\n\f\r ]+/g, "");
+    if (!original || /^[\t\n\f\r ]+$/.test(original))
+      throw new Error("Expected a nonempty --font-display stack");
+    let quote = "";
+    let separator = original.length;
+    for (let i = 0; i < original.length; i++) {
+      const char = original[i];
+      if (char === "\\") {
+        i++;
+      } else if (quote) {
+        if (char === quote) quote = "";
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === "/" && original[i + 1] === "*") {
+        const end = original.indexOf("*/", i + 2);
+        if (end === -1) throw new Error("Unterminated comment in --font-display stack");
+        i = end + 1;
+      } else if (char === ",") {
+        separator = i;
+        break;
+      }
+    }
+    const normalized = `"${family}"${original.slice(separator)}`;
+    root.style.setProperty("--font-display", normalized);
+    const effective = getComputedStyle(root).getPropertyValue("--font-display");
+    if (effective !== normalized) throw new Error("Display token override did not take effect");
+    return { original, normalized: effective };
+  }, face.family);
+  return { face, token };
+}
+
+export async function captureNormalizedDisplayFont(
+  page: Page,
+  options: { url: string; weight?: string; root: string; heading: string },
+) {
+  const { face, token } = await normalizeDisplayFont(page, options);
+  const capture = await captureWithGeometry(
+    page,
+    { heading: options.heading },
+    {
+      animations: "disabled",
+      caret: "hide",
+      scale: "css",
+    },
+  );
+  const headingFamily = await page.locator(options.heading).evaluate((element) => {
+    return getComputedStyle(element).fontFamily;
+  });
+  const fonts = await renderedPlatformFonts(page, options.heading);
+  return { face, token, headingFamily, fonts, ...capture };
 }

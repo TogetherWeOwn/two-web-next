@@ -66,6 +66,22 @@ export async function assertHomeEvidence(page, state) {
   if (!Object.hasOwn(states, state)) throw new Error(`Unknown home evidence state: ${state}`);
   const count = (id) => page.getByTestId(id).count();
   const session = states[state].session;
+  assert.equal(await count("join-band"), session?.member ? 0 : 1, `${state}: join band`);
+  if (!session?.member) {
+    const fallback = state === "sessionOutage" || state === "joinFailed";
+    const cta = page.getByTestId(fallback ? "join-band-invite" : "join-band-join");
+    assert.equal(await count(fallback ? "join-band-join" : "join-band-invite"), 0);
+    assert.equal(
+      await cta.getAttribute("href"),
+      state === "sessionOutage"
+        ? "/discord"
+        : state === "joinFailed"
+          ? "https://discord.gg/invite"
+          : "/auth/discord",
+      `${state}: join band destination`,
+    );
+    assert.match(await page.getByTestId("join-band").innerText(), /Pull up a chair\./);
+  }
   assert.equal(await count("signin"), session ? 0 : 1, `${state}: guest header`);
   assert.equal(
     await count("join"),
@@ -75,14 +91,8 @@ export async function assertHomeEvidence(page, state) {
   assert.equal(await count("member-count"), state === "missingCounts" ? 0 : 1, `${state}: counts`);
   assert.equal(await count("notice"), state === "joinFailed" ? 1 : 0, `${state}: notice`);
   assert.equal(await page.getByTestId("home-highlights").locator("li").count(), 4);
-  assert.equal(await count("join-band"), session?.member ? 0 : 1, `${state}: join band`);
-  if (!session?.member) {
-    const fallback = state === "sessionOutage" || state === "joinFailed";
-    assert.equal(await count("join-band-invite"), fallback ? 1 : 0, `${state}: invite`);
-    assert.equal(await count("join-band-join"), fallback ? 0 : 1, `${state}: sign-in`);
-    if (!fallback)
-      assert.match(await page.getByTestId("join-band").innerText(), /Approve once with Discord/);
-  }
+  if (!session?.member && state !== "sessionOutage" && state !== "joinFailed")
+    assert.match(await page.getByTestId("join-band").innerText(), /Approve once with Discord/);
   assert.equal(
     await count("join-result"),
     ["joinAdded", "alreadyMember"].includes(state) ? 1 : 0,

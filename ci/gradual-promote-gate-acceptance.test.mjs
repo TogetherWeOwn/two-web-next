@@ -227,7 +227,7 @@ async function runGate(block, host, mutate = (script) => script) {
 test("gradual-promote defines exactly the three version-override gates, quoted", () => {
   const action = readAction();
   assert.equal(
-    (action.match(/--version-override /g) ?? []).length,
+    (action.replace(/^\s*#.*$/gm, "").match(/--version-override /g) ?? []).length,
     3,
     "expected exactly three --version-override gates (5, 50, 100 percent)",
   );
