@@ -1,19 +1,26 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile } from "node:fs/promises";
 import { test } from "node:test";
+import AxeBuilder from "@axe-core/playwright";
+import { expect } from "@playwright/test";
 import { withKitOfflineBrowser } from "./kit-offline-browser.mjs";
+
+const mobile = { width: 390, height: 844 };
+const member = "?state=member&auth=1";
+const menu = (page, role = "button") => page.getByRole(role, { name: "Menu", exact: true });
+const shot = (page, name) =>
+  page.screenshot({ path: `artifacts/kit-ember-shell/${name}.png`, fullPage: true });
+const source = () =>
+  readFile(new URL("../test/fixtures/kit-ember-shell-route.svelte", import.meta.url), "utf8");
 
 test("built Ember shell preserves its landmarks and account states without JavaScript", {
   timeout: 720_000,
 }, async () => {
-  const source = await readFile(
-    new URL("../test/fixtures/kit-ember-shell-route.svelte", import.meta.url),
-    "utf8",
-  );
+  const fixture = await source();
   await mkdir("artifacts/kit-ember-shell", { recursive: true });
   for (const state of ["guest", "member", "hidden"]) {
     await withKitOfflineBrowser(
-      { page: source, search: `?state=${state}` },
+      { page: fixture, search: state === "member" ? member : `?state=${state}` },
       async ({ page, html }) => {
         assert.match(html, /_app\/immutable\/assets\/[^" ]+\.css/);
         assert.equal(await page.locator('a[href="#main"]').count(), 1);
@@ -83,8 +90,126 @@ test("built Ember shell preserves its landmarks and account states without JavaS
             });
             await page.reload();
           }
+          const fallback = menu(page, "link");
+          const sheet = page.locator("#menu-sheet");
+          if (viewport.width === 390) {
+            await expect(sheet).toBeHidden();
+            assert.equal(await fallback.getAttribute("aria-expanded"), null);
+            await fallback.click();
+            const account = sheet.getByRole("navigation", { name: "Account" });
+            const link = (name) => sheet.getByRole("link", { name });
+            await expect(account).toHaveCount(Number(state !== "hidden"));
+            await expect(link("Your profile")).toHaveCount(Number(state === "member"));
+            await expect(link("Sign in with Discord")).toHaveCount(Number(state === "guest"));
+            await expect(link("Leaderboard")).toHaveCount(Number(state === "member"));
+            await expect(page.locator("[inert]")).toHaveCount(0);
+            await shot(page, `nojs-${state}-open-390`);
+          }
+          if (state === "member") {
+            const id = viewport.width === 390 ? "menu-signout" : "signout";
+            const logout = new URL("/logout", page.url()).href;
+            await page.route(logout, (route) => route.fulfill({ status: 204 }), { times: 1 });
+            const post = page.waitForRequest(logout);
+            await page.getByTestId(id).click();
+            assert.equal((await post).method(), "POST");
+          }
+          if (viewport.width === 390) {
+            await sheet.getByRole("link", { name: "Close menu" }).click();
+            await expect(sheet).toBeHidden();
+          }
         }
       },
     );
   }
+});
+
+test("CSR-disabled Kit header supports keyboard, account variants, and a blocked island", {
+  timeout: 720_000,
+}, async () => {
+  const options = { page: await source(), javaScriptEnabled: true, headerMenu: true };
+  await withKitOfflineBrowser(options, async ({ page, html }) => {
+    const url = page.url();
+    const toggle = menu(page);
+    const sheet = page.locator("#menu-sheet");
+    const home = sheet.getByRole("link", { name: "Home", exact: true });
+    const key = (name) => page.keyboard.press(name);
+    const inert = page.locator("main[inert], footer[inert]");
+    assert.match(html, /<script src="\/islands\/site-header-menu\.js" defer>/);
+    assert.doesNotMatch(html, /_app\/immutable\/(entry|nodes)/);
+    await page.setViewportSize(mobile);
+    await shot(page, "enhanced-closed-390");
+    await toggle.focus();
+    for (let i = 0; i < 10; i++) {
+      await key("Tab");
+      assert.equal(await sheet.locator(":focus").count(), 0);
+    }
+    await toggle.click();
+    await expect(home).toBeFocused();
+    await expect(inert).toHaveCount(2);
+    await expect(sheet.getByText("Close menu")).toBeHidden();
+    await shot(page, "keyboard-open-390");
+    const cycle = [toggle, sheet.getByTestId("signin"), toggle, home];
+    for (const [i, target] of cycle.entries()) {
+      await key(i < 2 ? "Shift+Tab" : "Tab");
+      await expect(target).toBeFocused();
+    }
+    const axe = new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]);
+    assert.deepEqual((await axe.analyze()).violations, []);
+    for (const close of ["Escape", "Enter"]) {
+      if (close === "Enter") await toggle.press("Enter");
+      await key(close === "Escape" ? close : "Shift+Tab");
+      if (close === "Enter") await key(close);
+      await expect(toggle).toBeFocused();
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect(inert).toHaveCount(0);
+    }
+    await toggle.press("Space");
+    await home.evaluate((el) => el.addEventListener("click", (event) => event.preventDefault()));
+    await home.click();
+    await expect(sheet).toBeHidden();
+    await expect(toggle).not.toBeFocused();
+    await page.setViewportSize({ ...mobile, width: 820 });
+    await page.goto(`${url}${member}#menu-sheet`);
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await page.setViewportSize({ ...mobile, width: 821 });
+    await expect(inert).toHaveCount(0);
+    await expect(home).toBeFocused();
+    await page.setViewportSize({ ...mobile, width: 320 });
+    await toggle.click();
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await shot(page, "enhanced-open-320");
+    await page.setViewportSize(mobile);
+    for (const [name, search, count, current] of [
+      ["guest", "?state=guest", 0, "page"],
+      ["member", member, 1, "location"],
+      ["nonmember", "?auth=1", 1, "page"],
+      ["unknown", "?state=member", 0, "location"],
+      ["hidden", "?state=hidden&auth=1", 0, "page"],
+    ]) {
+      await page.goto(url + search);
+      await toggle.click();
+      await expect(sheet.getByRole("link", { name: "Profile", exact: true })).toHaveCount(count);
+      await expect(sheet.getByRole("button", { name: "Sign out" })).toHaveCount(count);
+      await expect(sheet.locator("[aria-current]")).toHaveAttribute("aria-current", current);
+      await expect(sheet.getByRole("link", { name: "Leaderboard" })).toHaveCount(
+        Number(current === "location"),
+      );
+      await expect(sheet.getByRole("navigation", { name: "Account" })).toHaveCount(
+        Number(name !== "hidden"),
+      );
+      await shot(page, `${name}-menu-open-390`);
+    }
+    await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
+    await toggle.press("Space");
+    await toggle.press("Space");
+    await expect(home).toHaveCSS("outline-style", "solid");
+    await expect(sheet).toHaveCSS("animation-name", "none");
+    await shot(page, "forced-colors-open-390");
+    await page.route(new URL("/islands/site-header-menu.js", url).href, (route) => route.abort());
+    await page.goto(`${url}?state=guest`);
+    await menu(page, "link").click();
+    await expect(sheet.getByRole("link", { name: "Close menu" })).toBeVisible();
+    await expect(inert).toHaveCount(0);
+    await shot(page, "blocked-island-open-390");
+  });
 });

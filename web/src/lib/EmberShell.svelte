@@ -8,6 +8,7 @@ let {
   member = false,
   loginReturnTo = null,
   accountChrome,
+  authenticated = false,
   hideAccount = false,
   children,
 }: {
@@ -15,6 +16,7 @@ let {
   member?: boolean;
   loginReturnTo?: string | null;
   accountChrome?: Snippet;
+  authenticated?: boolean;
   hideAccount?: boolean;
   children: Snippet;
 } = $props();
@@ -22,7 +24,7 @@ let {
 
 <!-- SiteHeader owns the skip link; the consuming Kit layout loads app.css and site-header.css. -->
 <div class="base-theme">
-  <SiteHeader {activeNav} {member} {loginReturnTo} {accountChrome} {hideAccount} />
+  <SiteHeader {activeNav} {member} {loginReturnTo} {accountChrome} {authenticated} {hideAccount} />
   <main id="main" tabindex="-1">{@render children()}</main>
   <EmberFooter />
 </div>

@@ -75,6 +75,7 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
   theme="home"
   activeNav="home"
   member={session?.member ?? false}
+  authenticated={session != null}
   accountChrome={session ? memberChrome : guestChrome}
 >
   {#if joinResult}

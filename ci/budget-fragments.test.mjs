@@ -62,6 +62,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/model-context.js": { maxRawBytes: 4608, maxGzipBytes: 2048 },
   "public/islands/past-events.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/islands/rsvp-button.js": { maxRawBytes: 17408, maxGzipBytes: 5120 },
+  "public/islands/site-header-menu.js": { maxRawBytes: 2560, maxGzipBytes: 1280 },
   "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
   "public/admin-rsvp-review.css": { maxRawBytes: 1024, maxGzipBytes: 512 },

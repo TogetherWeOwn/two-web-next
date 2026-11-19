@@ -63,17 +63,16 @@ export function fixedDateBanner(now) {
 // production credentials; an empty `unexpected` only covers routed requests.
 /**
  * `now` (epoch ms) fixes the server clock; `timezoneId` overrides only the browser timezone.
- * @param {{ source?: string, page: string, search?: string, now?: number, javaScriptEnabled?: boolean, timezoneId?: string }} options
+ * @param {{ source?: string, page: string, search?: string, now?: number, javaScriptEnabled?: boolean, timezoneId?: string, headerMenu?: boolean }} input
  */
-export async function withKitOfflineBrowser(
-  { source, page: fixture, search = "", now = undefined, javaScriptEnabled = false, timezoneId },
-  callback,
-) {
+export async function withKitOfflineBrowser(input, callback) {
+  const { source, page: fixture, search = "", now, javaScriptEnabled = false, timezoneId } = input;
+  const { headerMenu = false } = input;
   if (typeof search !== "string" || (search && !search.startsWith("?")) || search.includes("#")) {
     throw new Error("Fixture search must be a query string");
   }
   const banner = now === undefined ? undefined : fixedDateBanner(now);
-  const options = { source, page: fixture, csr: javaScriptEnabled };
+  const options = { source, page: fixture, csr: javaScriptEnabled && !headerMenu };
   return withKitBrowserFixture(options, async ({ root, output }) => {
     const entry = join(root, "fixture-server.mjs");
     await build({
@@ -112,9 +111,9 @@ export async function withKitOfflineBrowser(
     const origin = "http://kit-fixture.test";
     const path = "/__browser_fixture__";
     const fixtureUrl = new URL(path + search, origin).href;
-    const response = await server.respond(new Request(fixtureUrl), {
-      getClientAddress: () => "127.0.0.1",
-    });
+    const respond = (url) =>
+      server.respond(new Request(url), { getClientAddress: () => "127.0.0.1" });
+    const response = await respond(fixtureUrl);
     assert.equal(response.status, 200);
     const html = await response.text();
     const browser = await chromium.launch({ headless: true });
@@ -132,16 +131,17 @@ export async function withKitOfflineBrowser(
       await context.route("**/*", async (route) => {
         const url = new URL(route.request().url());
         if (url.origin === origin && route.request().method() === "GET") {
-          if (url.href === fixtureUrl)
+          if (url.pathname === path && (url.search === search || headerMenu))
             return route.fulfill({
               contentType: "text/html",
               headers: { "content-security-policy": "worker-src 'none'; frame-src 'none'" },
-              body: html,
+              body: url.href === fixtureUrl ? html : await (await respond(url.href)).text(),
             });
           const isAppAsset = url.pathname.startsWith("/_app/");
+          const isMenu = url.pathname === "/islands/site-header-menu.js";
           const directory = isAppAsset ? join(output, "client") : join(root, "public");
           const asset = await readFixtureAsset(directory, url.pathname, {
-            allowJavaScript: isAppAsset && javaScriptEnabled,
+            allowJavaScript: javaScriptEnabled && (headerMenu ? isMenu : isAppAsset),
           });
           if (asset) return route.fulfill(asset);
         }

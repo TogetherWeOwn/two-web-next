@@ -57,6 +57,7 @@ const isOutage = $derived(OUTAGE_CODES.includes(code));
   title={copy.title}
   robots="noindex, nofollow"
   theme="home"
+  menuFallbackOnly
   accountChrome={isOutage ? outageAccount : undefined}
 >
   <section class="hero recovery-hero" aria-labelledby="error-heading">

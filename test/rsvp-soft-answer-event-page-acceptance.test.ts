@@ -191,6 +191,7 @@ function kitModel(over: Partial<KitEventDetailModel> = {}): KitEventDetailModel 
     showJoinPitch: false,
     joinReturnTo: PATH,
     joinResult: null,
+    viewerAuthenticated: true,
     viewerMember: true,
     viewerModerator: false,
     viewerUsername: "member",

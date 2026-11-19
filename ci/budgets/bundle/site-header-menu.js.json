@@ -1,0 +1,6 @@
+{
+  "$comment": "Deferred Kit header enhancement; server links and POST work without this asset.",
+  "budgets": {
+    "public/islands/site-header-menu.js": { "maxRawBytes": 2560, "maxGzipBytes": 1280 }
+  }
+}
