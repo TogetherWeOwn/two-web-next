@@ -53,16 +53,18 @@ let {
 {:else if kind === "gap"}
   <div data-testid={EVENTS_EMPTY_GAP_TESTID}>
     <h2>{EVENTS_EMPTY_COPY.gapTitle}</h2>
-    <h3>{EVENTS_EMPTY_COPY.gapListHeading}</h3>
-    <ul data-testid={EVENTS_EMPTY_GAP_LIST_TESTID}>
-      {#each past.slice(0, EVENTS_GAP_LIST_LIMIT) as event}
-        <li data-testid={EVENTS_EMPTY_GAP_ITEM_TESTID}>
-          {#if event.status === "cancelled"}{event.title}{:else}<a href={eventPageUrl(event.eventKey)}>{event.title}</a>{/if}{" "}
-          <time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)}</time>
-        </li>
-      {/each}
-    </ul>
-    <p><a href="/events/past">{EVENTS_EMPTY_COPY.pastArchive}</a></p>
+    {#if past.length > 0}
+      <h3>{EVENTS_EMPTY_COPY.gapListHeading}</h3>
+      <ul data-testid={EVENTS_EMPTY_GAP_LIST_TESTID}>
+        {#each past.slice(0, EVENTS_GAP_LIST_LIMIT) as event}
+          <li data-testid={EVENTS_EMPTY_GAP_ITEM_TESTID}>
+            {#if event.status === "cancelled"}{event.title}{:else}<a href={eventPageUrl(event.eventKey)}>{event.title}</a>{/if}{" "}
+            <time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)}</time>
+          </li>
+        {/each}
+      </ul>
+      <p><a href="/events/past">{EVENTS_EMPTY_COPY.pastArchive}</a></p>
+    {/if}
   </div>
 {:else if kind === "error" || kind === "partial"}
   <div role={kind === "error" ? "alert" : "status"} data-testid={kind === "error" ? EVENTS_EMPTY_ERROR_TESTID : EVENTS_PARTIAL_TESTID}>

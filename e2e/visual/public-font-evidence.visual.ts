@@ -4,6 +4,7 @@ import {
   captureWithGeometry,
   expectStablePublicPageCapture,
   loadVisualFont,
+  normalizeDisplayFont,
   renderedPlatformFonts,
 } from "./font-evidence";
 
@@ -55,6 +56,13 @@ test("rules full-page display evidence @ 360", async ({ page }, testInfo) => {
   await page.setViewportSize(size);
   expect((await page.goto("/rules"))?.status()).toBe(200);
   await page.waitForLoadState("networkidle");
+  const normalized = await normalizeDisplayFont(page, {
+    url: FONT_URL,
+    weight: "200 900",
+    root: ".content-theme",
+  });
+  expect(normalized.face.status).toBe("loaded");
+  expect(normalized.token.original).toMatch(/^\s*['"]?Mona Sans Content['"]?\s*,/);
   await page.evaluate(() => document.fonts.ready);
   const capture = await expectStablePublicPageCapture(page, testInfo, {
     heading,
@@ -67,7 +75,14 @@ test("rules full-page display evidence @ 360", async ({ page }, testInfo) => {
     contentType: "application/json",
   });
   expect(fonts.length).toBeGreaterThan(0);
-  expect(fonts.every((font) => !font.isCustomFont && font.glyphCount > 0)).toBe(true);
+  expect(
+    fonts.every(
+      (font) =>
+        font.isCustomFont &&
+        font.postScriptName === "MonaSansExtraLight-Regular" &&
+        font.glyphCount > 0,
+    ),
+  ).toBe(true);
 });
 
 test("rules separately loaded Mona Sans evidence @ 360", async ({ page }, testInfo) => {
