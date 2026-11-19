@@ -12,9 +12,11 @@ on:
     - cron: "41 3 * * *"
   workflow_dispatch:
 
+# The reusable rollback workflow cannot elevate the caller token. Only its
+# production path reads Environment protection; both drill legs target staging.
 permissions:
   contents: read
-  actions: read
+  actions: read # Let rollback and restore read exact-SHA CI runs and jobs.
 
 # Own staging from plan through restore, not just during each mutation leg.
 concurrency:
