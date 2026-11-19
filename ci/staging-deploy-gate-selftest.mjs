@@ -146,6 +146,7 @@ function executeStaging(ctx, evidence, changes = {}, routeFamily = "hono") {
           DEPLOY_SHA: ctx.checkoutSha,
           KIT_ROUTE_ARCHIVE: flags.archive,
           KIT_ROUTE_STATIC: flags.static,
+          KIT_ROUTE_EVENTS: flags.events,
           GITHUB_TOKEN: "offline-stub",
           TEST_CHECKOUT_SHA: ctx.checkoutSha,
           TEST_EVIDENCE: join(dir, "evidence.json"),
@@ -167,16 +168,17 @@ function executeStaging(ctx, evidence, changes = {}, routeFamily = "hono") {
   }
 }
 
-test("Kit route-family selection emits cumulative flags and fails closed", () => {
+test("Kit route-family selection emits validated flags and fails closed", () => {
   const dir = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-route-flags-"),
   );
   try {
     for (const [family, expected] of [
-      ["", { archive: "false", static: "false" }],
-      ["hono", { archive: "false", static: "false" }],
-      ["archive", { archive: "true", static: "false" }],
-      ["archive-static", { archive: "true", static: "true" }],
+      ["", { archive: "false", static: "false", events: "false" }],
+      ["hono", { archive: "false", static: "false", events: "false" }],
+      ["archive", { archive: "true", static: "false", events: "false" }],
+      ["archive-static", { archive: "true", static: "true", events: "false" }],
+      ["events", { archive: "false", static: "false", events: "true" }],
     ]) {
       const output = join(dir, "github-output");
       writeFileSync(output, "");
@@ -187,7 +189,7 @@ test("Kit route-family selection emits cumulative flags and fails closed", () =>
       assert.equal(result.status, 0, result.stderr);
       assert.equal(
         readFileSync(output, "utf8"),
-        `archive=${expected.archive}\nstatic=${expected.static}\n`,
+        `archive=${expected.archive}\nstatic=${expected.static}\nevents=${expected.events}\n`,
       );
     }
     const output = join(dir, "github-output");
@@ -200,6 +202,47 @@ test("Kit route-family selection emits cumulative flags and fails closed", () =>
     assert.equal(readFileSync(output, "utf8"), "");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the events-only deployment probes the exact staging GET after revision verification", () => {
+  const probeOffset = workflow.indexOf("- name: Verify staging Kit events renderer");
+  assert.ok(probeOffset > workflow.indexOf("- name: Verify deployed revision"));
+  assert.ok(probeOffset < workflow.indexOf("- name: Scope post-deploy smoke"));
+  assert.match(
+    workflow.slice(probeOffset),
+    /^- name: Verify staging Kit events renderer\n(?:        #.*\n)*        if: steps\.kit-route-flags\.outputs\.events == 'true'\n        run: node ci\/staging-kit-events-check\.mjs\n/,
+  );
+
+  for (const [status, marker, expected] of [
+    [200, "kit", 0],
+    [200, null, 1],
+    [200, "hono", 1],
+    [302, "kit", 1],
+    [503, "kit", 1],
+  ]) {
+    const stub = `globalThis.fetch = async (url, options) => {
+      if (url !== "https://next.togetherweown.com/events" || (options.method ?? "GET") !== "GET" ||
+          options.redirect !== "manual" || options.cache !== "no-store" || !options.signal) {
+        throw new Error("Unexpected probe request");
+      }
+      return new Response(null, {status: ${status}, headers: ${JSON.stringify(marker ? { "x-two-renderer": marker } : {})}});
+    };`;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        `data:text/javascript,${encodeURIComponent(stub)}`,
+        "ci/staging-kit-events-check.mjs",
+      ],
+      { cwd: root, encoding: "utf8", timeout: 5_000 },
+    );
+    assert.equal(result.status, expected, `${status} / ${marker}: ${result.stderr}`);
+    if (expected === 0) assert.match(result.stdout, /HTTP 200, x-two-renderer: kit/);
+    else {
+      assert.equal(result.stdout, "");
+      assert.match(result.stderr, status === 200 ? /did not return/ : /expected 200/);
+    }
   }
 });
 
@@ -366,7 +409,7 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
       "wrangler queues create two-sync-event",
       "wrangler queues create two-internal-action",
       "wrangler deploy --config tail/wrangler.jsonc",
-      `wrangler deploy --config web/wrangler.staging.jsonc --tag ${sha} --var KIT_ROUTE_ARCHIVE:false --var KIT_ROUTE_STATIC:false`,
+      `wrangler deploy --config web/wrangler.staging.jsonc --tag ${sha} --var KIT_ROUTE_ARCHIVE:false --var KIT_ROUTE_STATIC:false --var KIT_ROUTE_EVENTS:false`,
     ]);
     assert.match(result.stdout, new RegExp(`Staging gate passed: ${sha}`));
   });
@@ -384,18 +427,19 @@ const mutationCalls = [
   "wrangler queues create two-sync-event",
   "wrangler queues create two-internal-action",
   "wrangler deploy --config tail/wrangler.jsonc",
-  `wrangler deploy --config web/wrangler.staging.jsonc --tag ${sha} --var KIT_ROUTE_ARCHIVE:false --var KIT_ROUTE_STATIC:false`,
+  `wrangler deploy --config web/wrangler.staging.jsonc --tag ${sha} --var KIT_ROUTE_ARCHIVE:false --var KIT_ROUTE_STATIC:false --var KIT_ROUTE_EVENTS:false`,
 ];
-for (const [family, staticFlag] of [
-  ["archive", "false"],
-  ["archive-static", "true"],
+for (const [family, archiveFlag, staticFlag, eventsFlag] of [
+  ["archive", "true", "false", "false"],
+  ["archive-static", "true", "true", "false"],
+  ["events", "false", "false", "true"],
 ]) {
   test(`workflow_dispatch: ${family} passes the selected route flags to the Worker deploy`, () => {
     const result = executeStaging(context("workflow_dispatch"), fixture(), {}, family);
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(result.calls, [
       ...mutationCalls.slice(0, 3),
-      `wrangler deploy --config web/wrangler.staging.jsonc --tag ${sha} --var KIT_ROUTE_ARCHIVE:true --var KIT_ROUTE_STATIC:${staticFlag}`,
+      `wrangler deploy --config web/wrangler.staging.jsonc --tag ${sha} --var KIT_ROUTE_ARCHIVE:${archiveFlag} --var KIT_ROUTE_STATIC:${staticFlag} --var KIT_ROUTE_EVENTS:${eventsFlag}`,
     ]);
   });
 }
@@ -576,7 +620,7 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(
     workflow,
-    /kit_route_family:\n        description: Kit staging route family; the default keeps all routes on Hono\n        type: choice\n        required: true\n        default: hono\n        options:\n          - hono\n          - archive\n          - archive-static/,
+    /kit_route_family:\n        description: Kit staging route family; the default keeps all routes on Hono\n        type: choice\n        required: true\n        default: hono\n        options:\n          - hono\n          - archive\n          - archive-static\n          - events\n/,
   );
   assert.match(
     workflow,
@@ -587,7 +631,7 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.match(workerDeployCommand, /--config web\/wrangler\.staging\.jsonc/);
   assert.match(
     workerDeployCommand,
-    /--var "KIT_ROUTE_ARCHIVE:\$KIT_ROUTE_ARCHIVE" --var "KIT_ROUTE_STATIC:\$KIT_ROUTE_STATIC"/,
+    /--var "KIT_ROUTE_ARCHIVE:\$KIT_ROUTE_ARCHIVE" --var "KIT_ROUTE_STATIC:\$KIT_ROUTE_STATIC" --var "KIT_ROUTE_EVENTS:\$KIT_ROUTE_EVENTS"/,
   );
   assert.doesNotMatch(workerDeployCommand, /\$\{\{/);
   assert.doesNotMatch(workflow, /^  push:/m);

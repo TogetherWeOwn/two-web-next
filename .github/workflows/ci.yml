@@ -734,11 +734,12 @@ jobs:
         run: bash ci/biome-selftest.sh
       # Fetch-await HARD gate (quality-gates.md): every fetch() in src/ is
       # awaited, returned or chained, plus the shared vendored warning rules
-      # and their fixtures. No build needed; fails the job.
+      # and their fixtures. Also guards against suppressions in src/http/.
       - name: Fetch-await gate (ast-grep, HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
           node ci/ast-grep-warn-selftest.mjs
+          node --test ci/http-boundary-suppressions.test.mjs
           npm run scan:fetch-await
           npm run scan:rules-test
       # Floor guard HARD (CONSTRAINTS.md): no new suppressions, skips,

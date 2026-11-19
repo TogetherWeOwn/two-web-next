@@ -66,6 +66,53 @@ test("projects discovered YAML context as isolated plain data", () => {
   assert.equal(discovered.precedingSteps[0].get("uses"), "actions/checkout@v4");
 });
 
+test("preserves discovered job context across nested invocation chains", () => {
+  const runs = discoverWorkflowRuns(
+    "ci.yml",
+    `jobs:
+  first:
+    steps:
+      - run: npm ci
+      - run: npm run browser
+  second:
+    steps:
+      - run: npm install
+      - run: npm run browser
+`,
+  );
+  const roots = runs
+    .filter(({ run }) => run === "npm run browser")
+    .map((run) => {
+      const context = workflowRunPlainData(run);
+      return {
+        origin: context.origin,
+        location: 0,
+        npmEdges: [{ script: "browser", location: 0 }],
+        context,
+      };
+    });
+  const scripts = {
+    browser: [{ location: 1, npmEdges: [{ script: "nested", location: 1 }] }],
+    nested: [{ location: 2, npmEdges: [] }],
+  };
+  const results = enumerateInvocationOccurrences(roots, scripts, (occurrence, _source, root) => ({
+    occurrence,
+    install: root.context.precedingSteps[0].run,
+  }));
+  assert.deepEqual(
+    results.map(({ install }) => install),
+    ["npm ci", "npm ci", "npm ci", "npm install", "npm install", "npm install"],
+  );
+  assert.deepEqual(
+    results.map(({ occurrence }) => occurrence.origin.job),
+    [0, 0, 0, 1, 1, 1],
+  );
+  assert.deepEqual(
+    results[5].occurrence.npmEdges.map(({ script }) => script),
+    ["browser", "nested"],
+  );
+});
+
 test("projects actual browser workflow contexts within the clone bounds", () => {
   for (const [name, needle] of [
     ["e2e.yml", "playwright.waitlist-capture.config.ts"],
@@ -204,6 +251,24 @@ test("plain data conversion enforces depth and shared work boundaries", () => {
   assert.doesNotThrow(() => workflowRunPlainData(run));
   run.precedingSteps = [new Scalar(null)];
   assert.throws(() => workflowRunPlainData(run), /ci.yml: unsupported workflow data/);
+});
+
+test("projection fails closed when converted context exceeds its clone budget", () => {
+  const [run] = discoverWorkflowRuns(
+    "ci.yml",
+    `jobs:
+  build:
+    steps:
+      - run: npm test
+`,
+  );
+  run.workflow = new Scalar("x".repeat(500_000));
+  const context = workflowRunPlainData(run);
+  const root = { origin: context.origin, location: 0, npmEdges: [], context };
+  assert.throws(
+    () => enumerateInvocationOccurrences([root], {}, (occurrence) => occurrence),
+    /npm invocation projection clone limit exceeded/,
+  );
 });
 
 test("workflow discovery refuses malformed or aliased executable structure", () => {
