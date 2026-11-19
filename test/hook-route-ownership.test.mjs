@@ -599,6 +599,10 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("kitRouteEvents: env.KIT_ROUTE_EVENTS");
     expect(source).toContain("sessionFor: kitSessionBridge(env)");
     expect(source).toContain("authStatusCookieFor: kitAuthStatusCookieFor(env)");
+    // Dispatch tests inject these callbacks; pin the Worker bindings so that
+    // dropping either one also fails a test.
+    expect(source).toContain("homePanelsFor: (request) => prepareKitHomePanels(env, request)");
+    expect(source).toContain("homeRenewalFor: kitDocumentRotationFor(env)");
     expect(source.match(/dispatchHookRequest\(event,/g)?.length).toBe(1);
     // Production session composition lives in kitSessionBridge
     // (src/kit-session.ts), pinned by test/kit-session.test.ts: the hook must
