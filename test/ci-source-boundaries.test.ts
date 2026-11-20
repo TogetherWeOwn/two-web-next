@@ -49,14 +49,16 @@ describe("CI workflow source boundaries", () => {
 
   it("keeps the shard's suite and coverage settings identical except for final reporting", () => {
     const config = 'import c from "./vitest.config.ts"; console.log(JSON.stringify(c.test));';
-    const read = (...args: string[]) =>
+    const read = (shard: string) =>
       JSON.parse(
-        execFileSync(process.execPath, ["--input-type=module", "-e", config, "--", ...args]).toString(),
+        execFileSync(process.execPath, ["--input-type=module", "-e", config], {
+          env: { ...process.env, VITEST_COVERAGE_SHARD: shard },
+          encoding: "utf8",
+        }),
       );
-    const { coverage, ...suite } = read();
+    const { coverage, ...suite } = read("");
     expect(coverage.thresholds).toBeDefined();
-    expect(read("--merge-reports=vitest-blob")).toEqual({ ...suite, coverage });
-    expect(read("--shard=1/3", "--reporter=blob")).toEqual({
+    expect(read("1")).toEqual({
       ...suite,
       coverage: { ...coverage, thresholds: undefined, reporter: [] },
     });

@@ -187,8 +187,7 @@ worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 checks relative links and anchors on every PR. `check` runs unless its run was
 cancelled, starts from `scope` alone so it runs in parallel with the audit
 and performance jobs, and skips its heavy steps on docs-only and draft PRs.
-`static-check` and the three `coverage-shard` jobs also start from `scope`.
-`ci-ok` requires static checks and merged coverage on non-draft code changes.
+On non-draft code changes, `ci-ok` also requires `static-check` and `coverage-merge`.
 The independent `kit-browser-fixture` job runs alongside `check` for non-draft,
 non-docs-only full, app or worker scopes. `ci-ok` requires its success when
 selected, and fails on failure, cancellation or an unexpected skip.

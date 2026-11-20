@@ -71,34 +71,28 @@ test("coverage shards preserve serial threads and the merge uses the canonical c
   assert.match(shard, /needs: \[scope\]/);
   assert.match(shard, /shard: \[1, 2, 3\]/);
   assert.match(shard, /SHARDS: \$\{\{ strategy\.job-total \}\}/);
-  assert(
-    shard.includes('npm run test:coverage -- --shard="$SHARD/$SHARDS" --reporter=dot --reporter=blob'),
-  );
-  assert.match(shard, /if-no-files-found: error/);
+  const capture =
+    'npm run test:coverage -- --shard="$SHARD/$SHARDS" --reporter=dot --reporter=blob';
+  assert(shard.includes(`VITEST_COVERAGE_SHARD: '1'\n        run: ${capture} `));
+  assert.equal(workflow.match(/VITEST_COVERAGE_SHARD:/g)?.length, 1);
+  const artifact =
+    /if-no-files-found: error\n          overwrite: true\n          retention-days: 30\b/;
+  for (const id of ["coverage-shard", "node22-shard"]) assert.match(job(id), artifact);
   const budget = Number(shard.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
   assert.ok(budget > 0 && budget <= 60, `coverage shard timeout ${budget} exceeds 60`);
   assert.match(mergeJob, /needs: \[scope, coverage-shard\]/);
-  assert(
-    mergeJob.includes('for shard in 1 2 3; do test -s "vitest-blob/vitest-$shard.json"; done'),
-  );
-  assert(
-    mergeJob.includes("npm run test:coverage -- --merge-reports=vitest-blob --reporter=dot\n"),
-  );
-  assert(
-    mergeJob.includes(
-      'SHARD_RESULT: ${{ needs.coverage-shard.result }}\n        run: test "$SHARD_RESULT" = success',
-    ),
-  );
+  const reports = 'for shard in 1 2 3; do test -s "vitest-blob/vitest-$shard.json"; done';
+  const merge = "npm run test:coverage -- --merge-reports=vitest-blob --reporter=dot\n";
+  const result =
+    'SHARD_RESULT: ${{ needs.coverage-shard.result }}\n        run: test "$SHARD_RESULT" = success';
+  for (const required of [reports, merge, result]) assert(mergeJob.includes(required), required);
   assert.doesNotMatch(shard + mergeJob, /continue-on-error:/);
   const staticCheck = job("static-check");
   assert.match(staticCheck, /needs: \[scope\]/);
   assert.match(staticCheck, /run: npm run lint && npm run typecheck && npm run e2e:typecheck\n/);
   assert.doesNotMatch(staticCheck, /continue-on-error:/);
-  assert(
-    job("ci-ok").includes(
-      'run: test "$STATIC_RESULT" = success && test "$COVERAGE_RESULT" = success\n',
-    ),
-  );
+  const gate = 'run: test "$STATIC_RESULT" = success && test "$COVERAGE_RESULT" = success\n';
+  assert(job("ci-ok").includes(gate));
   const config = await readFile(new URL("../vitest.config.ts", import.meta.url), "utf8");
   assert.match(
     config,

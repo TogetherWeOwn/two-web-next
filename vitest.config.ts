@@ -1,7 +1,6 @@
 import { configDefaults, defineConfig } from "vitest/config";
 
-const coverageShard =
-  process.argv.includes("--reporter=blob") && process.argv.some((arg) => arg.startsWith("--shard="));
+const coverageShard = process.env.VITEST_COVERAGE_SHARD === "1";
 
 export default defineConfig({
   test: {
