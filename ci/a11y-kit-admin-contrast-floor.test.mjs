@@ -30,9 +30,10 @@ test("Kit admin contrast floor matches every declared case", async () => {
   const names = [...loop[2].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(widths, ["1280", "390"], "the loop must cover desktop and mobile");
   assert.equal(new Set(names).size, names.length, "fixture names must be unique");
-  // Every node:test call, whatever its title syntax or indentation; `.test(` is
-  // RegExp#test. The width × fixture loop accounts for exactly one call.
-  const calls = (source.match(/(?<![.\w])test(?:\.\w+)?\(/g) ?? []).length;
+  // Every node:test call statement, whatever its title syntax or indentation.
+  // Anchoring to the line start skips comments and RegExp#test. The width ×
+  // fixture loop accounts for exactly one call.
+  const calls = (source.match(/^[ \t]*test(?:\.\w+)?\(/gm) ?? []).length;
   const singles = calls - 1;
 
   assert.equal(
