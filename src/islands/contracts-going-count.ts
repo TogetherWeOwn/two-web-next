@@ -75,6 +75,10 @@ export function goingAnnouncementText(a: GoingViewerState | null): string {
 }
 
 /** "N of M going" with a cap, "N going" without — never invents a number. */
+export function listedSignUpCountText(count: number): string {
+  return `${count} listed sign-up${count === 1 ? "" : "s"}`;
+}
+
 export function goingCountText(going: number, capacity: number | null): string {
   return capacity !== null ? `${going} of ${capacity} going` : `${going} going`;
 }
@@ -120,7 +124,7 @@ export function renderGoingCount(eventKey: string, s: GoingCountState): string {
     `${MOUNT_ATTR}="${GOING_COUNT_ISLAND}" data-event-key="${safeKey}" data-capacity="${s.capacity ?? ""}"` +
     `${s.signedUp ? " data-signed-up" : s.refreshSeat ? ' data-seat-refresh="initial"' : ""}>` +
     `<span class="sr-only" data-announcement>${announcement}${announcement ? " " : ""}</span>` +
-    `<span data-count>${s.signedUp ? `${s.going} signed up` : goingCountText(s.going, s.capacity)}</span>${spots}</span>`
+    `<span data-count>${s.signedUp ? listedSignUpCountText(s.going) : goingCountText(s.going, s.capacity)}</span>${spots}</span>`
   );
 }
 

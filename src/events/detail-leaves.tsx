@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
 import { renderGoingCount, type RsvpClosedReason } from "../islands/contracts";
+import { listedSignUpCountText } from "../islands/contracts-going-count";
 import { kitOpenSeat } from "./kit-seat-actions";
 import type { EventAttendee, ViewerRsvp } from "./reads";
 import { RsvpControl } from "./rsvp-button";
@@ -83,7 +84,11 @@ export const EventShare: FC<{ model: DetailShareModel; ended?: boolean }> = ({
               {model.googleCalendarUrl ? (
                 <>
                   {" · "}
-                  <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
+                  <a
+                    href={model.googleCalendarUrl}
+                    data-testid="event-google-calendar"
+                    rel="noopener"
+                  >
                     Google Calendar
                   </a>
                 </>
@@ -324,10 +329,17 @@ export const EventRoster: FC<{ model: DetailRosterModel; ended?: boolean }> = ({
           ))}
         </ul>
       ) : (
-        <p>{ended ? "There are no more sign-ups on this page." : "There are no more attendees on this page."}</p>
+        <p>
+          {ended
+            ? "There are no more sign-ups on this page."
+            : "There are no more attendees on this page."}
+        </p>
       )}
       {model.attendeesPaging.prevHref || model.attendeesPaging.nextHref ? (
-        <nav class="event-attendees-pagination" aria-label={ended ? "Sign-up pages" : "Attendee pages"}>
+        <nav
+          class="event-attendees-pagination"
+          aria-label={ended ? "Sign-up pages" : "Attendee pages"}
+        >
           {model.attendeesPaging.prevHref ? (
             <a href={model.attendeesPaging.prevHref} rel="prev" data-testid="event-attendees-prev">
               ← Previous {ended ? "sign-ups" : "attendees"}
@@ -363,16 +375,23 @@ export const EventRoster: FC<{ model: DetailRosterModel; ended?: boolean }> = ({
       }
     >
       <h2 id="event-roster-heading">
-        {ended ? "Signed up" : "Who's going"}{model.viewerMember ? " (0)" : ""}
+        {ended ? "Signed up" : "Who's going"}
+        {model.viewerMember ? " (0)" : ""}
       </h2>
       <p>
         {model.viewerMember ? (
-          ended ? "No one signed up." : "No one is listed as going yet."
+          ended ? (
+            "No sign-ups are listed."
+          ) : (
+            "No one is listed as going yet."
+          )
         ) : model.showJoinPitch ? (
           <>
             {model.goingCount > 0
-              ? `${model.goingCount} ${ended ? "signed up" : "going"} —`
-              : ended ? "No one signed up." : "No one is listed as going yet."}{" "}
+              ? `${ended ? listedSignUpCountText(model.goingCount) : `${model.goingCount} going`} —`
+              : ended
+                ? "No sign-ups are listed."
+                : "No one is listed as going yet."}{" "}
             <a href={`/join/discord?next=${encodeURIComponent(model.joinReturnTo)}`}>
               sign in to {ended ? "see who signed up" : "see who's in"}
             </a>

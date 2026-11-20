@@ -716,7 +716,10 @@ export async function resolveKitEventDetail(
           waitlistPosition: position,
           neighbors: {
             previous: neighbors.previous ? toLink(neighbors.previous, now) : null,
-            next: neighbors.next ? toLink(neighbors.next, now) : null,
+            next:
+              neighbors.next && (!ended || !series?.memberIds?.includes(neighbors.next.id))
+                ? toLink(neighbors.next, now)
+                : null,
           },
           related: related.map((link) => toLink(link, now)),
           series: series

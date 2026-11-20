@@ -1093,7 +1093,9 @@ describe("Kit detail presentation", () => {
       if (typeof verdict === "string") expect(html).toContain(verdict);
       else expect(html).toMatch(verdict);
       expect(html).toContain('data-testid="event-roster-empty"');
-      expect(html).toContain("No one is listed as going yet.");
+      expect(html).toContain(
+        _label === "ended event" ? "No sign-ups are listed." : "No one is listed as going yet.",
+      );
       expect(html).not.toMatch(/No RSVPs(\.| yet)/);
       expect(html).not.toContain("RSVP to start the list");
     },
@@ -1128,7 +1130,9 @@ describe("Kit detail presentation", () => {
       if (typeof rsvpCopy === "string") expect(html).toContain(rsvpCopy);
       else expect(html).toMatch(rsvpCopy);
       expect(html).toContain('data-testid="event-roster-guest-nudge"');
-      expect(html).toContain("No one is listed as going yet.");
+      expect(html).toContain(
+        _label === "ended event" ? "No sign-ups are listed." : "No one is listed as going yet.",
+      );
       expect(html).not.toMatch(/No RSVPs(\.| yet)/);
       expect(html).not.toContain("sign in to be the first");
     },
@@ -1289,7 +1293,7 @@ describe("Kit detail presentation", () => {
     const pastMemberHtml = renderDetail(
       pastMember.outcome.model as unknown as Record<string, unknown>,
     );
-    expect(pastMemberHtml).toContain("No Echo for this one. 3 signed up.");
+    expect(pastMemberHtml).toContain("No Echo for this one. 3 listed sign-ups.");
     expect(pastMemberHtml).not.toContain(`action="/e/${KEY}/rsvp"`);
     expect(pastMemberHtml).not.toContain("Next one:");
   });

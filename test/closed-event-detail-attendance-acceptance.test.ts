@@ -406,7 +406,9 @@ it("visible copy excludes mixed-case head and script markup, not adjacent attend
 async function expectPastLineup(html: string, counts: DetailCounts, kit = false): Promise<void> {
   const text = await visibleText(html);
   expect(text).toContain(
-    kit ? `Sign-ups ${counts.going} signed up` : goingCountText(counts.going, counts.capacity),
+    kit
+      ? `Sign-ups ${counts.going} listed sign-up${counts.going === 1 ? "" : "s"}`
+      : goingCountText(counts.going, counts.capacity),
   );
   if (kit) expect(text).not.toMatch(/\bgoing\b/i);
   expect(html).not.toContain(`data-testid="${SPOTS_LEFT_TESTID}"`);
@@ -492,7 +494,7 @@ describe("server-time closure for still-published detail", () => {
     );
     const text = await visibleText(html);
     expect(text).toContain(kit ? "Sign-up record" : "This one has been and gone");
-    expect(text).toContain(kit ? "9 signed up" : "9 of 10 going");
+    expect(text).toContain(kit ? "9 listed sign-ups" : "9 of 10 going");
     expect(html).not.toContain("data-rsvp-form");
     await expectPastLineup(html, counts, kit);
   }
@@ -771,7 +773,7 @@ describe("island refresh keeps the closed-event rendering (RED: no spots node ap
       ],
     });
     await b.settle();
-    expect(b.count.textContent).toBe(`${pastFull.going - 1} signed up`);
+    expect(b.count.textContent).toBe(`${pastFull.going - 1} listed sign-ups`);
     expect(b.mount.querySelector("[data-announcement]")?.textContent ?? "").toBe("");
     expect(b.mount.querySelector("[data-spots]")).toBeNull();
   });

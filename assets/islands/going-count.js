@@ -323,7 +323,7 @@
             var signedUp = node.getAttribute("data-signed-up") !== null;
             if (count) {
               count.textContent = signedUp
-                ? row.going_count + " signed up"
+                ? row.going_count + " listed sign-up" + (row.going_count === 1 ? "" : "s")
                 : countText(row.going_count, capacity);
             }
             var spots = node.querySelector("[data-spots]");
