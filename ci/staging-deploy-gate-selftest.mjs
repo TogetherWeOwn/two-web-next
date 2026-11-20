@@ -333,7 +333,12 @@ test("each Ember opt-in probes the exact staging GET after revision verification
         "ci/staging-kit-route-check.mjs",
         path,
       ],
-      { cwd: root, encoding: "utf8", timeout: 5_000 },
+      {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 5_000,
+        env: { ...process.env, KIT_ROUTE_CHECK_ATTEMPTS: "1" },
+      },
     );
     assert.equal(result.status, expected, `${status} / ${marker}: ${result.stderr}`);
     if (expected === 0) assert.match(result.stdout, /HTTP 200, x-two-renderer: kit/);
@@ -343,6 +348,28 @@ test("each Ember opt-in probes the exact staging GET after revision verification
       assert.match(result.stderr, refusal ?? (status === 200 ? /did not return/ : /expected 200/));
     }
   }
+  // A freshly switched family can answer Hono for a few seconds: the probe retries.
+  const flaky = `let calls = 0; globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(null, {status: 200, headers: calls < 3 ? {"x-two-renderer": "hono"} : {"x-two-renderer": "kit"}});
+  };`;
+  const retried = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      `data:text/javascript,${encodeURIComponent(flaky)}`,
+      "ci/staging-kit-route-check.mjs",
+      "/",
+    ],
+    {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 5_000,
+      env: { ...process.env, KIT_ROUTE_CHECK_ATTEMPTS: "3", KIT_ROUTE_CHECK_DELAY_MS: "10" },
+    },
+  );
+  assert.equal(retried.status, 0, retried.stderr);
+  assert.match(retried.stdout, /x-two-renderer: kit \(attempt 3\)/);
 });
 
 const denied = [
