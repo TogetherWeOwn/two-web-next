@@ -604,8 +604,6 @@ async function browser(opts: {
 
   const context: Record<string, unknown> = {
     document: documentStub,
-    matchMedia: () => ({ matches: false, addEventListener: () => undefined }),
-    addEventListener: () => undefined,
     CustomEvent: class {
       constructor(
         public type: string,

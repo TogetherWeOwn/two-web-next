@@ -215,11 +215,24 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     await expect(home).toHaveCSS("outline-style", "solid");
     await expect(sheet).toHaveCSS("animation-name", "none");
     await shot(page, "forced-colors-open-390");
-    await page.route(new URL("/islands/site-header-menu.js", url).href, (route) => route.abort());
+    const island = new URL("/islands/site-header-menu.js", url).href;
+    await page.route(island, (route) => route.abort());
+    async function assertFallback(name) {
+      const trigger = menu(page, "link");
+      assert.equal(await trigger.getAttribute("aria-expanded"), null);
+      await trigger.click();
+      await expect(page).toHaveURL(/#menu-sheet$/);
+      await expect(row("Close menu")).toBeVisible();
+      await expect(inert).toHaveCount(0);
+      await shot(page, `${name}-open-390`);
+    }
     await open("?state=guest");
-    await menu(page, "link").click();
-    await expect(sheet.getByRole("link", { name: "Close menu" })).toBeVisible();
-    await expect(inert).toHaveCount(0);
-    await shot(page, "blocked-island-open-390");
+    await assertFallback("blocked-island");
+    await page.unroute(island);
+    await page.addInitScript(() => Reflect.deleteProperty(HTMLElement.prototype, "inert"));
+    const [response] = await Promise.all([page.waitForResponse(island), open("?state=guest")]);
+    assert.equal(response.ok(), true);
+    assert.equal(await page.evaluate(() => "inert" in HTMLElement.prototype), false);
+    await assertFallback("no-inert");
   });
 });
