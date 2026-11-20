@@ -46,7 +46,7 @@ export interface DetailLeavesModel
     DetailRosterModel,
     DetailShareModel {
   isOngoing?: boolean;
-  lifecycle?: object | null;
+  isEnded?: boolean;
   rsvpOpen: boolean;
   rsvpClosed: RsvpClosedReason | null;
   answer: ViewerRsvp | null;
@@ -413,7 +413,7 @@ export function withEventDetailHtml<T extends DetailLeavesModel>(
   model: T,
 ): T & { detailHtml: EventDetailHtml } {
   const review = model.viewerModerator ? model.review : undefined;
-  const ended = Boolean(model.lifecycle);
+  const ended = model.isEnded ?? false;
   return {
     ...model,
     detailHtml: {

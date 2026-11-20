@@ -22,7 +22,7 @@ let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrit
   $props();
 const facts = $derived(kitEventFacts(model));
 const lifecycle = $derived(model.lifecycle);
-const series = $derived(lifecycle && model.series ? { ...model.series, next: null } : model.series);
+const series = $derived(model.isEnded && model.series ? { ...model.series, next: null } : model.series);
 const live = $derived(model.liveTime);
 const savedLive = $derived(
   live && !model.review && model.viewerMember && model.answer?.status === "going",
@@ -132,7 +132,7 @@ const detailIslands = $derived([
     {#if model.isDraft}
       <p class="notice" data-testid="event-draft">Draft</p>
     {/if}
-    {#if !lifecycle && model.isPast}
+    {#if !model.isEnded && model.isPast}
       <p class="notice" data-testid="event-past">Past event</p>
     {/if}
     {#if model.status === "cancelled"}
@@ -172,11 +172,11 @@ const detailIslands = $derived([
   {/if}
   </div>
   <div class="event-layout-rail">
-    {#if lifecycle}
+    {#if model.isEnded}
       <section class="seat-card" aria-labelledby="signup-record-heading" data-testid="event-past">
         <div class="seat-card-head"><h2 id="signup-record-heading">Sign-up record</h2></div>
         <p class="seat-card-note">No Echo for this one. {listedSignUpCountText(model.goingCount)}.</p>
-        {#if lifecycle.next}<p><a href="/e/{lifecycle.next.key}">Next one: {lifecycle.next.date}</a></p>{/if}
+        {#if lifecycle?.next}<p><a href="/e/{lifecycle.next.key}">Next one: {lifecycle.next.date}</a></p>{/if}
       </section>
       {#if model.viewerModerator && model.review}{@html model.review.rsvp}{/if}
     {:else if savedLive}

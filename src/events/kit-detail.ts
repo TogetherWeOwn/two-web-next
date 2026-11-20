@@ -202,6 +202,8 @@ export interface KitEventDetailModel {
    * interval. Never a client clock; RSVP verdicts are unaffected. Optional
    * so a pre-existing fixture without the flag reads as not ongoing. */
   isOngoing?: boolean;
+  /** Elapsed at the server render instant, even if a review cannot format its dates. */
+  isEnded: boolean;
   lifecycle: { date: string; endTime: string; next: { key: string; date: string } | null } | null;
   liveTime?: { asOf: string; staleAt: string };
   goingCount: number;
@@ -675,6 +677,7 @@ export async function resolveKitEventDetail(
           isDraft: event.status === "draft",
           isPast: event.status === "past",
           isOngoing: Boolean(liveTime),
+          isEnded: ended,
           lifecycle: ended ? detailLifecycle(event, zoneLabel, series?.upcoming) : null,
           ...(liveTime ? { liveTime } : {}),
           goingCount: event.goingCount,

@@ -353,6 +353,36 @@ describe("member-detail review mode", () => {
       "Time unavailable",
     );
   });
+
+  it("keeps elapsed review in the ended state when the start date is unreadable", async () => {
+    const event = {
+      ...row({
+        status: "published",
+        startsAt: new Date(NaN),
+        endsAt: new Date("2020-01-02T00:00:00Z"),
+      }),
+      goingCount: 0,
+      goingOccupancy: 0,
+    };
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event }),
+      memberSession(MOD_ID, true),
+      null,
+      "?review=1",
+    );
+    if (outcome.kind !== "ok") throw new Error(outcome.kind);
+    const { model } = outcome;
+    expect(model.lifecycle).toBeNull();
+    expect(model.detailHtml.share).toContain("Share this event");
+    expect(model.detailHtml.share).not.toContain("Add to calendar");
+    expect(model.detailHtml.metadata).toContain("listed sign-ups");
+    expect(model.detailHtml.roster).not.toContain('data-island="attendees-live"');
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(model as unknown as Record<string, unknown>);
+    expect(html).toContain("Time unavailable");
+    expect(html).toContain('aria-labelledby="signup-record-heading"');
+  });
 });
 
 describe("event-detail gate order", () => {

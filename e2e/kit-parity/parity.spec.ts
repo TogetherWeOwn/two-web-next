@@ -2407,10 +2407,12 @@ test("Kit member event detail captures the ended record at both widths", async (
       );
       await expect(page.getByLabel("Event link")).toBeVisible();
       const comparisons = page.locator(".event-meta .event-device-timezone");
-      await expect(comparisons).toHaveCount(3);
+      await expect(comparisons).toHaveCount(4);
       for (const comparison of await comparisons.all())
         expect(await comparison.boundingBox()).toBeNull();
-      expect(await page.locator(".event-meta > div[hidden]").boundingBox()).toBeNull();
+      const hiddenRows = page.locator(".event-meta > div[hidden]");
+      await expect(hiddenRows).toHaveCount(2);
+      for (const row of await hiddenRows.all()) expect(await row.boundingBox()).toBeNull();
       for (const fact of ["Starts", "Ends"]) {
         const row = page
           .locator(".event-meta > div")

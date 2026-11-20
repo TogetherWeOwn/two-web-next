@@ -224,7 +224,12 @@ describe("shared event detail server leaves", () => {
     expect(forcedClosed.rsvp).not.toContain("<form");
     expect(forcedClosed.metadata).not.toContain('data-testid="event-spots-left"');
     vi.setSystemTime(new Date(0));
-    const forcedOpen = withEventDetailHtml({ ...ended.model, rsvpClosed: null, lifecycle: null });
+    const forcedOpen = withEventDetailHtml({
+      ...ended.model,
+      rsvpClosed: null,
+      isEnded: false,
+      lifecycle: null,
+    });
     expect(forcedOpen.detailHtml.rsvp).toContain("data-rsvp-form");
     expect(forcedOpen.detailHtml.rsvp).not.toContain("rsvp-closed");
     // The open-seat card owns the initial count; the lineup can still refresh.
