@@ -1050,6 +1050,20 @@ test("CLI enforces the selected staging Join renderer and its public action", as
       failure: /expected join-oneclick link/,
     },
     {
+      name: "action under an inert ancestor",
+      expected: "kit",
+      body: `${heading}<div inert><p>${action}</p></div>`,
+      marker: "kit",
+      failure: /expected join-oneclick link/,
+    },
+    {
+      name: "action under a hidden ancestor",
+      expected: "kit",
+      body: `${heading}<div hidden><p>${action}</p></div>`,
+      marker: "kit",
+      failure: /expected join-oneclick link/,
+    },
+    {
       name: "test ID and href belong to different elements",
       expected: "kit",
       body: `${heading}<a href="/join/discord">Join</a><span data-testid="join-oneclick">Join</span>`,

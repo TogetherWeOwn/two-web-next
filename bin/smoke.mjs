@@ -229,6 +229,7 @@ async function readJoinMarkup(body) {
     const node = nodes.pop();
     if (node.namespaceURI === "http://www.w3.org/1999/xhtml") {
       const attr = (name) => node.attrs.find((entry) => entry.name === name)?.value;
+      if (attr("inert") !== undefined || attr("hidden") !== undefined) continue;
       // A bare /join GET renders this same-origin action without query parameters.
       if (
         node.tagName === "a" &&
