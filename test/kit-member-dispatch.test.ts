@@ -40,7 +40,10 @@ const eventFor = (path: string, method = "GET"): HookEventLike => {
     method,
     headers: { host: "next.example.test" },
   });
-  return { request, url: new URL(request.url), route: { id: "/members/[id]" } };
+  const url = new URL(request.url);
+  const isDataRequest = url.pathname.endsWith("/__data.json");
+  if (isDataRequest) url.pathname = url.pathname.slice(0, -"/__data.json".length);
+  return { request, url, isDataRequest, route: { id: "/members/[id]" } };
 };
 
 const authenticated = (userId: string): KitLocals => ({
@@ -503,7 +506,12 @@ describe("decideRoute", () => {
   it("the shipped manifest keeps the homepage, privacy, rules, join and recover on Hono, assigns the public archive, events list, hot-zones, about and faq leaves, member board and join-attempts list and detail to Kit, and holds the admin dashboard, featured list, create and edit forms, activity log, event-create and event-edit forms and profile reads on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
-      { method: "GET", path: "/", enabled: false, reads: "public" },
+      {
+        method: "GET",
+        path: "/",
+        enabled: false,
+        reads: { resource: "member", action: "list", route: "home" },
+      },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/events", enabled: true, reads: "public" },
       { method: "GET", path: "/about", enabled: true, reads: "public" },

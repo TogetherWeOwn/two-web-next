@@ -191,6 +191,28 @@ describe.skipIf(!process.env.DATABASE_URL)("series materialisation (agent-testdb
     expect(await db.select().from(activityLog)).toEqual(audits);
   });
 
+  it("round-trips the repeat-until date in a non-UTC session before reconciling", async () => {
+    await fixture!.client`set time zone 'America/Los_Angeles'`;
+    const [session] = await fixture!.client`select current_setting('TimeZone') as timezone`;
+    expect(session!.timezone).toBe("America/Los_Angeles");
+    const { row } = await createEvent(db, actor, input, {
+      frequency: "weekly",
+      count: null,
+      endsOn: new Date("2026-11-01T00:00:00.000Z"),
+    });
+    const [parent] = await db.select().from(events).where(eq(events.id, row.id));
+    expect(parent!.recurrenceEndsOn?.toISOString()).toBe("2026-11-01T00:00:00.000Z");
+    const original = await db.select().from(events).orderBy(events.recurrenceIndex);
+    expect(original.length).toBeGreaterThan(1);
+    const last = original[original.length - 1]!;
+    await db.delete(events).where(eq(events.id, last.id));
+    expect(await materializeRecurringSeries(db)).toBe(1);
+    const restored = await db.select().from(events).orderBy(events.recurrenceIndex);
+    expect(restored.map((event) => event.startsAt.toISOString())).toEqual(
+      original.map((event) => event.startsAt.toISOString()),
+    );
+  });
+
   it("reconcile tops up a missing index and never resurrects a cancelled skipped week", async () => {
     const { row } = await createEvent(db, actor, input, {
       frequency: "weekly",

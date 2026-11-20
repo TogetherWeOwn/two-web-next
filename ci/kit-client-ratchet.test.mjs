@@ -635,7 +635,7 @@ test("initial measured route admission remains pinned independently of the live 
   assert.equal(initial.routes["/admin"].js.maxRawBytes, 145920);
   assert.equal(
     createHash("sha256").update(JSON.stringify(initial)).digest("hex"),
-    "38eb8669ed3145d33b86658d1923845029782dff1441fafed27a611d2a7e8207",
+    "1af9a4895c9fdfada76fee2e503d80f194792397bddd026ed243cbd2697c7f07",
   );
   assert.deepEqual(
     JSON.parse(readFileSync(join(repo, ROUTE_BUDGET), "utf8")),

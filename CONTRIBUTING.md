@@ -52,9 +52,11 @@ The repository rulesets enforce the following on `main`:
 
 - `protect-main`: changes arrive through a pull request, the branch cannot be
   deleted or force-pushed, only squash merges are allowed, and `ci-ok`,
-  `gitleaks` and `e2e-ok` must pass on the exact head, and so must the two
-  review app checks, CodeRabbit and Devin Review. No approving review is
-  required.
+  `gitleaks`, `e2e-ok` and `pr-size-gate / gate` must pass on the exact head,
+  and so must the `Devin Review` check and the organization rulesets
+  (`pr-standards`, `CodeQL`). CodeRabbit is advisory, not a required check;
+  answer every finding, but its check does not gate the merge. No approving
+  review is required.
 
   The journeys count only through the aggregator in e2e.yml: it fails when the
   scope job fails or the browser journeys fail or are cancelled, and passes a
@@ -63,19 +65,23 @@ The repository rulesets enforce the following on `main`:
 
 - `pr-conventions`: `pr-lint` must pass.
 
+The `pr-size-gate` job's check, `pr-size-gate / gate`, is the required size
+gate named in the `protect-main` bullet above.
+
 Who merges: when native review stages apply, the final-stage reviewer
 squash-merges the exact reviewed head before closing the task; without a review
 stage, the author merges. Every required check must be green on that head and
 every review finding must be fixed or answered with evidence. Pin the merge to
 that SHA; do not approve a final stage and leave an open PR for the author.
 
-A merge to `main` reaches production through CI, staging deploy, e2e-staging and
-automatic production promotion, so it needs a fresh Release Manager
-`request_confirmation` for that PR's exact head on a child confirmation card
-assigned and addressed to the Release Manager. Every other production deploy,
-including manual dispatch or promotion, also needs Release Manager confirmation.
-Any push changes the head and requires a new exact-head confirmation. Record the
-confirmation and pinned squash SHA in the release log.
+A merge to `main` does not reach production on its own. For automatic promotion,
+[the resolver](ci/resolve-promotion-sha.mjs) skips unless the qualified, soaked
+staging SHA equals `PRODUCTION_ACCEPTED_SHA`. The Release Manager accepts the
+exact release SHA; the authorized Operator sets the variable to that SHA.
+Ordinary PRs need **no per-PR Release Manager confirmation**. Changes to the
+promotion path still need exact-head confirmation before merge, as described
+below. Every production deploy, including manual dispatch, still needs Release
+Manager acceptance.
 
 ### Merge and production staging evidence
 
@@ -89,23 +95,30 @@ requirement. Do not demand paired artifact hashes or a comparison to current
 
 Before merge, require:
 
-1. **Exact-head checks and review.** All required checks listed above (`ci-ok`,
-   `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review`) pass on the
-   exact PR head. Every finding is fixed or answered with evidence, and applicable
+1. **Exact-head checks and review.** All required checks listed above
+   (`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `pr-size-gate / gate`,
+   `Devin Review`, the organization `pr-standards` workflow and `CodeQL`)
+   pass on the exact PR head. CodeRabbit is
+   advisory: answer every finding, but it is not a required check. Every finding is fixed or answered with evidence, and applicable
    security reviews, rulesets and native review stages are complete.
    Record exact-head GitHub Actions run/job links and conclusions; local output
    does not replace required Actions evidence.
-2. **Fresh production confirmation.** Obtain a new per-PR exact-head Release
-   Manager `request_confirmation` on a child card assigned and addressed to the
-   Release Manager. Include the migration ledger evidence or "no migration",
-   known-good rollback target, and the automatic post-merge staging path. The
-   staging item is met by that path, not by a claimed pass for the unmerged head.
-   Any push requires a new exact-head confirmation.
+2. **Exact-head Release Manager confirmation for promotion-path PRs.** This
+   covers `.github/workflows/**`, actions and tooling that qualify, select,
+   deploy or roll back a production candidate (including
+   `ci/resolve-promotion-sha.mjs` and `ci/production-deploy-gate.mjs`), and
+   deploy, Wrangler or binding config.
+   Obtain a `request_confirmation` on a child card assigned and addressed to the
+   Release Manager. Include the migration ledger evidence or "no migration", the
+   known-good rollback target and the automatic post-merge staging path. A push
+   that changes the PR head requires fresh confirmation. This does not authorize
+   a production deploy; release acceptance is separate.
 3. **Pinned handoff and retained safeguards.** The final-stage reviewer, or the
    author when no native review stage applies, squash-merges only the reviewed
-   and confirmed head, with the merge pinned to that SHA. Record the
-   confirmation and squash SHA in the release log. Incident, freeze and hold
-   safeguards, identity/capability holds and rollback requirements still apply.
+   head and, for a promotion-path PR, only if it matches the confirmed SHA.
+   Record the pinned squash SHA and any required confirmation in the release log.
+   Incident, freeze and hold safeguards, identity/capability holds and rollback
+   requirements still apply.
    An otherwise mergeable PR need not be restacked solely because `main` moved.
 
 After merge, the resulting **exact `main` SHA** must pass the existing full CI,
@@ -134,13 +147,11 @@ and all existing promotion, migration and rollback guards. If matching evidence
 cannot be obtained, hold that candidate's promotion; do not stage an unmerged
 head, infer a pass from a skip, or change a workflow in this documentation PR.
 
-This changes when staging evidence is required, not the pipeline or other
-merge/release gates. No red deterministic gate is waived, no pipeline skip/no-op
-is authorized, and every other production deploy still requires Release Manager
-confirmation. Previously rejected requests remain historical rejections, not
-retroactive approvals: resubmit each candidate for fresh exact-head confirmation.
-This documentation grants no merge or production permission, including for a PR
-documenting it.
+This policy does not change the pipeline or waive any other merge or release
+requirement. Previously rejected requests are not retroactive approvals; obtain
+fresh acceptance for any release candidate and fresh confirmation when the PR
+changes the promotion path. This documentation does not authorize any
+particular merge or production deployment.
 
 ### Pull-request size labels (advisory)
 
@@ -152,9 +163,12 @@ and fixtures. The labeller lives once in the org
 [TogetherWeOwn/.github](https://github.com/TogetherWeOwn/.github) repository
 (`CI-STANDARD.md`, "Advisory PR-size labels"); the workflow here is a thin
 caller pinned to a central SHA and passes only this repo's generated paths.
-This is advisory only: it is not a required check and never blocks a merge.
-A Monday run of the same workflow prints the weekly tally of merged pull
-requests per size; the labels are the durable record behind it.
+The labeller is advisory only: it is not a required check and never blocks a
+merge. The same workflow's `pr-size-gate` job is the required size gate,
+reported as `pr-size-gate / gate` (see Branch protection and required checks
+above). A Monday run of the same workflow
+prints the weekly tally of merged pull requests per size; the labels are the
+durable record behind it.
 
 ### Change-gated CI and `ci-ok`
 
@@ -173,6 +187,9 @@ worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 checks relative links and anchors on every PR. `check` runs unless its run was
 cancelled, starts from `scope` alone so it runs in parallel with the audit
 and performance jobs, and skips its heavy steps on docs-only and draft PRs.
+The independent `kit-browser-fixture` job runs alongside `check` for non-draft,
+non-docs-only full, app or worker scopes. `ci-ok` requires its success when
+selected, and fails on failure, cancellation or an unexpected skip.
 `node22-compat` reports the same way on the exact Node 22.23.0 `engines`
 floor — the version asserted in its log — running lint, typecheck and the
 unit suite, so the declared 22 range is verified beside the Node 24 jobs;
@@ -224,9 +241,13 @@ below-cutoff branch rows need `PR_STANDARDS_MODE`.
 | Advisory references in the PR title or body, or an internal reference in the branch name below the cutoff (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 
 GitHub does not enforce an approval count here, and neither does team policy.
-Independent review comes from the two review app checks, CodeRabbit and Devin
-Review, which run on the head SHA, and a new push re-runs them. The merge rule is
-the one in "Who merges" above.
+Independent review comes from Devin Review, a required check that runs on the
+head SHA and re-runs on a new push, plus CodeRabbit, whose check is advisory:
+its findings must each be fixed or answered with evidence, but the check never
+blocks the merge. Review conversations still follow the required thread
+resolution in "Branch protection and required checks", so resolve each
+conversation once it is fixed or answered. The merge rule is the one in
+"Who merges" above.
 
 `pr-lint` lives in `.github/workflows/pr-gates.yml` and runs through
 `ci/pr-lint-output.py check`: first `ci/check-pr-conventions.py` (it fails on a
@@ -244,7 +265,15 @@ script is unit-tested beside it: `python3 -m unittest discover -s .github/script
 ### Secret-scan allowlists
 
 The required `gitleaks` job (also in `pr-gates.yml`) scans the full history
-reachable from the PR head. On a pull request it applies the base branch's
+reachable from the checked-out commit. On pull requests, this starts at GitHub's
+PR merge commit, not the submitted branch tip. The scan forces text diffs and
+compares each merge with its first parent, including conflict resolutions.
+That comparison can report content inherited from another parent under the
+merge SHA. Use commit-scoped ignore fingerprints to limit an exception to one
+occurrence. A fingerprint scoped to the original commit does not also exempt
+the merge occurrence.
+
+On a pull request the job applies the base branch's
 `.gitleaks.toml` and `.gitleaksignore` and ignores inline `gitleaks:allow`
 comments, so a PR cannot allowlist its own leak. If a change legitimately needs a
 new allowlist entry, merge that entry first as a small, separately reviewed PR;
@@ -389,25 +418,72 @@ npm run check                    # lint + format + typecheck + config drift + te
 #### AI contributors: exact-head GitHub Actions
 
 Full suites and CI gates run only on GitHub Actions for the exact PR head.
-Push to the PR branch, open or keep the PR as a draft while incomplete, and
-record exact-head Actions run/job links and conclusions in Verification before
-marking ready. Changes to `src/`, `test/` or migrations still require the full
-gate; draft or scope-skipped jobs are not a full-suite pass. If the draft run
-skips heavy steps, dispatch the existing CI workflow on that PR branch for full
-verification. Every required check, database-safety rule, native review and
-release gate remains in force.
+Keep the PR in draft until implementation is complete and the checks that run
+on drafts pass on that head. Record their run/job links and conclusions and all
+other required before-ready evidence in Verification. If a draft check does not
+produce required changed-behavior proof, use the relevant focused Actions
+workflow where available. Do not dispatch full CI just because the draft skips
+heavy jobs.
 
-Local agent test execution is limited to an authorized focused reproduction of
-one failing test or crate. Neither the builder nor its caller may run local
+Mark that head ready to trigger the normal PR CI and E2E runs. Before submitting
+for native review, verify the required checks passed on that same head and
+record the run/job links and conclusions in Verification. Changes to `src/`,
+`test/` or migrations still require the full gate; draft or scope-skipped jobs
+are not a full-suite pass. Every required check, database-safety rule, native
+review and release gate remains in force.
+
+Local agent test execution is limited to the bounded pre-push fixture checks
+below and, when Actions cannot run it, an authorized focused reproduction of
+one failing non-Rust test. Neither the builder nor its caller may run local
 full suites or CI mirrors on the shared host, in Boat or through a fallback;
-do not split a suite into successive focused commands. Any heavy build needed
-for that reproduction must use the guarded `boat` PATH wrapper with approved
-source-only export, sizing/budget controls, `--no-env`, and verified cleanup.
-Never bypass the wrapper or use a heavy raw-host fallback. If no compliant
-path is available, defer to Actions or route the actual prerequisite. Report
-focused reproduction output separately as diagnostic evidence; it does not
-replace Actions evidence. Read-only reviewers inspect source and existing
-evidence and do not execute tests, builds or installs.
+do not split a suite into successive focused commands. Do not use Boat or a
+heavy raw-host fallback for non-Cargo work. If no compliant path is available,
+defer to Actions or route the actual prerequisite. Report focused reproduction
+output separately as diagnostic evidence; it does not replace Actions evidence.
+Read-only reviewers inspect source and existing evidence and do not execute
+tests, builds or installs.
+
+Before every push, agents verify a fresh worktree with a bounded,
+offline-fixture set of checks. GitHub Actions is the only place agents run the
+full suite, the database tests, Docker and the browser gates.
+
+Install once per worktree and reuse it unless a lockfile changes. Project npm
+configuration disables lifecycle scripts by default; keep `--ignore-scripts`
+explicit and use a per-task npm cache. `npm ci`
+uses the frozen lockfile and its integrity checks; this change does not add or
+update dependencies. Although npm 11.19 accepts `--min-release-age`, it does not
+enforce that age on locked packages installed by `npm ci`. Do not treat this
+command as a package-age check. Use the Node floor stated in the README.
+
+```sh
+nice timeout -k 10 300 npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund --cache "$PAPERCLIP_TASK_SCRATCH_DIR/npm-cache"
+nice timeout -k 10 120 npm run generate:first-party
+nice timeout -k 10 120 npm run typecheck
+nice timeout -k 10 300 env -u DATABASE_URL -u BOT_DATABASE_URL npm run test:unit -- test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
+```
+
+- `--ignore-scripts` suppresses npm pre and post hooks, so `postinstall` and
+  `pretypecheck` do not run. `npm run typecheck` therefore runs the generator
+  itself: `node ci/build-leaf-css.mjs && tsc --noEmit && tsc --noEmit -p ci/tsconfig.json`.
+- `npm run test:unit` is `node ci/test-unit.mjs`. It requires explicit, exact
+  `test/*.test.ts` paths and rejects no arguments, invalid names, directories,
+  flags, globs and missing paths. It regenerates the same critical-CSS module
+  through the generator before Vitest and does not build the app. Run tests
+  separately from typecheck; neither depends on the other.
+- Choose test files beside the code you changed and the files that import it
+  (`git grep -l <module> test/`). Pick only fixtures that run offline. The two
+  files above are an example. Do not provide `DATABASE_URL` or any credential.
+- Format and lint each changed file with a 120 second limit, for example
+  `nice timeout -k 10 120 npm exec --no -- biome format package.json ci/test-unit.mjs test/<file>.test.ts`,
+  then `nice timeout -k 10 120 npm exec --no -- biome check --error-on-warnings <same paths>`.
+- Precheck resources first. If the load average exceeds `nproc`, `MemAvailable`
+  is under 10% of total memory, or `/home` has 85% or more used, skip the
+  install-dependent checks and record that you skipped them and why.
+- Clean up only what you created: remove the worktree's `node_modules` and the
+  per-task npm cache when you finish.
+- Run in Actions only, on the exact head SHA: `npm run check`, the full build,
+  database tests, Docker and the browser, a11y and Kit gates. Cite that head's
+  results as evidence. Do not claim a result you did not see.
 
 The command examples in Local development and the human workflow below are
 a tooling reference, not an exception to these agent execution limits.
@@ -448,6 +524,9 @@ bin/local-ci.sh -j 8 --no-coverage --no-static                  # suite only, qu
   above; neither the builder nor its caller runs this local gate.
 - Not covered: the browser journeys (`e2e-ok`), the a11y job, the Kit build and
   parity gates, and Semgrep. CI still runs them on the PR.
+
+`bin/local-ci.sh` (also `npm run ci:local --`) is a human workflow; agents do
+not run it. Agents do not run the full suite locally; use the Actions run instead.
 
 Biome is pinned in `package-lock.json`. `npm run lint` uses the read-only
 [`biome ci`](https://biomejs.dev/reference/cli/#biome-ci) command to enforce both

@@ -5,9 +5,11 @@ import { describe, expect, it } from "vitest";
 // Typography acceptance: every Mona Sans stack in the four theme sheets
 // carries the metric-matched 'Mona Sans Fallback' directly after Mona Sans
 // (the theme.css position), every --font-display token definition carries the
-// fallback too (including the generated web/src/ember-theme.css; exactness
-// against the vendored kit is gated by ci/check-ember-token-sync.mjs), and no
-// hardcoded hex lives in theme rules outside the generated base role block.
+// fallback too (including the content-theme override, which carries 'Mona Sans
+// Content' first with the fallback second, and the generated
+// web/src/ember-theme.css; exactness against the vendored kit is gated by
+// ci/check-ember-token-sync.mjs), and no hardcoded hex lives in theme rules
+// outside the generated base role block.
 // theme.css is generated and minified: its display text rules use the shared
 // --font-display hook, which is expanded here so the stack counts still pin
 // the real family chain. Static pins only: no app, no database, no network.
@@ -39,9 +41,12 @@ const FONT_DECLARATION = /(?:font-family|font)\s*:[^;{}]+(?:;|(?=\}))/g;
 // Bare Mona Sans: neither the quoted 'Mona Sans Fallback' family nor font-display.
 const BARE_MONA = /(?<!['"-\w])Mona Sans(?!['"-\w])/;
 // theme.css position: the fallback sits directly after Mona Sans.
-const UNIFIED_STACK = /Mona Sans,\s*["']Mona Sans Fallback["']/;
+const UNIFIED_STACK = /Mona Sans["']?,\s*["']Mona Sans Fallback["']/;
+// The fallback sits directly after Mona Sans or after Mona Sans Content.
+const UNIFIED_STACK_OR_CONTENT =
+  /(?:Mona Sans Content["']?|Mona Sans["']?),\s*["']Mona Sans Fallback["']/;
 const HEX_LITERAL = /#[0-9a-fA-F]{3,8}\b/g;
-const TOKEN_DECLARATION = /--font-display\s*:[^;{}]+;/g;
+const TOKEN_DECLARATION = /--font-display\s*:[^;{}]+(?:;|(?=\}))/g;
 
 const tokenValue = (declaration: string): string =>
   declaration.replace(/^--font-display\s*:\s*/, "").replace(/;$/, "");
@@ -51,15 +56,31 @@ const tokenDefinitions = (): string[] =>
     (css) => stripComments(css).match(TOKEN_DECLARATION) ?? [],
   );
 
-// The served hook value every var(--font-display) usage resolves to.
+// The served hook value every var(--font-display) usage resolves to is the
+// base definition; the content-theme override re-points the same hook at the
+// optional content face, so it is read separately below.
+const hookDefinitions = (): string[] =>
+  stripComments(sheet("theme.css")).match(TOKEN_DECLARATION) ?? [];
+
 const hookValue = (): string => {
-  const definitions = stripComments(sheet("theme.css")).match(TOKEN_DECLARATION) ?? [];
-  expect(definitions).toHaveLength(1);
+  const definitions = hookDefinitions();
+  expect(definitions.length).toBeGreaterThanOrEqual(1);
   return tokenValue(definitions[0]!);
 };
 
+const contentHookValue = (): string => {
+  const override = hookDefinitions().find((definition) =>
+    /Mona Sans Content/.test(tokenValue(definition)),
+  );
+  expect(override, "theme.css must define a content-theme --font-display override").toBeDefined();
+  return tokenValue(override!);
+};
+
 // Declarations that resolve to a Mona Sans stack: literal stacks plus usages
-// of the shared hook, expanded to the stack they resolve to.
+// of the shared hook, expanded to the stack they resolve to. Counted per
+// declaration occurrence: once the content guards are gone the minifier merges
+// the text targets sharing `font-family: var(--font-display)` into one rule,
+// so the pinned counts below drop by one with no target lost.
 const displayStacks = (css: string): string[] => {
   const hook = hookValue();
   return (stripFontFace(stripComments(css)).match(FONT_DECLARATION) ?? [])
@@ -80,8 +101,12 @@ describe("unified Mona Sans fallback stacks", () => {
     expect(violations).toEqual([]);
   });
 
+  // theme.css drops one declaration because the minifier merges the text
+  // targets that share `font-family: var(--font-display)` once the content
+  // guards are gone; all eight targets still paint through the hook (see the
+  // per-target pin in test/content-leaf-no-webfont.test.ts).
   it.each([
-    ["theme.css", 7],
+    ["theme.css", 6],
     ["event-theme.css", 4],
     ["schedule-theme.css", 1],
     ["profile-theme.css", 4],
@@ -95,7 +120,8 @@ describe("unified Mona Sans fallback stacks", () => {
       (count, entry) => count + displayStacks(sheet(entry)).length,
       0,
     );
-    expect(total).toBeGreaterThanOrEqual(16);
+    // 15, not 16, for the same minifier merge as the theme.css count above.
+    expect(total).toBeGreaterThanOrEqual(15);
   });
 });
 
@@ -108,21 +134,43 @@ describe("--font-display token", () => {
     // The hook is the kit literal plus the measured local fallback, inserted
     // by the generator; ci/check-ember-token-sync.mjs fails on any drift. A
     // definition without the fallback would swap to unadjusted system sans.
+    // The content-theme override carries the content face instead, with the
+    // same fallback second.
     for (const definition of tokenDefinitions()) {
-      expect(definition).toMatch(UNIFIED_STACK);
+      expect(definition).toMatch(UNIFIED_STACK_OR_CONTENT);
     }
   });
 
   it("is defined in both the served theme.css and the generated Kit sheet", () => {
-    expect(stripComments(sheet("theme.css")).match(TOKEN_DECLARATION)).toHaveLength(1);
+    expect(stripComments(sheet("theme.css")).match(TOKEN_DECLARATION)).toHaveLength(2);
     expect(stripComments(emberThemeCss()).match(TOKEN_DECLARATION)).toHaveLength(1);
   });
 
-  it("is used by the shared display rules in theme.css (seven usages)", () => {
+  it("points the content-theme override at the content face with the fallback second", () => {
+    const families = contentHookValue()
+      .split(",")
+      .map((family) =>
+        family
+          .trim()
+          .replace(/^["']|["']$/g, "")
+          .replace(/\s+/g, " "),
+      );
+    expect(families.slice(0, 2)).toEqual(["Mona Sans Content", "Mona Sans Fallback"]);
+    expect(families.slice(2)).toContain("system-ui");
+    const definitions = hookDefinitions();
+    expect(
+      definitions.filter((definition) => /Mona Sans Content/.test(tokenValue(definition))),
+    ).toHaveLength(1);
+    expect(
+      definitions.filter((definition) => UNIFIED_STACK.test(tokenValue(definition))),
+    ).toHaveLength(1);
+  });
+
+  it("is used by the shared display rules in theme.css (six usages after the minifier merge)", () => {
     const usages = stripFontFace(stripComments(sheet("theme.css"))).match(
       /(?:font-family|font)\s*:[^;{}]*var\(--font-display\)/g,
     );
-    expect(usages?.length ?? 0).toBeGreaterThanOrEqual(7);
+    expect(usages?.length ?? 0).toBeGreaterThanOrEqual(6);
   });
 });
 

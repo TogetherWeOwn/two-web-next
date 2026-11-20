@@ -17,7 +17,7 @@ const OUTAGE_URL = "postgres://outage_fixture@127.0.0.1:1/outage_fixture";
 // Keep the real postgres driver/socket failure. Track its per-request clients
 // so migration/read failures cannot leave reconnect timers behind after a test.
 vi.mock("postgres", async (importOriginal) => {
-  const original = await importOriginal<{ default: typeof import("postgres") }>();
+  const original = await importOriginal<{ default: typeof postgres }>();
   return {
     default: (url: string, options?: object) => {
       if (url !== "postgres://outage_fixture@127.0.0.1:1/outage_fixture") {
@@ -349,14 +349,16 @@ const MATRIX: Case[] = [
 
 // ALL registrations are not all middleware: the RSVP 405 fallback is a real
 // endpoint. Pin known middleware multiplicity instead of filtering wildcards.
-// Global `*` carries seven: the pre-throttle guard, trust-hosts, same-origin,
-// the stale-tab auth-status script, the expired-write banner (main #239
-// added those two), the flag-gated freeze banner and the flag-gated WebMCP
-// pilot script (session-free, 200 HTML on four public paths only). Profile
-// paths carry three registrations each: the session gate, the join-result
-// consumer, and the mandatory access log.
+// Global `*` carries eight: the outermost wire-encoding stream wrapper, the
+// pre-throttle guard, trust-hosts, same-origin, the stale-tab auth-status
+// script, the expired-write banner (main #239 added those two), the
+// flag-gated freeze banner and the flag-gated WebMCP pilot script
+// (session-free, 200 HTML on four public paths only). Profile paths carry
+// three registrations each: the session gate, the join-result consumer, and
+// the mandatory access log.
 // Profiles: session gate + keyed read boundary per path (main #145).
 const MIDDLEWARE = [
+  "ALL /*",
   "ALL /*",
   "ALL /*",
   "ALL /*",

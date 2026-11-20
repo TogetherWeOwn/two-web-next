@@ -8,7 +8,7 @@ consumer are outside this pilot.
 
 ## Build once, then bind deployment evidence
 
-The lockfile installs Wrangler 4.156.1 and its esbuild 0.28.2 dependency. The
+The lockfile installs Wrangler 4.161.0 and its esbuild 0.28.2 dependency. The
 installed `wrangler deploy --help` exposes `--metafile [path]`; an explicit path
 avoids relying on the default `bundle-meta.json` placement:
 

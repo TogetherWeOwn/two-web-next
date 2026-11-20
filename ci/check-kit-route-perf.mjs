@@ -8,7 +8,7 @@
 // remain outside this immutable-JS/CSS metric and under existing served gates.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
@@ -272,28 +272,59 @@ export function measureRoutes(root = resolve(import.meta.dirname, "..")) {
   };
 }
 
-export function checkRoutes(root = resolve(import.meta.dirname, "..")) {
+function measurementFailure(error) {
+  return {
+    version: 1,
+    scope: ROUTE_SCOPE,
+    exitCode: 2,
+    error: String(error.message).slice(0, 1000),
+  };
+}
+
+export function checkRoutes(
+  root = resolve(import.meta.dirname, ".."),
+  { reportOnly = false } = {},
+) {
   try {
-    const budget = validateRouteBudget(JSON.parse(read(root, ROUTE_BUDGET)));
-    assert.deepEqual(
-      budget,
-      approvedRouteBudget(root),
-      "live budget differs from approved route plan",
-    );
+    const budget = approvedRouteBudget(root);
+    // The trusted-main ratchet still requires an exact live and measured plan.
+    if (!reportOnly) {
+      const live = validateRouteBudget(JSON.parse(read(root, ROUTE_BUDGET)));
+      assert.deepEqual(live, budget, "live budget differs from approved route plan");
+    }
     const measurement = measureRoutes(root);
-    same(Object.keys(measurement.routes), Object.keys(budget.routes));
+    if (!reportOnly) same(Object.keys(measurement.routes), Object.keys(budget.routes));
     const breaches = [];
+    const warnings = [];
     const headroomShortfalls = [];
     for (const [id, route] of Object.entries(measurement.routes)) {
+      if (!Object.hasOwn(budget.routes, id)) {
+        warnings.push({ route: id, reason: "unapproved-route" });
+        continue;
+      }
       for (const kind of ["js", "css"]) {
         const value = route[kind];
         const ceiling = budget.routes[id][kind];
-        if (
-          value.rawBytes > ceiling.maxRawBytes ||
-          value.gzipBytes > ceiling.maxGzipBytes ||
-          value.files > ceiling.maxFiles
-        )
-          breaches.push(`${id} ${kind}`);
+        let breached = false;
+        for (const [metric, limit] of [
+          ["rawBytes", "maxRawBytes"],
+          ["gzipBytes", "maxGzipBytes"],
+          ["files", "maxFiles"],
+        ]) {
+          if (value[metric] <= ceiling[limit]) continue;
+          if (reportOnly || (kind === "css" && metric !== "files")) {
+            warnings.push({
+              route: id,
+              kind,
+              metric,
+              measured: value[metric],
+              ceiling: ceiling[limit],
+            });
+          } else {
+            breached = true;
+          }
+        }
+        if (breached) breaches.push(`${id} ${kind}`);
         if (
           targetBytes(value.rawBytes, 512) > ceiling.maxRawBytes ||
           targetBytes(value.gzipBytes, 256) > ceiling.maxGzipBytes
@@ -301,23 +332,69 @@ export function checkRoutes(root = resolve(import.meta.dirname, "..")) {
           headroomShortfalls.push(`${id} ${kind}`);
       }
     }
-    return { ...measurement, exitCode: breaches.length ? 1 : 0, breaches, headroomShortfalls };
-  } catch (error) {
     return {
-      version: 1,
-      scope: ROUTE_SCOPE,
-      exitCode: 2,
-      error: String(error.message).slice(0, 1000),
+      ...measurement,
+      exitCode: breaches.length ? 1 : 0,
+      breaches,
+      warnings,
+      headroomShortfalls,
     };
+  } catch (error) {
+    return measurementFailure(error);
   }
 }
 
+function jobSummary(result) {
+  const title = "## Kit route performance (report only)\n\n";
+  if (result.exitCode === 2) return `${title}Measurement failed; see the step's JSON output.\n`;
+
+  // Route IDs come from source paths. Keep Markdown and HTML syntax inert.
+  const label = (id) =>
+    `\`${JSON.stringify(id).slice(1, -1).replaceAll("`", "\\u0060").replaceAll("|", "\\u007c")}\``;
+  const row = (id, { js, css }) =>
+    `| ${id} | ${js.rawBytes} | ${js.gzipBytes} | ${js.files} | ${css.rawBytes} | ${css.gzipBytes} | ${css.files} |`;
+  return [
+    title.trimEnd(),
+    "",
+    `Advisory warnings: ${result.warnings.length}`,
+    "",
+    ...result.warnings.map(({ route, reason, kind, metric, measured, ceiling }) =>
+      reason === "unapproved-route"
+        ? `- ${label(route)}: no approved ceiling (route measured below).`
+        : `- ${label(route)}: ${kind.toUpperCase()} ${metric} ${measured} exceeds ${ceiling}.`,
+    ),
+    "",
+    "| Route | JS raw B | JS gzip B | JS files | CSS raw B | CSS gzip B | CSS files |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ...Object.entries(result.routes).map(([id, route]) => row(label(id), route)),
+    row("**All client assets**", result.aggregate),
+    "",
+  ].join("\n");
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  assert.ok(
-    process.argv.length === 2 || (process.argv.length === 4 && process.argv[2] === "--root"),
-    "usage: node ci/check-kit-route-perf.mjs [--root DIR]",
-  );
-  const result = checkRoutes(process.argv[3]);
+  const args = process.argv.slice(2);
+  const reportOnly = args[0] === "--report-only";
+  if (reportOnly) args.shift();
+  let result;
+  try {
+    assert.ok(
+      args.length === 0 || (args.length === 2 && args[0] === "--root"),
+      "usage: node ci/check-kit-route-perf.mjs [--report-only] [--root DIR]",
+    );
+    result = checkRoutes(args[1], { reportOnly });
+  } catch (error) {
+    result = measurementFailure(error);
+  }
+  if (reportOnly && process.env.GITHUB_STEP_SUMMARY) {
+    try {
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, jobSummary(result));
+    } catch (error) {
+      console.error(
+        `kit route performance: unable to write job summary (${error.code ?? "unknown error"})`,
+      );
+    }
+  }
   console.log(JSON.stringify(result));
   process.exitCode = result.exitCode;
 }

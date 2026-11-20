@@ -6,7 +6,7 @@ import type { Page } from "@playwright/test";
 import { LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 import { pageShellFixture } from "../test/helpers/page-shells";
 
-const UI_FONT_PATH = "/fonts/mona-sans-latin-var.woff2";
+const UI_FONT_PATH = "/fonts/mona-sans-latin-wght.woff2";
 const UI_FONT_BYTES = readFileSync(resolve("public", UI_FONT_PATH.slice(1)));
 
 type FontSwapMetrics = {

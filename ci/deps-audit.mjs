@@ -16,8 +16,10 @@ const lockfileLabels = [".", "web"];
 // `npm audit` a bounded number of times. Findings, invalid reports and
 // permanent registry-boundary failures still fail immediately. Exhaustion stays
 // blocking unless every attempt proves a registry outage. Attempts = delays + 1.
-const auditTimeoutMs = 120_000;
-const auditRetryDelaysMs = [5_000, 15_000];
+// Exported so tests pin these production defaults instead of duplicating
+// literals, and so no importer can mutate the retry policy (frozen).
+export const auditTimeoutMs = 120_000;
+export const auditRetryDelaysMs = Object.freeze([5_000, 15_000]);
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const text = (value) => typeof value === "string" && value.trim().length > 0;
 
@@ -377,7 +379,11 @@ export function auditOneLockfile({
   throw new Error(`npm audit did not complete successfully for "${label}"`);
 }
 
-export function runAudit() {
+// Callers may only narrow the attempt bound and the backoff schedule; every
+// other control (spawn, sleep, policy) stays internal so the gate always runs
+// real npm with a real preload. The production CLI calls this with no
+// arguments and therefore always audits with the 120s bound and 5s/15s delays.
+export function runAudit({ timeoutMs = auditTimeoutMs, retryDelaysMs = auditRetryDelaysMs } = {}) {
   // One owned parent cache; each lockfile gets its own fresh child cache so a
   // retained advisory severity in one lockfile cannot leak into the other.
   const cacheParent = mkdtempSync(
@@ -400,7 +406,15 @@ export function runAudit() {
     const outages = [];
     for (const { label, dir } of lockfiles) {
       try {
-        results[label] = auditOneLockfile({ label, dir, guard, allowlist, cacheParent });
+        results[label] = auditOneLockfile({
+          label,
+          dir,
+          guard,
+          allowlist,
+          cacheParent,
+          timeoutMs,
+          retryDelaysMs,
+        });
       } catch (error) {
         // An outage in one lockfile must not hide an advisory in the other:
         // record it as unavailable (never clean) and keep auditing. Permanent

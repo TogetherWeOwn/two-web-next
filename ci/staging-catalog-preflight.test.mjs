@@ -221,8 +221,14 @@ const LIVE_URL = (() => {
   const raw = process.env.CATALOG_PREFLIGHT_TEST_DATABASE_URL;
   if (!raw) return null;
   try {
+    const url = new URL(raw);
+    const catalogService =
+      process.env.GITHUB_ACTIONS === "true" &&
+      process.env.CI === "true" &&
+      url.href === "postgres://postgres:ci@catalog-postgres:5432/postgres";
     if (
-      ["localhost", "127.0.0.1", "::1", "agent-testdb", "postgres"].includes(new URL(raw).hostname)
+      ["localhost", "127.0.0.1", "::1", "agent-testdb", "postgres"].includes(url.hostname) ||
+      catalogService
     ) {
       return raw;
     }

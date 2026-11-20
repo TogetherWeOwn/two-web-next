@@ -1,30 +1,15 @@
-// Test Author owned: pre-enable create-form parity, not edit or route enablement.
-// Compile the real Svelte component; only SQL is replaced with a fail-closed
-// effect counter. Native submissions exercise the real Hono guard and validators.
-// Real-store success proofs register in admin.test.ts via the persistence helper.
+// Baseline controls extracted from the create-form acceptance tests.
 import { Hono } from "hono";
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildEventCreateView } from "../src/admin/kit-event-create";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EventFormPage } from "../src/admin/pages";
-import { parseRecurrenceForm } from "../src/admin/recurrence";
 import { adminApp } from "../src/admin/routes";
 import { parseEventForm } from "../src/admin/validation";
 import type { Db } from "../src/db/index";
-import { decideOwner, ROUTE_MANIFEST } from "../src/route-ownership";
 import { sameOrigin } from "../src/same-origin";
 import { createMemorySessionStore } from "../src/sessions";
-import {
-  content,
-  control,
-  decode,
-  fields,
-  nativeForm,
-  values,
-} from "./helpers/admin-create-content-form";
+import { control, fields, nativeForm, values } from "./helpers/admin-create-content-form";
 import { eventEditorBrowser } from "./helpers/admin-event-editor";
-import { compileKitForms, summaryFragment } from "./helpers/admin-validation-correction";
+import { summaryFragment } from "./helpers/admin-validation-correction";
 import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
 
 function boundary(name: string, limit: number): string {
@@ -33,13 +18,6 @@ function boundary(name: string, limit: number): string {
   return prefix + "x".repeat(limit - prefix.length);
 }
 
-let kit: Awaited<ReturnType<typeof compileKitForms>>;
-beforeAll(async () => {
-  kit = await compileKitForms();
-});
-afterAll(() => kit?.dispose());
-const renderKit = (v: Record<string, string> = {}, e: Record<string, string> = {}) =>
-  kit.renderForm(0, buildEventCreateView(v, e));
 async function renderHono(v: Record<string, string>, errors: Record<string, string> = {}) {
   return (await EventFormPage({ mode: "new", values: v, errors }))!.toString();
 }
@@ -128,130 +106,6 @@ describe("bounded native form serializer controls", () => {
       expect(nativeForm(truncated).body.get(fixture.name)).not.toBe(hostile);
     });
   }
-});
-
-for (const field of fields) {
-  describe(`Kit create ${field.name}`, () => {
-    it("renders the existing optional Hono control, label and associated public-safe help", () => {
-      const html = renderKit();
-      const entry = control(html, field.name);
-      expect(entry.tag).toBe(field.tag);
-      expect(entry.attrs.id).toBe(field.id);
-      expect(entry.attrs).not.toHaveProperty("required");
-      expect(entry.attrs["aria-invalid"]).toBeUndefined();
-      expect(html).toContain(`<label for="${field.id}">${field.label}</label>`);
-      const descriptions = entry.attrs["aria-describedby"]?.split(/\s+/) ?? [];
-      expect(descriptions).toContain(`${field.id}-hint`);
-      expect(html).toContain(`id="${field.id}-hint"`);
-      expect(html).toContain(field.hint);
-      if (field.name === "join_url") expect(entry.attrs.type).toBe("url");
-      else {
-        expect(entry.attrs["data-event-text-limit"]).toBe(String(field.limit));
-        expect(entry.attrs).not.toHaveProperty("maxlength");
-      }
-      expect(nativeForm(html).body.get(field.name)).toBe("");
-    });
-
-    it("echoes hostile input as text and associates field errors with a real correction target", () => {
-      const hostile = '</textarea><img data-content-injected="yes" src=x> & "public"';
-      const error = `${field.message} <img data-error-injected="yes" src=x>`;
-      const html = renderKit({ ...values, [field.name]: hostile }, { [field.name]: error });
-      const entry = control(html, field.name);
-      expect(nativeForm(html).body.get(field.name)).toBe(hostile);
-      expect(html).not.toContain('<img data-content-injected="yes"');
-      expect(html).not.toContain('<img data-error-injected="yes"');
-      expect(entry.attrs["aria-invalid"]).toBe("true");
-      expect(entry.attrs["aria-describedby"]?.split(/\s+/)).toEqual(
-        expect.arrayContaining([`${field.id}-hint`, `${field.id}-error`]),
-      );
-      expect(html).toContain(`id="${field.id}-error"`);
-      expect(html).toContain(`data-testid="error-${field.name}"`);
-      expect(summaryFragment(html)).toContain(`href="#${field.id}"`);
-      expect(summaryFragment(html)).toContain(field.message);
-      expect(nativeForm(html).attrs).toHaveProperty("data-event-draft", "");
-    });
-
-    it("carries the full code-point boundary through the real form without native truncation", () => {
-      const value = boundary(field.name, field.limit);
-      expect(nativeForm(renderKit({ ...values, [field.name]: value })).body.get(field.name)).toBe(
-        value,
-      );
-    });
-
-    it("includes the field in the shared dirty-form departure protection", () => {
-      const form = nativeForm(renderKit(values));
-      expect(form.body.has(field.name)).toBe(true);
-      expect(form.attrs).toHaveProperty("data-event-editor", "");
-      const browser = eventEditorBrowser({ initial: Object.fromEntries(form.body) });
-      expect(browser.navigate("unrelated").preventDefault).not.toHaveBeenCalled();
-      browser.values.set(field.name, "Changed public detail");
-      browser.input();
-      expect(browser.navigate("unrelated").preventDefault).toHaveBeenCalledOnce();
-    });
-  });
-}
-
-describe("real Kit form to Hono native POST", () => {
-  it("retains all four serialized values on the current 422 page without JavaScript or SQL", async () => {
-    const form = nativeForm(renderKit({ ...values, title: "" }));
-    expect(form.attrs.method).toBe("post");
-    expect(form.attrs.action).toBe("/admin/events");
-    const response = await post(form.body);
-    refusedWithoutEffects(response);
-    const html = await response.text();
-    expect(summaryFragment(html)).toContain('href="#f-title"');
-    const echoed = nativeForm(html).body;
-    for (const field of fields) {
-      const want = field.value.replace(/\n/g, "\r\n");
-      expect(form.body.get(field.name), `Kit serializes ${field.name}`).toBe(want);
-      expect(echoed.get(field.name), `Hono retains ${field.name}`).toBe(want);
-    }
-  });
-
-  it("preserves draft-first action, recurrence and timezone without publishing or enabling routes", () => {
-    const html = renderKit(values);
-    const form = nativeForm(html);
-    expect(form.attrs.method).toBe("post");
-    expect(form.attrs.action).toBe("/admin/events");
-    expect(html).toContain("Create draft");
-    expect(form.body.has("status")).toBe(false);
-    expect(form.body.has("is_published")).toBe(false);
-    expect(form.body.has("starts_at_utc")).toBe(false);
-    expect(parseEventForm(Object.fromEntries(form.body))).toMatchObject({
-      startsAtUtc: new Date("2030-06-05T19:00:00Z"),
-      endsAtUtc: new Date("2030-06-05T21:00:00Z"),
-      timezone: "Europe/London",
-    });
-    expect(parseRecurrenceForm(Object.fromEntries(form.body))).toMatchObject({
-      frequency: "weekly",
-      count: 3,
-    });
-    expect(html).toContain("/islands/admin-event-text-limits.js");
-    expect(html).toContain("/islands/admin-event-editor.js");
-    expect(form.attrs).not.toHaveProperty("data-event-draft");
-    for (const method of ["GET", "HEAD", "POST"]) {
-      const path = method === "POST" ? "/admin/events" : "/admin/events/new";
-      expect(decideOwner(new Request(`${env.APP_URL}${path}`, { method }))).toBe("hono");
-    }
-    const route = ROUTE_MANIFEST.find((entry) => entry.path === "/admin/events/new");
-    expect(route?.reads).toEqual({
-      resource: "events",
-      action: "view",
-      route: "admin.events.create",
-    });
-  });
-
-  it("keeps all four empty values optional in existing validation", () => {
-    const form = nativeForm(
-      renderKit({ ...values, ...Object.fromEntries(fields.map((f) => [f.name, ""])) }),
-    );
-    expect(parseEventForm(Object.fromEntries(form.body))).toMatchObject({
-      accessibilityNotes: null,
-      organizer_name: null,
-      join_url: null,
-      join_instructions: null,
-    });
-  });
 });
 
 describe("existing Hono authority preservation controls", () => {
@@ -349,21 +203,3 @@ describe("existing Hono authority preservation controls", () => {
     expect(dbTouched).not.toHaveBeenCalled();
   });
 });
-
-const island = readFileSync(
-  new URL("../public/islands/admin-event-text-limits.js", import.meta.url).pathname,
-  "utf8",
-);
-const { eventTextLimitError } = runInNewContext(
-  island.replace(/(^|;)export (?=function |const |let |var |class )/gm, "$1") +
-    "\n({ eventTextLimitError });",
-) as { eventTextLimitError: (value: string, field: string, limit: number) => string };
-for (const field of fields.filter((entry) => entry.name !== "join_url")) {
-  it(`${field.name}: rendered progressive annotation uses the shared Unicode-safe limit`, () => {
-    const entry = control(renderKit(values), field.name);
-    const limit = Number(entry.attrs["data-event-text-limit"]);
-    expect(limit).toBe(field.limit);
-    expect(eventTextLimitError("😀".repeat(field.limit), field.name, limit)).toBe("");
-    expect(eventTextLimitError("😀".repeat(field.limit + 1), field.name, limit)).not.toBe("");
-  });
-}

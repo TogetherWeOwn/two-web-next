@@ -1,0 +1,109 @@
+--- a/linter_test.go
++++ b/linter_test.go
+@@ -11,6 +11,7 @@
+ 	"path/filepath"
+ 	"regexp"
+ 	"runtime"
++	"runtime/debug"
+ 	"sort"
+ 	"strings"
+ 	"testing"
+@@ -411,6 +412,10 @@
+ }
+
+ func TestLinterFormatErrorMessageInSARIF(t *testing.T) {
++	info, ok := debug.ReadBuildInfo()
++	if !ok || info.Main.Version != "(devel)" {
++		t.Fatalf("source-build harness requires main version (devel): info=%v, ok=%v", info, ok)
++	}
+ 	dir := filepath.Join("testdata", "format")
+ 	proj := &Project{root: dir}
+ 	file := filepath.Join(dir, "test.yaml")
+--- a/testdata/format/test.sarif
++++ b/testdata/format/test.sarif
+@@ -6,7 +6,7 @@
+       "tool": {
+         "driver": {
+           "name": "GitHub Actions lint",
+-          "version": "",
++          "version": "(devel)",
+           "informationUri": "https://github.com/rhysd/actionlint",
+           "rules": [
+             {
+--- a/scripts/generate-popular-actions/main_test.go
++++ b/scripts/generate-popular-actions/main_test.go
+@@ -3,10 +3,13 @@
+ import (
+ 	"bytes"
+ 	"errors"
++	"fmt"
+ 	"io"
++	"net/http"
+ 	"os"
+ 	"path/filepath"
+ 	"strings"
++	"sync/atomic"
+ 	"testing"
+
+ 	"github.com/google/go-cmp/cmp"
+@@ -458,7 +461,39 @@
+ 	}
+ }
+
++type releaseStatusTransport func(*http.Request) (*http.Response, error)
++
++func (f releaseStatusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
++	return f(req)
++}
++
++func mockReleaseStatus(t *testing.T, status int) {
++	t.Helper()
++	previous := http.DefaultTransport
++	var calls int32
++	http.DefaultTransport = releaseStatusTransport(func(req *http.Request) (*http.Response, error) {
++		if req.Method != http.MethodHead || req.URL.String() != "https://raw.githubusercontent.com//v2/action.yml" {
++			return nil, fmt.Errorf("unexpected fixture request: %s %s", req.Method, req.URL)
++		}
++		atomic.AddInt32(&calls, 1)
++		return &http.Response{
++			StatusCode: status,
++			Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
++			Header:     make(http.Header),
++			Body:       io.NopCloser(strings.NewReader("")),
++			Request:    req,
++		}, nil
++	})
++	t.Cleanup(func() {
++		http.DefaultTransport = previous
++		if got := atomic.LoadInt32(&calls); got != 1 {
++			t.Errorf("expected one intercepted release request, got %d", got)
++		}
++	})
++}
++
+ func TestDetectErrorBadRequest(t *testing.T) {
++	mockReleaseStatus(t, http.StatusBadRequest)
+ 	stdout := io.Discard
+ 	stderr := &bytes.Buffer{}
+ 	f := filepath.Join("testdata", "registry", "empty_slug.json")
+@@ -472,6 +507,20 @@
+ 	}
+ }
+
++func TestDetectAbsentReleaseNotFound(t *testing.T) {
++	mockReleaseStatus(t, http.StatusNotFound)
++	stdout := &bytes.Buffer{}
++	stderr := &bytes.Buffer{}
++	f := filepath.Join("testdata", "registry", "empty_slug.json")
++	status := newGen(stdout, stderr, io.Discard).run([]string{"test", "-d", "-r", f})
++	if status != 0 {
++		t.Fatal("exit status is not 0:", status)
++	}
++	if stdout.String() != "No new release was found\n" || stderr.Len() != 0 {
++		t.Fatalf("unexpected absent-release result: stdout=%q stderr=%q", stdout.String(), stderr.String())
++	}
++}
++
+ func TestReadActionRegistryError(t *testing.T) {
+ 	tests := []struct {
+ 		file string

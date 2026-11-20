@@ -1,0 +1,9 @@
+{
+  "$comment": "See ci/budgets/decisions/bundle/2026-11-19-kit-live-event-time.md.",
+  "budgets": {
+    "public/islands/kit-live-event-time.js": {
+      "maxRawBytes": 5120,
+      "maxGzipBytes": 2304
+    }
+  }
+}

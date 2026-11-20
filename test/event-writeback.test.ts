@@ -1,5 +1,6 @@
 import postgres from "postgres";
 import { sql as drizzleSql } from "drizzle-orm";
+import { resolveReconciliation } from "../src/admin/reconciliation-resolution";
 import { createEvent, updateEvent } from "../src/admin/store";
 import type { EventFormInput } from "../src/admin/validation";
 import { serializeSigned } from "hono/utils/cookie";
@@ -9,6 +10,7 @@ import type { Env } from "../src/env";
 import { buildSyncMessage, enqueueEventSync } from "../src/events/sync";
 import { consume } from "../src/jobs/consumer";
 import { pgEventStore } from "../src/jobs/events";
+import { pgReconciliationStore, SYNC_RECONCILIATION_MARKER } from "../src/jobs/reconciliation";
 import { reconcileEvents } from "../src/jobs/cron";
 import { trackingQueue } from "../src/jobs/ledger";
 import { BotTransportError } from "../src/jobs/types";
@@ -216,6 +218,115 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     lock: pgUniqueLock(sql),
     ledger: pgQueueLedger(sql),
     dispatchPending: (key: string) => enqueueSyncEvent(env, buildSyncMessage(key, "published")!),
+  });
+
+  it("atomically fences a stopped claim and retains its wire context", async () => {
+    await seed();
+    const key = crypto.randomUUID();
+    const events = pgEventStore(sql);
+    const store = pgReconciliationStore(sql);
+    const prepared = await events.prepareSync(eventKey, key, new Date());
+    if (!prepared || "waiting" in prepared) throw new Error("missing sync snapshot");
+    const attempt = await events.claimSync(prepared, new Date());
+    if (!attempt) throw new Error("missing sync claim");
+    const intent = {
+      idempotencyKey: key,
+      verb: attempt.action,
+      subject: eventKey,
+      attempts: attempt.requestAttempts,
+      lastCode: "needs_reconciliation",
+      lastStatus: 409,
+    };
+    await store.recordSync(intent);
+    await store.recordSync({ ...intent, lastCode: null, lastStatus: null });
+    await events.deferSync(attempt, new Date());
+    await events.completeSync(attempt, "discord-1");
+    await events.failSync(key);
+    const [row] =
+      await sql`select state, next_attempt_at, terminal_reason from event_sync_attempts where idempotency_key = ${key}::uuid`;
+    expect(row).toMatchObject({
+      state: "pending",
+      next_attempt_at: null,
+      terminal_reason: SYNC_RECONCILIATION_MARKER,
+    });
+    const [saved] =
+      await sql`select last_code, last_status from bot_reconciliation_intents where idempotency_key = ${key}::uuid`;
+    expect(saved).toMatchObject({ last_code: "needs_reconciliation", last_status: 409 });
+    await expect(store.recordSync({ ...intent, attempts: 2 })).rejects.toThrow();
+  });
+
+  it("stores a resolution receipt as a queryable JSON object", async () => {
+    const key = crypto.randomUUID();
+    const store = pgReconciliationStore(sql);
+    await store.record({
+      idempotencyKey: key,
+      verb: "event.upsert",
+      subject: eventKey,
+      attempts: 1,
+      lastCode: null,
+      lastStatus: null,
+    });
+
+    await expect(resolveReconciliation(store, key, "123", "not_applied")).resolves.toBe(true);
+    const receipts = await sql`select jsonb_typeof(properties) as type,
+      properties->'resolution'->>'after' as resolution, properties->'resolution'->'before' as before
+      from activity_log where subject_id = ${key} and description = 'bot-reconciliation.resolve'`;
+    expect(receipts).toEqual([{ type: "object", resolution: "not_applied", before: null }]);
+    await expect(resolveReconciliation(store, key, "123", "confirmed")).resolves.toBe(false);
+    expect(await sql`select id from activity_log where subject_id = ${key}`).toHaveLength(1);
+  });
+
+  it("does not claim a reopened attempt from a stale snapshot after reconciliation", async () => {
+    await seed();
+    const key = crypto.randomUUID();
+    const events = pgEventStore(sql);
+    const prepared = await events.prepareSync(eventKey, key, new Date());
+    if (!prepared || "waiting" in prepared) throw new Error("missing sync snapshot");
+    const attempt = await events.claimSync(prepared, new Date());
+    if (!attempt) throw new Error("missing sync claim");
+    await pgReconciliationStore(sql).recordSync({
+      idempotencyKey: key,
+      verb: attempt.action,
+      subject: eventKey,
+      attempts: attempt.requestAttempts,
+      lastCode: "needs_reconciliation",
+      lastStatus: 409,
+    });
+    const due = new Date("2020-01-01T00:00:00Z");
+    await sql`update event_sync_attempts set next_attempt_at = ${due} where idempotency_key = ${key}::uuid`;
+    expect(await events.claimSync(prepared, new Date())).toBeNull();
+    const [row] = await sql`select state, request_attempts, next_attempt_at, terminal_reason
+      from event_sync_attempts where idempotency_key = ${key}::uuid`;
+    expect(row).toMatchObject({
+      state: "pending",
+      request_attempts: attempt.requestAttempts,
+      next_attempt_at: due,
+      terminal_reason: SYNC_RECONCILIATION_MARKER,
+    });
+  });
+
+  it("rolls back the sync fence if the intent conflicts", async () => {
+    await seed();
+    const key = crypto.randomUUID();
+    const events = pgEventStore(sql);
+    const store = pgReconciliationStore(sql);
+    const prepared = await events.prepareSync(eventKey, key, new Date());
+    if (!prepared || "waiting" in prepared) throw new Error("missing sync snapshot");
+    const attempt = await events.claimSync(prepared, new Date());
+    if (!attempt) throw new Error("missing sync claim");
+    const intent = {
+      idempotencyKey: key,
+      verb: attempt.action,
+      subject: eventKey,
+      attempts: attempt.requestAttempts,
+      lastCode: null,
+      lastStatus: null,
+    };
+    await store.record({ ...intent, subject: "another-event" });
+    await expect(store.recordSync(intent)).rejects.toThrow();
+    const [row] =
+      await sql`select terminal_reason from event_sync_attempts where idempotency_key = ${key}::uuid`;
+    expect(row?.terminal_reason).toBeNull();
   });
 
   for (const mode of ["admin", "json"] as const) {

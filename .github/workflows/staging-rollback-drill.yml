@@ -12,9 +12,11 @@ on:
     - cron: "41 3 * * *"
   workflow_dispatch:
 
+# The reusable rollback workflow cannot elevate the caller token. Only its
+# production path reads Environment protection; both drill legs target staging.
 permissions:
   contents: read
-  actions: read
+  actions: read # Let rollback and restore read exact-SHA CI runs and jobs.
 
 # Own staging from plan through restore, not just during each mutation leg.
 concurrency:
@@ -29,8 +31,7 @@ jobs:
     # Staging-only drill: bind the staging Environment so the staging
     # Cloudflare secrets below resolve under its branch policy.
     environment: staging
-    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     outputs:
       live: ${{ steps.versions.outputs.live }}
@@ -92,7 +93,7 @@ jobs:
     # staging` pin below fixes the callee on its staging leg, whose own job
     # binds `environment: ${{ inputs.environment }}`; the secrets preflight
     # accepts this pinned-caller shape (ci/check-production-secrets.test.mjs).
-    uses: ./.github/workflows/rollback-production.yml
+    uses: TogetherWeOwn/two-web-next/.github/workflows/rollback-production.yml@38581ef492f5c972969f5dfada396a9f0e2ee989
     with:
       environment: staging
       version_id: ${{ needs.plan.outputs.previous }}
@@ -112,7 +113,7 @@ jobs:
     # Same pinned-caller shape as the rollback leg above: no job-level
     # `environment:` (forbidden on caller jobs), the `with:` pin fixes the
     # staging leg.
-    uses: ./.github/workflows/rollback-production.yml
+    uses: TogetherWeOwn/two-web-next/.github/workflows/rollback-production.yml@38581ef492f5c972969f5dfada396a9f0e2ee989
     with:
       environment: staging
       version_id: ${{ needs.plan.outputs.live }}
@@ -128,7 +129,7 @@ jobs:
     # the previous version and the restore brought the live version back.
     needs: [plan, rollback, restore]
     if: ${{ always() }}
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require both legs

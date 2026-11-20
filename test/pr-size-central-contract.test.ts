@@ -9,12 +9,15 @@ import { describe, expect, it } from "vitest";
 // wiring. A head with neither fails here first, before the floor guard
 // reports the deletion; a head with both fails too, rejecting a half-finished
 // move that leaves the local copy behind as dead code.
-const workflow = readFileSync(".github/workflows/pr-size.yml", "utf8");
+const workflow = readFileSync(".github/workflows/pr-size.yml", "utf8").replace(
+  /^(      (?:issues|pull-requests): (?:read|write))[ \t]+#[^\n]*$/gm,
+  "$1",
+);
 const contributing = readFileSync("CONTRIBUTING.md", "utf8");
 const job = (id: string) =>
   workflow.split(new RegExp(`\\n  ${id}:\\n`))[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";
 const CENTRAL_RE =
-  /uses:\s*TogetherWeOwn\/\.github\/\.github\/workflows\/pr-size(-weekly)?\.yml@([0-9a-f]{40})/g;
+  /uses:\s*TogetherWeOwn\/\.github\/\.github\/workflows\/pr-size(-gate|-weekly)?\.yml@([0-9a-f]{40})/g;
 
 describe("pr-size moved-behaviour contract", () => {
   it("documents the size boundaries", () => {
@@ -25,7 +28,7 @@ describe("pr-size moved-behaviour contract", () => {
 
   it("excludes this repo's generated paths but keeps hand-written SQL counted", () => {
     const extra =
-      job("pr-size").match(/exclude-extra: "([^"]*)"/)?.[1] ??
+      job("pr-size").match(/^      exclude-extra: "([^"]*)"$/m)?.[1] ??
       workflow.match(/PR_SIZE_EXCLUDE_EXTRA: "([^"]*)"/)?.[1] ??
       "";
     expect(extra.split(",")).toContain("public/islands/**");
@@ -35,22 +38,27 @@ describe("pr-size moved-behaviour contract", () => {
     expect(extra.split(",")).not.toContain("drizzle/**");
   });
 
-  it("stays advisory-only", () => {
+  it("stays advisory-only except for the required gate", () => {
     const branchProtection =
       contributing.split("### Branch protection and required checks")[1]?.split(/\n#{2,3} /)[0] ??
       "";
-    expect(branchProtection).not.toContain("pr-size");
+    // The advisory labeller must never join the required set; the gate is
+    // the one deliberate required exception.
+    expect(branchProtection).not.toContain("`pr-size`");
+    expect(branchProtection).toContain("`pr-size-gate`");
     const topLevel = workflow.split(/\npermissions:\n/)[1]?.split(/\n\S/)[0] ?? "";
     expect(topLevel).not.toMatch(/\bwrite\b/);
     expect(job("pr-size")).toContain("      issues: write\n");
     expect(job("pr-size")).toContain("      pull-requests: write\n");
+    expect(job("pr-size-gate")).toContain("      issues: write\n");
+    expect(job("pr-size-gate")).toContain("      pull-requests: write\n");
     expect(job("pr-size-weekly")).not.toMatch(/\bwrite\b/);
   });
 
   it("carries the labeller from exactly one source of truth", () => {
     const hasLocal = existsSync(".github/scripts/pr_size.py");
     const pins = [...workflow.matchAll(CENTRAL_RE)].map((m) => m[2]);
-    const hasCentral = pins.length === 2 && pins[0] === pins[1];
+    const hasCentral = pins.length === 3 && pins.every((pin) => pin === pins[0]);
     // Failing-first core: a head that deletes the local script without
     // wiring the central caller fails here, proving the move lost coverage.
     // XOR: a half-finished move that wires the central caller but leaves the
@@ -58,8 +66,9 @@ describe("pr-size moved-behaviour contract", () => {
     expect(hasLocal !== hasCentral).toBe(true);
     if (hasCentral) {
       expect(job("pr-size")).toMatch(/workflows\/pr-size\.yml@/);
+      expect(job("pr-size-gate")).toMatch(/workflows\/pr-size-gate\.yml@/);
       expect(job("pr-size-weekly")).toMatch(/workflows\/pr-size-weekly\.yml@/);
-      expect(workflow.match(/\n    uses: /g)).toHaveLength(2);
+      expect(workflow.match(/\n    uses: /g)).toHaveLength(3);
       expect(workflow).not.toContain("secrets:");
       expect(workflow).not.toContain("python3");
       expect(workflow).not.toContain("PR_SIZE_THRESHOLD");

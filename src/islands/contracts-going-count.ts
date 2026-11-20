@@ -55,6 +55,8 @@ export interface GoingCountState {
   occupancy?: number;
   capacity: number | null;
   showSpotsLeft: boolean;
+  /** Kit open-seat pages reveal this badge after their first inline write. */
+  refreshSeat?: boolean;
   announcement: GoingViewerState | null;
 }
 
@@ -103,13 +105,17 @@ export function renderGoingCount(eventKey: string, s: GoingCountState): string {
   const announcement = goingAnnouncementText(s.announcement);
   const safeKey = eventKey.replace(/"/g, "&quot;");
   const occupancy = s.occupancy ?? s.going;
-  const spots =
-    s.showSpotsLeft && s.capacity !== null
-      ? ` · <span data-testid="${SPOTS_LEFT_TESTID}" data-spots>${spotsLeftText(occupancy, s.capacity)}</span>`
+  const spotsTarget = `<span data-testid="${SPOTS_LEFT_TESTID}" data-spots`;
+  const availability = s.capacity !== null ? spotsLeftText(occupancy, s.capacity) : "";
+  const spots = s.refreshSeat
+    ? `${spotsTarget}${availability ? "" : " hidden"}>${availability}</span>`
+    : s.showSpotsLeft && availability
+      ? ` · ${spotsTarget}>${availability}</span>`
       : "";
   return (
     `<span role="status" data-testid="${GOING_COUNT_TESTID}" ` +
-    `${MOUNT_ATTR}="${GOING_COUNT_ISLAND}" data-event-key="${safeKey}" data-capacity="${s.capacity ?? ""}">` +
+    `${MOUNT_ATTR}="${GOING_COUNT_ISLAND}" data-event-key="${safeKey}" data-capacity="${s.capacity ?? ""}"` +
+    `${s.refreshSeat ? ' data-seat-refresh="initial"' : ""}>` +
     `<span class="sr-only" data-announcement>${announcement}${announcement ? " " : ""}</span>` +
     `<span data-count>${goingCountText(s.going, s.capacity)}</span>${spots}</span>`
   );

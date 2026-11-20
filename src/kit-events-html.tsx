@@ -1,3 +1,4 @@
+import type { JSX } from "hono/jsx/jsx-runtime";
 import { HtmlEscapedCallbackPhase, resolveCallback } from "hono/utils/html";
 import { EventsCalendarPage, EventsSearchTooLongPage } from "./events/pages";
 import type { KitEventsLoadData } from "./kit-events";
@@ -12,9 +13,7 @@ export interface KitEventsHtml {
 }
 
 /**
- * Render the Kit events-list model through the Hono calendar screen, so the
- * native endpoint answers byte-identical HTML to GET /events without a
- * Svelte page component (and its client entries/node) in the Kit bundle.
+ * Render a calendar with the supplied adapter or the Hono fallback.
  *
  * Props mirror src/events/routes-calendar.tsx exactly: the too-long branch
  * renders the notice screen with the app URL only (never the query), and the
@@ -27,21 +26,26 @@ export async function renderEventsHtml(
   data: KitEventsLoadData | { queryTooLong: true; appUrl: string },
   headers: Record<string, string>,
   restoredWrite = false,
+  renderCalendar?: (data: KitEventsLoadData) => Promise<JSX.Element>,
 ): Promise<KitEventsHtml> {
   const element = data.queryTooLong ? (
     <EventsSearchTooLongPage appUrl={data.appUrl} />
+  ) : renderCalendar ? (
+    await renderCalendar(data)
   ) : (
     <EventsCalendarPage
       state={data.state}
       upcoming={data.upcoming}
       past={data.past}
       pastMayBeTruncated={data.pastMayBeTruncated}
+      monthReadMayBeIncomplete={data.monthReadMayBeIncomplete}
       zone={data.zone}
       now={data.now}
       totalPages={data.totalPages}
       emptyState={data.emptyState}
       robots={data.robots}
       discordFailed={data.discordFailed}
+      discordSnapshotAt={data.discordSnapshotAt}
       games={data.games}
       gameFilter={data.gameFilter}
       member={data.member}

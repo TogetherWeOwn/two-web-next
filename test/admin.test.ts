@@ -34,6 +34,9 @@ import { adminApp } from "../src/admin/routes";
 import { resolveKitEventEdit } from "../src/admin/kit-event-edit";
 import { listRoster } from "../src/admin/reads";
 import { getEvent } from "../src/admin/store-event-reads";
+import { getPublicEvent } from "../src/events/reads";
+import { compileKitForms } from "./helpers/admin-validation-correction";
+import { attr, controlNamed, firstForm, submittedFields } from "./helpers/kit-edit-controls";
 import { listFeatured } from "../src/admin/store-featured";
 import { dispatchWriteBack } from "../src/admin/writeback";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
@@ -62,6 +65,7 @@ import {
 import { clearAuditRows } from "./helpers/audit-rows";
 import { registerWaitlistAcceptance } from "./helpers/admin-waitlist-acceptance";
 import { registerCreateContentPersistenceAcceptance } from "./helpers/admin-create-content-persistence";
+import { registerWaitlistOfferLifecycle } from "./helpers/waitlist-offer-lifecycle";
 import {
   cookieFor as featuredCookieFor,
   env as featuredEnv,
@@ -227,6 +231,7 @@ describe("admin guard pins (memory store, no DB)", () => {
 describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", () => {
   registerWaitlistAcceptance();
   registerCreateContentPersistenceAcceptance();
+  registerWaitlistOfferLifecycle();
   // Roster acceptance keeps its own scoped fixture under the pre-existing DB gate.
   describe("refused event edit explains the missing roster (isolated test DB)", () => {
     let fixture: MemberDataFixture;
@@ -479,6 +484,99 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
 
     // Sessions resolve through the memory store; admin tables hit Postgres.
     const app = () => adminApp({ sessionStore: store, db });
+
+    it.each(["untouched", "cleared", "omitted"] as const)(
+      "Kit native edit POST persists %s access/joining values through public readback",
+      async (mode) => {
+        const access = {
+          accessibilityNotes: "Step-free side door; hearing loop fitted",
+          organizer_name: "Jordan",
+          join_url: "https://example.com/lobby",
+          join_instructions: "Ask for the community table on level two",
+        };
+        await db.insert(events).values({
+          eventKey: KEY,
+          title: "Kit save round trip",
+          game: "Chess",
+          description: "Boards out",
+          startsAt: new Date("2026-11-04T20:00:00Z"),
+          endsAt: new Date("2026-11-04T22:00:00Z"),
+          timezone: "Europe/London",
+          location: "Voice",
+          capacity: 8,
+          status: "published",
+          ...access,
+        });
+        const before = await getEvent(db, KEY);
+        expect(before).not.toBeNull();
+        const load = () =>
+          resolveKitEventEdit(
+            KEY,
+            {},
+            {
+              db,
+              get: getEvent,
+              list: async () => ({ rows: [], total: 0 }),
+            },
+          );
+        const loaded = await load();
+        if (loaded.kind !== "ok") throw new Error(`expected edit view, got ${loaded.kind}`);
+        const compiler = await compileKitForms();
+        let html: string;
+        try {
+          html = compiler.renderForm(1, { view: loaded.view });
+        } finally {
+          compiler.dispose();
+        }
+        expect(attr(firstForm(html), "action")).toBe(`/admin/events/${KEY}`);
+        const fields = submittedFields(html);
+        const fieldNames = Object.keys(fields);
+        const names = ["accessibility_notes", "organizer_name", "join_url", "join_instructions"];
+        if (process.env.KIT_HISTORICAL_BASELINE_ADAPTER === "1") {
+          expect(mode).toBe("untouched");
+          for (const name of ["saved_baseline", ...names]) {
+            expect(controlNamed(html, name)).toBeUndefined();
+          }
+          fields.saved_baseline = await tokenFor(`/events/${KEY}`);
+        }
+        for (const name of names) {
+          if (mode === "cleared") fields[name] = "";
+          if (mode === "omitted") delete fields[name];
+        }
+        const response = await app().request(`/events/${KEY}`, form(fields), liveEnv());
+        expect(response.status).toBe(303);
+        const expectedAccess =
+          mode === "untouched"
+            ? access
+            : {
+                accessibilityNotes: null,
+                organizer_name: null,
+                join_url: null,
+                join_instructions: null,
+              };
+        const unchanged = {
+          title: before!.title,
+          game: before!.game,
+          description: before!.description,
+          startsAt: before!.startsAt,
+          endsAt: before!.endsAt,
+          timezone: before!.timezone,
+          location: before!.location,
+          capacity: before!.capacity,
+          status: before!.status,
+        };
+        expect(await getEvent(db, KEY)).toMatchObject({ ...unchanged, ...expectedAccess });
+        expect(await getPublicEvent(db, KEY)).toMatchObject({ ...unchanged, ...expectedAccess });
+        expect(fieldNames).toEqual(expect.arrayContaining(names));
+        const reloaded = await load();
+        if (reloaded.kind !== "ok") throw new Error(`expected edit view, got ${reloaded.kind}`);
+        for (const name of names) {
+          expect(reloaded.view.values[name as keyof typeof reloaded.view.values]).toBe(
+            mode === "untouched" ? fields[name] : "",
+          );
+        }
+      },
+    );
 
     it("moderator event CRUD: create-as-draft → edit → publish → cancel, all audited", async () => {
       const create = await app().request(

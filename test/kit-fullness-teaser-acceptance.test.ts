@@ -21,7 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "../src/home-copy";
+import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const webRequire = createRequire(join(root, "web/package.json"));
@@ -52,7 +52,7 @@ function baseData(overrides: Record<string, unknown> = {}): Record<string, unkno
     eventsUnavailable: false,
     featured: [],
     imageHosts: "",
-    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
+    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO },
     ...overrides,
   };
 }
@@ -73,9 +73,11 @@ function canonicalEvent(overrides: Record<string, unknown> = {}): Record<string,
 
 /** The one teaser row linking `key`, so a sibling's marker cannot satisfy the pin. */
 function teaserRow(html: string, key: string): string {
-  const hit = html.split('<li class="card"').find((chunk) => chunk.includes(`/e/${key}"`));
+  const hit = [...html.matchAll(/<li class="card(?:\s[^"]*)?"[^>]*>[\s\S]*?<\/li>/g)].find(
+    ([row]) => row.includes(`/e/${key}"`),
+  )?.[0];
   if (!hit) throw new Error(`no teaser row for ${key}`);
-  return hit.split("</li>")[0]!;
+  return hit;
 }
 
 beforeAll(async () => {

@@ -1,0 +1,62 @@
+--- a/ast.go
++++ b/ast.go
+@@ -368,6 +368,14 @@
+ 	Pos *Pos
+ }
+ 
++// ConcurrencyQueue is the literal pending-run policy for a concurrency group.
++type ConcurrencyQueue string
++
++const (
++	ConcurrencyQueueSingle ConcurrencyQueue = "single"
++	ConcurrencyQueueMax    ConcurrencyQueue = "max"
++)
++
+ // Concurrency is a configuration of concurrency of the workflow.
+ // https://docs.github.com/en/actions/learn-github-actions/workflow-syntax-for-github-actions#concurrency
+ type Concurrency struct {
+@@ -375,6 +383,8 @@
+ 	Group *String
+ 	// CancelInProgress is a flag that shows if canceling this workflow cancels other jobs in progress.
+ 	CancelInProgress *Bool
++	// Queue is the pending-run policy. Empty means the default single slot.
++	Queue ConcurrencyQueue
+ 	// Pos is a position in source.
+ 	Pos *Pos
+ }
+--- a/parse.go
++++ b/parse.go
+@@ -721,6 +721,7 @@
+ 		ret.Group = p.parseString(n, false)
+ 	} else {
+ 		groupFound := false
++		var cancelNode *yaml.Node
+ 		for _, kv := range p.parseSectionMapping("concurrency", n, false, true) {
+ 			switch kv.id {
+ 			case "group":
+@@ -728,12 +729,25 @@
+ 				groupFound = true
+ 			case "cancel-in-progress":
+ 				ret.CancelInProgress = p.parseBool(kv.val)
++				cancelNode = kv.val
++			case "queue":
++				if kv.val.Kind != yaml.ScalarNode || kv.val.Tag != "!!str" ||
++					(kv.val.Value != "single" && kv.val.Value != "max") {
++					p.error(kv.val, "concurrency queue must be the literal string \"single\" or \"max\"")
++				} else {
++					ret.Queue = ConcurrencyQueue(kv.val.Value)
++				}
+ 			default:
++				// Retain existing diagnostics and upstream fixture expectations.
+ 				p.unexpectedKey(kv.key, "concurrency", []string{"group", "cancel-in-progress"})
+ 			}
+ 		}
+ 		if !groupFound {
+ 			p.errorAt(pos, "group name is missing in \"concurrency\" section")
++		}
++		if ret.Queue == ConcurrencyQueueMax && cancelNode != nil &&
++			(cancelNode.Tag != "!!bool" || !strings.EqualFold(cancelNode.Value, "false")) {
++			p.error(cancelNode, "concurrency queue \"max\" requires cancel-in-progress to be false or omitted")
+ 		}
+ 	}
+ 
