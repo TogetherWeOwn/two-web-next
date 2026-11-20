@@ -67,7 +67,7 @@ describe("hooks.server route ownership wiring", () => {
   it("pins the full shipped ownership manifest", () => {
     const homeReads = { resource: "member", action: "list", route: "home" };
     expect(ROUTE_MANIFEST).toEqual([
-      { method: "GET", path: "/", enabled: false, reads: homeReads },
+      { method: "GET", path: "/", enabled: true, reads: homeReads },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/events", enabled: true, reads: "public" },
       { method: "GET", path: "/about", enabled: true, reads: "public" },

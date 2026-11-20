@@ -162,9 +162,10 @@ describe("Kit dispatch HTML wire shape", () => {
   });
 
   it("leaves a Hono-owned response's declared Content-Length untouched", async () => {
-    // GET / is enabled:false in the shipped manifest, so dispatch answers
-    // through honoFetch and never reaches the stream wrap.
-    const res = await dispatchHookRequest(kitEventFor("/", "/[...path]"), {
+    // Disabling the shipped homepage entry rolls it back to Hono without
+    // applying Kit's stream wrap.
+    const resolve = vi.fn(async () => new Response("kit"));
+    const res = await dispatchHookRequest(kitEventFor("/", "/"), {
       appUrl: KIT_APP_URL,
       honoFetch: vi.fn(
         async () =>
@@ -173,8 +174,10 @@ describe("Kit dispatch HTML wire shape", () => {
             headers: { "content-type": "text/html", "content-length": "4" },
           }),
       ),
-      resolve: vi.fn(async () => new Response("kit")),
+      resolve,
+      manifest: kitManifestFor("/").map((entry) => ({ ...entry, enabled: false })),
     });
+    expect(resolve).not.toHaveBeenCalled();
     expect(res.headers.get("content-length")).toBe("4");
     expect(await res.text()).toBe("hono");
   });
