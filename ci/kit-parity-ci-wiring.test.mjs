@@ -279,7 +279,9 @@ test("the ranked RSVP is established before the first cache-settling /events GET
   // settled guest entry already carries the ranked count. Seed it before
   // either isolate settles an entry; the DB fixture does not retire caches.
   const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
-  const setup = spec.match(/test\.beforeAll\(async \(\{ playwright \}\) => \{([\s\S]*?)\n\}\);/)?.[1];
+  const setup = spec.match(
+    /test\.beforeAll\(async \(\{ playwright \}\) => \{([\s\S]*?)\n\}\);/,
+  )?.[1];
   assert(setup, "worker setup must exist");
   assert.match(
     setup,
