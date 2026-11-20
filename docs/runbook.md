@@ -607,7 +607,8 @@ locking (including termination of only its own migration backend while a second
 fixture connection takes the lock), transactional rollback of ledger setup,
 PITR timestamp recording, error redaction, normalized driver options and hostile
 ambient `PGPORT`. It never falls back to a remote URL; any non-test endpoint is
-refused before connecting.
+refused before connecting. For a human local run, fetch `origin/main` with enough
+history to include the pinned readiness builds; the selftest checks their ancestry.
 
 Sources: [GitHub Environment protection and secrets](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments),
 [Drizzle migration semantics](https://orm.drizzle.team/docs/migrations),

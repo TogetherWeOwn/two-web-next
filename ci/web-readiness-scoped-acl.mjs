@@ -33,7 +33,8 @@ export async function grantScopedAcl(sql, login) {
 }
 
 export async function assertScopedAcl(sql, login, owner) {
-  const [role] = await sql`SELECT NOT (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls)
+  const [role] = await sql`SELECT
+    NOT (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls)
     AND rolcanlogin AND NOT EXISTS (SELECT 1 FROM pg_auth_members WHERE member = r.oid) AS scoped
     FROM pg_roles r WHERE rolname = ${login}`;
   assert.equal(role.scoped, true);
@@ -50,8 +51,8 @@ export async function assertScopedAcl(sql, login, owner) {
     updatable: 0,
     columns: ["created_at"],
   });
-  const census = await sql`SELECT c.relname::text AS name, c.relkind::text AS kind, pg_get_userbyid(c.relowner) AS owner
-    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  const census = await sql`SELECT c.relname::text AS name, c.relkind::text AS kind,
+    pg_get_userbyid(c.relowner) AS owner FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S')`;
   const expected = [
     "web_readiness.migration_timestamps:SELECT",
@@ -85,8 +86,8 @@ export async function assertScopedAcl(sql, login, owner) {
   assert.ok(acl.every((right) => !right.public && !right.is_grantable));
   const grants = acl.map(({ name, privilege_type }) => `${name}:${privilege_type}`);
   assert.deepEqual(grants.sort(), expected.sort());
-  const schemaAcl = await sql`SELECT nspname::text AS name, privilege_type, grantee = 0 AS public, is_grantable
-    FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl)
+  const schemaAcl = await sql`SELECT nspname::text AS name, privilege_type,
+    grantee = 0 AS public, is_grantable FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl)
     WHERE nspname IN ('public', 'web_readiness') AND grantee IN (0, (SELECT oid FROM pg_roles WHERE rolname = ${login}))`;
   assert.ok(schemaAcl.every((right) => !right.is_grantable));
   const schemas = schemaAcl.map((r) => `${r.name}:${r.privilege_type}:${r.public}`);
@@ -99,8 +100,8 @@ export async function assertScopedAcl(sql, login, owner) {
 
 export async function probeWorkloads(owner, runtime) {
   const denied = { code: "42501" };
-  const [grant] = await owner`INSERT INTO agent_event_grants (agent_id, company_id, guild_id, verifier_hash)
-    VALUES ('fixture', 'fixture', 'fixture', 'fixture') RETURNING id`;
+  const [grant] = await owner`INSERT INTO agent_event_grants
+    (agent_id, company_id, guild_id, verifier_hash) VALUES ('fixture', 'fixture', 'fixture', 'fixture') RETURNING id`;
   const one = async (query) => assert.equal((await query).count, 1);
   await runtime.begin(async (tx) => {
     await one(tx`SELECT id FROM agent_event_grants WHERE id = ${grant.id} FOR SHARE`);
@@ -131,7 +132,9 @@ export async function probeWorkloads(owner, runtime) {
   await one(runtime`DELETE FROM rsvps WHERE id = ${rsvp.id}`);
   const [job] = await runtime`INSERT INTO queue_jobs (job_id, kind, available_at)
     VALUES (gen_random_uuid(), 'fixture', now()) RETURNING job_id`;
-  await one(runtime`UPDATE queue_jobs SET reserved_at = now() WHERE job_id = ${job.job_id} RETURNING job_id`);
+  await one(
+    runtime`UPDATE queue_jobs SET reserved_at = now() WHERE job_id = ${job.job_id} RETURNING job_id`,
+  );
   await one(runtime`DELETE FROM queue_jobs WHERE job_id = ${job.job_id}`);
   await runtime`INSERT INTO bot_reconciliation_intents (idempotency_key, verb, subject, last_attempt_at, attempts)
     VALUES (${job.job_id}, 'event.upsert', 'fixture', now(), 1)`;
@@ -163,7 +166,9 @@ export async function probeWorkloads(owner, runtime) {
         runtime`DELETE FROM ${runtime(table)} WHERE ${runtime(age)} >= now() - interval '90 days'`,
         /append-only/,
       );
-      await one(runtime`DELETE FROM ${runtime(table)} WHERE ${runtime(age)} < now() - interval '90 days'`);
+      await one(
+        runtime`DELETE FROM ${runtime(table)} WHERE ${runtime(age)} < now() - interval '90 days'`,
+      );
     }
   }
 }

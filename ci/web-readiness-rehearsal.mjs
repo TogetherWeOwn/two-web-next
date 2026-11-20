@@ -44,7 +44,8 @@ async function pinnedApp(root, sha) {
   const history = entries.map(({ tag, when }, i) => {
     assert.ok(Number.isSafeInteger(when) && (i === 0 || when > entries[i - 1].when));
     const path = `drizzle/${tag}.sql`;
-    const hash = createHash("sha256").update(readFileSync(join(dir, path))).digest("hex");
+    const sql = readFileSync(join(dir, path));
+    const hash = createHash("sha256").update(sql).digest("hex");
     assert.deepEqual(lock[i], { path, sha256: hash });
     return { tag, created_at: String(when), hash };
   });
@@ -74,30 +75,24 @@ async function pinnedApp(root, sha) {
 async function checkUp(build, reader, expected, status, pending, queries, relation) {
   queries.length = 0;
   const appUrl = "https://next.example.test";
-  const response = await build.app.request(`${appUrl}/up`, {}, {
+  const env = {
     APP_URL: appUrl,
     SESSION_SECRET: randomUUID(),
     DISCORD_CLIENT_SECRET: "fixture",
     DISCORD_BOT_TOKEN: "fixture",
     QUEUE_DEPTH_STORE: reader,
-  });
+  };
+  const response = await build.app.request(`${appUrl}/up`, {}, env);
   assert.equal(response.status, status, `${build.sha} /up status`);
-  const { db, pending_migrations, migration_ledger } = await response.json();
-  assert.deepEqual(
-    { db, pending_migrations, migration_ledger },
-    {
-      db: "ok",
-      pending_migrations: pending,
-      migration_ledger: expected?.map(({ created_at }) => Number(created_at)) ?? null,
-    },
-  );
-  assert.ok(
-    queries.some((query) => query.includes(`FROM ${relation}`)),
-    `${build.sha} read ${relation}`,
-  );
-  if (relation === projection) {
-    assert.ok(!queries.some((query) => query.includes(`FROM ${ledger}`)));
-  }
+  const { db, pending_migrations, migration_ledger, queue } = await response.json();
+  const timestamps = expected?.map(({ created_at }) => Number(created_at)) ?? null;
+  assert.equal(db, "ok");
+  assert.equal(pending_migrations, pending);
+  assert.deepEqual(migration_ledger, timestamps);
+  if (status === 200) assert.equal(queue?.status, "healthy", `${build.sha} /up empty queue`);
+  const read = (name) => queries.some((query) => query.includes(`FROM ${name}`));
+  assert.ok(read(relation), `${build.sha} read ${relation}`);
+  if (relation === projection) assert.ok(!read(ledger), `${build.sha} must not fall back`);
   const rows = migration_ledger?.length ?? "unreadable";
   console.info(`${build.sha} /up: HTTP ${status}, pending=${pending}, rows=${rows}`);
 }
@@ -192,7 +187,7 @@ export async function rehearseWebReadiness(owner, url) {
     await owner`GRANT SELECT ON web_readiness.migration_timestamps TO ${owner(login)}`;
     await probeWorkloads(owner, reader);
     assert.deepEqual(await readLedger(), expanded);
-    console.info("Scoped ACL, same database/login, workloads and unchanged locked journal verified.");
+    console.info("Verified scoped ACL, same database/login, workloads and unchanged journal.");
   } finally {
     try {
       await reader?.end({ timeout: 0 });
