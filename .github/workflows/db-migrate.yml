@@ -101,6 +101,7 @@ jobs:
           # Non-secret pins, provisioned only on the protected production Environment.
           PRODUCTION_MIGRATION_APPROVED_SHA: ${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_APPROVED_SHA || '' }}
           PRODUCTION_MIGRATION_IDENTITY_SHA256: ${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_IDENTITY_SHA256 || '' }}
+          PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: ${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS || '' }}
           STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}
           # Provision ONLY as secrets on the matching GitHub Environment.
           # The unselected target is not exposed to the process. No DATABASE_URL fallback.

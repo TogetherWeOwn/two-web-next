@@ -217,8 +217,15 @@ test("db-migrate admits staging and production through one explicit gate before 
       "PRODUCTION_MIGRATION_IDENTITY_SHA256: ${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_IDENTITY_SHA256 || '' }}",
     ),
   );
+  assert.ok(
+    migrationEnv.includes(
+      "PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: ${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS || '' }}",
+    ),
+  );
   for (const mode of ["plan", "apply", "verify"])
     assert.ok(dbMigrate.includes(`node ci/db-migrate.mjs ${mode}`));
+  for (const mode of ["apply", "verify"])
+    assert.ok(dbMigrate.includes(`node ci/db-migrate.mjs ${mode}\n        env: *migration-env`));
 });
 
 test("deploy holds the direct staging migration path before dependencies or mutations", () => {
