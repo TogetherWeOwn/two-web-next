@@ -54,7 +54,7 @@ oldest-hit-plus-window minus now), otherwise the admission inserts one hit row
 and lets the request through. The count-then-insert runs under a per-bucket
 Postgres advisory lock so concurrent bursts cannot overshoot; the lock waits
 at most `WEB_THROTTLE_LOCK_TIMEOUT_MS` (`SET LOCAL lock_timeout` in
-[`checkJoinThrottle`](../src/join/service.ts)). Failure posture
+[`chargeWebThrottle`](../src/http/throttle.ts)). Failure posture
 differs by call site:
 
 - Absent store allows: [`checkJoinThrottle`](../src/join/service.ts) returns
