@@ -106,6 +106,29 @@ jobs:
           path: artifacts/kit-rank/
           if-no-files-found: error
           retention-days: 14
+  members-directory-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+      - run: node --test ci/kit-members-directory-browser.test.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: kit-members-directory
+          path: artifacts/kit-members-directory/
+          if-no-files-found: error
+          retention-days: 14
   profile-comparison-diagnostic:
     if: github.event_name == 'workflow_dispatch' && inputs.profile_comparison_diagnostic
     runs-on: ubuntu-latest
