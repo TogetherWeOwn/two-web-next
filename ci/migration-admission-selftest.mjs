@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { assertMigrationAdmission, assertStagingDeployHold } from "./migration-admission.mjs";
 import {
+  PLANETSCALE_PRODUCTION_BRANCH_ID,
+  PLANETSCALE_PRODUCTION_HOST,
   PLANETSCALE_STAGING_BRANCH_ID,
   PLANETSCALE_STAGING_HOST,
   migrationConfig,
@@ -14,7 +16,14 @@ import {
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const STAGING_URL = `postgres://role-stub.${PLANETSCALE_STAGING_BRANCH_ID}:stub@${PLANETSCALE_STAGING_HOST}/db?sslmode=require`;
-const PROD_URL = "postgres://user:stub@stub-1.pg.psdb.cloud/db?sslmode=require";
+const PROD_URL = `postgres://role-stub.${PLANETSCALE_PRODUCTION_BRANCH_ID}:stub@${PLANETSCALE_PRODUCTION_HOST}/db?sslmode=require`;
+const sha = "a".repeat(40);
+const production = {
+  MIGRATION_TARGET: "production",
+  PRODUCTION_DEPLOY_ENABLED: "true",
+  GITHUB_SHA: sha,
+  PRODUCTION_MIGRATION_APPROVED_SHA: sha,
+};
 const mainRef = "refs/heads/main";
 
 function env(overrides = {}) {
@@ -69,8 +78,7 @@ test("production path ignores the staging hold and keeps the existing enable gat
   for (const hold of [undefined, "", "true", "false", "malformed"]) {
     assertMigrationAdmission(
       env({
-        MIGRATION_TARGET: "production",
-        PRODUCTION_DEPLOY_ENABLED: "true",
+        ...production,
         STAGING_MIGRATION_HOLD: hold,
       }),
     );
@@ -156,8 +164,8 @@ test("migrationConfig refuses held staging before URL parsing or connection", ()
   assert.equal(
     migrationConfig(
       env({
-        MIGRATION_TARGET: "production",
-        PRODUCTION_DEPLOY_ENABLED: "true",
+        ...production,
+        PRODUCTION_MIGRATION_IDENTITY_SHA256: "b".repeat(64),
         PRODUCTION_DATABASE_URL: PROD_URL,
         STAGING_MIGRATION_HOLD: "true",
       }),
@@ -182,6 +190,10 @@ test("db-migrate admits staging and production through one explicit gate before 
   assert.match(gate, /Migrations require main/);
   assert.match(gate, /Unknown migration target/);
   assert.match(gate, /Production migrations are disabled/);
+  const shaSetting =
+    "${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_APPROVED_SHA || '' }}";
+  assert.ok(gate.includes(`PRODUCTION_MIGRATION_APPROVED_SHA: ${shaSetting}`));
+  assert.ok(dbMigrate.slice(checkoutIndex).includes("ref: ${{ github.sha }}"));
   assert.match(gate, /STAGING_MIGRATION_HOLD/);
   assert.match(gate, /Staging migrations are held/);
   // Exact-string release only: no case-insensitive or trimmed fallback.
@@ -199,6 +211,12 @@ test("db-migrate admits staging and production through one explicit gate before 
     migrationEnvEnd > migrationEnvAt ? migrationEnvEnd : undefined,
   );
   assert.match(migrationEnv, /STAGING_MIGRATION_HOLD: \$\{\{ vars\.STAGING_MIGRATION_HOLD \}\}/);
+  assert.ok(migrationEnv.includes(`PRODUCTION_MIGRATION_APPROVED_SHA: ${shaSetting}`));
+  assert.ok(
+    migrationEnv.includes(
+      "PRODUCTION_MIGRATION_IDENTITY_SHA256: ${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_IDENTITY_SHA256 || '' }}",
+    ),
+  );
   for (const mode of ["plan", "apply", "verify"])
     assert.ok(dbMigrate.includes(`node ci/db-migrate.mjs ${mode}`));
 });
@@ -303,8 +321,7 @@ test("workflow shells refuse held staging and preserve production/invalid-target
   // Production keeps the existing enable gate and ignores the hold.
   assert.equal(
     runShell(migrateGate, {
-      MIGRATION_TARGET: "production",
-      PRODUCTION_DEPLOY_ENABLED: "true",
+      ...production,
       STAGING_MIGRATION_HOLD: "true",
     }).status,
     0,
@@ -331,4 +348,18 @@ test("workflow shells refuse held staging and preserve production/invalid-target
     assert.match(direct.stderr, /Staging migrations are held/);
   }
   assert.equal(runShell(deployGate, { STAGING_MIGRATION_HOLD: "false" }, "sh").status, 0);
+});
+
+test("production requires an exact approved SHA in both the workflow and runner", () => {
+  const gate = shellScript(dbMigrate, "Ref and production enable gate");
+  for (const approved of [undefined, "", "b".repeat(40), sha.toUpperCase(), ` ${sha}`, "*"]) {
+    const candidate = { ...production, PRODUCTION_MIGRATION_APPROVED_SHA: approved };
+    const result = runShell(gate, candidate);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Production migration SHA/);
+    assert.throws(() => assertMigrationAdmission(env(candidate)), /Production migration SHA/);
+  }
+  const missingRunSha = { ...production, GITHUB_SHA: undefined };
+  assert.equal(runShell(gate, missingRunSha).status, 1);
+  assert.throws(() => assertMigrationAdmission(env(missingRunSha)), /Production migration SHA/);
 });

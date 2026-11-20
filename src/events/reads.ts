@@ -892,6 +892,8 @@ export interface EventSeriesContext {
   next: EventLink | null;
   /** Earliest future published sibling at the requested render instant. */
   upcoming?: EventLink | null;
+  /** Public siblings from the same bounded read, used to disambiguate ended navigation. */
+  memberIds?: readonly number[];
 }
 
 /** The series-membership slice of the loaded row the context read keys on. */
@@ -1023,7 +1025,13 @@ export async function getEventSeriesContext(
     .filter((row) => row.id !== event.id && row.status === "published" && row.startsAt > now)
     .filter((row) => isRenderableEventWindow(row) && (acceptUpcomingKey?.(row.eventKey) ?? true))
     .sort((a, b) => +a.startsAt - +b.startsAt)[0];
-  return { hosts, previous, next, upcoming: upcoming ? toLink(upcoming) : null };
+  return {
+    hosts,
+    previous,
+    next,
+    upcoming: upcoming ? toLink(upcoming) : null,
+    memberIds: rows.map((row) => row.id),
+  };
 }
 
 /** Viewer answer for the RSVP island (TOG-9839 slice 2): the caller's own row

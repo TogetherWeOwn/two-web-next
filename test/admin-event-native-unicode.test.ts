@@ -5,7 +5,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EventFormPage } from "../src/admin/pages";
 import type { EventRow } from "../src/admin/store";
-import { parseEventForm, ValidationError } from "../src/admin/validation";
+import { parseHumanEventForm, ValidationError } from "../src/admin/validation";
 
 const base = {
   title: "Game night",
@@ -88,7 +88,7 @@ describe("admin event code-point contract", () => {
       ({ characters }) => {
         const value = text(characters, max);
         expect(eventTextLimitError(value, field, max)).toBe("");
-        const parsed = parseEventForm({ ...base, [field]: value });
+        const parsed = parseHumanEventForm({ ...base, [field]: value });
         expect(field === "accessibility_notes" ? parsed.accessibilityNotes : parsed[field]).toBe(
           value,
         );
@@ -103,7 +103,7 @@ describe("admin event code-point contract", () => {
                 : message;
         expect(eventTextLimitError(value + "x", field, max)).toBe(message);
         try {
-          parseEventForm({ ...base, [field]: value + "x" });
+          parseHumanEventForm({ ...base, [field]: value + "x" });
           throw new Error("Expected server validation to reject N+1 without JS");
         } catch (error) {
           expect(error).toBeInstanceOf(ValidationError);
@@ -121,28 +121,27 @@ describe("admin event code-point contract", () => {
       );
     }
   });
-  it("description with line breaks matches the server verdict (browsers submit CRLF)", () => {
-    // Browsers serialize textarea LF as CRLF on submit, so the server counts
-    // two code points per break while textarea .value holds one.
+  it("description with line breaks matches the human server verdict (canonical LF)", () => {
+    // Native POST expands LF to CRLF; the human parser counts canonical LF.
     const toSubmitted = (value: string): string => value.replace(/\n/g, "\r\n");
     const serverMessage = (value: string): string => {
       try {
-        parseEventForm({ ...base, description: toSubmitted(value) });
+        parseHumanEventForm({ ...base, description: toSubmitted(value) });
         return "";
       } catch (error) {
         expect(error).toBeInstanceOf(ValidationError);
         return (error as ValidationError).fields.description ?? "";
       }
     };
-    // 47 lines of 20 chars: 986 code points by .value, 1032 as submitted.
-    const over = Array.from({ length: 47 }, () => "x".repeat(20)).join("\n");
-    expect([...over].length).toBe(986);
+    // 48 lines of 20 chars: 1007 canonical code points, independent of wire CRLF.
+    const over = Array.from({ length: 48 }, () => "x".repeat(20)).join("\n");
+    expect([...over].length).toBe(1007);
     expect(eventTextLimitError(over, "description", 1000)).toBe(
       "Keep the description to 1000 characters.",
     );
     expect(serverMessage(over)).toBe("Keep the description to 1000 characters.");
-    // 45 lines of 20 chars: 944 by .value, 988 as submitted — both pass.
-    const under = Array.from({ length: 45 }, () => "x".repeat(20)).join("\n");
+    // The old 986-code-point refusal now passes despite 1032 wire code points.
+    const under = Array.from({ length: 47 }, () => "x".repeat(20)).join("\n");
     expect(eventTextLimitError(under, "description", 1000)).toBe("");
     expect(serverMessage(under)).toBe("");
   });
@@ -345,7 +344,7 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
                 await page.evaluate<Record<string, string>[]>("window.submissions");
               expect(submissions).toHaveLength(1);
               expect(submissions[0]![field]).toBe(value);
-              const parsedSubmission = parseEventForm(submissions[0]!);
+              const parsedSubmission = parseHumanEventForm(submissions[0]!);
               expect(
                 field === "accessibility_notes"
                   ? parsedSubmission.accessibilityNotes

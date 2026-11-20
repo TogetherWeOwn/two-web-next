@@ -9,6 +9,7 @@ import {
 import postgres from "postgres";
 import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
+import { QA_IDENTITIES } from "../../src/qa";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
   expectedKitMarker,
@@ -37,7 +38,7 @@ import { postParityQaLogin } from "./parity-qa-login.mjs";
 // targets (re-signed for the Kit fixture's own secret) — the token and
 // cookie values never appear in assertions or artifacts, and every body
 // is scrubbed. The journey also makes its viewer the board's one ranked
-// member with a single going RSVP on the seeded event, withdrawn in
+// member with a single going RSVP on the seeded event, deleted in
 // afterAll: no earlier journey leaves a going RSVP behind, so without it
 // both boards render their empty state and ranked content is unprovable.
 // Login journeys (member RSVP, moderator admin, profile edit) stay Hono-only
@@ -60,20 +61,14 @@ test.beforeAll(async ({ playwright }) => {
       }),
     );
   }
-  // Ranked RSVP before the first cache-settling read: anonymous /events
-  // entries are isolate-local (src/events/anon-cache.ts) and the RSVP PUT
-  // retires only the Hono isolate, so establishing the going RSVP here means
-  // every guest entry settled later on either isolate already carries
-  // count=1. This spends the journey's one memoized QA login early; the
-  // afterAll withdrawal and the exactly-one-login assertion are unchanged.
-  await memberGoingRsvp();
-  // Leave the shared jar guest-clean: the QA login above stores its session
-  // cookie in the Hono context, and every later api(hono) call would send
-  // it — turning the guest-contract tests (public cache-control on /events,
-  // the 302 member-board bounce) into member reads. Recreate the context
-  // instead: the memoized pair stays live (the RSVP PUT never rotates), so
-  // later memberCookie() calls replay it explicitly with no second login.
   const hono = targets.find((target) => target.name === "hono")!;
+  await memberCookie(hono);
+  // Seed the ranked count before the first cache-settling read on either
+  // isolate (src/events/anon-cache.ts).
+  await memberGoingRsvp();
+  // The QA login above populates the Hono jar. Recreate that context so
+  // subsequent guest requests stay anonymous; member requests replay the
+  // memoized cookie explicitly without another login.
   await contexts.get(hono.name)!.dispose();
   contexts.set(
     hono.name,
@@ -86,14 +81,12 @@ test.beforeAll(async ({ playwright }) => {
 
 test.afterAll(async () => {
   try {
-    // Undo the journey's one ranked RSVP while its Hono context is alive,
-    // so the seeded event is left exactly as the earlier journeys left it.
-    if (memberRsvpCreated) {
-      const hono = targets.find((target) => target.name === "hono")!;
-      const withdrawn = await api(hono).delete(`/events/${SEEDED_EVENT_KEY}/rsvp`, {
-        headers: { cookie: await memberCookie(hono), Origin: "https://localhost:8787" },
+    const id = memberRsvpId;
+    if (id !== null) {
+      await withSessionDb(async (sql) => {
+        const deleted = await sql`delete from rsvps where id = ${id} returning id`;
+        expect(deleted, "worker's ranked RSVP deleted").toHaveLength(1);
       });
-      expect(withdrawn.status(), "ranked RSVP withdrawn").toBe(204);
     }
   } finally {
     for (const context of contexts.values()) await context.dispose();
@@ -271,25 +264,26 @@ async function sessionCount(): Promise<number> {
 // The board's one ranked member: the QA viewer answers going to the seeded
 // published event (e2e/seed.mjs, "E2E Community Night", 2099, no game).
 // Earlier journeys withdraw or cancel every going RSVP they create, so
-// this idempotent write — memoized within a worker, replayed after a restart,
-// and withdrawn in afterAll — gives both renderers a ranked row to serve.
+// a worker inserts and owns this fixture row, without spending the RSVP
+// limiter budget reserved for the journeys. A restarted worker seeds anew.
 // Its 2099 start and missing game also pin the season=2026 and activity=valheim
 // views to their empty state below.
 const SEEDED_EVENT_KEY = "01J00000000000000000000001";
-let memberRsvpCreated = false;
+let memberRsvpId: number | null = null;
 let memberRsvpPromise: Promise<void> | null = null;
 function memberGoingRsvp(): Promise<void> {
-  memberRsvpPromise ??= (async () => {
-    const hono = targets.find((target) => target.name === "hono")!;
-    const response = await api(hono).put(`/events/${SEEDED_EVENT_KEY}/rsvp`, {
-      headers: { cookie: await memberCookie(hono), Origin: "https://localhost:8787" },
-      data: { status: "going" },
-    });
-    expect([200, 201], "ranked RSVP created or refreshed").toContain(response.status());
-    memberRsvpCreated = true;
-    const body = (await response.json()) as { data?: { status?: string } };
-    expect(body.data?.status, "ranked RSVP holds a seat, not the waitlist").toBe("going");
-  })().catch((error: unknown) => {
+  memberRsvpPromise ??= withSessionDb(async (sql) => {
+    const rows = await sql<{ id: number; status: string }[]>`
+      insert into rsvps (event_id, user_id, status)
+      select id, ${QA_IDENTITIES["qa-member"]!.discordId}, 'going'
+      from events where event_key = ${SEEDED_EVENT_KEY}
+      on conflict (event_id, user_id) do nothing
+      returning id, status`;
+    const [inserted] = rows;
+    memberRsvpId = inserted?.id ?? null;
+    expect(rows, "worker inserted its ranked RSVP without replacing another row").toHaveLength(1);
+    expect(inserted?.status, "ranked RSVP holds a seat, not the waitlist").toBe("going");
+  }).catch((error: unknown) => {
     memberRsvpPromise = null;
     throw error;
   });
@@ -2451,6 +2445,7 @@ test("Kit member event detail captures the ended record at both widths", async (
   const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
   const now = Date.now();
   const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  const enhanced = await browser.newPage({ baseURL: target.origin });
   try {
     await withSessionDb(async (sql) => {
       await sql`insert into users (id, username, member) values (${userId}, 'Seat fixture', true)`;
@@ -2467,7 +2462,7 @@ test("Kit member event detail captures the ended record at both widths", async (
       await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 6, recurrence_index = 1
         where event_key = ${endedKey}`;
       await sql`update events set parent_event_id = (select id from events where event_key = ${endedKey}),
-        recurrence_index = 2 where event_key = ${adjacentKey}`;
+        recurrence_index = 6 where event_key = ${adjacentKey}`;
       for (const sibling of [
         { key: laterKey, days: 14, status: "published", index: 3 },
         { key: nextKey, days: 7, status: "published", index: 4 },
@@ -2479,8 +2474,8 @@ test("Kit member event detail captures the ended record at both widths", async (
             ${sibling.status}, id, ${sibling.index} from events where event_key = ${endedKey}`;
       }
       await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
-        select ${unreadableKey}, title, ${new Date(now + 172_800_000)}, 'infinity'::timestamptz,
-          'published', id, 6 from events where event_key = ${endedKey}`;
+        select ${unreadableKey}, title, ${new Date(Date.UTC(2026, 0, 2, 3, 59))}, 'infinity'::timestamptz,
+          'published', id, 2 from events where event_key = ${endedKey}`;
       await sql`insert into rsvps (event_id, user_id, status)
         select id, ${userId}, 'going' from events where event_key = ${endedKey}`;
     });
@@ -2496,13 +2491,15 @@ test("Kit member event detail captures the ended record at both widths", async (
       },
     ]);
     const page = await context.newPage();
+    const record = page.getByRole("region", { name: "Sign-up record" });
+    const nextDates = page.getByRole("link", { name: /^Next one:/, includeHidden: true });
+    const siblingPagerLink = page.locator(`[data-testid="event-next"][href="/e/${adjacentKey}"]`);
     for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
       const response = await page.goto(`/e/${endedKey}`);
       expect(response?.status()).toBe(200);
       expect(response?.headers()["x-two-renderer"]).toBe("kit");
       const time = page.getByTestId("kit-event-time");
-      const record = page.getByRole("region", { name: "Sign-up record" });
       const menu = await compactMenu(page);
       await menu?.click();
       await expect(headerSignOut(page)).toBeVisible();
@@ -2514,16 +2511,30 @@ test("Kit member event detail captures the ended record at both widths", async (
       await expect(time.locator('time[datetime="2026-01-02T06:00:00.000Z"]')).toHaveText(
         "2 Jan 2026, 01:00",
       );
-      await expect(page.getByTestId("event-series-next")).toHaveAttribute(
-        "href",
-        `/e/${adjacentKey}`,
-      );
+      await expect(page.getByTestId("event-series-next")).toHaveCount(0);
+      await expect(siblingPagerLink).toHaveCount(0);
+      await expect(record).toHaveCount(1);
+      await expect(page.getByLabel("Event overview")).not.toContainText("Sign-up record");
+      await expect(page.getByRole("heading", { name: "Signed up (1)" })).toBeVisible();
+      await expect(page.locator(".event-meta [data-count]")).toHaveText("1 listed sign-up");
+      await expect(page.getByRole("heading", { name: "Save the date" })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: /to calendar|Google Calendar/ })).toHaveCount(0);
+      await expect(page.getByLabel("Event link")).toBeVisible();
+      const hidden = page.locator(".event-meta .event-device-timezone, .event-meta > div[hidden]");
+      await expect(hidden.and(page.locator(".event-device-timezone"))).toHaveCount(4);
+      await expect(hidden).toHaveCount(6);
+      for (const control of await hidden.all()) expect(await control.boundingBox()).toBeNull();
+      for (const fact of ["Starts", "Ends"]) {
+        const label = page.getByText(fact, { exact: true });
+        const row = page.locator(".event-meta > div").filter({ has: label });
+        expect((await row.boundingBox())?.height).toBeLessThan(160);
+      }
       await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
-      await expect(record).toContainText("No Echo for this one. 1 signed up.");
-      await expect(record.getByRole("link", { name: /^Next one:/ })).toHaveAttribute(
-        "href",
-        `/e/${nextKey}`,
-      );
+      await expect(record).toContainText("No Echo for this one. 1 listed sign-up.");
+      await expect(nextDates).toHaveCount(1);
+      await expect(record.locator(`a[href="/e/${nextKey}"]`).and(nextDates)).toBeVisible();
+      await expect(page.locator(`a[href="/e/${nextKey}"]`)).toHaveCount(1);
+      await expect(page.locator(`a[href="/e/${unreadableKey}"]`)).toHaveCount(0);
       if (width === 390) {
         await expect(
           page.locator(
@@ -2539,8 +2550,32 @@ test("Kit member event detail captures the ended record at both widths", async (
       await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
       await test.info().attach(name, { path, contentType: "image/png" });
     }
+    await withSessionDb(async (sql) => {
+      await sql`update events set status = 'past' where event_key in (${nextKey}, ${laterKey})`;
+      await sql`update events set starts_at = ${new Date(now + 172_800_000)} where event_key = ${unreadableKey}`;
+      await sql`update rsvps set user_id = '900000000000000849'
+        where user_id = ${userId} and event_id = (select id from events where event_key = ${endedKey})`;
+    });
+    expect((await page.reload())?.status()).toBe(200);
+    await expect(record).toBeVisible();
+    await expect(nextDates).toHaveCount(0);
+    await expect(page.getByTestId("event-series-next")).toHaveCount(0);
+    await expect(siblingPagerLink).toHaveCount(0);
+    await expect(page.getByTestId("event-roster-empty")).toContainText("No sign-ups are listed.");
+    await expect(page.locator(".event-meta [data-count]")).toHaveText("0 listed sign-ups");
+    await expect(record).toContainText("0 listed sign-ups");
+    await withSessionDb(async (sql) => {
+      await sql`update events set parent_event_id = null, recurrence_index = null where event_key = ${adjacentKey}`;
+    });
+    expect((await page.reload())?.status()).toBe(200);
+    await expect(siblingPagerLink).toBeVisible();
+    expect((await enhanced.goto(`/e/${endedKey}`))?.status()).toBe(200);
+    await expect(enhanced.getByTestId("event-device-timezone-starts-button")).toBeVisible();
+    await enhanced.getByTestId("event-chosen-timezone-input").fill("Asia/Tokyo");
+    await enhanced.getByTestId("event-chosen-timezone-button").click();
+    await expect(enhanced.getByTestId("event-chosen-timezone-status")).toContainText("GMT+09:00");
   } finally {
-    await context.close();
+    await Promise.all([context.close(), enhanced.close()]);
     await withSessionDb(async (sql) => {
       await sql`delete from events where event_key in (${adjacentKey}, ${endedKey}, ${nextKey}, ${laterKey}, ${historicalKey}, ${unreadableKey})`;
       await sql`delete from web_session_grace where user_id = ${userId}`;
