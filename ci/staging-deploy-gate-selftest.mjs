@@ -288,10 +288,13 @@ test("events-home turns on only /events and / and refuses either disabled GET", 
 });
 
 function runKitProbe(path, fetchStub, env = process.env) {
-  // Skip the retry wait only in the offline subprocess.
-  const setup = `const realSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = (callback, delay, ...args) =>
-      realSetTimeout(callback, delay === 10_000 ? 0 : delay, ...args);
+  // Record requested delays before shortening the retry wait in the offline subprocess.
+  const setup = `const retryDelays = [];
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      retryDelays.push(delay);
+      return realSetTimeout(callback, delay === 10_000 ? 0 : delay, ...args);
+    };
     ${fetchStub}`;
   return spawnSync(
     process.execPath,
@@ -360,10 +363,13 @@ test("the staging Kit renderer probe recovers on attempt three", () => {
     `let calls = 0; globalThis.fetch = async () => {
       calls += 1;
       return new Response(null, {status: 200, headers: calls < 3 ? {"x-two-renderer": "hono"} : {"x-two-renderer": "kit"}});
-    };`,
+    };
+    process.on("exit", () => console.error("Retry delays:", retryDelays.join(",")));`,
+    { ...process.env, KIT_ROUTE_CHECK_DELAY_MS: "0" },
   );
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /x-two-renderer: kit \(attempt 3\)/);
+  assert.match(result.stderr, /^Retry delays: 10000,10000$/m);
 });
 
 test("the staging Kit renderer probe fails after six Hono responses", () => {
@@ -373,13 +379,17 @@ test("the staging Kit renderer probe fails after six Hono responses", () => {
       calls += 1;
       return new Response(null, {status: 200, headers: {"x-two-renderer": "hono"}});
     };
-    process.on("exit", () => console.error("Probe requests:", calls));`,
+    process.on("exit", () => {
+      console.error("Probe requests:", calls);
+      console.error("Retry delays:", retryDelays.join(","));
+    });`,
     { ...process.env, KIT_ROUTE_CHECK_ATTEMPTS: "", KIT_ROUTE_CHECK_DELAY_MS: "invalid" },
   );
   assert.equal(result.status, 1, result.stderr);
   assert.equal(result.stdout, "");
   assert.match(result.stderr, /GET \/ did not return x-two-renderer: kit/);
   assert.match(result.stderr, /^Probe requests: 6$/m);
+  assert.match(result.stderr, /^Retry delays: 10000,10000,10000,10000,10000$/m);
 });
 
 const denied = [
