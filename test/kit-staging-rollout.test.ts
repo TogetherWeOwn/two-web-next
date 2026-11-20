@@ -512,13 +512,16 @@ describe("Kit production route selection", () => {
     expect(rolledBack.headers.get("cache-control")).toBe("public, max-age=300");
   });
 
-  it.each(archiveStatic)("does not let a cached Kit response outlast rollback at %s", async (path) => {
-    const event = productionEvent(path);
-    const optedIn = await expectOwner(event, "kit");
-    expect(optedIn.headers.get("cache-control")).toBe("private, no-store");
-    const rolledBack = await expectOwner(event, "hono", shippedFlags);
-    expect(rolledBack.headers.get("cache-control")).toBe("public, max-age=300");
-  });
+  it.each(archiveStatic)(
+    "does not let a cached Kit response outlast rollback at %s",
+    async (path) => {
+      const event = productionEvent(path);
+      const optedIn = await expectOwner(event, "kit");
+      expect(optedIn.headers.get("cache-control")).toBe("private, no-store");
+      const rolledBack = await expectOwner(event, "hono", shippedFlags);
+      expect(rolledBack.headers.get("cache-control")).toBe("public, max-age=300");
+    },
+  );
 
   it("keeps Kit data requests on Hono after Kit strips the data suffix", async () => {
     const event = productionEvent(`${archive}/__data.json`);
