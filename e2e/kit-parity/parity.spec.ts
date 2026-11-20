@@ -552,9 +552,8 @@ for (const target of targets) {
       const response = await api(target).get("/auth/recover?next=%2Fprofile%3Fedit%3D1");
       expect(response.status()).toBe(200);
       expect(response.headers()["content-type"]).toContain("text/html");
-      // Renderer ownership is per target: Kit answers with the
-      // manifest-derived marker once enabled, Hono never carries one.
-      const expectedMarker = target.name === "kit" ? expectedKitMarker("/auth/recover") : null;
+      // Only this loopback Worker enables the Kit recovery presentation.
+      const expectedMarker = target.name === "kit" ? "kit" : null;
       expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
       const body = await response.text();
       expect(scrubSecrets(body)).toEqual([]);
@@ -569,8 +568,7 @@ for (const target of targets) {
       expect(body).not.toContain("<iframe");
       // Per-visitor journey state: never shared-cacheable.
       expect(response.headers()["cache-control"]).toBe("no-store, private");
-      // The Hono controller still owns the one-use journey write, served
-      // undecorated through honoFetch on both targets until enablement. A
+      // The Hono controller still owns the one-use journey write. A
       // bare landing visit never arms the pending notice: only a genuine
       // expired-write bounce does, so an attacker link cannot pre-arm a
       // false restored banner.
@@ -580,6 +578,18 @@ for (const target of targets) {
         .join("\n");
       expect(setCookies).toContain("__Host-two_login_intended=");
       expect(setCookies).not.toContain("__Host-two_expired_write=");
+
+      await test.step("HEAD keeps the recovery headers and signed cookie without a body", async () => {
+        const head = await api(target).head("/auth/recover?next=%2Fprofile", {
+          headers: { "if-none-match": "*" },
+        });
+        expect(head.status()).toBe(200);
+        expect(head.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+        expect(head.headers()["cache-control"]).toBe("no-store, private");
+        expect(head.headers()["set-cookie"]).toContain("__Host-two_login_intended=");
+        expect(head.headers().etag).toBeUndefined();
+        expect(await head.text()).toBe("");
+      });
     });
 
     test("safe next survives onto the login retry, hostile next leaves no trace", async () => {
