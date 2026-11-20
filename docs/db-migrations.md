@@ -309,18 +309,21 @@ with `target: production`, behind the `production` Environment:
   that inherits `pg_read_all_data` and no write, DDL or admin role, on the
   PlanetScale direct endpoint, same `pg_dump -Fc` path — direct `5432`, never
   the pooled `6432` port).
-  Also needs Cloudflare credentials from the bound Environment:
-  `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` (staging Environment), or
-  `PRODUCTION_CLOUDFLARE_API_TOKEN` / `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`
-  (production Environment) behind the same `inputs.target` guard.
-  Set the `BACKUP_TRANSPORT` repository variable to `s3` to opt in for
-  staging only. Production uses `PRODUCTION_BACKUP_TRANSPORT` independently;
-  leave it unset until production cutover is approved. For S3, the staging
-  Environment needs `R2_ACCOUNT_ID`, `R2_S3_ACCESS_KEY_ID`, and
-  `R2_S3_SECRET_ACCESS_KEY`; the production Environment needs the corresponding
-  `PRODUCTION_` secrets. An unset transport variable uses Wrangler. Verify a
-  staging dispatch and a separately approved production dispatch with read-back
-  before narrowing the existing Cloudflare API token.
+- Backup storage credentials depend on the transport and come from the bound
+  Environment. Wrangler (the default when the target's transport variable is
+  unset) uses `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in staging, or
+  the corresponding `PRODUCTION_` secrets in production. S3 uses
+  `R2_ACCOUNT_ID`, `R2_S3_ACCESS_KEY_ID`, and `R2_S3_SECRET_ACCESS_KEY` in staging,
+  or the corresponding `PRODUCTION_` secrets in production. The workflow only
+  passes S3 credentials to the backup, rotation, and check steps when S3 is selected.
+  Set the `BACKUP_TRANSPORT` repository variable to `s3` to opt in for staging
+  only. Production uses `PRODUCTION_BACKUP_TRANSPORT` independently; leave it
+  unset until production cutover is approved.
+- Before narrowing the existing backup-related R2 write grant, verify a staging
+  S3 dispatch and a separately approved production S3 dispatch with read-back.
+  A dispatch does not exercise retention. For rollout verification, also observe
+  the scheduled staging S3 path, including Sunday promotion and deletion when
+  archives are eligible.
 - Branch/target correspondence: `branch` must be empty (defaults to `target`),
   equal to `target`, or `test-*`; staging↔production swaps and other overrides
   refuse before provisioning or I/O. Local operators must declare
