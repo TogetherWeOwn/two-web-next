@@ -126,6 +126,7 @@ jobs:
           PARITY_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: |
           mkdir -p artifacts/production-kit-parity
+          node --test ci/parity/upload-rehearsal.test.mjs | tee artifacts/production-kit-parity/upload-fixtures.tap
           result=0
           bash ci/xfs-qualification-fixture.sh node --import tsx ci/parity/production.mjs 2>&1 \
             | tee artifacts/production-kit-parity/runner.log || result=$?
