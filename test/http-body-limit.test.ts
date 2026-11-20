@@ -56,22 +56,18 @@ describe.each(Object.entries(implementations))("%s body cap contract", (_name, r
     },
   );
 
-  it.each(["4097", "1"])(
-    "cancels a refused upload without awaiting cancellation (length %s)",
-    async (length) => {
-      const cancel = vi.fn(() => new Promise<void>(() => {}));
-      const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
-        controller.enqueue(new Uint8Array(3000));
-        if (pull.mock.calls.length === 3) controller.close();
-      });
-      const body = new ReadableStream<Uint8Array>({ pull, cancel }, { highWaterMark: 0 });
-      expect((await run("action", upload(body, length))).status).toBe(413);
-      expect(cancel).toHaveBeenCalledTimes(1);
-      expect(pull).toHaveBeenCalledTimes(length === "4097" ? 0 : 2);
-      expect(body.locked).toBe(false);
-    },
-    2000,
-  );
+  it.each(["4097", "1"])("refuses without awaiting cancellation (length %s)", async (length) => {
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+      controller.enqueue(new Uint8Array(3000));
+      if (pull.mock.calls.length === 3) controller.close();
+    });
+    const body = new ReadableStream<Uint8Array>({ pull, cancel }, { highWaterMark: 0 });
+    expect((await run("action", upload(body, length))).status).toBe(413);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(pull).toHaveBeenCalledTimes(length === "4097" ? 0 : 2);
+    expect(body.locked).toBe(false);
+  });
 
   it("admits bodyless requests", async () => {
     const response = await run("action", upload(null));
