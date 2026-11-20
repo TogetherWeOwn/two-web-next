@@ -321,6 +321,11 @@ describe("Kit admin contrast", () => {
                 await control.inputValue(),
                 name === "event-new" || isTextLimit ? "" : value,
               );
+              if (isTextLimit) {
+                await control.press("Shift+Tab");
+                await page.keyboard.press("Tab");
+                assert.equal(await focusOutlineColor(control), "rgb(255, 156, 54)");
+              }
               if (name === "event-new-invalid") {
                 assert.equal(await control.getAttribute("aria-invalid"), "true");
                 assert.equal(
