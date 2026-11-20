@@ -211,6 +211,9 @@ A missing test alone is not a runtime bug. These are blocking findings:
   Preserve gates intentionally defined against the fork point or base-branch policy.
   For publish or artifact jobs, confirm keys, tokens, and secrets cannot reach uploaded
   artifacts or public output. Report a violation as Severe only with the exact job/line and failing path.
+  With `actions/upload-artifact` v4+, artifact names only need to be unique
+  within one run attempt; reruns may reuse them. Do not flag a missing
+  `run_attempt` in an artifact name unless two uploads in the same attempt collide.
 - **Generated assets:** `build:assets` generates budgeted outputs from
   `assets/`; see `ci/minify-assets.mjs` for the mapping and the authored CSS
   exceptions. Check generated output for drift or hand-edits, accounting for
