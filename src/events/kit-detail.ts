@@ -204,7 +204,8 @@ export interface KitEventDetailModel {
   isOngoing?: boolean;
   /** Elapsed at the server render instant, even if a review cannot format its dates. */
   isEnded: boolean;
-  lifecycle: { date: string; endTime: string; next: { key: string; date: string } | null } | null;
+  lifecycle: { date: string; endTime: string } | null;
+  endedNext: { key: string; date: string } | null;
   liveTime?: { asOf: string; staleAt: string };
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
@@ -388,11 +389,7 @@ function toLink(link: EventLink, now: Date): KitEventDetailLink {
   };
 }
 
-function detailLifecycle(
-  event: PublicEvent,
-  timeZone: string,
-  next: EventLink | null | undefined,
-): KitEventDetailModel["lifecycle"] {
+function detailLifecycle(event: PublicEvent, timeZone: string): KitEventDetailModel["lifecycle"] {
   if (!instantIso(event.startsAt) || !instantIso(event.endsAt)) return null;
   const date = new Intl.DateTimeFormat("en-GB", {
     timeZone,
@@ -407,17 +404,19 @@ function detailLifecycle(
   return {
     date: startDate,
     endTime: startDate === endDate ? endTime : `${endDate}, ${endTime}`,
-    next: next
-      ? {
-          key: next.eventKey,
-          date: new Intl.DateTimeFormat("en-GB", {
-            timeZone: isValidZone(next.timezone) ? next.timezone : "UTC",
-            weekday: "short",
-            day: "numeric",
-            month: "short",
-          }).format(next.startsAt),
-        }
-      : null,
+  };
+}
+
+function endedNext(next: EventLink | null | undefined): KitEventDetailModel["endedNext"] {
+  if (!next) return null;
+  return {
+    key: next.eventKey,
+    date: new Intl.DateTimeFormat("en-GB", {
+      timeZone: isValidZone(next.timezone) ? next.timezone : "UTC",
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+    }).format(next.startsAt),
   };
 }
 
@@ -678,7 +677,8 @@ export async function resolveKitEventDetail(
           isPast: event.status === "past",
           isOngoing: Boolean(liveTime),
           isEnded: ended,
-          lifecycle: ended ? detailLifecycle(event, zoneLabel, series?.upcoming) : null,
+          lifecycle: ended ? detailLifecycle(event, zoneLabel) : null,
+          endedNext: ended ? endedNext(series?.upcoming) : null,
           ...(liveTime ? { liveTime } : {}),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,

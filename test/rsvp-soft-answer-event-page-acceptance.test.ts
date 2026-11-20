@@ -161,6 +161,7 @@ function kitModel(over: Partial<KitEventDetailModel> = {}): KitEventDetailModel 
     isPast: false,
     isEnded: false,
     lifecycle: null,
+    endedNext: null,
     goingCount: 1,
     goingOccupancy: 1,
     capacity: 10,

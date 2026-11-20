@@ -22,7 +22,9 @@ let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrit
   $props();
 const facts = $derived(kitEventFacts(model));
 const lifecycle = $derived(model.lifecycle);
-const series = $derived(model.isEnded && model.series ? { ...model.series, next: null } : model.series);
+const series = $derived(
+  model.isEnded && model.series ? { ...model.series, next: null } : model.series,
+);
 const live = $derived(model.liveTime);
 const savedLive = $derived(
   live && !model.review && model.viewerMember && model.answer?.status === "going",
@@ -176,7 +178,7 @@ const detailIslands = $derived([
       <section class="seat-card" aria-labelledby="signup-record-heading" data-testid="event-past">
         <div class="seat-card-head"><h2 id="signup-record-heading">Sign-up record</h2></div>
         <p class="seat-card-note">No Echo for this one. {listedSignUpCountText(model.goingCount)}.</p>
-        {#if lifecycle?.next}<p><a href="/e/{lifecycle.next.key}">Next one: {lifecycle.next.date}</a></p>{/if}
+        {#if model.endedNext}<p><a href="/e/{model.endedNext.key}">Next one: {model.endedNext.date}</a></p>{/if}
       </section>
       {#if model.viewerModerator && model.review}{@html model.review.rsvp}{/if}
     {:else if savedLive}

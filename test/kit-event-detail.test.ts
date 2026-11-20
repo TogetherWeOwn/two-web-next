@@ -171,11 +171,13 @@ async function resolve(
   session: KitRequestSession = GUEST,
   joinResult: JoinResult | null = null,
   search = "",
+  now?: Date,
 ) {
   const seen: Record<string, string>[] = [];
   const outcome = await resolveKitEventDetail({
     key,
     search,
+    now,
     path: `/e/${key}`,
     env,
     session,
@@ -360,16 +362,28 @@ describe("member-detail review mode", () => {
         status: "published",
         startsAt: new Date(NaN),
         endsAt: new Date("2020-01-02T00:00:00Z"),
+        recurrenceIndex: 1,
       }),
       goingCount: 0,
       goingOccupancy: 0,
     };
+    const upcoming = NEIGHBORS.next!;
     const { outcome } = await resolve(
       KEY,
-      fakeStore({ event }),
+      {
+        ...fakeStore({ event, related: [] }),
+        seriesFn: async () => ({
+          hosts: [],
+          previous: null,
+          next: upcoming,
+          upcoming,
+          memberIds: [event.id, upcoming.id],
+        }),
+      },
       memberSession(MOD_ID, true),
       null,
       "?review=1",
+      new Date("2029-12-31T00:00:00Z"),
     );
     if (outcome.kind !== "ok") throw new Error(outcome.kind);
     const { model } = outcome;
@@ -382,6 +396,8 @@ describe("member-detail review mode", () => {
     const html = renderDetail(model as unknown as Record<string, unknown>);
     expect(html).toContain("Time unavailable");
     expect(html).toContain('aria-labelledby="signup-record-heading"');
+    expect(html).toContain(`href="/e/${upcoming.eventKey}">Next one: Fri 1 Feb</a>`);
+    expect(html.split(`href="/e/${upcoming.eventKey}"`)).toHaveLength(2);
   });
 });
 
