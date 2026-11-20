@@ -10,6 +10,7 @@ test("disposable migration workflows prepare the role before migrations", () => 
     [".github/workflows/e2e.yml", 1],
     [".github/workflows/kit-edit-regression-proof.yml", 1],
     [".github/workflows/discovery-title-evidence.yml", 1],
+    [".github/workflows/xfs-qualification.yml", 1],
   ]) {
     const source = read(path);
     const migrations = [...source.matchAll(/npm run db:migrate\b/g)];

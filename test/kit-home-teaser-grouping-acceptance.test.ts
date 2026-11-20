@@ -21,7 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "../src/home-copy";
+import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const webRequire = createRequire(join(root, "web/package.json"));
@@ -47,11 +47,17 @@ function baseData(overrides: Record<string, unknown> = {}): Record<string, unkno
     inviteUrl: INVITE_URL,
     appUrl: APP_URL,
     counts: { memberCount: 42, onlineCount: 7, ranks: [] },
+    countsSnapshot: {
+      memberCount: 42,
+      onlineCount: 7,
+      observedAt: NOW.toISOString(),
+      stale: false,
+    },
     upcomingEvents: [],
     eventsUnavailable: false,
     featured: [],
     imageHosts: "",
-    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
+    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO },
     ...overrides,
   };
 }

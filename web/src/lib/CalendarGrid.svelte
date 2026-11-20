@@ -2,6 +2,7 @@
 import {
   CALENDAR_MONTH_MAX,
   CALENDAR_MONTH_MIN,
+  EVENTS_CALENDAR_SCROLL_LABEL,
   WEEKDAY_HEADINGS,
   addCalendarMonth,
   calendarJumpUrl,
@@ -38,7 +39,7 @@ const scrollAttributes = { tabindex: 0 };
     {#if state.past}<input type="hidden" name="past" value="1" />{/if}{" "}
     <button class="btn" type="submit" data-testid="calendar-month-jump-submit">Go</button>
   </form>
-  <div role="region" aria-label="Events calendar; scroll horizontally to see all days" {...scrollAttributes} data-testid="events-calendar-scroll">
+  {#snippet monthTable()}
     <table data-testid="events-calendar-grid">
       <caption class="sr-only">{calendarMonthLabel(state.month)}</caption>
       <thead><tr>{#each WEEKDAY_HEADINGS as day}<th scope="col">{day}</th>{/each}</tr></thead>
@@ -64,5 +65,13 @@ const scrollAttributes = { tabindex: 0 };
         {/each}
       </tbody>
     </table>
+  {/snippet}
+  <div class="schedule-month-container">
+    <div class="schedule-month-frame">
+      <p class="schedule-month-hint">Scroll sideways for Fri–Sun →</p>
+      <div role="region" aria-label={EVENTS_CALENDAR_SCROLL_LABEL} {...scrollAttributes} data-testid="events-calendar-scroll">
+        {@render monthTable()}
+      </div>
+    </div>
   </div>
 </div>

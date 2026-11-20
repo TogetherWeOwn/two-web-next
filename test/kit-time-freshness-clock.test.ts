@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
-import type * as Clock from "../web/src/lib/time-freshness-clock";
+import type * as Clock from "../lib/time-freshness-clock";
 
 let snapshotNow: typeof Clock.snapshotNow;
 let timeSnapshotIsStale: typeof Clock.timeSnapshotIsStale;
@@ -15,9 +15,7 @@ beforeAll(async () => {
   try {
     const outfile = join(scratch, "clock.mjs");
     await build({
-      entryPoints: [
-        fileURLToPath(new URL("../web/src/lib/time-freshness-clock.ts", import.meta.url).href),
-      ],
+      entryPoints: [fileURLToPath(new URL("../lib/time-freshness-clock.ts", import.meta.url).href)],
       bundle: true,
       platform: "node",
       format: "esm",

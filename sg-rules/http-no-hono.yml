@@ -1,0 +1,95 @@
+id: http-no-hono
+language: TypeScript
+severity: error
+message: "The HTTP core must not import or re-export Hono"
+files:
+  - src/http/**/*.{ts,mts,cts,js,mjs,cjs}
+rule:
+  all:
+    - any:
+        - kind: string
+          regex: '^["\x27]hono(?:/[^"\x27]*)?["\x27]$'
+        - kind: template_string
+          regex: >-
+            (?xs)^ ` (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:h|\\(?:h|x68|u0068|u\{0*68\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:o|\\(?:o|x6[fF]|u006[fF]|u\{0*6[fF]\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:n|\\(?:x6[eE]|u006[eE]|u\{0*6[eE]\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:o|\\(?:o|x6[fF]|u006[fF]|u\{0*6[fF]\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:/|\\(?:/|x2[fF]|u002[fF]|u\{0*2[fF]\}))
+        # Match escaped spellings of the package and slash without banning
+        # unrelated escaped module names. Line continuations decode to nothing.
+        - kind: string
+          regex: >-
+            (?xs)^ ["\x27] (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:h|\\(?:h|150|x68|u0068|u\{0*68\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:o|\\(?:o|157|x6[fF]|u006[fF]|u\{0*6[fF]\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:n|\\(?:156|x6[eE]|u006[eE]|u\{0*6[eE]\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:o|\\(?:o|157|x6[fF]|u006[fF]|u\{0*6[fF]\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:(?:/|\\(?:/|0?57|x2[fF]|u002[fF]|u\{0*2[fF]\})).*)? ["\x27] $
+        - kind: template_string
+          regex: >-
+            (?xs)^ ` (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:h|\\(?:h|x68|u0068|u\{0*68\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:o|\\(?:o|x6[fF]|u006[fF]|u\{0*6[fF]\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:n|\\(?:x6[eE]|u006[eE]|u\{0*6[eE]\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:o|\\(?:o|x6[fF]|u006[fF]|u\{0*6[fF]\})) (?:\\(?:\r\n|[\r\n\x{2028}\x{2029}]))*
+            (?:(?:/|\\(?:/|x2[fF]|u002[fF]|u\{0*2[fF]\}))(?:\\.|[^`\\])*)? ` $
+          not:
+            has:
+              kind: template_substitution
+              stopBy: end
+  any:
+    - inside:
+        kind: import_statement
+        field: source
+    - inside:
+        kind: import_require_clause
+        field: source
+    - inside:
+        kind: export_statement
+        field: source
+    - matches: value-position
+      inside:
+        kind: arguments
+        stopBy:
+          not:
+            all:
+              - any:
+                  - kind: parenthesized_expression
+                  - kind: as_expression
+                  - kind: satisfies_expression
+                  - kind: non_null_expression
+                  - kind: type_assertion
+              - matches: value-position
+        inside:
+          kind: call_expression
+          has:
+            field: function
+            any:
+              - kind: import
+              - kind: identifier
+                regex: "^require$"
+              - kind: parenthesized_expression
+                has:
+                  kind: identifier
+                  regex: "^require$"
+                  stopBy:
+                    not:
+                      kind: parenthesized_expression
+utils:
+  value-position:
+    any:
+      - nthChild:
+          position: 1
+          ofRule:
+            not:
+              kind: comment
+      - nthChild:
+          position: 2
+          ofRule:
+            not:
+              kind: comment
+        inside:
+          kind: type_assertion
+          stopBy: neighbor

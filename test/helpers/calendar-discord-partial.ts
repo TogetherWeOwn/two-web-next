@@ -71,12 +71,17 @@ export async function partialHtml(
   // loginReturnTo from the request path). Pass the request path so fragment
   // turns stay committable; the default keeps the entry-page value.
   loginReturnTo = PARTIAL_PATH,
+  render: (
+    data: Parameters<typeof renderEventsHtml>[0],
+    headers: Record<string, string>,
+  ) => ReturnType<typeof renderEventsHtml> = renderEventsHtml,
+  now = new Date("2099-05-01T12:00:00Z"),
 ) {
   return (
-    await renderEventsHtml(
+    await render(
       {
         ...model,
-        now: new Date("2099-05-01T12:00:00Z"),
+        now,
         member: false,
         session: null,
         moderator: false,
@@ -93,10 +98,11 @@ export async function partialHtml(
 }
 
 export function discordNotices(html: string): string[] {
-  // Accept semantic status or alert wrappers, not an implementation-specific id
-  // or exact wording. This extracts rendered content, never source literals.
+  // Extract the rendered partial notice, not the live island status.
   return [
-    ...html.matchAll(/<(p|div|aside|section)\b[^>]*role="(?:status|alert)"[^>]*>([\s\S]*?)<\/\1>/g),
+    ...html.matchAll(
+      /<(p|div|aside|section)\b[^>]*data-testid="events-partial-source"[^>]*>([\s\S]*?)<\/\1>/g,
+    ),
   ]
     .map((match) => match[2]!)
     .filter((body) => MISSING_DISCORD.test(body.replace(/<[^>]*>/g, " ")));

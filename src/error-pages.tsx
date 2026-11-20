@@ -1,4 +1,5 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
+import { HtmlEscapedCallbackPhase, resolveCallback } from "hono/utils/html";
 import type { AdminWayBack } from "./admin-wayback";
 import type { SuggestedEvent } from "./events/suggestions";
 import { RecoveryShell } from "./pages";
@@ -119,6 +120,18 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
     </p>
   </ErrorShell>
 );
+
+// Same JSX serialization as c.html for callers without a Hono context.
+export async function renderNotFoundDocument(suggestions: SuggestedEvent[] = []): Promise<string> {
+  return String(
+    await resolveCallback(
+      <NotFoundPage suggestions={suggestions} />,
+      HtmlEscapedCallbackPhase.Stringify,
+      false,
+      {},
+    ),
+  );
+}
 
 const SupportReference: FC<{ reference?: string }> = ({ reference }) =>
   reference ? (

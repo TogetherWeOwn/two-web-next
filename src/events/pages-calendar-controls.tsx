@@ -10,6 +10,7 @@ import {
   EVENTS_PAST_ARCHIVE_LINK_TESTID,
   EVENTS_PAST_STATUS_COPY,
   EVENTS_PAST_STATUS_TESTID,
+  EVENTS_PARTIAL_COPY,
   EVENTS_SEARCH_CLEAR_TESTID,
   EVENTS_SEARCH_LABEL,
   EVENTS_SEARCH_PLACEHOLDER,
@@ -49,6 +50,7 @@ export const CalendarLiveRegions: FC<{
   pageUnreadable: boolean;
   searchMiss: boolean;
   gameFilter: string | null;
+  discordFailed: boolean;
 }> = ({
   state,
   pastCount,
@@ -58,6 +60,7 @@ export const CalendarLiveRegions: FC<{
   pageUnreadable,
   searchMiss,
   gameFilter,
+  discordFailed,
 }) => (
   <>
     <p role="status" class="sr-only" data-testid={EVENTS_VIEW_STATUS_TESTID}>
@@ -67,7 +70,7 @@ export const CalendarLiveRegions: FC<{
         swapped zone and a search leaves focus in the input. */}
     <p role="status" class="sr-only" data-testid={EVENTS_SEARCH_STATUS_TESTID}>
       {emptyState === "error"
-        ? ""
+        ? EVENTS_EMPTY_COPY.errorTitle
         : pageUnreadable
           ? upcomingEventsPageUnreadableCopy(state.page)
           : searching
@@ -83,6 +86,9 @@ export const CalendarLiveRegions: FC<{
             : gameFilter !== null
               ? eventsGameFilterCopy(gameFilter)
               : ""}
+      {discordFailed && emptyState === null && (hasSearchResults || state.view === "calendar")
+        ? ` ${EVENTS_PARTIAL_COPY.notice}`
+        : ""}
     </p>
     <p role="status" class="sr-only" data-testid={EVENTS_PAST_STATUS_TESTID}>
       {state.past && pastCount > 0 ? EVENTS_PAST_STATUS_COPY : ""}

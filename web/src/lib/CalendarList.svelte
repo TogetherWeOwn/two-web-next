@@ -3,6 +3,7 @@ import {
   EVENTS_LIST_HEADING_SR,
   EVENTS_LIST_TESTID,
   EVENTS_OUT_OF_RANGE_TESTID,
+  EVENTS_PAGE_UNREADABLE_TESTID,
   EVENTS_PAGER_FIRST_COPY,
   EVENTS_PAGER_FIRST_TESTID,
   EVENTS_PAGER_LABEL,
@@ -17,6 +18,7 @@ import {
   calendarUrl,
   upcomingEventsOutOfRangeCopy,
   upcomingEventsPageStatusCopy,
+  upcomingEventsPageUnreadableCopy,
 } from "../../../src/islands/contracts";
 import CalendarCard from "./CalendarCard.svelte";
 import CalendarPastDrawer from "./CalendarPastDrawer.svelte";
@@ -31,11 +33,12 @@ let {
   past,
   totalPages,
   outOfRange,
+  pageUnreadable = false,
   showPast,
   member,
   inviteUrl,
   loginReturnTo,
-}: CalendarListProps = $props();
+}: CalendarListProps & { pageUnreadable?: boolean } = $props();
 
 // First from any later or unavailable page; an out-of-range request therefore
 // recovers straight to page one. Previous clamps only out of range.
@@ -45,6 +48,8 @@ const previousPage = $derived(outOfRange ? Math.min(state.page - 1, totalPages) 
 <div>
   {#if outOfRange}
     <p role="status" data-testid={EVENTS_OUT_OF_RANGE_TESTID}>{upcomingEventsOutOfRangeCopy(state.page, totalPages)}</p>
+  {:else if pageUnreadable}
+    <p data-testid={EVENTS_PAGE_UNREADABLE_TESTID}>{upcomingEventsPageUnreadableCopy(state.page)}</p>
   {/if}
   <h2 class="sr-only">{EVENTS_LIST_HEADING_SR}</h2>
   <ul data-testid={EVENTS_LIST_TESTID}>
@@ -52,7 +57,7 @@ const previousPage = $derived(outOfRange ? Math.min(state.page - 1, totalPages) 
       <CalendarCard {e} isPast={false} {member} {inviteUrl} {loginReturnTo} />
     {/each}
   </ul>
-  {#if totalPages > 1 || outOfRange}
+  {#if totalPages > 1 || outOfRange || pageUnreadable}
     <nav aria-label={EVENTS_PAGER_LABEL} data-testid={EVENTS_PAGER_TESTID}>
       {#if state.page > 1}<a href={calendarUrl({ ...state, page: 1 })} data-testid={EVENTS_PAGER_FIRST_TESTID}>{EVENTS_PAGER_FIRST_COPY}</a>{" "}{/if}
       {#if state.page > 1}<a href={calendarUrl({ ...state, page: previousPage })} data-testid={EVENTS_PAGER_PREV_TESTID}>{EVENTS_PAGER_PREV_COPY}</a>{/if}{" "}

@@ -26,7 +26,7 @@ import { parseLeafModule } from "./leaf-css-parser.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const TRUST_HOSTS_PATH = "src/trust-hosts.ts";
-const HEADERS_PATH = "src/headers.ts";
+const HEADERS_PATH = "src/http/secure-headers.ts";
 const LEAF_MODULE_PATH = "src/leaf-critical-css.ts";
 // Same inputs, same order as ci/build-leaf-css.mjs SOURCES.
 const LEAF_SOURCES = [

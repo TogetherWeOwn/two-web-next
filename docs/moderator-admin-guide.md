@@ -792,6 +792,16 @@ an otherwise usable panel with empty counts.
 There is no member-access-log viewer, user editor, role/ban manager
 or join-attempt mutation screen here.
 
+## Reconcile a recorded intent (Kit fixture only)
+
+On the Kit fixture dashboard only, **Reconciliation** logs access before showing
+up to 100 open and 50 recently resolved intents. Exhausted retries can stay in
+the sync ledger without an intent; check Discord independently. Open a record,
+choose **Confirmed**, **Not applied**, or **Superseded**, then select **Stamp
+resolved**. This records your conclusion against the original key; it does not
+send or retry the change or change the queue. Resolved records are read-only.
+If a submission conflicts, review the record again.
+
 ## Member deletion requests
 
 Members can ask anytime to be removed, by DM to a moderator or through a

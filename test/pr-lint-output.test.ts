@@ -573,8 +573,8 @@ describe("unchanged convention policy and workflow gates", () => {
     expect(workflow).toContain("    name: pr-lint\n");
     expect(workflow.match(/^    runs-on: ubuntu-latest$/gm)).toHaveLength(2);
     expect(workflow).not.toMatch(/CI_OVERFLOW_RUNNER|two-selfhosted/);
-    expect(workflow.match(/^permissions:\n((?:  .*\n)+)/m)?.[1]).toBe(
-      "  contents: read\n  pull-requests: read\n",
+    expect(workflow.match(/^permissions:\n((?:  .*\n)+)/m)?.[1]).toMatch(
+      /^  contents: read\n  pull-requests: read # \S[^\n]*\n$/,
     );
   });
 });

@@ -391,18 +391,43 @@ describe("frozen Hono behavior without a database", () => {
     }
   });
 
-  it("answers a wrong-method RSVP write with 405 and the Allow header", async () => {
-    // Same-origin headers pass the transport guard so the method fallback
-    // below is what answers: 405 with Allow, without a DB read.
+  it.each([
+    { accept: undefined, json: false },
+    { accept: "text/html", json: false },
+    { accept: "application/json", json: true },
+  ])("preserves the explicit RSVP 405 for Accept $accept", async ({ accept, json }) => {
+    // Same-origin POST reaches the same fallback as the GET Accept goldens.
     const { env, dbRead } = fixture();
-    const res = await request("/events/spring-fete/rsvp", env, {
-      method: "POST",
-      headers: { origin: APP_URL },
-    });
+    const requestId = "0123456789abcdef";
+    const headers = new Headers({ origin: APP_URL, "cf-ray": requestId });
+    if (accept) headers.set("accept", accept);
+    const res = await request("/events/spring-fete/rsvp", env, { method: "POST", headers });
     expect(res.status).toBe(405);
     expect(res.headers.get("Allow")).toBe("PUT, DELETE");
+    expect(res.headers.get("Vary")).toBe("Accept");
+    expect(res.headers.get("X-Request-Id")).toBe(requestId);
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    if (json) {
+      expect(res.headers.get("Content-Type")).toBe("application/json");
+      expect(await res.text()).toBe(
+        JSON.stringify({ error: "method_not_allowed", request_id: requestId }),
+      );
+    } else {
+      expect(res.headers.get("Content-Type")).toBeNull();
+      expect(res.body).toBeNull();
+    }
     expect(dbRead).not.toHaveBeenCalled();
   });
+
+  it.each(["/e/spring-fete/rsvp", "/events/spring-fete/rsvp-pause"])(
+    "keeps unregistered OPTIONS %s a 404 without Allow",
+    async (path) => {
+      const { env } = fixture();
+      const res = await request(path, env, { method: "OPTIONS" });
+      expect(res.status).toBe(404);
+      expect(res.headers.get("Allow")).toBeNull();
+    },
+  );
 
   it("refuses the disabled agent ingress with 404 before any store read", async () => {
     const { env, dbRead } = fixture();

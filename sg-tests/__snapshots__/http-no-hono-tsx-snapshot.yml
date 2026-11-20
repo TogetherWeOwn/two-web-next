@@ -1,0 +1,78 @@
+id: http-no-hono-tsx
+snapshots:
+  import { Hono } from 'hono'; const node = <div />:
+    labels:
+      - source: "'hono'"
+        style: primary
+        start: 21
+        end: 27
+      - source: import { Hono } from 'hono';
+        style: secondary
+        start: 0
+        end: 28
+  import type { Context } from 'hono/context'; const node = <div />:
+    labels:
+      - source: "'hono/context'"
+        style: primary
+        start: 29
+        end: 43
+      - source: import type { Context } from 'hono/context';
+        style: secondary
+        start: 0
+        end: 44
+  export * from 'hono/cors':
+    labels:
+      - source: "'hono/cors'"
+        style: primary
+        start: 14
+        end: 25
+      - source: export * from 'hono/cors'
+        style: secondary
+        start: 0
+        end: 25
+  export type { Context } from 'hono':
+    labels:
+      - source: "'hono'"
+        style: primary
+        start: 29
+        end: 35
+      - source: export type { Context } from 'hono'
+        style: secondary
+        start: 0
+        end: 35
+  const load = () => import('hono/cors'):
+    labels:
+      - source: "'hono/cors'"
+        style: primary
+        start: 26
+        end: 37
+      - source: import
+        style: secondary
+        start: 19
+        end: 25
+      - source: import('hono/cors')
+        style: secondary
+        start: 19
+        end: 38
+      - source: ('hono/cors')
+        style: secondary
+        start: 25
+        end: 38
+  const hono = require('hono'):
+    labels:
+      - source: "'hono'"
+        style: primary
+        start: 21
+        end: 27
+      - source: require
+        style: secondary
+        start: 13
+        end: 20
+      - source: require('hono')
+        style: secondary
+        start: 13
+        end: 28
+      - source: ('hono')
+        style: secondary
+        start: 20
+        end: 28

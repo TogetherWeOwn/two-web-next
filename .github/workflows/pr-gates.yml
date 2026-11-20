@@ -30,7 +30,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: read # Read PR metadata and commit subjects for pr-lint.
 
 # A pull_request run cancels its superseded run; a manual dispatch never
 # cancels. Each push to main keeps its own group: pr-lint checks that push's

@@ -6,9 +6,9 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { dbFor } from "../admin/db";
 import { requestBodyLimit } from "../body-limit";
 import type { Session } from "../env";
-import { rateLimitExceeded, varyAccept } from "../errors";
+import { rateLimitExceeded } from "../errors";
+import { explicitMethodRefusal } from "../http/method";
 import { jsonRefusal } from "../json-refusal";
-import { acceptsJson } from "../media-type";
 import { RSVP_HONEY_FIELD, loginUrl, rsvpHoneyFilled } from "../islands/contracts";
 import { renderHtmlOutcome } from "../html-outcome";
 import { SESSION_COOKIE } from "../session-cookie";
@@ -225,9 +225,13 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
   });
 
   app.all("/events/:key/rsvp", (c) => {
-    c.header("Allow", "PUT, DELETE");
-    varyAccept(c);
-    if (acceptsJson(c.req.header("accept"))) return jsonRefusal(c, "method_not_allowed", 405);
-    return c.body(null, 405);
+    const { status, headers, error } = explicitMethodRefusal({
+      allow: "PUT, DELETE",
+      accept: c.req.header("accept"),
+      vary: c.res.headers.get("Vary"),
+    });
+    c.header("Allow", headers.Allow);
+    c.header("Vary", headers.Vary);
+    return error ? jsonRefusal(c, error, status) : c.body(null, status);
   });
 }

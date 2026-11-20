@@ -4,6 +4,7 @@ import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { EventMetadata, EventShare, withEventDetailHtml } from "../src/events/detail-leaves";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
+import { kitOpenSeat } from "../src/events/kit-seat-actions";
 import { ATTENDEE_PAGE_SIZE, type PublicEvent } from "../src/events/reads";
 import type { KitSession } from "../src/kit-session";
 
@@ -223,10 +224,39 @@ describe("shared event detail server leaves", () => {
     expect(forcedClosed.rsvp).not.toContain("<form");
     expect(forcedClosed.metadata).not.toContain('data-testid="event-spots-left"');
     vi.setSystemTime(new Date(0));
-    const forcedOpen = withEventDetailHtml({ ...ended.model, rsvpClosed: null }).detailHtml;
-    expect(forcedOpen.rsvp).toContain("data-rsvp-form");
-    expect(forcedOpen.rsvp).not.toContain("rsvp-closed");
-    expect(forcedOpen.metadata).toContain('data-testid="event-spots-left"');
+    const forcedOpen = withEventDetailHtml({ ...ended.model, rsvpClosed: null });
+    expect(forcedOpen.detailHtml.rsvp).toContain("data-rsvp-form");
+    expect(forcedOpen.detailHtml.rsvp).not.toContain("rsvp-closed");
+    // The open-seat card owns the initial count; the lineup can still refresh.
+    expect(forcedOpen.detailHtml.metadata).toContain('data-seat-refresh="initial"');
+    expect(forcedOpen.detailHtml.metadata).toContain('data-testid="event-spots-left"');
+    expect(kitOpenSeat(forcedOpen)).toBe("0 of 10 in");
+  });
+
+  it("projects open-seat copy and refresh markup from the same RSVP snapshot", async () => {
+    const { model } = await resolve(
+      {
+        startsAt: new Date("2030-01-10T21:00:00Z"),
+        goingCount: 1,
+        goingOccupancy: 2,
+      },
+      member,
+      "?attendees=2",
+    );
+    expect(kitOpenSeat(model)).toBe("2 of 10 in");
+    expect(model.detailHtml.rsvp).toContain(`/e/${KEY}/rsvp?attendees=2`);
+    expect(model.detailHtml.metadata).toContain('data-seat-refresh="initial"');
+    expect(model.detailHtml.metadata).toContain("data-spots>8 of 10 spots left</span>");
+    expect(kitOpenSeat({ ...model, capacity: null })).toBe("1 going");
+    expect(kitOpenSeat({ ...model, goingOccupancy: 10 })).toBeNull();
+    expect(kitOpenSeat({ ...model, rsvpOpen: false })).toBeNull();
+    expect(kitOpenSeat({ ...model, isOngoing: true })).toBeNull();
+    expect(kitOpenSeat({ ...model, rsvpClosed: "past" })).toBeNull();
+    expect(kitOpenSeat({ ...model, status: "cancelled" })).toBeNull();
+    expect(kitOpenSeat({ ...model, viewerMember: false })).toBeNull();
+    expect(
+      kitOpenSeat({ ...model, answer: { status: "going", syncedToDiscordAt: null } }),
+    ).toBeNull();
   });
 
   it("keeps review form-free and the cancelled hidden-row difference explicit", async () => {
