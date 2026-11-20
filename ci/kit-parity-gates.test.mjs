@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { summarizeJourneys } from "../e2e/staging/journey-ledger.mjs";
 import {
   LOGIN_JOURNEYS,
   PARITY_ROUTES,
@@ -1117,6 +1118,20 @@ test("executed-run coverage is GET/HEAD /events/past, GET/HEAD /events, GET/HEAD
   );
 });
 
+test("the Kit report accounts for 101 journeys without raising the staging cap", () => {
+  const report = (length) => ({
+    suites: [{ specs: [{ tests: Array.from({ length }, () => ({ status: "expected" })) }] }],
+  });
+  const kind = { reportKind: "kit-parity" };
+  const kit = summarizeJourneys(report(101), kind);
+  assert.equal(kit.verdict, "pass");
+  assert.equal(kit.counts.passed, 101);
+  for (const ledger of [summarizeJourneys(report(101)), summarizeJourneys(report(201), kind)]) {
+    assert.equal(ledger.verdict, "fail");
+    assert.equal(ledger.diagnostics[0]?.code, "report_too_large");
+  }
+});
+
 test("preview home fetch checks guest responses from both renderers", () => {
   const stub = `
 globalThis.fetch = async (input) => {
@@ -1156,11 +1171,8 @@ test("home parity exercises the guest contract and keeps write siblings uncovere
     "mutant own RSVP fails",
     "mutant shared-cache fails",
   ]) {
-    assert.equal(
-      journeys.find((journey) => journey.name === `unit: home ${name}`)?.status,
-      "passed",
-      name,
-    );
+    const status = journeys.find((journey) => journey.name === `unit: home ${name}`)?.status;
+    assert.equal(status, "passed", name);
   }
   assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/" }), true);
   assert.equal(isCoveredByExecutedRun({ method: "HEAD", path: "/" }), true);

@@ -22,15 +22,8 @@ import { sectionOf } from "./kit-section-contract.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 
 export const PARITY_ROUTES = [
-  // Home content is live and viewer-specific; compare structural guest
-  // contracts, not bytes from independent databases.
-  {
-    path: "/",
-    expectStatus: 200,
-    expectMarker: "manifest",
-    contract: "home",
-    compareSection: null,
-  },
+  // Compare guest structure, not live viewer-specific content.
+  { path: "/", expectStatus: 200, expectMarker: "manifest", contract: "home" },
   {
     path: "/events/past",
     expectStatus: 200,
@@ -2180,12 +2173,11 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // Exercise the home contract in CI even when preview credentials are absent.
   if (parseManifestEntries(manifestSource).some((entry) => entry.path === "/")) {
     const homeMarker = expectedMarkerFor(manifestSource, "/");
+    const join = '<a href="/auth/discord" data-testid="join">Join with Discord</a>';
     const homeShell =
-      `<html><head><link rel="canonical" href="https://next.togetherweown.com/"></head>` +
-      `<body><a class="skip-link" href="#main">Skip</a><nav aria-label="Primary"></nav>` +
-      `<main id="main"><h1 id="home-heading">The lobby is open.</h1>` +
-      `<a href="/auth/discord" data-testid="join">Join with Discord</a></main>` +
-      `<p>Welcome, guest</p></body></html>`;
+      `<link rel="canonical" href="https://next.togetherweown.com/">` +
+      `<a class="skip-link" href="#main">Skip</a><nav aria-label="Primary"></nav>` +
+      `<main id="main"><h1>The lobby is open.</h1>${join}</main><p>Welcome, guest</p>`;
     const checkHome = (html, cache = "private, no-store") =>
       assertRouteContract({
         label: "unit/home",
@@ -2198,45 +2190,23 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
         status: 200,
         expected: { status: 200, marker: homeMarker, contract: "home" },
       });
-    const fallbackShell = homeShell.replace(
-      '<a href="/auth/discord" data-testid="join">Join with Discord</a>',
-      '<a href="/discord" data-testid="discord-join">Join with an invite link</a>',
-    );
-    for (const [name, html] of [
+    const invite = '<a href="/discord" data-testid="discord-join">Join with an invite link</a>';
+    const fallbackShell = homeShell.replace(join, invite);
+    for (const [name, html, mutant, cache] of [
       ["good fixture", homeShell],
       ["invite fallback", fallbackShell],
-    ]) {
-      const failures = checkHome(html);
-      push(
-        `unit: home ${name} passes`,
-        failures.length ? "failed" : "passed",
-        failures.join("; ") || null,
-      );
-    }
-    for (const [name, html, cache] of [
-      ["heading", homeShell.replace("The lobby is open.", "Welcome"), "private, no-store"],
-      [
-        "join",
-        homeShell.replace('href="/auth/discord"', 'href="https://evil.test/"'),
-        "private, no-store",
-      ],
-      [
-        "invite fallback",
-        fallbackShell.replace('href="/discord"', 'href="/join"'),
-        "private, no-store",
-      ],
-      [
-        "own RSVP",
-        homeShell.replace("</main>", '<p data-testid="home-standing">Own RSVP</p></main>'),
-        "private, no-store",
-      ],
-      ["shared-cache", homeShell, "public, max-age=60"],
+      ["heading", homeShell.replace("The lobby is open.", "Welcome"), true],
+      ["join", homeShell.replace('href="/auth/discord"', 'href="https://evil.test/"'), true],
+      ["invite fallback", fallbackShell.replace('href="/discord"', 'href="/join"'), true],
+      ["own RSVP", `${homeShell}<p data-testid="home-standing">Own RSVP</p>`, true],
+      ["shared-cache", homeShell, true, "public, max-age=60"],
     ]) {
       const failures = checkHome(html, cache);
+      const passed = Boolean(failures.length) === Boolean(mutant);
       push(
-        `unit: home mutant ${name} fails`,
-        failures.length ? "passed" : "failed",
-        failures.length ? null : "mutant was NOT detected",
+        `unit: home ${mutant ? `mutant ${name} fails` : `${name} passes`}`,
+        passed ? "passed" : "failed",
+        passed ? null : failures.join("; ") || "mutant was NOT detected",
       );
     }
   }
