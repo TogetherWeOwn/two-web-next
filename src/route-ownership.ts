@@ -59,9 +59,9 @@ export interface RouteDecision {
 }
 
 // The archive page, events list, hot-zone heatmaps, member board and the
-// about/faq leaves render natively; privacy/rules/join/recovery/profile reads
-// and admin routes stay on Hono until their enablement is reviewed. Returning
-// an enabled entry to `enabled: false` restores Hono ownership as the rollback.
+// about/faq, join and recovery leaves render natively; privacy/rules/profile
+// reads and the remaining admin routes stay on Hono pending enablement review.
+// Returning an entry to `enabled: false` restores Hono ownership for rollback.
 // Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
@@ -86,7 +86,7 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
   { method: "GET", path: "/faq", enabled: true, reads: "public" },
-  { method: "GET", path: "/join", enabled: false, reads: "public" },
+  { method: "GET", path: "/join", enabled: true, reads: "public" },
   // Moderator dashboard: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
   // viewer. Off until the enablement review: the Hono panel answers meanwhile.
@@ -218,7 +218,7 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: true,
     reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
   },
-  { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
+  { method: "GET", path: "/auth/recover", enabled: true, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
   // rendering stays off until edit parity reviews enablement; write siblings
   // and the retired /members directory have no entries and stay Hono-owned.
