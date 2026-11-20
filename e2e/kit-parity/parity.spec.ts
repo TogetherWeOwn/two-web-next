@@ -327,6 +327,12 @@ async function closeCompactMenu(page: Page, menu: Awaited<ReturnType<typeof comp
       .click();
 }
 
+function headerSignOut(page: Page) {
+  return page
+    .locator('.header-account form[method="post"][action="/logout"] button[type="submit"]')
+    .and(page.getByRole("button", { name: "Sign out", exact: true }));
+}
+
 test("kit: capture synthetic non-member and account-hidden headers", async ({ browser }) => {
   test.setTimeout(120_000);
   requireGithubRunner();
@@ -379,7 +385,7 @@ test("kit: capture synthetic non-member and account-hidden headers", async ({ br
         if (state === "non-member") {
           await (await compactMenu(page))?.click();
           await expect(page.locator(".header-account .who")).toHaveText("Synthetic Viewer");
-          await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+          await expect(headerSignOut(page)).toBeVisible();
           await expect(page.locator('.main-nav a[href="/leaderboards/members"]')).toHaveCount(0);
         } else {
           await expect(page.locator(".header-account")).toHaveCount(0);
@@ -2499,7 +2505,7 @@ test("Kit member event detail captures the ended record at both widths", async (
       const record = page.getByRole("region", { name: "Sign-up record" });
       const menu = await compactMenu(page);
       await menu?.click();
-      await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+      await expect(headerSignOut(page)).toBeVisible();
       await closeCompactMenu(page, menu);
       await expect(page.getByRole("complementary", { name: "Your seat", exact: true })).toHaveCount(
         0,
