@@ -10,6 +10,7 @@ const families = [
   "events",
   "home",
   "events-join",
+  "events-home",
   "join",
   "ember-pages",
 ];
@@ -21,8 +22,10 @@ export function kitRouteFlagsForFamily(family) {
   return {
     archive: String(selection === "archive" || selection === "archive-static"),
     static: String(selection === "archive-static"),
-    events: String(selection === "events" || selection === "events-join" || ember),
-    home: String(selection === "home" || ember),
+    events: String(
+      selection === "events" || selection === "events-join" || selection === "events-home" || ember,
+    ),
+    home: String(selection === "home" || selection === "events-home" || ember),
     join: String(selection === "join" || selection === "events-join" || ember),
   };
 }
