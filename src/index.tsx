@@ -11,17 +11,15 @@ import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
 import {
   hashToken,
-  isValidSessionToken,
   newSessionToken,
   SESSION_TTL_SECONDS,
   type SessionStore,
   type Sql,
 } from "./sessions";
-import { refreshSessionRoles, roleRecheckConfigFor } from "./session-role-refresh";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
-import { issueSession as persistSession, storeForEnv } from "./http/session";
+import { issueSession as persistSession, lookupSession, storeForEnv } from "./http/session";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { operatorImageHosts } from "./config-warn";
@@ -312,18 +310,10 @@ async function readSession(
   c: Context<{ Bindings: Env }>,
   rotateToken = true,
 ): Promise<Session | null> {
-  const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (!isValidSessionToken(token)) return null;
-  // Anonymous public pages must not depend on session storage or its startup DDL.
-  const store = await storeFor(c);
-  const tokenHash = await hashToken(token);
-  const storedRow = await store.get(tokenHash);
-  if (!storedRow) return null;
-  // Mid-session role recheck: bits older than the cadence re-derive from
-  // Discord before they authorize (src/session-role-refresh.ts). A row that
-  // stopped being live during the refresh reads as no session.
-  const row = await refreshSessionRoles(store, tokenHash, storedRow, roleRecheckConfigFor(c.env));
-  if (!row) return null;
+  const signed = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+  const stored = await lookupSession(signed, c.env, () => storeFor(c));
+  if (!stored) return null;
+  const { token, store, row } = stored;
   // Abortable calendar fragments validate expiry/revocation but must not delete
   // the browser's current token: an aborted response cannot deliver a replacement.
   if (!rotateToken) {

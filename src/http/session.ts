@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "../db/connection";
 import type { Env } from "../env";
+import { refreshSessionRoles, roleRecheckConfigFor } from "../session-role-refresh";
 import {
   createMemorySessionStore,
   createPostgresSessionStore,
@@ -163,4 +164,23 @@ export async function issueSession(
     }
   });
   return token;
+}
+
+/** Resolve a verified bearer without rotating it. Anonymous reads never acquire a store. */
+export async function lookupSession(
+  token: unknown,
+  env: Env,
+  storeFor: () => Promise<SessionStore>,
+): Promise<{ token: string; store: SessionStore; row: DbSessionRow } | null> {
+  if (!isValidSessionToken(token)) return null;
+  // Anonymous public pages must not depend on session storage or its startup DDL.
+  const store = await storeFor();
+  const tokenHash = await hashToken(token);
+  const storedRow = await store.get(tokenHash);
+  if (!storedRow) return null;
+  // Mid-session role recheck: bits older than the cadence re-derive from
+  // Discord before they authorize (src/session-role-refresh.ts). A row that
+  // stopped being live during the refresh reads as no session.
+  const row = await refreshSessionRoles(store, tokenHash, storedRow, roleRecheckConfigFor(env));
+  return row ? { token, store, row } : null;
 }

@@ -8,7 +8,7 @@
 // guest/no-op BEFORE hashing or any session-store call, across every reader
 // of the signed session bearer:
 //
-// - Hono readSession (src/index.tsx) and fresh-login prior-token revoke (src/http/session.ts)
+// - Hono session lookup and fresh-login prior-token revoke (src/http/session.ts)
 // - auth-status fallback probe (src/auth-status.ts)
 // - Kit request session + Kit auth-status cookie writer (src/kit-session.ts)
 // - profile member gate (src/profiles/routes-gate.ts)
@@ -296,16 +296,17 @@ describe("admin guard", () => {
 
 describe("Hono readSession (homepage)", () => {
   it.each(MALFORMED)(
-    "malformed bearer renders as guest with no store read or rotation: %s",
+    "malformed bearer renders as guest without acquiring the store: %s",
     async (_label, value) => {
       mockDiscord();
       const spy = spyStore();
-      const res = await app.request(
-        "/",
-        { headers: { cookie: await pair(value) } },
-        envWith(spy.store),
-      );
+      const env = envWith(spy.store);
+      const acquire = vi.fn(() => spy.store);
+      Object.defineProperty(env, "SESSION_STORE", { get: acquire });
+      const res = await app.request("/", { headers: { cookie: await pair(value) } }, env);
       expect(res.status).toBe(200);
+      expect(await res.text()).toContain('data-testid="join"');
+      expect(acquire).not.toHaveBeenCalled();
       expect(spy.readCalls()).toEqual([]);
     },
   );
