@@ -88,15 +88,25 @@ test("pre-hook assets require GET/HEAD, exact 304, no cookies and the reviewed s
   const hono = recording({ GET: miss, HEAD: miss, [exact]: miss });
   const compare = (vectors) =>
     comparePreHookAssets(hono, recording(vectors), [path], Object.keys(safe), csp);
-  assert.equal(compare({ GET: row(200), HEAD: row(200), [exact]: row(304) }).failures.length, 0);
-  const bad = { GET: row(404, {}), [exact]: row(200, dynamic, ["fixture"]) };
+  const request = { headers: { "if-none-match": '"asset"' } };
+  const get = row(200, { ...safe, etag: '"asset"' });
+  const good = { GET: get, HEAD: row(200), [exact]: { ...row(304), request } };
+  assert.equal(compare(good).failures.length, 0);
+  assert.equal(compare({ ...good, GET: row(200) }).failures[0]?.field, "request.if-none-match");
+  const bad = {
+    GET: row(404, { etag: '"asset"' }),
+    [exact]: { ...row(200, dynamic, ["fixture"]), request },
+  };
   const fields = ["status", `headers.${name}`, "headers.x-frame-options", "missing"];
   assert.deepEqual(
     compare(bad).failures.map(({ field }) => field),
     [...fields, "status", "setCookies", `headers.${name}`],
   );
   delete dynamic[name];
-  assert.equal(compare(bad).failures.at(-1)?.field, `headers.${name}`);
+  assert.deepEqual(
+    compare(good).failures.map(({ field }) => field),
+    Array(3).fill(`headers.${name}`),
+  );
 });
 
 const inventory = JSON.parse(

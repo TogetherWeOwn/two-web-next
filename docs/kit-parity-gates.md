@@ -250,19 +250,12 @@ take no exceptions.
 
 ### All-off production configuration replay
 
-The [XFS qualification workflow](../.github/workflows/xfs-qualification.yml)
-replays the exact head with production vars on pure Hono and the installed Kit
-facade. Requests use the production origin without contacting it, disposable
-Postgres clones, local assets and a stubbed outbound client. The artifact keeps
-both recordings, config and installed-output hashes, the comparison and logs.
-Fixture admission failures and unapproved route drift fail the run.
+[XFS qualification](../.github/workflows/xfs-qualification.yml) replays the exact head and production origin on pure Hono and the installed Kit facade, using local assets, disposable Postgres and outbound stubs.
+It retains both recordings, config/output hashes, the comparison and logs. Fixture admission failures and unapproved drift fail the run.
 
-Kit-only `/_app` assets have their own status, cookie and header checks. The
-separate fault-injected fatal proof does not use the all-off configuration.
-This is local instrumentation, not an uploaded Worker: it does not cover live
-Hyperdrive, queues, version metadata, tail delivery or edge routing. There is
-no populated bot reader or Discord events binding, so bot-backed counts/ranks
-and populated Discord event-binding responses are also outside this proof.
+Kit-only `/_app` assets have separate status, validator, cookie and header checks. The separate fatal proof does not fault-inject the all-off configuration.
+
+No Worker is uploaded. Live Hyperdrive, queues, version metadata, tail delivery, edge routing, bot-backed counts/ranks and populated Discord event-binding responses are not verified.
 
 ## Journey gates (`ci/kit-parity-gates.mjs`)
 

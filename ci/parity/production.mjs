@@ -48,18 +48,11 @@ export function productionTargets(root, kit) {
     assert.equal(assets.run_worker_first, true);
   }
   // Select only runtime inputs consumed by the local recording harness.
-  const local = (
-    { compatibility_date, compatibility_flags, assets, queues, vars },
-    main,
-    directory,
-  ) => ({
-    main,
-    compatibility_date,
-    compatibility_flags,
-    assets: { ...assets, directory },
-    queues,
-    vars,
-  });
+  const local = (config, main, directory) => {
+    const { compatibility_date, compatibility_flags, queues, vars } = config;
+    const assets = { ...config.assets, directory };
+    return { main, compatibility_date, compatibility_flags, assets, queues, vars };
+  };
   return {
     flags,
     hono: local(hono, join(repo, hono.main), join(repo, hono.assets.directory)),
@@ -126,6 +119,11 @@ export function comparePreHookAssets(hono, kit, paths, headerNames, csp) {
         continue;
       }
       if (required[id] && after.status !== required[id]) fail("status", required[id], after.status);
+      if (id === "GET if-none-match:exact") {
+        const etag = b.GET?.response.headers.etag;
+        const supplied = b[id].request?.headers["if-none-match"];
+        if (!etag || etag !== supplied) fail("request.if-none-match", etag, supplied);
+      }
       if (after.setCookies?.length !== 0) fail("setCookies", 0, after.setCookies?.length);
       rows.push({ key, path, hono: before.status, kit: after.status });
       for (const name of headerNames) {
