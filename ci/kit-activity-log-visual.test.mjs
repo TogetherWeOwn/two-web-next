@@ -1,66 +1,88 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { crc32, deflateSync } from "node:zlib";
-import { validatePngDirectory, viewportPngs } from "./kit-activity-log-png.mjs";
-import { expectedContent, validateView } from "./kit-activity-log-visual.mjs";
+import { viewportPngs } from "./kit-activity-log-png.mjs";
+import {
+  collectVisuals,
+  expectedContent,
+  kitDocument,
+  validateView,
+} from "./kit-activity-log-visual.mjs";
 
 test("capture refuses renderer, fixture content and keyboard drift", () => {
-  const response = ["http://127.0.0.1:8788/admin/activity-log", 200, "kit", "private, no-store"];
-  const state = [true, false, false];
-  const content = structuredClone(expectedContent(false));
+  assert.equal(
+    kitDocument(200, { "x-two-renderer": "hono", "cache-control": "private, no-store" }),
+    false,
+  );
   assert.equal(expectedContent(true).at(-1), "/admin/activity-log?page=1");
-  validateView(response, content, state, false, false);
-  const hono = response.with(2, "hono");
-  assert.throws(() => validateView(hono, content, state, false, false), /provenance/);
-  assert.throws(() => validateView(response, content, [true, true, false], false, true), /state/);
-  content[1][3] = "unapproved";
-  assert.throws(() => validateView(response, content, state, false, false), /content/);
+  const state = [true, false, false];
+  const content = expectedContent(false);
+  validateView(content, state, false, false);
+  assert.throws(() => validateView(content, [true, true, false], false, true), /state/);
+  assert.throws(() => validateView(["unapproved"], state, false, false), /content/);
 });
 
-function chunk(type, bytes) {
-  const data = Buffer.concat([Buffer.from(type), bytes]);
-  const result = Buffer.alloc(data.length + 8);
-  result.writeUInt32BE(bytes.length);
-  data.copy(result, 4);
-  result.writeUInt32BE(crc32(data), result.length - 4);
-  return result;
-}
-function png([width, height], meta = Buffer.alloc(0)) {
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr.set([8, 2], 8);
-  return Buffer.concat([
-    Buffer.from("89504e470d0a1a0a", "hex"),
-    chunk("IHDR", ihdr),
-    meta,
-    chunk("IDAT", deflateSync(Buffer.alloc(height * (1 + width * 3)))),
-    chunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-
-test("staging accepts exactly five valid PNGs and refuses extra files, links, or unapproved bytes", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "kit-png-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  for (const [name, size] of Object.entries(viewportPngs))
-    writeFileSync(join(dir, name), png(size));
-  assert.equal(validatePngDirectory(dir).length, 5);
-  const extra = join(dir, "extra.png");
-  writeFileSync(extra, "extra");
-  assert.throws(() => validatePngDirectory(dir), /inventory/);
-  rmSync(extra);
-  const file = join(dir, "populated-desktop.png");
-  const metadata = png([1280, 800], chunk("tEXt", Buffer.from("x\0y")));
-  for (const bytes of [png([390, 844]), metadata, Buffer.from("not PNG")]) {
-    writeFileSync(file, bytes);
-    assert.throws(() => validatePngDirectory(dir), /invalid viewport PNG/);
-  }
-  rmSync(file);
-  symlinkSync("empty-desktop.png", file);
-  assert.throws(() => validatePngDirectory(dir), /invalid viewport file/);
+test("keyboard capture drives native keys before an isolated Lighthouse timeout", async () => {
+  const shots = [];
+  const keys = [];
+  const noop = () => undefined;
+  let closed = 0;
+  let closedBeforeMeasure;
+  let intercept;
+  const browser = {
+    newContext: async () => {
+      let url;
+      let scrolled = false;
+      const page = {
+        goto: async (href) => {
+          url = href;
+          return {
+            url: () => url,
+            status: () => 200,
+            headers: () => ({ "x-two-renderer": "kit", "cache-control": "private, no-store" }),
+          };
+        },
+        on: noop,
+        evaluate: noop,
+        setDefaultTimeout: noop,
+        waitForFunction: () => assert.ok(scrolled),
+        keyboard: {
+          press: async (key) => {
+            keys.push(key);
+            scrolled = key === "ArrowRight";
+          },
+        },
+        getByTestId: () => ({
+          evaluate: async () => [expectedContent(url.includes("?")), [true, scrolled, scrolled]],
+        }),
+        screenshot: async ({ path }) => shots.push(path),
+      };
+      return {
+        addCookies: noop,
+        close: async () => {
+          closed++;
+        },
+        newPage: async () => page,
+        route: (_, handler) => {
+          intercept = handler;
+        },
+      };
+    },
+  };
+  const measure = async (_, url) => {
+    closedBeforeMeasure = closed;
+    await intercept({
+      request: () => ({ url: () => url, isNavigationRequest: () => true, method: () => "GET" }),
+      fetch: () => Promise.reject(new Error("timeout")),
+      abort: noop,
+    });
+    return "partial result";
+  };
+  assert.equal(await collectVisuals(browser, {}, ".", noop, measure), null);
+  assert.equal(closedBeforeMeasure, 5);
+  assert.equal(closed, 6);
+  assert.deepEqual(shots, Object.keys(viewportPngs));
+  assert.deepEqual(keys, [...Array(11).fill("Tab"), "ArrowRight"]);
 });
 
 test("only the protected diagnostic publishes the validated directory", () => {

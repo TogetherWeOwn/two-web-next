@@ -6,11 +6,9 @@ import { chromium } from "@playwright/test";
 import postgres from "postgres";
 import { requireGithubRunner, requireTestDatabase } from "../e2e/ci-only.mjs";
 import { routeA11y, routeLighthouse } from "./kit-activity-log-metrics.mjs";
-import { collectVisuals } from "./kit-activity-log-visual.mjs";
+import { collectVisuals, origin, path } from "./kit-activity-log-visual.mjs";
 
 const cdpPort = 9222;
-const origin = "http://127.0.0.1:8788";
-const path = "/admin/activity-log";
 const mod = "900000000000009301";
 const member = "900000000000009302";
 const [a, b] = ["900000000000009311", "900000000000009312"];
@@ -130,19 +128,22 @@ async function main() {
       "audit:subjects",
     );
     await context.close();
-
-    // Only the fixed dataset seeded above and the original moderator session may render.
     const record = (text) => appendFileSync(join(process.env.TMPDIR, "metrics.txt"), `${text}\n`);
     const session = { name: cookie, value: moderatorToken, domain, path: "/", secure: true };
-    const evidence = async (page, name, url) => {
-      if (!name.endsWith("desktop.png")) return;
+    const audit = async (page, name) => {
       const a11y = await routeA11y(page);
       record(`${name} ${a11y}`);
       ok(a11y.startsWith("a11y: PASS "), "visual:a11y");
-      if (name.startsWith("populated"))
-        record(`${name} ${await routeLighthouse(page, cdpPort, url)}`);
     };
-    await collectVisuals(browser, session, join(process.env.TMPDIR, "screenshots"), evidence);
+    const measure = routeLighthouse.bind(null, cdpPort);
+    const lighthouse = await collectVisuals(
+      browser,
+      session,
+      join(process.env.TMPDIR, "screenshots"),
+      audit,
+      measure,
+    );
+    record(`populated-desktop.png ${lighthouse ?? "lighthouse: unavailable"}`);
   } finally {
     try {
       await browser?.close();

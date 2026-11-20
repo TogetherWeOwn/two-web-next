@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { viewportPngs } from "./kit-activity-log-png.mjs";
 
-const origin = "http://127.0.0.1:8788";
-const path = "/admin/activity-log";
+export const origin = "http://127.0.0.1:8788";
+export const path = "/admin/activity-log";
 const subject = "zz-no-activity";
 const urlFor = (empty) => `${origin}${path}${empty ? `?subject=${subject}` : ""}`;
 const shell = "Skip to content TWO admin Events · Featured · Join attempts · Activity log · Site";
@@ -19,16 +19,19 @@ const rows = Array.from({ length: 50 }, (_, index) => {
 
 export function expectedContent(empty) {
   const cells = empty ? ["No activity matches these filters."] : rows;
-  const actions = empty ? "Clear filters Page 1" : "Page 1 Next";
   const table = cells.join(" ").replaceAll("|", " ");
+  const actions = empty ? "Clear filters Page 1" : "Page 1 Next";
   const text = `${shell} ${intro} ${form} Who What When (UTC) Subject ${table} ${actions} Together We Own · moderators only`;
   return [text, cells, [empty ? subject : "", ""], `${path}?page=${empty ? 1 : 2}`];
 }
 
-export function validateView(response, content, state, empty, keyboard) {
+export const kitDocument = (status, headers) =>
+  status === 200 &&
+  headers["x-two-renderer"] === "kit" &&
+  headers["cache-control"] === "private, no-store";
+
+export function validateView(content, state, empty, keyboard) {
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  if (!same(response, [urlFor(empty), 200, "kit", "private, no-store"]))
-    throw new Error("visual provenance drift");
   if (!same(content, expectedContent(empty))) throw new Error("visual content drift");
   if (!same(state, [true, keyboard, keyboard])) throw new Error("visual state drift");
 }
@@ -41,13 +44,16 @@ async function serve(route, url) {
   const file = req.url().startsWith(origin) ? req.url().slice(origin.length) : "";
   const document = req.isNavigationRequest();
   if (req.method() !== "GET" || !(document ? req.url() === url : asset.test(file))) return false;
-  const res = await route.fetch({ maxRedirects: 0, timeout: 5_000 });
+  const res = await route.fetch({ maxRedirects: 0, timeout: 5_000 }).catch(() => null);
+  if (!res) return null;
   try {
     if (res.status() !== 200) return false;
-    if (!document) {
-      const pinned = await readFile(`web/.svelte-kit/cloudflare${file}`);
-      if (!pinned.equals(await res.body())) return false;
-    }
+    if (
+      document
+        ? !kitDocument(res.status(), res.headers())
+        : !(await readFile(`web/.svelte-kit/cloudflare${file}`)).equals(await res.body())
+    )
+      return false;
     await route.fulfill({ response: res });
     return true;
   } finally {
@@ -56,7 +62,7 @@ async function serve(route, url) {
 }
 
 const regionId = "activity-log-table-scroll";
-async function inspect(page, nav, empty, keyboard) {
+async function inspect(page, empty, keyboard) {
   const [content, state] = await page.getByTestId(regionId).evaluate((el) => {
     const text = (node) => node.innerText.replace(/\s+/g, " ").trim();
     const all = (selector, mapper) => Array.from(document.querySelectorAll(selector), mapper);
@@ -79,54 +85,71 @@ async function inspect(page, nav, empty, keyboard) {
       [shape, focus, el.scrollLeft > 0],
     ];
   });
-  validateView(nav, content, state, empty, keyboard);
+  validateView(content, state, empty, keyboard);
 }
 
-export async function collectVisuals(browser, session, dir, audit) {
-  for (const [name, [width, height]] of Object.entries(viewportPngs)) {
+async function guardedPage(browser, session, [width, height], url, render, reportOnly) {
+  const viewport = { width, height };
+  const context = await browser.newContext({
+    viewport,
+    serviceWorkers: "block",
+    javaScriptEnabled: false,
+  });
+  let violation = false;
+  let unavailable = false;
+  let result;
+  try {
+    await context.addCookies([session]);
+    await context.route("**/*", async (route) => {
+      const verified = await serve(route, url).catch(() => false);
+      if (verified) return;
+      violation ||= verified === false || !reportOnly;
+      unavailable ||= verified === null;
+      await route.abort();
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(5_000);
+    const markViolation = () => {
+      violation = true;
+    };
+    page.on("pageerror", markViolation);
+    if (!reportOnly) page.on("console", markViolation);
+    const response = await page.goto(url).catch(() => null);
+    if (
+      !unavailable &&
+      (!response || response.url() !== url || !kitDocument(response.status(), response.headers()))
+    )
+      throw new Error("visual provenance drift");
+    if (!unavailable) result = await render(page);
+  } finally {
+    await context.close();
+  }
+  if (violation) throw new Error("unexpected visual diagnostic");
+  return unavailable ? null : result;
+}
+
+export async function collectVisuals(browser, session, dir, audit, measure) {
+  const views = { ...viewportPngs, lighthouse: viewportPngs["populated-desktop.png"] };
+  for (const [name, size] of Object.entries(views)) {
+    const reportOnly = name === "lighthouse";
     const empty = name.startsWith("empty-");
     const keyboard = name === "keyboard-mobile.png";
     const url = urlFor(empty);
-    const context = await browser.newContext({
-      viewport: { width, height },
-      serviceWorkers: "block",
-      javaScriptEnabled: false,
-    });
-    let unexpected = false;
-    try {
-      await context.addCookies([session]);
-      await context.route("**/*", async (route) => {
-        if (await serve(route, url).catch(() => false)) return;
-        unexpected = true;
-        await route.abort();
-      });
-      const page = await context.newPage();
-      page.setDefaultTimeout(5_000);
-      const drift = () => {
-        unexpected = true;
-      };
-      page.on("pageerror", drift);
-      page.on("console", drift);
-      let nav;
-      page.on("response", (res) => {
-        const { "x-two-renderer": renderer, "cache-control": cache } = res.headers();
-        if (res.request().isNavigationRequest()) nav = [res.url(), res.status(), renderer, cache];
-      });
-      await page.goto(url);
+    const render = async (page) => {
       await page.evaluate(() => document.fonts.ready.then(() => true));
-      await inspect(page, nav, empty, false);
+      await inspect(page, empty, false);
+      if (reportOnly) return measure(page, url).catch(() => null);
       if (keyboard) {
         for (let n = 0; n < 11; n++) await page.keyboard.press("Tab");
         await page.keyboard.press("ArrowRight");
         await page.waitForFunction(() => document.activeElement.scrollLeft > 0);
+        await inspect(page, empty, true);
       }
-      await inspect(page, nav, empty, keyboard);
       await page.screenshot({ path: join(dir, name), animations: "disabled" });
-      await audit(page, name, url);
-      await inspect(page, nav, empty, keyboard);
-    } finally {
-      await context.close();
-    }
-    if (unexpected) throw new Error("unexpected visual diagnostic");
+      if (name.endsWith("desktop.png")) await audit(page, name);
+      await inspect(page, empty, keyboard);
+    };
+    const result = await guardedPage(browser, session, size, url, render, reportOnly);
+    if (reportOnly) return result;
   }
 }

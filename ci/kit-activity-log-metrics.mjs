@@ -12,7 +12,7 @@ export async function routeA11y(page) {
   return `a11y: ${violations || incomplete ? "FAIL" : "PASS"} violations=${violations} incomplete=${incomplete}`;
 }
 
-export async function routeLighthouse(page, port, url) {
+export async function routeLighthouse(port, page, url) {
   // Use the existing guarded target and a log-only Lighthouse audit (no filmstrip or report file).
   const unavailable = "lighthouse: unavailable";
   const audit = "total-byte-weight";
