@@ -458,6 +458,30 @@ test("Kit fixture denies public JavaScript even with hydration enabled", async (
   );
 });
 
+test("Kit fixture serves the menu island only with explicit opt-in", async () => {
+  const path = "/islands/site-header-menu.js";
+  const options = { page: "<p>Fixture</p>", javaScriptEnabled: true };
+  await assert.rejects(
+    withKitOfflineBrowser(options, async ({ page }) => {
+      await page.evaluate((url) => fetch(url).catch(() => null), path);
+    }),
+    /\/islands\/site-header-menu\.js/,
+  );
+
+  const body = await readFile(new URL(`../public${path}`, import.meta.url), "utf8");
+  await withKitOfflineBrowser({ ...options, headerMenu: true }, async ({ page }) => {
+    const response = await page.evaluate(async (url) => {
+      const asset = await fetch(url);
+      return {
+        status: asset.status,
+        type: asset.headers.get("content-type"),
+        body: await asset.text(),
+      };
+    }, path);
+    assert.deepEqual(response, { status: 200, type: "text/javascript", body });
+  });
+});
+
 test("Kit fixture renders query data and same-origin static assets", async () => {
   await withKitOfflineBrowser(
     {
