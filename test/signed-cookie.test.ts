@@ -92,6 +92,18 @@ describe("signed cookie wire compatibility", () => {
       sameSite: "lax",
       encode: expect.any(Function),
     });
-    expect(await signedCookieHeader(name, "value", secret, 0)).toContain("; Max-Age=0;");
+  });
+
+  it.each([0, 34_560_000])("preserves Max-Age=%i on both writers", async (maxAge) => {
+    const set = vi.fn<Parameters<typeof setSignedEventCookie>[0]["set"]>();
+    expect(await signedCookieHeader(name, "value", secret, maxAge)).toContain(
+      `; Max-Age=${maxAge};`,
+    );
+    await setSignedEventCookie({ set }, name, "value", secret, maxAge);
+    expect(set).toHaveBeenCalledExactlyOnceWith(
+      name,
+      expect.any(String),
+      expect.objectContaining({ maxAge }),
+    );
   });
 });
