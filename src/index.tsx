@@ -21,7 +21,7 @@ import { refreshSessionRoles, roleRecheckConfigFor } from "./session-role-refres
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
-import { storeForEnv, withFreshLoginUserLock } from "./http/session";
+import { issueSession as persistSession, storeForEnv } from "./http/session";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { operatorImageHosts } from "./config-warn";
@@ -222,8 +222,7 @@ async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   return storeForEnv(c.env);
 }
 
-export { FRESH_LOGIN_LOCK_WAIT_MS } from "./http/session";
-export { withFreshLoginUserLock };
+export { FRESH_LOGIN_LOCK_WAIT_MS, withFreshLoginUserLock } from "./http/session";
 
 // Keep the existing Kit import until its separate session cutover.
 export { storeForEnv };
@@ -290,53 +289,14 @@ async function issueSession(
       exception: (err as Error)?.constructor?.name ?? "unknown",
     });
   }
-  const token = newSessionToken();
-  const tokenHash = await hashToken(token);
-  const replacement = {
-    tokenHash,
-    ...row,
-    expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
-  };
-  const prior = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  // Malformed pre-login bearers never reach the store: the shared
-  // minted-shape gate rejects them before hashing (malformed prior =>
-  // create, never replace).
-  const priorHash = isValidSessionToken(prior) ? await hashToken(prior) : null;
-  // Serialize the insert+sweep per user (see withFreshLoginUserLock): the
-  // second overlapping issuance waits for the first to finish, so the final
-  // state equals a serialized order — newest live, previous revoked. The wait
-  // is bounded: a holder stuck past FRESH_LOGIN_LOCK_WAIT_MS (for example a
-  // disconnect-cancelled callback that never settles its tail) no longer wedges
-  // later logins; the overlap stays fail-closed. A sweep failure still
-  // completes sign-in (fail-open wins over strict newest-wins: both stay live
-  // rather than failing the login). A degenerate empty user id runs unlocked;
-  // Discord ids are never empty.
-  const runLocked =
-    typeof row.userId === "string" && row.userId
-      ? (fn: () => Promise<void>) => withFreshLoginUserLock(row.userId, fn)
-      : (fn: () => Promise<void>) => fn();
-  await runLocked(async () => {
-    // Fresh authentication revokes the presented pre-login/pre-join token
-    // atomically with the insert (a failed insert leaves the prior session
-    // intact; see store.replace). The token is revoked by hash because it can
-    // belong to a different user (shared terminal).
-    if (priorHash) {
-      await store.replace(priorHash, replacement);
-    } else {
-      await store.create(replacement);
-    }
-    // Session fixation: additionally revoke every other live session for this
-    // user so only the newest survives. The fresh row already exists: a sweep
-    // failure warns and sign-in still succeeds (fail-open on the sweep, never
-    // a logout-on-login). Token-hash-only.
-    try {
-      await store.revokeUserSessions(row.userId, tokenHash);
-    } catch (err) {
+  const token = await persistSession(store, row, {
+    readPriorToken: () => getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE),
+    warnSweepFailure: (err) => {
       console.warn("prior session sweep failed", {
         request_id: c.get("requestId"),
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
-    }
+    },
   });
   await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
     path: "/",
