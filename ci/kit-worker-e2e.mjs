@@ -12,6 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { expectedMarkerFor } from "./kit-parity-gates.mjs";
+import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -49,8 +50,9 @@ function tail(value, limit = 4000) {
   return value.length > limit ? `…${value.slice(-limit)}` : value;
 }
 
-function listen(child, origin, getLog, headers, timeoutMs = 60_000) {
+function listen(child, origin, getLog, timeoutMs = 60_000) {
   const started = Date.now();
+  let lastStatus = "no response";
   return new Promise((resolveReady, reject) => {
     const attempt = async () => {
       if (child.exitCode !== null) {
@@ -63,10 +65,11 @@ function listen(child, origin, getLog, headers, timeoutMs = 60_000) {
       }
       try {
         const response = await fetch(`${origin}/favicon.ico`, {
-          headers,
           redirect: "manual",
           signal: AbortSignal.timeout(1_000),
         });
+        lastStatus = `HTTP ${response.status}`;
+        await response.body?.cancel();
         if (response.ok) {
           resolveReady();
           return;
@@ -77,7 +80,7 @@ function listen(child, origin, getLog, headers, timeoutMs = 60_000) {
       if (Date.now() - started >= timeoutMs) {
         reject(
           new Error(
-            `Timed out waiting for the generated Kit Worker. Worker output:\n${tail(getLog())}`,
+            `Timed out waiting for ${origin}/favicon.ico (${lastStatus}). Worker output:\n${tail(getLog())}`,
           ),
         );
         return;
@@ -281,28 +284,39 @@ try {
   }
   console.log("PASS generated Worker content-leaf zero-stylesheet contract");
 
-  // Route the real staging selector in a local Worker with no DB or session
-  // bindings. Only the Host header uses the staging authority; connections
-  // stay on loopback and redirects are never followed.
-  const stagingAppUrl = "https://next.togetherweown.com";
-  const stagingHeaders = { host: new URL(stagingAppUrl).host };
-  const staging = await startWorker("kit-static", worker, assets, undefined, {
-    APP_URL: stagingAppUrl,
+  // The host check requires the Request URL and Host header to agree with
+  // APP_URL. Rewrite both inside the fixture, then call the generated Worker
+  // directly so the HTTP connection never leaves loopback.
+  const stagingEntry = join(scratch, "kit-static.mjs");
+  await writeFile(
+    stagingEntry,
+    `import worker from ${JSON.stringify(worker)};
+export default {
+  fetch(request, env, context) {
+    const local = new URL(request.url);
+    const url = new URL(env.APP_URL);
+    url.pathname = local.pathname;
+    url.search = local.search;
+    const stagedRequest = new Request(url, request);
+    stagedRequest.headers.set("host", url.host);
+    return worker.fetch(stagedRequest, env, context);
+  },
+};\n`,
+  );
+  const staging = await startWorker("kit-static", stagingEntry, assets, undefined, {
+    APP_URL: STAGING_ORIGIN,
     DATABASE_URL: undefined,
     KIT_ROUTE_ARCHIVE: "true",
     KIT_ROUTE_STATIC: "true",
   });
-  await listen(staging.child, staging.origin, () => staging.log, stagingHeaders);
+  await listen(staging.child, staging.origin, () => staging.log);
   for (const [leaf, marker] of [
     ["/about", 'data-testid="about-facts"'],
     ["/faq", 'data-testid="faq-list"'],
     ["/privacy", 'data-testid="privacy-policy"'],
     ["/rules", 'data-testid="rules-list"'],
   ]) {
-    const page = await fetch(`${staging.origin}${leaf}`, {
-      headers: stagingHeaders,
-      redirect: "manual",
-    });
+    const page = await fetch(`${staging.origin}${leaf}`, { redirect: "manual" });
     const html = await assertContentLeaf(page, leaf);
     assert.ok(html.includes(marker), `${leaf} has server-rendered content`);
     assert.doesNotMatch(html, /<script\b/i, `${leaf} ships no JavaScript`);
