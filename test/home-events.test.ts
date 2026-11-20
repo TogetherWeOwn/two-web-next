@@ -331,7 +331,12 @@ describe("homepage upcoming events", () => {
 
   it("renders three anonymous signposts with local time, page links, going aggregates and the guest join CTA", async () => {
     freezeNow();
-    const f = fixture([event(4), event(2), event(3), event(1)]);
+    const f = fixture([
+      event(4),
+      event(2),
+      event(3),
+      event(1, { organizer_name: "SyntheticOrganizerName" }),
+    ]);
     const response = await f.request();
     expect(response.status).toBe(200);
     const html = await response.text();
@@ -352,6 +357,7 @@ describe("homepage upcoming events", () => {
       "private-creator-id",
       "discord-event-id",
       "Private host notes",
+      "SyntheticOrganizerName",
       "user_id",
       "data-island",
       "RSVP",

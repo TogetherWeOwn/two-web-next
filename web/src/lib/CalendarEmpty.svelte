@@ -53,21 +53,23 @@ let {
 {:else if kind === "gap"}
   <div data-testid={EVENTS_EMPTY_GAP_TESTID}>
     <h2>{EVENTS_EMPTY_COPY.gapTitle}</h2>
-    <h3>{EVENTS_EMPTY_COPY.gapListHeading}</h3>
-    <ul data-testid={EVENTS_EMPTY_GAP_LIST_TESTID}>
-      {#each past.slice(0, EVENTS_GAP_LIST_LIMIT) as event}
-        <li data-testid={EVENTS_EMPTY_GAP_ITEM_TESTID}>
-          {#if event.status === "cancelled"}{event.title}{:else}<a href={eventPageUrl(event.eventKey)}>{event.title}</a>{/if}{" "}
-          <time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)}</time>
-        </li>
-      {/each}
-    </ul>
-    <p><a href="/events/past">{EVENTS_EMPTY_COPY.pastArchive}</a></p>
+    {#if past.length > 0}
+      <h3>{EVENTS_EMPTY_COPY.gapListHeading}</h3>
+      <ul data-testid={EVENTS_EMPTY_GAP_LIST_TESTID}>
+        {#each past.slice(0, EVENTS_GAP_LIST_LIMIT) as event}
+          <li data-testid={EVENTS_EMPTY_GAP_ITEM_TESTID}>
+            {#if event.status === "cancelled"}{event.title}{:else}<a href={eventPageUrl(event.eventKey)}>{event.title}</a>{/if}{" "}
+            <time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)}</time>
+          </li>
+        {/each}
+      </ul>
+      <p><a href="/events/past">{EVENTS_EMPTY_COPY.pastArchive}</a></p>
+    {/if}
   </div>
 {:else if kind === "error" || kind === "partial"}
-  <div role={kind === "error" ? "alert" : "status"} data-testid={kind === "error" ? EVENTS_EMPTY_ERROR_TESTID : EVENTS_PARTIAL_TESTID}>
+  <div data-testid={kind === "error" ? EVENTS_EMPTY_ERROR_TESTID : EVENTS_PARTIAL_TESTID}>
     {#if kind === "error"}<h2>{EVENTS_EMPTY_COPY.errorTitle}</h2><p>{EVENTS_EMPTY_COPY.errorBody}</p>{:else}<p>{EVENTS_PARTIAL_COPY.notice}</p>{/if}
-    <p><a href={calendarUrl(state)} data-testid={EVENTS_RETRY_TESTID}>{EVENTS_EMPTY_COPY.retry}</a>{" "}<a href={inviteUrl} data-testid={DISCORD_JOIN_TESTID}>{EVENTS_EMPTY_COPY.join}</a></p>
+    <div class="schedule-recovery-actions"><a href={calendarUrl(state)} data-testid={EVENTS_RETRY_TESTID}>{EVENTS_EMPTY_COPY.retry}</a><a href={inviteUrl} data-testid={DISCORD_JOIN_TESTID}>{EVENTS_EMPTY_COPY.join}</a></div>
   </div>
 {:else}
   <div data-testid={EVENTS_EMPTY_SEARCH_TESTID}>

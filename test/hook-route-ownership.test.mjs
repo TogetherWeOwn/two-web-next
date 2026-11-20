@@ -581,7 +581,9 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("kitEventsSessionFor(env)");
     expect(source).toContain("kitEventsJourneyFor(env)");
     expect(source).toContain("journeyFor: kitEventsJourneyFor(env),\n        requestId,");
-    expect(source).toContain("honoFetch,");
+    expect(source).toContain(
+      "honoFetch: (request) => {\n      honoOwned = true;\n      return honoFetch(request);",
+    );
     // The content-leaf zero-stylesheet strip travels as a resolve option:
     // the hook must forward it untouched. Dropping the second argument
     // serves the layout stylesheet on /about and /faq while every dispatch
@@ -597,6 +599,8 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("kitRouteArchive: env.KIT_ROUTE_ARCHIVE");
     expect(source).toContain("kitRouteStatic: env.KIT_ROUTE_STATIC");
     expect(source).toContain("kitRouteEvents: env.KIT_ROUTE_EVENTS");
+    expect(source).toContain("kitRouteHome: env.KIT_ROUTE_HOME");
+    expect(source).toContain("kitRouteJoin: env.KIT_ROUTE_JOIN");
     expect(source).toContain("sessionFor: kitSessionBridge(env)");
     expect(source).toContain("authStatusCookieFor: kitAuthStatusCookieFor(env)");
     // Dispatch tests inject these callbacks; pin the Worker bindings so that

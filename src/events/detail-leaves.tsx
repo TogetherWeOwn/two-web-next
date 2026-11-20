@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
 import { renderGoingCount, type RsvpClosedReason } from "../islands/contracts";
+import { kitOpenSeat } from "./kit-seat-actions";
 import type { EventAttendee, ViewerRsvp } from "./reads";
 import { RsvpControl } from "./rsvp-button";
 
@@ -43,6 +44,7 @@ export interface DetailLeavesModel
   extends DetailMetadataModel,
     DetailRosterModel,
     DetailShareModel {
+  isOngoing?: boolean;
   rsvpOpen: boolean;
   rsvpClosed: RsvpClosedReason | null;
   answer: ViewerRsvp | null;
@@ -138,10 +140,18 @@ export const EventMetadata: FC<{
   showTimeFromNow: boolean;
   showSpotsLeft: boolean;
   retainEmptyInstants?: boolean;
+  refreshSeat?: boolean;
   /** Kit-only: the C6 facts list owns the host row (and its event-organizer
    * hook), so the metadata list skips it. Hono never sets this. */
   omitHost?: boolean;
-}> = ({ model, showTimeFromNow, showSpotsLeft, retainEmptyInstants = false, omitHost = false }) => (
+}> = ({
+  model,
+  showTimeFromNow,
+  showSpotsLeft,
+  retainEmptyInstants = false,
+  refreshSeat = false,
+  omitHost = false,
+}) => (
   <dl class="event-meta" aria-label="Event details">
     <div>
       <dt>Starts</dt>
@@ -232,7 +242,7 @@ export const EventMetadata: FC<{
         </dd>
       </div>
     ) : null}
-    <div>
+    <div data-event-lineup={refreshSeat ? "" : undefined}>
       <dt>The lineup</dt>
       <dd>
         <p
@@ -242,6 +252,7 @@ export const EventMetadata: FC<{
               occupancy: model.goingOccupancy,
               capacity: model.capacity,
               showSpotsLeft,
+              refreshSeat,
               announcement: null,
             }),
           }}
@@ -370,9 +381,10 @@ export function withEventDetailHtml<T extends DetailLeavesModel>(
       metadata: (
         <EventMetadata
           model={model}
-          showTimeFromNow={model.status !== "draft"}
+          showTimeFromNow={model.status !== "draft" && !model.isOngoing}
           retainEmptyInstants
           omitHost={Boolean(model.organizerName?.trim())}
+          refreshSeat={kitOpenSeat(model) !== null}
           showSpotsLeft={
             model.status !== "past" && model.status !== "cancelled" && model.rsvpClosed !== "past"
           }

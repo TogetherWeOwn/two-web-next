@@ -1,0 +1,10 @@
+id: http-no-hono-jsx
+language: tsx
+severity: error
+message: "The HTTP core must not emit Hono JSX runtime imports"
+files:
+  - src/http/**/*.{tsx,jsx}
+rule:
+  any:
+    - kind: jsx_element
+    - kind: jsx_self_closing_element

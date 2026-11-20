@@ -1,4 +1,4 @@
-import { twoMotionPollStaleAfter } from "../../../vendor/design-kit/tokens";
+import { twoMotionPollStaleAfter } from "../vendor/design-kit/tokens";
 
 /**
  * Return the deadline for a server snapshot's relative or live claims.

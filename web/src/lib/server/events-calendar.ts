@@ -1,4 +1,7 @@
-import { deriveCalendarScreenState } from "../../../../src/events/calendar-screen-state";
+import {
+  calendarDiscordReadMarker,
+  deriveCalendarScreenState,
+} from "../../../../src/events/calendar-screen-state";
 import { effectiveZone } from "../../../../src/events/date-format";
 import {
   type CalRow,
@@ -53,7 +56,7 @@ function persistedCard(
 /** Allowlist the calendar body inputs; never give the component DB rows or viewer credentials. */
 export function projectEventsCalendar(data: KitEventsLoadData) {
   const { state, zone, now } = data;
-  const { weeks, showPast, hasVisibleResults, outOfRange, searchMiss, monthEmpty } =
+  const { weeks, showPast, hasVisibleResults, outOfRange, pageUnreadable, searchMiss, monthEmpty } =
     deriveCalendarScreenState(data);
   const query = matchQuery(state.q) ?? "";
   const currentMonth = wallMonth(now, zone);
@@ -65,12 +68,14 @@ export function projectEventsCalendar(data: KitEventsLoadData) {
     totalPages: data.totalPages,
     emptyState: data.emptyState,
     discordFailed: data.discordFailed,
+    discordRead: calendarDiscordReadMarker(data.discordSnapshotAt, data.discordFailed),
     inviteUrl: data.inviteUrl,
     member: data.member,
     loginReturnTo: data.loginReturnTo,
     showPast,
     hasVisibleResults,
     outOfRange,
+    pageUnreadable,
     searchMiss,
     monthEmpty,
     zone,

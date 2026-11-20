@@ -88,13 +88,19 @@ describe("home counts snapshot", () => {
     expect(state.queries[0]).toMatch(/FROM web_v1\.live_counts LIMIT 1\s*$/);
   });
 
-  it.each([null, "", "invalid", "2026-09-29T12:00:00", new Date(NaN), 123, new Date(NOW + 1)])(
-    "does not invent a snapshot for an invalid or future timestamp %s",
-    async (timestamp) => {
-      state.live[0]!.counts_updated_at = timestamp;
-      expect(await counts.readHomeCountsSnapshot(env)).toBeNull();
-    },
-  );
+  it.each([
+    null,
+    "",
+    "invalid",
+    "2026-09-29T12:00:00",
+    "2026-09-30T13:00:00+01:00", // Same instant as NOW, but not expressed in UTC.
+    new Date(NaN),
+    123,
+    new Date(NOW + 1),
+  ])("does not invent a snapshot for an invalid or future timestamp %s", async (timestamp) => {
+    state.live[0]!.counts_updated_at = timestamp;
+    expect(await counts.readHomeCountsSnapshot(env)).toBeNull();
+  });
 
   it.each(["2026-09-30T12:00:00.000Z", "2026-09-30T12:00:00+00:00"])(
     "accepts an explicitly UTC view timestamp %s",

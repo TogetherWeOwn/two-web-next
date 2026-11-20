@@ -23,6 +23,8 @@ import {
   type CalendarEmptyState,
   type CalendarState,
 } from "../../../src/islands/contracts";
+import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
+import type { JoinResult } from "../../../src/return-journey";
 import type { CalendarGridProps } from "./calendar-grid";
 import type { CalendarListCard, CalendarPersistedCard } from "./calendar-list";
 import CalendarControls from "./CalendarControls.svelte";
@@ -47,13 +49,17 @@ let {
   showPast,
   emptyState,
   discordFailed,
+  discordRead,
   hasVisibleResults,
   outOfRange,
+  pageUnreadable = false,
   searchMiss,
   monthEmpty,
   inviteUrl,
   member,
   loginReturnTo = null,
+  joinResult = null,
+  island = false,
   weeks,
   zone,
   now,
@@ -69,28 +75,45 @@ let {
   showPast: boolean;
   emptyState: CalendarEmptyState;
   discordFailed: boolean;
+  discordRead: number;
   hasVisibleResults: boolean;
   outOfRange: boolean;
+  pageUnreadable?: boolean;
   searchMiss: boolean;
   monthEmpty: boolean;
   inviteUrl: string;
   member: boolean;
   loginReturnTo?: string | null;
+  joinResult?: JoinResult | null;
+  island?: boolean;
   weeks: CalendarGridProps["weeks"];
   zone: string;
   now: Date;
 } = $props();
 let searching = $derived(calendarSearching(state));
+let hasResultsOrPageNotice = $derived(hasVisibleResults || outOfRange || pageUnreadable);
+let showPartial = $derived(
+  discordFailed && emptyState === null && (hasResultsOrPageNotice || state.view === "calendar"),
+);
 </script>
 
-<section data-island={EVENTS_CALENDAR_ISLAND} data-testid={EVENTS_CALENDAR_TESTID} data-view={state.view} data-month={state.month} data-past={state.past ? "1" : ""} data-load-error={EVENTS_CALENDAR_FETCH_FAILED} data-search-max-length={EVENTS_SEARCH_MAX_LENGTH} data-search-too-long={EVENTS_SEARCH_TOO_LONG_COPY} aria-labelledby="events-heading">
+<section data-island={EVENTS_CALENDAR_ISLAND} data-testid={EVENTS_CALENDAR_TESTID} data-discord-read={discordRead} data-view={state.view} data-month={state.month} data-past={state.past ? "1" : ""} data-load-error={EVENTS_CALENDAR_FETCH_FAILED} data-search-max-length={EVENTS_SEARCH_MAX_LENGTH} data-search-too-long={EVENTS_SEARCH_TOO_LONG_COPY} aria-labelledby="events-heading">
   <div class="schedule-heading">
     <p class="strap">Community schedule</p>
     <h1 id="events-heading" tabindex="-1">Events</h1>
     <p>Game nights, tournaments and whatever else the community puts on.</p>
     {#if !member}<a class="btn" href={loginReturnTo ? `/join?next=${encodeURIComponent(loginReturnTo)}` : "/join"}>Join the Discord</a>{/if}
   </div>
-  <CalendarControls {state} {appUrl} {games} {gameFilter} {searching} pastCount={past.length} {emptyState} {hasVisibleResults} {outOfRange} />
+  {#if joinResult}
+    <p class="notice" role="status" data-testid="join-result">
+      {#if joinResult === "added"}
+        {HOME_JOIN_RESULT_COPY.added}
+      {:else}
+        {HOME_JOIN_RESULT_COPY.alreadyInServer}{" "}<a href="/discord" data-testid="reinvite-link">{HOME_JOIN_RESULT_COPY.reinvite}</a>
+      {/if}
+    </p>
+  {/if}
+  <CalendarControls {state} {appUrl} {games} {gameFilter} {searching} pastCount={past.length} {emptyState} {hasVisibleResults} {outOfRange} {showPartial} {pageUnreadable} {searchMiss} {island} />
   <p role="status" {...{ [EVENTS_CAL_FEEDBACK]: true }}></p>
   <div>
     <p role="status" data-testid={EVENTS_READ_STATUS_TESTID}></p>
@@ -105,12 +128,12 @@ let searching = $derived(calendarSearching(state));
     {#each Array.from({ length: EVENTS_LOADING_ROWS }) as _}<p aria-hidden="true">…</p>{/each}
   </div>
   <div data-cal-zone="content" data-testid={EVENTS_CONTENT_TESTID}>
-    {#if discordFailed && emptyState === null && (hasVisibleResults || outOfRange || state.view === "calendar")}
+    {#if showPartial}
       <CalendarEmpty kind="partial" {state} {gameFilter} past={gapPast} {inviteUrl} />
     {/if}
     {#if emptyState !== null}<CalendarEmpty kind={emptyState} {state} {gameFilter} past={gapPast} {inviteUrl} />{/if}
-    {#if emptyState === null && (hasVisibleResults || outOfRange) && state.view === "list"}
-      <CalendarList {state} {upcoming} {past} {totalPages} {outOfRange} {showPast} {member} {inviteUrl} {loginReturnTo} />
+    {#if emptyState === null && hasResultsOrPageNotice && state.view === "list"}
+      <CalendarList {state} {upcoming} {past} {totalPages} {outOfRange} {pageUnreadable} {showPast} {member} {inviteUrl} {loginReturnTo} />
     {/if}
     {#if emptyState === null && state.view === "calendar"}
       <CalendarGrid {state} {weeks} {zone} {now} />
@@ -118,7 +141,7 @@ let searching = $derived(calendarSearching(state));
     {/if}
     {#if monthEmpty}
       <div data-testid={CALENDAR_MONTH_EMPTY_TESTID}>
-        <p>{calendarMonthEmptyCopy(state.month)}</p>
+        <p>{calendarMonthEmptyCopy(state.month, gameFilter)}</p>
         <p><a href={calendarUrl({ ...state, view: "list" })}>{CALENDAR_MONTH_EMPTY_RECOVERY_COPY}</a></p>
       </div>
     {/if}

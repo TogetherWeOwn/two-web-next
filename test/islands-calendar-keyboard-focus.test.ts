@@ -218,11 +218,15 @@ function browser() {
     expect(prevented).toBe(true);
   };
   const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
-  async function finish(index: number, children: Partial<Record<string, Element[]>> = {}) {
+  async function finish(
+    index: number,
+    children: Partial<Record<string, Element[]>> = {},
+    zoneNames = Object.keys(zones),
+  ) {
     const page = node("html");
     const next = node("section", { "data-island": "events-calendar" });
     next.replaceChildren(
-      ...Object.keys(zones).map((name) => {
+      ...zoneNames.map((name) => {
         const zone = node("div", { "data-cal-zone": name });
         zone.replaceChildren(...(children[name] ?? []));
         return zone;
@@ -508,9 +512,14 @@ describe("calendar keyboard focus after failed hidden-content navigation", () =>
   }
 
   async function fail(b: Browser, failure: Failure) {
+    if (failure === "invalid") {
+      // Keep four zones so admission reaches the duplicate-name check.
+      await b.finish(0, {}, ["head", "actions", "head", "content"]);
+      return;
+    }
     if (failure === "transport") b.requests[0]!.reject(new Error("offline"));
     else if (failure === "deadline") b.expireDeadline();
-    else b.requests[0]!.resolve({ ok: failure !== "http", text: async () => "invalid" });
+    else b.requests[0]!.resolve({ ok: false });
     await b.settle();
   }
 
@@ -589,6 +598,28 @@ describe("calendar keyboard focus after failed hidden-content navigation", () =>
     expect(b.focused()).toBe(b.body);
     expect(b.zones.content!.hidden).toBe(false);
   });
+
+  it.each(FAILURES)(
+    "a pointer grid jump does not focus a retained hash target on %s failure",
+    async (failure) => {
+      const b = browser();
+      const control = b.link("calendar-day", "/events#event-night", { "data-cal-jump": "" });
+      const card = b.node("article", { id: "event-night", tabindex: "-1" });
+      b.zones.content!.replaceChildren(control, card);
+      control.focus(); // Pointer down can focus the anchor without granting keyboard recovery.
+      b.click(control, false);
+      b.paint();
+      expect(b.focused()).toBe(b.body);
+
+      await fail(b, failure);
+
+      expect(b.zones.content!.hidden).toBe(false);
+      expect(b.zones.content!.childNodes).toEqual([control, card]);
+      expect(b.focused()).toBe(b.body);
+      expect(b.root.getAttribute("aria-busy")).toBeNull();
+      expect(b.focusListeners.size).toBe(0);
+    },
+  );
 
   it("ignores a superseded hidden origin's late failure while newer navigation owns focus", async () => {
     const { b, control } = hiddenOrigin("month");

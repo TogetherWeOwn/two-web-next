@@ -10,6 +10,7 @@ vi.mock("../src/events/reads", () => ({
   getPublicEvent: vi.fn(),
   getEventForModeratorReview: vi.fn(),
   getEventNeighbors: vi.fn(),
+  getEventSeriesContext: vi.fn(),
   listRelatedEvents: vi.fn(),
   listGoingAttendees: vi.fn(),
   nextAttendeePage: vi.fn(),

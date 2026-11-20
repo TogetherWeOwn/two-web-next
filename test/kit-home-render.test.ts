@@ -116,17 +116,12 @@ describe("Kit home SSR render: session-aware header and hero", () => {
   });
 
   it("does not render attendee names from an event fixture for a guest", () => {
-    const html = renderPage(
-      baseData({
-        upcomingEvents: [
-          fullnessEvent({
-            title: "Public game night",
-            organizer_name: "SyntheticHostName",
-            attendees: [{ username: "SyntheticPrivateName" }],
-          }),
-        ],
-      }),
-    );
+    const event = fullnessEvent({
+      title: "Public game night",
+      organizer_name: "SyntheticHostName",
+      attendees: [{ username: "SyntheticPrivateName" }],
+    });
+    const html = renderPage(baseData({ upcomingEvents: [event] }));
     expect(html).toContain("Public game night");
     expect(html).toContain("1 of 4 going");
     expect(html).not.toContain("SyntheticPrivateName");

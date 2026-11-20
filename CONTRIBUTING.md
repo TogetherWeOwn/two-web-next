@@ -261,7 +261,15 @@ script is unit-tested beside it: `python3 -m unittest discover -s .github/script
 ### Secret-scan allowlists
 
 The required `gitleaks` job (also in `pr-gates.yml`) scans the full history
-reachable from the PR head. On a pull request it applies the base branch's
+reachable from the checked-out commit. On pull requests, this starts at GitHub's
+PR merge commit, not the submitted branch tip. The scan forces text diffs and
+compares each merge with its first parent, including conflict resolutions.
+That comparison can report content inherited from another parent under the
+merge SHA. Use commit-scoped ignore fingerprints to limit an exception to one
+occurrence. A fingerprint scoped to the original commit does not also exempt
+the merge occurrence.
+
+On a pull request the job applies the base branch's
 `.gitleaks.toml` and `.gitleaksignore` and ignores inline `gitleaks:allow`
 comments, so a PR cannot allowlist its own leak. If a change legitimately needs a
 new allowlist entry, merge that entry first as a small, separately reviewed PR;
@@ -406,13 +414,19 @@ npm run check                    # lint + format + typecheck + config drift + te
 #### AI contributors: exact-head GitHub Actions
 
 Full suites and CI gates run only on GitHub Actions for the exact PR head.
-Push to the PR branch, open or keep the PR as a draft while incomplete, and
-record exact-head Actions run/job links and conclusions in Verification before
-marking ready. Changes to `src/`, `test/` or migrations still require the full
-gate; draft or scope-skipped jobs are not a full-suite pass. If the draft run
-skips heavy steps, dispatch the existing CI workflow on that PR branch for full
-verification. Every required check, database-safety rule, native review and
-release gate remains in force.
+Keep the PR in draft until implementation is complete and the checks that run
+on drafts pass on that head. Record their run/job links and conclusions and all
+other required before-ready evidence in Verification. If a draft check does not
+produce required changed-behavior proof, use the relevant focused Actions
+workflow where available. Do not dispatch full CI just because the draft skips
+heavy jobs.
+
+Mark that head ready to trigger the normal PR CI and E2E runs. Before submitting
+for native review, verify the required checks passed on that same head and
+record the run/job links and conclusions in Verification. Changes to `src/`,
+`test/` or migrations still require the full gate; draft or scope-skipped jobs
+are not a full-suite pass. Every required check, database-safety rule, native
+review and release gate remains in force.
 
 Local agent test execution is limited to the bounded pre-push fixture checks
 below and, when Actions cannot run it, an authorized focused reproduction of

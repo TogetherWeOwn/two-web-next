@@ -24,10 +24,11 @@ const workflows = readdirSync(dir)
 
 const hosted = "ubuntu-latest";
 const hostedJson = JSON.stringify([hosted]);
-// Keep the fixed OS for visual baselines, recovery and the XFS fixture.
+// Keep the fixed OS for browser fixtures, visual baselines, recovery and the XFS fixture.
 // Re-baseline browser-smoke in the same PR as any bump (docs/visual-regression.md).
 const pinnedHostedJobs = new Map([
   ["e2e.yml", "browser-smoke"],
+  ["kit-activity-log-diagnostic.yml", "browser"],
   ["kit-home-evidence.yml", "capture"],
   ["kit-event-evidence.yml", "capture"],
   ["admin-stale-save-ubuntu24-proof.yml", "recovery-proof"],
@@ -165,6 +166,16 @@ describe("workflow runner labels", () => {
       expect(runsOn, `ci.yml job ${id}`).toBe(hosted);
     }
     expect(events(workflow!.source.on)).toContain("workflow_dispatch");
+  });
+
+  it("runs the Join capture matrix only on explicit manual dispatch", () => {
+    const workflow = workflows.find(({ name }) => name === "kit-browser-fixture.yml");
+    expect(workflow?.source).toMatchObject({
+      on: { workflow_dispatch: { inputs: { join_evidence: { type: "boolean", default: false } } } },
+      jobs: {
+        "join-evidence": { if: "github.event_name == 'workflow_dispatch' && inputs.join_evidence" },
+      },
+    });
   });
 
   it("keeps deploy, proof and gate jobs hosted for every event and visibility", () => {

@@ -466,6 +466,12 @@ See the [Worker bundle inventory contract](docs/worker-bundle-inventory.md) for
 artifact names, schemas, conservative package findings and consumer validation.
 CI dry-run inventories alone are not deployment evidence.
 
+[`web/wrangler.production.jsonc`](web/wrangler.production.jsonc) is a source-only
+Kit contract. Do not invoke it for deployment. No workflow or CLI selects it;
+production still uploads the Hono bundle using the root config. Its entry path
+names the generated adapter output and does not prove facade installation or
+qualify Kit for production.
+
 Cutover decision state is recorded in `docs/cutover-gates.md` and the release
 contract in `docs/releases.md`; this section describes the deployment contract,
 not the currently serving version. Worker code reaches production only through
@@ -524,8 +530,9 @@ with `PRODUCTION_AUTO_APPROVE=true`, it instead requires a main-only deployment
 policy and successful staging deploy and `e2e-staging` runs on the exact SHA,
 whose `staging-quality` job must also pass with origin web standards executed.
 Deployed-origin Lighthouse budgets and scores are report-only until the Ember
-and SvelteKit migration is complete (owner decision 2026-11-14). The separate
-PR quality gate remains unchanged.
+and SvelteKit migration is complete (owner decision 2026-11-14). PR Lighthouse
+performance budget misses are also report-only; collection, desktop accessibility,
+best practices, SEO and web standards still block PR CI.
 Both modes require successful exact-SHA CI. Admin bypass explicitly remains
 enabled by the owner's provisioning exception; neither the workflow nor
 the preflight claims to prevent an authorized administrator from bypassing review.
@@ -709,8 +716,7 @@ Owner+Moderator pair (staging guild `1545644954272137297`:
 `1546211363578191873,1545648550329851946`; production guild
 `326474832151838730`: `1546777855801954408,1546777856984481792`) before deployment.
 The staging workflow deploys `web/wrangler.staging.jsonc` and supplies only the
-validated `KIT_ROUTE_ARCHIVE`, `KIT_ROUTE_STATIC` and `KIT_ROUTE_EVENTS` route
-flags with `--var`;
+validated [staging route flags](docs/config.md) with `--var`;
 it does not override either moderator var. A separate GitHub moderator secret
 cannot make the gate pass. `keep_vars` retains unrelated remote plaintext vars,
 and Wrangler retains remote secrets. No binding values are read back or copied.

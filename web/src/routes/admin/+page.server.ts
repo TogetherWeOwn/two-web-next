@@ -7,6 +7,7 @@ import { JOIN_RETENTION_DAYS } from "../../../../src/admin/reads";
 import { databaseUrl } from "../../../../src/db/connection";
 import { topZeroResultSearches } from "../../../../src/events/search-log";
 import { safeRequestId } from "../../../../src/request-log";
+import { fixtureManifestFor } from "../../../../src/route-ownership";
 import type { PageServerLoad } from "./$types";
 
 // Same reads and failure posture as the Hono dashboard
@@ -24,6 +25,11 @@ import type { PageServerLoad } from "./$types";
 // are the shared bounded helpers, outcomes only, no member subjects.
 export const load: PageServerLoad = async ({ parent, request, locals }) => {
   const { actor } = await parent();
+  const reconciliationAvailable =
+    fixtureManifestFor({
+      APP_URL: env.APP_URL,
+      includeReconciliation: env.KIT_PARITY_FIXTURE_ADMIN_DASHBOARD === "true",
+    })?.some((route) => route.path === "/admin/reconciliation" && route.enabled) ?? false;
   const db = await dbFor({ env });
   // Match dbFor's precedence: an injected ADMIN_DB overrides either URL, so
   // the funnel cache scopes to the same identity the Hono route uses.
@@ -34,6 +40,7 @@ export const load: PageServerLoad = async ({ parent, request, locals }) => {
       funnel: undefined,
       zeroSearches: undefined,
       retentionDays: JOIN_RETENTION_DAYS,
+      reconciliationAvailable,
     };
   }
   const [funnelSettled, zeroSettled] = await Promise.allSettled([
@@ -71,5 +78,6 @@ export const load: PageServerLoad = async ({ parent, request, locals }) => {
       lastSearchedAt: r.lastSearchedAt.toISOString(),
     })),
     retentionDays: JOIN_RETENTION_DAYS,
+    reconciliationAvailable,
   };
 };

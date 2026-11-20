@@ -34,7 +34,7 @@ host schedule and calendar links remain.
 
 Audience: guests and members deciding whether a night is soon enough to join.
 Primary action: **Show time from now**, a native `type="button"` in its own row
-below **Ends**. Both twins render it: [Hono detail](../src/events/pages-detail.tsx)
+below **Ends**. Both twins render it outside Kit's dated live view: [Hono detail](../src/events/pages-detail.tsx)
 and [Kit detail](../web/src/lib/EventDetail.svelte), enhanced by
 [the island](../assets/islands/event-time-from-now.js). It reuses the device
 timezone button/status styling and the existing semantic tokens (Open Lobby /
