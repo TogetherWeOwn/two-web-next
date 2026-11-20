@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { viewportPngs } from "./kit-activity-log-png.mjs";
 
 export const origin = "http://127.0.0.1:8788";
@@ -25,7 +26,7 @@ export function expectedContent(empty) {
   return [text, cells, [empty ? subject : "", ""], `${path}?page=${empty ? 1 : 2}`];
 }
 
-export const kitDocument = (status, headers) =>
+const kitDocument = (status, headers) =>
   status === 200 &&
   headers["x-two-renderer"] === "kit" &&
   headers["cache-control"] === "private, no-store";
@@ -47,13 +48,11 @@ async function serve(route, url) {
   const res = await route.fetch({ maxRedirects: 0, timeout: 5_000 }).catch(() => null);
   if (!res) return null;
   try {
-    if (res.status() !== 200) return false;
-    if (
-      document
-        ? !kitDocument(res.status(), res.headers())
-        : !(await readFile(`web/.svelte-kit/cloudflare${file}`)).equals(await res.body())
-    )
-      return false;
+    const valid = document
+      ? kitDocument(res.status(), res.headers())
+      : res.status() === 200 &&
+        (await readFile(`web/.svelte-kit/cloudflare${file}`)).equals(await res.body());
+    if (!valid) return false;
     await route.fulfill({ response: res });
     return true;
   } finally {
@@ -61,9 +60,8 @@ async function serve(route, url) {
   }
 }
 
-const regionId = "activity-log-table-scroll";
 async function inspect(page, empty, keyboard) {
-  const [content, state] = await page.getByTestId(regionId).evaluate((el) => {
+  const [content, state] = await page.getByTestId("activity-log-table-scroll").evaluate((el) => {
     const text = (node) => node.innerText.replace(/\s+/g, " ").trim();
     const all = (selector, mapper) => Array.from(document.querySelectorAll(selector), mapper);
     const cell = (node) => (node.checkVisibility({ checkOpacity: true }) ? text(node) : "[hidden]");
@@ -88,27 +86,29 @@ async function inspect(page, empty, keyboard) {
   validateView(content, state, empty, keyboard);
 }
 
-async function guardedPage(browser, session, [width, height], url, render, reportOnly) {
-  const viewport = { width, height };
+async function guardedPage(browser, mintModerator, [width, height], url, render, reportOnly) {
   const context = await browser.newContext({
-    viewport,
+    viewport: { width, height },
     serviceWorkers: "block",
     javaScriptEnabled: false,
   });
   let violation = false;
   let unavailable = false;
   let result;
+  const pending = new Set();
+  const settle = async () => {
+    while (pending.size) await Promise.all(pending);
+  };
   try {
-    let navigation;
-    await context.addCookies([session]);
+    await context.addCookies([await mintModerator()]);
     await context.route("**/*", async (route) => {
       const check = serve(route, url).catch(() => false);
-      if (route.request().isNavigationRequest()) navigation = check;
+      pending.add(check);
       const verified = await check;
-      if (verified) return;
-      violation ||= verified === false || !reportOnly;
+      violation ||= verified === false || (verified === null && !reportOnly);
       unavailable ||= verified === null;
-      await route.abort();
+      pending.delete(check);
+      if (!verified) await route.abort().catch(() => undefined);
     });
     const page = await context.newPage();
     page.setDefaultTimeout(5_000);
@@ -118,14 +118,12 @@ async function guardedPage(browser, session, [width, height], url, render, repor
     page.on("pageerror", markViolation);
     if (!reportOnly) page.on("console", markViolation);
     const response = await page.goto(url).catch(() => null);
-    // Navigation can time out before the intercepted fetch classifies the error.
-    if (reportOnly && !response) await navigation;
-    if (
-      !unavailable &&
-      (!response || response.url() !== url || !kitDocument(response.status(), response.headers()))
-    )
-      throw new Error("visual provenance drift");
-    if (!unavailable) result = await render(page);
+    // The load timeout can precede a later document or asset fetch verdict.
+    await settle();
+    const valid = response?.url() === url && kitDocument(response.status(), response.headers());
+    if (!(response ? valid : unavailable)) throw new Error("visual provenance drift");
+    if (!violation && !unavailable) result = await render(page);
+    await settle();
   } finally {
     await context.close();
   }
@@ -133,7 +131,19 @@ async function guardedPage(browser, session, [width, height], url, render, repor
   return unavailable ? null : result;
 }
 
-export async function collectVisuals(browser, session, dir, audit, measure) {
+async function boundedMeasurement(measure, ms) {
+  // Leave 20 seconds for request verdicts and teardown under the 150-second runner watchdog.
+  const budget = Math.min(ms, 130_000 - process.uptime() * 1_000);
+  if (budget <= 0) return null;
+  const timer = new AbortController();
+  const task = Promise.resolve()
+    .then(measure)
+    .catch(() => null);
+  const deadline = delay(budget, null, { signal: timer.signal });
+  return Promise.race([task, deadline]).finally(() => timer.abort());
+}
+
+export async function collectVisuals(browser, mint, dir, { audit, measure, ms = 25_000 }) {
   const views = { ...viewportPngs, lighthouse: viewportPngs["populated-desktop.png"] };
   for (const [name, size] of Object.entries(views)) {
     const reportOnly = name === "lighthouse";
@@ -143,7 +153,7 @@ export async function collectVisuals(browser, session, dir, audit, measure) {
     const render = async (page) => {
       await page.evaluate(() => document.fonts.ready.then(() => true));
       await inspect(page, empty, false);
-      if (reportOnly) return measure(page, url).catch(() => null);
+      if (reportOnly) return boundedMeasurement(() => measure(page, url), ms);
       if (keyboard) {
         for (let n = 0; n < 11; n++) await page.keyboard.press("Tab");
         await page.keyboard.press("ArrowRight");
@@ -154,7 +164,7 @@ export async function collectVisuals(browser, session, dir, audit, measure) {
       if (name.endsWith("desktop.png")) await audit(page, name);
       await inspect(page, empty, keyboard);
     };
-    const result = await guardedPage(browser, session, size, url, render, reportOnly);
+    const result = await guardedPage(browser, mint, size, url, render, reportOnly);
     if (reportOnly) return result;
   }
 }

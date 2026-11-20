@@ -1,7 +1,6 @@
 // Run from the pinned app checkout, only with the job-private Worker and Postgres.
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import postgres from "postgres";
 import { requireGithubRunner, requireTestDatabase } from "../e2e/ci-only.mjs";
@@ -128,21 +127,19 @@ async function main() {
       "audit:subjects",
     );
     await context.close();
-    const record = (text) => appendFileSync(join(process.env.TMPDIR, "metrics.txt"), `${text}\n`);
-    const session = { name: cookie, value: moderatorToken, domain, path: "/", secure: true };
-    const audit = async (page, name) => {
-      const a11y = await routeA11y(page);
-      record(`${name} ${a11y}`);
-      ok(a11y.startsWith("a11y: PASS "), "visual:a11y");
-    };
-    const measure = routeLighthouse.bind(null, cdpPort);
-    const lighthouse = await collectVisuals(
-      browser,
-      session,
-      join(process.env.TMPDIR, "screenshots"),
-      audit,
-      measure,
-    );
+    const scratch = process.env.TMPDIR;
+    const record = (text) => appendFileSync(`${scratch}/metrics.txt`, `${text}\n`);
+    // A successful moderator GET rotates the session, so never seed a second context with it.
+    const mintModerator = () =>
+      mint(mod, true).then((value) => ({ name: cookie, value, domain, path: "/", secure: true }));
+    const lighthouse = await collectVisuals(browser, mintModerator, `${scratch}/screenshots`, {
+      audit: async (page, name) => {
+        const a11y = await routeA11y(page);
+        record(`${name} ${a11y}`);
+        ok(a11y.startsWith("a11y: PASS "), "visual:a11y");
+      },
+      measure: routeLighthouse.bind(null, cdpPort),
+    });
     record(`populated-desktop.png ${lighthouse ?? "lighthouse: unavailable"}`);
   } finally {
     try {

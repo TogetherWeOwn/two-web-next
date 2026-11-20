@@ -5,15 +5,11 @@ import { viewportPngs } from "./kit-activity-log-png.mjs";
 import {
   collectVisuals,
   expectedContent,
-  kitDocument,
+  origin,
   validateView,
 } from "./kit-activity-log-visual.mjs";
 
-test("capture refuses renderer, fixture content and keyboard drift", () => {
-  assert.equal(
-    kitDocument(200, { "x-two-renderer": "hono", "cache-control": "private, no-store" }),
-    false,
-  );
+test("capture refuses fixture content and keyboard drift", () => {
   assert.equal(expectedContent(true).at(-1), "/admin/activity-log?page=1");
   const state = [true, false, false];
   const content = expectedContent(false);
@@ -22,79 +18,85 @@ test("capture refuses renderer, fixture content and keyboard drift", () => {
   assert.throws(() => validateView(["unapproved"], state, false, false), /content/);
 });
 
-test("capture isolates Lighthouse timeouts and rejects a Hono document", async (t) => {
-  const shots = [];
-  const keys = [];
-  const noop = () => undefined;
-  let closed = 0;
-  let renderer = "kit";
-  let intercept;
-  const browser = {
-    newContext: async () => {
-      let url;
-      let scrolled = false;
-      const page = {
-        goto: async (href) => {
-          url = href;
-          if (closed === 5) {
-            void intercept({
-              request: () => ({
-                url: () => href,
-                isNavigationRequest: () => true,
-                method: () => "GET",
-              }),
-              fetch: () => new Promise((_, reject) => setImmediate(reject, new Error("timeout"))),
-              abort: noop,
-            });
-            throw new Error("navigation timed out first");
-          }
-          return {
-            url: () => url,
-            status: () => 200,
-            headers: () => ({ "x-two-renderer": renderer, "cache-control": "private, no-store" }),
-          };
-        },
-        on: noop,
-        evaluate: noop,
-        setDefaultTimeout: noop,
-        waitForFunction: () => assert.ok(scrolled),
-        keyboard: {
-          press: async (key) => {
-            keys.push(key);
-            scrolled = key === "ArrowRight";
-          },
-        },
-        getByTestId: () => ({
-          evaluate: async () => [expectedContent(url.includes("?")), [true, scrolled, scrolled]],
+test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", async (t) => {
+  const noop = async () => undefined;
+  const stall = () => new Promise((_, reject) => setImmediate(reject, new Error("fetch timeout")));
+  for (const mode of ["document", "asset", "disallowed", "pending", "rejected", "hono"]) {
+    const shots = [];
+    const keys = [];
+    const consumed = new Set([0]); // Functional context already rotated its cookie.
+    let closed = 0;
+    let cookie = 0;
+    let url, intercept;
+    const request = (href, document, fetch) =>
+      intercept({
+        request: () => ({
+          url: () => href,
+          isNavigationRequest: () => document,
+          method: () => "GET",
         }),
-        screenshot: async ({ path }) => shots.push(path),
-      };
-      return {
-        addCookies: noop,
-        close: async () => {
-          closed++;
+        fetch,
+        fulfill: noop,
+        abort: noop,
+      });
+    const fixture = {
+      close: () => ++closed,
+      addCookies: ([session]) => {
+        cookie = session.value;
+      },
+      route: (_, handler) => {
+        intercept = handler;
+      },
+      newPage: () => fixture,
+      on: noop,
+      evaluate: noop,
+      setDefaultTimeout: noop,
+      goto: async (href) => {
+        url = href;
+        const status = consumed.has(cookie) ? 302 : 200;
+        consumed.add(cookie);
+        const renderer = mode === "hono" ? "hono" : "kit";
+        const headers = { "x-two-renderer": renderer, "cache-control": "private, no-store" };
+        const response = {
+          url: () => href,
+          status: () => status,
+          headers: () => headers,
+          dispose: noop,
+        };
+        if (closed !== 5 || !["document", "asset", "disallowed"].includes(mode)) return response;
+        if (mode === "document") void request(href, true, stall);
+        else {
+          await request(href, true, async () => response);
+          void request(`${origin}/styles.css`, false, stall);
+          if (mode === "disallowed") void request(`${origin}/unexpected.css`, false, noop);
+        }
+        throw new Error("navigation timed out first");
+      },
+      waitForFunction: () => assert.equal(keys.at(-1), "ArrowRight"),
+      keyboard: { press: (key) => keys.push(key) },
+      getByTestId: () => ({
+        evaluate: () => {
+          const scroll = closed === 4 && keys.at(-1) === "ArrowRight";
+          return [expectedContent(url.includes("?")), [true, scroll, scroll]];
         },
-        newPage: async () => page,
-        route: (_, handler) => {
-          intercept = handler;
-        },
-      };
-    },
-  };
-  const measure = () => assert.fail("Lighthouse must not measure a failed navigation");
-  assert.equal(await collectVisuals(browser, {}, ".", noop, measure), null);
-  assert.equal(closed, 6);
-  assert.deepEqual(shots, Object.keys(viewportPngs));
-  assert.deepEqual(keys, [...Array(11).fill("Tab"), "ArrowRight"]);
-  const timeout = t.mock.fn(() => Promise.reject(new Error("measurement transport timed out")));
-  shots.length = 0;
-  assert.equal(await collectVisuals(browser, {}, ".", noop, timeout), null);
-  assert.equal(timeout.mock.callCount(), 1);
-  assert.deepEqual(shots, Object.keys(viewportPngs));
-  renderer = "hono";
-  shots.length = 0;
-  await assert.rejects(collectVisuals(browser, {}, ".", noop, measure), /provenance drift/);
-  assert.deepEqual(shots, []);
+      }),
+      screenshot: ({ path }) => shots.push(path),
+    };
+    const browser = { newContext: () => fixture };
+    const measure = t.mock.fn(() =>
+      mode === "rejected" ? Promise.reject(new Error("transport")) : new Promise(noop),
+    );
+    const mint = () => ({ value: consumed.size });
+    const report = collectVisuals(browser, mint, ".", { audit: noop, measure, ms: 10 });
+    if (mode === "hono") await assert.rejects(report, /provenance drift/);
+    else if (mode === "disallowed") await assert.rejects(report, /unexpected visual diagnostic/);
+    else assert.equal(await report, null);
+    assert.equal(closed, mode === "hono" ? 1 : 6);
+    assert.equal(consumed.size, closed + 1);
+    assert.equal(measure.mock.callCount(), Number(mode === "pending" || mode === "rejected"));
+    assert.deepEqual(shots, mode === "hono" ? [] : Object.keys(viewportPngs));
+    assert.deepEqual(keys, mode === "hono" ? [] : [...Array(11).fill("Tab"), "ArrowRight"]);
+  }
 });
 
 test("only the protected diagnostic publishes the validated directory", () => {

@@ -14,17 +14,14 @@ export async function routeA11y(page) {
 
 export async function routeLighthouse(port, page, url) {
   // Use the existing guarded target and a log-only Lighthouse audit (no filmstrip or report file).
-  const unavailable = "lighthouse: unavailable";
-  const audit = "total-byte-weight";
-  let browser;
+  const browserURL = `http://127.0.0.1:${port}`;
+  const browser = await puppeteer.connect({ browserURL, defaultViewport: null });
   try {
-    const browserURL = `http://127.0.0.1:${port}`;
-    browser = await puppeteer.connect({ browserURL, defaultViewport: null });
-    const [target, ...other] = (await browser.pages()).filter((p) => p.url() === url);
-    if (!target || other.length) return unavailable;
+    const [target, other] = (await browser.pages()).filter((p) => p.url() === url);
+    if (!target || other) return null;
     const flags = {
       logLevel: "silent",
-      onlyAudits: [audit],
+      onlyAudits: ["total-byte-weight"],
       disableFullPageScreenshot: true,
       disableStorageReset: true,
       screenEmulation: { disabled: true },
@@ -32,18 +29,14 @@ export async function routeLighthouse(port, page, url) {
       maxWaitForLoad: 20_000,
     };
     const { lhr } = await lighthouse(url, flags, undefined, target);
-    if (lhr.finalDisplayedUrl !== url || lhr.runtimeError || lhr.runWarnings.length)
-      return unavailable;
-    const bytes = lhr.audits[audit]?.numericValue;
+    if (lhr.finalDisplayedUrl !== url || lhr.runtimeError || lhr.runWarnings.length) return null;
+    const bytes = lhr.audits["total-byte-weight"]?.numericValue;
     const fcp = await page.evaluate(
-      (name) => performance.getEntriesByName(name)[0]?.startTime,
-      "first-contentful-paint",
+      () => performance.getEntriesByName("first-contentful-paint")[0]?.startTime,
     );
-    if (!Number.isSafeInteger(bytes) || bytes <= 0 || !Number.isFinite(fcp)) return unavailable;
+    if (!Number.isSafeInteger(bytes) || bytes <= 0 || !Number.isFinite(fcp)) return null;
     return `lighthouse: report-only total_bytes=${bytes} fcp_ms=${Math.round(fcp)}`;
-  } catch {
-    return unavailable;
   } finally {
-    await browser?.disconnect();
+    await browser.disconnect();
   }
 }
