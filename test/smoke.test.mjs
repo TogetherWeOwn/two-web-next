@@ -205,8 +205,9 @@ async function run(url, options = {}) {
   return { ok, output: output.join("\n") };
 }
 
-async function cli(args) {
+async function cli(args, env = process.env) {
   const child = spawn(process.execPath, ["bin/smoke.mjs", ...args], {
+    env,
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -1013,6 +1014,83 @@ test("join accepts rendered Join but rejects rendered Home with the shared foote
       );
       assert.ok(!result.output.includes("PASS /join"), result.output);
     }
+  }
+});
+
+test("CLI enforces the selected staging Join renderer and its public action", async (t) => {
+  const action = '<a href="/join/discord" data-testid="join-oneclick">Join with Discord</a>';
+  const hono = `${fixtures["/join"][2]}${action}`;
+  const heading = '<h2 id="join-card-heading">Join with one sign-in</h2>';
+  const kit = `${heading}${action}`;
+  const cases = [
+    { name: "Hono selected", expected: "hono", body: hono },
+    { name: "Kit selected", expected: "kit", body: kit, marker: "kit" },
+    {
+      name: "Hono fallback even with Kit markup",
+      expected: "kit",
+      body: kit,
+      failure: /expected x-two-renderer: kit/,
+    },
+    {
+      name: "Hono selected but Kit marker returned",
+      expected: "hono",
+      body: hono,
+      marker: "kit",
+      failure: /expected no x-two-renderer/,
+    },
+    {
+      name: "missing action (commented out)",
+      expected: "kit",
+      body: `${heading}<!--${action}-->`,
+      marker: "kit",
+      failure: /expected join-oneclick link/,
+    },
+    {
+      name: "action in an inert template",
+      expected: "kit",
+      body: `${heading}<template>${action}</template>`,
+      marker: "kit",
+      failure: /expected join-oneclick link/,
+    },
+    {
+      name: "action under an inert ancestor",
+      expected: "kit",
+      body: `${heading}<div inert><p>${action}</p></div>`,
+      marker: "kit",
+      failure: /expected join-oneclick link/,
+    },
+    {
+      name: "action under a hidden ancestor",
+      expected: "kit",
+      body: `${heading}<div hidden><p>${action}</p></div>`,
+      marker: "kit",
+      failure: /expected join-oneclick link/,
+    },
+    {
+      name: "test ID and href belong to different elements",
+      expected: "kit",
+      body: `${heading}<a href="/join/discord">Join</a><span data-testid="join-oneclick">Join</span>`,
+      marker: "kit",
+      failure: /expected join-oneclick link/,
+    },
+    {
+      name: "action without the Kit heading",
+      expected: "kit",
+      body: action,
+      marker: "kit",
+      failure: /expected Kit Join card heading/,
+    },
+  ];
+  for (const { name, expected, body, marker, failure } of cases) {
+    const { url } = await stub(t, (path, response) => {
+      if (path !== "/join") return;
+      response.body = body;
+      if (marker) response.headers["x-two-renderer"] = marker;
+    });
+    const result = await cli([url], { ...process.env, SMOKE_EXPECT_JOIN_RENDERER: expected });
+    assert.equal(result.code, failure ? 1 : 0, `${name}: ${result.output}`);
+    if (failure) assert.match(result.output, failure, name);
+    else assert.match(result.output, /^PASS \/join$/m, name);
   }
 });
 

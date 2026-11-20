@@ -467,7 +467,7 @@ artifact names, schemas, conservative package findings and consumer validation.
 CI dry-run inventories alone are not deployment evidence.
 
 [`web/wrangler.production.jsonc`](web/wrangler.production.jsonc) is a source-only
-Kit contract. Do not invoke it for deployment. No workflow or CLI selects it;
+Kit contract. Do not invoke it for deployment. Only a CI dry-run selects it;
 production still uploads the Hono bundle using the root config. Its entry path
 names the generated adapter output and does not prove facade installation or
 qualify Kit for production.
@@ -625,9 +625,11 @@ rollback, or production migration is authorized, including applicable
 organization and Environment values.
 The deploy, rollback, and db-migrate workflows each require the flag to be
 exactly `true`; `ci/production-deploy-gate.mjs` runs in the deploy and rollback
-workflows, while db-migrate relies on the flag, the main-only ref check, and
-production Environment protection. The
-workflow's `vars` expression resolves configuration across scopes:
+workflows. The migration workflow requires the flag, the main-only ref,
+production Environment protection, a separate exact approved migration SHA,
+and a match for the approved database and migrator before DDL. See the
+[migration runbook](docs/runbook.md#neon-web-schema-migrations-separate-operator-action).
+The workflow's `vars` expression resolves configuration across scopes:
 repository/Environment absence alone does not prove the effective flag is
 disabled. Verify the organization's value and repo visibility before
 authorizing a deployment, rollback, or production migration; keep the repository value unset/false otherwise.

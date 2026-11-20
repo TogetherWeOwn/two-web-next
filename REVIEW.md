@@ -144,7 +144,12 @@ Try to prove your own candidate wrong first:
 3. Check whether the behavior is documented as intentional in README/docs
    (for example, throttle failure handling varies by call site; see
    `docs/throttling.md` for missing stores, unclassified errors, outages,
-   and lock contention). Intentional, documented behavior is not a defect.
+   and lock contention). Before reporting a defect, check the PR's Claims in
+   Attestation and linked docs. For documented intent (e.g. fail-closed until a
+   binding exists, an advisory-only CSS budget, or a removed live region), report
+   only if evidence shows a violation of an existing requirement, a contradiction
+   of the stated contract, or user harm beyond what the PR describes. The private
+   security-reporting exception above still applies.
 4. Pre-existing issues are out of scope unless this PR makes them newly
    reachable or worse; if so, explain the new reachability.
 
@@ -211,6 +216,10 @@ A missing test alone is not a runtime bug. These are blocking findings:
   Preserve gates intentionally defined against the fork point or base-branch policy.
   For publish or artifact jobs, confirm keys, tokens, and secrets cannot reach uploaded
   artifacts or public output. Report a violation as Severe only with the exact job/line and failing path.
+  With `actions/upload-artifact` v4+, artifact names only need to be unique
+  within one run attempt; reruns may reuse them. For upload collisions, flag
+  same-attempt name conflicts, not a missing `run_attempt` suffix by itself.
+  Check that consumers requiring the current attempt select that attempt's artifact.
 - **Generated assets:** `build:assets` generates budgeted outputs from
   `assets/`; see `ci/minify-assets.mjs` for the mapping and the authored CSS
   exceptions. Check generated output for drift or hand-edits, accounting for

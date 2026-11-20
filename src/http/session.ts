@@ -1,5 +1,6 @@
 import postgres from "postgres";
 import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "../db/connection";
+import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { refreshSessionRoles, roleRecheckConfigFor } from "../session-role-refresh";
 import {
@@ -166,12 +167,19 @@ export async function issueSession(
   return token;
 }
 
-/** Resolve a verified bearer without rotating it. Anonymous reads never acquire a store. */
-export async function lookupSession(
+type SessionRead = {
+  store: SessionStore;
+  row: DbSessionRow;
+  renewal: { replacement: string; statusKey: string | null } | null;
+};
+
+/** Resolve a verified bearer and optionally rotate it. The caller owns cookie I/O. */
+export async function readSession(
   token: unknown,
   env: Env,
   storeFor: () => Promise<SessionStore>,
-): Promise<{ token: string; store: SessionStore; row: DbSessionRow } | null> {
+  rotateToken: boolean,
+): Promise<SessionRead | null> {
   if (!isValidSessionToken(token)) return null;
   // Anonymous public pages must not depend on session storage or its startup DDL.
   const store = await storeFor();
@@ -182,5 +190,33 @@ export async function lookupSession(
   // Discord before they authorize (src/session-role-refresh.ts). A row that
   // stopped being live during the refresh reads as no session.
   const row = await refreshSessionRoles(store, tokenHash, storedRow, roleRecheckConfigFor(env));
-  return row ? { token, store, row } : null;
+  if (!row) return null;
+  // Abortable calendar fragments validate expiry/revocation but must not delete
+  // the browser's current token: an aborted response cannot deliver a replacement.
+  if (!rotateToken) return { store, row, renewal: null };
+
+  // Rotate atomically, keeping the immediate predecessor valid for 10s (bounded
+  // by its own expiry) while the successor stays live. Rotation errors are
+  // outages, not guest reads: preserve classified database errors and normalize
+  // the rest to plain Error for the caller's existing outage boundary.
+  const statusKey = await store.statusHash(await hashToken(token));
+  const replacement = newSessionToken();
+  let rotated: boolean;
+  try {
+    rotated = await store.rotate(await hashToken(token), {
+      tokenHash: await hashToken(replacement),
+      ...row,
+      expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
+    });
+  } catch (err) {
+    if (isDatabaseUnavailable(err)) throw err;
+    throw new Error("Session rotation unavailable");
+  }
+  if (!rotated) {
+    // Re-read once for predecessor grace or a lost rotation race. Authenticated
+    // grace reads do not renew cookies; revoked or expired sessions stay guest.
+    const graceRow = await store.get(await hashToken(token));
+    return graceRow ? { store, row: graceRow, renewal: null } : null;
+  }
+  return { store, row, renewal: { replacement, statusKey } };
 }

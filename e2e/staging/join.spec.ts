@@ -1,3 +1,4 @@
+import { accessibleJoinOneclick } from "../join-oneclick";
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import { test, expect, emptyStorageState, memberStorageState, stagingOrigin } from "./fixtures";
 import { loginQaMember } from "./qa-login";
@@ -67,6 +68,7 @@ test("staging join funnel answers without a session and entries redirect to Disc
     const oneclick = joinContent.getByTestId("join-oneclick");
     await expect(oneclick).toBeVisible();
     expect(await oneclick.getAttribute("href")).toBe("/join/discord");
+    await expect(accessibleJoinOneclick(joinContent)).toBeVisible();
 
     const joinEntry = await guest.request.get("/join/discord", { maxRedirects: 0 });
     expect(joinEntry.status()).toBe(302);

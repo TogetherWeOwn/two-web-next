@@ -148,6 +148,7 @@ it("an authenticated predecessor read cannot fork a lineage that survives logout
   const { f, predecessor, successor } = await rotatedTabs();
   vi.setSystemTime(START + INSIDE);
   const page = await readers[0]!.check(f, predecessor, true);
+  expect(page.headers.getSetCookie()).toEqual([]);
   const tabB = mergeCookies(predecessor, page);
   const tabBHash = await bearerHash(tabB);
   expect(await f.sessions.get(tabBHash)).toMatchObject({ userId: MEMBER });
