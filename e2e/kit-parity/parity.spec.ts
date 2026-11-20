@@ -2343,7 +2343,7 @@ test("Kit member event detail captures the ended record at both widths", async (
       await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 6, recurrence_index = 1
         where event_key = ${endedKey}`;
       await sql`update events set parent_event_id = (select id from events where event_key = ${endedKey}),
-        recurrence_index = 2 where event_key = ${adjacentKey}`;
+        recurrence_index = 6 where event_key = ${adjacentKey}`;
       for (const sibling of [
         { key: laterKey, days: 14, status: "published", index: 3 },
         { key: nextKey, days: 7, status: "published", index: 4 },
@@ -2356,7 +2356,7 @@ test("Kit member event detail captures the ended record at both widths", async (
       }
       await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
         select ${unreadableKey}, title, ${new Date(now + 172_800_000)}, 'infinity'::timestamptz,
-          'published', id, 6 from events where event_key = ${endedKey}`;
+          'published', id, 2 from events where event_key = ${endedKey}`;
       await sql`insert into rsvps (event_id, user_id, status)
         select id, ${userId}, 'going' from events where event_key = ${endedKey}`;
     });
@@ -2387,10 +2387,29 @@ test("Kit member event detail captures the ended record at both widths", async (
       await expect(time.locator('time[datetime="2026-01-02T06:00:00.000Z"]')).toHaveText(
         "2 Jan 2026, 01:00",
       );
-      await expect(page.getByTestId("event-series-next")).toHaveAttribute(
-        "href",
-        `/e/${adjacentKey}`,
+      await expect(page.getByTestId("event-series-next")).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: "Sign-up record", exact: true })).toHaveCount(
+        1,
       );
+      await expect(page.getByRole("region", { name: "Event overview" })).not.toContainText(
+        "Sign-up record",
+      );
+      await expect(page.getByRole("heading", { name: "Signed up (1)" })).toBeVisible();
+      const facts = page
+        .getByRole("definition")
+        .filter({ has: page.getByText("1 signed up", { exact: true }) });
+      await expect(facts).toHaveCount(1);
+      await expect(page.getByRole("heading", { name: "Save the date" })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: /Add to calendar|Google Calendar/ })).toHaveCount(
+        0,
+      );
+      await expect(page.getByLabel("Event link")).toBeVisible();
+      for (const fact of ["Starts", "Ends"]) {
+        const row = page
+          .locator(".event-meta > div")
+          .filter({ has: page.getByText(fact, { exact: true }) });
+        expect((await row.boundingBox())?.height).toBeLessThan(160);
+      }
       await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
       await expect(record).toContainText("No Echo for this one. 1 signed up.");
       await expect(record.getByRole("link", { name: /^Next one:/ })).toHaveAttribute(
@@ -2412,6 +2431,13 @@ test("Kit member event detail captures the ended record at both widths", async (
       await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
       await test.info().attach(name, { path, contentType: "image/png" });
     }
+    await withSessionDb(async (sql) => {
+      await sql`update events set status = 'past' where event_key in (${nextKey}, ${laterKey})`;
+    });
+    expect((await page.reload())?.status()).toBe(200);
+    await expect(page.getByRole("region", { name: "Sign-up record" })).toBeVisible();
+    await expect(page.getByRole("link", { name: /^Next one:/ })).toHaveCount(0);
+    await expect(page.getByTestId("event-series-next")).toHaveCount(0);
   } finally {
     await context.close();
     await withSessionDb(async (sql) => {

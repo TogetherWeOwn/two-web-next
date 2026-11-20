@@ -45,6 +45,7 @@ export interface DetailLeavesModel
     DetailRosterModel,
     DetailShareModel {
   isOngoing?: boolean;
+  lifecycle?: object | null;
   rsvpOpen: boolean;
   rsvpClosed: RsvpClosedReason | null;
   answer: ViewerRsvp | null;
@@ -60,9 +61,12 @@ export interface EventDetailHtml {
   share: string;
 }
 
-export const EventShare: FC<{ model: DetailShareModel }> = ({ model }) => (
+export const EventShare: FC<{ model: DetailShareModel; ended?: boolean }> = ({
+  model,
+  ended = false,
+}) => (
   <section class="event-share" aria-labelledby="event-share-heading">
-    <h2 id="event-share-heading">Save the date</h2>
+    <h2 id="event-share-heading">{ended ? "Share this event" : "Save the date"}</h2>
     {model.status === "draft" ? (
       <p data-testid="event-share-draft-note">
         Calendar and share links open once this event is published. Members can&apos;t open a draft
@@ -71,22 +75,28 @@ export const EventShare: FC<{ model: DetailShareModel }> = ({ model }) => (
     ) : (
       <>
         <p>
-          <a href={model.icsUrl} data-testid="event-ics">
-            Add to calendar (.ics)
-          </a>
-          {model.googleCalendarUrl ? (
+          {!ended ? (
             <>
-              {" · "}
-              <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
-                Google Calendar
+              <a href={model.icsUrl} data-testid="event-ics">
+                Add to calendar (.ics)
               </a>
+              {model.googleCalendarUrl ? (
+                <>
+                  {" · "}
+                  <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
+                    Google Calendar
+                  </a>
+                </>
+              ) : null}
             </>
           ) : null}
           {model.status === "published" ? (
             <>
-              <span hidden data-native-share-sep aria-hidden="true">
-                {" · "}
-              </span>
+              {!ended ? (
+                <span hidden data-native-share-sep aria-hidden="true">
+                  {" · "}
+                </span>
+              ) : null}
               <button
                 type="button"
                 hidden
@@ -141,6 +151,7 @@ export const EventMetadata: FC<{
   showSpotsLeft: boolean;
   retainEmptyInstants?: boolean;
   refreshSeat?: boolean;
+  ended?: boolean;
   /** Kit-only: the C6 facts list owns the host row (and its event-organizer
    * hook), so the metadata list skips it. Hono never sets this. */
   omitHost?: boolean;
@@ -150,6 +161,7 @@ export const EventMetadata: FC<{
   showSpotsLeft,
   retainEmptyInstants = false,
   refreshSeat = false,
+  ended = false,
   omitHost = false,
 }) => (
   <dl class="event-meta" aria-label="Event details">
@@ -243,7 +255,7 @@ export const EventMetadata: FC<{
       </div>
     ) : null}
     <div data-event-lineup={refreshSeat ? "" : undefined}>
-      <dt>The lineup</dt>
+      <dt>{ended ? "Sign-ups" : "The lineup"}</dt>
       <dd>
         <p
           dangerouslySetInnerHTML={{
@@ -253,6 +265,7 @@ export const EventMetadata: FC<{
               capacity: model.capacity,
               showSpotsLeft,
               refreshSeat,
+              signedUp: ended,
               announcement: null,
             }),
           }}
@@ -282,17 +295,22 @@ export const EventMetadata: FC<{
   </dl>
 );
 
-export const EventRoster: FC<{ model: DetailRosterModel }> = ({ model }) =>
+export const EventRoster: FC<{ model: DetailRosterModel; ended?: boolean }> = ({
+  model,
+  ended = false,
+}) =>
   model.attendees.length > 0 || (model.viewerMember && model.attendeesPaging.page > 1) ? (
     <section
       aria-labelledby="event-attendees-heading"
       data-testid="event-attendees"
-      data-island="attendees-live"
+      data-island={ended ? undefined : "attendees-live"}
     >
       {model.attendeesPaging.prevHref || model.attendeesPaging.nextHref ? (
-        <h2 id="event-attendees-heading">Who's going</h2>
+        <h2 id="event-attendees-heading">{ended ? "Signed up" : "Who's going"}</h2>
       ) : (
-        <h2 id="event-attendees-heading">Who's going ({model.attendees.length})</h2>
+        <h2 id="event-attendees-heading">
+          {ended ? "Signed up" : "Who's going"} ({model.attendees.length})
+        </h2>
       )}
       {model.attendees.length > 0 ? (
         <ul class="event-attendee-grid">
@@ -306,13 +324,13 @@ export const EventRoster: FC<{ model: DetailRosterModel }> = ({ model }) =>
           ))}
         </ul>
       ) : (
-        <p>There are no more attendees on this page.</p>
+        <p>{ended ? "There are no more sign-ups on this page." : "There are no more attendees on this page."}</p>
       )}
       {model.attendeesPaging.prevHref || model.attendeesPaging.nextHref ? (
-        <nav class="event-attendees-pagination" aria-label="Attendee pages">
+        <nav class="event-attendees-pagination" aria-label={ended ? "Sign-up pages" : "Attendee pages"}>
           {model.attendeesPaging.prevHref ? (
             <a href={model.attendeesPaging.prevHref} rel="prev" data-testid="event-attendees-prev">
-              ← Previous attendees
+              ← Previous {ended ? "sign-ups" : "attendees"}
             </a>
           ) : null}{" "}
           <span data-testid="event-attendees-current-page" aria-current="page">
@@ -320,15 +338,15 @@ export const EventRoster: FC<{ model: DetailRosterModel }> = ({ model }) =>
           </span>{" "}
           {model.attendeesPaging.nextHref ? (
             <a href={model.attendeesPaging.nextHref} rel="next" data-testid="event-attendees-next">
-              Next attendees →
+              Next {ended ? "sign-ups" : "attendees"} →
             </a>
           ) : null}
         </nav>
       ) : null}
       <p>
-        Attendees shown at page load.{" "}
+        {ended ? "Sign-ups shown at page load." : "Attendees shown at page load."}{" "}
         <a href={model.attendeesRefreshHref} data-testid="event-attendees-refresh">
-          Refresh attendees
+          Refresh {ended ? "sign-ups" : "attendees"}
         </a>
         .
       </p>
@@ -344,17 +362,19 @@ export const EventRoster: FC<{ model: DetailRosterModel }> = ({ model }) =>
             : "event-roster-members-only"
       }
     >
-      <h2 id="event-roster-heading">Who's going{model.viewerMember ? " (0)" : ""}</h2>
+      <h2 id="event-roster-heading">
+        {ended ? "Signed up" : "Who's going"}{model.viewerMember ? " (0)" : ""}
+      </h2>
       <p>
         {model.viewerMember ? (
-          "No one is listed as going yet."
+          ended ? "No one signed up." : "No one is listed as going yet."
         ) : model.showJoinPitch ? (
           <>
             {model.goingCount > 0
-              ? `${model.goingCount} going —`
-              : "No one is listed as going yet."}{" "}
+              ? `${model.goingCount} ${ended ? "signed up" : "going"} —`
+              : ended ? "No one signed up." : "No one is listed as going yet."}{" "}
             <a href={`/join/discord?next=${encodeURIComponent(model.joinReturnTo)}`}>
-              sign in to see who's in
+              sign in to {ended ? "see who signed up" : "see who's in"}
             </a>
             .
           </>
@@ -362,7 +382,7 @@ export const EventRoster: FC<{ model: DetailRosterModel }> = ({ model }) =>
           <>
             Members only —{" "}
             <a href={`/join?next=${encodeURIComponent(model.joinReturnTo)}`}>join the Discord</a> to
-            see who's in.
+            {ended ? "see who signed up" : "see who's in"}.
           </>
         )}
       </p>
@@ -374,6 +394,7 @@ export function withEventDetailHtml<T extends DetailLeavesModel>(
   model: T,
 ): T & { detailHtml: EventDetailHtml } {
   const review = model.viewerModerator ? model.review : undefined;
+  const ended = Boolean(model.lifecycle);
   return {
     ...model,
     detailHtml: {
@@ -383,6 +404,7 @@ export function withEventDetailHtml<T extends DetailLeavesModel>(
           model={model}
           showTimeFromNow={model.status !== "draft" && !model.isOngoing}
           retainEmptyInstants
+          ended={ended}
           omitHost={Boolean(model.organizerName?.trim())}
           refreshSeat={kitOpenSeat(model) !== null}
           showSpotsLeft={
@@ -403,8 +425,8 @@ export function withEventDetailHtml<T extends DetailLeavesModel>(
               attendeePage={model.attendeesPaging.page}
             />
           ).toString(),
-      roster: (<EventRoster model={model} />).toString(),
-      share: (<EventShare model={model} />).toString(),
+      roster: (<EventRoster model={model} ended={ended} />).toString(),
+      share: (<EventShare model={model} ended={ended} />).toString(),
     },
   };
 }

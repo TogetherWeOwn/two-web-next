@@ -57,6 +57,7 @@ export interface GoingCountState {
   showSpotsLeft: boolean;
   /** Kit open-seat pages reveal this badge after their first inline write. */
   refreshSeat?: boolean;
+  signedUp?: boolean;
   announcement: GoingViewerState | null;
 }
 
@@ -102,22 +103,24 @@ export function spotsLeftText(going: number, capacity: number): string {
  * one querySelector and patches only its own island.
  */
 export function renderGoingCount(eventKey: string, s: GoingCountState): string {
-  const announcement = goingAnnouncementText(s.announcement);
+  const announcement = s.signedUp ? "" : goingAnnouncementText(s.announcement);
   const safeKey = eventKey.replace(/"/g, "&quot;");
   const occupancy = s.occupancy ?? s.going;
   const spotsTarget = `<span data-testid="${SPOTS_LEFT_TESTID}" data-spots`;
   const availability = s.capacity !== null ? spotsLeftText(occupancy, s.capacity) : "";
-  const spots = s.refreshSeat
-    ? `${spotsTarget}${availability ? "" : " hidden"}>${availability}</span>`
-    : s.showSpotsLeft && availability
-      ? ` · ${spotsTarget}>${availability}</span>`
-      : "";
+  const spots = s.signedUp
+    ? ""
+    : s.refreshSeat
+      ? `${spotsTarget}${availability ? "" : " hidden"}>${availability}</span>`
+      : s.showSpotsLeft && availability
+        ? ` · ${spotsTarget}>${availability}</span>`
+        : "";
   return (
     `<span role="status" data-testid="${GOING_COUNT_TESTID}" ` +
     `${MOUNT_ATTR}="${GOING_COUNT_ISLAND}" data-event-key="${safeKey}" data-capacity="${s.capacity ?? ""}"` +
-    `${s.refreshSeat ? ' data-seat-refresh="initial"' : ""}>` +
+    `${s.signedUp ? " data-signed-up" : s.refreshSeat ? ' data-seat-refresh="initial"' : ""}>` +
     `<span class="sr-only" data-announcement>${announcement}${announcement ? " " : ""}</span>` +
-    `<span data-count>${goingCountText(s.going, s.capacity)}</span>${spots}</span>`
+    `<span data-count>${s.signedUp ? `${s.going} signed up` : goingCountText(s.going, s.capacity)}</span>${spots}</span>`
   );
 }
 

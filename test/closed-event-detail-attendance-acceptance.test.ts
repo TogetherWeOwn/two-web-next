@@ -403,9 +403,12 @@ it("visible copy excludes mixed-case head and script markup, not adjacent attend
   expect(await visibleText(html)).toBe("7 existing responses & friends Still visible");
 });
 
-async function expectPastLineup(html: string, counts: DetailCounts): Promise<void> {
+async function expectPastLineup(html: string, counts: DetailCounts, kit = false): Promise<void> {
   const text = await visibleText(html);
-  expect(text).toContain(goingCountText(counts.going, counts.capacity));
+  expect(text).toContain(
+    kit ? `Sign-ups ${counts.going} signed up` : goingCountText(counts.going, counts.capacity),
+  );
+  if (kit) expect(text).not.toMatch(/\bgoing\b/i);
   expect(html).not.toContain(`data-testid="${SPOTS_LEFT_TESTID}"`);
   expect(text).not.toMatch(/spots left/i);
   expect(text).not.toMatch(/\bFull\b/);
@@ -443,11 +446,11 @@ describe("Hono cancelled detail (RED: existing responses, no capacity)", () => {
   });
 });
 
-describe("Kit past detail (RED: final attendance, no spots line)", () => {
-  it.each(CASES)("shows the going count with no spots/full line ($name)", async (counts) => {
+describe("Kit past detail (sign-ups, not attendance)", () => {
+  it.each(CASES)("shows sign-ups with no spots/full line ($name)", async (counts) => {
     const html = await kitDetailHtml("past", counts);
     expect(html).toMatch(/<h2 id="signup-record-heading"[^>]*>Sign-up record<\/h2>/);
-    await expectPastLineup(html, counts);
+    await expectPastLineup(html, counts, true);
   });
 });
 
@@ -489,9 +492,9 @@ describe("server-time closure for still-published detail", () => {
     );
     const text = await visibleText(html);
     expect(text).toContain(kit ? "Sign-up record" : "This one has been and gone");
-    expect(text).toContain("9 of 10 going");
+    expect(text).toContain(kit ? "9 signed up" : "9 of 10 going");
     expect(html).not.toContain("data-rsvp-form");
-    await expectPastLineup(html, counts);
+    await expectPastLineup(html, counts, kit);
   }
 
   async function expectInvitation(html: string) {
@@ -682,6 +685,7 @@ function browser(html: string) {
     const value = tag!.match(new RegExp(`${name}="([^"]*)"`))?.[1];
     if (value !== undefined) mount.setAttribute(name, value);
   }
+  if (tag!.includes(" data-signed-up")) mount.setAttribute("data-signed-up", "");
   const count = mount.addTarget("[data-count]");
   count.textContent = html.match(/<span data-count>([^<]*)<\/span>/)?.[1] ?? "";
   mount.addTarget("[data-announcement]");
@@ -754,20 +758,21 @@ describe("island refresh keeps the closed-event rendering (RED: no spots node ap
     expect(b.mount.querySelector("[data-spots]")).toBeNull();
   });
 
-  it("Kit past: a full snapshot refreshes the count without materializing a spots node", async () => {
+  it("Kit past: a full snapshot refreshes sign-ups without materializing a spots node", async () => {
     const html = await kitDetailHtml("past", pastFull);
     expect(html).not.toContain(`data-testid="${SPOTS_LEFT_TESTID}"`);
     const b = browser(html);
-    b.broadcast(KEY);
+    b.broadcast(KEY, "going");
     expect(b.requests).toHaveLength(1);
     b.requests[0]!.resolve({
       ok: true,
       json: async () => [
-        { event_key: KEY, going_count: pastFull.going, going_occupancy: pastFull.occupancy },
+        { event_key: KEY, going_count: pastFull.going - 1, going_occupancy: pastFull.occupancy },
       ],
     });
     await b.settle();
-    expect(b.count.textContent).toBe(goingCountText(pastFull.going, pastFull.capacity));
+    expect(b.count.textContent).toBe(`${pastFull.going - 1} signed up`);
+    expect(b.mount.querySelector("[data-announcement]")?.textContent ?? "").toBe("");
     expect(b.mount.querySelector("[data-spots]")).toBeNull();
   });
 
@@ -897,14 +902,15 @@ describe("keyboard and no-JS detail journeys (CONTROL: green before and after)",
       '<p role="status" aria-live="polite" data-testid="event-device-timezone-starts-status"></p>',
     );
     // The readonly URL supports manual copying without JS; Copy stays hidden
-    // until enhanced. Calendar links remain native anchors.
+    // until enhanced. Only Hono keeps the elapsed calendar link.
     expect(html).toMatch(
       /<a href="[^"]*" data-copy-link=[^>]*data-testid="event-copy-link" hidden/,
     );
     expect(html).toContain('<label for="event-link-url">Event link</label>');
     expect(html).toMatch(/<input[^>]*data-testid="event-link-url"[^>]*readonly/);
     expect(html).toContain('data-testid="event-manual-copy"');
-    expect(html).toContain('data-testid="event-ics"');
+    if (kit) expect(html).not.toContain('data-testid="event-ics"');
+    else expect(html).toContain('data-testid="event-ics"');
     expect(html).not.toMatch(/\son(?:click|keydown)=/);
   }
 

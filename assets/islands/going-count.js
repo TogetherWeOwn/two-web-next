@@ -320,7 +320,12 @@
             if (capacity === undefined) return;
             node.setAttribute("data-capacity", capacity === null ? "" : String(capacity));
             var count = node.querySelector("[data-count]");
-            if (count) count.textContent = countText(row.going_count, capacity);
+            var signedUp = node.getAttribute("data-signed-up") !== null;
+            if (count) {
+              count.textContent = signedUp
+                ? row.going_count + " signed up"
+                : countText(row.going_count, capacity);
+            }
             var spots = node.querySelector("[data-spots]");
             if (capacity === null) {
               // A lifted cap leaves no seats to count: hide the stale line
@@ -340,7 +345,7 @@
               spots.textContent = spotsLeftText(occupancy, capacity);
             }
             var ann = node.querySelector("[data-announcement]");
-            if (ann && state) {
+            if (ann && state && !signedUp) {
               var t = announcementText(state);
               ann.textContent = t ? t + " " : "";
             }
