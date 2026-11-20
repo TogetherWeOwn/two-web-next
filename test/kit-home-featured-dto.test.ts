@@ -72,6 +72,7 @@ beforeAll(async () => {
   await build({
     stdin: {
       contents: [
+        `import { env } from "cloudflare:workers";`,
         `import { load as routeLoad } from ${JSON.stringify(routePath)};`,
         `import { prepareKitHomePanels } from ${JSON.stringify(join(root, "src/kit-home-panels.ts"))};`,
         `export const load = async (args) => routeLoad({ ...args, locals: { ...args.locals, homePanels: await prepareKitHomePanels(env, args.request) } });`,
