@@ -380,14 +380,18 @@ binding isolation before any remote mutation.
    dispatch from `main` uses only `kit_route_family`, which defaults to `hono`;
    it does not change the next automatic deploy. Choose `archive` for only
    `GET /events/past`, or `archive-static` to add `GET /about` and `GET /faq`.
-   Choose `events`, `home` or `join` for `/events`, `/` or `/join`, or
-   `ember-pages` for all three. Disabled Ember GET entries block
+   Choose `events`, `home` or `join` for `/events`, `/` or `/join`,
+   `events-join` for `/events` and `/join` together, or `ember-pages` for all
+   three. Disabled Ember GET entries block
    selection before migrations or Worker mutations. HEAD follows GET; event
    detail, OAuth, recovery and write methods are unaffected. After revision
    verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
    to an unauthenticated GET that does not follow redirects. After changing the
    variable to `events`, confirm the next normal deploy passes
-   `node ci/staging-kit-route-check.mjs /events`. Set the variable to `hono` or
+   `node ci/staging-kit-route-check.mjs /events`. If `GET /join` is enabled in
+   the route manifest before `GET /`, use `events-join` to keep `/events` on
+   Kit while adding `/join` (`join` alone would turn `/events` off), then
+   `ember-pages` once `GET /` is enabled. Set the variable to `hono` or
    remove it to restore Hono on subsequent automatic deploys. Missing or
    malformed flags fail closed to Hono.
 
