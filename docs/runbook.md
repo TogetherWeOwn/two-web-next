@@ -496,9 +496,12 @@ migration is performed by its selftest.
 - Only on the protected `production` GitHub Environment, the authorized Operator
   sets `PRODUCTION_MIGRATION_APPROVED_SHA` to the full lowercase `main` SHA
   separately approved for the migration. A missing, malformed or different SHA
-  refuses before checkout. Do not set `PRODUCTION_ACCEPTED_SHA` for a migration:
-  that is a separate Worker promotion control. Clear the migration SHA after the
-  authorized operation; clearing it does not revoke a run that already started.
+  refuses before checkout. If `main` advances before dispatch, stop and obtain
+  fresh approval for the new tip before the Operator updates the pin. The pin
+  checks the run SHA; it does not select a previous revision. Do not set
+  `PRODUCTION_ACCEPTED_SHA` for a migration: that is a separate Worker promotion
+  control. Clear the migration SHA after the authorized operation; clearing it
+  does not revoke a run that already started.
 - On that same Environment, set `PRODUCTION_MIGRATION_IDENTITY_SHA256` to the
   lowercase SHA-256 hex digest of the exact approved database name in UTF-8,
   one NUL byte, then the exact existing Postgres migrator role name in UTF-8

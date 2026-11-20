@@ -14,6 +14,7 @@ import {
   PLANETSCALE_PRODUCTION_HOST,
   PLANETSCALE_STAGING_BRANCH_ID,
   PLANETSCALE_STAGING_HOST,
+  assertProductionIdentity,
   captureDriverRaceCrashes,
   isDriverConnectionRaceCrash,
   migrationClient,
@@ -290,8 +291,7 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
     production.replace(".pg.psdb.cloud", "-pooler.pg.psdb.cloud"),
   ]) {
     assert.throws(
-      () =>
-        migrationConfig({ ...mainEnv, ...productionEnv, PRODUCTION_DATABASE_URL: wrong }),
+      () => migrationConfig({ ...mainEnv, ...productionEnv, PRODUCTION_DATABASE_URL: wrong }),
       /pinned direct production PlanetScale endpoint/,
     );
   }
@@ -484,15 +484,29 @@ test("production refuses a missing pin before access and a changed identity befo
       { message: "Production migration identity setting is missing or malformed." },
     );
   }
-  await fixture(async ({ client, run, output }) => {
+  await fixture(async ({ client, run, output, url }) => {
     const [{ db, role }] = await client`select current_database() as db, session_user as role`;
-    const approved = { ...productionEnv, PRODUCTION_MIGRATION_IDENTITY_SHA256: identityHash(db, role) };
+    const approved = {
+      ...productionEnv,
+      PRODUCTION_MIGRATION_IDENTITY_SHA256: identityHash(db, role),
+    };
     assert.equal((await run("plan", approved)).length, journal.entries.length);
     assert.equal(output[0], "Production migration database and role identity matched.");
     output.length = 0;
     const refusal = {
       message: "Production migration database or role identity did not match; values withheld.",
     };
+    // The live database matches the digest but not the URL pin. Exercise that
+    // comparison independently without pointing a connection at another database.
+    const wrongUrl = new URL("/wrong_database", url);
+    await assert.rejects(
+      assertProductionIdentity(
+        client,
+        { target: "production", url: wrongUrl, identity: identityHash(db, role) },
+        (line) => output.push(line),
+      ),
+      refusal,
+    );
     for (const pin of [identityHash(db, "wrong_role"), identityHash("wrong_database", role)]) {
       await assert.rejects(
         run("apply", { ...approved, PRODUCTION_MIGRATION_IDENTITY_SHA256: pin }),
@@ -519,6 +533,33 @@ test("production refuses a missing pin before access and a changed identity befo
     const [state] =
       await client`select to_regnamespace('drizzle') as schema, to_regclass('public.users') as users`;
     assert.deepEqual({ ...state }, { schema: null, users: null });
+  });
+});
+
+test("production plan and verify check identity inside the journal transaction", async () => {
+  await fixture(async ({ client, env }) => {
+    const [{ db, role }] = await client`select current_database() as db, session_user as role`;
+    const approved = {
+      ...env,
+      ...productionEnv,
+      PRODUCTION_MIGRATION_IDENTITY_SHA256: identityHash(db, role),
+    };
+    const checked = [];
+    const run = (mode) =>
+      runMigration(mode, approved, {
+        testDatabase: true,
+        report: async (line) => {
+          if (line !== "Production migration database and role identity matched.") return;
+          const [runner] = await client`
+            select state from pg_catalog.pg_stat_activity
+            where datname = current_database() and pid <> pg_backend_pid()`;
+          assert.equal(runner?.state, "idle in transaction");
+          checked.push(mode);
+        },
+      });
+    assert.equal((await run("plan")).length, journal.entries.length);
+    await assert.rejects(run("verify"), /remain pending/);
+    assert.deepEqual(checked, ["plan", "verify"]);
   });
 });
 

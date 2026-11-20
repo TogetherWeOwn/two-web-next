@@ -126,7 +126,7 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
   return { target, url, testDatabase, identity };
 }
 
-async function assertProductionIdentity(connection, config, summary) {
+export async function assertProductionIdentity(connection, config, summary) {
   if (config.target !== "production") return;
   const [actual] = await connection`select pg_catalog.current_database()::text as database,
     session_user::text as authenticated, current_user::text as effective`;
@@ -325,8 +325,15 @@ export async function runMigration(mode, env = process.env, options = {}) {
   };
   try {
     if (mode !== "apply") {
-      await assertProductionIdentity(client, config, summary);
-      const pending = await plan(client);
+      // In production, a dropped connection must not resume on a new session
+      // after the identity check, even for a read-only plan or verification.
+      const pending =
+        config.target === "production"
+          ? await client.begin("read only", async (transaction) => {
+              await assertProductionIdentity(transaction, config, summary);
+              return plan(transaction);
+            })
+          : await plan(client);
       if (mode === "verify" && pending.length)
         refuse("Post-check failed: web migrations remain pending.");
       return pending;
