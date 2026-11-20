@@ -209,8 +209,47 @@ test("the report merge rejects partial or empty input before calling Vitest", as
   const blobs = join(dir, "vitest-blob");
   const cli = join(dir, "node_modules/vitest/vitest.mjs");
   await mkdir(blobs);
+  await mkdir(join(dir, "ci"));
   await mkdir(join(dir, "node_modules/vitest"), { recursive: true });
+  await writeFile(
+    join(dir, "ci/verify-vitest-shards.mjs"),
+    await readFile(new URL("./verify-vitest-shards.mjs", import.meta.url)),
+  );
+  await writeFile(
+    join(dir, "node_modules/vitest/package.json"),
+    JSON.stringify({ exports: { "./node": "./node.mjs" } }),
+  );
+  await writeFile(
+    join(dir, "node_modules/vitest/node.mjs"),
+    `import { resolve } from "node:path";
+export async function createVitest({ shard }) {
+  const [index, count] = shard.split("/");
+  if (count !== "3") throw new Error("Wrong shard count");
+  return {
+    config: { sequence: { sequencer: class {
+      async shard(specifications) {
+        return specifications.filter((specification) => specification.shard === index);
+      }
+    } } },
+    getRelevantTestSpecifications: async () => [
+      ...["1", "2", "3"].map((shard) => ({ shard, moduleId: resolve("shard-" + shard + ".test.ts") })),
+      { shard: "2", moduleId: resolve("extra.test.ts") },
+    ],
+    close: async () => {},
+  };
+}`,
+  );
   await writeFile(cli, 'console.log("merged"); process.exitCode = Number(process.env.MERGE_EXIT);');
+  // A Flatted Vitest tuple with one entry per file task and its filepath.
+  const blob = (paths) =>
+    JSON.stringify([
+      ["1", "2", "3", null, 0, "4"],
+      "5.1.0",
+      paths.map((_, index) => String(5 + 2 * index)),
+      [],
+      {},
+      ...paths.flatMap((filepath, index) => [{ filepath: String(6 + 2 * index) }, filepath]),
+    ]);
   const step = merge.split("      - name: Merge Node 22 Vitest reports\n")[1];
   const script = step.split("        run: |\n")[1];
   const run = (exit = 0) =>
@@ -221,13 +260,31 @@ test("the report merge rejects partial or empty input before calling Vitest", as
     });
   for (const shard of [1, 2, 3]) {
     assert.notEqual(run().status, 0);
-    await writeFile(join(blobs, `vitest-${shard}.json`), "blob");
+    const paths = [join(dir, `shard-${shard}.test.ts`)];
+    if (shard === 2) paths.push(join(dir, "extra.test.ts"));
+    await writeFile(join(blobs, `vitest-${shard}.json`), blob(paths));
   }
   const complete = run();
   assert.equal(complete.status, 0, complete.stderr);
   assert.equal(complete.stdout.trim(), "merged");
   assert.equal(run(9).status, 9);
-  await writeFile(join(blobs, "vitest-2.json"), "");
+  const shard2 = join(blobs, "vitest-2.json");
+  for (const [paths, error] of [
+    [["shard-2.test.ts"], /missing: extra\.test\.ts/],
+    [["shard-2.test.ts", "shard-1.test.ts"], /unexpected or duplicate: shard-1\.test\.ts/],
+    [
+      ["shard-2.test.ts", "extra.test.ts", "extra.test.ts"],
+      /unexpected or duplicate: extra\.test\.ts/,
+    ],
+  ]) {
+    await writeFile(shard2, blob(paths.map((path) => join(dir, path))));
+    const invalid = run();
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stderr, /vitest-2\.json: Vitest inventory mismatch/);
+    assert.match(invalid.stderr, error);
+    assert.doesNotMatch(invalid.stdout, /merged/);
+  }
+  await writeFile(shard2, "");
   assert.notEqual(run().status, 0);
 });
 

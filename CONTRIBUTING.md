@@ -193,9 +193,10 @@ selected, and fails on failure, cancellation or an unexpected skip.
 The Node 22.23.0 `engines` floor is asserted in each of three `node22-shard`
 jobs. The first shard also runs lint and typecheck. Each runs its share of the
 unit suite serially against its own Postgres service. For a selected run,
-`node22-compat` requires the matrix to succeed and merges all three Vitest
-reports; it fast-passes on docs-only and draft PRs. The `ci-ok` aggregator
-requires `docs-links`, `node22-compat` and every
+`node22-compat` requires the matrix to succeed and checks that each Vitest
+report lists exactly the files assigned by the configured sequencer before
+replaying all three reports. It fast-passes on docs-only and draft PRs.
+The `ci-ok` aggregator requires `docs-links`, `node22-compat` and every
 selected job's result, and reports the overall conclusion. In a run
 cancelled by a newer run on the same PR, both conclude cancelled rather than
 failed, and the newer run's `ci-ok` decides the merge. Main pushes and the nightly schedule
