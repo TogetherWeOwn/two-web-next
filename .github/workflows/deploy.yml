@@ -23,6 +23,7 @@ on:
           - events
           - home
           - events-join
+          - events-home
           - join
           - ember-pages
 
@@ -344,6 +345,7 @@ jobs:
         env:
           SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
           SMOKE_ALLOW_MISSING_BASELINE: "1"
+          SMOKE_EXPECT_JOIN_RENDERER: ${{ steps.kit-route-flags.outputs.join == 'true' && 'kit' || 'hono' }}
         run: |
           for i in 1 2 3 4 5 6; do
             if node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical; then

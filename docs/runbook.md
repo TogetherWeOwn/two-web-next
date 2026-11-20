@@ -381,19 +381,38 @@ binding isolation before any remote mutation.
    it does not change the next automatic deploy. Choose `archive` for only
    `GET /events/past`, or `archive-static` to add `GET /about` and `GET /faq`.
    Choose `events`, `home` or `join` for `/events`, `/` or `/join`,
-   `events-join` for `/events` and `/join` together, or `ember-pages` for all
+   `events-join` for `/events` and `/join` together, `events-home` for
+   `/events` and `/` together, or `ember-pages` for all
    three. Disabled Ember GET entries block
    selection before migrations or Worker mutations. HEAD follows GET; event
    detail, OAuth, recovery and write methods are unaffected. After revision
    verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
    to an unauthenticated GET that does not follow redirects. After changing the
    variable to `events`, confirm the next normal deploy passes
-   `node ci/staging-kit-route-check.mjs /events`. If `GET /join` is enabled in
-   the route manifest before `GET /`, use `events-join` to keep `/events` on
-   Kit while adding `/join` (`join` alone would turn `/events` off), then
-   `ember-pages` once `GET /` is enabled. Set the variable to `hono` or
-   remove it to restore Hono on subsequent automatic deploys. Missing or
-   malformed flags fail closed to Hono.
+   `node ci/staging-kit-route-check.mjs /events`.
+
+   Before changing the persistent variable, verify that the target `main`
+   revision contains both the selector for the new family and the cutovers
+   that enable its GET entries in the route manifest. For a family that adds
+   `/`, that includes the home cutover. Wait for older automatic staging
+   deploys to finish, including any still waiting for their `main` CI runs.
+   Automatic deploys check out the triggering CI SHA but read the current
+   staging variable at deploy time. An older selector can treat a new family
+   as unknown and send `/events` back to Hono.
+
+   - **Home first:** from `events`, select `events-home` when `GET /events`
+     and `GET /` are enabled. Switch to `ember-pages` once `GET /join` is
+     also enabled.
+   - **Join first:** from `events`, select `events-join` when `GET /events`
+     and `GET /join` are enabled. Once all three GET entries are enabled,
+     go straight from `events-join` to `ember-pages`; `events-home` would
+     send `/join` back to Hono.
+
+   Do not use `home` or `join` alone to add a route to `events`; either would
+   turn Kit off for `/events`. Never use `ember-pages` to work around a
+   disabled manifest entry; the selection refuses it. Set the variable to
+   `hono` or remove it to restore Hono on subsequent automatic deploys.
+   Missing or malformed flags fail closed to Hono.
 
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
    ([smoke checker](../bin/smoke.mjs)), covering 24 public routes: `/up`
@@ -412,10 +431,16 @@ binding isolation before any remote mutation.
    `/e/<key>` (404 branded missing-event HTML page: the fixed probe key
    exists in no database)
    and `/__smoke_unknown_route__` (404)
-   with CSP/nosniff/content-type/noindex/redirect assertions. The `/up` assertions
-   are DB/schema readiness, not liveness only; with the staging strict flag a literal
-   `unknown` in `queue.status` or `ready_wait_severity`, or a `critical`
-   `ready_wait_severity`, fails the deploy even though `/up` itself still returns 200.
+   with CSP/nosniff/content-type/noindex/redirect assertions. The deploy sets
+   `SMOKE_EXPECT_JOIN_RENDERER` to `kit` or `hono` from its `/join` route flag.
+   The smoke requires the selected renderer, its Join copy, and the
+   `join-oneclick` link to `/join/discord` outside `inert` or `hidden` markup.
+   For a staging diagnostic, set the same expectation from the deploy's
+   selection, not from the live response.
+   The `/up` assertions are DB/schema readiness, not liveness only. With the
+   staging strict flag, a literal `unknown` in `queue.status` or
+   `ready_wait_severity`, or a `critical` `ready_wait_severity`, fails the
+   deploy even though `/up` itself still returns 200.
    Queue `degraded` passes. The strict flag is staging-only: the apex production
    smoke uses the same 24-route shape with `--allow-indexable` and without the strict flag
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
@@ -1535,12 +1560,24 @@ the same URL, they share a two-slot client; otherwise each uses a one-slot clien
 and is independently measured and cleaned up within the same response deadline.
 
 The journal (`drizzle/meta/_journal.json`) is embedded in the Worker at build
-time. Only web tags `1000–1999` are checked against exact `created_at` timestamps
-in `drizzle.__drizzle_migrations`; bot rows and grandfathered `0000/0001` tags do
-not participate. A newer bot row or later web row cannot hide an earlier missing
-web migration. An empty ledger counts all bundled web migrations as pending; a
-missing, unreadable or malformed ledger reports `null`, never a false zero.
-Volatile `clock_timestamp()` in both DB queries avoids Hyperdrive query caching.
+time. Only web tags `1000–1999` are checked for exact `created_at` membership;
+bot rows and grandfathered `0000/0001` tags do not participate. A newer bot or
+web row cannot hide an earlier missing web migration. An empty ledger counts
+all bundled web migrations as pending; an unreadable or malformed ledger reports
+`null`, never a false zero. Volatile `clock_timestamp()` avoids Hyperdrive query caching.
+
+The Worker prefers the owner-controlled [timestamp view](web-readiness-projection.sql)
+`web_readiness.migration_timestamps`. Only a confirmed absent view permits the
+transitional read of `drizzle.__drizzle_migrations`. A permission error, timeout,
+or malformed result never permits fallback. Before the view exists, the failed
+view read and absence check add two transactions within the same response deadline.
+The migration and deploy pipeline does not apply the view. In a separate rollout,
+commit the schema, view, and runtime `USAGE` and `SELECT` grants in one transaction:
+a schema that exists without the runtime grant can make `/up` return 503 even
+while the legacy ledger is readable. Coordinate ledger revocation separately. A
+Worker that only knows the legacy ledger cannot report migration readiness once
+its direct access is removed. Do not treat this change as release or rollback
+qualification.
 
 DB ping + ledger share a **3-second response deadline**, running in parallel with
 the existing 3-second queue deadline. Each ping, ledger and queue read runs in a

@@ -17,6 +17,7 @@ export const REPORT_LIMITS = Object.freeze({
   journeys: 100,
 });
 
+const KIT_MAX_JOURNEYS = 200;
 const MAX_REASON_LENGTH = 200;
 const MAX_DIAGNOSTIC_COUNT = 10000;
 const DIAGNOSTICS = Object.freeze({
@@ -196,7 +197,7 @@ function collection(owner, key, addDiagnostic, required = false) {
   return [];
 }
 
-function collectTests(suites, out, addDiagnostic, parents = []) {
+function collectTests(suites, out, addDiagnostic, maxJourneys, parents = []) {
   for (const suite of suites) {
     if (!isRecord(suite)) {
       addDiagnostic("report_invalid_shape");
@@ -220,14 +221,14 @@ function collectTests(suites, out, addDiagnostic, parents = []) {
             if (!isRecord(item)) addDiagnostic("report_invalid_shape");
           }
         }
-        if (out.length === REPORT_LIMITS.journeys) {
+        if (out.length === maxJourneys) {
           addDiagnostic("report_too_large");
           return;
         }
         out.push({ file, title, test, path });
       }
     }
-    collectTests(collection(suite, "suites", addDiagnostic), out, addDiagnostic, path);
+    collectTests(collection(suite, "suites", addDiagnostic), out, addDiagnostic, maxJourneys, path);
   }
 }
 
@@ -255,7 +256,7 @@ function safeProvenance(provenance = {}) {
  */
 export function summarizeJourneys(
   report,
-  { qaAuthToken, provenance, inputError, outputError = false } = {},
+  { qaAuthToken, provenance, inputError, outputError = false, reportKind = "staging" } = {},
 ) {
   const diagnosticCounts = new Map();
   const addDiagnostic = (code, count = 1) => {
@@ -278,7 +279,8 @@ export function summarizeJourneys(
       else addDiagnostic("report_invalid_shape");
     }
     if (runnerErrors) addDiagnostic("runner_error", runnerErrors);
-    collectTests(collection(report, "suites", addDiagnostic), flat, addDiagnostic);
+    const maxJourneys = reportKind === "kit-parity" ? KIT_MAX_JOURNEYS : REPORT_LIMITS.journeys;
+    collectTests(collection(report, "suites", addDiagnostic), flat, addDiagnostic, maxJourneys);
   }
 
   if (outputError) addDiagnostic("output_unwritable");

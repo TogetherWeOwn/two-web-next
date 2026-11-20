@@ -724,6 +724,29 @@ describe("/up transaction-local server budgets", () => {
   });
 });
 
+describe("/up migration source fallback", () => {
+  it.each([
+    ["missing dependency of a present bridge", "42P01", [{ absent: false }]],
+    ["invalid absence check", "42P01", [{ absent: "true" }]],
+    ["permission refusal", "42501", [{ absent: true }]],
+    ["lock timeout", "55P03", [{ absent: true }]],
+    ["statement timeout", "57014", [{ absent: true }]],
+  ])("does not read the legacy ledger after %s", async (_label, code, absence) => {
+    const legacy = vi.fn(async () => [{ created_at: WEB_MIGRATIONS[0]!.when }]);
+    const client = healthSql({
+      migrations: Object.assign(new Error("bridge read failed"), { code }),
+      absence,
+      legacy,
+    });
+    expect(await databaseReadiness(client)).toEqual({
+      db: "ok",
+      pending_migrations: null,
+      migration_ledger: null,
+    });
+    expect(legacy).not.toHaveBeenCalled();
+  });
+});
+
 describe("/up bounded reads", () => {
   it.each(["ping", "migrations"] as const)(
     "a hung %s read and queue share a single 3 s response deadline",
@@ -798,7 +821,12 @@ describe.skipIf(!process.env.DATABASE_URL)("/up queue.failed redrive linkage", (
       (async (strings: TemplateStringsArray, ...values: unknown[]) => {
         const query = strings.reduce((text, part, i) => text + (i ? `$${i}` : "") + part, "");
         return target.unsafe(
-          query.replaceAll("drizzle.__drizzle_migrations", "__drizzle_migrations"),
+          query
+            .replaceAll("drizzle.__drizzle_migrations", "__drizzle_migrations")
+            .replaceAll(
+              "web_readiness.migration_timestamps",
+              `"${fixture.schemaName}".migration_timestamps`,
+            ),
           values as postgres.ParameterOrJSON<never>[],
           { prepare: true },
         );

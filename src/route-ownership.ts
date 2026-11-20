@@ -74,11 +74,11 @@ export interface RouteDecision {
 // shipped manifest instead of hard-coding "kit": flipping enabled flips the
 // gate for the right reason.
 export const ROUTE_MANIFEST: OwnedRoute[] = [
-  // The Kit home reads only the viewer's RSVPs. Hono owns GET / until cutover.
+  // GET also owns HEAD; disable this entry to restore Hono until retirement.
   {
     method: "GET",
     path: "/",
-    enabled: false,
+    enabled: true,
     reads: { resource: "member", action: "list", route: "home" },
   },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
@@ -599,11 +599,11 @@ export interface HookDispatchDeps {
   // Fixed, viewer-invariant home panels. No session or resolve callback.
   homePanelsFor?: (request: Request) => Promise<KitHomePanels>;
   homeRenewalFor?: (event: HookEventLike) => Promise<string | null>;
-  // The member-document proof is supplied only after audit release and full-HTML
+  // The account-document proof is supplied only after audit release and full-HTML
   // classification below; callers without it retain the moderator admin scope.
   authStatusCookieFor?: (
     event: HookEventLike,
-    releasedMemberDocument?: boolean,
+    releasedAccountDocument?: boolean,
   ) => Promise<string | null>;
   // Optional sliding-session renewal for the native Kit event detail. Runs
   // only after the member-read boundary releases a successful GET (see
@@ -1100,6 +1100,15 @@ async function dispatchOwnedRequest(
   }
   if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return response;
   const locals = event.locals as Partial<KitLocals> | undefined;
+  // Capture the audit release before the auth-status controller rewrites the body.
+  const renewHome =
+    route.path === "/" &&
+    response === releasedMemberResponse &&
+    event.request.method === "GET" &&
+    !event.isDataRequest &&
+    response.status === 200 &&
+    response.headers.get("content-type")?.includes("text/html") &&
+    locals?.status === "authenticated";
   if (
     deps.authStatusCookieFor &&
     event.request.method === "GET" &&
@@ -1109,16 +1118,17 @@ async function dispatchOwnedRequest(
   ) {
     // Match the owned manifest entry, not an arbitrary member-looking URL.
     // Only the exact buffered response released by the audit boundary qualifies.
-    let memberDocument = false;
+    let accountDocument = false;
     if (
-      response === releasedMemberResponse &&
-      locals.session?.member === true &&
-      ["/leaderboards/members", "/profile", "/members/:user"].includes(route.path)
+      renewHome ||
+      (response === releasedMemberResponse &&
+        locals.session?.member === true &&
+        ["/leaderboards/members", "/profile", "/members/:user"].includes(route.path))
     ) {
       const html = await response.clone().text();
-      memberDocument =
+      accountDocument =
         /<!doctype html>/i.test(html) && /<html[\s>]/i.test(html) && html.includes("</body>");
-      if (memberDocument) {
+      if (accountDocument) {
         const headers = new Headers(response.headers);
         headers.delete("content-length");
         response = new Response(
@@ -1137,8 +1147,8 @@ async function dispatchOwnedRequest(
     const adminDocument = /^\/admin(?:\/|$)/.test(event.url.pathname) && locals.session?.moderator;
     try {
       const cookie =
-        memberDocument || adminDocument
-          ? await deps.authStatusCookieFor(event, memberDocument)
+        accountDocument || adminDocument
+          ? await deps.authStatusCookieFor(event, accountDocument)
           : null;
       if (cookie) {
         const headers = new Headers(response.headers);
@@ -1161,14 +1171,6 @@ async function dispatchOwnedRequest(
   // bearer); a rotation store failure warns and likewise renews nothing —
   // the already-rendered member page still stands, and the old row stays
   // live because rotate is one atomic statement.
-  const renewHome =
-    route.path === "/" &&
-    response === releasedMemberResponse &&
-    event.request.method === "GET" &&
-    !event.isDataRequest &&
-    response.status === 200 &&
-    response.headers.get("content-type")?.includes("text/html") &&
-    locals?.status === "authenticated";
   const documentRotationFor = renewHome
     ? deps.homeRenewalFor
     : releasedEventDetailRenewsSession(route, event, response)

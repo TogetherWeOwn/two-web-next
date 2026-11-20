@@ -1,9 +1,16 @@
 import postgres from "postgres";
 import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "../db/connection";
+import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
+import { refreshSessionRoles, roleRecheckConfigFor } from "../session-role-refresh";
 import {
   createMemorySessionStore,
   createPostgresSessionStore,
+  type DbSessionRow,
+  hashToken,
+  isValidSessionToken,
+  newSessionToken,
+  SESSION_TTL_SECONDS,
   type SessionStore,
   type Sql,
 } from "../sessions";
@@ -41,7 +48,7 @@ export async function storeForEnv(env: Env): Promise<SessionStore> {
  * no live database connection while waiting (per-request clients connect
  * lazily on first query, inside the lock body — a queued waiter adds no
  * socket beyond the client its own request already owns). Single call site
- * (`issueSession` in the Hono entrypoint); not reentrant — never wrap it in itself.
+ * (`issueSession` below); not reentrant — never wrap it in itself.
  *
  * Cross-isolate note: this chain serializes only within one isolate. Two
  * callbacks for the same user on different isolates still overlap; that case
@@ -98,4 +105,118 @@ export async function withFreshLoginUserLock<T>(
     releaseTail();
     if (freshLoginChains.get(userId) === cur) freshLoginChains.delete(userId);
   }
+}
+
+/** Issue a fresh login session; the caller owns roster and cookie I/O. */
+export async function issueSession(
+  store: SessionStore,
+  row: DbSessionRow,
+  {
+    readPriorToken,
+    warnSweepFailure,
+  }: {
+    readPriorToken: () => Promise<unknown>;
+    warnSweepFailure: (error: unknown) => void;
+  },
+): Promise<string> {
+  const token = newSessionToken();
+  const tokenHash = await hashToken(token);
+  const replacement = {
+    tokenHash,
+    ...row,
+    expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
+  };
+  const prior = await readPriorToken();
+  // Malformed pre-login bearers never reach the store: the shared
+  // minted-shape gate rejects them before hashing (malformed prior =>
+  // create, never replace).
+  const priorHash = isValidSessionToken(prior) ? await hashToken(prior) : null;
+  // Serialize the insert+sweep per user (see withFreshLoginUserLock): the
+  // second overlapping issuance waits for the first to finish, so the final
+  // state equals a serialized order — newest live, previous revoked. The wait
+  // is bounded: a holder stuck past FRESH_LOGIN_LOCK_WAIT_MS (for example a
+  // disconnect-cancelled callback that never settles its tail) no longer wedges
+  // later logins; the overlap stays fail-closed. A sweep failure still
+  // completes sign-in (fail-open wins over strict newest-wins: both stay live
+  // rather than failing the login). A degenerate empty user id runs unlocked;
+  // Discord ids are never empty.
+  const runLocked =
+    typeof row.userId === "string" && row.userId
+      ? (fn: () => Promise<void>) => withFreshLoginUserLock(row.userId, fn)
+      : (fn: () => Promise<void>) => fn();
+  await runLocked(async () => {
+    // Fresh authentication revokes the presented pre-login/pre-join token
+    // atomically with the insert (a failed insert leaves the prior session
+    // intact; see store.replace). The token is revoked by hash because it can
+    // belong to a different user (shared terminal).
+    if (priorHash) {
+      await store.replace(priorHash, replacement);
+    } else {
+      await store.create(replacement);
+    }
+    // Session fixation: additionally revoke every other live session for this
+    // user so only the newest survives. The fresh row already exists: a sweep
+    // failure warns and sign-in still succeeds (fail-open on the sweep, never
+    // a logout-on-login). Token-hash-only.
+    try {
+      await store.revokeUserSessions(row.userId, tokenHash);
+    } catch (err) {
+      warnSweepFailure(err);
+    }
+  });
+  return token;
+}
+
+type SessionRead = {
+  store: SessionStore;
+  row: DbSessionRow;
+  renewal: { replacement: string; statusKey: string | null } | null;
+};
+
+/** Resolve a verified bearer and optionally rotate it. The caller owns cookie I/O. */
+export async function readSession(
+  token: unknown,
+  env: Env,
+  storeFor: () => Promise<SessionStore>,
+  rotateToken: boolean,
+): Promise<SessionRead | null> {
+  if (!isValidSessionToken(token)) return null;
+  // Anonymous public pages must not depend on session storage or its startup DDL.
+  const store = await storeFor();
+  const tokenHash = await hashToken(token);
+  const storedRow = await store.get(tokenHash);
+  if (!storedRow) return null;
+  // Mid-session role recheck: bits older than the cadence re-derive from
+  // Discord before they authorize (src/session-role-refresh.ts). A row that
+  // stopped being live during the refresh reads as no session.
+  const row = await refreshSessionRoles(store, tokenHash, storedRow, roleRecheckConfigFor(env));
+  if (!row) return null;
+  // Abortable calendar fragments validate expiry/revocation but must not delete
+  // the browser's current token: an aborted response cannot deliver a replacement.
+  if (!rotateToken) return { store, row, renewal: null };
+
+  // Rotate atomically, keeping the immediate predecessor valid for 10s (bounded
+  // by its own expiry) while the successor stays live. Rotation errors are
+  // outages, not guest reads: preserve classified database errors and normalize
+  // the rest to plain Error for the caller's existing outage boundary.
+  const statusKey = await store.statusHash(await hashToken(token));
+  const replacement = newSessionToken();
+  let rotated: boolean;
+  try {
+    rotated = await store.rotate(await hashToken(token), {
+      tokenHash: await hashToken(replacement),
+      ...row,
+      expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
+    });
+  } catch (err) {
+    if (isDatabaseUnavailable(err)) throw err;
+    throw new Error("Session rotation unavailable");
+  }
+  if (!rotated) {
+    // Re-read once for predecessor grace or a lost rotation race. Authenticated
+    // grace reads do not renew cookies; revoked or expired sessions stay guest.
+    const graceRow = await store.get(await hashToken(token));
+    return graceRow ? { store, row: graceRow, renewal: null } : null;
+  }
+  return { store, row, renewal: { replacement, statusKey } };
 }
