@@ -191,6 +191,7 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     await expect(inert).toHaveCount(0);
     await expect(home).toBeFocused();
     await page.setViewportSize({ ...mobile, width: 320 });
+    await expect(toggle).toBeFocused();
     await toggle.click();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await shot(page, "enhanced-open-320");

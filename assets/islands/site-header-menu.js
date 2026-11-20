@@ -46,7 +46,19 @@
     }
   }
   document.addEventListener("keydown", onKey, true);
-  compact.addEventListener("change", ({ matches }) => !matches && isOpen() && openMenu(false));
+  let focused = header.contains(document.activeElement) ? document.activeElement : null;
+  header.addEventListener("focusin", ({ target }) => {
+    focused = target;
+  });
+  header.addEventListener("focusout", ({ target, relatedTarget }) => {
+    if (relatedTarget || target.getClientRects().length) focused = null;
+  });
+  compact.addEventListener("change", ({ matches }) => {
+    if (!matches && isOpen()) openMenu(false);
+    const active = document.activeElement;
+    if (active !== document.body && active !== focused) return;
+    if (focused && !focused.getClientRects().length) (matches ? trigger : items()[0])?.focus();
+  });
   function adoptFragment() {
     if (!compact.matches || location.hash !== trigger.hash || isOpen()) return;
     openMenu(true);
