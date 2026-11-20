@@ -2,7 +2,7 @@
   const header = document.querySelector("[data-kit-site-header]");
   const trigger = header?.querySelector(".menu-toggle");
   const sheet = header?.querySelector(".menu-sheet");
-  if (!trigger || !sheet || header.hasAttribute("data-menu-ready")) return;
+  if (!trigger || !sheet || !("inert" in sheet) || header.hasAttribute("data-menu-ready")) return;
   const compact = matchMedia("(max-width: 820px)");
   let background = [];
   const items = () =>
