@@ -1,5 +1,5 @@
-// Hosted, source-only replay at the production origin. The transport and DB
-// stay on loopback; neither production config is given to Wrangler directly.
+// Hosted, source-only replay at the production origin. The replay transport and
+// DB stay on loopback. Only the credential-free upload dry run uses raw config.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -9,6 +9,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COMPANION_NAME, ENTRY_NAME } from "../../web/scripts/kit-facade-transaction.mjs";
 import { prepareInstalledKitWorker } from "../kit-worker-installed-output.mjs";
+import { assertKitProductionCandidate } from "../production-deploy-gate.mjs";
 import { readWranglerConfig } from "../wrangler-config.mjs";
 import {
   compareRecordings,
@@ -17,6 +18,7 @@ import {
   parseExceptions,
   report,
 } from "./compare.mjs";
+import { rehearsalContext, rehearseUpload } from "./upload-rehearsal.mjs";
 import { listPublicFiles, slug } from "./vectors.mjs";
 
 const repo = resolve(import.meta.dirname, "../..");
@@ -74,7 +76,7 @@ async function outputIdentity({ assets, worker }) {
       files[relative(root, path)] = hash(await readFile(path));
     }
   }
-  for (const name of [ENTRY_NAME, COMPANION_NAME, "_headers"])
+  for (const name of [ENTRY_NAME, COMPANION_NAME, "_headers", ".assetsignore"])
     assert.ok(files[join(basename(assets), name)], `missing installed ${name}`);
   return Object.fromEntries(Object.entries(files).sort(([a], [b]) => a.localeCompare(b)));
 }
@@ -163,15 +165,19 @@ async function main() {
   const save = (name, data) => writeFile(join(out, name), `${JSON.stringify(data, null, 2)}\n`);
   const rootBytes = readFileSync(join(repo, "wrangler.jsonc"));
   const kitBytes = readFileSync(join(repo, "web/wrangler.production.jsonc"));
+  const rootText = rootBytes.toString();
+  const kitText = kitBytes.toString();
+  assertKitProductionCandidate(rootText, kitText);
   const { hono, kit, flags } = productionTargets(
-    readWranglerConfig(rootBytes.toString()),
-    readWranglerConfig(kitBytes.toString()),
+    readWranglerConfig(rootText),
+    readWranglerConfig(kitText),
   );
+  const context = rehearsalContext(head);
   const installed = await prepareInstalledKitWorker(repo);
   const files = await outputIdentity(installed);
   const candidate = kit(installed.worker, installed.assets);
   const identity = {
-    sourceSha: head,
+    ...context,
     productionOrigin: hono.vars.APP_URL,
     flags,
     honoConfigSha256: hash(rootBytes),
@@ -217,7 +223,8 @@ async function main() {
     const diff = compareRecordings(shared(baseline.recording), shared(built.recording), exceptions);
     const assets = comparePreHookAssets(baseline.recording, built.recording, paths, names, csp);
     await save("comparison.json", {
-      sourceSha: head,
+      ...context,
+      kitConfigSha256: identity.kitConfigSha256,
       installedOutputSha256: identity.installedOutputSha256,
       honoRuntimePin: baseline.meta.pinnedSha,
       vectorCount: built.meta.vectorCount,
@@ -226,7 +233,24 @@ async function main() {
     });
     console.log(report(diff, "Hono vs installed Kit (production origin, all families off)"));
     console.log(report({ ...assets, approved: [], unused: [] }, "pre-hook asset security headers"));
-    if (diff.failures.length || assets.failures.length) process.exitCode = 1;
+    if (diff.failures.length || assets.failures.length) {
+      process.exitCode = 1;
+      return;
+    }
+    const rehearsal = await rehearseUpload({
+      repo,
+      installed,
+      configBytes: kitBytes,
+      identity,
+      context,
+      outputIdentity,
+    });
+    await save("upload-rehearsal.json", rehearsal);
+    // An incompatible tool is a recorded refusal, not a failed route replay
+    // or successful byte comparison. Nothing consumes this as a release gate.
+    if (rehearsal.outcome === "matched") console.log("Dry-run module bytes match parity inputs");
+    else
+      console.warn(`No upload rehearsal match (${rehearsal.outcome}); see upload-rehearsal.json`);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
