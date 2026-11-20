@@ -368,10 +368,11 @@ describe("member-detail review mode", () => {
       goingOccupancy: 0,
     };
     const upcoming = NEIGHBORS.next!;
+    const unrelated = { ...upcoming, id: 10, eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAE" };
     const { outcome } = await resolve(
       KEY,
       {
-        ...fakeStore({ event, related: [] }),
+        ...fakeStore({ event, related: [upcoming, unrelated] }),
         seriesFn: async () => ({
           hosts: [],
           previous: null,
@@ -398,6 +399,7 @@ describe("member-detail review mode", () => {
     expect(html).toContain('aria-labelledby="signup-record-heading"');
     expect(html).toContain(`href="/e/${upcoming.eventKey}">Next one: Fri 1 Feb</a>`);
     expect(html.split(`href="/e/${upcoming.eventKey}"`)).toHaveLength(2);
+    expect(html).toContain(`href="/e/${unrelated.eventKey}"`);
   });
 });
 

@@ -632,6 +632,7 @@ export async function resolveKitEventDetail(
       const review = wantsReview ? savedEventReview(event, now, search) : null;
       const zoneLabel = isValidZone(event.timezone) ? event.timezone : "UTC";
       const liveTime = liveDetailTime(event, now);
+      const nextInRecord = ended ? endedNext(series?.upcoming) : null;
       const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
@@ -678,7 +679,7 @@ export async function resolveKitEventDetail(
           isOngoing: Boolean(liveTime),
           isEnded: ended,
           lifecycle: ended ? detailLifecycle(event, zoneLabel) : null,
-          endedNext: ended ? endedNext(series?.upcoming) : null,
+          endedNext: nextInRecord,
           ...(liveTime ? { liveTime } : {}),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
@@ -724,7 +725,9 @@ export async function resolveKitEventDetail(
                 ? toLink(neighbors.next, now)
                 : null,
           },
-          related: related.map((link) => toLink(link, now)),
+          related: related
+            .filter((link) => link.eventKey !== nextInRecord?.key)
+            .map((link) => toLink(link, now)),
           series: series
             ? {
                 hosts: series.hosts,

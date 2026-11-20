@@ -2425,6 +2425,7 @@ test("Kit member event detail captures the ended record at both widths", async (
         "href",
         `/e/${nextKey}`,
       );
+      await expect(page.locator(`a[href="/e/${nextKey}"]`)).toHaveCount(1);
       if (width === 390) {
         await expect(
           page.locator(
