@@ -305,6 +305,7 @@ describe("Hono readSession (homepage)", () => {
       Object.defineProperty(env, "SESSION_STORE", { get: acquire });
       const res = await app.request("/", { headers: { cookie: await pair(value) } }, env);
       expect(res.status).toBe(200);
+      expect(await res.text()).toContain('data-testid="join"');
       expect(acquire).not.toHaveBeenCalled();
       expect(spy.readCalls()).toEqual([]);
     },
