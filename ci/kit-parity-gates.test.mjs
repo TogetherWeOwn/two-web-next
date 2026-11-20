@@ -1062,7 +1062,7 @@ test("enabled routes outside every journey scope fail via the catch-all", () => 
     `{ method: "GET", path: "/admin/queue/failed/:id/preview", enabled: true }`,
     `{ method: "GET", path: "/events/:key", enabled: true }`,
     `{ method: "GET", path: "/join/discord", enabled: true }`,
-    `{ method: "GET", path: "/", enabled: true }`,
+    `{ method: "GET", path: "/home", enabled: true }`,
     `{ method: "POST", path: "/events/past", enabled: true }`,
   ]) {
     const journeys = runUnitMode({
@@ -1115,6 +1115,55 @@ test("executed-run coverage is GET/HEAD /events/past, GET/HEAD /events, GET/HEAD
     isCoveredByExecutedRun({ method: "POST", path: "/auth/recover", enabled: true }),
     false,
   );
+});
+
+test("preview home fetch checks guest responses from both renderers", () => {
+  const stub = `
+globalThis.fetch = async (input) => {
+  const url = new URL(String(input.url ?? input));
+  if (url.pathname === "/up") return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  const kit = url.hostname.startsWith("kit.");
+  const join = kit
+    ? '<a href="/discord" data-testid="discord-join">Join with an invite link</a>'
+    : '<a data-testid="join" href="/auth/discord">Join with Discord</a>';
+  const html = '<link rel="canonical" href="https://next.togetherweown.com/">' +
+    '<a class="skip-link" href="#main">Skip</a><nav aria-label="Primary"></nav>' +
+    '<main id="main"><h1>The lobby is open.</h1>' + join + '</main><p>Welcome, guest</p>';
+  return new Response(html, { status: 200, headers: { "content-type": "text/html", "cache-control": "private, no-store", ...(kit ? { "x-two-renderer": "kit" } : {}) } });
+};
+`;
+  const { output } = runScript({
+    env: {
+      KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+      HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+    },
+    stub,
+  });
+  assert.match(output, /\[passed\] preview Kit \/: contract/);
+  assert.match(output, /\[passed\] preview Hono \/: no Kit marker/);
+});
+
+test("home parity exercises the guest contract and keeps write siblings uncovered", () => {
+  const manifestSource = `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }, { method: "GET", path: "/", enabled: true }`;
+  const journeys = runUnitMode({ stdout: { write: () => {} }, manifestSource });
+  for (const name of [
+    "good fixture passes",
+    "invite fallback passes",
+    "mutant heading fails",
+    "mutant join fails",
+    "mutant invite fallback fails",
+    "mutant own RSVP fails",
+    "mutant shared-cache fails",
+  ]) {
+    assert.equal(
+      journeys.find((journey) => journey.name === `unit: home ${name}`)?.status,
+      "passed",
+      name,
+    );
+  }
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/" }), true);
+  assert.equal(isCoveredByExecutedRun({ method: "HEAD", path: "/" }), true);
+  assert.equal(isCoveredByExecutedRun({ method: "POST", path: "/" }), false);
 });
 
 test("executed-run coverage includes the moderator join-attempts pair via its numeric detail instance", () => {
