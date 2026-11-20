@@ -90,7 +90,7 @@ test("built Ember shell preserves its landmarks and account states without JavaS
             await page.reload();
           }
           const fallback = menu(page, "link");
-          const sheet = page.locator("#menu-sheet");
+          const sheet = page.locator(".menu-sheet");
           if (viewport.width === 390) {
             await expect(sheet).toBeHidden();
             assert.equal(await fallback.getAttribute("aria-expanded"), null);
@@ -104,10 +104,14 @@ test("built Ember shell preserves its landmarks and account states without JavaS
             await expect(page.locator("[inert]")).toHaveCount(0);
             if (state !== "hidden") await expect(account).toHaveCSS("justify-self", "stretch");
             await shot(page, `nojs-${state}-open-390`);
-            await sheet.getByRole("link", { name: "Close menu" }).press("Tab");
-            await expect(page.getByRole("link", { name: "About", exact: true })).toBeFocused();
-            await expect(sheet).toBeHidden();
-            await fallback.click();
+            const close = link("Close menu");
+            const about = page.getByRole("link", { name: "About", exact: true });
+            await close.focus();
+            for (const target of [about, close, about]) {
+              await page.keyboard.press(target === close ? "Shift+Tab" : "Tab");
+              await expect(target).toBeFocused();
+            }
+            await expect(sheet.locator("..")).toHaveCSS("position", "static");
           }
           if (state === "member") {
             const button = page.getByTestId(viewport.width === 390 ? "menu-signout" : "signout");
@@ -135,7 +139,7 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
   await withKitOfflineBrowser(options, async ({ page, html }) => {
     const url = page.url();
     const toggle = menu(page);
-    const sheet = page.locator("#menu-sheet");
+    const sheet = page.locator(".menu-sheet");
     const home = sheet.getByRole("link", { name: "Home", exact: true });
     const key = (name) => page.keyboard.press(name);
     const inert = page.locator("main[inert], footer[inert]");

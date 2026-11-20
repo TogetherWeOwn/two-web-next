@@ -1,8 +1,7 @@
-// The fragment links work before this loads. The island owns interaction only.
 (() => {
   const header = document.querySelector("[data-kit-site-header]");
   const trigger = header?.querySelector(".menu-toggle");
-  const sheet = header?.querySelector("#menu-sheet");
+  const sheet = header?.querySelector(".menu-sheet");
   if (!trigger || !sheet || header.hasAttribute("data-menu-ready")) return;
   const compact = matchMedia("(max-width: 820px)");
   let background = [];

@@ -33,7 +33,7 @@ let {
 const menuIsland = '<script src="/islands/site-header-menu.js" defer></' + "script>";
 </script>
 
-{#snippet primary()}
+{#snippet menuContent()}
   <nav class="main-nav" aria-label="Primary">
     <a href="/" aria-current={activeNav === "home" ? "page" : undefined}>Home</a>
     <a
@@ -50,15 +50,9 @@ const menuIsland = '<script src="/islands/site-header-menu.js" defer></' + "scri
         aria-current={activeNav === "leaderboard" ? "page" : undefined}>Leaderboard</a
       >{/if}
   </nav>
-{/snippet}
-
-{#snippet lockup(compact: boolean)}
-  <a class="brand" class:menu-brand={compact} href="/" aria-label="Together We Own homepage">
+  <a class="brand" href="/" aria-label="Together We Own homepage">
     <img src="/logo.svg" width="180" height="50" alt="Together We Own" />
   </a>
-{/snippet}
-
-{#snippet account()}
   {#if !hideAccount}
     <nav class="header-account" class:menu-signed-in={authenticated} aria-label="Account">
       {#if accountChrome}
@@ -70,27 +64,24 @@ const menuIsland = '<script src="/islands/site-header-menu.js" defer></' + "scri
         </div>
       {/if}
       {#if authenticated}
-        <div class="menu-account-actions">
+        <form class="menu-account-actions" method="post" action="/logout">
           {#if member || activeNav === "leaderboard"}<a href="/profile">Profile</a>{/if}
-          <form method="post" action="/logout">
-            <button type="submit" data-testid="menu-signout">Sign out</button>
-          </form>
-        </div>
+          <button type="submit" data-testid="menu-signout">Sign out</button>
+        </form>
       {/if}
     </nav>
   {/if}
 {/snippet}
-
 <a class="skip-link" href="#main">Skip to content</a>
-<header class="bar site-header" data-kit-site-header>
-  {@render lockup(true)}
-  <a class="menu-toggle" id="kit-menu" href="#menu-sheet" aria-label="Menu" aria-controls="menu-sheet">
+<header class="bar site-header" id="menu-sheet" data-kit-site-header>
+  <a class="brand menu-brand" href="/" aria-label="Together We Own homepage">
+    <img src="/logo.svg" width="180" height="50" alt="Together We Own" />
+  </a>
+  <a class="menu-toggle" id="kit-menu" href="#menu-sheet" aria-label="Menu" aria-controls="kit-menu-panel">
     <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
   </a>
-  <div class="menu-sheet" id="menu-sheet">
-    {@render primary()}
-    {@render lockup(false)}
-    {@render account()}
+  <div class="menu-sheet" id="kit-menu-panel">
+    {@render menuContent()}
     <a class="menu-close" href="#kit-menu">Close menu</a>
   </div>
 </header>
