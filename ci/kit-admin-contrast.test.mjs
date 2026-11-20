@@ -17,7 +17,7 @@ import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit.ts";
 import { EventFormPage, FeaturedFormPage } from "../src/admin/pages.tsx";
 import { EventEditableFields } from "../src/admin/pages/event-editable-fields.tsx";
 import { parseRecurrenceForm } from "../src/admin/recurrence.ts";
-import { parseEventForm, ValidationError } from "../src/admin/validation.ts";
+import { parseHumanEventForm, ValidationError } from "../src/admin/validation.ts";
 
 const output = resolve("web/.svelte-kit/output");
 const evidence = process.env.KIT_ADMIN_CONTRAST_EVIDENCE_DIR;
@@ -56,7 +56,7 @@ function rejectedFields(values, ...parsers) {
   }
   return fields;
 }
-const createErrors = rejectedFields(createRejected, parseEventForm, parseRecurrenceForm);
+const createErrors = rejectedFields(createRejected, parseHumanEventForm, parseRecurrenceForm);
 assert.deepEqual(
   Object.keys(createErrors).sort(),
   ["accessibility_notes", "join_instructions", "join_url", "organizer_name", "recurrence_count"],
@@ -138,7 +138,7 @@ before(async () => {
   assert.equal(populatedEvent.kind, "ok");
   // The rejected edit keeps the saved heading; the form echoes the submission.
   const editRejected = { ...event.view.values, title: editRejectedTitle };
-  const editErrors = rejectedFields(editRejected, parseEventForm);
+  const editErrors = rejectedFields(editRejected, parseHumanEventForm);
   assert.deepEqual(Object.keys(editErrors), ["title"], "only the title is rejected");
   fixtures = [
     { name: "event-new", path: "/admin/events/new", data: buildEventCreateView() },
