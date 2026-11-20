@@ -401,6 +401,33 @@ jobs:
         run: node workflow-tip/ci/worker-bundle-evidence.mjs create dist-production
         env:
           BUILD_SHA: ${{ needs.preflight.outputs.sha }}
+      # Inert Kit production candidate: build-only, no credentials, never uploaded
+      # (the upload stays dist-production/worker.js). Older targets skip it.
+      - name: Check the inert Kit production candidate config
+        if: hashFiles('web/wrangler.production.jsonc') != ''
+        run: node workflow-tip/ci/production-deploy-gate.mjs --kit-candidate
+      - name: Build the inert Kit production candidate without deploying
+        if: hashFiles('web/wrangler.production.jsonc') != ''
+        run: |
+          set -euo pipefail
+          npm ci --prefix web --include=dev --no-audit --no-fund
+          npm run build --prefix web
+          cd web
+          npx wrangler deploy --dry-run --config wrangler.production.jsonc --outdir dist-production-kit --metafile dist-production-kit/bundle-meta.json
+      - name: Inventory the inert Kit production candidate
+        id: kit-inventory
+        if: hashFiles('web/wrangler.production.jsonc') != ''
+        run: node workflow-tip/ci/worker-bundle-evidence.mjs create web/dist-production-kit kit
+        env:
+          BUILD_SHA: ${{ needs.preflight.outputs.sha }}
+      - name: Archive the inert Kit production candidate inventory
+        if: ${{ !cancelled() && steps.kit-inventory.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: worker-bundle-production-kit-${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: web/dist-production-kit/
+          if-no-files-found: error
+          retention-days: 30
       - name: Require production-only Cloudflare credentials
         run: node ci/production-deploy-gate.mjs --credentials
         env:

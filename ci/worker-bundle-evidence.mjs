@@ -1,9 +1,10 @@
-// Production Hono pilot only. A build inventory is not a deployment receipt.
+// Production Hono pilot, plus the inert Kit candidate as build-only evidence.
+// A build inventory is not a deployment receipt.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { builtinModules, createRequire } from "node:module";
 import { lstatSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const SCHEMA = "two.worker-bundle-inventory.v1";
@@ -53,6 +54,35 @@ function identity(value) {
   return value;
 }
 
+// Wrangler roots metafile paths at the config's directory. The Kit candidate
+// builds from web/ with its own config; it is never uploaded or deployed.
+export const PROFILES = {
+  hono: { project: "", entry: "worker.js", config: "wrangler.jsonc" },
+  kit: {
+    project: "web",
+    entry: "_worker.js",
+    config: "web/wrangler.production.jsonc",
+    assets: "web/.svelte-kit/cloudflare",
+  },
+};
+
+function profileOf(name) {
+  assert.ok(Object.hasOwn(PROFILES, name), `unknown bundle profile: ${name}`);
+  return PROFILES[name];
+}
+
+// Every regular file under the asset directory, sorted; links fail closed.
+function assetFiles(root, directory, prefix = "") {
+  return readdirSync(resolve(root, directory, prefix), { withFileTypes: true })
+    .map((entry) => `${prefix}${entry.name}`)
+    .sort((a, b) => a.localeCompare(b))
+    .flatMap((path) =>
+      lstatSync(resolve(root, directory, path)).isDirectory()
+        ? assetFiles(root, directory, `${path}/`)
+        : [{ ...file(root, `${directory}/${path}`), path }],
+    );
+}
+
 export function packageRoot(path) {
   const parts = path.split("/");
   const at = parts.lastIndexOf("node_modules");
@@ -63,14 +93,19 @@ export function packageRoot(path) {
   return { name, root: parts.slice(0, at + 1 + count).join("/") };
 }
 
-export function createInventory(root, directory, context) {
+export function createInventory(root, directory, context, profileName = "hono") {
   identity(context);
+  const profile = profileOf(profileName);
+  const { project, entry } = profile;
+  const at = (path) => (project ? posix.normalize(`${project}/${path}`) : path);
+  const outdir = project ? posix.relative(project, directory) : directory;
+  assert.ok(at(outdir) === directory && !outdir.startsWith(".."), "outdir outside project");
   const build = resolve(root, directory);
   // Additional Wrangler modules are not necessarily represented by esbuild's
   // outputs. Fail closed rather than claiming an incomplete runtime inventory.
   const allowed = new Set([
-    "worker.js",
-    "worker.js.map",
+    entry,
+    `${entry}.map`,
     "README.md",
     "bundle-meta.json",
     "inventory.json",
@@ -85,8 +120,8 @@ export function createInventory(root, directory, context) {
   object(meta.outputs, "metafile outputs");
   assert.ok(Object.keys(meta.inputs).length > 0, "empty metafile inputs");
   assert.deepEqual(
-    Object.keys(meta.outputs).sort(),
-    [`${directory}/worker.js`, `${directory}/worker.js.map`].sort(),
+    Object.keys(meta.outputs).map(at).sort(),
+    [`${directory}/${entry}`, `${directory}/${entry}.map`].sort(),
     "unsupported output set",
   );
   const packages = new Map();
@@ -94,7 +129,8 @@ export function createInventory(root, directory, context) {
   const externals = new Set();
   const outputs = Object.entries(meta.outputs)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([path, output]) => {
+    .map(([key, output]) => {
+      const path = at(key);
       object(output, "output");
       object(output.inputs, "output inputs");
       assert.ok(Array.isArray(output.imports), "output imports missing");
@@ -109,7 +145,10 @@ export function createInventory(root, directory, context) {
           Number.isSafeInteger(contribution.bytesInOutput) && contribution.bytesInOutput >= 0,
           "invalid contribution",
         );
-        contributions.set(input, (contributions.get(input) ?? 0) + contribution.bytesInOutput);
+        contributions.set(
+          at(input),
+          (contributions.get(at(input)) ?? 0) + contribution.bytesInOutput,
+        );
       }
       const record = file(root, path);
       assert.equal(record.bytes, output.bytes, "stale metafile output size");
@@ -117,7 +156,8 @@ export function createInventory(root, directory, context) {
     });
   const inputs = Object.entries(meta.inputs)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([path, input]) => {
+    .map(([key, input]) => {
+      const path = at(key);
       const record = file(root, path);
       assert.equal(record.bytes, input.bytes, "stale metafile input size");
       const pkg = packageRoot(path);
@@ -138,10 +178,9 @@ export function createInventory(root, directory, context) {
       };
     });
   const unknownExternals = [...externals].filter((name) => !nativeExternals.has(name)).sort();
-  const wrangler = JSON.parse(
-    readFileSync(inside(root, "node_modules/wrangler/package.json"), "utf8"),
-  );
-  const requireWrangler = createRequire(inside(root, "node_modules/wrangler/package.json"));
+  const wranglerManifest = inside(root, at("node_modules/wrangler/package.json"));
+  const wrangler = JSON.parse(readFileSync(wranglerManifest, "utf8"));
+  const requireWrangler = createRequire(wranglerManifest);
   const esbuild = requireWrangler("esbuild/package.json");
   assert.equal(
     esbuild.version,
@@ -151,20 +190,27 @@ export function createInventory(root, directory, context) {
   return {
     schema: SCHEMA,
     evidence: "build-only",
+    ...(project ? { candidate: "inert-kit" } : {}),
     ...context,
     tools: { node: process.versions.node, wrangler: wrangler.version, esbuild: esbuild.version },
     build: {
-      command: `wrangler deploy --dry-run --env production --outdir ${directory} --metafile ${directory}/bundle-meta.json`,
-      config: file(root, "wrangler.jsonc"),
+      command: project
+        ? `wrangler deploy --dry-run --config ${posix.relative(project, profile.config)} --outdir ${outdir} --metafile ${outdir}/bundle-meta.json`
+        : `wrangler deploy --dry-run --env production --outdir ${directory} --metafile ${directory}/bundle-meta.json`,
+      config: file(root, profile.config),
       lockfile: file(root, "package-lock.json"),
+      ...(project ? { projectLockfile: file(root, at("package-lock.json")) } : {}),
     },
     metafile: { ...metaFile, path: "bundle-meta.json" },
     // v1 permits one runtime JS module; maps are archived evidence, not runtime.
     bundle: {
       algorithm: "sha256",
-      sha256: outputs.find((item) => item.path === "worker.js").sha256,
-      entry: "worker.js",
+      sha256: outputs.find((item) => item.path === entry).sha256,
+      entry,
     },
+    ...(profile.assets
+      ? { assets: { directory: profile.assets, files: assetFiles(root, profile.assets) } }
+      : {}),
     outputs,
     inputs,
     packages: [...packages.values()].sort((a, b) => a.manifest.path.localeCompare(b.manifest.path)),
@@ -174,12 +220,12 @@ export function createInventory(root, directory, context) {
   };
 }
 
-export function verifyInventory(root, directory, expected) {
+export function verifyInventory(root, directory, expected, profileName = "hono") {
   const raw = readFileSync(inside(root, `${directory}/inventory.json`), "utf8");
   const saved = JSON.parse(raw);
   assert.equal(saved.schema, SCHEMA, "unsupported inventory schema");
   identity(expected);
-  const actual = createInventory(root, directory, expected);
+  const actual = createInventory(root, directory, expected, profileName);
   assert.deepEqual(saved, actual, "missing, stale or invalid bundle evidence");
   return { inventory: actual, inventorySha256: sha256(raw) };
 }
@@ -243,7 +289,12 @@ export function deploymentReceipt(verified, upload, versionId) {
 }
 
 function main() {
-  const [command, directory = "dist-production"] = process.argv.slice(2);
+  const [command, directory = "dist-production", profileName = "hono"] = process.argv.slice(2);
+  profileOf(profileName);
+  assert.ok(
+    profileName === "hono" || command === "create" || command === "verify",
+    "the Kit candidate is build-only: create or verify",
+  );
   const root = process.cwd();
   const context = identity({
     sourceSha: process.env.BUILD_SHA,
@@ -255,11 +306,11 @@ function main() {
   if (command === "create") {
     writeFileSync(
       resolve(root, directory, "inventory.json"),
-      json(createInventory(root, directory, context)),
+      json(createInventory(root, directory, context, profileName)),
       { flag: "wx" },
     );
   } else {
-    const verified = verifyInventory(root, directory, context);
+    const verified = verifyInventory(root, directory, context, profileName);
     if (command === "verify") {
       console.log(
         json({
@@ -287,7 +338,9 @@ function main() {
         { flag: "wx" },
       );
     } else {
-      throw new Error("usage: worker-bundle-evidence.mjs create|verify|uploaded|deployed [outdir]");
+      throw new Error(
+        "usage: worker-bundle-evidence.mjs create|verify|uploaded|deployed [outdir] [hono|kit]",
+      );
     }
   }
 }
