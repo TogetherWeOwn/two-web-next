@@ -55,7 +55,8 @@ test("dry-run multipart size and framing are bounded", async () => {
   await assert.rejects(compareDryRun(atLimit, expected, tag), /envelope boundary/);
   await assert.rejects(compareDryRun(invalid, expected, tag), /envelope size/);
   const body = await multipart(modules);
-  await assert.rejects(compareDryRun(body.subarray(1), expected, tag), /envelope boundary/);
+  const malformed = Buffer.concat([Buffer.from("!"), body]);
+  await assert.rejects(compareDryRun(malformed, expected, tag), /envelope boundary/);
   await assert.rejects(compareDryRun(body.subarray(0, -5), expected, tag), /multipart body/);
 });
 
