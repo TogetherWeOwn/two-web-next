@@ -92,7 +92,7 @@ export function registerCreateContentPersistenceAcceptance() {
                 accessibilityNotes: "Step-free entrance; quiet room available.",
                 organizer_name: "Riley & friends",
                 join_url: "https://meet.example.test/lobby?room=9&mode=public",
-                join_instructions: "Use the public lobby.\r\nAsk the host for the next game.",
+                join_instructions: "Use the public lobby.\nAsk the host for the next game.",
               }
             : {
                 accessibilityNotes: null,
