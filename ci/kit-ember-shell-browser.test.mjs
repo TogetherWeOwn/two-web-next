@@ -148,8 +148,8 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     const url = page.url();
     const toggle = menu(page);
     const sheet = page.locator(".menu-sheet");
-    const home = sheet.getByRole("link", { name: "Home", exact: true });
-    const key = (name) => page.keyboard.press(name);
+    const row = (name, role = "link") => sheet.getByRole(role, { name, exact: true });
+    const home = row("Home");
     const inert = page.locator("main[inert], footer[inert]");
     assert.match(html, /<script src="\/islands\/site-header-menu\.js" defer>/);
     assert.doesNotMatch(html, /_app\/immutable\/(entry|nodes)/);
@@ -157,7 +157,7 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     await toggle.focus();
     await shot(page, "enhanced-closed-390");
     for (let i = 0; i < 10; i++) {
-      await key("Tab");
+      await page.keyboard.press("Tab");
       assert.equal(await sheet.locator(":focus").count(), 0);
     }
     await toggle.click();
@@ -165,15 +165,14 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     await expect(inert).toHaveCount(2);
     await expect(sheet.getByText("Close menu")).toBeHidden();
     await shot(page, "keyboard-open-390");
-    const signIn = sheet.getByTestId("signin");
-    await expect(signIn).toHaveCSS("justify-content", "flex-start");
-    for (const [i, target] of [toggle, signIn, toggle, home].entries()) {
-      await key(i < 2 ? "Shift+Tab" : "Tab");
+    await expect(row("Sign in with Discord")).toHaveCSS("justify-content", "flex-start");
+    for (const [i, target] of [toggle, row("Sign in with Discord"), toggle, home].entries()) {
+      await page.keyboard.press(i < 2 ? "Shift+Tab" : "Tab");
       await expect(target).toBeFocused();
     }
     const axe = new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]);
     assert.deepEqual((await axe.analyze()).violations, []);
-    for (const close of [() => key("Escape"), () => toggle.press("Enter")]) {
+    for (const close of [() => page.keyboard.press("Escape"), () => toggle.press("Enter")]) {
       await close();
       await expect(toggle).toBeFocused();
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -184,29 +183,30 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     await home.click();
     await expect(sheet).toBeHidden();
     await expect(toggle).not.toBeFocused();
-    await page.setViewportSize({ ...mobile, width: 820 });
-    await page.goto(`${url}${member}#menu-sheet`);
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await page.setViewportSize({ ...mobile, width: 821 });
-    await expect(inert).toHaveCount(0);
-    await expect(home).toBeFocused();
+    for (const start of [home, toggle]) {
+      await page.setViewportSize({ ...mobile, width: 820 });
+      await page.goto(`${url}${member}#menu-sheet`);
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      if (start === toggle) await page.keyboard.press("Shift+Tab");
+      await expect(start).toBeFocused();
+      await page.setViewportSize({ ...mobile, width: 821 });
+      await expect(inert).toHaveCount(0);
+      await expect(home).toBeFocused();
+    }
     await page.setViewportSize({ ...mobile, width: 320 });
     await expect(toggle).toBeFocused();
     await toggle.click();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await shot(page, "enhanced-open-320");
     await page.setViewportSize(mobile);
-    const board = sheet.getByRole("link", { name: "Leaderboard" });
-    const account = sheet.getByRole("navigation", { name: "Account" });
-    const profile = sheet.getByRole("link", { name: "Profile", exact: true });
     for (const [name, search, count, current] of states) {
       await open(search);
       await toggle.click();
-      await expect(profile).toHaveCount(Number(name === "member"));
-      await expect(sheet.getByRole("button", { name: "Sign out" })).toHaveCount(count);
+      await expect(row("Profile")).toHaveCount(Number(name === "member"));
+      await expect(row("Sign out", "button")).toHaveCount(count);
       await expect(sheet.locator("[aria-current]")).toHaveAttribute("aria-current", current);
-      await expect(board).toHaveCount(Number(current === "location"));
-      await expect(account).toHaveCount(Number(name !== "hidden"));
+      await expect(row("Leaderboard")).toHaveCount(Number(current === "location"));
+      await expect(row("Account", "navigation")).toHaveCount(Number(name !== "hidden"));
       await shot(page, `${name}-menu-open-390`);
     }
     await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
