@@ -92,7 +92,10 @@ async function assertSingleServerError(page, id, message) {
     [`${id}-error`],
   );
   const errors = await page.locator(`.field:has(#${id}) .error:visible`).allTextContents();
-  assert.deepEqual(errors.map((text) => text.trim()), [message]);
+  assert.deepEqual(
+    errors.map((text) => text.trim()),
+    [message],
+  );
   assert.equal(await control.evaluate((el) => el.validationMessage), message);
 }
 
@@ -503,6 +506,30 @@ describe("Kit admin contrast", () => {
                 2,
               ),
             );
+          }
+          if (name === "event-edit-invalid") {
+            // Real submit events, but no request or write leaves the fixture.
+            const form = page.locator("form[data-event-editor]");
+            await form.evaluate((el) => {
+              el.addEventListener("submit", (event) => {
+                event.preventDefault();
+                el.setAttribute("data-submitted-title", new FormData(el).get("title"));
+              });
+            });
+            const save = page.getByTestId("save-event");
+            await save.click();
+            assert.equal(await form.getAttribute("data-submitted-title"), null);
+
+            const title = page.locator("#f-title");
+            await title.fill("Corrected game night");
+            assert.equal(await title.evaluate((el) => el.validity.valid), true);
+            assert.equal(
+              (await page.locator("#f-title-error").textContent()).trim(),
+              "Keep the title to 100 characters.",
+            );
+            assert.equal(await summary.isVisible(), true);
+            await save.click();
+            assert.equal(await form.getAttribute("data-submitted-title"), "Corrected game night");
           }
           assert.deepEqual(unexpected, [], "no live or mutating requests");
           assert.deepEqual(errors, [], "shipped islands execute without errors");
