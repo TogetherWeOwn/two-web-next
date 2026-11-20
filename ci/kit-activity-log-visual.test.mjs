@@ -22,12 +22,12 @@ test("capture refuses renderer, fixture content and keyboard drift", () => {
   assert.throws(() => validateView(["unapproved"], state, false, false), /content/);
 });
 
-test("keyboard capture drives native keys before an isolated Lighthouse timeout", async () => {
+test("capture isolates Lighthouse navigation timeouts and rejects a Hono document", async () => {
   const shots = [];
   const keys = [];
   const noop = () => undefined;
   let closed = 0;
-  let closedBeforeMeasure;
+  let renderer = "kit";
   let intercept;
   const browser = {
     newContext: async () => {
@@ -36,10 +36,22 @@ test("keyboard capture drives native keys before an isolated Lighthouse timeout"
       const page = {
         goto: async (href) => {
           url = href;
+          if (closed === 5) {
+            void intercept({
+              request: () => ({
+                url: () => href,
+                isNavigationRequest: () => true,
+                method: () => "GET",
+              }),
+              fetch: () => new Promise((_, reject) => setImmediate(reject, new Error("timeout"))),
+              abort: noop,
+            });
+            throw new Error("navigation timed out first");
+          }
           return {
             url: () => url,
             status: () => 200,
-            headers: () => ({ "x-two-renderer": "kit", "cache-control": "private, no-store" }),
+            headers: () => ({ "x-two-renderer": renderer, "cache-control": "private, no-store" }),
           };
         },
         on: noop,
@@ -69,20 +81,15 @@ test("keyboard capture drives native keys before an isolated Lighthouse timeout"
       };
     },
   };
-  const measure = async (_, url) => {
-    closedBeforeMeasure = closed;
-    await intercept({
-      request: () => ({ url: () => url, isNavigationRequest: () => true, method: () => "GET" }),
-      fetch: () => Promise.reject(new Error("timeout")),
-      abort: noop,
-    });
-    return "partial result";
-  };
+  const measure = () => assert.fail("Lighthouse must not measure a failed navigation");
   assert.equal(await collectVisuals(browser, {}, ".", noop, measure), null);
-  assert.equal(closedBeforeMeasure, 5);
   assert.equal(closed, 6);
   assert.deepEqual(shots, Object.keys(viewportPngs));
   assert.deepEqual(keys, [...Array(11).fill("Tab"), "ArrowRight"]);
+  renderer = "hono";
+  shots.length = 0;
+  await assert.rejects(collectVisuals(browser, {}, ".", noop, measure), /provenance drift/);
+  assert.deepEqual(shots, []);
 });
 
 test("only the protected diagnostic publishes the validated directory", () => {

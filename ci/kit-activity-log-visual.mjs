@@ -99,9 +99,12 @@ async function guardedPage(browser, session, [width, height], url, render, repor
   let unavailable = false;
   let result;
   try {
+    let navigation;
     await context.addCookies([session]);
     await context.route("**/*", async (route) => {
-      const verified = await serve(route, url).catch(() => false);
+      const check = serve(route, url).catch(() => false);
+      if (route.request().isNavigationRequest()) navigation = check;
+      const verified = await check;
       if (verified) return;
       violation ||= verified === false || !reportOnly;
       unavailable ||= verified === null;
@@ -115,6 +118,8 @@ async function guardedPage(browser, session, [width, height], url, render, repor
     page.on("pageerror", markViolation);
     if (!reportOnly) page.on("console", markViolation);
     const response = await page.goto(url).catch(() => null);
+    // Navigation can time out before the intercepted fetch classifies the error.
+    if (reportOnly && !response) await navigation;
     if (
       !unavailable &&
       (!response || response.url() !== url || !kitDocument(response.status(), response.headers()))
