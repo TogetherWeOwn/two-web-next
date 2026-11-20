@@ -3,7 +3,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "@babel/parser";
-import { traverseFast } from "@babel/types";
+import traverse from "@babel/traverse";
+import type { Identifier } from "@babel/types";
 import { describe, expect, it } from "vitest";
 import {
   JOURNEY_TTL_SECONDS as JOIN_JOURNEY_TTL_SECONDS,
@@ -331,61 +332,85 @@ const CODEC_AGE_INDEX = new Map([
   ["setSignedEventCookie", 4],
 ]);
 
-// Match direct calls through static imports of the codec, not unrelated functions with the same name.
+function isPinnedOrigin(name: string, path: string): boolean {
+  return (
+    PINNED_COOKIE_LIFETIMES.includes(name) &&
+    PINNED_COOKIE_ORIGINS[name]!.some((origin) => origin === path || origin.startsWith(`${path}.`))
+  );
+}
+
+// Follow lexical bindings for direct codec imports and the pinned lifetime argument.
 function unpinnedCodecCalls(where: string, text: string): string[] {
-  const { program } = parse(text, {
+  const ast = parse(text, {
     sourceType: "module",
     plugins: where.endsWith(".tsx") ? ["typescript", "jsx"] : ["typescript"],
   });
-  const writers = new Map<string, number>();
-  const namespaces = new Set<string>();
-  for (const node of program.body) {
+  const writers = new Map<Identifier, number>();
+  const namespaces = new Set<Identifier>();
+  const lifetimes = new Set<Identifier>();
+  for (const node of ast.program.body) {
+    if (
+      node.type === "ExportNamedDeclaration" &&
+      node.declaration?.type === "VariableDeclaration"
+    ) {
+      if (node.declaration.kind !== "const") continue;
+      for (const { id, init } of node.declaration.declarations) {
+        if (init && id.type === "Identifier" && isPinnedOrigin(id.name, where)) lifetimes.add(id);
+      }
+    }
     if (node.type !== "ImportDeclaration" || node.importKind === "type") continue;
     const source = node.source.value;
-    if (
-      !source.startsWith(".") ||
-      join(dirname(where), source).replace(/\.(?:ts|js)$/, "") !== "src/http/signed-cookie"
-    )
-      continue;
+    if (!source.startsWith(".")) continue;
+    const path = join(dirname(where), source);
+    const fromCodec = path.replace(/\.(?:ts|js)$/, "") === "src/http/signed-cookie";
     for (const specifier of node.specifiers) {
-      if (specifier.type === "ImportNamespaceSpecifier") namespaces.add(specifier.local.name);
-      if (specifier.type === "ImportSpecifier" && specifier.importKind !== "type") {
-        const { imported } = specifier;
-        const index = CODEC_AGE_INDEX.get(
-          imported.type === "Identifier" ? imported.name : imported.value,
-        );
-        if (index !== undefined) writers.set(specifier.local.name, index);
+      if (fromCodec && specifier.type === "ImportNamespaceSpecifier")
+        namespaces.add(specifier.local);
+      if (specifier.type !== "ImportSpecifier" || specifier.importKind === "type") continue;
+      const { imported, local } = specifier;
+      const name = imported.type === "Identifier" ? imported.name : imported.value;
+      if (fromCodec) {
+        const index = CODEC_AGE_INDEX.get(name);
+        if (index !== undefined) writers.set(local, index);
       }
+      if (local.name === name && isPinnedOrigin(name, path)) lifetimes.add(local);
     }
   }
   if (!writers.size && !namespaces.size) return [];
 
   const offenders: string[] = [];
-  traverseFast(program, (node) => {
-    if (node.type !== "CallExpression" && node.type !== "OptionalCallExpression") return;
-    const { callee } = node;
-    let index: number | undefined;
-    if (callee.type === "Identifier") index = writers.get(callee.name);
-    else if (
-      (callee.type === "MemberExpression" || callee.type === "OptionalMemberExpression") &&
-      callee.object.type === "Identifier" &&
-      namespaces.has(callee.object.name)
-    ) {
-      const { computed, property } = callee;
-      if (!computed && property.type === "Identifier") index = CODEC_AGE_INDEX.get(property.name);
-      else if (computed && property.type === "StringLiteral")
-        index = CODEC_AGE_INDEX.get(property.value);
-    }
-    if (index === undefined) return;
-    const age = node.arguments[index];
-    if (
-      age?.type === "Identifier" &&
-      !node.arguments.slice(0, index).some((arg) => arg.type === "SpreadElement") &&
-      pinnedLifetimeInFile(where, text, age.name)
-    )
-      return;
-    const call = text.slice(node.start ?? 0, node.end ?? undefined);
-    offenders.push(`${where}: ${call.replace(/\s+/g, " ").slice(0, 80)}`);
+  traverse(ast, {
+    "CallExpression|OptionalCallExpression"({ node, scope }) {
+      const { callee } = node;
+      let index: number | undefined;
+      if (callee.type === "Identifier") {
+        const binding = scope.getBinding(callee.name);
+        if (binding) index = writers.get(binding.identifier);
+      } else if (
+        (callee.type === "MemberExpression" || callee.type === "OptionalMemberExpression") &&
+        callee.object.type === "Identifier"
+      ) {
+        const binding = scope.getBinding(callee.object.name);
+        if (binding && namespaces.has(binding.identifier)) {
+          const { computed, property } = callee;
+          if (!computed && property.type === "Identifier")
+            index = CODEC_AGE_INDEX.get(property.name);
+          else if (computed && property.type === "StringLiteral")
+            index = CODEC_AGE_INDEX.get(property.value);
+        }
+      }
+      if (index === undefined) return;
+      const age = node.arguments[index];
+      const binding = age?.type === "Identifier" && scope.getBinding(age.name);
+      if (
+        binding &&
+        lifetimes.has(binding.identifier) &&
+        !node.arguments.slice(0, index).some((arg) => arg.type === "SpreadElement")
+      )
+        return;
+      const call = text.slice(node.start ?? 0, node.end ?? undefined);
+      offenders.push(`${where}: ${call.replace(/\s+/g, " ").slice(0, 80)}`);
+    },
   });
   return offenders;
 }
@@ -510,6 +535,14 @@ describe(`privacy policy v${POLICY_VERSION} numbers are pinned to code`, () => {
     expect(
       cookieLifetimeOffenders(file, `${codec}\n${ttl}\n${call}, SESSION_TTL_SECONDS,)`),
     ).toEqual([]);
+    expect(
+      cookieLifetimeOffenders(
+        file,
+        `${codec}\n${ttl}\nfunction issue(SESSION_TTL_SECONDS: number) {
+          ${call}, SESSION_TTL_SECONDS);
+        }`,
+      ),
+    ).toHaveLength(1);
     expect(cookieLifetimeOffenders(file, `${codec}\n${call}, SESSION_TTL_SECONDS)`)).toHaveLength(
       1,
     );
@@ -532,13 +565,33 @@ describe(`privacy policy v${POLICY_VERSION} numbers are pinned to code`, () => {
     ).toHaveLength(1);
   });
 
+  it("accepts only the canonical declaration in the lifetime's defining file", () => {
+    const source = `
+      import { signedCookieHeader } from "./http/signed-cookie";
+      export const SESSION_TTL_SECONDS = 7200;
+      signedCookieHeader(name, value, secret, SESSION_TTL_SECONDS);
+      {
+        const SESSION_TTL_SECONDS = 600;
+        signedCookieHeader(otherName, value, secret, SESSION_TTL_SECONDS);
+      }
+    `;
+    expect(cookieLifetimeOffenders(resolve(root, "src/sessions.ts"), source)).toEqual([
+      "src/sessions.ts: signedCookieHeader(otherName, value, secret, SESSION_TTL_SECONDS)",
+    ]);
+  });
+
   it("checks namespace calls to the codec but not namesakes from another module", () => {
     const file = resolve(root, "src/example.ts");
     const source = `
       import * as codec from "./http/signed-cookie";
       import { signedCookieHeader } from "./unrelated/signed-cookie";
+      import { signedCookieHeader as write } from "./http/signed-cookie";
       codec.signedCookieHeader(name, value, secret, 600);
       signedCookieHeader(name, value, secret, 600);
+      function issue(codec: LocalCodec, write: LocalWriter) {
+        codec.signedCookieHeader(name, value, secret, 600);
+        write(name, value, secret, 600);
+      }
     `;
     expect(cookieLifetimeOffenders(file, source)).toEqual([
       "src/example.ts: codec.signedCookieHeader(name, value, secret, 600)",
