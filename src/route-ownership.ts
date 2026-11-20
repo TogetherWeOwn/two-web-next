@@ -26,6 +26,7 @@ import { STAGING_APP_URL } from "./qa";
 import { newRequestId, safeRequestId } from "./request-log";
 import { withStreamedBody } from "./html-stream";
 import { applySingleValidator } from "./http/conditional";
+import { PRODUCTION_APEX } from "./http/robots";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitHomePanels } from "./kit-home-panels";
 import type { KitLocals } from "./kit-session";
@@ -389,8 +390,7 @@ export function stagingManifestFor(
   });
 }
 
-const PRODUCTION_APP_URL = "https://togetherweown.com";
-const PRODUCTION_HOST = new URL(PRODUCTION_APP_URL).hostname;
+const PRODUCTION_APP_URL = `https://${PRODUCTION_APEX}`;
 const PRODUCTION_DOCUMENT_VARY = [
   "X-Two-Island",
   "Sec-Fetch-Dest",
@@ -418,7 +418,7 @@ export function productionManifestFor(
   routes: OwnedRoute[] = ROUTE_MANIFEST,
 ): OwnedRoute[] | undefined {
   const requestUrl = new URL(event.request.url);
-  if (requestUrl.hostname !== PRODUCTION_HOST && event.url.hostname !== PRODUCTION_HOST) {
+  if (requestUrl.hostname !== PRODUCTION_APEX && event.url.hostname !== PRODUCTION_APEX) {
     return undefined;
   }
   if (
