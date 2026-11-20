@@ -2,6 +2,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse } from "@babel/parser";
+import traverse from "@babel/traverse";
+import type { Identifier } from "@babel/types";
 import { describe, expect, it } from "vitest";
 import {
   JOURNEY_TTL_SECONDS as JOIN_JOURNEY_TTL_SECONDS,
@@ -274,8 +277,7 @@ function importEntries(text: string): ImportEntry[] {
 // A pinned name counts only from its canonical module: defined there, or imported
 // from there under the same name. A same-named local constant anywhere else is a
 // shadow, not the pin.
-function pinnedLifetimeInFile(where: string, fileText: string, snippet: string): boolean {
-  const name = snippet.match(/maxAge:\s*(\w+)/)?.[1];
+function pinnedLifetimeInFile(where: string, fileText: string, name: string | undefined): boolean {
   if (name === undefined || !PINNED_COOKIE_LIFETIMES.includes(name)) return false;
   const origins = PINNED_COOKIE_ORIGINS[name] ?? [];
   if (origins.includes(where))
@@ -296,11 +298,11 @@ function pinnedLifetimeInFile(where: string, fileText: string, snippet: string):
 function unpinnedCookieCalls(file: string, text: string): string[] {
   const where = relative(root, file);
   return cookieCalls(text).flatMap((call) => {
-    if (pinnedLifetimeInFile(where, text, call)) return [];
+    if (pinnedLifetimeInFile(where, text, call.match(/maxAge:\s*(\w+)/)?.[1])) return [];
     const lastArg = call.slice(0, -1).split(",").at(-1)?.trim() ?? "";
     if (/^\w+$/.test(lastArg)) {
       const definition = new RegExp(`const ${lastArg} = \\{[\\s\\S]*?\\};`).exec(text)?.[0] ?? "";
-      if (pinnedLifetimeInFile(where, text, definition)) return [];
+      if (pinnedLifetimeInFile(where, text, definition.match(/maxAge:\s*(\w+)/)?.[1])) return [];
     }
     return [`${where}: ${call.replace(/\s+/g, " ").slice(0, 80)}`];
   });
@@ -325,14 +327,109 @@ function withoutCookieDeletions(text: string): string {
   );
 }
 
+const CODEC_AGE_INDEX = new Map([
+  ["signedCookieHeader", 3],
+  ["setSignedEventCookie", 4],
+]);
+
+function isPinnedOrigin(name: string, path: string): boolean {
+  return (
+    PINNED_COOKIE_LIFETIMES.includes(name) &&
+    PINNED_COOKIE_ORIGINS[name]!.some((origin) => origin === path || origin.startsWith(`${path}.`))
+  );
+}
+
+// Follow lexical bindings for direct codec imports and the pinned lifetime argument.
+function unpinnedCodecCalls(where: string, text: string): string[] {
+  const ast = parse(text, {
+    sourceType: "module",
+    plugins: where.endsWith(".tsx") ? ["typescript", "jsx"] : ["typescript"],
+  });
+  const writers = new Map<Identifier, number>();
+  const namespaces = new Set<Identifier>();
+  const lifetimes = new Set<Identifier>();
+  for (const node of ast.program.body) {
+    if (
+      node.type === "ExportNamedDeclaration" &&
+      node.declaration?.type === "VariableDeclaration"
+    ) {
+      if (node.declaration.kind !== "const") continue;
+      for (const { id, init } of node.declaration.declarations) {
+        if (init && id.type === "Identifier" && isPinnedOrigin(id.name, where)) lifetimes.add(id);
+      }
+    }
+    if (node.type !== "ImportDeclaration" || node.importKind === "type") continue;
+    const source = node.source.value;
+    if (!source.startsWith(".")) continue;
+    const path = join(dirname(where), source);
+    const fromCodec = path.replace(/\.(?:ts|js)$/, "") === "src/http/signed-cookie";
+    for (const specifier of node.specifiers) {
+      if (fromCodec && specifier.type === "ImportNamespaceSpecifier")
+        namespaces.add(specifier.local);
+      if (specifier.type !== "ImportSpecifier" || specifier.importKind === "type") continue;
+      const { imported, local } = specifier;
+      const name = imported.type === "Identifier" ? imported.name : imported.value;
+      if (fromCodec) {
+        const index = CODEC_AGE_INDEX.get(name);
+        if (index !== undefined) writers.set(local, index);
+      }
+      if (local.name === name && isPinnedOrigin(name, path)) lifetimes.add(local);
+    }
+  }
+  if (!writers.size && !namespaces.size) return [];
+
+  const offenders: string[] = [];
+  traverse(ast, {
+    "CallExpression|OptionalCallExpression"({ node, scope }) {
+      const { callee } = node;
+      let index: number | undefined;
+      if (callee.type === "Identifier") {
+        const binding = scope.getBinding(callee.name);
+        if (binding) index = writers.get(binding.identifier);
+      } else if (
+        (callee.type === "MemberExpression" || callee.type === "OptionalMemberExpression") &&
+        callee.object.type === "Identifier"
+      ) {
+        const binding = scope.getBinding(callee.object.name);
+        if (binding && namespaces.has(binding.identifier)) {
+          const { computed, property } = callee;
+          if (!computed && property.type === "Identifier")
+            index = CODEC_AGE_INDEX.get(property.name);
+          else if (computed && property.type === "StringLiteral")
+            index = CODEC_AGE_INDEX.get(property.value);
+        }
+      }
+      if (index === undefined) return;
+      const age = node.arguments[index];
+      const binding = age?.type === "Identifier" && scope.getBinding(age.name);
+      if (
+        binding &&
+        lifetimes.has(binding.identifier) &&
+        !node.arguments.slice(0, index).some((arg) => arg.type === "SpreadElement")
+      )
+        return;
+      const call = text.slice(node.start ?? 0, node.end ?? undefined);
+      offenders.push(`${where}: ${call.replace(/\s+/g, " ").slice(0, 80)}`);
+    },
+  });
+  return offenders;
+}
+
 function cookieLifetimeOffenders(file: string, text: string): string[] {
-  text = withoutCookieDeletions(text);
   const where = relative(root, file);
+  const codecCalls = unpinnedCodecCalls(where, text);
+  text = withoutCookieDeletions(text);
+  if (where === "src/http/signed-cookie.ts") {
+    // These two serializer expressions forward the lifetime checked at the call site.
+    text = text
+      .replace('ageSeconds === undefined ? "" : `; Max-Age=${ageSeconds}`', "")
+      .replace("...(ageSeconds === undefined ? {} : { maxAge: ageSeconds })", "");
+  }
   const expressions = [...text.matchAll(/maxAge:\s*([^,}\n]+)/g)].map((match) => match[1]!.trim());
   return [
     ...expressions.flatMap((expr) => {
       if (!PINNED_COOKIE_LIFETIMES.includes(expr)) return [`${where}: maxAge: ${expr}`];
-      if (!pinnedLifetimeInFile(where, text, `maxAge: ${expr}`))
+      if (!pinnedLifetimeInFile(where, text, expr))
         return [
           `${where}: maxAge: ${expr} must come from its pinned module (${(PINNED_COOKIE_ORIGINS[expr] ?? []).join(" or ")})`,
         ];
@@ -341,6 +438,7 @@ function cookieLifetimeOffenders(file: string, text: string): string[] {
     ...(/\bmaxAge\s*[,}]/.test(text) ? [`${where}: shorthand maxAge`] : []),
     ...(/\b(?:Max-Age|Expires)=/.test(text) ? [`${where}: raw cookie expiry`] : []),
     ...unpinnedCookieCalls(file, text),
+    ...codecCalls,
   ];
 }
 
@@ -424,6 +522,85 @@ describe(`privacy policy v${POLICY_VERSION} numbers are pinned to code`, () => {
     expect(offenders, "every cookie lifetime in src must be one of the pinned constants").toEqual(
       [],
     );
+  });
+
+  it.each([
+    ["signedCookieHeader", "name"],
+    ["setSignedEventCookie", "cookies, name"],
+  ])("requires a pinned lifetime at %s call sites", (writer, prefix) => {
+    const file = resolve(root, "src/example.ts");
+    const codec = `import { ${writer} } from "./http/signed-cookie";`;
+    const ttl = 'import { SESSION_TTL_SECONDS } from "./sessions";';
+    const call = `${writer}(${prefix}, value, secret`;
+    expect(
+      cookieLifetimeOffenders(file, `${codec}\n${ttl}\n${call}, SESSION_TTL_SECONDS,)`),
+    ).toEqual([]);
+    expect(
+      cookieLifetimeOffenders(
+        file,
+        `${codec}\n${ttl}\nfunction issue(SESSION_TTL_SECONDS: number) {
+          ${call}, SESSION_TTL_SECONDS);
+        }`,
+      ),
+    ).toHaveLength(1);
+    expect(cookieLifetimeOffenders(file, `${codec}\n${call}, SESSION_TTL_SECONDS)`)).toHaveLength(
+      1,
+    );
+    expect(cookieLifetimeOffenders(file, `${codec}\n${ttl}\n${call}, 600)`)).toHaveLength(1);
+    expect(cookieLifetimeOffenders(file, `${codec}\n${call})`)).toHaveLength(1);
+    expect(
+      cookieLifetimeOffenders(file, `${codec}\n${ttl}\n${call}, 600, SESSION_TTL_SECONDS)`),
+    ).toHaveLength(1);
+    expect(
+      cookieLifetimeOffenders(
+        file,
+        `${codec}\n${ttl}\n${writer}(${prefix}, ")", secret, SESSION_TTL_SECONDS)`,
+      ),
+    ).toEqual([]);
+    expect(
+      cookieLifetimeOffenders(
+        file,
+        `import { ${writer} as write } from "./http/signed-cookie.ts";\nwrite(${prefix}, value, secret, 600);`,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("accepts only the canonical declaration in the lifetime's defining file", () => {
+    const source = `
+      import { signedCookieHeader } from "./http/signed-cookie";
+      export const SESSION_TTL_SECONDS = 7200;
+      signedCookieHeader(name, value, secret, SESSION_TTL_SECONDS);
+      {
+        const SESSION_TTL_SECONDS = 600;
+        signedCookieHeader(otherName, value, secret, SESSION_TTL_SECONDS);
+      }
+    `;
+    expect(cookieLifetimeOffenders(resolve(root, "src/sessions.ts"), source)).toEqual([
+      "src/sessions.ts: signedCookieHeader(otherName, value, secret, SESSION_TTL_SECONDS)",
+    ]);
+  });
+
+  it("checks namespace calls to the codec but not namesakes from another module", () => {
+    const file = resolve(root, "src/example.ts");
+    const source = `
+      import * as codec from "./http/signed-cookie";
+      import { signedCookieHeader } from "./unrelated/signed-cookie";
+      import { signedCookieHeader as write } from "./http/signed-cookie";
+      codec.signedCookieHeader(name, value, secret, 600);
+      signedCookieHeader(name, value, secret, 600);
+      function issue(codec: LocalCodec, write: LocalWriter) {
+        codec.signedCookieHeader(name, value, secret, 600);
+        write(name, value, secret, 600);
+      }
+    `;
+    expect(cookieLifetimeOffenders(file, source)).toEqual([
+      "src/example.ts: codec.signedCookieHeader(name, value, secret, 600)",
+    ]);
+  });
+
+  it("still rejects a hardcoded expiry in the codec itself", () => {
+    const file = resolve(root, "src/http/signed-cookie.ts");
+    expect(cookieLifetimeOffenders(file, 'const expiry = "; Max-Age=600";')).toHaveLength(1);
   });
 
   it("recognizes an explicit empty-cookie deletion rather than a live lifetime", () => {
