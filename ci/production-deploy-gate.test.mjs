@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -11,7 +19,9 @@ import { readWranglerConfig } from "./wrangler-config.mjs";
 import {
   AUTOMATIC_PROMOTION_EVENTS,
   PRODUCTION_HOLD_MAX_MS,
+  KIT_ROUTE_FLAGS,
   PRODUCTION_ORIGIN,
+  assertKitProductionCandidate,
   assertProductionCredentials,
   assertProductionHold,
   assertProductionProtection,
@@ -257,6 +267,71 @@ test("checkout/dispatch SHA mismatch refuses production deployment", async () =>
     checkGreen(ciEvidence(), {}, greenEnv, { checkoutSha: otherSha }),
     /Checkout does not match deployment SHA/,
   );
+});
+
+const repoText = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
+const kitPair = () => ({
+  root: repoText("../wrangler.jsonc"),
+  kit: readWranglerConfig(repoText("../web/wrangler.production.jsonc")),
+});
+
+test("the reviewed Kit candidate passes; drift in name, flags, crons or bindings refuses", () => {
+  const { root, kit } = kitPair();
+  assert.doesNotThrow(() => assertKitProductionCandidate(root, JSON.stringify(kit)));
+  const cases = [
+    [(kit) => Object.assign(kit, { name: "two-web-next" }), /two-web-next-production/],
+    ...KIT_ROUTE_FLAGS.map((flag) => [(kit) => (kit.vars[flag] = "true"), new RegExp(flag)]),
+    [(kit) => (kit.vars.KIT_ROUTE_HOME = false), /KIT_ROUTE_HOME/],
+    [(kit) => (kit.triggers.crons = ["*/10 * * * *"]), /empty crons/],
+    [(kit) => (kit.routes = [{ pattern: "togetherweown.com" }]), /routes/],
+    [(kit) => (kit.workers_dev = true), /workers.dev/],
+    [(kit) => (kit.preview_urls = true), /preview URLs/],
+    [(kit) => delete kit.preview_urls, /preview URLs/],
+    [(kit) => (kit.hyperdrive[0].id = "f".repeat(32)), /hyperdrive bindings/],
+    [(kit) => (kit.queues.consumers = [{ queue: "q" }]), /queues bindings/],
+    [(kit) => delete kit.tail_consumers, /tail_consumers bindings/],
+    [(kit) => (kit.kv_namespaces = [{ binding: "KV", id: "x" }]), /kv_namespaces bindings/],
+    [(kit) => (kit.send_email = [{ name: "EMAIL" }]), /unreviewed config section send_email/],
+    [(kit) => (kit.assets.binding = "STATIC"), /assets settings/],
+    [(kit) => (kit.assets.directory = "./public"), /assets settings/],
+    [(kit) => (kit.vars.APP_URL = "https://example.com"), /var APP_URL/],
+    [(kit) => delete kit.vars.DISCORD_MODERATOR_ROLE_IDS, /var DISCORD_MODERATOR_ROLE_IDS/],
+  ];
+  for (const [mutate, message] of cases) {
+    const { root, kit } = kitPair();
+    mutate(kit);
+    assert.throws(() => assertKitProductionCandidate(root, JSON.stringify(kit)), message);
+  }
+});
+
+test("--kit-candidate CLI checks the working-directory checkout", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gate-kit-"));
+  try {
+    const script = fileURLToPath(new URL("./production-deploy-gate.mjs", import.meta.url));
+    const { root, kit } = kitPair();
+    mkdirSync(join(dir, "web"));
+    writeFileSync(join(dir, "wrangler.jsonc"), root);
+    writeFileSync(join(dir, "web/wrangler.production.jsonc"), JSON.stringify(kit));
+    const run = () =>
+      spawnSync(process.execPath, [script, "--kit-candidate"], { cwd: dir, encoding: "utf8" });
+    const ok = run();
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.match(ok.stdout, /matches root env.production/);
+    kit.vars.KIT_ROUTE_ARCHIVE = "true";
+    writeFileSync(join(dir, "web/wrangler.production.jsonc"), JSON.stringify(kit));
+    const bad = run();
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /::error::Kit candidate KIT_ROUTE_ARCHIVE/);
+
+    kit.vars.KIT_ROUTE_ARCHIVE = "false";
+    kit.assets.run_worker_first = false;
+    writeFileSync(join(dir, "web/wrangler.production.jsonc"), JSON.stringify(kit));
+    const badAssets = run();
+    assert.equal(badAssets.status, 1, badAssets.stdout);
+    assert.match(badAssets.stderr, /::error::Kit candidate assets settings/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 const sentinel = "00000000000000000000000000000000";

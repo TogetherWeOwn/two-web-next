@@ -503,13 +503,27 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
+  it("limits the default home cutover to GET and HEAD and restores Hono on rollback", () => {
+    const home = ROUTE_MANIFEST.find((entry) => entry.method === "GET" && entry.path === "/")!;
+    const get = new Request(new URL("/", APP_URL));
+    const head = new Request(new URL("/", APP_URL), { method: "HEAD" });
+    const post = new Request(new URL("/", APP_URL), { method: "POST" });
+
+    expect(decideRoute(get)).toBe(home);
+    expect(decideRoute(head)).toBe(home);
+    expect(home.reads).toEqual({ resource: "member", action: "list", route: "home" });
+    expect(decideRoute(post)).toBeUndefined();
+    expect(decideRoute(get, [{ ...home, enabled: false }])).toBeUndefined();
+    expect(decideRoute(head, [{ ...home, enabled: false }])).toBeUndefined();
+  });
+
   it("ships the reviewed native route entries and keeps other reads on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       {
         method: "GET",
         path: "/",
-        enabled: false,
+        enabled: true,
         reads: { resource: "member", action: "list", route: "home" },
       },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
@@ -664,5 +678,36 @@ describe("decideRoute", () => {
     expect(decideRoute(new Request(new URL("/profile", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
     // Live event detail stays Hono-served until the RSVP companion passes.
     expect(decideRoute(new Request(new URL("/e/abc123", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
+  });
+});
+
+describe("Kit home flash release", () => {
+  it("does not release the home flash deletion when the member audit fails", async () => {
+    const home = ROUTE_MANIFEST.find((entry) => entry.method === "GET" && entry.path === "/")!;
+    const event = eventFor("/");
+    event.route = { id: "/" };
+    const deletion = "__Host-two_join_result=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax";
+    // A different subject forces an audit; an own-only RSVP read does not.
+    const resolve = vi.fn(async () => {
+      await readOwners([SUBJECT], null);
+      return new Response("home", {
+        headers: { "content-type": "text/html", "set-cookie": deletion },
+      });
+    });
+    const refused = await dispatchHookRequest(
+      event,
+      depsFor({ manifest: [{ ...home, enabled: true }], resolve, accessSink: async () => null }),
+    );
+    expect(resolve).toHaveBeenCalledOnce();
+    await expectSanitizedRefusal(refused);
+    expect(refused.headers.getSetCookie()).toEqual([]);
+
+    const { sink } = recording();
+    const released = await dispatchHookRequest(
+      eventFor("/"),
+      depsFor({ manifest: [{ ...home, enabled: true }], resolve, accessSink: async () => sink }),
+    );
+    expect(released.status).toBe(200);
+    expect(released.headers.getSetCookie()).toContain(deletion);
   });
 });

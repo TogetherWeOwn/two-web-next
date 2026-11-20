@@ -433,18 +433,21 @@ const AUTH_STATUS_OPTIONS = {
   maxAge: SESSION_TTL_SECONDS,
 };
 
-/** The hook alone supplies the proof of an audited, full member document. */
+/** The hook alone supplies the proof of a full account document released by the audit boundary. */
 export function kitAuthStatusCookieFor(
   env: Env,
-): (event: HookEventLike, releasedMemberDocument?: boolean) => Promise<string | null> {
-  return async (event, releasedMemberDocument = false) => {
+): (event: HookEventLike, releasedAccountDocument?: boolean) => Promise<string | null> {
+  return async (event, releasedAccountDocument = false) => {
     const locals = event.locals as Partial<KitLocals> | undefined;
     const admin = /^\/admin(?:\/|$)/.test(event.url.pathname) && locals?.session?.moderator;
-    const member = releasedMemberDocument && locals?.session?.member === true;
+    const account =
+      releasedAccountDocument &&
+      locals?.session &&
+      (event.url.pathname === "/" || locals.session.member);
     if (
       event.request.method !== "GET" ||
       locals?.status !== "authenticated" ||
-      (!admin && !member) ||
+      (!admin && !account) ||
       !env.SESSION_SECRET
     )
       return null;

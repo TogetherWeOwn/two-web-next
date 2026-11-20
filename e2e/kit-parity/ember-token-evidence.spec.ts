@@ -171,7 +171,7 @@ for (const target of targets) {
               const topmost = document.elementFromPoint(rect.left + rect.width / 2, rect.top + 5);
               const sample = document.createElement("span");
               sample.style.backgroundColor = "var(--g0, var(--color-page))";
-              element.append(sample);
+              element.appendChild(sample);
               const expectedBackground =
                 element.id === "menu-sheet"
                   ? getComputedStyle(sample).backgroundColor
