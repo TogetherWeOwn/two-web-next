@@ -14,8 +14,8 @@ import { assertScopedAcl, grantScopedAcl, probeWorkloads } from "./web-readiness
 
 const legacy = "57f1abbc25d0b39a77d83b46eb8b803b0249bb66";
 const bridge = "ac9024ed0150df44dfcde1bdce64e3fa9699924e";
-// Add a distinct, verified bridge-aware main SHA here, never the rehearsal PR head.
-const bridges = [bridge];
+const successor = "88e73791dd84b4e81a8d89687032185fa694cb3b";
+const bridges = [bridge, successor];
 const git = (...args) => execFileSync("git", args, { maxBuffer: 32 * 1024 * 1024 });
 const fixture = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const projection = "web_readiness.migration_timestamps";
@@ -37,15 +37,8 @@ async function pinnedApp(root, sha) {
     "public/theme-tokens.css",
     "public/theme.css",
   ];
-  const optional = ["ci/css-dictionary.mjs", "web/src/lib/site-header.css"];
-  const extraPaths = git("ls-tree", "--name-only", sha, "--", ...optional)
-    .toString()
-    .trim()
-    .split("\n")
-    .filter(Boolean);
-  execFileSync("tar", ["-x", "-C", dir], {
-    input: git("archive", sha, ...paths, ...extraPaths),
-  });
+  if (sha !== legacy) paths.push("ci/css-dictionary.mjs", "web/src/lib/site-header.css");
+  execFileSync("tar", ["-x", "-C", dir], { input: git("archive", sha, ...paths) });
   const { entries } = JSON.parse(readFileSync(join(dir, "drizzle/meta/_journal.json"), "utf8"));
   const { migrations: lock } = JSON.parse(readFileSync(join(dir, "migrations.lock"), "utf8"));
   const history = entries.map(({ tag, when }, i) => {
@@ -90,15 +83,23 @@ async function checkUp(build, reader, expected, status, pending, queries, relati
   });
   assert.equal(response.status, status, `${build.sha} /up status`);
   const { db, pending_migrations, migration_ledger } = await response.json();
-  assert.deepEqual({ db, pending_migrations, migration_ledger }, {
-    db: "ok", pending_migrations: pending,
-    migration_ledger: expected?.map(({ created_at }) => Number(created_at)) ?? null,
-  });
-  if (relation) {
-    assert.ok(queries.some((query) => query.includes(`FROM ${relation}`)), `${build.sha} read ${relation}`);
-    if (relation === projection) assert.ok(!queries.some((query) => query.includes(`FROM ${ledger}`)));
+  assert.deepEqual(
+    { db, pending_migrations, migration_ledger },
+    {
+      db: "ok",
+      pending_migrations: pending,
+      migration_ledger: expected?.map(({ created_at }) => Number(created_at)) ?? null,
+    },
+  );
+  assert.ok(
+    queries.some((query) => query.includes(`FROM ${relation}`)),
+    `${build.sha} read ${relation}`,
+  );
+  if (relation === projection) {
+    assert.ok(!queries.some((query) => query.includes(`FROM ${ledger}`)));
   }
-  console.info(`${build.sha} /up: HTTP ${status}, pending=${pending}, rows=${migration_ledger?.length ?? "unreadable"}`);
+  const rows = migration_ledger?.length ?? "unreadable";
+  console.info(`${build.sha} /up: HTTP ${status}, pending=${pending}, rows=${rows}`);
 }
 
 // The migration selftest owns the fresh database and validates its URL before
@@ -112,15 +113,25 @@ export async function rehearseWebReadiness(owner, url) {
   let createdLogin = false;
   try {
     symlinkSync(resolve("node_modules"), join(root, "node_modules"));
-    const [old, ...candidates] = await Promise.all([legacy, ...bridges].map((sha) => pinnedApp(root, sha)));
+    assert.equal(new Set([legacy, ...bridges]).size, bridges.length + 1);
+    const old = await pinnedApp(root, legacy);
+    const candidates = [];
+    for (const sha of bridges) candidates.push(await pinnedApp(root, sha));
     const [first] = candidates;
+    const bridgeUp = async (expected, status, pending) => {
+      for (const candidate of candidates) {
+        await checkUp(candidate, reader, expected, status, pending, queries, projection);
+      }
+    };
     assert.equal(old.history.length, 34);
     assert.match(old.history.at(-1).tag, /^1033_/);
     assert.deepEqual(first.history.slice(0, 34), old.history);
-    assert.deepEqual(first.history.slice(34).map(({ tag }) => tag.slice(0, 4)), ["1034", "1035", "1036", "1037"]);
-    for (const candidate of candidates) assert.deepEqual(candidate.history, first.history);
-    assert.equal(new Set([legacy, ...bridges]).size, candidates.length + 1);
-    console.info(`Pinned sources: legacy=${legacy}; bridges=${bridges.join(", ")}. Distinct bridge pair: ${bridges.length > 1 ? "exercised below" : "not available"}.`);
+    assert.deepEqual(
+      first.history.slice(34).map(({ tag }) => tag.slice(0, 4)),
+      ["1034", "1035", "1036", "1037"],
+    );
+    for (const candidate of candidates.slice(1)) assert.deepEqual(candidate.history, first.history);
+    console.info(`Pinned sources: legacy=${legacy}; bridges=${bridges.join(", ")}.`);
 
     await owner`CREATE ROLE ${owner(login)} LOGIN PASSWORD ${owner.unsafe(`'${password}'`)}`;
     createdLogin = true;
@@ -129,6 +140,7 @@ export async function rehearseWebReadiness(owner, url) {
     runtimeUrl.username = login;
     runtimeUrl.password = "";
     reader = postgres(runtimeUrl.href, {
+      port: 5432,
       max: 2,
       connect_timeout: 5,
       password: () => password,
@@ -145,16 +157,17 @@ export async function rehearseWebReadiness(owner, url) {
     assert.equal(catalog.role, catalog.owner);
     assert.deepEqual(await identity(reader), { ...catalog, role: login, login });
     await owner`REVOKE CREATE ON SCHEMA public FROM PUBLIC`;
-    const readLedger = async () =>
-      (await owner`SELECT created_at::text, hash FROM drizzle.__drizzle_migrations ORDER BY created_at, id`).map(
-        ({ created_at, hash }) => ({ created_at, hash }),
-      );
+    const readLedger = async () => [
+      ...(await owner`SELECT created_at::text, hash
+        FROM drizzle.__drizzle_migrations ORDER BY created_at, id`),
+    ];
     const pairs = (history) => history.map(({ created_at, hash }) => ({ created_at, hash }));
     await migrate(drizzle(owner), old);
     assert.deepEqual(await readLedger(), pairs(old.history));
     await owner.unsafe(fixture("../docs/web-readiness-projection.sql"));
-    await grantScopedAcl(owner, login, false);
-    for (const candidate of candidates) await checkUp(candidate, reader, old.history, 503, 4, queries, projection);
+    await owner`GRANT USAGE ON SCHEMA public, web_readiness TO ${owner(login)}`;
+    await owner`GRANT SELECT ON web_readiness.migration_timestamps TO ${owner(login)}`;
+    await bridgeUp(old.history, 503, 4);
 
     await migrate(drizzle(owner), first);
     const expanded = await readLedger();
@@ -162,24 +175,24 @@ export async function rehearseWebReadiness(owner, url) {
     await assert.rejects(assertServingLedgerIsolation(owner, login), /implicit USAGE/);
     await assert.rejects(reader.unsafe(`INSERT INTO ${projection} VALUES (1)`), { code: "55000" });
     await checkUp(old, reader, first.history, 200, 0, queries, ledger);
-    for (const candidate of candidates) await checkUp(candidate, reader, first.history, 200, 0, queries, projection);
+    await bridgeUp(first.history, 200, 0);
 
     await owner.begin(async (tx) => {
-      await grantScopedAcl(tx, login, true);
+      await grantScopedAcl(tx, login);
       await tx`REVOKE pg_read_all_data, pg_write_all_data FROM ${tx(login)}`;
       await assertServingLedgerIsolation(tx, login);
       await assertScopedAcl(tx, login, catalog.role);
     });
     assert.deepEqual(await identity(reader), { ...catalog, role: login, login });
     await assert.rejects(reader.unsafe(`SELECT created_at FROM ${ledger}`), { code: "42501" });
-    for (const candidate of candidates) await checkUp(candidate, reader, first.history, 200, 0, queries, projection);
+    await bridgeUp(first.history, 200, 0);
     await checkUp(old, reader, null, 503, null, queries, ledger);
     await owner`REVOKE SELECT ON web_readiness.migration_timestamps FROM ${owner(login)}`;
-    for (const candidate of candidates) await checkUp(candidate, reader, null, 503, null, queries, projection);
+    await bridgeUp(null, 503, null);
     await owner`GRANT SELECT ON web_readiness.migration_timestamps TO ${owner(login)}`;
     await probeWorkloads(owner, reader);
     assert.deepEqual(await readLedger(), expanded);
-    console.info("Ordered locked hashes and timestamps, same database/login, scoped ACL, workloads and unchanged journal verified.");
+    console.info("Scoped ACL, same database/login, workloads and unchanged locked journal verified.");
   } finally {
     try {
       await reader?.end({ timeout: 0 });

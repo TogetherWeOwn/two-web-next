@@ -242,17 +242,11 @@ run-owned shard container. The SQL serializes role creation, verifies a test
 lifetime. GitHub jobs run it twice to exercise idempotence. This preparation is
 not part of the live migrator or a bootstrap instruction for shared databases.
 
-The `check` job's migration workflow selftest includes a **web readiness bridge
-rehearsal**. It applies the locked journal
-through `1033`, then through `1037`, in a fresh database on that same service.
-It runs the pinned Hono `/up` handlers with the job's locked dependencies and one
-synthetic runtime login. A ready legacy handler before narrowing and a 503 after
-narrowing are both expected. Bridge handlers must stay ready with the exact
-applied timestamps and no direct ledger read, and return 503 if view access is
-lost. The rehearsal also checks scoped app and audit access and the unchanged
-journal. It reports the pinned sources and distinguishes one bridge from a
-verified pair. This is source and database compatibility evidence, not staging
-qualification or a deployed Worker rollback identity.
+The `check` job's **web readiness bridge rehearsal** applies the locked journal
+through `1033` and `1037` in one disposable database. It logs the pinned legacy
+and bridge `/up` results before and after narrowing the synthetic login, and
+checks scoped app and audit access and the unchanged journal. This is database
+compatibility evidence, not staging or deployed Worker rollback qualification.
 
 The runner also refuses at plan time while any reviewed object (the
 runtime-rights table/sequence census, plus the `drizzle` migration ledger and
