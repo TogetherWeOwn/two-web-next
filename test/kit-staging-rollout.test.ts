@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone CI tooling has no declaration file.
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
+import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static";
 import {
   KIT_RENDERER_HEADER,
   KIT_RENDERER_VALUE,
@@ -13,6 +14,9 @@ import {
 
 const STAGING_APP_URL = "https://next.togetherweown.com";
 const NEW_STATIC_LEAVES = ["/privacy", "/rules"];
+const ACTIVE_STATIC_LEAVES = NEW_STATIC_LEAVES.filter(
+  (path) => STAGING_STATIC_DOCUMENT_READY.get(path) !== false,
+);
 const ARCHIVE_STATIC = { archive: "true", static: "true" };
 const rolloutCandidates = ROUTE_MANIFEST.filter(
   (entry) => entry.enabled || NEW_STATIC_LEAVES.includes(entry.path),
@@ -40,6 +44,13 @@ function stagingDeps(flags: RolloutFlags = {}) {
     kitRouteJoin: flags.join,
     featuredImageHosts: "",
     honoFetch: vi.fn(async () => new Response("hono", { status: 200 })),
+    sessionFor: vi.fn(async () => ({
+      status: "guest" as const,
+      session: null,
+      returnTo: null,
+      joinResult: null,
+      expiredWrite: null,
+    })),
     resolve: vi.fn(
       async () =>
         new Response("<html>kit page</html>", {
@@ -245,7 +256,12 @@ describe("Kit staging route rollout", () => {
           KIT_ROUTE_STATIC: "true",
         }),
       ),
-    ).toEqual(["GET /events/past", "GET /about", "GET /privacy", "GET /rules", "GET /faq"]);
+    ).toEqual([
+      "GET /events/past",
+      "GET /about",
+      ...ACTIVE_STATIC_LEAVES.map((path) => `GET ${path}`),
+      "GET /faq",
+    ]);
     expect(
       enabledPaths(stagingManifestFor({ APP_URL: STAGING_APP_URL, KIT_ROUTE_STATIC: "true" })),
     ).toEqual([]);
@@ -254,11 +270,11 @@ describe("Kit staging route rollout", () => {
 
   it.each([
     ["archive only", { archive: "true" }, ["/events/past"]],
-    ["archive-static", ARCHIVE_STATIC, ["/events/past", "/about", "/privacy", "/rules", "/faq"]],
+    ["archive-static", ARCHIVE_STATIC, ["/events/past", "/about", "/faq", ...ACTIVE_STATIC_LEAVES]],
     ["events only", { events: "true" }, ["/events"]],
   ] as const)(
     "keeps every unselected Kit route on Hono under %s",
-    async (_name, flags, kitPaths) => {
+    async (name, flags, kitPaths) => {
       // Exhaustive flags-on negative coverage: the flags-off loop above plus
       // one sampled sibling per stage left widening mutants green.
       const kitEnabled = rolloutCandidates;
@@ -268,6 +284,9 @@ describe("Kit staging route rollout", () => {
         const expectKit = (kitPaths as readonly string[]).includes(route.path);
         const { deps, response } = await dispatchAt(path, flags);
         if (expectKit) {
+          if (name === "archive-static" && path !== "/events/past") {
+            expect(deps.sessionFor, path).not.toHaveBeenCalled();
+          }
           expect(deps.resolve, path).toHaveBeenCalledOnce();
           expect(deps.honoFetch, path).not.toHaveBeenCalled();
           expect(response.headers.get(KIT_RENDERER_HEADER), path).toBe(KIT_RENDERER_VALUE);

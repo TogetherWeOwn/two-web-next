@@ -383,8 +383,9 @@ binding isolation before any remote mutation.
    `/about`, `/faq`, `/privacy`, and `/rules`. Privacy and House Rules opt in
    only for exact document GETs; HEAD and markdown stay on Hono. To roll back
    one of those two leaves without changing the family, set its entry to
-   `false` in `STAGING_STATIC_DOCUMENT_READY` in `src/route-ownership.ts` and
-   deploy the updated staging revision.
+   `false` in `STAGING_STATIC_DOCUMENT_READY` in `src/kit-staging-static.ts`.
+   After CI passes and the updated staging revision deploys, the rolled-back
+   leaf must return HTTP 200 without `x-two-renderer: kit`.
    Choose `events`, `home` or `join` for `/events`, `/` or `/join`,
    `events-join` for `/events` and `/join` together, `events-home` for
    `/events` and `/` together, or `ember-pages` for all

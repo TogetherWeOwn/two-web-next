@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
+import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
 import { expectedMarkerFor } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
@@ -317,6 +318,12 @@ export default {
     ["/rules", 'data-testid="rules-list"'],
   ]) {
     const page = await fetch(`${staging.origin}${leaf}`, { redirect: "manual" });
+    if (STAGING_STATIC_DOCUMENT_READY.get(leaf) === false) {
+      assert.equal(page.status, 200, `${leaf} still serves a document after rollback`);
+      assert.equal(page.headers.get("x-two-renderer"), null, `${leaf} rolls back to Hono`);
+      assert.ok((await page.text()).includes(marker), `${leaf} retains its content on Hono`);
+      continue;
+    }
     const html = await assertContentLeaf(page, leaf);
     assert.ok(html.includes(marker), `${leaf} has server-rendered content`);
     assert.doesNotMatch(html, /<script\b/i, `${leaf} ships no JavaScript`);

@@ -35,6 +35,7 @@ import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 import { type MemberRead, memberReadResponse } from "./member-reads";
 import { JOIN_RESULT_COOKIE, deleteOpts } from "./return-journey";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
+import { STAGING_STATIC_DOCUMENT_READY } from "./kit-staging-static";
 import { isTrustedHost } from "./trust-hosts";
 
 export type RouteOwner = "kit" | "hono";
@@ -340,12 +341,6 @@ export function fixtureManifestFor(env: {
   }
   return routes;
 }
-
-// Set one entry to false to return just that document to Hono on staging.
-const STAGING_STATIC_DOCUMENT_READY: ReadonlyMap<string, boolean> = new Map([
-  ["/privacy", true],
-  ["/rules", true],
-]);
 
 // Staging Kit starts with every route on Hono. The staging hostname or any
 // rollout flag selects this restrictive manifest, even with a misconfigured
