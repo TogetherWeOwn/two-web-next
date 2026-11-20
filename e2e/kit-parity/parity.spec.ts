@@ -2498,7 +2498,7 @@ test("Kit member event detail captures the ended record at both widths", async (
     ]);
     const page = await context.newPage();
     const record = page.getByRole("region", { name: "Sign-up record" });
-    const nextDates = page.locator("a[href]", { hasText: /^Next one:/ });
+    const nextDates = page.getByRole("link", { name: /^Next one:/, includeHidden: true });
     const siblingPagerLink = page.locator(`[data-testid="event-next"][href="/e/${adjacentKey}"]`);
     for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });

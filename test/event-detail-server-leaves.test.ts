@@ -129,6 +129,7 @@ describe("shared event detail server leaves", () => {
       expect(model.detailHtml.roster).toContain(
         viewer ? "event-roster-members-only" : "event-roster-guest-nudge",
       );
+      if (viewer) expect(model.detailHtml.roster).toContain("</a> to see who");
       expect(model.detailHtml.rsvp).not.toContain("<form");
     },
   );

@@ -300,10 +300,7 @@ export const EventMetadata: FC<{
   </dl>
 );
 
-export const EventRoster: FC<{ model: DetailRosterModel; ended?: boolean }> = ({
-  model,
-  ended = false,
-}) =>
+export const EventRoster: FC<{ model: DetailRosterModel; ended?: boolean }> = ({ model, ended }) =>
   model.attendees.length > 0 || (model.viewerMember && model.attendeesPaging.page > 1) ? (
     <section
       aria-labelledby="event-attendees-heading"
@@ -400,8 +397,8 @@ export const EventRoster: FC<{ model: DetailRosterModel; ended?: boolean }> = ({
         ) : (
           <>
             Members only —{" "}
-            <a href={`/join?next=${encodeURIComponent(model.joinReturnTo)}`}>join the Discord</a> to
-            {ended ? "see who signed up" : "see who's in"}.
+            <a href={`/join?next=${encodeURIComponent(model.joinReturnTo)}`}>join the Discord</a>
+            {ended ? " to see who signed up" : " to see who's in"}.
           </>
         )}
       </p>
