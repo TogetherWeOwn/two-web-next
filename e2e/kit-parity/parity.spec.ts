@@ -2448,7 +2448,7 @@ test("Kit member event detail captures the ended record at both widths", async (
             ${sibling.status}, id, ${sibling.index} from events where event_key = ${endedKey}`;
       }
       await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
-        select ${unreadableKey}, title, ${new Date(now + 172_800_000)}, 'infinity'::timestamptz,
+        select ${unreadableKey}, title, ${new Date(Date.UTC(2026, 0, 2, 3, 59))}, 'infinity'::timestamptz,
           'published', id, 2 from events where event_key = ${endedKey}`;
       await sql`insert into rsvps (event_id, user_id, status)
         select id, ${userId}, 'going' from events where event_key = ${endedKey}`;
@@ -2485,16 +2485,15 @@ test("Kit member event detail captures the ended record at both widths", async (
       await expect(page.getByTestId("event-series-next")).toHaveCount(0);
       await expect(siblingPagerLink).toHaveCount(0);
       await expect(record).toHaveCount(1);
-      const overview = page.getByRole("region", { name: "Event overview" });
-      await expect(overview).not.toContainText("Sign-up record");
+      await expect(page.getByLabel("Event overview")).not.toContainText("Sign-up record");
       await expect(page.getByRole("heading", { name: "Signed up (1)" })).toBeVisible();
-      const facts = page.getByRole("definition");
-      await expect(facts.getByText("1 listed sign-up", { exact: true })).toHaveCount(1);
+      await expect(page.locator(".event-meta [data-count]")).toHaveText("1 listed sign-up");
       await expect(page.getByRole("heading", { name: "Save the date" })).toHaveCount(0);
       const calendarLinks = page.getByRole("link", { name: /Add to calendar|Google Calendar/ });
       await expect(calendarLinks).toHaveCount(0);
       await expect(page.getByLabel("Event link")).toBeVisible();
       const hidden = page.locator(".event-meta .event-device-timezone, .event-meta > div[hidden]");
+      await expect(hidden.and(page.locator(".event-device-timezone"))).toHaveCount(4);
       await expect(hidden).toHaveCount(6);
       for (const control of await hidden.all()) expect(await control.boundingBox()).toBeNull();
       for (const fact of ["Starts", "Ends"]) {
@@ -2530,7 +2529,7 @@ test("Kit member event detail captures the ended record at both widths", async (
     });
     expect((await page.reload())?.status()).toBe(200);
     await expect(record).toBeVisible();
-    await expect(nextLink).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /^Next one:/ })).toHaveCount(0);
     await expect(page.getByTestId("event-series-next")).toHaveCount(0);
     await expect(siblingPagerLink).toHaveCount(0);
     await expect(page.getByTestId("event-roster-empty")).toContainText("No sign-ups are listed.");
