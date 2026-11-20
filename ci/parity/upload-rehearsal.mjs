@@ -138,7 +138,10 @@ export async function checkEffectiveConfig(path, digest) {
   assert.equal(sha256(await readFile(path)), digest, "effective config digest mismatch");
 }
 
-export async function rehearseUpload({ repo, installed, identity, context, outputIdentity }) {
+export async function rehearseUpload(
+  { repo, installed, identity, context, outputIdentity },
+  run = spawnSync,
+) {
   const tag = `${context.sourceSha}-${context.runId}-${context.runAttempt}`;
   const command = ["versions", "upload", "--dry-run", "--no-bundle", "--upload-source-maps=false"];
   const receipt = {
@@ -148,7 +151,6 @@ export async function rehearseUpload({ repo, installed, identity, context, outpu
     tag,
     kitConfigSha256: identity.kitConfigSha256,
     installedOutputSha256: identity.installedOutputSha256,
-    scratchRemoved: false,
   };
   const originalConfig = join(repo, productionConfig);
   const checkOriginal = async (configBytes) => {
@@ -191,9 +193,9 @@ export async function rehearseUpload({ repo, installed, identity, context, outpu
     receipt.wrangler = { version, command };
 
     const outfile = join(dir, "upload.multipart");
-    const args = [...command, "--config", config, "--tag", tag, "--outfile", outfile];
     phase = "wrangler-execution";
-    const child = spawnSync(process.execPath, [join(tool, "bin/wrangler.js"), ...args], {
+    const args = [...command, "--config", config, "--tag", tag, "--outfile", outfile];
+    const child = await run(process.execPath, [join(tool, "bin/wrangler.js"), ...args], {
       cwd: dir,
       env: {
         CI: "true",
