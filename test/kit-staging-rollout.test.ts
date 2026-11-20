@@ -493,6 +493,8 @@ describe("Kit production route selection", () => {
     [{ "sec-fetch-dest": "empty", "sec-fetch-mode": "same-origin" }, "hono"],
     [{ "sec-purpose": "prefetch" }, "hono"],
     [{ "x-moz": "prefetch" }, "hono"],
+    [{ "x-moz": "other, PreFetch" }, "hono"],
+    [{ "x-moz": "not-prefetch" }, "kit"],
   ] as const)("routes archive page 2 and varies its response for %j", async (headers, owner) => {
     const event = productionEvent(`${archive}?page=2`);
     event.request = new Request(event.request.url, { headers });
