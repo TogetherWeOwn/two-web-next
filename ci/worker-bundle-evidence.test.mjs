@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -665,6 +666,154 @@ describe("receipts", () => {
   });
 });
 
+const KIT_DIR = "web/dist-production-kit";
+
+// Wrangler roots the Kit metafile at web/, so inputs from the repo root carry ../.
+function kitFixture() {
+  const root = mkdtempSync(join(tmpdir(), "bundle-evidence-kit-"));
+  roots.push(root);
+  const pkg = (name, version, extra) => JSON.stringify({ name, version, ...extra });
+  const files = {
+    "src/shared.ts": "export const shared = 1;\n",
+    "node_modules/hono/dist/index.js": "export const hono = 1;\n",
+    "node_modules/hono/package.json": pkg("hono", "4.1.0"),
+    "web/node_modules/devalue/index.js": "export const devalue = 1;\n",
+    "web/node_modules/devalue/package.json": pkg("devalue", "5.0.0"),
+    "web/node_modules/wrangler/package.json": pkg("wrangler", "4.1.0", {
+      dependencies: { esbuild: "0.26.0" },
+    }),
+    "web/node_modules/esbuild/package.json": pkg("esbuild", "0.26.0"),
+    "web/.svelte-kit/cloudflare/_worker.js": "export default {};\n",
+    "web/.svelte-kit/cloudflare/_app/a.js": "export const a = 1;\n",
+    "package-lock.json": '{"lockfileVersion":3}\n',
+    "web/package-lock.json": '{"lockfileVersion":3,"name":"kit"}\n',
+    "web/wrangler.production.jsonc": '{"name":"two-web-next-production"}\n',
+    [`${KIT_DIR}/_worker.js`]: "console.log('kit');\n",
+    [`${KIT_DIR}/_worker.js.map`]: '{"version":3}\n',
+  };
+  for (const [path, content] of Object.entries(files)) put(root, path, content);
+  const size = (path) => Buffer.byteLength(files[path]);
+  const inputs = {
+    "../src/shared.ts": "src/shared.ts",
+    "../node_modules/hono/dist/index.js": "node_modules/hono/dist/index.js",
+    "node_modules/devalue/index.js": "web/node_modules/devalue/index.js",
+  };
+  const meta = {
+    inputs: Object.fromEntries(
+      Object.entries(inputs).map(([key, path]) => [key, { bytes: size(path), imports: [] }]),
+    ),
+    outputs: {
+      "dist-production-kit/_worker.js": {
+        bytes: size(`${KIT_DIR}/_worker.js`),
+        imports: [{ path: "cloudflare:workers", kind: "import-statement", external: true }],
+        inputs: Object.fromEntries(Object.keys(inputs).map((key) => [key, { bytesInOutput: 3 }])),
+      },
+      "dist-production-kit/_worker.js.map": { bytes: 14, imports: [], inputs: {} },
+    },
+  };
+  put(root, `${KIT_DIR}/bundle-meta.json`, JSON.stringify(meta));
+  return root;
+}
+
+describe("inert Kit candidate profile", () => {
+  test("inventories web-rooted paths, both lockfiles and every asset file", () => {
+    const root = kitFixture();
+    const inv = createInventory(root, KIT_DIR, context, "kit");
+    assert.equal(inv.candidate, "inert-kit");
+    assert.equal(inv.evidence, "build-only");
+    assert.equal(inv.bundle.entry, "_worker.js");
+    assert.equal(inv.bundle.sha256, sha256("console.log('kit');\n"));
+    assert.deepEqual(
+      inv.inputs.map((i) => [i.path, i.bytesInOutput]),
+      [
+        ["node_modules/hono/dist/index.js", 3],
+        ["src/shared.ts", 3],
+        ["web/node_modules/devalue/index.js", 3],
+      ],
+    );
+    assert.deepEqual(
+      inv.packages.map((p) => [p.manifest.path, p.version]),
+      [
+        ["node_modules/hono/package.json", "4.1.0"],
+        ["web/node_modules/devalue/package.json", "5.0.0"],
+      ],
+    );
+    assert.equal(inv.tools.wrangler, "4.1.0");
+    assert.equal(inv.build.config.path, "web/wrangler.production.jsonc");
+    assert.equal(inv.build.projectLockfile.path, "web/package-lock.json");
+    assert.match(
+      inv.build.command,
+      /--config wrangler.production.jsonc --outdir dist-production-kit /,
+    );
+    assert.deepEqual(inv.assets, {
+      directory: "web/.svelte-kit/cloudflare",
+      files: [
+        { path: "_app/a.js", bytes: 20, sha256: sha256("export const a = 1;\n") },
+        { path: "_worker.js", bytes: 19, sha256: sha256("export default {};\n") },
+      ],
+    });
+    put(root, `${KIT_DIR}/inventory.json`, `${JSON.stringify(inv, null, 2)}\n`);
+    assert.deepEqual(verifyInventory(root, KIT_DIR, context, "kit").inventory, inv);
+    put(root, "web/.svelte-kit/cloudflare/_app/a.js", "export const a = 2;\n");
+    assert.throws(() => verifyInventory(root, KIT_DIR, context, "kit"), /stale or invalid/);
+    const hono = createInventory(fixture(), DIR, context);
+    for (const key of ["candidate", "assets"]) assert.equal(Object.hasOwn(hono, key), false);
+    assert.equal(Object.hasOwn(hono.build, "projectLockfile"), false);
+  });
+
+  test("refuses linked assets, an outdir outside web/ and unknown profiles", () => {
+    const root = kitFixture();
+    symlinkSync(join(root, "package-lock.json"), join(root, "web/.svelte-kit/cloudflare/x.json"));
+    assert.throws(() => createInventory(root, KIT_DIR, context, "kit"), /regular file/);
+    assert.throws(() => createInventory(root, "dist-kit", context, "kit"), /outside project/);
+    assert.throws(() => createInventory(root, KIT_DIR, context, "toString"), /unknown bundle/);
+  });
+
+  for (const directory of ["web/.svelte-kit/cloudflare", "web/.svelte-kit", "web"]) {
+    test(`refuses a linked Kit asset path component: ${directory}`, () => {
+      const root = kitFixture();
+      const inventory = createInventory(root, KIT_DIR, context, "kit");
+      put(root, `${KIT_DIR}/inventory.json`, JSON.stringify(inventory));
+      const path = join(root, directory);
+      const moved = join(root, "moved-assets");
+      renameSync(path, moved);
+      symlinkSync(moved, path, "dir");
+      assert.throws(() => createInventory(root, KIT_DIR, context, "kit"), /asset directory/);
+      assert.throws(() => verifyInventory(root, KIT_DIR, context, "kit"), /asset directory/);
+    });
+  }
+
+  for (const name of ["upload.json", "deployed.json"]) {
+    test(`refuses a pre-existing Kit receipt: ${name}`, () => {
+      const root = kitFixture();
+      const inventory = createInventory(root, KIT_DIR, context, "kit");
+      put(root, `${KIT_DIR}/inventory.json`, JSON.stringify(inventory));
+      put(root, `${KIT_DIR}/${name}`, "{}\n");
+      const expected = { message: `untracked bundle file: ${name}` };
+      assert.throws(() => createInventory(root, KIT_DIR, context, "kit"), expected);
+      assert.throws(() => verifyInventory(root, KIT_DIR, context, "kit"), expected);
+    });
+  }
+
+  test("the CLI keeps the Kit candidate build-only", () => {
+    const root = kitFixture();
+    const env = { ...process.env, BUILD_SHA: SHA, GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1" };
+    const script = new URL("./worker-bundle-evidence.mjs", import.meta.url).pathname;
+    const options = { cwd: root, env, encoding: "utf8", timeout: 10_000 };
+    const cli = (...args) => spawnSync(process.execPath, [script, ...args], options);
+    assert.equal(cli("create", KIT_DIR, "kit").status, 0);
+    const verified = cli("verify", KIT_DIR, "kit");
+    assert.equal(verified.status, 0, verified.stderr);
+    assert.deepEqual(JSON.parse(verified.stdout).samples, { hono: "present", vitest: "unknown" });
+    for (const command of ["uploaded", "deployed"]) {
+      const refused = cli(command, KIT_DIR, "kit");
+      assert.equal(refused.status, 1);
+      assert.match(refused.stderr, /build-only/);
+    }
+    assert.equal(existsSync(join(root, KIT_DIR, "upload.json")), false);
+  });
+});
+
 describe("workflow evidence wiring", () => {
   const workflow = (name) =>
     parse(readFileSync(new URL(`../.github/workflows/${name}.yml`, import.meta.url), "utf8"));
@@ -725,6 +874,44 @@ describe("workflow evidence wiring", () => {
     assert.equal(steps[archive].with.path, "dist-production/");
     assert.equal(steps[archive].with["if-no-files-found"], "error");
     assert.equal(steps[archive].with["retention-days"], 30);
+  });
+
+  test("production builds the inert Kit candidate beside, never instead of, the Hono upload", () => {
+    const steps = workflow("deploy-production").jobs["deploy-production"].steps;
+    const find = (text) => steps.findIndex((step) => step.name?.includes(text));
+    const honoInventory = find("Inventory the exact");
+    const check = find("Check the inert Kit production candidate config");
+    const build = find("Build the inert Kit production candidate");
+    const inventory = find("Inventory the inert Kit production candidate");
+    const archive = find("Archive the inert Kit production candidate");
+    const credentials = find("Require production-only Cloudflare credentials");
+    const order = [honoInventory, check, build, inventory, archive, credentials];
+    assert.ok(
+      order.every((index, n) => index > (order[n - 1] ?? -1)),
+      String(order),
+    );
+    const guard = "hashFiles('web/wrangler.production.jsonc') != ''";
+    for (const index of [check, build, inventory]) assert.equal(steps[index].if, guard);
+    assert.equal(
+      steps[check].run,
+      "node workflow-tip/ci/production-deploy-gate.mjs --kit-candidate",
+    );
+    assert.match(
+      steps[build].run,
+      /cd web\nnpx wrangler deploy --dry-run --config wrangler.production.jsonc --outdir dist-production-kit --metafile dist-production-kit\/bundle-meta.json\n/,
+    );
+    assert.equal(
+      steps[inventory].run,
+      "node workflow-tip/ci/worker-bundle-evidence.mjs create web/dist-production-kit kit",
+    );
+    assert.equal(steps[inventory].env.BUILD_SHA, steps[honoInventory].env.BUILD_SHA);
+    assert.equal(steps[archive].uses, artifactPin);
+    assert.equal(steps[archive].with.path, "web/dist-production-kit/");
+    const kitSteps = JSON.stringify([check, build, inventory, archive].map((i) => steps[i]));
+    assert.doesNotMatch(kitSteps, /secrets\.|versions upload|--env production/);
+    for (const step of steps.filter((s) => /versions (?:upload|deploy)/.test(s.run ?? ""))) {
+      assert.doesNotMatch(step.run, /kit/i);
+    }
   });
 
   test("CI creates build-only evidence and checks pinned no-bundle equivalence", () => {

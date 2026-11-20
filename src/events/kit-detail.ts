@@ -62,6 +62,7 @@ import {
   getEventSeriesContext,
   getPublicEvent,
   getViewerRsvp,
+  isRenderableEventWindow,
   listGoingAttendees,
   listRelatedEvents,
   nextAttendeePage,
@@ -202,7 +203,10 @@ export interface KitEventDetailModel {
    * interval. Never a client clock; RSVP verdicts are unaffected. Optional
    * so a pre-existing fixture without the flag reads as not ongoing. */
   isOngoing?: boolean;
-  lifecycle: { date: string; endTime: string; next: { key: string; date: string } | null } | null;
+  /** Elapsed at the server render instant, even if a review cannot format its dates. */
+  isEnded: boolean;
+  lifecycle: { date: string; endTime: string } | null;
+  endedNext: { key: string; date: string } | null;
   liveTime?: { asOf: string; staleAt: string };
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
@@ -257,6 +261,7 @@ export interface KitEventDetailModel {
   showJoinPitch: boolean;
   joinReturnTo: string;
   joinResult: JoinResult | null;
+  viewerAuthenticated: boolean;
   viewerMember: boolean;
   viewerModerator: boolean;
   /** Signed-in display name for the header sign-out form; null for guests. */
@@ -386,11 +391,7 @@ function toLink(link: EventLink, now: Date): KitEventDetailLink {
   };
 }
 
-function detailLifecycle(
-  event: PublicEvent,
-  timeZone: string,
-  next: EventLink | null | undefined,
-): KitEventDetailModel["lifecycle"] {
+function detailLifecycle(event: PublicEvent, timeZone: string): KitEventDetailModel["lifecycle"] {
   if (!instantIso(event.startsAt) || !instantIso(event.endsAt)) return null;
   const date = new Intl.DateTimeFormat("en-GB", {
     timeZone,
@@ -405,17 +406,19 @@ function detailLifecycle(
   return {
     date: startDate,
     endTime: startDate === endDate ? endTime : `${endDate}, ${endTime}`,
-    next: next
-      ? {
-          key: next.eventKey,
-          date: new Intl.DateTimeFormat("en-GB", {
-            timeZone: isValidZone(next.timezone) ? next.timezone : "UTC",
-            weekday: "short",
-            day: "numeric",
-            month: "short",
-          }).format(next.startsAt),
-        }
-      : null,
+  };
+}
+
+function endedNext(next: EventLink | null | undefined): KitEventDetailModel["endedNext"] {
+  if (!next) return null;
+  return {
+    key: next.eventKey,
+    date: new Intl.DateTimeFormat("en-GB", {
+      timeZone: isValidZone(next.timezone) ? next.timezone : "UTC",
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+    }).format(next.startsAt),
   };
 }
 
@@ -631,6 +634,11 @@ export async function resolveKitEventDetail(
       const review = wantsReview ? savedEventReview(event, now, search) : null;
       const zoneLabel = isValidZone(event.timezone) ? event.timezone : "UTC";
       const liveTime = liveDetailTime(event, now);
+      const nextInRecord = ended ? endedNext(series?.upcoming) : null;
+      const canLink = (link: EventLink) =>
+        !ended || (link.eventKey !== nextInRecord?.key && isRenderableEventWindow(link));
+      const discoveryLink = (link: EventLink | null) =>
+        link && canLink(link) ? toLink(link, now) : null;
       const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
@@ -675,7 +683,9 @@ export async function resolveKitEventDetail(
           isDraft: event.status === "draft",
           isPast: event.status === "past",
           isOngoing: Boolean(liveTime),
-          lifecycle: ended ? detailLifecycle(event, zoneLabel, series?.upcoming) : null,
+          isEnded: ended,
+          lifecycle: ended ? detailLifecycle(event, zoneLabel) : null,
+          endedNext: nextInRecord,
           ...(liveTime ? { liveTime } : {}),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
@@ -715,15 +725,18 @@ export async function resolveKitEventDetail(
           answer,
           waitlistPosition: position,
           neighbors: {
-            previous: neighbors.previous ? toLink(neighbors.previous, now) : null,
-            next: neighbors.next ? toLink(neighbors.next, now) : null,
+            previous: discoveryLink(neighbors.previous),
+            next:
+              ended && neighbors.next && series?.memberIds?.includes(neighbors.next.id)
+                ? null
+                : discoveryLink(neighbors.next),
           },
-          related: related.map((link) => toLink(link, now)),
+          related: related.filter(canLink).map((link) => toLink(link, now)),
           series: series
             ? {
                 hosts: series.hosts,
-                previous: series.previous ? toLink(series.previous, now) : null,
-                next: series.next ? toLink(series.next, now) : null,
+                previous: discoveryLink(series.previous),
+                next: ended ? null : discoveryLink(series.next),
               }
             : null,
           showJoinPitch: !viewer,
@@ -737,6 +750,7 @@ export async function resolveKitEventDetail(
             MAX_RETURN_DESTINATION_BYTES,
           ),
           joinResult,
+          viewerAuthenticated: viewer != null,
           viewerMember: member,
           viewerModerator: viewer?.moderator === true,
           viewerUsername: viewer?.username ?? null,

@@ -1,4 +1,26 @@
 import { test, expect, localOrigin } from "./fixtures";
+import { accessibleJoinOneclick } from "./join-oneclick";
+
+test("the one-click Join locator rejects an aria-hidden anchor", async ({ page }) => {
+  await page.setContent(`
+    <section aria-label="Join Together We Own">
+      <a data-testid="join-oneclick" href="/join/discord" aria-hidden="true">Join with Discord</a>
+      <a href="/join/discord">Join with Discord</a>
+    </section>
+  `);
+  const landmark = page.getByRole("region", { name: "Join Together We Own", exact: true });
+  const oneclick = landmark.getByTestId("join-oneclick");
+  const accessibleLink = accessibleJoinOneclick(landmark);
+
+  // The old checks pass, and the other accessible link cannot stand in for this anchor.
+  await expect(oneclick).toBeVisible();
+  await expect(oneclick).toHaveAttribute("href", "/join/discord");
+  await expect(accessibleLink).toHaveCount(0);
+
+  await oneclick.evaluate((link) => link.removeAttribute("aria-hidden"));
+  await expect(accessibleLink).toBeVisible();
+  await expect(accessibleLink).toHaveAttribute("href", "/join/discord");
+});
 
 test("homepage join CTA completes stubbed Discord OAuth and opens the member profile", async ({
   page,

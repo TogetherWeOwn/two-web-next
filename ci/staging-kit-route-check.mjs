@@ -1,7 +1,10 @@
 const path = process.argv[2];
+// A route-family switch reaches the edge a little after `wrangler deploy`
+// returns, so poll briefly instead of failing on the first stale answer.
+const attempts = 6;
+const delayMs = 10_000;
 
-try {
-  if (!["/events", "/", "/join"].includes(path)) throw new Error("Unsupported Kit probe path");
+async function probe() {
   const response = await fetch(`https://next.togetherweown.com${path}`, {
     method: "GET",
     credentials: "omit",
@@ -15,7 +18,20 @@ try {
   if (headers.get("x-two-renderer") !== "kit") {
     throw new Error(`GET ${path} did not return x-two-renderer: kit`);
   }
-  console.log(`GET ${path}: HTTP 200, x-two-renderer: kit`);
+}
+
+try {
+  if (!["/events", "/", "/join"].includes(path)) throw new Error("Unsupported Kit probe path");
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await probe();
+      console.log(`GET ${path}: HTTP 200, x-two-renderer: kit (attempt ${attempt})`);
+      break;
+    } catch (error) {
+      if (attempt === attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 } catch (error) {
   console.error(`Staging Kit renderer check failed: ${error.message}`);
   process.exitCode = 1;

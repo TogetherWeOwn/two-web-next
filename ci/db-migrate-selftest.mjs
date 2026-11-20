@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, copyFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,7 @@ import {
   PLANETSCALE_PRODUCTION_HOST,
   PLANETSCALE_STAGING_BRANCH_ID,
   PLANETSCALE_STAGING_HOST,
+  assertProductionIdentity,
   captureDriverRaceCrashes,
   isDriverConnectionRaceCrash,
   migrationClient,
@@ -30,12 +31,22 @@ import {
   assertServingLedgerIsolation,
   validateMigrationSql,
 } from "./migration-runtime-rights.mjs";
+import { rehearseWebReadiness } from "./web-readiness-rehearsal.mjs";
 
 const mainEnv = {
   GITHUB_REF: "refs/heads/main",
   MIGRATION_TARGET: "staging",
   STAGING_MIGRATION_HOLD: "false",
 };
+const productionEnv = {
+  MIGRATION_TARGET: "production",
+  PRODUCTION_DEPLOY_ENABLED: "true",
+  GITHUB_SHA: "a".repeat(40),
+  PRODUCTION_MIGRATION_APPROVED_SHA: "a".repeat(40),
+  PRODUCTION_MIGRATION_IDENTITY_SHA256: "b".repeat(64),
+};
+const identityHash = (database, role) =>
+  createHash("sha256").update(database).update(Buffer.of(0)).update(role).digest("hex");
 const script = fileURLToPath(new URL("./db-migrate.mjs", import.meta.url));
 const source = fileURLToPath(new URL("../drizzle", import.meta.url));
 const journal = JSON.parse(readFileSync(join(source, "meta/_journal.json"), "utf8"));
@@ -101,7 +112,7 @@ async function fixture(callback) {
         { ...env, ...overrides },
         { testDatabase: true, report: (line) => output.push(line) },
       );
-    await callback({ client, run, env, output });
+    await callback({ client, run, env, output, url });
   } finally {
     try {
       if (client) await client.end();
@@ -187,8 +198,7 @@ test("the workflow's actual shell gate denies disabled production and non-main r
       env: {
         ...process.env,
         ...mainEnv,
-        MIGRATION_TARGET: "production",
-        PRODUCTION_DEPLOY_ENABLED: "true",
+        ...productionEnv,
       },
     }).status,
     0,
@@ -238,8 +248,7 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
     () =>
       migrationConfig({
         ...mainEnv,
-        MIGRATION_TARGET: "production",
-        PRODUCTION_DEPLOY_ENABLED: "true",
+        ...productionEnv,
         PLANETSCALE_STAGING_DATABASE_URL: "unused",
       }),
     /Missing PRODUCTION_DATABASE_URL/,
@@ -265,28 +274,27 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
     () => migrationConfig({ ...mainEnv, PLANETSCALE_STAGING_DATABASE_URL: retiredNeon }),
     /pinned staging endpoint/,
   );
-  // Production is PlanetScale: a retired Neon URL must be refused, and a
-  // direct PlanetScale URL (5432, pooled 6432 never) must be accepted.
-  const production = "postgres://user:stub@stub-1.pg.psdb.cloud/db?sslmode=require";
+  // Only the pinned direct production host and branch are accepted.
+  const production = `postgres://role-stub.${PLANETSCALE_PRODUCTION_BRANCH_ID}:stub@${PLANETSCALE_PRODUCTION_HOST}/db?sslmode=require`;
   assert.equal(
     migrationConfig({
       ...mainEnv,
-      MIGRATION_TARGET: "production",
-      PRODUCTION_DEPLOY_ENABLED: "true",
+      ...productionEnv,
       PRODUCTION_DATABASE_URL: production,
     }).target,
     "production",
   );
-  assert.throws(
-    () =>
-      migrationConfig({
-        ...mainEnv,
-        MIGRATION_TARGET: "production",
-        PRODUCTION_DEPLOY_ENABLED: "true",
-        PRODUCTION_DATABASE_URL: retiredNeon,
-      }),
-    /PlanetScale/,
-  );
+  for (const wrong of [
+    retiredNeon,
+    production.replace(PLANETSCALE_PRODUCTION_HOST, PLANETSCALE_STAGING_HOST),
+    production.replace(PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_STAGING_BRANCH_ID),
+    production.replace(".pg.psdb.cloud", "-pooler.pg.psdb.cloud"),
+  ]) {
+    assert.throws(
+      () => migrationConfig({ ...mainEnv, ...productionEnv, PRODUCTION_DATABASE_URL: wrong }),
+      /pinned direct production PlanetScale endpoint/,
+    );
+  }
   // Only the pinned PlanetScale staging branch is accepted for staging: the
   // username suffix carries the branch id, so a production URL in the staging
   // secret fails closed even though staging migrations run automatically on
@@ -450,14 +458,109 @@ test("partial journal prefix: remaining web SQL applies through the enabled prod
     await fixture(async ({ client, run }) => {
       await migrate(drizzle(client), { migrationsFolder: scratch });
       assert.equal((await run("plan")).length, journal.entries.length - 3);
-      await run("apply", { MIGRATION_TARGET: "production", PRODUCTION_DEPLOY_ENABLED: "true" });
-      assert.equal((await run("verify")).length, 0);
+      const [identity] = await client`select current_database() as db, session_user as role`;
+      const approved = {
+        ...productionEnv,
+        PRODUCTION_MIGRATION_IDENTITY_SHA256: identityHash(identity.db, identity.role),
+      };
+      await run("apply", approved);
+      assert.equal((await run("verify", approved)).length, 0);
       await client`update drizzle.__drizzle_migrations set hash = 'edited' where id = 1`;
       await assert.rejects(run("apply"), /exact prefix/);
     });
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+test("production refuses a missing pin before access and a changed identity before DDL", async () => {
+  for (const pin of [undefined, "", "DO_NOT_ECHO"]) {
+    await assert.rejects(
+      runMigration("apply", {
+        ...mainEnv,
+        ...productionEnv,
+        PRODUCTION_MIGRATION_IDENTITY_SHA256: pin,
+      }),
+      { message: "Production migration identity setting is missing or malformed." },
+    );
+  }
+  await fixture(async ({ client, run, output, url }) => {
+    const [{ db, role }] = await client`select current_database() as db, session_user as role`;
+    const approved = {
+      ...productionEnv,
+      PRODUCTION_MIGRATION_IDENTITY_SHA256: identityHash(db, role),
+    };
+    assert.equal((await run("plan", approved)).length, journal.entries.length);
+    assert.equal(output[0], "Production migration database and role identity matched.");
+    output.length = 0;
+    const refusal = {
+      message: "Production migration database or role identity did not match; values withheld.",
+    };
+    // The live database matches the digest but not the URL pin. Exercise that
+    // comparison independently without pointing a connection at another database.
+    const wrongUrl = new URL("/wrong_database", url);
+    await assert.rejects(
+      assertProductionIdentity(
+        client,
+        { target: "production", url: wrongUrl, identity: identityHash(db, role) },
+        (line) => output.push(line),
+      ),
+      refusal,
+    );
+    for (const pin of [identityHash(db, "wrong_role"), identityHash("wrong_database", role)]) {
+      await assert.rejects(
+        run("apply", { ...approved, PRODUCTION_MIGRATION_IDENTITY_SHA256: pin }),
+        refusal,
+      );
+    }
+    // New connections start with a different effective role, even though the
+    // authenticated role and database still match the successful plan.
+    await client`alter database ${client(db)} set role to pg_read_all_data`;
+    try {
+      await assert.rejects(run("apply", approved), refusal);
+      // Even an approved effective role cannot stand in for the login role.
+      await assert.rejects(
+        run("apply", {
+          ...approved,
+          PRODUCTION_MIGRATION_IDENTITY_SHA256: identityHash(db, "pg_read_all_data"),
+        }),
+        refusal,
+      );
+    } finally {
+      await client`alter database ${client(db)} reset role`;
+    }
+    assert.deepEqual(output, []);
+    const [state] =
+      await client`select to_regnamespace('drizzle') as schema, to_regclass('public.users') as users`;
+    assert.deepEqual({ ...state }, { schema: null, users: null });
+  });
+});
+
+test("production plan and verify check identity inside the journal transaction", async () => {
+  await fixture(async ({ client, env }) => {
+    const [{ db, role }] = await client`select current_database() as db, session_user as role`;
+    const approved = {
+      ...env,
+      ...productionEnv,
+      PRODUCTION_MIGRATION_IDENTITY_SHA256: identityHash(db, role),
+    };
+    const checked = [];
+    const run = (mode) =>
+      runMigration(mode, approved, {
+        testDatabase: true,
+        report: async (line) => {
+          if (line !== "Production migration database and role identity matched.") return;
+          const [runner] = await client`
+            select state from pg_catalog.pg_stat_activity
+            where datname = current_database() and pid <> pg_backend_pid()`;
+          assert.equal(runner?.state, "idle in transaction");
+          checked.push(mode);
+        },
+      });
+    assert.equal((await run("plan")).length, journal.entries.length);
+    await assert.rejects(run("verify"), /remain pending/);
+    assert.deepEqual(checked, ["plan", "verify"]);
+  });
 });
 
 test("canonical Drizzle migrator applies a pending migration after the runner", async () => {
@@ -726,6 +829,17 @@ async function assertLedgerRefused(client, run, reason) {
   );
   assert.equal((await client`select to_regclass('public.users') as name`)[0].name, null);
 }
+
+test("web readiness bridge rehearsal: locked expansion and scoped runtime cutover", async () => {
+  await fixture(async ({ client, url }) => {
+    const created = await ensureRuntimeRole(client);
+    try {
+      await rehearseWebReadiness(client, url);
+    } finally {
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
 
 test("implicit ledger rights refuse; object grants preserve runtime and audit operations", async () => {
   await fixture(async ({ client }) => {

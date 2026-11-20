@@ -9,17 +9,15 @@ import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
 import { registerAlertProbe } from "./alert-probe";
 import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
-import {
-  hashToken,
-  newSessionToken,
-  SESSION_TTL_SECONDS,
-  type SessionStore,
-  type Sql,
-} from "./sessions";
+import { hashToken, SESSION_TTL_SECONDS, type SessionStore, type Sql } from "./sessions";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
-import { issueSession as persistSession, lookupSession, storeForEnv } from "./http/session";
+import {
+  issueSession as persistSession,
+  readSession as readStoredSession,
+  storeForEnv,
+} from "./http/session";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { operatorImageHosts } from "./config-warn";
@@ -311,59 +309,18 @@ async function readSession(
   rotateToken = true,
 ): Promise<Session | null> {
   const signed = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  const stored = await lookupSession(signed, c.env, () => storeFor(c));
+  const stored = await readStoredSession(signed, c.env, () => storeFor(c), rotateToken);
   if (!stored) return null;
-  const { token, store, row } = stored;
-  // Abortable calendar fragments validate expiry/revocation but must not delete
-  // the browser's current token: an aborted response cannot deliver a replacement.
-  if (!rotateToken) {
-    return {
-      id: row.userId,
-      username: row.username,
-      avatar: row.avatar,
-      member: row.member,
-      moderator: row.moderator,
-    };
-  }
-  // Rotation: every authenticated page view mints a fresh token and deletes
-  // the old row in the same statement, keeping the immediate predecessor
-  // valid for 10s (bounded by its own expiry) while its successor stays live.
-  // A replayed cookie past grace finds no row: guest (rotate resolves false
-  // for a revoked/expired/missing source — row ineligible stays guest, never
-  // an outage). Any rotation *error* is an outage, never a silent guest:
-  // classified database failures propagate as themselves, generic errors
-  // normalize to a plain Error so the callers' existing opaque-fallback
-  // boundary (plain Error => outage, named non-outage => 500) renders the
-  // honest outage treatment without leaking driver details or swallowing
-  // genuine programming errors from other reads.
-  const statusKey = await store.statusHash(await hashToken(token));
-  const replacement = newSessionToken();
-  let rotated: boolean;
-  try {
-    rotated = await store.rotate(await hashToken(token), {
-      tokenHash: await hashToken(replacement),
-      ...row,
-      expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
-    });
-  } catch (err) {
-    if (isDatabaseUnavailable(err)) throw err;
-    throw new Error("Session rotation unavailable");
-  }
-  if (!rotated) {
-    // Predecessor grace or a lost rotation race: re-read once. A grace row
-    // (or a concurrent winner's predecessor) authenticates without rotating,
-    // minting or extending — tab B keeps its jar until grace lapses. A
-    // revoked/expired source stays guest.
-    const graceRow = await store.get(await hashToken(token));
-    if (!graceRow) return null;
-    return {
-      id: graceRow.userId,
-      username: graceRow.username,
-      avatar: graceRow.avatar,
-      member: graceRow.member,
-      moderator: graceRow.moderator,
-    };
-  }
+  const { store, row, renewal } = stored;
+  const session = {
+    id: row.userId,
+    username: row.username,
+    avatar: row.avatar,
+    member: row.member,
+    moderator: row.moderator,
+  };
+  if (!renewal) return session;
+  const { replacement, statusKey } = renewal;
   await enableAuthStatus(c, store, await hashToken(replacement), statusKey);
   await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
     path: "/",
@@ -372,13 +329,7 @@ async function readSession(
     sameSite: "Lax",
     maxAge: SESSION_TTL_SECONDS,
   });
-  return {
-    id: row.userId,
-    username: row.username,
-    avatar: row.avatar,
-    member: row.member,
-    moderator: row.moderator,
-  };
+  return session;
 }
 
 // One banner sentence per ordinary-login failure meaning (TOG-10355): denied
