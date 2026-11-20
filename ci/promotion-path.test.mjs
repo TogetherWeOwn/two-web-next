@@ -13,7 +13,8 @@ const file = (filename, status = "modified", previous_filename) => ({
   status,
   previous_filename,
 });
-const ordinary = Array.from({ length: 101 }, (_, i) => file(`src/routes/product-${i}.ts`));
+const docs = (length) => Array.from({ length }, (_, i) => file(`docs/${i}.md`));
+const ordinary = docs(101);
 
 function github(rows, options = {}) {
   const labels = new Set(["unrelated", ...(options.labels ?? [])]);
@@ -59,13 +60,8 @@ function github(rows, options = {}) {
     }
     assert.fail(`Unexpected fixture request: ${method} ${path}`);
   };
-  return {
-    labels,
-    pages,
-    writes,
-    summary,
-    run: () => labelPromotionPath(api, 42, (entry) => summary.push(entry)),
-  };
+  const run = () => labelPromotionPath(api, 42, (entry) => summary.push(entry));
+  return { labels, pages, writes, summary, run };
 }
 
 test("only promotion surfaces match, including directly called tooling", () => {
@@ -73,7 +69,10 @@ test("only promotion surfaces match, including directly called tooling", () => {
     deep/web/wrangler.production.toml tail/wrangler.jsonc drizzle/meta/_journal.json migrations.lock db/migrations/0001.sql
     ci/resolve-promotion-sha.mjs ci/production-deploy-gate.mjs ci/rollback-target.mjs
     ci/staging-provenance.mjs ci/staging-deploy-gate.mjs ci/db-migrate.mjs
-    ci/migration-runtime-rights.mjs src/up-database.ts bin/version-check.mjs e2e/staging/join.spec.ts`;
+    ci/migration-runtime-rights.mjs src/up-database.ts bin/version-check.mjs e2e/staging/join.spec.ts
+    e2e/watch/guest-journeys.spec.ts playwright.watch.config.ts e2e/watch-guard.mjs e2e/ci-only.mjs
+    playwright.staging.config.ts e2e/staging-guard.mjs e2e/join-oneclick.ts src/qa.ts
+    web/package.json web/scripts/copy-public.mjs ci/kit-route-evidence.mjs bin/ts-hook.mjs bin/ts-hooks.mjs`;
   const excluded = `docs/runbook.md docs/wrangler.md test/fixtures/legacy/verify.sql
     src/routes/events.ts web/src/routes/+page.svelte ci/staging-provenance.test.mjs
     ci/check-doc-links.mjs e2e/staging/journey-ledger.test.mjs`;
@@ -87,13 +86,16 @@ test("paginates, detects removal and either side of renames, and flips only its 
     file("docs/former-config.txt", "renamed", "tail/wrangler.jsonc"),
     file("tail/wrangler.jsonc", "renamed", "docs/former-config.txt"),
   ]) {
-    const run = github([...ordinary.slice(0, 100), change], { labels: [no] });
+    const run = github([...docs(2998), change], { labels: [no] });
     await run.run();
-    assert.deepEqual(run.pages, [1, 2]);
+    assert.deepEqual(
+      run.pages,
+      Array.from({ length: 30 }, (_, i) => i + 1),
+    );
     assert.deepEqual([...run.labels], ["unrelated", yes]);
     assert.ok(run.summary[0].includes("verdict **yes**"));
   }
-  const run = github(ordinary, { labels: [yes, no], createRace: true });
+  const run = github(docs(299), { labels: [yes, no], createRace: true });
   await run.run();
   await run.run();
   assert.deepEqual([...run.labels], ["unrelated", no]);
@@ -107,7 +109,7 @@ test("failed, capped, incomplete or inconsistent reads produce no verdict label"
     [ordinary.slice(0, 100), { count: 101 }],
     [ordinary, { failPage: 2 }],
     [ordinary, { count: 3000 }],
-    [Array.from({ length: 300 }, (_, i) => file(`docs/${i}.md`)), {}],
+    [docs(300), {}],
     [[...ordinary.slice(0, 100), ordinary[0]], {}],
     [[file("docs/new.txt", "renamed")], {}],
     [ordinary, { comparison: [...ordinary.slice(0, 100), file("ci/production-deploy-gate.mjs")] }],

@@ -17,11 +17,13 @@ const directPaths = new Set(
    drizzle.config.ts migrations.lock
    bin/smoke.mjs bin/version-check.mjs bin/revision-check.mjs bin/json-smoke.mjs
    ci/robots-directives.mjs lib/loopback-hosts.mjs
-   bin/check-moderators.mjs bin/operator-probe-errors.mjs bin/ts-hook.mjs src/probes/check-moderators.ts
+   bin/check-moderators.mjs bin/operator-probe-errors.mjs bin/ts-hook.mjs bin/ts-hooks.mjs src/probes/check-moderators.ts src/roles.ts
    src/index.tsx src/version.ts src/release-tag.ts src/headers.ts src/route-ownership.ts
    src/up.ts src/up-body.ts src/up-config.ts src/up-database.ts src/up-migrations.ts
    src/up-queue.ts src/up-revision.ts src/up-timeout.ts
-   playwright.staging.config.ts
+   playwright.staging.config.ts playwright.watch.config.ts e2e/ci-only.mjs e2e/watch-guard.mjs e2e/staging-guard.mjs
+   e2e/featured-guest-poll.mjs e2e/qa-login-retry.mjs e2e/qa-request.mjs e2e/rsvp-pending.ts e2e/join-oneclick.ts e2e/fixture-sweep.mjs
+   src/qa.ts src/session-cookie.ts web/scripts/copy-public.mjs ci/kit-route-evidence.mjs
    ci/build-ember-tokens.mjs ci/build-leaf-css.mjs ci/build-events-css.mjs ci/css-dictionary.mjs
    ci/minify-assets.mjs ci/budget-fragments.mjs ci/bundle-budget.json
    .npmrc package.json package-lock.json web/.npmrc web/package.json web/package-lock.json
@@ -34,7 +36,7 @@ export function isPromotionPath(path) {
     /^(?:\.github\/(?:workflows|actions)|drizzle|(?:db\/)?migrations)\//.test(path) ||
     /(?:^|\/)wrangler(?:[.-][^/]*)?\.(?:toml|jsonc?)$/i.test(path) ||
     /^ci\/budgets\/bundle\/[^/]+\.json$/.test(path) ||
-    /^e2e\/staging\/(?!.*\.test\.)[^/]+\.(?:ts|mjs)$/.test(path)
+    /^e2e\/(?:staging|watch)\/(?!.*\.test\.)[^/]+\.(?:ts|mjs)$/.test(path)
   );
 }
 
@@ -42,15 +44,7 @@ const pageSize = 100;
 const prFilesCap = 3000;
 const compareFilesCap = 300;
 const isSha = (value) => typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
-const knownStatus = new Set([
-  "added",
-  "modified",
-  "removed",
-  "renamed",
-  "copied",
-  "changed",
-  "unchanged",
-]);
+const knownStatus = new Set("added modified removed renamed copied changed unchanged".split(" "));
 
 async function json(response) {
   assert.ok(response.ok, `GitHub read failed (HTTP ${response.status})`);
