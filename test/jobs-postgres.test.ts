@@ -1,8 +1,14 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { pgReconciliationReads } from "../src/admin/reconciliation-reads";
+import {
+  reconciliationService,
+  reconciliationServiceFor,
+} from "../src/admin/reconciliation-service";
 import { pgPruneStores, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 import { registerJobsServerTimeoutsAcceptance } from "./helpers/jobs-server-timeouts-acceptance";
+import { env } from "./helpers/member-data";
 
 // Real Postgres, guarded before driver construction: agent-testdb or the CI
 // service only. Each fixture migrates and drops only its disposable schema.
@@ -16,6 +22,137 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
   });
   afterAll(async () => {
     await fixture?.dispose();
+  });
+
+  it("returns filtered, ordered reconciliation windows at both limits", async ({
+    onTestFinished,
+  }) => {
+    const windowFixture = await createJobsFixture(process.env.DATABASE_URL!);
+    onTestFinished(() => windowFixture.dispose());
+    const sql = windowFixture.client;
+    const reads = pgReconciliationReads(sql);
+    const key = (n: number) => `00000000-0000-0000-0000-${n.toString().padStart(12, "0")}`;
+    const keys = (start: number, count: number) =>
+      Array.from({ length: count }, (_, i) => key(start + i));
+    const resultKeys = (rows: Awaited<ReturnType<typeof reads.listOpen>>) =>
+      rows.map((row) => row.idempotencyKey);
+
+    expect(await reads.listOpen()).toEqual([]);
+    expect(await reads.listResolved()).toEqual([]);
+    await sql`insert into bot_reconciliation_intents
+      (idempotency_key, verb, subject, first_seen_at, resolved_at, attempts)
+      select ('00000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid,
+        'event.upsert', 'event:42', '2026-01-02'::timestamptz, null, 1
+      from generate_series(1, 100) as n`;
+    await sql`insert into bot_reconciliation_intents
+      (idempotency_key, verb, subject, first_seen_at, resolved_at, attempts)
+      select ('00000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid,
+        'event.upsert', 'event:42', '2026-01-02'::timestamptz, '2026-01-02'::timestamptz, 1
+      from generate_series(201, 250) as n`;
+    expect(resultKeys(await reads.listOpen())).toEqual(keys(1, 100));
+    expect(resultKeys(await reads.listResolved())).toEqual(keys(201, 50));
+
+    await sql`insert into bot_reconciliation_intents
+      (idempotency_key, verb, subject, first_seen_at, resolved_at, attempts) values
+      (${key(101)}::uuid, 'event.upsert', 'event:42', '2026-01-01'::timestamptz, null, 1),
+      (${key(251)}::uuid, 'event.upsert', 'event:42', '2026-01-02'::timestamptz, '2026-01-03'::timestamptz, 1)`;
+    expect(resultKeys(await reads.listOpen())).toEqual([key(101), ...keys(1, 99)]);
+    expect(resultKeys(await reads.listResolved())).toEqual([key(251), ...keys(201, 49)]);
+  });
+
+  it("returns exact Dates from both reconciliation clients regardless of DateStyle", async ({
+    onTestFinished,
+  }) => {
+    // Both pools have one connection, so the setting reaches every read transaction.
+    const dateFixture = await createJobsFixture(process.env.DATABASE_URL!);
+    onTestFinished(() => dateFixture.dispose());
+    const sql = dateFixture.client;
+    const openKey = "00000000-0000-0000-0002-000000000001";
+    const resolvedKey = "00000000-0000-0000-0002-000000000002";
+    const firstSeenAt = "2026-12-17T09:10:11.123+02:00";
+    const lastAttemptAt = "2026-12-18T10:11:12.456+02:00";
+    const resolvedAt = "2026-12-19T11:12:13.789999+02:00";
+    await sql`insert into bot_reconciliation_intents
+      (idempotency_key, verb, subject, attempts, first_seen_at, last_attempt_at, resolved_at) values
+      (${openKey}::uuid, 'event.upsert', 'event:42', 1, ${firstSeenAt}, ${lastAttemptAt}, null),
+      (${resolvedKey}::uuid, 'event.upsert', 'event:43', 1, ${firstSeenAt}, ${lastAttemptAt}, ${resolvedAt})`;
+
+    const actor = "100000000000000112";
+    const injected = await reconciliationServiceFor({ ...env, ADMIN_DB: dateFixture.db }, actor);
+    const timestamps = {
+      firstSeenAt: new Date("2026-12-17T07:10:11.123Z"),
+      lastAttemptAt: new Date("2026-12-18T08:11:12.456Z"),
+    };
+    const open = { ...timestamps, idempotencyKey: openKey, resolvedAt: null };
+    const resolved = {
+      ...timestamps,
+      idempotencyKey: resolvedKey,
+      resolvedAt: new Date("2026-12-19T09:12:13.789Z"),
+    };
+    for (const [client, service] of [
+      [sql, reconciliationService(sql, actor)],
+      [dateFixture.db.$client, injected!],
+    ] as const) {
+      for (const dateStyle of ["ISO, MDY", "SQL, DMY"]) {
+        await client`select set_config('DateStyle', ${dateStyle}, false)`;
+        expect(await service.get(openKey)).toMatchObject(open);
+        expect(await service.get(resolvedKey)).toMatchObject(resolved);
+        expect(await service.listOpen()).toEqual([expect.objectContaining(open)]);
+        expect(await service.listResolved()).toEqual([expect.objectContaining(resolved)]);
+        expect(await client`show DateStyle`).toEqual([{ DateStyle: dateStyle }]);
+      }
+    }
+  });
+
+  it("records moderator access, resolves once under contention, and refuses failed receipts", async () => {
+    const key = (n: number) => `00000000-0000-0000-0001-${n.toString().padStart(12, "0")}`;
+    const actor = "100000000000000111";
+    const service = reconciliationService(sql, actor);
+    await sql`insert into bot_reconciliation_intents (idempotency_key, verb, subject, attempts)
+      values (${key(1)}::uuid, 'event.upsert', 'event:42', 1),
+        (${key(2)}::uuid, 'event.upsert', 'event:43', 1)`;
+
+    expect(await service.get(key(1))).toMatchObject({ idempotencyKey: key(1), resolvedAt: null });
+    expect(await service.get(key(3))).toBeNull();
+    expect(
+      (
+        await Promise.all([
+          service.resolve(key(1), "confirmed"),
+          service.resolve(key(1), "confirmed"),
+        ])
+      ).sort(),
+    ).toEqual(["resolved", "unchanged"]);
+    expect(await service.get(key(1))).toMatchObject({
+      idempotencyKey: key(1),
+      resolution: "confirmed",
+    });
+    const receipts = await sql`select subject_id, description from activity_log
+      where causer_id = ${actor} and subject_type = 'bot_reconciliation_intents'`;
+    expect(receipts.filter((row) => row.description === "bot-reconciliation.read")).toEqual(
+      expect.arrayContaining([{ description: "bot-reconciliation.read", subject_id: null }]),
+    );
+    expect(receipts.filter((row) => row.description === "bot-reconciliation.resolve")).toEqual([
+      { description: "bot-reconciliation.resolve", subject_id: key(1) },
+    ]);
+
+    // Refuse new receipts in this disposable schema, leaving existing evidence intact.
+    await sql`alter table activity_log add constraint test_refuse_reconciliation_receipt
+      check (subject_type <> 'bot_reconciliation_intents') not valid`;
+    try {
+      const receiptViolation = {
+        code: "23514",
+        constraint_name: "test_refuse_reconciliation_receipt",
+      };
+      await expect(service.get(key(2))).rejects.toMatchObject(receiptViolation);
+      await expect(service.resolve(key(2), "not_applied")).rejects.toMatchObject(receiptViolation);
+      expect(await pgReconciliationReads(sql).get(key(2))).toMatchObject({
+        idempotencyKey: key(2),
+        resolvedAt: null,
+        resolution: null,
+      });
+    } finally {
+      await sql`alter table activity_log drop constraint test_refuse_reconciliation_receipt`;
+    }
   });
 
   // Observe the holder instead of guessing with a sleep: pg_try_advisory_xact_lock

@@ -265,7 +265,9 @@ for (const twin of ["Hono", "Kit"] as const) {
         );
         expect(status).toBe(200);
         expect(html.includes('data-testid="rsvp-going"')).toBe(open);
-        expect(html.includes('data-testid="rsvp-closed"')).toBe(!open);
+        const closedMarker =
+          twin === "Kit" ? 'aria-labelledby="signup-record-heading"' : 'data-testid="rsvp-closed"';
+        expect(html.includes(closedMarker)).toBe(!open);
       },
     );
 

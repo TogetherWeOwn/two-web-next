@@ -1,5 +1,6 @@
+import { accessibleJoinOneclick } from "../join-oneclick";
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
-import { test, expect, emptyStorageState, memberStorageState } from "./fixtures";
+import { test, expect, emptyStorageState, memberStorageState, stagingOrigin } from "./fixtures";
 import { loginQaMember } from "./qa-login";
 
 // Join-funnel staging journey. Runs explicitly unauthenticated for the funnel
@@ -33,11 +34,41 @@ test("staging join funnel answers without a session and entries redirect to Disc
       /^https:\/\/discord\.com\/oauth2\/authorize/,
     );
 
-    await page.goto("/join");
-    await expect(page.getByRole("heading", { name: "Join Together We Own" })).toBeVisible();
-    const oneclick = page.getByTestId("join-oneclick");
+    const join = await page.goto("/join");
+    if (!join) throw new Error("Missing /join navigation response");
+    expect(join.status()).toBe(200);
+    expect(join.url()).toBe(new URL("/join", stagingOrigin).href);
+    expect(join.request().redirectedFrom()).toBeNull();
+    const marker = await join.headerValue("x-two-renderer");
+    expect([null, "kit"]).toContain(marker);
+    const isKit = marker === "kit";
+    // The staging journey gets no selector input. Log the response's renderer
+    // separately from the candidate SHA verified by the workflow.
+    console.log(`Staging /join observed renderer: ${isKit ? "kit" : "hono"} (not selector proof)`);
+
+    await expect(
+      page
+        .getByRole("heading", {
+          name: isKit ? "Play with people who show up." : "Join Together We Own",
+          level: 1,
+          exact: true,
+        })
+        .and(page.locator("#join-heading")),
+    ).toBeVisible();
+    const joinContent = isKit
+      ? page.getByRole("complementary", { name: "Join with one sign-in", exact: true })
+      : page.getByRole("region", { name: "Join Together We Own", exact: true });
+    if (isKit) {
+      await expect(
+        joinContent
+          .getByRole("heading", { name: "Join with one sign-in", level: 2, exact: true })
+          .and(page.locator("#join-card-heading")),
+      ).toBeVisible();
+    }
+    const oneclick = joinContent.getByTestId("join-oneclick");
     await expect(oneclick).toBeVisible();
     expect(await oneclick.getAttribute("href")).toBe("/join/discord");
+    await expect(accessibleJoinOneclick(joinContent)).toBeVisible();
 
     const joinEntry = await guest.request.get("/join/discord", { maxRedirects: 0 });
     expect(joinEntry.status()).toBe(302);

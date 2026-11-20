@@ -1,0 +1,164 @@
+[
+  { "name": "default", "block": "group: fixture", "valid": true, "stockValid": true, "queue": "" },
+  {
+    "name": "max-false",
+    "block": "group: fixture\ncancel-in-progress: false\nqueue: max",
+    "valid": true,
+    "stockValid": false,
+    "queue": "max"
+  },
+  {
+    "name": "max-default-cancel",
+    "block": "group: fixture\nqueue: max",
+    "valid": true,
+    "stockValid": false,
+    "queue": "max"
+  },
+  {
+    "name": "single",
+    "block": "group: fixture\nqueue: single\ncancel-in-progress: true",
+    "valid": true,
+    "stockValid": false,
+    "queue": "single"
+  },
+  {
+    "name": "single-expression-cancel",
+    "block": "group: fixture\nqueue: single\ncancel-in-progress: ${{ github.ref == 'refs/heads/main' }}",
+    "valid": true,
+    "stockValid": false,
+    "queue": "single"
+  },
+  {
+    "name": "quoted-max",
+    "block": "group: fixture\nqueue: 'max'",
+    "valid": true,
+    "stockValid": false,
+    "queue": "max"
+  },
+  {
+    "name": "duplicate",
+    "block": "group: fixture\nqueue: max\nqueue: single",
+    "valid": false,
+    "stockValid": false,
+    "error": "is duplicated"
+  },
+  {
+    "name": "unknown-key",
+    "block": "group: fixture\nunknown: false",
+    "valid": false,
+    "stockValid": false,
+    "error": "unexpected key"
+  },
+  {
+    "name": "missing-group",
+    "block": "queue: max",
+    "valid": false,
+    "stockValid": false,
+    "error": "group name is missing"
+  },
+  {
+    "name": "unknown",
+    "block": "group: fixture\nqueue: many",
+    "valid": false,
+    "stockValid": false,
+    "error": "literal string"
+  },
+  {
+    "name": "empty",
+    "block": "group: fixture\nqueue:",
+    "valid": false,
+    "stockValid": false,
+    "error": "literal string"
+  },
+  {
+    "name": "empty-string",
+    "block": "group: fixture\nqueue: ''",
+    "valid": false,
+    "stockValid": false,
+    "error": "literal string"
+  },
+  {
+    "name": "boolean",
+    "block": "group: fixture\nqueue: true",
+    "valid": false,
+    "stockValid": false,
+    "error": "literal string"
+  },
+  {
+    "name": "number",
+    "block": "group: fixture\nqueue: 100",
+    "valid": false,
+    "stockValid": false,
+    "error": "literal string"
+  },
+  {
+    "name": "sequence",
+    "block": "group: fixture\nqueue: [max]",
+    "valid": false,
+    "stockValid": false,
+    "error": "literal string"
+  },
+  {
+    "name": "mapping",
+    "block": "group: fixture\nqueue: {value: max}",
+    "valid": false,
+    "stockValid": false,
+    "error": "literal string"
+  },
+  {
+    "name": "expression",
+    "block": "group: fixture\nqueue: ${{ 'max' }}",
+    "valid": false,
+    "stockValid": false,
+    "error": "literal string"
+  },
+  {
+    "name": "embedded-expression",
+    "block": "group: fixture\nqueue: max${{ github.run_id }}",
+    "valid": false,
+    "stockValid": false,
+    "error": "literal string"
+  },
+  {
+    "name": "max-true",
+    "block": "group: fixture\nqueue: max\ncancel-in-progress: true",
+    "valid": false,
+    "stockValid": false,
+    "error": "requires cancel-in-progress"
+  },
+  {
+    "name": "max-uppercase-true",
+    "block": "group: fixture\nqueue: max\ncancel-in-progress: TRUE",
+    "valid": false,
+    "stockValid": false,
+    "error": "requires cancel-in-progress"
+  },
+  {
+    "name": "max-uppercase-false",
+    "block": "group: fixture\nqueue: max\ncancel-in-progress: FALSE",
+    "valid": true,
+    "stockValid": false,
+    "queue": "max"
+  },
+  {
+    "name": "max-expression",
+    "block": "group: fixture\ncancel-in-progress: ${{ false }}\nqueue: max",
+    "valid": false,
+    "stockValid": false,
+    "error": "requires cancel-in-progress"
+  },
+  {
+    "name": "bad-cancel-type",
+    "block": "group: fixture\nqueue: max\ncancel-in-progress: [false]",
+    "valid": false,
+    "stockValid": false,
+    "error": "expected bool value"
+  },
+  {
+    "name": "duplicate-group",
+    "block": "group: fixture\ngroup: second",
+    "valid": false,
+    "stockValid": false,
+    "error": "is duplicated"
+  }
+]

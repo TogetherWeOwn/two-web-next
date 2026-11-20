@@ -42,6 +42,8 @@ for a in "$@"; do
 done
 [ -n "$out" ] || { echo "fake pg_dump: no -f" >&2; exit 2; }
 printf 'FAKEDUMP-payload\n' > "$out"
+if [ "${STUB_LARGE:-0}" = 1 ]; then truncate -s 8388608 "$out"; fi
+if [ -n "${STUB_DUMP_LOG:-}" ]; then printf 'dump\n' >> "$STUB_DUMP_LOG"; fi
 FAKE
 chmod +x "$T/fakebin/pg_dump"
 export PATH="$T/fakebin:$PATH"
@@ -83,6 +85,7 @@ esac
 STUB
 chmod +x "$T/wrangler-stub"
 export WRANGLER_BIN="$T/wrangler-stub"
+unset BACKUP_TRANSPORT
 
 export BACKUP_BUCKET="test-bucket"
 export BACKUP_PREFIX="neon"
@@ -164,7 +167,7 @@ ok "check fails on missing key"
 
 # 9. Unset DATABASE_URL refuses before touching anything (empty password is
 #    fine — agent-testdb trust auth — so only the unset case refuses).
-if DATABASE_URL= "$BIN" backup staging >/dev/null 2>&1; then fail "backup must refuse unset DATABASE_URL"; fi
+if DATABASE_URL='' "$BIN" backup staging >/dev/null 2>&1; then fail "backup must refuse unset DATABASE_URL"; fi
 ok "backup refuses unset DATABASE_URL"
 # Backup keys carry second-resolution timestamps: stay out of OUT2's second so
 # the passwordless backup cannot collide with it (TOG-13095 CI flake).
@@ -190,5 +193,67 @@ if ! python3 ci/backup-manifest-admission-selftest > "$T/admission.log" 2>&1; th
   fail "manifest admission selftest failed"
 fi
 ok "manifest admission selftest passes"
+
+# The AWS stub uses its own store and rejects unexpected argv before writing.
+export BACKUP_TRANSPORT=s3 BACKUP_JURISDICTION=eu AWS_BIN="$ROOT/ci/fixtures/db-backup/aws" WRANGLER_BIN=/bin/false
+export R2_ACCOUNT_ID=00000000000000000000000000000000
+export R2_S3_ACCESS_KEY_ID=fixture-access R2_S3_SECRET_ACCESS_KEY=fixture-secret AWS_PROFILE=unused AWS_SESSION_TOKEN=unused
+export STUB_R2="$T/s3" STUB_LOG="$T/s3.log" STUB_DUMP_LOG="$T/dump.log"
+expect_failure() { if "$@" >"$T/out" 2>"$T/err"; then fail "expected failure: $*"; fi; }
+expect_failure env BACKUP_TRANSPORT=unknown "$BIN" backup staging
+expect_failure env R2_S3_SECRET_ACCESS_KEY= "$BIN" backup staging
+[ ! -e "$STUB_DUMP_LOG" ] && [ ! -e "$STUB_LOG" ] || fail "invalid S3 setup connected"
+ok "invalid transport or incomplete S3 credentials refuse before dump and storage"
+for error in 403 NoSuchBucket transport noisy partial; do
+  expect_failure env STUB_FAIL_KEY="$MANIFEST" STUB_GET_ERROR="$error" "$BIN" backup staging
+  grep -qxF 'db-backup: manifest read failed; refusing remote mutation' "$T/err" || fail "unexpected $error failure"
+done
+! grep -vxF "get-object $MANIFEST" "$STUB_LOG" || fail "failed S3 manifest read mutated storage"
+ok "forbidden, wrong bucket, transport and partial reads never initialize the S3 manifest"
+
+S3_OUT="$(STUB_LARGE=1 "$BIN" backup staging)"
+grep -qxF "multipart ${S3_OUT#backup: }" "$STUB_LOG" || fail "large dump did not use multipart upload"
+"$BIN" promote-weekly staging >/dev/null
+"$BIN" check staging --require-verified >/dev/null
+ok "S3 backup initializes on NoSuchKey and verifies multipart dump, receipt and weekly copy"
+
+manifest="$STUB_R2/$MANIFEST"
+cp "$manifest" "$T/s3-before"
+: > "$STUB_LOG"
+expect_failure env STUB_FAIL_KEY="$MANIFEST" STUB_GET_ERROR=404 "$BIN" backup staging
+grep -qxF 'db-backup: manifest read failed; refusing remote mutation' "$T/err" || fail "generic 404 was treated as absence"
+[ "$(<"$STUB_LOG")" = "get-object $MANIFEST" ] && cmp "$manifest" "$T/s3-before" || fail "generic 404 changed storage"
+ok "S3 backup rejects an ambiguous 404 without changing the existing inventory"
+
+absent=neon/staging-staging-20240101T000000Z.dump
+old=neon/staging-staging-20240102T000000Z.dump
+printf 'old\n' > "$STUB_R2/$old"
+printf '%s\n' "$old" >> "$manifest"
+"$BIN" check staging >/dev/null
+expect_failure env STUB_FAIL_KEY="$old.digest.json" STUB_GET_ERROR=403 "$BIN" check staging
+grep -qxF 'db-backup: check failed' "$T/err" || fail "legacy receipt error did not fail check"
+ok "S3 legacy check tolerates an absent receipt but refuses an unreadable one"
+
+printf '%s\n' "$absent" "$absent.digest.json" "$old.digest.json" >> "$manifest"
+printf 'unused receipt\n' > "$STUB_R2/$old.digest.json"
+cp "$manifest" "$T/s3-before"
+export STUB_DELETE_FAILURE_KEY="$absent"
+for error in 403 404; do
+  expect_failure env BACKUP_KEEP_DAILY=1 STUB_FAIL_KEY="$absent" STUB_GET_ERROR="$error" "$BIN" rotate staging --apply
+  cmp "$manifest" "$T/s3-before" && [ -f "$STUB_R2/$old" ] || fail "$error delete probe changed retention"
+done
+BACKUP_KEEP_DAILY=1 "$BIN" rotate staging --apply >/dev/null
+unset STUB_DELETE_FAILURE_KEY
+grep -qxF "delete-object $absent.digest.json" "$STUB_LOG" || fail "rotation did not delete an already absent receipt"
+! grep -qxF "get-object $absent.digest.json" "$STUB_LOG" || fail "rotation probed after a successful delete"
+[ ! -e "$STUB_R2/$old" ] && [ ! -e "$STUB_R2/$old.digest.json" ] || fail "S3 rotation left an old pair"
+"$BIN" check staging --require-verified >/dev/null
+ok "S3 rotation preserves inventory on ambiguous probes and accepts idempotent deletes"
+
+for suffix in .dump .digest.json; do
+  expect_failure env STUB_CORRUPT_SUFFIX="$suffix" "$BIN" backup test-s3
+  [ ! -e "$STUB_R2/neon/test-s3-test-s3/MANIFEST.txt" ] || fail "S3 backup published a corrupt $suffix pair"
+done
+ok "S3 backup refuses digest and receipt read-back mismatches before publishing"
 
 echo "selftest: $PASS passed"

@@ -3,8 +3,7 @@
 // server on this logged-out, indexed page (privacy policy v2). No token in
 // the client bundle; the response never waits on Discord (cache read +
 // waitUntil re-probe, like the existing health verdict); widget-disabled
-// falls back to the static invite. Presence views keep a 60 s shared-cache
-// TTL matching the verdict TTL.
+// falls back to the static invite. Presence responses are not cacheable.
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -179,14 +178,18 @@ describe("/join widget.json presence (server-side cache only)", () => {
     expect(second.html).not.toContain("maria");
   });
 
-  it("keeps presence under a 60 s shared-cache TTL matching the verdict TTL", async () => {
+  it("never caches presence, including near and beyond the verdict boundary", async () => {
     const h = harness(async () => Response.json(widgetPayload()));
     const first = await h.join();
     expect(first.cacheControl).toBe("public, max-age=3600");
     await Promise.all(first.pending);
-    const second = await h.join();
-    expect(second.html).toContain('data-testid="join-widget-presence"');
-    expect(second.cacheControl).toBe("public, max-age=60");
+    for (const advance of [0, 59_000, 1_000]) {
+      h.advance(advance);
+      const response = await h.join();
+      expect(response.html).toContain('data-testid="join-widget-presence"');
+      expect(response.cacheControl).toBe("no-store");
+      await Promise.all(response.pending);
+    }
   });
 
   it("falls back to the static invite when the widget is disabled (403)", async () => {

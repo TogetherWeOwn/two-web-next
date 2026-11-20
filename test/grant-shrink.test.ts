@@ -16,6 +16,7 @@ import { DEFAULT_CONFIG, handleAgentEvent, type IngressEffects } from "../src/ag
 import { sha256Hex } from "../src/bot/signer";
 import { rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
+import { pgReconciliationStore } from "../src/jobs/reconciliation";
 import { CAPACITY_BELOW_GOING } from "../src/events/waitlist";
 import { createMemorySessionStore } from "../src/sessions";
 import { clearAuditRows } from "./helpers/audit-rows";
@@ -80,6 +81,93 @@ describe.skipIf(!process.env.DATABASE_URL)(
     });
     afterAll(async () => {
       await fixture?.dispose();
+    });
+    it("grants only reviewed reconciliation rights inside the owned fixture schema", async () => {
+      const rows = await fixture.client`
+        SELECT privilege_type, is_grantable
+          FROM information_schema.role_table_grants
+         WHERE table_schema = ${fixture.schemaName}
+           AND table_name = 'bot_reconciliation_intents'
+           AND grantee = 'two_web_app'
+         ORDER BY privilege_type
+      `;
+      expect(rows).toEqual([
+        { privilege_type: "INSERT", is_grantable: "NO" },
+        { privilege_type: "SELECT", is_grantable: "NO" },
+        { privilege_type: "UPDATE", is_grantable: "NO" },
+      ]);
+      const [rights] = await fixture.client`
+        SELECT has_table_privilege('two_web_app',
+          format('%I.bot_reconciliation_intents', ${fixture.schemaName}::text), 'DELETE') AS can_delete
+      `;
+      expect(rights!.can_delete).toBe(false);
+    });
+    it("preserves reconciliation keys and commits resolution only with its receipt", async () => {
+      const store = pgReconciliationStore(fixture.client);
+      const key = randomUUID();
+      const intent = {
+        idempotencyKey: key,
+        verb: "event.upsert",
+        subject: "event-123",
+        attempts: 2,
+        lastCode: "needs_reconciliation",
+        lastStatus: 409,
+      };
+      await store.record(intent);
+      await store.record({ ...intent, attempts: 1, lastCode: "provider secret" });
+      const [open] =
+        await fixture.client`select * from bot_reconciliation_intents where idempotency_key = ${key}`;
+      expect(open).toMatchObject({ idempotency_key: key, attempts: 2, last_code: "unknown" });
+      await expect(store.record({ ...intent, subject: "other" })).rejects.toThrow();
+      await fixture.client`create table reconciliation_test_receipts (key uuid not null)`;
+      await expect(
+        store.resolve(key, "123", "confirmed", async (tx) => {
+          await tx`insert into reconciliation_test_receipts (key) values (${key}::uuid)`;
+          throw new Error("receipt failed");
+        }),
+      ).rejects.toThrow("receipt failed");
+      const [rolledBack] =
+        await fixture.client`select resolved_at from bot_reconciliation_intents where idempotency_key = ${key}`;
+      expect(rolledBack!.resolved_at).toBeNull();
+      expect(await fixture.client`select key from reconciliation_test_receipts`).toEqual([]);
+      const resolve = () =>
+        store.resolve(key, "123", "confirmed", async (tx) => {
+          await tx`insert into reconciliation_test_receipts (key) values (${key}::uuid)`;
+        });
+      expect((await Promise.all([resolve(), resolve()])).sort()).toEqual([false, true]);
+      expect(await fixture.client`select key from reconciliation_test_receipts`).toEqual([{ key }]);
+      await expect(store.record(intent)).rejects.toThrow();
+      const [resolved] =
+        await fixture.client`select resolved_by, resolution from bot_reconciliation_intents where idempotency_key = ${key}`;
+      expect(resolved).toMatchObject({ resolved_by: "123", resolution: "confirmed" });
+    });
+    it("enforces reconciliation intent constraints at their boundaries", async () => {
+      const insert = (verb: string, subject: string, attempts: number, resolution: string | null) =>
+        fixture.client`
+          INSERT INTO bot_reconciliation_intents (idempotency_key, verb, subject, attempts, resolution)
+          VALUES (${randomUUID()}, ${verb}, ${subject}, ${attempts}, ${resolution})
+        `;
+      for (const verb of [
+        "announcement.post",
+        "event.upsert",
+        "event.cancel",
+        "reminder.send",
+        "place_offer.send",
+      ]) {
+        await insert(verb, "s".repeat(200), 1, "r".repeat(500));
+      }
+      await insert("event.upsert", "", 1, null);
+      for (const values of [
+        ["unknown", "subject", 1, null],
+        ["event.upsert", "s".repeat(201), 1, null],
+        ["event.upsert", "subject", 0, null],
+        ["event.upsert", "subject", -1, null],
+        ["event.upsert", "subject", 1, "r".repeat(501)],
+      ] as const) {
+        await expect(insert(values[0], values[1], values[2], values[3])).rejects.toMatchObject({
+          code: "23514",
+        });
+      }
     });
     beforeEach(async () => {
       await fixture.reset();

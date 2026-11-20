@@ -35,6 +35,12 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
       <h2><a href="/admin/join-attempts">Join attempts</a></h2>
       <p>Every join try, outcome and refusal. Read-only.</p>
     </li>
+    {#if data.reconciliationAvailable}
+      <li class="card">
+        <h2><a href="/admin/reconciliation">Reconciliation</a></h2>
+        <p>Review recorded reconciliation intents. Some unconfirmed changes may not appear here.</p>
+      </li>
+    {/if}
   </ul>
   {#if funnel}
     <section data-testid="join-funnel" aria-labelledby="join-funnel-heading">

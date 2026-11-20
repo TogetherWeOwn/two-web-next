@@ -4,7 +4,7 @@
 // file under ci/budgets/<kind>/, and the checkers aggregate them at CI time
 // (ci/budget-fragments.mjs). These tests prove the aggregation reproduces
 // the exact pre-split ceilings, keeps the checkers' exit semantics
-// (0 fits, 1 breach, 2 cannot enforce), fails closed on ambiguous or broken
+// (Kit overages warn; bundle breaches exit 1; cannot-enforce exits 2), fails closed on broken
 // fragments, and preserves the legacy $comment history byte-for-byte.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -41,7 +41,7 @@ const SHIPPING_KIT_BUDGET = {
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
     js: { maxRawBytes: 257024, maxGzipBytes: 103168, maxFiles: 55 },
-    css: { maxRawBytes: 3072, maxGzipBytes: 1280, maxFiles: 4 },
+    css: { maxRawBytes: 3584, maxGzipBytes: 1280, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
 };
@@ -62,17 +62,21 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/model-context.js": { maxRawBytes: 4608, maxGzipBytes: 2048 },
   "public/islands/past-events.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/islands/rsvp-button.js": { maxRawBytes: 17408, maxGzipBytes: 5120 },
+  "public/islands/site-header-menu.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
   "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
   "public/admin-rsvp-review.css": { maxRawBytes: 1024, maxGzipBytes: 512 },
+  "public/admin-theme.css": { maxRawBytes: 4608, maxGzipBytes: 1280 },
   "public/operator-overrides-theme.css": { maxRawBytes: 512, maxGzipBytes: 256 },
   "public/theme.css": { maxRawBytes: 15360, maxGzipBytes: 3584 },
   "public/theme-tokens.css": { maxRawBytes: 1536, maxGzipBytes: 512 },
   "public/event-theme.css": { maxRawBytes: 7168, maxGzipBytes: 2048 },
   "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
-  "public/schedule-theme.css": { maxRawBytes: 6144, maxGzipBytes: 1792 },
+  "public/schedule-theme.css": { maxRawBytes: 9728, maxGzipBytes: 2560 },
+  "public/kit-events-controls.css": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/islands/event-time-from-now.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
+  "public/islands/kit-live-event-time.js": { maxRawBytes: 5120, maxGzipBytes: 2304 },
 };
 
 // sha256 of the frozen legacy-history archives: header + the verbatim
@@ -170,9 +174,12 @@ function kitFixture(t, fragments) {
 // 341055; 340736 rejects by 319).
 // 342272 is the bounded Ember allocation (frozen builds 341996 and 341995;
 // 341248 rejects by 748 and 747), not automatic 25% headroom.
+// 344320 admits the HTML wire-streaming helper on top of that (exact-head
+// CI `d020bf0e1` measured 344075, run 43343222288; the 256-step 344064
+// rejects by 11, so one further step is the least cover).
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
   335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176,
-  338432, 338688, 339200, 339456, 339968, 340224, 340736, 341248, 342272,
+  338432, 338688, 339200, 339456, 339968, 340224, 340736, 341248, 342272, 344320,
 ];
 // Admitted server.js maxRawBytes allocations. The SHIPPING_KIT_BUDGET pin
 // above (1203200) is the historical baseline; 1203968 admits the
@@ -222,9 +229,12 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // 1233920 admits the content display face leaf growth on top of that
 // (exact-head CI 1233453 raw, run 42985471999; the 1233408 step rejects
 // by 45, so one further 512 step is the least cover).
+// 1234944 admits the HTML wire-streaming helper on top of that (exact-head
+// CI `d020bf0e1` measured 1234582 raw, run 43343222288; the 1234432 step
+// rejects by 150, so one further 512 step is the least cover).
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
   1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440,
-  1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408, 1233920,
+  1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408, 1233920, 1234944,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
@@ -740,11 +750,19 @@ test("kit checker fits a fragment tree exactly at its ceilings", (t) => {
   assert.equal(runKit(kitFixture(t, {}), sink), 0);
 });
 
-test("kit checker breach against a fragment ceiling exits 1", (t) => {
+test("kit checker reports a fragment ceiling overage as advisory", (t) => {
   const root = kitFixture(t, {
     "server.json": { server: { js: { maxRawBytes: 1, maxGzipBytes: 999999, maxFiles: 4 } } },
   });
-  assert.equal(runKit(root, sink), 1);
+  const logs = [];
+  const warnings = [];
+  assert.equal(
+    runKit(root, { log: (line) => logs.push(line), error: (line) => warnings.push(line) }),
+    0,
+  );
+  assert.ok(warnings.some((line) => /server.*raw 819B over 1B.*advisory/.test(line)));
+  assert.ok(logs.some((line) => line.includes("not every asset fits")));
+  assert.ok(!logs.some((line) => line.includes("every Kit asset fits")));
 });
 
 test("duplicate kit unit across fragments cannot enforce (2)", (t) => {
@@ -831,6 +849,38 @@ test("bundle checker breach against a fragment ceiling exits 1", (t) => {
     }),
   );
   assert.equal(runBundle(root, sink), 1);
+});
+
+test("only the Kit controls stylesheet has advisory byte targets", (t) => {
+  const { root } = bundleFixture(t, {});
+  for (const name of ["kit-events-controls.css.json", "schedule-theme.css.json"]) {
+    const path = `ci/budgets/bundle/${name}`;
+    writeFile(root, path, readFileSync(join(repoRoot, path)));
+  }
+  const controls = "public/kit-events-controls.css";
+  const schedule = "public/schedule-theme.css";
+  const parts = Array.from({ length: 40 }, (_, i) =>
+    createHash("sha256").update(String(i)).digest("base64"),
+  );
+  const payload = Buffer.from(parts.join(""));
+  writeFile(root, controls, payload);
+  writeFile(root, schedule, "/* fits */");
+  const logs = [];
+  const diagnostics = [];
+  const output = { log: (line) => logs.push(line), error: (line) => diagnostics.push(line) };
+  assert.equal(runBundle(root, output), 0);
+  const overages = `raw ${payload.length}B over 1536B, gzip ${gzipSync(payload).length}B over 768B`;
+  assert.ok(diagnostics.includes(`bundle budget: warning: ${controls}: ${overages} (advisory)`));
+  assert.ok(logs.some((line) => line.includes("passed with advisory warnings")));
+
+  writeFile(root, schedule, " ".repeat(9729));
+  assert.equal(runBundle(root, output), 1);
+  assert.ok(diagnostics.some((line) => line.includes(`${schedule}: raw 9729B over 9728B`)));
+
+  writeFile(root, schedule, "/* fits */");
+  rmSync(join(root, controls));
+  assert.equal(runBundle(root, output), 1);
+  assert.ok(diagnostics.some((line) => line.includes(`${controls}: missing/unreadable asset`)));
 });
 
 test("duplicate bundle entry across fragments cannot enforce (2)", (t) => {

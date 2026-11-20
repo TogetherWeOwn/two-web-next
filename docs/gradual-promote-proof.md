@@ -10,7 +10,7 @@ production Workers, any database, or any custom domain.
 
 | Thing | Value |
 | --- | --- |
-| Action under test | `TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06` (unchanged; invoked once from the proof workflow) |
+| Action under test | `TogetherWeOwn/.github/actions/gradual-promote@2ef8ad6447e11d019ac3098bcfd011193b75266a` (unchanged; invoked once from the proof workflow) |
 | Caller workflow | `.github/workflows/gradual-promote-proof.yml` (`workflow_dispatch` only, `main` only) |
 | Synthetic Worker | `two-gradual-promote-proof` on workers.dev |
 | Fixture | `ci/gradual-promote-proof/fixture.mjs` (no imports, no data bindings) |

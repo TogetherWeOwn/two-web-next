@@ -3,8 +3,9 @@
 // Cloudflare Web Analytics (RUM) for the production site via the GraphQL
 // Analytics API and fails when a p75 exceeds its budget in ci/rum-budget.json.
 // Needs a READ-ONLY token (Account Analytics: Read) in CF_ANALYTICS_READ_TOKEN
-// plus the repo variables CF_RUM_ACCOUNT_ID and CF_RUM_SITE_TAG; until they exist it reports
-// "not configured" and exits 0, so setup never raises a false alarm.
+// plus the repo variables CF_RUM_ACCOUNT_ID and CF_RUM_SITE_TAG. The production
+// workflow uses --require-collection: missing config or too few samples fails
+// collection health separately from a metric breach. Default runs are diagnostic.
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -105,13 +106,15 @@ export function admitRumResponse(body, minSamples = DEFAULT_MIN_SAMPLES) {
   return { count: group.count, quantiles };
 }
 
-function tableLines(rows) {
+function tableLines(rows, enoughData) {
   return [
-    "| Metric | p75 | Budget | |",
+    "| Metric | p75 | Budget | Verdict |",
     "| --- | --- | --- | --- |",
-    ...rows.map(
-      (r) => `| ${r.name} | ${r.value ?? "n/a"} | ${r.max} | ${r.ok ? "ok" : "**over**"} |`,
-    ),
+    ...rows.map((r) => {
+      const verdict =
+        r.value === null ? "unavailable" : !enoughData ? "not evaluated" : r.ok ? "ok" : "**over**";
+      return `| ${r.name} | ${r.value ?? "n/a"} | ${r.max} | ${verdict} |`;
+    }),
   ];
 }
 
@@ -252,14 +255,19 @@ export async function runRumCheck({
   timeoutMs = RUM_TRANSPORT_TIMEOUT_MS,
   maxResponseBytes = RUM_MAX_RESPONSE_BYTES,
   until = new Date(),
+  requireCollection = false,
 } = {}) {
   const { CF_ANALYTICS_READ_TOKEN: token, CF_RUM_ACCOUNT_ID: account, CF_RUM_SITE_TAG: site } = env;
   const emit = onSummary ?? emitSummary;
+  const finish = (result, collectionHealth, metricVerdict = "not-evaluated") => {
+    const summary = `${result.summary}\n\nCollection health: **${collectionHealth}** (${requireCollection ? "required" : "diagnostic"}).\nMetric verdict: **${metricVerdict}**.`;
+    emit(summary);
+    return { ...result, summary, collectionHealth, metricVerdict };
+  };
   if (!token || !account || !site) {
     const summary =
-      "## Real-user Web Vitals\n\nNot configured (needs secret CF_ANALYTICS_READ_TOKEN and variables CF_RUM_ACCOUNT_ID, CF_RUM_SITE_TAG). Skipped.";
-    emit(summary);
-    return { code: 0, kind: "skipped", summary };
+      "## Real-user Web Vitals\n\nNot configured (needs secret CF_ANALYTICS_READ_TOKEN and variables CF_RUM_ACCOUNT_ID, CF_RUM_SITE_TAG). Budgets not evaluated.";
+    return finish({ code: requireCollection ? 2 : 0, kind: "skipped", summary }, "not-configured");
   }
   const resolvedBudget = budget ?? JSON.parse(readFileSync("ci/rum-budget.json", "utf8"));
   const since = new Date(until.getTime() - 24 * 3600 * 1000);
@@ -283,31 +291,31 @@ export async function runRumCheck({
       "query-failed": "Query failed (network error).",
     }[result.kind];
     const summary = `## Real-user Web Vitals\n\n${reason} Budgets not evaluated.`;
-    emit(summary);
-    return { code: 1, kind: result.kind, summary };
+    return finish({ code: 1, kind: result.kind, summary }, "unavailable");
   }
   const { res, body, jsonFailed } = result;
   const errorCount = Array.isArray(body?.errors) ? body.errors.length : 0;
   if (!res.ok || errorCount > 0) {
     // Provider error text is omitted on purpose; a non-JSON gateway page keeps its HTTP status.
     const summary = `## Real-user Web Vitals\n\nQuery failed (HTTP ${res.status}, ${errorCount} GraphQL error(s)). Budgets not evaluated.`;
-    emit(summary);
     const retryWait =
       res.status === 429 && result.bodyComplete
         ? rateLimitWaitMs(res.headers.get("retry-after"))
         : null;
-    return {
-      code: 1,
-      kind: "query-failed",
-      summary,
-      ...(retryWait === null ? {} : { rateLimitWaitMs: retryWait }),
-    };
+    return finish(
+      {
+        code: 1,
+        kind: "query-failed",
+        summary,
+        ...(retryWait === null ? {} : { rateLimitWaitMs: retryWait }),
+      },
+      "unavailable",
+    );
   }
   if (jsonFailed) {
     const summary =
       "## Real-user Web Vitals\n\nResponse invalid: invalid JSON. Expected GraphQL data.viewer.accounts[0].rumWebVitalsEventsAdaptiveGroups[0] with a non-negative integer count. Budgets not evaluated.";
-    emit(summary);
-    return { code: 1, kind: "invalid-response", summary };
+    return finish({ code: 1, kind: "invalid-response", summary }, "invalid-response");
   }
   let admitted;
   try {
@@ -315,8 +323,7 @@ export async function runRumCheck({
   } catch (err) {
     const reason = String(err?.message ?? "Response invalid").replace(/^Response invalid:\s*/, "");
     const summary = `## Real-user Web Vitals\n\nResponse invalid: ${reason.slice(0, 120)}. Expected GraphQL data.viewer.accounts[0].rumWebVitalsEventsAdaptiveGroups[0] with a non-negative integer count. Budgets not evaluated.`;
-    emit(summary);
-    return { code: 1, kind: "invalid-response", summary };
+    return finish({ code: 1, kind: "invalid-response", summary }, "invalid-response");
   }
   const { rows, enoughData, failed } = evaluate(admitted.quantiles, resolvedBudget, admitted.count);
   const summary = [
@@ -324,13 +331,27 @@ export async function runRumCheck({
     "",
     `${admitted.count} sample(s)${enoughData ? "" : ` — below minSamples=${resolvedBudget.minSamples ?? DEFAULT_MIN_SAMPLES}, budgets not enforced`}`,
     "",
-    ...tableLines(rows),
+    ...tableLines(rows, enoughData),
   ].join("\n");
-  emit(summary);
-  if (failed.length) {
-    return { code: 1, kind: "over-budget", summary };
+  if (!enoughData) {
+    return finish(
+      { code: requireCollection ? 2 : 0, kind: "insufficient", summary },
+      "insufficient",
+    );
   }
-  return { code: 0, kind: enoughData ? "pass" : "insufficient", summary };
+  const unavailable = rows.filter((row) => row.value === null).length;
+  if (failed.length) {
+    return finish(
+      { code: 1, kind: "over-budget", summary },
+      "healthy",
+      unavailable ? "over-budget (partial)" : "over-budget",
+    );
+  }
+  return finish(
+    { code: 0, kind: "pass", summary },
+    "healthy",
+    unavailable === rows.length ? "unavailable" : unavailable > 0 ? "partial" : "pass",
+  );
 }
 
 // Exactly one cooldown and one retry; the second outcome is never converted to success.
@@ -351,7 +372,14 @@ export async function runRumCheckWithRateLimitRetry(options = {}) {
 }
 
 async function main() {
-  const { code } = await runRumCheckWithRateLimitRetry();
+  const args = process.argv.slice(2);
+  if (args.some((arg) => arg !== "--require-collection")) {
+    console.error("Usage: node ci/rum-check.mjs [--require-collection]");
+    return 2;
+  }
+  const { code } = await runRumCheckWithRateLimitRetry({
+    requireCollection: args.includes("--require-collection"),
+  });
   return code;
 }
 

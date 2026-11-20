@@ -31,7 +31,7 @@ on:
 permissions:
   contents: read
   # The scope job lists the PR's changed files via the API.
-  pull-requests: read
+  pull-requests: read # Read proof PR files and metadata for the evidence comparison.
 
 # Schedule and dispatch runs get their own groups (as in ci.yml): with the
 # default queue a newly queued run cancels any pending run in its group, so a
@@ -162,7 +162,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
         env:
           POSTGRES_USER: agent_test
           POSTGRES_DB: agent_test

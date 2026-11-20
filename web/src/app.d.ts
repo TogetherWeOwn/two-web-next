@@ -1,6 +1,8 @@
 import type { Env as AppEnv } from "../../src/env";
+import type { KitHomePanels } from "../../src/kit-home-panels";
 import type { KitLocals } from "../../src/kit-session";
 import type { EventGoneModel, EventMissingModel } from "../../src/kit-event-states";
+import type { RecoveryModel } from "../../src/recovery-outcome";
 
 // adapter-cloudflare 8 passes no `platform`; bindings come from
 // `import { env } from "cloudflare:workers"`, typed as Cloudflare.Env.
@@ -11,16 +13,19 @@ declare global {
   namespace App {
     // Populated by the read-only session bridge on Kit-owned requests only
     // Hono-owned requests skip the bridge, so every field stays
-    // optional. Rotation, logout and OAuth stay Hono-owned: Kit reads these
-    // locals but never writes session cookies from them.
+    // optional. Loaders never rotate a session; only the hook can renew a
+    // released document. Logout and OAuth stay Hono-owned.
     interface Locals {
       session?: KitLocals["session"];
       status?: KitLocals["status"];
       returnTo?: KitLocals["returnTo"];
       joinResult?: KitLocals["joinResult"];
       expiredWrite?: KitLocals["expiredWrite"];
+      homePanels?: KitHomePanels;
       // Signature-verified display bit; never the signed write destination.
       restoredWrite?: boolean;
+      // Display model from the admitted Hono recovery controller, never a cookie.
+      recovery?: RecoveryModel;
       // Validated request id the Kit hook merged before resolve (Hono
       // requestLog parity): response header, error pages and error.alert
       // lines carry this same value. Absent off the Kit branch.

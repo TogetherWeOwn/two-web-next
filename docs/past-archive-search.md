@@ -14,10 +14,10 @@ this is not a new visual direction. At 1280×800 and 390×844 the query must wra
 links must remain usable, and rows must not overflow.
 
 Required states: populated matching pages, no matches with clear-search recovery,
-out-of-range with a matching-page recovery, ordinary empty archive, bounded search
-rejection and failed enhanced navigation retaining the last good page. Native
-links work without JavaScript; enhancement retains the existing deadline, focus
-ownership, history and metadata protections. Non-goals: a search engine, new query
+out-of-range with a matching-page recovery, ordinary empty archive, an unreadable
+in-range page, bounded search rejection and failed enhanced navigation retaining
+the last good page. Native links work without JavaScript; enhancement retains the
+existing deadline, focus ownership, history and metadata protections. Non-goals: a search engine, new query
 syntax, feed search, schema changes or a larger preview.
 
 ## Behavior and boundaries
@@ -38,6 +38,10 @@ Pager and canonical URLs contain only archive state (`page` and `q`). Native and
 enhanced paging, copied URLs, reload and Back/Forward retain the query. Clearing
 search intentionally removes it and returns to page one. No matches is different
 from requesting a page beyond the matching archive; both have recovery links.
+When the count includes the requested page but none of its rows can be shown,
+both renderers display an unreadable-page status instead. Neither offers a link
+back to the same page. Newer and Older remain available where the pager already
+renders them, and fragment turns replace the status alongside the list and pager.
 
 Filtered responses use private, no-store and cannot read or populate anonymous
 archive entries. Ordinary archive caching retains its existing page-only keys,

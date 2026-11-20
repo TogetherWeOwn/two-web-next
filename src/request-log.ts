@@ -1,7 +1,11 @@
 import type { Context, Next } from "hono";
 import { matchedRoutes } from "hono/route";
+import { selectRequestId } from "./http/request-log";
+import { selectRouteLabel } from "./http/route-labels";
 import { currentReleaseFields, setReleaseMetadata } from "./release-tag";
 import { STAGING_APP_URL } from "./qa";
+
+export { newRequestId, safeRequestId } from "./http/request-log";
 
 const CALENDAR_PHASES = [
   "public_read_guard",
@@ -54,44 +58,18 @@ declare module "hono" {
   }
 }
 
-const BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const RAY_ID = /^[a-fA-F0-9]{16}(?:-[A-Z]{3})?$/;
-const ULID = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
-
-/** Accept only correlation IDs, never arbitrary client-supplied header text. */
-export function safeRequestId(value: unknown): string | undefined {
-  return typeof value === "string" && (RAY_ID.test(value) || ULID.test(value)) ? value : undefined;
-}
-
-/** 48-bit timestamp + 80 cryptographically random bits, Crockford base32. */
-export function newRequestId(): string {
-  let value = BigInt(Date.now());
-  for (const byte of crypto.getRandomValues(new Uint8Array(10)))
-    value = (value << 8n) | BigInt(byte);
-  let id = "";
-  for (let i = 0; i < 26; i++) {
-    id = BASE32[Number(value & 31n)] + id;
-    value >>= 5n;
-  }
-  return id;
-}
-
 /** Registered patterns include mount prefixes, but never resolved params. */
 export function requestRoute(c: Context): string {
-  // routeIndex is the handler that responded, so /events/new is not logged as
-  // a later /events/:key. A wildcard guard or 404 names the first endpoint the
-  // router would run, and wildcard-only matches get one constant label, never
-  // the user-supplied path (or an identity).
-  // Source: https://hono.dev/docs/helpers/route#matchedroutes
-  const paths = matchedRoutes(c).map((r) => r.path);
-  const responded = paths[c.req.routeIndex];
-  if (responded && !responded.endsWith("*")) return responded;
-  return paths.find((path) => !path.endsWith("*")) ?? "unmatched";
+  // The current handler can differ from the first match when it calls next().
+  return selectRouteLabel(
+    matchedRoutes(c).map((route) => route.path),
+    c.req.routeIndex,
+  );
 }
 
 export async function requestLog(c: Context, next: Next): Promise<void> {
   const started = performance.now();
-  const requestId = safeRequestId(c.req.header("cf-ray")) ?? newRequestId();
+  const requestId = selectRequestId(c.req.header("cf-ray"));
   c.set("requestId", requestId);
   if (
     (c.env as { APP_URL?: unknown } | undefined)?.APP_URL === STAGING_APP_URL &&

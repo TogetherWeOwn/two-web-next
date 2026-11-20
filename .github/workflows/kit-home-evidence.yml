@@ -1,0 +1,92 @@
+name: Kit home evidence
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kit-home-evidence-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  capture:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.number == 2294 && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        state:
+          [
+            guest,
+            member,
+            guestEvents,
+            memberEvents,
+            staleCounts,
+            quietOnline,
+            nonmember,
+            sessionOutage,
+            eventsOutage,
+            missingCounts,
+            joinFailed,
+            joinAdded,
+            alreadyMember,
+          ]
+    steps:
+      - name: Check out pinned fixture tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 5ab8dbbef925d03f19809963c06e7edd04032bee
+          path: tooling
+          persist-credentials: false
+      - name: Check out final app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: after
+          persist-credentials: false
+      - name: Check out original app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fcc8df5378cb76faaf2717677d16261efbe09f63
+          path: before
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Verify immutable checkouts
+        env:
+          FINAL_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git -C tooling rev-parse HEAD)" = 5ab8dbbef925d03f19809963c06e7edd04032bee
+          test "$(git -C after rev-parse HEAD)" = "$FINAL_SHA"
+          test "$(git -C before rev-parse HEAD)" = fcc8df5378cb76faaf2717677d16261efbe09f63
+      - name: Install locked dependencies
+        run: |
+          for app in tooling before after; do
+            npm ci --prefix "$app" --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+            npm ci --prefix "$app/web" --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+          done
+      - name: Install locked Chromium
+        working-directory: tooling
+        run: npx --no-install playwright install --with-deps chromium
+      - name: Capture home state
+        env:
+          FINAL_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          STATE: ${{ matrix.state }}
+          TZ: UTC
+        run: node after/ci/kit-home-capture.mjs "$STATE" "artifacts/$STATE"
+      - name: Retain evidence and diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-home-${{ matrix.state }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/${{ matrix.state }}/
+          if-no-files-found: error
+          retention-days: 14

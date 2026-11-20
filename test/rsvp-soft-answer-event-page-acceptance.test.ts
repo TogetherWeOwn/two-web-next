@@ -159,11 +159,13 @@ function kitModel(over: Partial<KitEventDetailModel> = {}): KitEventDetailModel 
     status: "published",
     isDraft: false,
     isPast: false,
+    lifecycle: null,
     goingCount: 1,
     goingOccupancy: 1,
     capacity: 10,
     rsvpOpen: true,
     rsvpClosed: null,
+    seatCard: { heading: "Your RSVP", tag: null, note: null },
     canonical: `${APP_URL}${PATH}`,
     path: PATH,
     attendeesRefreshHref: PATH,
@@ -695,10 +697,13 @@ describe("Kit established branches are unchanged", () => {
     expect(html).toContain('data-testid="rsvp-syncing"');
   });
 
-  it("unanswered members still get the bare join CTA", () => {
-    const html = kit({ answer: null });
+  it.each([
+    { phase: "upcoming", isOngoing: false, submits: ["going", "going"] },
+    { phase: "ongoing", isOngoing: true, submits: ["going"] },
+  ])("unanswered members keep the inline join CTA ($phase)", ({ isOngoing, submits }) => {
+    const html = kit({ answer: null, isOngoing });
     expect(html).toContain('data-testid="rsvp-going"');
-    expect(submitValues(html)).toEqual(["going"]);
+    expect(submitValues(html)).toEqual(submits);
     expect(softLine(html, "maybe")).toBeNull();
   });
 

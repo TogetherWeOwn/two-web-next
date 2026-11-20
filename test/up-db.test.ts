@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 import app from "./app";
@@ -15,6 +17,7 @@ function scopedHealthSql(
   schema: string,
   slow?: "ping" | "queue",
   afterSetup?: () => Promise<void>,
+  bridgeSchema = schema,
 ): Sql {
   const wrap = (sql: Pick<Sql, "unsafe">): Sql =>
     (async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -23,8 +26,13 @@ function scopedHealthSql(
         (slow === "queue" && query.includes("queue_jobs")) ||
           (slow === "ping" && query.startsWith("SELECT clock_timestamp"))
           ? "SELECT pg_sleep(10)"
-          : query.replaceAll("drizzle.__drizzle_migrations", `"${schema}".__drizzle_migrations`),
-        values as Parameters<Sql["unsafe"]>[1],
+          : query
+              .replaceAll("drizzle.__drizzle_migrations", `"${schema}".__drizzle_migrations`)
+              .replaceAll(
+                "web_readiness.migration_timestamps",
+                `"${bridgeSchema}".migration_timestamps`,
+              ),
+        values as postgres.ParameterOrJSON<never>[],
         { prepare: true },
       );
       if (query.includes("set_config")) await afterSetup?.();
@@ -137,6 +145,154 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
       }
     }
   }, 10000);
+
+  it("reads only timestamps as the same runtime login before and after ledger isolation", async () => {
+    const url = testDatabaseUrl(raw!);
+    const suffix = randomUUID().replaceAll("-", "");
+    const schema = `up_ledger_${suffix}`;
+    const bridgeSchema = `up_bridge_${suffix}`;
+    const login = `up_login_${suffix}`;
+    const broad = `up_broad_${suffix}`;
+    const password = randomUUID().replaceAll("-", "");
+    const ledger = `${schema}.__drizzle_migrations`;
+    const sequence = `${ledger}_id_seq`;
+    const view = `${bridgeSchema}.migration_timestamps`;
+    const definition = readFileSync(
+      fileURLToPath(new URL("../docs/web-readiness-projection.sql", import.meta.url).href),
+      "utf8",
+    )
+      .replaceAll("web_readiness", bridgeSchema)
+      .replaceAll("drizzle.__drizzle_migrations", ledger);
+    const options = { max: 1, connect_timeout: 3, onnotice: () => {} };
+    const admin = postgres(url.href, { ...options, password: () => url.password });
+    const readerUrl = new URL(url.href);
+    readerUrl.username = login;
+    readerUrl.password = "";
+    const reader = postgres(readerUrl.href, { ...options, password: () => password });
+    const client = scopedHealthSql(reader, schema, undefined, undefined, bridgeSchema);
+    const unreadable = { db: "ok", pending_migrations: null, migration_ledger: null };
+    let created = false;
+    try {
+      // Broad inherited rights are limited to this test's objects, never a
+      // cluster-wide predefined role on a potentially shared test server.
+      await admin.begin(async (tx) => {
+        await tx
+          .unsafe(`
+        CREATE ROLE ${broad} NOLOGIN;
+        CREATE ROLE ${login} LOGIN PASSWORD '${password}';
+        GRANT ${broad} TO ${login};
+        CREATE SCHEMA ${schema};
+        CREATE TABLE ${ledger} (id serial PRIMARY KEY, hash text NOT NULL, created_at bigint);
+        GRANT USAGE ON SCHEMA ${schema} TO ${broad};
+        GRANT ALL ON TABLE ${ledger} TO ${broad};
+        GRANT ALL ON SEQUENCE ${sequence} TO ${broad};
+        `)
+          .simple();
+      });
+      created = true;
+      const missing = WEB_MIGRATIONS[1]!;
+      const entries = WEB_MIGRATIONS.filter((entry) => entry !== missing);
+      await admin`INSERT INTO ${admin(schema)}.__drizzle_migrations ${admin(
+        [
+          ...entries.map(({ tag, when }) => ({ hash: tag, created_at: when })),
+          { hash: "bot-fixture", created_at: 9999999999999 },
+        ],
+        "hash",
+        "created_at",
+      )}`;
+      expect(await reader`SELECT session_user AS login, current_user AS active`).toEqual([
+        { login, active: login },
+      ]);
+      const absent = await databaseReadiness(client);
+      expect(absent).toEqual({
+        db: "ok",
+        pending_migrations: 1,
+        migration_ledger: [...entries.map(({ when }) => when), 9999999999999].sort((a, b) => a - b),
+      });
+
+      await admin
+        .unsafe(`${definition}
+        GRANT USAGE ON SCHEMA ${bridgeSchema} TO ${login};
+        GRANT ALL ON TABLE ${view} TO ${broad};
+      `)
+        .simple();
+      expect(await databaseReadiness(client)).toEqual(absent);
+      expect(
+        (await reader.unsafe(`SELECT * FROM ${view}`)).columns.map((column) => column.name),
+      ).toEqual(["created_at"]);
+      await expect(
+        reader.unsafe(`CREATE TABLE ${bridgeSchema}.denied (id int)`),
+      ).rejects.toMatchObject({ code: "42501" });
+      for (const dml of [
+        `INSERT INTO ${view} VALUES (0)`,
+        `UPDATE ${view} SET created_at = 0`,
+        `DELETE FROM ${view}`,
+      ]) {
+        await expect(reader.unsafe(dml)).rejects.toMatchObject({ code: "55000" });
+      }
+
+      // A readable legacy ledger would hide both failures if fallback were broad.
+      await admin.unsafe(`REVOKE ALL ON TABLE ${view} FROM ${broad}`);
+      await expect(reader.unsafe(`SELECT created_at FROM ${view}`)).rejects.toMatchObject({
+        code: "42501",
+      });
+      expect(await reader.unsafe(`SELECT created_at FROM ${ledger}`)).toHaveLength(
+        entries.length + 1,
+      );
+      expect(await databaseReadiness(client)).toEqual(unreadable);
+      await admin
+        .unsafe(`
+        ALTER VIEW ${view} RENAME TO saved_timestamps;
+        CREATE VIEW ${view} AS SELECT NULL::bigint AS created_at;
+        GRANT SELECT ON TABLE ${view} TO ${login};
+      `)
+        .simple();
+      expect(await databaseReadiness(client)).toEqual(unreadable);
+      await admin
+        .unsafe(`
+        DROP VIEW ${view};
+        ALTER VIEW ${bridgeSchema}.saved_timestamps RENAME TO migration_timestamps;
+        GRANT SELECT ON TABLE ${view} TO ${login};
+        REVOKE ${broad} FROM ${login};
+      `)
+        .simple();
+
+      // Check the exact login's effective rights, including inherited and PUBLIC
+      // access. Admin only resolves the qualified names hidden from the login.
+      expect(
+        await admin`
+        SELECT has_schema_privilege(${login}, ${schema}, 'USAGE,CREATE') AS schema,
+          has_table_privilege(${login}, ${ledger}, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') AS table,
+          has_any_column_privilege(${login}, ${ledger}, 'SELECT,INSERT,UPDATE,REFERENCES') AS columns,
+          has_sequence_privilege(${login}, ${sequence}, 'USAGE,SELECT,UPDATE') AS sequence
+      `,
+      ).toEqual([{ schema: false, table: false, columns: false, sequence: false }]);
+      await expect(reader.unsafe(`SELECT created_at FROM ${ledger}`)).rejects.toMatchObject({
+        code: "42501",
+      });
+      expect(await databaseReadiness(client)).toEqual(absent);
+      await admin`INSERT INTO ${admin(schema)}.__drizzle_migrations (hash, created_at) VALUES (${missing.tag}, ${missing.when})`;
+      expect(await databaseReadiness(client)).toEqual({
+        db: "ok",
+        pending_migrations: 0,
+        migration_ledger: [...absent.migration_ledger!, missing.when].sort((a, b) => a - b),
+      });
+    } finally {
+      try {
+        await reader.end({ timeout: 0 });
+        if (created)
+          await admin
+            .unsafe(`
+          DROP SCHEMA IF EXISTS ${bridgeSchema} CASCADE;
+          DROP SCHEMA ${schema} CASCADE;
+          DROP ROLE ${login}, ${broad};
+        `)
+            .simple();
+      } finally {
+        await admin.end({ timeout: 0 });
+      }
+    }
+  });
 
   it("aborts a slow ping server-side and restores local limits without closing the injected pool", async () => {
     const url = testDatabaseUrl(raw!);

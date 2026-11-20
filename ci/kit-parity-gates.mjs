@@ -17,10 +17,13 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripEmberDelta } from "./kit-archive-delta.mjs";
 import { sectionOf } from "./kit-section-contract.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 
 export const PARITY_ROUTES = [
+  // Compare guest structure, not live viewer-specific content.
+  { path: "/", expectStatus: 200, expectMarker: "manifest", contract: "home" },
   {
     path: "/events/past",
     expectStatus: 200,
@@ -59,7 +62,7 @@ export const PARITY_ROUTES = [
     expectStatus: 200,
     expectMarker: "manifest",
     contract: "join",
-    cache: ["public, max-age=60", "public, max-age=3600"],
+    cache: ["no-store", "public, max-age=3600"],
     compareSection: null,
   },
   // GET /auth/recover only: the one-use journey writes stay Hono-owned, so
@@ -586,6 +589,19 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
       failures.push(`${label}: archive never indexes`);
     if (!html.includes('<script src="/islands/past-events.js"'))
       failures.push(`${label}: shared island binder`);
+  } else if (contract === "home") {
+    if (!/<h1\b[^>]*>\s*The lobby is open\.\s*<\/h1>/i.test(html))
+      failures.push(`${label}: home heading present`);
+    const oauthJoin =
+      /<a\b(?=[^>]*\shref="\/auth\/discord")(?=[^>]*\sdata-testid="join")[^>]*>\s*Join with Discord\s*<\/a>/i;
+    const inviteFallback =
+      /<a\b(?=[^>]*\shref="\/discord")(?=[^>]*\sdata-testid="discord-join")[^>]*>\s*Join with an invite link\s*<\/a>/i;
+    if (!oauthJoin.test(html) && !inviteFallback.test(html))
+      failures.push(`${label}: guest join action or session-unavailable invite fallback present`);
+    if (/data-testid="(?:home-standing|home-event-own-rsvp)"/.test(html))
+      failures.push(`${label}: guest home must not show member RSVP data`);
+    if ((get("cache-control") ?? "") !== "private, no-store")
+      failures.push(`${label}: home is private, no-store`);
   } else if (contract === "join") {
     failures.push(...assertJoinContract(label, html, get, expected));
   } else if (contract === "recovery") {
@@ -608,9 +624,10 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
   }
   if (html.includes("Cross-site POST form submissions"))
     failures.push(`${label}: bare Kit CSRF text (must be the hardened gate)`);
-  // Account chrome: the public archive and the join landing are guest-only.
+  // Check the logout control, not copy that may appear in guest content.
   if (!html.includes("Welcome, guest")) failures.push(`${label}: guest account chrome`);
-  if (html.includes("Sign out")) failures.push(`${label}: guest page must not show Sign out`);
+  if (/<form\b[^>]*\saction="\/logout(?:\/everywhere)?"/i.test(html))
+    failures.push(`${label}: guest page must not show Sign out`);
   const secretHits = scrubSecrets(html);
   if (secretHits.length)
     failures.push(`${label}: secret-shaped content in HTML (${secretHits.length} patterns)`);
@@ -700,13 +717,14 @@ function assertJoinContract(label, html, get, expected) {
   const hasFlash = html.includes('data-testid="join-result"');
   if (hasFlash && cacheActual !== "private, no-store")
     failures.push(`${label}: flash view answers private, no-store`);
-  if (!hasFlash && cacheActual === "private, no-store")
-    failures.push(`${label}: flash-free view keeps its shared-cache TTL`);
+  if (!hasFlash && hasPresence && cacheActual !== "no-store")
+    failures.push(`${label}: presence view answers no-store`);
+  if (!hasFlash && !hasPresence && cacheActual !== "public, max-age=3600")
+    failures.push(`${label}: static view keeps its shared-cache TTL`);
   return failures;
 }
 
-// Events-list contract (src/events/pages-calendar-screen.tsx via
-// src/kit-events-html.tsx): the native endpoint renders the Hono calendar
+// Events-list contract: both routes render the calendar
 // screen, so the island identity, view toggles, search form, archive and
 // subscribe links and markdown alternate ride both renderers. Rows are live
 // reads (staging is often empty), so cards are never required here — the
@@ -1258,7 +1276,10 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       (html) => html.replace('class="skip-link" href="#main"', 'class="skip-link" href="#other"'),
     ],
     ["no-canonical", (html) => html.replace('<link rel="canonical"', '<link rel="alternate"')],
-    ["signed-in-chrome", (html) => html.replace("Welcome, guest", "Sign out")],
+    [
+      "signed-in-chrome",
+      (html) => `${html}<form method="post" action="/logout"><button>Sign out</button></form>`,
+    ],
     ["bare-csrf-text", (html) => `${html}Cross-site POST form submissions`],
     ["secret-leak", (html) => `${html}<meta name="x" content="Bearer abc.def.ghi">`],
   ];
@@ -1310,7 +1331,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     `unavailable — the join button above still works.</p>`;
   const joinCases = [
     ["unit/join cold facade", joinShell(joinFacade), "public, max-age=3600"],
-    ["unit/join warm presence", joinShell(joinPresence), "public, max-age=60"],
+    ["unit/join warm presence", joinShell(joinPresence), "no-store"],
     ["unit/join fallback", joinShell(joinFallback), "public, max-age=3600"],
   ];
   for (const [name, html, cache] of joinCases) {
@@ -2149,6 +2170,47 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     }
   }
 
+  // Exercise the home contract in CI even when preview credentials are absent.
+  if (parseManifestEntries(manifestSource).some((entry) => entry.path === "/")) {
+    const homeMarker = expectedMarkerFor(manifestSource, "/");
+    const join = '<a href="/auth/discord" data-testid="join">Join with Discord</a>';
+    const homeShell =
+      `<link rel="canonical" href="https://next.togetherweown.com/">` +
+      `<a class="skip-link" href="#main">Skip</a><nav aria-label="Primary"></nav>` +
+      `<main id="main"><h1>The lobby is open.</h1>${join}</main><p>Welcome, guest</p>`;
+    const checkHome = (html, cache = "private, no-store") =>
+      assertRouteContract({
+        label: "unit/home",
+        html,
+        headers: headerMap({
+          "content-type": "text/html",
+          "x-two-renderer": homeMarker,
+          "cache-control": cache,
+        }),
+        status: 200,
+        expected: { status: 200, marker: homeMarker, contract: "home" },
+      });
+    const invite = '<a href="/discord" data-testid="discord-join">Join with an invite link</a>';
+    const fallbackShell = homeShell.replace(join, invite);
+    for (const [name, html, mutant, cache] of [
+      ["good fixture", homeShell],
+      ["invite fallback", fallbackShell],
+      ["heading", homeShell.replace("The lobby is open.", "Welcome"), true],
+      ["join", homeShell.replace('href="/auth/discord"', 'href="https://evil.test/"'), true],
+      ["invite fallback", fallbackShell.replace('href="/discord"', 'href="/join"'), true],
+      ["own RSVP", `${homeShell}<p data-testid="home-standing">Own RSVP</p>`, true],
+      ["shared-cache", homeShell, true, "public, max-age=60"],
+    ]) {
+      const failures = checkHome(html, cache);
+      const passed = Boolean(failures.length) === Boolean(mutant);
+      push(
+        `unit: home ${mutant ? `mutant ${name} fails` : `${name} passes`}`,
+        passed ? "passed" : "failed",
+        passed ? null : failures.join("; ") || "mutant was NOT detected",
+      );
+    }
+  }
+
   // Wrong-marker mutant: Hono-owned route carrying the Kit marker must fail.
   const markerFailures = assertRouteContract({
     label: "unit/mutant-marker",
@@ -2480,8 +2542,10 @@ async function runPreviewMode(
       let same = false;
       let reason = "section HTML differs";
       try {
+        const kitComparable = route.contract === "archive" ? stripEmberDelta(kitHtml) : kitHtml;
         same =
-          sectionOf(kitHtml, route.compareSection) === sectionOf(honoHtml, route.compareSection);
+          sectionOf(kitComparable, route.compareSection) ===
+          sectionOf(honoHtml, route.compareSection);
         if (same) reason = null;
       } catch (error) {
         reason = String(error?.message ?? error).slice(0, 200);

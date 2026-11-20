@@ -17,6 +17,7 @@
 // read, draft stays forbidden without the moderator bit, an indeterminate
 // session is unavailable (never a false logout, never a guest render of
 // member state), and every database failure is a 503 before bytes.
+import { timeStaleAt } from "../../lib/time-freshness-clock";
 import { dbFor } from "../admin/db";
 import { savedEventReview } from "../admin/event-saved-review";
 import {
@@ -26,8 +27,9 @@ import {
 import { alertRequestError, exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import type { Env } from "../env";
-import type { RsvpClosedReason } from "../islands/contracts";
+import { RSVP_COPY, type RsvpClosedReason } from "../islands/contracts";
 import type { KitRequestSession } from "../kit-session";
+import { eventGoneModel } from "../kit-event-states";
 import type {
   EventGoneModel,
   EventMissingModel,
@@ -51,7 +53,6 @@ import {
 } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
-import { fmt } from "./pages-shared";
 import { eventLinkAvailability } from "./link-availability";
 import { isOngoing } from "./ongoing";
 import {
@@ -70,7 +71,6 @@ import {
   type EventNeighbors,
   type EventSeriesContext,
   type PublicEvent,
-  type SeriesEventRef,
   type ViewerRsvp,
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
@@ -89,7 +89,7 @@ export interface KitEventDetailStore {
   /** Series run read. Optional so existing fakes keep compiling: the resolver
    * falls back to the shared read, which skips standalone events with zero
    * queries and fails open everywhere else. */
-  seriesFn?: (db: Db, event: SeriesEventRef) => Promise<EventSeriesContext | null>;
+  seriesFn?: typeof getEventSeriesContext;
   /** Bounded attendee window for one native page: the page plus the first row
    * of the next page (lookahead, never rendered) that powers Next. */
   attendeesFn: (db: Db, eventId: number, page: number) => Promise<EventAttendee[]>;
@@ -142,7 +142,34 @@ export interface KitEventDetailSeries {
   next: KitEventDetailLink | null;
 }
 
+export interface KitSeatCard {
+  heading: string | null;
+  tag: { tone: "warn"; text: string } | null;
+  note: string | null;
+}
+
+/** Only event-level gates belong here; the RSVP island owns viewer state. */
+export function kitSeatCard(
+  closed: RsvpClosedReason | null,
+  member: boolean,
+  open: boolean,
+  review: boolean,
+): KitSeatCard {
+  if (review) return { heading: null, tag: null, note: null };
+  if (closed) return { heading: "RSVPs closed", tag: null, note: null };
+  const tag = open ? null : { tone: "warn" as const, text: "Paused" };
+  if (member) return { heading: "Your RSVP", tag, note: null };
+  return {
+    heading: "Log in to RSVP",
+    tag,
+    note: open ? "You'll come straight back here." : RSVP_COPY.paused,
+  };
+}
+
+export { kitEventFacts } from "./kit-event-facts";
+
 export interface KitEventDetailModel {
+  seatCard: KitSeatCard;
   /** Escaped server-only member presentation; created after disclosure declaration. */
   detailHtml: EventDetailHtml;
   /** Moderator-only escaped leaves; the member rendering is shared unchanged. */
@@ -172,9 +199,11 @@ export interface KitEventDetailModel {
   isDraft: boolean;
   isPast: boolean;
   /** Server snapshot at the render instant (`isOngoing`): the "Happening now"
-   * hero badge. Never a client clock; RSVP verdicts are unaffected. Optional
+   * interval. Never a client clock; RSVP verdicts are unaffected. Optional
    * so a pre-existing fixture without the flag reads as not ongoing. */
   isOngoing?: boolean;
+  lifecycle: { date: string; endTime: string; next: { key: string; date: string } | null } | null;
+  liveTime?: { asOf: string; staleAt: string };
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
@@ -316,7 +345,7 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
     getReviewEventFn: (db, key) => getEventForModeratorReview(db, key),
     neighborsFn: getEventNeighbors,
     relatedFn: listRelatedEvents,
-    seriesFn: (db, event) => getEventSeriesContext(db, event),
+    seriesFn: getEventSeriesContext,
     attendeesFn: async (db, eventId, page) => {
       // Same bounded window as the served handler: the requested page plus
       // the first row of the next page (lookahead, never rendered) that
@@ -355,6 +384,46 @@ function toLink(link: EventLink, now: Date): KitEventDetailLink {
     game: link.game || null,
     availability: eventLinkAvailability(link, now),
   };
+}
+
+function detailLifecycle(
+  event: PublicEvent,
+  timeZone: string,
+  next: EventLink | null | undefined,
+): KitEventDetailModel["lifecycle"] {
+  if (!instantIso(event.startsAt) || !instantIso(event.endsAt)) return null;
+  const date = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  const clock = new Intl.DateTimeFormat("en-GB", { timeZone, timeStyle: "short" });
+  const startDate = date.format(event.startsAt);
+  const endDate = date.format(event.endsAt);
+  const endTime = clock.format(event.endsAt);
+  return {
+    date: startDate,
+    endTime: startDate === endDate ? endTime : `${endDate}, ${endTime}`,
+    next: next
+      ? {
+          key: next.eventKey,
+          date: new Intl.DateTimeFormat("en-GB", {
+            timeZone: isValidZone(next.timezone) ? next.timezone : "UTC",
+            weekday: "short",
+            day: "numeric",
+            month: "short",
+          }).format(next.startsAt),
+        }
+      : null,
+  };
+}
+
+function liveDetailTime(event: PublicEvent, now: Date): KitEventDetailModel["liveTime"] {
+  if (!isOngoing(event, now)) return undefined;
+  const staleAt = timeStaleAt("live", +now, +event.startsAt, +event.endsAt);
+  if (staleAt === null || !Number.isFinite(staleAt)) return undefined;
+  return { asOf: now.toISOString(), staleAt: new Date(staleAt).toISOString() };
 }
 
 // A code bug (no branded status) must never look like a downstream outage:
@@ -444,30 +513,25 @@ export async function resolveKitEventDetail(
           });
           related = [];
         }
+        let upcoming: EventLink | null = null;
+        try {
+          const acceptKey = (key: string) =>
+            eventKeyAllowed(key, appUrl) && (canonicalEventKey(key) ?? key) === key;
+          const readSeries = store.seriesFn ?? getEventSeriesContext;
+          upcoming = (await readSeries(db, event, now, acceptKey))?.upcoming ?? null;
+        } catch (err) {
+          console.warn("Event next date unavailable; serving cancellation without it.", {
+            request_id: safeRequestId(requestId),
+            exception: exceptionClass(err),
+          });
+        }
         const headers = { "cache-control": NO_STORE, "x-robots-tag": NOINDEX };
         setHeaders(headers);
         return {
           kind: "gone",
           status: 410,
           headers,
-          model: {
-            title: event.title,
-            game: event.game,
-            eventKey: event.eventKey,
-            existingResponses: event.goingCount,
-            icsUrl: `/events/${event.eventKey}.ics`,
-            markdownAlternate: `/e/${event.eventKey}.md`,
-            upcomingUrl: "/events",
-            related: related.map((link) => ({
-              key: link.eventKey,
-              title: link.title,
-              whenText: fmt(link.startsAt, link.timezone),
-              datetime: link.startsAt.toISOString(),
-              location: link.location,
-            })),
-            jsonLd: eventJsonLd(event, appUrl),
-            siteJsonLd: siteJsonLd(appUrl),
-          },
+          model: eventGoneModel(event, related, appUrl, upcoming),
         };
       }
       // An indeterminate session is a store outage, never a logout and never
@@ -505,8 +569,12 @@ export async function resolveKitEventDetail(
         (related) => related,
         (): EventLink[] => [],
       );
-      const seriesSettled = (
-        store.seriesFn ? store.seriesFn(db, event) : getEventSeriesContext(db, event)
+      const ended =
+        (event.status === "past" || event.status === "published") && event.endsAt <= now;
+      const seriesSettled = (store.seriesFn ?? getEventSeriesContext)(
+        db,
+        event,
+        ended ? now : undefined,
       ).then(
         (series) => series,
         (): EventSeriesContext | null => null,
@@ -561,6 +629,8 @@ export async function resolveKitEventDetail(
       const pagePath = `/e/${event.eventKey}`;
       const pageCanonical = canonicalUrl(appUrl, pagePath);
       const review = wantsReview ? savedEventReview(event, now, search) : null;
+      const zoneLabel = isValidZone(event.timezone) ? event.timezone : "UTC";
+      const liveTime = liveDetailTime(event, now);
       const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
@@ -604,12 +674,15 @@ export async function resolveKitEventDetail(
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
-          isOngoing: isOngoing(event, now),
+          isOngoing: Boolean(liveTime),
+          lifecycle: ended ? detailLifecycle(event, zoneLabel, series?.upcoming) : null,
+          ...(liveTime ? { liveTime } : {}),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,
           rsvpOpen: event.rsvpOpen,
           rsvpClosed,
+          seatCard: kitSeatCard(rsvpClosed, member, event.rsvpOpen, Boolean(review)),
           canonical: pageCanonical,
           path: pagePath,
           // Keep validated roster/archive state only, never raw query text.
@@ -635,7 +708,7 @@ export async function resolveKitEventDetail(
           whenText: formatDetailWhen(event.startsAt, event.timezone),
           endsWhenText: formatDetailWhen(event.endsAt, event.timezone),
           durationText: formatElapsedDuration(event.endsAt.getTime() - event.startsAt.getTime()),
-          zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
+          zoneLabel,
           timeDatetime: instantIso(event.startsAt),
           attendees,
           attendeesPaging,

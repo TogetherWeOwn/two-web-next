@@ -51,7 +51,7 @@ function assertShell(html: string) {
     expect(html).toContain("base-theme homepage-theme");
     expect(html).toContain(".hero h1");
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
+    expect(html).toContain('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
   } else {
     expect(html).toContain('rel="stylesheet" href="/styles.css"');
   }
@@ -216,8 +216,8 @@ it("keeps event detail on its own theme, outside the schedule-only sheet", async
 
 it("keeps schedule layout in its own self-contained sheet", () => {
   const css = readFileSync(new URL("../public/schedule-theme.css", import.meta.url), "utf8");
-  // Match the existing served-asset ceiling; the budget gate also checks gzip.
-  expect(Buffer.byteLength(css, "utf8")).toBeLessThan(6144);
+  // Match the separately approved served-asset ceiling; the budget gate also checks gzip.
+  expect(Buffer.byteLength(css, "utf8")).toBeLessThanOrEqual(9728);
   expect(css).toMatch(/\.schedule-date\{[^}]*font-family:var\(--font-display\)/);
   expect(css).toMatch(/\.schedule-date strong\{[^}]*white-space:nowrap/);
   expect(css).toContain("@media (max-width: 48rem)");

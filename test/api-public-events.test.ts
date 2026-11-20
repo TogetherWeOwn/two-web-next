@@ -41,6 +41,7 @@ import type { Sql } from "../src/sessions";
 import type { EnvWithThrottle } from "../src/throttle";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { validatePublicSchema } from "./helpers/public-api-schema";
+import { UNKNOWN_PATHS } from "./helpers/public-unknown-paths";
 
 // Deferred-reader gate for the overtaken-read pin below: the mocked
 // collection read resolves its rows first (so the in-flight request has
@@ -222,6 +223,44 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
 
   const smuggleTitle = (eventKey: string, title: string) =>
     fixture.client`update events set title = ${title} where event_key = ${eventKey}`;
+
+  it.each(UNKNOWN_PATHS)("GET %s answers JSON with a database present", async (path) => {
+    await seed(21);
+    const res = await app.request(
+      path,
+      { headers: { "cf-connecting-ip": "192.0.2.97" } },
+      {
+        ...env,
+        DATABASE_URL: process.env.DATABASE_URL as string,
+      },
+    );
+    expect(res.status, path).toBe(404);
+    expect(res.headers.get("content-type"), path).toContain("application/json");
+    expect(res.headers.get("cache-control"), path).toBe("no-store, private");
+    expect(res.headers.get("set-cookie"), path).toBeNull();
+    const requestId = res.headers.get("x-request-id");
+    expect(requestId, path).toBeTruthy();
+    const raw = await res.text();
+    expect(raw, path).not.toMatch(/<!doctype|<html|error-heading/i);
+    expect(raw, path).not.toContain("ASSET-BYTES-SHOULD-NOT-LEAK");
+    expect(raw, path).not.toContain(path.split("?")[0]);
+    expect(raw, path).not.toContain(encodeURIComponent(path));
+    const query = path.includes("?") ? path.slice(path.indexOf("?") + 1) : "";
+    if (query) {
+      expect(raw, path).not.toContain(query);
+      expect(raw, path).not.toContain(encodeURIComponent(query));
+    }
+    const body = JSON.parse(raw);
+    expect(validatePublicSchema(body, "PublicDataError"), path).toEqual([]);
+    expect(body).toEqual({
+      error: {
+        code: "not_found",
+        message: "No such API path.",
+        request_id: requestId,
+        next: "Check the API path and retry.",
+      },
+    });
+  });
 
   it("lists published events soonest-first with the shared 16-key projection", async () => {
     const [ev] = await db
@@ -742,5 +781,133 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
 
     // None of the denials retired: the re-warmed bytes stay served.
     expect(await (await get("/api/public/events")).text()).toContain("Smuggled one");
+  });
+
+  // Conditional controls inherit the existing disposable-database gate.
+  describe("conditional reads", () => {
+    const junkEtag = (etag: string) => {
+      const flipped = etag.replace(
+        /^(W\/)?"(.)/,
+        (_m, weak: string | undefined, ch: string) => `${weak ?? ""}"${ch === "0" ? "1" : "0"}`,
+      );
+      return flipped !== etag ? flipped : '"junk-not-the-current-validator"';
+    };
+    const weakForm = (etag: string) => `W/${etag.replace(/^W\//, "")}`;
+
+    // Resolve the shared env's ADMIN_DB getter after the fixture is ready.
+    const dbEnv = () =>
+      ({ ...env, DATABASE_URL: process.env.DATABASE_URL as string }) as unknown as Env &
+        EnvWithThrottle;
+
+    // A throttle store whose bucket for `ip` is already spent.
+    const spentThrottleEnv = (ip: string) => {
+      const at = Date.now();
+      const spent: { bucket: string; at: number }[] = Array.from({ length: 60 }, () => ({
+        bucket: `events-read:${ip}`,
+        at,
+      }));
+      const sql = Object.assign(
+        async (strings: TemplateStringsArray, ...values: unknown[]) => {
+          const statement = strings.join("?");
+          if (statement.includes("pg_advisory_xact_lock")) return [];
+          if (statement.includes("SELECT count(*)")) {
+            const rows = spent.filter((hit) => hit.bucket === values[0] && hit.at > at - 60_000);
+            return [{ n: rows.length, wait: 60 }];
+          }
+          if (statement.includes("INSERT INTO web_throttle_hits")) {
+            spent.push({ bucket: String(values[0]), at });
+            return [];
+          }
+          if (statement.includes("DELETE FROM web_throttle_hits")) return [];
+          throw new Error("Unexpected throttle statement");
+        },
+        {
+          begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql),
+          unsafe: async () => [],
+        },
+      );
+      return {
+        ...dbEnv(),
+        THROTTLE_STORE: async () => sql as unknown as Sql,
+      } as unknown as Env & EnvWithThrottle;
+    };
+
+    const dbGet = (path: string, init: RequestInit = {}, ip = "192.0.2.97") =>
+      app.request(path, { ...init, headers: { "cf-connecting-ip": ip, ...init.headers } }, dbEnv());
+
+    it.each(["/api/public/events", `/api/public/events/${key(51)}`])(
+      "%s answers 304 for exact, weak, list and wildcard validators",
+      async (path) => {
+        await seed(51);
+        const first = await dbGet(path);
+        expect(first.status).toBe(200);
+        const etag = first.headers.get("etag");
+        expect(etag).not.toBeNull();
+        await first.text();
+        for (const validator of [
+          etag as string,
+          weakForm(etag as string),
+          `${junkEtag(etag as string)}, ${etag as string}`,
+          `${junkEtag(etag as string)}, ${weakForm(etag as string)}`,
+          "*",
+        ]) {
+          const res = await dbGet(path, { headers: { "if-none-match": validator } });
+          expect(res.status, `${path} ${validator}`).toBe(304);
+          expect(await res.text(), validator).toBe("");
+          expect(res.headers.get("etag"), validator).toBe(etag);
+        }
+        const fresh = await dbGet(path, {
+          headers: { "if-none-match": junkEtag(etag as string) },
+        });
+        expect(fresh.status).toBe(200);
+      },
+    );
+
+    it("serves the canonical empty page conditionally when the game is unknown", async () => {
+      await seed(52);
+      const first = await dbGet("/api/public/events?game=unknown-game-xyz");
+      expect(first.status).toBe(200);
+      const etag = first.headers.get("etag");
+      expect(etag).not.toBeNull();
+      await first.text();
+      const cached = await dbGet("/api/public/events?game=unknown-game-xyz", {
+        headers: { "if-none-match": etag as string },
+      });
+      expect(cached.status).toBe(304);
+      expect(await cached.text()).toBe("");
+      expect(cached.headers.get("etag")).toBe(etag);
+    });
+
+    it("refuses before 304 on event reads when the shared budget is spent", async () => {
+      await seed(53);
+      // Warm each endpoint independently and keep its own validator.
+      const paths = ["/api/public/events", `/api/public/events/${key(53)}`];
+      const etags = new Map<string, string>();
+      for (const path of paths) {
+        const first = await dbGet(path);
+        expect(first.status, path).toBe(200);
+        const etag = first.headers.get("etag");
+        expect(etag, path).not.toBeNull();
+        etags.set(path, etag as string);
+        await first.text();
+      }
+      // Control: each validator really is a 304 before the budget is spent.
+      for (const path of paths) {
+        const warm = await dbGet(path, { headers: { "if-none-match": etags.get(path) as string } });
+        expect(warm.status, `${path} warm 304`).toBe(304);
+        await warm.text();
+      }
+      const ip = "192.0.2.100";
+      const throttled = spentThrottleEnv(ip);
+      for (const path of paths) {
+        const res = await app.request(
+          path,
+          { headers: { "cf-connecting-ip": ip, "if-none-match": etags.get(path) as string } },
+          throttled,
+        );
+        expect(res.status, path).toBe(429);
+        expect(res.headers.get("etag"), path).toBeNull();
+      }
+    });
   });
 });

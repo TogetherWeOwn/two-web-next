@@ -346,8 +346,12 @@ test("the staging drill rolls back and forward through rollback-production.yml",
   assert.match(workflow, /\n  schedule:\n    - cron: "41 3 \* \* \*"\n/);
   assert.match(workflow, /\n  workflow_dispatch:\n/);
   assert.ok(!/\n  (push|pull_request|workflow_run):/.test(workflow));
-  assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n/m);
-  const legs = [...workflow.matchAll(/uses: \.\/\.github\/workflows\/rollback-production\.yml\n/g)];
+  assert.match(workflow, /^permissions:\n  contents: read\n  actions: read # \S[^\n]*\n\n/m);
+  const legs = [
+    ...workflow.matchAll(
+      /uses: TogetherWeOwn\/two-web-next\/\.github\/workflows\/rollback-production\.yml@38581ef492f5c972969f5dfada396a9f0e2ee989\n/g,
+    ),
+  ];
   assert.equal(legs.length, 2, "both legs call the production rollback workflow");
   const rollback = workflow.slice(
     workflow.indexOf("\n  rollback:\n"),

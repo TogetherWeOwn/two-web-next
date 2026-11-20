@@ -7,7 +7,7 @@
 // viewers, cookie-bearing guests and moderator sessions — that is the cache
 // isolation, and test/api-public-events.test.ts pins it. The session-gated
 // /events.json contract is untouched.
-import type { Context, Hono } from "hono";
+import type { Hono } from "hono";
 import { dbFor } from "../admin/db";
 import { containsControlCharacters } from "../admin/validation-shared";
 import { alertRequestError } from "../alerts";
@@ -17,7 +17,8 @@ import type { Env } from "../env";
 import { varyAccept } from "../errors";
 import { stagingRobots } from "../headers";
 import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../events/reads";
-import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
+import { publicReadGuard } from "../events/routes-shared";
+import { etagFor, matchesIfNoneMatch } from "../http/conditional";
 import { inviteDestination } from "../invite";
 import { wallDateIso, wallTimeHm } from "../islands/contracts";
 import { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "../mcp/identity";
@@ -34,7 +35,6 @@ import {
   type JoinHandoffDto,
   type PublicApiEventCollectionDto,
   type PublicApiEventDto,
-  type PublicDataErrorCode,
   type PublicDataErrorDto,
   type PublicEventId,
 } from "./contracts";
@@ -47,29 +47,11 @@ import {
   type ApiPublicCacheEntry,
 } from "./cache";
 import { getOpenApiDocument } from "./openapi";
+import { apiError, type Ctx } from "./unknown-path";
 import { parseRetryAfterSeconds } from "../jobs/retry-delay";
-
-type Ctx = Context<{ Bindings: Env }>;
 
 const PUBLIC_MAX_AGE = "public, max-age=60";
 const TEXT = new TextEncoder();
-
-function apiError(
-  c: Ctx,
-  code: PublicDataErrorCode,
-  message: string,
-  status: 422 | 404 | 500 | 503,
-): Response {
-  const body: PublicDataErrorDto = {
-    error: {
-      code,
-      message,
-      request_id: c.get("requestId"),
-      next: PUBLIC_DATA_ERROR_NEXT[code],
-    },
-  };
-  return c.json(body, status, { "cache-control": "no-store, private" });
-}
 
 /**
  * Unexpected fault on an event read: alert once with the class fingerprint
@@ -333,7 +315,7 @@ async function servePublicJson(
   expectedGeneration?: number,
 ): Promise<Response> {
   const body = typeof value === "string" ? value : JSON.stringify(value);
-  const etag = await etagFor(body);
+  const etag = await etagFor(body, "SHA-1");
   const headers = {
     "content-type": "application/json; charset=UTF-8",
     "cache-control": PUBLIC_MAX_AGE,
@@ -363,7 +345,7 @@ async function emptyEventCollection(c: Ctx, expectedGeneration?: number): Promis
   const body = JSON.stringify(
     serializeEventCollection([], 0, 1, API_PUBLIC_BOUNDS.defaultPageSize),
   );
-  const etag = await etagFor(body);
+  const etag = await etagFor(body, "SHA-1");
   const cacheControl =
     expectedGeneration !== undefined && expectedGeneration !== apiPublicCacheGeneration()
       ? "public, max-age=0, must-revalidate"
@@ -564,7 +546,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
   // no session, unchanged bytes per APP_URL with a long edge TTL.
   app.get("/openapi.json", async (c) => {
     const body = JSON.stringify(getOpenApiDocument(c.env.APP_URL));
-    const etag = await etagFor(body);
+    const etag = await etagFor(body, "SHA-1");
     c.header("cache-control", "public, max-age=3600");
     c.header("etag", etag);
     const robots = stagingRobots(c);

@@ -15,14 +15,73 @@ import { buildEventCreateView } from "../src/admin/kit-event-create.ts";
 import { resolveKitEventEdit } from "../src/admin/kit-event-edit.ts";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit.ts";
 import { EventFormPage, FeaturedFormPage } from "../src/admin/pages.tsx";
+import { EventEditableFields } from "../src/admin/pages/event-editable-fields.tsx";
+import { parseRecurrenceForm } from "../src/admin/recurrence.ts";
+import { parseEventForm, ValidationError } from "../src/admin/validation.ts";
 
 const output = resolve("web/.svelte-kit/output");
 const evidence = process.env.KIT_ADMIN_CONTRAST_EVIDENCE_DIR;
 const origin = "http://kit-admin.test";
+const createDetails = {
+  organizer_name: "Riley & friends",
+  join_url: "https://example.com/lobby",
+  join_instructions: "Use the public lobby.\nAsk the host for the next game.",
+};
+// Rejected submissions: the shipped parsers decide the errors, so the
+// invalid fixtures render what a moderator sees after a real 422.
+const createRejected = {
+  title: "Game night",
+  starts_at: "2026-11-04 20:00",
+  ends_at: "2026-11-04 22:00",
+  timezone: "Europe/London",
+  accessibility_notes: "Step-free entrance. ".repeat(55).trim(),
+  organizer_name: "Riley & friends ".repeat(35).trim(),
+  join_url: "lobby.example.com/join",
+  join_instructions: "Use the public lobby. ".repeat(240).trim(),
+  recurrence_frequency: "weekly",
+  recurrence_count: "53",
+};
+const editRejectedTitle = "Game night moved to the big room ".repeat(4).trim();
+
+/** Field errors from the shipped parsers, merged as the create route does. */
+function rejectedFields(values, ...parsers) {
+  const fields = {};
+  for (const parse of parsers) {
+    try {
+      parse(values);
+    } catch (err) {
+      if (!(err instanceof ValidationError)) throw err;
+      Object.assign(fields, err.fields);
+    }
+  }
+  return fields;
+}
+const createErrors = rejectedFields(createRejected, parseEventForm, parseRecurrenceForm);
+assert.deepEqual(
+  Object.keys(createErrors).sort(),
+  ["accessibility_notes", "join_instructions", "join_url", "organizer_name", "recurrence_count"],
+  "the rejected create submission fails exactly the fields the fixture exercises",
+);
 let scratch;
 let browser;
 let server;
 let fixtures;
+
+async function focusOutlineColor(locator) {
+  const outline = await locator.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return {
+      focused: el === document.activeElement && el.matches(":focus-visible"),
+      style: style.outlineStyle,
+      width: Number.parseFloat(style.outlineWidth),
+      color: style.outlineColor,
+    };
+  });
+  assert.ok(outline.focused, `${locator} has visible keyboard focus`);
+  assert.equal(outline.style, "solid", `${locator} has a solid outline`);
+  assert.ok(outline.width > 0, `${locator} has a nonzero outline`);
+  return outline.color;
+}
 
 before(async () => {
   scratch = await mkdtemp(
@@ -45,8 +104,72 @@ before(async () => {
   });
   assert.equal(event.kind, "ok");
   assert.equal(featured.kind, "ok");
+  const populatedEvent = await resolveKitEventEdit(
+    eventRow.eventKey,
+    {},
+    {
+      db: {},
+      get: async () => ({
+        ...eventRow,
+        accessibilityNotes: "Step-free side door; hearing loop fitted",
+        organizer_name: "Jordan",
+        join_url: "https://example.com/lobby",
+        join_instructions: "Ask for the community table on level two",
+      }),
+      list: async () => ({ rows: [], total: 0 }),
+    },
+  );
+  assert.equal(populatedEvent.kind, "ok");
+  // The rejected edit keeps the saved heading; the form echoes the submission.
+  const editRejected = { ...event.view.values, title: editRejectedTitle };
+  const editErrors = rejectedFields(editRejected, parseEventForm);
+  assert.deepEqual(Object.keys(editErrors), ["title"], "only the title is rejected");
   fixtures = [
     { name: "event-new", path: "/admin/events/new", data: buildEventCreateView() },
+    {
+      name: "event-new-populated",
+      path: "/admin/events/new",
+      data: buildEventCreateView({ accessibility_notes: "Step-free entrance.", ...createDetails }),
+    },
+    {
+      name: "event-new-invalid",
+      path: "/admin/events/new",
+      data: buildEventCreateView(createRejected, createErrors),
+    },
+    {
+      name: "event-edit-populated",
+      path: `/admin/events/${eventRow.eventKey}`,
+      data: { view: populatedEvent.view },
+    },
+    {
+      name: "event-edit-errors",
+      path: `/admin/events/${eventRow.eventKey}`,
+      data: {
+        view: {
+          ...populatedEvent.view,
+          hasErrors: true,
+          errors: {
+            accessibility_notes: "Keep accessibility notes to 1000 characters.",
+            organizer_name: "Keep the organizer name to 500 characters.",
+            join_url: "Enter a valid public HTTP or HTTPS link without sign-in credentials.",
+            join_instructions: "Keep joining instructions to 5000 characters.",
+          },
+        },
+      },
+    },
+    {
+      name: "event-edit-invalid",
+      path: `/admin/events/${eventRow.eventKey}`,
+      data: {
+        view: {
+          ...event.view,
+          values: editRejected,
+          errors: editErrors,
+          hasErrors: true,
+          fieldsHtml: String(EventEditableFields({ values: editRejected, errors: editErrors })),
+        },
+      },
+    },
     { name: "event-edit", path: `/admin/events/${eventRow.eventKey}`, data: { view: event.view } },
     { name: "featured-new", path: "/admin/featured/new", data: {} },
     { name: "featured-edit", path: "/admin/featured/7", data: { view: featured.view } },
@@ -127,10 +250,24 @@ after(async () => {
 // Named suite: the executed-count verifier admits only cases under this title.
 describe("Kit admin contrast", () => {
   for (const width of [1280, 390]) {
-    for (const name of ["event-new", "event-edit", "featured-new", "featured-edit", "dashboard"]) {
+    for (const name of [
+      "event-new",
+      "event-new-populated",
+      "event-new-invalid",
+      "event-new-text-limit",
+      "event-edit",
+      "event-edit-populated",
+      "event-edit-errors",
+      "event-edit-invalid",
+      "featured-new",
+      "featured-edit",
+      "dashboard",
+    ]) {
       test(`Kit admin contrast: ${name} at ${width}`, async () => {
-        const f = fixtures.find((fixture) => fixture.name === name);
+        const isTextLimit = name === "event-new-text-limit";
+        const f = fixtures.find((fixture) => fixture.name === (isTextLimit ? "event-new" : name));
         const isDashboard = name === "dashboard";
+        const isInvalid = name.endsWith("-invalid");
         const context = await browser.newContext({
           viewport: { width, height: width === 390 ? 844 : 800 },
         });
@@ -183,7 +320,112 @@ describe("Kit admin contrast", () => {
               "help text is actually present",
             );
           }
-          if (name === "event-new") assert.equal(await page.locator("fieldset label").count(), 3);
+          if (name.startsWith("event-new")) {
+            assert.equal(await page.locator("fieldset label").count(), 3);
+            const notes = page.locator("#f-accessibility-notes");
+            assert.equal(await notes.count(), 1);
+            const submitted = name === "event-new-invalid" ? createRejected : createDetails;
+            assert.equal(
+              await notes.inputValue(),
+              name === "event-new" || isTextLimit
+                ? ""
+                : name === "event-new-invalid"
+                  ? createRejected.accessibility_notes
+                  : "Step-free entrance.",
+            );
+            if (isTextLimit) {
+              const error = page.locator("#f-accessibility-notes-limit-error");
+              await error.waitFor({ state: "attached" });
+              assert.equal(await error.isVisible(), false);
+              await notes.fill("🎮".repeat(1001));
+              await page.keyboard.press("Shift+Tab");
+              await page.keyboard.press("Tab");
+              assert.equal(await focusOutlineColor(notes), "rgb(255, 156, 54)");
+              assert.equal(await error.isVisible(), true);
+              assert.equal(await notes.getAttribute("aria-invalid"), "true");
+            }
+            for (const field of Object.keys(createDetails)) {
+              const id = `f-${field.replaceAll("_", "-")}`;
+              const control = page.locator(`#${id}`);
+              assert.equal(
+                await control.inputValue(),
+                name === "event-new" || isTextLimit ? "" : submitted[field],
+              );
+              if (isTextLimit) {
+                await control.press("Shift+Tab");
+                await page.keyboard.press("Tab");
+                assert.equal(await focusOutlineColor(control), "rgb(255, 156, 54)");
+              }
+              if (name === "event-new-invalid") {
+                assert.equal(await control.getAttribute("aria-invalid"), "true");
+                assert.equal(
+                  await page.locator(`[data-admin-validation-summary] a[href="#${id}"]`).count(),
+                  1,
+                );
+                assert.equal(
+                  (await page.locator(`#${id}-error`).textContent()).trim(),
+                  createErrors[field],
+                );
+              }
+            }
+            if (name === "event-new-invalid") {
+              assert.equal(await notes.getAttribute("aria-invalid"), "true");
+              assert.equal(
+                await page
+                  .locator('[data-testid="form-errors"] a[href="#f-accessibility-notes"]')
+                  .count(),
+                1,
+              );
+              assert.equal(
+                (await page.locator("#f-accessibility-notes-error").textContent()).trim(),
+                createErrors.accessibility_notes,
+              );
+              assert.equal(
+                await page.locator("#f-recurrence-count").inputValue(),
+                createRejected.recurrence_count,
+              );
+              assert.equal(await page.locator("fieldset #f-recurrence-count-error").count(), 1);
+            }
+          }
+          const summary = page.locator("[data-admin-validation-summary]");
+          const summaryLink = summary.locator("a").first();
+          if (name === "event-edit-invalid") {
+            assert.equal(await page.locator("#f-title-error").count(), 1);
+            assert.equal(await summary.locator('a[href="#f-title"]').count(), 1);
+            assert.equal(await page.locator("#f-title").inputValue(), editRejectedTitle);
+            assert.equal(
+              (await page.locator("#f-title-error").textContent()).trim(),
+              "Keep the title to 100 characters.",
+            );
+            assert.equal(
+              await page.getByRole("heading", { level: 1, name: "Edit Saved game night" }).count(),
+              1,
+              "the heading keeps the saved title",
+            );
+          }
+          if (isInvalid) {
+            assert.equal(await summary.evaluate((el) => el === document.activeElement), true);
+            assert.equal(await focusOutlineColor(summary), "rgb(255, 156, 54)");
+            if (evidence) {
+              await page.screenshot({
+                path: join(evidence, `${name}-${width}-summary-focus.png`),
+                fullPage: true,
+              });
+            }
+            await page.keyboard.press("Tab");
+            assert.deepEqual(
+              await summaryLink.evaluate((el) => {
+                const style = getComputedStyle(el);
+                return [el.matches(":focus-visible"), style.outlineStyle, style.outlineColor];
+              }),
+              [true, "solid", "rgb(255, 156, 54)"],
+              "the focused summary link uses the lobby focus token, not the light-theme outline",
+            );
+            assert.match(
+              await summaryLink.evaluate((el) => getComputedStyle(el).textDecorationLine),
+              /underline/,
+            );
+          }
           const axe = new AxeBuilder({ page });
           if (isDashboard) {
             // Card descriptions and footer only: the card heading links carry
@@ -195,10 +437,16 @@ describe("Kit admin contrast", () => {
           } else {
             axe.include(".hint").include("footer").include("fieldset");
           }
+          const summarySelector = "[data-admin-validation-summary]";
+          const fieldErrorSelector = ".field .error";
+          if (isInvalid) axe.include(summarySelector);
+          if (isInvalid || isTextLimit) axe.include(fieldErrorSelector);
           const result = await axe.withRules(["color-contrast"]).analyze();
           const measured = await page
             .locator(
-              isDashboard ? ".card p, footer" : ".hint, footer, fieldset label, fieldset legend",
+              isDashboard
+                ? ".card p, footer"
+                : `.hint, footer, fieldset label, fieldset legend, ${summarySelector} p, ${summarySelector} a, ${fieldErrorSelector}`,
             )
             .evaluateAll(
               (elements, cardContainer) =>
@@ -208,8 +456,24 @@ describe("Kit admin contrast", () => {
                   background: getComputedStyle(el.closest(cardContainer) ?? document.body)
                     .backgroundColor,
                 })),
-              isDashboard ? ".card" : "fieldset",
+              isDashboard ? ".card" : ".notice, fieldset",
             );
+          if (isTextLimit) {
+            assert.ok(
+              measured.some(
+                ({ text }) => text === "Keep the accessibility_notes to 1000 characters.",
+              ),
+            );
+          }
+          if (isInvalid) {
+            const texts = measured.map((item) => item.text);
+            assert.ok(texts.includes("Check the highlighted fields and try again."));
+            for (const message of name === "event-new-invalid"
+              ? Object.values(createErrors)
+              : ["Keep the title to 100 characters."]) {
+              assert.ok(texts.includes(message), `${message} is included in the contrast evidence`);
+            }
+          }
           if (evidence) {
             await page.screenshot({ path: join(evidence, `${name}-${width}.png`), fullPage: true });
             await writeFile(
@@ -235,6 +499,49 @@ describe("Kit admin contrast", () => {
             })),
             [],
           );
+          if (isTextLimit) {
+            const notes = page.locator("#f-accessibility-notes");
+            await notes.fill("🎮".repeat(1000));
+            assert.equal(
+              await page.locator("#f-accessibility-notes-limit-error").isVisible(),
+              false,
+            );
+            assert.equal(await notes.getAttribute("aria-invalid"), null);
+          }
+          if (isInvalid) {
+            for (const token of ["--color-danger", "--color-lobby-accent"]) {
+              assert.notEqual(
+                await page.evaluate(
+                  (property) =>
+                    getComputedStyle(document.documentElement).getPropertyValue(property).trim(),
+                  token,
+                ),
+                "",
+                `${token} is emitted by the built stylesheet`,
+              );
+            }
+            await page.emulateMedia({ forcedColors: "active" });
+            const rule = await summary.evaluate((el) => ({
+              width: getComputedStyle(el).borderLeftWidth,
+              style: getComputedStyle(el).borderLeftStyle,
+              color: getComputedStyle(el).borderLeftColor,
+              background: getComputedStyle(el).backgroundColor,
+            }));
+            assert.notEqual(rule.width, "0px");
+            assert.notEqual(rule.style, "none");
+            assert.notEqual(rule.color, rule.background);
+            assert.notEqual(await focusOutlineColor(summaryLink), rule.background);
+            assert.match(
+              await summaryLink.evaluate((el) => getComputedStyle(el).textDecorationLine),
+              /underline/,
+            );
+            if (evidence) {
+              await page.screenshot({
+                path: join(evidence, `${name}-${width}-forced-colors.png`),
+                fullPage: true,
+              });
+            }
+          }
         } finally {
           await context.close();
         }

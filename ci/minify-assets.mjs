@@ -39,6 +39,7 @@ const AUTHORED_CSS = new Set([
   "public/profile-theme.css",
   "public/operator-overrides-theme.css",
   "public/schedule-theme.css",
+  "public/kit-events-controls.css",
 ]);
 // Budget entries are read from the checked root (not captured at import),
 // so --selftest can copy the budget fragments into a scratch root and prove
@@ -70,7 +71,8 @@ function minifyBytes(entry, root) {
   // .js extension silently dropped the "use strict" prefix.
   const args = entry.endsWith(".css")
     ? ["--loader:.css=css", "--minify", source]
-    : entry === "public/islands/event-device-timezone.js"
+    : entry === "public/islands/event-device-timezone.js" ||
+        entry === "public/islands/kit-live-event-time.js"
       ? ["--bundle", "--format=iife", "--minify", source]
       : ["--minify", source];
   return execFileSync(esbuild, args, { maxBuffer: 16 * 1024 * 1024 });
@@ -212,6 +214,7 @@ function selftest() {
     cpSync(join(repoRoot, "assets"), join(scratch, "assets"), { recursive: true });
     cpSync(join(repoRoot, "public"), join(scratch, "public"), { recursive: true });
     cpSync(join(repoRoot, "vendor"), join(scratch, "vendor"), { recursive: true });
+    cpSync(join(repoRoot, "lib"), join(scratch, "lib"), { recursive: true });
     for (const path of [...HONO_CONSUMERS, ...ARTIFACTS]) {
       mkdirSync(dirname(join(scratch, path)), { recursive: true });
       copyFileSync(join(repoRoot, path), join(scratch, path));

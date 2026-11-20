@@ -2,8 +2,8 @@
 // SvelteKit migration: the Kit GET /join load keeps the Hono landing page's
 // cache contract byte-for-byte (src/index.tsx joinPage render). A consumed
 // one-shot flash makes the view viewer-specific (private, no-store); a
-// rendered presence snapshot says "now" (60 s shared TTL matching the widget
-// verdict TTL); the static page without presence keeps 3600 s. Vary stays on
+// rendered presence snapshot says "now" (no-store); the static page without
+// presence keeps 3600 s. Vary stays on
 // every variant: the representation depends on the flash cookie even when the
 // view has nothing to consume.
 import { readFileSync } from "node:fs";
@@ -32,8 +32,10 @@ describe("Kit GET /join cache contract (Hono joinPage parity)", () => {
     expect(joinPageCacheControl("added", null)).toBe("private, no-store");
   });
 
-  it("presence without a flash keeps the 60 s shared TTL", () => {
-    expect(joinPageCacheControl(null, snapshot)).toBe("public, max-age=60");
+  it("presence without a flash is never stored regardless of snapshot age", () => {
+    for (const fetchedAt of [0, 59_000, 60_000]) {
+      expect(joinPageCacheControl(null, { ...snapshot, fetchedAt })).toBe("no-store");
+    }
   });
 
   it("the static page without presence or flash keeps 3600 s", () => {
@@ -98,12 +100,24 @@ describe("Kit GET /join markup contract (src/screens/join.tsx parity)", () => {
       "/discord",
       "/join.md",
       "data-join-widget",
-      "join-layout",
-      "join-panel",
+      "ember-join",
+      "join-card",
       "join-preview",
     ]) {
       expect(page, `missing ${needle}`).toContain(needle);
     }
+  });
+
+  it("uses the Ember shell while retaining metadata and the restored-write notice", () => {
+    expect(page).toContain("<EmberShell {accountChrome}>");
+    expect(page).toContain("<SiteMetadata");
+    expect(page).toContain('canonical={canonicalUrl(appUrl, "/join")}');
+    expect(page).toContain("{#if data.restoredWrite}");
+    expect(page).toContain('data-testid="auth-error"');
+    expect(page).toContain(
+      "You signed in again. Your earlier changes were not saved. Review and submit them again.",
+    );
+    expect(page.indexOf("{#if data.restoredWrite}")).toBeLessThan(page.indexOf("{#if joinResult}"));
   });
 
   it("defers the widget to a click: no-referrer facade link and island, no iframe", () => {

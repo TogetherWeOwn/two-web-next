@@ -1,10 +1,15 @@
 // Ports HotPathIndexTest.php; all DDL/data stays in the guarded disposable schema.
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { sql } from "drizzle-orm";
 import { PgDialect, getTableConfig } from "drizzle-orm/pg-core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { events, rsvps } from "../src/db/admin-schema";
+import { waitlistOffers } from "../src/db/dormant-schema";
+import { adminSchema, schema } from "../src/db/index";
 import { joinAttempts } from "../src/db/schema";
+import { createWaitlistOffer } from "../src/events/waitlist-offers";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../src/jobs/constants";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -34,6 +39,29 @@ it("declares the five legacy-named indexes in the Drizzle schema", () => {
   }
 });
 
+it("declares dormant waitlist offers owned by the RSVP with no member or event column", async () => {
+  const cfg = getTableConfig(waitlistOffers);
+  const columnNames = cfg.columns.map((c) => c.name);
+  expect(columnNames).not.toContain("user_id");
+  expect(columnNames).not.toContain("event_id");
+  expect(cfg.foreignKeys.map((fk) => fk.reference().foreignTable)).toEqual([rsvps]);
+  expect(cfg.foreignKeys[0]!.onDelete).toBe("cascade");
+  expect(cfg.indexes.map((i) => [i.config.name, i.config.unique])).toEqual([
+    ["waitlist_offers_held_rsvp_idx", true],
+  ]);
+  const sql = await readFile(
+    fileURLToPath(new URL("../drizzle/1037_waitlist-offers.sql", import.meta.url).href),
+    "utf8",
+  );
+  expect(sql.match(/^GRANT (\w+) ON TABLE/gm)).toEqual([
+    "GRANT SELECT ON TABLE",
+    "GRANT INSERT ON TABLE",
+    "GRANT UPDATE ON TABLE",
+  ]);
+});
+
+const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+
 describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", () => {
   let fixture: MemberDataFixture;
   let client: MemberDataFixture["client"];
@@ -41,7 +69,7 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
 
   beforeAll(async () => {
     // Applies the full journal to a fresh schema, including this migration.
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 4 });
     client = fixture.client;
     // A long archive plus a small live tail makes the event range/order plans stable.
     await client`
@@ -132,6 +160,371 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
         expect(await snapshot()).toEqual(before);
         expect(await rowCounts()).toEqual(counts);
       }
+    });
+  });
+
+  it("stores waitlist offers per RSVP: one held, kept history, unique keys, cascade", async () => {
+    const [rsvp] = await client<{ id: number }[]>`
+      insert into rsvps (event_id, user_id, status)
+      values (${eventId}, 'offer-fixture', 'waitlisted') returning id`;
+    const rsvpId = rsvp!.id;
+    const offer = (state: string, hours = 1) => client`
+      insert into waitlist_offers (rsvp_id, state, offered_at, expires_at)
+      values (${rsvpId!}, ${state}, now(), now() + make_interval(hours => ${hours}::int)) returning id, notification_key`;
+    const [first] = await offer("held");
+    await expect(offer("held")).rejects.toThrow(/waitlist_offers_held_rsvp_idx/);
+    await client`update waitlist_offers set state = 'expired' where id = ${first!.id}`;
+    const [second] = await offer("held");
+    expect(second!.notification_key).not.toBe(first!.notification_key);
+    const history = await client<{ state: string; notification_key: string }[]>`
+      select state, notification_key from waitlist_offers where rsvp_id = ${rsvpId!}`;
+    expect(history).toHaveLength(2);
+    expect(history).toEqual(
+      expect.arrayContaining([
+        { state: "expired", notification_key: first!.notification_key },
+        { state: "held", notification_key: second!.notification_key },
+      ]),
+    );
+    await expect(offer("bogus")).rejects.toThrow(/waitlist_offers_state_check/);
+    await expect(offer("accepted", 0)).rejects.toThrow(/waitlist_offers_window_check/);
+    await expect(
+      client`insert into waitlist_offers (rsvp_id, offered_at, expires_at, notification_key)
+        values (${rsvpId!}, now(), now() + interval '1 hour', ${first!.notification_key})`,
+    ).rejects.toThrow(/waitlist_offers_notification_key_unique/);
+    await client`delete from rsvps where id = ${rsvpId!}`;
+    expect(await client`select 1 from waitlist_offers`).toHaveLength(0);
+  });
+
+  describe("waitlist offer creation", () => {
+    // Targeted creation reads one post-lock clock, expires lapsed holds and
+    // replays a live hold or creates one only for the eligible FIFO head.
+    let offerSeq = 0;
+    afterEach(async () => {
+      // Scoped cleanup: never touch the suite's seeded rows.
+      await client`delete from events where event_key like 'offer-event-%'`;
+    });
+
+    async function makeEvent(
+      o: {
+        startsIn?: string;
+        capacity?: number | null;
+        status?: string;
+        rsvpOpen?: boolean;
+        endsIn?: string;
+      } = {},
+    ) {
+      const key = `offer-event-${++offerSeq}`;
+      const [row] = await client<{ id: number }[]>`
+        insert into events (event_key, title, starts_at, ends_at, status, capacity, rsvp_open)
+        values (${key}, ${key}, now() + ${o.startsIn ?? "1 day"}::interval,
+          now() + ${o.endsIn ?? "2 days"}::interval, ${o.status ?? "published"},
+          ${o.capacity === undefined ? 1 : o.capacity}, ${o.rsvpOpen ?? true})
+        returning id`;
+      return row!.id;
+    }
+    async function makeRsvp(eventId: number, status: string, user = `u${++offerSeq}`) {
+      const [row] = await client<{ id: number }[]>`
+        insert into rsvps (event_id, user_id, status) values (${eventId}, ${user}, ${status})
+        returning id`;
+      return row!.id;
+    }
+    const create = (rsvpId: number) =>
+      fixture.db.transaction((tx) => createWaitlistOffer(tx, rsvpId));
+    const rows = (rsvpId: number) =>
+      client<{ state: string; offered_at: string; expires_at: string }[]>`
+        select state, offered_at::text, expires_at::text from waitlist_offers
+        where rsvp_id = ${rsvpId} order by created_at, id`;
+
+    it("creates a two-hour held offer stamped from the database clock", async () => {
+      const eventId = await makeEvent();
+      const rsvpId = await makeRsvp(eventId, "waitlisted");
+      const [before] = await client<{ t: string }[]>`select clock_timestamp()::text as t`;
+      const offer = await create(rsvpId);
+      const [after] = await client<{ t: string }[]>`select clock_timestamp()::text as t`;
+      expect(offer).not.toBeNull();
+      const [row] = await rows(rsvpId);
+      expect(row!.state).toBe("held");
+      expect(Date.parse(row!.offered_at)).toBeGreaterThanOrEqual(Date.parse(before!.t));
+      expect(Date.parse(row!.offered_at)).toBeLessThanOrEqual(Date.parse(after!.t));
+      expect(Date.parse(row!.expires_at) - Date.parse(row!.offered_at)).toBe(TWO_HOURS_MS);
+    });
+
+    it("takes the offer instant after waiting on the event lock, not before", async () => {
+      const eventId = await makeEvent();
+      const rsvpId = await makeRsvp(eventId, "waitlisted");
+      let released!: () => void;
+      const gate = new Promise<void>((r) => (released = r));
+      let lockedAt!: () => void;
+      const locked = new Promise<void>((r) => (lockedAt = r));
+      const holder = client.begin(async (tx) => {
+        await tx`select id from events where id = ${eventId} for update`;
+        lockedAt();
+        await gate;
+        const [t] = await tx<{ t: string }[]>`select clock_timestamp()::text as t`;
+        return t!.t;
+      });
+      await locked;
+      const pending = create(rsvpId);
+      await new Promise((r) => setTimeout(r, 300));
+      released();
+      const releasedAt = await holder;
+      expect(await pending).not.toBeNull();
+      const [row] = await rows(rsvpId);
+      expect(Date.parse(row!.offered_at)).toBeGreaterThanOrEqual(Date.parse(releasedAt));
+    });
+
+    it("truncates the window at event start", async () => {
+      const eventId = await makeEvent({ startsIn: "30 minutes" });
+      const rsvpId = await makeRsvp(eventId, "waitlisted");
+      expect(await create(rsvpId)).not.toBeNull();
+      const [ev] = await client<
+        { starts_at: string }[]
+      >`select starts_at::text from events where id = ${eventId}`;
+      const [row] = await rows(rsvpId);
+      expect(Date.parse(row!.expires_at)).toBe(Date.parse(ev!.starts_at));
+      expect(Date.parse(row!.expires_at)).toBeGreaterThan(Date.parse(row!.offered_at));
+    });
+
+    it("refuses when the event start passes while waiting on the event lock", async () => {
+      const eventId = await makeEvent({ startsIn: "1 second" });
+      const rsvpId = await makeRsvp(eventId, "waitlisted");
+      let locked!: () => void;
+      const ready = new Promise<void>((r) => (locked = r));
+      const holder = client.begin(async (tx) => {
+        await tx`select id from events where id = ${eventId} for update`;
+        locked();
+        await new Promise((r) => setTimeout(r, 1500));
+      });
+      await ready;
+      const pending = create(rsvpId);
+      await holder;
+      expect(await pending).toBeNull();
+      expect(await rows(rsvpId)).toHaveLength(0);
+    });
+
+    it("rolls back a newly created offer with its transaction", async () => {
+      const eventId = await makeEvent();
+      const rsvpId = await makeRsvp(eventId, "waitlisted");
+      await expect(
+        fixture.db.transaction(async (tx) => {
+          expect(await createWaitlistOffer(tx, rsvpId)).not.toBeNull();
+          throw new Error("rollback");
+        }),
+      ).rejects.toThrow("rollback");
+      expect(await rows(rsvpId)).toHaveLength(0);
+      expect(await create(rsvpId)).not.toBeNull();
+    });
+
+    it("refuses an offer once the event has started (no empty window)", async () => {
+      const eventId = await makeEvent({ startsIn: "-1 minute", endsIn: "1 hour" });
+      const rsvpId = await makeRsvp(eventId, "waitlisted");
+      expect(await create(rsvpId)).toBeNull();
+      expect(await rows(rsvpId)).toHaveLength(0);
+    });
+
+    it("returns the live held offer instead of creating a second", async () => {
+      const eventId = await makeEvent();
+      const rsvpId = await makeRsvp(eventId, "waitlisted");
+      const first = await create(rsvpId);
+      const again = await create(rsvpId);
+      expect(again).toMatchObject({ id: first!.id, notificationKey: first!.notificationKey });
+      expect(await rows(rsvpId)).toHaveLength(1);
+    });
+
+    it("expires a lapsed hold and opens a fresh window with a new key for the next RSVP", async () => {
+      const eventId = await makeEvent();
+      const rsvpId = await makeRsvp(eventId, "waitlisted");
+      const next = await makeRsvp(eventId, "waitlisted");
+      const [old] = await client<{ id: string; notification_key: string }[]>`
+        insert into waitlist_offers (rsvp_id, offered_at, expires_at)
+        values (${rsvpId}, now() - interval '3 hours', now() - interval '1 hour')
+        returning id, notification_key`;
+      expect(await create(rsvpId)).toBeNull();
+      const offer = await create(next);
+      expect(offer).not.toBeNull();
+      expect(offer!.id).not.toBe(old!.id);
+      expect(offer!.notificationKey).not.toBe(old!.notification_key);
+      const history = await rows(rsvpId);
+      expect(history.map((r) => r.state)).toEqual(["expired"]);
+      const nextRows = await rows(next);
+      expect(nextRows.map((r) => r.state)).toEqual(["held"]);
+      expect(Date.parse(nextRows[0]!.expires_at) - Date.parse(nextRows[0]!.offered_at)).toBe(
+        TWO_HOURS_MS,
+      );
+      expect(Date.parse(nextRows[0]!.offered_at)).toBeGreaterThan(
+        Date.parse(history[0]!.expires_at),
+      );
+    });
+
+    it.each(["going", "maybe", "not_going"])("refuses a %s RSVP", async (status) => {
+      const eventId = await makeEvent({ capacity: 5 });
+      const rsvpId = await makeRsvp(eventId, status);
+      expect(await create(rsvpId)).toBeNull();
+      expect(await rows(rsvpId)).toHaveLength(0);
+    });
+
+    it.each([
+      ["draft event", { status: "draft" }],
+      ["cancelled event", { status: "cancelled" }],
+      ["closed RSVPs", { rsvpOpen: false }],
+    ])("refuses a %s", async (_name, o) => {
+      const eventId = await makeEvent(o);
+      const rsvpId = await makeRsvp(eventId, "waitlisted");
+      expect(await create(rsvpId)).toBeNull();
+      expect(await rows(rsvpId)).toHaveLength(0);
+    });
+
+    it("refuses a missing RSVP", async () => {
+      expect(await create(2_000_000_000)).toBeNull();
+    });
+
+    it("refuses when going seats fill capacity", async () => {
+      const eventId = await makeEvent({ capacity: 1 });
+      await makeRsvp(eventId, "going");
+      const rsvpId = await makeRsvp(eventId, "waitlisted");
+      expect(await create(rsvpId)).toBeNull();
+    });
+
+    it("counts another member's live hold against capacity, and frees it on expiry", async () => {
+      const eventId = await makeEvent({ capacity: 1 });
+      const first = await makeRsvp(eventId, "waitlisted");
+      const second = await makeRsvp(eventId, "waitlisted");
+      expect(await create(first)).not.toBeNull();
+      expect(await create(second)).toBeNull();
+      await client`update waitlist_offers set offered_at = now() - interval '3 hours',
+        expires_at = now() - interval '1 hour' where rsvp_id = ${first}`;
+      expect(await create(second)).not.toBeNull();
+    });
+
+    it("keeps event-scoped offer query parameters bounded as the RSVP line grows", async () => {
+      const queries: { query: string; params: unknown[] }[] = [];
+      const db = drizzle(client, {
+        schema: { ...schema, ...adminSchema },
+        logger: { logQuery: (query, params) => queries.push({ query, params: [...params] }) },
+      });
+      let baseline: { query: string; count: number }[] | undefined;
+      for (const size of [4, 32]) {
+        const eventId = await makeEvent({ capacity: 1 });
+        const rsvpId = await makeRsvp(eventId, "waitlisted");
+        const another = await makeRsvp(eventId, "waitlisted");
+        const otherEvent = await makeEvent();
+        const otherRsvp = await makeRsvp(otherEvent, "waitlisted");
+        const rollback = new Error("roll back bounded fixture");
+        await expect(
+          db.transaction(async (tx) => {
+            await tx.execute(sql`set local statement_timeout = '5s'`);
+            await tx.execute(sql`set local lock_timeout = '1s'`);
+            await tx.execute(sql`
+              insert into rsvps (event_id, user_id, status)
+              select ${eventId}, 'bounded-' || g, 'waitlisted' from generate_series(1, ${size - 2}) g`);
+            const old = await tx.execute<{ id: string; notification_key: string }>(sql`
+              insert into waitlist_offers (rsvp_id, offered_at, expires_at)
+              values (${rsvpId}, now() - interval '3 hours', now() - interval '1 hour')
+              returning id, notification_key`);
+            await tx.execute(sql`
+              insert into waitlist_offers (rsvp_id, offered_at, expires_at)
+              values (${otherRsvp}, now() - interval '3 hours', now() - interval '1 hour')`);
+            const other = () =>
+              tx.execute(sql`
+              select id, state, offered_at::text, expires_at::text, updated_at::text
+              from waitlist_offers where rsvp_id = ${otherRsvp}`);
+            const before = await other();
+            const invoke = async (id: number) => {
+              const start = queries.length;
+              const result = await createWaitlistOffer(tx, id);
+              // The FIFO query reads RSVPs with a correlated offer-history check.
+              // Compare the three top-level offer queries shared by creation and replay.
+              const offerQueries = queries
+                .slice(start)
+                .filter(({ query }) =>
+                  /^(?:select [^()]*\bfrom|update)\s+"?waitlist_offers"?\s/i.test(query),
+                );
+              expect(offerQueries).toHaveLength(3);
+              const shapes = offerQueries.map(({ query, params }) => {
+                const normalized = query
+                  .replaceAll('"', "")
+                  .replace(/\s+/g, " ")
+                  .trim()
+                  .toLowerCase();
+                const match = normalized.match(
+                  /rsvp_id\s+in\s*\(select\s+(?:\w+\.)?id\s+from\s+rsvps\s+where\s+(?:\w+\.)?event_id\s*=\s*\$(\d+)\)/,
+                );
+                expect(match, normalized).not.toBeNull();
+                expect(params[Number(match![1]) - 1]).toBe(eventId);
+                expect(params.length).toBeLessThanOrEqual(8);
+                return { query: normalized, count: params.length };
+              });
+              expect(
+                shapes.filter(
+                  ({ query }) => query.startsWith("select ") && /for update$/.test(query),
+                ),
+              ).toHaveLength(1);
+              expect(shapes.filter(({ query }) => query.startsWith("update "))).toHaveLength(1);
+              expect(
+                shapes.filter(
+                  ({ query }) => query.startsWith("select ") && !/for update$/.test(query),
+                ),
+              ).toHaveLength(1);
+              if (baseline) expect(shapes).toEqual(baseline);
+              else baseline = shapes;
+              return result;
+            };
+            const first = await invoke(another);
+            expect(first).not.toBeNull();
+            expect(first!.id).not.toBe(old[0]!.id);
+            expect(first!.notificationKey).not.toBe(old[0]!.notification_key);
+            const history = await tx.execute<{ state: string }>(sql`
+              select state from waitlist_offers where rsvp_id = ${rsvpId} order by created_at, id`);
+            expect(history.map((row) => row.state)).toEqual(["expired"]);
+            expect(await invoke(another)).toMatchObject({
+              id: first!.id,
+              notificationKey: first!.notificationKey,
+            });
+            expect(await invoke(rsvpId)).toBeNull();
+            expect(await other()).toEqual(before);
+            throw rollback;
+          }),
+        ).rejects.toBe(rollback);
+      }
+    }, 15_000);
+
+    it("offers while capacity is unlimited", async () => {
+      const eventId = await makeEvent({ capacity: null });
+      await makeRsvp(eventId, "going");
+      const rsvpId = await makeRsvp(eventId, "waitlisted");
+      expect(await create(rsvpId)).not.toBeNull();
+    });
+
+    it.each(["repeatable read", "serializable"] as const)(
+      "rejects a stale %s transaction before it can overbook",
+      async (isolationLevel) => {
+        const eventId = await makeEvent({ capacity: 1 });
+        const first = await makeRsvp(eventId, "waitlisted");
+        const second = await makeRsvp(eventId, "waitlisted");
+        await expect(
+          fixture.db.transaction(
+            async (tx) => {
+              await tx.select({ snapshot: sql`count(*)` }).from(waitlistOffers);
+              expect(await create(first)).not.toBeNull();
+              await createWaitlistOffer(tx, second);
+            },
+            { isolationLevel },
+          ),
+        ).rejects.toThrow(/read committed/i);
+        expect(await rows(first)).toHaveLength(1);
+        expect(await rows(second)).toHaveLength(0);
+      },
+    );
+
+    it("serializes concurrent creators to one held offer for the last seat", async () => {
+      const eventId = await makeEvent({ capacity: 1 });
+      const a = await makeRsvp(eventId, "waitlisted");
+      const b = await makeRsvp(eventId, "waitlisted");
+      const results = await Promise.all([create(a), create(b), create(a)]);
+      expect(results.filter(Boolean).length).toBeGreaterThanOrEqual(1);
+      const [held] = await client<{ n: number }[]>`
+        select count(*)::int as n from waitlist_offers where state = 'held'`;
+      expect(held!.n).toBe(1);
     });
   });
 

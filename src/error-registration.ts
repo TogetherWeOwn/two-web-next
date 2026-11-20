@@ -2,9 +2,12 @@ import type { Hono } from "hono";
 import type { Env } from "./env";
 import { internalErrorHandler, notFoundHandler } from "./error-responses";
 import { withPinnedAssetCache } from "./pinned-assets";
+import { isPublicApiPath, publicApiNotFound } from "./public-data/unknown-path";
 
 export function registerErrorHandlers(app: Hono<{ Bindings: Env }>): void {
   app.notFound(async (c) => {
+    // The read API answers its own namespace without an asset lookup.
+    if (isPublicApiPath(c.req.path)) return publicApiNotFound(c);
     // run_worker_first admits every request through TrustHosts before a
     // static lookup. ASSETS.fetch never re-enters the user Worker.
     if (c.env?.ASSETS && (c.req.method === "GET" || c.req.method === "HEAD")) {

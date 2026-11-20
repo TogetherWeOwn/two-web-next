@@ -45,6 +45,129 @@ import {
   rowZone,
 } from "./pages-calendar-row";
 
+const MonthGridBody: FC<{
+  state: CalendarState;
+  weeks: CalendarDay<CalRow>[][];
+  zone: string;
+  now: Date;
+}> = ({ state, weeks, zone, now }) => (
+  <div
+    role="region"
+    aria-label={EVENTS_CALENDAR_SCROLL_LABEL}
+    tabindex={0}
+    data-testid={EVENTS_CALENDAR_SCROLL_TESTID}
+  >
+    <table data-testid={EVENTS_CALENDAR_GRID_TESTID}>
+      <caption class="sr-only">{calendarMonthLabel(state.month)}</caption>
+      <thead>
+        <tr>
+          {WEEKDAY_HEADINGS.map((d) => (
+            <th scope="col">{d}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {weeks.map((week) => (
+          <tr>
+            {week.map((day) => (
+              <td
+                data-testid={CALENDAR_DAY_TESTID}
+                data-date={day.iso}
+                aria-current={day.isToday ? "date" : undefined}
+                data-outside={day.inMonth ? undefined : "true"}
+              >
+                <span>{day.day}</span>
+                <ul>
+                  {day.events.map((e) => {
+                    const hostZone = rowZone(e, zone);
+                    const entryZone = isValidZone(hostZone) ? hostZone : "UTC";
+                    // A row lands on a non-start cell only through canonical
+                    // interval expansion — transients and past rows bucket on
+                    // their start day — so a day mismatch is exactly the
+                    // continuation case.
+                    const continued = day.iso !== wallDateIso(e.startsAt, entryZone);
+                    // Cancelled entries keep their day-jump to the retained
+                    // list card, but say so in words — never color alone —
+                    // with the same badge word the card carries.
+                    const cancelled = !isTransient(e) && e.status === "cancelled";
+                    // Same availability verdict as the list card, so the grid
+                    // exposes paused/full/remaining without opening the
+                    // night. Cancelled and draft rows carry no suffix: the
+                    // badge is the verdict there. The suffix sits inside the
+                    // visible prefix of the accessible name (WCAG 2.5.3).
+                    // Keep canonical availability tied to the event interval, not
+                    // the displayed month. Spillover cells use their own month
+                    // when deciding whether to show the snapshot badge.
+                    const inCurrentMonth = day.iso.slice(0, -3) === wallMonth(now, zone);
+                    const availability = rowAvailability(e, now, isTransient(e) && !inCurrentMonth);
+                    const ongoing = inCurrentMonth && (availability?.ongoing ?? false);
+                    const availabilityText = availability
+                      ? ongoing
+                        ? `${ONGOING_COPY} ${availability.text}`
+                        : availability.text
+                      : null;
+                    return (
+                      <li>
+                        <a
+                          href={calendarJumpUrl(state.past, rowKey(e), state.game)}
+                          data-cal-jump
+                          data-cancelled={cancelled ? "true" : undefined}
+                          aria-label={
+                            continued
+                              ? gridContinuationAccessibleName(
+                                  rowTitle(e),
+                                  day.iso,
+                                  cancelled,
+                                  availabilityText,
+                                )
+                              : gridAccessibleName(
+                                  rowTitle(e),
+                                  e.startsAt,
+                                  entryZone,
+                                  cancelled,
+                                  availabilityText,
+                                )
+                          }
+                        >
+                          {continued
+                            ? `Continues ${gridTitle(rowTitle(e))}`
+                            : `${wallTimeHm(e.startsAt, entryZone)} ${entryZone} ${gridTitle(rowTitle(e))}`}
+                          {cancelled ? (
+                            <>
+                              {" "}
+                              <span class="schedule-badge">{GRID_CANCELLED_COPY}</span>
+                            </>
+                          ) : null}
+                          {ongoing ? (
+                            <>
+                              {" "}
+                              <span class="schedule-badge" data-testid={EVENT_ONGOING_TESTID}>
+                                {ONGOING_COPY}
+                              </span>
+                            </>
+                          ) : null}
+                          {availability ? (
+                            <>
+                              {" "}
+                              <span data-testid={SCHEDULE_AVAILABILITY_TESTID}>
+                                {availability.text}
+                              </span>
+                            </>
+                          ) : null}
+                        </a>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
 /** The month grid: prev/next anchors are real links; cells link into the list. */
 export const MonthGrid: FC<{
   state: CalendarState;
@@ -96,124 +219,11 @@ export const MonthGrid: FC<{
         {CALENDAR_MONTH_JUMP_SUBMIT_COPY}
       </button>
     </form>
-    <div
-      role="region"
-      aria-label={EVENTS_CALENDAR_SCROLL_LABEL}
-      tabindex={0}
-      data-testid={EVENTS_CALENDAR_SCROLL_TESTID}
-    >
-      <table data-testid={EVENTS_CALENDAR_GRID_TESTID}>
-        <caption class="sr-only">{calendarMonthLabel(state.month)}</caption>
-        <thead>
-          <tr>
-            {WEEKDAY_HEADINGS.map((d) => (
-              <th scope="col">{d}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {weeks.map((week) => (
-            <tr>
-              {week.map((day) => (
-                <td
-                  data-testid={CALENDAR_DAY_TESTID}
-                  data-date={day.iso}
-                  aria-current={day.isToday ? "date" : undefined}
-                  data-outside={day.inMonth ? undefined : "true"}
-                >
-                  <span>{day.day}</span>
-                  <ul>
-                    {day.events.map((e) => {
-                      const hostZone = rowZone(e, zone);
-                      const entryZone = isValidZone(hostZone) ? hostZone : "UTC";
-                      // A row lands on a non-start cell only through canonical
-                      // interval expansion — transients and past rows bucket on
-                      // their start day — so a day mismatch is exactly the
-                      // continuation case.
-                      const continued = day.iso !== wallDateIso(e.startsAt, entryZone);
-                      // Cancelled entries keep their day-jump to the retained
-                      // list card, but say so in words — never color alone —
-                      // with the same badge word the card carries.
-                      const cancelled = !isTransient(e) && e.status === "cancelled";
-                      // Same availability verdict as the list card, so the grid
-                      // exposes paused/full/remaining without opening the
-                      // night. Cancelled and draft rows carry no suffix: the
-                      // badge is the verdict there. The suffix sits inside the
-                      // visible prefix of the accessible name (WCAG 2.5.3).
-                      // Keep canonical availability tied to the event interval, not
-                      // the displayed month. Spillover cells use their own month
-                      // when deciding whether to show the snapshot badge.
-                      const inCurrentMonth = day.iso.slice(0, -3) === wallMonth(now, zone);
-                      const availability = rowAvailability(
-                        e,
-                        now,
-                        isTransient(e) && !inCurrentMonth,
-                      );
-                      const ongoing = inCurrentMonth && (availability?.ongoing ?? false);
-                      const availabilityText = availability
-                        ? ongoing
-                          ? `${ONGOING_COPY} ${availability.text}`
-                          : availability.text
-                        : null;
-                      return (
-                        <li>
-                          <a
-                            href={calendarJumpUrl(state.past, rowKey(e), state.game)}
-                            data-cal-jump
-                            data-cancelled={cancelled ? "true" : undefined}
-                            aria-label={
-                              continued
-                                ? gridContinuationAccessibleName(
-                                    rowTitle(e),
-                                    day.iso,
-                                    cancelled,
-                                    availabilityText,
-                                  )
-                                : gridAccessibleName(
-                                    rowTitle(e),
-                                    e.startsAt,
-                                    entryZone,
-                                    cancelled,
-                                    availabilityText,
-                                  )
-                            }
-                          >
-                            {continued
-                              ? `Continues ${gridTitle(rowTitle(e))}`
-                              : `${wallTimeHm(e.startsAt, entryZone)} ${entryZone} ${gridTitle(rowTitle(e))}`}
-                            {cancelled ? (
-                              <>
-                                {" "}
-                                <span class="schedule-badge">{GRID_CANCELLED_COPY}</span>
-                              </>
-                            ) : null}
-                            {ongoing ? (
-                              <>
-                                {" "}
-                                <span class="schedule-badge" data-testid={EVENT_ONGOING_TESTID}>
-                                  {ONGOING_COPY}
-                                </span>
-                              </>
-                            ) : null}
-                            {availability ? (
-                              <>
-                                {" "}
-                                <span data-testid={SCHEDULE_AVAILABILITY_TESTID}>
-                                  {availability.text}
-                                </span>
-                              </>
-                            ) : null}
-                          </a>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div class="schedule-month-container">
+      <div class="schedule-month-frame">
+        <p class="schedule-month-hint">Scroll sideways for Fri–Sun →</p>
+        <MonthGridBody state={state} weeks={weeks} zone={zone} now={now} />
+      </div>
     </div>
   </div>
 );

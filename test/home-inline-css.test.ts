@@ -12,13 +12,13 @@ describe("homepage inlined critical CSS", () => {
     const html = Layout({ title: "Fixture", theme: "home", inlineCriticalCss: true })!.toString();
     expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
+    expect(html).toContain('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
   });
 
   it("keeps the unflagged home shell on external stylesheets with the preload", () => {
     const html = Layout({ title: "Fixture", theme: "home" })!.toString();
     expect(html).toContain('rel="stylesheet" href="/styles.css"');
-    expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
+    expect(html).toContain('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
     expect(html).not.toContain("<style>");
   });
 
@@ -28,7 +28,7 @@ describe("homepage inlined critical CSS", () => {
     const html = await response.text();
     expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
+    expect(html).toContain('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
     const csp = response.headers.get("content-security-policy") ?? "";
     expect(csp).toContain(`style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`);
     expect(csp).not.toContain("unsafe-inline");
@@ -72,13 +72,38 @@ describe("homepage inlined critical CSS", () => {
     expect(html).toMatch(/["']?Mona Sans Fallback["']?/);
   });
 
+  it("uses a bold local fallback for bold display text", () => {
+    const faces = [...LEAF_CRITICAL_CSS.matchAll(/@font-face\s*\{([^}]*)\}/g)]
+      .map((match) => match[1])
+      .filter(
+        (face) =>
+          face !== undefined && /font-family:\s*["']?Mona Sans Fallback["']?\s*;/.test(face),
+      );
+    expect(faces).toHaveLength(2);
+    expect(faces[0]).toMatch(/font-weight:\s*200\s+500\s*;/);
+    expect(faces[1]).toMatch(/font-weight:\s*600\s+900\s*;/);
+    for (const name of [
+      "Arial Bold",
+      "Arial-BoldMT",
+      "Liberation Sans Bold",
+      "LiberationSans-Bold",
+      "Arimo Bold",
+      "Arimo-Bold",
+    ]) {
+      expect(faces[1]).toContain(name);
+    }
+    expect(faces[1]).toMatch(/size-adjust:\s*104\.48%/);
+    expect(faces[1]).toMatch(/ascent-override:\s*104\.33%/);
+    expect(faces[1]).toMatch(/descent-override:\s*30\.63%/);
+  });
+
   it("emits the Mona Sans preload before the inlined style block", async () => {
     // Staging forensics: the font was discovered at document-end + ~25 ms in
     // every mobile sample (the preload sat after ~19 KB of inline CSS), so the
     // simulated font completion hovered at the paint boundary and flipped `/`
     // LCP between FCP and FCP + ~450 ms. Early discovery keeps LCP at FCP.
     const assertPreloadBeforeStyle = (html: string) => {
-      const preload = html.indexOf('href="/fonts/mona-sans-latin-var.woff2" as="font"');
+      const preload = html.indexOf('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
       const style = html.indexOf("<style>");
       expect(preload).toBeGreaterThanOrEqual(0);
       expect(style).toBeGreaterThanOrEqual(0);

@@ -5,6 +5,8 @@ import app from "../src/index";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env as memberEnv, MODERATOR } from "./helpers/member-data";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS, sameOrigin } from "../src/same-origin";
+import { isSameOriginAllowed } from "../src/http/same-origin";
+import { fetchApp } from "./helpers/fetch-app";
 
 const env: Env = { ...memberEnv, APP_URL: "https://two.test/" };
 const forbidden = { error: "cross_origin", request_id: expect.any(String) };
@@ -28,11 +30,13 @@ function assertGuarded(router: typeof app) {
   expect(guards).toHaveLength(1);
   expect(guards[0]).toMatchObject({ method: "ALL", path: "/*" });
   const guardIndex = router.routes.indexOf(guards[0]!);
-  // Only the security-header wrapper and TrustHosts may precede it.
-  // Pin both registrations: do not filter away an extra wildcard handler.
-  expect(guardIndex).toBe(2);
+  // Only the wire-encoding stream wrapper, the security-header wrapper and
+  // TrustHosts may precede it. Pin all three registrations: do not filter
+  // away an extra wildcard handler.
+  expect(guardIndex).toBe(3);
   expect(router.routes[0]).toMatchObject({ method: "ALL", path: "/*" });
   expect(router.routes[1]).toMatchObject({ method: "ALL", path: "/*" });
+  expect(router.routes[2]).toMatchObject({ method: "ALL", path: "/*" });
   const unsafe = router.routes.filter((r) => UNSAFE_METHODS.some((m) => m === r.method));
   expect(unsafe.length).toBeGreaterThan(0);
   for (const exemption of SAME_ORIGIN_EXEMPTIONS) {
@@ -143,6 +147,54 @@ describe("mounted route same-origin audit", () => {
       );
       expect(csp.status).toBe(204);
     }
+  });
+});
+
+describe("framework-neutral same-origin decision", () => {
+  const base = {
+    method: "patch",
+    path: "/write",
+    requestUrl: "https://two.test/write",
+    appUrl: "https://two.test/",
+    origin: undefined as string | undefined,
+    fetchSite: undefined as string | undefined,
+  };
+
+  it.each<{ changes: Partial<typeof base>; expected: boolean }>([
+    { changes: { origin: "https://two.test" }, expected: true },
+    { changes: { origin: "https://evil.test", fetchSite: "same-origin" }, expected: false },
+    { changes: { origin: "", fetchSite: "same-origin" }, expected: false },
+    { changes: { fetchSite: "same-origin" }, expected: true },
+    { changes: { fetchSite: "Same-Origin" }, expected: false },
+    {
+      changes: { requestUrl: "https://other.test/write", fetchSite: "same-origin" },
+      expected: false,
+    },
+    { changes: { appUrl: "file:///two", origin: "https://two.test" }, expected: false },
+    { changes: { appUrl: "invalid", fetchSite: "same-origin" }, expected: false },
+    { changes: { method: "get", appUrl: "invalid" }, expected: true },
+    { changes: { method: "post", path: "/mcp", appUrl: "invalid" }, expected: true },
+    { changes: { method: "post", path: "/mcp/" }, expected: false },
+  ])("preserves the decision for $changes", ({ changes, expected }) => {
+    expect(isSameOriginAllowed({ ...base, ...changes })).toBe(expected);
+  });
+
+  it("keeps refusal bytes and headers through the fetch seam", async () => {
+    const { app, effect } = fixture();
+    const response = await fetchApp(
+      new Request("https://two.test/write", {
+        method: "patch",
+        headers: { origin: "https://evil.test", accept: "application/json" },
+      }),
+      env,
+      {} as ExecutionContext,
+      app.fetch,
+    );
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe('{"error":"cross_origin"}');
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
+    expect(response.headers.get("vary")).toContain("Accept");
+    expect(effect).not.toHaveBeenCalled();
   });
 });
 

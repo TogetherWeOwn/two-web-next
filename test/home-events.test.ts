@@ -12,6 +12,7 @@ import {
   HOME_EVENTS_DEADLINE_MS,
   listHomeUpcoming,
   loadHomeUpcoming,
+  mergeHomeUpcoming,
 } from "../src/events/reads";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 
@@ -24,6 +25,45 @@ const { makeSql } = vi.hoisted(() => ({
 vi.mock("postgres", () => ({ default: makeSql }));
 
 const NOW = new Date("2030-07-04T18:00:00Z");
+
+describe("homepage teaser privacy projection", () => {
+  it("does not pass extra attendee data through the shared guest cache boundary", () => {
+    const row = {
+      eventKey: "public-night",
+      title: "Public game night",
+      startsAt: new Date("2030-07-04T19:00:00Z"),
+      timezone: "UTC",
+      location: null,
+      goingCount: 1,
+      goingOccupancy: 1,
+      capacity: 4,
+      game: "Wingspan",
+      organizer_name: "SyntheticHostName",
+      endsAt: new Date("2030-07-04T21:00:00Z"),
+      rsvpOpen: false,
+      attendees: [{ username: "SyntheticPrivateName" }],
+    };
+    const result = mergeHomeUpcoming([row], [], new Set(), NOW);
+    expect(result).toEqual([
+      {
+        source: "canonical",
+        eventKey: row.eventKey,
+        title: row.title,
+        startsAt: row.startsAt,
+        timezone: row.timezone,
+        location: row.location,
+        goingCount: 1,
+        goingOccupancy: 1,
+        capacity: 4,
+        game: row.game,
+        organizer_name: row.organizer_name,
+        endsAt: row.endsAt,
+        rsvpOpen: false,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("SyntheticPrivateName");
+  });
+});
 const baseEnv: Env = {
   APP_URL: "https://next.example.test",
   DISCORD_CLIENT_ID: "client-id",
@@ -220,7 +260,7 @@ describe("homepage upcoming events", () => {
       event(4),
       event(3),
       event(2),
-      event(1),
+      event(1, { game: "Wingspan", organizer_name: "Riley", rsvpOpen: false }),
       event(5, { status: "draft" }),
       event(6, { status: "cancelled" }),
       event(7, { status: "past" }),
@@ -229,6 +269,12 @@ describe("homepage upcoming events", () => {
     const rows = await listHomeUpcoming(f.db, NOW);
     expect(rows.map((r) => r.eventKey)).toEqual(["event-1", "event-2", "event-3"]);
     expect(rows.map((r) => r.goingCount)).toEqual([2, 1, 0]);
+    expect(rows[0]).toMatchObject({
+      game: "Wingspan",
+      organizer_name: "Riley",
+      rsvpOpen: false,
+      endsAt: event(1).endsAt,
+    });
     expect(f.queries).toHaveLength(4);
     // Note: this pins listHomeUpcoming (the canonical teaser read) only, not
     // the merged homepage loader, which additionally reads past zones.
@@ -257,10 +303,14 @@ describe("homepage upcoming events", () => {
     expect(f.queries[3]!.sql).not.toContain('inner join "users"');
     expect(Object.keys(rows[0]!).sort()).toEqual([
       "capacity",
+      "endsAt",
       "eventKey",
+      "game",
       "goingCount",
       "goingOccupancy",
       "location",
+      "organizer_name",
+      "rsvpOpen",
       "startsAt",
       "timezone",
       "title",
@@ -281,7 +331,12 @@ describe("homepage upcoming events", () => {
 
   it("renders three anonymous signposts with local time, page links, going aggregates and the guest join CTA", async () => {
     freezeNow();
-    const f = fixture([event(4), event(2), event(3), event(1)]);
+    const f = fixture([
+      event(4),
+      event(2),
+      event(3),
+      event(1, { organizer_name: "SyntheticOrganizerName" }),
+    ]);
     const response = await f.request();
     expect(response.status).toBe(200);
     const html = await response.text();
@@ -302,6 +357,7 @@ describe("homepage upcoming events", () => {
       "private-creator-id",
       "discord-event-id",
       "Private host notes",
+      "SyntheticOrganizerName",
       "user_id",
       "data-island",
       "RSVP",

@@ -1,10 +1,18 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type APIResponse,
+  type Page,
+} from "@playwright/test";
 import postgres from "postgres";
+import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
   expectedKitMarker,
+  HONO_ORIGIN,
   kitFixtureOwnsEventDetail,
   kitFixtureOwnsMemberBoard,
   kitFixtureSessionSecret,
@@ -300,6 +308,111 @@ function expectNoMarker(headers: Record<string, string>, label: string) {
   ).toBeNull();
 }
 
+async function compactMenu(page: Page) {
+  if (
+    (page.viewportSize()?.width ?? Infinity) > 820 ||
+    !(await page.locator("header#menu-sheet").count())
+  ) {
+    return null;
+  }
+  const name = { name: "Menu", exact: true };
+  return page.getByRole("button", name).or(page.getByRole("link", name));
+}
+
+async function closeCompactMenu(page: Page, menu: Awaited<ReturnType<typeof compactMenu>>) {
+  if (menu)
+    await menu
+      .or(page.getByRole("link", { name: "Close menu", exact: true }))
+      .last()
+      .click();
+}
+
+function headerSignOut(page: Page) {
+  return page
+    .locator('.header-account form[method="post"][action="/logout"] button[type="submit"]')
+    .and(page.getByRole("button", { name: "Sign out", exact: true }));
+}
+
+test("kit: capture synthetic non-member and account-hidden headers", async ({ browser }) => {
+  test.setTimeout(120_000);
+  requireGithubRunner();
+  for (const state of ["non-member", "account-hidden"] as const) {
+    for (const width of [1280, 390]) {
+      const bearer = `two_${randomBytes(32).toString("base64url")}`;
+      const tokenHash = createHash("sha256").update(bearer).digest("hex");
+      const userId = `9${BigInt(`0x${randomBytes(7).toString("hex")}`)
+        .toString()
+        .padStart(17, "0")}`;
+      const signature = createHmac("sha256", kitFixtureSessionSecret())
+        .update(bearer)
+        .digest("base64");
+      const context = await browser.newContext({
+        baseURL: KIT_ORIGIN,
+        viewport: { width, height: width === 1280 ? 800 : 844 },
+        storageState: {
+          cookies: [
+            {
+              name: "__Host-two_session",
+              value: `${bearer}.${signature}`,
+              domain: new URL(KIT_ORIGIN).hostname,
+              path: "/",
+              expires: -1,
+              httpOnly: true,
+              secure: true,
+              sameSite: "Lax",
+            },
+          ],
+          origins: [],
+        },
+      });
+      try {
+        await withSessionDb(async (sql) => {
+          await sql`
+            insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at)
+            values (${tokenHash}, ${tokenHash}, ${userId}, 'Synthetic Viewer', null, ${state === "account-hidden"}, false, ${new Date(Date.now() + 120 * 60 * 1000)})`;
+        });
+        await context.route("**/*", (route) =>
+          new URL(route.request().url()).origin === KIT_ORIGIN
+            ? route.continue()
+            : route.abort("blockedbyclient"),
+        );
+        const page = await context.newPage();
+        const path =
+          state === "non-member" ? `/e/${SEEDED_EVENT_KEY}` : "/leaderboards/members?season=bogus";
+        const response = await page.goto(path);
+        expect(response?.status()).toBe(state === "non-member" ? 200 : 400);
+        expect(response?.headers()["x-two-renderer"]).toBe("kit");
+        if (state === "non-member") {
+          await (await compactMenu(page))?.click();
+          await expect(page.locator(".header-account .who")).toHaveText("Synthetic Viewer");
+          await expect(headerSignOut(page)).toBeVisible();
+          await expect(page.locator('.main-nav a[href="/leaderboards/members"]')).toHaveCount(0);
+        } else {
+          await expect(page.locator(".header-account")).toHaveCount(0);
+          await expect(
+            page.getByRole("heading", { name: "Check the board filters" }),
+          ).toBeVisible();
+        }
+        await page.evaluate(() => (globalThis as any).document.fonts.ready);
+        await page.screenshot({
+          path: test.info().outputPath(`brand-kit-${state}-${width}.png`),
+          animations: "disabled",
+          caret: "hide",
+        });
+      } finally {
+        try {
+          await context.close();
+        } finally {
+          await withSessionDb(async (sql) => {
+            await sql`delete from web_session_grace where user_id = ${userId}`;
+            await sql`delete from web_sessions where user_id = ${userId}`;
+          });
+        }
+      }
+    }
+  }
+});
+
 for (const target of targets) {
   test.describe(`${target.name}: past archive renders the seeded row`, () => {
     test("page one renders the list with the seeded row", async () => {
@@ -415,9 +528,9 @@ for (const target of targets) {
       const response = await api(target).get("/join");
       expect(response.status()).toBe(200);
       expect(response.headers()["content-type"]).toContain("text/html");
-      // Renderer ownership is per target: Kit answers with the
-      // manifest-derived marker once enabled, Hono never carries one.
-      const expectedMarker = target.name === "kit" ? expectedKitMarker("/join") : null;
+      // The loopback fixture enables Kit for join even while the shipped
+      // manifest leaves it disabled; Hono must never carry the Kit marker.
+      const expectedMarker = target.name === "kit" ? "kit" : null;
       expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
       const body = await response.text();
       expect(scrubSecrets(body)).toEqual([]);
@@ -434,10 +547,11 @@ for (const target of targets) {
       expect(hasLoad !== hasFallback, `${target.name} join shows exactly one widget zone`).toBe(
         true,
       );
-      if (body.includes('data-testid="join-widget-presence"')) expect(hasLoad).toBe(true);
-      // Public without a flash: no cookies are sent on this journey.
-      expect(["public, max-age=60", "public, max-age=3600"]).toContain(
-        response.headers()["cache-control"],
+      const hasPresence = body.includes('data-testid="join-widget-presence"');
+      if (hasPresence) expect(hasLoad).toBe(true);
+      // No flash cookies are sent on this journey; presence must not be stored.
+      expect(response.headers()["cache-control"]).toBe(
+        hasPresence ? "no-store" : "public, max-age=3600",
       );
       expect(response.headers()["vary"] ?? "").toMatch(/cookie/i);
     });
@@ -462,9 +576,8 @@ for (const target of targets) {
       const response = await api(target).get("/auth/recover?next=%2Fprofile%3Fedit%3D1");
       expect(response.status()).toBe(200);
       expect(response.headers()["content-type"]).toContain("text/html");
-      // Renderer ownership is per target: Kit answers with the
-      // manifest-derived marker once enabled, Hono never carries one.
-      const expectedMarker = target.name === "kit" ? expectedKitMarker("/auth/recover") : null;
+      // Only this loopback Worker enables the Kit recovery presentation.
+      const expectedMarker = target.name === "kit" ? "kit" : null;
       expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
       const body = await response.text();
       expect(scrubSecrets(body)).toEqual([]);
@@ -479,8 +592,7 @@ for (const target of targets) {
       expect(body).not.toContain("<iframe");
       // Per-visitor journey state: never shared-cacheable.
       expect(response.headers()["cache-control"]).toBe("no-store, private");
-      // The Hono controller still owns the one-use journey write, served
-      // undecorated through honoFetch on both targets until enablement. A
+      // The Hono controller still owns the one-use journey write. A
       // bare landing visit never arms the pending notice: only a genuine
       // expired-write bounce does, so an attacker link cannot pre-arm a
       // false restored banner.
@@ -490,6 +602,18 @@ for (const target of targets) {
         .join("\n");
       expect(setCookies).toContain("__Host-two_login_intended=");
       expect(setCookies).not.toContain("__Host-two_expired_write=");
+
+      await test.step("HEAD keeps the recovery headers and signed cookie without a body", async () => {
+        const head = await api(target).head("/auth/recover?next=%2Fprofile", {
+          headers: { "if-none-match": "*" },
+        });
+        expect(head.status()).toBe(200);
+        expect(head.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+        expect(head.headers()["cache-control"]).toBe("no-store, private");
+        expect(head.headers()["set-cookie"]).toContain("__Host-two_login_intended=");
+        expect(head.headers().etag).toBeUndefined();
+        expect(await head.text()).toBe("");
+      });
     });
 
     test("safe next survives onto the login retry, hostile next leaves no trace", async () => {
@@ -848,6 +972,11 @@ for (const target of targets) {
         expect(body).not.toContain('data-testid="event-attendees"');
         expect(body).not.toContain("Sign out");
         expect(body).toContain("Welcome, guest");
+        if (target.name === "kit") {
+          expect(body).toContain('data-testid="kit-seat-card"');
+          expect(body).toContain("Log in to RSVP");
+          expect(body).toContain("come straight back here.");
+        }
       } finally {
         await guest.dispose();
       }
@@ -908,6 +1037,11 @@ for (const target of targets) {
       // controller, the islands only enhance it.
       expect(body).toContain(`action="/e/${EVENT_KEY}/rsvp"`);
       expect(body).toContain("/islands/rsvp-button.js");
+      if (target.name === "kit") {
+        expect(body).toContain('data-testid="kit-seat-card"');
+        expect(body).toMatch(/\d+ of 10 in/);
+        expect(body).not.toContain("Log in to RSVP");
+      }
       expect(body).toContain("Sign out");
       expect(body).not.toContain("Welcome, guest");
       // Both renderers rotate the active bearer and renew its 120-minute
@@ -1140,9 +1274,12 @@ for (const target of targets) {
             animations: "disabled",
             caret: "hide",
           });
-          const logo = await page.locator(".brand img").boundingBox();
-          expect(logo?.width).toBe(width <= 480 ? 50 : 180);
-          expect(logo?.height).toBe(50);
+          const menu = await compactMenu(page);
+          const logo = await page.locator(".brand img:visible").boundingBox();
+          expect(logo?.height).toBe(menu ? 32 : 50);
+          if (menu) expect(logo?.width).toBeCloseTo((456.86 * 32) / 126.34, 1);
+          else expect(logo?.width).toBe(width <= 480 ? 50 : 180);
+          await menu?.click();
           const chrome = (await page.evaluate(`(() => {
             const account = document.querySelector('.header-account');
             const button = account.querySelector('.btn');
@@ -1266,6 +1403,60 @@ for (const target of targets) {
         await context.close();
       }
     });
+  }
+
+  if (target.name === "kit") {
+    for (const viewport of PARITY_VIEWPORTS) {
+      test(`kit: join ${viewport.name} shows the heading and action without JavaScript`, async ({
+        browser,
+      }) => {
+        const context = await browser.newContext({
+          baseURL: target.origin,
+          ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+          viewport: viewport.size,
+          javaScriptEnabled: false,
+        });
+        try {
+          await context.route("**/*", (route) => {
+            const url = new URL(route.request().url());
+            return url.origin === target.origin ? route.continue() : route.abort("blockedbyclient");
+          });
+          const page = await context.newPage();
+          const response = await page.goto("/join?next=%2Fevents");
+          expect(response?.headers()["x-two-renderer"]).toBe("kit");
+          expect(response?.status()).toBe(200);
+          await expect(
+            page.getByRole("heading", { level: 1, name: "Play with people who show up." }),
+          ).toBeVisible();
+          await expect(
+            page.getByText("A Discord gaming community · founded 1998 · English"),
+          ).toBeVisible();
+          await expect(page.locator("#join-steps-heading")).toHaveText(
+            "What happens when you join",
+          );
+          await expect(
+            page.getByRole("heading", { name: "The bot lets you in and makes you a Prospect" }),
+          ).toBeVisible();
+          await expect(
+            page.getByRole("heading", { name: "You land back here, signed in" }),
+          ).toBeVisible();
+          await expect(page.getByRole("heading", { name: "What we ask of you" })).toBeVisible();
+          await expect(page.getByText("You must be 18 or older.")).toBeVisible();
+          await expect(page.getByRole("link", { name: "How deletion works" })).toHaveAttribute(
+            "href",
+            "/privacy",
+          );
+          await expect(
+            page.getByRole("complementary", { name: "Join with one sign-in" }),
+          ).toBeVisible();
+          await expect(
+            page.getByRole("link", { name: "Join with Discord", exact: true }),
+          ).toHaveAttribute("href", "/join/discord?next=%2Fevents");
+        } finally {
+          await context.close();
+        }
+      });
+    }
   }
 
   // Two-width hot-zone journey: the index shows the grids and the signal nav
@@ -1481,9 +1672,14 @@ for (const target of targets) {
           // default sign-in chrome on both renderers, so no Welcome caption
           // and no sign-in/sign-out controls), no member identifiers, noindex
           // plus canonical (cache/marker headers asserted above).
-          await expect(page.getByRole("link", { name: "Open Discord" })).toBeVisible();
+          const menu = await compactMenu(page);
+          await menu?.click();
+          const discord = page.getByRole("link", { name: "Open Discord" });
+          await expect(discord).toBeVisible();
+          await expect(discord).toHaveAttribute("href", "/discord");
           await expect(page.getByText("Sign in with Discord")).toHaveCount(0);
           await expect(page.getByText("Sign out")).toHaveCount(0);
+          await closeCompactMenu(page, menu);
           expect(await page.content(), `${target.name} ${path} no member identifiers`).not.toMatch(
             /discord_id|created_at/i,
           );
@@ -1508,6 +1704,408 @@ for (const target of targets) {
   }
 }
 
+test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", async ({
+  browser,
+}) => {
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const eventPath = "/e/01J00000000000000000000001";
+  for (const viewport of [
+    { width: 1280, height: 800 },
+    { width: 390, height: 844 },
+  ]) {
+    const context = await browser.newContext({ viewport, javaScriptEnabled: false });
+    try {
+      const page = await context.newPage();
+      const response = await page.goto(`${KIT_ORIGIN}${eventPath}`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      const card = page.getByTestId("kit-seat-card");
+      await expect(card.getByRole("heading", { name: "Log in to RSVP" })).toBeVisible();
+      await expect(card.getByRole("link", { name: "Log in with Discord" })).toHaveAttribute(
+        "href",
+        `/join/discord?next=${encodeURIComponent(eventPath)}`,
+      );
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+      const bar = page.getByRole("complementary", { name: "Your seat" });
+      await expect(bar).toHaveCount(viewport.width === 390 ? 1 : 0);
+      if (viewport.width === 390) {
+        await expect(bar.getByRole("link", { name: "Log in with Discord" })).toHaveAttribute(
+          "href",
+          `/join/discord?next=${encodeURIComponent(eventPath)}`,
+        );
+        await expect(bar.getByRole("link", { name: "Add to calendar" })).toBeVisible();
+      }
+      const screenshot = test.info().outputPath(`kit-review-seat-card-guest-${viewport.width}.png`);
+      if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: screenshot, animations: "disabled", caret: "hide" });
+      await test.info().attach(`kit-review-seat-card-guest-${viewport.width}`, {
+        path: screenshot,
+        contentType: "image/png",
+      });
+      if (viewport.width === 1280) {
+        const rail = card.locator("..");
+        await expect(rail).toHaveCSS("position", "sticky");
+        const bounds = await rail.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.height).toBeLessThanOrEqual(viewport.height - 92);
+      }
+    } finally {
+      await context.close();
+    }
+  }
+});
+
+test("Kit member seat card captures open, saved and full states", async ({ browser }) => {
+  const target = targets.find((item) => item.name === "kit")!;
+  const key = "01J00000000000000000000991";
+  const openKey = "01J00000000000000000000992";
+  const savedUserId = "900000000000000846";
+  const fullUserId = "900000000000000845";
+  const openUserId = "900000000000000847";
+  const states = [
+    { name: "saved", userId: savedUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
+    { name: "full", userId: fullUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
+    { name: "open", userId: openUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
+  ];
+  const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  const enhanced = await browser.newContext({
+    baseURL: target.origin,
+    viewport: { width: 390, height: 844 },
+  });
+  try {
+    await withSessionDb(async (sql) => {
+      for (const state of states) {
+        const hash = createHash("sha256").update(state.bearer).digest("hex");
+        await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+          values (${hash}, ${hash}, ${state.userId}, 'Seat fixture', true, false, ${new Date(Date.now() + 7_200_000)})`;
+      }
+      await sql`insert into users (id, username, member)
+        values (${savedUserId}, 'Seat fixture', true), (${openUserId}, 'Seat fixture', true)`;
+      await sql`insert into events (event_key, title, description, game, organizer_name, starts_at, ends_at, location, status, capacity, rsvp_open)
+        values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
+          'Catan', 'Vexa', '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true),
+          (${openKey}, 'Community game night', 'Bring a favourite game and meet the community.',
+          'Catan', 'Vexa', '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 2, true)`;
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, ${savedUserId}, 'going' from events where event_key = ${key}`;
+    });
+    // Facts list (C6): Host then Game, one organizer hook, no member data,
+    // for a guest and for each member state, at both widths. The facts
+    // full page is captured for the review artifact.
+    const expectFacts = async (page: Page, who: string, width: number) => {
+      const facts = page.getByTestId("kit-event-facts");
+      await expect(facts).toHaveCount(1);
+      await expect(facts.locator("dt")).toHaveText(["Host", "Game"]);
+      await expect(facts.locator("dd")).toHaveText(["Vexa", "Catan"]);
+      await expect(page.getByTestId("event-organizer")).toHaveCount(1);
+      await expect(facts.getByTestId("event-organizer")).toHaveText("Vexa");
+      await expect(facts.locator("a")).toHaveCount(0);
+      const cardBounds = await page.getByTestId("kit-seat-card").boundingBox();
+      const factsBounds = await facts.boundingBox();
+      const shareHeadingBounds = await page.locator(".event-share h2").boundingBox();
+      expect(cardBounds).not.toBeNull();
+      expect(factsBounds).not.toBeNull();
+      expect(shareHeadingBounds).not.toBeNull();
+      expect(factsBounds!.y - (cardBounds!.y + cardBounds!.height)).toBeCloseTo(16, 0);
+      if (width === 390) {
+        expect(
+          shareHeadingBounds!.y - (factsBounds!.y + factsBounds!.height),
+        ).toBeGreaterThanOrEqual(24);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      const name = `kit-review-facts-${who}-${width}`;
+      const path = test.info().outputPath(`${name}.png`);
+      if (width === 1280) {
+        const rail = facts.locator("..");
+        const bounds = await rail.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.height).toBeLessThanOrEqual(800 - 92);
+      }
+      await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    };
+    const guestContext = await browser.newContext({
+      baseURL: target.origin,
+      javaScriptEnabled: false,
+    });
+    try {
+      const guestPage = await guestContext.newPage();
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await guestPage.setViewportSize(viewport);
+        const response = await guestPage.goto(`/e/${key}`);
+        expect(response?.status()).toBe(200);
+        expect(response?.headers()["x-two-renderer"]).toBe("kit");
+        await expectFacts(guestPage, "guest", viewport.width);
+        // A full event keeps the guest card's login link but does not surface B4.
+        await expect(guestPage.locator('aside[aria-label="Your seat"]')).toHaveCount(0);
+        // Guest privacy: no roster, no member links, no sign-out chrome.
+        await expect(guestPage.getByTestId("event-attendees")).toHaveCount(0);
+        await expect(guestPage.locator('a[href^="/members/"]')).toHaveCount(0);
+        await expect(guestPage.getByText("Sign out")).toHaveCount(0);
+      }
+    } finally {
+      await guestContext.close();
+    }
+    const page = await context.newPage();
+    for (const state of states) {
+      const signature = createHmac("sha256", kitFixtureSessionSecret())
+        .update(state.bearer)
+        .digest("base64");
+      await context.addCookies([
+        {
+          name: "__Host-two_session",
+          value: `${state.bearer}.${signature}`,
+          domain: new URL(target.origin).hostname,
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        },
+      ]);
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        const response = await page.goto(`/e/${state.name === "open" ? openKey : key}`);
+        expect(response?.status()).toBe(200);
+        expect(response?.headers()["x-two-renderer"]).toBe("kit");
+        const card = page.getByTestId("kit-seat-card");
+        const bar = page.getByRole("complementary", { name: "Your seat" });
+        if (state.name === "open") {
+          await expect(card.getByRole("heading", { name: "0 of 2 in" })).toBeVisible();
+          await expect(card.getByText("Sign-ups open")).toBeVisible();
+          await expect(card.getByRole("button", { name: "I'm in" })).toBeVisible();
+          await expect(card.getByRole("link", { name: "Add to calendar" })).toHaveAttribute(
+            "href",
+            `/events/${openKey}.ics`,
+          );
+          await expect(page.getByTestId("event-going-count")).toBeHidden();
+          await expect(page.getByTestId("event-spots-left")).toBeHidden();
+          if (viewport.width === 390) {
+            const time = page.locator(".event-layout-head > dl:last-child");
+            await expect(time.locator("time[datetime]").first()).toHaveAttribute(
+              "datetime",
+              "2099-03-01T18:00:00.000Z",
+            );
+            await expect(time.locator("xpath=../following-sibling::*[1]/*[1]")).toHaveAttribute(
+              "data-testid",
+              "kit-seat-card",
+            );
+            await expect(bar).toHaveCount(1);
+            await expect(bar).toHaveCSS("position", "fixed");
+            await expect(bar).toContainText("0 of 2 in");
+            await expect(bar).toContainText("Sign-ups open");
+            await expect(bar.getByRole("link", { name: "Add to calendar" })).toHaveAttribute(
+              "href",
+              `/events/${openKey}.ics`,
+            );
+            await expect(bar.getByRole("button", { name: "I'm in" })).toBeVisible();
+            await card.scrollIntoViewIfNeeded();
+          } else {
+            await expect(bar).toHaveCount(0);
+            await expect(card.locator("..")).toHaveCSS("position", "sticky");
+          }
+          const name = `kit-review-seat-card-open-${viewport.width}`;
+          const path = test.info().outputPath(`${name}.png`);
+          await page.screenshot({ path, animations: "disabled", caret: "hide" });
+          await test.info().attach(name, { path, contentType: "image/png" });
+          continue;
+        }
+        await expect(card.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+        await expect(
+          card.getByRole("button", {
+            name: state.name === "saved" ? /can't make it/i : /join the waitlist/i,
+          }),
+        ).toBeVisible();
+        await expect(bar).toHaveCount(viewport.width === 390 && state.name === "saved" ? 1 : 0);
+        if (viewport.width === 390 && state.name === "saved") {
+          await expect(bar).toContainText("You're in");
+          await expect(bar).toContainText(/Starts at \d{2}:\d{2}/);
+          await expect(bar.getByRole("link", { name: "Add to calendar" })).toHaveAttribute(
+            "href",
+            `/events/${key}.ics`,
+          );
+          await expect(bar.getByRole("button")).toHaveCount(0);
+        }
+        const name = `kit-review-seat-card-${state.name}-${viewport.width}`;
+        const path = test.info().outputPath(`${name}.png`);
+        if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
+        await page.screenshot({ path, animations: "disabled", caret: "hide" });
+        await test.info().attach(name, { path, contentType: "image/png" });
+        await expectFacts(page, state.name, viewport.width);
+      }
+    }
+    const bar = page.getByRole("complementary", { name: "Your seat" });
+    await page.setViewportSize({ width: 820, height: 844 });
+    await expect(bar).toHaveCount(1);
+    await page.setViewportSize({ width: 821, height: 844 });
+    await expect(bar).toHaveCount(0);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const footer = page.getByRole("contentinfo");
+    const lastLink = footer.getByRole("link", { name: "Privacy" });
+    await footer.getByRole("link", { name: "House rules" }).focus();
+    await page.keyboard.press("Tab");
+    await expect(lastLink).toBeFocused();
+    const expectPrivacyClear = async () => {
+      const lastBounds = (await lastLink.boundingBox())!;
+      const barBounds = (await bar.boundingBox())!;
+      expect(lastBounds.y).toBeGreaterThanOrEqual(0);
+      expect(lastBounds.y + lastBounds.height).toBeLessThanOrEqual(barBounds.y);
+    };
+    await expectPrivacyClear();
+    await lastLink.evaluate((link) => link.scrollIntoView({ block: "end" }));
+    await expectPrivacyClear();
+
+    // Drive the shipped island in place before exercising the native form.
+    await enhanced.addCookies(await context.cookies());
+    const enhancedPage = await enhanced.newPage();
+    await withSessionDb(async (sql) => {
+      // No users row: this RSVP holds a seat but is not listed in the lineup.
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, '900000000000000848', 'going' from events where event_key = ${openKey}`;
+    });
+    await enhancedPage.goto(`/e/${openKey}`);
+    const enhancedCard = enhancedPage.getByTestId("kit-seat-card");
+    const enhancedBar = enhancedPage.getByRole("complementary", { name: "Your seat" });
+    const lineup = enhancedPage.getByTestId("event-going-count");
+    const spots = enhancedPage.getByTestId("event-spots-left");
+    const initialSeat = enhancedCard.getByText("1 of 2 in", { exact: true });
+    const going = lineup.locator("[data-count]");
+    await expect(initialSeat).toBeVisible();
+    await expect(enhancedBar).toContainText("1 of 2 in");
+    await expect(lineup).toBeHidden();
+    await enhancedCard.getByRole("button", { name: "I'm in" }).click();
+    await expect(enhancedCard.getByTestId("rsvp-confirmed")).toBeVisible();
+    await expect(lineup).toBeVisible();
+    await expect(going).toHaveText("1 of 2 going");
+    await expect(initialSeat).toBeHidden();
+    await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    await expect(spots).toBeVisible();
+    await expect(spots).toHaveText("Full");
+
+    // Keep the same Kit mount across a finite → unlimited → finite edit.
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = null where event_key = ${openKey}`;
+    });
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(going).toHaveText("0 going");
+    await expect(spots).toBeHidden();
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = 3 where event_key = ${openKey}`;
+    });
+    await enhancedCard.getByRole("button", { name: "I'm in" }).click();
+    await expect(going).toHaveText("1 of 3 going");
+    await expect(spots).toBeVisible();
+    await expect(spots).toHaveText("1 of 3 spots left");
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(going).toHaveText("0 of 3 going");
+
+    // Start the failed-first-read journey from a fresh snapshot.
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = 2 where event_key = ${openKey}`;
+    });
+    await enhancedPage.goto(`/e/${openKey}`);
+    await expect(initialSeat).toBeVisible();
+    await expect(lineup).toBeHidden();
+    // Fail the first count read only; RSVP and the manual retry hit the real fixture.
+    await enhancedPage.route(
+      `${target.origin}/events.json?event_key=${openKey}`,
+      (route) => route.fulfill({ status: 503 }),
+      { times: 1 },
+    );
+    await enhancedCard.getByRole("button", { name: "I'm in" }).click();
+    await expect(enhancedCard.getByTestId("rsvp-confirmed")).toBeVisible();
+    await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    const stale = lineup.getByTestId("event-going-count-stale");
+    await expect(stale).toBeVisible();
+    await expect(stale).toContainText(
+      "Going count could not refresh. Showing the last saved count.",
+    );
+    const retry = stale.getByRole("button", { name: "Try again" });
+    await expect(retry).toBeVisible();
+    await retry.click();
+    await expect(stale).toHaveCount(0);
+    await expect(lineup.locator("[data-count]")).toHaveText("1 of 2 going");
+    await expect(spots).toBeVisible();
+    await expect(spots).toHaveText("Full");
+    await expect(enhancedBar).toHaveCount(0);
+
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = 3 where event_key = ${openKey}`;
+    });
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(enhancedCard.getByTestId("rsvp-going")).toBeEnabled();
+    await expect(lineup.locator("[data-count]")).toHaveText("0 of 3 going");
+    await expect(spots).toHaveText("2 of 3 spots left");
+    await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    await expect(enhancedCard.getByRole("heading", { name: "1 of 2 in" })).toHaveCount(0);
+    await expect(enhancedBar).toHaveCount(0);
+
+    // The enhanced navigations rotated the shared fixture session.
+    await context.addCookies(await enhanced.cookies());
+    const post = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === `/e/${openKey}/rsvp`,
+    );
+    await bar.getByRole("button", { name: "I'm in" }).click();
+    const submitted = await post;
+    expect(submitted.request().postData()).toBe("status=going");
+    expect(submitted.status()).toBe(303);
+    expect(submitted.headers().location).toBe(`/e/${openKey}`);
+    expect(submitted.headers()["x-two-renderer"]).toBeUndefined();
+    await expect(page.getByTestId("kit-seat-card").getByTestId("rsvp-confirmed")).toBeVisible();
+    await expect(bar).toContainText("You're in");
+    await expect(bar.getByRole("button")).toHaveCount(0);
+
+    // Reload from the real saved row, using the session returned by the native flow.
+    await enhanced.addCookies(await context.cookies());
+    await enhancedPage.reload();
+    await expect(enhancedBar).toContainText("You're in");
+    await enhancedPage.route(`**/events/${openKey}/rsvp`, (route) => route.abort("failed"));
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(enhancedCard.getByTestId("rsvp-unknown")).toHaveAttribute("role", "alert");
+    await expect(enhancedBar).toHaveCount(0);
+
+    // Probe absence against actual server snapshots, without redoing the sibling renderer captures.
+    await context.addCookies(await enhanced.cookies());
+    for (const state of ["live", "ended", "cancelled"]) {
+      await withSessionDb(async (sql) => {
+        const endsAt = new Date(Date.now() + (state === "live" ? 3_600_000 : -3_600_000));
+        await sql`update events set starts_at = now() - interval '2 hours', ends_at = ${endsAt},
+          status = ${state === "cancelled" ? "cancelled" : "published"} where event_key = ${openKey}`;
+      });
+      const response = await page.goto(`/e/${openKey}`);
+      expect(response?.status()).toBe(state === "cancelled" ? 410 : 200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      await expect(page.locator('aside[aria-label="Your seat"]')).toHaveCount(0);
+    }
+  } finally {
+    await Promise.all([context.close(), enhanced.close()]);
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key in (${key}, ${openKey})`;
+      for (const state of states) {
+        await sql`delete from web_session_grace where user_id = ${state.userId}`;
+        await sql`delete from web_sessions where user_id = ${state.userId}`;
+      }
+      await sql`delete from users where id in (${savedUserId}, ${openUserId})`;
+    });
+  }
+});
+
+function archiveSectionForComparison(section: string, kitOwnsArchive: boolean): string {
+  if (kitOwnsArchive) assertEmberArchive(section);
+  return normalizeSection(kitOwnsArchive ? stripEmberDelta(section) : section);
+}
+
 test("cross-target: normalized archive sections match", async () => {
   const bodies = new Map<string, string>();
   for (const target of targets) {
@@ -1519,13 +2117,88 @@ test("cross-target: normalized archive sections match", async () => {
   // treatment as ci/kit-preview-e2e.mjs): raw section bytes always differ
   // (hydration markers, boolean attributes, `>` escaping), so compare the
   // normalized contract after origin normalization, not the bytes.
+  const kitSection = bodies
+    .get("kit")!
+    .match(/<section[^>]*data-testid="past-events"[\s\S]*?<\/section>/)?.[0];
+  expect(kitSection, "Kit archive section exists").toBeDefined();
+  const kitOwnsArchive = expectedKitMarker("/events/past") === "kit";
+  if (kitOwnsArchive) {
+    const fallback = stripEmberDelta(kitSection!);
+    expect(archiveSectionForComparison(kitSection!, true)).toBe(
+      archiveSectionForComparison(fallback, false),
+    );
+    expect(archiveSectionForComparison(kitSection!, false)).not.toBe(
+      archiveSectionForComparison(fallback, false),
+    );
+    expect(fallback).toContain("E2E Past Night");
+    expect(archiveSectionForComparison(kitSection!, true)).not.toBe(
+      archiveSectionForComparison(fallback.replace("E2E Past Night", "Different event"), false),
+    );
+    expect(() =>
+      archiveSectionForComparison(kitSection!.replace("Sign-up record", "Changed"), true),
+    ).toThrow();
+  }
   expect(
-    sectionOf(bodies.get("kit")!, "past-events"),
-    "Kit section matches Hono section after origin normalization",
+    archiveSectionForComparison(kitSection!, kitOwnsArchive),
+    "Archive section matches Hono under the configured ownership",
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
-test("cross-target: normalized events-calendar sections match", async ({ playwright }) => {
+test("Kit calendar styles survive a swap into the old document", async ({ page }) => {
+  // Serve the old Hono shell without the new aliases; the island fetches from Kit.
+  const old = await page.request.get(`${HONO_ORIGIN}/events`, { maxRedirects: 0 });
+  expect(old.status()).toBe(200);
+  await page.route(`${KIT_ORIGIN}/events`, (route) => route.fulfill({ response: old }), {
+    times: 1,
+  });
+  await page.route(`${KIT_ORIGIN}/theme-tokens.css`, (route) =>
+    route.fulfill({ contentType: "text/css", body: "" }),
+  );
+  await page.goto(`${KIT_ORIGIN}/events`);
+  await expect(page.locator(".schedule-views")).toBeVisible();
+  await expect(page.locator('link[href="/kit-events-controls.css"]')).toHaveCount(0);
+  const html = page.locator("html");
+  await html.evaluate((element) => element.setAttribute("data-rollout-shell", "old"));
+  await page.getByTestId("events-view-calendar").click();
+  const selected = page.locator("nav.segments").getByTestId("events-view-calendar");
+  await expect(selected).toHaveAttribute("aria-current", "page");
+  await expect(selected).toHaveCSS("gap", "8px");
+  await expect(selected).toHaveCSS("background-color", "rgb(46, 36, 32)");
+  await expect(html).toHaveAttribute("data-rollout-shell", "old");
+});
+
+test("cross-target: normalized events-calendar sections match", async ({ playwright, page }) => {
+  // Normalize serializer noise and the Kit wrapper, not the tabs' links or selection.
+  const calendarSection = async (html: string) =>
+    normalizeSection(
+      await page.evaluate((html) => {
+        const document = new DOMParser().parseFromString(html, "text/html");
+        const section = document.querySelector('section[data-testid="events-calendar"]');
+        if (!section) throw new Error("Missing calendar section");
+        const segments = section.querySelector('nav.segments[aria-label="How to show the events"]');
+        if (segments) {
+          section.querySelector('link[rel=stylesheet][href="/kit-events-controls.css"]')?.remove();
+          const group = document.createElement("div");
+          group.className = "schedule-views";
+          group.setAttribute("role", "group");
+          group.setAttribute("aria-label", "How to show the events");
+          while (segments.firstChild) group.appendChild(segments.firstChild);
+          segments.replaceWith(group);
+        }
+        for (const element of [section, ...section.querySelectorAll("*")]) {
+          const attrs = [...element.attributes].sort((a, b) => a.name.localeCompare(b.name));
+          for (const { name, value } of attrs) {
+            element.removeAttribute(name);
+            element.setAttribute(name, value);
+          }
+        }
+        const comments = document.createTreeWalker(section, NodeFilter.SHOW_COMMENT);
+        const markers: Node[] = [];
+        while (comments.nextNode()) markers.push(comments.currentNode);
+        for (const marker of markers) marker.parentNode?.removeChild(marker);
+        return section.outerHTML;
+      }, html),
+    );
   const bodies = new Map<string, string>();
   for (const target of targets) {
     // A fresh jar prevents authentication by the shared QA-login cookie.
@@ -1552,14 +2225,12 @@ test("cross-target: normalized events-calendar sections match", async ({ playwri
   }
   // Non-vacuous equality: the compared sections carry the seeded row, so
   // two empty lists cannot pass for parity.
-  expect(
-    sectionOf(bodies.get("hono")!, "events-calendar"),
-    "Hono events-calendar section carries the seeded row",
-  ).toContain("E2E Community Night");
-  expect(
-    sectionOf(bodies.get("kit")!, "events-calendar"),
-    "Kit section matches Hono section after origin normalization",
-  ).toBe(sectionOf(bodies.get("hono")!, "events-calendar"));
+  const hono = await calendarSection(bodies.get("hono")!);
+  const kit = await calendarSection(bodies.get("kit")!);
+  expect(hono, "Hono events-calendar section carries the seeded row").toContain(
+    "E2E Community Night",
+  );
+  expect(kit, "Kit matches the Hono calendar contract after normalization").toBe(hono);
 });
 
 test("cross-target: normalized member-board tables match", async () => {
@@ -1642,17 +2313,400 @@ test.describe("kit: archive visuals", () => {
           expect(response?.status(), `kit ${view.path} @ ${viewport.name}`).toBe(200);
           await expect(page.getByTestId(view.testid)).toBeVisible();
           await page.waitForLoadState("networkidle");
+          const kitOwnsArchive = expectedKitMarker(view.path) === "kit";
+          if (view.name === "populated" && kitOwnsArchive) {
+            const card = page.getByTestId("event-card").first();
+            await expect.soft(card.locator(".event-title")).toHaveCSS("display", "flex");
+            const state = card.getByText("Sign-up record");
+            await expect.soft(state).toBeVisible();
+            await expect.soft(state).toHaveCSS("border-top-style", "solid");
+            await expect.soft(state).toHaveCSS("font-size", "12px");
+            await expect.soft(state).toHaveCSS("text-transform", "uppercase");
+            await expect.soft(state).toHaveCSS("padding", "5px 7px");
+            await expect.soft(state).toHaveCSS("white-space", "nowrap");
+            const glyph = card.locator(".state-glyph");
+            if (viewport.name === "desktop") {
+              await expect.soft(glyph).toBeVisible();
+              await expect.soft(glyph).toHaveCSS("width", "16px");
+              await expect.soft(glyph).toHaveCSS("height", "16px");
+            } else {
+              await expect.soft(glyph).toBeHidden();
+            }
+          } else if (view.name === "populated") {
+            const card = page.getByTestId("event-card").first();
+            await expect.soft(card.getByRole("link", { name: "E2E Past Night" })).toBeVisible();
+            await expect.soft(card.locator(".state-glyph, .event-title")).toHaveCount(0);
+            await expect.soft(card.getByText("Sign-up record")).toHaveCount(0);
+          }
           await expect
             .soft(page)
-            .toHaveScreenshot(`kit-archive-${view.name}-${viewport.name}.png`, {
-              fullPage: true,
-              mask: [page.locator("time")],
-            });
+            .toHaveScreenshot(
+              `kit-archive-${view.name}${view.name === "populated" && !kitOwnsArchive ? "-hono" : ""}-${viewport.name}.png`,
+              {
+                fullPage: true,
+                mask: [page.locator("time")],
+              },
+            );
+          if (view.name === "populated") {
+            const name = `kit-review-archive-default-${viewport.name}`;
+            const path = test.info().outputPath(`${name}.png`);
+            await page.screenshot({ path, fullPage: true, mask: [page.locator("time")] });
+            await test.info().attach(name, { path, contentType: "image/png" });
+          }
         }
         expect(pageErrors, "no uncaught page errors").toEqual([]);
       } finally {
         await context.close();
       }
+    });
+  }
+});
+
+test("hono: populated archive fallback baseline @ desktop and mobile", async ({ browser }) => {
+  const hono = targets.find((target) => target.name === "hono")!;
+  const context = await browser.newContext({
+    baseURL: hono.origin,
+    ignoreHTTPSErrors: hono.ignoreHTTPSErrors,
+  });
+  try {
+    await context.route("**/*", (route) => {
+      const origin = new URL(route.request().url()).origin;
+      return origin === hono.origin || origin === KIT_ORIGIN
+        ? route.continue()
+        : route.abort("blockedbyclient");
+    });
+    const page = await context.newPage();
+    for (const viewport of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport.size);
+      const response = await page.goto("/events/past");
+      expect(response?.status()).toBe(200);
+      await expect(page.getByTestId("past-events")).toBeVisible();
+      await page.waitForLoadState("networkidle");
+      await expect.soft(page).toHaveScreenshot(`kit-archive-populated-hono-${viewport.name}.png`, {
+        fullPage: true,
+        mask: [page.locator("time")],
+      });
+      const name = `kit-review-hono-archive-fallback-${viewport.name}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, mask: [page.locator("time")] });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    }
+  } finally {
+    await context.close();
+  }
+});
+
+test("kit: archive search and keyboard focus evidence", async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: KIT_ORIGIN, ignoreHTTPSErrors: true });
+  try {
+    await context.route("**/*", (route) => {
+      const origin = new URL(route.request().url()).origin;
+      return origin === "https://localhost:8787" || origin === KIT_ORIGIN
+        ? route.continue()
+        : route.abort("blockedbyclient");
+    });
+    const page = await context.newPage();
+    for (const viewport of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport.size);
+      const response = await page.goto("/events/past?q=Past");
+      expect(response?.status()).toBe(200);
+      const card = page.getByTestId("event-card").first();
+      const title = card.getByRole("link", { name: "E2E Past Night" });
+      await expect(title.locator("mark")).toHaveText("Past");
+      await page.waitForLoadState("networkidle");
+      const save = async (state: string) => {
+        const name = `kit-review-archive-${state}-${viewport.name}`;
+        const path = test.info().outputPath(`${name}.png`);
+        await page.screenshot({ path, fullPage: true, mask: [page.locator("time")] });
+        await test.info().attach(name, { path, contentType: "image/png" });
+      };
+      await save("search");
+      for (
+        let i = 0;
+        i < 30 && !(await title.evaluate((el) => el === document.activeElement));
+        i++
+      ) {
+        await page.keyboard.press("Tab");
+      }
+      await expect(title).toBeFocused();
+      await save("focus");
+    }
+  } finally {
+    await context.close();
+  }
+});
+
+test("Kit member event detail captures the ended record at both widths", async ({ browser }) => {
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const target = targets.find((item) => item.name === "kit")!;
+  const adjacentKey = "01J00000000000000000000993";
+  const endedKey = "01J00000000000000000000994";
+  const nextKey = "01J00000000000000000000995";
+  const laterKey = "01J00000000000000000000996";
+  const historicalKey = "01J00000000000000000000997";
+  const unreadableKey = "01J00000000000000000000998";
+  const userId = "900000000000000848";
+  const bearer = `two_${randomBytes(32).toString("base64url")}`;
+  const hash = createHash("sha256").update(bearer).digest("hex");
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
+  const now = Date.now();
+  const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into users (id, username, member) values (${userId}, 'Seat fixture', true)`;
+      await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+        values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(now + 7_200_000)})`;
+      for (const event of [
+        { key: adjacentKey, start: now - 3_600_000, end: now + 3_600_000 },
+        { key: endedKey, start: Date.UTC(2026, 0, 2, 4), end: Date.UTC(2026, 0, 2, 6) },
+      ]) {
+        await sql`insert into events (event_key, title, description, starts_at, ends_at, timezone, location, status, rsvp_open)
+          values (${event.key}, 'Community game night', 'Bring a favourite game and meet the community.',
+            ${new Date(event.start)}, ${new Date(event.end)}, 'America/New_York', 'Community voice', 'published', true)`;
+      }
+      await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 6, recurrence_index = 1
+        where event_key = ${endedKey}`;
+      await sql`update events set parent_event_id = (select id from events where event_key = ${endedKey}),
+        recurrence_index = 2 where event_key = ${adjacentKey}`;
+      for (const sibling of [
+        { key: laterKey, days: 14, status: "published", index: 3 },
+        { key: nextKey, days: 7, status: "published", index: 4 },
+        { key: historicalKey, days: 1, status: "past", index: 5 },
+      ]) {
+        const startsAt = now + sibling.days * 86_400_000;
+        await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
+          select ${sibling.key}, title, ${new Date(startsAt)}, ${new Date(startsAt + 7_200_000)},
+            ${sibling.status}, id, ${sibling.index} from events where event_key = ${endedKey}`;
+      }
+      await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
+        select ${unreadableKey}, title, ${new Date(now + 172_800_000)}, 'infinity'::timestamptz,
+          'published', id, 6 from events where event_key = ${endedKey}`;
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, ${userId}, 'going' from events where event_key = ${endedKey}`;
+    });
+    await context.addCookies([
+      {
+        name: "__Host-two_session",
+        value: `${bearer}.${signature}`,
+        domain: new URL(target.origin).hostname,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    ]);
+    const page = await context.newPage();
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
+      const response = await page.goto(`/e/${endedKey}`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      const time = page.getByTestId("kit-event-time");
+      const record = page.getByRole("region", { name: "Sign-up record" });
+      const menu = await compactMenu(page);
+      await menu?.click();
+      await expect(headerSignOut(page)).toBeVisible();
+      await closeCompactMenu(page, menu);
+      await expect(page.getByRole("complementary", { name: "Your seat", exact: true })).toHaveCount(
+        0,
+      );
+      await expect(page.getByTestId("event-ongoing")).toHaveCount(0);
+      await expect(time.locator('time[datetime="2026-01-02T06:00:00.000Z"]')).toHaveText(
+        "2 Jan 2026, 01:00",
+      );
+      await expect(page.getByTestId("event-series-next")).toHaveAttribute(
+        "href",
+        `/e/${adjacentKey}`,
+      );
+      await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
+      await expect(record).toContainText("No Echo for this one. 1 signed up.");
+      await expect(record.getByRole("link", { name: /^Next one:/ })).toHaveAttribute(
+        "href",
+        `/e/${nextKey}`,
+      );
+      if (width === 390) {
+        await expect(
+          page.locator(
+            ".event-layout-head:has(> [data-testid=kit-event-time]:last-child) + .event-layout-rail > [aria-labelledby=signup-record-heading]:first-child",
+          ),
+        ).toHaveCount(1);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      const name = `kit-review-event-ended-${width}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    }
+  } finally {
+    await context.close();
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key in (${adjacentKey}, ${endedKey}, ${nextKey}, ${laterKey}, ${historicalKey}, ${unreadableKey})`;
+      await sql`delete from web_session_grace where user_id = ${userId}`;
+      await sql`delete from web_sessions where user_id = ${userId}`;
+      await sql`delete from users where id = ${userId}`;
+    });
+  }
+});
+
+test("Kit saved live snapshot expires without changing the RSVP", async ({ browser }) => {
+  test.setTimeout(60_000);
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const target = targets.find((item) => item.name === "kit")!;
+  const key = "01J00000000000000000000989";
+  const userId = "900000000000000843";
+  const bearer = `two_${randomBytes(32).toString("base64url")}`;
+  const hash = createHash("sha256").update(bearer).digest("hex");
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
+  const now = Date.now();
+  const end = new Date(now + 3_600_000);
+  const path = `/e/${key}?attendees=1`;
+  const plain = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  const enhanced = await browser.newContext({ baseURL: target.origin });
+  async function assertMobileSeatOrder(page: Page) {
+    const time = page.locator(".event-layout-head > [data-testid=kit-event-time]:last-child");
+    const seat = page.locator(
+      ".event-layout-head:has(> [data-testid=kit-event-time]:last-child) + .event-layout-rail > [data-testid=kit-seat-card]:first-child",
+    );
+    await expect(seat).toBeVisible();
+    const [block, card] = await Promise.all([time.boundingBox(), seat.boundingBox()]);
+    expect(card!.y).toBeGreaterThanOrEqual(block!.y + block!.height);
+  }
+  async function capture(page: Page, name: string) {
+    const size = page.viewportSize()?.width === 390 ? "40px" : "89.6px";
+    await expect(page.locator(".live-time .time-block > time")).toHaveCSS("font-size", size);
+    const screenshot = test.info().outputPath(`${name}.png`);
+    await page.screenshot({ path: screenshot, animations: "disabled", caret: "hide" });
+    await test.info().attach(name, { path: screenshot, contentType: "image/png" });
+  }
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into users (id, username, member) values (${userId}, 'Seat fixture', true)`;
+      await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+        values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(now + 7_200_000)})`;
+      await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, rsvp_open)
+        values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
+          ${new Date(now - 3_600_000)}, ${end}, 'Community voice', 'published', true)`;
+    });
+    const noJs = await plain.newPage();
+    const guest = await noJs.goto(path);
+    expect(guest?.headers()["x-two-renderer"]).toBe("kit");
+    expect(guest?.headers()["cache-control"]).toBe("private, no-store");
+    await plain.addCookies([
+      {
+        name: "__Host-two_session",
+        value: `${bearer}.${signature}`,
+        domain: new URL(target.origin).hostname,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    ]);
+    for (const { size: viewport } of PARITY_VIEWPORTS) {
+      await noJs.setViewportSize(viewport);
+      expect((await noJs.goto(path))?.headers()["x-two-renderer"]).toBe("kit");
+      if (viewport.width === 390) await assertMobileSeatOrder(noJs);
+      const rsvp = noJs.getByRole("button", { name: "I'm in", exact: true });
+      await expect(rsvp).toBeEnabled();
+      await rsvp.scrollIntoViewIfNeeded();
+      const ends = noJs.locator("p:visible", { hasText: /^Ends / }).last();
+      await expect(ends.locator("time")).toHaveAttribute("datetime", end.toISOString());
+      await expect(ends).toBeInViewport();
+      const ordered = await ends.evaluate((line) => {
+        const button = document.querySelector('[data-testid="rsvp-going"]')!;
+        const follows = line.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING;
+        return (
+          Boolean(follows) &&
+          line.getBoundingClientRect().bottom <= button.getBoundingClientRect().top
+        );
+      });
+      expect(ordered, "the end precedes the RSVP in DOM and visual order").toBe(true);
+      await capture(noJs, `kit-review-event-live-open-${viewport.width}`);
+    }
+    await withSessionDb(async (sql) => {
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, ${userId}, 'going' from events where event_key = ${key}`;
+    });
+    await noJs.reload();
+    await expect(noJs.getByTestId("rsvp-syncing")).toBeVisible();
+    await withSessionDb(async (sql) => {
+      await sql`update rsvps set synced_to_discord_at = ${new Date(now)} where user_id = ${userId}`;
+    });
+    for (const { size: viewport } of PARITY_VIEWPORTS) {
+      await noJs.setViewportSize(viewport);
+      const response = await noJs.reload();
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      expect(response?.headers()["cache-control"]).toBe("private, no-store");
+      if (viewport.width === 390) await assertMobileSeatOrder(noJs);
+      const time = noJs.getByTestId("kit-event-time").locator('> .time-block[data-state="live"]');
+      const seat = noJs.getByTestId("kit-seat-card");
+      await expect(noJs.getByTestId("event-ongoing")).toHaveText("Live");
+      await expect(time.locator("[data-live-fresh]:visible").last()).toHaveText("as of");
+      await expect(time.locator("time").last()).toHaveAttribute("datetime", end.toISOString());
+      await expect(seat.getByRole("heading", { name: "You're in." })).toBeVisible();
+      await expect(seat.getByTestId("rsvp-synced")).toHaveText("Synced to Discord.");
+      await expect(seat.getByRole("button").or(seat.getByRole("link"))).toHaveCount(0);
+      await expect(noJs.getByRole("complementary", { name: /^Your seat$/ })).toHaveCount(0);
+      await expect(noJs.getByRole("link", { name: "Refresh the event time" })).toHaveCount(0);
+      await capture(noJs, `kit-review-event-live-${viewport.width}`);
+    }
+    await enhanced.addCookies(await plain.cookies());
+    const page = await enhanced.newPage();
+    await page.goto(`${path}#snapshot`);
+    const live = page.getByTestId("event-ongoing");
+    await expect(live).toBeVisible();
+    const deadline = Date.parse(
+      (await page.locator("#kit-live-snapshot").getAttribute("data-stale-at"))!,
+    );
+    await page.bringToFront();
+    const hidden = await live.evaluate((tag, ms) => {
+      // Sample both sides in one browser task so the real timer cannot win the race.
+      Date.now = () => ms - 1;
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+      const before = tag.hasAttribute("hidden");
+      Date.now = () => ms;
+      document.dispatchEvent(new Event("visibilitychange"));
+      return [before, tag.hasAttribute("hidden")];
+    }, deadline);
+    expect(hidden).toEqual([false, true]);
+    await expect(page.locator("[data-live-fresh]:visible")).toHaveCount(0);
+    await expect(page.getByText("Stale", { exact: true })).toHaveCount(2);
+    await expect(page.getByRole("link", { name: "Refresh the event time" })).toHaveAttribute(
+      "href",
+      `${target.origin}${path}`,
+    );
+    await expect(page.getByTestId("rsvp-synced")).toBeVisible();
+    await expect(page.getByTestId("kit-event-time").getByText("live as of")).toBeVisible();
+    for (const { size: viewport } of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport);
+      await capture(page, `kit-review-event-stale-${viewport.width}`);
+    }
+    const refreshed = page.waitForResponse(
+      (response) =>
+        response.url() === `${target.origin}${path}` && response.request().isNavigationRequest(),
+    );
+    await page.getByRole("link", { name: "Refresh the event time" }).click();
+    expect((await refreshed).headers()["cache-control"]).toBe("private, no-store");
+    await expect(live).toBeVisible();
+    await page.getByTestId("event-device-timezone-ends-button").click();
+    await expect(page.getByTestId("event-device-timezone-ends-status")).not.toBeEmpty();
+    await page.addInitScript(() => {
+      Date.now = () => 1;
+    });
+    await page.reload();
+    await expect(live).toBeHidden();
+    await expect(page.getByRole("link", { name: "Refresh the event time" })).toBeVisible();
+    await expect(page.getByTestId("rsvp-synced")).toBeVisible();
+  } finally {
+    await Promise.all([plain.close(), enhanced.close()]);
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key = ${key}`;
+      await sql`delete from web_session_grace where user_id = ${userId}`;
+      await sql`delete from web_sessions where user_id = ${userId}`;
+      await sql`delete from users where id = ${userId}`;
     });
   }
 });
@@ -2233,6 +3287,122 @@ test.describe("kit: member-board visuals", () => {
       } finally {
         await context.close();
       }
+    });
+  }
+});
+
+test("Kit cancelled event renders its record and next date without JavaScript", async ({
+  browser,
+}) => {
+  test.setTimeout(90_000);
+  const target = targets.find((item) => item.name === "kit")!;
+  expect(kitFixtureOwnsEventDetail()).toBe(true);
+  const prefix = "01J0000000000000000CXN000";
+  const key = (n: number) => `${prefix}${n}`;
+  const attendee = "900000000000000848";
+  const game = "Fixture tabletop";
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into users (id, username, member) values (${attendee}, 'Fixture Attendee Marker', true)`;
+      const [root] = await sql<{ id: number }[]>`
+        insert into events (event_key,title,game,organizer_name,description,join_instructions,starts_at,ends_at,timezone,status,recurrence_frequency,recurrence_index)
+        values (${key(1)},'Cancelled series night',${game},'Fixture Public Host','Public synthetic summary','Private instructions marker',
+          '2099-03-01T18:00Z','2099-03-01T20:00Z','Asia/Kolkata','cancelled','weekly',1) returning id`;
+      await sql`insert into rsvps (event_id,user_id,status) values (${root!.id},${attendee},'going')`;
+      await sql`insert into events (event_key,title,game,starts_at,ends_at,timezone,status,parent_event_id,recurrence_index) values
+        (${key(2)},'Later sibling',${game},'2099-03-22T18:00Z','2099-03-22T20:00Z','UTC','published',${root!.id},2),
+        (${key(3)},'Next sibling',${game},'2099-03-15T18:00Z','2099-03-15T20:00Z','Pacific/Auckland','published',${root!.id},3),
+        (${key(4)},'Unpublished sibling',${game},'2099-03-08T18:00Z','2099-03-08T20:00Z','UTC','draft',${root!.id},4),
+        (${key(5)},'Cancelled sibling',${game},'2099-03-09T18:00Z','2099-03-09T20:00Z','UTC','cancelled',${root!.id},5),
+        (${key(6)},'Historical sibling',${game},'2099-03-10T18:00Z','2099-03-10T20:00Z','UTC','past',${root!.id},6),
+        (${key(7)},'Invalid sibling',null,'2099-03-11T18:00Z','infinity','UTC','published',${root!.id},7),
+        (${`${prefix}a`},'Unroutable sibling',null,'2099-03-12T18:00Z','2099-03-12T20:00Z','UTC','published',${root!.id},8),
+        (${key(8)},'Other event',${game},'2099-03-05T18:00Z','2099-03-05T20:00Z','UTC','published',null,null),
+        (${key(9)},'Standalone cancellation',${game},'2099-04-01T18:00Z','2099-04-01T20:00Z','UTC','cancelled',null,null)`;
+      await sql`update events set description = 'Draft description marker' where event_key = ${key(4)}`;
+    });
+    const privateMarkers =
+      /Fixture Attendee Marker|Private instructions marker|Draft description marker|data-rsvp-form/;
+    const Cookie = await memberCookie(target);
+    const signed = await api(target).get(`/e/${key(1)}`, { headers: { Cookie } });
+    expect(signed.status()).toBe(410);
+    expect(await signed.text()).not.toMatch(privateMarkers);
+    for (const width of [1280, 390]) {
+      const context = await browser.newContext({
+        baseURL: target.origin,
+        viewport: { width, height: width === 390 ? 844 : 800 },
+        javaScriptEnabled: false,
+      });
+      try {
+        const page = await context.newPage();
+        for (const state of ["guest", "fallback"]) {
+          const fallback = state === "fallback";
+          const eventKey = key(fallback ? 9 : 1);
+          const response = await page.goto(`/e/${eventKey}`);
+          expect(response?.status()).toBe(410);
+          expect(response!.headers()).toMatchObject({
+            "x-two-renderer": "kit",
+            "cache-control": "private, no-store",
+            "x-robots-tag": "noindex, nofollow",
+          });
+          expect(await response!.text()).not.toMatch(privateMarkers);
+          await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
+          const actions =
+            'main form, aside[aria-label="Your seat"], [data-testid="event-join-pitch"]';
+          await expect(page.locator(actions)).toHaveCount(0);
+          await expect(page.getByTestId("event-cancelled")).toHaveText("Cancelled");
+          const calendar = page.getByTestId("event-cancelled-ics");
+          await expect(calendar).toHaveAttribute("href", `/events/${eventKey}.ics`);
+          const alternatives = page.getByTestId("event-cancelled-alternatives");
+          await expect(alternatives.getByRole("link", { name: "Other event" })).toBeVisible();
+          const next = page.getByRole("link", { name: "See the next date" });
+          const record = page.getByTestId("event-cancelled-record");
+          if (fallback) {
+            await expect(next).toHaveCount(0);
+            await expect(record.locator("time")).toHaveCount(0);
+          } else {
+            const time = page.getByTestId("event-cancelled-time");
+            const facts = page.getByTestId("kit-event-facts");
+            await expect(facts.getByText("Fixture Public Host", { exact: true })).toBeVisible();
+            await expect(time).toHaveAttribute("datetime", "2099-03-01T18:00:00.000Z");
+            await expect(time.locator("s")).toHaveText("23:30");
+            await expect(time.locator("..")).toContainText("Asia/Kolkata · 18:00 UTC");
+            await expect(next).toHaveAttribute("href", `/e/${key(3)}`);
+            const nextTime = record.locator("time");
+            await expect(nextTime).toHaveAttribute("datetime", "2099-03-15T18:00:00.000Z");
+            await expect(record).toContainText(/Next one:.*16 March 2099.*07:00/);
+            if (width === 390) {
+              const ids = ["event-cancelled-time", "event-cancelled-record", "kit-event-facts"];
+              const nodes = page.locator(ids.map((id) => `[data-testid="${id}"]`).join(","));
+              const order = await nodes.evaluateAll((els) =>
+                els.map((el) => el.getAttribute("data-testid")),
+              );
+              expect(order).toEqual(ids);
+              const boxes = await Promise.all(
+                [time, record, facts].map((node) => node.boundingBox()),
+              );
+              expect(boxes[0]!.y).toBeLessThan(boxes[1]!.y);
+              expect(boxes[1]!.y).toBeLessThan(boxes[2]!.y);
+            } else {
+              expect((await record.boundingBox())!.x).toBeGreaterThan(
+                (await time.boundingBox())!.x,
+              );
+            }
+          }
+          const name = `kit-review-cancelled-record-${state}-${width}`;
+          const path = test.info().outputPath(`${name}.png`);
+          await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+          await test.info().attach(name, { path, contentType: "image/png" });
+        }
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await withSessionDb(async (sql) => {
+      await sql`delete from rsvps where user_id = ${attendee}`;
+      await sql`delete from events where event_key like ${`${prefix}%`}`;
+      await sql`delete from users where id = ${attendee}`;
     });
   }
 });

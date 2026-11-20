@@ -41,6 +41,38 @@ export async function withHealthReadTimeout<T>(
   })) as T;
 }
 
+async function readMigrationTimestamps(sql: Sql, deadline: number) {
+  try {
+    return await withHealthReadTimeout(
+      sql,
+      async (tx) => tx<{ created_at: unknown }[]>`
+        SELECT created_at, clock_timestamp() AS checked_at FROM web_readiness.migration_timestamps
+      `,
+      deadline,
+    );
+  } catch (err) {
+    // Transition only: the failed SELECT is rolled back before checking absence.
+    // SQLSTATE alone cannot distinguish a missing bridge from a broken dependency.
+    if (!(err instanceof Error && "code" in err && err.code === "42P01")) throw err;
+    const absent = await withHealthReadTimeout(
+      sql,
+      async (tx) => tx<{ absent: boolean }[]>`
+        SELECT pg_catalog.to_regclass('web_readiness.migration_timestamps') IS NULL AS absent,
+          clock_timestamp() AS checked_at
+      `,
+      deadline,
+    );
+    if (absent.length !== 1 || absent[0]?.absent !== true) throw err;
+  }
+  return withHealthReadTimeout(
+    sql,
+    async (tx) => tx<{ created_at: unknown }[]>`
+      SELECT created_at, clock_timestamp() AS checked_at FROM drizzle.__drizzle_migrations
+    `,
+    deadline,
+  );
+}
+
 export async function databaseReadiness(sql: Sql | null): Promise<DatabaseReadiness> {
   let db: DatabaseReadiness["db"] = "error";
   if (!sql) return { db, pending_migrations: null, migration_ledger: null };
@@ -60,13 +92,7 @@ export async function databaseReadiness(sql: Sql | null): Promise<DatabaseReadin
         db = "ok";
         // Drizzle 0.45 records journal.when as created_at, not the filename/tag:
         // https://orm.drizzle.team/docs/drizzle-kit-migrate#applied-migrations-log-in-the-database
-        const rows = await withHealthReadTimeout(
-          sql,
-          async (tx) => tx<{ created_at: unknown }[]>`
-        SELECT created_at, clock_timestamp() AS checked_at FROM drizzle.__drizzle_migrations
-      `,
-          deadline,
-        );
+        const rows = await readMigrationTimestamps(sql, deadline);
         // One ledger read feeds both signals; a malformed row fails both together.
         return {
           pending_migrations: pendingWebMigrations(rows),

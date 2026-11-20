@@ -11,6 +11,7 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Env } from "../src/env";
+import { events } from "../src/db/admin-schema";
 import {
   getEventRow,
   getPublicEvent,
@@ -63,6 +64,61 @@ const app = () => {
 };
 
 describe.skipIf(!url)("served reads refuse JS-unrepresentable windows (isolated test DB)", () => {
+  it("refills homepage slots when finite PostgreSQL ends overflow JavaScript Dates", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      await client`insert into events (event_key, title, starts_at, ends_at, status) values
+        ('overflow-1', 'Overflow 1', '2069-01-02T18:00:00Z', ${FAR_ENDS}, 'published'),
+        ('overflow-2', 'Overflow 2', '2069-01-03T18:00:00Z', ${FAR_ENDS}, 'published'),
+        ('overflow-3', 'Overflow 3', '2069-01-04T18:00:00Z', ${FAR_ENDS}, 'published'),
+        ('later-valid', 'Later valid', '2069-01-06T18:00:00Z', '2069-01-06T20:00:00Z', 'published')`;
+      const raw =
+        await client`select isfinite(ends_at) as finite from events where event_key = 'overflow-1'`;
+      expect(raw[0]!.finite).toBe(true);
+      const decoded = await db.select().from(events);
+      expect(
+        Number.isNaN(decoded.find((row) => row.eventKey === "overflow-1")!.endsAt.getTime()),
+      ).toBe(true);
+      const home = await listHomeUpcoming(db, new Date("2069-01-01T00:00:00Z"));
+      expect(home.map((row) => row.eventKey)).toEqual(["later-valid"]);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("matches decoded homepage window boundaries before the limit", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      // Keep the end upcoming even for the BC start. Check the driver's actual
+      // decoding as well as admission, including sub-millisecond precision.
+      for (const [start, end, valid] of [
+        ["0001-12-31 23:59:59+00 BC", "2069-01-02T20:00:00Z", false],
+        ["0001-01-01 00:00:00+00", "2069-01-02T20:00:00Z", true],
+        ["2069-01-02T18:00:00Z", "275760-09-13 00:00:00.000999+00", true],
+        ["2069-01-02T18:00:00Z", "275760-09-13 00:00:00.001+00", false],
+        ["275760-09-13 00:00:00.000999+00", "275760-09-13 00:00:00.000999+00", true],
+        ["275760-09-13 00:00:00.001+00", "275760-09-13 00:00:00.001+00", false],
+      ] as const) {
+        await client`delete from events`;
+        await client`insert into events (event_key, title, starts_at, ends_at, status)
+          values ('boundary', 'Boundary', ${start}::timestamptz, ${end}::timestamptz, 'published')`;
+        const [row] = await db.select().from(events);
+        const decoded =
+          Number.isFinite(row!.startsAt.getTime()) && Number.isFinite(row!.endsAt.getTime());
+        expect(decoded, `${start} / ${end}`).toBe(valid);
+        const home = await listHomeUpcoming(db, new Date("2069-01-01T00:00:00Z"));
+        expect(
+          home.map((event) => event.eventKey),
+          `${start} / ${end}`,
+        ).toEqual(valid ? ["boundary"] : []);
+      }
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("excludes far-future windows from listFeed, listUpcoming and listHomeUpcoming", async () => {
     const fixture = await createMemberDataFixture(url!, { max: 2 });
     const { client, db } = fixture;
