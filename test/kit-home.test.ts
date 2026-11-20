@@ -29,7 +29,7 @@ function read(p: string): string {
 
 describe("Kit home port: shared server models, no duplicated content", () => {
   it("loads every panel from the shared Hono-side readers", () => {
-    const server = read(serverPath);
+    const server = read(serverPath) + read(join(root, "src/kit-home-panels.ts"));
     expect(server).toContain("readCounts");
     expect(server).toContain("cachedHomeUpcoming");
     expect(server).toContain("discordEventsSource");

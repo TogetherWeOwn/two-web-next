@@ -436,7 +436,10 @@ beforeAll(async () => {
   await build({
     stdin: {
       contents: [
-        `export { load as homeLoad } from ${JSON.stringify(route("web/src/routes/+page.server.ts"))};`,
+        `import { env } from "cloudflare:workers";`,
+        `import { load as routeLoad } from ${JSON.stringify(route("web/src/routes/+page.server.ts"))};`,
+        `import { prepareKitHomePanels } from ${JSON.stringify(join(root, "src/kit-home-panels.ts"))};`,
+        `export const homeLoad = async (args) => routeLoad({ ...args, locals: { ...args.locals, homePanels: await prepareKitHomePanels(env, args.request) } });`,
         `export { load as pastLoad } from ${JSON.stringify(route("web/src/routes/events/past/+page.server.ts"))};`,
         `export { load as joinLoad } from ${JSON.stringify(route("web/src/routes/join/+page.server.ts"))};`,
         `export { load as aboutLoad } from ${JSON.stringify(route("web/src/routes/about/+page.server.ts"))};`,
