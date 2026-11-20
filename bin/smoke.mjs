@@ -15,7 +15,7 @@ const html = [
   ["/privacy", /Privacy policy/],
   ["/events", /id="events-heading"/],
   ["/events/past", /id="past-events-heading"/],
-  ["/join", /One click with Discord/],
+  ["/join", /id="join-heading"/],
 ];
 // HTML leaves that stay non-indexable even on the indexable apex: the archive
 // and the branded 404s carry their noindex in <meta>, so the deploy smoke

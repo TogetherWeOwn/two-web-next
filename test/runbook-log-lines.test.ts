@@ -812,9 +812,9 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
           /keeps an authorized admin response when the probe rejects/,
       },
       [ROTATION]: {
-        "test/kit-event-detail-session-renewal.test.ts:500":
+        "test/kit-event-detail-session-renewal.test.ts:502":
           /a rotation store error delivers the released 200/,
-        "test/kit-event-detail-session-renewal.test.ts:534":
+        "test/kit-event-detail-session-renewal.test.ts:536":
           /re-verifies the cookie: forged locals/,
       },
       [ADMIN]: {

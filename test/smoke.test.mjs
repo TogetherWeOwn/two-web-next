@@ -992,11 +992,14 @@ test("join accepts rendered Join but rejects rendered Home with the shared foote
     appUrl: "https://example.test",
     joinResult: null,
   }).toString();
-  assert.match(join, /One click with Discord/);
-  assert.doesNotMatch(home, /One click with Discord/);
+  assert.match(join, /id="join-heading"/);
+  assert.doesNotMatch(home, /id="join-heading"/);
+  // The Kit /join renderer keeps the heading id but not the Hono copy.
+  const kitJoin = '<h1 id="join-heading">Join Together We Own</h1><p>Join with one sign-in</p>';
   for (const [body, expected] of [
     [home, false],
     [join, true],
+    [kitJoin, true],
   ]) {
     const { url } = await stub(t, (route, result) => {
       if (route === "/join") result.body = body;
@@ -1006,7 +1009,7 @@ test("join accepts rendered Join but rejects rendered Home with the shared foote
     if (!expected) {
       assert.match(
         result.output,
-        /FAIL \/join: expected body matching .*One click with Discord.*; actual body did not match/,
+        /FAIL \/join: expected body matching .*join-heading.*; actual body did not match/,
       );
       assert.ok(!result.output.includes("PASS /join"), result.output);
     }

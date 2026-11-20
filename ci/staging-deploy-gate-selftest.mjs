@@ -186,15 +186,20 @@ test("Kit route-family selection emits validated flags and fails closed", async 
       ["archive-static", ["archive", "static"]],
       ["events", ["events"]],
       ["home", ["home"]],
+      ["events-join", ["events", "join"]],
+      ["events-home", ["events", "home"]],
       ["join", ["join"]],
       ["ember-pages", ["events", "home", "join"]],
       ["all", null],
       ["events", ["events"], "workflow_run"],
+      ["events-join", ["events", "join"], "workflow_run"],
+      ["events-home", ["events", "home"], "workflow_run"],
       ["ember-pages", ["events", "home", "join"], "workflow_run"],
       [undefined, [], "workflow_run"],
       ["", [], "workflow_run"],
       ["all", [], "workflow_run"],
       ["EVENTS", [], "workflow_run"],
+      ["unknown", [], "workflow_run"],
     ]) {
       const automatic = eventName === "workflow_run";
       const disabled = emberRoutes.some(
@@ -239,6 +244,46 @@ test("the combined selection refuses any disabled or non-GET Ember entry", async
     for (const invalid of [[], [{ ...entry, method: "POST" }], [{ ...entry, enabled: false }]]) {
       await assert.rejects(requireEnabledEmberRoutes(flags, [...rest, ...invalid]), /not enabled/);
     }
+  }
+});
+
+test("events-join turns on only /events and /join and refuses either disabled GET", async () => {
+  const flags = kitRouteFlagsForFamily("events-join");
+  assert.deepEqual(flags, {
+    archive: "false",
+    static: "false",
+    events: "true",
+    home: "false",
+    join: "true",
+  });
+  const routes = ["/events", "/join"].map((path) => ({ method: "GET", path, enabled: true }));
+  await requireEnabledEmberRoutes(flags, routes);
+  for (const entry of routes) {
+    const rest = routes.filter((route) => route !== entry);
+    await assert.rejects(
+      requireEnabledEmberRoutes(flags, [...rest, { ...entry, enabled: false }]),
+      new RegExp(`GET ${entry.path} is not enabled`),
+    );
+  }
+});
+
+test("events-home turns on only /events and / and refuses either disabled GET", async () => {
+  const flags = kitRouteFlagsForFamily("events-home");
+  assert.deepEqual(flags, {
+    archive: "false",
+    static: "false",
+    events: "true",
+    home: "true",
+    join: "false",
+  });
+  const routes = ["/events", "/"].map((path) => ({ method: "GET", path, enabled: true }));
+  await requireEnabledEmberRoutes(flags, routes);
+  for (const entry of routes) {
+    const rest = routes.filter((route) => route !== entry);
+    await assert.rejects(
+      requireEnabledEmberRoutes(flags, [...rest, { ...entry, enabled: false }]),
+      new RegExp(`GET ${entry.path} is not enabled`),
+    );
   }
 });
 
@@ -480,6 +525,8 @@ for (const [family, archiveFlag, staticFlag, eventsFlag, homeFlag, joinFlag] of 
   ["archive-static", "true", "true", "false", "false", "false"],
   ["events", "false", "false", "true", "false", "false"],
   ["home", "false", "false", "false", "true", "false"],
+  ["events-join", "false", "false", "true", "false", "true"],
+  ["events-home", "false", "false", "true", "true", "false"],
   ["join", "false", "false", "false", "false", "true"],
   ["ember-pages", "false", "false", "true", "true", "true"],
 ]) {
@@ -669,7 +716,7 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(
     workflow,
-    /kit_route_family:\n        description: Kit staging route family; the default keeps all routes on Hono\n        type: choice\n        required: true\n        default: hono\n        options:\n          - hono\n          - archive\n          - archive-static\n          - events\n          - home\n          - join\n          - ember-pages\n/,
+    /kit_route_family:\n        description: Kit staging route family; the default keeps all routes on Hono\n        type: choice\n        required: true\n        default: hono\n        options:\n          - hono\n          - archive\n          - archive-static\n          - events\n          - home\n          - events-join\n          - events-home\n          - join\n          - ember-pages\n/,
   );
   assert.match(
     workflow,

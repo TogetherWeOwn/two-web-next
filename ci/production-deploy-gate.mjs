@@ -998,11 +998,16 @@ const KIT_BINDING_KEYS = (
   "hyperdrive queues tail_consumers version_metadata services kv_namespaces r2_buckets " +
   "d1_databases durable_objects analytics_engine_datasets ai browser workflows"
 ).split(" ");
+const KIT_CONFIG_KEYS = new Set(
+  (
+    "$schema name main compatibility_date compatibility_flags observability workers_dev " +
+    "preview_urls placement tail_consumers version_metadata keep_vars triggers queues assets hyperdrive vars"
+  ).split(" "),
+);
 
-// The inert Kit production candidate (web/wrangler.production.jsonc) is only
-// built and inventoried. It must name the production Worker, keep every Kit
-// route family off, own no crons or routes and bind exactly what the root
-// env.production binds, so its dry-run bytes are a faithful candidate.
+// Validate the source-only Kit production config without building or deploying.
+// The candidate must name the production Worker, keep every Kit route family
+// off, own no crons or routes, and match the checked production bindings.
 export function assertKitProductionCandidate(rootText, kitText) {
   const root = readWranglerConfig(rootText);
   const production = root.env?.production;
@@ -1019,17 +1024,34 @@ export function assertKitProductionCandidate(rootText, kitText) {
   if ("routes" in kit || "route" in kit || "env" in kit || kit.workers_dev !== false) {
     throw new Error("Kit candidate must not declare routes, environments or workers.dev");
   }
+  if (kit.preview_urls !== false) {
+    throw new Error("Kit candidate must disable preview URLs");
+  }
   for (const key of KIT_BINDING_KEYS) {
     if (!isDeepStrictEqual(kit[key], production[key])) {
       throw new Error(`Kit candidate ${key} bindings differ from root env.production`);
     }
   }
-  if (kit.assets?.binding !== (production.assets ?? root.assets)?.binding) {
-    throw new Error("Kit candidate assets binding differs from root env.production");
+  const expectedAssets = {
+    ...(production.assets ?? root.assets),
+    directory: ".svelte-kit/cloudflare",
+  };
+  if (!isDeepStrictEqual(kit.assets, expectedAssets)) {
+    throw new Error("Kit candidate assets settings differ from the expected production settings");
   }
-  for (const [name, value] of Object.entries(kit.vars ?? {})) {
+  for (const key of Object.keys(kit)) {
+    if (!KIT_CONFIG_KEYS.has(key)) {
+      throw new Error(`Kit candidate has unreviewed config section ${key}`);
+    }
+  }
+  for (const [name, value] of Object.entries(kit.vars)) {
     if (!KIT_ROUTE_FLAGS.includes(name) && production.vars?.[name] !== value) {
       throw new Error(`Kit candidate var ${name} differs from root env.production`);
+    }
+  }
+  for (const name of Object.keys(production.vars ?? {})) {
+    if (!Object.hasOwn(kit.vars, name)) {
+      throw new Error(`Kit candidate var ${name} is missing`);
     }
   }
 }
@@ -1362,8 +1384,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         }
       }
     } else if (process.argv[2] === "--kit-candidate") {
-      // Reads the checkout in the working directory, not this script's tree:
-      // the workflow runs the tip script against the target checkout.
+      // Validate the working-directory checkout, even when the script lives
+      // in a separate tree.
       assertKitProductionCandidate(
         readFileSync("wrangler.jsonc", "utf8"),
         readFileSync("web/wrangler.production.jsonc", "utf8"),

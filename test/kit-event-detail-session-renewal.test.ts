@@ -25,10 +25,12 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { parseSigned, serializeSigned } from "hono/utils/cookie";
 import type { AccessEntry } from "../src/access-log";
+import { AUTH_STATUS_COOKIE } from "../src/auth-status";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import {
+  kitAuthStatusCookieFor,
   kitDocumentRotationFor,
   kitSessionBridge,
   type KitLocals,
@@ -607,11 +609,11 @@ describe("route ownership", () => {
 });
 
 describe("Kit home document session renewal", () => {
-  it.each(["released", "audit refusal", "HEAD", "data", "guest"] as const)(
-    "rotates only the released authenticated GET document (%s)",
+  it.each(["member", "nonmember", "audit refusal", "HEAD", "data", "guest"] as const)(
+    "renews the session and attaches tab sync only to released authenticated GETs (%s)",
     async (result) => {
       const { deps, env, store } = harness();
-      const { cookie, token } = await mint(store, MEMBER);
+      const { cookie, token } = await mint(store, { ...MEMBER, member: result !== "nonmember" });
       const event = eventFor(
         result === "data" ? "/__data.json" : "/",
         result === "guest" ? null : cookie,
@@ -627,20 +629,33 @@ describe("Kit home document session renewal", () => {
           entry.path === "/" ? { ...entry, enabled: true } : entry,
         ),
         homeRenewalFor: renew,
+        authStatusCookieFor: kitAuthStatusCookieFor(env),
         accessSink: async () => null,
         resolve: async () => {
           if (result === "audit refusal") declareMemberResult([ATTENDEES[0]!.id]);
-          return new Response("home", { headers: { "content-type": "text/html" } });
+          return new Response("<!doctype html><html><body>home</body></html>", {
+            headers: { "content-type": "text/html" },
+          });
         },
       });
       expect(response.status).toBe(result === "audit refusal" ? 503 : 200);
       expect(response.headers.get("cache-control")).toBe("private, no-store");
-      if (result === "released") {
+      const probes = response.headers
+        .getSetCookie()
+        .filter((c) => c.startsWith(`${AUTH_STATUS_COOKIE}=`));
+      const html = await response.text();
+      if (result === "member" || result === "nonmember") {
         expect(renew).toHaveBeenCalledOnce();
         const next = expectRotationCookie(response, token);
         expect((await store.get(await hashToken(next)))?.userId).toBe(MEMBER_ID);
         expect(await store.statusHash(await hashToken(token))).toBeNull();
+        expect(html.match(/data-testid="auth-tab-sync"/g)).toHaveLength(1);
+        expect(probes).toHaveLength(1);
+        const parsed = await parseSigned(probes[0]!.split(";")[0]!, SECRET);
+        expect(parsed[AUTH_STATUS_COOKIE]).toBe(await store.statusHash(await hashToken(next)));
       } else {
+        expect(html).not.toContain('data-testid="auth-tab-sync"');
+        expect(probes).toEqual([]);
         expect(renew).not.toHaveBeenCalled();
         expect(sessionSets(response)).toEqual([]);
         expect(await store.statusHash(await hashToken(token))).not.toBeNull();
