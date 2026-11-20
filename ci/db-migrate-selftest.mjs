@@ -733,7 +733,11 @@ test("implicit ledger rights refuse; object grants preserve runtime and audit op
     const login = `serving_${randomUUID().replaceAll("-", "")}`;
     await client.unsafe(`CREATE ROLE "${login}" LOGIN`);
     try {
-      await createFixtureLedger(client);
+      assert.equal((await client`select to_regnamespace('drizzle') as schema`)[0].schema, null);
+      await assert.rejects(
+        assertServingLedgerIsolation(client, login),
+        /ledger identity.*not found/,
+      );
       await client.begin(async (tx) => {
         await assertRuntimeDefaultAcl(tx);
         for (const role of ["pg_read_all_data", "pg_write_all_data", "pg_maintain"]) {
@@ -741,6 +745,13 @@ test("implicit ledger rights refuse; object grants preserve runtime and audit op
           await assert.rejects(assertRuntimeDefaultAcl(tx), new RegExp(`/${role}/implicit`));
           await tx.unsafe(`REVOKE ${role} FROM two_web_app`);
         }
+      });
+      await createFixtureLedger(client);
+      await client.begin(async (tx) => {
+        await tx`ALTER SEQUENCE drizzle.__drizzle_migrations_id_seq OWNED BY NONE`;
+        await assert.rejects(assertServingLedgerIsolation(tx, login), /ledger identity.*not found/);
+        await tx`ALTER SEQUENCE drizzle.__drizzle_migrations_id_seq OWNED BY drizzle.__drizzle_migrations.id`;
+        await assertServingLedgerIsolation(tx, login);
       });
 
       await client.unsafe(`GRANT pg_read_all_data, pg_write_all_data TO "${login}"`);
