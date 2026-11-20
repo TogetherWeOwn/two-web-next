@@ -2435,7 +2435,7 @@ test("Kit member event detail captures the ended record at both widths", async (
       await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 6, recurrence_index = 1
         where event_key = ${endedKey}`;
       await sql`update events set parent_event_id = (select id from events where event_key = ${endedKey}),
-        recurrence_index = 2 where event_key = ${adjacentKey}`;
+        recurrence_index = 6 where event_key = ${adjacentKey}`;
       for (const sibling of [
         { key: laterKey, days: 14, status: "published", index: 3 },
         { key: nextKey, days: 7, status: "published", index: 4 },
@@ -2448,7 +2448,7 @@ test("Kit member event detail captures the ended record at both widths", async (
       }
       await sql`insert into events (event_key, title, starts_at, ends_at, status, parent_event_id, recurrence_index)
         select ${unreadableKey}, title, ${new Date(now + 172_800_000)}, 'infinity'::timestamptz,
-          'published', id, 6 from events where event_key = ${endedKey}`;
+          'published', id, 2 from events where event_key = ${endedKey}`;
       await sql`insert into rsvps (event_id, user_id, status)
         select id, ${userId}, 'going' from events where event_key = ${endedKey}`;
     });
@@ -2464,6 +2464,7 @@ test("Kit member event detail captures the ended record at both widths", async (
       },
     ]);
     const page = await context.newPage();
+    const siblingPagerLink = page.locator(`[data-testid="event-next"][href="/e/${adjacentKey}"]`);
     for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
       const response = await page.goto(`/e/${endedKey}`);
@@ -2479,16 +2480,44 @@ test("Kit member event detail captures the ended record at both widths", async (
       await expect(time.locator('time[datetime="2026-01-02T06:00:00.000Z"]')).toHaveText(
         "2 Jan 2026, 01:00",
       );
-      await expect(page.getByTestId("event-series-next")).toHaveAttribute(
-        "href",
-        `/e/${adjacentKey}`,
+      await expect(page.getByTestId("event-series-next")).toHaveCount(0);
+      await expect(siblingPagerLink).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: "Sign-up record", exact: true })).toHaveCount(
+        1,
       );
+      await expect(page.getByRole("region", { name: "Event overview" })).not.toContainText(
+        "Sign-up record",
+      );
+      await expect(page.getByRole("heading", { name: "Signed up (1)" })).toBeVisible();
+      const facts = page
+        .getByRole("definition")
+        .filter({ has: page.getByText("1 listed sign-up", { exact: true }) });
+      await expect(facts).toHaveCount(1);
+      await expect(page.getByRole("heading", { name: "Save the date" })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: /Add to calendar|Google Calendar/ })).toHaveCount(
+        0,
+      );
+      await expect(page.getByLabel("Event link")).toBeVisible();
+      const comparisons = page.locator(".event-meta .event-device-timezone");
+      await expect(comparisons).toHaveCount(4);
+      for (const comparison of await comparisons.all())
+        expect(await comparison.boundingBox()).toBeNull();
+      const hiddenRows = page.locator(".event-meta > div[hidden]");
+      await expect(hiddenRows).toHaveCount(2);
+      for (const row of await hiddenRows.all()) expect(await row.boundingBox()).toBeNull();
+      for (const fact of ["Starts", "Ends"]) {
+        const row = page
+          .locator(".event-meta > div")
+          .filter({ has: page.getByText(fact, { exact: true }) });
+        expect((await row.boundingBox())?.height).toBeLessThan(160);
+      }
       await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
-      await expect(record).toContainText("No Echo for this one. 1 signed up.");
+      await expect(record).toContainText("No Echo for this one. 1 listed sign-up.");
       await expect(record.getByRole("link", { name: /^Next one:/ })).toHaveAttribute(
         "href",
         `/e/${nextKey}`,
       );
+      await expect(page.locator(`a[href="/e/${nextKey}"]`)).toHaveCount(1);
       if (width === 390) {
         await expect(
           page.locator(
@@ -2504,6 +2533,26 @@ test("Kit member event detail captures the ended record at both widths", async (
       await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
       await test.info().attach(name, { path, contentType: "image/png" });
     }
+    await withSessionDb(async (sql) => {
+      await sql`update events set status = 'past' where event_key in (${nextKey}, ${laterKey})`;
+      await sql`update rsvps set user_id = '900000000000000849'
+        where user_id = ${userId} and event_id = (select id from events where event_key = ${endedKey})`;
+    });
+    expect((await page.reload())?.status()).toBe(200);
+    await expect(page.getByRole("region", { name: "Sign-up record" })).toBeVisible();
+    await expect(page.getByRole("link", { name: /^Next one:/ })).toHaveCount(0);
+    await expect(page.getByTestId("event-series-next")).toHaveCount(0);
+    await expect(siblingPagerLink).toHaveCount(0);
+    await expect(page.getByTestId("event-roster-empty")).toContainText("No sign-ups are listed.");
+    await expect(page.locator(".event-meta [data-count]")).toHaveText("0 listed sign-ups");
+    await expect(page.getByRole("region", { name: "Sign-up record" })).toContainText(
+      "0 listed sign-ups",
+    );
+    await withSessionDb(async (sql) => {
+      await sql`update events set parent_event_id = null, recurrence_index = null where event_key = ${adjacentKey}`;
+    });
+    expect((await page.reload())?.status()).toBe(200);
+    await expect(siblingPagerLink).toBeVisible();
   } finally {
     await context.close();
     await withSessionDb(async (sql) => {
