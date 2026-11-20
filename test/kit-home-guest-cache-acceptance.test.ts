@@ -624,19 +624,22 @@ describe("Kit home guest cache: correlation and DTOs", () => {
       () => f.discord,
       now,
     );
-    expect(data.upcomingEvents).toEqual(directUpcoming.items);
+    const guestItems = ({ items }: typeof directUpcoming) =>
+      items.map((row) => (row.source === "canonical" ? { ...row, organizer_name: null } : row));
+    expect(data.upcomingEvents).toEqual(guestItems(directUpcoming));
     expect(data.eventsUnavailable).toBe(directUpcoming.unavailable);
     expect(data.upcomingEvents.map((row) => row.title)).toEqual(["Game night 1", "Game night 2"]);
-    // The load contract keeps its fields: nothing dropped, nothing added.
     expect(Object.keys(data).sort()).toEqual([
       "appUrl",
       "counts",
+      "countsSnapshot",
       "eventsUnavailable",
       "featured",
       "homeCopy",
       "imageHosts",
       "inviteUrl",
       "joinResult",
+      "memberRsvps",
       "notice",
       "session",
       "sessionUnavailable",
@@ -654,7 +657,7 @@ describe("Kit home guest cache: correlation and DTOs", () => {
     );
     expect(degraded.eventsUnavailable).toBe(false);
     expect(degraded.eventsUnavailable).toBe(directDegraded.unavailable);
-    expect(degraded.upcomingEvents).toEqual(directDegraded.items);
+    expect(degraded.upcomingEvents).toEqual(guestItems(directDegraded));
   });
 });
 
