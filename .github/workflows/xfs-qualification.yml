@@ -125,12 +125,17 @@ jobs:
         env:
           PARITY_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: |
-          mkdir -p artifacts/production-kit-parity
-          node --test ci/parity/upload-rehearsal.test.mjs | tee artifacts/production-kit-parity/upload-fixtures.tap
+          out=artifacts/production-kit-parity
+          mkdir -p "$out"
+          rm -f "$out/comparison.json" "$out/upload-rehearsal.json"
+          node --test --test-reporter=tap ci/parity/upload-rehearsal.test.mjs | tee "$out/upload-fixtures.tap"
           result=0
           bash ci/xfs-qualification-fixture.sh node --import tsx ci/parity/production.mjs 2>&1 \
-            | tee artifacts/production-kit-parity/runner.log || result=$?
-          grep -Fx 'Fixture mounts and backing file removed' artifacts/production-kit-parity/runner.log
+            | tee "$out/runner.log" || result=$?
+          grep -Fx 'Fixture mounts and backing file removed' "$out/runner.log"
+          if (( result == 0 )); then
+            node ci/parity/verify-upload-rehearsal.mjs "$out"
+          fi
           exit "$result"
       - name: Retain production-config parity evidence
         if: always() && steps.production-parity.outcome != 'skipped'

@@ -64,7 +64,9 @@ export async function compareDryRun(bytes, expected, tag) {
   const extra = [...modules.keys()].filter((name) => !Object.hasOwn(expected, name)).sort();
   const changed = Object.keys(expected).filter((name) => {
     const part = modules.get(name);
-    return part && (part.sha256 !== expected[name] || part.type !== "application/javascript+module");
+    return (
+      part && (part.sha256 !== expected[name] || part.type !== "application/javascript+module")
+    );
   });
   return {
     sameModuleBytes: missing.length === 0 && extra.length === 0 && changed.length === 0,
@@ -93,7 +95,11 @@ export async function rehearseUpload({
   const lock = JSON.parse(await readFile(join(repo, "web/package-lock.json"), "utf8"));
   const tool = join(repo, "web/node_modules/wrangler");
   const { version } = JSON.parse(await readFile(join(tool, "package.json"), "utf8"));
-  assert.equal(version, lock.packages[""].devDependencies.wrangler, "Wrangler must use the web pin");
+  assert.equal(
+    version,
+    lock.packages[""].devDependencies.wrangler,
+    "Wrangler must use the web pin",
+  );
   assert.equal(version, lock.packages["node_modules/wrangler"].version, "Wrangler lock mismatch");
   const prefix = `${basename(installed.assets)}/`;
   const assetInputs = Object.fromEntries(
@@ -141,7 +147,10 @@ export async function rehearseUpload({
         const stat = await lstat(outfile);
         assert.ok(stat.isFile() && stat.size <= 64 * 1024 * 1024, "invalid Wrangler output file");
         const comparison = await compareDryRun(await readFile(outfile), expected, tag);
-        result = { outcome: comparison.sameModuleBytes ? "matched" : "module-mismatch", comparison };
+        result = {
+          outcome: comparison.sameModuleBytes ? "matched" : "module-mismatch",
+          comparison,
+        };
       } catch (error) {
         result = { outcome: "invalid-envelope", error: error.message };
       }
@@ -152,14 +161,15 @@ export async function rehearseUpload({
   }
   return {
     schema: "two.kit-parity-upload-rehearsal.v1",
-    scope: "credential-free dry run only; not selected remote assets, an upload UUID, deployed parity, or qualified recovery",
+    scope:
+      "credential-free dry run only; not selected remote assets, an upload UUID, deployed parity, or qualified recovery",
     ...context,
     tag,
     kitConfigSha256: identity.kitConfigSha256,
     installedOutputSha256: identity.installedOutputSha256,
     workerSha256: expected[ENTRY_NAME],
     assetInputTreeSha256: sha256(JSON.stringify(assetInputs)),
-    controlFiles: { "_headers": assetInputs._headers, ".assetsignore": assetInputs[".assetsignore"] },
+    controlFiles: { _headers: assetInputs._headers, ".assetsignore": assetInputs[".assetsignore"] },
     wrangler: { version, command },
     scratchRemoved: true,
     ...result,

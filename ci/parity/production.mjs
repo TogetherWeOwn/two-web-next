@@ -249,7 +249,8 @@ async function main() {
     // An incompatible tool is a recorded refusal, not a failed route replay
     // or successful byte comparison. Nothing consumes this as a release gate.
     if (rehearsal.outcome === "matched") console.log("Dry-run module bytes match parity inputs");
-    else console.warn(`No upload rehearsal match (${rehearsal.outcome}); see upload-rehearsal.json`);
+    else
+      console.warn(`No upload rehearsal match (${rehearsal.outcome}); see upload-rehearsal.json`);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
