@@ -1193,7 +1193,6 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3]
-    # Keep SQL tests serial inside each shard, with an isolated Postgres service.
     container:
       image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
       options: --cgroupns=host
@@ -1229,7 +1228,7 @@ jobs:
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ strategy.job-total }}
-          VITEST_COVERAGE_SHARD: '1'
+          VITEST_COVERAGE_SHARD: "1"
         run: npm run test:coverage -- --shard="$SHARD/$SHARDS" --reporter=dot --reporter=blob --outputFile.blob="vitest-$SHARD.json"
       - name: Upload coverage shard report
         if: success() || (failure() && hashFiles(format('vitest-{0}.json', matrix.shard)) != '')

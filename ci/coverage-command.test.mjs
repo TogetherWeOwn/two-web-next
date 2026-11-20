@@ -73,7 +73,7 @@ test("coverage shards preserve serial threads and the merge uses the canonical c
   assert.match(shard, /SHARDS: \$\{\{ strategy\.job-total \}\}/);
   const capture =
     'npm run test:coverage -- --shard="$SHARD/$SHARDS" --reporter=dot --reporter=blob';
-  assert(shard.includes(`VITEST_COVERAGE_SHARD: '1'\n        run: ${capture} `));
+  assert(shard.includes(`VITEST_COVERAGE_SHARD: "1"\n        run: ${capture} `));
   assert.equal(workflow.match(/VITEST_COVERAGE_SHARD:/g)?.length, 1);
   const artifact =
     /if-no-files-found: error\n          overwrite: true\n          retention-days: 30\b/;
@@ -413,6 +413,7 @@ test("Tier-0 and patch coverage run when earlier steps in their own jobs succeed
   assert.equal(simulateCheckJob({ scope: codeScope }).get(TIER0), "success");
   const noReport = simulateCheckJob({ scope: codeScope, reportPresent: false }, mergeSteps);
   assert.equal(noReport.get(PATCH), "success");
+  assert.equal(noReport.get(UPLOAD), "skipped");
 });
 
 for (const failing of [COVERAGE, PATCH]) {
