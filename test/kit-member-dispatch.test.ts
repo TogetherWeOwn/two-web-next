@@ -503,7 +503,7 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest keeps the homepage, privacy, rules, join and recover on Hono, assigns the public archive, events list, hot-zones, about and faq leaves, member board and join-attempts list and detail to Kit, and holds the admin dashboard, featured list, create and edit forms, activity log, event-create and event-edit forms and profile reads on Hono", () => {
+  it("ships the reviewed native route entries and keeps other reads on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       {
@@ -518,7 +518,7 @@ describe("decideRoute", () => {
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
       { method: "GET", path: "/faq", enabled: true, reads: "public" },
-      { method: "GET", path: "/join", enabled: false, reads: "public" },
+      { method: "GET", path: "/join", enabled: true, reads: "public" },
       {
         method: "GET",
         path: "/admin",
@@ -580,7 +580,7 @@ describe("decideRoute", () => {
         enabled: true,
         reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
       },
-      { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
+      { method: "GET", path: "/auth/recover", enabled: true, reads: "public" },
       {
         method: "GET",
         path: "/profile",
@@ -613,10 +613,19 @@ describe("decideRoute", () => {
     const archive = ROUTE_MANIFEST.find((entry) => entry.path === "/events/past");
     expect(decideRoute(get, ROUTE_MANIFEST)).toBe(archive);
     expect(decideRoute(get, [{ ...archive!, enabled: false }])).toBeUndefined();
-    expect(decideRoute(new Request(new URL("/join", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
-    // The moderator dashboard, featured list, create and edit forms,
-    // activity log, events list and recovery page stay
-    // Hono-served until their enablement reviews.
+    for (const path of ["/join", "/auth/recover"]) {
+      const url = new URL(path, APP_URL);
+      const entry = ROUTE_MANIFEST.find((route) => route.method === "GET" && route.path === path);
+      expect(entry).toMatchObject({ enabled: true, reads: "public" });
+      expect(decideRoute(new Request(url))).toBe(entry);
+      expect(decideRoute(new Request(url, { method: "HEAD" }))).toBe(entry);
+      expect(decideRoute(new Request(url, { method: "POST" }))).toBeUndefined();
+    }
+    for (const path of ["/join/discord", "/join/callback"]) {
+      expect(decideRoute(new Request(new URL(path, APP_URL)))).toBeUndefined();
+    }
+    // The moderator dashboard, featured list, create and edit forms, and
+    // activity log stay Hono-served until their enablement reviews.
     expect(decideRoute(new Request(new URL("/admin", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
     expect(
       decideRoute(new Request(new URL("/admin/featured", APP_URL)), ROUTE_MANIFEST),
@@ -655,8 +664,5 @@ describe("decideRoute", () => {
     expect(decideRoute(new Request(new URL("/profile", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
     // Live event detail stays Hono-served until the RSVP companion passes.
     expect(decideRoute(new Request(new URL("/e/abc123", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
-    expect(
-      decideRoute(new Request(new URL("/auth/recover", APP_URL)), ROUTE_MANIFEST),
-    ).toBeUndefined();
   });
 });

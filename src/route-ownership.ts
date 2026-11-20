@@ -27,6 +27,7 @@ import { newRequestId, safeRequestId } from "./request-log";
 import { withStreamedBody } from "./html-stream";
 import { applySingleValidator } from "./http/conditional";
 import { transformContentLeafChunk } from "./kit-content-chunk";
+import type { KitHomePanels } from "./kit-home-panels";
 import type { KitLocals } from "./kit-session";
 import type { RecoveryRender } from "./recovery-outcome";
 import { isKitNoticeDocument, readKitRestoredWrite } from "./kit-restored-write";
@@ -59,9 +60,9 @@ export interface RouteDecision {
 }
 
 // The archive page, events list, hot-zone heatmaps, member board and the
-// about/faq leaves render natively; privacy/rules/join/recovery/profile reads
-// and admin routes stay on Hono until their enablement is reviewed. Returning
-// an enabled entry to `enabled: false` restores Hono ownership as the rollback.
+// about/faq, join and recovery leaves render natively; privacy/rules/profile
+// reads and the remaining admin routes stay on Hono pending enablement review.
+// Returning an entry to `enabled: false` restores Hono ownership for rollback.
 // Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
@@ -86,7 +87,7 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
   { method: "GET", path: "/faq", enabled: true, reads: "public" },
-  { method: "GET", path: "/join", enabled: false, reads: "public" },
+  { method: "GET", path: "/join", enabled: true, reads: "public" },
   // Moderator dashboard: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
   // viewer. Off until the enablement review: the Hono panel answers meanwhile.
@@ -218,7 +219,7 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: true,
     reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
   },
-  { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
+  { method: "GET", path: "/auth/recover", enabled: true, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
   // rendering stays off until edit parity reviews enablement; write siblings
   // and the retired /members directory have no entries and stay Hono-owned.
@@ -595,6 +596,9 @@ export interface HookDispatchDeps {
   // resolve, so Kit loads share one session decision. Absent by default:
   // without it the dispatch behaves exactly as before.
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
+  // Fixed, viewer-invariant home panels. No session or resolve callback.
+  homePanelsFor?: (request: Request) => Promise<KitHomePanels>;
+  homeRenewalFor?: (event: HookEventLike) => Promise<string | null>;
   // The member-document proof is supplied only after audit release and full-HTML
   // classification below; callers without it retain the moderator admin scope.
   authStatusCookieFor?: (
@@ -1066,7 +1070,11 @@ async function dispatchOwnedRequest(
         requestId,
       );
     } else {
-      await bridgeSession();
+      const [, homePanels] = await Promise.all([
+        bridgeSession(),
+        route.path === "/" ? deps.homePanelsFor?.(event.request) : undefined,
+      ]);
+      if (homePanels) event.locals = { ...(event.locals as object), homePanels };
       response = await renderMemberRead(event, reads, deps, (released) => {
         releasedMemberResponse = released;
       });
@@ -1147,15 +1155,28 @@ async function dispatchOwnedRequest(
       });
     }
   }
-  // Sliding renewal for the released Kit event detail, at the same
+  // Sliding renewal for the released Kit home and event detail, at the same
   // post-response position as the probe append above. A rotation that loses
   // its race resolves to no cookie (the next read retries with a live
   // bearer); a rotation store failure warns and likewise renews nothing —
   // the already-rendered member page still stands, and the old row stays
   // live because rotate is one atomic statement.
-  if (deps.eventDetailRotationFor && releasedEventDetailRenewsSession(route, event, response)) {
+  const renewHome =
+    route.path === "/" &&
+    response === releasedMemberResponse &&
+    event.request.method === "GET" &&
+    !event.isDataRequest &&
+    response.status === 200 &&
+    response.headers.get("content-type")?.includes("text/html") &&
+    locals?.status === "authenticated";
+  const documentRotationFor = renewHome
+    ? deps.homeRenewalFor
+    : releasedEventDetailRenewsSession(route, event, response)
+      ? deps.eventDetailRotationFor
+      : undefined;
+  if (documentRotationFor) {
     try {
-      const cookie = await deps.eventDetailRotationFor(event);
+      const cookie = await documentRotationFor(event);
       if (cookie) {
         const headers = new Headers(response.headers);
         headers.append("set-cookie", cookie);
@@ -1166,7 +1187,7 @@ async function dispatchOwnedRequest(
         });
       }
     } catch (err) {
-      console.warn("kit event-detail rotation unavailable; rendering without renewal.", {
+      console.warn("kit document rotation unavailable; rendering without renewal.", {
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
     }

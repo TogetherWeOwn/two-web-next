@@ -21,10 +21,94 @@ import {
   normalizeHeaders,
   normalizeSetCookie,
 } from "./normalize.mjs";
+import { readWranglerConfig } from "../wrangler-config.mjs";
+import { assertFixtureAdmission, comparePreHookAssets, productionTargets } from "./production.mjs";
 import { signedCookieNames } from "./signed-cookies.mjs";
 import { buildVectors, concretePath, listPublicFiles, slug } from "./vectors.mjs";
 
 const repo = join(import.meta.dirname, "../..");
+test("production replay refuses missing/on flags, mismatched origin and wrong output shape", () => {
+  const config = (path) => readWranglerConfig(readFileSync(join(repo, path), "utf8"));
+  const root = config("wrangler.jsonc");
+  const kit = config("web/wrangler.production.jsonc");
+  const targets = productionTargets(root, kit);
+  assert.equal(targets.hono.vars.APP_URL, root.env.production.vars.APP_URL);
+  const candidate = targets.kit("installed-entry", "installed-assets");
+  assert.equal(candidate.main, "installed-entry");
+  assert.equal(candidate.assets.directory, "installed-assets");
+  for (const target of [targets.hono, candidate]) {
+    for (const key of ["hyperdrive", "routes", "tail_consumers", "triggers"])
+      assert.ok(!(key in target), `${key} must not enter local replay`);
+  }
+  for (const [flag, value] of Object.entries(kit.vars)) {
+    if (!flag.startsWith("KIT_ROUTE_")) continue;
+    assert.equal(value, "false");
+    for (const invalid of [undefined, true, false, "true"]) {
+      assert.throws(
+        () => productionTargets(root, { ...kit, vars: { ...kit.vars, [flag]: invalid } }),
+        new RegExp(`${flag}=false`),
+      );
+    }
+  }
+  assert.throws(
+    () =>
+      productionTargets(root, { ...kit, vars: { ...kit.vars, APP_URL: "https://example.org" } }),
+    /production origin/,
+  );
+  assert.throws(() => productionTargets(root, { ...kit, main: "stock.js" }), /_worker\.js/);
+  const overrides = [{ main: "other.ts" }, { assets: { ...root.assets, directory: "other" } }];
+  for (const override of overrides) {
+    const production = { ...root.env.production, ...override };
+    assert.throws(() => productionTargets({ ...root, env: { production } }, kit), /Hono/);
+  }
+});
+
+test("production replay rejects matching but wrongly denied writes", () => {
+  const dir = join(repo, "test/fixtures/parity");
+  const golden = readdirSync(dir).find((name) => name.startsWith("hono-"));
+  const recording = loadRecording(join(dir, golden));
+  assertFixtureAdmission(recording, "control");
+  recording.get("routes/logout").POST.response.status = 403;
+  assert.equal(compareRecordings(recording, structuredClone(recording)).failures.length, 0);
+  assert.throws(() => assertFixtureAdmission(recording, "control"), /routes\/logout#POST/);
+});
+
+test("pre-hook assets require GET/HEAD, exact 304, no cookies and the reviewed static CSP", () => {
+  const path = "/_app/version.json";
+  const name = "content-security-policy";
+  const csp = "img-src 'self' https://cdn.discordapp.com";
+  const safe = { [name]: csp, "x-frame-options": "DENY" };
+  const dynamic = { ...safe, [name]: `${csp} https://example.org` };
+  const row = (status, headers = safe, setCookies = []) => ({
+    response: { status, headers, setCookies },
+  });
+  const recording = (vectors) => new Map([[`static/${slug(path)}`, vectors]]);
+  const exact = "GET if-none-match:exact";
+  const miss = row(404, dynamic);
+  const hono = recording({ GET: miss, HEAD: miss, [exact]: miss });
+  const compare = (vectors) =>
+    comparePreHookAssets(hono, recording(vectors), [path], Object.keys(safe), csp);
+  const request = { headers: { "if-none-match": '"asset"' } };
+  const get = row(200, { ...safe, etag: '"asset"' });
+  const good = { GET: get, HEAD: row(200), [exact]: { ...row(304), request } };
+  assert.equal(compare(good).failures.length, 0);
+  assert.equal(compare({ ...good, GET: row(200) }).failures[0]?.field, "request.if-none-match");
+  const bad = {
+    GET: row(404, { etag: '"asset"' }),
+    [exact]: { ...row(200, dynamic, ["fixture"]), request },
+  };
+  const fields = ["status", `headers.${name}`, "headers.x-frame-options", "missing"];
+  assert.deepEqual(
+    compare(bad).failures.map(({ field }) => field),
+    [...fields, "status", "setCookies", `headers.${name}`],
+  );
+  delete dynamic[name];
+  assert.deepEqual(
+    compare(good).failures.map(({ field }) => field),
+    Array(3).fill(`headers.${name}`),
+  );
+});
+
 const inventory = JSON.parse(
   readFileSync(join(repo, "test/fixtures/route-inventory.json"), "utf8"),
 );

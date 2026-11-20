@@ -27,6 +27,7 @@ import {
   SEQUENCE_RIGHTS,
   TABLE_RIGHTS,
   assertRuntimeDefaultAcl,
+  assertServingLedgerIsolation,
   validateMigrationSql,
 } from "./migration-runtime-rights.mjs";
 
@@ -725,6 +726,116 @@ async function assertLedgerRefused(client, run, reason) {
   );
   assert.equal((await client`select to_regclass('public.users') as name`)[0].name, null);
 }
+
+test("implicit ledger rights refuse; object grants preserve runtime and audit operations", async () => {
+  await fixture(async ({ client }) => {
+    const created = await ensureRuntimeRole(client);
+    const login = `serving_${randomUUID().replaceAll("-", "")}`;
+    await client.unsafe(`CREATE ROLE "${login}" LOGIN`);
+    try {
+      assert.equal((await client`select to_regnamespace('drizzle') as schema`)[0].schema, null);
+      await assert.rejects(
+        assertServingLedgerIsolation(client, login),
+        /ledger identity.*not found/,
+      );
+      await client.begin(async (tx) => {
+        await assertRuntimeDefaultAcl(tx);
+        for (const role of ["pg_read_all_data", "pg_write_all_data", "pg_maintain"]) {
+          await tx.unsafe(`GRANT ${role} TO two_web_app`);
+          await assert.rejects(assertRuntimeDefaultAcl(tx), new RegExp(`/${role}/implicit`));
+          await tx.unsafe(`REVOKE ${role} FROM two_web_app`);
+        }
+      });
+      await createFixtureLedger(client);
+      await client.begin(async (tx) => {
+        await tx`ALTER SEQUENCE drizzle.__drizzle_migrations_id_seq OWNED BY NONE`;
+        await assert.rejects(assertServingLedgerIsolation(tx, login), /ledger identity.*not found/);
+        await tx`ALTER SEQUENCE drizzle.__drizzle_migrations_id_seq OWNED BY drizzle.__drizzle_migrations.id`;
+        await assertServingLedgerIsolation(tx, login);
+      });
+
+      await client.unsafe(`GRANT pg_read_all_data, pg_write_all_data TO "${login}"`);
+      const effective = () => client`
+        select has_schema_privilege(${login}::name, 'drizzle', 'USAGE, CREATE') as schema_access,
+          has_table_privilege(${login}::name, 'drizzle.__drizzle_migrations',
+            'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN') as table_access,
+          has_any_column_privilege(${login}::name, 'drizzle.__drizzle_migrations',
+            'SELECT, INSERT, UPDATE, REFERENCES') as column_access,
+          has_sequence_privilege(${login}::name, 'drizzle.__drizzle_migrations_id_seq',
+            'SELECT, UPDATE, USAGE') as sequence_access`;
+      assert.deepEqual(await runtimeAcl(client, "drizzle.__drizzle_migrations"), []);
+      assert.deepEqual(Object.values((await effective())[0]), [true, true, true, true]);
+      await assertRuntimeDefaultAcl(client);
+      await assert.rejects(assertServingLedgerIsolation(client, login), /implicit USAGE/);
+      await assert.rejects(assertServingLedgerIsolation(client, `${login}_missing`), /not found/);
+
+      await client.unsafe(`
+        CREATE TABLE public.events (id serial PRIMARY KEY, title text NOT NULL);
+        CREATE TABLE public.agent_event_audits (id serial PRIMARY KEY, created_at timestamptz DEFAULT now());
+        CREATE TABLE public.member_data_access_logs (id serial PRIMARY KEY, occurred_at timestamptz DEFAULT now());
+        CREATE TABLE public.activity_log (id serial PRIMARY KEY, created_at timestamptz DEFAULT now());
+        ${readFileSync(join(source, "1018_audit-immutability.sql"), "utf8")}
+        GRANT USAGE ON SCHEMA public TO "${login}";
+        GRANT SELECT, INSERT, UPDATE ON public.events TO "${login}";
+        GRANT USAGE ON SEQUENCE public.events_id_seq TO "${login}";
+        GRANT SELECT, INSERT, DELETE ON public.agent_event_audits, public.member_data_access_logs TO "${login}";
+        GRANT SELECT, INSERT ON public.activity_log TO "${login}";
+        GRANT USAGE ON SEQUENCE public.agent_event_audits_id_seq,
+          public.member_data_access_logs_id_seq, public.activity_log_id_seq TO "${login}";
+        REVOKE pg_read_all_data, pg_write_all_data FROM "${login}";
+      `);
+      assert.deepEqual(Object.values((await effective())[0]), [false, false, false, false]);
+      await assertServingLedgerIsolation(client, login);
+      await client.unsafe("GRANT SELECT (hash) ON drizzle.__drizzle_migrations TO PUBLIC");
+      await assert.rejects(assertServingLedgerIsolation(client, login), /hash\/PUBLIC\/SELECT/);
+      await client.unsafe("REVOKE SELECT (hash) ON drizzle.__drizzle_migrations FROM PUBLIC");
+      await assertServingLedgerIsolation(client, login);
+
+      await client.begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL ROLE "${login}"`);
+        const [{ id }] = await tx`INSERT INTO events (title) VALUES ('Fixture') RETURNING id`;
+        await tx`UPDATE events SET title = 'Changed' WHERE id = ${id}`;
+        assert.equal((await tx`SELECT title FROM events WHERE id = ${id}`)[0].title, "Changed");
+        for (const [table, age] of [
+          ["agent_event_audits", "created_at"],
+          ["member_data_access_logs", "occurred_at"],
+          ["activity_log", "created_at"],
+        ]) {
+          const [sequence] = await tx`
+            select has_sequence_privilege(${`public.${table}_id_seq`}, 'USAGE') as usage,
+                   has_sequence_privilege(${`public.${table}_id_seq`}, 'SELECT, UPDATE') as excess`;
+          assert.deepEqual({ ...sequence }, { usage: true, excess: false });
+          const [{ id }] = await tx`INSERT INTO ${tx(table)} DEFAULT VALUES RETURNING id`;
+          assert.equal((await tx`SELECT id FROM ${tx(table)} WHERE id = ${id}`).length, 1);
+          await assert.rejects(
+            tx.savepoint((sp) => sp.unsafe(`UPDATE ${table} SET ${age} = now()`)),
+            { code: "42501" },
+          );
+          await assert.rejects(
+            tx.savepoint((sp) => sp.unsafe(`TRUNCATE ${table}`)),
+            { code: "42501" },
+          );
+          await assert.rejects(
+            tx.savepoint((sp) => sp.unsafe(`DELETE FROM ${table}`)),
+            { code: "42501" },
+          );
+          if (table !== "activity_log") {
+            await tx.unsafe(`INSERT INTO ${table} (${age}) VALUES (now() - interval '91 days')`);
+            assert.equal(
+              (await tx.unsafe(`DELETE FROM ${table} WHERE ${age} < now() - interval '90 days'`))
+                .count,
+              1,
+            );
+          }
+        }
+      });
+    } finally {
+      await client.unsafe(`DROP OWNED BY "${login}"`);
+      await client.unsafe(`DROP ROLE "${login}"`);
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
 
 test("runtime ownership refuses even when ledger relation ACLs are NULL", async () => {
   await fixture(async ({ client, run }) => {
@@ -1617,7 +1728,10 @@ assert.deepEqual(state.statements, [
    ORDER BY 1, 2, 3, 4, 5, 6
 `)},
   ${JSON.stringify(`
-  WITH targets(oid) AS (
+  WITH runtimes AS (
+    SELECT oid FROM pg_roles
+     WHERE rolname = 'two_web_app' OR (rolcanlogin AND rolname::text = $1::text)
+  ), targets(oid) AS (
     SELECT to_regclass('drizzle.__drizzle_migrations')
     UNION ALL
     SELECT CASE WHEN to_regclass('drizzle.__drizzle_migrations') IS NULL THEN NULL
@@ -1643,17 +1757,32 @@ assert.deepEqual(state.statements, [
       FROM pg_namespace AS n
       CROSS JOIN LATERAL aclexplode(n.nspacl) AS acl
      WHERE n.nspname = 'drizzle'
+    UNION ALL
+    -- Predefined roles confer rights without any object ACL entry. Check
+    -- reachability even before bootstrap creates the ledger and schema.
+    SELECT 'schema drizzle', oid, 'implicit USAGE', false FROM pg_roles
+     WHERE rolname IN ('pg_read_all_data', 'pg_write_all_data')
+    UNION ALL
+    SELECT '__drizzle_migrations', oid, 'implicit MAINTAIN', false FROM pg_roles
+     WHERE rolname = 'pg_maintain'
   )
   SELECT object_name,
-         CASE WHEN grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(grantee) END AS grantee,
+         CASE WHEN grantee = 0 THEN 'PUBLIC'
+              WHEN $1::text IS NOT NULL THEN 'runtime-reachable role'
+              ELSE pg_get_userbyid(grantee) END AS grantee,
          privilege_type,
          is_grantable,
          CASE WHEN grantee = 0 THEN true ELSE EXISTS (
-           SELECT 1 FROM pg_roles AS runtime
-            WHERE runtime.rolname = 'two_web_app'
-              AND pg_has_role(runtime.oid, rights.grantee, 'MEMBER')
+           SELECT 1 FROM runtimes AS runtime WHERE pg_has_role(runtime.oid, rights.grantee, 'MEMBER')
          ) END AS runtime_access
     FROM rights
+  UNION ALL
+  SELECT 'serving login or ledger identity', 'configured runtime', 'not found', false, true
+   WHERE $1::text IS NOT NULL AND (
+     NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolcanlogin AND rolname::text = $1::text)
+     OR NOT EXISTS (SELECT 1 FROM objects WHERE relkind = 'r' AND relname = '__drizzle_migrations')
+     OR NOT EXISTS (SELECT 1 FROM objects WHERE relkind = 'S')
+   )
    ORDER BY 1, 2, 3, 4
 `)},
   "select coalesce((select rolsuper from pg_roles where rolname = current_user), false) as is_superuser",

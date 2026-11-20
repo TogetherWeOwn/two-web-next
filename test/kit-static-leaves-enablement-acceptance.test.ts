@@ -91,7 +91,7 @@ describe("static leaves enablement acceptance (shipped manifest)", () => {
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
       { method: "GET", path: "/faq", enabled: true, reads: "public" },
-      { method: "GET", path: "/join", enabled: false, reads: "public" },
+      { method: "GET", path: "/join", enabled: true, reads: "public" },
       {
         method: "GET",
         path: "/admin",
@@ -153,7 +153,7 @@ describe("static leaves enablement acceptance (shipped manifest)", () => {
         enabled: true,
         reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
       },
-      { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
+      { method: "GET", path: "/auth/recover", enabled: true, reads: "public" },
       {
         method: "GET",
         path: "/profile",

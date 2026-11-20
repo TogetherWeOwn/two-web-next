@@ -333,6 +333,7 @@ exactly once.
 | `src/kit-event-states.ts` | events |
 | `src/kit-events-html.tsx` | events |
 | `src/kit-events.ts` | events |
+| `src/kit-home-panels.ts` | content |
 | `src/kit-hotzones.ts` | events |
 | `src/kit-members.ts` | profiles |
 | `src/kit-past-events.ts` | events |

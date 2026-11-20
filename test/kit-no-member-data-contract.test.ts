@@ -12,7 +12,7 @@
 // `/events/past`, `/about`, `/faq`, `/rules`, `/privacy`, `/join`,
 // `/hotzones`, `/hotzones/joins`, `/hotzones/voice`, `/hotzones/games`.
 // Out of scope per the card: `/e/:key` (Hono-owned member-read boundary) and
-// `/auth/recover` (Hono-owned transient outcome page).
+// `/auth/recover` (Hono-admitted transient document with no Kit data response).
 //
 // Leak model notes:
 // - `events.created_by` / `featured_contents.created_by` hold the authoring
@@ -436,7 +436,10 @@ beforeAll(async () => {
   await build({
     stdin: {
       contents: [
-        `export { load as homeLoad } from ${JSON.stringify(route("web/src/routes/+page.server.ts"))};`,
+        `import { env } from "cloudflare:workers";`,
+        `import { load as routeLoad } from ${JSON.stringify(route("web/src/routes/+page.server.ts"))};`,
+        `import { prepareKitHomePanels } from ${JSON.stringify(join(root, "src/kit-home-panels.ts"))};`,
+        `export const homeLoad = async (args) => routeLoad({ ...args, locals: { ...args.locals, homePanels: await prepareKitHomePanels(env, args.request) } });`,
         `export { load as pastLoad } from ${JSON.stringify(route("web/src/routes/events/past/+page.server.ts"))};`,
         `export { load as joinLoad } from ${JSON.stringify(route("web/src/routes/join/+page.server.ts"))};`,
         `export { load as aboutLoad } from ${JSON.stringify(route("web/src/routes/about/+page.server.ts"))};`,
