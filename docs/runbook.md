@@ -379,14 +379,19 @@ binding isolation before any remote mutation.
    organization scope. An unset or unrecognized value selects `hono`. Manual
    dispatch from `main` uses only `kit_route_family`, which defaults to `hono`;
    it does not change the next automatic deploy. Choose `archive` for only
-   `GET /events/past`, or `archive-static` to add `GET /about` and `GET /faq`.
+   `GET /events/past`, or `archive-static` to add the four static pages:
+   `/about`, `/faq`, `/privacy`, and `/rules`. Privacy and House Rules opt in
+   only for exact document GETs; HEAD and markdown stay on Hono. To roll back
+   one of those two leaves without changing the family, set its entry to
+   `false` in `STAGING_STATIC_DOCUMENT_READY` in `src/route-ownership.ts` and
+   deploy the updated staging revision.
    Choose `events`, `home` or `join` for `/events`, `/` or `/join`,
    `events-join` for `/events` and `/join` together, `events-home` for
    `/events` and `/` together, or `ember-pages` for all
    three. Disabled Ember GET entries block
-   selection before migrations or Worker mutations. HEAD follows GET; event
-   detail, OAuth, recovery and write methods are unaffected. After revision
-   verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
+   selection before migrations or Worker mutations. HEAD otherwise follows
+   GET; event detail, OAuth, recovery and write methods are unaffected. After
+   revision verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
    to an unauthenticated GET that does not follow redirects. After changing the
    variable to `events`, confirm the next normal deploy passes
    `node ci/staging-kit-route-check.mjs /events`.

@@ -145,17 +145,27 @@ describe("Kit staging route rollout", () => {
     );
   });
 
-  it.each(["/about", ...NEW_STATIC_LEAVES])(
-    "keeps a manifest-disabled %s on Hono under archive-static (rollback)",
-    (path) => {
-      const manifest = stagingManifestFor(
-        { APP_URL: STAGING_APP_URL, KIT_ROUTE_ARCHIVE: "true", KIT_ROUTE_STATIC: "true" },
-        [{ method: "GET", path, enabled: false, reads: "public" }],
-      );
-      expect(manifest?.[0]?.enabled).toBe(false);
-      expect(resolveRouteOwner({ method: "GET", path }, manifest ?? [])).toBe("hono");
-    },
-  );
+  it("keeps manifest-disabled About on Hono under archive-static", () => {
+    const manifest = stagingManifestFor(
+      { APP_URL: STAGING_APP_URL, KIT_ROUTE_ARCHIVE: "true", KIT_ROUTE_STATIC: "true" },
+      [{ method: "GET", path: "/about", enabled: false, reads: "public" }],
+    );
+    expect(manifest?.[0]?.enabled).toBe(false);
+    expect(resolveRouteOwner({ method: "GET", path: "/about" }, manifest ?? [])).toBe("hono");
+  });
+
+  it.each(NEW_STATIC_LEAVES)("can roll back staging %s independently of its family", (path) => {
+    const manifest = stagingManifestFor(
+      { APP_URL: STAGING_APP_URL, KIT_ROUTE_ARCHIVE: "true", KIT_ROUTE_STATIC: "true" },
+      ROUTE_MANIFEST,
+      new Map(NEW_STATIC_LEAVES.map((leaf) => [leaf, leaf !== path])),
+    );
+    expect(resolveRouteOwner({ method: "GET", path }, manifest ?? [])).toBe("hono");
+    for (const sibling of ["/events/past", "/about", "/faq", ...NEW_STATIC_LEAVES]) {
+      if (sibling === path) continue;
+      expect(resolveRouteOwner({ method: "GET", path: sibling }, manifest ?? [])).toBe("kit");
+    }
+  });
 
   it("requires public GET entries for the staging-only leaves", () => {
     const manifest = stagingManifestFor(
@@ -181,7 +191,11 @@ describe("Kit staging route rollout", () => {
       [ARCHIVE_STATIC, {}, `${path}/`],
       [ARCHIVE_STATIC, {}, `${path}.md`],
       [ARCHIVE_STATIC, {}, `${path}/child`],
-      [ARCHIVE_STATIC, {}, path.replace(/p|r/, (letter) => `%${letter.charCodeAt(0).toString(16)}`)],
+      [
+        ARCHIVE_STATIC,
+        {},
+        path.replace(/p|r/, (letter) => `%${letter.charCodeAt(0).toString(16)}`),
+      ],
       // Kit strips the data suffix from event.url before invoking the hook.
       [ARCHIVE_STATIC, { pagePath: path }, `${path}/__data.json`],
     ] as const) {
@@ -193,12 +207,15 @@ describe("Kit staging route rollout", () => {
     expect(resolveRouteOwner({ method: "GET", path })).toBe("hono");
   });
 
-  it.each(["/about", "/faq"])("preserves the existing staging HEAD behavior for %s", async (path) => {
-    const { deps, response } = await dispatchAt(path, ARCHIVE_STATIC, { method: "HEAD" });
-    expect(deps.resolve).toHaveBeenCalledOnce();
-    expect(deps.honoFetch).not.toHaveBeenCalled();
-    expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
-  });
+  it.each(["/about", "/faq"])(
+    "preserves the existing staging HEAD behavior for %s",
+    async (path) => {
+      const { deps, response } = await dispatchAt(path, ARCHIVE_STATIC, { method: "HEAD" });
+      expect(deps.resolve).toHaveBeenCalledOnce();
+      expect(deps.honoFetch).not.toHaveBeenCalled();
+      expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    },
+  );
 
   it("does not let the events flag bypass method, detail, or manifest gates", () => {
     const manifest = stagingManifestFor({ APP_URL: STAGING_APP_URL, KIT_ROUTE_EVENTS: "true" }, [

@@ -49,7 +49,7 @@ function tail(value, limit = 4000) {
   return value.length > limit ? `…${value.slice(-limit)}` : value;
 }
 
-function listen(child, origin, getLog, timeoutMs = 60_000) {
+function listen(child, origin, getLog, headers, timeoutMs = 60_000) {
   const started = Date.now();
   return new Promise((resolveReady, reject) => {
     const attempt = async () => {
@@ -63,6 +63,8 @@ function listen(child, origin, getLog, timeoutMs = 60_000) {
       }
       try {
         const response = await fetch(`${origin}/favicon.ico`, {
+          headers,
+          redirect: "manual",
           signal: AbortSignal.timeout(1_000),
         });
         if (response.ok) {
@@ -111,7 +113,7 @@ const workers = [];
 // Start one loopback Worker. The generated Kit Worker and the direct Hono
 // Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
 // fixture database and vars within each pair.
-async function startWorker(name, main, assetsDirectory, sessionSecret) {
+async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
   const port = await unusedPort();
   const origin = `http://127.0.0.1:${port}`;
   const config = join(scratch, `${name}.wrangler.jsonc`);
@@ -133,6 +135,7 @@ async function startWorker(name, main, assetsDirectory, sessionSecret) {
       DISCORD_MODERATOR_ROLE_IDS: "",
       DISCORD_INVITE_URL: "https://example.invalid/invite",
       AGENT_EVENTS_ENABLED: "false",
+      ...vars,
     },
   };
   await writeFile(config, JSON.stringify(configBody));
@@ -239,15 +242,14 @@ try {
   // Content leaves keep #808's zero-stylesheet contract on the served
   // worker. The unit parity harness renders pages without +layout.svelte,
   // so it passes while the served page carries the layout asset link —
-  // this is the built-worker pin: both Kit-owned leaves answer from Kit
+  // this is the built-worker pin: the content leaves answer from Kit
   // with the exact inlined leaf block (its sha256 equals the
   // CSP-allowlisted hash), zero stylesheet links, and the Hono body class
   // so the leaf block owns the canvas.
   const leafModule = await readFile(join(repo, "src", "leaf-critical-css.ts"), "utf8");
   const leafHash = leafModule.match(/LEAF_CRITICAL_CSS_SHA256: string = "([^"]+)"/)?.[1];
   assert.ok(leafHash, "leaf CSS hash is generated");
-  for (const leaf of ["/about", "/faq"]) {
-    const page = await fetch(`${origin}${leaf}`);
+  async function assertContentLeaf(page, leaf) {
     const html = await page.text();
     assert.equal(page.status, 200, `generated Worker serves ${leaf} (got ${page.status})`);
     assert.equal(page.headers.get("x-two-renderer"), "kit", `${leaf} is Kit-owned`);
@@ -272,8 +274,47 @@ try {
     assert.equal(styleBlocks.length, 1, `${leaf} inlines exactly one style block`);
     const servedHash = createHash("sha256").update(styleBlocks[0][1], "utf8").digest("base64");
     assert.equal(servedHash, leafHash, `${leaf} style block matches the CSP hash`);
+    return html;
+  }
+  for (const leaf of ["/about", "/faq"]) {
+    await assertContentLeaf(await fetch(`${origin}${leaf}`), leaf);
   }
   console.log("PASS generated Worker content-leaf zero-stylesheet contract");
+
+  // Route the real staging selector in a local Worker with no DB or session
+  // bindings. Only the Host header uses the staging authority; connections
+  // stay on loopback and redirects are never followed.
+  const stagingAppUrl = "https://next.togetherweown.com";
+  const stagingHeaders = { host: new URL(stagingAppUrl).host };
+  const staging = await startWorker("kit-static", worker, assets, undefined, {
+    APP_URL: stagingAppUrl,
+    DATABASE_URL: undefined,
+    KIT_ROUTE_ARCHIVE: "true",
+    KIT_ROUTE_STATIC: "true",
+  });
+  await listen(staging.child, staging.origin, () => staging.log, stagingHeaders);
+  for (const [leaf, marker] of [
+    ["/about", 'data-testid="about-facts"'],
+    ["/faq", 'data-testid="faq-list"'],
+    ["/privacy", 'data-testid="privacy-policy"'],
+    ["/rules", 'data-testid="rules-list"'],
+  ]) {
+    const page = await fetch(`${staging.origin}${leaf}`, {
+      headers: stagingHeaders,
+      redirect: "manual",
+    });
+    const html = await assertContentLeaf(page, leaf);
+    assert.ok(html.includes(marker), `${leaf} has server-rendered content`);
+    assert.doesNotMatch(html, /<script\b/i, `${leaf} ships no JavaScript`);
+    assert.equal(page.headers.get("set-cookie"), null, `${leaf} does not set a session cookie`);
+    const csp = page.headers.get("content-security-policy")?.split("; ") ?? [];
+    assert.ok(csp.includes("script-src 'self'"), `${leaf} retains strict script CSP`);
+    assert.ok(
+      csp.includes(`style-src 'self' 'sha256-${leafHash}'`),
+      `${leaf} retains strict style CSP`,
+    );
+  }
+  console.log("PASS generated Worker archive-static SSR without database, session, or JavaScript");
 
   // Exercise the post-hook Kit ETag rewrite in the built Worker, not only the
   // framework-free dispatch. Every security header must survive revalidation.

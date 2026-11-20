@@ -341,7 +341,11 @@ export function fixtureManifestFor(env: {
   return routes;
 }
 
-const STAGING_ONLY_STATIC_LEAVES = new Set(["/privacy", "/rules"]);
+// Set one entry to false to return just that document to Hono on staging.
+const STAGING_STATIC_DOCUMENT_READY: ReadonlyMap<string, boolean> = new Map([
+  ["/privacy", true],
+  ["/rules", true],
+]);
 
 // Staging Kit starts with every route on Hono. The staging hostname or any
 // rollout flag selects this restrictive manifest, even with a misconfigured
@@ -357,7 +361,8 @@ export function stagingManifestFor(
     KIT_ROUTE_HOME?: string;
     KIT_ROUTE_JOIN?: string;
   },
-  routes?: OwnedRoute[],
+  routes: OwnedRoute[] = ROUTE_MANIFEST,
+  staticDocumentReady = STAGING_STATIC_DOCUMENT_READY,
 ): OwnedRoute[] | undefined {
   let app: URL | undefined;
   try {
@@ -381,14 +386,12 @@ export function stagingManifestFor(
   const eventsEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_EVENTS === "true";
   const homeEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_HOME === "true";
   const joinEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_JOIN === "true";
-  return (routes ?? ROUTE_MANIFEST).map((entry) => {
-    if (entry.method === "GET" && STAGING_ONLY_STATIC_LEAVES.has(entry.path)) {
-      // The shipped public entries stay disabled outside staging. An explicit
-      // manifest still controls readiness, just as it does for the other families.
+  return routes.map((entry) => {
+    const documentReady = staticDocumentReady.get(entry.path);
+    if (entry.method === "GET" && documentReady !== undefined) {
       return {
         ...entry,
-        enabled:
-          staticEnabled && entry.reads === "public" && (routes === undefined || entry.enabled),
+        enabled: staticEnabled && entry.reads === "public" && documentReady,
         documentGetOnly: true,
       };
     }
