@@ -214,7 +214,13 @@ The `drizzle` schema itself gets the same check: its owner (`nspowner`)
 can drop and recreate the ledger whatever the ledger's own ACLs say, and
 any `nspacl` right (`CREATE` or `USAGE`) for `two_web_app`, `PUBLIC`, or a
 role the runtime is a member of also refuses, because the runtime has no
-reviewed need for the schema.
+reviewed need for the schema. The guard also refuses membership in the
+predefined `pg_read_all_data`, `pg_write_all_data` and `pg_maintain` roles:
+their implicit schema or ledger rights do not appear in object ACLs.
+For an already-provisioned target, `assertServingLedgerIsolation` also requires
+the exact configured serving login and an existing ledger and sequence. Bind
+the login to the serving target independently, then pass it to the verifier
+without logging it. This is not inferred from the migrator's `current_user`.
 Unrelated owners and grantees stay allowed. The runner
 never revokes such a right itself, so an already-exposed ledger stays refused
 until the right is removed outside the runner. The refusal names the offending
