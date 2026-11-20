@@ -381,6 +381,7 @@ describe("Kit production route selection", () => {
     appUrl = apex,
   ) {
     const deps = { ...stagingDeps(flags), appUrl };
+    deps.honoFetch.mockResolvedValue(new Response("Hono", { headers: { vary: "Cookie" } }));
     const response = await dispatchHookRequest(event, deps);
     const path = event.url.pathname;
     if (expected === "hono") {
@@ -393,6 +394,7 @@ describe("Kit production route selection", () => {
       expect(response.headers.get(KIT_RENDERER_HEADER), path).toBe(KIT_RENDERER_VALUE);
       expect(response.headers.get("X-Robots-Tag"), path).toBeNull();
     }
+    return response;
   }
 
   const { vars } = readWranglerConfig(readFileSync("web/wrangler.production.jsonc", "utf8"));
@@ -475,6 +477,29 @@ describe("Kit production route selection", () => {
     "/about/other",
   ])("does not admit unlisted paths (%s)", async (path) => {
     await expectOwner(productionEvent(path), "hono");
+  });
+
+  it.each([
+    [{ "sec-fetch-dest": "document", "sec-fetch-mode": "navigate" }, "kit"],
+    [{ "x-two-island": "past-events", accept: "text/html" }, "hono"],
+    [{ "sec-fetch-dest": "empty", "sec-fetch-mode": "same-origin" }, "hono"],
+    [{ "sec-purpose": "prefetch" }, "hono"],
+  ] as const)("routes archive page 2 and varies its response for %j", async (headers, owner) => {
+    const event = productionEvent(`${archive}?page=2`);
+    event.request = new Request(event.request.url, { headers });
+    const response = await expectOwner(event, owner);
+    expect(response.headers.get("vary")?.toLowerCase().split(/,\s*/)).toEqual(
+      expect.arrayContaining([
+        "x-two-island",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "purpose",
+        "sec-purpose",
+        ...(owner === "hono" ? ["cookie"] : []),
+      ]),
+    );
+    const rolledBack = await expectOwner(event, "hono", shippedFlags);
+    expect(rolledBack.headers.get("vary")).toBe("Cookie");
   });
 
   it("keeps Kit data requests on Hono after Kit strips the data suffix", async () => {

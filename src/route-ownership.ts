@@ -391,12 +391,30 @@ export function stagingManifestFor(
 
 const PRODUCTION_APP_URL = "https://togetherweown.com";
 const PRODUCTION_HOST = new URL(PRODUCTION_APP_URL).hostname;
+const PRODUCTION_DOCUMENT_VARY = [
+  "X-Two-Island",
+  "Sec-Fetch-Dest",
+  "Sec-Fetch-Mode",
+  "Purpose",
+  "Sec-Purpose",
+];
+type ProductionRollout = Pick<HookDispatchDeps, "appUrl" | "kitRouteArchive" | "kitRouteStatic">;
+
+function isProductionRolloutPath(url: URL, deps: ProductionRollout): boolean {
+  return (
+    deps.appUrl === PRODUCTION_APP_URL &&
+    url.origin === PRODUCTION_APP_URL &&
+    deps.kitRouteArchive === "true" &&
+    (url.pathname === "/events/past" ||
+      (deps.kitRouteStatic === "true" && (url.pathname === "/about" || url.pathname === "/faq")))
+  );
+}
 
 // A request at the production apex must never fall through to the staging or
 // preview manifests. Only canonical public document GETs can opt in here.
 export function productionManifestFor(
   event: Pick<HookEventLike, "request" | "url" | "isDataRequest">,
-  deps: Pick<HookDispatchDeps, "appUrl" | "kitRouteArchive" | "kitRouteStatic">,
+  deps: ProductionRollout,
   routes: OwnedRoute[] = ROUTE_MANIFEST,
 ): OwnedRoute[] | undefined {
   const requestUrl = new URL(event.request.url);
@@ -404,21 +422,15 @@ export function productionManifestFor(
     return undefined;
   }
   if (
-    deps.appUrl !== PRODUCTION_APP_URL ||
-    requestUrl.origin !== PRODUCTION_APP_URL ||
+    !isProductionRolloutPath(requestUrl, deps) ||
     event.url.origin !== PRODUCTION_APP_URL ||
-    event.request.method !== "GET" ||
-    event.isDataRequest ||
     event.url.pathname !== requestUrl.pathname ||
-    deps.kitRouteArchive !== "true"
+    !isKitNoticeDocument(event.request, event.isDataRequest)
   ) {
     return [];
   }
-  const path = requestUrl.pathname;
-  const staticEnabled = deps.kitRouteStatic === "true" && (path === "/about" || path === "/faq");
-  if (path !== "/events/past" && !staticEnabled) return [];
   return routes
-    .filter((entry) => entry.method === "GET" && entry.path === path)
+    .filter((entry) => entry.method === "GET" && entry.path === requestUrl.pathname)
     .map((entry) => ({ ...entry, enabled: entry.enabled && entry.reads === "public" }));
 }
 
@@ -963,7 +975,26 @@ export async function dispatchHookRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
 ): Promise<Response> {
-  const response = await dispatchOwnedRequest(event, deps);
+  let response = await dispatchOwnedRequest(event, deps);
+  // Both owners can serve the same URL when a production rollout is on. Keep
+  // their HTTP cache variants apart before any conditional 304 is applied.
+  if (
+    deps.appUrl === PRODUCTION_APP_URL &&
+    (event.request.method === "GET" || event.request.method === "HEAD") &&
+    isProductionRolloutPath(new URL(event.request.url), deps) &&
+    response.headers.get("vary")?.trim() !== "*"
+  ) {
+    const headers = new Headers(response.headers);
+    const vary = headers.get("vary")?.toLowerCase().split(/,\s*/) ?? [];
+    for (const name of PRODUCTION_DOCUMENT_VARY) {
+      if (!vary.includes(name.toLowerCase())) headers.append("vary", name);
+    }
+    response = new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
   return applySingleValidator(event.request, response);
 }
 
