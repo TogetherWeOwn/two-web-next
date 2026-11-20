@@ -1696,6 +1696,15 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         viewport.width,
       );
+      const bar = page.getByRole("complementary", { name: "Your seat" });
+      await expect(bar).toHaveCount(viewport.width === 390 ? 1 : 0);
+      if (viewport.width === 390) {
+        await expect(bar.getByRole("link", { name: "Log in with Discord" })).toHaveAttribute(
+          "href",
+          `/join/discord?next=${encodeURIComponent(eventPath)}`,
+        );
+        await expect(bar.getByRole("link", { name: "Add to calendar" })).toBeVisible();
+      }
       const screenshot = test.info().outputPath(`kit-review-seat-card-guest-${viewport.width}.png`);
       if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
       await page.screenshot({ path: screenshot, animations: "disabled", caret: "hide" });
@@ -1802,6 +1811,8 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
         expect(response?.status()).toBe(200);
         expect(response?.headers()["x-two-renderer"]).toBe("kit");
         await expectFacts(guestPage, "guest", viewport.width);
+        // A full event keeps the guest card's login link but does not surface B4.
+        await expect(guestPage.locator('aside[aria-label="Your seat"]')).toHaveCount(0);
         // Guest privacy: no roster, no member links, no sign-out chrome.
         await expect(guestPage.getByTestId("event-attendees")).toHaveCount(0);
         await expect(guestPage.locator('a[href^="/members/"]')).toHaveCount(0);
@@ -1835,6 +1846,7 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
         expect(response?.status()).toBe(200);
         expect(response?.headers()["x-two-renderer"]).toBe("kit");
         const card = page.getByTestId("kit-seat-card");
+        const bar = page.getByRole("complementary", { name: "Your seat" });
         if (state.name === "open") {
           await expect(card.getByRole("heading", { name: "0 of 2 in" })).toBeVisible();
           await expect(card.getByText("Sign-ups open")).toBeVisible();
@@ -1855,8 +1867,18 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
               "data-testid",
               "kit-seat-card",
             );
+            await expect(bar).toHaveCount(1);
+            await expect(bar).toHaveCSS("position", "fixed");
+            await expect(bar).toContainText("0 of 2 in");
+            await expect(bar).toContainText("Sign-ups open");
+            await expect(bar.getByRole("link", { name: "Add to calendar" })).toHaveAttribute(
+              "href",
+              `/events/${openKey}.ics`,
+            );
+            await expect(bar.getByRole("button", { name: "I'm in" })).toBeVisible();
             await card.scrollIntoViewIfNeeded();
           } else {
+            await expect(bar).toHaveCount(0);
             await expect(card.locator("..")).toHaveCSS("position", "sticky");
           }
           const name = `kit-review-seat-card-open-${viewport.width}`;
@@ -1871,6 +1893,16 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
             name: state.name === "saved" ? /can't make it/i : /join the waitlist/i,
           }),
         ).toBeVisible();
+        await expect(bar).toHaveCount(viewport.width === 390 && state.name === "saved" ? 1 : 0);
+        if (viewport.width === 390 && state.name === "saved") {
+          await expect(bar).toContainText("You're in");
+          await expect(bar).toContainText(/Starts at \d{2}:\d{2}/);
+          await expect(bar.getByRole("link", { name: "Add to calendar" })).toHaveAttribute(
+            "href",
+            `/events/${key}.ics`,
+          );
+          await expect(bar.getByRole("button")).toHaveCount(0);
+        }
         const name = `kit-review-seat-card-${state.name}-${viewport.width}`;
         const path = test.info().outputPath(`${name}.png`);
         if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
@@ -1879,6 +1911,27 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
         await expectFacts(page, state.name, viewport.width);
       }
     }
+    const bar = page.getByRole("complementary", { name: "Your seat" });
+    await page.setViewportSize({ width: 820, height: 844 });
+    await expect(bar).toHaveCount(1);
+    await page.setViewportSize({ width: 821, height: 844 });
+    await expect(bar).toHaveCount(0);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const footer = page.getByRole("contentinfo");
+    const lastLink = footer.getByRole("link", { name: "Privacy" });
+    await footer.getByRole("link", { name: "House rules" }).focus();
+    await page.keyboard.press("Tab");
+    await expect(lastLink).toBeFocused();
+    const expectPrivacyClear = async () => {
+      const lastBounds = (await lastLink.boundingBox())!;
+      const barBounds = (await bar.boundingBox())!;
+      expect(lastBounds.y).toBeGreaterThanOrEqual(0);
+      expect(lastBounds.y + lastBounds.height).toBeLessThanOrEqual(barBounds.y);
+    };
+    await expectPrivacyClear();
+    await lastLink.evaluate((link) => link.scrollIntoView({ block: "end" }));
+    await expectPrivacyClear();
+
     // Drive the shipped island in place before exercising the native form.
     await enhanced.addCookies(await context.cookies());
     const enhancedPage = await enhanced.newPage();
@@ -1889,11 +1942,13 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     });
     await enhancedPage.goto(`/e/${openKey}`);
     const enhancedCard = enhancedPage.getByTestId("kit-seat-card");
+    const enhancedBar = enhancedPage.getByRole("complementary", { name: "Your seat" });
     const lineup = enhancedPage.getByTestId("event-going-count");
     const spots = enhancedPage.getByTestId("event-spots-left");
     const initialSeat = enhancedCard.getByText("1 of 2 in", { exact: true });
     const going = lineup.locator("[data-count]");
     await expect(initialSeat).toBeVisible();
+    await expect(enhancedBar).toContainText("1 of 2 in");
     await expect(lineup).toBeHidden();
     await enhancedCard.getByRole("button", { name: "I'm in" }).click();
     await expect(enhancedCard.getByTestId("rsvp-confirmed")).toBeVisible();
@@ -1949,6 +2004,7 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     await expect(lineup.locator("[data-count]")).toHaveText("1 of 2 going");
     await expect(spots).toBeVisible();
     await expect(spots).toHaveText("Full");
+    await expect(enhancedBar).toHaveCount(0);
 
     await withSessionDb(async (sql) => {
       await sql`update events set capacity = 3 where event_key = ${openKey}`;
@@ -1959,6 +2015,7 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     await expect(spots).toHaveText("2 of 3 spots left");
     await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
     await expect(enhancedCard.getByRole("heading", { name: "1 of 2 in" })).toHaveCount(0);
+    await expect(enhancedBar).toHaveCount(0);
 
     // The enhanced navigations rotated the shared fixture session.
     await context.addCookies(await enhanced.cookies());
@@ -1967,13 +2024,38 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
         response.request().method() === "POST" &&
         new URL(response.url()).pathname === `/e/${openKey}/rsvp`,
     );
-    await page.getByTestId("kit-seat-card").getByRole("button", { name: "I'm in" }).click();
+    await bar.getByRole("button", { name: "I'm in" }).click();
     const submitted = await post;
     expect(submitted.request().postData()).toBe("status=going");
     expect(submitted.status()).toBe(303);
     expect(submitted.headers().location).toBe(`/e/${openKey}`);
     expect(submitted.headers()["x-two-renderer"]).toBeUndefined();
     await expect(page.getByTestId("kit-seat-card").getByTestId("rsvp-confirmed")).toBeVisible();
+    await expect(bar).toContainText("You're in");
+    await expect(bar.getByRole("button")).toHaveCount(0);
+
+    // Reload from the real saved row, using the session returned by the native flow.
+    await enhanced.addCookies(await context.cookies());
+    await enhancedPage.reload();
+    await expect(enhancedBar).toContainText("You're in");
+    await enhancedPage.route(`**/events/${openKey}/rsvp`, (route) => route.abort("failed"));
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(enhancedCard.getByTestId("rsvp-unknown")).toHaveAttribute("role", "alert");
+    await expect(enhancedBar).toHaveCount(0);
+
+    // Probe absence against actual server snapshots, without redoing the sibling renderer captures.
+    await context.addCookies(await enhanced.cookies());
+    for (const state of ["live", "ended", "cancelled"]) {
+      await withSessionDb(async (sql) => {
+        const endsAt = new Date(Date.now() + (state === "live" ? 3_600_000 : -3_600_000));
+        await sql`update events set starts_at = now() - interval '2 hours', ends_at = ${endsAt},
+          status = ${state === "cancelled" ? "cancelled" : "published"} where event_key = ${openKey}`;
+      });
+      const response = await page.goto(`/e/${openKey}`);
+      expect(response?.status()).toBe(state === "cancelled" ? 410 : 200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      await expect(page.locator('aside[aria-label="Your seat"]')).toHaveCount(0);
+    }
   } finally {
     await Promise.all([context.close(), enhanced.close()]);
     await withSessionDb(async (sql) => {

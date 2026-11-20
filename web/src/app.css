@@ -76,3 +76,22 @@ html body {
 .kit-admin fieldset {
   background: var(--color-lobby-raised);
 }
+
+/* Use the dark admin roles for event validation without retheming other notices. */
+.kit-admin .notice[data-admin-validation-summary] {
+  background: var(--color-lobby-raised);
+  border-left-color: var(--color-lobby-accent);
+  color: var(--color-lobby-ink);
+}
+.kit-admin .notice[data-admin-validation-summary] a {
+  color: var(--color-lobby-accent);
+}
+.kit-admin .notice[data-admin-validation-summary]:focus-visible,
+.kit-admin .notice[data-admin-validation-summary] a:focus-visible,
+.kit-admin #f-accessibility-notes:focus-visible {
+  outline-color: var(--color-lobby-focus);
+}
+.kit-admin [data-event-editor][data-event-draft] .field .error,
+.kit-admin [data-event-editor] [data-event-text-limit] + .error {
+  color: var(--color-danger);
+}
