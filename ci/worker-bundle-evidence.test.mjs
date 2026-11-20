@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -768,6 +769,32 @@ describe("inert Kit candidate profile", () => {
     assert.throws(() => createInventory(root, KIT_DIR, context, "toString"), /unknown bundle/);
   });
 
+  for (const directory of ["web/.svelte-kit/cloudflare", "web/.svelte-kit", "web"]) {
+    test(`refuses a linked Kit asset path component: ${directory}`, () => {
+      const root = kitFixture();
+      const inventory = createInventory(root, KIT_DIR, context, "kit");
+      put(root, `${KIT_DIR}/inventory.json`, JSON.stringify(inventory));
+      const path = join(root, directory);
+      const moved = join(root, "moved-assets");
+      renameSync(path, moved);
+      symlinkSync(moved, path, "dir");
+      assert.throws(() => createInventory(root, KIT_DIR, context, "kit"), /asset directory/);
+      assert.throws(() => verifyInventory(root, KIT_DIR, context, "kit"), /asset directory/);
+    });
+  }
+
+  for (const name of ["upload.json", "deployed.json"]) {
+    test(`refuses a pre-existing Kit receipt: ${name}`, () => {
+      const root = kitFixture();
+      const inventory = createInventory(root, KIT_DIR, context, "kit");
+      put(root, `${KIT_DIR}/inventory.json`, JSON.stringify(inventory));
+      put(root, `${KIT_DIR}/${name}`, "{}\n");
+      const expected = { message: `untracked bundle file: ${name}` };
+      assert.throws(() => createInventory(root, KIT_DIR, context, "kit"), expected);
+      assert.throws(() => verifyInventory(root, KIT_DIR, context, "kit"), expected);
+    });
+  }
+
   test("the CLI keeps the Kit candidate build-only", () => {
     const root = kitFixture();
     const env = { ...process.env, BUILD_SHA: SHA, GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1" };
@@ -777,7 +804,7 @@ describe("inert Kit candidate profile", () => {
     assert.equal(cli("create", KIT_DIR, "kit").status, 0);
     const verified = cli("verify", KIT_DIR, "kit");
     assert.equal(verified.status, 0, verified.stderr);
-    assert.equal(JSON.parse(verified.stdout).samples.hono, "present");
+    assert.deepEqual(JSON.parse(verified.stdout).samples, { hono: "present", vitest: "unknown" });
     for (const command of ["uploaded", "deployed"]) {
       const refused = cli(command, KIT_DIR, "kit");
       assert.equal(refused.status, 1);

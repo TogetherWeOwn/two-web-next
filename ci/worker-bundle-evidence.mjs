@@ -72,6 +72,13 @@ function profileOf(name) {
 
 // Every regular file under the asset directory, sorted; links fail closed.
 function assetFiles(root, directory, prefix = "") {
+  if (!prefix) {
+    let parent = root;
+    for (const part of directory.split("/")) {
+      parent = resolve(parent, part);
+      assert.ok(lstatSync(parent).isDirectory(), "expected a real asset directory");
+    }
+  }
   return readdirSync(resolve(root, directory, prefix), { withFileTypes: true })
     .map((entry) => `${prefix}${entry.name}`)
     .sort((a, b) => a.localeCompare(b))
@@ -108,8 +115,7 @@ export function createInventory(root, directory, context, profileName = "hono") 
     "README.md",
     "bundle-meta.json",
     "inventory.json",
-    "upload.json",
-    "deployed.json",
+    ...(profileName === "hono" ? ["upload.json", "deployed.json"] : []),
   ]);
   for (const name of readdirSync(build))
     assert.ok(allowed.has(name), `untracked bundle file: ${name}`);
@@ -212,7 +218,8 @@ export function createInventory(root, directory, context, profileName = "hono") 
     inputs,
     packages: [...packages.values()].sort((a, b) => a.manifest.path.localeCompare(b.manifest.path)),
     externals: [...externals].sort(),
-    absenceEligible: unknownExternals.length === 0,
+    // Wrangler cannot enumerate packages already bundled into Kit's adapter output.
+    absenceEligible: profileName === "hono" && unknownExternals.length === 0,
     unknownExternals,
   };
 }
