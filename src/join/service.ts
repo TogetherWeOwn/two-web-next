@@ -27,9 +27,11 @@
 // bodies and exception messages can quote the live token, so none of them is
 // ever a recordAttempt parameter and none is ever logged.
 import { addGuildMemberDetailed, type JoinResult } from "../discord";
-import { PER_REQUEST_STATEMENT_TIMEOUT_LOCAL } from "../db/connection";
+import { chargeWebThrottle, type ThrottleVerdict } from "../http/throttle";
 import { safeRequestId } from "../request-log";
 import type { Sql } from "../sessions";
+
+export { type ThrottleVerdict, WEB_THROTTLE_LOCK_TIMEOUT_MS } from "../http/throttle";
 
 export const JOIN_OUTCOMES = [
   "added",
@@ -49,20 +51,6 @@ export const JOIN_THROTTLE_PER_MINUTE = 10;
 export const JOIN_THROTTLE_BUCKET = "join";
 // The privacy policy promises this window for rate-limit counters; change it only with a policy version.
 export const THROTTLE_COUNTER_RETENTION_MINUTES = 5;
-
-/**
- * Bound on the per-bucket admission-lock wait. A held `web-throttle:` advisory
- * lock resolves to a refusal within this bound (55P03 → `{ limited: true }`,
- * no hit charged) instead of hanging a funnel request behind another
- * isolate's admission. Sized above the ~1s held-lock windows pinned by the
- * concurrency suite and well inside the 4s busy bound in
- * `test/web-throttle-lock-busy.test.ts`. A refusal is the correct mapping
- * because every bucket is per client (`<name>:<clientKey>`): contention on a
- * bucket only comes from that same client's parallel requests, which is the
- * burst the throttle exists to limit — admitting it would turn the throttle
- * off under exactly the load it exists to stop.
- */
-export const WEB_THROTTLE_LOCK_TIMEOUT_MS = 2000;
 
 /**
  * Named wait for the best-effort throttle prune: the already-decided verdict
@@ -125,8 +113,6 @@ export function safeNext(raw: unknown): string | null {
   return raw;
 }
 
-export type ThrottleVerdict = { limited: false } | { limited: true; retryAfter: number };
-
 /**
  * Fixed-window throttle: count rows in this bucket in the last 60 s; over
  * budget refuses before the token exchange runs. A missing store degrades to
@@ -161,36 +147,9 @@ export async function checkJoinThrottle(
     console.warn("Throttle store unavailable; allowing the request.", { throttle });
     return { limited: false };
   }
-  // The native postgres.js store supports transactions; the session SQL seam
-  // deliberately exposes only the statements needed by session stores.
-  const store = sql as Sql & {
-    begin: (run: (tx: Sql) => Promise<ThrottleVerdict>) => Promise<ThrottleVerdict>;
-  };
   let verdict: ThrottleVerdict;
   try {
-    verdict = await store.begin(async (tx) => {
-      // Bound the admission-lock wait: without this, a bucket whose advisory
-      // lock is held by another isolate blocks here until the holder commits.
-      // Same `SET LOCAL lock_timeout` shape as the agent-events shield, inner
-      // limiter and ingress operation locks.
-      await tx.unsafe(`SET LOCAL lock_timeout = '${WEB_THROTTLE_LOCK_TIMEOUT_MS}ms'`);
-      // Per-request statement bound: a lock timeout alone cannot cancel an
-      // executing statement, so the INSERT below also carries the shared
-      // 5 s bound. It sits above the 2 s lock timeout, so lock waits still
-      // refuse with 55P03 while executing statements cancel with 57014 and
-      // propagate to the callers' fail-open/outage handling.
-      await tx.unsafe(PER_REQUEST_STATEMENT_TIMEOUT_LOCAL);
-      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`web-throttle:${bucket}`}, 0))`;
-      // now() is transaction-start time, which can precede a long lock wait.
-      const rows = await tx<{ n: number; wait: number }[]>`
-      SELECT count(*)::int AS n,
-        coalesce(ceil(extract(epoch FROM (min(at) + interval '60 seconds' - clock_timestamp()))), 1)::int AS wait
-      FROM web_throttle_hits WHERE bucket = ${bucket} AND at > clock_timestamp() - interval '60 seconds'`;
-      const r = rows[0];
-      if (r && r.n >= max) return { limited: true, retryAfter: Math.max(1, r.wait) };
-      await tx`INSERT INTO web_throttle_hits (bucket, at) VALUES (${bucket}, clock_timestamp())`;
-      return { limited: false };
-    });
+    verdict = await chargeWebThrottle(sql, bucket, max);
   } catch (err) {
     if ((err as { code?: string }).code !== "55P03") throw err;
     // Busy pass: the verdict transaction aborted with no hit inserted. Fall

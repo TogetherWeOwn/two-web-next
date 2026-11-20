@@ -144,7 +144,12 @@ Try to prove your own candidate wrong first:
 3. Check whether the behavior is documented as intentional in README/docs
    (for example, throttle failure handling varies by call site; see
    `docs/throttling.md` for missing stores, unclassified errors, outages,
-   and lock contention). Intentional, documented behavior is not a defect.
+   and lock contention). Before reporting a defect, check the PR's Claims in
+   Attestation and linked docs. For documented intent (e.g. fail-closed until a
+   binding exists, an advisory-only CSS budget, or a removed live region), report
+   only if evidence shows a violation of an existing requirement, a contradiction
+   of the stated contract, or user harm beyond what the PR describes. The private
+   security-reporting exception above still applies.
 4. Pre-existing issues are out of scope unless this PR makes them newly
    reachable or worse; if so, explain the new reachability.
 

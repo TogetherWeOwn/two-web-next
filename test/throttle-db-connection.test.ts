@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { PER_REQUEST_STATEMENT_TIMEOUT_LOCAL } from "../src/db/connection";
 import type { Env } from "../src/env";
+import { chargeWebThrottle } from "../src/http/throttle";
 import { checkJoinThrottle } from "../src/join/service";
 import type { Sql } from "../src/sessions";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -14,10 +15,12 @@ const { makeSql } = vi.hoisted(() => ({ makeSql: vi.fn() }));
 vi.mock("postgres", () => ({ default: makeSql }));
 
 const hits = new Map<string, number>();
+const prune = vi.fn();
 const sql = Object.assign(
   async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join("?");
     if (query.includes("pg_advisory_xact_lock")) return [];
+    if (query.includes("DELETE FROM web_throttle_hits")) prune();
     const bucket = String(values[0]);
     if (query.includes("SELECT count(*)")) return [{ n: hits.get(bucket) ?? 0, wait: 30 }];
     if (query.includes("INSERT INTO web_throttle_hits"))
@@ -25,7 +28,7 @@ const sql = Object.assign(
     return [];
   },
   {
-    unsafe: vi.fn(async () => []),
+    unsafe: vi.fn(async (_statement: string) => []),
     // Transaction seam for atomic admission: single-threaded double, run inline.
     begin: (run: (tx: unknown) => Promise<unknown>) => run(sql),
   },
@@ -64,6 +67,36 @@ describe("throttle runtime connection wiring", () => {
     });
     expect(sql.unsafe).toHaveBeenNthCalledWith(1, "SET LOCAL lock_timeout = '2000ms'");
     expect(sql.unsafe).toHaveBeenNthCalledWith(2, PER_REQUEST_STATEMENT_TIMEOUT_LOCAL);
+  });
+
+  it("matches shared admission at the budget boundary without running prune itself", async () => {
+    const store = sql as unknown as Sql;
+    const direct = "probe:direct";
+    const join = "probe:join";
+    expect(await chargeWebThrottle(store, direct, 1)).toEqual({ limited: false });
+    expect(prune).not.toHaveBeenCalled();
+    expect(await checkJoinThrottle(store, join, 1)).toEqual({ limited: false });
+    expect(prune).toHaveBeenCalledTimes(1);
+    expect(await chargeWebThrottle(store, direct, 1)).toEqual({ limited: true, retryAfter: 30 });
+    expect(prune).toHaveBeenCalledTimes(1);
+    expect(await checkJoinThrottle(store, join, 1)).toEqual({ limited: true, retryAfter: 30 });
+    expect(prune).toHaveBeenCalledTimes(2);
+    expect([...hits]).toEqual([
+      [direct, 1],
+      [join, 1],
+    ]);
+    expect(sql.unsafe.mock.calls.map(([statement]) => statement)).toEqual([
+      "SET LOCAL lock_timeout = '2000ms'",
+      PER_REQUEST_STATEMENT_TIMEOUT_LOCAL,
+      "SET LOCAL lock_timeout = '2000ms'",
+      PER_REQUEST_STATEMENT_TIMEOUT_LOCAL,
+      "SET LOCAL statement_timeout = '2000ms'",
+      "SET LOCAL lock_timeout = '2000ms'",
+      PER_REQUEST_STATEMENT_TIMEOUT_LOCAL,
+      "SET LOCAL lock_timeout = '2000ms'",
+      PER_REQUEST_STATEMENT_TIMEOUT_LOCAL,
+      "SET LOCAL statement_timeout = '2000ms'",
+    ]);
   });
 
   it("keeps the injected store ahead of either runtime URL", async () => {

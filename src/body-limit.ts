@@ -2,18 +2,10 @@ import type { MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { Env } from "./env";
 import { badRequest, payloadTooLarge } from "./errors";
+import { BODY_LIMIT_BYTES, type BodyClass } from "./http/body-limit";
 
-// Wire-size budgets (including encoding overhead); field validation still runs
-// independently. See docs/body-limits.md for the legacy-maxima derivation.
-export const BODY_LIMIT_BYTES = {
-  form: 64 * 1024,
-  json: 32 * 1024,
-  agent: 32 * 1024,
-  mcp: 32 * 1024,
-  featured: 256 * 1024,
-  action: 4 * 1024,
-} as const;
-export type BodyClass = keyof typeof BODY_LIMIT_BYTES;
+export { BODY_LIMIT_BYTES, type BodyClass };
+
 const LIMITED = Symbol("body-limited");
 
 export function requestBodyLimit(kind: BodyClass): MiddlewareHandler<{ Bindings: Env }> {

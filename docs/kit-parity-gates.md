@@ -256,7 +256,9 @@ It retains both recordings, config/output hashes, the comparison and logs. Fixtu
 
 Kit-only `/_app` assets have separate status, validator, cookie and header checks. The separate fatal proof does not fault-inject the all-off configuration.
 
-No Worker is uploaded. Live Hyperdrive, queues, version metadata, tail delivery, edge routing, bot-backed counts/ranks and populated Discord event-binding responses are not verified.
+After a passing replay, the same job tries the web lockfile's Wrangler `versions upload --dry-run --no-bundle` against the exact installed files and unchanged Kit production config. `upload-rehearsal.json` binds the candidate SHA/run/attempt, config, Worker and asset-directory input digests to the replay. It compares the façade and adapter against the serialized dry-run module parts, keeping only digests and a refusal reason if the tool cannot reproduce those modules. The runner does not rebuild or remap a mismatched result, and a green replay does not turn a refusal into a match.
+
+After a zero replay exit, the hosted job requires a fresh match or refusal receipt and checks its SHA, run, attempt, config digest and installed-tree digest against the parity comparison. The receipt is not selected remote assets, an upload UUID, deployed parity, or qualified recovery. No Worker is uploaded. Live Hyperdrive, queues, version metadata, tail delivery, edge routing, bot-backed counts/ranks and populated Discord event-binding responses are not verified.
 
 ## Journey gates (`ci/kit-parity-gates.mjs`)
 
