@@ -1,5 +1,5 @@
 // Source contract only, based on the retained draft #2092. Never deploy with
-// this file. No workflow or CLI selects it; the root config still owns the
+// this file. Only a CI dry-run selects it; the root config still owns the
 // production route and upload. The adapter output path does not attest facade
 // installation. Production crons and consumers belong to the jobs Worker.
 {

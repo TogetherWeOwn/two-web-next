@@ -467,7 +467,7 @@ artifact names, schemas, conservative package findings and consumer validation.
 CI dry-run inventories alone are not deployment evidence.
 
 [`web/wrangler.production.jsonc`](web/wrangler.production.jsonc) is a source-only
-Kit contract. Do not invoke it for deployment. No workflow or CLI selects it;
+Kit contract. Do not invoke it for deployment. Only a CI dry-run selects it;
 production still uploads the Hono bundle using the root config. Its entry path
 names the generated adapter output and does not prove facade installation or
 qualify Kit for production.
