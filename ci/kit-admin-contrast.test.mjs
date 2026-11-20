@@ -83,6 +83,19 @@ async function focusOutlineColor(locator) {
   return outline.color;
 }
 
+async function assertSingleServerError(page, id, message) {
+  const control = page.locator(`#${id}`);
+  assert.deepEqual(
+    (await control.getAttribute("aria-describedby"))
+      .split(/\s+/)
+      .filter((id) => id.endsWith("-error")),
+    [`${id}-error`],
+  );
+  const errors = await page.locator(`.field:has(#${id}) .error:visible`).allTextContents();
+  assert.deepEqual(errors.map((text) => text.trim()), [message]);
+  assert.equal(await control.evaluate((el) => el.validationMessage), message);
+}
+
 before(async () => {
   scratch = await mkdtemp(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-admin-contrast-"),
@@ -385,12 +398,20 @@ describe("Kit admin contrast", () => {
                 createRejected.recurrence_count,
               );
               assert.equal(await page.locator("fieldset #f-recurrence-count-error").count(), 1);
+              for (const field of ["accessibility_notes", "organizer_name", "join_instructions"]) {
+                await assertSingleServerError(
+                  page,
+                  `f-${field.replaceAll("_", "-")}`,
+                  createErrors[field],
+                );
+              }
             }
           }
           const summary = page.locator("[data-admin-validation-summary]");
           const summaryLink = summary.locator("a").first();
           if (name === "event-edit-invalid") {
             assert.equal(await page.locator("#f-title-error").count(), 1);
+            await assertSingleServerError(page, "f-title", "Keep the title to 100 characters.");
             assert.equal(await summary.locator('a[href="#f-title"]').count(), 1);
             assert.equal(await page.locator("#f-title").inputValue(), editRejectedTitle);
             assert.equal(
@@ -460,9 +481,7 @@ describe("Kit admin contrast", () => {
             );
           if (isTextLimit) {
             assert.ok(
-              measured.some(
-                ({ text }) => text === "Keep the accessibility_notes to 1000 characters.",
-              ),
+              measured.some(({ text }) => text === "Keep accessibility notes to 1000 characters."),
             );
           }
           if (isInvalid) {
