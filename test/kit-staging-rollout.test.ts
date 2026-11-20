@@ -381,7 +381,15 @@ describe("Kit production route selection", () => {
     appUrl = apex,
   ) {
     const deps = { ...stagingDeps(flags), appUrl };
-    deps.honoFetch.mockResolvedValue(new Response("Hono", { headers: { vary: "Cookie" } }));
+    const cacheControl = "public, max-age=300";
+    deps.honoFetch.mockResolvedValue(
+      new Response("Hono", { headers: { vary: "Cookie", "cache-control": cacheControl } }),
+    );
+    deps.resolve.mockResolvedValue(
+      new Response("<html>kit page</html>", {
+        headers: { "content-type": "text/html", "cache-control": cacheControl },
+      }),
+    );
     const response = await dispatchHookRequest(event, deps);
     const path = event.url.pathname;
     if (expected === "hono") {
@@ -498,8 +506,18 @@ describe("Kit production route selection", () => {
         ...(owner === "hono" ? ["cookie"] : []),
       ]),
     );
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     const rolledBack = await expectOwner(event, "hono", shippedFlags);
     expect(rolledBack.headers.get("vary")).toBe("Cookie");
+    expect(rolledBack.headers.get("cache-control")).toBe("public, max-age=300");
+  });
+
+  it.each(archiveStatic)("does not let a cached Kit response outlast rollback at %s", async (path) => {
+    const event = productionEvent(path);
+    const optedIn = await expectOwner(event, "kit");
+    expect(optedIn.headers.get("cache-control")).toBe("private, no-store");
+    const rolledBack = await expectOwner(event, "hono", shippedFlags);
+    expect(rolledBack.headers.get("cache-control")).toBe("public, max-age=300");
   });
 
   it("keeps Kit data requests on Hono after Kit strips the data suffix", async () => {

@@ -976,18 +976,19 @@ export async function dispatchHookRequest(
   deps: HookDispatchDeps,
 ): Promise<Response> {
   let response = await dispatchOwnedRequest(event, deps);
-  // Both owners can serve the same URL when a production rollout is on. Keep
-  // their HTTP cache variants apart before any conditional 304 is applied.
+  // Keep opted-in responses out of HTTP caches so a rollback reaches the
+  // Worker. The renderer-scoped in-memory archive cache is unaffected.
   if (
-    deps.appUrl === PRODUCTION_APP_URL &&
     (event.request.method === "GET" || event.request.method === "HEAD") &&
-    isProductionRolloutPath(new URL(event.request.url), deps) &&
-    response.headers.get("vary")?.trim() !== "*"
+    isProductionRolloutPath(new URL(event.request.url), deps)
   ) {
     const headers = new Headers(response.headers);
+    headers.set("cache-control", "private, no-store");
     const vary = headers.get("vary")?.toLowerCase().split(/,\s*/) ?? [];
-    for (const name of PRODUCTION_DOCUMENT_VARY) {
-      if (!vary.includes(name.toLowerCase())) headers.append("vary", name);
+    if (!vary.includes("*")) {
+      for (const name of PRODUCTION_DOCUMENT_VARY) {
+        if (!vary.includes(name.toLowerCase())) headers.append("vary", name);
+      }
     }
     response = new Response(response.body, {
       status: response.status,

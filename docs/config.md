@@ -133,6 +133,12 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `KIT_ROUTE_JOIN` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | Only exact `true` with the exact staging `APP_URL` and an enabled `GET /join` manifest entry selects Kit. The `join`, `events-join`, and `ember-pages` dispatch choices set this flag; OAuth and recovery stay on Hono. |
 <!-- config-docs:end -->
 
+While production opt-ins are active, responses for the selected paths use
+`Cache-Control: private, no-store` so a cached Kit document cannot outlast a
+flag rollback. A Hono response cached before opt-in can still be served until
+its existing freshness lifetime ends. With the opt-ins off, Hono retains its
+normal cache policy.
+
 ### `SESSION_SECRET` strength and rotation
 
 The floor is **at least 32 characters as configured, with no leading or
