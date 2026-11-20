@@ -599,9 +599,16 @@ using controlled provider-side evidence. Do not cancel in-flight DDL casually.
 
 **Rollback:** a Worker rollback does not undo schema/data. SQL failure rolls back
 the pending transaction, including ledger initialization on a fresh DB. Existing
-history stays intact. On connection loss, do not infer commit success: re-plan and
-verify under the approved recovery procedure before retrying. After a successful
-but harmful migration, prefer a reviewed forward repair.
+history stays intact. On connection loss, do not infer commit success. For
+production, a new apply dispatch is not a recovery check: if the transaction
+committed, its `plan` step refuses zero pending. Under a separately approved
+recovery procedure, the authorized database operator checks the full journal
+read-only against the same release before any retry. The runner's standalone
+`verify` mode is read-only, still requires the same SHA, identity and valid scope
+pins, and succeeds only with a complete journal. Do not change the pins to make a
+retry pass. For staging, re-plan and verify under the approved recovery procedure
+before retrying. After a successful but harmful migration, prefer a reviewed
+forward repair.
 If authorized PITR is required, pause writers and coordinate **both** consumers,
 verify the recorded timestamp is eligible, and use the provider's documented
 restore procedure (Neon branch restore or PlanetScale backup/restore). Restore can overwrite all databases on the branch and lose later

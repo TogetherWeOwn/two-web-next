@@ -545,6 +545,14 @@ test("production refuses earlier and later exact prefixes, including drift after
         approvedTags,
       );
       await seedPrefix(client, approvedPrefixLength + 1);
+      // The changed prefix must not be checked until apply holds the lock.
+      await client.begin(async (transaction) => {
+        await transaction`select pg_advisory_xact_lock(11161001)`;
+        await assert.rejects(
+          run("apply", approved),
+          /Another web migration holds the database lock/,
+        );
+      });
       await assertRefused("apply", "plan");
       await assert.rejects(run("verify", approved), /remain pending/);
     });
