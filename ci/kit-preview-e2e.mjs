@@ -218,14 +218,17 @@ function expectShell(document) {
   const scripts = [...document.matchAll(/<script\b[^>]*>/gi)].map((match) => match[0]);
   check("one document head is assembled", count(/<head(?:\s|>)/gi) === 1);
   check("one semantic main is rendered", count(/<main(?:\s|>)/gi) === 1);
-  // No hydration bundle or inline bootstrap (csr=false, CSP script-src
-  // 'self'): exactly the two deferred first-party island binders, in Hono's
-  // order. The copy-link binder arrived with the calendar subscription help.
+  // No hydration bundle or inline bootstrap on this CSR-disabled route.
+  const expected = [
+    '<script src="/islands/copy-link.js" defer>',
+    '<script src="/islands/past-events.js" defer>',
+  ];
+  if (document.includes('href="#menu-sheet"')) {
+    expected.unshift('<script src="/islands/site-header-menu.js" defer>');
+  }
   check(
-    "only the copy-link and archive island binders load",
-    scripts.length === 2 &&
-      scripts[0] === '<script src="/islands/copy-link.js" defer>' &&
-      scripts[1] === '<script src="/islands/past-events.js" defer>',
+    "only the expected deferred islands load",
+    JSON.stringify(scripts) === JSON.stringify(expected),
   );
   check("one canonical URL is rendered", count(/<link rel="canonical"/g) === 1);
   check("archive shell carries the schedule theme", document.includes('data-theme="schedule"'));
@@ -274,7 +277,7 @@ async function browserShellFixtures(document) {
   const fixture = document
     .replace(/<link rel="(?:stylesheet|preload)"[^>]*\/?\s*>/g, "")
     .replace(/<link rel="(?:manifest|icon|apple-touch-icon)"[^>]*\/?\s*>/g, "")
-    .replace(/<script src="\/islands\/past-events\.js"[^>]*><\/script>/g, "")
+    .replace(/<script src="\/islands\/[^"/]+\.js" defer><\/script>/g, "")
     .replace(
       'src="/logo.svg"',
       'src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 1 1%22/%3E"',
@@ -345,6 +348,9 @@ async function browserShellFixtures(document) {
     check("skip link moves keyboard focus to main", skipTargetFocused);
 
     await page.setViewportSize({ width: 375, height: 812 });
+    if (document.includes('href="#menu-sheet"')) {
+      await page.getByRole("link", { name: "Menu", exact: true }).click();
+    }
     const mobile = await page.evaluate(() => {
       const nav = document.querySelector(".main-nav").getBoundingClientRect();
       const links = [...document.querySelectorAll(".main-nav a")].map((link) => {

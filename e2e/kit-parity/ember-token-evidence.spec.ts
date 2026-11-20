@@ -169,16 +169,22 @@ for (const target of targets) {
               const style = getComputedStyle(element);
               const rect = element.getBoundingClientRect();
               const topmost = document.elementFromPoint(rect.left + rect.width / 2, rect.top + 5);
+              const sample = document.createElement("span");
+              sample.style.backgroundColor = "var(--g0, var(--color-page))";
+              element.append(sample);
+              const expectedBackground =
+                element.id === "menu-sheet"
+                  ? getComputedStyle(sample).backgroundColor
+                  : getComputedStyle(element.closest(".base-theme")!).backgroundColor;
+              sample.remove();
               return {
                 background: style.backgroundColor,
+                expectedBackground,
                 opacity: style.opacity,
                 coversContent: topmost !== null && element.contains(topmost),
               };
             });
-            const pageBackground = await page
-              .locator(".base-theme")
-              .evaluate((element) => getComputedStyle(element).backgroundColor);
-            expect(surface.background).toBe(pageBackground);
+            expect(surface.background).toBe(surface.expectedBackground);
             expect(surface.background).not.toBe("rgba(0, 0, 0, 0)");
             expect(surface.opacity).toBe("1");
             expect(surface.coversContent).toBe(true);

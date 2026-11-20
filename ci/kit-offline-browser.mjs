@@ -64,7 +64,7 @@ export function fixedDateBanner(now) {
 /**
  * `now` (epoch ms) fixes the server clock; `timezoneId` overrides only the browser timezone.
  * `searches` opts in extra exact query strings of the same path; `open(search)` navigates to one.
- * @param {{ source?: string, page: string, search?: string, searches?: string[], now?: number, javaScriptEnabled?: boolean, timezoneId?: string }} options
+ * @param {{ source?: string, page: string, search?: string, searches?: string[], now?: number, javaScriptEnabled?: boolean, timezoneId?: string, headerMenu?: boolean }} options
  */
 export async function withKitOfflineBrowser(
   {
@@ -75,6 +75,7 @@ export async function withKitOfflineBrowser(
     now = undefined,
     javaScriptEnabled = false,
     timezoneId,
+    headerMenu = false,
   },
   callback,
 ) {
@@ -84,7 +85,7 @@ export async function withKitOfflineBrowser(
     }
   }
   const banner = now === undefined ? undefined : fixedDateBanner(now);
-  const options = { source, page: fixture, csr: javaScriptEnabled };
+  const options = { source, page: fixture, csr: javaScriptEnabled && !headerMenu };
   return withKitBrowserFixture(options, async ({ root, output }) => {
     const entry = join(root, "fixture-server.mjs");
     await build({
@@ -155,9 +156,10 @@ export async function withKitOfflineBrowser(
               body: pages.get(url.href),
             });
           const isAppAsset = url.pathname.startsWith("/_app/");
+          const isMenu = url.pathname === "/islands/site-header-menu.js";
           const directory = isAppAsset ? join(output, "client") : join(root, "public");
           const asset = await readFixtureAsset(directory, url.pathname, {
-            allowJavaScript: isAppAsset && javaScriptEnabled,
+            allowJavaScript: javaScriptEnabled && (isMenu || (isAppAsset && !headerMenu)),
           });
           if (asset) return route.fulfill(asset);
         }
