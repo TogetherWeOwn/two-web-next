@@ -37,7 +37,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
   description={JOIN_INTRO}
   theme="join"
 />
-<EmberShell {accountChrome}>
+<EmberShell {accountChrome} menuFallbackOnly>
   {#if data.restoredWrite}
     <div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>
   {/if}

@@ -191,6 +191,7 @@ function kitModel(over: Partial<KitEventDetailModel> = {}): KitEventDetailModel 
     showJoinPitch: false,
     joinReturnTo: PATH,
     joinResult: null,
+    viewerAuthenticated: true,
     viewerMember: true,
     viewerModerator: false,
     viewerUsername: "member",
@@ -671,6 +672,7 @@ describe("Kit soft-answer SSR", () => {
       const html = kit({
         ...over,
         answer: null,
+        viewerAuthenticated: false,
         viewerMember: false,
         viewerUsername: null,
         showJoinPitch: true,
@@ -796,6 +798,46 @@ const kitMember: KitRequestSession = {
   status: "authenticated",
   session: { userId: MEMBER, username: "member", avatar: null, member: true, moderator: false },
 };
+
+describe("Kit resolver viewer projection", () => {
+  const guest = { status: "guest", session: null } satisfies KitRequestSession;
+  const nonmember: KitRequestSession = {
+    status: "authenticated",
+    session: { ...kitMember.session!, member: false },
+  };
+
+  it.each([
+    { name: "guest", session: guest, authenticated: false, member: false },
+    { name: "nonmember", session: nonmember, authenticated: true, member: false },
+    { name: "member", session: kitMember, authenticated: true, member: true },
+  ])("projects $name from the resolved viewer without another read", async (row) => {
+    const store = softStore(null);
+    const dbForFn = vi.fn(store.dbForFn);
+    const waitlistFn = vi.fn(store.waitlistFn);
+    const viewerRsvpFn = vi.fn(store.viewerRsvpFn);
+    const attendeesFn = vi.fn(store.attendeesFn);
+    const outcome = await resolveKitEventDetail({
+      key: KEY,
+      search: "",
+      path: PATH,
+      env: { APP_URL } as Env,
+      session: row.session,
+      joinResult: null,
+      setHeaders: () => {},
+      store: { ...store, dbForFn, waitlistFn, viewerRsvpFn, attendeesFn },
+    });
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.model).toMatchObject({
+      viewerAuthenticated: row.authenticated,
+      viewerMember: row.member,
+    });
+    expect(dbForFn).toHaveBeenCalledTimes(1);
+    expect(waitlistFn).toHaveBeenCalledTimes(row.authenticated ? 1 : 0);
+    expect(viewerRsvpFn).toHaveBeenCalledTimes(row.member ? 1 : 0);
+    expect(attendeesFn).toHaveBeenCalledTimes(row.member ? 1 : 0);
+  });
+});
 
 describe("Kit resolver carries soft answers to the model", () => {
   it.each(["maybe", "not_going"] as const)(

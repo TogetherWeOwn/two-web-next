@@ -257,6 +257,7 @@ export interface KitEventDetailModel {
   showJoinPitch: boolean;
   joinReturnTo: string;
   joinResult: JoinResult | null;
+  viewerAuthenticated: boolean;
   viewerMember: boolean;
   viewerModerator: boolean;
   /** Signed-in display name for the header sign-out form; null for guests. */
@@ -737,6 +738,7 @@ export async function resolveKitEventDetail(
             MAX_RETURN_DESTINATION_BYTES,
           ),
           joinResult,
+          viewerAuthenticated: viewer != null,
           viewerMember: member,
           viewerModerator: viewer?.moderator === true,
           viewerUsername: viewer?.username ?? null,
