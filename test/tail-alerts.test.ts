@@ -79,11 +79,23 @@ describe("Tail alert parser and redaction", () => {
     ).toEqual(alert);
   });
 
+  it.each(["/e/:file{.+\\.md}", "/__probe/alert"])(
+    "preserves the reviewed label %s",
+    async (route) => {
+      const alert = await parseAlert(JSON.stringify({ ...requestAlert, route }), timestamp);
+      expect(alert?.route).toBe(route);
+    },
+  );
+
   it("redacts raw paths, query strings, unknown routes and forged fingerprints", async () => {
     for (const route of [
       "/members/private-user",
+      "/e/never-send.md",
       "/join?token=never-send",
+      "/__probe/alert?token=never-send",
       "/unknown/never-send",
+      "/admin/*",
+      "unmatched",
     ]) {
       const alert = await parseAlert(
         JSON.stringify({ ...requestAlert, route, fingerprint: `never-send@${route}` }),

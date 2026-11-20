@@ -179,7 +179,7 @@ test("Kit route-family selection emits validated flags and fails closed", async 
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-route-flags-"),
   );
   try {
-    for (const [family, expected] of [
+    for (const [family, expected, eventName = "workflow_dispatch"] of [
       ["", []],
       ["hono", []],
       ["archive", ["archive"]],
@@ -189,7 +189,14 @@ test("Kit route-family selection emits validated flags and fails closed", async 
       ["join", ["join"]],
       ["ember-pages", ["events", "home", "join"]],
       ["all", null],
+      ["events", ["events"], "workflow_run"],
+      ["ember-pages", ["events", "home", "join"], "workflow_run"],
+      [undefined, [], "workflow_run"],
+      ["", [], "workflow_run"],
+      ["all", [], "workflow_run"],
+      ["EVENTS", [], "workflow_run"],
     ]) {
+      const automatic = eventName === "workflow_run";
       const disabled = emberRoutes.some(
         ([flag, path]) =>
           expected?.includes(flag) &&
@@ -202,14 +209,21 @@ test("Kit route-family selection emits validated flags and fails closed", async 
       const result = spawnSync(process.execPath, ["--import", "tsx", "ci/kit-route-flags.mjs"], {
         cwd: root,
         encoding: "utf8",
-        env: { ...process.env, GITHUB_OUTPUT: output, KIT_ROUTE_FAMILY: family },
+        env: {
+          ...process.env,
+          GITHUB_OUTPUT: output,
+          GITHUB_EVENT_NAME: eventName,
+          KIT_ROUTE_FAMILY: automatic ? "archive" : family,
+          KIT_STAGING_ROUTE_FAMILY: automatic ? family : "archive",
+        },
       });
       const flags = ["archive", "static", "events", "home", "join"]
         .map((name) => `${name}=${expected?.includes(name) ?? false}\n`)
         .join("");
       const success = expected && !disabled;
-      assert.equal(result.status, success ? 0 : 1, result.stderr);
-      assert.equal(readFileSync(output, "utf8"), success ? flags : "");
+      const label = `${eventName} family ${JSON.stringify(family)}`;
+      assert.equal(result.status, success ? 0 : 1, `${label}: ${result.stderr}`);
+      assert.equal(readFileSync(output, "utf8"), success ? flags : "", label);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -659,7 +673,7 @@ test("workflow wires the tested gate before both mutations and preserves staging
   );
   assert.match(
     workflow,
-    /KIT_ROUTE_FAMILY: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.kit_route_family \|\| 'hono' \}\}/,
+    /KIT_ROUTE_FAMILY: \$\{\{ inputs\.kit_route_family \}\}\n          KIT_STAGING_ROUTE_FAMILY: \$\{\{ github\.event_name == 'workflow_run' && vars\.KIT_STAGING_ROUTE_FAMILY \|\| '' \}\}/,
   );
   assert.match(workflow, /run: node --import tsx ci\/kit-route-flags\.mjs/);
   assert.match(workflow, /run: npm run build --prefix web/);

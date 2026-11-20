@@ -17,6 +17,7 @@
 // read, draft stays forbidden without the moderator bit, an indeterminate
 // session is unavailable (never a false logout, never a guest render of
 // member state), and every database failure is a 503 before bytes.
+import { timeStaleAt } from "../../lib/time-freshness-clock";
 import { dbFor } from "../admin/db";
 import { savedEventReview } from "../admin/event-saved-review";
 import {
@@ -28,6 +29,7 @@ import type { Db } from "../db/index";
 import type { Env } from "../env";
 import { RSVP_COPY, type RsvpClosedReason } from "../islands/contracts";
 import type { KitRequestSession } from "../kit-session";
+import { eventGoneModel } from "../kit-event-states";
 import type {
   EventGoneModel,
   EventMissingModel,
@@ -51,7 +53,6 @@ import {
 } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
-import { fmt } from "./pages-shared";
 import { eventLinkAvailability } from "./link-availability";
 import { isOngoing } from "./ongoing";
 import {
@@ -198,10 +199,11 @@ export interface KitEventDetailModel {
   isDraft: boolean;
   isPast: boolean;
   /** Server snapshot at the render instant (`isOngoing`): the "Happening now"
-   * hero badge. Never a client clock; RSVP verdicts are unaffected. Optional
+   * interval. Never a client clock; RSVP verdicts are unaffected. Optional
    * so a pre-existing fixture without the flag reads as not ongoing. */
   isOngoing?: boolean;
   lifecycle: { date: string; endTime: string; next: { key: string; date: string } | null } | null;
+  liveTime?: { asOf: string; staleAt: string };
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
@@ -343,7 +345,7 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
     getReviewEventFn: (db, key) => getEventForModeratorReview(db, key),
     neighborsFn: getEventNeighbors,
     relatedFn: listRelatedEvents,
-    seriesFn: (db, event, now) => getEventSeriesContext(db, event, now),
+    seriesFn: getEventSeriesContext,
     attendeesFn: async (db, eventId, page) => {
       // Same bounded window as the served handler: the requested page plus
       // the first row of the next page (lookahead, never rendered) that
@@ -415,6 +417,13 @@ function detailLifecycle(
         }
       : null,
   };
+}
+
+function liveDetailTime(event: PublicEvent, now: Date): KitEventDetailModel["liveTime"] {
+  if (!isOngoing(event, now)) return undefined;
+  const staleAt = timeStaleAt("live", +now, +event.startsAt, +event.endsAt);
+  if (staleAt === null || !Number.isFinite(staleAt)) return undefined;
+  return { asOf: now.toISOString(), staleAt: new Date(staleAt).toISOString() };
 }
 
 // A code bug (no branded status) must never look like a downstream outage:
@@ -504,30 +513,25 @@ export async function resolveKitEventDetail(
           });
           related = [];
         }
+        let upcoming: EventLink | null = null;
+        try {
+          const acceptKey = (key: string) =>
+            eventKeyAllowed(key, appUrl) && (canonicalEventKey(key) ?? key) === key;
+          const readSeries = store.seriesFn ?? getEventSeriesContext;
+          upcoming = (await readSeries(db, event, now, acceptKey))?.upcoming ?? null;
+        } catch (err) {
+          console.warn("Event next date unavailable; serving cancellation without it.", {
+            request_id: safeRequestId(requestId),
+            exception: exceptionClass(err),
+          });
+        }
         const headers = { "cache-control": NO_STORE, "x-robots-tag": NOINDEX };
         setHeaders(headers);
         return {
           kind: "gone",
           status: 410,
           headers,
-          model: {
-            title: event.title,
-            game: event.game,
-            eventKey: event.eventKey,
-            existingResponses: event.goingCount,
-            icsUrl: `/events/${event.eventKey}.ics`,
-            markdownAlternate: `/e/${event.eventKey}.md`,
-            upcomingUrl: "/events",
-            related: related.map((link) => ({
-              key: link.eventKey,
-              title: link.title,
-              whenText: fmt(link.startsAt, link.timezone),
-              datetime: link.startsAt.toISOString(),
-              location: link.location,
-            })),
-            jsonLd: eventJsonLd(event, appUrl),
-            siteJsonLd: siteJsonLd(appUrl),
-          },
+          model: eventGoneModel(event, related, appUrl, upcoming),
         };
       }
       // An indeterminate session is a store outage, never a logout and never
@@ -626,6 +630,7 @@ export async function resolveKitEventDetail(
       const pageCanonical = canonicalUrl(appUrl, pagePath);
       const review = wantsReview ? savedEventReview(event, now, search) : null;
       const zoneLabel = isValidZone(event.timezone) ? event.timezone : "UTC";
+      const liveTime = liveDetailTime(event, now);
       const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
@@ -669,8 +674,9 @@ export async function resolveKitEventDetail(
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
-          isOngoing: isOngoing(event, now),
+          isOngoing: Boolean(liveTime),
           lifecycle: ended ? detailLifecycle(event, zoneLabel, series?.upcoming) : null,
+          ...(liveTime ? { liveTime } : {}),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,

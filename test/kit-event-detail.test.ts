@@ -914,7 +914,7 @@ describe("Kit detail presentation", () => {
           event: {
             ...row(),
             goingCount: 3,
-            startsAt: new Date("2098-12-31T19:00:00Z"),
+            startsAt: new Date("-000001-12-31T19:00:00Z"),
             endsAt: new Date("2098-12-31T21:00:00Z"),
           } as PublicEvent,
         }),
@@ -924,8 +924,44 @@ describe("Kit detail presentation", () => {
       html.push(renderDetail(outcome.model as unknown as Record<string, unknown>));
       expect(Date.now()).toBe(new Date(wall).getTime());
     }
-    expect(html[0]).toContain("Happening now");
+    expect(html[0]).toContain('id="kit-live-refresh"');
+    expect(html[0]).toContain('data-as-of="2098-12-31T20:00:00.000Z"');
+    expect(html[0]).toContain('data-stale-at="2098-12-31T20:05:00.000Z"');
     expect(html[0]).toBe(html[1]);
+  });
+
+  it("shows live timing in published review without enabling RSVP", async () => {
+    const endsAt = new Date("2026-10-25T01:15:00.001Z");
+    const event = {
+      ...row({ timezone: "Europe/London", startsAt: new Date("2026-10-25T00:45:00Z"), endsAt }),
+      goingCount: 0,
+      goingOccupancy: 0,
+    };
+    const render = () =>
+      resolve(KEY, fakeStore({ event }), memberSession(MOD_ID, true), null, "?review=1");
+    vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(new Date(+event.endsAt - 1));
+    const { outcome: last } = await render();
+    expect(last.kind).toBe("ok");
+    if (last.kind !== "ok") throw new Error(last.kind);
+    expect(last.model.liveTime).toMatchObject({
+      staleAt: event.endsAt.toISOString(),
+      asOf: new Date(+endsAt - 1).toISOString(),
+    });
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(last.model as unknown as Record<string, unknown>);
+    expect(html).toContain("since 01:45 GMT+1");
+    const asOf = /<time datetime="2026-10-25T01:15:00\.000Z">01:15 GMT(?:\+0)?<\/time>/;
+    expect(html.replace(/<!---->/g, "")).toMatch(asOf);
+    expect(last.model.review?.actions).toContain("Back to edit");
+    expect(last.model.detailHtml.rsvp).toContain("disabled");
+    expect(last.model.lifecycle).toBeNull();
+    vi.setSystemTime(event.endsAt);
+    const { outcome: end } = await render();
+    expect(end.kind).toBe("ok");
+    if (end.kind !== "ok") throw new Error(end.kind);
+    expect(end.model.liveTime).toBeUndefined();
+    expect(end.model.lifecycle).toMatchObject({ date: "25 Oct 2026", endTime: "01:15" });
+    expect(end.model.rsvpClosed).toBe("past");
   });
 
   function freezeRosterClock() {
@@ -1585,20 +1621,27 @@ describe("event-detail gone presentation", () => {
     expect(viewerRsvpFn).not.toHaveBeenCalled();
   });
 
-  it("degrades to an empty alternatives list when the related read fails", async () => {
+  it.each(["relatedFn", "seriesFn"] as const)("keeps the 410 when %s fails", async (read) => {
     const store = fakeStore({
-      event: { ...row({ status: "cancelled" }), goingCount: 3 } as PublicEvent,
+      event: { ...row({ status: "cancelled", recurrenceIndex: 1 }), goingCount: 3 } as PublicEvent,
     });
+    const fail = vi.fn().mockRejectedValue(new Error("optional read down"));
+    const upcoming = RELATED[0]!;
     const { outcome } = await resolve(KEY, {
       ...store,
-      relatedFn: async () => {
-        throw new Error("related down");
-      },
+      seriesFn: async () => ({ hosts: [], previous: null, next: null, upcoming }),
+      [read]: fail,
     });
+    expect(fail).toHaveBeenCalledOnce();
     expect(outcome.kind).toBe("gone");
     if (outcome.kind !== "gone") throw new Error("unreachable");
     expect(outcome.status).toBe(410);
-    expect(outcome.model.related).toEqual([]);
+    expect(outcome.headers["cache-control"]).toBe("private, no-store");
+    expect(outcome.model.related.map(({ key }) => key)).toEqual(
+      read === "relatedFn" ? [] : RELATED.map(({ eventKey }) => eventKey),
+    );
+    const nextHref = read === "relatedFn" ? `/e/${upcoming.eventKey}` : undefined;
+    expect(outcome.model.nextDate?.href).toBe(nextHref);
     expect(outcome.model.title).toBe("Chess night");
   });
 

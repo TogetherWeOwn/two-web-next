@@ -25,6 +25,7 @@ import {
 import { STAGING_APP_URL } from "./qa";
 import { newRequestId, safeRequestId } from "./request-log";
 import { withStreamedBody } from "./html-stream";
+import { applySingleValidator } from "./http/conditional";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { isKitNoticeDocument, readKitRestoredWrite } from "./kit-restored-write";
@@ -71,7 +72,13 @@ export interface RouteDecision {
 // shipped manifest instead of hard-coding "kit": flipping enabled flips the
 // gate for the right reason.
 export const ROUTE_MANIFEST: OwnedRoute[] = [
-  { method: "GET", path: "/", enabled: false, reads: "public" },
+  // The Kit home reads only the viewer's RSVPs. Hono owns GET / until cutover.
+  {
+    method: "GET",
+    path: "/",
+    enabled: false,
+    reads: { resource: "member", action: "list", route: "home" },
+  },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
   { method: "GET", path: "/events", enabled: true, reads: "public" },
   { method: "GET", path: "/about", enabled: true, reads: "public" },
@@ -306,9 +313,10 @@ export function fixtureManifestFor(env: {
   // These Kit-only evidence routes have no Hono twin.
   // Build them from fixture data, separate from the shipped manifest literals.
   if (wantReconciliation) {
+    const detailPath = "/admin/reconciliation/:key";
     const reads = [
       ["/admin/reconciliation", "list", "admin.reconciliation.index"],
-      ["/admin/reconciliation/:key", "view", "admin.reconciliation.show"],
+      [detailPath, "view", "admin.reconciliation.show"],
     ] as const;
     for (const [path, action, route] of reads) {
       routes.push({
@@ -318,6 +326,13 @@ export function fixtureManifestFor(env: {
         reads: { resource: "reconciliation", action, route },
       });
     }
+    routes.push({
+      method: "POST",
+      path: detailPath,
+      enabled: true,
+      // The service audits the submit; the detail boundary keeps its response private.
+      reads: { resource: "reconciliation", action: "view", route: "admin.reconciliation.show" },
+    });
   }
   return routes;
 }
@@ -910,14 +925,7 @@ export async function dispatchHookRequest(
   deps: HookDispatchDeps,
 ): Promise<Response> {
   const response = await dispatchOwnedRequest(event, deps);
-  // Match Kit's post-hook ETag check before it can discard response headers.
-  const etag = response.headers.get("etag");
-  let validator = event.request.headers.get("if-none-match");
-  if (validator?.startsWith('W/"')) validator = validator.slice(2);
-  if (response.status === 200 && etag !== null && validator === etag) {
-    return new Response(null, { status: 304, headers: response.headers });
-  }
-  return response;
+  return applySingleValidator(event.request, response);
 }
 
 async function dispatchOwnedRequest(

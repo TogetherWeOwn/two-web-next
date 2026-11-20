@@ -1,29 +1,12 @@
 <script lang="ts">
-import Shell from "#lib/Shell.svelte";
+import EmberShell from "#lib/EmberShell.svelte";
+import SiteMetadata from "#lib/SiteMetadata.svelte";
+import type { RecoveryModel } from "../../../src/recovery-outcome";
 
-// Shared recovery shell: the Svelte adapter over the RecoveryModel shape
-// (src/recovery-outcome.ts). Markup contract of Recovery
-// (src/screens/recovery.tsx over src/page-shell.tsx RecoveryShell): hero
-// chrome, heading id, lead message, retry button and invite fallback keep
-// their classes, testids and copy on every renderer, so the existing recovery
-// tests and the no-JS contract still apply. Copy is duplicated here
-// deliberately (never imported from the .tsx): importing the Hono screen
-// would bundle the JSX runtime into the Kit worker. All values are display
-// copy or safe same-origin destinations built server-side — never echoed
-// OAuth input — so no raw-HTML rendering is needed and Svelte's default escaping holds.
-let {
-  title,
-  message,
-  retryUrl,
-  retryLabel,
-  inviteUrl,
-}: {
-  title: string;
-  message: string;
-  retryUrl: string;
-  retryLabel: string;
-  inviteUrl: string;
-} = $props();
+// Keep the Hono recovery heading, lead, retry and invite markup contracts.
+// The server supplies display copy and validated destinations; never render
+// raw provider input. The type-only import adds no Hono code to the Kit worker.
+let { title, message, retryUrl, retryLabel, inviteUrl, supportReference }: RecoveryModel = $props();
 </script>
 
 {#snippet guestChrome()}
@@ -33,7 +16,8 @@ let {
   </div>
 {/snippet}
 
-<Shell title={title} theme="home" accountChrome={guestChrome}>
+<SiteMetadata title={title} theme="home" />
+<EmberShell accountChrome={guestChrome}>
   <section class="hero recovery-hero" aria-labelledby="recovery-heading">
     <div class="hero-detail hero-detail-left" aria-hidden="true">
       <span></span>
@@ -52,5 +36,10 @@ let {
       <a class="btn" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>
       {" "}<a href={inviteUrl} data-testid="recovery-invite">Join with an invite link instead</a>
     </p>
+    {#if supportReference}
+      <p class="support-reference">
+        Support reference: <code data-testid="error-support-reference">{supportReference}</code>
+      </p>
+    {/if}
   </section>
-</Shell>
+</EmberShell>

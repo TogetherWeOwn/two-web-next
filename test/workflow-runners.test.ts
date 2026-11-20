@@ -168,6 +168,16 @@ describe("workflow runner labels", () => {
     expect(events(workflow!.source.on)).toContain("workflow_dispatch");
   });
 
+  it("runs the Join capture matrix only on explicit manual dispatch", () => {
+    const workflow = workflows.find(({ name }) => name === "kit-browser-fixture.yml");
+    expect(workflow?.source).toMatchObject({
+      on: { workflow_dispatch: { inputs: { join_evidence: { type: "boolean", default: false } } } },
+      jobs: {
+        "join-evidence": { if: "github.event_name == 'workflow_dispatch' && inputs.join_evidence" },
+      },
+    });
+  });
+
   it("keeps deploy, proof and gate jobs hosted for every event and visibility", () => {
     for (const [name, ids] of [
       [

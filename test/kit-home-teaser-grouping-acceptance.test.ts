@@ -47,6 +47,12 @@ function baseData(overrides: Record<string, unknown> = {}): Record<string, unkno
     inviteUrl: INVITE_URL,
     appUrl: APP_URL,
     counts: { memberCount: 42, onlineCount: 7, ranks: [] },
+    countsSnapshot: {
+      memberCount: 42,
+      onlineCount: 7,
+      observedAt: NOW.toISOString(),
+      stale: false,
+    },
     upcomingEvents: [],
     eventsUnavailable: false,
     featured: [],
