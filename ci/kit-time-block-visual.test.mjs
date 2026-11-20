@@ -12,7 +12,13 @@ test("built Kit time block renders required states with and without JavaScript",
   );
   await mkdir("artifacts/kit-time-block", { recursive: true });
   for (const javaScriptEnabled of [false, true]) {
-    const options = { page: source, javaScriptEnabled, timezoneId: "UTC" };
+    const options = {
+      page: source,
+      javaScriptEnabled,
+      timezoneId: "UTC",
+      headerMenu: true,
+      csr: javaScriptEnabled,
+    };
     await withKitOfflineBrowser(options, async ({ page, html }) => {
       assert.match(html, /_app\/immutable\/assets\/[^" ]+\.css/);
       const blocks = page.locator(".time-block");
