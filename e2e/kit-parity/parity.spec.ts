@@ -308,6 +308,31 @@ function expectNoMarker(headers: Record<string, string>, label: string) {
   ).toBeNull();
 }
 
+async function compactMenu(page: Page) {
+  if (
+    (page.viewportSize()?.width ?? Infinity) > 820 ||
+    !(await page.locator("header#menu-sheet").count())
+  ) {
+    return null;
+  }
+  const name = { name: "Menu", exact: true };
+  return page.getByRole("button", name).or(page.getByRole("link", name));
+}
+
+async function closeCompactMenu(page: Page, menu: Awaited<ReturnType<typeof compactMenu>>) {
+  if (menu)
+    await menu
+      .or(page.getByRole("link", { name: "Close menu", exact: true }))
+      .last()
+      .click();
+}
+
+function headerSignOut(page: Page) {
+  return page
+    .locator('.header-account form[method="post"][action="/logout"] button[type="submit"]')
+    .and(page.getByRole("button", { name: "Sign out", exact: true }));
+}
+
 test("kit: capture synthetic non-member and account-hidden headers", async ({ browser }) => {
   test.setTimeout(120_000);
   requireGithubRunner();
@@ -358,10 +383,9 @@ test("kit: capture synthetic non-member and account-hidden headers", async ({ br
         expect(response?.status()).toBe(state === "non-member" ? 200 : 400);
         expect(response?.headers()["x-two-renderer"]).toBe("kit");
         if (state === "non-member") {
+          await (await compactMenu(page))?.click();
           await expect(page.locator(".header-account .who")).toHaveText("Synthetic Viewer");
-          await expect(page.locator('.header-account button[type="submit"]')).toHaveText(
-            "Sign out",
-          );
+          await expect(headerSignOut(page)).toBeVisible();
           await expect(page.locator('.main-nav a[href="/leaderboards/members"]')).toHaveCount(0);
         } else {
           await expect(page.locator(".header-account")).toHaveCount(0);
@@ -1250,9 +1274,12 @@ for (const target of targets) {
             animations: "disabled",
             caret: "hide",
           });
-          const logo = await page.locator(".brand img").boundingBox();
-          expect(logo?.width).toBe(width <= 480 ? 50 : 180);
-          expect(logo?.height).toBe(50);
+          const menu = await compactMenu(page);
+          const logo = await page.locator(".brand img:visible").boundingBox();
+          expect(logo?.height).toBe(menu ? 32 : 50);
+          if (menu) expect(logo?.width).toBeCloseTo((456.86 * 32) / 126.34, 1);
+          else expect(logo?.width).toBe(width <= 480 ? 50 : 180);
+          await menu?.click();
           const chrome = (await page.evaluate(`(() => {
             const account = document.querySelector('.header-account');
             const button = account.querySelector('.btn');
@@ -1645,9 +1672,14 @@ for (const target of targets) {
           // default sign-in chrome on both renderers, so no Welcome caption
           // and no sign-in/sign-out controls), no member identifiers, noindex
           // plus canonical (cache/marker headers asserted above).
-          await expect(page.getByRole("link", { name: "Open Discord" })).toBeVisible();
+          const menu = await compactMenu(page);
+          await menu?.click();
+          const discord = page.getByRole("link", { name: "Open Discord" });
+          await expect(discord).toBeVisible();
+          await expect(discord).toHaveAttribute("href", "/discord");
           await expect(page.getByText("Sign in with Discord")).toHaveCount(0);
           await expect(page.getByText("Sign out")).toHaveCount(0);
+          await closeCompactMenu(page, menu);
           expect(await page.content(), `${target.name} ${path} no member identifiers`).not.toMatch(
             /discord_id|created_at/i,
           );
@@ -2471,7 +2503,10 @@ test("Kit member event detail captures the ended record at both widths", async (
       expect(response?.headers()["x-two-renderer"]).toBe("kit");
       const time = page.getByTestId("kit-event-time");
       const record = page.getByRole("region", { name: "Sign-up record" });
-      await expect(page.getByText("Sign out", { exact: true })).toBeVisible();
+      const menu = await compactMenu(page);
+      await menu?.click();
+      await expect(headerSignOut(page)).toBeVisible();
+      await closeCompactMenu(page, menu);
       await expect(page.getByRole("complementary", { name: "Your seat", exact: true })).toHaveCount(
         0,
       );
