@@ -156,15 +156,9 @@ class ManifestAdmission(unittest.TestCase):
         self.assertEqual((self.store / MANIFEST).read_text(), NEW + "\n" + NEW + RECEIPT_SUFFIX + "\n")
         self.assertEqual((self.store / NEW).read_bytes(), b"SYNTHETIC-DUMP\n")
 
-    def test_failed_read_with_notfound_diagnostic_discards_partial_file(self):
+    def test_failed_read_with_notfound_diagnostic_refuses_partial_file(self):
         self.env["FAKE_FAILURE"] = "✘ [ERROR] The specified key does not exist."
-        # Only the initial GET fails; the proof GET must use the uploaded manifest.
-        stub = Path(self.env["WRANGLER_BIN"])
-        stub.write_text(FAKE_R2.replace('and os.environ.get("FAKE_FAILURE"):',
-                                       'and not dest.is_file() and os.environ.get("FAKE_FAILURE"):'))
-        result = self.run_backup("backup")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.store / MANIFEST).read_text(), NEW + "\n" + NEW + RECEIPT_SUFFIX + "\n")
+        self.refuse_without_mutation("backup")
 
     def test_valid_append_preserves_daily_and_weekly(self):
         old_weekly = PREFIX + "-20260901T000000Z-weekly-20260907T000000Z.dump"
