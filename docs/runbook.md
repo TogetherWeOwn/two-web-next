@@ -1540,11 +1540,15 @@ all bundled web migrations as pending; an unreadable or malformed ledger reports
 The Worker prefers the owner-controlled [timestamp view](web-readiness-projection.sql)
 `web_readiness.migration_timestamps`. Only a confirmed absent view permits the
 transitional read of `drizzle.__drizzle_migrations`. A permission error, timeout,
-or malformed result never permits fallback. The view definition is not applied
-by the migration or deploy pipeline. Bootstrap and revocation must be coordinated
-separately: a Worker that only knows the legacy ledger cannot report migration
-readiness once its direct access is removed. Do not treat this change as release
-or rollback qualification.
+or malformed result never permits fallback. Before the view exists, the failed
+view read and absence check add two transactions within the same response deadline.
+The migration and deploy pipeline does not apply the view. In a separate rollout,
+commit the schema, view, and runtime `USAGE` and `SELECT` grants in one transaction:
+a schema that exists without the runtime grant can make `/up` return 503 even
+while the legacy ledger is readable. Coordinate ledger revocation separately. A
+Worker that only knows the legacy ledger cannot report migration readiness once
+its direct access is removed. Do not treat this change as release or rollback
+qualification.
 
 DB ping + ledger share a **3-second response deadline**, running in parallel with
 the existing 3-second queue deadline. Each ping, ledger and queue read runs in a

@@ -292,7 +292,7 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
         await admin.end({ timeout: 0 });
       }
     }
-  }, 10000);
+  });
 
   it("aborts a slow ping server-side and restores local limits without closing the injected pool", async () => {
     const url = testDatabaseUrl(raw!);

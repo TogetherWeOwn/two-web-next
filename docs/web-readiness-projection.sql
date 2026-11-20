@@ -1,7 +1,8 @@
 -- Reference definition, exercised by the disposable /up fixture; not a migration.
 -- The trusted owner creates both objects and retains access to the base column.
--- The runtime gets schema USAGE and view SELECT separately, never ownership,
--- schema CREATE, or membership in the owner role.
+-- In a separate rollout, commit this definition and the runtime's schema USAGE
+-- and view SELECT grants in the same transaction. Never give the runtime
+-- ownership, schema CREATE, or membership in the owner role.
 CREATE SCHEMA web_readiness;
 REVOKE ALL ON SCHEMA web_readiness FROM PUBLIC;
 

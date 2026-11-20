@@ -106,7 +106,7 @@ timing check to fake timers; do not retry the job until it passes.
 | Test | Limit | Why it stays |
 | --- | --- | --- |
 | `test/hot-path-indexes.test.ts` (1× 15 s) | 15 s per test | Bounds the event-scoped offer regression across both RSVP fixture sizes and transactional rollback |
-| `test/up-db.test.ts` (6× 10 s) | 10 s per test; elapsed `< 3500`/`< 4000` ms | Asserts the up-probe's DB deadlines and bounds the readiness projection privilege test |
+| `test/up-db.test.ts` (5× 10 s) | 10 s per test; elapsed `< 3500`/`< 4000` ms | Asserts the up-probe's own DB deadlines |
 | `test/db-ping-cli.test.mjs` (1× 10 s) | 10 s; elapsed `< 500`/`< 2500` ms | Asserts the CLI's probe and cleanup deadlines |
 | `test/counts-worker.test.ts` (4× 10 s) | 10 s per test | Bounds the miniflare counts Worker runs |
 | `test/remote-runner-isolation.test.ts:547` (1× 10 s) | 10 s; child exec 10 s | Asserts the runner's kill deadline |
