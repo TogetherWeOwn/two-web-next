@@ -4,6 +4,7 @@ import { chmod, copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -128,6 +129,52 @@ test("the coverage gate keeps area floors and summary scopes for the high-blast-
     );
     assert.ok(summary.includes(`"${file}"`), `coverage summary must report ${file}`);
   }
+});
+
+test("the join coverage summary aggregates join and the shared throttle module", async (t) => {
+  const fixture = await mkdtemp(join(tmpdir(), "join-coverage-summary-"));
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+  const coverage = (covered, total) =>
+    Object.fromEntries(
+      ["statements", "branches", "functions", "lines"].map((metric) => [
+        metric,
+        { covered, total, pct: (covered / total) * 100 },
+      ]),
+    );
+  const summary = { total: coverage(1, 1) };
+  for (const file of [
+    "admin/index.ts",
+    "events/index.ts",
+    "sessions.ts",
+    "jobs/index.ts",
+    "bot/index.ts",
+    "agent-events/index.ts",
+    "profiles/index.ts",
+    "auth/index.ts",
+    "invite.ts",
+    "return-journey.ts",
+    "write-recovery.tsx",
+    "kit-example.ts",
+    "counts.ts",
+    "seo.ts",
+    "http/throttle-extra.ts",
+  ]) {
+    summary[join(fixture, "src", file)] = coverage(1, 1);
+  }
+  summary[join(fixture, "src/join/service.ts")] = coverage(1, 1);
+  summary[join(fixture, "src/http/throttle.ts")] = coverage(1, 3);
+  const reportPath = join(fixture, "coverage.json");
+  await writeFile(reportPath, JSON.stringify(summary));
+  const script = new URL("./coverage-summary.mjs", import.meta.url);
+  const result = spawnSync(process.execPath, [fileURLToPath(script), reportPath], {
+    cwd: fixture,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    result.stdout.split("\n").find((line) => line.startsWith("| `src/join/")),
+    "| `src/join/ + src/http/throttle.ts` | 50% | 50% | 50% | 50% |",
+  );
 });
 
 test("patch coverage fails closed when its coverage input is missing", async () => {
