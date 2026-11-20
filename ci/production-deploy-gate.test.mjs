@@ -285,12 +285,16 @@ test("the reviewed Kit candidate passes; drift in name, flags, crons or bindings
     [(kit) => (kit.triggers.crons = ["*/10 * * * *"]), /empty crons/],
     [(kit) => (kit.routes = [{ pattern: "togetherweown.com" }]), /routes/],
     [(kit) => (kit.workers_dev = true), /workers.dev/],
+    [(kit) => (kit.preview_urls = true), /preview URLs/],
+    [(kit) => delete kit.preview_urls, /preview URLs/],
     [(kit) => (kit.hyperdrive[0].id = "f".repeat(32)), /hyperdrive bindings/],
     [(kit) => (kit.queues.consumers = [{ queue: "q" }]), /queues bindings/],
     [(kit) => delete kit.tail_consumers, /tail_consumers bindings/],
     [(kit) => (kit.kv_namespaces = [{ binding: "KV", id: "x" }]), /kv_namespaces bindings/],
+    [(kit) => (kit.send_email = [{ name: "EMAIL" }]), /unreviewed config section send_email/],
     [(kit) => (kit.assets.binding = "STATIC"), /assets binding/],
     [(kit) => (kit.vars.APP_URL = "https://example.com"), /var APP_URL/],
+    [(kit) => delete kit.vars.DISCORD_MODERATOR_ROLE_IDS, /var DISCORD_MODERATOR_ROLE_IDS/],
   ];
   for (const [mutate, message] of cases) {
     const { root, kit } = kitPair();

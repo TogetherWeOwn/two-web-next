@@ -998,6 +998,12 @@ const KIT_BINDING_KEYS = (
   "hyperdrive queues tail_consumers version_metadata services kv_namespaces r2_buckets " +
   "d1_databases durable_objects analytics_engine_datasets ai browser workflows"
 ).split(" ");
+const KIT_CONFIG_KEYS = new Set(
+  (
+    "$schema name main compatibility_date compatibility_flags observability workers_dev " +
+    "preview_urls placement tail_consumers version_metadata keep_vars triggers queues assets hyperdrive vars"
+  ).split(" "),
+);
 
 // Validate the source-only Kit production config without building or deploying.
 // The candidate must name the production Worker, keep every Kit route family
@@ -1018,6 +1024,9 @@ export function assertKitProductionCandidate(rootText, kitText) {
   if ("routes" in kit || "route" in kit || "env" in kit || kit.workers_dev !== false) {
     throw new Error("Kit candidate must not declare routes, environments or workers.dev");
   }
+  if (kit.preview_urls !== false) {
+    throw new Error("Kit candidate must disable preview URLs");
+  }
   for (const key of KIT_BINDING_KEYS) {
     if (!isDeepStrictEqual(kit[key], production[key])) {
       throw new Error(`Kit candidate ${key} bindings differ from root env.production`);
@@ -1026,9 +1035,19 @@ export function assertKitProductionCandidate(rootText, kitText) {
   if (kit.assets?.binding !== (production.assets ?? root.assets)?.binding) {
     throw new Error("Kit candidate assets binding differs from root env.production");
   }
-  for (const [name, value] of Object.entries(kit.vars ?? {})) {
+  for (const key of Object.keys(kit)) {
+    if (!KIT_CONFIG_KEYS.has(key)) {
+      throw new Error(`Kit candidate has unreviewed config section ${key}`);
+    }
+  }
+  for (const [name, value] of Object.entries(kit.vars)) {
     if (!KIT_ROUTE_FLAGS.includes(name) && production.vars?.[name] !== value) {
       throw new Error(`Kit candidate var ${name} differs from root env.production`);
+    }
+  }
+  for (const name of Object.keys(production.vars ?? {})) {
+    if (!Object.hasOwn(kit.vars, name)) {
+      throw new Error(`Kit candidate var ${name} is missing`);
     }
   }
 }
