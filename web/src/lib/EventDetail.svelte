@@ -5,6 +5,11 @@ import Tag from "#lib/Tag.svelte";
 import TimeBlock from "#lib/TimeBlock.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
 import { kitEventFacts } from "../../../src/events/kit-event-facts";
+import {
+  kitOpenSeat,
+  kitSeatActionBar,
+  KIT_SIGNUPS_OPEN,
+} from "../../../src/events/kit-seat-actions";
 import { isPublicJoinUrl } from "../../../src/events/public-join-url";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
 import {
@@ -24,6 +29,9 @@ const live = $derived(model.liveTime);
 const savedLive = $derived(
   live && !model.review && model.viewerMember && model.answer?.status === "going",
 );
+const openSeat = $derived(kitOpenSeat(model));
+const seatHeading = $derived(openSeat ?? model.seatCard.heading);
+const bar = $derived(kitSeatActionBar(model));
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
@@ -141,6 +149,7 @@ const detailIslands = $derived([
         {#if savedLive}<Tag variant="you">You're in</Tag>{/if}
       </div>
     {/if}
+    {#if openSeat}<span class="seat-open-snapshot"><Tag variant="ok">{KIT_SIGNUPS_OPEN}</Tag></span>{/if}
     <h1 data-waitlist-position={model.waitlistPosition ?? ""}>{model.title}</h1>
   </section>
   {#if model.joinResult}
@@ -185,17 +194,23 @@ const detailIslands = $derived([
         {/if}
       </section>
     {:else}
-    <section class="seat-card" aria-labelledby={model.seatCard.heading ? 'seat-card-heading' : undefined} aria-label={model.seatCard.heading ? undefined : 'RSVP'} data-testid="kit-seat-card">
-      {#if model.seatCard.heading}
+    <section class="seat-card" aria-labelledby={seatHeading ? 'seat-card-heading' : undefined} aria-label={seatHeading ? undefined : 'RSVP'} data-testid="kit-seat-card">
+      {#if seatHeading}
         <div class="seat-card-head">
-          <h2 id="seat-card-heading">{model.seatCard.heading}</h2>
-          {#if model.seatCard.tag}<span class="seat-card-tag">{model.seatCard.tag.text}</span>{/if}
+          <h2 id="seat-card-heading">
+            {#if openSeat}
+              <span class="seat-open-snapshot">{seatHeading}</span><span class="seat-open-fallback">{model.seatCard.heading}</span>
+            {:else}{seatHeading}{/if}
+          </h2>
+          {#if openSeat}<span class="seat-open-snapshot"><Tag variant="ok">{KIT_SIGNUPS_OPEN}</Tag></span>
+          {:else if model.seatCard.tag}<span class="seat-card-tag">{model.seatCard.tag.text}</span>{/if}
         </div>
       {/if}
       {#if live && !model.review}
         <p class="seat-card-note live-rsvp-end">Ends <time datetime={model.endsAt}>{model.endsWhenText}</time></p>
       {/if}
       <div class="event-rsvp">{@html model.detailHtml.rsvp}</div>
+      {#if openSeat}<a class="seat-action" href={model.icsUrl}>Add to calendar</a>{/if}
       {#if model.seatCard.note}<p class="seat-card-note">{model.seatCard.note}</p>{/if}
     </section>
     {/if}
@@ -318,6 +333,23 @@ const detailIslands = $derived([
     {/if}
   </div>
   {#if model.viewerModerator && model.review}{@html model.review.actions}{/if}
+  {#if bar}
+    <aside class="event-seat-bar" aria-label="Your seat" data-state={bar.state}>
+      <p><strong>{bar.title}</strong><br />{bar.detail}</p>
+      <a class="seat-action seat-action-icon" href={model.icsUrl} aria-label="Add to calendar">
+        <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round">
+          <rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M8 3v4M16 3v4M3.5 10h17"/>
+        </svg>
+      </a>
+      {#if bar.state === "open"}
+        <form method="post" action={bar.action}>
+          <button class="seat-action seat-action-primary" type="submit" name="status" value="going">{RSVP_COPY.cta}</button>
+        </form>
+      {:else if bar.state === "guest"}
+        <a class="seat-action seat-action-primary" href={bar.href}>{bar.label}</a>
+      {/if}
+    </aside>
+  {/if}
 </Shell>
 
 <style>
@@ -360,6 +392,63 @@ const detailIslands = $derived([
   :global(.event-theme) .seat-card :global(.event-rsvp > section > a),
   :global(.event-theme) .seat-card :global(.event-rsvp button) { width: 100%; box-sizing: border-box; }
   :global(.event-theme) .event-detail-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  /* Native B4/C5 controls: the Kit pill treatment without a client handler. */
+  .seat-action {
+    display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+    min-height: 44px; border: 0; border-radius: var(--radius-pill); padding: 0 var(--space-5);
+    box-shadow: inset 0 0 0 1px var(--color-hair2); background: transparent; color: var(--color-t1);
+    font: var(--font-weight-semibold) var(--text-ui) var(--font-ui);
+    font-stretch: var(--font-width-button); text-decoration: none; cursor: pointer;
+  }
+  .seat-action-primary { background: var(--color-ember); color: var(--color-on-accent); box-shadow: none; }
+  .seat-action-icon { min-height: 36px; padding-inline: var(--space-3); }
+  .seat-action:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
+  .seat-card > .seat-action { width: 100%; margin-top: var(--space-3); }
+  @media (forced-colors: active) { .seat-action { border: 1px solid ButtonText; } }
+  .seat-open-fallback { display: none; }
+  /* C5 owns the initial availability. After an inline write the lineup badge
+     takes over, even if the inline join control later returns. */
+  .event-layout :global([data-event-lineup]:has([data-seat-refresh]:not([data-seat-refresh="ready"]))) { display: none; }
+  .event-layout :global([data-seat-refresh] [data-spots]:not([hidden]))::before { content: " · "; }
+  .event-layout:has(:global([data-seat-refresh]:not([data-seat-refresh="initial"]))),
+  .event-layout:not(:has(:global([data-testid="rsvp-going"]))),
+  .event-layout:has(:global([data-island="rsvp-button"][data-outcome-unknown])) {
+    .seat-open-snapshot { display: none; }
+    .seat-open-fallback { display: inline; }
+  }
+  .event-seat-bar { display: none; }
+  /* Kit B4 uses the sheet elevation and keeps the full bar out of the focus viewport. */
+  @media (max-width: 820px) {
+    :global(html):has(.event-seat-bar) {
+      --event-bar-safe: env(safe-area-inset-bottom, 0px);
+      --event-bar-height: calc(max(44px, 3.5rem) + 2 * var(--space-3) + 1px + var(--event-bar-safe));
+      /* Keep the focus outline clear of the fixed bar, including at max scroll. */
+      --event-bar-clearance: calc(var(--event-bar-height) + var(--space-2));
+      scroll-padding-bottom: var(--event-bar-clearance);
+      padding-bottom: var(--event-bar-clearance);
+    }
+    .event-seat-bar {
+      position: fixed;
+      z-index: 2;
+      inset: auto 0 0;
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      box-sizing: border-box;
+      min-height: var(--event-bar-height);
+      padding: var(--space-3) var(--space-3) calc(var(--space-3) + var(--event-bar-safe));
+      border-top: 1px solid var(--color-hair2);
+      background: color-mix(in srgb, var(--color-g1) 94%, transparent);
+    }
+    .event-seat-bar p { flex: 1; margin: 0; font-size: var(--text-small); color: var(--color-t2); }
+    .event-seat-bar strong { color: var(--color-t1); }
+    .event-seat-bar form { flex: none; margin: 0; }
+    /* The inline island can update without navigation. Never offer a stale B4
+       snapshot beside a changed or unconfirmed answer; native B4 POSTs reload. */
+    .event-layout:has(:global([data-seat-refresh]:not([data-seat-refresh="initial"]))) ~ .event-seat-bar[data-state="open"],
+    .event-layout:not(:has(:global([data-testid="rsvp-going"]:enabled))) ~ .event-seat-bar[data-state="open"],
+    .event-layout:not(:has(:global([data-testid="rsvp-withdraw"]:enabled))) ~ .event-seat-bar[data-state="saved"] { display: none; }
+  }
   /* Kit breakpoint.compact-max, layout.rail.seat, and layout.sticky-offset. */
   @media (min-width: 821px) {
     .event-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "head rail" "body rail"; column-gap: var(--space-9); align-items: start; }

@@ -661,7 +661,7 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
   const KIT_SESSION = "src/kit-session.ts";
   const BRIDGE = "kit session bridge unavailable; rendering without locals.";
   const PROBE = "kit auth-status probe unavailable; rendering without probe cookie.";
-  const ROTATION = "kit event-detail rotation unavailable; rendering without renewal.";
+  const ROTATION = "kit document rotation unavailable; rendering without renewal.";
   const ADMIN = "kit admin renewal unavailable; rendering without renewal.";
   // Emitted by the fallback-document style-hash read, not a session leg: no row
   // in this section (a separate rowing decision), but it must stay named here.
@@ -724,13 +724,13 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     probe: () => span(ROUTE_OWNERSHIP, /^ {4}deps\.authStatusCookieFor &&$/, "  }", 1),
     rotationPredicate: () =>
       span(ROUTE_OWNERSHIP, /^function releasedEventDetailRenewsSession\(/, "}"),
-    rotationAppend: () => span(ROUTE_OWNERSHIP, /^ {2}if \(deps\.eventDetailRotationFor &&/, "  }"),
+    rotationAppend: () => span(ROUTE_OWNERSHIP, /^ {2}if \(documentRotationFor\)/, "  }"),
     adminPredicate: () => span(ROUTE_OWNERSHIP, /^function releasedAdminRenewsSession\(/, "}"),
     adminAppend: () => span(ROUTE_OWNERSHIP, /^ {2}if \(deps\.adminRenewalFor &&/, "  }"),
   };
   const session = {
     bridge: () => span(KIT_SESSION, /^export function kitSessionBridge\(/, "}"),
-    rotation: () => span(KIT_SESSION, /^export function kitEventDetailRotationFor\(/, "}"),
+    rotation: () => span(KIT_SESSION, /^export function kitDocumentRotationFor\(/, "}"),
     adminRenewal: () => span(KIT_SESSION, /^export function kitAdminRenewalFor\(/, "}"),
     signer: () => span(KIT_SESSION, /^export function kitAuthStatusCookieFor\(/, "}"),
   };
@@ -812,9 +812,9 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
           /keeps an authorized admin response when the probe rejects/,
       },
       [ROTATION]: {
-        "test/kit-event-detail-session-renewal.test.ts:499":
+        "test/kit-event-detail-session-renewal.test.ts:502":
           /a rotation store error delivers the released 200/,
-        "test/kit-event-detail-session-renewal.test.ts:533":
+        "test/kit-event-detail-session-renewal.test.ts:536":
           /re-verifies the cookie: forged locals/,
       },
       [ADMIN]: {

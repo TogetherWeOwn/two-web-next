@@ -22,6 +22,8 @@ on:
           - archive-static
           - events
           - home
+          - events-join
+          - events-home
           - join
           - ember-pages
 
@@ -107,7 +109,8 @@ jobs:
       - name: Select Kit route families
         id: kit-route-flags
         env:
-          KIT_ROUTE_FAMILY: ${{ github.event_name == 'workflow_dispatch' && inputs.kit_route_family || 'hono' }}
+          KIT_ROUTE_FAMILY: ${{ inputs.kit_route_family }}
+          KIT_STAGING_ROUTE_FAMILY: ${{ github.event_name == 'workflow_run' && vars.KIT_STAGING_ROUTE_FAMILY || '' }}
         run: node --import tsx ci/kit-route-flags.mjs
       - name: Moderator role-config preflight (before any Cloudflare mutation)
         # Read the same top-level source var Wrangler deploys, not a CI secret.

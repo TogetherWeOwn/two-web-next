@@ -244,6 +244,20 @@ describe("Kit staging route rollout", () => {
 });
 
 describe("staging home and join opt-ins", () => {
+  it("keeps the shipped join and recovery entries on Hono by default", () => {
+    const env = { APP_URL: STAGING_APP_URL };
+    const off = stagingManifestFor(env);
+    const on = stagingManifestFor({ ...env, KIT_ROUTE_JOIN: "true" });
+    expect(off?.filter(({ enabled }) => enabled)).toEqual([]);
+    expect(on?.filter(({ enabled }) => enabled)).toEqual([
+      { method: "GET", path: "/join", enabled: true, reads: "public" },
+    ]);
+    expect(resolveRouteOwner({ method: "HEAD", path: "/join" }, on)).toBe("kit");
+    for (const method of ["GET", "HEAD"]) {
+      expect(resolveRouteOwner({ method, path: "/auth/recover" }, on)).toBe("hono");
+    }
+  });
+
   // Use enabled fixture entries to exercise opt-in before the page PRs land.
   const pages = ["/", "/join", "/events", "/events/past", "/about"];
   const excluded = ["/join/discord", "/join/callback", "/auth/recover", "/e/:key"];
@@ -279,12 +293,9 @@ describe("staging home and join opt-ins", () => {
   it.each([
     ["/", "home"],
     ["/join", "join"],
-  ] as const)("dispatches enabled GET %s to Kit only when opted in", async (path, flag) => {
-    const entry = ROUTE_MANIFEST.find((route) => route.method === "GET" && route.path === path);
-    if (!entry) throw new Error(`Missing GET ${path} manifest entry`);
-    const prior = entry.enabled;
-    entry.enabled = true;
-    try {
+  ] as const)(
+    "dispatches shipped GET %s to Kit on staging only when opted in",
+    async (path, flag) => {
       const off = await dispatchAt(path, { [flag]: "false" });
       expect(off.deps.honoFetch).toHaveBeenCalledOnce();
       expect(off.response.headers.get(KIT_RENDERER_HEADER)).toBeNull();
@@ -297,10 +308,8 @@ describe("staging home and join opt-ins", () => {
         { ...stagingDeps({ [flag]: "true" }), appUrl: url.origin },
       );
       expect(await preview.text()).toBe("hono");
-    } finally {
-      entry.enabled = prior;
-    }
-  });
+    },
+  );
 });
 
 describe("Kit staging Wrangler config", () => {
@@ -356,7 +365,7 @@ describe("staging deployment selection", () => {
     expect(deployWorkflow).toMatch(/workflow_dispatch:\n\s+inputs:\n\s+kit_route_family:/);
     expect(deployWorkflow).toContain("default: hono");
     expect(deployWorkflow).toContain(
-      "- hono\n          - archive\n          - archive-static\n          - events\n          - home\n          - join\n          - ember-pages",
+      "- hono\n          - archive\n          - archive-static\n          - events\n          - home\n          - events-join\n          - events-home\n          - join\n          - ember-pages",
     );
     const deployStep = deployWorkflow
       .split("      - name: Deploy to Cloudflare Workers\n")[1]

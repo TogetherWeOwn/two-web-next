@@ -1,15 +1,14 @@
 import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../src/admin/db";
-import { readCounts } from "../../../src/counts";
-import { discordEventsSource } from "../../../src/events/discord-transients-source";
-import { cachedFeatured, cachedHomeUpcoming } from "../../../src/home-cache";
+import { getMemberHomeRsvps } from "../../../src/events/member-home-rsvps";
 import {
   FALLBACK_RANKS,
   HOME_JOIN_RESULT_COPY,
   HOME_NOTICES,
   JOIN_INTRO,
   applyHomeResponsePolicy,
+  homeSessionFor,
 } from "../../../src/home-copy";
 import { inviteDestination } from "../../../src/invite";
 import { JOIN_RESULT_COOKIE } from "../../../src/return-journey";
@@ -22,18 +21,27 @@ export const csr = false;
 // Same reads and cache policy as the Hono handler (src/index.tsx GET /):
 // session-aware header from the bridge locals, join notice from ?n=,
 // one-shot join flash, bot-owned counts, merged upcoming events and visible
-// featured rows. Every panel degrades independently — the shared readers
-// never throw — and the response stays viewer-specific (private, no-store).
+// featured rows. Shared public panels degrade independently; a failed private
+// RSVP read propagates rather than pretending the member has no answer. The
+// response stays viewer-specific (private, no-store).
 export const load: PageServerLoad = async ({ url, request, locals, cookies, setHeaders }) => {
-  // Framework-free decisions plus the viewer-specific response policy
-  // (src/home-copy.ts applyHomeResponsePolicy, mirroring Hono): an outage is
-  // never reported as a logout — unknown renders the guest header with the
-  // invite-link hero — ?n= validates to the six keys, a failure notice drops a
-  // stale success flash, the first GET that can render the banner deletes the
-  // one-shot cookie even when the banner is suppressed, and every response
-  // stays private, no-store. While this entry is disabled the hook sends GET /
-  // to Hono, which consumes it there; once enabled, this load is the consumer.
-  const { session, sessionUnavailable, notice, joinResult } = applyHomeResponsePolicy({
+  const session = homeSessionFor(locals);
+  if (!locals.homePanels) throw new Error("Home panels were not prepared");
+  const { counts, countsSnapshot, homeUpcoming, featured } = locals.homePanels;
+  // This per-viewer read stays inside the declared member-read boundary and
+  // outside the shared guest cache.
+  const eventKeys = homeUpcoming.items.flatMap((event) =>
+    event.source === "canonical" ? [event.eventKey] : [],
+  );
+  let memberRsvps: Array<{ eventKey: string; status: string; syncedToDiscordAt: Date | null }> = [];
+  if (session?.member && eventKeys.length > 0) {
+    const db = await dbFor({ env });
+    if (!db) throw new Error("Home RSVP database unavailable");
+    const answers = await getMemberHomeRsvps(db, session.userId, eventKeys);
+    memberRsvps = Array.from(answers, ([eventKey, answer]) => ({ eventKey, ...answer }));
+  }
+  // Do not consume the one-shot notice if the private read failed.
+  const { sessionUnavailable, notice, joinResult } = applyHomeResponsePolicy({
     locals,
     noticeRaw: url.searchParams.get("n"),
     method: request.method,
@@ -41,34 +49,6 @@ export const load: PageServerLoad = async ({ url, request, locals, cookies, setH
     cookies,
     setHeaders,
   });
-  // The counts read degrades to hidden when the bot DB is down — never a 500
-  // on the funnel top (the legacy CountsReader never-throw contract).
-  const counts = await readCounts(env);
-  // Guest-invariant panels ride the shared isolate-local guest cache (the same
-  // module the Hono handler uses): same TTL, in-flight-retire guard and
-  // never-store rules, retired by the committed featured/event mutations.
-  // Each read opens its own web-DB client, like the Hono cached path.
-  const [homeUpcoming, featured] = await Promise.all([
-    cachedHomeUpcoming(
-      env,
-      () => dbFor({ env }),
-      () => discordEventsSource(env),
-      new Date(),
-      undefined,
-      // Same correlation source as the Hono request log: the validated
-      // cf-ray (safeRequestId inside the reader drops anything else).
-      request.headers.get("cf-ray") ?? undefined,
-    ),
-    cachedFeatured(
-      env,
-      () => dbFor({ env }),
-      new Date(),
-      undefined,
-      // Same validated cf-ray correlation as the upcoming leg (safeRequestId
-      // inside the reader drops anything else), mirroring Hono's requestId.
-      request.headers.get("cf-ray") ?? undefined,
-    ),
-  ]);
   return {
     session,
     sessionUnavailable,
@@ -77,7 +57,15 @@ export const load: PageServerLoad = async ({ url, request, locals, cookies, setH
     inviteUrl: inviteDestination(env.DISCORD_INVITE_URL),
     appUrl: env.APP_URL,
     counts,
-    upcomingEvents: homeUpcoming.items,
+    countsSnapshot,
+    // The shared cache is viewer-invariant. Redact names only in the response
+    // projection, so a guest request cannot alter the later member view.
+    upcomingEvents: session?.member
+      ? homeUpcoming.items
+      : homeUpcoming.items.map((event) =>
+          event.source === "canonical" ? { ...event, organizer_name: null } : event,
+        ),
+    memberRsvps,
     eventsUnavailable: homeUpcoming.unavailable,
     featured,
     imageHosts: env.FEATURED_IMAGE_HOSTS,

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Offline R2 fixture. Reject unexpected arguments before touching the local store.
+set -euo pipefail
+[[ $AWS_ACCESS_KEY_ID = fixture-access && $AWS_SECRET_ACCESS_KEY = fixture-secret ]]
+[[ ! -v AWS_SESSION_TOKEN && ! -v AWS_PROFILE && $AWS_CONFIG_FILE = /dev/null ]]
+[[ $AWS_CLI_ERROR_FORMAT = legacy ]]
+[[ $1 = --no-cli-pager && $2 = --no-cli-auto-prompt && $3 = --region && $4 = auto ]]
+[[ $5 = --endpoint-url && $6 = "https://$R2_ACCOUNT_ID.eu.r2.cloudflarestorage.com" ]]
+shift 6
+if [[ $1 = s3 ]]; then
+  [[ $# = 5 && $2 = cp && $4 = s3://test-bucket/* && $5 = --only-show-errors ]]
+  op=multipart key="${4#s3://test-bucket/}" file="$3"
+else
+  [[ $1 = s3api && $3 = --bucket && $4 = test-bucket && $5 = --key ]]
+  op="$2" key="$6"
+fi
+dest="$STUB_R2/$key"
+printf '%s %s\n' "$op" "$key" >> "$STUB_LOG"
+case "$op" in
+  put-object|multipart)
+    if [[ $op = put-object ]]; then [[ $# = 8 && $7 = --body ]]; file="$8"; fi
+    mkdir -p "$(dirname "$dest")"
+    cp "$file" "$dest" ;;
+  get-object)
+    [[ $# = 7 ]]; file="$7"
+    if [[ $key = "${STUB_FAIL_KEY:-}" ]]; then
+      case "$STUB_GET_ERROR" in
+        partial) printf 'partial\n' > "$file"; code=NoSuchKey ;;
+        transport) echo 'Connection closed without a response' >&2; exit 255 ;;
+        noisy) echo 'Connection closed without a response' >&2; code=NoSuchKey ;;
+        *) code="$STUB_GET_ERROR" ;;
+      esac
+    elif [[ ! -f $dest ]]; then
+      code=NoSuchKey
+    else
+      cp "$dest" "$file"
+      if [[ -n ${STUB_CORRUPT_SUFFIX:-} && $key = *"$STUB_CORRUPT_SUFFIX" ]]; then
+        printf 'corrupt\n' >> "$file"
+      fi
+      exit 0
+    fi
+    printf '\nAn error occurred (%s) when calling the GetObject operation: fixture\n' "$code" >&2
+    exit 254 ;;
+  delete-object)
+    [[ $# = 6 && $key != "${STUB_DELETE_FAILURE_KEY:-}" ]]
+    rm -f "$dest" ;;
+  *) exit 2 ;;
+esac

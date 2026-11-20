@@ -179,17 +179,29 @@ test("Kit route-family selection emits validated flags and fails closed", async 
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-route-flags-"),
   );
   try {
-    for (const [family, expected] of [
+    for (const [family, expected, eventName = "workflow_dispatch"] of [
       ["", []],
       ["hono", []],
       ["archive", ["archive"]],
       ["archive-static", ["archive", "static"]],
       ["events", ["events"]],
       ["home", ["home"]],
+      ["events-join", ["events", "join"]],
+      ["events-home", ["events", "home"]],
       ["join", ["join"]],
       ["ember-pages", ["events", "home", "join"]],
       ["all", null],
+      ["events", ["events"], "workflow_run"],
+      ["events-join", ["events", "join"], "workflow_run"],
+      ["events-home", ["events", "home"], "workflow_run"],
+      ["ember-pages", ["events", "home", "join"], "workflow_run"],
+      [undefined, [], "workflow_run"],
+      ["", [], "workflow_run"],
+      ["all", [], "workflow_run"],
+      ["EVENTS", [], "workflow_run"],
+      ["unknown", [], "workflow_run"],
     ]) {
+      const automatic = eventName === "workflow_run";
       const disabled = emberRoutes.some(
         ([flag, path]) =>
           expected?.includes(flag) &&
@@ -202,14 +214,21 @@ test("Kit route-family selection emits validated flags and fails closed", async 
       const result = spawnSync(process.execPath, ["--import", "tsx", "ci/kit-route-flags.mjs"], {
         cwd: root,
         encoding: "utf8",
-        env: { ...process.env, GITHUB_OUTPUT: output, KIT_ROUTE_FAMILY: family },
+        env: {
+          ...process.env,
+          GITHUB_OUTPUT: output,
+          GITHUB_EVENT_NAME: eventName,
+          KIT_ROUTE_FAMILY: automatic ? "archive" : family,
+          KIT_STAGING_ROUTE_FAMILY: automatic ? family : "archive",
+        },
       });
       const flags = ["archive", "static", "events", "home", "join"]
         .map((name) => `${name}=${expected?.includes(name) ?? false}\n`)
         .join("");
       const success = expected && !disabled;
-      assert.equal(result.status, success ? 0 : 1, result.stderr);
-      assert.equal(readFileSync(output, "utf8"), success ? flags : "");
+      const label = `${eventName} family ${JSON.stringify(family)}`;
+      assert.equal(result.status, success ? 0 : 1, `${label}: ${result.stderr}`);
+      assert.equal(readFileSync(output, "utf8"), success ? flags : "", label);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -225,6 +244,46 @@ test("the combined selection refuses any disabled or non-GET Ember entry", async
     for (const invalid of [[], [{ ...entry, method: "POST" }], [{ ...entry, enabled: false }]]) {
       await assert.rejects(requireEnabledEmberRoutes(flags, [...rest, ...invalid]), /not enabled/);
     }
+  }
+});
+
+test("events-join turns on only /events and /join and refuses either disabled GET", async () => {
+  const flags = kitRouteFlagsForFamily("events-join");
+  assert.deepEqual(flags, {
+    archive: "false",
+    static: "false",
+    events: "true",
+    home: "false",
+    join: "true",
+  });
+  const routes = ["/events", "/join"].map((path) => ({ method: "GET", path, enabled: true }));
+  await requireEnabledEmberRoutes(flags, routes);
+  for (const entry of routes) {
+    const rest = routes.filter((route) => route !== entry);
+    await assert.rejects(
+      requireEnabledEmberRoutes(flags, [...rest, { ...entry, enabled: false }]),
+      new RegExp(`GET ${entry.path} is not enabled`),
+    );
+  }
+});
+
+test("events-home turns on only /events and / and refuses either disabled GET", async () => {
+  const flags = kitRouteFlagsForFamily("events-home");
+  assert.deepEqual(flags, {
+    archive: "false",
+    static: "false",
+    events: "true",
+    home: "true",
+    join: "false",
+  });
+  const routes = ["/events", "/"].map((path) => ({ method: "GET", path, enabled: true }));
+  await requireEnabledEmberRoutes(flags, routes);
+  for (const entry of routes) {
+    const rest = routes.filter((route) => route !== entry);
+    await assert.rejects(
+      requireEnabledEmberRoutes(flags, [...rest, { ...entry, enabled: false }]),
+      new RegExp(`GET ${entry.path} is not enabled`),
+    );
   }
 });
 
@@ -466,6 +525,8 @@ for (const [family, archiveFlag, staticFlag, eventsFlag, homeFlag, joinFlag] of 
   ["archive-static", "true", "true", "false", "false", "false"],
   ["events", "false", "false", "true", "false", "false"],
   ["home", "false", "false", "false", "true", "false"],
+  ["events-join", "false", "false", "true", "false", "true"],
+  ["events-home", "false", "false", "true", "true", "false"],
   ["join", "false", "false", "false", "false", "true"],
   ["ember-pages", "false", "false", "true", "true", "true"],
 ]) {
@@ -655,11 +716,11 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(
     workflow,
-    /kit_route_family:\n        description: Kit staging route family; the default keeps all routes on Hono\n        type: choice\n        required: true\n        default: hono\n        options:\n          - hono\n          - archive\n          - archive-static\n          - events\n          - home\n          - join\n          - ember-pages\n/,
+    /kit_route_family:\n        description: Kit staging route family; the default keeps all routes on Hono\n        type: choice\n        required: true\n        default: hono\n        options:\n          - hono\n          - archive\n          - archive-static\n          - events\n          - home\n          - events-join\n          - events-home\n          - join\n          - ember-pages\n/,
   );
   assert.match(
     workflow,
-    /KIT_ROUTE_FAMILY: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.kit_route_family \|\| 'hono' \}\}/,
+    /KIT_ROUTE_FAMILY: \$\{\{ inputs\.kit_route_family \}\}\n          KIT_STAGING_ROUTE_FAMILY: \$\{\{ github\.event_name == 'workflow_run' && vars\.KIT_STAGING_ROUTE_FAMILY \|\| '' \}\}/,
   );
   assert.match(workflow, /run: node --import tsx ci\/kit-route-flags\.mjs/);
   assert.match(workflow, /run: npm run build --prefix web/);

@@ -11,6 +11,8 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
+import { expectedMarkerFor } from "./kit-parity-gates.mjs";
+import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = join(repo, "web");
@@ -108,8 +110,8 @@ const workers = [];
 
 // Start one loopback Worker. The generated Kit Worker and the direct Hono
 // Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
-// fixture database and vars; only main, assets and the self origin differ.
-async function startWorker(name, main, assetsDirectory) {
+// fixture database and vars within each pair.
+async function startWorker(name, main, assetsDirectory, sessionSecret) {
   const port = await unusedPort();
   const origin = `http://127.0.0.1:${port}`;
   const config = join(scratch, `${name}.wrangler.jsonc`);
@@ -122,6 +124,7 @@ async function startWorker(name, main, assetsDirectory) {
     vars: {
       APP_URL: origin,
       DATABASE_URL: databaseUrl,
+      ...(sessionSecret ? { SESSION_SECRET: sessionSecret } : {}),
       FEATURED_IMAGE_HOSTS: "",
       DISCORD_CLIENT_ID: "ci-fixture-client",
       DISCORD_CLIENT_SECRET: "ci-fixture-secret",
@@ -213,6 +216,25 @@ try {
     "archive load reads the empty disposable event database",
   );
   console.log("PASS generated Worker archive request");
+
+  const manifest = await readFile(join(repo, "src/route-ownership.ts"), "utf8");
+  const homeMarker = expectedMarkerFor(manifest, "/");
+  const home = await fetch(`${origin}/`);
+  const homeHtml = await home.text();
+  assert.equal(home.status, 200, "guest home GET renders");
+  assert.equal(home.headers.get("x-two-renderer"), homeMarker, "home GET follows the manifest");
+  assert.equal(home.headers.get("cache-control"), "private, no-store");
+  assert.match(homeHtml, /<h1 id="home-heading">The lobby is open\.<\/h1>/);
+  // No session-secret binding: a guest still gets the safe invite fallback.
+  assert.match(homeHtml, /href="\/discord"[^>]*data-testid="discord-join"/);
+  assert.doesNotMatch(homeHtml, /data-testid="join"/);
+  assert.doesNotMatch(homeHtml, /data-testid="(?:home-standing|home-event-own-rsvp)"/);
+  const headHome = await fetch(`${origin}/`, { method: "HEAD" });
+  assert.equal(headHome.status, home.status);
+  assert.equal(headHome.headers.get("x-two-renderer"), homeMarker, "home HEAD follows GET");
+  assert.equal(headHome.headers.get("cache-control"), "private, no-store");
+  assert.equal(await headHome.text(), "", "HEAD has no response body");
+  console.log("PASS generated Worker guest home GET and HEAD");
 
   // Content leaves keep #808's zero-stylesheet contract on the served
   // worker. The unit parity harness renders pages without +layout.svelte,
@@ -512,6 +534,63 @@ try {
     return fromHono;
   }
 
+  if (args.length) {
+    // Only the data-redirect proof needs signed cookies. Leave the existing
+    // method-parity pair in its original, no-session configuration.
+    const secret = FIXTURE_SECRETS.SESSION_SECRET;
+    const kitWithSession = await startWorker("kit-session", worker, assets, secret);
+    const honoWithSession = await startWorker(
+      "hono-session",
+      join(repo, "src/worker.ts"),
+      join(repo, "public"),
+      secret,
+    );
+    await Promise.all(
+      [kitWithSession, honoWithSession].map((instance) =>
+        listen(instance.child, instance.origin, () => instance.log),
+      ),
+    );
+
+    async function observeDataRedirect(worker, path) {
+      const response = await fetch(`${worker.origin}${path}`, { redirect: "manual" });
+      assert.equal(response.status, 302, `${path}: Hono guest redirect`);
+      assert.equal(response.headers.get("location"), "/auth/discord", `${path}: login location`);
+      const cookies = response.headers.getSetCookie();
+      assert.equal(cookies.length, 1, `${path}: one intended-login cookie`);
+      assert.ok(
+        cookies[0].startsWith(`__Host-two_login_intended=${encodeURIComponent(path)}.`),
+        `${path}: cookie carries the original path and query`,
+      );
+      assert.equal(response.headers.get("x-two-renderer"), null, `${path}: not a Kit render`);
+      const requestId = response.headers.get("x-request-id");
+      assert.ok(requestId, `${path}: request correlation survives`);
+      const headers = [...SECURITY_HEADERS, "vary"].map((name) =>
+        normalize(response.headers.get(name) ?? "", worker, requestId),
+      );
+      return { headers, cookies, body: await response.text() };
+    }
+
+    for (const path of ["/admin/__data.json?tab=events", "/members/__data.json"]) {
+      const [direct, installed] = await Promise.all([
+        observeDataRedirect(honoWithSession, path),
+        observeDataRedirect(kitWithSession, path),
+      ]);
+      assert.deepEqual(installed, direct, `${path}: installed facade preserves Hono response`);
+    }
+    console.log("PASS installed Worker preserves Hono data redirects");
+
+    const kitData = await fetch(`${kitWithSession.origin}/admin/join-attempts/__data.json`, {
+      redirect: "manual",
+    });
+    assert.equal(kitData.status, 200, "Kit-owned data redirect remains a JSON response");
+    assert.deepEqual(await kitData.json(), {
+      type: "redirect",
+      status: 302,
+      location: "/auth/discord?next=%2Fadmin%2Fjoin-attempts",
+    });
+    console.log("PASS installed Worker preserves Kit-owned data redirects");
+  }
+
   // GET and HEAD, with and without a query, across slash variants. /members/
   // and /up/ are non-page paths; the rest are enabled page variants.
   const pagePaths = [
@@ -557,6 +636,11 @@ try {
     }
     await assertParity(`OPTIONS ${path}`, path, { method: "OPTIONS" });
   }
+  await assertParity("POST / stays with Hono", "/", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: "{}",
+  });
   const postApiX = await assertParity("POST /api/x/", "/api/x/", {
     method: "POST",
     headers: jsonHeaders,

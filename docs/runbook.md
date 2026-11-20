@@ -295,22 +295,16 @@ environment. There is no `[env.staging]` configuration. Do not add `--env
 staging` or invent a different Worker target. Verify the approved account and
 binding isolation before any remote mutation.
 
-1. Require green `ci-ok`, `e2e-ok`, `gitleaks`, `pr-lint`, `CodeRabbit` and
-   `Devin Review` on the exact head SHA, with every review finding fixed or
-   answered with evidence, and fresh per-PR exact-head Release Manager
-   `request_confirmation` on a child card assigned and addressed to the Release
-   Manager (this merge deploys production). Apply the
-   [merge and production staging contract](../CONTRIBUTING.md#merge-and-production-staging-evidence)
-   and its retained safeguards: staging is met by the automatic post-merge,
-   pre-production staging/e2e/soak gate, not a pre-merge staging run or artifact
-   equality. Production promotion still waits for qualification of the resulting
-   exact `main` SHA. A scope-skipped staging journey/passive job is not qualifying
-   evidence: follow the linked contract's post-merge manual-dispatch caveat rather
-   than claiming automatic eligibility. Any push requires a new exact-head confirmation.
-   When native review stages apply, the final-stage reviewer squash-merges the
-   exact reviewed and confirmed head before closing the task; otherwise the
-   author merges. Pin the merge to that SHA. Record the confirmation, pinned
-   squash SHA and intended target in the release log.
+1. Apply the exact-head checks, review and retained safeguards in the
+   [merge and production staging contract](../CONTRIBUTING.md#merge-and-production-staging-evidence).
+   Only promotion-path PRs need fresh exact-head Release Manager confirmation
+   before merge. The final-stage reviewer pins the squash merge to the reviewed
+   head; the author does this when no native review stage applies. Record the
+   pinned squash SHA, intended target and any required confirmation in the
+   release log. Staging qualification happens after merge and before production
+   promotion, on the exact `main` SHA. A scope-skipped staging journey or passive
+   job is not qualifying evidence: follow the linked contract's post-merge
+   manual-dispatch caveat rather than claiming automatic eligibility.
 
    For automatic promotion, the Release Manager accepts the exact release SHA
    and asks the authorized Operator to set the repository Actions variable
@@ -380,18 +374,45 @@ binding isolation before any remote mutation.
    then deploys the jobs Worker. A
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
-   The automatic `workflow_run` path always deploys with `hono`, so every route
-   starts and returns to Hono on an ordinary main-CI deploy. To opt into the
-   archive route, dispatch the same workflow from `main` with
-   `kit_route_family=archive` (only `GET /events/past`); choose
-   `kit_route_family=archive-static` to cumulatively add `GET /about` and
-   `GET /faq`. Choose `events`, `home` or `join` for `/events`, `/` or
-   `/join`, or `ember-pages` for all three. Disabled Ember GET entries block
+   Automatic `workflow_run` deploys use `KIT_STAGING_ROUTE_FAMILY` from the
+   GitHub `staging` Environment. Set it only there, not at repository or
+   organization scope. An unset or unrecognized value selects `hono`. Manual
+   dispatch from `main` uses only `kit_route_family`, which defaults to `hono`;
+   it does not change the next automatic deploy. Choose `archive` for only
+   `GET /events/past`, or `archive-static` to add `GET /about` and `GET /faq`.
+   Choose `events`, `home` or `join` for `/events`, `/` or `/join`,
+   `events-join` for `/events` and `/join` together, `events-home` for
+   `/events` and `/` together, or `ember-pages` for all
+   three. Disabled Ember GET entries block
    selection before migrations or Worker mutations. HEAD follows GET; event
    detail, OAuth, recovery and write methods are unaffected. After revision
    verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
-   to an unauthenticated GET that does not follow redirects. Missing or
-   malformed flags fail closed to Hono.
+   to an unauthenticated GET that does not follow redirects. After changing the
+   variable to `events`, confirm the next normal deploy passes
+   `node ci/staging-kit-route-check.mjs /events`.
+
+   Before changing the persistent variable, verify that the target `main`
+   revision contains both the selector for the new family and the cutovers
+   that enable its GET entries in the route manifest. For a family that adds
+   `/`, that includes the home cutover. Wait for older automatic staging
+   deploys to finish, including any still waiting for their `main` CI runs.
+   Automatic deploys check out the triggering CI SHA but read the current
+   staging variable at deploy time. An older selector can treat a new family
+   as unknown and send `/events` back to Hono.
+
+   - **Home first:** from `events`, select `events-home` when `GET /events`
+     and `GET /` are enabled. Switch to `ember-pages` once `GET /join` is
+     also enabled.
+   - **Join first:** from `events`, select `events-join` when `GET /events`
+     and `GET /join` are enabled. Once all three GET entries are enabled,
+     go straight from `events-join` to `ember-pages`; `events-home` would
+     send `/join` back to Hono.
+
+   Do not use `home` or `join` alone to add a route to `events`; either would
+   turn Kit off for `/events`. Never use `ember-pages` to work around a
+   disabled manifest entry; the selection refuses it. Set the variable to
+   `hono` or remove it to restore Hono on subsequent automatic deploys.
+   Missing or malformed flags fail closed to Hono.
 
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
    ([smoke checker](../bin/smoke.mjs)), covering 24 public routes: `/up`
@@ -423,10 +444,10 @@ binding isolation before any remote mutation.
    deploy run link and each applicable `Verify staging Kit … renderer` result.
    `workflow_dispatch` uses the same exact-SHA CI gate, staging migration,
    Kit build, Tail-first deployment, queue handoff, revision verification and
-   smoke path as the automatic workflow. This is the supported route-selection
-   path; `hono` is the default and disables all Kit routes. The next automatic
-   main-CI deployment resets the selection to `hono`. Do not use local
-   `npm run deploy` or direct `wrangler deploy` for the Kit staging Worker:
+   smoke path as the automatic workflow. The manual choice applies only to that
+   run; the next automatic deploy uses the staging environment setting above.
+   Do not use local `npm run deploy` or direct `wrangler deploy` for the Kit
+   staging Worker:
    those commands do not select the reviewed Kit staging config or preserve
    its exact-SHA workflow gates.
 5. Capture the resulting deployment/version IDs and workflow URL. On staging
@@ -1533,12 +1554,24 @@ the same URL, they share a two-slot client; otherwise each uses a one-slot clien
 and is independently measured and cleaned up within the same response deadline.
 
 The journal (`drizzle/meta/_journal.json`) is embedded in the Worker at build
-time. Only web tags `1000–1999` are checked against exact `created_at` timestamps
-in `drizzle.__drizzle_migrations`; bot rows and grandfathered `0000/0001` tags do
-not participate. A newer bot row or later web row cannot hide an earlier missing
-web migration. An empty ledger counts all bundled web migrations as pending; a
-missing, unreadable or malformed ledger reports `null`, never a false zero.
-Volatile `clock_timestamp()` in both DB queries avoids Hyperdrive query caching.
+time. Only web tags `1000–1999` are checked for exact `created_at` membership;
+bot rows and grandfathered `0000/0001` tags do not participate. A newer bot or
+web row cannot hide an earlier missing web migration. An empty ledger counts
+all bundled web migrations as pending; an unreadable or malformed ledger reports
+`null`, never a false zero. Volatile `clock_timestamp()` avoids Hyperdrive query caching.
+
+The Worker prefers the owner-controlled [timestamp view](web-readiness-projection.sql)
+`web_readiness.migration_timestamps`. Only a confirmed absent view permits the
+transitional read of `drizzle.__drizzle_migrations`. A permission error, timeout,
+or malformed result never permits fallback. Before the view exists, the failed
+view read and absence check add two transactions within the same response deadline.
+The migration and deploy pipeline does not apply the view. In a separate rollout,
+commit the schema, view, and runtime `USAGE` and `SELECT` grants in one transaction:
+a schema that exists without the runtime grant can make `/up` return 503 even
+while the legacy ledger is readable. Coordinate ledger revocation separately. A
+Worker that only knows the legacy ledger cannot report migration readiness once
+its direct access is removed. Do not treat this change as release or rollback
+qualification.
 
 DB ping + ledger share a **3-second response deadline**, running in parallel with
 the existing 3-second queue deadline. Each ping, ledger and queue read runs in a

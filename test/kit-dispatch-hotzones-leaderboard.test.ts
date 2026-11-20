@@ -51,10 +51,10 @@ describe("hot-zone Kit ownership (shipped manifest)", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/leaderboards/members" })).toBe("kit");
   });
 
-  it("keeps the control /events/past on Kit and still-disabled leaves on Hono", () => {
+  it("keeps enabled control routes on Kit and disabled leaves on Hono", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/events/past" })).toBe("kit");
     expect(resolveRouteOwner({ method: "GET", path: "/privacy" })).toBe("hono");
-    expect(resolveRouteOwner({ method: "GET", path: "/join" })).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/join" })).toBe("kit");
   });
 
   it("declares public reads for hot-zones and the member read for the board", () => {

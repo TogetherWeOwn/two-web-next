@@ -15,8 +15,8 @@
 // probe below, attached by the hook only to successful moderator admin
 // responses or audited full member documents. Renewal stays route-specific:
 // Hono's readSession rotates its page views (no blanket rotating layout load;
-// fragments and JSON keep nonrotating reads), the Kit event detail renews
-// through kitEventDetailRotationFor, and Kit admin reads rotate through
+// fragments and JSON keep nonrotating reads), Kit home and event detail
+// renew through kitDocumentRotationFor, and Kit admin reads rotate through
 // kitAdminRenewalFor, which the hook core calls only after the
 // member-read boundary releases a successful GET. Logout stays the
 // authoritative Hono POST /logout. This module only peeks flashes. Profile
@@ -304,7 +304,7 @@ export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<Ki
 }
 
 /**
- * Sliding renewal for the native Kit event detail (src/events/kit-detail.ts):
+ * Sliding renewal for Kit home and event detail documents:
  * the post-release twin of Hono's readSession rotation. The hook core calls
  * this only after the member-read boundary releases a successful GET, so a
  * refused, failed, throttled or redirected read never burns the presented
@@ -322,9 +322,7 @@ export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<Ki
  * statement, so a throw leaves the old row live and the next read retries).
  * Anonymous callers get null with zero store writes.
  */
-export function kitEventDetailRotationFor(
-  env: Env,
-): (event: HookEventLike) => Promise<string | null> {
+export function kitDocumentRotationFor(env: Env): (event: HookEventLike) => Promise<string | null> {
   return async (event) => {
     const locals = event.locals as Partial<KitLocals> | undefined;
     const bits = locals?.status === "authenticated" ? locals.session : null;
@@ -435,18 +433,21 @@ const AUTH_STATUS_OPTIONS = {
   maxAge: SESSION_TTL_SECONDS,
 };
 
-/** The hook alone supplies the proof of an audited, full member document. */
+/** The hook alone supplies the proof of a full account document released by the audit boundary. */
 export function kitAuthStatusCookieFor(
   env: Env,
-): (event: HookEventLike, releasedMemberDocument?: boolean) => Promise<string | null> {
-  return async (event, releasedMemberDocument = false) => {
+): (event: HookEventLike, releasedAccountDocument?: boolean) => Promise<string | null> {
+  return async (event, releasedAccountDocument = false) => {
     const locals = event.locals as Partial<KitLocals> | undefined;
     const admin = /^\/admin(?:\/|$)/.test(event.url.pathname) && locals?.session?.moderator;
-    const member = releasedMemberDocument && locals?.session?.member === true;
+    const account =
+      releasedAccountDocument &&
+      locals?.session &&
+      (event.url.pathname === "/" || locals.session.member);
     if (
       event.request.method !== "GET" ||
       locals?.status !== "authenticated" ||
-      (!admin && !member) ||
+      (!admin && !account) ||
       !env.SESSION_SECRET
     )
       return null;

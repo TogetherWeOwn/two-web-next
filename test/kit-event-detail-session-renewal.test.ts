@@ -25,11 +25,13 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { parseSigned, serializeSigned } from "hono/utils/cookie";
 import type { AccessEntry } from "../src/access-log";
+import { AUTH_STATUS_COOKIE } from "../src/auth-status";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import {
-  kitEventDetailRotationFor,
+  kitAuthStatusCookieFor,
+  kitDocumentRotationFor,
   kitSessionBridge,
   type KitLocals,
   type KitRequestSession,
@@ -40,6 +42,7 @@ import {
   type HookDispatchDeps,
   type HookEventLike,
 } from "../src/route-ownership";
+import { declareMemberResult } from "../src/member-reads";
 import { SESSION_COOKIE } from "../src/session-cookie";
 import {
   createMemorySessionStore,
@@ -150,7 +153,7 @@ function harness(options: HarnessOptions = {}) {
     honoFetch: vi.fn(async () => new Response("hono")),
     manifest: TEST_MANIFEST,
     sessionFor: kitSessionBridge(env),
-    eventDetailRotationFor: kitEventDetailRotationFor(env),
+    eventDetailRotationFor: kitDocumentRotationFor(env),
     accessSink: async () =>
       options.sink ??
       (async (entry: AccessEntry) => {
@@ -518,7 +521,7 @@ describe("rotation helper guards", () => {
 
   it("returns null without an authenticated session in locals", async () => {
     const { env, store } = harness();
-    const rotate = kitEventDetailRotationFor(env);
+    const rotate = kitDocumentRotationFor(env);
     const { cookie } = await mint(store, MEMBER);
     for (const locals of [
       undefined,
@@ -532,7 +535,7 @@ describe("rotation helper guards", () => {
 
   it("re-verifies the cookie: forged locals with a tampered bearer rotate nothing", async () => {
     const { env, store } = harness();
-    const rotate = kitEventDetailRotationFor(env);
+    const rotate = kitDocumentRotationFor(env);
     const { cookie } = await mint(store, MEMBER, "wrong-secret");
     const forged: KitRequestSession = {
       status: "authenticated",
@@ -549,7 +552,7 @@ describe("rotation helper guards", () => {
 
   it("returns null when no session secret is configured", async () => {
     const { store } = harness();
-    const rotate = kitEventDetailRotationFor({
+    const rotate = kitDocumentRotationFor({
       ...baseEnv,
       SESSION_SECRET: "",
       SESSION_STORE: store,
@@ -585,7 +588,7 @@ describe("route ownership", () => {
       appUrl: APP_URL,
       honoFetch: vi.fn(async () => new Response("hono")),
       sessionFor: kitSessionBridge(env),
-      eventDetailRotationFor: kitEventDetailRotationFor(env),
+      eventDetailRotationFor: kitDocumentRotationFor(env),
       accessSink: async () => async () => true,
       resolve: async () =>
         new Response("<h1>Board</h1>", {
@@ -603,4 +606,60 @@ describe("route ownership", () => {
     expect(sessionSets(res)).toEqual([]);
     expect(await store.get(await hashToken(token))).not.toBeNull();
   });
+});
+
+describe("Kit home document session renewal", () => {
+  it.each(["member", "nonmember", "audit refusal", "HEAD", "data", "guest"] as const)(
+    "renews the session and attaches tab sync only to released authenticated GETs (%s)",
+    async (result) => {
+      const { deps, env, store } = harness();
+      const { cookie, token } = await mint(store, { ...MEMBER, member: result !== "nonmember" });
+      const event = eventFor(
+        result === "data" ? "/__data.json" : "/",
+        result === "guest" ? null : cookie,
+        result === "HEAD" ? "HEAD" : "GET",
+      );
+      event.route = { id: "/" };
+      event.isDataRequest = result === "data";
+      if (event.isDataRequest) event.url.pathname = "/";
+      const renew = vi.fn(kitDocumentRotationFor(env));
+      const response = await dispatchHookRequest(event, {
+        ...deps,
+        manifest: ROUTE_MANIFEST.map((entry) =>
+          entry.path === "/" ? { ...entry, enabled: true } : entry,
+        ),
+        homeRenewalFor: renew,
+        authStatusCookieFor: kitAuthStatusCookieFor(env),
+        accessSink: async () => null,
+        resolve: async () => {
+          if (result === "audit refusal") declareMemberResult([ATTENDEES[0]!.id]);
+          return new Response("<!doctype html><html><body>home</body></html>", {
+            headers: { "content-type": "text/html" },
+          });
+        },
+      });
+      expect(response.status).toBe(result === "audit refusal" ? 503 : 200);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      const probes = response.headers
+        .getSetCookie()
+        .filter((c) => c.startsWith(`${AUTH_STATUS_COOKIE}=`));
+      const html = await response.text();
+      if (result === "member" || result === "nonmember") {
+        expect(renew).toHaveBeenCalledOnce();
+        const next = expectRotationCookie(response, token);
+        expect((await store.get(await hashToken(next)))?.userId).toBe(MEMBER_ID);
+        expect(await store.statusHash(await hashToken(token))).toBeNull();
+        expect(html.match(/data-testid="auth-tab-sync"/g)).toHaveLength(1);
+        expect(probes).toHaveLength(1);
+        const parsed = await parseSigned(probes[0]!.split(";")[0]!, SECRET);
+        expect(parsed[AUTH_STATUS_COOKIE]).toBe(await store.statusHash(await hashToken(next)));
+      } else {
+        expect(html).not.toContain('data-testid="auth-tab-sync"');
+        expect(probes).toEqual([]);
+        expect(renew).not.toHaveBeenCalled();
+        expect(sessionSets(response)).toEqual([]);
+        expect(await store.statusHash(await hashToken(token))).not.toBeNull();
+      }
+    },
+  );
 });

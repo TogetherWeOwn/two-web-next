@@ -375,7 +375,7 @@ to execute the same Chromium proof.
 | `test/admin-editor-expiry-departure.test.ts` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS=true npx vitest run test/admin-editor-expiry-departure.test.ts` |
 | `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
-| `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
+| `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles; 11 event, featured and dashboard admin states, including create/edit validation errors and a text-limit error, at both widths plus a Hono color check, at least 23 executed cases; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
 | `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (20 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; includes restored-write screenshots in CI; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
 | `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (44 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
 | `ci/schedule-search-context-browser.test.ts` | None—always runs | `npx vitest run --config ci/schedule-search-context-browser.vitest.ts ci/schedule-search-context-browser.test.ts` (5 Hono and 5 Kit real Chromium cases; requires Kit dependencies and Chromium; JSON-verified in `a11y` via `ci/a11y-require-executed.mjs`) |
@@ -465,6 +465,12 @@ Only a successful version-aware promotion smoke creates deployed evidence.
 See the [Worker bundle inventory contract](docs/worker-bundle-inventory.md) for
 artifact names, schemas, conservative package findings and consumer validation.
 CI dry-run inventories alone are not deployment evidence.
+
+[`web/wrangler.production.jsonc`](web/wrangler.production.jsonc) is a source-only
+Kit contract. Do not invoke it for deployment. No workflow or CLI selects it;
+production still uploads the Hono bundle using the root config. Its entry path
+names the generated adapter output and does not prove facade installation or
+qualify Kit for production.
 
 Cutover decision state is recorded in `docs/cutover-gates.md` and the release
 contract in `docs/releases.md`; this section describes the deployment contract,
@@ -758,11 +764,10 @@ Squash-merge only; PR titles follow Conventional Commits and the body follows th
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
 `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review` are required
 on the exact head, with no approving review. The final-stage reviewer merges when
-native review stages apply; otherwise the author merges. A merge to `main` reaches
-production, so it needs fresh per-PR exact-head Release Manager confirmation on a
-child card assigned and addressed to the Release Manager. Pin the squash merge to
-that confirmed head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
-for post-merge staging qualification and retained safeguards, and [AGENTS.md](AGENTS.md).
+native review stages apply; otherwise the author merges. Pin the squash merge to
+that reviewed head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
+for the promotion-path PR exception, post-merge staging qualification and
+per-release Release Manager acceptance, and [AGENTS.md](AGENTS.md) for agent guidance.
 
 ## License
 

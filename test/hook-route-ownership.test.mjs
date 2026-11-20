@@ -64,16 +64,17 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the native archive, events list, about/faq leaves and join-attempts pair enabled with the homepage, privacy, rules, join, recover, remaining admin and profile reads still on Hono", () => {
+  it("pins the full shipped ownership manifest", () => {
+    const homeReads = { resource: "member", action: "list", route: "home" };
     expect(ROUTE_MANIFEST).toEqual([
-      { method: "GET", path: "/", enabled: false, reads: "public" },
+      { method: "GET", path: "/", enabled: true, reads: homeReads },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/events", enabled: true, reads: "public" },
       { method: "GET", path: "/about", enabled: true, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
       { method: "GET", path: "/faq", enabled: true, reads: "public" },
-      { method: "GET", path: "/join", enabled: false, reads: "public" },
+      { method: "GET", path: "/join", enabled: true, reads: "public" },
       {
         method: "GET",
         path: "/admin",
@@ -135,7 +136,7 @@ describe("hooks.server route ownership wiring", () => {
         enabled: true,
         reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
       },
-      { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
+      { method: "GET", path: "/auth/recover", enabled: true, reads: "public" },
       {
         method: "GET",
         path: "/profile",
@@ -580,7 +581,9 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("kitEventsSessionFor(env)");
     expect(source).toContain("kitEventsJourneyFor(env)");
     expect(source).toContain("journeyFor: kitEventsJourneyFor(env),\n        requestId,");
-    expect(source).toContain("honoFetch,");
+    expect(source).toContain(
+      "honoFetch: (request) => {\n      honoOwned = true;\n      return honoFetch(request);",
+    );
     // The content-leaf zero-stylesheet strip travels as a resolve option:
     // the hook must forward it untouched. Dropping the second argument
     // serves the layout stylesheet on /about and /faq while every dispatch
@@ -600,6 +603,10 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("kitRouteJoin: env.KIT_ROUTE_JOIN");
     expect(source).toContain("sessionFor: kitSessionBridge(env)");
     expect(source).toContain("authStatusCookieFor: kitAuthStatusCookieFor(env)");
+    // Dispatch tests inject these callbacks; pin the Worker bindings so that
+    // dropping either one also fails a test.
+    expect(source).toContain("homePanelsFor: (request) => prepareKitHomePanels(env, request)");
+    expect(source).toContain("homeRenewalFor: kitDocumentRotationFor(env)");
     expect(source.match(/dispatchHookRequest\(event,/g)?.length).toBe(1);
     // Production session composition lives in kitSessionBridge
     // (src/kit-session.ts), pinned by test/kit-session.test.ts: the hook must

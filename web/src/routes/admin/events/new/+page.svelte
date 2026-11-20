@@ -26,6 +26,39 @@ const textLimitsIsland =
 const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
+{#snippet detail(name: string, label: string, hint: string, limit?: number, type?: "text" | "url")}
+  {@const id = `f-${name.replaceAll("_", "-")}`}
+  {@const error = errors[name]}
+  {@const description = error ? `${id}-hint ${id}-error` : `${id}-hint`}
+  <div class="field">
+    <label for={id}>{label}</label>
+    {#if type}
+      <input
+        {id}
+        {name}
+        {type}
+        value={val(name)}
+        data-event-text-limit={limit}
+        aria-invalid={error ? "true" : undefined}
+        aria-describedby={description}
+      />
+    {:else}
+      <textarea
+        {id}
+        {name}
+        rows={4}
+        data-event-text-limit={limit}
+        aria-invalid={error ? "true" : undefined}
+        aria-describedby={description}
+      >{val(name)}</textarea>
+    {/if}
+    <p id={`${id}-hint`} class="hint">{hint}</p>
+    {#if error}
+      <p id={`${id}-error`} class="error" role="alert" data-testid={`error-${name}`}>{error}</p>
+    {/if}
+  </div>
+{/snippet}
+
 <AdminShell restoredWrite={data.restoredWrite} title="New event">
 <section>
   <h1>New event</h1>
@@ -99,6 +132,27 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {/if}
     </div>
     <div class="field">
+      <label for="f-accessibility-notes">Accessibility notes</label>
+      <textarea
+        id="f-accessibility-notes"
+        name="accessibility_notes"
+        rows={4}
+        data-event-text-limit={1000}
+        aria-invalid={errors.accessibility_notes ? "true" : undefined}
+        aria-describedby={errors.accessibility_notes
+          ? "f-accessibility-notes-hint f-accessibility-notes-error"
+          : "f-accessibility-notes-hint"}
+      >{val("accessibility_notes")}</textarea>
+      <p id="f-accessibility-notes-hint" class="hint">
+        Optional; include only confirmed details, not personal contact information.
+      </p>
+      {#if errors.accessibility_notes}
+        <p id="f-accessibility-notes-error" class="error" role="alert" data-testid="error-accessibility_notes">
+          {errors.accessibility_notes}
+        </p>
+      {/if}
+    </div>
+    <div class="field">
       <label for="f-starts-at">Starts (local wall time, YYYY-MM-DD HH:mm)</label>
       <input
         id="f-starts-at"
@@ -168,6 +222,9 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         </p>
       {/if}
     </div>
+    {@render detail("organizer_name", "Organizer display name (optional)", "Use a name the organizer has agreed to show publicly. Do not enter contact details.", 500, "text")}
+    {@render detail("join_url", "Public joining link (optional)", "HTTPS or HTTP link visible to everyone. Never use attendee-only or private links.", undefined, "url")}
+    {@render detail("join_instructions", "Public joining instructions (optional)", "Share only verified details that are safe for anyone to see. Do not enter contact details.", 5000)}
     <div class="field">
       <label for="f-capacity">Capacity (empty = unlimited)</label>
       <input

@@ -77,9 +77,11 @@ describe("workflow source argument boundaries", () => {
   ])("passes all five staging Kit route flags as single Wrangler arguments for %s", (_, flags) => {
     const steps = workflow("deploy").jobs["deploy-staging"]?.steps;
     const selector = steps?.find(({ id }) => id === "kit-route-flags");
-    expect(selector?.env?.KIT_ROUTE_FAMILY).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && inputs.kit_route_family || 'hono' }}",
-    );
+    expect(selector?.env).toMatchObject({
+      KIT_ROUTE_FAMILY: "${{ inputs.kit_route_family }}",
+      KIT_STAGING_ROUTE_FAMILY:
+        "${{ github.event_name == 'workflow_run' && vars.KIT_STAGING_ROUTE_FAMILY || '' }}",
+    });
     const step = steps?.find(({ name }) => name === "Deploy to Cloudflare Workers");
     expect(step?.env).toMatchObject({
       KIT_ROUTE_ARCHIVE: "${{ steps.kit-route-flags.outputs.archive }}",

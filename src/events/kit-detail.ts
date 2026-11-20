@@ -29,6 +29,7 @@ import type { Db } from "../db/index";
 import type { Env } from "../env";
 import { RSVP_COPY, type RsvpClosedReason } from "../islands/contracts";
 import type { KitRequestSession } from "../kit-session";
+import { eventGoneModel } from "../kit-event-states";
 import type {
   EventGoneModel,
   EventMissingModel,
@@ -52,7 +53,6 @@ import {
 } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
-import { fmt } from "./pages-shared";
 import { eventLinkAvailability } from "./link-availability";
 import { isOngoing } from "./ongoing";
 import {
@@ -345,7 +345,7 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
     getReviewEventFn: (db, key) => getEventForModeratorReview(db, key),
     neighborsFn: getEventNeighbors,
     relatedFn: listRelatedEvents,
-    seriesFn: (db, event, now) => getEventSeriesContext(db, event, now),
+    seriesFn: getEventSeriesContext,
     attendeesFn: async (db, eventId, page) => {
       // Same bounded window as the served handler: the requested page plus
       // the first row of the next page (lookahead, never rendered) that
@@ -513,30 +513,25 @@ export async function resolveKitEventDetail(
           });
           related = [];
         }
+        let upcoming: EventLink | null = null;
+        try {
+          const acceptKey = (key: string) =>
+            eventKeyAllowed(key, appUrl) && (canonicalEventKey(key) ?? key) === key;
+          const readSeries = store.seriesFn ?? getEventSeriesContext;
+          upcoming = (await readSeries(db, event, now, acceptKey))?.upcoming ?? null;
+        } catch (err) {
+          console.warn("Event next date unavailable; serving cancellation without it.", {
+            request_id: safeRequestId(requestId),
+            exception: exceptionClass(err),
+          });
+        }
         const headers = { "cache-control": NO_STORE, "x-robots-tag": NOINDEX };
         setHeaders(headers);
         return {
           kind: "gone",
           status: 410,
           headers,
-          model: {
-            title: event.title,
-            game: event.game,
-            eventKey: event.eventKey,
-            existingResponses: event.goingCount,
-            icsUrl: `/events/${event.eventKey}.ics`,
-            markdownAlternate: `/e/${event.eventKey}.md`,
-            upcomingUrl: "/events",
-            related: related.map((link) => ({
-              key: link.eventKey,
-              title: link.title,
-              whenText: fmt(link.startsAt, link.timezone),
-              datetime: link.startsAt.toISOString(),
-              location: link.location,
-            })),
-            jsonLd: eventJsonLd(event, appUrl),
-            siteJsonLd: siteJsonLd(appUrl),
-          },
+          model: eventGoneModel(event, related, appUrl, upcoming),
         };
       }
       // An indeterminate session is a store outage, never a logout and never

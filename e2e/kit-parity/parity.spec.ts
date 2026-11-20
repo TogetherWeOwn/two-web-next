@@ -552,9 +552,8 @@ for (const target of targets) {
       const response = await api(target).get("/auth/recover?next=%2Fprofile%3Fedit%3D1");
       expect(response.status()).toBe(200);
       expect(response.headers()["content-type"]).toContain("text/html");
-      // Renderer ownership is per target: Kit answers with the
-      // manifest-derived marker once enabled, Hono never carries one.
-      const expectedMarker = target.name === "kit" ? expectedKitMarker("/auth/recover") : null;
+      // Only this loopback Worker enables the Kit recovery presentation.
+      const expectedMarker = target.name === "kit" ? "kit" : null;
       expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
       const body = await response.text();
       expect(scrubSecrets(body)).toEqual([]);
@@ -569,8 +568,7 @@ for (const target of targets) {
       expect(body).not.toContain("<iframe");
       // Per-visitor journey state: never shared-cacheable.
       expect(response.headers()["cache-control"]).toBe("no-store, private");
-      // The Hono controller still owns the one-use journey write, served
-      // undecorated through honoFetch on both targets until enablement. A
+      // The Hono controller still owns the one-use journey write. A
       // bare landing visit never arms the pending notice: only a genuine
       // expired-write bounce does, so an attacker link cannot pre-arm a
       // false restored banner.
@@ -580,6 +578,18 @@ for (const target of targets) {
         .join("\n");
       expect(setCookies).toContain("__Host-two_login_intended=");
       expect(setCookies).not.toContain("__Host-two_expired_write=");
+
+      await test.step("HEAD keeps the recovery headers and signed cookie without a body", async () => {
+        const head = await api(target).head("/auth/recover?next=%2Fprofile", {
+          headers: { "if-none-match": "*" },
+        });
+        expect(head.status()).toBe(200);
+        expect(head.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+        expect(head.headers()["cache-control"]).toBe("no-store, private");
+        expect(head.headers()["set-cookie"]).toContain("__Host-two_login_intended=");
+        expect(head.headers().etag).toBeUndefined();
+        expect(await head.text()).toBe("");
+      });
     });
 
     test("safe next survives onto the login retry, hostile next leaves no trace", async () => {
@@ -1005,7 +1015,7 @@ for (const target of targets) {
       expect(body).toContain("/islands/rsvp-button.js");
       if (target.name === "kit") {
         expect(body).toContain('data-testid="kit-seat-card"');
-        expect(body).toContain("Your RSVP");
+        expect(body).toMatch(/\d+ of 10 in/);
         expect(body).not.toContain("Log in to RSVP");
       }
       expect(body).toContain("Sign out");
@@ -1686,6 +1696,15 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         viewport.width,
       );
+      const bar = page.getByRole("complementary", { name: "Your seat" });
+      await expect(bar).toHaveCount(viewport.width === 390 ? 1 : 0);
+      if (viewport.width === 390) {
+        await expect(bar.getByRole("link", { name: "Log in with Discord" })).toHaveAttribute(
+          "href",
+          `/join/discord?next=${encodeURIComponent(eventPath)}`,
+        );
+        await expect(bar.getByRole("link", { name: "Add to calendar" })).toBeVisible();
+      }
       const screenshot = test.info().outputPath(`kit-review-seat-card-guest-${viewport.width}.png`);
       if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
       await page.screenshot({ path: screenshot, animations: "disabled", caret: "hide" });
@@ -1706,16 +1725,23 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
   }
 });
 
-test("Kit member seat card captures saved and full states", async ({ browser }) => {
+test("Kit member seat card captures open, saved and full states", async ({ browser }) => {
   const target = targets.find((item) => item.name === "kit")!;
   const key = "01J00000000000000000000991";
+  const openKey = "01J00000000000000000000992";
   const savedUserId = "900000000000000846";
   const fullUserId = "900000000000000845";
+  const openUserId = "900000000000000847";
   const states = [
     { name: "saved", userId: savedUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
     { name: "full", userId: fullUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
+    { name: "open", userId: openUserId, bearer: `two_${randomBytes(32).toString("base64url")}` },
   ];
   const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  const enhanced = await browser.newContext({
+    baseURL: target.origin,
+    viewport: { width: 390, height: 844 },
+  });
   try {
     await withSessionDb(async (sql) => {
       for (const state of states) {
@@ -1723,10 +1749,13 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
         await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
           values (${hash}, ${hash}, ${state.userId}, 'Seat fixture', true, false, ${new Date(Date.now() + 7_200_000)})`;
       }
-      await sql`insert into users (id, username, member) values (${savedUserId}, 'Seat fixture', true)`;
+      await sql`insert into users (id, username, member)
+        values (${savedUserId}, 'Seat fixture', true), (${openUserId}, 'Seat fixture', true)`;
       await sql`insert into events (event_key, title, description, game, organizer_name, starts_at, ends_at, location, status, capacity, rsvp_open)
         values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
-          'Catan', 'Vexa', '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true)`;
+          'Catan', 'Vexa', '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 1, true),
+          (${openKey}, 'Community game night', 'Bring a favourite game and meet the community.',
+          'Catan', 'Vexa', '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'published', 2, true)`;
       await sql`insert into rsvps (event_id, user_id, status)
         select id, ${savedUserId}, 'going' from events where event_key = ${key}`;
     });
@@ -1782,6 +1811,8 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
         expect(response?.status()).toBe(200);
         expect(response?.headers()["x-two-renderer"]).toBe("kit");
         await expectFacts(guestPage, "guest", viewport.width);
+        // A full event keeps the guest card's login link but does not surface B4.
+        await expect(guestPage.locator('aside[aria-label="Your seat"]')).toHaveCount(0);
         // Guest privacy: no roster, no member links, no sign-out chrome.
         await expect(guestPage.getByTestId("event-attendees")).toHaveCount(0);
         await expect(guestPage.locator('a[href^="/members/"]')).toHaveCount(0);
@@ -1811,16 +1842,67 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
         { width: 390, height: 844 },
       ]) {
         await page.setViewportSize(viewport);
-        const response = await page.goto(`/e/${key}`);
+        const response = await page.goto(`/e/${state.name === "open" ? openKey : key}`);
         expect(response?.status()).toBe(200);
         expect(response?.headers()["x-two-renderer"]).toBe("kit");
         const card = page.getByTestId("kit-seat-card");
+        const bar = page.getByRole("complementary", { name: "Your seat" });
+        if (state.name === "open") {
+          await expect(card.getByRole("heading", { name: "0 of 2 in" })).toBeVisible();
+          await expect(card.getByText("Sign-ups open")).toBeVisible();
+          await expect(card.getByRole("button", { name: "I'm in" })).toBeVisible();
+          await expect(card.getByRole("link", { name: "Add to calendar" })).toHaveAttribute(
+            "href",
+            `/events/${openKey}.ics`,
+          );
+          await expect(page.getByTestId("event-going-count")).toBeHidden();
+          await expect(page.getByTestId("event-spots-left")).toBeHidden();
+          if (viewport.width === 390) {
+            const time = page.locator(".event-layout-head > dl:last-child");
+            await expect(time.locator("time[datetime]").first()).toHaveAttribute(
+              "datetime",
+              "2099-03-01T18:00:00.000Z",
+            );
+            await expect(time.locator("xpath=../following-sibling::*[1]/*[1]")).toHaveAttribute(
+              "data-testid",
+              "kit-seat-card",
+            );
+            await expect(bar).toHaveCount(1);
+            await expect(bar).toHaveCSS("position", "fixed");
+            await expect(bar).toContainText("0 of 2 in");
+            await expect(bar).toContainText("Sign-ups open");
+            await expect(bar.getByRole("link", { name: "Add to calendar" })).toHaveAttribute(
+              "href",
+              `/events/${openKey}.ics`,
+            );
+            await expect(bar.getByRole("button", { name: "I'm in" })).toBeVisible();
+            await card.scrollIntoViewIfNeeded();
+          } else {
+            await expect(bar).toHaveCount(0);
+            await expect(card.locator("..")).toHaveCSS("position", "sticky");
+          }
+          const name = `kit-review-seat-card-open-${viewport.width}`;
+          const path = test.info().outputPath(`${name}.png`);
+          await page.screenshot({ path, animations: "disabled", caret: "hide" });
+          await test.info().attach(name, { path, contentType: "image/png" });
+          continue;
+        }
         await expect(card.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
         await expect(
           card.getByRole("button", {
             name: state.name === "saved" ? /can't make it/i : /join the waitlist/i,
           }),
         ).toBeVisible();
+        await expect(bar).toHaveCount(viewport.width === 390 && state.name === "saved" ? 1 : 0);
+        if (viewport.width === 390 && state.name === "saved") {
+          await expect(bar).toContainText("You're in");
+          await expect(bar).toContainText(/Starts at \d{2}:\d{2}/);
+          await expect(bar.getByRole("link", { name: "Add to calendar" })).toHaveAttribute(
+            "href",
+            `/events/${key}.ics`,
+          );
+          await expect(bar.getByRole("button")).toHaveCount(0);
+        }
         const name = `kit-review-seat-card-${state.name}-${viewport.width}`;
         const path = test.info().outputPath(`${name}.png`);
         if (viewport.width === 390) await card.scrollIntoViewIfNeeded();
@@ -1829,15 +1911,160 @@ test("Kit member seat card captures saved and full states", async ({ browser }) 
         await expectFacts(page, state.name, viewport.width);
       }
     }
-  } finally {
-    await context.close();
+    const bar = page.getByRole("complementary", { name: "Your seat" });
+    await page.setViewportSize({ width: 820, height: 844 });
+    await expect(bar).toHaveCount(1);
+    await page.setViewportSize({ width: 821, height: 844 });
+    await expect(bar).toHaveCount(0);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const footer = page.getByRole("contentinfo");
+    const lastLink = footer.getByRole("link", { name: "Privacy" });
+    await footer.getByRole("link", { name: "House rules" }).focus();
+    await page.keyboard.press("Tab");
+    await expect(lastLink).toBeFocused();
+    const expectPrivacyClear = async () => {
+      const lastBounds = (await lastLink.boundingBox())!;
+      const barBounds = (await bar.boundingBox())!;
+      expect(lastBounds.y).toBeGreaterThanOrEqual(0);
+      expect(lastBounds.y + lastBounds.height).toBeLessThanOrEqual(barBounds.y);
+    };
+    await expectPrivacyClear();
+    await lastLink.evaluate((link) => link.scrollIntoView({ block: "end" }));
+    await expectPrivacyClear();
+
+    // Drive the shipped island in place before exercising the native form.
+    await enhanced.addCookies(await context.cookies());
+    const enhancedPage = await enhanced.newPage();
     await withSessionDb(async (sql) => {
-      await sql`delete from events where event_key = ${key}`;
+      // No users row: this RSVP holds a seat but is not listed in the lineup.
+      await sql`insert into rsvps (event_id, user_id, status)
+        select id, '900000000000000848', 'going' from events where event_key = ${openKey}`;
+    });
+    await enhancedPage.goto(`/e/${openKey}`);
+    const enhancedCard = enhancedPage.getByTestId("kit-seat-card");
+    const enhancedBar = enhancedPage.getByRole("complementary", { name: "Your seat" });
+    const lineup = enhancedPage.getByTestId("event-going-count");
+    const spots = enhancedPage.getByTestId("event-spots-left");
+    const initialSeat = enhancedCard.getByText("1 of 2 in", { exact: true });
+    const going = lineup.locator("[data-count]");
+    await expect(initialSeat).toBeVisible();
+    await expect(enhancedBar).toContainText("1 of 2 in");
+    await expect(lineup).toBeHidden();
+    await enhancedCard.getByRole("button", { name: "I'm in" }).click();
+    await expect(enhancedCard.getByTestId("rsvp-confirmed")).toBeVisible();
+    await expect(lineup).toBeVisible();
+    await expect(going).toHaveText("1 of 2 going");
+    await expect(initialSeat).toBeHidden();
+    await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    await expect(spots).toBeVisible();
+    await expect(spots).toHaveText("Full");
+
+    // Keep the same Kit mount across a finite → unlimited → finite edit.
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = null where event_key = ${openKey}`;
+    });
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(going).toHaveText("0 going");
+    await expect(spots).toBeHidden();
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = 3 where event_key = ${openKey}`;
+    });
+    await enhancedCard.getByRole("button", { name: "I'm in" }).click();
+    await expect(going).toHaveText("1 of 3 going");
+    await expect(spots).toBeVisible();
+    await expect(spots).toHaveText("1 of 3 spots left");
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(going).toHaveText("0 of 3 going");
+
+    // Start the failed-first-read journey from a fresh snapshot.
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = 2 where event_key = ${openKey}`;
+    });
+    await enhancedPage.goto(`/e/${openKey}`);
+    await expect(initialSeat).toBeVisible();
+    await expect(lineup).toBeHidden();
+    // Fail the first count read only; RSVP and the manual retry hit the real fixture.
+    await enhancedPage.route(
+      `${target.origin}/events.json?event_key=${openKey}`,
+      (route) => route.fulfill({ status: 503 }),
+      { times: 1 },
+    );
+    await enhancedCard.getByRole("button", { name: "I'm in" }).click();
+    await expect(enhancedCard.getByTestId("rsvp-confirmed")).toBeVisible();
+    await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    const stale = lineup.getByTestId("event-going-count-stale");
+    await expect(stale).toBeVisible();
+    await expect(stale).toContainText(
+      "Going count could not refresh. Showing the last saved count.",
+    );
+    const retry = stale.getByRole("button", { name: "Try again" });
+    await expect(retry).toBeVisible();
+    await retry.click();
+    await expect(stale).toHaveCount(0);
+    await expect(lineup.locator("[data-count]")).toHaveText("1 of 2 going");
+    await expect(spots).toBeVisible();
+    await expect(spots).toHaveText("Full");
+    await expect(enhancedBar).toHaveCount(0);
+
+    await withSessionDb(async (sql) => {
+      await sql`update events set capacity = 3 where event_key = ${openKey}`;
+    });
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(enhancedCard.getByTestId("rsvp-going")).toBeEnabled();
+    await expect(lineup.locator("[data-count]")).toHaveText("0 of 3 going");
+    await expect(spots).toHaveText("2 of 3 spots left");
+    await expect(enhancedCard.getByRole("heading", { name: "Your RSVP" })).toBeVisible();
+    await expect(enhancedCard.getByRole("heading", { name: "1 of 2 in" })).toHaveCount(0);
+    await expect(enhancedBar).toHaveCount(0);
+
+    // The enhanced navigations rotated the shared fixture session.
+    await context.addCookies(await enhanced.cookies());
+    const post = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === `/e/${openKey}/rsvp`,
+    );
+    await bar.getByRole("button", { name: "I'm in" }).click();
+    const submitted = await post;
+    expect(submitted.request().postData()).toBe("status=going");
+    expect(submitted.status()).toBe(303);
+    expect(submitted.headers().location).toBe(`/e/${openKey}`);
+    expect(submitted.headers()["x-two-renderer"]).toBeUndefined();
+    await expect(page.getByTestId("kit-seat-card").getByTestId("rsvp-confirmed")).toBeVisible();
+    await expect(bar).toContainText("You're in");
+    await expect(bar.getByRole("button")).toHaveCount(0);
+
+    // Reload from the real saved row, using the session returned by the native flow.
+    await enhanced.addCookies(await context.cookies());
+    await enhancedPage.reload();
+    await expect(enhancedBar).toContainText("You're in");
+    await enhancedPage.route(`**/events/${openKey}/rsvp`, (route) => route.abort("failed"));
+    await enhancedCard.getByTestId("rsvp-withdraw").click();
+    await expect(enhancedCard.getByTestId("rsvp-unknown")).toHaveAttribute("role", "alert");
+    await expect(enhancedBar).toHaveCount(0);
+
+    // Probe absence against actual server snapshots, without redoing the sibling renderer captures.
+    await context.addCookies(await enhanced.cookies());
+    for (const state of ["live", "ended", "cancelled"]) {
+      await withSessionDb(async (sql) => {
+        const endsAt = new Date(Date.now() + (state === "live" ? 3_600_000 : -3_600_000));
+        await sql`update events set starts_at = now() - interval '2 hours', ends_at = ${endsAt},
+          status = ${state === "cancelled" ? "cancelled" : "published"} where event_key = ${openKey}`;
+      });
+      const response = await page.goto(`/e/${openKey}`);
+      expect(response?.status()).toBe(state === "cancelled" ? 410 : 200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      await expect(page.locator('aside[aria-label="Your seat"]')).toHaveCount(0);
+    }
+  } finally {
+    await Promise.all([context.close(), enhanced.close()]);
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key in (${key}, ${openKey})`;
       for (const state of states) {
         await sql`delete from web_session_grace where user_id = ${state.userId}`;
         await sql`delete from web_sessions where user_id = ${state.userId}`;
       }
-      await sql`delete from users where id = ${savedUserId}`;
+      await sql`delete from users where id in (${savedUserId}, ${openUserId})`;
     });
   }
 });
@@ -3025,6 +3252,122 @@ test.describe("kit: member-board visuals", () => {
       } finally {
         await context.close();
       }
+    });
+  }
+});
+
+test("Kit cancelled event renders its record and next date without JavaScript", async ({
+  browser,
+}) => {
+  test.setTimeout(90_000);
+  const target = targets.find((item) => item.name === "kit")!;
+  expect(kitFixtureOwnsEventDetail()).toBe(true);
+  const prefix = "01J0000000000000000CXN000";
+  const key = (n: number) => `${prefix}${n}`;
+  const attendee = "900000000000000848";
+  const game = "Fixture tabletop";
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into users (id, username, member) values (${attendee}, 'Fixture Attendee Marker', true)`;
+      const [root] = await sql<{ id: number }[]>`
+        insert into events (event_key,title,game,organizer_name,description,join_instructions,starts_at,ends_at,timezone,status,recurrence_frequency,recurrence_index)
+        values (${key(1)},'Cancelled series night',${game},'Fixture Public Host','Public synthetic summary','Private instructions marker',
+          '2099-03-01T18:00Z','2099-03-01T20:00Z','Asia/Kolkata','cancelled','weekly',1) returning id`;
+      await sql`insert into rsvps (event_id,user_id,status) values (${root!.id},${attendee},'going')`;
+      await sql`insert into events (event_key,title,game,starts_at,ends_at,timezone,status,parent_event_id,recurrence_index) values
+        (${key(2)},'Later sibling',${game},'2099-03-22T18:00Z','2099-03-22T20:00Z','UTC','published',${root!.id},2),
+        (${key(3)},'Next sibling',${game},'2099-03-15T18:00Z','2099-03-15T20:00Z','Pacific/Auckland','published',${root!.id},3),
+        (${key(4)},'Unpublished sibling',${game},'2099-03-08T18:00Z','2099-03-08T20:00Z','UTC','draft',${root!.id},4),
+        (${key(5)},'Cancelled sibling',${game},'2099-03-09T18:00Z','2099-03-09T20:00Z','UTC','cancelled',${root!.id},5),
+        (${key(6)},'Historical sibling',${game},'2099-03-10T18:00Z','2099-03-10T20:00Z','UTC','past',${root!.id},6),
+        (${key(7)},'Invalid sibling',null,'2099-03-11T18:00Z','infinity','UTC','published',${root!.id},7),
+        (${`${prefix}a`},'Unroutable sibling',null,'2099-03-12T18:00Z','2099-03-12T20:00Z','UTC','published',${root!.id},8),
+        (${key(8)},'Other event',${game},'2099-03-05T18:00Z','2099-03-05T20:00Z','UTC','published',null,null),
+        (${key(9)},'Standalone cancellation',${game},'2099-04-01T18:00Z','2099-04-01T20:00Z','UTC','cancelled',null,null)`;
+      await sql`update events set description = 'Draft description marker' where event_key = ${key(4)}`;
+    });
+    const privateMarkers =
+      /Fixture Attendee Marker|Private instructions marker|Draft description marker|data-rsvp-form/;
+    const Cookie = await memberCookie(target);
+    const signed = await api(target).get(`/e/${key(1)}`, { headers: { Cookie } });
+    expect(signed.status()).toBe(410);
+    expect(await signed.text()).not.toMatch(privateMarkers);
+    for (const width of [1280, 390]) {
+      const context = await browser.newContext({
+        baseURL: target.origin,
+        viewport: { width, height: width === 390 ? 844 : 800 },
+        javaScriptEnabled: false,
+      });
+      try {
+        const page = await context.newPage();
+        for (const state of ["guest", "fallback"]) {
+          const fallback = state === "fallback";
+          const eventKey = key(fallback ? 9 : 1);
+          const response = await page.goto(`/e/${eventKey}`);
+          expect(response?.status()).toBe(410);
+          expect(response!.headers()).toMatchObject({
+            "x-two-renderer": "kit",
+            "cache-control": "private, no-store",
+            "x-robots-tag": "noindex, nofollow",
+          });
+          expect(await response!.text()).not.toMatch(privateMarkers);
+          await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
+          const actions =
+            'main form, aside[aria-label="Your seat"], [data-testid="event-join-pitch"]';
+          await expect(page.locator(actions)).toHaveCount(0);
+          await expect(page.getByTestId("event-cancelled")).toHaveText("Cancelled");
+          const calendar = page.getByTestId("event-cancelled-ics");
+          await expect(calendar).toHaveAttribute("href", `/events/${eventKey}.ics`);
+          const alternatives = page.getByTestId("event-cancelled-alternatives");
+          await expect(alternatives.getByRole("link", { name: "Other event" })).toBeVisible();
+          const next = page.getByRole("link", { name: "See the next date" });
+          const record = page.getByTestId("event-cancelled-record");
+          if (fallback) {
+            await expect(next).toHaveCount(0);
+            await expect(record.locator("time")).toHaveCount(0);
+          } else {
+            const time = page.getByTestId("event-cancelled-time");
+            const facts = page.getByTestId("kit-event-facts");
+            await expect(facts.getByText("Fixture Public Host", { exact: true })).toBeVisible();
+            await expect(time).toHaveAttribute("datetime", "2099-03-01T18:00:00.000Z");
+            await expect(time.locator("s")).toHaveText("23:30");
+            await expect(time.locator("..")).toContainText("Asia/Kolkata · 18:00 UTC");
+            await expect(next).toHaveAttribute("href", `/e/${key(3)}`);
+            const nextTime = record.locator("time");
+            await expect(nextTime).toHaveAttribute("datetime", "2099-03-15T18:00:00.000Z");
+            await expect(record).toContainText(/Next one:.*16 March 2099.*07:00/);
+            if (width === 390) {
+              const ids = ["event-cancelled-time", "event-cancelled-record", "kit-event-facts"];
+              const nodes = page.locator(ids.map((id) => `[data-testid="${id}"]`).join(","));
+              const order = await nodes.evaluateAll((els) =>
+                els.map((el) => el.getAttribute("data-testid")),
+              );
+              expect(order).toEqual(ids);
+              const boxes = await Promise.all(
+                [time, record, facts].map((node) => node.boundingBox()),
+              );
+              expect(boxes[0]!.y).toBeLessThan(boxes[1]!.y);
+              expect(boxes[1]!.y).toBeLessThan(boxes[2]!.y);
+            } else {
+              expect((await record.boundingBox())!.x).toBeGreaterThan(
+                (await time.boundingBox())!.x,
+              );
+            }
+          }
+          const name = `kit-review-cancelled-record-${state}-${width}`;
+          const path = test.info().outputPath(`${name}.png`);
+          await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+          await test.info().attach(name, { path, contentType: "image/png" });
+        }
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await withSessionDb(async (sql) => {
+      await sql`delete from rsvps where user_id = ${attendee}`;
+      await sql`delete from events where event_key like ${`${prefix}%`}`;
+      await sql`delete from users where id = ${attendee}`;
     });
   }
 });

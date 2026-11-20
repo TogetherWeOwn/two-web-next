@@ -65,6 +65,7 @@ type KitHomeLoadData = {
 type KitHomeLoad = (args: KitHomeLoadArgs) => Promise<KitHomeLoadData>;
 
 let load: KitHomeLoad;
+let dispatchHome: (args: KitHomeLoadArgs) => Promise<Response>;
 let retireHomeGuestCache: () => Promise<void>;
 let resetHomeGuestCache: () => void;
 let cacheTtlMs: number;
@@ -94,7 +95,18 @@ beforeAll(async () => {
   await build({
     stdin: {
       contents: [
-        `export { load } from ${JSON.stringify(routePath)};`,
+        `import { env } from "cloudflare:workers";`,
+        `import { load as routeLoad } from ${JSON.stringify(routePath)};`,
+        `import { prepareKitHomePanels } from ${JSON.stringify(join(root, "src/kit-home-panels.ts"))};`,
+        `export const load = async (args) => routeLoad({ ...args, locals: { ...args.locals, homePanels: await prepareKitHomePanels(env, args.request) } });`,
+        `import { dispatchHookRequest, ROUTE_MANIFEST } from ${JSON.stringify(join(root, "src/route-ownership.ts"))};`,
+        `export const dispatchHome = (args) => dispatchHookRequest({ ...args, route: { id: "/" } }, {
+          appUrl: args.url.origin,
+          manifest: ROUTE_MANIFEST.map((entry) => entry.path === "/" ? { ...entry, enabled: true } : entry),
+          honoFetch: async () => { throw new Error("Unexpected Hono fallback"); },
+          homePanelsFor: (request) => prepareKitHomePanels(env, request),
+          resolve: async (event) => Response.json(await routeLoad({ ...args, locals: event.locals })),
+        });`,
         `export {`,
         `  retireHomeGuestCache,`,
         `  __resetHomeGuestCacheForTests as resetHomeGuestCache,`,
@@ -130,11 +142,13 @@ beforeAll(async () => {
   });
   const mod = (await import(pathToFileURL(outfile).href)) as unknown as {
     load: KitHomeLoad;
+    dispatchHome: typeof dispatchHome;
     retireHomeGuestCache: () => Promise<void>;
     resetHomeGuestCache: () => void;
     cacheTtlMs: number;
   };
   load = mod.load;
+  dispatchHome = mod.dispatchHome;
   retireHomeGuestCache = mod.retireHomeGuestCache;
   resetHomeGuestCache = mod.resetHomeGuestCache;
   cacheTtlMs = mod.cacheTtlMs;
@@ -481,6 +495,30 @@ describe("Kit home guest cache: same-isolate memory", () => {
 });
 
 describe("Kit home guest cache: never-store rules", () => {
+  it("releases the home fallback while an optional schedule query is still pending", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const f = fixture();
+    f.use();
+    f.hold();
+    try {
+      const response = await dispatchHome(loadArgs().args);
+      expect(f.entered()).toBe(true);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(await response.json()).toMatchObject({
+        eventsUnavailable: true,
+        upcomingEvents: [],
+        featured: [expect.objectContaining({ title: "Featured slot 1" })],
+      });
+      expect(warn).toHaveBeenCalledWith(
+        "Home events unavailable; serving the fallback.",
+        expect.objectContaining({ exception: "HomeEventsDeadline" }),
+      );
+    } finally {
+      f.release();
+    }
+  });
+
   it("never stores an outage, so recovery shows without a retire", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const f = fixture();
@@ -624,19 +662,22 @@ describe("Kit home guest cache: correlation and DTOs", () => {
       () => f.discord,
       now,
     );
-    expect(data.upcomingEvents).toEqual(directUpcoming.items);
+    const guestItems = ({ items }: typeof directUpcoming) =>
+      items.map((row) => (row.source === "canonical" ? { ...row, organizer_name: null } : row));
+    expect(data.upcomingEvents).toEqual(guestItems(directUpcoming));
     expect(data.eventsUnavailable).toBe(directUpcoming.unavailable);
     expect(data.upcomingEvents.map((row) => row.title)).toEqual(["Game night 1", "Game night 2"]);
-    // The load contract keeps its fields: nothing dropped, nothing added.
     expect(Object.keys(data).sort()).toEqual([
       "appUrl",
       "counts",
+      "countsSnapshot",
       "eventsUnavailable",
       "featured",
       "homeCopy",
       "imageHosts",
       "inviteUrl",
       "joinResult",
+      "memberRsvps",
       "notice",
       "session",
       "sessionUnavailable",
@@ -654,7 +695,7 @@ describe("Kit home guest cache: correlation and DTOs", () => {
     );
     expect(degraded.eventsUnavailable).toBe(false);
     expect(degraded.eventsUnavailable).toBe(directDegraded.unavailable);
-    expect(degraded.upcomingEvents).toEqual(directDegraded.items);
+    expect(degraded.upcomingEvents).toEqual(guestItems(directDegraded));
   });
 });
 
@@ -696,7 +737,7 @@ describe("Kit home guest cache: shared sourcing, no duplicate retire path", () =
   ];
 
   it("routes the Kit home load through the shared guest cache", () => {
-    const server = read(ROUTE);
+    const server = read(ROUTE) + read(join(root, "src/kit-home-panels.ts"));
     expect(server).toContain("cachedHomeUpcoming");
     expect(server).toContain("cachedFeatured");
     expect(server).toContain("cachedHomeUpcoming(");
@@ -713,7 +754,7 @@ describe("Kit home guest cache: shared sourcing, no duplicate retire path", () =
   });
 
   it("adds no Kit-side duplicate retire path", () => {
-    const server = read(ROUTE);
+    const server = read(ROUTE) + read(join(root, "src/kit-home-panels.ts"));
     // Retirement stays the shared module's job (called by the committed
     // featured/event mutations below): the load only reads through it.
     expect(server).not.toContain("retireHomeGuestCache");
@@ -733,8 +774,7 @@ describe("Kit home guest cache: shared sourcing, no duplicate retire path", () =
     }
   });
 
-  it("leaves GET / ownership on Hono", () => {
-    // Cache sourcing lands before the flip; the flip itself is out of scope.
-    expect(read(MANIFEST)).toMatch(/method:\s*"GET",\s*path:\s*"\/",\s*enabled:\s*false/);
+  it("enables GET / with the shared cached panels", () => {
+    expect(read(MANIFEST)).toMatch(/method:\s*"GET",\s*path:\s*"\/",\s*enabled:\s*true/);
   });
 });
