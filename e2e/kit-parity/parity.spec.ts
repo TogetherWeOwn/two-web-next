@@ -2419,6 +2419,7 @@ test("Kit member event detail captures the ended record at both widths", async (
   const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
   const now = Date.now();
   const context = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
+  const enhanced = await browser.newPage({ baseURL: target.origin });
   try {
     await withSessionDb(async (sql) => {
       await sql`insert into users (id, username, member) values (${userId}, 'Seat fixture', true)`;
@@ -2464,6 +2465,8 @@ test("Kit member event detail captures the ended record at both widths", async (
       },
     ]);
     const page = await context.newPage();
+    const record = page.getByRole("region", { name: "Sign-up record" });
+    const nextLink = record.getByRole("link", { name: /^Next one:/ });
     const siblingPagerLink = page.locator(`[data-testid="event-next"][href="/e/${adjacentKey}"]`);
     for (const width of [1280, 390]) {
       await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
@@ -2471,7 +2474,6 @@ test("Kit member event detail captures the ended record at both widths", async (
       expect(response?.status()).toBe(200);
       expect(response?.headers()["x-two-renderer"]).toBe("kit");
       const time = page.getByTestId("kit-event-time");
-      const record = page.getByRole("region", { name: "Sign-up record" });
       await expect(page.getByText("Sign out", { exact: true })).toBeVisible();
       await expect(page.getByRole("complementary", { name: "Your seat", exact: true })).toHaveCount(
         0,
@@ -2482,29 +2484,19 @@ test("Kit member event detail captures the ended record at both widths", async (
       );
       await expect(page.getByTestId("event-series-next")).toHaveCount(0);
       await expect(siblingPagerLink).toHaveCount(0);
-      await expect(page.getByRole("heading", { name: "Sign-up record", exact: true })).toHaveCount(
-        1,
-      );
-      await expect(page.getByRole("region", { name: "Event overview" })).not.toContainText(
-        "Sign-up record",
-      );
+      await expect(record).toHaveCount(1);
+      const overview = page.getByRole("region", { name: "Event overview" });
+      await expect(overview).not.toContainText("Sign-up record");
       await expect(page.getByRole("heading", { name: "Signed up (1)" })).toBeVisible();
-      const facts = page
-        .getByRole("definition")
-        .filter({ has: page.getByText("1 listed sign-up", { exact: true }) });
-      await expect(facts).toHaveCount(1);
+      const facts = page.getByRole("definition");
+      await expect(facts.getByText("1 listed sign-up", { exact: true })).toHaveCount(1);
       await expect(page.getByRole("heading", { name: "Save the date" })).toHaveCount(0);
-      await expect(page.getByRole("link", { name: /Add to calendar|Google Calendar/ })).toHaveCount(
-        0,
-      );
+      const calendarLinks = page.getByRole("link", { name: /Add to calendar|Google Calendar/ });
+      await expect(calendarLinks).toHaveCount(0);
       await expect(page.getByLabel("Event link")).toBeVisible();
-      const comparisons = page.locator(".event-meta .event-device-timezone");
-      await expect(comparisons).toHaveCount(4);
-      for (const comparison of await comparisons.all())
-        expect(await comparison.boundingBox()).toBeNull();
-      const hiddenRows = page.locator(".event-meta > div[hidden]");
-      await expect(hiddenRows).toHaveCount(2);
-      for (const row of await hiddenRows.all()) expect(await row.boundingBox()).toBeNull();
+      const hidden = page.locator(".event-meta .event-device-timezone, .event-meta > div[hidden]");
+      await expect(hidden).toHaveCount(6);
+      for (const control of await hidden.all()) expect(await control.boundingBox()).toBeNull();
       for (const fact of ["Starts", "Ends"]) {
         const row = page
           .locator(".event-meta > div")
@@ -2513,11 +2505,9 @@ test("Kit member event detail captures the ended record at both widths", async (
       }
       await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
       await expect(record).toContainText("No Echo for this one. 1 listed sign-up.");
-      await expect(record.getByRole("link", { name: /^Next one:/ })).toHaveAttribute(
-        "href",
-        `/e/${nextKey}`,
-      );
+      await expect(nextLink).toHaveAttribute("href", `/e/${nextKey}`);
       await expect(page.locator(`a[href="/e/${nextKey}"]`)).toHaveCount(1);
+      await expect(page.locator(`a[href="/e/${unreadableKey}"]`)).toHaveCount(0);
       if (width === 390) {
         await expect(
           page.locator(
@@ -2539,22 +2529,25 @@ test("Kit member event detail captures the ended record at both widths", async (
         where user_id = ${userId} and event_id = (select id from events where event_key = ${endedKey})`;
     });
     expect((await page.reload())?.status()).toBe(200);
-    await expect(page.getByRole("region", { name: "Sign-up record" })).toBeVisible();
-    await expect(page.getByRole("link", { name: /^Next one:/ })).toHaveCount(0);
+    await expect(record).toBeVisible();
+    await expect(nextLink).toHaveCount(0);
     await expect(page.getByTestId("event-series-next")).toHaveCount(0);
     await expect(siblingPagerLink).toHaveCount(0);
     await expect(page.getByTestId("event-roster-empty")).toContainText("No sign-ups are listed.");
     await expect(page.locator(".event-meta [data-count]")).toHaveText("0 listed sign-ups");
-    await expect(page.getByRole("region", { name: "Sign-up record" })).toContainText(
-      "0 listed sign-ups",
-    );
+    await expect(record).toContainText("0 listed sign-ups");
     await withSessionDb(async (sql) => {
       await sql`update events set parent_event_id = null, recurrence_index = null where event_key = ${adjacentKey}`;
     });
     expect((await page.reload())?.status()).toBe(200);
     await expect(siblingPagerLink).toBeVisible();
+    expect((await enhanced.goto(`/e/${endedKey}`))?.status()).toBe(200);
+    await expect(enhanced.getByTestId("event-device-timezone-starts-button")).toBeVisible();
+    await enhanced.getByTestId("event-chosen-timezone-input").fill("Asia/Tokyo");
+    await enhanced.getByTestId("event-chosen-timezone-button").click();
+    await expect(enhanced.getByTestId("event-chosen-timezone-status")).toContainText("GMT+09:00");
   } finally {
-    await context.close();
+    await Promise.all([context.close(), enhanced.close()]);
     await withSessionDb(async (sql) => {
       await sql`delete from events where event_key in (${adjacentKey}, ${endedKey}, ${nextKey}, ${laterKey}, ${historicalKey}, ${unreadableKey})`;
       await sql`delete from web_session_grace where user_id = ${userId}`;

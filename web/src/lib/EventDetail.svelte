@@ -26,9 +26,6 @@ let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrit
   $props();
 const facts = $derived(kitEventFacts(model));
 const lifecycle = $derived(model.lifecycle);
-const series = $derived(
-  model.isEnded && model.series ? { ...model.series, next: null } : model.series,
-);
 const live = $derived(model.liveTime);
 const savedLive = $derived(
   live && !model.review && model.viewerMember && model.answer?.status === "going",
@@ -304,7 +301,7 @@ const detailIslands = $derived([
   {@html detailIslands.map((name) => `<script src="/islands/${name}.js" defer></` + "script>").join("")}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
-  <div class="event-discovery">{@render eventPagination(series, true)}{@render eventPagination(model.neighbors, false)}
+  <div class="event-discovery">{@render eventPagination(model.series, true)}{@render eventPagination(model.neighbors, false)}
     {#if model.related.length > 0}
       <section aria-label="Related events" data-testid="event-related">
         <h2>More events you might like</h2>

@@ -62,6 +62,7 @@ import {
   getEventSeriesContext,
   getPublicEvent,
   getViewerRsvp,
+  isRenderableEventWindow,
   listGoingAttendees,
   listRelatedEvents,
   nextAttendeePage,
@@ -633,6 +634,10 @@ export async function resolveKitEventDetail(
       const zoneLabel = isValidZone(event.timezone) ? event.timezone : "UTC";
       const liveTime = liveDetailTime(event, now);
       const nextInRecord = ended ? endedNext(series?.upcoming) : null;
+      const canLink = (link: EventLink) =>
+        !ended || (link.eventKey !== nextInRecord?.key && isRenderableEventWindow(link));
+      const discoveryLink = (link: EventLink | null) =>
+        link && canLink(link) ? toLink(link, now) : null;
       const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
@@ -719,20 +724,18 @@ export async function resolveKitEventDetail(
           answer,
           waitlistPosition: position,
           neighbors: {
-            previous: neighbors.previous ? toLink(neighbors.previous, now) : null,
+            previous: discoveryLink(neighbors.previous),
             next:
-              neighbors.next && (!ended || !series?.memberIds?.includes(neighbors.next.id))
-                ? toLink(neighbors.next, now)
-                : null,
+              ended && neighbors.next && series?.memberIds?.includes(neighbors.next.id)
+                ? null
+                : discoveryLink(neighbors.next),
           },
-          related: related
-            .filter((link) => link.eventKey !== nextInRecord?.key)
-            .map((link) => toLink(link, now)),
+          related: related.filter(canLink).map((link) => toLink(link, now)),
           series: series
             ? {
                 hosts: series.hosts,
-                previous: series.previous ? toLink(series.previous, now) : null,
-                next: series.next ? toLink(series.next, now) : null,
+                previous: discoveryLink(series.previous),
+                next: ended ? null : discoveryLink(series.next),
               }
             : null,
           showJoinPitch: !viewer,

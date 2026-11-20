@@ -368,15 +368,15 @@ describe("member-detail review mode", () => {
       goingOccupancy: 0,
     };
     const upcoming = NEIGHBORS.next!;
-    const unrelated = { ...upcoming, id: 10, eventKey: SUGGESTIONS[0].key };
+    const unrelated = { ...upcoming, id: 10, eventKey: SUGGESTIONS[0]!.key };
     const { outcome } = await resolve(
       KEY,
       {
         ...fakeStore({ event, related: [upcoming, unrelated] }),
         seriesFn: async () => ({
           hosts: [],
-          previous: null,
-          next: upcoming,
+          previous: upcoming,
+          next: null,
           upcoming,
           memberIds: [event.id, upcoming.id],
         }),
