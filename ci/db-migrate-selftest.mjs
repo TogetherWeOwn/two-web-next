@@ -30,6 +30,7 @@ import {
   assertServingLedgerIsolation,
   validateMigrationSql,
 } from "./migration-runtime-rights.mjs";
+import { rehearseWebReadiness } from "./web-readiness-rehearsal.mjs";
 
 const mainEnv = {
   GITHUB_REF: "refs/heads/main",
@@ -101,7 +102,7 @@ async function fixture(callback) {
         { ...env, ...overrides },
         { testDatabase: true, report: (line) => output.push(line) },
       );
-    await callback({ client, run, env, output });
+    await callback({ client, run, env, output, url });
   } finally {
     try {
       if (client) await client.end();
@@ -726,6 +727,17 @@ async function assertLedgerRefused(client, run, reason) {
   );
   assert.equal((await client`select to_regclass('public.users') as name`)[0].name, null);
 }
+
+test("web readiness bridge rehearsal: locked expansion and scoped runtime cutover", async () => {
+  await fixture(async ({ client, url }) => {
+    const created = await ensureRuntimeRole(client);
+    try {
+      await rehearseWebReadiness(client, url);
+    } finally {
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
 
 test("implicit ledger rights refuse; object grants preserve runtime and audit operations", async () => {
   await fixture(async ({ client }) => {
