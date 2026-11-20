@@ -1289,7 +1289,7 @@ jobs:
           path: vitest-${{ matrix.shard }}.json
           if-no-files-found: error
           overwrite: true
-          retention-days: 1
+          retention-days: 30 # Matches GitHub Actions rerun eligibility.
 
   node22-compat:
     name: node22-compat

@@ -10,7 +10,9 @@ import { sampleProcesses, startProgress } from "./node22-progress.mjs";
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const job = workflow.split("\n  node22-shard:\n")[1]?.split("\n  node22-compat:\n")[0];
 const merge = workflow.split("\n  node22-compat:\n")[1]?.split("\n  bundle-budget:\n")[0];
-const step = job?.split("\n      - name: Run Node 22.23.0 Vitest shard\n")[1]?.split("\n      - ")[0];
+const step = job
+  ?.split("\n      - name: Run Node 22.23.0 Vitest shard\n")[1]
+  ?.split("\n      - ")[0];
 const command = step
   ?.match(/        run: \|\n([\s\S]*?)(?=        env:)/)?.[1]
   .replace(/^          /gm, "");
@@ -208,10 +210,15 @@ test("the report merge rejects partial or empty input before calling Vitest", as
   const cli = join(dir, "node_modules/vitest/vitest.mjs");
   await mkdir(blobs);
   await mkdir(join(dir, "node_modules/vitest"), { recursive: true });
-  await writeFile(cli, 'console.log("merged")');
+  await writeFile(cli, 'console.log("merged"); process.exitCode = Number(process.env.MERGE_EXIT);');
   const step = merge.split("      - name: Merge Node 22 Vitest reports\n")[1];
   const script = step.split("        run: |\n")[1];
-  const run = () => spawnSync("sh", ["-e", "-c", script], { cwd: dir, encoding: "utf8" });
+  const run = (exit = 0) =>
+    spawnSync("sh", ["-e", "-c", script], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, MERGE_EXIT: String(exit) },
+    });
   for (const shard of [1, 2, 3]) {
     assert.notEqual(run().status, 0);
     await writeFile(join(blobs, `vitest-${shard}.json`), "blob");
@@ -219,6 +226,7 @@ test("the report merge rejects partial or empty input before calling Vitest", as
   const complete = run();
   assert.equal(complete.status, 0, complete.stderr);
   assert.equal(complete.stdout.trim(), "merged");
+  assert.equal(run(9).status, 9);
   await writeFile(join(blobs, "vitest-2.json"), "");
   assert.notEqual(run().status, 0);
 });
@@ -260,7 +268,10 @@ if (readyFile) {
 const args = process.argv.slice(2);
 const stage = args[0] === "test" ? "test" : args[1];
 if (stage === "test") assert.deepEqual(args, ${JSON.stringify(shardCommand(shard).split(" ").slice(1))});
-else assert.ok(["lint", "typecheck"].includes(stage));
+else {
+  assert.ok(["lint", "typecheck"].includes(stage));
+  assert.deepEqual(args, ["run", stage]);
+}
 console.log("out:" + stage);
 console.error("err:" + stage);
 setTimeout(() => {
