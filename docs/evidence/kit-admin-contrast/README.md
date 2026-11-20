@@ -81,5 +81,7 @@ fallback is serif; these are fixture evidence, not pinned-runner golden images.
   2892 raw / **1024 gzip** bytes. All fit the existing limits; CSS has no gzip slack.
 - **Coverage distinction:** Hono accessibility/Lighthouse and public visual specs
   do not exercise these Kit admin leaves. The new built-runtime check runs after
-  the Kit adapter build in CI and verifies eleven executed cases with a TAP guard.
-  No masks, budgets or committed golden baselines change.
+  the Kit adapter build in CI. Its TAP guard now requires all 23 executed cases
+  (11 states at both widths plus the Hono check), and
+  `ci/a11y-kit-admin-contrast-floor.test.mjs` keeps that floor equal to the
+  declared cases. The eleven-case run above is the original capture. No masks, budgets or committed golden baselines change.
