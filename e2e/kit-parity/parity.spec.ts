@@ -2615,8 +2615,9 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
     timeStyle: "short",
   }).format(end);
   const path = `/e/${key}?attendees=1`;
+  const deviceZone = "Asia/Tokyo";
   const plain = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
-  const enhanced = await browser.newContext({ baseURL: target.origin });
+  const enhanced = await browser.newContext({ baseURL: target.origin, timezoneId: deviceZone });
   async function assertMobileSeatOrder(page: Page) {
     const time = page.locator(".event-layout-head > [data-testid=kit-event-time]:last-child");
     const seat = page.locator(
@@ -2765,7 +2766,13 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
     expect((await refreshed).headers()["cache-control"]).toBe("private, no-store");
     await expect(live).toBeVisible();
     await page.getByTestId("event-device-timezone-ends-button").click();
-    await expect(page.getByTestId("event-device-timezone-ends-status")).not.toBeEmpty();
+    const deviceEnd = new Intl.DateTimeFormat("en-GB", {
+      timeZone: deviceZone,
+      timeStyle: "short",
+    }).format(end);
+    await expect(page.getByTestId("event-device-timezone-ends-status")).toContainText(
+      `${deviceEnd} GMT+09:00 (${deviceZone})`,
+    );
     await page.addInitScript(() => {
       Date.now = () => 1;
     });
