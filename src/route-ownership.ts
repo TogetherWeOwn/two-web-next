@@ -73,7 +73,13 @@ export interface RouteDecision {
 // shipped manifest instead of hard-coding "kit": flipping enabled flips the
 // gate for the right reason.
 export const ROUTE_MANIFEST: OwnedRoute[] = [
-  { method: "GET", path: "/", enabled: false, reads: "public" },
+  // The Kit home reads only the viewer's RSVPs. Hono owns GET / until cutover.
+  {
+    method: "GET",
+    path: "/",
+    enabled: false,
+    reads: { resource: "member", action: "list", route: "home" },
+  },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
   { method: "GET", path: "/events", enabled: true, reads: "public" },
   { method: "GET", path: "/about", enabled: true, reads: "public" },

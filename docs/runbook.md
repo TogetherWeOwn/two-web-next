@@ -295,22 +295,16 @@ environment. There is no `[env.staging]` configuration. Do not add `--env
 staging` or invent a different Worker target. Verify the approved account and
 binding isolation before any remote mutation.
 
-1. Require green `ci-ok`, `e2e-ok`, `gitleaks`, `pr-lint`, `CodeRabbit` and
-   `Devin Review` on the exact head SHA, with every review finding fixed or
-   answered with evidence, and fresh per-PR exact-head Release Manager
-   `request_confirmation` on a child card assigned and addressed to the Release
-   Manager (this merge deploys production). Apply the
-   [merge and production staging contract](../CONTRIBUTING.md#merge-and-production-staging-evidence)
-   and its retained safeguards: staging is met by the automatic post-merge,
-   pre-production staging/e2e/soak gate, not a pre-merge staging run or artifact
-   equality. Production promotion still waits for qualification of the resulting
-   exact `main` SHA. A scope-skipped staging journey/passive job is not qualifying
-   evidence: follow the linked contract's post-merge manual-dispatch caveat rather
-   than claiming automatic eligibility. Any push requires a new exact-head confirmation.
-   When native review stages apply, the final-stage reviewer squash-merges the
-   exact reviewed and confirmed head before closing the task; otherwise the
-   author merges. Pin the merge to that SHA. Record the confirmation, pinned
-   squash SHA and intended target in the release log.
+1. Apply the exact-head checks, review and retained safeguards in the
+   [merge and production staging contract](../CONTRIBUTING.md#merge-and-production-staging-evidence).
+   Only promotion-path PRs need fresh exact-head Release Manager confirmation
+   before merge. The final-stage reviewer pins the squash merge to the reviewed
+   head; the author does this when no native review stage applies. Record the
+   pinned squash SHA, intended target and any required confirmation in the
+   release log. Staging qualification happens after merge and before production
+   promotion, on the exact `main` SHA. A scope-skipped staging journey or passive
+   job is not qualifying evidence: follow the linked contract's post-merge
+   manual-dispatch caveat rather than claiming automatic eligibility.
 
    For automatic promotion, the Release Manager accepts the exact release SHA
    and asks the authorized Operator to set the repository Actions variable

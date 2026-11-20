@@ -20,8 +20,8 @@ export type ScheduledFailingJob = (typeof SCHEDULED_FAILING_JOBS)[number];
 
 import { AlertProbeError } from "./alert-probe-error";
 import { sanitizeExceptionClass } from "./exception-class";
+import { safeRequestId } from "./http/request-log";
 import { currentReleaseFields } from "./release-tag";
-import { safeRequestId } from "./request-log";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./jobs/sync-retry-diagnostic";
 
 export const ALERT_WINDOW_MS = 5 * 60 * 1000;
