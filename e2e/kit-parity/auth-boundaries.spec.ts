@@ -56,9 +56,7 @@ test("Kit home consumes the signed join flash on GET only", async ({ request }) 
     JOIN_RESULT_COOKIE,
     "already_member",
     kitFixtureSessionSecret(),
-    {
-      path: "/",
-    },
+    { path: "/", secure: true },
   );
   const headers = { cookie: signed.split(";")[0]! };
   const head = await request.head(`${KIT_ORIGIN}/`, { headers });
