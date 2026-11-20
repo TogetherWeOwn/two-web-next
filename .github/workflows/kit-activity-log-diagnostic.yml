@@ -20,7 +20,7 @@ on:
 permissions: {}
 
 env:
-  APP_SHA: b2025dceb93efbc0cac0a7149afe7ded42269afb
+  APP_SHA: bf486005e1c0a7395af7011411255af8f58510b9
 
 jobs:
   provenance:
