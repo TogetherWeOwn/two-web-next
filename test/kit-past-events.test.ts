@@ -384,6 +384,30 @@ describe("hook archive dispatch", () => {
     expect(guard).toHaveBeenCalledOnce();
   });
 
+  it("keeps the archive guard in front of an opted-in production render", async () => {
+    const appUrl = "https://togetherweown.com";
+    const req = request(`${appUrl}/events/past?page=2`);
+    const resolve = vi.fn(async () => cachedResponse());
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    const guard = vi.fn(async () => new Response("limited", { status: 429 }));
+    const response = await dispatchHookRequest(
+      { request: req, url: new URL(req.url), route: { id: "/events/past" } },
+      {
+        appUrl,
+        kitRouteArchive: "true",
+        honoFetch,
+        resolve,
+        pastArchive: (request, render, id) =>
+          dispatchPastArchiveRequest(request, env, render, guard, 1000, id),
+      },
+    );
+
+    expect(response.status).toBe(429);
+    expect(guard).toHaveBeenCalledExactlyOnceWith(req, env, expect.any(String));
+    expect(resolve).not.toHaveBeenCalled();
+    expect(honoFetch).not.toHaveBeenCalled();
+  });
+
   it("does not wrap non-archive public routes", async () => {
     const pastArchive = vi.fn(async (_req: Request, render: () => Promise<Response>) => render());
     const resolve = vi.fn(async () => new Response("privacy"));

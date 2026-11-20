@@ -389,6 +389,39 @@ export function stagingManifestFor(
   });
 }
 
+const PRODUCTION_APP_URL = "https://togetherweown.com";
+const PRODUCTION_HOST = new URL(PRODUCTION_APP_URL).hostname;
+
+// A request at the production apex must never fall through to the staging or
+// preview manifests. Only canonical public document GETs can opt in here.
+export function productionManifestFor(
+  event: Pick<HookEventLike, "request" | "url" | "isDataRequest">,
+  deps: Pick<HookDispatchDeps, "appUrl" | "kitRouteArchive" | "kitRouteStatic">,
+  routes: OwnedRoute[] = ROUTE_MANIFEST,
+): OwnedRoute[] | undefined {
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.hostname !== PRODUCTION_HOST && event.url.hostname !== PRODUCTION_HOST) {
+    return undefined;
+  }
+  if (
+    deps.appUrl !== PRODUCTION_APP_URL ||
+    requestUrl.origin !== PRODUCTION_APP_URL ||
+    event.url.origin !== PRODUCTION_APP_URL ||
+    event.request.method !== "GET" ||
+    event.isDataRequest ||
+    event.url.pathname !== requestUrl.pathname ||
+    deps.kitRouteArchive !== "true"
+  ) {
+    return [];
+  }
+  const path = requestUrl.pathname;
+  const staticEnabled = deps.kitRouteStatic === "true" && (path === "/about" || path === "/faq");
+  if (path !== "/events/past" && !staticEnabled) return [];
+  return routes
+    .filter((entry) => entry.method === "GET" && entry.path === path)
+    .map((entry) => ({ ...entry, enabled: entry.enabled && entry.reads === "public" }));
+}
+
 // Response header set only on the Kit-rendered branch of the hook, so the
 // preview parity check and worker e2e can prove which renderer answered.
 // Hono responses (honoFetch or the catch-all fallback) never carry it.
@@ -563,9 +596,8 @@ export interface HookDispatchDeps {
   appUrl: string;
   // Signature-only notice peek, independent of the public route's session store.
   sessionSecret?: string;
-  // Staging-only rollout controls. The staging APP_URL selects a fail-closed
-  // manifest that admits only these reviewed families; unset or malformed
-  // values keep every route on Hono. Preview/local parity stays unchanged.
+  // Archive and static opt-ins are shared by the separate staging and
+  // production selectors. Events, home and join are staging-only.
   kitRouteArchive?: string;
   kitRouteStatic?: string;
   kitRouteEvents?: string;
@@ -949,6 +981,7 @@ async function dispatchOwnedRequest(
   const route = decideRoute(
     event.request,
     deps.manifest ??
+      productionManifestFor(event, deps) ??
       fixtureManifestFor({
         APP_URL: deps.appUrl,
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,

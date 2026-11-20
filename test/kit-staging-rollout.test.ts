@@ -7,6 +7,7 @@ import {
   KIT_RENDERER_VALUE,
   ROUTE_MANIFEST,
   dispatchHookRequest,
+  productionManifestFor,
   resolveRouteOwner,
   stagingManifestFor,
 } from "../src/route-ownership";
@@ -357,6 +358,142 @@ describe("Kit staging Wrangler config", () => {
       "two-internal-action",
     ]);
     expect(jobs.triggers?.crons).toEqual(["*/10 * * * *", "0 0 * * *"]);
+  });
+});
+
+describe("Kit production route selection", () => {
+  const apex = "https://togetherweown.com";
+  const archive = "/events/past";
+  const archiveStatic = [archive, "/about", "/faq"];
+  // Try even staging-only opt-ins, to catch accidental reuse of its admission rules.
+  const allOn = { archive: "true", static: "true", events: "true", home: "true", join: "true" };
+
+  function productionEvent(path: string, method = "GET", origin = apex) {
+    const request = new Request(`${origin}${path}`, { method });
+    const url = new URL(request.url);
+    return { request, url, route: { id: url.pathname }, isDataRequest: false };
+  }
+
+  async function expectOwner(
+    event: ReturnType<typeof productionEvent>,
+    expected: "hono" | "kit",
+    flags: RolloutFlags = allOn,
+    appUrl = apex,
+  ) {
+    const deps = { ...stagingDeps(flags), appUrl };
+    const response = await dispatchHookRequest(event, deps);
+    const path = event.url.pathname;
+    if (expected === "hono") {
+      expect(deps.honoFetch, path).toHaveBeenCalledExactlyOnceWith(event.request);
+      expect(deps.resolve, path).not.toHaveBeenCalled();
+      expect(response.headers.get(KIT_RENDERER_HEADER), path).toBeNull();
+    } else {
+      expect(deps.resolve, path).toHaveBeenCalledOnce();
+      expect(deps.honoFetch, path).not.toHaveBeenCalled();
+      expect(response.headers.get(KIT_RENDERER_HEADER), path).toBe(KIT_RENDERER_VALUE);
+      expect(response.headers.get("X-Robots-Tag"), path).toBeNull();
+    }
+  }
+
+  const { vars } = readWranglerConfig(readFileSync("web/wrangler.production.jsonc", "utf8"));
+  const shippedFlags = {
+    archive: vars.KIT_ROUTE_ARCHIVE,
+    static: vars.KIT_ROUTE_STATIC,
+    events: vars.KIT_ROUTE_EVENTS,
+    home: vars.KIT_ROUTE_HOME,
+    join: vars.KIT_ROUTE_JOIN,
+  };
+
+  it("keeps the shipped production config inert", () => {
+    expect(vars.APP_URL).toBe(apex);
+    expect(Object.values(shippedFlags)).toEqual(Array(5).fill("false"));
+  });
+
+  it.each([
+    ["shipped false flags", shippedFlags, []],
+    ["absent flags", {}, []],
+    ["malformed archive", { archive: "TRUE", static: "true" }, []],
+    ["static alone", { static: "true" }, []],
+    ["archive alone", { archive: "true" }, [archive]],
+    ["malformed static", { archive: "true", static: "true " }, [archive]],
+    ["cumulative opt-in", allOn, archiveStatic],
+  ] as const)("selects only the expected routes with %s", async (_name, flags, kitPaths) => {
+    for (const route of ROUTE_MANIFEST) {
+      const path = route.path.replace(":id", "1").replace(":key", "event");
+      const expected = (kitPaths as readonly string[]).includes(path) ? "kit" : "hono";
+      await expectOwner(productionEvent(path, route.method), expected, flags);
+    }
+  });
+
+  it.each([
+    "",
+    "not a URL",
+    `${apex}/`,
+    `${apex}/nested`,
+    `${apex}?config=invalid`,
+    `${apex}:443`,
+    "http://togetherweown.com",
+    "https://TOGETHERWEOWN.COM",
+    "https://togetherweown.com.evil.test",
+    STAGING_APP_URL,
+  ])("fails closed for a noncanonical production APP_URL (%s)", async (appUrl) => {
+    await expectOwner(productionEvent(archive), "hono", allOn, appUrl);
+    await expectOwner(productionEvent(archive), "hono", {}, appUrl);
+  });
+
+  it.each(["http://togetherweown.com", `${apex}:8443`, "https://preview.example.test"])(
+    "requires the original request origin even when the Kit event uses the apex (%s)",
+    async (origin) => {
+      const event = productionEvent(archive, "GET", origin);
+      await expectOwner({ ...event, url: new URL(`${apex}${archive}`) }, "hono");
+    },
+  );
+
+  it("does not use a preview manifest if the event URL masks a production request", async () => {
+    const preview = "https://preview.example.test";
+    const event = productionEvent(archive);
+    await expectOwner({ ...event, url: new URL(`${preview}${archive}`) }, "hono", {}, preview);
+  });
+
+  it.each(["HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"])(
+    "leaves %s on Hono even with both flags on",
+    async (method) => {
+      for (const path of archiveStatic) await expectOwner(productionEvent(path, method), "hono");
+    },
+  );
+
+  it.each([
+    "/up",
+    "/version",
+    "/csp-reports",
+    "/api/agent-events",
+    "/_app/immutable/asset.js",
+    "/events/past/",
+    "/events/%70ast",
+    "/events/past/other",
+    "/events/past/__data.json",
+    "/about/other",
+  ])("does not admit unlisted paths (%s)", async (path) => {
+    await expectOwner(productionEvent(path), "hono");
+  });
+
+  it("keeps Kit data requests on Hono after Kit strips the data suffix", async () => {
+    const event = productionEvent(`${archive}/__data.json`);
+    await expectOwner(
+      { ...event, url: new URL(`${apex}${archive}`), route: { id: archive }, isDataRequest: true },
+      "hono",
+    );
+  });
+
+  it.each(archiveStatic)("honors the manifest rollback and public-read scope at %s", (path) => {
+    const event = productionEvent(path);
+    const deps = { appUrl: apex, kitRouteArchive: "true", kitRouteStatic: "true" };
+    const manifest = productionManifestFor(event, deps, [
+      { method: "GET", path, enabled: false, reads: "public" },
+    ]);
+    expect(resolveRouteOwner({ method: "GET", path }, manifest ?? [])).toBe("hono");
+    const notPublic = productionManifestFor(event, deps, [{ method: "GET", path, enabled: true }]);
+    expect(resolveRouteOwner({ method: "GET", path }, notPublic ?? [])).toBe("hono");
   });
 });
 
