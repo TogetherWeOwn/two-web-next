@@ -1554,12 +1554,24 @@ the same URL, they share a two-slot client; otherwise each uses a one-slot clien
 and is independently measured and cleaned up within the same response deadline.
 
 The journal (`drizzle/meta/_journal.json`) is embedded in the Worker at build
-time. Only web tags `1000–1999` are checked against exact `created_at` timestamps
-in `drizzle.__drizzle_migrations`; bot rows and grandfathered `0000/0001` tags do
-not participate. A newer bot row or later web row cannot hide an earlier missing
-web migration. An empty ledger counts all bundled web migrations as pending; a
-missing, unreadable or malformed ledger reports `null`, never a false zero.
-Volatile `clock_timestamp()` in both DB queries avoids Hyperdrive query caching.
+time. Only web tags `1000–1999` are checked for exact `created_at` membership;
+bot rows and grandfathered `0000/0001` tags do not participate. A newer bot or
+web row cannot hide an earlier missing web migration. An empty ledger counts
+all bundled web migrations as pending; an unreadable or malformed ledger reports
+`null`, never a false zero. Volatile `clock_timestamp()` avoids Hyperdrive query caching.
+
+The Worker prefers the owner-controlled [timestamp view](web-readiness-projection.sql)
+`web_readiness.migration_timestamps`. Only a confirmed absent view permits the
+transitional read of `drizzle.__drizzle_migrations`. A permission error, timeout,
+or malformed result never permits fallback. Before the view exists, the failed
+view read and absence check add two transactions within the same response deadline.
+The migration and deploy pipeline does not apply the view. In a separate rollout,
+commit the schema, view, and runtime `USAGE` and `SELECT` grants in one transaction:
+a schema that exists without the runtime grant can make `/up` return 503 even
+while the legacy ledger is readable. Coordinate ledger revocation separately. A
+Worker that only knows the legacy ledger cannot report migration readiness once
+its direct access is removed. Do not treat this change as release or rollback
+qualification.
 
 DB ping + ledger share a **3-second response deadline**, running in parallel with
 the existing 3-second queue deadline. Each ping, ledger and queue read runs in a
