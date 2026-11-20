@@ -1,8 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { isScalar, parseDocument } from "yaml";
-import shardConfig from "../vitest.coverage-shard.config";
-import coverageConfig from "../vitest.config";
 
 const workflows = {
   ci: parseDocument(readFileSync(".github/workflows/ci.yml", "utf8")),
@@ -49,9 +48,15 @@ describe("CI workflow source boundaries", () => {
   });
 
   it("keeps the shard's suite and coverage settings identical except for final reporting", () => {
-    const { coverage, ...suite } = coverageConfig.test ?? {};
-    expect(coverage?.thresholds).toBeDefined();
-    expect(shardConfig.test).toEqual({
+    const config = 'import c from "./vitest.config.ts"; console.log(JSON.stringify(c.test));';
+    const read = (...args: string[]) =>
+      JSON.parse(
+        execFileSync(process.execPath, ["--input-type=module", "-e", config, "--", ...args]).toString(),
+      );
+    const { coverage, ...suite } = read();
+    expect(coverage.thresholds).toBeDefined();
+    expect(read("--merge-reports=vitest-blob")).toEqual({ ...suite, coverage });
+    expect(read("--shard=1/3", "--reporter=blob")).toEqual({
       ...suite,
       coverage: { ...coverage, thresholds: undefined, reporter: [] },
     });

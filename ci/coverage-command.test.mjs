@@ -71,9 +71,8 @@ test("coverage shards preserve serial threads and the merge uses the canonical c
   assert.match(shard, /needs: \[scope\]/);
   assert.match(shard, /shard: \[1, 2, 3\]/);
   assert.match(shard, /SHARDS: \$\{\{ strategy\.job-total \}\}/);
-  const coverageCommand = "npm run test:coverage -- --config=vitest.coverage-shard.config.ts";
   assert(
-    shard.includes(`${coverageCommand} --shard="$SHARD/$SHARDS" --reporter=dot --reporter=blob`),
+    shard.includes('npm run test:coverage -- --shard="$SHARD/$SHARDS" --reporter=dot --reporter=blob'),
   );
   assert.match(shard, /if-no-files-found: error/);
   const budget = Number(shard.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
@@ -367,7 +366,7 @@ test("bounded CSS evidence is collected only after the Kit budget fails", () => 
 });
 
 test("the shipping Kit route step reports overages but still fails on bad measurements", () => {
-  const step = check
+  const step = checkJob
     .split(/\n      - /)
     .find((entry) => entry.startsWith("name: Kit route performance (report only)\n"));
   assert.ok(step);
