@@ -53,8 +53,14 @@ while lowering it, or deleting the row, fails the gate.
 | Test inventory | Every test file reachable from CI | `npm run test:inventory -- --strict` | every PR (`check` job, HARD) |
 | Bundle size | Served assets within budget | `npm run budget` | `bundle-budget` job, blocks merge |
 | Worker bundle | Main Worker dry-run bundle within budget | `npm run worker-budget` | every PR (`check` job) |
-| Page quality | Lighthouse categories within `ci/quality-budget.json`; security headers, HTML basics, internal links | `npm run lighthouse:quality`, `npm run standards` | `lighthouse` job, blocks merge |
+| Page quality | Lighthouse categories within `ci/quality-budget.json` (see performance note below); security headers, HTML basics, internal links | `npm run lighthouse:quality`, `npm run standards` | `lighthouse` job, blocks merge |
 | Accessibility | Zero critical or serious violations on fixtures | `npm run a11y` | `a11y` job, blocks merge |
+
+Under the 2026-11-14 owner decision, the desktop Lighthouse performance
+floor is reported as a warning until the Ember and SvelteKit migration is
+complete. The floor itself is unchanged. Desktop accessibility, best
+practices and SEO floors, incomplete collection, and web standards still
+block the required `lighthouse` job.
 
 Every row names the command that produces the verdict. A dimension with a
 number and no command here is an aspiration, not a constraint.

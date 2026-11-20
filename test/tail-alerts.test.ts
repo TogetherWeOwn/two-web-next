@@ -108,8 +108,10 @@ describe("Tail alert parser and redaction", () => {
     const inventory = JSON.parse(readFileSync("test/fixtures/route-inventory.json", "utf8")) as {
       path: string;
     }[];
+    const kitOnly = ["/admin/reconciliation", "/admin/reconciliation/:key"];
+    const paths = [...inventory.map((r) => r.path), ...kitOnly];
     expect([...ALERT_ROUTES].sort()).toEqual(
-      [...new Set(inventory.map((r) => r.path).filter((p) => !p.includes("*")))].sort(),
+      [...new Set(paths.filter((p) => !p.includes("*")))].sort(),
     );
   });
 

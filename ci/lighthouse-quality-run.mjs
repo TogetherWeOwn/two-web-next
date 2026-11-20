@@ -410,6 +410,8 @@ export async function main(
 
 async function selftest() {
   const { navigationMetadata } = await import("../test/lighthouse-navigation-fixtures.mjs");
+  const { getAllAssertionResults } = require("@lhci/utils/src/assertions.js");
+  const assertConfig = require("./lighthouserc.quality.cjs").ci.assert;
   // expectedLhrs reads the real configs (no network): fixture mode lists 8
   // routes (one is the fixture event), the staging deployed mode lists 7,
   // both at 3 runs each.
@@ -446,6 +448,7 @@ async function selftest() {
     requestedUrl: url,
     finalUrl: url,
     finalDisplayedUrl: url,
+    audits: {},
     categories: Object.fromEntries(
       ["performance", "accessibility", "best-practices", "seo"].map((id) => [id, { score: 1 }]),
     ),
@@ -519,11 +522,14 @@ async function selftest() {
       // Emulate a fresh collect: per-run saved LHRs, then the deduping upload.
       clearAttemptEvidence({ qualityDir: qdir, lhciDir: lhci });
       mkdirSync(qdir, { recursive: true });
-      step.urls.forEach((url, i) => {
+      const reports = step.urls.map((url, i) => {
+        const report = lhr(url, deployed);
+        if (step.missedCategory) report.categories[step.missedCategory].score = 0.5;
         writeFileSync(
           join(lhci, `lhr-${calls}${String(i).padStart(4, "0")}-${i}.json`),
-          JSON.stringify(lhr(url, deployed)),
+          JSON.stringify(report),
         );
+        return report;
       });
       for (const route of new Set(step.urls.map(routeOf))) {
         const slug = route === "/" ? "root" : route.replaceAll("/", "_");
@@ -531,6 +537,12 @@ async function selftest() {
           join(qdir, `${slug}-report.json`),
           JSON.stringify(lhr(`https://h${route}`, deployed)),
         );
+      }
+      if (step.missedCategory) {
+        const results = getAllAssertionResults(assertConfig, reports);
+        writeFileSync(join(lhci, "assertion-results.json"), JSON.stringify(results));
+        const failed = results.some((result) => !result.passed && result.level === "error");
+        return { exitCode: failed ? 1 : 0, output: failed ? ASSERT_FAILURE_MARKER : "" };
       }
       const marker = step.assertFailed ? `\n${ASSERT_FAILURE_MARKER}\n` : "";
       return {
@@ -561,6 +573,36 @@ async function selftest() {
     assert.equal(code, 0);
     assert.equal(calls, 1);
     assert.equal(loadCollectedLhrs(join(caseDir, ".lighthouseci")).length, 24);
+  }
+  // Full evidence never retries: only a desktop performance miss is advisory.
+  for (const [category, severity] of [
+    ["performance", "warn"],
+    ["accessibility", "error"],
+    ["best-practices", "error"],
+    ["seo", "error"],
+  ]) {
+    const { code, calls, caseDir } = await runCase([
+      { urls: fixtureUrls, missedCategory: category },
+    ]);
+    try {
+      assert.equal(code, severity === "warn" ? 0 : 1, category);
+      assert.equal(calls, 1);
+      const results = JSON.parse(
+        readFileSync(join(caseDir, ".lighthouseci", "assertion-results.json"), "utf8"),
+      );
+      assert.ok(
+        results.some(
+          (r) =>
+            r.auditId === "categories" &&
+            r.auditProperty === category &&
+            !r.passed &&
+            r.level === severity,
+        ),
+        `assertion-results.json must retain the ${category} ${severity}`,
+      );
+    } finally {
+      rmSync(caseDir, { recursive: true, force: true });
+    }
   }
   // Stale evidence from an earlier invocation never counts: a leftover
   // mobile-run LHR plus old quality reports are cleared before attempt 1.

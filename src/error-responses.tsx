@@ -1,5 +1,4 @@
 import type { Context } from "hono";
-import { accepts } from "hono/accepts";
 import { adminWayBack } from "./admin-wayback";
 import { alertRequestError } from "./alerts";
 import { isDatabaseUnavailable } from "./db/errors";
@@ -15,6 +14,7 @@ import {
   RateLimitedPage,
 } from "./error-pages";
 import type { SuggestedEvent } from "./events/suggestions";
+import { negotiateErrorAccept } from "./http/accepts";
 import { inviteDestination } from "./invite";
 import {
   bufferedMemberHtml,
@@ -148,61 +148,8 @@ function jsonOnlyEventRequest(c: Context): boolean {
   return false;
 }
 
-interface NegotiatedErrorSelection {
-  type: string;
-  htmlQ: number;
-  htmlExact: boolean;
-}
-
-// Shared quality/specificity selector for the supported error representations.
-// The most specific range determines each representation's quality, including
-// q=0 exclusions; only then compare the supported responses. Returns the
-// selected representation plus the text/html candidate's own quality and
-// whether an exact text/html range matched, so explicit-opt-in checks reuse the
-// same parsed qualities instead of treating the all-q=0 default as a preference.
-function negotiatedErrorSelection(c: Context): NegotiatedErrorSelection {
-  const acceptHeader = c.req.header("Accept");
-  if (!acceptHeader) {
-    return { type: "text/html", htmlQ: 0, htmlExact: false };
-  }
-  return accepts(c, {
-    header: "Accept",
-    supports: ["text/html", "application/json"],
-    default: "text/html",
-    match: (ranges, config) => {
-      // The most specific range determines each representation's quality,
-      // including q=0 exclusions; only then compare the supported responses.
-      const candidates = config.supports.map((type) => {
-        let specificity = -1;
-        let q = 0;
-        let order = ranges.length;
-        ranges.forEach((range, index) => {
-          const media = range.type.toLowerCase();
-          const rank =
-            media === type ? 2 : media === `${type.split("/")[0]}/*` ? 1 : media === "*/*" ? 0 : -1;
-          if (rank > specificity) {
-            specificity = rank;
-            q = range.q;
-            order = index;
-          }
-        });
-        return { type, q, specificity, order };
-      });
-      candidates.sort((a, b) => b.q - a.q || b.specificity - a.specificity || a.order - b.order);
-      const preferred = candidates[0]!;
-      const selected = preferred.q > 0 ? preferred.type : config.default;
-      const html = candidates.find((candidate) => candidate.type === "text/html")!;
-      return {
-        type: selected,
-        htmlQ: html.q,
-        htmlExact: html.specificity === 2,
-      } as unknown as string;
-    },
-  }) as unknown as NegotiatedErrorSelection;
-}
-
 export function outageRepresentation(c: Context): string {
-  return negotiatedErrorSelection(c).type;
+  return negotiateErrorAccept(c.req.header("Accept")).type;
 }
 
 // Existing machine refusals keep their exact bytes unless a browser explicitly
@@ -213,8 +160,7 @@ export function prefersHtmlError(c: Context): boolean {
   if (jsonOnlyEventRequest(c) || c.req.path.startsWith("/api/") || isFeedErrorPath(c.req.path)) {
     return false;
   }
-  const selection = negotiatedErrorSelection(c);
-  return selection.htmlExact && selection.htmlQ > 0 && selection.type === "text/html";
+  return negotiateErrorAccept(c.req.header("Accept")).prefersHtml;
 }
 
 // Static upload-refusal messages, shared by the generic envelopes and the
