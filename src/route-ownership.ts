@@ -53,7 +53,7 @@ export interface OwnedRoute {
   // Native rendering stays off until explicitly enabled.
   enabled: boolean;
   reads?: RouteReads;
-  // A staging opt-in for the document only; no implicit HEAD or Kit data route.
+  // An exact-origin staging document opt-in; no implicit HEAD or Kit data route.
   documentGetOnly?: true;
 }
 
@@ -504,8 +504,9 @@ function enabledRouteFor(
   const best = bestMatch(normalized, candidates);
   if (!best?.enabled) return undefined;
   if (best.documentGetOnly) {
-    const documentPath = originalUrl ? new URL(originalUrl).pathname : decision.path;
-    if (upper !== "GET" || documentPath !== best.path) return undefined;
+    const documentUrl = originalUrl ? new URL(originalUrl) : undefined;
+    if (documentUrl && documentUrl.origin !== STAGING_APP_URL) return undefined;
+    if (upper !== "GET" || (documentUrl?.pathname ?? decision.path) !== best.path) return undefined;
   }
   return best;
 }
@@ -517,8 +518,8 @@ export function resolveRouteOwner(
   return enabledRouteFor(decision, manifest) ? "kit" : "hono";
 }
 
-// Hook entry point: pure function of method + path. Reads nothing else, so the
-// body is still unread and the URL (query included) is intact for the owner.
+// Hook entry point: checks the method and URL, leaving the body unread and
+// the original URL (query included) intact for the owner.
 export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST, url?: URL) {
   // Kit has already stripped a literal data suffix from event.url. Do not
   // strip again: an encoded suffix is not a Kit data request.
@@ -526,7 +527,7 @@ export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MAN
     { method: request.method, path: (url ?? new URL(request.url)).pathname },
     manifest,
     !url,
-    url ? request.url : undefined,
+    request.url,
   );
 }
 

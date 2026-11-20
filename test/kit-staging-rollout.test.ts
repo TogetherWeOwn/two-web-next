@@ -64,11 +64,17 @@ function stagingDeps(flags: RolloutFlags = {}) {
 async function dispatchAt(
   path: string,
   flags: RolloutFlags = {},
-  { appUrl = STAGING_APP_URL, method = "GET", pagePath = path } = {},
+  {
+    appUrl = STAGING_APP_URL,
+    method = "GET",
+    pagePath = path,
+    requestOrigin,
+  }: { appUrl?: string; method?: string; pagePath?: string; requestOrigin?: string } = {},
 ) {
-  const requestUrl = new URL(path, appUrl);
+  const origin = requestOrigin ?? appUrl;
+  const requestUrl = new URL(path, origin);
   const request = new Request(requestUrl, { method, headers: { host: requestUrl.host } });
-  const event = { request, url: new URL(pagePath, appUrl), route: { id: pagePath } };
+  const event = { request, url: new URL(pagePath, origin), route: { id: pagePath } };
   const deps = { ...stagingDeps(flags), appUrl };
   const response = await dispatchHookRequest(event, deps);
   return { deps, response };
@@ -196,6 +202,8 @@ describe("Kit staging route rollout", () => {
       [{ archive: "true", static: "yes" }, {}],
       [{ archive: "true", static: "false" }, {}],
       [ARCHIVE_STATIC, { appUrl: "https://togetherweown.com" }],
+      [ARCHIVE_STATIC, { requestOrigin: STAGING_APP_URL.replace("https:", "http:") }],
+      [ARCHIVE_STATIC, { requestOrigin: `${STAGING_APP_URL}:8443` }],
       [ARCHIVE_STATIC, { method: "HEAD" }],
       [ARCHIVE_STATIC, { method: "POST" }],
       [ARCHIVE_STATIC, { method: "OPTIONS" }],
