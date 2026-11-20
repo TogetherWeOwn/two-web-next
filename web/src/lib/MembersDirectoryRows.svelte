@@ -43,7 +43,7 @@ const arcs = [
   li {
     position: relative;
     display: grid;
-    grid-template-columns: var(--two-size-avatar-lg) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 150px) auto;
+    grid-template-columns: var(--two-size-avatar-lg) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 0.75fr) 5.5rem;
     align-items: center;
     gap: var(--space-4);
     min-height: var(--two-size-row-calm);
