@@ -144,10 +144,11 @@ In `browser-smoke`, after the seed and before any browser journey mutates
 shared state, the dedicated `events-index.visual.spec.ts` captures the Kit
 `/events` page. Kit dependencies/build and this visual run precede the Hono
 visual suite and critical browser journeys. The full `parity.spec.ts` run stays
-after the critical journeys; it spends one shared QA login and writes then
-withdraws one RSVP on the seeded event. This ordering keeps both visual suites
-on the clean seed state. The parity run is followed by
-`node ci/check-kit-parity.mjs` (loud ledger).
+after the critical journeys. Each parity worker spends one shared QA login and
+inserts one ranking RSVP in the disposable test database before the first
+cache-settling read. Teardown deletes only that worker's inserted row. This
+ordering keeps both visual suites on the clean seed state. The parity run is
+followed by `node ci/check-kit-parity.mjs` (loud ledger).
 
 One baseline integrator owns `e2e/visual/__screenshots__/` and
 `e2e/visual/__screenshots-kit__/`: parallel migration cards never commit

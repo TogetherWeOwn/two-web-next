@@ -9,6 +9,7 @@ import {
 import postgres from "postgres";
 import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
+import { QA_IDENTITIES } from "../../src/qa";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
   expectedKitMarker,
@@ -37,7 +38,7 @@ import { postParityQaLogin } from "./parity-qa-login.mjs";
 // targets (re-signed for the Kit fixture's own secret) — the token and
 // cookie values never appear in assertions or artifacts, and every body
 // is scrubbed. The journey also makes its viewer the board's one ranked
-// member with a single going RSVP on the seeded event, withdrawn in
+// member with a single going RSVP on the seeded event, deleted in
 // afterAll: no earlier journey leaves a going RSVP behind, so without it
 // both boards render their empty state and ranked content is unprovable.
 // Login journeys (member RSVP, moderator admin, profile edit) stay Hono-only
@@ -60,20 +61,14 @@ test.beforeAll(async ({ playwright }) => {
       }),
     );
   }
-  // Ranked RSVP before the first cache-settling read: anonymous /events
-  // entries are isolate-local (src/events/anon-cache.ts) and the RSVP PUT
-  // retires only the Hono isolate, so establishing the going RSVP here means
-  // every guest entry settled later on either isolate already carries
-  // count=1. This spends the journey's one memoized QA login early; the
-  // afterAll withdrawal and the exactly-one-login assertion are unchanged.
-  await memberGoingRsvp();
-  // Leave the shared jar guest-clean: the QA login above stores its session
-  // cookie in the Hono context, and every later api(hono) call would send
-  // it — turning the guest-contract tests (public cache-control on /events,
-  // the 302 member-board bounce) into member reads. Recreate the context
-  // instead: the memoized pair stays live (the RSVP PUT never rotates), so
-  // later memberCookie() calls replay it explicitly with no second login.
   const hono = targets.find((target) => target.name === "hono")!;
+  await memberCookie(hono);
+  // Seed the ranked count before the first cache-settling read on either
+  // isolate (src/events/anon-cache.ts).
+  await memberGoingRsvp();
+  // The QA login above populates the Hono jar. Recreate that context so
+  // subsequent guest requests stay anonymous; member requests replay the
+  // memoized cookie explicitly without another login.
   await contexts.get(hono.name)!.dispose();
   contexts.set(
     hono.name,
@@ -86,14 +81,12 @@ test.beforeAll(async ({ playwright }) => {
 
 test.afterAll(async () => {
   try {
-    // Undo the journey's one ranked RSVP while its Hono context is alive,
-    // so the seeded event is left exactly as the earlier journeys left it.
-    if (memberRsvpCreated) {
-      const hono = targets.find((target) => target.name === "hono")!;
-      const withdrawn = await api(hono).delete(`/events/${SEEDED_EVENT_KEY}/rsvp`, {
-        headers: { cookie: await memberCookie(hono), Origin: "https://localhost:8787" },
+    const id = memberRsvpId;
+    if (id !== null) {
+      await withSessionDb(async (sql) => {
+        const deleted = await sql`delete from rsvps where id = ${id} returning id`;
+        expect(deleted, "worker's ranked RSVP deleted").toHaveLength(1);
       });
-      expect(withdrawn.status(), "ranked RSVP withdrawn").toBe(204);
     }
   } finally {
     for (const context of contexts.values()) await context.dispose();
@@ -271,25 +264,26 @@ async function sessionCount(): Promise<number> {
 // The board's one ranked member: the QA viewer answers going to the seeded
 // published event (e2e/seed.mjs, "E2E Community Night", 2099, no game).
 // Earlier journeys withdraw or cancel every going RSVP they create, so
-// this idempotent write — memoized within a worker, replayed after a restart,
-// and withdrawn in afterAll — gives both renderers a ranked row to serve.
+// a worker inserts and owns this fixture row, without spending the RSVP
+// limiter budget reserved for the journeys. A restarted worker seeds anew.
 // Its 2099 start and missing game also pin the season=2026 and activity=valheim
 // views to their empty state below.
 const SEEDED_EVENT_KEY = "01J00000000000000000000001";
-let memberRsvpCreated = false;
+let memberRsvpId: number | null = null;
 let memberRsvpPromise: Promise<void> | null = null;
 function memberGoingRsvp(): Promise<void> {
-  memberRsvpPromise ??= (async () => {
-    const hono = targets.find((target) => target.name === "hono")!;
-    const response = await api(hono).put(`/events/${SEEDED_EVENT_KEY}/rsvp`, {
-      headers: { cookie: await memberCookie(hono), Origin: "https://localhost:8787" },
-      data: { status: "going" },
-    });
-    expect([200, 201], "ranked RSVP created or refreshed").toContain(response.status());
-    memberRsvpCreated = true;
-    const body = (await response.json()) as { data?: { status?: string } };
-    expect(body.data?.status, "ranked RSVP holds a seat, not the waitlist").toBe("going");
-  })().catch((error: unknown) => {
+  memberRsvpPromise ??= withSessionDb(async (sql) => {
+    const rows = await sql<{ id: number; status: string }[]>`
+      insert into rsvps (event_id, user_id, status)
+      select id, ${QA_IDENTITIES["qa-member"]!.discordId}, 'going'
+      from events where event_key = ${SEEDED_EVENT_KEY}
+      on conflict (event_id, user_id) do nothing
+      returning id, status`;
+    const [inserted] = rows;
+    memberRsvpId = inserted?.id ?? null;
+    expect(rows, "worker inserted its ranked RSVP without replacing another row").toHaveLength(1);
+    expect(inserted?.status, "ranked RSVP holds a seat, not the waitlist").toBe("going");
+  }).catch((error: unknown) => {
     memberRsvpPromise = null;
     throw error;
   });
