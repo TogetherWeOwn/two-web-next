@@ -389,15 +389,30 @@ binding isolation before any remote mutation.
    verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
    to an unauthenticated GET that does not follow redirects. After changing the
    variable to `events`, confirm the next normal deploy passes
-   `node ci/staging-kit-route-check.mjs /events`. Once `GET /` is enabled in
-   the route manifest, use `events-home` to keep `/events` on Kit while adding
-   `/` (`home` alone would turn `/events` off). If `GET /join` is enabled
-   before `GET /`, use `events-join` instead (`join` alone would turn
-   `/events` off). Use `ember-pages` only once all three GET entries are
-   enabled. Never use `ember-pages` to work around a disabled manifest
-   entry; the selection refuses it. Set the variable to `hono` or
-   remove it to restore Hono on subsequent automatic deploys. Missing or
-   malformed flags fail closed to Hono.
+   `node ci/staging-kit-route-check.mjs /events`.
+
+   Before changing the persistent variable, verify that the target `main`
+   revision contains both the selector for the new family and the cutovers
+   that enable its GET entries in the route manifest. For a family that adds
+   `/`, that includes the home cutover. Wait for older automatic staging
+   deploys to finish, including any still waiting for their `main` CI runs.
+   Automatic deploys check out the triggering CI SHA but read the current
+   staging variable at deploy time. An older selector can treat a new family
+   as unknown and send `/events` back to Hono.
+
+   - **Home first:** from `events`, select `events-home` when `GET /events`
+     and `GET /` are enabled. Switch to `ember-pages` once `GET /join` is
+     also enabled.
+   - **Join first:** from `events`, select `events-join` when `GET /events`
+     and `GET /join` are enabled. Once all three GET entries are enabled,
+     go straight from `events-join` to `ember-pages`; `events-home` would
+     send `/join` back to Hono.
+
+   Do not use `home` or `join` alone to add a route to `events`; either would
+   turn Kit off for `/events`. Never use `ember-pages` to work around a
+   disabled manifest entry; the selection refuses it. Set the variable to
+   `hono` or remove it to restore Hono on subsequent automatic deploys.
+   Missing or malformed flags fail closed to Hono.
 
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
    ([smoke checker](../bin/smoke.mjs)), covering 24 public routes: `/up`
