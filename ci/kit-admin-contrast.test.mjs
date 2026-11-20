@@ -16,6 +16,8 @@ import { resolveKitEventEdit } from "../src/admin/kit-event-edit.ts";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit.ts";
 import { EventFormPage, FeaturedFormPage } from "../src/admin/pages.tsx";
 import { EventEditableFields } from "../src/admin/pages/event-editable-fields.tsx";
+import { parseRecurrenceForm } from "../src/admin/recurrence.ts";
+import { parseEventForm, ValidationError } from "../src/admin/validation.ts";
 
 const output = resolve("web/.svelte-kit/output");
 const evidence = process.env.KIT_ADMIN_CONTRAST_EVIDENCE_DIR;
@@ -25,11 +27,41 @@ const createDetails = {
   join_url: "https://example.com/lobby",
   join_instructions: "Use the public lobby.\nAsk the host for the next game.",
 };
-const createErrors = {
-  organizer_name: "Keep the organizer name to 500 characters.",
-  join_url: "Enter a valid public HTTP or HTTPS link without sign-in credentials.",
-  join_instructions: "Keep joining instructions to 5000 characters.",
+// Rejected submissions: the shipped parsers decide the errors, so the
+// invalid fixtures render what a moderator sees after a real 422.
+const createRejected = {
+  title: "Game night",
+  starts_at: "2026-11-04 20:00",
+  ends_at: "2026-11-04 22:00",
+  timezone: "Europe/London",
+  accessibility_notes: "Step-free entrance. ".repeat(55).trim(),
+  organizer_name: "Riley & friends ".repeat(35).trim(),
+  join_url: "lobby.example.com/join",
+  join_instructions: "Use the public lobby. ".repeat(240).trim(),
+  recurrence_frequency: "weekly",
+  recurrence_count: "53",
 };
+const editRejectedTitle = "Game night moved to the big room ".repeat(4).trim();
+
+/** Field errors from the shipped parsers, merged as the create route does. */
+function rejectedFields(values, ...parsers) {
+  const fields = {};
+  for (const parse of parsers) {
+    try {
+      parse(values);
+    } catch (err) {
+      if (!(err instanceof ValidationError)) throw err;
+      Object.assign(fields, err.fields);
+    }
+  }
+  return fields;
+}
+const createErrors = rejectedFields(createRejected, parseEventForm, parseRecurrenceForm);
+assert.deepEqual(
+  Object.keys(createErrors).sort(),
+  ["accessibility_notes", "join_instructions", "join_url", "organizer_name", "recurrence_count"],
+  "the rejected create submission fails exactly the fields the fixture exercises",
+);
 let scratch;
 let browser;
 let server;
@@ -88,6 +120,10 @@ before(async () => {
     },
   );
   assert.equal(populatedEvent.kind, "ok");
+  // The rejected edit keeps the saved heading; the form echoes the submission.
+  const editRejected = { ...event.view.values, title: editRejectedTitle };
+  const editErrors = rejectedFields(editRejected, parseEventForm);
+  assert.deepEqual(Object.keys(editErrors), ["title"], "only the title is rejected");
   fixtures = [
     { name: "event-new", path: "/admin/events/new", data: buildEventCreateView() },
     {
@@ -98,14 +134,7 @@ before(async () => {
     {
       name: "event-new-invalid",
       path: "/admin/events/new",
-      data: buildEventCreateView(
-        { accessibility_notes: "Step-free entrance.", ...createDetails },
-        {
-          ...createErrors,
-          accessibility_notes: "Accessibility notes are too long.",
-          recurrence_count: "Occurrences must be between 1 and 52.",
-        },
-      ),
+      data: buildEventCreateView(createRejected, createErrors),
     },
     {
       name: "event-edit-populated",
@@ -134,14 +163,10 @@ before(async () => {
       data: {
         view: {
           ...event.view,
-          errors: { title: "Title is required." },
+          values: editRejected,
+          errors: editErrors,
           hasErrors: true,
-          fieldsHtml: String(
-            EventEditableFields({
-              values: event.view.values,
-              errors: { title: "Title is required." },
-            }),
-          ),
+          fieldsHtml: String(EventEditableFields({ values: editRejected, errors: editErrors })),
         },
       },
     },
@@ -299,9 +324,14 @@ describe("Kit admin contrast", () => {
             assert.equal(await page.locator("fieldset label").count(), 3);
             const notes = page.locator("#f-accessibility-notes");
             assert.equal(await notes.count(), 1);
+            const submitted = name === "event-new-invalid" ? createRejected : createDetails;
             assert.equal(
               await notes.inputValue(),
-              name === "event-new" || isTextLimit ? "" : "Step-free entrance.",
+              name === "event-new" || isTextLimit
+                ? ""
+                : name === "event-new-invalid"
+                  ? createRejected.accessibility_notes
+                  : "Step-free entrance.",
             );
             if (isTextLimit) {
               const error = page.locator("#f-accessibility-notes-limit-error");
@@ -314,12 +344,12 @@ describe("Kit admin contrast", () => {
               assert.equal(await error.isVisible(), true);
               assert.equal(await notes.getAttribute("aria-invalid"), "true");
             }
-            for (const [field, value] of Object.entries(createDetails)) {
+            for (const field of Object.keys(createDetails)) {
               const id = `f-${field.replaceAll("_", "-")}`;
               const control = page.locator(`#${id}`);
               assert.equal(
                 await control.inputValue(),
-                name === "event-new" || isTextLimit ? "" : value,
+                name === "event-new" || isTextLimit ? "" : submitted[field],
               );
               if (isTextLimit) {
                 await control.press("Shift+Tab");
@@ -348,7 +378,11 @@ describe("Kit admin contrast", () => {
               );
               assert.equal(
                 (await page.locator("#f-accessibility-notes-error").textContent()).trim(),
-                "Accessibility notes are too long.",
+                createErrors.accessibility_notes,
+              );
+              assert.equal(
+                await page.locator("#f-recurrence-count").inputValue(),
+                createRejected.recurrence_count,
               );
               assert.equal(await page.locator("fieldset #f-recurrence-count-error").count(), 1);
             }
@@ -358,6 +392,16 @@ describe("Kit admin contrast", () => {
           if (name === "event-edit-invalid") {
             assert.equal(await page.locator("#f-title-error").count(), 1);
             assert.equal(await summary.locator('a[href="#f-title"]').count(), 1);
+            assert.equal(await page.locator("#f-title").inputValue(), editRejectedTitle);
+            assert.equal(
+              (await page.locator("#f-title-error").textContent()).trim(),
+              "Keep the title to 100 characters.",
+            );
+            assert.equal(
+              await page.getByRole("heading", { level: 1, name: "Edit Saved game night" }).count(),
+              1,
+              "the heading keeps the saved title",
+            );
           }
           if (isInvalid) {
             assert.equal(await summary.evaluate((el) => el === document.activeElement), true);
@@ -425,12 +469,8 @@ describe("Kit admin contrast", () => {
             const texts = measured.map((item) => item.text);
             assert.ok(texts.includes("Check the highlighted fields and try again."));
             for (const message of name === "event-new-invalid"
-              ? [
-                  "Accessibility notes are too long.",
-                  "Occurrences must be between 1 and 52.",
-                  ...Object.values(createErrors),
-                ]
-              : ["Title is required."]) {
+              ? Object.values(createErrors)
+              : ["Keep the title to 100 characters."]) {
               assert.ok(texts.includes(message), `${message} is included in the contrast evidence`);
             }
           }
