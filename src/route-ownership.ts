@@ -35,6 +35,7 @@ import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 import { type MemberRead, memberReadResponse } from "./member-reads";
 import { JOIN_RESULT_COOKIE, deleteOpts } from "./return-journey";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
+import { STAGING_STATIC_DOCUMENT_READY } from "./kit-staging-static";
 import { isTrustedHost } from "./trust-hosts";
 
 export type RouteOwner = "kit" | "hono";
@@ -52,6 +53,8 @@ export interface OwnedRoute {
   // Native rendering stays off until explicitly enabled.
   enabled: boolean;
   reads?: RouteReads;
+  // An exact-origin staging document opt-in; no implicit HEAD or Kit data route.
+  documentGetOnly?: true;
 }
 
 export interface RouteDecision {
@@ -60,8 +63,8 @@ export interface RouteDecision {
 }
 
 // The archive page, events list, hot-zone heatmaps, member board and the
-// about/faq, join and recovery leaves render natively; privacy/rules/profile
-// reads and the remaining admin routes stay on Hono pending enablement review.
+// about/faq, join and recovery leaves render natively. Privacy and rules are
+// staging-only opt-ins; profile and the remaining admin routes stay on Hono.
 // Returning an entry to `enabled: false` restores Hono ownership for rollback.
 // Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
@@ -339,11 +342,11 @@ export function fixtureManifestFor(env: {
   return routes;
 }
 
-// Staging Kit starts with every route on Hono. The reviewed deploy workflow
-// may opt into only the exact GET entries listed below, and only if the shared
-// manifest enables them. The staging hostname or any rollout flag selects this
-// restrictive manifest, even with a misconfigured APP_URL. Only the exact
-// staging APP_URL can enable a family; absent or malformed flags keep it off.
+// Staging Kit starts with every route on Hono. The staging hostname or any
+// rollout flag selects this restrictive manifest, even with a misconfigured
+// APP_URL. Only the exact staging APP_URL can enable a family; absent or
+// malformed flags keep it off. Staging-only approvals do not change the
+// shared manifest used outside the rollout.
 export function stagingManifestFor(
   env: {
     APP_URL?: string;
@@ -354,6 +357,7 @@ export function stagingManifestFor(
     KIT_ROUTE_JOIN?: string;
   },
   routes: OwnedRoute[] = ROUTE_MANIFEST,
+  staticDocumentReady = STAGING_STATIC_DOCUMENT_READY,
 ): OwnedRoute[] | undefined {
   let app: URL | undefined;
   try {
@@ -378,6 +382,14 @@ export function stagingManifestFor(
   const homeEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_HOME === "true";
   const joinEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_JOIN === "true";
   return routes.map((entry) => {
+    const documentReady = staticDocumentReady.get(entry.path);
+    if (entry.method === "GET" && documentReady !== undefined) {
+      return {
+        ...entry,
+        enabled: staticEnabled && entry.reads === "public" && documentReady,
+        documentGetOnly: true,
+      };
+    }
     const familyEnabled =
       entry.method === "GET" &&
       ((entry.path === "/events" && eventsEnabled) ||
@@ -481,6 +493,7 @@ function enabledRouteFor(
   decision: RouteDecision,
   manifest: OwnedRoute[],
   stripData = true,
+  originalUrl?: string,
 ): OwnedRoute | undefined {
   const normalized = normalizePath(decision.path, stripData);
   if (normalized === null) return undefined;
@@ -489,7 +502,13 @@ function enabledRouteFor(
   const lookup = upper === "HEAD" ? "GET" : upper;
   const candidates = manifest.filter((entry) => entry.method.toUpperCase() === lookup);
   const best = bestMatch(normalized, candidates);
-  return best?.enabled ? best : undefined;
+  if (!best?.enabled) return undefined;
+  if (best.documentGetOnly) {
+    const documentUrl = originalUrl ? new URL(originalUrl) : undefined;
+    if (documentUrl && documentUrl.origin !== STAGING_APP_URL) return undefined;
+    if (upper !== "GET" || (documentUrl?.pathname ?? decision.path) !== best.path) return undefined;
+  }
+  return best;
 }
 
 export function resolveRouteOwner(
@@ -499,8 +518,8 @@ export function resolveRouteOwner(
   return enabledRouteFor(decision, manifest) ? "kit" : "hono";
 }
 
-// Hook entry point: pure function of method + path. Reads nothing else, so the
-// body is still unread and the URL (query included) is intact for the owner.
+// Hook entry point: checks the method and URL, leaving the body unread and
+// the original URL (query included) intact for the owner.
 export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST, url?: URL) {
   // Kit has already stripped a literal data suffix from event.url. Do not
   // strip again: an encoded suffix is not a Kit data request.
@@ -508,6 +527,7 @@ export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MAN
     { method: request.method, path: (url ?? new URL(request.url)).pathname },
     manifest,
     !url,
+    request.url,
   );
 }
 
