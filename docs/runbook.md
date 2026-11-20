@@ -493,6 +493,19 @@ migration is performed by its selftest.
   Both the shell gate and runner reject non-`main` refs, invalid targets and
   production unless `PRODUCTION_DEPLOY_ENABLED` is exactly `true` (the same
   flag used for production Worker deploys). Leave it unset/false until approved.
+- Only on the protected `production` GitHub Environment, the authorized Operator
+  sets `PRODUCTION_MIGRATION_APPROVED_SHA` to the full lowercase `main` SHA
+  separately approved for the migration. A missing, malformed or different SHA
+  refuses before checkout. Do not set `PRODUCTION_ACCEPTED_SHA` for a migration:
+  that is a separate Worker promotion control. Clear the migration SHA after the
+  authorized operation; clearing it does not revoke a run that already started.
+- On that same Environment, set `PRODUCTION_MIGRATION_IDENTITY_SHA256` to the
+  lowercase SHA-256 hex digest of the exact approved database name in UTF-8,
+  one NUL byte, then the exact existing Postgres migrator role name in UTF-8
+  (no trailing newline). Use approved operator records, not a live probe or
+  the URL login string. Reserve both variable names for this Environment only:
+  keep them absent at repository and organization scope, since the Actions
+  `vars` context does not attest scope. Neither variable is needed in staging.
 - Staging admission hold: `STAGING_MIGRATION_HOLD` must be exactly `false` to
   release any staging migration or staging deploy. Absent, empty, `true` and
   malformed values all hold. Set it as a repository variable
@@ -510,9 +523,8 @@ migration is performed by its selftest.
   PlanetScale staging branch and host (retired Neon endpoints are refused);
   production is PlanetScale Postgres on its own branch
   and host (direct `<id>.pg.psdb.cloud:5432` endpoint — never the
-  pooled `6432` port). The migrate gate pins the staging host and branch id and
-  refuses the production identity in code, so a production URL in the staging
-  secret fails closed. The driver pins port 5432 and enforces
+  pooled `6432` port). The migrate gate pins each target's host and branch id in
+  code, so a URL for the other target fails closed. The driver pins port 5432 and enforces
   certificate-verified TLS (`sslmode=require|verify-full` plus
   `rejectUnauthorized:true` in `migrationClient`), while
   `channel_binding=require|prefer|disable` values are accepted and stripped
@@ -549,6 +561,11 @@ available. The workflow validates migration numbers, then:
    **pre-migration PITR timestamp** and release SHA in the job summary
    **before DDL**. Ledger initialization, canonical Drizzle journal SQL and
    hash/timestamp inserts, and the zero-pending check all run in that transaction.
+   On production, `plan` and `verify` check `current_database()`, `session_user`
+   and `current_user`; `apply` repeats the check on its own transaction before
+   any DDL. The database must match the URL path and approved fingerprint, and
+   both roles must equal the same approved principal. The check reports only
+   match or refusal, not the database or role names.
    Connection loss fails closed, never reconnects mid-apply; the success receipt
    is printed only after commit. URLs and raw database/SQL errors are never printed.
 3. Both `apply` and the final `verify` require **zero pending web migrations**.
