@@ -397,6 +397,7 @@ const PRODUCTION_DOCUMENT_VARY = [
   "Sec-Fetch-Mode",
   "Purpose",
   "Sec-Purpose",
+  "X-Moz",
 ];
 type ProductionRollout = Pick<HookDispatchDeps, "appUrl" | "kitRouteArchive" | "kitRouteStatic">;
 
@@ -425,7 +426,9 @@ export function productionManifestFor(
     !isProductionRolloutPath(requestUrl, deps) ||
     event.url.origin !== PRODUCTION_APP_URL ||
     event.url.pathname !== requestUrl.pathname ||
-    !isKitNoticeDocument(event.request, event.isDataRequest)
+    !isKitNoticeDocument(event.request, event.isDataRequest) ||
+    // Older Firefox sends X-Moz: prefetch without Fetch Metadata.
+    /(?:^|,)\s*prefetch\s*(?:,|$)/i.test(event.request.headers.get("x-moz") ?? "")
   ) {
     return [];
   }
