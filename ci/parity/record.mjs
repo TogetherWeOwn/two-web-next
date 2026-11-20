@@ -118,8 +118,8 @@ function send(port, options, body) {
 async function waitReady(port, child, log) {
   const started = Date.now();
   while (Date.now() - started < 120_000) {
-    if (child.exitCode !== null)
-      throw new Error(`wrangler dev exited (${child.exitCode}):\n${log().slice(-4000)}`);
+    const exit = child.exitCode ?? child.signalCode;
+    if (exit !== null) throw new Error(`wrangler dev exited (${exit}):\n${log().slice(-4000)}`);
     try {
       const res = await send(port, { method: "GET", path: "/__parity/ready" });
       if (res.status === 200) {
@@ -337,8 +337,10 @@ async function recordRun({
     }
     await writeFile(join(out, "index.json"), goldenJson(meta, { shared: packed.shared, coverage }));
   } finally {
-    child.kill("SIGTERM");
-    await new Promise((done) => (child.exitCode !== null ? done() : child.once("exit", done)));
+    if ((child.exitCode ?? child.signalCode) === null) {
+      child.kill("SIGTERM");
+      await new Promise((done) => child.once("exit", done));
+    }
     await rm(scratch, { recursive: true, force: true });
     await clone.end();
     await admin.unsafe(`drop database if exists ${runDb} with (force)`);

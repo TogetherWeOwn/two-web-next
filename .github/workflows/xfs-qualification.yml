@@ -127,7 +127,7 @@ jobs:
         run: |
           mkdir -p artifacts/production-kit-parity
           result=0
-          bash ci/xfs-qualification-fixture.sh node --import tsx ci/parity/production.mjs \
+          bash ci/xfs-qualification-fixture.sh node --import tsx ci/parity/production.mjs 2>&1 \
             | tee artifacts/production-kit-parity/runner.log || result=$?
           grep -Fx 'Fixture mounts and backing file removed' artifacts/production-kit-parity/runner.log
           exit "$result"

@@ -22,7 +22,7 @@ import {
   normalizeSetCookie,
 } from "./normalize.mjs";
 import { readWranglerConfig } from "../wrangler-config.mjs";
-import { comparePreHookAssets, productionTargets } from "./production.mjs";
+import { assertFixtureAdmission, comparePreHookAssets, productionTargets } from "./production.mjs";
 import { signedCookieNames } from "./signed-cookies.mjs";
 import { buildVectors, concretePath, listPublicFiles, slug } from "./vectors.mjs";
 
@@ -56,27 +56,47 @@ test("production replay refuses missing/on flags, mismatched origin and wrong ou
     /production origin/,
   );
   assert.throws(() => productionTargets(root, { ...kit, main: "stock.js" }), /_worker\.js/);
+  const overrides = [{ main: "other.ts" }, { assets: { ...root.assets, directory: "other" } }];
+  for (const override of overrides) {
+    const production = { ...root.env.production, ...override };
+    assert.throws(() => productionTargets({ ...root, env: { production } }, kit), /Hono/);
+  }
 });
 
-test("pre-hook assets require GET and HEAD, success and present security headers", () => {
+test("production replay rejects matching but wrongly denied writes", () => {
+  const dir = join(repo, "test/fixtures/parity");
+  const golden = readdirSync(dir).find((name) => name.startsWith("hono-"));
+  const recording = loadRecording(join(dir, golden));
+  assertFixtureAdmission(recording, "control");
+  recording.get("routes/logout").POST.response.status = 403;
+  assert.equal(compareRecordings(recording, structuredClone(recording)).failures.length, 0);
+  assert.throws(() => assertFixtureAdmission(recording, "control"), /routes\/logout#POST/);
+});
+
+test("pre-hook assets require GET/HEAD, exact 304, no cookies and the reviewed static CSP", () => {
   const path = "/_app/version.json";
   const name = "content-security-policy";
-  const row = (status, headers) => ({ response: { status, headers } });
-  const safe = { [name]: "default-src 'self'" };
+  const csp = "img-src 'self' https://cdn.discordapp.com";
+  const safe = { [name]: csp, "x-frame-options": "DENY" };
+  const dynamic = { ...safe, [name]: `${csp} https://example.org` };
+  const row = (status, headers = safe, setCookies = []) => ({
+    response: { status, headers, setCookies },
+  });
   const recording = (vectors) => new Map([[`static/${slug(path)}`, vectors]]);
-  const hono = recording({ GET: row(404, safe), HEAD: row(404, safe) });
-  const good = recording({ GET: row(200, safe), HEAD: row(200, safe) });
-  assert.equal(comparePreHookAssets(hono, good, [path], [name]).failures.length, 0);
-  const bad = recording({ GET: row(404, {}) });
+  const exact = "GET if-none-match:exact";
+  const miss = row(404, dynamic);
+  const hono = recording({ GET: miss, HEAD: miss, [exact]: miss });
+  const compare = (vectors) =>
+    comparePreHookAssets(hono, recording(vectors), [path], Object.keys(safe), csp);
+  assert.equal(compare({ GET: row(200), HEAD: row(200), [exact]: row(304) }).failures.length, 0);
+  const bad = { GET: row(404, {}), [exact]: row(200, dynamic, ["fixture"]) };
+  const fields = ["status", `headers.${name}`, "headers.x-frame-options", "missing"];
   assert.deepEqual(
-    comparePreHookAssets(hono, bad, [path], [name]).failures.map(({ field }) => field),
-    ["status", `headers.${name}`, "missing"],
+    compare(bad).failures.map(({ field }) => field),
+    [...fields, "status", "setCookies", `headers.${name}`],
   );
-  const missingOnBoth = recording({ GET: row(200, {}), HEAD: row(200, {}) });
-  assert.equal(
-    comparePreHookAssets(missingOnBoth, missingOnBoth, [path], [name]).failures.length,
-    2,
-  );
+  delete dynamic[name];
+  assert.equal(compare(bad).failures.at(-1)?.field, `headers.${name}`);
 });
 
 const inventory = JSON.parse(
