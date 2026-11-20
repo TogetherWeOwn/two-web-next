@@ -1,5 +1,5 @@
-import { expect, test, type Browser } from "@playwright/test";
-import { expectedKitMarker, KIT_ORIGIN, parityTargets } from "../kit-parity";
+import { type Browser, expect, type Page, test } from "@playwright/test";
+import { KIT_ORIGIN, PARITY_VIEWPORTS, parityTargets } from "../kit-parity";
 
 const targets = parityTargets();
 const AUTHORIZE_URL = "https://discord.com/oauth2/authorize";
@@ -25,6 +25,24 @@ async function isolatedPage(browser: Browser, target: (typeof targets)[number]) 
   return context;
 }
 
+// Resize the rendered response rather than reloading: callback state and the
+// confirmation are both single-use. The artifact names name the actual renderer.
+async function captureJoin(page: Page, state: string) {
+  for (const { name, size } of PARITY_VIEWPORTS) {
+    await page.setViewportSize(size);
+    if (state === "kit-guest" && name === "mobile") {
+      const lede = await page.locator(".join-lede").boundingBox();
+      const card = await page.locator(".join-lede + .join-card").boundingBox();
+      if (!lede || !card) throw new Error("The mobile Join card must follow the lede.");
+      expect(card.y).toBeGreaterThanOrEqual(lede.y + lede.height);
+    }
+    const label = `kit-review-join-${state}-${name}`;
+    const path = test.info().outputPath(`${label}.png`);
+    await page.screenshot({ path, animations: "disabled", scale: "css" });
+    await test.info().attach(label, { path, contentType: "image/png" });
+  }
+}
+
 for (const target of targets) {
   test(`${target.name}: guest join CTA enters the Hono-owned OAuth flow`, async ({ browser }) => {
     const context = await isolatedPage(browser, target);
@@ -33,14 +51,22 @@ for (const target of targets) {
       const oauthResponse = page.waitForResponse(
         (response) => new URL(response.url()).pathname === "/join/discord",
       );
-      const landing = await page.goto(`${target.origin}/join`);
+      const returnTo = "/join?source=home";
+      const landing = await page.goto(`/join?next=${encodeURIComponent(returnTo)}`);
       expect(landing?.status()).toBe(200);
+      expect(landing?.headers()["x-two-renderer"] ?? null).toBe(
+        target.name === "kit" ? "kit" : null,
+      );
       await expect(page.getByText("Welcome, guest")).toBeVisible();
       await expect(page.getByText("Sign out")).toHaveCount(0);
 
       const cta = page.getByTestId("join-oneclick");
       await expect(cta).toBeVisible();
-      expect(await cta.getAttribute("href")).toBe("/join/discord");
+      await expect(cta).toHaveAttribute(
+        "href",
+        `/join/discord?next=${encodeURIComponent(returnTo)}`,
+      );
+      await captureJoin(page, `${target.name}-guest`);
       await cta.click();
       const oauth = await oauthResponse;
       expect(oauth.status()).toBe(302);
@@ -50,10 +76,39 @@ for (const target of targets) {
       const authorize = new URL(location!);
       expect(authorize.origin + authorize.pathname).toBe(AUTHORIZE_URL);
       expect(authorize.searchParams.get("scope")).toBe("identify guilds.join");
-      expect(authorize.searchParams.get("state")).toBeTruthy();
+      const state = authorize.searchParams.get("state");
+      expect(state).toBeTruthy();
       expect((await context.cookies()).some((cookie) => cookie.name === "__Host-two_session")).toBe(
         false,
       );
+
+      // The worker's existing Discord stub reports an existing guild member.
+      // Use the real state and browser cookie jar, without contacting Discord.
+      const callbackResponse = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === "/join/callback",
+      );
+      const query = new URLSearchParams({ code: "e2e-code", state: state! });
+      const returned = await page.goto(`/join/callback?${query}`);
+      const callback = await callbackResponse;
+      expect(callback.status()).toBe(302);
+      expect(callback.headers()["x-two-renderer"] ?? null).toBeNull();
+      expect(callback.headers().location).toBe(returnTo);
+      await expect(page).toHaveURL(`${target.origin}${returnTo}`);
+      expect(returned?.status()).toBe(200);
+      expect(returned?.headers()["x-two-renderer"] ?? null).toBe(
+        target.name === "kit" ? "kit" : null,
+      );
+      expect(returned?.headers()["cache-control"]).toMatch(
+        /^(private, no-store|no-store, private)$/,
+      );
+      const status = await context.request.get("/auth/status");
+      expect(status.status()).toBe(200);
+      expect(await status.json()).toEqual({ authenticated: true });
+      await expect(page.getByTestId("join-result")).toContainText("You are already in the server.");
+      await expect(page.getByTestId("reinvite-link")).toHaveAttribute("href", "/discord");
+      if (target.name === "kit") await captureJoin(page, "kit-existing-member");
+      await page.reload();
+      await expect(page.getByTestId("join-result")).toHaveCount(0);
     } finally {
       await context.close();
     }
@@ -70,7 +125,7 @@ for (const target of targets) {
       expect(recovery?.status()).toBe(200);
       expect(recovery?.headers()["cache-control"]).toBe("no-store, private");
       expect(recovery?.headers()["x-two-renderer"] ?? null).toBe(
-        target.name === "kit" ? expectedKitMarker("/auth/recover") : null,
+        target.name === "kit" ? "kit" : null,
       );
       await expect(page.getByRole("heading", { name: "Your session expired" })).toBeVisible();
       await expect(page.getByTestId("recovery-retry")).toHaveAttribute(
@@ -81,6 +136,7 @@ for (const target of targets) {
       expect((await context.cookies()).some((cookie) => cookie.name === "__Host-two_session")).toBe(
         false,
       );
+      await captureJoin(page, `${target.name}-expired-session`);
 
       // Obtain a valid one-use state cookie from the Hono-owned start route,
       // then inject a provider denial. The callback is a failure outcome and
@@ -109,6 +165,7 @@ for (const target of targets) {
       expect((await callback?.allHeaders())?.["set-cookie"] ?? "").not.toContain(
         "__Host-two_session=",
       );
+      if (target.name === "kit") await captureJoin(page, "hono-denied");
 
       // A callback with an unusable one-use state renders the expired outcome,
       // still as a private Hono response with no session issuance.
@@ -148,6 +205,7 @@ for (const target of targets) {
       expect((await blocked?.allHeaders())?.["set-cookie"] ?? "").not.toContain(
         "__Host-two_session=",
       );
+      if (target.name === "kit") await captureJoin(page, "hono-bot-fallback");
 
       // The OAuth token-exchange fixture injects a deterministic upstream
       // outage; it preserves Hono's 503/private response and never signs in.
@@ -171,6 +229,7 @@ for (const target of targets) {
       expect((await outage?.allHeaders())?.["set-cookie"] ?? "").not.toContain(
         "__Host-two_session=",
       );
+      if (target.name === "kit") await captureJoin(page, "hono-oauth-outage");
     } finally {
       await context.close();
     }

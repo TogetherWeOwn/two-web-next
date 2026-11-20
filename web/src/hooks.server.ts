@@ -18,7 +18,7 @@ import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
-import { honoFetch } from "#lib/server/hono.ts";
+import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
 
 // Pure env binding: trust, ownership, decoration, the read-only session
 // bridge and the archive/list/detail/hot-zone guard branches live in the tested core
@@ -63,6 +63,7 @@ export const handle: Handle = async ({ event, resolve }) => {
     // core alone decides when the option is set.
     resolve: (hookEvent, opts) =>
       resolve(hookEvent as Parameters<typeof resolve>[0], opts as Parameters<typeof resolve>[1]),
+    recoveryPage: honoRecoveryFetch,
     pastArchive: (request, render, requestId) =>
       dispatchPastArchiveRequest(request, env, render, undefined, undefined, requestId),
     eventsPage: (request, render, requestId) =>
