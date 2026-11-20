@@ -466,6 +466,12 @@ See the [Worker bundle inventory contract](docs/worker-bundle-inventory.md) for
 artifact names, schemas, conservative package findings and consumer validation.
 CI dry-run inventories alone are not deployment evidence.
 
+[`web/wrangler.production.jsonc`](web/wrangler.production.jsonc) is a source-only
+Kit contract. Do not invoke it for deployment. No workflow or CLI selects it;
+production still uploads the Hono bundle using the root config. Its entry path
+names the generated adapter output and does not prove facade installation or
+qualify Kit for production.
+
 Cutover decision state is recorded in `docs/cutover-gates.md` and the release
 contract in `docs/releases.md`; this section describes the deployment contract,
 not the currently serving version. Worker code reaches production only through
@@ -758,11 +764,10 @@ Squash-merge only; PR titles follow Conventional Commits and the body follows th
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
 `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review` are required
 on the exact head, with no approving review. The final-stage reviewer merges when
-native review stages apply; otherwise the author merges. A merge to `main` reaches
-production, so it needs fresh per-PR exact-head Release Manager confirmation on a
-child card assigned and addressed to the Release Manager. Pin the squash merge to
-that confirmed head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
-for post-merge staging qualification and retained safeguards, and [AGENTS.md](AGENTS.md).
+native review stages apply; otherwise the author merges. Pin the squash merge to
+that reviewed head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
+for the promotion-path PR exception, post-merge staging qualification and
+per-release Release Manager acceptance, and [AGENTS.md](AGENTS.md) for agent guidance.
 
 ## License
 

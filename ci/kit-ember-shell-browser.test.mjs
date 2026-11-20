@@ -135,8 +135,16 @@ test("built Ember shell preserves its landmarks and account states without JavaS
 test("CSR-disabled Kit header supports keyboard, account variants, and a blocked island", {
   timeout: 720_000,
 }, async () => {
-  const options = { page: source, javaScriptEnabled: true, headerMenu: true };
-  await withKitOfflineBrowser(options, async ({ page, html }) => {
+  const states = [
+    ["guest", "?state=guest", 0, "page"],
+    ["member", member, 1, "location"],
+    ["nonmember", "?auth=1", 1, "page"],
+    ["unknown", "?state=member", 0, "location"],
+    ["hidden", "?state=hidden&auth=1", 0, "page"],
+  ];
+  const searches = states.map(([, search]) => search);
+  const options = { page: source, javaScriptEnabled: true, headerMenu: true, searches };
+  await withKitOfflineBrowser(options, async ({ page, html, open }) => {
     const url = page.url();
     const toggle = menu(page);
     const sheet = page.locator(".menu-sheet");
@@ -190,14 +198,8 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     const board = sheet.getByRole("link", { name: "Leaderboard" });
     const account = sheet.getByRole("navigation", { name: "Account" });
     const profile = sheet.getByRole("link", { name: "Profile", exact: true });
-    for (const [name, search, count, current] of [
-      ["guest", "?state=guest", 0, "page"],
-      ["member", member, 1, "location"],
-      ["nonmember", "?auth=1", 1, "page"],
-      ["unknown", "?state=member", 0, "location"],
-      ["hidden", "?state=hidden&auth=1", 0, "page"],
-    ]) {
-      await page.goto(url + search);
+    for (const [name, search, count, current] of states) {
+      await open(search);
       await toggle.click();
       await expect(profile).toHaveCount(Number(name === "member"));
       await expect(sheet.getByRole("button", { name: "Sign out" })).toHaveCount(count);
@@ -213,7 +215,7 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     await expect(sheet).toHaveCSS("animation-name", "none");
     await shot(page, "forced-colors-open-390");
     await page.route(new URL("/islands/site-header-menu.js", url).href, (route) => route.abort());
-    await page.goto(`${url}?state=guest`);
+    await open("?state=guest");
     await menu(page, "link").click();
     await expect(sheet.getByRole("link", { name: "Close menu" })).toBeVisible();
     await expect(inert).toHaveCount(0);

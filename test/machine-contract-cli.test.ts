@@ -33,6 +33,7 @@ describe("standalone machine-contract CLI", () => {
     copyFileSync(join(repo, "package.json"), join(root, "package.json"));
     copyFileSync(join(repo, "tsconfig.json"), join(root, "tsconfig.json"));
     cpSync(join(repo, "src"), join(root, "src"), { recursive: true });
+    cpSync(join(repo, "vendor/design-kit"), join(root, "vendor/design-kit"), { recursive: true });
     symlinkSync(join(repo, "node_modules"), join(root, "node_modules"), "dir");
   });
   afterAll(() => {

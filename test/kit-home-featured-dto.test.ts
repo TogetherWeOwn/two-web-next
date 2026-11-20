@@ -90,12 +90,18 @@ beforeAll(async () => {
       {
         name: "kit-home-featured-dto-env",
         setup(plugin) {
-          plugin.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
-            path: "kit-home-featured-dto-env",
+          plugin.onResolve({ filter: /^(cloudflare:workers|postgres)$/ }, ({ path }) => ({
+            path,
             namespace: "kit-home-featured-dto",
           }));
-          plugin.onLoad({ filter: /.*/, namespace: "kit-home-featured-dto" }, () => ({
-            contents: `export const env = globalThis[${JSON.stringify(ENV_KEY)}];`,
+          plugin.onLoad({ filter: /.*/, namespace: "kit-home-featured-dto" }, ({ path }) => ({
+            contents:
+              path === "postgres"
+                ? `export default () => Object.assign(async (sql) =>
+                    sql.join("").includes("web_v1.live_counts")
+                      ? [globalThis[${JSON.stringify(ENV_KEY)}].TEST_COUNTS_ROW] : [],
+                    { end: async () => {} });`
+                : `export const env = globalThis[${JSON.stringify(ENV_KEY)}];`,
             loader: "js",
           }));
         },
@@ -140,12 +146,15 @@ function featuredRow(id: number, title: string, startsAt: string | null, endsAt:
   return [id, title, `Featured body ${id}`, null, null, null, startsAt, endsAt];
 }
 
-function fixture(featuredRows: unknown[][]) {
+function fixture(featuredRows: unknown[][], options: { failMemberRsvps?: boolean } = {}) {
+  let memberRsvpQueries = 0;
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
   const eventStartsAt = new Date(Date.now() + 3600_000);
   const event = {
     id: 1,
+    eventKey: "game-night-1",
     title: "Game night 1",
+    organizer_name: "Synthetic Host",
     startsAt: eventStartsAt,
     endsAt: new Date(eventStartsAt.getTime() + 7200_000),
   };
@@ -172,7 +181,14 @@ function fixture(featuredRows: unknown[][]) {
     if (sql.includes("set_config")) return { rows: [] };
     if (sql.includes('"timezone"') && !sql.includes('"title"')) return { rows: [] };
     if (sql.includes("discord_event_id") && !sql.includes('"title"')) return { rows: [] };
-    if (sql.includes('from "rsvps"')) return { rows: [] };
+    if (sql.includes('from "rsvps"')) {
+      if (sql.includes('inner join "events"')) {
+        memberRsvpQueries++;
+        if (options.failMemberRsvps) throw new Error("RSVP read failed");
+        return { rows: [[memberLocals.session.userId, event.eventKey, "going", null]] };
+      }
+      return { rows: [] };
+    }
     if (sql.includes('from "events"')) {
       return {
         rows: [
@@ -192,21 +208,69 @@ function fixture(featuredRows: unknown[][]) {
     lastReadFailed: () => false,
   };
   const env = { ...baseEnv, ADMIN_DB: db, DISCORD_EVENTS: discord } as Env;
-  return { db, env, use: () => setSharedEnv(env) };
+  return { db, env, use: () => setSharedEnv(env), memberRsvpQueries: () => memberRsvpQueries };
 }
 
-function loadArgs(): KitHomeLoadArgs {
+function loadArgs(locals: KitHomeLoadArgs["locals"] = { status: "guest" }): KitHomeLoadArgs {
   const url = new URL("https://example.test/");
   return {
     url,
     request: new Request(url, { method: "GET" }),
-    locals: { status: "guest" },
+    locals,
     cookies: { delete: () => {} },
     setHeaders: () => {},
   };
 }
 
+const memberLocals = {
+  status: "authenticated",
+  session: {
+    userId: "123456789012345678",
+    username: "Member",
+    avatar: null,
+    member: true,
+    moderator: false,
+  },
+} satisfies KitHomeLoadArgs["locals"];
+
 describe("Kit home featured DTO: cached shape matches the direct reader", () => {
+  it("loads observed counts for both viewers and keeps host names and RSVPs member-only", async () => {
+    const f = fixture([]);
+    const observedAt = new Date().toISOString();
+    setSharedEnv(
+      Object.assign(f.env, {
+        BOT_DATABASE_URL: "postgres://fixture.test/home-counts",
+        TEST_COUNTS_ROW: { human_member_count: 42, online_count: 0, counts_updated_at: observedAt },
+      }),
+    );
+    const guest = await load(loadArgs());
+    expect(guest.upcomingEvents).toHaveLength(1);
+    expect(JSON.stringify(guest.upcomingEvents)).not.toContain("Synthetic Host");
+    expect(guest.memberRsvps).toEqual([]);
+
+    const member = await load(loadArgs(memberLocals));
+    expect(member.upcomingEvents[0]?.organizer_name).toBe("Synthetic Host");
+    expect(member.memberRsvps).toEqual([
+      { eventKey: "game-night-1", status: "going", syncedToDiscordAt: null },
+    ]);
+    const snapshot = { memberCount: 42, onlineCount: 0, observedAt, stale: false };
+    expect(guest.countsSnapshot).toEqual(snapshot);
+    expect(member.countsSnapshot).toEqual(snapshot);
+    expect(f.memberRsvpQueries()).toBe(1);
+  });
+
+  it("propagates an authenticated member RSVP read failure from the load", async () => {
+    const f = fixture([], { failMemberRsvps: true });
+    f.use();
+    const args = loadArgs({ ...memberLocals, joinResult: "added" });
+    const deleteCookie = vi.fn();
+    args.cookies.delete = deleteCookie;
+
+    await expect(load(args)).rejects.toMatchObject({ cause: { message: "RSVP read failed" } });
+    expect(f.memberRsvpQueries()).toBe(1);
+    expect(deleteCookie).not.toHaveBeenCalled();
+  });
+
   it("serves exactly the six VisibleFeatured fields, equal to listVisibleFeatured", async () => {
     const day = 86_400_000;
     const now = Date.now();
@@ -223,6 +287,9 @@ describe("Kit home featured DTO: cached shape matches the direct reader", () => 
     f.use();
 
     const data = await load(loadArgs());
+    // No bot source is configured: never claim an observed snapshot.
+    expect(data.countsSnapshot).toBeNull();
+    expect(data.memberRsvps).toEqual([]);
     expect(data.featured.map((row) => row.title)).toEqual(["Bounded slot", "Always visible"]);
     for (const row of data.featured) {
       expect(Object.keys(row).sort()).toEqual(DISPLAY_KEYS);

@@ -63,15 +63,29 @@ export function fixedDateBanner(now) {
 // production credentials; an empty `unexpected` only covers routed requests.
 /**
  * `now` (epoch ms) fixes the server clock; `timezoneId` overrides only the browser timezone.
- * @param {{ source?: string, page: string, search?: string, now?: number, javaScriptEnabled?: boolean, timezoneId?: string, headerMenu?: boolean }} input
+ * `searches` opts in extra exact query strings of the same path; `open(search)` navigates to one.
+ * @param {{ source?: string, page: string, search?: string, searches?: string[], now?: number, javaScriptEnabled?: boolean, timezoneId?: string, headerMenu?: boolean }} options
  */
-export async function withKitOfflineBrowser(input, callback) {
-  const { source, page: fixture, search = "", now, javaScriptEnabled = false, timezoneId } = input;
-  if (typeof search !== "string" || (search && !search.startsWith("?")) || search.includes("#")) {
-    throw new Error("Fixture search must be a query string");
+export async function withKitOfflineBrowser(
+  {
+    source,
+    page: fixture,
+    search = "",
+    searches = [],
+    now = undefined,
+    javaScriptEnabled = false,
+    timezoneId,
+    headerMenu = false,
+  },
+  callback,
+) {
+  for (const value of [search, ...searches]) {
+    if (typeof value !== "string" || (value && !value.startsWith("?")) || value.includes("#")) {
+      throw new Error("Fixture search must be a query string");
+    }
   }
   const banner = now === undefined ? undefined : fixedDateBanner(now);
-  const options = { source, page: fixture, csr: javaScriptEnabled && !input.headerMenu };
+  const options = { source, page: fixture, csr: javaScriptEnabled && !headerMenu };
   return withKitBrowserFixture(options, async ({ root, output }) => {
     const entry = join(root, "fixture-server.mjs");
     await build({
@@ -110,11 +124,16 @@ export async function withKitOfflineBrowser(input, callback) {
     const origin = "http://kit-fixture.test";
     const path = "/__browser_fixture__";
     const fixtureUrl = new URL(path + search, origin).href;
-    const respond = (url) =>
-      server.respond(new Request(url), { getClientAddress: () => "127.0.0.1" });
-    const response = await respond(fixtureUrl);
-    assert.equal(response.status, 200);
-    const html = await response.text();
+    const pages = new Map();
+    for (const value of new Set([search, ...searches])) {
+      const href = new URL(path + value, origin).href;
+      const response = await server.respond(new Request(href), {
+        getClientAddress: () => "127.0.0.1",
+      });
+      assert.equal(response.status, 200);
+      pages.set(href, await response.text());
+    }
+    const html = pages.get(fixtureUrl);
     const browser = await chromium.launch({ headless: true });
     try {
       const context = await browser.newContext({
@@ -130,17 +149,17 @@ export async function withKitOfflineBrowser(input, callback) {
       await context.route("**/*", async (route) => {
         const url = new URL(route.request().url());
         if (url.origin === origin && route.request().method() === "GET") {
-          if (url.pathname === path && (url.search === search || input.headerMenu))
+          if (pages.has(url.href))
             return route.fulfill({
               contentType: "text/html",
               headers: { "content-security-policy": "worker-src 'none'; frame-src 'none'" },
-              body: url.href === fixtureUrl ? html : await (await respond(url.href)).text(),
+              body: pages.get(url.href),
             });
           const isAppAsset = url.pathname.startsWith("/_app/");
           const isMenu = url.pathname === "/islands/site-header-menu.js";
           const directory = isAppAsset ? join(output, "client") : join(root, "public");
           const asset = await readFixtureAsset(directory, url.pathname, {
-            allowJavaScript: javaScriptEnabled && (isMenu || (isAppAsset && !input.headerMenu)),
+            allowJavaScript: javaScriptEnabled && (isMenu || (isAppAsset && !headerMenu)),
           });
           if (asset) return route.fulfill(asset);
         }
@@ -150,7 +169,13 @@ export async function withKitOfflineBrowser(input, callback) {
       const page = await context.newPage();
       try {
         await page.goto(fixtureUrl);
-        return await callback({ page, html, unexpected: [...unexpected] });
+        const open = async (value) => {
+          const href = new URL(path + value, origin).href;
+          assert.ok(pages.has(href), `Fixture search not allowlisted: ${value}`);
+          await page.goto(href);
+          return pages.get(href);
+        };
+        return await callback({ page, html, open, unexpected: [...unexpected] });
       } finally {
         await context.close();
         assert.deepEqual(unexpected, []);

@@ -443,16 +443,25 @@ describe("Kit GET /auth/recover markup contract (Recovery shell parity)", () => 
       expect(lib, `missing ${needle}`).toContain(needle);
     }
     // The tab-title site suffix rides SiteMetadata's derivation: a bare model
-    // title through Shell, suffixed once like the Hono RecoveryShell — never
+    // title through SiteMetadata, suffixed once like the Hono RecoveryShell — never
     // a pre-suffixed title prop (which double-suffixed).
     expect(lib).toContain("title={title}");
-    expect(lib).toContain("Shell");
+    expect(lib).toContain('import EmberShell from "#lib/EmberShell.svelte"');
+    expect(lib).toContain("<EmberShell accountChrome={guestChrome}>");
+    expect(lib).toContain('<SiteMetadata title={title} theme="home" />');
     expect(lib).not.toContain("{@html");
     expect(lib).not.toContain("<script src");
     expect(lib).not.toContain("<iframe");
     // The shell renders display copy only: no session, database or network
     // reads merely to offer recovery (same posture as the Hono RecoveryShell).
     expect(lib).not.toMatch(/getSignedCookie|readSession|dbFor|ADMIN_DB|SESSION_STORE|fetch\(/);
+  });
+
+  it("pins the optional support reference markup", () => {
+    expect(lib).toContain('import type { RecoveryModel } from "../../../src/recovery-outcome"');
+    expect(lib).toContain("{#if supportReference}");
+    expect(lib).toContain('data-testid="error-support-reference">{supportReference}</code>');
+    expect(lib).not.toContain("{@html supportReference}");
   });
 
   it("the page binds the whole RecoveryModel, no canonical divergence", () => {

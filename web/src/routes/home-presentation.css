@@ -1,4 +1,8 @@
 /* Kit home presentation; shared Hono sheets remain unchanged. */
+:root .base-theme .counts[data-stale="true"],
+:root .base-theme .counts[data-stale="true"] strong {
+  color: var(--t2);
+}
 :root .base-theme .event-band .home-event-link {
   grid-template-columns: 118px minmax(0, 1fr);
 }

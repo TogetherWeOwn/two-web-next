@@ -1,6 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
-import { resolutionLabel } from "../labels";
+import { resolutionLabel, resolutions } from "../labels";
 import type { PageProps } from "./$types";
 let { data }: PageProps = $props();
 const row = $derived(data.row);
@@ -12,7 +12,7 @@ const row = $derived(data.row);
     <h1 id="reconciliation-heading">{row.verb}</h1>
     {#if !row.resolvedAt}
       <p class="notice">
-        Delivery was not confirmed. Check Discord independently. This page is read-only.
+        Delivery was not confirmed. Check Discord independently before recording a resolution.
       </p>
     {/if}
     <dl>
@@ -34,6 +34,25 @@ const row = $derived(data.row);
     </dl>
     {#if row.resolvedAt}
       <p class="hint">Read-only. Resolved keys stay as audit evidence.</p>
+    {:else}
+      <form method="post" action={`/admin/reconciliation/${encodeURIComponent(row.idempotencyKey)}`}>
+        <div class="field">
+          <label for="reconciliation-resolution">Resolution</label>
+          <select id="reconciliation-resolution" name="resolution" class="reconciliation-focus"
+            aria-describedby="reconciliation-resolution-hint" required>
+            <option value="">Choose a resolution</option>
+            {#each Object.entries(resolutions) as [value, label] (value)}
+              <option {value}>{label}</option>
+            {/each}
+          </select>
+          <p class="hint" id="reconciliation-resolution-hint">
+            Records your conclusion without sending or retrying the change.
+          </p>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn reconciliation-focus">Stamp resolved</button>
+        </div>
+      </form>
     {/if}
   </section>
 </AdminShell>

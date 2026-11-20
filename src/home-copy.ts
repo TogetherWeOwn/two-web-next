@@ -181,9 +181,13 @@ export type HomeResponsePolicyOutput = {
   joinResult: JoinResult | null;
 };
 
+export function homeSessionFor(locals: HomeResponsePolicyLocals): KitSession | null {
+  return locals.status === "authenticated" ? (locals.session ?? null) : null;
+}
+
 /** Session mapping, flash decisions, one-shot consumption and cache policy. */
 export function applyHomeResponsePolicy(input: HomeResponsePolicyInput): HomeResponsePolicyOutput {
-  const session = input.locals.status === "authenticated" ? (input.locals.session ?? null) : null;
+  const session = homeSessionFor(input.locals);
   const flash = input.locals.joinResult ?? null;
   const { sessionUnavailable, notice, joinResult } = resolveHomePageState({
     status: input.locals.status,

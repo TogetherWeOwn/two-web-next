@@ -107,16 +107,16 @@ async function renderHonoRecovery(model: RecoveryModel): Promise<string> {
   return res.text();
 }
 
-/** The opening `<Shell …>` tag of a Svelte lib file. */
-function shellTag(source: string): string {
-  const start = source.indexOf("<Shell");
-  if (start < 0) throw new Error("expected a <Shell> invocation");
+/** The opening tag of the Svelte component that owns the metadata props. */
+function shellTag(source: string, component = "Shell"): string {
+  const start = source.indexOf(`<${component}`);
+  if (start < 0) throw new Error(`expected a <${component}> invocation`);
   const end = source.indexOf(">", start);
-  if (end < 0) throw new Error("expected the <Shell> tag to close");
+  if (end < 0) throw new Error(`expected the <${component}> tag to close`);
   return source.slice(start, end + 1);
 }
 
-/** The value of one Svelte prop inside a `<Shell …>` tag, string or expression. */
+/** The value of one Svelte prop inside the tag, string or expression. */
 function shellProp(tag: string, name: string): string | null {
   const quoted = new RegExp(`${name}="([^"]*)"`).exec(tag)?.[1];
   if (quoted !== undefined) return quoted;
@@ -129,7 +129,7 @@ function shellProp(tag: string, name: string): string | null {
  * the props Recovery.svelte passes. A pre-suffixed title prop double-suffixes.
  */
 function kitRecoveryTitleFor(modelTitle: string): string {
-  const tag = shellTag(recoveryLib);
+  const tag = shellTag(recoveryLib, "SiteMetadata");
   if (tag.includes("exactTitle")) return `${modelTitle} ${SITE_SUFFIX}`;
   const titleProp = shellProp(tag, "title") ?? "";
   if (titleProp.includes("Together We Own")) return `${modelTitle} ${SITE_SUFFIX} ${SITE_SUFFIX}`;
@@ -196,14 +196,14 @@ describe("Kit Recovery titles match Hono byte-for-byte", () => {
     inviteUrl: FALLBACK_INVITE,
   };
 
-  it("passes a bare title to Shell instead of a pre-suffixed one", () => {
-    const titleProp = shellProp(shellTag(recoveryLib), "title");
-    expect(titleProp, "Recovery.svelte <Shell> title prop").not.toBeNull();
+  it("passes a bare title to SiteMetadata instead of a pre-suffixed one", () => {
+    const titleProp = shellProp(shellTag(recoveryLib, "SiteMetadata"), "title");
+    expect(titleProp, "Recovery.svelte <SiteMetadata> title prop").not.toBeNull();
     expect(titleProp ?? "").not.toContain("Together We Own");
   });
 
   it("renders through a bare title or an exactTitle, never a pre-suffixed title", () => {
-    const tag = shellTag(recoveryLib);
+    const tag = shellTag(recoveryLib, "SiteMetadata");
     const titleProp = shellProp(tag, "title") ?? "";
     const exactProp = shellProp(tag, "exactTitle");
     expect(titleProp.includes("Together We Own") && exactProp === null).toBe(false);
@@ -229,7 +229,7 @@ describe("Kit Recovery titles match Hono byte-for-byte", () => {
   });
 
   it("adds no canonical or share title, matching Hono's absent share tags", () => {
-    const tag = shellTag(recoveryLib);
+    const tag = shellTag(recoveryLib, "SiteMetadata");
     expect(tag).not.toContain("canonical");
     expect(tag).not.toContain("shareTitle");
   });

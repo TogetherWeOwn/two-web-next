@@ -10,7 +10,7 @@ const number = new Intl.NumberFormat("en");
   <p class="members-counts">
     {number.format(counts.members)} members · {number.format(counts.attendedThisMonth)} came to something this month
   </p>
-  <h1>Who's here.{#if !guest} <span>Say hi to the new ones.</span>{/if}</h1>
+  <h1>Who's here.{#if !guest}{" "}<span>Say hi to the new ones.</span>{/if}</h1>
   {#if guest}
     <p class="members-rule">Only signed-in members see names. Visitors see the counts.</p>
     <Button variant="primary" href="/auth/discord">Sign in with Discord to see who's here</Button>

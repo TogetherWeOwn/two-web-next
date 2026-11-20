@@ -4,7 +4,12 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { assertJoinEvidence, joinEvidencePage, joinEvidenceStates } from "./kit-join-evidence.mjs";
+import {
+  assertJoinEvidence,
+  isJoinPage,
+  joinEvidencePage,
+  joinEvidenceStates,
+} from "./kit-join-evidence.mjs";
 import { withKitOfflineBrowser } from "./kit-offline-browser.mjs";
 
 const [state, destination, shell] = process.argv.slice(2);
@@ -24,7 +29,7 @@ await withKitOfflineBrowser({ page: joinEvidencePage(state) }, async ({ page }) 
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.evaluate(() => document.fonts.ready);
     await assertJoinEvidence(page, state, shell);
-    if (state !== "recovery") {
+    if (isJoinPage(state)) {
       const display = await page
         .locator(".ember-join")
         .evaluate((element) => getComputedStyle(element).display);
@@ -34,7 +39,7 @@ await withKitOfflineBrowser({ page: joinEvidencePage(state) }, async ({ page }) 
         `${state}: responsive styles must load`,
       );
     }
-    if (state !== "recovery" && viewport.name === "mobile") {
+    if (isJoinPage(state) && viewport.name === "mobile") {
       const lede = await page.locator(".join-lede").boundingBox();
       const card = await page.locator(".join-card").boundingBox();
       const steps = await page.locator(".join-steps").boundingBox();

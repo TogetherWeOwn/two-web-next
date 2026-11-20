@@ -72,7 +72,13 @@ export interface RouteDecision {
 // shipped manifest instead of hard-coding "kit": flipping enabled flips the
 // gate for the right reason.
 export const ROUTE_MANIFEST: OwnedRoute[] = [
-  { method: "GET", path: "/", enabled: false, reads: "public" },
+  // The Kit home reads only the viewer's RSVPs. Hono owns GET / until cutover.
+  {
+    method: "GET",
+    path: "/",
+    enabled: false,
+    reads: { resource: "member", action: "list", route: "home" },
+  },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
   { method: "GET", path: "/events", enabled: true, reads: "public" },
   { method: "GET", path: "/about", enabled: true, reads: "public" },
@@ -307,9 +313,10 @@ export function fixtureManifestFor(env: {
   // These Kit-only evidence routes have no Hono twin.
   // Build them from fixture data, separate from the shipped manifest literals.
   if (wantReconciliation) {
+    const detailPath = "/admin/reconciliation/:key";
     const reads = [
       ["/admin/reconciliation", "list", "admin.reconciliation.index"],
-      ["/admin/reconciliation/:key", "view", "admin.reconciliation.show"],
+      [detailPath, "view", "admin.reconciliation.show"],
     ] as const;
     for (const [path, action, route] of reads) {
       routes.push({
@@ -319,6 +326,13 @@ export function fixtureManifestFor(env: {
         reads: { resource: "reconciliation", action, route },
       });
     }
+    routes.push({
+      method: "POST",
+      path: detailPath,
+      enabled: true,
+      // The service audits the submit; the detail boundary keeps its response private.
+      reads: { resource: "reconciliation", action: "view", route: "admin.reconciliation.show" },
+    });
   }
   return routes;
 }

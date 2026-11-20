@@ -28,6 +28,7 @@ import { withEventDetailHtml, type DetailLeavesModel } from "../src/events/detai
 import { kitSeatCard } from "../src/events/kit-detail";
 import { loginUrl } from "../src/islands/contracts";
 import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
+import type { EventGoneModel } from "../src/kit-event-states";
 import { renderEventsHtml } from "../src/kit-events-html";
 import app from "./app";
 import { EVENT_KEY, pageShellFixture } from "./helpers/page-shells";
@@ -136,7 +137,7 @@ type KitRenders = {
   renderSiteHeader: (props: Record<string, unknown>) => string;
   renderHome: (data: Record<string, unknown>) => string;
   renderEventDetail: (model: Record<string, unknown>) => string;
-  renderEventGone: (model: Record<string, unknown>) => string;
+  renderEventGone: (model: EventGoneModel) => string;
   renderBoard: (data: Record<string, unknown>) => string;
   renderAbout: (data: Record<string, unknown>) => string;
   renderPast: (data: Record<string, unknown>) => string;
@@ -240,17 +241,20 @@ const baseDetailModel = (overrides: Record<string, unknown> = {}): Record<string
   };
 };
 
-const baseGoneModel = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+const baseGoneModel = (): EventGoneModel => ({
   title: "Cancelled game night",
   game: "Chess",
   eventKey: EVENT_KEY,
+  existingResponses: 0,
   icsUrl: `${APP_URL}/events/${EVENT_KEY}.ics`,
   markdownAlternate: `/e/${EVENT_KEY}.md`,
   upcomingUrl: "/events",
+  scheduled: null,
+  facts: [],
+  nextDate: null,
   related: [],
   jsonLd: "{}",
   siteJsonLd: "{}",
-  ...overrides,
 });
 
 const baseBoardData = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({

@@ -63,6 +63,7 @@ const cases = [
     now: new Date("2035-10-20T10:59:59.999Z"),
     ongoing: false,
     availability: TWO_LEFT,
+    kitAvailability: /\b8 of 10 in\b/i,
   },
   {
     name: "last millisecond is ongoing",
@@ -103,20 +104,23 @@ const cases = [
 
 for (const twin of ["Hono", "Kit"] as const) {
   describe(`${twin} event-detail ongoing snapshot`, () => {
-    it.each(cases)("$name", async ({ row, now, ongoing, availability }) => {
+    it.each(cases)("$name", async ({ row, now, ongoing, availability, kitAvailability }) => {
       const result = await detailSnapshot(twin, row, kit, now);
       expect(result.status).toBe(200);
       const visibleHero = visibleText(hero(result.html));
+      const visiblePage = visibleText(document(result.html));
       const liveLabel = twin === "Kit" ? /\bLive\b/ : ONGOING;
       expect.soft(liveLabel.test(visibleHero), visibleHero).toBe(ongoing);
-      expect.soft(visibleText(document(result.html))).toMatch(availability);
+      expect
+        .soft(visiblePage)
+        .toMatch(twin === "Kit" ? (kitAvailability ?? availability) : availability);
       if (twin === "Kit" && ongoing && result.html.includes('data-testid="rsvp-going"')) {
         expect(result.html).toMatch(
           /class="seat-card-note live-rsvp-end[^>]*>Ends <time[^>]*>[\s\S]*data-testid="rsvp-going"/,
         );
       }
       if (now >= END) {
-        expect.soft(visibleText(document(result.html))).not.toMatch(TWO_LEFT);
+        expect.soft(visiblePage).not.toMatch(TWO_LEFT);
         expect.soft(result.html).not.toMatch(/data-testid="(?:rsvp-going|waitlist-join)"/);
       }
     });

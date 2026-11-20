@@ -15,6 +15,7 @@ import {
 } from "./error-pages";
 import type { SuggestedEvent } from "./events/suggestions";
 import { negotiateErrorAccept } from "./http/accepts";
+import { BRANDED_NOT_FOUND } from "./http/not-found";
 import { inviteDestination } from "./invite";
 import {
   bufferedMemberHtml,
@@ -36,16 +37,19 @@ export function notFoundResponse(
   c: Context,
   suggestions: SuggestedEvent[] = [],
 ): Response | Promise<Response> {
+  const { status, headers } = BRANDED_NOT_FOUND;
   if (memberReadActive()) {
     // Only this known shell classifies a missing route; arbitrary 404 responses
     // and prior queries still must satisfy the ordinary read boundary.
     if (c.get("adminActor"))
       c.set("access", { resource: "not-found", action: "view", route: "admin.not-found" });
-    return bufferedMemberHtml(c, <NotFoundPage suggestions={suggestions} />, 404);
+    return bufferedMemberHtml(c, <NotFoundPage suggestions={suggestions} />, status);
   }
-  c.header("cache-control", "no-store, private");
-  c.status(404);
-  return c.html(<NotFoundPage suggestions={suggestions} />);
+  c.header("cache-control", headers["cache-control"]);
+  c.status(status);
+  return c.html(<NotFoundPage suggestions={suggestions} />, undefined, {
+    "Content-Type": headers["content-type"],
+  });
 }
 
 export async function notFoundHandler(c: Context): Promise<Response> {
