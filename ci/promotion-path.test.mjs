@@ -1,0 +1,134 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { isPromotionPath, labelPromotionPath } from "./promotion-path.mjs";
+
+const pull = "/pulls/42";
+const issueLabels = "/issues/42/labels";
+const head = "a".repeat(40);
+const base = "b".repeat(40);
+const yes = "promotion-path: yes";
+const no = "promotion-path: no";
+const file = (filename, status = "modified", previous_filename) => ({
+  filename,
+  status,
+  previous_filename,
+});
+const ordinary = Array.from({ length: 101 }, (_, i) => file(`src/routes/product-${i}.ts`));
+
+function github(rows, options = {}) {
+  const labels = new Set(["unrelated", ...(options.labels ?? [])]);
+  const summary = [];
+  const pages = [];
+  const writes = [];
+  let reads = 0;
+  let repoLabelExists = !options.createRace;
+  const api = async (method, path, body) => {
+    if (method !== "GET") writes.push([method, path]);
+    if (method === "GET" && path === pull) {
+      const pr = {
+        state: "open",
+        head: { sha: head },
+        base: { sha: base, ref: "main" },
+        changed_files: options.count ?? rows.length,
+      };
+      return Response.json({ ...pr, ...options.revision?.(++reads) });
+    }
+    if (method === "GET" && path.startsWith(`${pull}/files?per_page=100&page=`)) {
+      const page = Number(path.split("=").at(-1));
+      pages.push(page);
+      if (page === options.failPage) return new Response(null, { status: 502 });
+      return Response.json(rows.slice(100 * (page - 1), 100 * page));
+    }
+    if (method === "GET" && path === `/compare/${base}...${head}?per_page=1`) {
+      return Response.json({ files: options.comparison ?? rows });
+    }
+    if (method === "GET" && path.startsWith("/labels/")) {
+      return new Response(null, { status: repoLabelExists ? 200 : 404 });
+    }
+    if (method === "POST" && path === "/labels" && options.createRace) {
+      repoLabelExists = true;
+      return new Response(null, { status: 422 });
+    }
+    if (method === "DELETE" && path.startsWith(`${issueLabels}/`)) {
+      const deleted = labels.delete(decodeURIComponent(path.slice(issueLabels.length + 1)));
+      return new Response(null, { status: deleted ? 200 : 404 });
+    }
+    if (method === "POST" && path === issueLabels) {
+      for (const label of body.labels) labels.add(label);
+      return new Response(null, { status: 200 });
+    }
+    assert.fail(`Unexpected fixture request: ${method} ${path}`);
+  };
+  return {
+    labels,
+    pages,
+    writes,
+    summary,
+    run: () => labelPromotionPath(api, 42, (entry) => summary.push(entry)),
+  };
+}
+
+test("only promotion surfaces match, including directly called tooling", () => {
+  const included = `.github/workflows/ci.yml .github/actions/gradual-promote/action.yml
+    deep/web/wrangler.production.toml tail/wrangler.jsonc drizzle/meta/_journal.json migrations.lock db/migrations/0001.sql
+    ci/resolve-promotion-sha.mjs ci/production-deploy-gate.mjs ci/rollback-target.mjs
+    ci/staging-provenance.mjs ci/staging-deploy-gate.mjs ci/db-migrate.mjs
+    ci/migration-runtime-rights.mjs src/up-database.ts bin/version-check.mjs e2e/staging/join.spec.ts`;
+  const excluded = `docs/runbook.md docs/wrangler.md test/fixtures/legacy/verify.sql
+    src/routes/events.ts web/src/routes/+page.svelte ci/staging-provenance.test.mjs
+    ci/check-doc-links.mjs e2e/staging/journey-ledger.test.mjs`;
+  for (const path of included.split(/\s+/)) assert.ok(isPromotionPath(path), path);
+  for (const path of excluded.split(/\s+/)) assert.equal(isPromotionPath(path), false, path);
+});
+
+test("paginates, detects removal and either side of renames, and flips only its labels", async () => {
+  for (const change of [
+    file("migrations.lock", "removed"),
+    file("docs/former-config.txt", "renamed", "tail/wrangler.jsonc"),
+    file("tail/wrangler.jsonc", "renamed", "docs/former-config.txt"),
+  ]) {
+    const run = github([...ordinary.slice(0, 100), change], { labels: [no] });
+    await run.run();
+    assert.deepEqual(run.pages, [1, 2]);
+    assert.deepEqual([...run.labels], ["unrelated", yes]);
+    assert.ok(run.summary[0].includes("verdict **yes**"));
+  }
+  const run = github(ordinary, { labels: [yes, no], createRace: true });
+  await run.run();
+  await run.run();
+  assert.deepEqual([...run.labels], ["unrelated", no]);
+  assert.ok(
+    run.summary[0].includes(`PR #42 · head \`${head}\` · base \`${base}\` · verdict **no**`),
+  );
+});
+
+test("failed, capped, incomplete or inconsistent reads produce no verdict label", async () => {
+  for (const [rows, options] of [
+    [ordinary.slice(0, 100), { count: 101 }],
+    [ordinary, { failPage: 2 }],
+    [ordinary, { count: 3000 }],
+    [Array.from({ length: 300 }, (_, i) => file(`docs/${i}.md`)), {}],
+    [[...ordinary.slice(0, 100), ordinary[0]], {}],
+    [[file("docs/new.txt", "renamed")], {}],
+    [ordinary, { comparison: [...ordinary.slice(0, 100), file("ci/production-deploy-gate.mjs")] }],
+  ]) {
+    const run = github(rows, options);
+    await assert.rejects(run.run());
+    assert.deepEqual(run.writes, []);
+    assert.ok(run.summary[0].includes("verdict **unknown**"));
+  }
+});
+
+test("ref changes prevent publication, including same-SHA retarget and a race during label write", async () => {
+  const retarget = github(ordinary, {
+    revision: (read) => read > 1 && { base: { sha: base, ref: "other" } },
+  });
+  await assert.rejects(retarget.run(), /refs or file count changed/);
+  assert.deepEqual(retarget.writes, []);
+  const moved = github(ordinary, {
+    revision: (read) => read > 3 && { head: { sha: "c".repeat(40) } },
+  });
+  await assert.rejects(moved.run(), /refs or file count changed/);
+  assert.deepEqual([...moved.labels], ["unrelated"]);
+  assert.ok(moved.summary[0].includes("verdict **unknown**"));
+});

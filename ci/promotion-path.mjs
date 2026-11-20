@@ -1,0 +1,205 @@
+import assert from "node:assert/strict";
+import { appendFileSync, readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+// Direct tooling/config from deploy-production, rollback-production, deploy,
+// e2e-staging and db-migrate. src/index.tsx wires /up and /version; do not
+// follow imports into ordinary product code.
+const directPaths = new Set(
+  `ci/promotion-path.mjs
+   ci/resolve-promotion-sha.mjs ci/production-deploy-gate.mjs ci/rollback-target.mjs
+   ci/post-deploy-watch.mjs ci/check-production-secrets.mjs
+   ci/operator-constants.mjs ci/wrangler-config.mjs ci/worker-bundle-evidence.mjs
+   ci/staging-deploy-gate.mjs ci/staging-provenance.mjs ci/check-staging-journeys.mjs
+   ci/change-scope.sh ci/e2e-test-helpers.mjs ci/kit-route-flags.mjs ci/staging-kit-route-check.mjs ci/check-jobs-secrets.mjs
+   ci/db-migrate.mjs ci/migration-admission.mjs ci/migration-ownership.mjs ci/migration-runtime-rights.mjs
+   ci/check-migration-numbers.sh ci/check-snapshot-chain.mjs ci/check-migration-history.mjs
+   drizzle.config.ts migrations.lock
+   bin/smoke.mjs bin/version-check.mjs bin/revision-check.mjs bin/json-smoke.mjs
+   ci/robots-directives.mjs lib/loopback-hosts.mjs
+   bin/check-moderators.mjs bin/operator-probe-errors.mjs bin/ts-hook.mjs src/probes/check-moderators.ts
+   src/index.tsx src/version.ts src/release-tag.ts src/headers.ts src/route-ownership.ts
+   src/up.ts src/up-body.ts src/up-config.ts src/up-database.ts src/up-migrations.ts
+   src/up-queue.ts src/up-revision.ts src/up-timeout.ts
+   playwright.staging.config.ts
+   ci/build-ember-tokens.mjs ci/build-leaf-css.mjs ci/build-events-css.mjs ci/css-dictionary.mjs
+   ci/minify-assets.mjs ci/budget-fragments.mjs ci/bundle-budget.json
+   .npmrc package.json package-lock.json web/.npmrc web/package.json web/package-lock.json
+   web/_headers web/vite.config.ts web/tsconfig.json`.split(/\s+/),
+);
+
+export function isPromotionPath(path) {
+  return (
+    directPaths.has(path) ||
+    /^(?:\.github\/(?:workflows|actions)|drizzle|(?:db\/)?migrations)\//.test(path) ||
+    /(?:^|\/)wrangler(?:[.-][^/]*)?\.(?:toml|jsonc?)$/i.test(path) ||
+    /^ci\/budgets\/bundle\/[^/]+\.json$/.test(path) ||
+    /^e2e\/staging\/(?!.*\.test\.)[^/]+\.(?:ts|mjs)$/.test(path)
+  );
+}
+
+const pageSize = 100;
+const prFilesCap = 3000;
+const compareFilesCap = 300;
+const isSha = (value) => typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
+const knownStatus = new Set([
+  "added",
+  "modified",
+  "removed",
+  "renamed",
+  "copied",
+  "changed",
+  "unchanged",
+]);
+
+async function json(response) {
+  assert.ok(response.ok, `GitHub read failed (HTTP ${response.status})`);
+  return response.json().catch(() => {
+    throw new Error("Invalid GitHub JSON");
+  });
+}
+
+async function readPR(api, pull) {
+  const pr = await json(await api("GET", pull));
+  assert.ok(
+    pr?.state === "open" &&
+      isSha(pr.head?.sha) &&
+      isSha(pr.base?.sha) &&
+      typeof pr.base?.ref === "string" &&
+      pr.base.ref.length > 0,
+    "Missing open PR or full head/base identity",
+  );
+  return { head: pr.head.sha, base: pr.base.sha, baseRef: pr.base.ref, count: pr.changed_files };
+}
+
+function readFiles(rows, expected, files) {
+  assert.ok(Array.isArray(rows) && rows.length === expected, "Incomplete file response");
+  for (const row of rows) {
+    const { filename, previous_filename: previous, status } = row ?? {};
+    assert.ok(
+      typeof filename === "string" &&
+        filename.length > 0 &&
+        knownStatus.has(status) &&
+        (previous === undefined
+          ? status !== "renamed"
+          : typeof previous === "string" && previous.length > 0),
+      "Invalid file metadata",
+    );
+    assert.ok(!files.has(filename), "Duplicate filename across file results");
+    files.set(filename, previous);
+  }
+}
+
+async function ensureLabel(api, label) {
+  const labelPath = `/labels/${encodeURIComponent(label)}`;
+  const read = await api("GET", labelPath);
+  if (read.ok) return;
+  assert.equal(read.status, 404, "Cannot read verdict label");
+  const create = await api("POST", "/labels", {
+    name: label,
+    color: label.endsWith("yes") ? "d4a72c" : "bfdadc",
+    description: "Advisory only; see the exact-head promotion-path Actions summary.",
+  });
+  if (create.ok) return;
+  // Another PR's run may have created this repository label concurrently.
+  assert.ok(
+    create.status === 422 && (await api("GET", labelPath)).ok,
+    "Cannot create verdict label",
+  );
+}
+
+export async function labelPromotionPath(api, number, summarize) {
+  assert.ok(Number.isSafeInteger(number) && number > 0, "Invalid PR number");
+  const pull = `/pulls/${number}`;
+  const issueLabels = `/issues/${number}/labels`;
+  let snapshot;
+  let verdict = "unknown";
+  try {
+    snapshot = await readPR(api, pull);
+    const { head, base, count } = snapshot;
+    assert.ok(
+      Number.isSafeInteger(count) && count >= 0 && count < prFilesCap,
+      "File count missing or at GitHub's PR file cap",
+    );
+    const files = new Map();
+    for (let offset = 0; offset < Math.max(1, count); offset += pageSize) {
+      const query = `per_page=${pageSize}&page=${1 + offset / pageSize}`;
+      readFiles(
+        await json(await api("GET", `${pull}/files?${query}`)),
+        Math.min(pageSize, count - offset),
+        files,
+      );
+    }
+    const matches = [...files].some(
+      ([path, prior]) => isPromotionPath(path) || (prior && isPromotionPath(prior)),
+    );
+    if (!matches) {
+      // The PR files endpoint is mutable. Bind a negative to the immutable
+      // three-dot comparison too; its file list is on page one and capped at 300.
+      assert.ok(count < compareFilesCap, "Cannot prove a negative at GitHub's compare file cap");
+      const comparison = await json(await api("GET", `/compare/${base}...${head}?per_page=1`));
+      const pinned = new Map();
+      readFiles(comparison?.files, count, pinned);
+      assert.ok(
+        [...files].every(([path, prior]) => pinned.has(path) && pinned.get(path) === prior),
+        "PR files differ from pinned comparison",
+      );
+    }
+    const value = matches ? "yes" : "no";
+    const label = `promotion-path: ${value}`;
+    const fresh = async () => {
+      const current = await readPR(api, pull);
+      assert.ok(
+        current.head === head &&
+          current.base === base &&
+          current.baseRef === snapshot.baseRef &&
+          current.count === count,
+        "PR refs or file count changed during classification",
+      );
+    };
+    const remove = async (name) => {
+      const response = await api("DELETE", `${issueLabels}/${encodeURIComponent(name)}`);
+      assert.ok(response.ok || response.status === 404, "Cannot remove verdict label");
+    };
+    await ensureLabel(api, label);
+    await fresh();
+    await remove(`promotion-path: ${matches ? "no" : "yes"}`);
+    await fresh();
+    try {
+      assert.ok(
+        (await api("POST", issueLabels, { labels: [label] })).ok,
+        "Cannot apply verdict label",
+      );
+      await fresh();
+    } catch (error) {
+      // Label writes are not conditional on refs. Retract if freshness cannot
+      // be confirmed after the write; a later run can classify the new refs.
+      await remove(label);
+      throw error;
+    }
+    verdict = value;
+  } finally {
+    summarize(
+      `PR #${number} · head \`${snapshot?.head ?? "unavailable"}\` · base \`${snapshot?.base ?? "unavailable"}\` · verdict **${verdict}**\n\nAdvisory only. Labels can be stale or edited and do not waive review.\n`,
+    );
+  }
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  const { GITHUB_EVENT_PATH, GITHUB_REPOSITORY, GITHUB_STEP_SUMMARY, GH_TOKEN } = process.env;
+  const { number } = JSON.parse(readFileSync(GITHUB_EVENT_PATH, "utf8"));
+  const api = (method, path, body) =>
+    fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}${path}`, {
+      method,
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${GH_TOKEN}`,
+        "content-type": "application/json",
+        "x-github-api-version": "2022-11-28",
+      },
+      body: JSON.stringify(body),
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
+    });
+  await labelPromotionPath(api, number, (summary) => appendFileSync(GITHUB_STEP_SUMMARY, summary));
+}
