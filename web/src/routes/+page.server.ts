@@ -1,10 +1,7 @@
 import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../src/admin/db";
-import { readCounts, readHomeCountsSnapshot } from "../../../src/counts";
-import { discordEventsSource } from "../../../src/events/discord-transients-source";
 import { getMemberHomeRsvps } from "../../../src/events/member-home-rsvps";
-import { cachedFeatured, cachedHomeUpcoming } from "../../../src/home-cache";
 import {
   FALLBACK_RANKS,
   HOME_JOIN_RESULT_COPY,
@@ -29,37 +26,10 @@ export const csr = false;
 // response stays viewer-specific (private, no-store).
 export const load: PageServerLoad = async ({ url, request, locals, cookies, setHeaders }) => {
   const session = homeSessionFor(locals);
-  // Keep the legacy counts contract while supplying the validated observation
-  // separately for the Ember home. Neither read throws when the bot DB is down.
-  const countsPromise = Promise.all([readCounts(env), readHomeCountsSnapshot(env)]);
-  // Guest-invariant panels ride the shared isolate-local guest cache (the same
-  // module the Hono handler uses): same TTL, in-flight-retire guard and
-  // never-store rules, retired by the committed featured/event mutations.
-  // Each read opens its own web-DB client, like the Hono cached path.
-  const [homeUpcoming, featured] = await Promise.all([
-    cachedHomeUpcoming(
-      env,
-      () => dbFor({ env }),
-      () => discordEventsSource(env),
-      new Date(),
-      undefined,
-      // Same correlation source as the Hono request log: the validated
-      // cf-ray (safeRequestId inside the reader drops anything else).
-      request.headers.get("cf-ray") ?? undefined,
-    ),
-    cachedFeatured(
-      env,
-      () => dbFor({ env }),
-      new Date(),
-      undefined,
-      // Same validated cf-ray correlation as the upcoming leg (safeRequestId
-      // inside the reader drops anything else), mirroring Hono's requestId.
-      request.headers.get("cf-ray") ?? undefined,
-    ),
-  ]);
-  const [counts, countsSnapshot] = await countsPromise;
-  // This per-viewer read is deliberately outside the shared guest cache. The
-  // dispatcher wraps the Kit route in its declared member-read boundary.
+  if (!locals.homePanels) throw new Error("Home panels were not prepared");
+  const { counts, countsSnapshot, homeUpcoming, featured } = locals.homePanels;
+  // This per-viewer read stays inside the declared member-read boundary and
+  // outside the shared guest cache.
   const eventKeys = homeUpcoming.items.flatMap((event) =>
     event.source === "canonical" ? [event.eventKey] : [],
   );

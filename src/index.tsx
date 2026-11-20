@@ -10,8 +10,6 @@ import { registerAlertProbe } from "./alert-probe";
 import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
 import {
-  createMemorySessionStore,
-  createPostgresSessionStore,
   hashToken,
   isValidSessionToken,
   newSessionToken,
@@ -20,9 +18,10 @@ import {
   type Sql,
 } from "./sessions";
 import { refreshSessionRoles, roleRecheckConfigFor } from "./session-role-refresh";
-import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "./db/connection";
+import { databaseOptions, databaseUrl } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
+import { storeForEnv } from "./http/session";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { operatorImageHosts } from "./config-warn";
@@ -208,11 +207,6 @@ registerAuthRoutes(app, {
 // page can share it (same file the /discord redirect uses).
 export { FALLBACK_INVITE, inviteDestination } from "./invite";
 
-// Test seam: tests carry a SessionStore on the env object (`{...env, SESSION_STORE: store}`,
-// cast at the call site). Production bindings never set it, so this branch is dead in
-// production. It keeps per-request store isolation without module-global state.
-type EnvWithStore = Env & { SESSION_STORE?: SessionStore };
-
 // Test seam for the roster write: tests inject a Sql double (`{...env, ROSTER_STORE: sql}`).
 // Production bindings never set it.
 type EnvWithRoster = Env & { ROSTER_STORE?: Sql };
@@ -228,24 +222,8 @@ async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   return storeForEnv(c.env);
 }
 
-// Shared with the Kit hook: the same DB selection Hono uses, so
-// Kit reads the sessions Hono writes. Same lifecycle too — a short-lived
-// per-request client, Hyperdrive pooling underneath, idle_timeout reaping.
-export async function storeForEnv(env: Env): Promise<SessionStore> {
-  const injected = (env as EnvWithStore).SESSION_STORE;
-  if (injected) return injected;
-  const url = databaseUrl(env);
-  // No DB configuration: a fresh memory store per request fails closed to guest.
-  if (!url) return createMemorySessionStore();
-  // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
-  // Keep it alive while the store uses it; idle_timeout closes idle sockets.
-  const sql = postgres(url, databaseOptions) as unknown as Sql;
-  // Per-request statement bound (SET LOCAL in a short transaction per
-  // statement): a stuck session lookup cancels into the existing outage
-  // handling instead of wedging the request. Journeys share the adapter, so
-  // the OAuth consume path is bounded the same way.
-  return createPostgresSessionStore(withPerRequestStatementBound(sql));
-}
+// Keep the existing Kit import until its separate session cutover.
+export { storeForEnv };
 
 // Roster persistence shares storeFor's DB selection so signed-in profiles
 // read the same users sign-in writes. Tests may inject ROSTER_STORE; no DB
