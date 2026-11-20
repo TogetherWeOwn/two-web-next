@@ -187,6 +187,8 @@ worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 checks relative links and anchors on every PR. `check` runs unless its run was
 cancelled, starts from `scope` alone so it runs in parallel with the audit
 and performance jobs, and skips its heavy steps on docs-only and draft PRs.
+`static-check` and the three `coverage-shard` jobs also start from `scope`.
+`ci-ok` requires static checks and merged coverage on non-draft code changes.
 The independent `kit-browser-fixture` job runs alongside `check` for non-draft,
 non-docs-only full, app or worker scopes. `ci-ok` requires its success when
 selected, and fails on failure, cancellation or an unexpected skip.
@@ -534,7 +536,7 @@ Biome is pinned in `package-lock.json`. `npm run lint` uses the read-only
 [`biome ci`](https://biomejs.dev/reference/cli/#biome-ci) command to enforce both
 lint and formatting. `npm run format` only formats; it does not apply lint fixes
 or reorder imports. `npm run check` runs this gate; CI runs it before typecheck
-and coverage, alongside the configuration drift check, and proves rejection
+and in parallel with coverage. The `check` job proves rejection
 of debugger statements, unused variables, floating promises and bad formatting
 with `bash ci/biome-selftest.sh`.
 
