@@ -214,7 +214,13 @@ The `drizzle` schema itself gets the same check: its owner (`nspowner`)
 can drop and recreate the ledger whatever the ledger's own ACLs say, and
 any `nspacl` right (`CREATE` or `USAGE`) for `two_web_app`, `PUBLIC`, or a
 role the runtime is a member of also refuses, because the runtime has no
-reviewed need for the schema.
+reviewed need for the schema. The guard also refuses membership in the
+predefined `pg_read_all_data`, `pg_write_all_data` and `pg_maintain` roles:
+their implicit schema or ledger rights do not appear in object ACLs.
+For an already-provisioned target, `assertServingLedgerIsolation` also requires
+the exact configured serving login and an existing ledger and sequence. Bind
+the login to the serving target independently, then pass it to the verifier
+without logging it. This is not inferred from the migrator's `current_user`.
 Unrelated owners and grantees stay allowed. The runner
 never revokes such a right itself, so an already-exposed ledger stays refused
 until the right is removed outside the runner. The refusal names the offending
@@ -227,6 +233,14 @@ in the existing `check` job, which feeds the required `ci-ok` status. CI and
 runner selftests use disposable Postgres only; this check does not authorize a
 staging or production connection or any live grant, revoke, role, or
 default-ACL change.
+
+The CI Postgres service is a fresh cluster per job. Before applying migrations,
+its workflows provision the cluster-wide `two_web_app` NOLOGIN role with
+`ci/disposable-runtime-role.sql`; the human local-CI tool does the same in each
+run-owned shard container. The SQL serializes role creation, verifies a test
+`GRANT`, and never drops the shared role: the disposable container owns its
+lifetime. GitHub jobs run it twice to exercise idempotence. This preparation is
+not part of the live migrator or a bootstrap instruction for shared databases.
 
 The runner also refuses at plan time while any reviewed object (the
 runtime-rights table/sequence census, plus the `drizzle` migration ledger and
@@ -284,10 +298,11 @@ with `target: production`, behind the `production` Environment:
 
 - Script: `bin/db-backup.sh` (`backup` | `promote-weekly` |
   `rotate` | `check`). Connection comes from `DATABASE_URL` env only —
-  never argv, never logs. Every `wrangler r2 object` call passes
-  `--jurisdiction eu` (overridable via `BACKUP_JURISDICTION`, default
-  `eu`); the bucket default is `two-web-next-backups` (overridable via
-  `BACKUP_BUCKET`).
+  never argv, never logs. Wrangler is the default transport; `BACKUP_TRANSPORT=s3`
+  uses the AWS CLI v2 with region `auto` and bucket-scoped R2 S3 credentials.
+  The default `BACKUP_JURISDICTION=eu` selects Wrangler's `--jurisdiction eu`
+  or the `.eu.r2.cloudflarestorage.com` S3 endpoint. The bucket default remains
+  `two-web-next-backups` (overridable via `BACKUP_BUCKET`).
 - `paperclip-backups` is explicitly out of scope for member-data dumps
   (jurisdiction `default` / location `ENAM`; must never receive them).
 - Schedule: `.github/workflows/db-backup.yml` — nightly `03:17Z` cron
@@ -300,10 +315,21 @@ with `target: production`, behind the `production` Environment:
   that inherits `pg_read_all_data` and no write, DDL or admin role, on the
   PlanetScale direct endpoint, same `pg_dump -Fc` path — direct `5432`, never
   the pooled `6432` port).
-  Also needs Cloudflare credentials from the bound Environment:
-  `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` (staging Environment), or
-  `PRODUCTION_CLOUDFLARE_API_TOKEN` / `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`
-  (production Environment) behind the same `inputs.target` guard.
+- Backup storage credentials depend on the transport and come from the bound
+  Environment. Wrangler (the default when the target's transport variable is
+  unset) uses `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in staging, or
+  the corresponding `PRODUCTION_` secrets in production. S3 uses
+  `R2_ACCOUNT_ID`, `R2_S3_ACCESS_KEY_ID`, and `R2_S3_SECRET_ACCESS_KEY` in staging,
+  or the corresponding `PRODUCTION_` secrets in production. The workflow only
+  passes S3 credentials to the backup, rotation, and check steps when S3 is selected.
+  Set the `BACKUP_TRANSPORT` repository variable to `s3` to opt in for staging
+  only. Production uses `PRODUCTION_BACKUP_TRANSPORT` independently; leave it
+  unset until production cutover is approved.
+- Before narrowing the existing backup-related R2 write grant, verify a staging
+  S3 dispatch and a separately approved production S3 dispatch with read-back.
+  A dispatch does not exercise retention. For rollout verification, also observe
+  the scheduled staging S3 path, including Sunday promotion and deletion when
+  archives are eligible.
 - Branch/target correspondence: `branch` must be empty (defaults to `target`),
   equal to `target`, or `test-*`; staging↔production swaps and other overrides
   refuse before provisioning or I/O. Local operators must declare

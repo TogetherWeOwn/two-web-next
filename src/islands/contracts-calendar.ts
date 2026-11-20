@@ -176,9 +176,12 @@ export const EVENTS_PAGER_PREV_COPY = "Previous page";
 export const EVENTS_PAGER_NEXT_COPY = "Next page";
 export const EVENTS_PAGER_LAST_COPY = "Last page";
 export const EVENTS_OUT_OF_RANGE_TESTID = "events-out-of-range";
+export const EVENTS_PAGE_UNREADABLE_TESTID = "events-page-unreadable";
 export function upcomingEventsOutOfRangeCopy(page: number, totalPages: number): string {
   return `Page ${page} is outside the schedule. There ${totalPages === 1 ? "is" : "are"} ${totalPages} ${totalPages === 1 ? "page" : "pages"}.`;
 }
+export const upcomingEventsPageUnreadableCopy = (page: number): string =>
+  `Events on page ${page} can't be shown.`;
 export const upcomingEventsPageStatusCopy = (page: number, totalPages: number): string =>
   `Page ${page} of ${totalPages}.`;
 
@@ -257,7 +260,7 @@ export const EVENTS_PARTIAL_COPY = {
 /* Month grid: whole weeks, Monday-first, leading/trailing neighbours flagged;
  * "today" is evaluated in the hosts' zone, not the server's or the viewer's. */
 export const EVENTS_CALENDAR_SCROLL_TESTID = "events-calendar-scroll";
-export const EVENTS_CALENDAR_SCROLL_LABEL = "Events calendar; scroll horizontally to see all days";
+export const EVENTS_CALENDAR_SCROLL_LABEL = "Events calendar";
 export const EVENTS_CALENDAR_GRID_TESTID = "events-calendar-grid";
 export const CALENDAR_MONTH_TESTID = "calendar-month";
 export const CALENDAR_MONTH_STATUS_TESTID = "calendar-month-status";
@@ -335,8 +338,8 @@ export function calendarMonthLabel(month: string): string {
 }
 
 /** Month-local empty guidance names the selected month, never the schedule. */
-export const calendarMonthEmptyCopy = (month: string): string =>
-  `No events in ${calendarMonthLabel(month)}.`;
+export const calendarMonthEmptyCopy = (month: string, game?: string | null): string =>
+  `No ${game ? `“${game}” ` : ""}events in ${calendarMonthLabel(month)}.`;
 
 export interface CalendarDay<E = unknown> {
   /** ISO date; trailing neighbours after 9999-12 use the expanded year +010000. */

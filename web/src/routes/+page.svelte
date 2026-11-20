@@ -1,6 +1,8 @@
 <script lang="ts">
+import "./home-presentation.css";
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
+import { seatAvailability } from "../../../src/events/pages-calendar-row";
 import type { HomeUpcomingRow } from "../../../src/events/reads";
 import { groupTeaserEvents } from "../../../src/events/teaser-groups";
 import { featuredImageSrc } from "../../../src/featured-image";
@@ -8,12 +10,14 @@ import type { HomeNotice } from "../../../src/home-copy";
 import {
   SPOTS_LEFT_TESTID,
   cardTimeLabel,
+  goingAnnouncementText,
   goingCountText,
   isValidZone,
 } from "../../../src/islands/contracts";
 import { canonicalUrl } from "../../../src/seo";
 import { siteJsonLd } from "../../../src/seo-json-ld";
 import type { PageProps } from "./$types";
+import "./home-join-band.css";
 
 // Markup contract of Home (src/screens/home.tsx): session-aware header,
 // notice slot, hero, counts, featured, community panels, ladder, events and
@@ -29,12 +33,13 @@ const {
   inviteUrl,
   appUrl,
   counts,
+  countsSnapshot,
   upcomingEvents,
   eventsUnavailable,
   featured,
   imageHosts,
 } = $derived(data);
-const { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS } = $derived(data.homeCopy);
+const { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO } = $derived(data.homeCopy);
 const canonical = $derived(canonicalUrl(appUrl, "/"));
 // The load validates ?n= through parseHomeNotice, so by render time the key
 // is one of the six — the cast only recovers what $derived destructuring widens.
@@ -44,7 +49,20 @@ const siteGraph = $derived(siteJsonLd(appUrl));
 // Same shared buckets as the Hono screen: group the capped rows at render.
 // The explicit row type recovers what $derived destructuring widens (see
 // noticeText above): without it the groups widen to the helper's input.
-const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, new Date()));
+const renderTime = new Date();
+const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, renderTime));
+const nextOwnEvent = $derived(
+  session?.member
+    ? (upcomingEvents as HomeUpcomingRow[])
+        .flatMap((event) => {
+          if (event.source !== "canonical" || event.startsAt <= renderTime) return [];
+          const answer = data.memberRsvps?.find((rsvp) => rsvp.eventKey === event.eventKey);
+          if (answer?.status !== "going" && answer?.status !== "waitlisted") return [];
+          return [{ event, status: answer.status as "going" | "waitlisted" }];
+        })
+        .sort((a, b) => a.event.startsAt.getTime() - b.event.startsAt.getTime())[0]
+    : undefined,
+);
 </script>
 
 {#snippet guestChrome()}
@@ -90,27 +108,19 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
       </p>
     {/if}
   {/if}
-  <section class="hero" aria-labelledby="home-heading">
-    <div class="hero-detail hero-detail-left" aria-hidden="true">
-      <span></span>
-      <span></span>
-      <span></span>
-    </div>
-    <div class="hero-detail hero-detail-right" aria-hidden="true">
-      <span></span>
-      <span></span>
-      <span></span>
-    </div>
+  <section class="hero kit-home" aria-labelledby="home-heading">
     <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
     <h1 id="home-heading">The lobby is open.</h1>
-    <p class="lead">We spent most of our life private. Now you can just turn up.</p>
-    {#if sessionUnavailable}
-      <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
-    {:else if session?.member}
-      <a class="btn" href={inviteUrl}>Open Discord</a>
-    {:else}
-      <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
-    {/if}
+    <div class="hero-action">
+      {#if sessionUnavailable}
+        <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
+      {:else if session?.member}
+        <a class="btn" href={inviteUrl}>Open Discord</a>
+      {:else}
+        <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
+      {/if}
+      <p class="lead">We spent most of our life private. Now you can just turn up.</p>
+    </div>
     {#if !session && !sessionUnavailable && eventsUnavailable}
       <p>
         <a href="/discord" data-testid="discord-join">Join with an invite link instead</a>
@@ -121,10 +131,13 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
         <a href={inviteUrl}>Join with an invite link instead</a>
       </p>
     {/if}
-    {#if counts.memberCount != null}
-      <p class="counts" data-testid="member-count">
-        <strong>{counts.memberCount}</strong> members{#if counts.onlineCount != null && counts.onlineCount > 0}
-          {" · "}<strong>{counts.onlineCount}</strong> online{/if}
+    {#if countsSnapshot}
+      <p class="counts" data-testid="member-count" data-stale={countsSnapshot.stale}>
+        <strong>{countsSnapshot.memberCount}</strong> members{#if countsSnapshot.onlineCount != null}
+          {" · "}<strong>{countsSnapshot.onlineCount}</strong> online{/if}
+        {#if countsSnapshot.stale}
+          {" · Last seen "}<time datetime={countsSnapshot.observedAt}>{countsSnapshot.observedAt.replace("T", " ").replace("Z", " UTC")}</time>
+        {/if}
       </p>
     {/if}
   </section>
@@ -154,28 +167,43 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
       </div>
     </section>
   {/if}
-  <div class="community-grid">
-    <section class="community-intro" aria-labelledby="community-heading">
-      <h2 id="community-heading">No application. No interview.</h2>
-      <p>
-        Show up a few times. Play. Become a Member. The ladder records trust and time, not
-        grind.
-      </p>
-      <p>Small enough that people notice when you come back.</p>
-      <h3>Not a crowd. A place that knows your name.</h3>
-      <p>The community is voice-first. Game nights get posted in the Discord first.</p>
-    </section>
+  <section class="highlights" aria-labelledby="community-heading">
+    <div class="band-head">
+      <h2 id="community-heading">No application. <span>No interview.</span></h2>
+      <p>Not a crowd. A place that knows your name.</p>
+    </div>
+    <ul class="hl" role="list" data-testid="home-highlights">
+      <li>
+        <p class="hl-cadence">Est. 1998 · 18+</p>
+        <h3>Grown-ups, mostly evenings</h3>
+        <p>We've played together since 1998: forum years, then voice years. It's an adult clan, and we're mostly on in the evenings.</p>
+      </li>
+      <li>
+        <p class="hl-cadence">Voice-first</p>
+        <h3>Turn up, say hello</h3>
+        <p>The community lives in voice. Small enough that people notice when you come back.</p>
+      </li>
+      <li>
+        <p class="hl-cadence">Everyone starts as a Prospect</p>
+        <h3>Trust and time, not grind</h3>
+        <p>Show up a few times, play, and you become a Member. No tryout and no skill bar.</p>
+      </li>
+      <li>
+        <p class="hl-cadence">5 XP per voice minute</p>
+        <h3>Ranks from playing</h3>
+        <p>Messages and voice time earn XP. At set levels the bot gives you a role reward, and it never takes one away.</p>
+      </li>
+    </ul>
     <section class="discord-preview" aria-labelledby="discord-heading">
-      <h2 id="discord-heading">In the Discord</h2>
+      <h3 id="discord-heading">In the Discord</h3>
       <p>Visit the join page for the server preview and ways to join.</p>
       <p>
         <a href="/join#join-heading" data-testid="home-widget-link">View the Discord lobby</a>
-      </p>
-      <p>
+        {" · "}
         <a href="/discord" data-testid="home-discord-invite">Open Discord</a>
       </p>
     </section>
-  </div>
+  </section>
   <section aria-label="Community ladder" class="community-ladder">
     <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
     <p>Ranks stack — a Veteran still holds everything below.</p>
@@ -188,9 +216,9 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
       {/each}
     </dl>
   </section>
-  <section aria-labelledby="home-events-heading">
+  <section class="event-band" aria-labelledby="home-events-heading">
     <p class="strap">Next up</p>
-    <h2 id="home-events-heading">Game nights, when they land.</h2>
+    <h2 id="home-events-heading">What’s on. <span>Come along.</span></h2>
     {#if upcomingEvents.length > 0}
       <ul class="facts home-events" data-testid="home-events-list">
         <!-- csr=false: omit this server-rendered list from the unused client asset.
@@ -213,19 +241,31 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
                       : "UTC"})
                   </time>
                 </p>
+                <div class="event-meta">
                 <h3>{event.title}</h3>
+                {#if event.source === "canonical" && event.game?.trim()}<p>{event.game.trim()}</p>{/if}
+                {#if session?.member && event.source === "canonical" && event.organizer_name?.trim()}
+                  <p class="home-event-host" data-testid="event-card-host">Hosted by {event.organizer_name.trim()}</p>
+                {/if}
                 {#if event.location}<p>{event.location}</p>{/if}
                 {#if event.source === "discord"}
-                  <p>RSVP in Discord</p>
+                  <p>RSVP in Discord · <span data-testid="event-schedule-availability">Discord-managed</span></p>
                 {:else}
+                  {@const availability = event.endsAt && event.endsAt.getTime() <= renderTime.getTime()
+                    ? { state: "past", text: "Ended" }
+                    : seatAvailability(event)}
                   <p>
-                    {goingCountText(event.goingCount, event.capacity)}
-                    {#if event.capacity !== null && (event.goingOccupancy ?? event.goingCount) >= event.capacity}
-                      {" · "}
-                      <span data-testid={SPOTS_LEFT_TESTID}>Full</span>
-                    {/if}
+                    {goingCountText(event.goingCount, event.capacity)}{" · "}
+                    <span data-testid={availability.state === "full" ? SPOTS_LEFT_TESTID : "event-schedule-availability"}>{availability.text}</span>
                   </p>
+                  {#if session?.member}
+                    {@const answer = data.memberRsvps?.find((rsvp) => rsvp.eventKey === event.eventKey)}
+                    {#if answer?.status === "going" || answer?.status === "waitlisted"}
+                      <p data-testid="home-event-own-rsvp">{goingAnnouncementText(answer.status)}</p>
+                    {/if}
+                  {/if}
                 {/if}
+                </div>
               </a>
             </li>
           {/each}
@@ -258,15 +298,50 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
             and you’ll hear about the next one.
           {/if}
         </p>
+        {#if !eventsUnavailable}
+          <p><a href="/discord" data-testid="home-suggest-event">Suggest an event in Discord</a></p>
+        {/if}
       </div>
     {/if}
     {#if !session}
       <p>
-        <a class="btn" href="/join" data-testid="home-events-join">
+        <a href="/join" data-testid="home-events-join">
           Join the Discord <span aria-hidden="true">→</span>
         </a>
       </p>
     {/if}
   </section>
+  {#if nextOwnEvent}
+    <section aria-labelledby="home-standing-heading" data-testid="home-standing">
+      <h2 id="home-standing-heading">Where you stand.</h2>
+      <div class="card">
+        <p>Next</p>
+        <p><a href={`/e/${encodeURIComponent(nextOwnEvent.event.eventKey)}`}>{nextOwnEvent.event.title}</a></p>
+        <p>
+          <time datetime={nextOwnEvent.event.startsAt.toISOString()}>{cardTimeLabel(nextOwnEvent.event.startsAt, nextOwnEvent.event.timezone)} ({isValidZone(nextOwnEvent.event.timezone) ? nextOwnEvent.event.timezone : "UTC"})</time>
+          {" · "}{goingAnnouncementText(nextOwnEvent.status)}
+        </p>
+      </div>
+    </section>
+  {/if}
+  {#if !session?.member}
+    <section class="join-band" aria-labelledby="join-band-heading" data-testid="join-band">
+      <div>
+        <h2 id="join-band-heading">Pull up a <em>chair.</em></h2>
+        {#if sessionUnavailable}
+          <p>Sign-in isn't answering right now. The invite link still gets you into the server.</p>
+        {:else if notice === "join_failed"}
+          <p>The bot couldn't add you just now. The invite link still gets you in.</p>
+        {:else}
+          <p>{JOIN_INTRO}</p>
+        {/if}
+      </div>
+      {#if sessionUnavailable || notice === "join_failed"}
+        <a class="join-band-btn" href={sessionUnavailable ? "/discord" : inviteUrl} data-testid="join-band-invite">Join with an invite link</a>
+      {:else}
+        <a class="join-band-btn" href="/auth/discord" data-testid="join-band-join">Join with Discord</a>
+      {/if}
+    </section>
+  {/if}
   <JsonLd testid="site-jsonld" json={siteGraph} />
 </Shell>

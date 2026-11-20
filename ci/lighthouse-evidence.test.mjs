@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +13,11 @@ import diagnosticsConfig from "./lighthouse-diagnostics.config.mjs";
 import { navigationMetadata } from "../test/lighthouse-navigation-fixtures.mjs";
 import DocumentTiming, { documentTiming } from "./lighthouse-document-timing.mjs";
 import { UP_TIMEOUT_MS, main as mobile } from "./lighthouse-origin-run.mjs";
-import { main as desktop, loadCollectedLhrs } from "./lighthouse-quality-run.mjs";
+import {
+  clearAttemptEvidence,
+  main as desktop,
+  loadCollectedLhrs,
+} from "./lighthouse-quality-run.mjs";
 
 test("diagnostic audit is additive and does not change scoring, gathers, mobile settings or existing audits", async () => {
   const flags = require("./lighthouserc.cjs").ci.collect.settings;
@@ -141,6 +145,43 @@ test("all mobile samples and assertions survive a complete desktop collect witho
   );
 });
 
+test("fixture snapshot retains the final mobile attempt when desktop reuses the raw paths", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "lh-fixture-snapshot-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const clear = () => clearAttemptEvidence({ lhciDir: dir, qualityDir: join(dir, "reports") });
+  await writeFile(join(dir, "lhr-100.json"), "short mobile attempt");
+  clear();
+
+  const final = [
+    ["lhr-200.json", '{"fetchTime":"first"}'],
+    ["lhr-200-1.json", '{"fetchTime":"second"}'],
+    ["lhr-201.json", '{"fetchTime":"third"}'],
+    ["assertion-results.json", "[]"],
+  ];
+  for (const [name, body] of final) await writeFile(join(dir, name), body);
+  await writeFile(join(dir, "lhr-200.html"), "HTML report");
+  await writeFile(join(dir, "lhr-200-1-1.json"), "not a raw report name");
+  await writeFile(join(dir, "manifest.json"), "representative reports only");
+  await symlink("lhr-200.json", join(dir, "lhr-202.json"));
+  const nested = join(dir, "lhr-203.json");
+  await mkdir(nested);
+  await writeFile(join(nested, "lhr-204.json"), "nested report");
+  const args = [
+    fileURLToPath(new URL("./lighthouse-preserve-mobile.sh", import.meta.url)),
+    dir,
+    "mobile-fixture",
+  ];
+  childProcess.execFileSync("bash", args);
+  clear();
+  for (const [name] of final) await writeFile(join(dir, name), "desktop output");
+  assert.equal(childProcess.spawnSync("bash", args).status, 1);
+
+  const snapshot = join(dir, "mobile-fixture");
+  assert.deepEqual((await readdir(snapshot)).sort(), final.map(([name]) => name).sort());
+  for (const [name, body] of final)
+    assert.equal(await readFile(join(snapshot, name), "utf8"), body);
+});
+
 test("754.261ms server median remains red with no retry and survives desktop cleanup", async (t) => {
   const failure = JSON.stringify([
     {
@@ -243,6 +284,106 @@ test("allowlist retains correlation and native server wait only, without header/
   );
 });
 
+// Adapted from Lighthouse 13.6.0 core/test/create-test-trace.js (Apache-2.0,
+// Copyright 2018 Google LLC). The trace and DevTools log model the same final
+// document; Lighthouse 13.6's native audit reads the trace, not the log.
+function documentTrace(wait) {
+  const pid = 1111;
+  const tid = 222;
+  const browserPid = 13725;
+  const frame = "ROOT_FRAME";
+  const requestId = "NAVIGATION_ID";
+  const event = (name, ts, ph, cat, args, processId = pid) => ({
+    name,
+    ts,
+    pid: processId,
+    tid,
+    ph,
+    cat,
+    dur: 0,
+    args,
+  });
+  const timeline = "disabled-by-default-devtools.timeline";
+  const network = "devtools.timeline";
+  const responseTime = 1 + wait;
+  return {
+    traceEvents: [
+      {
+        ...event(
+          "TracingStartedInBrowser",
+          0,
+          "I",
+          timeline,
+          {
+            data: {
+              frameTreeNodeId: 6,
+              persistentIds: true,
+              frames: [{ frame, url: "about:blank", name: "", processId: pid }],
+            },
+          },
+          browserPid,
+        ),
+        s: "t",
+      },
+      event("navigationStart", 0, "R", "blink.user_timing", {
+        frame,
+        data: {
+          documentLoaderURL: resource.url,
+          isLoadingMainFrame: true,
+          navigationId: requestId,
+        },
+      }),
+      event("thread_name", 0, "M", "__metadata", { name: "CrRendererMain" }),
+      event(
+        "FrameCommittedInBrowser",
+        0,
+        "I",
+        timeline,
+        { data: { frame, url: resource.url, name: "", processId: pid } },
+        browserPid,
+      ),
+      event("domContentLoadedEventEnd", 10, "R", "blink.user_timing,rail", { frame }),
+      event("firstContentfulPaint", 10, "R", "loading,rail,devtools.timeline", {
+        frame,
+        data: { navigationId: requestId },
+      }),
+      event("ResourceWillSendRequest", 1000000, "I", network, { data: { requestId } }),
+      event("ResourceSendRequest", 1000000, "I", network, {
+        data: {
+          requestId,
+          initiator: { type: "other" },
+          resourceType: "Document",
+          url: resource.url,
+        },
+      }),
+      event("ResourceReceiveResponse", 1000000 + responseTime * 1000, "I", network, {
+        data: {
+          requestId,
+          mimeType: "text/html",
+          statusCode: 200,
+          timing: {
+            requestTime: 1,
+            sendEnd: 1,
+            receiveHeadersStart: responseTime,
+            receiveHeadersEnd: responseTime,
+          },
+          connectionId: 140,
+          connectionReused: false,
+          protocol: "h2",
+        },
+      }),
+      event("ResourceFinish", 2000000 + responseTime * 1000, "I", network, {
+        data: {
+          requestId,
+          finishTime: (2000000 + responseTime * 1000) / 1000000,
+          encodedDataLength: 0,
+          decodedBodyLength: 0,
+        },
+      }),
+    ],
+  };
+}
+
 test("real Lighthouse audit selects the same main document and leaves the real LHCI 600ms median red", async () => {
   const { default: ServerResponseTime } = await import(
     "lighthouse/core/audits/server-response-time.js"
@@ -295,23 +436,30 @@ test("real Lighthouse audit selects the same main document and leaves the real L
       finalDisplayedUrl: resource.url,
     },
     GatherContext: { gatherMode: "navigation" },
+    Trace: documentTrace(754.261),
+    SourceMaps: [],
+    HostDPR: 1,
   };
-  const context = { computedCache: new Map() };
+  const context = { computedCache: new Map(), settings: {} };
   const native = await ServerResponseTime.audit(artifacts, context);
   const diagnostic = await DocumentTiming.audit(artifacts, context);
-  assert.equal(native.numericValue, 754.261);
-  assert.equal(diagnostic.details.serverWaitMs, native.numericValue);
+  // Lighthouse 13.6 rounds the trace-based result to whole milliseconds;
+  // the diagnostic deliberately retains the raw DevTools timing.
+  assert.equal(native.numericValue, 754);
+  assert.equal(Math.round(diagnostic.details.serverWaitMs), native.numericValue);
   assert.equal(diagnostic.details.requestId, "0123456789abcdef-LHR");
   assert.equal(diagnostic.score, null);
   assert.doesNotMatch(JSON.stringify(diagnostic), /DO_NOT_COPY|private|Cookie|Authorization/);
-  const reports = [650.73, 754.261, 769.81].map((value) => lhr(`${origin}/events`, value));
+  const reports = [650.73, native.numericValue, 769.81].map((value) =>
+    lhr(`${origin}/events`, value),
+  );
   const options = require("./lighthouserc.cjs").ci.assert;
   const failure = getAllAssertionResults(options, reports).find(
     (row) => row.auditId === "server-response-time",
   );
   assert.equal(failure.passed, false);
   assert.equal(failure.expected, 600);
-  assert.equal(failure.actual, 754.261);
+  assert.equal(failure.actual, 754);
   const withDiagnostics = reports.map((report) => ({
     ...report,
     audits: { ...report.audits, "main-document-timing": { ...diagnostic, numericValue: 0 } },
@@ -567,8 +715,11 @@ test("real MainResource selects the final document navigation, not a later same-
       finalDisplayedUrl: resource.url,
     },
     GatherContext: { gatherMode: "navigation" },
+    Trace: documentTrace(754.261),
+    SourceMaps: [],
+    HostDPR: 1,
   };
-  const context = { computedCache: new Map() };
+  const context = { computedCache: new Map(), settings: {} };
   const selected = await MainResource.request({ devtoolsLog: log, URL: artifacts.URL }, context);
   assert.equal(selected.requestId, "reload");
   const diagnostic = await DocumentTiming.audit(artifacts, context);
@@ -577,7 +728,7 @@ test("real MainResource selects the final document navigation, not a later same-
   assert.equal(diagnostic.details.requestId, "2222222222222222-LHR");
   assert.equal(diagnostic.details.cfRay, "2222222222222222-LHR");
   assert.equal(diagnostic.details.serverWaitMs, 754.261);
-  assert.equal(diagnostic.details.serverWaitMs, native.numericValue);
+  assert.equal(Math.round(diagnostic.details.serverWaitMs), native.numericValue);
 });
 
 test("malformed assertions stay failing over full samples, regardless of diagnostics", async (t) => {

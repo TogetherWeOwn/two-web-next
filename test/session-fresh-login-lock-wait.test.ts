@@ -6,11 +6,15 @@
 // overlapping-issuance end states are pinned in
 // test/session-overlapping-signin.test.ts (acceptance-owned).
 import { describe, expect, it } from "vitest";
-import { withFreshLoginUserLock } from "../src/index";
+import { FRESH_LOGIN_LOCK_WAIT_MS, withFreshLoginUserLock } from "../src/http/session";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("withFreshLoginUserLock bounded wait", () => {
+  it("keeps the production wait at ten seconds", () => {
+    expect(FRESH_LOGIN_LOCK_WAIT_MS).toBe(10_000);
+  });
+
   it("a waiter proceeds after the bound when the holder never settles", async () => {
     let releaseHolder!: () => void;
     const holderGate = new Promise<void>((resolve) => {

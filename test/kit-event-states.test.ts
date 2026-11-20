@@ -540,9 +540,8 @@ describe("Kit cancelled presentation", () => {
     expect(kitHtml).not.toContain('data-testid="signin"');
   });
 
-  it("keeps the served Hono hero core inside the extended Kit hero", async () => {
-    // The Kit hero deliberately extends the Hono one (alternatives + ICS are
-    // the new acceptance), so parity is the shared core, not the section.
+  it("keeps the served Hono hero core and the upcoming recovery link", async () => {
+    // Kit puts recovery links below the cancellation record and facts.
     const source = honoFixture();
     const honoHtml = await (await source.request()).text();
     const { store } = fakeStore();
@@ -556,11 +555,12 @@ describe("Kit cancelled presentation", () => {
       '<p class="event-kicker">Chess</p>',
       'data-testid="event-cancelled">Cancelled',
       "<h1>Chess night</h1>",
-      ">See upcoming events</a>",
     ]) {
       expect(honoHero).toContain(core);
       expect(kitHero).toContain(core);
     }
+    expect(honoHero).toContain(">See upcoming events</a>");
+    expect(kitHtml).toContain(">See upcoming events</a>");
   });
 });
 

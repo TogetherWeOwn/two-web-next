@@ -21,7 +21,20 @@ const dir = ".github/workflows";
 const workflows = readdirSync(dir)
   .filter((name) => name.endsWith(".yml"))
   .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
+// Locally defined checks whose job must live in a repo workflow; the doc test
+// below uses `documented`, which also names the app-installed and
+// organization-managed required checks that no local workflow defines.
 const required = ["ci-ok", "gitleaks", "e2e-ok", "pr-lint"];
+const documented = [
+  "ci-ok",
+  "gitleaks",
+  "e2e-ok",
+  "pr-size-gate / gate",
+  "Devin Review",
+  "pr-standards",
+  "CodeQL",
+  "pr-lint",
+];
 const triggers = (text: string) => text.split(/\non:\n/)[1]?.split(/\n\S/)[0] ?? "";
 // Children of the pull_request trigger: filters (paths, branches) live here.
 const pullRequestBlock = (text: string) =>
@@ -54,7 +67,10 @@ describe("required checks always report", () => {
       .flatMap((bullet) =>
         [...(bullet.split("\n\n")[0] ?? "").matchAll(/`([^`]+)`/g)].map((m) => m[1]).slice(1),
       );
-    expect(named).toEqual(required);
+    expect(named).toEqual(documented);
+    expect(named).not.toContain("CodeRabbit");
+    expect(section).toContain("CodeRabbit is advisory");
+    expect(section).not.toMatch(/CodeRabbit is(?![^.]*\badvisory\b)[^.]*\brequired\b/);
   });
 
   it("AGENTS.md and README.md name the live required set, not the retired check triple", () => {

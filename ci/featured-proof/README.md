@@ -2,12 +2,7 @@
 
 This is the bounded offline CI lane authorized by [TOG-11003](/TOG/issues/TOG-11003), following [TOG-10986](/TOG/issues/TOG-10986). The installed GitHub company-bot connection `73e50cff-255d-4fc3-9ec1-8553a8984cfd` successfully listed this repository's workflows; the documented project-scoped git credential helper successfully read `main` before implementation. Neither the stopped `gh` shim nor runtime-tools transport is used. No connection, credential, paid runner or capacity provisioning is involved.
 
-Both capture jobs run on `[self-hosted, two-selfhosted]` while the repository is private and on GitHub-hosted `ubuntu-latest` while it is public, because the org runner group refuses public repositories ([TOG-12326](/TOG/issues/TOG-12326)). Both retain their digest-pinned browser job container, isolating browser execution from the runner host. No additional capacity is requested.
-
-Runner routing update: `pull_request` runs of this workflow (the
-`current-source` job included) now always use GitHub-hosted
-`ubuntu-latest`, in both visibilities. The visibility routing above now
-applies to manual dispatches only. See `docs/private-flip-checklist.md`.
+Every job runs on standard GitHub-hosted `ubuntu-latest` for every event and visibility. Both capture jobs retain their digest-pinned browser container. No private-fleet admission or additional capacity is implied.
 
 ## Current-source PR proof
 
@@ -22,10 +17,10 @@ PR source changes run this new job automatically. Manual `workflow_dispatch` ret
 ## Frozen-input invocation and containment
 
 - Service/repository: GitHub Actions, `TogetherWeOwn/two-web-next`.
-- Entry point: `.github/workflows/featured-offline-proof.yml`, job `capture` on the visibility-routed runner above, in the pinned browser job container.
+- Entry point: `.github/workflows/featured-offline-proof.yml`, job `capture` on the hosted runner above, in the pinned browser job container.
 - Runs on an explicitly authorized `workflow_dispatch`; PR changes use the separate current-source job above. No automatic main/deployment job is added.
 - Browser image: `mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d`. The public MCR manifest resolved this digest on 2026-09-30; amd64 manifest is `sha256:65cefd09a5e943921ecd3a6e5414c603db2eb161e9eb48f2e2ccc63486dc7dc0`.
-- Matching `playwright@1.58.2` npm module is installed **only inside the CI container**, under `RUNNER_TEMP`, with scripts/browser downloads disabled. No root app dependency changes, host installs or browser installs.
+- Matching `playwright@1.58.2` npm module is installed **only inside the CI container**, under `RUNNER_TEMP`, from the reviewed isolated runtime manifest and integrity lock with `npm ci --ignore-scripts`. Browser downloads are disabled. No root app dependency changes, host installs or browser installs.
 - The guard executes the unchanged driver as `node capture-featured-proof.cjs <fixture-directory> <new-output-directory>`. The workflow invokes the guard with `node ci/featured-proof/run-capture.cjs ci/featured-proof/fixtures "$PROOF_OUTPUT"`.
 - Driver uses direct `setContent`, offline contexts, JavaScript disabled, service workers blocked and all routed requests aborted. It never starts an app/server, uses a DB/deployed endpoint, clicks a link or submits a form.
 - Guard independently fails on changed driver/fixtures, incomplete reports/PNGs, failed states or any recorded attempted request. It keeps driver reports/partial captures on failure and adds a failure report if the driver could not create one. Artifact upload runs even on failure.
@@ -55,16 +50,24 @@ Only supplied saved static SSR states are covered. Not auth, save interactions, 
 
 The current-source guard follows runtime imports, including the exact ignored
 `src/leaf-critical-css.ts` output before it exists. That module requires scope
-coverage for its tracked generator, `ci/build-leaf-css.mjs`, and all three inputs:
-`public/styles.css`, `public/theme-tokens.css` and `public/theme.css`. Listing the
+coverage for its tracked generator, `ci/build-leaf-css.mjs`, its tracked dictionary
+packer, `ci/css-dictionary.mjs`, the tracked runtime decoder, `src/css-dictionary.ts`,
+and all four inputs: `public/styles.css`, `public/theme-tokens.css`,
+`public/theme.css` and `web/src/lib/site-header.css`, in that order. Listing the
 output itself does not replace those requirements. Other runtime source modules
 still require ordinary direct or glob coverage.
 
-The guard pins the generator's SHA-256 without executing it and reads every input.
-Only the exact generated output may be absent before generation; when present,
-its complete bytes, provenance header and CSS hash must match the inputs and
-reviewed recipe. Generator changes require deliberate review of the provenance
-contract in `run-capture.test.cjs`; stale output requires regeneration. No browser
+The guard pins the SHA-256 of both the generator and the packer without executing
+either, requires the decoder file to exist, and reads every input. Only the exact
+generated output may be absent before generation. When present, its complete bytes
+must match the reviewed header, the known `decodeCssDictionary(...)` initializer
+(or the literal fallback for marker-colliding or oversized CSS), the CSS hash and
+the inputs. The guard parses the packed text and dictionary as data and decodes
+them with its own decoder, so it never imports or runs the generated module, the
+packer or the runtime decoder. Any dictionary that decodes to exactly the inputs
+is accepted; the canonical packer choice is covered by the pinned packer hash.
+Generator or packer changes require deliberate review of the provenance contract
+in `run-capture.test.cjs`; stale output requires regeneration. No browser
 container, fixture, capture driver or network-containment setting changes.
 
 Credential-free local guard regression command (no browser/module/server/DB):

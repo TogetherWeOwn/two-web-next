@@ -92,14 +92,21 @@ export type Env = AgentEventsEnv & {
   // stays disabled until the companion passes; honoured only for an http
   // loopback APP_URL (src/route-ownership.ts fixtureManifestFor).
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
+  // Loopback Kit parity fixture only; the shipped join entry stays disabled.
+  KIT_PARITY_FIXTURE_JOIN?: string;
+  // Loopback Kit parity fixture only; serves GET /admin for dashboard captures.
+  KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
   // Generated local capture build only; no deployed config defines the build gate.
   SSR_CAPTURE_FIXTURE?: string;
   // Staging Kit rollout controls (web/wrangler.staging.jsonc only). The exact
   // staging APP_URL activates a fail-closed route manifest: unset or malformed
-  // values keep archive and static families on Hono. Preview fixture workers
+  // values keep the corresponding families on Hono. Preview fixture workers
   // and production do not set these flags.
   KIT_ROUTE_ARCHIVE?: string;
   KIT_ROUTE_STATIC?: string;
+  KIT_ROUTE_EVENTS?: string;
+  KIT_ROUTE_HOME?: string;
+  KIT_ROUTE_JOIN?: string;
   // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
   // model-context island on the four pilot pages; unset or anything else
   // leaves pages byte-identical. No session, cookie or database read.

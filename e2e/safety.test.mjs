@@ -81,6 +81,22 @@ test("intentional RSVP controls suppress raw failure uploads with the exact pred
   assert.match(uploads[0], /^        uses: actions\/upload-artifact@/m);
 });
 
+test("intentional RSVP controls suppress retained visual reports", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
+  const uploads = workflow
+    .split(/(?=^      - )/m)
+    .filter((step) => step.startsWith("      - name: Retain visual report\n"));
+  assert.equal(uploads.length, 1);
+  assert.equal(
+    uploads[0].match(/^        if: (.+)$/m)?.[1],
+    "${{ always() && steps.visual.outcome != 'skipped' && !(github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'test/rsvp-pending-control-')) }}",
+  );
+  assert.match(uploads[0], /^        uses: actions\/upload-artifact@/m);
+  assert.match(uploads[0], /path: playwright-report-visual\//);
+  assert.match(uploads[0], /if-no-files-found: error/);
+  assert.match(uploads[0], /retention-days: 7/);
+});
+
 test("RSVP control upload predicate never gates browser checks or cleanup", () => {
   const workflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
   const steps = workflow.split(/(?=^      - )/m);
@@ -95,13 +111,18 @@ test("RSVP control upload predicate never gates browser checks or cleanup", () =
   assert.match(screenshots[0], /^        uses: actions\/upload-artifact@/m);
   assert.match(screenshots[0], /test-results\/\*\*\/attachments\/hono-review-\*\.png/);
   assert.match(screenshots[0], /test-results-kit-parity\/\*\*\/attachments\/kit-review-\*\.png/);
+  assert.match(
+    screenshots[0],
+    /test-results-kit-visual\/\*\*\/attachments\/kit-review-calendar-\*\.png/,
+  );
   assert.match(screenshots[0], /if-no-files-found: error/);
   assert.match(screenshots[0], /retention-days: 7/);
   const execution = steps
     .filter(
       (step) =>
         !step.startsWith("      - name: Failure traces and report\n") &&
-        !step.startsWith("      - name: Saved review screenshots\n"),
+        !step.startsWith("      - name: Saved review screenshots\n") &&
+        !step.startsWith("      - name: Retain visual report\n"),
     )
     .join("");
   for (const name of [
@@ -118,7 +139,7 @@ test("RSVP control upload predicate never gates browser checks or cleanup", () =
   ]) {
     assert.ok(execution.includes(`      - name: ${name}\n`), `missing execution step: ${name}`);
   }
-  // Exclude only the two verified uploads: job-level gates and every execution step stay checked.
+  // Exclude only the three verified uploads: job-level gates and every execution step stay checked.
   assert.doesNotMatch(execution, /test\/rsvp-pending-control-/);
 });
 

@@ -28,6 +28,7 @@ import {
   type SessionStore,
 } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { fetchApp } from "./helpers/fetch-app";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
@@ -175,7 +176,17 @@ describe.each(backends)("PATCH /members/:user is self-only ($name)", (backend) =
       throttle: async () => ({ limited: false }),
     });
   });
-  const send = (path: string, init: RequestInit) => app.request(path, init, env);
+  // Exercise the injected profile sub-app, not the mounted app or a built Kit Worker.
+  const send = (path: string, init: RequestInit) =>
+    fetchApp(
+      new Request(new URL(path, APP_URL), init),
+      env,
+      {
+        waitUntil: () => {},
+        passThroughOnException: () => {},
+      } as unknown as ExecutionContext,
+      app.fetch,
+    );
 
   it("another member or a moderator gets 403 on every write shape and no row changes", async () => {
     const before = await seeded.snapshot();

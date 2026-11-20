@@ -210,7 +210,10 @@ async function dispatchKit(
   body = "<html>kit</html>",
 ) {
   const request = kitRequest(path, headers);
-  const event: HookEventLike = { request, url: new URL(request.url), route: { id: "/about" } };
+  const url = new URL(request.url);
+  const isDataRequest = url.pathname.endsWith("/__data.json");
+  if (isDataRequest) url.pathname = url.pathname.slice(0, -"/__data.json".length);
+  const event: HookEventLike = { request, url, isDataRequest, route: { id: "/about" } };
   const seen: Seen = {};
   const resolveFn = vi.fn(async (renderEvent: HookEventLike) => {
     // Shallow snapshot: the id is a top-level string, and later dispatch steps

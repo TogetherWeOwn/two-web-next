@@ -15,9 +15,17 @@
  * Head-only metadata has no utility classes and also stays out of detection. */
 @source "./**/*.svelte";
 @source not "./lib/SiteMetadata.svelte";
-/* Prose, attributes and the relative leaderboard scope produce these false
- * candidates, never classes. kit-tailwind-sources.test.ts guards that boundary. */
-@source not inline("visible relative static block hidden table");
+/* SkipLink uses scoped CSS, not utility classes. Its CSS declarations are
+ * otherwise scanned as utility candidates; restore detection if it uses any. */
+@source not "./lib/SkipLink.svelte";
+/* These primitives use scoped styles and reference-backed theme fallbacks, not
+ * utilities. Revisit if they acquire utility classes or forward class names. */
+@source not "./lib/Chip.svelte";
+@source not "./lib/SegmentedControl.svelte";
+@source not "./lib/StructuredTime.svelte";
+/* Prose, attributes, component CSS and the relative leaderboard scope produce
+ * these false candidates, never classes. kit-tailwind-sources.test.ts guards that boundary. */
+@source not inline("visible relative static block hidden table inline outline flex flex-wrap");
 
 /* The join-attempts audit page keeps the Hono viewer's `filters` form class
  * for markup parity, but Tailwind v4 lifts a `filter` candidate from that
@@ -49,29 +57,42 @@ html body {
  * The light ink is set directly on those elements: overriding --muted on the
  * shell would also recolor the dashboard's light resource cards
  * (.card p uses var(--muted) on #fffdf8), dropping them to 1.81:1. */
-.kit-admin :is(.field .hint, .hint, footer) {
-  color: var(--color-lobby-muted);
+.kit-admin .brand {
+  color: var(--color-lobby-ink);
+  outline-color: currentColor;
 }
-/* Validation states. The shared sheet paints the summary cream (#fff7ed) and
- * field errors rust (#9a3412), so on this canvas the inherited ink measured
- * ~1.0:1, the UA dark-scheme summary links ~2.3:1 and the errors ~2.5:1. The
- * summary takes the raised surface (keeping the inherited lobby ink) with
- * accent links; field errors inherit the lobby ink from .field (inherit, not
- * the token, keeps the client CSS budget) with weight and the summary's
- * existing --brand rail (3.49:1 on the canvas), so they read as errors
- * without relying on text color alone. Summary links pin the lobby focus
- * color so their ring never falls back to a dark --ink outline (1.24:1 on the
- * raised surface). */
-.kit-admin :is(fieldset, .notice) {
-  background: var(--color-lobby-raised);
-}
-.kit-admin .notice a {
-  color: var(--color-lobby-accent);
+.kit-admin :is(.reconciliation-focus, .reconciliation-error a):focus-visible {
   outline-color: var(--color-lobby-focus);
 }
-.kit-admin .field .error {
-  color: inherit;
-  font-weight: 600;
-  border-left: 3px solid var(--brand);
-  padding-left: 0.5rem;
+.kit-admin :is(.facts .card h2 a, p.notice) {
+  color: var(--ink);
+}
+.kit-admin :is(.field .hint, .hint) {
+  color: var(--color-lobby-muted);
+}
+.kit-admin footer {
+  color: var(--color-lobby-muted);
+}
+.kit-admin fieldset {
+  background: var(--color-lobby-raised);
+}
+
+/* Use the dark admin roles for event validation without retheming other notices. */
+.kit-admin .notice[data-admin-validation-summary] {
+  background: var(--color-lobby-raised);
+  border-left-color: var(--color-lobby-accent);
+  color: var(--color-lobby-ink);
+}
+.kit-admin .notice[data-admin-validation-summary] a {
+  color: var(--color-lobby-accent);
+}
+.kit-admin .notice[data-admin-validation-summary]:focus-visible,
+.kit-admin .notice[data-admin-validation-summary] a:focus-visible,
+.kit-admin
+  :is(#f-accessibility-notes, #f-organizer-name, #f-join-url, #f-join-instructions):focus-visible {
+  outline-color: var(--color-lobby-focus);
+}
+.kit-admin [data-event-editor][data-event-draft] .field .error,
+.kit-admin [data-event-editor] [data-event-text-limit] + .error {
+  color: var(--color-danger);
 }

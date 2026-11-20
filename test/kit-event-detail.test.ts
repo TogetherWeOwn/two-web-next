@@ -15,6 +15,7 @@ import { build } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
+import { jsx } from "hono/jsx";
 import { serializeSigned } from "hono/utils/cookie";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import app from "./app";
@@ -36,10 +37,12 @@ import {
   dispatchEventDetailRequest,
   eventDetailConsumesFlash,
   eventDetailErrorPayload,
+  kitEventFacts,
   resolveKitEventDetail,
   type KitEventDetailStore,
 } from "../src/events/kit-detail";
-import { withEventDetailHtml } from "../src/events/detail-leaves";
+import { EventMetadata, withEventDetailHtml } from "../src/events/detail-leaves";
+import { RSVP_COPY } from "../src/islands/contracts";
 import { ROUTE_MANIFEST, resolveRouteOwner } from "../src/route-ownership";
 
 const APP_URL = "https://next.example.test";
@@ -911,7 +914,7 @@ describe("Kit detail presentation", () => {
           event: {
             ...row(),
             goingCount: 3,
-            startsAt: new Date("2098-12-31T19:00:00Z"),
+            startsAt: new Date("-000001-12-31T19:00:00Z"),
             endsAt: new Date("2098-12-31T21:00:00Z"),
           } as PublicEvent,
         }),
@@ -921,8 +924,44 @@ describe("Kit detail presentation", () => {
       html.push(renderDetail(outcome.model as unknown as Record<string, unknown>));
       expect(Date.now()).toBe(new Date(wall).getTime());
     }
-    expect(html[0]).toContain("Happening now");
+    expect(html[0]).toContain('id="kit-live-refresh"');
+    expect(html[0]).toContain('data-as-of="2098-12-31T20:00:00.000Z"');
+    expect(html[0]).toContain('data-stale-at="2098-12-31T20:05:00.000Z"');
     expect(html[0]).toBe(html[1]);
+  });
+
+  it("shows live timing in published review without enabling RSVP", async () => {
+    const endsAt = new Date("2026-10-25T01:15:00.001Z");
+    const event = {
+      ...row({ timezone: "Europe/London", startsAt: new Date("2026-10-25T00:45:00Z"), endsAt }),
+      goingCount: 0,
+      goingOccupancy: 0,
+    };
+    const render = () =>
+      resolve(KEY, fakeStore({ event }), memberSession(MOD_ID, true), null, "?review=1");
+    vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(new Date(+event.endsAt - 1));
+    const { outcome: last } = await render();
+    expect(last.kind).toBe("ok");
+    if (last.kind !== "ok") throw new Error(last.kind);
+    expect(last.model.liveTime).toMatchObject({
+      staleAt: event.endsAt.toISOString(),
+      asOf: new Date(+endsAt - 1).toISOString(),
+    });
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(last.model as unknown as Record<string, unknown>);
+    expect(html).toContain("since 01:45 GMT+1");
+    const asOf = /<time datetime="2026-10-25T01:15:00\.000Z">01:15 GMT(?:\+0)?<\/time>/;
+    expect(html.replace(/<!---->/g, "")).toMatch(asOf);
+    expect(last.model.review?.actions).toContain("Back to edit");
+    expect(last.model.detailHtml.rsvp).toContain("disabled");
+    expect(last.model.lifecycle).toBeNull();
+    vi.setSystemTime(event.endsAt);
+    const { outcome: end } = await render();
+    expect(end.kind).toBe("ok");
+    if (end.kind !== "ok") throw new Error(end.kind);
+    expect(end.model.liveTime).toBeUndefined();
+    expect(end.model.lifecycle).toMatchObject({ date: "25 Oct 2026", endTime: "01:15" });
+    expect(end.model.rsvpClosed).toBe("past");
   });
 
   function freezeRosterClock() {
@@ -1026,7 +1065,7 @@ describe("Kit detail presentation", () => {
     [
       "ended event",
       { startsAt: new Date("2020-01-10T20:00:00Z"), endsAt: new Date("2020-01-10T22:00:00Z") },
-      "This one has been and gone",
+      /<h2 id="signup-record-heading"[^>]*>Sign-up record<\/h2>/,
       false,
     ],
     ["paused RSVPs", { rsvpOpen: false }, "RSVPs are paused for this event", false],
@@ -1051,7 +1090,8 @@ describe("Kit detail presentation", () => {
       if (outcome.kind !== "ok") throw new Error("unreachable");
       const { renderDetail } = await buildKitEventDetailBundle();
       const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
-      expect(html).toContain(verdict);
+      if (typeof verdict === "string") expect(html).toContain(verdict);
+      else expect(html).toMatch(verdict);
       expect(html).toContain('data-testid="event-roster-empty"');
       expect(html).toContain("No one is listed as going yet.");
       expect(html).not.toMatch(/No RSVPs(\.| yet)/);
@@ -1064,7 +1104,7 @@ describe("Kit detail presentation", () => {
     [
       "ended event",
       { startsAt: new Date("2020-01-10T20:00:00Z"), endsAt: new Date("2020-01-10T22:00:00Z") },
-      "This one has been and gone",
+      /<h2 id="signup-record-heading"[^>]*>Sign-up record<\/h2>/,
     ],
     ["paused RSVPs", { rsvpOpen: false }, "Log in with Discord"],
   ])(
@@ -1085,7 +1125,8 @@ describe("Kit detail presentation", () => {
       if (outcome.kind !== "ok") throw new Error("unreachable");
       const { renderDetail } = await buildKitEventDetailBundle();
       const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
-      expect(html).toContain(rsvpCopy);
+      if (typeof rsvpCopy === "string") expect(html).toContain(rsvpCopy);
+      else expect(html).toMatch(rsvpCopy);
       expect(html).toContain('data-testid="event-roster-guest-nudge"');
       expect(html).toContain("No one is listed as going yet.");
       expect(html).not.toMatch(/No RSVPs(\.| yet)/);
@@ -1229,17 +1270,28 @@ describe("Kit detail presentation", () => {
     const pastHtml = renderDetail(past.outcome.model as unknown as Record<string, unknown>);
     expect(pastHtml).toContain('data-testid="event-past"');
     expect(pastHtml).toContain("text/markdown");
-    // A past row closes RSVP for members, exactly as the served button does.
+    // An ended past row still closes RSVP for members, but shows the sign-up record.
     const pastMember = await resolve(
       KEY,
-      fakeStore({ event: { ...row({ status: "past" }), goingCount: 3 } as PublicEvent }),
+      fakeStore({
+        event: {
+          ...row({
+            status: "past",
+            startsAt: new Date("2020-01-01T20:00:00Z"),
+            endsAt: new Date("2020-01-01T22:00:00Z"),
+          }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
       memberSession(),
     );
     if (pastMember.outcome.kind !== "ok") throw new Error("unreachable");
     const pastMemberHtml = renderDetail(
       pastMember.outcome.model as unknown as Record<string, unknown>,
     );
-    expect(pastMemberHtml).toContain('data-testid="rsvp-closed"');
+    expect(pastMemberHtml).toContain("No Echo for this one. 3 signed up.");
+    expect(pastMemberHtml).not.toContain(`action="/e/${KEY}/rsvp"`);
+    expect(pastMemberHtml).not.toContain("Next one:");
   });
 
   // The host/join fields are independently optional, so each one renders on
@@ -1262,7 +1314,7 @@ describe("Kit detail presentation", () => {
     expect(outcome.model.joinInstructions).toBeNull();
     const { renderDetail } = await buildKitEventDetailBundle();
     const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
-    expect(html).toContain('data-testid="event-organizer">Solo host');
+    expect(html).toMatch(/data-testid="event-organizer"[^>]*>Solo host/);
     expect(html).not.toContain('data-testid="event-join-details"');
   });
 
@@ -1569,20 +1621,27 @@ describe("event-detail gone presentation", () => {
     expect(viewerRsvpFn).not.toHaveBeenCalled();
   });
 
-  it("degrades to an empty alternatives list when the related read fails", async () => {
+  it.each(["relatedFn", "seriesFn"] as const)("keeps the 410 when %s fails", async (read) => {
     const store = fakeStore({
-      event: { ...row({ status: "cancelled" }), goingCount: 3 } as PublicEvent,
+      event: { ...row({ status: "cancelled", recurrenceIndex: 1 }), goingCount: 3 } as PublicEvent,
     });
+    const fail = vi.fn().mockRejectedValue(new Error("optional read down"));
+    const upcoming = RELATED[0]!;
     const { outcome } = await resolve(KEY, {
       ...store,
-      relatedFn: async () => {
-        throw new Error("related down");
-      },
+      seriesFn: async () => ({ hosts: [], previous: null, next: null, upcoming }),
+      [read]: fail,
     });
+    expect(fail).toHaveBeenCalledOnce();
     expect(outcome.kind).toBe("gone");
     if (outcome.kind !== "gone") throw new Error("unreachable");
     expect(outcome.status).toBe(410);
-    expect(outcome.model.related).toEqual([]);
+    expect(outcome.headers["cache-control"]).toBe("private, no-store");
+    expect(outcome.model.related.map(({ key }) => key)).toEqual(
+      read === "relatedFn" ? [] : RELATED.map(({ eventKey }) => eventKey),
+    );
+    const nextHref = read === "relatedFn" ? `/e/${upcoming.eventKey}` : undefined;
+    expect(outcome.model.nextDate?.href).toBe(nextHref);
     expect(outcome.model.title).toBe("Chess night");
   });
 
@@ -1726,5 +1785,218 @@ describe("event-detail read throttle", () => {
     expect(res.headers.get("cache-control")).toBe("no-store, private");
     expect(await res.text()).toBe("slow down");
     expect(render).not.toHaveBeenCalled();
+  });
+});
+
+describe("Kit seat card derivation", () => {
+  const PAUSED = { tone: "warn", text: "Paused" };
+  const seatCard = async (
+    over: Partial<typeof events.$inferSelect>,
+    session: KitRequestSession,
+    store: Partial<Parameters<typeof fakeStore>[0]> = {},
+    search = "",
+  ) => {
+    const event = { ...row(over), goingCount: 3, goingOccupancy: 3 } as PublicEvent;
+    const { outcome } = await resolve(KEY, fakeStore({ event, ...store }), session, null, search);
+    if (outcome.kind !== "ok") throw new Error(outcome.kind);
+    return outcome.model.seatCard;
+  };
+
+  it.each([
+    ["open guest", {}, GUEST, "Log in to RSVP", null, "You'll come straight back here."],
+    ["paused guest", { rsvpOpen: false }, GUEST, "Log in to RSVP", PAUSED, RSVP_COPY.paused],
+    ["open member", {}, memberSession(), "Your RSVP", null, null],
+    ["paused member", { rsvpOpen: false }, memberSession(), "Your RSVP", PAUSED, null],
+  ] as const)("%s", async (_name, over, session, heading, tag, note) => {
+    expect(await seatCard(over, session)).toEqual({ heading, tag, note });
+  });
+
+  it.each([
+    ["past status", { status: "past" }],
+    ["ended published", { endsAt: new Date("2020-01-01T00:00:00Z") }],
+  ] as const)("closed %s hides the pause tag and note for guests and members", async (_n, over) => {
+    for (const rsvpOpen of [true, false]) {
+      for (const session of [GUEST, memberSession()]) {
+        expect(await seatCard({ ...over, rsvpOpen }, session)).toEqual({
+          heading: "RSVPs closed",
+          tag: null,
+          note: null,
+        });
+      }
+    }
+  });
+
+  it("shows a closed card for a draft visible to a moderator", async () => {
+    for (const rsvpOpen of [true, false]) {
+      expect(await seatCard({ status: "draft", rsvpOpen }, memberSession(MOD_ID, true))).toEqual({
+        heading: "RSVPs closed",
+        tag: null,
+        note: null,
+      });
+    }
+  });
+
+  it.each(["draft", "published"])("review mode clears every field for %s", async (status) => {
+    for (const rsvpOpen of [true, false]) {
+      expect(
+        await seatCard({ status, rsvpOpen }, memberSession(MOD_ID, true), {}, "?review=1"),
+      ).toEqual({ heading: null, tag: null, note: null });
+    }
+  });
+
+  it("ignores answer, position, occupancy and capacity", async () => {
+    const answers: (ViewerRsvp | null)[] = [
+      null,
+      { status: "going", syncedToDiscordAt: null },
+      { status: "maybe", syncedToDiscordAt: null },
+      { status: "waitlisted", syncedToDiscordAt: null },
+    ];
+    for (const rsvpOpen of [true, false]) {
+      for (const session of [GUEST, memberSession()]) {
+        const baseline = await seatCard({ rsvpOpen }, session, { answer: null });
+        for (const answer of answers) {
+          for (const waitlist of [null, 1, 5]) {
+            for (const [goingOccupancy, capacity] of [
+              [0, 10],
+              [10, 10],
+              [99, 10],
+              [3, null],
+            ] as const) {
+              const event = {
+                ...row({ rsvpOpen, capacity }),
+                goingCount: goingOccupancy,
+                goingOccupancy,
+              } as PublicEvent;
+              const { outcome } = await resolve(
+                KEY,
+                fakeStore({ event, answer, waitlist }),
+                session,
+              );
+              if (outcome.kind !== "ok") throw new Error(outcome.kind);
+              expect(outcome.model.seatCard).toEqual(baseline);
+            }
+          }
+        }
+      }
+    }
+  });
+});
+
+describe("Kit event facts list (C6)", () => {
+  it("lists Host then Game in kit order from real model data", () => {
+    expect(kitEventFacts({ organizerName: "Vexa", game: "Chess" })).toEqual([
+      { key: "Host", value: "Vexa" },
+      { key: "Game", value: "Chess" },
+    ]);
+  });
+
+  it.each([
+    [{ organizerName: null, game: "Chess" }, [{ key: "Game", value: "Chess" }]],
+    [{ organizerName: "Vexa", game: null }, [{ key: "Host", value: "Vexa" }]],
+    [{ organizerName: "  ", game: "" }, []],
+    [{ organizerName: null, game: null }, []],
+  ] as const)("omits unavailable data: %j", (input, expected) => {
+    expect(kitEventFacts({ ...input })).toEqual(expected);
+  });
+
+  it("never invents Room, Repeats, Talk or Share rows", async () => {
+    const facts = kitEventFacts({ organizerName: "Vexa", game: "Chess" });
+    expect(facts.map((fact) => fact.key)).not.toContain("Room");
+    expect(facts.map((fact) => fact.key)).not.toContain("Repeats");
+    expect(facts.map((fact) => fact.key)).not.toContain("Talk");
+    expect(facts.map((fact) => fact.key)).not.toContain("Share");
+  });
+
+  const hosted = (organizer_name: string | null, game: string | null) =>
+    fakeStore({
+      event: { ...row({ organizer_name, game }), goingCount: 3 } as PublicEvent,
+    });
+  const renderFor = async (store: KitEventDetailStore, session: KitRequestSession) => {
+    const { outcome } = await resolve(KEY, store, session);
+    if (outcome.kind !== "ok") throw new Error(outcome.kind);
+    const { renderDetail } = await buildKitEventDetailBundle();
+    return renderDetail(outcome.model as unknown as Record<string, unknown>);
+  };
+
+  it.each([
+    ["guest", GUEST],
+    ["member", memberSession()],
+  ] as const)(
+    "renders the facts box once in the rail for a %s, with Host not duplicated",
+    async (_n, session) => {
+      const html = await renderFor(hosted("Vexa", "Chess"), session);
+      const box =
+        html.match(/<section class="[^"]*event-facts[^"]*"[\s\S]*?<\/section>/)?.[0] ?? "";
+      expect(box).toContain('data-testid="kit-event-facts"');
+      expect(box).toContain('aria-label="Event facts"');
+      expect(box.match(/<dt\b[^>]*>Host<\/dt>/)?.index).toBeTypeOf("number");
+      expect(box.match(/<dt\b[^>]*>Host<\/dt>/)?.index ?? -1).toBeLessThan(
+        box.match(/<dt\b[^>]*>Game<\/dt>/)?.index ?? -1,
+      );
+      expect(box).toMatch(/data-testid="event-organizer"[^>]*>Vexa<\/p>/);
+      expect(box).toContain("Chess");
+      expect(box).not.toMatch(/<dt\b[^>]*>Room<\/dt>/);
+      expect(box).not.toMatch(/<dt\b[^>]*>Repeats<\/dt>/);
+      expect(box).not.toMatch(/<dt\b[^>]*>Talk<\/dt>/);
+      expect(box).not.toMatch(/<dt\b[^>]*>Share<\/dt>/);
+      // Host appears once: the metadata list no longer renders its own row.
+      expect(html.match(/data-testid="event-organizer"/g)).toHaveLength(1);
+      expect(html).not.toContain("<dt>Hosted by</dt>");
+      // The box sits in the rail ahead of the shared share leaf, which keeps the
+      // only copy-link/share hooks.
+      expect(html.indexOf('data-testid="kit-event-facts"')).toBeLessThan(
+        html.indexOf('data-testid="event-link-url"'),
+      );
+      expect(html.match(/data-testid="event-copy-link"/g)).toHaveLength(1);
+      expect(html).toContain("<dt>Where</dt>");
+    },
+  );
+
+  it("adds no member data to the facts for guests", async () => {
+    const html = await renderFor(hosted("Vexa", "Chess"), GUEST);
+    const box = html.match(/<section class="[^"]*event-facts[^"]*"[\s\S]*?<\/section>/)?.[0] ?? "";
+    expect(box).not.toContain("/members/");
+    expect(box).not.toContain("<a ");
+    expect(html).not.toContain('data-testid="event-attendees"');
+    expect(html).not.toContain(">ann<");
+  });
+
+  it("omits the box, and keeps the metadata untouched, when nothing is available", async () => {
+    const html = await renderFor(hosted(null, null), GUEST);
+    expect(html).not.toContain('data-testid="kit-event-facts"');
+    expect(html).not.toContain('data-testid="event-organizer"');
+    expect(html).toContain("<dt>Where</dt>");
+  });
+
+  it("renders only Game when there is no host", async () => {
+    const html = await renderFor(hosted(null, "Chess"), GUEST);
+    expect(html).toContain('data-testid="kit-event-facts"');
+    expect(html).toMatch(/<dt\b[^>]*>Game<\/dt>/);
+    expect(html).not.toMatch(/<dt\b[^>]*>Host<\/dt>/);
+  });
+
+  it("leaves the shared Hono metadata host row unchanged by default", () => {
+    const model = {
+      eventKey: KEY,
+      status: "published",
+      whenText: "w",
+      endsWhenText: "e",
+      timeDatetime: "",
+      endsAt: "",
+      zoneLabel: "UTC",
+      location: null,
+      directionsUrl: null,
+      organizerName: "Vexa",
+      goingCount: 0,
+      goingOccupancy: 0,
+      capacity: null,
+    };
+    const props = { model, showTimeFromNow: true, showSpotsLeft: true };
+    const hono = jsx(EventMetadata, props).toString();
+    expect(hono).toContain("<dt>Hosted by</dt>");
+    expect(hono).toContain('data-testid="event-organizer">Vexa</p>');
+    const kit = jsx(EventMetadata, { ...props, omitHost: true }).toString();
+    expect(kit).not.toContain("Hosted by");
+    expect(kit).not.toContain("event-organizer");
   });
 });

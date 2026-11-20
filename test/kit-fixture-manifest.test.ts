@@ -280,6 +280,156 @@ describe("fixtureManifestFor (Kit parity fixture only)", () => {
   });
 });
 
+describe("fixtureManifestFor (join)", () => {
+  it("can only override join and recovery on HTTP loopback", () => {
+    expect(
+      fixtureManifestFor({ APP_URL: "http://localhost:8788", KIT_PARITY_FIXTURE_JOIN: "false" }),
+    ).toBeUndefined();
+    for (const APP_URL of [
+      "https://localhost:8788",
+      "https://next.togetherweown.com",
+      "http://example.com",
+    ]) {
+      expect(fixtureManifestFor({ APP_URL, KIT_PARITY_FIXTURE_JOIN: "true" })).toBeUndefined();
+    }
+    const manifest = fixtureManifestFor({
+      APP_URL: "http://127.0.0.1:8788",
+      KIT_PARITY_FIXTURE_JOIN: "true",
+    })!;
+    expect(ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === "/join")?.enabled).toBe(
+      true,
+    );
+    expect(manifest.find((e) => e.method === "GET" && e.path === "/join")?.enabled).toBe(true);
+    expect(manifest.filter((e, i) => e !== ROUTE_MANIFEST[i]).map((e) => e.path)).toEqual([
+      "/join",
+      "/auth/recover",
+    ]);
+    expect(ROUTE_MANIFEST.find((e) => e.path === "/auth/recover")?.enabled).toBe(true);
+    expect(manifest.find((e) => e.path === "/auth/recover")?.enabled).toBe(true);
+  });
+
+  it("dispatches join through Kit without a loopback fixture flag", async () => {
+    const request = new Request("http://127.0.0.1:8788/join?next=%2Fevents", {
+      headers: { host: "127.0.0.1:8788" },
+    });
+    const resolve = vi.fn(async () => new Response("kit join"));
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    const res = await dispatchHookRequest(
+      { request, url: new URL(request.url), route: { id: "/join" } },
+      { appUrl: "http://127.0.0.1:8788", honoFetch, resolve },
+    );
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(honoFetch).not.toHaveBeenCalled();
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(await res.text()).toBe("kit join");
+  });
+});
+
+it.each(["GET", "HEAD"])(
+  "%s uses the Hono recovery controller without a Kit session read",
+  async (method) => {
+    const appUrl = "http://127.0.0.1:8788";
+    const url = new URL("/auth/recover", appUrl);
+    const request = new Request(url, { method });
+    const event = { request, url, route: { id: "/auth/recover" } };
+    const refusal = new Response(null, { status: 429 });
+    const recoveryPage = vi.fn(async () => refusal);
+    const deps = {
+      appUrl,
+      recoveryPage,
+      resolve: vi.fn(),
+      sessionFor: vi.fn(),
+      honoFetch: vi.fn(async () => new Response(null, { status: 404 })),
+    };
+    expect(await dispatchHookRequest(event, deps)).toBe(refusal);
+    expect(recoveryPage).toHaveBeenCalledExactlyOnceWith(request, expect.any(Function));
+    expect(deps.sessionFor).not.toHaveBeenCalled();
+    expect(deps.resolve).not.toHaveBeenCalled();
+    expect(deps.honoFetch).not.toHaveBeenCalled();
+
+    const data = new Request(new URL("/auth/recover/__data.json", appUrl));
+    const response = await dispatchHookRequest(
+      { ...event, request: data, isDataRequest: true },
+      deps,
+    );
+    expect(response.status).toBe(404);
+    expect(deps.honoFetch).toHaveBeenCalledExactlyOnceWith(data);
+    expect(recoveryPage).toHaveBeenCalledTimes(1);
+  },
+);
+
+describe("Join and recovery rollback", () => {
+  it.each(["/join", "/auth/recover"])(
+    "leaves GET and HEAD %s to Hono when disabled",
+    async (path) => {
+      const entry = ROUTE_MANIFEST.find((route) => route.method === "GET" && route.path === path);
+      expect(entry).toMatchObject({ method: "GET", path, enabled: true, reads: "public" });
+      const appUrl = "http://127.0.0.1:8788";
+      const url = new URL(`${path}?next=%2Fprofile`, appUrl);
+      for (const method of ["GET", "HEAD"]) {
+        const request = new Request(url, { method });
+        const response = new Response(null, { headers: { "cache-control": "no-store, private" } });
+        const honoFetch = vi.fn(async () => response);
+        const resolve = vi.fn(async () => new Response("kit"));
+        const actual = await dispatchHookRequest(
+          { request, url, route: { id: path } },
+          { appUrl, honoFetch, resolve, manifest: [{ ...entry!, enabled: false }] },
+        );
+        expect(honoFetch).toHaveBeenCalledExactlyOnceWith(request);
+        expect(resolve).not.toHaveBeenCalled();
+        expect(actual).toBe(response);
+      }
+    },
+  );
+});
+
+describe("fixtureManifestFor (moderator dashboard)", () => {
+  const loopback = "http://127.0.0.1:8788";
+  const dashboardFlag = { KIT_PARITY_FIXTURE_ADMIN_DASHBOARD: "true" };
+
+  it("changes only the disabled dashboard entry on HTTP loopback", () => {
+    for (const APP_URL of ["https://127.0.0.1:8788", "http://example.com"]) {
+      expect(fixtureManifestFor({ APP_URL, ...dashboardFlag })).toBeUndefined();
+    }
+    const manifest = fixtureManifestFor({ APP_URL: loopback, ...dashboardFlag });
+    const dashboard = ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === "/admin");
+    expect(dashboard?.enabled).toBe(false);
+    expect(manifest?.filter((e, i) => e !== ROUTE_MANIFEST[i])).toEqual([
+      { ...dashboard, enabled: true },
+    ]);
+  });
+
+  it.each([
+    [loopback, "HEAD", "/admin", true],
+    [loopback, "POST", "/admin", true],
+    [loopback, "GET", "/admin/featured", true],
+    [loopback, "GET", "/admin", false],
+    ["https://next.togetherweown.com", "GET", "/admin", true],
+  ] as const)("keeps %s %s %s on Hono (fixture flag %s)", async (appUrl, method, path, flag) => {
+    const request = new Request(appUrl + path, { method });
+    const resolve = vi.fn(async () => new Response("kit"));
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    await dispatchHookRequest(
+      { request, url: new URL(request.url), route: { id: path } },
+      { appUrl, resolve, honoFetch, fixtureAdminDashboard: flag },
+    );
+    expect(honoFetch).toHaveBeenCalledExactlyOnceWith(request);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("keeps a normalized dashboard data request on Hono", async () => {
+    const request = new Request(`${loopback}/admin/__data.json`);
+    const resolve = vi.fn(async () => new Response("kit"));
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    await dispatchHookRequest(
+      { request, url: new URL(`${loopback}/admin`), route: { id: "/admin" }, isDataRequest: true },
+      { appUrl: loopback, resolve, honoFetch, fixtureAdminDashboard: true },
+    );
+    expect(honoFetch).toHaveBeenCalledExactlyOnceWith(request);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+});
+
 describe("fixtureManifestFor (event-detail RSVP companion)", () => {
   it("returns no override without either fixture flag", () => {
     expect(fixtureManifestFor({ APP_URL: "http://127.0.0.1:8788" })).toBeUndefined();

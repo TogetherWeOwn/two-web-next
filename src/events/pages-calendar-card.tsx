@@ -166,7 +166,7 @@ export const CalCard: FC<{
             ) : null}
           </p>
           {descriptionPoints.length > DESCRIPTION_LIMIT ? (
-            <details class="schedule-description">
+            <details class="schedule-text">
               <summary>
                 <span class="schedule-excerpt">
                   {passage ?? `${descriptionPoints.slice(0, DESCRIPTION_LIMIT).join("")}…`}
@@ -177,7 +177,7 @@ export const CalCard: FC<{
               <p>{e.description}</p>
             </details>
           ) : e.description ? (
-            <p>{passage ?? e.description}</p>
+            <p class="schedule-text">{passage ?? e.description}</p>
           ) : null}
         </div>
         <div class="schedule-actions">

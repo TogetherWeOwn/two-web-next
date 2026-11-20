@@ -14,6 +14,7 @@ import {
   cachedHomeUpcoming,
   retireHomeGuestCache,
 } from "../src/home-cache";
+import { prepareKitHomePanels } from "../src/kit-home-panels";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { JOIN_RESULT_COOKIE } from "../src/return-journey";
 
@@ -269,6 +270,26 @@ describe("homepage guest-invariant cache", () => {
     const second = await app.request("/", {}, f.env);
     expect(second.status).toBe(200);
     expect(await second.text()).toContain("Game night 1");
+  });
+});
+
+describe("Kit home panel preparation", () => {
+  it("loads cold shared panels and reuses them on the next request", async () => {
+    vi.setSystemTime(NOW);
+    const f = fixture();
+    const first = await prepareKitHomePanels(f.env, new Request(f.env.APP_URL));
+    expect(first.homeUpcoming.unavailable).toBe(false);
+    expect(first.homeUpcoming.items).toMatchObject([{ title: "Game night 1" }]);
+    expect(first.featured).toMatchObject([{ title: "Community news" }]);
+    expect(first.counts.memberCount).toBeNull();
+    expect(first.countsSnapshot).toBeNull();
+    const coldReads = f.counts();
+    expect(coldReads.eventQueries).toBeGreaterThan(0);
+    expect(coldReads.featuredQueries).toBeGreaterThan(0);
+
+    const second = await prepareKitHomePanels(f.env, new Request(f.env.APP_URL));
+    expect(second).toEqual(first);
+    expect(f.counts()).toEqual(coldReads);
   });
 });
 

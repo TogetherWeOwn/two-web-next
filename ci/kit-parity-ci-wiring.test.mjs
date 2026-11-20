@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { createDiscordReadRendezvous } from "./kit-discord-read-rendezvous.mjs";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -83,26 +84,80 @@ test("the Kit fixture owns the live event detail only on its loopback worker", (
   assert.match(helper, /kitFixtureOwnsEventDetail/);
 });
 
+test("the Kit browser worker uses shipped join and recovery ownership", () => {
+  const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
+  const hooks = readFileSync(new URL("../web/src/hooks.server.ts", import.meta.url), "utf8");
+  const deployed = readFileSync(new URL("../web/wrangler.jsonc", import.meta.url), "utf8");
+  assert.doesNotMatch(worker, /KIT_PARITY_FIXTURE_JOIN/);
+  assert.match(hooks, /fixtureJoin: env\.KIT_PARITY_FIXTURE_JOIN === "true"/);
+  assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_JOIN/);
+});
+
+test("the Kit dashboard fixture flag is absent from deployed configuration", () => {
+  for (const file of ["wrangler.jsonc", "web/wrangler.jsonc", "web/wrangler.staging.jsonc"]) {
+    const deployed = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_ADMIN_DASHBOARD/, file);
+  }
+});
+
 test("both loopback parity workers inject the same healthy-empty Discord seam", () => {
   // The cross-target events-calendar comparison renders the partial-source
   // notice only when a target reports a Discord failure, so both loopback
   // workers must simulate the same healthy-empty state or the sections
-  // diverge. The Kit wrapper MUST assign onto the incoming env object: Kit
-  // reads the ambient `cloudflare:workers` env (the entrypoint's original
-  // object), so a spread copy passed to worker.fetch is invisible to it and
-  // Kit falls back to a live read the fixture fetch stub refuses.
+  // diverge. Both fixtures opt into failure via an explicit test header;
+  // the browser journey checks that concurrent Kit reads do not share it.
+  // The Kit wrapper MUST assign onto the incoming env object: Kit reads the
+  // ambient `cloudflare:workers` env (the entrypoint's original object), so a
+  // spread copy passed to worker.fetch is invisible to it and Kit falls back
+  // to a live read the fixture fetch stub refuses.
   const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
-  assert.match(
-    worker,
-    /env\.DISCORD_EVENTS = \{ upcoming: async \(\) => \[\], lastReadFailed: \(\) => false \};/,
-  );
+  assert.match(worker, /"  upcoming: async \(\) => \{",[\s\S]*?"    return \[\];",/);
+  assert.match(worker, /lastReadFailed: \(\) => discordRead\.getStore\(\)\?\.failed \?\? false/);
+  assert.match(worker, /request\.headers\.get\("x-e2e-discord-read"\) === "failed"/);
+  assert.match(worker, /env\.DISCORD_EVENTS = discordEvents;/);
+  assert.match(worker, /discordRead\.run\(read, \(\) => worker\.fetch\(request, env, ctx\)\)/);
   assert.doesNotMatch(worker, /\{\s*\.\.\.env,\s*DISCORD_EVENTS/);
   const hono = readFileSync(new URL("../e2e/worker.ts", import.meta.url), "utf8");
   assert.match(
     hono,
-    /DISCORD_EVENTS: \{ upcoming: async \(\) => \[\], lastReadFailed: \(\) => false \}/,
+    /DISCORD_EVENTS: \{\s*upcoming: async \(\) => \[\],\s*lastReadFailed: \(\) => request\.headers\.get\("x-e2e-discord-read"\) === "failed",\s*\}/,
   );
 });
+
+for (const [arrival, timely] of [
+  [9_999, true],
+  [10_000, false],
+  [10_001, false],
+]) {
+  test(`the Kit Discord overlap deadline uses the second arrival at ${arrival}ms`, async () => {
+    let clock = 0;
+    let resume;
+    const wait = createDiscordReadRendezvous({
+      now: () => clock,
+      pause: () =>
+        new Promise((resolve) => {
+          resume = resolve;
+        }),
+    });
+    const first = wait("pair", true);
+    assert.equal(typeof resume, "function", "the first read must still be waiting");
+
+    clock = arrival;
+    const second = wait("pair", false);
+    // The partner arrives before the first poll resumes, but not always in time.
+    clock = 10_010;
+    resume();
+
+    if (timely) {
+      await Promise.all([first, second]);
+    } else {
+      await Promise.all([
+        assert.rejects(first, /Timed out waiting for the other Kit Discord read/),
+        assert.rejects(second, /Timed out waiting for the other Kit Discord read/),
+      ]);
+    }
+  });
+}
 
 test("both loopback parity workers share the raised read budget", () => {
   // The Kit fixture enforces the same `events-read:anon` bucket as the Hono
