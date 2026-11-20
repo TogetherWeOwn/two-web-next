@@ -469,17 +469,21 @@ test("Kit fixture serves the menu island only with explicit opt-in", async () =>
   );
 
   const body = await readFile(new URL(`../public${path}`, import.meta.url), "utf8");
-  await withKitOfflineBrowser({ ...options, headerMenu: true }, async ({ page }) => {
-    const response = await page.evaluate(async (url) => {
-      const asset = await fetch(url);
-      return {
-        status: asset.status,
-        type: asset.headers.get("content-type"),
-        body: await asset.text(),
-      };
-    }, path);
-    assert.deepEqual(response, { status: 200, type: "text/javascript", body });
-  });
+  await assert.rejects(
+    withKitOfflineBrowser({ ...options, headerMenu: true }, async ({ page }) => {
+      const response = await page.evaluate(async (url) => {
+        const asset = await fetch(url);
+        return {
+          status: asset.status,
+          type: asset.headers.get("content-type"),
+          body: await asset.text(),
+        };
+      }, path);
+      assert.deepEqual(response, { status: 200, type: "text/javascript", body });
+      await page.evaluate(() => fetch("/islands/events-calendar.js").catch(() => null));
+    }),
+    /\/islands\/events-calendar\.js/,
+  );
 });
 
 test("Kit fixture renders query data and same-origin static assets", async () => {
