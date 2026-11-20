@@ -52,6 +52,8 @@ export interface OwnedRoute {
   // Native rendering stays off until explicitly enabled.
   enabled: boolean;
   reads?: RouteReads;
+  // A staging opt-in for the document only; no implicit HEAD or Kit data route.
+  documentGetOnly?: true;
 }
 
 export interface RouteDecision {
@@ -60,8 +62,8 @@ export interface RouteDecision {
 }
 
 // The archive page, events list, hot-zone heatmaps, member board and the
-// about/faq, join and recovery leaves render natively; privacy/rules/profile
-// reads and the remaining admin routes stay on Hono pending enablement review.
+// about/faq, join and recovery leaves render natively. Privacy and rules are
+// staging-only opt-ins; profile and the remaining admin routes stay on Hono.
 // Returning an entry to `enabled: false` restores Hono ownership for rollback.
 // Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
@@ -339,11 +341,13 @@ export function fixtureManifestFor(env: {
   return routes;
 }
 
-// Staging Kit starts with every route on Hono. The reviewed deploy workflow
-// may opt into only the exact GET entries listed below, and only if the shared
-// manifest enables them. The staging hostname or any rollout flag selects this
-// restrictive manifest, even with a misconfigured APP_URL. Only the exact
-// staging APP_URL can enable a family; absent or malformed flags keep it off.
+const STAGING_ONLY_STATIC_LEAVES = new Set(["/privacy", "/rules"]);
+
+// Staging Kit starts with every route on Hono. The staging hostname or any
+// rollout flag selects this restrictive manifest, even with a misconfigured
+// APP_URL. Only the exact staging APP_URL can enable a family; absent or
+// malformed flags keep it off. Staging-only approvals do not change the
+// shared manifest used outside the rollout.
 export function stagingManifestFor(
   env: {
     APP_URL?: string;
@@ -353,7 +357,7 @@ export function stagingManifestFor(
     KIT_ROUTE_HOME?: string;
     KIT_ROUTE_JOIN?: string;
   },
-  routes: OwnedRoute[] = ROUTE_MANIFEST,
+  routes?: OwnedRoute[],
 ): OwnedRoute[] | undefined {
   let app: URL | undefined;
   try {
@@ -377,7 +381,17 @@ export function stagingManifestFor(
   const eventsEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_EVENTS === "true";
   const homeEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_HOME === "true";
   const joinEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_JOIN === "true";
-  return routes.map((entry) => {
+  return (routes ?? ROUTE_MANIFEST).map((entry) => {
+    if (entry.method === "GET" && STAGING_ONLY_STATIC_LEAVES.has(entry.path)) {
+      // The shipped public entries stay disabled outside staging. An explicit
+      // manifest still controls readiness, just as it does for the other families.
+      return {
+        ...entry,
+        enabled:
+          staticEnabled && entry.reads === "public" && (routes === undefined || entry.enabled),
+        documentGetOnly: true,
+      };
+    }
     const familyEnabled =
       entry.method === "GET" &&
       ((entry.path === "/events" && eventsEnabled) ||
@@ -481,6 +495,7 @@ function enabledRouteFor(
   decision: RouteDecision,
   manifest: OwnedRoute[],
   stripData = true,
+  originalUrl?: string,
 ): OwnedRoute | undefined {
   const normalized = normalizePath(decision.path, stripData);
   if (normalized === null) return undefined;
@@ -489,7 +504,12 @@ function enabledRouteFor(
   const lookup = upper === "HEAD" ? "GET" : upper;
   const candidates = manifest.filter((entry) => entry.method.toUpperCase() === lookup);
   const best = bestMatch(normalized, candidates);
-  return best?.enabled ? best : undefined;
+  if (!best?.enabled) return undefined;
+  if (best.documentGetOnly) {
+    const documentPath = originalUrl ? new URL(originalUrl).pathname : decision.path;
+    if (upper !== "GET" || documentPath !== best.path) return undefined;
+  }
+  return best;
 }
 
 export function resolveRouteOwner(
@@ -508,6 +528,7 @@ export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MAN
     { method: request.method, path: (url ?? new URL(request.url)).pathname },
     manifest,
     !url,
+    url ? request.url : undefined,
   );
 }
 
