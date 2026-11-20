@@ -279,6 +279,14 @@ test("each Ember opt-in probes the exact staging GET after revision verification
     assert.ok(lines.includes(`        if: steps.kit-route-flags.outputs.${flag} == 'true'`));
     assert.ok(lines.includes(`        run: node ci/staging-kit-route-check.mjs ${path}`));
   }
+  const smokeStep = workflow
+    .split("\n      - ")
+    .find((step) => step.startsWith("name: Smoke test staging public routes\n"));
+  assert.ok(
+    smokeStep?.includes(
+      "SMOKE_EXPECT_JOIN_RENDERER: ${{ steps.kit-route-flags.outputs.join == 'true' && 'kit' || 'hono' }}",
+    ),
+  );
   const cases = emberRoutes.flatMap(([, path]) => [
     [path, 200, "kit", 0],
     [path, 200, null, 1],

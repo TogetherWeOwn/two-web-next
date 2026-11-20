@@ -233,6 +233,7 @@ export async function smoke(
     failedBaseline,
     allowMissingBaseline = false,
     failOnReadyWaitCritical = false,
+    expectedJoinRenderer,
     onRoute,
   } = {},
 ) {
@@ -251,6 +252,9 @@ export async function smoke(
   }
   if (versionOverride !== undefined) assertVersionOverride(versionOverride);
   if (expectedVersionId !== undefined) assertExpectedVersionId(expectedVersionId);
+  if (expectedJoinRenderer !== undefined && !["hono", "kit"].includes(expectedJoinRenderer)) {
+    throw new Error("SMOKE_EXPECT_JOIN_RENDERER must be hono or kit");
+  }
   const baseline = failedBaseline === undefined ? undefined : assertFailedBaseline(failedBaseline);
   const overrideVersionId =
     versionOverride === undefined ? undefined : versionIdFromOverride(versionOverride);
@@ -695,7 +699,28 @@ export async function smoke(
           check(false, "valid JSON object", "invalid JSON");
         }
       }
-      if (route.body)
+      const kitJoin = route.path === "/join" && expectedJoinRenderer === "kit";
+      if (route.path === "/join" && expectedJoinRenderer !== undefined) {
+        const renderer = headers.get("x-two-renderer");
+        check(
+          renderer === (expectedJoinRenderer === "kit" ? "kit" : null),
+          expectedJoinRenderer === "kit" ? "x-two-renderer: kit" : "no x-two-renderer (Hono)",
+          renderer === null ? "header missing" : "unexpected renderer header",
+        );
+        // A bare /join GET renders this same-origin action without query parameters.
+        const joinAction =
+          /<a\s(?=[^<>]*\shref="\/join\/discord")(?=[^<>]*\sdata-testid="join-oneclick")[^<>]*>/;
+        const markup = body.replace(/<!--[\s\S]*?-->/g, "");
+        check(joinAction.test(markup), "join-oneclick link to /join/discord", "link did not match");
+        if (kitJoin) {
+          check(
+            /<h2 id="join-card-heading">Join with one sign-in<\/h2>/.test(markup),
+            'Kit Join card heading "Join with one sign-in"',
+            "heading did not match",
+          );
+        }
+      }
+      if (!kitJoin && route.body)
         check(route.body.test(body), `body matching ${route.body}`, "body did not match");
       if (route.redirect && response.status === 302) {
         const location = headers.get("location");
@@ -873,6 +898,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           failedBaseline: baseline,
           allowMissingBaseline: allowMissing,
           failOnReadyWaitCritical,
+          // Only callers with a route selection opt into an exact renderer check.
+          expectedJoinRenderer: process.env.SMOKE_EXPECT_JOIN_RENDERER,
           onRoute:
             jsonVerdict || ledgerPath !== undefined
               ? (path, failedAssertions) => {

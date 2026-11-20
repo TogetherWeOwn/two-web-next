@@ -412,10 +412,15 @@ binding isolation before any remote mutation.
    `/e/<key>` (404 branded missing-event HTML page: the fixed probe key
    exists in no database)
    and `/__smoke_unknown_route__` (404)
-   with CSP/nosniff/content-type/noindex/redirect assertions. The `/up` assertions
-   are DB/schema readiness, not liveness only; with the staging strict flag a literal
-   `unknown` in `queue.status` or `ready_wait_severity`, or a `critical`
-   `ready_wait_severity`, fails the deploy even though `/up` itself still returns 200.
+   with CSP/nosniff/content-type/noindex/redirect assertions. The deploy sets
+   `SMOKE_EXPECT_JOIN_RENDERER` to `kit` or `hono` from its `/join` route flag.
+   The smoke requires the selected renderer, its Join copy, and the
+   `join-oneclick` link to `/join/discord`. For a staging diagnostic, set the
+   same expectation from the deploy's selection, not from the live response.
+   The `/up` assertions are DB/schema readiness, not liveness only. With the
+   staging strict flag, a literal `unknown` in `queue.status` or
+   `ready_wait_severity`, or a `critical` `ready_wait_severity`, fails the
+   deploy even though `/up` itself still returns 200.
    Queue `degraded` passes. The strict flag is staging-only: the apex production
    smoke uses the same 24-route shape with `--allow-indexable` and without the strict flag
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
