@@ -8,7 +8,7 @@
 // guest/no-op BEFORE hashing or any session-store call, across every reader
 // of the signed session bearer:
 //
-// - Hono readSession + fresh-login prior-token revoke (src/index.tsx)
+// - Hono readSession (src/index.tsx) and fresh-login prior-token revoke (src/http/session.ts)
 // - auth-status fallback probe (src/auth-status.ts)
 // - Kit request session + Kit auth-status cookie writer (src/kit-session.ts)
 // - profile member gate (src/profiles/routes-gate.ts)
@@ -440,6 +440,12 @@ describe("controls: well-formed bearers behave exactly as before", () => {
     expect(login.status).toBe(302);
     expect(spy.callsTo("replace")).toHaveLength(1);
     expect(spy.callsTo("replace")[0]!.args[0]).toBe(prior.tokenHash);
+    const minted = (await parseSigned(jarOf(login), SECRET))[SESSION_COOKIE];
+    if (typeof minted !== "string") throw new Error("Expected a signed session cookie");
+    const mintedHash = await hashToken(minted);
+    expect(spy.callsTo("replace")[0]!.args[1]).toMatchObject({ tokenHash: mintedHash });
+    expect(spy.callsTo("revokeUserSessions").map((c) => c.args)).toEqual([["42", mintedHash]]);
+    expect(await spy.inner.get(mintedHash)).toMatchObject({ userId: "42" });
     expect(await spy.inner.get(prior.tokenHash)).toBeNull();
   });
 });
