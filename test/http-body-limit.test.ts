@@ -20,8 +20,10 @@ function upload(body: RequestInit["body"], length?: string) {
 const implementations = {
   Hono: (kind: BodyClass, request: Request) => {
     const app = new Hono<{ Bindings: Env }>();
-    app.post("/upload", requestBodyLimit(kind), (c) =>
-      new Response(c.req.raw.body, { headers: c.req.raw.headers }),
+    app.post(
+      "/upload",
+      requestBodyLimit(kind),
+      (c) => new Response(c.req.raw.body, { headers: c.req.raw.headers }),
     );
     return app.request(request);
   },
@@ -33,13 +35,20 @@ const implementations = {
   },
 };
 
-const limits = { form: 65536, json: 32768, agent: 32768, mcp: 32768, featured: 262144, action: 4096 };
+const limits = {
+  form: 65536,
+  json: 32768,
+  agent: 32768,
+  mcp: 32768,
+  featured: 262144,
+  action: 4096,
+};
 
 describe.each(Object.entries(implementations))("%s body cap contract", (_name, run) => {
   it.each(Object.entries(limits) as [BodyClass, number][])(
     "admits %s at the byte limit and rejects one more byte",
     async (kind, max) => {
-      const body = new Uint8Array(max).fill(0xa5, max / 2);
+      const body = new Uint8Array(max).fill(0x5a).fill(0xa5, max / 2);
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(body.subarray(0, max / 2));

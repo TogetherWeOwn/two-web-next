@@ -22,7 +22,10 @@ function overflow(source: Pick<ReadableStream<Uint8Array>, "cancel"> | null) {
 
 // Run before parsing, then use the returned request instead of the consumed one.
 // The caller owns the response envelope and admission order.
-export async function limitRequestBody(request: Request, kind: BodyClass): Promise<BodyLimitResult> {
+export async function limitRequestBody(
+  request: Request,
+  kind: BodyClass,
+): Promise<BodyLimitResult> {
   const max = BODY_LIMIT_BYTES[kind];
   if (Number(request.headers.get("content-length")) > max) return overflow(request.body);
   if (!request.body) return { ok: true, request };
@@ -42,7 +45,9 @@ export async function limitRequestBody(request: Request, kind: BodyClass): Promi
       const nextSize = size + chunk.value.byteLength;
       if (nextSize > max) return overflow(reader);
       if (nextSize > bytes.byteLength) {
-        const buffer = new Uint8Array(Math.min(max, Math.max(4096, nextSize, bytes.byteLength * 2)));
+        const buffer = new Uint8Array(
+          Math.min(max, Math.max(4096, nextSize, bytes.byteLength * 2)),
+        );
         buffer.set(bytes);
         bytes = buffer;
       }
