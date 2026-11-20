@@ -22,7 +22,7 @@ test("capture refuses renderer, fixture content and keyboard drift", () => {
   assert.throws(() => validateView(["unapproved"], state, false, false), /content/);
 });
 
-test("capture isolates Lighthouse navigation timeouts and rejects a Hono document", async () => {
+test("capture isolates Lighthouse timeouts and rejects a Hono document", async (t) => {
   const shots = [];
   const keys = [];
   const noop = () => undefined;
@@ -86,6 +86,11 @@ test("capture isolates Lighthouse navigation timeouts and rejects a Hono documen
   assert.equal(closed, 6);
   assert.deepEqual(shots, Object.keys(viewportPngs));
   assert.deepEqual(keys, [...Array(11).fill("Tab"), "ArrowRight"]);
+  const timeout = t.mock.fn(() => Promise.reject(new Error("measurement transport timed out")));
+  shots.length = 0;
+  assert.equal(await collectVisuals(browser, {}, ".", noop, timeout), null);
+  assert.equal(timeout.mock.callCount(), 1);
+  assert.deepEqual(shots, Object.keys(viewportPngs));
   renderer = "hono";
   shots.length = 0;
   await assert.rejects(collectVisuals(browser, {}, ".", noop, measure), /provenance drift/);
