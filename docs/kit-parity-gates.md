@@ -248,6 +248,15 @@ take no exceptions.
 | --- | --- | --- |
 <!-- route-parity-exceptions:end -->
 
+### All-off production configuration replay
+
+[XFS qualification](../.github/workflows/xfs-qualification.yml) replays the exact head and production origin on pure Hono and the installed Kit facade, using local assets, disposable Postgres and outbound stubs.
+It retains both recordings, config/output hashes, the comparison and logs. Fixture admission failures and unapproved drift fail the run.
+
+Kit-only `/_app` assets have separate status, validator, cookie and header checks. The separate fatal proof does not fault-inject the all-off configuration.
+
+No Worker is uploaded. Live Hyperdrive, queues, version metadata, tail delivery, edge routing, bot-backed counts/ranks and populated Discord event-binding responses are not verified.
+
 ## Journey gates (`ci/kit-parity-gates.mjs`)
 
 Two modes, one assertion set per parity route:
