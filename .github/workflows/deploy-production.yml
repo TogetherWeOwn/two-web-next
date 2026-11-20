@@ -401,8 +401,7 @@ jobs:
         run: node workflow-tip/ci/worker-bundle-evidence.mjs create dist-production
         env:
           BUILD_SHA: ${{ needs.preflight.outputs.sha }}
-      # Inert Kit production candidate: build-only, no credentials, never uploaded
-      # (the upload stays dist-production/worker.js). Older targets skip it.
+      # Inert Kit candidate: build-only, never uploaded (upload stays dist-production/worker.js).
       - name: Check the inert Kit production candidate config
         if: hashFiles('web/wrangler.production.jsonc') != ''
         run: node workflow-tip/ci/production-deploy-gate.mjs --kit-candidate

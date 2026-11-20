@@ -1,5 +1,4 @@
-// Production Hono pilot, plus the inert Kit candidate as build-only evidence.
-// A build inventory is not a deployment receipt.
+// Production Hono pilot plus the build-only inert Kit candidate; not a deployment receipt.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { builtinModules, createRequire } from "node:module";
@@ -145,10 +144,8 @@ export function createInventory(root, directory, context, profileName = "hono") 
           Number.isSafeInteger(contribution.bytesInOutput) && contribution.bytesInOutput >= 0,
           "invalid contribution",
         );
-        contributions.set(
-          at(input),
-          (contributions.get(at(input)) ?? 0) + contribution.bytesInOutput,
-        );
+        const source = at(input);
+        contributions.set(source, (contributions.get(source) ?? 0) + contribution.bytesInOutput);
       }
       const record = file(root, path);
       assert.equal(record.bytes, output.bytes, "stale metafile output size");
