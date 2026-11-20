@@ -132,7 +132,12 @@ export function memberBoardDocument(twin: Twin, scope: Scope) {
   const css = ["styles", "theme-tokens", "theme", "schedule-theme"]
     .map((name) => readFileSync(join(root, `public/${name}.css`), "utf8"))
     .join("\n");
-  const styles = css + (twin === "kit" ? `\n${compileCss.build(candidates)}` : "");
+  // Mirror the Kit layout's header import; unstyled menu chrome shifts the
+  // table's scroll origin even when the header is outside the capture.
+  const styles =
+    twin === "kit"
+      ? `${css}\n${compileCss.build(candidates)}\n${readFileSync(join(root, "web/src/lib/site-header.css"), "utf8")}`
+      : css;
   if (styles.includes("</style")) throw new Error("Fixture CSS must not close its style tag");
   // Keep the real shell and page, but inline the served styles and never execute islands.
   // Preserve the real <body> attributes: the Hono shell themes through
