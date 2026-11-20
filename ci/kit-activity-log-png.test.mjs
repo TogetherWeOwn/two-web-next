@@ -96,8 +96,9 @@ test("staging accepts exactly five valid PNGs and refuses extra files, links, or
     writeFileSync(file, bytes);
     assert.throws(() => validatePngDirectory(dir), /invalid viewport PNG/, reason);
   }
+  // Require the inflate cap to reject the PNG before the post-inflate length check.
   writeFileSync(file, png(desktop, { extraDecoded: 1 }));
-  assert.throws(() => validatePngDirectory(dir), "one byte over the decoded limit");
+  assert.throws(() => validatePngDirectory(dir), { code: "ERR_BUFFER_TOO_LARGE" });
 
   // An invalid PNG at the byte limit must reach the PNG check, not the file-size check.
   writeFileSync(file, malformed.signature);
