@@ -36,6 +36,8 @@ export function isPromotionPath(path) {
     /^(?:\.github\/(?:workflows|actions)|drizzle|(?:db\/)?migrations)\//.test(path) ||
     /(?:^|\/)wrangler(?:[.-][^/]*)?\.(?:toml|jsonc?)$/i.test(path) ||
     /^ci\/budgets\/bundle\/[^/]+\.json$/.test(path) ||
+    // Both release Playwright configs discover specs recursively.
+    /^e2e\/(?:staging|watch)\/.*\.spec\.ts$/s.test(path) ||
     /^e2e\/(?:staging|watch)\/(?!.*\.test\.)[^/]+\.(?:ts|mjs)$/.test(path)
   );
 }

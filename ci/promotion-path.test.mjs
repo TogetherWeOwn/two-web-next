@@ -71,11 +71,12 @@ test("only promotion surfaces match, including directly called tooling", () => {
     ci/staging-provenance.mjs ci/staging-deploy-gate.mjs ci/db-migrate.mjs
     ci/migration-runtime-rights.mjs src/up-database.ts bin/version-check.mjs e2e/staging/join.spec.ts
     e2e/watch/guest-journeys.spec.ts playwright.watch.config.ts e2e/watch-guard.mjs e2e/ci-only.mjs
+    e2e/watch/events/calendar.spec.ts e2e/staging/events/lists/calendar.spec.ts
     playwright.staging.config.ts e2e/staging-guard.mjs e2e/join-oneclick.ts src/qa.ts
     web/package.json web/scripts/copy-public.mjs ci/kit-route-evidence.mjs bin/ts-hook.mjs bin/ts-hooks.mjs`;
   const excluded = `docs/runbook.md docs/wrangler.md test/fixtures/legacy/verify.sql
     src/routes/events.ts web/src/routes/+page.svelte ci/staging-provenance.test.mjs
-    ci/check-doc-links.mjs e2e/staging/journey-ledger.test.mjs`;
+    ci/check-doc-links.mjs e2e/staging/journey-ledger.test.mjs e2e/watch/events/calendar.test.ts`;
   for (const path of included.split(/\s+/)) assert.ok(isPromotionPath(path), path);
   for (const path of excluded.split(/\s+/)) assert.equal(isPromotionPath(path), false, path);
 });
