@@ -572,11 +572,9 @@ describe("Kit GET /auth/recover markup contract (Recovery shell parity)", () => 
     );
   });
 
-  it("registers a public, Hono-owned manifest entry", () => {
+  it("registers a public, Kit-owned recovery document", () => {
     expect(manifest).toMatch(/path:\s*"\/auth\/recover"/);
     expect(manifest).toMatch(/\/auth\/recover"[^}]*reads:\s*"public"/);
-    // Stays on Hono until the enablement review: flipping enabled flips
-    // ownership, and the parity ledger fails any enabled route with no run.
-    expect(manifest).toMatch(/\/auth\/recover"[^}]*enabled:\s*false/);
+    expect(manifest).toMatch(/\/auth\/recover"[^}]*enabled:\s*true/);
   });
 });

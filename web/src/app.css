@@ -88,7 +88,8 @@ html body {
 }
 .kit-admin .notice[data-admin-validation-summary]:focus-visible,
 .kit-admin .notice[data-admin-validation-summary] a:focus-visible,
-.kit-admin #f-accessibility-notes:focus-visible {
+.kit-admin
+  :is(#f-accessibility-notes, #f-organizer-name, #f-join-url, #f-join-instructions):focus-visible {
   outline-color: var(--color-lobby-focus);
 }
 .kit-admin [data-event-editor][data-event-draft] .field .error,

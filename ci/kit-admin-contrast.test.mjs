@@ -20,6 +20,16 @@ import { EventEditableFields } from "../src/admin/pages/event-editable-fields.ts
 const output = resolve("web/.svelte-kit/output");
 const evidence = process.env.KIT_ADMIN_CONTRAST_EVIDENCE_DIR;
 const origin = "http://kit-admin.test";
+const createDetails = {
+  organizer_name: "Riley & friends",
+  join_url: "https://example.com/lobby",
+  join_instructions: "Use the public lobby.\nAsk the host for the next game.",
+};
+const createErrors = {
+  organizer_name: "Keep the organizer name to 500 characters.",
+  join_url: "Enter a valid public HTTP or HTTPS link without sign-in credentials.",
+  join_instructions: "Keep joining instructions to 5000 characters.",
+};
 let scratch;
 let browser;
 let server;
@@ -83,14 +93,15 @@ before(async () => {
     {
       name: "event-new-populated",
       path: "/admin/events/new",
-      data: buildEventCreateView({ accessibility_notes: "Step-free entrance." }),
+      data: buildEventCreateView({ accessibility_notes: "Step-free entrance.", ...createDetails }),
     },
     {
       name: "event-new-invalid",
       path: "/admin/events/new",
       data: buildEventCreateView(
-        { accessibility_notes: "Step-free entrance." },
+        { accessibility_notes: "Step-free entrance.", ...createDetails },
         {
+          ...createErrors,
           accessibility_notes: "Accessibility notes are too long.",
           recurrence_count: "Occurrences must be between 1 and 52.",
         },
@@ -303,6 +314,30 @@ describe("Kit admin contrast", () => {
               assert.equal(await error.isVisible(), true);
               assert.equal(await notes.getAttribute("aria-invalid"), "true");
             }
+            for (const [field, value] of Object.entries(createDetails)) {
+              const id = `f-${field.replaceAll("_", "-")}`;
+              const control = page.locator(`#${id}`);
+              assert.equal(
+                await control.inputValue(),
+                name === "event-new" || isTextLimit ? "" : value,
+              );
+              if (isTextLimit) {
+                await control.press("Shift+Tab");
+                await page.keyboard.press("Tab");
+                assert.equal(await focusOutlineColor(control), "rgb(255, 156, 54)");
+              }
+              if (name === "event-new-invalid") {
+                assert.equal(await control.getAttribute("aria-invalid"), "true");
+                assert.equal(
+                  await page.locator(`[data-admin-validation-summary] a[href="#${id}"]`).count(),
+                  1,
+                );
+                assert.equal(
+                  (await page.locator(`#${id}-error`).textContent()).trim(),
+                  createErrors[field],
+                );
+              }
+            }
             if (name === "event-new-invalid") {
               assert.equal(await notes.getAttribute("aria-invalid"), "true");
               assert.equal(
@@ -390,7 +425,11 @@ describe("Kit admin contrast", () => {
             const texts = measured.map((item) => item.text);
             assert.ok(texts.includes("Check the highlighted fields and try again."));
             for (const message of name === "event-new-invalid"
-              ? ["Accessibility notes are too long.", "Occurrences must be between 1 and 52."]
+              ? [
+                  "Accessibility notes are too long.",
+                  "Occurrences must be between 1 and 52.",
+                  ...Object.values(createErrors),
+                ]
               : ["Title is required."]) {
               assert.ok(texts.includes(message), `${message} is included in the contrast evidence`);
             }

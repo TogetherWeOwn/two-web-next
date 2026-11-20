@@ -205,7 +205,7 @@
     {
       "route": "GET /auth/recover",
       "binding": "web/src/routes/auth/recover/+page.server.ts",
-      "reason": "Hono-owned transient outcome page (journey writes + /join/callback outcomes stay Hono)."
+      "reason": "Transient SSR-only page: Hono admits the landing and supplies a display model; the dispatcher does not serve a Kit data response."
     },
     {
       "route": "*",

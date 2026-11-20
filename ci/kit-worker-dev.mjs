@@ -152,7 +152,7 @@ writeFileSync(
       // fixture alone enables it for the RSVP companion journey.
       KIT_PARITY_FIXTURE_MEMBER_BOARD: "true",
       KIT_PARITY_FIXTURE_EVENT_DETAIL: "true",
-      KIT_PARITY_FIXTURE_JOIN: "true",
+      // Join and recovery use the shipped manifest, not a fixture override.
       ...(process.env.KIT_PARITY_FIXTURE_ADMIN_DASHBOARD === "true"
         ? { KIT_PARITY_FIXTURE_ADMIN_DASHBOARD: "true" }
         : {}),

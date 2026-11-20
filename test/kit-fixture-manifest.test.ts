@@ -281,7 +281,7 @@ describe("fixtureManifestFor (Kit parity fixture only)", () => {
 });
 
 describe("fixtureManifestFor (join)", () => {
-  it("enables only join and recovery on HTTP loopback without changing the shipped manifest", () => {
+  it("can only override join and recovery on HTTP loopback", () => {
     expect(
       fixtureManifestFor({ APP_URL: "http://localhost:8788", KIT_PARITY_FIXTURE_JOIN: "false" }),
     ).toBeUndefined();
@@ -297,18 +297,18 @@ describe("fixtureManifestFor (join)", () => {
       KIT_PARITY_FIXTURE_JOIN: "true",
     })!;
     expect(ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === "/join")?.enabled).toBe(
-      false,
+      true,
     );
     expect(manifest.find((e) => e.method === "GET" && e.path === "/join")?.enabled).toBe(true);
     expect(manifest.filter((e, i) => e !== ROUTE_MANIFEST[i]).map((e) => e.path)).toEqual([
       "/join",
       "/auth/recover",
     ]);
-    expect(ROUTE_MANIFEST.find((e) => e.path === "/auth/recover")?.enabled).toBe(false);
+    expect(ROUTE_MANIFEST.find((e) => e.path === "/auth/recover")?.enabled).toBe(true);
     expect(manifest.find((e) => e.path === "/auth/recover")?.enabled).toBe(true);
   });
 
-  it("dispatches join through Kit only with the loopback fixture flag", async () => {
+  it("dispatches join through Kit without a loopback fixture flag", async () => {
     const request = new Request("http://127.0.0.1:8788/join?next=%2Fevents", {
       headers: { host: "127.0.0.1:8788" },
     });
@@ -316,7 +316,7 @@ describe("fixtureManifestFor (join)", () => {
     const honoFetch = vi.fn(async () => new Response("hono"));
     const res = await dispatchHookRequest(
       { request, url: new URL(request.url), route: { id: "/join" } },
-      { appUrl: "http://127.0.0.1:8788", honoFetch, resolve, fixtureJoin: true },
+      { appUrl: "http://127.0.0.1:8788", honoFetch, resolve },
     );
     expect(resolve).toHaveBeenCalledTimes(1);
     expect(honoFetch).not.toHaveBeenCalled();
@@ -336,7 +336,6 @@ it.each(["GET", "HEAD"])(
     const recoveryPage = vi.fn(async () => refusal);
     const deps = {
       appUrl,
-      fixtureJoin: true,
       recoveryPage,
       resolve: vi.fn(),
       sessionFor: vi.fn(),
@@ -364,7 +363,7 @@ describe("Join and recovery rollback", () => {
     "leaves GET and HEAD %s to Hono when disabled",
     async (path) => {
       const entry = ROUTE_MANIFEST.find((route) => route.method === "GET" && route.path === path);
-      expect(entry).toMatchObject({ method: "GET", path, reads: "public" });
+      expect(entry).toMatchObject({ method: "GET", path, enabled: true, reads: "public" });
       const appUrl = "http://127.0.0.1:8788";
       const url = new URL(`${path}?next=%2Fprofile`, appUrl);
       for (const method of ["GET", "HEAD"]) {

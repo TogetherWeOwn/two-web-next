@@ -244,6 +244,20 @@ describe("Kit staging route rollout", () => {
 });
 
 describe("staging home and join opt-ins", () => {
+  it("keeps the shipped join and recovery entries on Hono by default", () => {
+    const env = { APP_URL: STAGING_APP_URL };
+    const off = stagingManifestFor(env);
+    const on = stagingManifestFor({ ...env, KIT_ROUTE_JOIN: "true" });
+    expect(off?.filter(({ enabled }) => enabled)).toEqual([]);
+    expect(on?.filter(({ enabled }) => enabled)).toEqual([
+      { method: "GET", path: "/join", enabled: true, reads: "public" },
+    ]);
+    expect(resolveRouteOwner({ method: "HEAD", path: "/join" }, on)).toBe("kit");
+    for (const method of ["GET", "HEAD"]) {
+      expect(resolveRouteOwner({ method, path: "/auth/recover" }, on)).toBe("hono");
+    }
+  });
+
   // Use enabled fixture entries to exercise opt-in before the page PRs land.
   const pages = ["/", "/join", "/events", "/events/past", "/about"];
   const excluded = ["/join/discord", "/join/callback", "/auth/recover", "/e/:key"];
