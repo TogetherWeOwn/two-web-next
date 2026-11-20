@@ -84,11 +84,11 @@ test("the Kit fixture owns the live event detail only on its loopback worker", (
   assert.match(helper, /kitFixtureOwnsEventDetail/);
 });
 
-test("the Kit join fixture flag is confined to the loopback worker", () => {
+test("the Kit browser worker uses shipped join and recovery ownership", () => {
   const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
   const hooks = readFileSync(new URL("../web/src/hooks.server.ts", import.meta.url), "utf8");
   const deployed = readFileSync(new URL("../web/wrangler.jsonc", import.meta.url), "utf8");
-  assert.match(worker, /KIT_PARITY_FIXTURE_JOIN: "true"/);
+  assert.doesNotMatch(worker, /KIT_PARITY_FIXTURE_JOIN/);
   assert.match(hooks, /fixtureJoin: env\.KIT_PARITY_FIXTURE_JOIN === "true"/);
   assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_JOIN/);
 });

@@ -12,7 +12,7 @@
 // `/events/past`, `/about`, `/faq`, `/rules`, `/privacy`, `/join`,
 // `/hotzones`, `/hotzones/joins`, `/hotzones/voice`, `/hotzones/games`.
 // Out of scope per the card: `/e/:key` (Hono-owned member-read boundary) and
-// `/auth/recover` (Hono-owned transient outcome page).
+// `/auth/recover` (Hono-admitted transient document with no Kit data response).
 //
 // Leak model notes:
 // - `events.created_by` / `featured_contents.created_by` hold the authoring
