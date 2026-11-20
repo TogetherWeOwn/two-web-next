@@ -383,7 +383,7 @@ test("the staging Kit renderer probe fails after six Hono responses", () => {
       console.error("Probe requests:", calls);
       console.error("Retry delays:", retryDelays.join(","));
     });`,
-    { ...process.env, KIT_ROUTE_CHECK_ATTEMPTS: "", KIT_ROUTE_CHECK_DELAY_MS: "invalid" },
+    { ...process.env, KIT_ROUTE_CHECK_ATTEMPTS: "", KIT_ROUTE_CHECK_DELAY_MS: "1" },
   );
   assert.equal(result.status, 1, result.stderr);
   assert.equal(result.stdout, "");
