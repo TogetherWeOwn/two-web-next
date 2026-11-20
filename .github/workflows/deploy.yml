@@ -22,6 +22,7 @@ on:
           - archive-static
           - events
           - home
+          - events-join
           - join
           - ember-pages
 

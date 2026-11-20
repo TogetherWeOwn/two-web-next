@@ -3,7 +3,16 @@ import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const families = ["hono", "archive", "archive-static", "events", "home", "join", "ember-pages"];
+const families = [
+  "hono",
+  "archive",
+  "archive-static",
+  "events",
+  "home",
+  "events-join",
+  "join",
+  "ember-pages",
+];
 
 export function kitRouteFlagsForFamily(family) {
   const selection = family || "hono";
@@ -12,9 +21,9 @@ export function kitRouteFlagsForFamily(family) {
   return {
     archive: String(selection === "archive" || selection === "archive-static"),
     static: String(selection === "archive-static"),
-    events: String(selection === "events" || ember),
+    events: String(selection === "events" || selection === "events-join" || ember),
     home: String(selection === "home" || ember),
-    join: String(selection === "join" || ember),
+    join: String(selection === "join" || selection === "events-join" || ember),
   };
 }
 

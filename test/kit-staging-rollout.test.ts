@@ -356,7 +356,7 @@ describe("staging deployment selection", () => {
     expect(deployWorkflow).toMatch(/workflow_dispatch:\n\s+inputs:\n\s+kit_route_family:/);
     expect(deployWorkflow).toContain("default: hono");
     expect(deployWorkflow).toContain(
-      "- hono\n          - archive\n          - archive-static\n          - events\n          - home\n          - join\n          - ember-pages",
+      "- hono\n          - archive\n          - archive-static\n          - events\n          - home\n          - events-join\n          - join\n          - ember-pages",
     );
     const deployStep = deployWorkflow
       .split("      - name: Deploy to Cloudflare Workers\n")[1]
