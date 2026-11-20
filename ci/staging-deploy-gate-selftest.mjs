@@ -287,6 +287,24 @@ test("events-home turns on only /events and / and refuses either disabled GET", 
   }
 });
 
+function runKitProbe(path, fetchStub, env = process.env) {
+  // Skip the retry wait only in the offline subprocess.
+  const setup = `const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = (callback, delay, ...args) =>
+      realSetTimeout(callback, delay === 10_000 ? 0 : delay, ...args);
+    ${fetchStub}`;
+  return spawnSync(
+    process.execPath,
+    [
+      "--import",
+      `data:text/javascript,${encodeURIComponent(setup)}`,
+      "ci/staging-kit-route-check.mjs",
+      path,
+    ],
+    { cwd: root, encoding: "utf8", timeout: 5_000, env },
+  );
+}
+
 test("each Ember opt-in probes the exact staging GET after revision verification", () => {
   const preflight = workflow.indexOf("run: node --import tsx ci/kit-route-flags.mjs");
   assert.ok(preflight > workflow.indexOf("- name: Require successful exact-SHA full CI"));
@@ -325,16 +343,7 @@ test("each Ember opt-in probes the exact staging GET after revision verification
       }
       return new Response(null, {status: ${status}, headers: ${JSON.stringify(marker ? { "x-two-renderer": marker } : {})}});
     };`;
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        `data:text/javascript,${encodeURIComponent(stub)}`,
-        "ci/staging-kit-route-check.mjs",
-        path,
-      ],
-      { cwd: root, encoding: "utf8", timeout: 5_000 },
-    );
+    const result = runKitProbe(path, stub);
     assert.equal(result.status, expected, `${status} / ${marker}: ${result.stderr}`);
     if (expected === 0) assert.match(result.stdout, /HTTP 200, x-two-renderer: kit/);
     else {
@@ -343,6 +352,34 @@ test("each Ember opt-in probes the exact staging GET after revision verification
       assert.match(result.stderr, refusal ?? (status === 200 ? /did not return/ : /expected 200/));
     }
   }
+});
+
+test("the staging Kit renderer probe recovers on attempt three", () => {
+  const result = runKitProbe(
+    "/",
+    `let calls = 0; globalThis.fetch = async () => {
+      calls += 1;
+      return new Response(null, {status: 200, headers: calls < 3 ? {"x-two-renderer": "hono"} : {"x-two-renderer": "kit"}});
+    };`,
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /x-two-renderer: kit \(attempt 3\)/);
+});
+
+test("the staging Kit renderer probe fails after six Hono responses", () => {
+  const result = runKitProbe(
+    "/",
+    `let calls = 0; globalThis.fetch = async () => {
+      calls += 1;
+      return new Response(null, {status: 200, headers: {"x-two-renderer": "hono"}});
+    };
+    process.on("exit", () => console.error("Probe requests:", calls));`,
+    { ...process.env, KIT_ROUTE_CHECK_ATTEMPTS: "", KIT_ROUTE_CHECK_DELAY_MS: "invalid" },
+  );
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /GET \/ did not return x-two-renderer: kit/);
+  assert.match(result.stderr, /^Probe requests: 6$/m);
 });
 
 const denied = [
