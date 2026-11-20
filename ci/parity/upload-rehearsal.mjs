@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
-import { stripVTControlCharacters } from "node:util";
+import { lstatSync } from "node:fs";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { COMPANION_NAME, ENTRY_NAME } from "../../web/scripts/kit-facade-transaction.mjs";
 import { sha256 } from "../worker-bundle-evidence.mjs";
+import { readWranglerConfig } from "../wrangler-config.mjs";
+
+const moduleNames = [ENTRY_NAME, COMPANION_NAME];
+const installedAssetPath = "../cloudflare";
+export const moduleMime = "application/javascript+module";
+export const rehearsalSchema = "two.kit-parity-upload-rehearsal.v2";
+export const productionConfig = "web/wrangler.production.jsonc";
+export const wranglerVersion = "4.156.1";
 
 export function rehearsalContext(sourceSha, env = process.env) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/);
@@ -23,6 +31,47 @@ export function checkRehearsalInput(identity, context, configBytes, files) {
     identity.installedOutputSha256,
     "installed output digest mismatch",
   );
+}
+
+export function rehearsalConfig(configBytes) {
+  const config = readWranglerConfig(configBytes.toString());
+  assert.equal(config.main, `.svelte-kit/cloudflare/${ENTRY_NAME}`);
+  assert.equal(config.assets.directory, ".svelte-kit/cloudflare");
+  return JSON.stringify({
+    ...config,
+    main: `modules/${ENTRY_NAME}`,
+    base_dir: "modules",
+    rules: [{ type: "ESModule", globs: [COMPANION_NAME] }],
+    // The scratch config is a sibling of the original installed asset directory.
+    assets: { ...config.assets, directory: installedAssetPath },
+  });
+}
+
+export function rehearsalInputs(files) {
+  const prefix = "cloudflare/";
+  const assetInputs = Object.fromEntries(
+    Object.entries(files)
+      .filter(([path]) => path.startsWith(prefix))
+      .map(([path, digest]) => [path.slice(prefix.length), digest]),
+  );
+  for (const name of [...moduleNames, "_headers", ".assetsignore"]) {
+    assert.match(assetInputs[name] ?? "", /^[a-f0-9]{64}$/, `missing installed ${name} digest`);
+  }
+  return {
+    moduleSha256: Object.fromEntries(moduleNames.map((name) => [name, assetInputs[name]])),
+    assetInputTreeSha256: sha256(JSON.stringify(assetInputs)),
+    controlFiles: { _headers: assetInputs._headers, ".assetsignore": assetInputs[".assetsignore"] },
+  };
+}
+
+export async function checkModuleRoot(root, expected) {
+  assert.ok((await lstat(root)).isDirectory(), "module root is not a directory");
+  assert.deepEqual((await readdir(root)).sort(), [...moduleNames].sort(), "module root file set");
+  for (const name of moduleNames) {
+    const path = join(root, name);
+    assert.ok((await lstat(path)).isFile(), "expected a regular scratch module");
+    assert.equal(sha256(await readFile(path)), expected[name], `scratch module digest: ${name}`);
+  }
 }
 
 // Compare the actual serialized module parts, not merely Wrangler's copied entry.
@@ -64,61 +113,86 @@ export async function compareDryRun(bytes, expected, tag) {
   const extra = [...modules.keys()].filter((name) => !Object.hasOwn(expected, name)).sort();
   const changed = Object.keys(expected).filter((name) => {
     const part = modules.get(name);
-    return (
-      part && (part.sha256 !== expected[name] || part.type !== "application/javascript+module")
-    );
+    return part && (part.sha256 !== expected[name] || part.type !== moduleMime);
   });
+  // Keep every compared part without persisting arbitrary names or MIME strings.
+  const safeName = (name) => (moduleNames.includes(name) ? name : `sha256:${sha256(name)}`);
+  const observed = Object.fromEntries(
+    [...modules].map(([name, part]) => [
+      safeName(name),
+      { sha256: part.sha256, type: part.type === moduleMime ? moduleMime : "unexpected-mime" },
+    ]),
+  );
   return {
     sameModuleBytes: missing.length === 0 && extra.length === 0 && changed.length === 0,
     expected,
-    observed: Object.fromEntries(modules),
+    observed,
     missing,
-    extra,
+    extra: extra.map(safeName),
     changed,
   };
 }
 
-export async function rehearseUpload({
-  repo,
-  installed,
-  configBytes,
-  identity,
-  context,
-  outputIdentity,
-}) {
-  const config = join(installed.assets, "../../wrangler.production.jsonc");
-  const before = await outputIdentity(installed);
-  checkRehearsalInput(identity, context, configBytes, before);
-  // Place the unmodified config next to the installed tree so its relative main
-  // and assets resolve to the parity inputs without CLI overrides or copies.
-  await writeFile(config, configBytes, { flag: "wx", mode: 0o600 });
-  const lock = JSON.parse(await readFile(join(repo, "web/package-lock.json"), "utf8"));
-  const tool = join(repo, "web/node_modules/wrangler");
-  const { version } = JSON.parse(await readFile(join(tool, "package.json"), "utf8"));
-  assert.equal(
-    version,
-    lock.packages[""].devDependencies.wrangler,
-    "Wrangler must use the web pin",
-  );
-  assert.equal(version, lock.packages["node_modules/wrangler"].version, "Wrangler lock mismatch");
-  const prefix = `${basename(installed.assets)}/`;
-  const assetInputs = Object.fromEntries(
-    Object.entries(before)
-      .filter(([path]) => path.startsWith(prefix))
-      .map(([path, digest]) => [path.slice(prefix.length), digest]),
-  );
-  const expected = Object.fromEntries(
-    [ENTRY_NAME, COMPANION_NAME].map((name) => [name, assetInputs[name]]),
-  );
+export async function checkEffectiveConfig(path, digest) {
+  assert.ok((await lstat(path)).isFile(), "expected a regular scratch config");
+  assert.equal(sha256(await readFile(path)), digest, "effective config digest mismatch");
+}
+
+export async function rehearseUpload({ repo, installed, identity, context, outputIdentity }) {
   const tag = `${context.sourceSha}-${context.runId}-${context.runAttempt}`;
-  const dir = await mkdtemp(join(dirname(config), "upload-rehearsal-"));
   const command = ["versions", "upload", "--dry-run", "--no-bundle", "--upload-source-maps=false"];
-  let result;
+  const receipt = {
+    schema: rehearsalSchema,
+    scope: "local serialization only; no asset synchronization, remote validation or upload",
+    ...context,
+    tag,
+    kitConfigSha256: identity.kitConfigSha256,
+    installedOutputSha256: identity.installedOutputSha256,
+    scratchRemoved: false,
+  };
+  const originalConfig = join(repo, productionConfig);
+  const checkOriginal = async (configBytes) => {
+    const files = await outputIdentity(installed);
+    checkRehearsalInput(identity, context, configBytes, files);
+    return files;
+  };
+  let dir;
+  let phase = "parity-input";
   try {
+    const configBytes = await readFile(originalConfig);
+    Object.assign(receipt, rehearsalInputs(await checkOriginal(configBytes)));
+    phase = "effective-config";
+    dir = await mkdtemp(join(dirname(installed.assets), "upload-rehearsal-"));
+    assert.ok(join(dir, installedAssetPath) === installed.assets, "asset directory moved");
+    const config = join(dir, "wrangler.json");
+    const effective = rehearsalConfig(configBytes);
+    receipt.effectiveConfigSha256 = sha256(effective);
+    await writeFile(config, effective, { flag: "wx", mode: 0o600 });
+
+    phase = "module-root";
+    const modules = join(dir, "modules");
     const home = join(dir, "home");
+    await mkdir(modules, { mode: 0o700 });
     await mkdir(home, { mode: 0o700 });
+    for (const name of moduleNames) {
+      const bytes = await readFile(join(installed.assets, name));
+      await writeFile(join(modules, name), bytes, { flag: "wx", mode: 0o600 });
+    }
+    await checkModuleRoot(modules, receipt.moduleSha256);
+    await checkEffectiveConfig(config, receipt.effectiveConfigSha256);
+
+    phase = "wrangler-pin";
+    const lock = JSON.parse(await readFile(join(repo, "web/package-lock.json"), "utf8"));
+    const tool = join(repo, "web/node_modules/wrangler");
+    const { version } = JSON.parse(await readFile(join(tool, "package.json"), "utf8"));
+    assert.equal(version, wranglerVersion, "unexpected rehearsal Wrangler version");
+    assert.equal(version, lock.packages[""].devDependencies.wrangler, "Wrangler web pin drift");
+    assert.equal(version, lock.packages["node_modules/wrangler"].version, "Wrangler lock mismatch");
+    receipt.wrangler = { version, command };
+
     const outfile = join(dir, "upload.multipart");
     const args = [...command, "--config", config, "--tag", tag, "--outfile", outfile];
+    phase = "wrangler-execution";
     const child = spawnSync(process.execPath, [join(tool, "bin/wrangler.js"), ...args], {
       cwd: dir,
       env: {
@@ -130,48 +204,40 @@ export async function rehearseUpload({
         CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
         WRANGLER_SEND_METRICS: "false",
       },
-      encoding: "utf8",
       maxBuffer: 1024 * 1024,
       timeout: 120_000,
     });
+    phase = "post-run-parity-input";
+    await checkOriginal(await readFile(originalConfig));
+    phase = "post-run-effective-config";
+    await checkEffectiveConfig(config, receipt.effectiveConfigSha256);
+    phase = "post-run-module-root";
+    await checkModuleRoot(modules, receipt.moduleSha256);
     if (child.error || child.status !== 0) {
-      result = {
+      Object.assign(receipt, {
         outcome: "wrangler-failed",
         status: child.status,
         signal: child.signal,
         error: child.error?.code,
-        stderr: stripVTControlCharacters(child.stderr ?? "").slice(-4_000),
-      };
+      });
     } else {
-      try {
-        const stat = await lstat(outfile);
-        assert.ok(stat.isFile() && stat.size <= 64 * 1024 * 1024, "invalid Wrangler output file");
-        const comparison = await compareDryRun(await readFile(outfile), expected, tag);
-        result = {
-          outcome: comparison.sameModuleBytes ? "matched" : "module-mismatch",
-          comparison,
-        };
-      } catch (error) {
-        result = { outcome: "invalid-envelope", error: error.message };
-      }
+      phase = "multipart-envelope";
+      const stat = await lstat(outfile);
+      assert.ok(stat.isFile() && stat.size <= 64 * 1024 * 1024, "invalid Wrangler output file");
+      receipt.comparison = await compareDryRun(await readFile(outfile), receipt.moduleSha256, tag);
+      receipt.outcome = receipt.comparison.sameModuleBytes ? "matched" : "module-mismatch";
     }
-    checkRehearsalInput(identity, context, await readFile(config), await outputIdentity(installed));
+  } catch {
+    // Wrapper errors and Wrangler stderr can carry scratch paths or config values.
+    Object.assign(receipt, { outcome: "refused", phase });
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    const removed =
+      !dir ||
+      (await rm(dir, { recursive: true, force: true })
+        .then(() => !lstatSync(dir, { throwIfNoEntry: false }))
+        .catch(() => false));
+    receipt.scratchRemoved = removed;
+    if (!removed) Object.assign(receipt, { outcome: "refused", phase: "cleanup" });
   }
-  return {
-    schema: "two.kit-parity-upload-rehearsal.v1",
-    scope:
-      "credential-free dry run only; not selected remote assets, an upload UUID, deployed parity, or qualified recovery",
-    ...context,
-    tag,
-    kitConfigSha256: identity.kitConfigSha256,
-    installedOutputSha256: identity.installedOutputSha256,
-    workerSha256: expected[ENTRY_NAME],
-    assetInputTreeSha256: sha256(JSON.stringify(assetInputs)),
-    controlFiles: { _headers: assetInputs._headers, ".assetsignore": assetInputs[".assetsignore"] },
-    wrangler: { version, command },
-    scratchRemoved: true,
-    ...result,
-  };
+  return receipt;
 }

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COMPANION_NAME, ENTRY_NAME } from "../../web/scripts/kit-facade-transaction.mjs";
@@ -18,7 +18,7 @@ import {
   parseExceptions,
   report,
 } from "./compare.mjs";
-import { rehearsalContext, rehearseUpload } from "./upload-rehearsal.mjs";
+import { productionConfig, rehearsalContext, rehearseUpload } from "./upload-rehearsal.mjs";
 import { listPublicFiles, slug } from "./vectors.mjs";
 
 const repo = resolve(import.meta.dirname, "../..");
@@ -67,7 +67,9 @@ async function outputIdentity({ assets, worker }) {
   const root = dirname(assets);
   const files = {};
   for (const name of [basename(assets), "cloudflare-tmp", "output"]) {
-    const entries = await readdir(join(root, name), { recursive: true, withFileTypes: true });
+    const directory = join(root, name);
+    assert.ok((await lstat(directory)).isDirectory(), `expected installed directory ${name}`);
+    const entries = await readdir(directory, { recursive: true, withFileTypes: true });
     const leaves = entries.filter((entry) => !entry.isDirectory());
     assert.ok(leaves.length, `missing built output in ${name}`);
     for (const entry of leaves) {
@@ -164,7 +166,7 @@ async function main() {
   await mkdir(out, { recursive: true });
   const save = (name, data) => writeFile(join(out, name), `${JSON.stringify(data, null, 2)}\n`);
   const rootBytes = readFileSync(join(repo, "wrangler.jsonc"));
-  const kitBytes = readFileSync(join(repo, "web/wrangler.production.jsonc"));
+  const kitBytes = readFileSync(join(repo, productionConfig));
   const rootText = rootBytes.toString();
   const kitText = kitBytes.toString();
   assertKitProductionCandidate(rootText, kitText);
@@ -240,14 +242,12 @@ async function main() {
     const rehearsal = await rehearseUpload({
       repo,
       installed,
-      configBytes: kitBytes,
       identity,
       context,
       outputIdentity,
     });
     await save("upload-rehearsal.json", rehearsal);
-    // An incompatible tool is a recorded refusal, not a failed route replay
-    // or successful byte comparison. Nothing consumes this as a release gate.
+    // The hosted verifier fails on a refusal after XFS cleanup.
     if (rehearsal.outcome === "matched") console.log("Dry-run module bytes match parity inputs");
     else
       console.warn(`No upload rehearsal match (${rehearsal.outcome}); see upload-rehearsal.json`);

@@ -1,7 +1,20 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { sha256 } from "../worker-bundle-evidence.mjs";
-import { checkRehearsalInput, compareDryRun, rehearsalContext } from "./upload-rehearsal.mjs";
+import {
+  checkEffectiveConfig,
+  checkModuleRoot,
+  checkRehearsalInput,
+  compareDryRun,
+  rehearsalConfig,
+  rehearsalContext,
+  rehearsalInputs,
+  rehearsalSchema,
+  wranglerVersion,
+} from "./upload-rehearsal.mjs";
 import { verifyUploadRehearsal } from "./verify-upload-rehearsal.mjs";
 
 const context = rehearsalContext("a".repeat(40), { GITHUB_RUN_ID: "21", GITHUB_RUN_ATTEMPT: "3" });
@@ -39,7 +52,7 @@ test("dry run matches only the exact installed modules", async () => {
   const mismatch = await compareDryRun(partial, expected, tag);
   assert.equal(mismatch.sameModuleBytes, false);
   assert.deepEqual(mismatch.missing, ["kit-adapter.js"]);
-  assert.deepEqual(mismatch.extra, ["unexpected.txt"]);
+  assert.deepEqual(mismatch.extra, [`sha256:${sha256("unexpected.txt")}`]);
   await assert.rejects(
     compareDryRun(await multipart(modules, "wrong-tag"), expected, tag),
     /candidate tag/,
@@ -60,28 +73,73 @@ test("dry-run multipart size and framing are bounded", async () => {
   await assert.rejects(compareDryRun(body.subarray(0, -5), expected, tag), /multipart body/);
 });
 
-test("hosted receipt verification requires an outcome bound to this parity replay", () => {
-  const parity = {
-    ...context,
-    kitConfigSha256: sha256("production config"),
-    installedOutputSha256: sha256("installed tree"),
+test("hosted verification requires a match bound to this parity replay", async () => {
+  const original = {
+    main: ".svelte-kit/cloudflare/_worker.js",
+    assets: { directory: ".svelte-kit/cloudflare", binding: "ASSETS", run_worker_first: true },
+    vars: { KIT_ROUTE_HOME: "false" },
   };
-  const receipt = { ...parity, schema: "two.kit-parity-upload-rehearsal.v1", scratchRemoved: true };
-  const check = (value) => verifyUploadRehearsal(value, parity, context);
-  const matched = { ...receipt, outcome: "matched", comparison: { sameModuleBytes: true } };
+  const config = Buffer.from(JSON.stringify(original));
+  const effective = rehearsalConfig(config);
+  assert.deepEqual(JSON.parse(effective), {
+    ...original,
+    main: "modules/_worker.js",
+    base_dir: "modules",
+    rules: [{ type: "ESModule", globs: ["kit-adapter.js"] }],
+    assets: { ...original.assets, directory: "../cloudflare" },
+  });
+  const assets = { ...expected, _headers: sha256("h"), ".assetsignore": sha256("i") };
+  const files = Object.fromEntries(Object.entries(assets).map(([k, v]) => [`cloudflare/${k}`, v]));
+  const binding = {
+    ...context,
+    kitConfigSha256: sha256(config),
+    installedOutputSha256: sha256(JSON.stringify(files)),
+  };
+  const identity = { ...binding, files };
+  const parity = { ...binding, failures: [], approved: [], assets: { failures: [] } };
+  const matched = {
+    ...binding,
+    ...rehearsalInputs(files),
+    effectiveConfigSha256: sha256(effective),
+    schema: rehearsalSchema,
+    scratchRemoved: true,
+    wrangler: { version: wranglerVersion },
+    tag,
+    outcome: "matched",
+    comparison: await compareDryRun(await multipart(modules), expected, tag),
+  };
+  const check = (value, replay = parity) =>
+    verifyUploadRehearsal(value, replay, identity, context, config);
   check(matched);
-  check({ ...receipt, outcome: "module-mismatch", comparison: { sameModuleBytes: false } });
-  check({ ...receipt, outcome: "invalid-envelope", error: "bad body" });
-  check({ ...receipt, outcome: "wrangler-failed", status: 1 });
-  assert.throws(() => check(undefined), /receipt schema/);
-  assert.throws(() => check(receipt), /outcome/);
-  assert.throws(() => check({ ...matched, outcome: "module-mismatch" }), /byte comparison/);
-  for (const key of Object.keys(parity)) {
-    assert.throws(() => check({ ...matched, [key]: "0" }), new RegExp(key));
+  for (const outcome of [undefined, "module-mismatch", "refused", "wrangler-failed"]) {
+    assert.throws(() => check({ ...matched, outcome }), /rehearsal refused/);
   }
-  const stale = { ...parity, runAttempt: "2" };
-  const staleReceipt = { ...matched, ...stale };
-  assert.throws(() => verifyUploadRehearsal(staleReceipt, stale, context), /runAttempt/);
+  assert.throws(() => check(undefined), /receipt schema/);
+  assert.throws(() => check({ ...matched, comparison: { sameModuleBytes: true } }), /comparison/);
+  for (const key of [...Object.keys(binding), "effectiveConfigSha256", "controlFiles"]) {
+    assert.throws(() => check({ ...matched, [key]: "0" }), /mismatch/);
+  }
+  const stale = { runAttempt: "2" };
+  assert.throws(() => check({ ...matched, ...stale }, { ...parity, ...stale }), /runAttempt/);
+});
+
+test("scratch checks refuse configuration, module bytes and file-set drift", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "rehearsal-input-test-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const config = join(dir, "wrangler.json");
+  await writeFile(config, "original");
+  await checkEffectiveConfig(config, sha256("original"));
+  await writeFile(config, "changed");
+  await assert.rejects(checkEffectiveConfig(config, sha256("original")), /config digest/);
+  await rm(config);
+  await writeFile(join(dir, "_worker.js"), modules["_worker.js"]);
+  await assert.rejects(checkModuleRoot(dir, expected), /file set/);
+  await writeFile(join(dir, "kit-adapter.js"), modules["kit-adapter.js"]);
+  await checkModuleRoot(dir, expected);
+  await writeFile(join(dir, "kit-adapter.js"), "changed");
+  await assert.rejects(checkModuleRoot(dir, expected), /module digest/);
+  await writeFile(join(dir, "unexpected.txt"), "extra");
+  await assert.rejects(checkModuleRoot(dir, expected), /file set/);
 });
 
 test("rehearsal refuses mismatched parity identity, config or installed inputs", () => {
