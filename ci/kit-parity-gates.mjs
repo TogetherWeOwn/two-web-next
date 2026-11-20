@@ -631,9 +631,10 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
   }
   if (html.includes("Cross-site POST form submissions"))
     failures.push(`${label}: bare Kit CSRF text (must be the hardened gate)`);
-  // Account chrome: the public archive and the join landing are guest-only.
+  // Check the logout control, not copy that may appear in guest content.
   if (!html.includes("Welcome, guest")) failures.push(`${label}: guest account chrome`);
-  if (html.includes("Sign out")) failures.push(`${label}: guest page must not show Sign out`);
+  if (/<form\b[^>]*\saction="\/logout(?:\/everywhere)?"/i.test(html))
+    failures.push(`${label}: guest page must not show Sign out`);
   const secretHits = scrubSecrets(html);
   if (secretHits.length)
     failures.push(`${label}: secret-shaped content in HTML (${secretHits.length} patterns)`);
@@ -1282,7 +1283,10 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       (html) => html.replace('class="skip-link" href="#main"', 'class="skip-link" href="#other"'),
     ],
     ["no-canonical", (html) => html.replace('<link rel="canonical"', '<link rel="alternate"')],
-    ["signed-in-chrome", (html) => html.replace("Welcome, guest", "Sign out")],
+    [
+      "signed-in-chrome",
+      (html) => `${html}<form method="post" action="/logout"><button>Sign out</button></form>`,
+    ],
     ["bare-csrf-text", (html) => `${html}Cross-site POST form submissions`],
     ["secret-leak", (html) => `${html}<meta name="x" content="Bearer abc.def.ghi">`],
   ];

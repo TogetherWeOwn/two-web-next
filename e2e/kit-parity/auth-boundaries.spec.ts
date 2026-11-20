@@ -1,5 +1,13 @@
 import { type Browser, expect, type Page, test } from "@playwright/test";
-import { KIT_ORIGIN, PARITY_VIEWPORTS, parityTargets } from "../kit-parity";
+import { serializeSigned } from "hono/utils/cookie";
+import { JOIN_RESULT_COOKIE } from "../../src/return-journey";
+import {
+  KIT_ORIGIN,
+  PARITY_VIEWPORTS,
+  expectedKitMarker,
+  kitFixtureSessionSecret,
+  parityTargets,
+} from "../kit-parity";
 
 const targets = parityTargets();
 const AUTHORIZE_URL = "https://discord.com/oauth2/authorize";
@@ -42,6 +50,32 @@ async function captureJoin(page: Page, state: string) {
     await test.info().attach(label, { path, contentType: "image/png" });
   }
 }
+
+test("Kit home consumes the signed join flash on GET only", async ({ request }) => {
+  const signed = await serializeSigned(
+    JOIN_RESULT_COOKIE,
+    "already_member",
+    kitFixtureSessionSecret(),
+    {
+      path: "/",
+    },
+  );
+  const headers = { cookie: signed.split(";")[0]! };
+  const head = await request.head(`${KIT_ORIGIN}/`, { headers });
+  expect(head.status()).toBe(200);
+  expect(head.headers()["set-cookie"]).toBeUndefined();
+
+  const home = await request.get(`${KIT_ORIGIN}/`, { headers });
+  expect(home.status()).toBe(200);
+  expect(home.headers()["x-two-renderer"] ?? null).toBe(expectedKitMarker("/"));
+  expect(home.headers()["set-cookie"]).toMatch(
+    new RegExp(`^${JOIN_RESULT_COOKIE}=;.*Max-Age=0`, "i"),
+  );
+  expect(await home.text()).toContain('data-testid="join-result"');
+  const revisit = await request.get(`${KIT_ORIGIN}/`);
+  expect(revisit.status()).toBe(200);
+  expect(await revisit.text()).not.toContain('data-testid="join-result"');
+});
 
 for (const target of targets) {
   test(`${target.name}: guest join CTA enters the Hono-owned OAuth flow`, async ({ browser }) => {
