@@ -219,6 +219,41 @@ export function securityTxtAssertions(
   return failures;
 }
 
+async function readJoinMarkup(body) {
+  // Staging installs parse5. Keep callers without a renderer expectation dependency-free.
+  const { parse } = await import("parse5");
+  const nodes = [parse(body)];
+  let action = false;
+  let heading = false;
+  while (nodes.length > 0) {
+    const node = nodes.pop();
+    if (node.namespaceURI === "http://www.w3.org/1999/xhtml") {
+      const attr = (name) => node.attrs.find((entry) => entry.name === name)?.value;
+      // A bare /join GET renders this same-origin action without query parameters.
+      if (
+        node.tagName === "a" &&
+        attr("href") === "/join/discord" &&
+        attr("data-testid") === "join-oneclick"
+      ) {
+        action = true;
+      }
+      if (node.tagName === "h2" && attr("id") === "join-card-heading") {
+        const [text] = node.childNodes;
+        if (
+          node.childNodes.length === 1 &&
+          text.nodeName === "#text" &&
+          text.value === "Join with one sign-in"
+        ) {
+          heading = true;
+        }
+      }
+    }
+    // Template contents are inert and are not part of childNodes.
+    for (const child of node.childNodes ?? []) nodes.push(child);
+  }
+  return { action, heading };
+}
+
 // Optional per-route hook for machine verdicts (--json/--ledger): called once
 // per route with (path, failedAssertionCount) after its PASS/FAIL lines.
 // Omitting it leaves the human output byte-identical to previous versions.
@@ -707,17 +742,10 @@ export async function smoke(
           expectedJoinRenderer === "kit" ? "x-two-renderer: kit" : "no x-two-renderer (Hono)",
           renderer === null ? "header missing" : "unexpected renderer header",
         );
-        // A bare /join GET renders this same-origin action without query parameters.
-        const joinAction =
-          /<a\s(?=[^<>]*\shref="\/join\/discord")(?=[^<>]*\sdata-testid="join-oneclick")[^<>]*>/;
-        const markup = body.replace(/<!--[\s\S]*?-->/g, "");
-        check(joinAction.test(markup), "join-oneclick link to /join/discord", "link did not match");
+        const { action, heading } = await readJoinMarkup(body);
+        check(action, "join-oneclick link to /join/discord", "link did not match");
         if (kitJoin) {
-          check(
-            /<h2 id="join-card-heading">Join with one sign-in<\/h2>/.test(markup),
-            'Kit Join card heading "Join with one sign-in"',
-            "heading did not match",
-          );
+          check(heading, 'Kit Join card heading "Join with one sign-in"', "heading did not match");
         }
       }
       if (!kitJoin && route.body)

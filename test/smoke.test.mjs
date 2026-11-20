@@ -1043,6 +1043,13 @@ test("CLI enforces the selected staging Join renderer and its public action", as
       failure: /expected join-oneclick link/,
     },
     {
+      name: "action in an inert template",
+      expected: "kit",
+      body: `${heading}<template>${action}</template>`,
+      marker: "kit",
+      failure: /expected join-oneclick link/,
+    },
+    {
       name: "test ID and href belong to different elements",
       expected: "kit",
       body: `${heading}<a href="/join/discord">Join</a><span data-testid="join-oneclick">Join</span>`,
