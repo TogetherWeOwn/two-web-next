@@ -1032,8 +1032,12 @@ export function assertKitProductionCandidate(rootText, kitText) {
       throw new Error(`Kit candidate ${key} bindings differ from root env.production`);
     }
   }
-  if (kit.assets?.binding !== (production.assets ?? root.assets)?.binding) {
-    throw new Error("Kit candidate assets binding differs from root env.production");
+  const expectedAssets = {
+    ...(production.assets ?? root.assets),
+    directory: ".svelte-kit/cloudflare",
+  };
+  if (!isDeepStrictEqual(kit.assets, expectedAssets)) {
+    throw new Error("Kit candidate assets settings differ from the expected production settings");
   }
   for (const key of Object.keys(kit)) {
     if (!KIT_CONFIG_KEYS.has(key)) {

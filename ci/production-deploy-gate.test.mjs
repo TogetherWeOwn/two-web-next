@@ -292,7 +292,8 @@ test("the reviewed Kit candidate passes; drift in name, flags, crons or bindings
     [(kit) => delete kit.tail_consumers, /tail_consumers bindings/],
     [(kit) => (kit.kv_namespaces = [{ binding: "KV", id: "x" }]), /kv_namespaces bindings/],
     [(kit) => (kit.send_email = [{ name: "EMAIL" }]), /unreviewed config section send_email/],
-    [(kit) => (kit.assets.binding = "STATIC"), /assets binding/],
+    [(kit) => (kit.assets.binding = "STATIC"), /assets settings/],
+    [(kit) => (kit.assets.directory = "./public"), /assets settings/],
     [(kit) => (kit.vars.APP_URL = "https://example.com"), /var APP_URL/],
     [(kit) => delete kit.vars.DISCORD_MODERATOR_ROLE_IDS, /var DISCORD_MODERATOR_ROLE_IDS/],
   ];
@@ -321,6 +322,13 @@ test("--kit-candidate CLI checks the working-directory checkout", () => {
     const bad = run();
     assert.equal(bad.status, 1);
     assert.match(bad.stderr, /::error::Kit candidate KIT_ROUTE_ARCHIVE/);
+
+    kit.vars.KIT_ROUTE_ARCHIVE = "false";
+    kit.assets.run_worker_first = false;
+    writeFileSync(join(dir, "web/wrangler.production.jsonc"), JSON.stringify(kit));
+    const badAssets = run();
+    assert.equal(badAssets.status, 1, badAssets.stdout);
+    assert.match(badAssets.stderr, /::error::Kit candidate assets settings/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
