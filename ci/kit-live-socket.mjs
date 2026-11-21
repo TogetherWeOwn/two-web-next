@@ -10,6 +10,10 @@ import { SESSION_COOKIE } from "./parity/fixture.mjs";
 
 const path = "/api/discord-live/v1";
 const deadline = () => ({ signal: AbortSignal.timeout(5_000) });
+const awaitEvent = (socket, event, phase, timeout = 5_000) =>
+  once(socket, event, { signal: AbortSignal.timeout(timeout) }).catch((cause) => {
+    throw new Error(`${phase}: waiting for ${event} (readyState=${socket.readyState})`, { cause });
+  });
 
 function upgradeRequest(url, headers) {
   return request(url, {
@@ -132,17 +136,17 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
   const open = async (headers) => {
     const socket = new WebSocket(url.replace(/^http:/, "ws:"), { headers });
     sockets.push(socket);
-    await once(socket, "open", deadline()); // Undici requires a valid HTTP 101 and accept key.
+    await awaitEvent(socket, "open", "session scenario upgrade"); // Undici verifies the 101.
     return socket;
   };
   const subscribe = JSON.stringify({ v: 1, type: "subscribe", topics: ["voice"] });
   try {
     const guest = await open(headers);
-    const frame = once(guest, "message", deadline());
+    const frame = awaitEvent(guest, "message", "guest subscribe");
     guest.send(subscribe);
     const unavailable = { v: 1, type: "unavailable", topic: "voice" };
     assert.deepEqual(JSON.parse((await frame)[0].data), unavailable);
-    const duplicate = once(guest, "close", deadline());
+    const duplicate = awaitEvent(guest, "close", "duplicate subscribe");
     guest.send(subscribe);
     assert.equal((await duplicate)[0].code, 1008);
 
@@ -151,8 +155,8 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     const expiring = await open({ ...headers, Cookie: cookie });
     await sql`update web_sessions set expires_at = clock_timestamp() + interval '3 seconds' where token_hash = ${ref}`;
     const expiry = Promise.all([
-      once(expiring, "message", deadline()),
-      once(expiring, "close", deadline()),
+      awaitEvent(expiring, "message", "shortened session subscribe"),
+      awaitEvent(expiring, "close", "shortened session alarm"),
     ]);
     expiring.send(subscribe);
     const [[message], [close]] = await expiry;
@@ -162,7 +166,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     await sql`update web_sessions set expires_at = clock_timestamp() + interval '10 minutes' where token_hash = ${ref}`;
     const signedIn = await open({ ...headers, Cookie: cookie });
     await sql`update web_sessions set revoked_at = clock_timestamp() where token_hash = ${ref}`;
-    const closed = once(signedIn, "close", deadline());
+    const closed = awaitEvent(signedIn, "close", "revoked session subscribe");
     let deliveries = 0;
     signedIn.addEventListener("message", () => deliveries++);
     signedIn.send(subscribe);
@@ -173,7 +177,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     await sql`update web_sessions set revoked_at = null where token_hash = ${ref}`;
     const lapsing = await open({ ...headers, Cookie: cookie });
     await sql`update web_sessions set expires_at = clock_timestamp() where token_hash = ${ref}`;
-    const expired = once(lapsing, "close", deadline());
+    const expired = awaitEvent(lapsing, "close", "expired session subscribe");
     lapsing.addEventListener("message", () => deliveries++);
     lapsing.send(subscribe);
     assert.equal((await expired)[0].code, 1008);
@@ -222,7 +226,7 @@ const leave = (id) => ({ topic: "voice", op: "remove", id });
 const unavailable = { v: 1, type: "unavailable", topic: "voice" };
 const projected = (type, seq, count) => ({ v: 1, type, topic: "voice", seq, value: { count } });
 
-function snapshot(seq, count) {
+function snapshot(seq, count, observedAt = new Date().toISOString()) {
   const room = (id, overwrites) => ({
     id,
     name: "Fixture room",
@@ -235,7 +239,7 @@ function snapshot(seq, count) {
     v: 1,
     guild_id: guild,
     seq,
-    observed_at: at,
+    observed_at: observedAt,
     topics: {
       guild: { ownerId: people[0], afkChannelId: null },
       channels: [
@@ -295,10 +299,15 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
     headers: { Origin: appOrigin },
   });
   const frames = [];
-  socket.addEventListener("message", ({ data }) => frames.push(JSON.parse(data)));
+  socket.addEventListener("message", ({ data }) => frames.push({ data, at: Date.now() }));
   const expectFrame = async (want, timeout = 5_000) => {
-    if (!frames.length) await once(socket, "message", { signal: AbortSignal.timeout(timeout) });
-    assert.deepEqual(frames.shift(), want);
+    if (!frames.length) {
+      await awaitEvent(socket, "message", `guest fan-out ${want.type}${want.seq ?? ""}`, timeout);
+    }
+    const { data, at } = frames.shift();
+    assert.equal(typeof data, "string");
+    assert.deepEqual(JSON.parse(data), want);
+    return at;
   };
   const command = (type) => JSON.stringify({ v: 1, type, topics: ["voice"] });
   const send = (type) => socket.send(command(type));
@@ -306,7 +315,7 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
   const sql = postgres(databaseUrl, { max: 1 });
   let member;
   try {
-    await once(socket, "open", deadline());
+    await awaitEvent(socket, "open", "guest fan-out upgrade");
     send("subscribe");
     await expectFrame(projected("snapshot", 1, null));
     await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
@@ -314,12 +323,12 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
     member = new WebSocket(`${origin}${path}`.replace(/^http:/, "ws:"), {
       headers: { Origin: appOrigin, Cookie: cookie },
     });
-    await once(member, "open", deadline());
-    const baseline = once(member, "message", deadline());
+    await awaitEvent(member, "open", "member fan-out upgrade");
+    const baseline = awaitEvent(member, "message", "member fan-out baseline");
     member.send(command("subscribe"));
     assert.deepEqual(JSON.parse((await baseline)[0].data), projected("snapshot", 1, null));
     await sql`update web_sessions set revoked_at = clock_timestamp() where token_hash = ${ref}`;
-    const memberClosed = once(member, "close", deadline());
+    const memberClosed = awaitEvent(member, "close", "member fan-out revocation");
     const revokedFrames = [];
     member.addEventListener("message", ({ data }) => revokedFrames.push(data));
     const [status, , [closure]] = await Promise.all([
@@ -338,7 +347,10 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
 
     assert.equal(await ingest(origin, 46, leave("106")), 409, "reject a behind snapshot");
     await expectFrame(unavailable);
-    const beforeWake = await source(snapshot(46, 5));
+    await source(snapshot(46, 5, new Date(Date.now() - 60_000).toISOString()));
+    assert.equal(await ingest(origin, 46, leave("106")), 409, "reject a stale covering snapshot");
+    const covering = snapshot(46, 5);
+    const beforeWake = await source(covering);
     assert.equal(await ingest(origin, 46, leave("106")), 204, "recover from a covering snapshot");
     await expectFrame(projected("snapshot", 4, 5));
     assert.equal(await source(), beforeWake);
@@ -365,8 +377,17 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
     assert.equal(await ingest(origin, 48, setRoom([])), 204);
     await expectFrame(projected("patch", 7, 5));
 
-    // No caller touches the Worker while waiting: only the source alarm can clear it.
-    await expectFrame(unavailable, 40_000);
+    // Keep the hub warm to isolate the lease alarm from constructor invalidation.
+    const expiresAt = Date.parse(covering.observed_at) + 30_000;
+    assert.equal(await ingest(origin, 49, join("106", "11")), 204);
+    while (Date.now() + 4_000 < expiresAt) {
+      await delay(4_000);
+      assert.equal(await source(), beforeWake + 1, "the hub must stay warm through lease expiry");
+    }
+    const receivedAt = await expectFrame(unavailable, 8_000);
+    assert.ok(receivedAt >= expiresAt, "the alarm must not clear the baseline early");
+    assert.ok(receivedAt < expiresAt + 8_000, "restricted ingress must not renew the lease");
+    assert.equal(await source(), beforeWake + 1);
     assert.equal(socket.readyState, WebSocket.OPEN, "source expiry is not connection expiry");
     console.log(
       "PASS installed Kit live counts, silence, fan-out revocation, gap recovery, hibernation, and lease expiry",

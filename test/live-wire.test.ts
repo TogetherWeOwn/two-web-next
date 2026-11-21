@@ -105,7 +105,7 @@ it("recovers complete state on a gap through one exact signed snapshot pull", as
     v: 1,
     guild_id: guildId,
     seq: 8,
-    observed_at: event.startsAt,
+    observed_at: new Date().toISOString(),
     topics: baseline,
   };
   const fetcher = vi.fn<typeof fetch>(async () => Response.json(snapshot));
@@ -117,7 +117,11 @@ it("recovers complete state on a gap through one exact signed snapshot pull", as
   const recovery = sequence.ingest(8, { ...decode(envelope)!, seq: 8 });
   expect(sequence.current).toBeNull();
   expect(await recovery).toBe("resynced");
-  expect(sequence.current).toEqual({ seq: 8, state: baseline });
+  expect(sequence.current).toEqual({
+    seq: 8,
+    state: baseline,
+    validUntil: Date.parse(snapshot.observed_at) + 30_000,
+  });
   expect(fetcher).toHaveBeenCalledOnce();
   const [url, init] = fetcher.mock.calls[0]!;
   const body = '{"action":"live.snapshot","guild_id":"100"}';

@@ -111,7 +111,7 @@ export function signedLiveSnapshot<State>(
   config: LiveKey & { origin: string; guildId: string },
   decodeTopics: (value: Record<string, unknown>) => State | null,
   fetcher: typeof fetch = fetch,
-): () => Promise<LiveSnapshot<State> | null> {
+): () => Promise<(LiveSnapshot<State> & { validUntil: number }) | null> {
   return async () => {
     try {
       const origin = new URL(config.origin);
@@ -156,12 +156,18 @@ export function signedLiveSnapshot<State>(
           typeof doc.seq !== "number" ||
           !Number.isSafeInteger(doc.seq) ||
           doc.seq < 0 ||
+          typeof doc.observed_at !== "string" ||
           !utcTimestamp.safeParse(doc.observed_at).success ||
           !record(doc.topics)
         )
           return null;
         const state = decodeTopics(doc.topics);
-        return state === null ? null : { seq: doc.seq, state };
+        const now = Date.now();
+        const observedAt = Date.parse(doc.observed_at);
+        // Allow two seconds of clock skew without granting extra lease time.
+        const validUntil = Math.min(observedAt, now) + 30_000;
+        if (state === null || observedAt > now + 2_000 || !(validUntil > now)) return null;
+        return { seq: doc.seq, state, validUntil };
       });
     } catch {
       return null;
