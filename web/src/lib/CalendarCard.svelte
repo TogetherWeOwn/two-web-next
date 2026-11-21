@@ -35,6 +35,7 @@ let {
   loginReturnTo,
 }: { e: CalendarListCard; isPast: boolean } & CalendarViewer = $props();
 
+const Heading = $derived(isPast ? "h3" : "h4");
 const transient = $derived(e.kind === "discord");
 const cancelled = $derived(e.kind === "event" && e.status === "cancelled");
 const draft = $derived(e.kind === "event" && e.status === "draft");
@@ -76,15 +77,15 @@ const full = $derived(
     </div>
     <div class="schedule-info">
       <!-- Cancelled and transient rows have no detail page (410 / none), so the title is plain text. -->
-      <h3>
+      <svelte:element this={Heading}>
         {#if e.kind === "event" && e.status !== "cancelled"}<a href={`/e/${e.eventKey}`}>{#if titleSegments}<span>{@render marked(titleSegments)}</span>{:else}{e.title}{/if}</a>{:else if titleSegments}<span>{@render marked(titleSegments)}</span>{:else}{e.title}{/if}
-      </h3>
+      </svelte:element>
       {#if e.kind === "event" && e.game}<p>{e.game}</p>{/if}
       {#if host !== ""}<p data-testid={EVENT_CARD_HOST_TESTID}>Hosted by {host}</p>{/if}
       {#if draft}{" "}<span class="schedule-badge" data-testid={EVENT_DRAFT_TESTID}>Draft</span>{" "}{/if}
       {#if cancelled}{" "}<span class="schedule-badge" data-testid={EVENT_CANCELLED_TESTID}>Cancelled</span>{" "}{/if}
       {#if availability?.ongoing}{" "}<span class="schedule-badge" data-testid={EVENT_ONGOING_TESTID}>{ONGOING_COPY}</span>{" "}{/if}
-      {#if e.location}<p>{e.location}</p>{/if}
+      {#if e.location}<p class="schedule-location">{e.location}</p>{/if}
       {#if descriptionPoints.length > DESCRIPTION_LIMIT}
         <details class="schedule-text">
           <summary>
@@ -111,8 +112,6 @@ const full = $derived(
         <a href={inviteUrl} data-testid={EVENT_DISCORD_RSVP_TESTID}>{EVENTS_EMPTY_COPY.discordRsvp}</a>
       {:else if !member && !cancelled}
         <a href={loginUrl(loginReturnTo)} data-testid="signin">{EVENTS_EMPTY_COPY.signIn}</a>
-      {:else if e.kind === "event" && !cancelled}
-        <a class="schedule-details" href={`/e/${e.eventKey}`} aria-label={`Details: ${e.title}`}>Details</a>
       {/if}
     </div>
   </article>

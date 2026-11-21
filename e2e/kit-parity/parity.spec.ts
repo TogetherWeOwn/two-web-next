@@ -2138,7 +2138,37 @@ test("cross-target: normalized archive sections match", async () => {
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
+test("Kit Events groups schedule dates but plots the grid on host-local dates", async ({
+  page,
+}) => {
+  const key = "01J00000000000000000000EM8E";
+  await withSessionDb(async (sql) => {
+    await sql`insert into events (event_key, title, starts_at, ends_at, timezone, status)
+      values (${key}, 'E2E May LA', '2099-05-15T01:00:00Z', '2099-05-15T02:00:00Z',
+        'America/Los_Angeles', 'published')`;
+  });
+  try {
+    await page.setViewportSize({ width: 744, height: 844 });
+    await page.context().addCookies([{ name: "e2e-parity-bypass", value: "1", url: KIT_ORIGIN }]);
+    await page.goto(`${KIT_ORIGIN}/events`);
+    const group = page.getByTestId("events-list").getByRole("list", { name: /15 May/ });
+    await expect(group.getByRole("listitem")).toHaveCount(2);
+    const row = group.getByTestId("event-card").first();
+    await expect(row.getByRole("heading", { level: 4 })).toHaveText("E2E May LA");
+    await expect(row.locator(".schedule-actions")).toHaveCSS("grid-column", "3");
+    await page.goto(`${KIT_ORIGIN}/events?view=calendar&month=2099-05&past=1`);
+    await expect(page.locator(".schedule-clock")).toContainText(/local dates.*UTC/);
+    await expect(page.locator('[data-date="2099-05-14"]')).toContainText("E2E May LA");
+    await expect(page.locator('[data-date="2099-05-15"]')).not.toContainText("E2E May LA");
+  } finally {
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key = ${key}`;
+    });
+  }
+});
+
 test("Kit calendar styles survive a swap into the old document", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   // Serve the old Hono shell without the new aliases; the island fetches from Kit.
   const old = await page.request.get(`${HONO_ORIGIN}/events`, { maxRedirects: 0 });
   expect(old.status()).toBe(200);
@@ -2158,6 +2188,12 @@ test("Kit calendar styles survive a swap into the old document", async ({ page }
   await expect(selected).toHaveAttribute("aria-current", "page");
   await expect(selected).toHaveCSS("gap", "8px");
   await expect(selected).toHaveCSS("background-color", "rgb(46, 36, 32)");
+  await page.getByTestId("events-view-list").click();
+  const row = page.getByTestId("event-card").first();
+  await expect(row.locator(".schedule-when")).toBeVisible();
+  await expect(row).toHaveCSS("grid-template-columns", /^\d+(?:\.\d+)?px$/);
+  await row.getByTestId("signin").focus();
+  await expect(row.getByTestId("signin")).toBeFocused();
   await expect(html).toHaveAttribute("data-rollout-shell", "old");
 });
 

@@ -44,7 +44,16 @@ let {
   loginReturnTo,
 }: CalendarListProps & { pageUnreadable?: boolean; zone: string; now: Date } = $props();
 const today = $derived(wallDateIso(now, zone));
-const days = $derived(upcoming.map((event) => wallDateIso(event.startsAt, zone)));
+const days = $derived.by(() => {
+  const groups = new Map<string, typeof upcoming>();
+  for (const event of upcoming) {
+    const day = wallDateIso(event.startsAt, zone);
+    const rows = groups.get(day);
+    if (rows) rows.push(event);
+    else groups.set(day, [event]);
+  }
+  return groups;
+});
 
 // First from any later or unavailable page; an out-of-range request therefore
 // recovers straight to page one. Previous clamps only out of range.
@@ -58,14 +67,16 @@ const previousPage = $derived(outOfRange ? Math.min(state.page - 1, totalPages) 
     <p data-testid={EVENTS_PAGE_UNREADABLE_TESTID}>{upcomingEventsPageUnreadableCopy(state.page)}</p>
   {/if}
   <h2 class="sr-only">{EVENTS_LIST_HEADING_SR}</h2>
-  <ul data-testid={EVENTS_LIST_TESTID}>
-    {#each upcoming as e, index (e.key)}
-      {#if days[index] !== days[index - 1]}
-        <li class="schedule-day"><h3>{days[index] === today ? "Today · " : ""}{cardDayLabel(e.startsAt, zone)}</h3></li>
-      {/if}
-      <CalendarCard {e} isPast={false} {member} {inviteUrl} {loginReturnTo} />
+  <div class="schedule-days" data-testid={EVENTS_LIST_TESTID}>
+    {#each days as [day, rows] (day)}
+      <h3 class="schedule-day" id={`schedule-day-${day}`}>{day === today ? "Today · " : ""}{cardDayLabel(rows[0]!.startsAt, zone)}</h3>
+      <ul aria-labelledby={`schedule-day-${day}`}>
+        {#each rows as e (e.key)}
+          <CalendarCard {e} isPast={false} {member} {inviteUrl} {loginReturnTo} />
+        {/each}
+      </ul>
     {/each}
-  </ul>
+  </div>
   {#if totalPages > 1 || outOfRange || pageUnreadable}
     <nav aria-label={EVENTS_PAGER_LABEL} data-testid={EVENTS_PAGER_TESTID}>
       {#if state.page > 1}<a href={calendarUrl({ ...state, page: 1 })} data-testid={EVENTS_PAGER_FIRST_TESTID}>{EVENTS_PAGER_FIRST_COPY}</a>{" "}{/if}

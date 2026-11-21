@@ -5,7 +5,12 @@ import CalendarScreen from "./CalendarScreen.svelte";
 import EmberShell from "./EmberShell.svelte";
 import SiteMetadata from "./SiteMetadata.svelte";
 
-let { canonical, robots, session, screen }: {
+let {
+  canonical,
+  robots,
+  session,
+  screen,
+}: {
   canonical: string;
   robots?: string;
   session: HeaderSession | null;
@@ -18,8 +23,6 @@ const { member, loginReturnTo } = $derived(screen);
   description="Game nights, tournaments and whatever else the community puts on." />
 <svelte:head>
   <link rel="alternate" type="text/markdown" title="Markdown version" href="/events.md" />
-  <!-- +server does not load Kit's layout CSS. Serve external styles under the existing CSP. -->
-  <link rel="stylesheet" href="/kit-events-schedule.css" />
 </svelte:head>
 
 {#snippet account()}

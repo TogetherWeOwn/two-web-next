@@ -128,7 +128,10 @@ let showPartial = $derived(
     {#each Array.from({ length: EVENTS_LOADING_ROWS }) as _}<p aria-hidden="true">…</p>{/each}
   </div>
   <div data-cal-zone="content" data-testid={EVENTS_CONTENT_TESTID}>
-    <p class="schedule-clock">{state.view === "list" ? "Schedule days" : "Calendar month"} use <strong>{zone}</strong>. Individual events show their own time zone.</p>
+    <p class="schedule-clock">
+      {#if state.view === "list"}Schedule days use <strong>{zone}</strong>. Individual events show their own time zone.
+      {:else}Events appear on their local dates. Today, This month and Discord events without a time zone use <strong>{zone}</strong>.{/if}
+    </p>
     {#if showPartial}
       <CalendarEmpty kind="partial" {state} {gameFilter} past={gapPast} {inviteUrl} />
     {/if}

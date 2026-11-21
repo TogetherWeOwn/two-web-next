@@ -87,7 +87,10 @@ let searchStatus = $derived.by(() => {
 <div data-cal-zone="head">
   <!-- Older tabs may predate both the control sheet and its schedule token aliases. -->
   <link rel="stylesheet" href="/kit-events-controls.css" />
-  {#if island}<link rel="stylesheet" href="/theme-tokens.css?kit-events-controls" />{/if}
+  {#if island}
+    <link rel="stylesheet" href="/theme-tokens.css?kit-events-controls" />
+  {/if}
+  <link rel="stylesheet" href="/kit-events-schedule.css" />
   <SegmentedControl label={EVENTS_VIEW_GROUP_LABEL} items={[
     { href: calendarUrl({ ...state, view: "list" }), label: "List", current: state.view === "list", testId: EVENTS_VIEW_LIST_TESTID },
     { href: calendarUrl({ ...state, view: "calendar" }), label: "Calendar", current: state.view === "calendar", testId: EVENTS_VIEW_CALENDAR_TESTID },
