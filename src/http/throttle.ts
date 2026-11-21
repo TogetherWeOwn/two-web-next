@@ -12,6 +12,16 @@ export const WEB_THROTTLE_LOCK_TIMEOUT_MS = 2000;
 
 export type ThrottleVerdict = { limited: false } | { limited: true; retryAfter: number };
 
+// The privacy policy promises this window for rate-limit counters; change it only with a policy version.
+export const THROTTLE_COUNTER_RETENTION_MINUTES = 5;
+
+/**
+ * Named wait for the best-effort throttle prune: the already-decided verdict
+ * returns after at most this long, whether or not the database cancels the
+ * statement.
+ */
+const THROTTLE_PRUNE_WAIT_MS = 2_000;
+
 /** Charge the shared Postgres window; the caller owns outage policy and cleanup. */
 export async function chargeWebThrottle(
   sql: Sql,
@@ -46,4 +56,33 @@ export async function chargeWebThrottle(
     await tx`INSERT INTO web_throttle_hits (bucket, at) VALUES (${bucket}, clock_timestamp())`;
     return { limited: false };
   });
+}
+
+/** Run one age-only batch outside the admission transaction. */
+export async function pruneWebThrottle(sql: Sql): Promise<"deadline" | { err: unknown } | null> {
+  const pruneDelete = (tx: Sql) =>
+    tx`DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) AS candidates WHERE web_throttle_hits.id = candidates.id`;
+  const pruneStore = sql as Sql & {
+    begin: (run: (tx: Sql) => Promise<void>) => Promise<void>;
+  };
+  const prune = (async () => {
+    try {
+      await pruneStore.begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL statement_timeout = '${THROTTLE_PRUNE_WAIT_MS}ms'`);
+        await pruneDelete(tx);
+      });
+      return null;
+    } catch (err) {
+      return { err };
+    }
+  })();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"deadline">((resolve) => {
+    timer = setTimeout(() => resolve("deadline"), THROTTLE_PRUNE_WAIT_MS);
+  });
+  try {
+    return await Promise.race([prune, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
