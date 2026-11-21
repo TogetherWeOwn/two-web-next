@@ -225,8 +225,22 @@ try {
     const entry = join(scratch, "kit-live.mjs");
     await writeFile(
       entry,
-      `import worker, { LiveGuildHub as InstalledHub } from ${JSON.stringify(worker)};
+      `import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import worker, { LiveGuildHub as InstalledHub } from ${JSON.stringify(worker)};
 const controlPath = "/__fixture/live-source";
+function authenticSnapshotRequest(request) {
+  const headers = new Headers(request.headers);
+  const timestamp = headers.get("X-TWO-Timestamp");
+  const nonce = headers.get("X-TWO-Nonce");
+  const signature = headers.get("X-TWO-Signature");
+  if (headers.get("X-TWO-Key-Id") !== "fixture-snapshot" || !/^\\d+$/.test(timestamp ?? "") ||
+      !/^[0-9a-f]{32}$/.test(nonce ?? "") || !/^sha256=[0-9a-f]{64}$/.test(signature ?? "") ||
+      typeof request.body !== "string") return false;
+  const digest = createHash("sha256").update(request.body).digest("hex");
+  const expected = createHmac("sha256", "fixture-snapshot-value")
+    .update(["POST", "/internal/actions", timestamp, nonce, digest].join("\\n")).digest();
+  return timingSafeEqual(expected, Buffer.from(signature.slice(7), "hex"));
+}
 export class LiveGuildHub extends InstalledHub {
   constructor(ctx, env) {
     const kv = ctx.storage.kv;
@@ -235,6 +249,7 @@ export class LiveGuildHub extends InstalledHub {
       if (url !== env.BOT_ENDPOINT_URL + "/internal/actions" || request.method !== "POST") {
         return new Response(null, { status: 400 });
       }
+      if (!authenticSnapshotRequest(request)) return new Response(null, { status: 401 });
       const body = JSON.parse(request.body);
       const snapshot = kv.get("fixture-snapshot");
       if (body.action !== "live.snapshot" || body.guild_id !== env.DISCORD_GUILD_ID || !snapshot) {
@@ -279,10 +294,14 @@ export default {
   },
 };\n`,
     );
+    const { LIVE_FIXTURE_GUILD, verifyKitLiveFanout, verifyKitLiveSocket } = await import(
+      "./kit-live-socket.mjs"
+    );
     const secret = FIXTURE_SECRETS.SESSION_SECRET;
     const live = await startWorker("kit-live", entry, assets, secret, {
       APP_URL: "https://kit-live.invalid",
       BOT_ENDPOINT_URL: "https://bot-live.invalid",
+      DISCORD_GUILD_ID: LIVE_FIXTURE_GUILD,
       DISCORD_LIVE_INGEST_ENABLED: "true",
       DISCORD_LIVE_SOCKET_ENABLED: "true",
       DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "10,11",
@@ -292,7 +311,6 @@ export default {
       DISCORD_LIVE_SNAPSHOT_SECRET: "fixture-snapshot-value",
     });
     await listen(live.child, live.origin, () => live.log);
-    const { verifyKitLiveFanout, verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
     await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
     await verifyKitLiveFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
   }

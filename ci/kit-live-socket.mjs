@@ -213,7 +213,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
 }
 
 const ingestPath = "/internal/discord-live/v1/ingest";
-const guild = "326474832151838730";
+export const LIVE_FIXTURE_GUILD = "900000000000001390";
 const people = ["101", "102", "103", "104", "105", "106"];
 const permissions = String((1 << 10) | (1 << 20));
 const at = "2026-11-20T00:00:00Z";
@@ -234,16 +234,16 @@ function snapshot(seq, count, observedAt = new Date().toISOString()) {
   });
   return {
     v: 1,
-    guild_id: guild,
+    guild_id: LIVE_FIXTURE_GUILD,
     seq,
     observed_at: observedAt,
     topics: {
       guild: { ownerId: people[0], afkChannelId: null },
       channels: [
         room("10", []),
-        room("11", [{ kind: "role", id: guild, allow: "0", deny: permissions }]),
+        room("11", [{ kind: "role", id: LIVE_FIXTURE_GUILD, allow: "0", deny: permissions }]),
       ],
-      roles: [{ id: guild, permissions }],
+      roles: [{ id: LIVE_FIXTURE_GUILD, permissions }],
       members: people.map((userId) => ({
         userId,
         nick: null,
@@ -258,7 +258,13 @@ function snapshot(seq, count, observedAt = new Date().toISOString()) {
 }
 
 async function ingest(origin, seq, op) {
-  const body = JSON.stringify({ v: 1, guild_id: guild, seq, occurred_at: at, ops: [op] });
+  const body = JSON.stringify({
+    v: 1,
+    guild_id: LIVE_FIXTURE_GUILD,
+    seq,
+    occurred_at: at,
+    ops: [op],
+  });
   const timestamp = String(Math.floor(Date.now() / 1000));
   const nonce = randomBytes(16).toString("hex");
   const digest = createHash("sha256").update(body).digest("hex");
@@ -366,7 +372,7 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
     assert.equal(await source(), beforeWake);
 
     const publicRoom = snapshot(46, 5).topics.channels[0];
-    const deny = [{ kind: "role", id: guild, allow: "0", deny: permissions }];
+    const deny = [{ kind: "role", id: LIVE_FIXTURE_GUILD, allow: "0", deny: permissions }];
     const setRoom = (overwrites) => ({
       topic: "channels",
       op: "upsert",
