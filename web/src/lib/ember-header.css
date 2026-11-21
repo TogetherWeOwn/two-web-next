@@ -44,8 +44,8 @@
 .base-theme .ember-header :where(.ember-header-join):hover {
   background: var(--two-color-accent-hover);
 }
-/* Exact complement of the shared sheet and island's compact query. */
-@media (width > 820px) {
+/* Exact complement of the sheet's compact query, without range syntax. */
+@media not all and (max-width: 820px) {
   /* Let pages with their own sticky toolbars reserve more space. */
   :where(:root):has(.ember-header) {
     scroll-padding-top: var(--two-size-header-wide);

@@ -244,7 +244,7 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
 
     // Playwright viewport widths are integers; pin the exact CSS complement too.
     const css = await readFile(new URL("../web/src/lib/ember-header.css", import.meta.url), "utf8");
-    assert.match(css, /@media \(width > 820px\)/);
+    assert.match(css, /@media not all and \(max-width: 820px\)/);
     await open("?state=guest");
     const join = header.getByRole("link", { name: "Join", exact: true });
     for (const width of [820, 821]) {
