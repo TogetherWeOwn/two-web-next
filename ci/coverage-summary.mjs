@@ -36,7 +36,7 @@ function table(rows) {
 const scopes = [
   "src/admin/",
   "src/events/",
-  "src/join/",
+  ["src/join/", "src/http/throttle.ts"],
   "src/sessions.ts",
   "src/jobs/",
   "src/bot/",
@@ -51,15 +51,21 @@ const scopes = [
   "src/seo.ts",
 ];
 const scoped = scopes.map((scope) => {
-  const entries = files.filter(({ file }) =>
-    scope.endsWith("*")
-      ? file.startsWith(scope.slice(0, -1))
-      : scope.endsWith("/")
-        ? file.startsWith(scope)
-        : file === scope,
-  );
-  if (entries.length === 0) throw new Error(`Coverage report is missing required scope: ${scope}`);
-  return { file: scope, coverage: aggregate(entries) };
+  const patterns = Array.isArray(scope) ? scope : [scope];
+  const entries = patterns.flatMap((pattern) => {
+    const matches = files.filter(({ file }) =>
+      pattern.endsWith("*")
+        ? file.startsWith(pattern.slice(0, -1))
+        : pattern.endsWith("/")
+          ? file.startsWith(pattern)
+          : file === pattern,
+    );
+    if (matches.length === 0) {
+      throw new Error(`Coverage report is missing required scope: ${pattern}`);
+    }
+    return matches;
+  });
+  return { file: patterns.join(" + "), coverage: aggregate(entries) };
 });
 const leastCovered = [...files]
   .sort((a, b) => a.coverage.lines.pct - b.coverage.lines.pct || a.file.localeCompare(b.file))

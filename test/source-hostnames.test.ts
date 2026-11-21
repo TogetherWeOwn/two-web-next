@@ -42,9 +42,8 @@ const REVIEWED_PINS: Pin[] = [
   },
   {
     file: "src/http/robots.ts",
-    line: 'const PRODUCTION_APEX = "togetherweown.com";',
-    reason:
-      "Only the production apex may be indexed; every other host gets noindex (fails closed).",
+    line: 'export const PRODUCTION_APEX = "togetherweown.com";',
+    reason: "One fixed apex for search indexing and the exact-origin Kit production rollout.",
   },
   {
     file: "src/probes/internal-action-drill.ts",

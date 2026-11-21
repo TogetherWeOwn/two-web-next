@@ -195,7 +195,8 @@ two call sites, both with a 5-minute bound:
   transactions are skipped for a later pass. The cleanup stays outside the lock
   so it never prolongs it; refused requests prune the same age-only rows
   instead of letting expired rows accumulate until some request is admitted.
-  Best-effort: a throwing prune keeps the decided verdict.
+  [`pruneWebThrottle`](../src/http/throttle.ts) runs the batch. A throwing
+  or stalled prune keeps the decided verdict.
 - [`src/events/rsvp.ts`](../src/events/rsvp.ts) (`pruneThrottle`, called from
   `writeRsvp` and both `withdrawRsvp` paths): inside the same transaction,
   before the budget charge and the write, at most one 1,000-row batch of
