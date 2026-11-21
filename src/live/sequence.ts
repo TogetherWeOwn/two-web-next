@@ -38,6 +38,10 @@ export class LiveSequence<State, Delta> {
     return this.#current;
   }
 
+  expire(): void {
+    this.#current = null;
+  }
+
   async synchronize(): Promise<boolean> {
     if (this.#current) return true;
     // Commit the latest observed gap before external I/O can yield or fail.

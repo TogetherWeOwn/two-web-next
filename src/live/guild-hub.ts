@@ -1,24 +1,50 @@
 import { HUB_INGEST_URL, liveIngressConfig } from "./ingress";
-import { LiveSequence, type LiveWatermarks } from "./sequence";
+import { encodeLiveProjection } from "./projection";
+import { LiveSequence, type LiveSnapshot, type LiveWatermarks } from "./sequence";
 import { HUB_SOCKET_URL, type LiveSocketEnv } from "./socket-route";
 import { LiveSockets } from "./sockets";
 import { reduceLiveState } from "./state";
 import { signedLiveSnapshot } from "./transport";
-import { decodeLiveDelta, type LiveDelta, type LiveState, snapshotTopics } from "./wire";
+import { decodeLiveDelta, type LiveDelta, liveId, type LiveState, snapshotTopics } from "./wire";
 
 const WATERMARKS = "live-watermarks-v1";
+const SOURCE_LEASE_MS = 30_000;
+const SOCKET_RECOVERY_INTERVAL_MS = 5_000;
+const PUBLIC_VOICE_PAGE = "public-voice";
+
+function publicVoiceRooms(raw = ""): ReadonlySet<string> | null {
+  if (!raw || raw.length > 2_099) return null;
+  const rooms = raw.split(",");
+  const unique = new Set(rooms);
+  return rooms.length <= 100 &&
+    unique.size === rooms.length &&
+    rooms.every((id) => liveId.safeParse(id).success)
+    ? unique
+    : null;
+}
 
 /** Binding-only Durable Object; durable storage never holds guild payloads. */
 export class LiveGuildHub {
   readonly #guildId?: string;
   readonly #sequence?: LiveSequence<LiveState, LiveDelta>;
   readonly #sockets: LiveSockets;
+  readonly #publicRooms: ReadonlySet<string> | null;
+  #leased: LiveSnapshot<LiveState> | null = null;
+  #sourceUntil = 0;
+  #nextSocketPull = 0;
 
   constructor(
-    ctx: DurableObjectState,
+    private readonly ctx: DurableObjectState,
     private readonly env: LiveSocketEnv,
+    fetchSnapshot: typeof fetch = fetch,
   ) {
-    this.#sockets = new LiveSockets(ctx, env);
+    this.#publicRooms =
+      env.DISCORD_LIVE_SOCKET_ENABLED === "true"
+        ? publicVoiceRooms(env.DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS)
+        : null;
+    this.#sockets = new LiveSockets(ctx, env, () => this.#publicVoice());
+    // Guild state and the last emitted value are both in memory only.
+    this.#sockets.invalidate();
     const config = liveIngressConfig(env);
     if (!config) return;
     this.#guildId = config.guildId;
@@ -31,8 +57,10 @@ export class LiveGuildHub {
       initial.minimum < initial.applied
     )
       throw new Error("Invalid live watermarks");
-    const load = signedLiveSnapshot(config.snapshot, (topics) =>
-      snapshotTopics(topics, config.guildId),
+    const load = signedLiveSnapshot(
+      config.snapshot,
+      (topics) => snapshotTopics(topics, config.guildId),
+      fetchSnapshot,
     );
     this.#sequence = new LiveSequence(load, reduceLiveState, {
       initial,
@@ -54,15 +82,72 @@ export class LiveGuildHub {
     // Only the Worker binding makes this request, from capped and verified bytes.
     const delta = decodeLiveDelta(await request.arrayBuffer(), this.#guildId);
     if (!delta) return new Response(null, { status: 400 });
-    const outcome = await this.#sequence.ingest(delta.seq, delta);
+    this.#expireSource();
+    const ingested = this.#sequence.ingest(delta.seq, delta);
+    // ingest() clears a gap synchronously, before its signed pull can resolve.
+    if (!this.#sequence.current) this.#sockets.invalidate();
+    const armed = this.#leaseCurrent();
+    const outcome = await ingested;
+    await armed;
+    if (outcome === "applied" || outcome === "resynced") await this.#publish();
     return new Response(null, {
       status: outcome === "unavailable" ? 409 : outcome === "invalid" ? 400 : 204,
     });
   }
 
-  webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> | void {
+  #expireSource(): void {
+    if (!this.#leased || this.#sourceUntil > Date.now()) return;
+    this.#sequence?.expire();
+    this.#leased = null;
+    this.#sourceUntil = 0;
+    this.#sockets.invalidate();
+  }
+
+  #leaseCurrent(): Promise<void> | undefined {
+    const current = this.#sequence?.current;
+    if (!current || current === this.#leased) return;
+    this.#leased = current;
+    this.#sourceUntil = Date.now() + SOURCE_LEASE_MS;
+    if (this.#publicRooms) return this.#sockets.scheduleSource(this.#sourceUntil);
+  }
+
+  async #publish(): Promise<void> {
+    await this.#leaseCurrent();
+    this.ctx.waitUntil(this.#sockets.publish());
+  }
+
+  #publicVoice(): string | null {
+    const current = this.#sequence?.current;
+    const guildId = this.#guildId;
+    if (!guildId || !current || current !== this.#leased || !this.#publicRooms) return null;
+    return encodeLiveProjection(
+      {
+        state: current.state,
+        guildId,
+        pageId: PUBLIC_VOICE_PAGE,
+        sourceUntil: this.#sourceUntil,
+        viewer: { kind: "public" },
+        page: {
+          guildId,
+          pageId: PUBLIC_VOICE_PAGE,
+          viewerId: null,
+          validUntil: this.#sourceUntil,
+          publicRoomIds: this.#publicRooms,
+        },
+        now: Date.now(),
+      },
+      "voice",
+    );
+  }
+
+  async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (!this.#sequence) return socket.close(1008);
-    return this.#sockets.message(socket, message);
+    this.#expireSource();
+    if (!(await this.#sockets.message(socket, message))) return;
+    const now = Date.now();
+    if (!this.#publicRooms || this.#sequence.current || now < this.#nextSocketPull) return;
+    this.#nextSocketPull = now + SOCKET_RECOVERY_INTERVAL_MS;
+    if (await this.#sequence.synchronize()) await this.#publish();
   }
 
   webSocketClose(socket: WebSocket): void {
@@ -74,6 +159,7 @@ export class LiveGuildHub {
   }
 
   alarm(): Promise<void> {
-    return this.#sockets.expire();
+    this.#expireSource();
+    return this.#sockets.expire(this.#leased && this.#publicRooms ? this.#sourceUntil : Infinity);
   }
 }
