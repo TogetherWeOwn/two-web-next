@@ -49,6 +49,19 @@ const siteGraph = $derived(siteJsonLd(appUrl));
 // noticeText above): without it the groups widen to the helper's input.
 const renderTime = new Date();
 const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, renderTime));
+const weekEvents = $derived(
+  upcomingEvents.filter(
+    (event: HomeUpcomingRow) =>
+      event.startsAt >= renderTime &&
+      groupedEvents.some((group) => group.key !== "later" && group.events.includes(event)),
+  ),
+);
+const showMemberDetails = $derived(session?.member && !sessionUnavailable);
+function ownRsvp(event: HomeUpcomingRow) {
+  if (!showMemberDetails || event.source !== "canonical") return null;
+  const status = data.memberRsvps?.find((rsvp) => rsvp.eventKey === event.eventKey)?.status;
+  return status === "going" || status === "waitlisted" ? status : null;
+}
 const nextOwnEvent = $derived(
   session?.member
     ? (upcomingEvents as HomeUpcomingRow[])
@@ -74,6 +87,10 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
     {#if session?.member}<a href="/leaderboards/members">Leaderboard</a>{/if}
     <a href="/about">About</a>
   </nav>
+{/snippet}
+
+{#snippet teaserTime(event: HomeUpcomingRow)}
+  <time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})</time>
 {/snippet}
 
 {#snippet homeContent()}
@@ -146,6 +163,10 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
       {/if}
     </aside>
   </section>
+  {@render homeBelowHero()}
+{/snippet}
+
+{#snippet homeFeatured()}
   {#if featured.length > 0}
     <section aria-labelledby="featured-heading" data-testid="featured-content">
       <h2 id="featured-heading">From the community team</h2>
@@ -172,6 +193,9 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
       </div>
     </section>
   {/if}
+{/snippet}
+
+{#snippet homeHighlights()}
   <section class="highlights" aria-labelledby="community-heading">
     <div class="band-head">
       <h2 id="community-heading">No application. <span>No interview.</span></h2>
@@ -209,6 +233,9 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
       </p>
     </section>
   </section>
+{/snippet}
+
+{#snippet homeLadder()}
   <section aria-label="Community ladder" class="community-ladder">
     <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
     <p>Ranks stack — a Veteran still holds everything below.</p>
@@ -221,60 +248,91 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
       {/each}
     </dl>
   </section>
-  <section class="event-band" aria-labelledby="home-events-heading">
-    <p class="strap">Next up</p>
-    <h2 id="home-events-heading">What’s on. <span>Come along.</span></h2>
-    {#if upcomingEvents.length > 0}
-      <ul class="facts home-events" data-testid="home-events-list">
-        <!-- csr=false: omit this server-rendered list from the unused client asset.
-             Direct server compilation without Vite's env also renders it. -->
-        {#if import.meta.env?.SSR !== false}{#each groupedEvents as group (group.key)}
-          <li class="home-events-group" data-testid={"home-events-group-" + group.key}>
-            <h3 class="strap">{group.label}</h3>
-          </li>
-          {#each group.events as event (event.source === "discord" ? `discord-${event.discordId}` : `canonical-${event.eventKey}`)}
-            <li class="card" data-source={event.source}>
-              <a
-                class="home-event-link"
-                href={event.source === "discord" ? inviteUrl : `/e/${encodeURIComponent(event.eventKey)}`}
-                data-testid={event.source === "discord" ? "home-event-discord" : undefined}
-              >
-                <p>
-                  <time datetime={event.startsAt.toISOString()}>
-                    {cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone)
-                      ? event.timezone
-                      : "UTC"})
-                  </time>
-                </p>
-                <div class="event-meta">
-                <h3>{event.title}</h3>
-                {#if event.source === "canonical" && event.game?.trim()}<p>{event.game.trim()}</p>{/if}
-                {#if session?.member && event.source === "canonical" && event.organizer_name?.trim()}
-                  <p class="home-event-host" data-testid="event-card-host">Hosted by {event.organizer_name.trim()}</p>
-                {/if}
-                {#if event.location}<p>{event.location}</p>{/if}
-                {#if event.source === "discord"}
-                  <p>RSVP in Discord · <span data-testid="event-schedule-availability">Discord-managed</span></p>
-                {:else}
-                  {@const availability = event.endsAt && event.endsAt.getTime() <= renderTime.getTime()
-                    ? { state: "past", text: "Ended" }
-                    : seatAvailability(event)}
-                  <p>
-                    {goingCountText(event.goingCount, event.capacity)}{" · "}
-                    <span data-testid={availability.state === "full" ? SPOTS_LEFT_TESTID : "event-schedule-availability"}>{availability.text}</span>
-                  </p>
-                  {#if session?.member}
-                    {@const answer = data.memberRsvps?.find((rsvp) => rsvp.eventKey === event.eventKey)}
-                    {#if answer?.status === "going" || answer?.status === "waitlisted"}
-                      <p data-testid="home-event-own-rsvp">{goingAnnouncementText(answer.status)}</p>
-                    {/if}
-                  {/if}
-                {/if}
-                </div>
-              </a>
+{/snippet}
+
+{#snippet homeBelowHero()}
+  {#if !session?.member}{@render homeHighlights()}{/if}
+  <section class="week-band" aria-labelledby="home-week-heading">
+    <div class="band-head">
+      <h2 id="home-week-heading">{showMemberDetails ? "Your week," : "This week,"} <span>when we play.</span></h2>
+      <p>
+        Times are shown in each event’s time zone.
+        {#if showMemberDetails}Your RSVPs are marked in the agenda.{/if}
+      </p>
+    </div>
+    <div class="week-panel">
+      {#if eventsUnavailable}
+        <p>We couldn’t load this week’s schedule.</p>
+      {:else if weekEvents.length > 0}
+        <ul class="week-agenda" role="list">
+          {#each weekEvents as event (event.source === "discord" ? `discord-${event.discordId}` : `canonical-${event.eventKey}`)}
+            {@const status = ownRsvp(event)}
+            <li>
+              {@render teaserTime(event)}
+              <div>
+                <strong>{event.title}</strong>
+                {#if status}<span class="schedule-rsvp">{goingAnnouncementText(status)}</span>{/if}
+              </div>
             </li>
           {/each}
-        {/each}{/if}
+        </ul>
+      {:else}
+        <p>No new starts in this preview. <a href="/events">See all events</a></p>
+      {/if}
+    </div>
+  </section>
+  <section class="event-band" aria-labelledby="home-events-heading">
+    <div class="band-head">
+      <h2 id="home-events-heading">What’s on. <span>{showMemberDetails ? "Plan your next game." : "Come along."}</span></h2>
+      <p>Browse upcoming game nights. Open an event for the details or head to Discord for events hosted there.</p>
+    </div>
+    {#if !eventsUnavailable && upcomingEvents.length > 0}
+      <ul class="facts home-events" role="list" data-testid="home-events-list">
+        <!-- Exclude the server-rendered list from the unused client asset. -->
+        {#if import.meta.env?.SSR !== false}
+          {#each groupedEvents as group (group.key)}
+            <li class="home-events-group" data-testid={"home-events-group-" + group.key}>
+              <h3 class="strap">{group.label}</h3>
+              <ul class="schedule-rows" role="list">
+                {#each group.events as event (event.source === "discord" ? `discord-${event.discordId}` : `canonical-${event.eventKey}`)}
+                  {@const status = ownRsvp(event)}
+                  <li class="card" data-source={event.source}>
+                    <a
+                      class="home-event-link"
+                      href={event.source === "discord" ? inviteUrl : `/e/${encodeURIComponent(event.eventKey)}`}
+                      data-testid={event.source === "discord" ? "home-event-discord" : undefined}
+                    >
+                      {@render teaserTime(event)}
+                      <div class="event-meta">
+                        <h4>{event.title}</h4>
+                        {#if event.source === "canonical" && event.game?.trim()}<p>{event.game.trim()}</p>{/if}
+                        {#if showMemberDetails && event.source === "canonical" && event.organizer_name?.trim()}
+                          <p class="home-event-host" data-testid="event-card-host">Hosted by {event.organizer_name.trim()}</p>
+                        {/if}
+                        {#if event.location}<p>{event.location}</p>{/if}
+                        {#if status}
+                          <p data-testid="home-event-own-rsvp"><span class="schedule-rsvp">{goingAnnouncementText(status)}</span></p>
+                        {/if}
+                      </div>
+                      {#if event.source === "discord"}
+                        <p>RSVP in Discord · <span data-testid="event-schedule-availability">Discord-managed</span></p>
+                      {:else}
+                        {@const availability = event.endsAt && event.endsAt.getTime() <= renderTime.getTime()
+                          ? { state: "past", text: "Ended" }
+                          : seatAvailability(event)}
+                        <p>
+                          {goingCountText(event.goingCount, event.capacity)}{" · "}
+                          <span data-testid={availability.state === "full" ? SPOTS_LEFT_TESTID : "event-schedule-availability"}>{availability.text}</span>
+                        </p>
+                      {/if}
+                      <span class="schedule-action">{event.source === "discord" ? "Open Discord" : "Details"}</span>
+                    </a>
+                  </li>
+                {/each}
+              </ul>
+            </li>
+          {/each}
+        {/if}
       </ul>
       <p>
         <a href="/events">See all events <span aria-hidden="true">→</span></a>
@@ -316,6 +374,9 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
       </p>
     {/if}
   </section>
+  {@render homeFeatured()}
+  {#if session?.member}{@render homeHighlights()}{/if}
+  {@render homeLadder()}
   {#if nextOwnEvent}
     <section aria-labelledby="home-standing-heading" data-testid="home-standing">
       <h2 id="home-standing-heading">Where you stand.</h2>

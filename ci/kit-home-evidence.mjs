@@ -20,6 +20,17 @@ const event = {
   goingCount: 3,
   capacity: null,
 };
+const agenda = [
+  event,
+  {
+    source: "discord",
+    discordId: "community-night",
+    title: "Community game night with a long title that wraps on smaller screens",
+    startsAt: "2026-10-23T19:00:00.000Z",
+    timezone: "America/Argentina/Buenos_Aires",
+  },
+  { ...event, eventKey: "later", title: "Strategy night", startsAt: "2026-11-01T19:00:00.000Z" },
+];
 const observedAt = new Date(HOME_EVIDENCE_NOW).toISOString();
 const freshSnapshot = { memberCount: 42, onlineCount: 7, observedAt, stale: false };
 const zeroOnline = { ...freshSnapshot, onlineCount: 0 };
@@ -27,6 +38,12 @@ const states = {
   guest: {},
   member: { session: member },
   guestEvents: { upcomingEvents: [event] },
+  guestAgenda: { upcomingEvents: agenda },
+  memberAgenda: {
+    session: member,
+    upcomingEvents: agenda,
+    memberRsvps: [{ eventKey: event.eventKey, status: "waitlisted" }],
+  },
   memberEvents: {
     session: member,
     upcomingEvents: [event],
@@ -113,8 +130,9 @@ export async function assertHomeEvidence(page, state) {
       /It's quiet right now|evenings are busiest|In voice now/,
     );
   }
+  const memberWithRsvp = state === "memberEvents" || state === "memberAgenda";
   for (const id of ["home-standing", "home-event-own-rsvp"])
-    assert.equal(await count(id), state === "memberEvents" ? 1 : 0, `${state}: ${id}`);
+    assert.equal(await count(id), memberWithRsvp ? 1 : 0, `${state}: ${id}`);
   assert.equal(await count("notice"), state === "joinFailed" ? 1 : 0, `${state}: notice`);
   assert.equal(await page.getByTestId("home-highlights").locator("li").count(), 4);
   if (!session?.member && state !== "sessionOutage" && state !== "joinFailed")
