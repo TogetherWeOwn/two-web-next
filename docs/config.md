@@ -273,9 +273,7 @@ These names are deliberately **not** extra rows in the marked inventory:
   is local-only, must not be remotely developed/deployed, and is **not** proof
   of real Hyperdrive pooling. It is not part of the main Worker configuration.
 - **Live Discord ingress fixture:** `POST /internal/discord-live/v1/ingest` returns 503 unless
-  `DISCORD_LIVE_INGEST_ENABLED=true` and `DISCORD_LIVE_HUB`, `APP_URL`, `BOT_ENDPOINT_URL`,
-  `DISCORD_GUILD_ID`, `DISCORD_LIVE_INGEST_KEY_ID`, `DISCORD_LIVE_INGEST_SECRET`,
-  `DISCORD_LIVE_SNAPSHOT_KEY_ID` and `DISCORD_LIVE_SNAPSHOT_SECRET` are valid, with distinct secrets.
+  `DISCORD_LIVE_INGEST_ENABLED=true` and the [ingress bindings](../src/live/ingress.ts) are valid.
   Only the installed CI fixture binds `LiveGuildHub`. Keep the flag off: recovery lacks producer epochs.
 - **Injected test seams:** `SESSION_STORE`, `ROSTER_STORE`, `QUEUE_DEPTH_STORE`,
   `ADMIN_DB`, `AGENT_EVENT_SQL`, `THROTTLE_STORE`, `JOIN_DEPS`, `DISCORD_EVENTS` are in-process

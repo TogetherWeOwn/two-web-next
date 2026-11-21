@@ -69,7 +69,9 @@ export class LiveSequence<State, Delta> {
   }
 
   #recover(): Promise<boolean> {
-    const load = Promise.resolve().then(() => this.load()).catch(() => null);
+    const load = Promise.resolve()
+      .then(() => this.load())
+      .catch(() => null);
     this.#recovering = load.then((snapshot) => {
       try {
         // Check against the latest observed gap, not the gap at request time.
