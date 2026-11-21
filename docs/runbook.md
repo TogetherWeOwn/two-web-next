@@ -521,9 +521,12 @@ migration is performed by its selftest.
   operation's exact, non-empty list of full journal tags in order, separated by
   commas without spaces. Use the approved scope, not tags inferred from the
   live ledger. Set the pending tags before setting the approved SHA. Clear the
-  SHA first, then the pending tags, after the run finishes or the operation is
-  abandoned. Clearing them does not revoke a run that already started. Do not
-  retry with a different scope without approval.
+  SHA first, then the pending tags, after the operation finishes or is abandoned.
+  If commit is uncertain, keep the original pins only while pursuing the
+  separately approved readback below. Clear them when readback finishes or is
+  abandoned. This does not authorize another apply. Clearing the pins does not
+  revoke a run that already started. Do not retry with a different scope without
+  approval.
 - The workflow reads the non-secret pending tags from the GitHub REST endpoint
   for the `production` Environment variable, not the merged `vars` context.
   A same-named repository or organization variable cannot substitute. A future
@@ -532,9 +535,10 @@ migration is performed by its selftest.
   Environment secret `PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN`. The default
   Actions token cannot be granted that permission. The workflow stops before
   checkout if the credential or scoped setting is missing, unreadable or
-  syntactically invalid. After checkout, the runner rejects a well-formed list
-  that is not an exact suffix of the locked release journal before connecting
-  to PostgreSQL. Do not provision or authorize credentials as part of a code merge.
+  syntactically invalid. After checkout, the runner rejects a list that is not
+  an exact contiguous segment of the locked release journal before connecting
+  to PostgreSQL. The approved segment can end below the journal tip. Do not
+  provision or authorize credentials as part of a code merge.
 - On that same Environment, set `PRODUCTION_MIGRATION_IDENTITY_SHA256` to the
   lowercase SHA-256 hex digest of the exact approved database name in UTF-8,
   one NUL byte, then the exact existing Postgres migrator role name in UTF-8
@@ -592,29 +596,34 @@ available. The workflow validates migration numbers, then:
 1. `plan` reads the canonical SQL/journal and `drizzle.__drizzle_migrations`,
    lists pending tags and counts in logs/job summary, and performs **no DDL**.
    This is a journal diff, not a SQL execution rehearsal.
-   Production requires the pin to be an ordered suffix of the locked release
-   journal and the pending tags to match it exactly.
+   Production lists only the approved segment and requires its first tag to
+   be the first pending tag after the exact live ledger prefix.
 2. `apply` starts one connection-bound transaction, acquires the web transaction
-   advisory lock, rechecks history and (on production) the exact pending tags,
-   and records the database clock's UTC
-   **pre-migration PITR timestamp** and release SHA in the job summary
-   **before DDL**. Production `apply` uses `READ COMMITTED` so the locked history
-   check sees commits made after the identity check. Ledger initialization,
-   canonical Drizzle journal SQL and hash/timestamp inserts, and the zero-pending
-   check all run in that transaction.
-   On production, `plan` and `verify` check `current_database()`, `session_user`
-   and `current_user`; `apply` repeats the check on its own transaction before
-   any DDL. The database must match the URL path and approved fingerprint, and
-   both roles must equal the same approved principal. The check reports only
-   match or refusal, not the database or role names.
+   advisory lock, rechecks the full ledger and (on production) the approved start,
+   and records the database clock's UTC **pre-migration PITR timestamp** and
+   release SHA in the job summary **before DDL**. Production `apply` uses
+   `READ COMMITTED` so the locked history check sees commits made after the
+   identity check. It executes only the approved canonical SQL and ledger
+   inserts, then requires the exact canonical prefix through the approved end
+   before committing. Staging still applies the full pending suffix and requires
+   zero pending in the same transaction.
+   Production checks `current_database()`, `session_user` and `current_user`
+   within the same transaction as each command's journal access. The database
+   must match the URL path and approved fingerprint, and both roles must equal
+   the same approved principal. The check reports only match or refusal, not
+   the database or role names.
    Connection loss fails closed, never reconnects mid-apply; the success receipt
    is printed only after commit. URLs and raw database/SQL errors are never printed.
-3. Both `apply` and the final `verify` require **zero pending web migrations**
-   against the full release journal, not just the approved scope.
-   Save the workflow URL, release SHA, timestamp and count with release evidence
-   before the Worker deployment. A successful journal check does not establish
-   bot schema readiness or run staging E2E. Staging E2E at the tested revision
-   remains required before any production deployment.
+3. The workflow follows staging apply with full-release `verify` (**zero pending
+   web migrations**). It follows production apply with read-only `verify-scope`,
+   which checks the full ledger again and requires exactly the approved end,
+   neither earlier nor later. Both scoped receipts list deferred journal tags.
+   A scoped success is not a full-release verdict, cannot qualify a release with
+   deferred migrations, and does not justify setting `migrations_applied: true`
+   for a Worker that requires them. Standalone `verify` still requires zero
+   pending against the full journal. Save the workflow URL, release SHA, PITR
+   timestamp and ledger result with the operation evidence. Bot schema readiness,
+   exact-revision staging E2E and the existing promotion gates still apply.
 
 SQL hashes/timestamps must be an exact prefix of the release journal. Edited,
 gapped, foreign/bot or newer history fails closed; never delete/forge the ledger,
@@ -629,15 +638,18 @@ using controlled provider-side evidence. Do not cancel in-flight DDL casually.
 **Rollback:** a Worker rollback does not undo schema/data. SQL failure rolls back
 the pending transaction, including ledger initialization on a fresh DB. Existing
 history stays intact. On connection loss, do not infer commit success. For
-production, a new apply dispatch is not a recovery check: if the transaction
-committed, its `plan` step refuses zero pending. Under a separately approved
-recovery procedure, the authorized database operator checks the full journal
-read-only against the same release before any retry. The runner's standalone
-`verify` mode is read-only, still requires the same SHA, identity and valid scope
-pins, and succeeds only with a complete journal. Do not change the pins to make a
-retry pass. For staging, re-plan and verify under the approved recovery procedure
-before retrying. After a successful but harmful migration, prefer a reviewed
-forward repair.
+production, do not replay apply to resolve an uncertain commit. Under separate
+recovery approval, dispatch `db-migrate.yml` on `main` with `target=production`
+and `readback_only=true`. This skips plan and apply, and runs only `verify-scope`
+for database access under the same protected Environment. The original approved
+SHA must still match the run, and the original migrator identity and scope pins
+must remain in place. Success means only that the ledger matches the exact
+approved end and the reported tail is still pending. If `main` moved, the pins
+no longer match, or the ledger is earlier, later or non-canonical, stop and
+reconcile with the original preflight/PITR evidence through the authorized
+operator. Do not change the pins, widen the scope or replay to force a result.
+For staging, re-plan and verify under the approved recovery procedure before retrying.
+After a successful but harmful migration, prefer a reviewed forward repair.
 If authorized PITR is required, pause writers and coordinate **both** consumers,
 verify the recorded timestamp is eligible, and use the provider's documented
 restore procedure (Neon branch restore or PlanetScale backup/restore). Restore can overwrite all databases on the branch and lose later

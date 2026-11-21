@@ -146,7 +146,11 @@ export function memberBoardDocument(twin: Twin, scope: Scope) {
   const css = sheets
     .map((name) => readFileSync(join(root, `public/${name}.css`), "utf8"))
     .join("\n");
-  const styles = css + (twin === "kit" ? `\n${compileCss.build(candidates)}` : "");
+  // Mirror the Kit layout's header import for the scrolled mobile bar.
+  const styles =
+    twin === "kit"
+      ? `${css}\n${compileCss.build(candidates)}\n${readFileSync(join(root, "web/src/lib/site-header.css"), "utf8")}`
+      : css;
   if (styles.includes("</style")) throw new Error("Fixture CSS must not close its style tag");
   // Keep the real shell and page, but inline the served styles and never execute islands.
   // Preserve the real <body> attributes: the Hono shell themes through
@@ -253,7 +257,7 @@ export function memberBoardDocument(twin: Twin, scope: Scope) {
   };
   const content =
     twin === "kit"
-      ? inert(body).replace(
+      ? inert(body).replaceAll(
           'src="/logo.svg"',
           `src="data:image/svg+xml;base64,${readFileSync(join(root, "public/logo.svg")).toString("base64")}"`,
         )

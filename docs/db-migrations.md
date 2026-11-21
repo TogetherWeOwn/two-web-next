@@ -82,7 +82,9 @@ is the sanctioned live web apply path, not `npm run db:migrate` from an agent
 workspace. Follow the [operator procedure and recovery gates](runbook.md#neon-web-schema-migrations-separate-operator-action).
 It loads the selected GitHub Environment secret, rejects disabled production,
 plans from the SQL journal/Drizzle ledger, records a pre-apply PITR timestamp,
-applies transactionally and verifies zero pending migrations. The staging
+and applies transactionally. Staging and full-release verification require zero
+pending migrations. Production scoped readback verifies only the approved end,
+reports deferred migrations, and does not qualify a release. The staging
 `deploy.yml` runs the same script for `staging` after CI and before the Worker
 deploy; live production execution always requires separate authorization and is
 never part of a Worker deploy.

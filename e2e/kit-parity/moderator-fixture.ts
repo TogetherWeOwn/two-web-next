@@ -38,6 +38,7 @@ export async function withModeratorFixture(
   renderer: ParityTarget["name"],
   viewport: Viewport,
   run: (fixture: ModeratorFixture) => Promise<void>,
+  options: { javaScriptEnabled?: boolean; fullPage?: boolean } = {},
 ): Promise<void> {
   requireGithubRunner();
   const target = parityTargets().find(({ name }) => name === renderer);
@@ -65,6 +66,7 @@ export async function withModeratorFixture(
   const signature = createHmac("sha256", secret).update(bearer).digest("base64");
   const context = await browser.newContext({
     viewport,
+    javaScriptEnabled: options.javaScriptEnabled,
     ignoreHTTPSErrors: target.ignoreHTTPSErrors,
     serviceWorkers: "block",
   });
@@ -115,7 +117,7 @@ export async function withModeratorFixture(
       async capture(name) {
         const label = `${renderer}-review-moderator-${name}-${viewport.width}`;
         const path = test.info().outputPath(`${label}.png`);
-        await page.screenshot({ path, scale: "css" });
+        await page.screenshot({ path, scale: "css", fullPage: options.fullPage });
         await test.info().attach(label, { path, contentType: "image/png" });
       },
     });

@@ -516,7 +516,8 @@ recovery also stops at the migration gate after three `/up` reads. An explicit
 manual re-dispatch with `migrations_applied: true` records an audited continuation
 past these migration stops once `db-migrate.yml` (target production) has applied the
 target's migrations; automatic runs ignore that input and halt on those stops
-unless the ledger already proves the target applied. The first promotion
+unless the ledger already proves the target applied. A scoped production migration
+that leaves any target migration deferred does not qualify the target. The first promotion
 after the ledger signal ships needs one manual dispatch because the live
 Worker predates it. Repo
 variable `PRODUCTION_HOLD_UNTIL` (ISO-8601 UTC, at most 24h ahead) pauses all

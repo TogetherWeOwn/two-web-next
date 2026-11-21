@@ -551,6 +551,15 @@ function countMatches(html, pattern) {
   return [...html.matchAll(pattern)].length;
 }
 
+export function kitHomeHeadingText(html) {
+  const [heading, duplicate] = activeBoardNodes(parse(html)).filter(
+    (n) => "attrs" in n && n.attrs.some((a) => a.name === "id" && a.value === "home-heading"),
+  );
+  if (heading?.nodeName !== "h1" || duplicate) return "";
+  const text = Array.from(activeBoardNodes(heading), (n) => ("value" in n ? n.value : ""));
+  return text.join("").replace(/\s+/g, " ").trim();
+}
+
 // One assertion set per route response. Returns an array of failure labels
 // (empty = pass). Pure: no I/O, no network.
 export function assertRouteContract({ label, html, headers, status, expected }) {
@@ -592,8 +601,12 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
     if (!html.includes('<script src="/islands/past-events.js"'))
       failures.push(`${label}: shared island binder`);
   } else if (contract === "home") {
-    if (!/<h1\b[^>]*>\s*The lobby is open\.\s*<\/h1>/i.test(html))
-      failures.push(`${label}: home heading present`);
+    const kitHeading = /^(?:The lobby is open\.|Next game night: .+\. Come play with us\.)$/;
+    const headingOk =
+      marker === "kit"
+        ? kitHeading.test(kitHomeHeadingText(html))
+        : /<h1\b[^>]*>\s*The lobby is open\.\s*<\/h1>/i.test(html);
+    if (!headingOk) failures.push(`${label}: home heading present`);
     const oauthJoin =
       /<a\b(?=[^>]*\shref="\/auth\/discord")(?=[^>]*\sdata-testid="join")[^>]*>\s*Join with Discord\s*<\/a>/i;
     const inviteFallback =
@@ -2244,10 +2257,11 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   if (parseManifestEntries(manifestSource).some((entry) => entry.path === "/")) {
     const homeMarker = expectedMarkerFor(manifestSource, "/");
     const join = '<a href="/auth/discord" data-testid="join">Join with Discord</a>';
+    const kitTitle = '<h1 id="home-heading">The lobby is <em>open</em>.</h1>';
     const homeShell =
       `<link rel="canonical" href="https://next.togetherweown.com/">` +
       `<a class="skip-link" href="#main">Skip</a><nav aria-label="Primary"></nav>` +
-      `<main id="main"><h1>The lobby is open.</h1>${join}</main><p>Welcome, guest</p>`;
+      `<main id="main">${homeMarker === "kit" ? kitTitle : "<h1>The lobby is open.</h1>"}${join}</main><p>Welcome, guest</p>`;
     const checkHome = (html, cache = "private, no-store") =>
       assertRouteContract({
         label: "unit/home",
@@ -2262,10 +2276,16 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       });
     const invite = '<a href="/discord" data-testid="discord-join">Join with an invite link</a>';
     const fallbackShell = homeShell.replace(join, invite);
+    const withHeading = (title) => homeShell.replace(/<h1.*?<\/h1>/, title);
+    const script = '<script type="application/json">The lobby is open.</script>';
     for (const [name, html, mutant, cache] of [
       ["good fixture", homeShell],
       ["invite fallback", fallbackShell],
-      ["heading", homeShell.replace("The lobby is open.", "Welcome"), true],
+      ["heading", homeShell.replace("The lobby is", "Welcome"), true],
+      ["inert heading", withHeading(`<template>${kitTitle}</template><!--${kitTitle}-->`), true],
+      ["script heading", withHeading(`<h1 id="home-heading">${script}</h1>`), true],
+      ["hidden heading", withHeading(kitTitle.replace("<h1", "<h1 hidden")), true],
+      ["hidden ancestor", withHeading(`<div hidden>${kitTitle}</div>`), true],
       ["join", homeShell.replace('href="/auth/discord"', 'href="https://evil.test/"'), true],
       ["invite fallback", fallbackShell.replace('href="/discord"', 'href="/join"'), true],
       ["own RSVP", `${homeShell}<p data-testid="home-standing">Own RSVP</p>`, true],
