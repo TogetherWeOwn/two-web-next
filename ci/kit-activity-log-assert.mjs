@@ -55,7 +55,7 @@ export async function memberRefusal(probe, headers, { signal, checkTime }, fetch
   return request;
 }
 
-async function main(chromium, postgres, TimeoutError) {
+async function main(chromium, postgres) {
   requireGithubRunner();
   const database = requireTestDatabase(process.env.DATABASE_URL);
   mark("FIXTURE");
@@ -186,7 +186,6 @@ async function main(chromium, postgres, TimeoutError) {
         progress("CAPTURE");
       },
       measure: routeLighthouse.bind(null, cdpPort),
-      TimeoutError,
     });
     record(`populated-desktop.png ${lighthouse ?? "lighthouse: unavailable"}`);
   }
@@ -213,5 +212,5 @@ export async function exitFixture(task, TimeoutError) {
 if (import.meta.main) {
   const { chromium, errors } = await import("@playwright/test");
   const { default: postgres } = await import("postgres");
-  await exitFixture(main(chromium, postgres, errors.TimeoutError), errors.TimeoutError);
+  await exitFixture(main(chromium, postgres), errors.TimeoutError);
 }

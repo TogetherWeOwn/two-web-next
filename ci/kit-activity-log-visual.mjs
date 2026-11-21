@@ -100,7 +100,7 @@ async function inspect(page, empty, keyboard) {
 }
 
 async function guardedPage(browser, mintModerator, [width, height], url, guard) {
-  const { render, reportOnly, TimeoutError, mark } = guard;
+  const { render, reportOnly, mark } = guard;
   const context = await browser.newContext({
     viewport: { width, height },
     serviceWorkers: "block",
@@ -140,8 +140,7 @@ async function guardedPage(browser, mintModerator, [width, height], url, guard) 
     // Settle the route guard before attributing any navigation failure.
     await settle();
     const valid = response?.url() === url && kitDocument(response.status(), response.headers());
-    if (error && !violation && (!unavailable || (!reportOnly && error instanceof TimeoutError)))
-      throw error;
+    if (error && !violation && !(reportOnly && unavailable)) throw error;
     if (!(response ? valid : unavailable)) throw new AssertionFailure("visual provenance drift");
     if (!violation && !unavailable) result = await render(page);
   } finally {
@@ -166,8 +165,7 @@ async function boundedMeasurement(measure, ms) {
   const deadline = delay(budget, null, { signal: timer.signal });
   return Promise.race([task, deadline]).finally(() => timer.abort());
 }
-export async function collectVisuals(browser, mint, dir, options) {
-  const { audit, measure, mark, TimeoutError = BrowserDeadline, ms = 25_000 } = options;
+export async function collectVisuals(browser, mint, dir, { audit, measure, mark, ms = 25_000 }) {
   const views = { ...viewportPngs, lighthouse: viewportPngs["populated-desktop.png"] };
   for (const [name, size] of Object.entries(views)) {
     const reportOnly = name === "lighthouse";
@@ -198,8 +196,7 @@ export async function collectVisuals(browser, mint, dir, options) {
       if (name.endsWith("desktop.png")) await audit(page, name);
       await inspect(page, empty, keyboard);
     };
-    const guard = { render, reportOnly, TimeoutError, mark };
-    const result = await guardedPage(browser, mint, size, url, guard);
+    const result = await guardedPage(browser, mint, size, url, { render, reportOnly, mark });
     if (reportOnly) return result;
   }
 }

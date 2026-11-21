@@ -22,8 +22,9 @@ class TimeoutError extends Error {}
 test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", async (t) => {
   const noop = async () => undefined;
   const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
-  const modes = "document asset disallowed pending rejected hono fonts capture-fonts";
-  for (const mode of [...modes.split(" "), "capture-error", "capture-timeout"]) {
+  const modes =
+    "document asset disallowed pending rejected hono fonts capture-fonts capture-error capture-inflight capture-timeout";
+  for (const mode of modes.split(" ")) {
     const navError = mode === "capture-timeout" ? new TimeoutError() : new Error("target closed");
     const shots = [];
     const keys = [];
@@ -75,7 +76,9 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
           headers: () => headers,
           dispose: noop,
         };
-        if (mode === "capture-error" || mode === "capture-timeout") throw navError;
+        const closeFetch = () => new Promise((_, reject) => setImmediate(reject, navError));
+        if (mode === "capture-inflight") void request(href, true, closeFetch);
+        if (mode.startsWith("capture-") && mode !== "capture-fonts") throw navError;
         if (closed !== 5 || !["document", "asset", "disallowed"].includes(mode)) return response;
         if (mode === "document") void request(href, true, stall);
         else {
@@ -103,7 +106,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     const mint = () => ({ value: consumed.size });
     const fakeClock = mode === "hono" || mode.endsWith("fonts");
     if (fakeClock) t.mock.timers.enable({ apis: ["setTimeout"] });
-    const options = { audit: noop, measure, mark, ms: 10, TimeoutError };
+    const options = { audit: noop, measure, mark, ms: 10 };
     const collect = () => visual.collectVisuals(browser, mint, ".", options);
     const teardown = () => visual.withDeadline(() => fixture.close(), 10_000);
     const report = mode === "hono" ? runWork(collect, teardown, mark) : collect();
