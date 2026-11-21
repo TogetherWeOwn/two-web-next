@@ -187,7 +187,9 @@ test("db-migrate admits staging and production through one explicit gate before 
   const gateIndex = dbMigrate.indexOf("Ref and production enable gate");
   const checkoutIndex = dbMigrate.indexOf("actions/checkout");
   assert.ok(gateIndex > 0 && checkoutIndex > gateIndex, "gate must run before checkout");
-  const gate = dbMigrate.slice(gateIndex, checkoutIndex);
+  const gateEnd = dbMigrate.indexOf("\n      - ", gateIndex);
+  assert.ok(gateEnd > gateIndex && gateEnd < checkoutIndex);
+  const gate = dbMigrate.slice(gateIndex, gateEnd);
   assert.match(gate, /Migrations require main/);
   assert.match(gate, /Unknown migration target/);
   assert.match(gate, /Production migrations are disabled/);
@@ -235,6 +237,9 @@ test("production scope comes only from the protected Environment API", (t) => {
   const [step] = scope.split("\n      - ");
   assert.ok(dbMigrate.indexOf(step) < dbMigrate.indexOf("actions/checkout"));
   assert.match(step, /if: \$\{\{ inputs\.target == 'production' \}\}/);
+  const credential = "secrets.PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN";
+  assert.ok(step.includes(`GH_TOKEN: \${{ ${credential} }}`));
+  assert.equal(dbMigrate.split(credential).length, 2, "scope credential is used only here");
   assert.doesNotMatch(dbMigrate, /vars\.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS/);
   const script = step.split("run: |\n")[1];
   assert.ok(script);

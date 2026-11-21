@@ -176,8 +176,14 @@ test("the workflow's actual shell gate denies disabled production and non-main r
     new URL("../.github/workflows/db-migrate.yml", import.meta.url),
     "utf8",
   );
-  const gate = workflow.match(/        run: \|\n([\s\S]*?)\n      - uses:/)?.[1];
-  assert.ok(gate, "workflow gate must be present before checkout");
+  const gateAt = workflow.indexOf("      - name: Ref and production enable gate");
+  const nextStepAt = workflow.indexOf("\n      - ", gateAt + 1);
+  assert.ok(
+    gateAt >= 0 && nextStepAt > gateAt && nextStepAt < workflow.indexOf("actions/checkout"),
+    "workflow gate must be a distinct step before checkout",
+  );
+  const gate = workflow.slice(gateAt, nextStepAt).split("        run: |\n")[1];
+  assert.ok(gate, "workflow gate must have a Bash script before checkout");
   const script = gate
     .split("\n")
     .map((line) => line.slice(10))

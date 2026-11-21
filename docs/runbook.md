@@ -515,9 +515,10 @@ migration is performed by its selftest.
   repository and **Environments: read**, available only as the production
   Environment secret `PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN`. The default
   Actions token cannot be granted that permission. The workflow stops before
-  checkout or database access if the credential or scoped setting is missing,
-  unreadable or malformed. Do not provision or authorize credentials as part of
-  a code merge.
+  checkout if the credential or scoped setting is missing, unreadable or
+  syntactically invalid. After checkout, the runner rejects a well-formed list
+  that is not an exact suffix of the locked release journal before connecting
+  to PostgreSQL. Do not provision or authorize credentials as part of a code merge.
 - On that same Environment, set `PRODUCTION_MIGRATION_IDENTITY_SHA256` to the
   lowercase SHA-256 hex digest of the exact approved database name in UTF-8,
   one NUL byte, then the exact existing Postgres migrator role name in UTF-8
