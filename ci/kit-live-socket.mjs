@@ -38,9 +38,23 @@ function openIdle(url, headers) {
       reject(new Error(`Idle WebSocket upgrade refused (${response.statusCode})`));
     });
     req.on("upgrade", (response, socket, head) => {
-      if (response.statusCode !== 101) {
+      const accept = createHash("sha1") // RFC 6455 handshake, not a signature.
+        .update(`${req.getHeader("Sec-WebSocket-Key")}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+        .digest("base64");
+      if (
+        response.statusCode !== 101 ||
+        response.headers.upgrade?.toLowerCase() !== "websocket" ||
+        !response.headers.connection
+          ?.toLowerCase()
+          .split(/\s*,\s*/)
+          .includes("upgrade") ||
+        response.headersDistinct["sec-websocket-accept"]?.length !== 1 ||
+        response.headers["sec-websocket-accept"] !== accept ||
+        response.headers["sec-websocket-protocol"] !== undefined ||
+        response.headers["sec-websocket-extensions"] !== undefined
+      ) {
         socket.destroy();
-        reject(new Error(`Idle WebSocket upgrade returned ${response.statusCode}, expected 101`));
+        reject(new Error(`Invalid idle WebSocket upgrade (${response.statusCode})`));
         return;
       }
       const peer = { socket, first: null, at: null, error: null };
@@ -419,6 +433,8 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
           assert.ok(sessionExpiry + 5_000 < expiresAt, "session deadline precedes voice deadline");
           idleMember = await openIdle(`${origin}${path}`, { Origin: appOrigin, Cookie: cookie });
           await awaitServerClose(idleMember, sessionExpiry, "cold session alarm");
+          idleMember.socket.destroy();
+          idleMember = undefined;
           assert.equal(socket.readyState, WebSocket.OPEN);
           assert.deepEqual(frames, [], "earlier cold alarm must preserve the guest baseline");
         }
@@ -480,7 +496,9 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
       send("resync");
       await expectFrame(unavailable);
       await expectFrame(projected("snapshot", ++revision, 5));
-      const idle = mode === "warm" ? 5_100 : 15_000;
+      // Leave room for workerd's idle eviction without crossing the 30s lease.
+      const idle = mode === "warm" ? 5_100 : 22_000;
+      const { alarms: beforeIdle } = await controlRequest();
       const next = snapshot(cursor + 2, 6, new Date(Date.now() + idle - 23_000).toISOString());
       if (mode === "producer wake") {
         const recovered = snapshot(cursor + 1, 5);
@@ -492,13 +510,21 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
       await delay(idle);
       if (mode === "producer wake") {
         assert.equal(await ingest(origin, cursor + 1, join("106", "11")), 204);
-        assert.equal(await source(next), generation + 1);
+        const afterIngress = await controlRequest({ method: "POST", body: JSON.stringify(next) });
+        assert.deepEqual(
+          afterIngress.alarms,
+          beforeIdle,
+          "producer ingress must be the wake event",
+        );
+        assert.equal(afterIngress.generation, generation + 1, "producer ingress reconstructs hub");
       }
       assert.deepEqual(frames, [], `${mode}: no frame before resync`);
       send("resync");
       const result = await expectFrame(projected("snapshot", ++revision, 6));
       assert.ok(result.at < Date.parse(initial.observed_at) + 30_000, `${mode}: pre-expiry`);
-      assert.equal(await source(), generation + Number(mode !== "warm"), mode);
+      const afterResync = await controlRequest();
+      assert.deepEqual(afterResync.alarms, beforeIdle, `${mode}: no competing alarm before resync`);
+      assert.equal(afterResync.generation, generation + Number(mode !== "warm"), mode);
       assert.deepEqual(frames, [], `${mode}: exactly one snapshot`);
       await expectFrame(unavailable, 12_000);
       cursor += 2;
