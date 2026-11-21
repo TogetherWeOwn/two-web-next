@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdir } from "node:fs/promises";
 import { test } from "node:test";
 import AxeBuilder from "@axe-core/playwright";
 import { homeVoiceFixture } from "../test/fixtures/kit-home-voice.ts";
@@ -48,8 +47,6 @@ data.homeCopy = { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTR
 test("Kit home places and captures each offline voice state at both widths", {
   timeout: 720_000,
 }, async () => {
-  const output = "artifacts/kit-home-voice";
-  await mkdir(output, { recursive: true });
   await withKitOfflineBrowser(
     {
       page: await fixturePage(),
@@ -69,8 +66,10 @@ test("Kit home places and captures each offline voice state at both widths", {
         assert.equal(await h1.getAttribute("id"), "home-heading");
         const withVoice = ["guest", "member", "quiet", "frozen"].includes(state);
         assert.equal(await panel.count(), Number(withVoice));
+        const heading = await h1.innerText();
+        if (withVoice) assert.match(heading, /Game night is at Tue 20 Oct, 19:00 \(UTC\)\./, state);
         assert.match(
-          await h1.innerText(),
+          heading,
           {
             guest: /5 of us are in voice right now/,
             member: /3 in voice rooms you can see/,
@@ -99,7 +98,7 @@ test("Kit home places and captures each offline voice state at both widths", {
             );
           }
           await page.screenshot({
-            path: `${output}/${state}-${viewport.width}x${viewport.height}.png`,
+            path: `artifacts/kit-home-voice/${state}-${viewport.width}x${viewport.height}.png`,
             fullPage: true,
             animations: "disabled",
           });

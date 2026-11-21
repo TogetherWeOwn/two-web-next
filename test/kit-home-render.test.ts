@@ -72,6 +72,8 @@ afterAll(() => {
 });
 
 describe("Kit home SSR render: offline voice composition", () => {
+  beforeEach(() => void vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime("2030-07-19T12:00Z"));
+  afterEach(() => void vi.useRealTimers());
   it("keeps the shipped hero for missing, suppressed, or wrongly scoped voice data", async () => {
     const data = baseData({ upcomingEvents: [fullnessEvent({ title: "Friday Raid" })] });
     const baseline = renderPage(data);
@@ -110,7 +112,9 @@ describe("Kit home SSR render: offline voice composition", () => {
       }),
       { voice },
     );
-    expect(html).toContain("3 in voice rooms you can see.");
+    const heading = html.match(/<h1\b[^>]*>(.*?)<\/h1>/)?.[1];
+    expect(heading).toContain("3 in voice rooms you can see.");
+    expect(heading).toContain("Friday Raid is at Sat 20 Jul, 20:00 (Europe/London).");
     expect(html).toContain(allowedRoom);
     expect(html).toContain("Mika");
     expect(html).toContain("Your RSVP");

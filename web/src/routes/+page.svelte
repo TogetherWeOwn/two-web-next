@@ -84,18 +84,15 @@ const nextPublicEvent = $derived(
   upcomingEvents.find((event: HomeUpcomingRow) => event.startsAt > renderTime),
 );
 const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? nextPublicEvent));
+const voiceAudience = $derived(session?.member ? "member" : "guest");
 const homeVoice = $derived(
-  voice?.snapshot &&
-    !sessionUnavailable &&
-    voice.audience === (session?.member ? "member" : "guest")
-    ? voice
-    : undefined,
+  !sessionUnavailable && voice?.snapshot && voice.audience === voiceAudience ? voice : undefined,
 );
 const nextVoiceEvent = $derived.by(() => {
   if (eventsUnavailable) return undefined;
   if (!nextPublicEvent) return null;
   const { title, startsAt, timezone } = nextPublicEvent;
-  return { title, timeLabel: cardTimeLabel(startsAt, timezone) };
+  return { title, timeLabel: `${cardTimeLabel(startsAt, timezone)} (${isValidZone(timezone) ? timezone : "UTC"})` };
 });
 </script>
 
