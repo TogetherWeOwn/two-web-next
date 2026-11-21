@@ -1,11 +1,11 @@
 // route-inventory: POST /__probe/alert
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { Env } from "../src/env";
 import { QA_HEADER, STAGING_APP_URL } from "../src/qa";
 import { env as baseEnv } from "./helpers/member-data";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
+import { requestApp } from "./helpers/fetch-app";
 
 const token = "test-only-probe-token-with-32-plus";
 const staging = { ...baseEnv, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: token };
@@ -41,7 +41,7 @@ describe("alert probe body cap runs before the throttle", () => {
       const store = vi.fn(async () => null);
       const send = vi.fn();
       const { request, pull } = overCap(advertised);
-      const response = await app.request(request, undefined, {
+      const response = await requestApp(request, undefined, {
         ...staging,
         THROTTLE_STORE: store,
         INTERNAL_ACTION_QUEUE: { send } as unknown as Queue,
@@ -59,7 +59,7 @@ describe("alert probe body cap runs before the throttle", () => {
   it("still throttles under-cap probes against a spent bucket", async () => {
     const store = vi.fn(async () => withThrottleTx((async () => [{ n: 10, wait: 30 }]) as never));
     const send = vi.fn();
-    const response = await app.request(
+    const response = await requestApp(
       new URL("/__probe/alert", STAGING_APP_URL).toString(),
       {
         method: "POST",
@@ -78,7 +78,7 @@ describe("alert probe body cap runs before the throttle", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const store = vi.fn(async () => null);
     const send = vi.fn(async () => {});
-    const response = await app.request(
+    const response = await requestApp(
       new URL("/__probe/alert", STAGING_APP_URL).toString(),
       {
         method: "POST",
@@ -96,7 +96,7 @@ describe("alert probe body cap runs before the throttle", () => {
     const send = vi.fn();
     for (const advertised of [false, true]) {
       const { request, pull } = overCap(advertised, { [QA_HEADER]: "wrong" });
-      const response = await app.request(request, undefined, {
+      const response = await requestApp(request, undefined, {
         ...staging,
         THROTTLE_STORE: store,
         INTERNAL_ACTION_QUEUE: { send } as unknown as Queue,
