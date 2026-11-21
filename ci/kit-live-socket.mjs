@@ -470,6 +470,20 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
           assert.ok(early.at >= sessionExpiry - idleMember.upgradeMs - 2);
           assert.ok(early.at <= idleMember.at && early.at < expiresAt);
           assert.ok(voiceAlarm.at >= expiresAt, "cold alarm re-arms the original voice deadline");
+          // The wire peer doesn't auto-reply like Undici. Finish its close
+          // handshake before the remaining trials measure idle reconstruction.
+          const mask = randomBytes(4);
+          const close = once(idleMember.socket, "close", deadline());
+          idleMember.socket.end(
+            Buffer.from([
+              0x88,
+              0x82,
+              ...mask,
+              idleMember.first[2] ^ mask[0],
+              idleMember.first[3] ^ mask[1],
+            ]),
+          );
+          await close;
         }
         assert.equal(
           socket.readyState,
@@ -513,7 +527,11 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
       if (mode === "producer wake") {
         assert.equal(await ingest(origin, cursor + 1, join("106", "11")), 204);
         const afterIngress = await controlRequest({ method: "POST", body: JSON.stringify(next) });
-        assert.equal(afterIngress.generation, generation + 1, "producer ingress reconstructs the hub");
+        assert.equal(
+          afterIngress.generation,
+          generation + 1,
+          `producer ingress must reconstruct the hub (first event: ${afterIngress.firstEvent})`,
+        );
         assert.equal(afterIngress.firstEvent, "ingress", "the probe did not wake the hub");
       }
       assert.deepEqual(frames, [], `${mode}: no frame before resync`);

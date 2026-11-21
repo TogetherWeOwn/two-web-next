@@ -272,6 +272,10 @@ export class LiveGuildHub extends InstalledHub {
     this.firstEvent ??= "message";
     return super.webSocketMessage(socket, message);
   }
+  webSocketClose(socket) {
+    this.firstEvent ??= "close";
+    return super.webSocketClose(socket);
+  }
   alarm() {
     this.firstEvent ??= "alarm";
     const alarms = this.kv.get("fixture-alarms") ?? [];
