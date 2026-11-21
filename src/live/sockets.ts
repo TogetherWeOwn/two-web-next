@@ -28,7 +28,7 @@ const attachment = z.strictObject({
   topics: topics.nullable(),
   nextResync: z.number().int().nonnegative(),
   voiceSeq: z.number().int().nonnegative(),
-  voiceLive: z.boolean(),
+  voiceUntil: z.number().int().nonnegative(),
 });
 
 type SocketMeta = z.infer<typeof attachment>;
@@ -56,7 +56,7 @@ export class LiveSockets {
   constructor(
     private readonly ctx: DurableObjectState,
     private readonly env: LiveSocketEnv,
-    private readonly projectVoice: () => string | null,
+    private readonly projectVoice: () => { value: string; until: number } | null,
   ) {}
 
   async accept(request: Request): Promise<Response> {
@@ -75,7 +75,7 @@ export class LiveSockets {
         topics: null,
         nextResync: 0,
         voiceSeq: 0,
-        voiceLive: false,
+        voiceUntil: 0,
       });
       if (!meta.success || (ref === null) !== (expiry === null) || until <= now) {
         return new Response(null, { status: 400 });
@@ -150,28 +150,31 @@ export class LiveSockets {
   }
 
   #voice(socket: WebSocket, meta: SocketMeta, force: boolean): void {
-    const value = this.projectVoice(); // Read current source and lease after any auth await.
-    if (value === null) {
-      if (meta.voiceLive) this.#clearVoice(socket, meta);
+    const projection = this.projectVoice(); // Read current proof after any auth await.
+    if (projection === null) {
+      if (force && meta.voiceUntil) this.#clearVoice(socket, meta);
       else if (force) this.#unavailable(socket, "voice");
       return;
     }
-    const changed = !meta.voiceLive || value !== this.#lastVoice.get(socket);
+    const { value, until } = projection;
+    const previous = this.#lastVoice.get(socket);
+    const sameLease = meta.voiceUntil === until && previous !== undefined;
+    const changed = !sameLease || value !== previous;
     if (!changed && !force) return;
     if (changed && meta.voiceSeq >= MAX_VOICE_REVISIONS) {
       this.#close(socket, 1012);
       return;
     }
-    const type = force || !meta.voiceLive ? "snapshot" : "patch";
+    const type = force || !sameLease ? "snapshot" : "patch";
     if (changed) meta.voiceSeq++;
     this.#lastVoice.set(socket, value);
-    meta.voiceLive = true;
+    meta.voiceUntil = until;
     socket.serializeAttachment(meta);
     socket.send(`{"v":1,"type":"${type}","topic":"voice","seq":${meta.voiceSeq},"value":${value}}`);
   }
 
   #clearVoice(socket: WebSocket, meta: SocketMeta): void {
-    meta.voiceLive = false;
+    meta.voiceUntil = 0;
     this.#lastVoice.delete(socket);
     socket.serializeAttachment(meta);
     this.#unavailable(socket, "voice");
@@ -181,15 +184,17 @@ export class LiveSockets {
     for (const socket of this.ctx.getWebSockets()) {
       if (socket.readyState !== WebSocket.OPEN) continue;
       const meta = attachment.safeParse(socket.deserializeAttachment()).data;
-      if (!meta?.voiceLive) continue;
-      try {
-        // A loss of source is synchronous. Close authenticated streams without
-        // a frame instead of waiting for a row read before clearing old state.
-        if (meta.ref !== null || meta.until <= Date.now()) this.#close(socket, 1012);
-        else this.#clearVoice(socket, meta);
-      } catch {
-        this.#close(socket, 1011);
-      }
+      if (meta?.voiceUntil) this.#withdrawVoice(socket, meta);
+    }
+  }
+
+  #withdrawVoice(socket: WebSocket, meta: SocketMeta): void {
+    try {
+      // Do not send on a session-bearing socket without a live row read.
+      if (meta.ref !== null || meta.until <= Date.now()) this.#close(socket, 1012);
+      else this.#clearVoice(socket, meta);
+    } catch {
+      this.#close(socket, 1011);
     }
   }
 
@@ -198,12 +203,14 @@ export class LiveSockets {
     const sockets = this.ctx.getWebSockets();
     if (!sockets.length) return;
     const preview = this.projectVoice();
-    if (preview === null) return this.invalidate();
+    if (preview === null) return;
     await Promise.all(
       sockets.map(async (socket) => {
         if (socket.readyState !== WebSocket.OPEN || this.#publishing.has(socket)) return;
         const meta = attachment.safeParse(socket.deserializeAttachment()).data;
-        if (!meta?.topics?.includes("voice") || preview === this.#lastVoice.get(socket)) return;
+        if (!meta?.topics?.includes("voice")) return;
+        if (meta.voiceUntil === preview.until && preview.value === this.#lastVoice.get(socket))
+          return;
         this.#publishing.add(socket);
         try {
           if (await this.#authorize(socket, meta)) {
@@ -227,18 +234,23 @@ export class LiveSockets {
     return this.ctx.blockConcurrencyWhile(() => this.#schedule(until));
   }
 
-  async expire(sourceUntil: number): Promise<void> {
-    const now = Date.now();
-    let next = sourceUntil;
-    for (const socket of this.ctx.getWebSockets()) {
-      if (socket.readyState !== WebSocket.OPEN) continue;
-      const meta = attachment.safeParse(socket.deserializeAttachment()).data;
-      if (!meta || meta.until <= now) socket.close(1008);
-      else next = Math.min(next, meta.until);
-    }
-    // The currently firing alarm cannot serve the next lease.
-    if (Number.isFinite(next)) {
-      await this.ctx.blockConcurrencyWhile(() => this.ctx.storage.setAlarm(next));
-    }
+  expire(sourceUntil: number): Promise<void> {
+    return this.ctx.blockConcurrencyWhile(async () => {
+      const now = Date.now();
+      let next = sourceUntil > now ? sourceUntil : Infinity;
+      for (const socket of this.ctx.getWebSockets()) {
+        if (socket.readyState !== WebSocket.OPEN) continue;
+        const meta = attachment.safeParse(socket.deserializeAttachment()).data;
+        if (!meta || meta.until <= now) {
+          socket.close(1008);
+          continue;
+        }
+        if (meta.voiceUntil && meta.voiceUntil <= now) this.#withdrawVoice(socket, meta);
+        if (socket.readyState !== WebSocket.OPEN) continue;
+        next = Math.min(next, meta.until, meta.voiceUntil || Infinity);
+      }
+      // The firing alarm has been consumed. Do not compare it to the next lease.
+      if (Number.isFinite(next)) await this.ctx.storage.setAlarm(next);
+    });
   }
 }
