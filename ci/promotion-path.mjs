@@ -2,27 +2,25 @@ import assert from "node:assert/strict";
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-// Direct tooling/config from deploy-production, rollback-production, deploy,
-// e2e-staging, web-quality-origin and db-migrate. src/index.tsx wires /up and /version; do not
-// follow imports into ordinary product code.
+// Direct release workflow inputs and deployed readiness wiring, not ordinary app imports.
 const directPaths = new Set(
   `ci/promotion-path.mjs
-   ci/resolve-promotion-sha.mjs ci/production-deploy-gate.mjs ci/rollback-target.mjs
+   ci/resolve-promotion-sha.mjs ci/production-deploy-gate.mjs ci/rollback-target.mjs ci/drill-scripts-ref.mjs
    ci/post-deploy-watch.mjs ci/check-production-secrets.mjs
    ci/operator-constants.mjs ci/wrangler-config.mjs ci/worker-bundle-evidence.mjs
    ci/staging-deploy-gate.mjs ci/staging-provenance.mjs ci/check-staging-journeys.mjs ci/web-standards.mjs
    ci/lighthouse-origin-lib.cjs ci/lighthouserc.cjs ci/quality-budget.json ci/lighthouse-samples.cjs ci/lighthouse-serving-values.cjs ci/lighthouse-preserve-mobile.sh
    ci/change-scope.sh ci/e2e-test-helpers.mjs ci/kit-route-flags.mjs ci/staging-kit-route-check.mjs ci/check-jobs-secrets.mjs
    ci/db-migrate.mjs ci/migration-admission.mjs ci/migration-ownership.mjs ci/migration-runtime-rights.mjs
-   ci/check-migration-numbers.sh ci/check-snapshot-chain.mjs ci/check-migration-history.mjs
+   ci/check-migration-numbers.sh ci/check-snapshot-chain.mjs ci/check-snapshot-chain-selftest.mjs ci/check-migration-history.mjs
    drizzle.config.ts migrations.lock
    bin/smoke.mjs bin/version-check.mjs bin/revision-check.mjs bin/json-smoke.mjs
    ci/robots-directives.mjs lib/loopback-hosts.mjs
    bin/check-moderators.mjs bin/operator-probe-errors.mjs bin/ts-hook.mjs bin/ts-hooks.mjs src/probes/check-moderators.ts src/roles.ts
-   src/index.tsx src/version.ts src/release-tag.ts src/headers.ts src/route-ownership.ts
+   src/worker.ts src/index.tsx src/version.ts src/release-tag.ts src/headers.ts src/route-ownership.ts
    src/up.ts src/up-body.ts src/up-config.ts src/up-database.ts src/up-migrations.ts
    src/up-queue.ts src/up-revision.ts src/up-timeout.ts
-   playwright.staging.config.ts playwright.watch.config.ts e2e/ci-only.mjs e2e/watch-guard.mjs e2e/staging-guard.mjs
+   playwright.staging.config.ts playwright.watch.config.ts e2e/ci-only.mjs e2e/watch-guard.mjs e2e/staging-guard.mjs e2e/search-retry.mjs
    e2e/featured-guest-poll.mjs e2e/qa-login-retry.mjs e2e/qa-request.mjs e2e/rsvp-pending.ts e2e/join-oneclick.ts e2e/fixture-sweep.mjs
    src/qa.ts src/session-cookie.ts web/scripts/copy-public.mjs ci/kit-route-evidence.mjs
    ci/build-ember-tokens.mjs ci/build-leaf-css.mjs ci/build-events-css.mjs ci/css-dictionary.mjs
@@ -46,7 +44,8 @@ export function isPromotionPath(path) {
 const pageSize = 100;
 const prFilesCap = 3000;
 const compareFilesCap = 300;
-const isSha = (value) => typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
+const nonempty = (value) => typeof value === "string" && value.length > 0;
+const isSha = (value) => nonempty(value) && /^[0-9a-f]{40}$/.test(value);
 const knownStatus = new Set("added modified removed renamed copied changed unchanged".split(" "));
 
 async function json(response) {
@@ -59,11 +58,7 @@ async function json(response) {
 async function readPR(api, pull) {
   const pr = await json(await api("GET", pull));
   assert.ok(
-    pr?.state === "open" &&
-      isSha(pr.head?.sha) &&
-      isSha(pr.base?.sha) &&
-      typeof pr.base?.ref === "string" &&
-      pr.base.ref.length > 0,
+    pr?.state === "open" && isSha(pr.head?.sha) && isSha(pr.base?.sha) && nonempty(pr.base.ref),
     "Missing open PR or full head/base identity",
   );
   return { head: pr.head.sha, base: pr.base.sha, baseRef: pr.base.ref, count: pr.changed_files };
@@ -74,12 +69,9 @@ function readFiles(rows, expected, files) {
   for (const row of rows) {
     const { filename, previous_filename: previous, status } = row ?? {};
     assert.ok(
-      typeof filename === "string" &&
-        filename.length > 0 &&
+      nonempty(filename) &&
         knownStatus.has(status) &&
-        (previous === undefined
-          ? status !== "renamed"
-          : typeof previous === "string" && previous.length > 0),
+        (nonempty(previous) || (previous === undefined && status !== "renamed")),
       "Invalid file metadata",
     );
     assert.ok(!files.has(filename), "Duplicate filename across file results");
@@ -97,20 +89,22 @@ async function ensureLabel(api, label) {
     color: label.endsWith("yes") ? "d4a72c" : "bfdadc",
     description: "Advisory only; see the exact-head promotion-path Actions summary.",
   });
-  if (create.ok) return;
-  // Another PR's run may have created this repository label concurrently.
+  // A concurrent creator can win the race; verify the label exists in that case.
   assert.ok(
-    create.status === 422 && (await api("GET", labelPath)).ok,
+    create.ok || (create.status === 422 && (await api("GET", labelPath)).ok),
     "Cannot create verdict label",
   );
 }
 
-export async function labelPromotionPath(api, number, summarize) {
+export async function labelPromotionPath(request, number, summarize, signal) {
+  const budget = signal ?? AbortSignal.timeout(180_000);
   assert.ok(Number.isSafeInteger(number) && number > 0, "Invalid PR number");
   const pull = `/pulls/${number}`;
   const issueLabels = `/issues/${number}/labels`;
-  const remove = async (name) => {
-    const response = await api("DELETE", `${issueLabels}/${encodeURIComponent(name)}`);
+  const api = (method, path, body) => request(method, path, body, budget);
+  const remove = async (value, client = api) => {
+    const name = encodeURIComponent(`promotion-path: ${value}`);
+    const response = await client("DELETE", `${issueLabels}/${name}`);
     assert.ok(response.ok || response.status === 404, "Cannot remove verdict label");
   };
   let snapshot;
@@ -125,11 +119,8 @@ export async function labelPromotionPath(api, number, summarize) {
     const files = new Map();
     for (let offset = 0; offset < Math.max(1, count); offset += pageSize) {
       const query = `per_page=${pageSize}&page=${1 + offset / pageSize}`;
-      readFiles(
-        await json(await api("GET", `${pull}/files?${query}`)),
-        Math.min(pageSize, count - offset),
-        files,
-      );
+      const page = await json(await api("GET", `${pull}/files?${query}`));
+      readFiles(page, Math.min(pageSize, count - offset), files);
     }
     const matches = [...files].some(
       ([path, prior]) => isPromotionPath(path) || (prior && isPromotionPath(prior)),
@@ -148,19 +139,14 @@ export async function labelPromotionPath(api, number, summarize) {
     }
     const value = matches ? "yes" : "no";
     const label = `promotion-path: ${value}`;
-    const fresh = async () => {
-      const current = await readPR(api, pull);
+    const fresh = async () =>
       assert.ok(
-        current.head === head &&
-          current.base === base &&
-          current.baseRef === snapshot.baseRef &&
-          current.count === count,
+        JSON.stringify(await readPR(api, pull)) === JSON.stringify(snapshot),
         "PR refs or file count changed during classification",
       );
-    };
     await ensureLabel(api, label);
     await fresh();
-    await remove(`promotion-path: ${matches ? "no" : "yes"}`);
+    await remove(matches ? "no" : "yes");
     await fresh();
     const applied = await api("POST", issueLabels, { labels: [label] });
     assert.ok(applied.ok, "Cannot apply verdict label");
@@ -168,7 +154,9 @@ export async function labelPromotionPath(api, number, summarize) {
     verdict = value;
   } catch (error) {
     // The validated PR number lets serialized runs retire owned verdicts even before a snapshot.
-    await Promise.all([remove("promotion-path: no"), remove("promotion-path: yes")]);
+    const outcomes = await Promise.allSettled([remove("no", request), remove("yes", request)]);
+    const failures = outcomes.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
+    if (failures.length) throw new AggregateError([error, ...failures], "Label cleanup failed");
     throw error;
   } finally {
     summarize(
@@ -180,7 +168,7 @@ export async function labelPromotionPath(api, number, summarize) {
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   const { GITHUB_EVENT_PATH, GITHUB_REPOSITORY, GITHUB_STEP_SUMMARY, GH_TOKEN } = process.env;
   const { number } = JSON.parse(readFileSync(GITHUB_EVENT_PATH, "utf8"));
-  const api = (method, path, body) =>
+  const api = (method, path, body, budget) =>
     fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}${path}`, {
       method,
       headers: {
@@ -191,7 +179,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       },
       body: JSON.stringify(body),
       redirect: "error",
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(budget ? [budget] : [])]),
     });
   await labelPromotionPath(api, number, (summary) => appendFileSync(GITHUB_STEP_SUMMARY, summary));
 }

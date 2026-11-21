@@ -1,12 +1,6 @@
 name: promotion-path-test
-
-on:
-  pull_request:
-    types: [opened, reopened, synchronize]
-
-permissions:
-  contents: read
-
+on: pull_request
+permissions: { contents: read }
 concurrency:
   group: promotion-path-test-${{ github.event.pull_request.number }}
   cancel-in-progress: true
