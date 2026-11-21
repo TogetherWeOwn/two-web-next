@@ -21,18 +21,16 @@ test("Lifeline renders each synthetic state without JavaScript or routes", async
     body { margin: 0; }
     main { max-width: 640px; margin: auto; padding: var(--space-6); }
   `;
+  // Expected clock | actor and state | title | optional detail. Shared rows stay identical.
+  const opened = "18:00|Bot · Recorded|Sign-ups opened";
+  const seat = "18:23|You, on this site · Recorded|Your seat is saved";
+  const reminder = "19:32|Site · Recorded|Reminder results recorded|8 sent · 2 unavailable";
+  const waitingRoom = "20:00|Bot · Waiting|Room opens|Waiting on the bot.";
   const examples = {
-    upcoming: /Sign-ups opened.*Your seat is saved.*Site · Next.*Reminder ping/s,
-    frozen:
-      /8 sent · 2 unavailable.*Bot · Counting now.*Waiting on the bot\. Last synced 12 min ago/s,
-    cancelled: /Event room seen.*Event cancelled.*severe weather\./s,
-    ended: /Counting window closed.*Echo frozen/s,
-  };
-  const clocks = {
-    upcoming: ["18:00", "18:23", "19:30", "19:45", "20:00", "21:25"],
-    frozen: ["18:00", "19:32", "19:45", "20:00", "21:25"],
-    cancelled: ["18:00", "18:23", "20:00", "20:01"],
-    ended: ["18:00", "19:32", "20:00", "21:15", "21:41"],
+    upcoming: `${opened}\n${seat}\n19:30|Site · Next|Reminder ping\n19:45|Bot · Planned|Bot counts who’s in\n20:00|Bot · Planned|Room opens\n21:25|Site · Planned|Echo freezes`,
+    frozen: `${opened}\n${reminder}\n19:45|Bot · Counting now|Bot counts who’s in\n${waitingRoom} Last synced 12 min ago\n21:25|Site · Next|Echo freezes`,
+    cancelled: `${opened}\n${seat}\n20:00|Bot · Recorded|Event room seen\n20:01|Bot · Recorded|Event cancelled|The host cancelled because of severe weather.`,
+    ended: `${opened}\n${reminder}\n${waitingRoom}\n21:15|Bot · Recorded|Counting window closed\n21:41|Site · Recorded|Echo frozen`,
   };
   const browser = await chromium.launch();
   t.after(() => browser.close());
@@ -44,22 +42,23 @@ test("Lifeline renders each synthetic state without JavaScript or routes", async
         `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lifeline fixture</title><style>${styles}\n[data-fixture]:not([data-fixture="${state}"]) { display: none; }</style></head><body class="base-theme">${body}</body></html>`,
       );
       const section = page.getByRole("region", { name: "Lifeline" });
-      const text = (await section.textContent()) ?? "";
-      assert.match(text, expected);
-      assert.doesNotMatch(text, /Pull me in|no.show/i);
+      assert.doesNotMatch((await section.textContent()) ?? "", /Pull me in|no.show/i);
       assert.equal(await section.locator("a, button, script, [aria-live]").count(), 0);
       const ongoing = state === "upcoming" || state === "frozen";
       assert.equal(await section.locator('[aria-current="step"]').count(), Number(ongoing));
       const rows = await section.locator("ol > li").all();
-      assert.equal(rows.length, clocks[state].length, `${state}: row count`);
+      const labels = expected.split("\n");
+      assert.equal(rows.length, labels.length, `${state}: row count`);
       for (const [index, row] of rows.entries()) {
-        const clock = clocks[state][index];
-        const stamp = row.locator("time[datetime]", { hasText: `${clock} UTC` });
-        const label = row.locator(".entry");
+        const [clock, meta, title, detail] = labels[index].split("|");
+        const stamp = row.locator("time[datetime]:visible", { hasText: `${clock} UTC` });
         const context = `${state}: ${clock} at ${width}px`;
-        assert.ok((await stamp.isVisible()) && (await label.isVisible()), `${context}: visibility`);
-        const [time, entry] = await Promise.all([stamp.boundingBox(), label.boundingBox()]);
-        assert.ok(time && entry, `${context}: bounds`);
+        const readLabel = (label) => row.locator(`${label}:visible`).allTextContents();
+        const copy = await Promise.all([".meta", ".title", ".detail"].map(readLabel));
+        assert.deepEqual(copy, [[meta], [title], detail ? [detail] : []], context);
+        const time = (await stamp.isVisible()) ? await stamp.boundingBox() : null;
+        const entry = await row.locator(".entry:visible").boundingBox();
+        assert.ok(time && entry, `${context}: visible timestamp and entry bounds`);
         const above = time.y + time.height <= entry.y;
         const aligned = time.y >= entry.y && time.y < entry.y + entry.height;
         assert.ok(width === 390 ? above : aligned && time.x + time.width <= entry.x, context);
