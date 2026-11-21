@@ -29,7 +29,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
   const lapse = clock(t);
   const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
   const modes =
-    "dom asset-dom asset-body late late-method capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled";
+    "dom load asset-dom asset-body late late-method capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled";
   for (const mode of modes.split(" ")) {
     const hono = mode === "hono";
     const expired = mode === "capture-budget";
@@ -92,7 +92,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       evaluate: () =>
         mode === "capture-fonts" || (mode === "fonts" && closed === 5) ? lapse(5_000) : true,
       setDefaultTimeout: noop,
-      waitForLoadState: async () => (/^asset(-dom)?$/.test(mode) ? stall() : undefined),
+      waitForLoadState: async () => (/^(asset(-dom)?|load)$/.test(mode) ? stall() : undefined),
       goto: async (href, { waitUntil } = {}) => {
         url = href;
         const status = consumed.has(cookie) ? 302 : 200;
@@ -115,7 +115,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
           void request(href, true, async () => response);
           throw navError;
         }
-        if (dom) await request(href, true, async () => response);
+        if (dom || mode === "load") await request(href, true, async () => response);
         if (closed !== 5 || !/^(document|asset|disallowed)/.test(mode)) return response;
         if (mode === "document") void request(href, true, stall);
         else {
