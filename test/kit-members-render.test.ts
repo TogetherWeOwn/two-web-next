@@ -17,6 +17,10 @@ import { parseActivityParam } from "../src/leaderboards/members";
 import { boardPeriodHarness, compileBoardPeriodKit } from "./helpers/member-board-period-shortcuts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+const testRequire = createRequire(import.meta.url);
+const { memberBoardStatus } = testRequire("../ci/kit-parity-gates.mjs") as {
+  memberBoardStatus: (html: string, allowEnded: boolean) => string | null;
+};
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
 const { compile } = webRequire("svelte/compiler") as {
   compile: (
@@ -185,10 +189,7 @@ describe("Kit member board render", () => {
     expect(html).toContain(`name="activity" type="text" value="${activityInput}"`);
   });
 
-  it("distinguishes an empty game from an outage and offers no-JS recovery", async () => {
-    const { memberBoardStatus } = (await import(
-      new URL("../ci/kit-parity-gates.mjs", import.meta.url).href
-    )) as { memberBoardStatus: (html: string, allowEnded: boolean) => string | null };
+  it("distinguishes an empty game from an outage and offers no-JS recovery", () => {
     const data = baseData({ season: "2000-02", activity: "valheim", rows: [] });
     const html = renderPage(data);
     expect(html).toContain('aria-label="Season elapsed" max="29" value="29"');
