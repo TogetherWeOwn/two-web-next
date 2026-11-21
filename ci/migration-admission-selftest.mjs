@@ -225,10 +225,20 @@ test("db-migrate admits staging and production through one explicit gate before 
       "PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: ${{ steps.production-scope.outputs.pending_tags }}",
     ),
   );
-  for (const mode of ["plan", "apply", "verify"])
-    assert.ok(dbMigrate.includes(`node ci/db-migrate.mjs ${mode}`));
-  for (const mode of ["apply", "verify"])
+  for (const mode of ["plan", "apply", "verify", "verify-scope"])
+    assert.ok(dbMigrate.includes(`node ci/db-migrate.mjs ${mode}\n`));
+  for (const mode of ["apply", "verify", "verify-scope"])
     assert.ok(dbMigrate.includes(`node ci/db-migrate.mjs ${mode}\n        env: *migration-env`));
+  for (const [target, mode] of [
+    ["staging", "verify"],
+    ["production", "verify-scope"],
+  ]) {
+    assert.ok(
+      dbMigrate.includes(
+        `if: \${{ inputs.target == '${target}' }}\n        run: node ci/db-migrate.mjs ${mode}\n`,
+      ),
+    );
+  }
 });
 
 test("production scope comes only from the protected Environment API", (t) => {

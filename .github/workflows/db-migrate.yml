@@ -134,5 +134,10 @@ jobs:
         run: node ci/db-migrate.mjs apply
         env: *migration-env
       - name: Post-check zero pending web migrations
+        if: ${{ inputs.target == 'staging' }}
         run: node ci/db-migrate.mjs verify
+        env: *migration-env
+      - name: Read back the approved production range (not a release gate)
+        if: ${{ inputs.target == 'production' }}
+        run: node ci/db-migrate.mjs verify-scope
         env: *migration-env
