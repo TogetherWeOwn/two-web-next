@@ -35,6 +35,33 @@ describe("live guild sequence", () => {
     expect(sequence.current).toEqual({ seq: 6, state: "fresh" });
   });
 
+  it("requires observation freshness independently of the cursor and never renews it on a delta", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      const load = loadFixture()
+        .mockResolvedValueOnce({ seq: 5, state: "expired", validUntil: 10_000 })
+        .mockResolvedValueOnce({ seq: 5, state: "fresh", validUntil: 10_050 })
+        .mockResolvedValueOnce(null);
+      const write = vi.fn();
+      const sequence = new LiveSequence(load, append, {
+        initial: { applied: 0, minimum: 0 },
+        write,
+      });
+      expect(await sequence.ingest(5, "first")).toBe("unavailable");
+      expect(sequence.current).toBeNull();
+      expect(write.mock.calls).toEqual([[{ applied: 0, minimum: 5 }]]);
+      expect(await sequence.ingest(5, "same cursor")).toBe("resynced");
+      clock.mockReturnValue(10_049);
+      expect(await sequence.ingest(6, " delta")).toBe("applied");
+      expect(sequence.current).toEqual({ seq: 6, state: "fresh delta", validUntil: 10_050 });
+      clock.mockReturnValue(10_050);
+      expect(sequence.current).toBeNull();
+      expect(await sequence.ingest(7, "too late to reduce")).toBe("unavailable");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("rejects invalid sequence numbers before touching state or pulling a snapshot", async () => {
     const load = loadFixture();
     const sequence = new LiveSequence(load, append);

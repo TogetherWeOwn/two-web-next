@@ -145,7 +145,7 @@ const leave = (id) => ({ topic: "voice", op: "remove", id });
 const unavailable = { v: 1, type: "unavailable", topic: "voice" };
 const projected = (type, seq, count) => ({ v: 1, type, topic: "voice", seq, value: { count } });
 
-function snapshot(seq, count) {
+function snapshot(seq, count, observedAt = new Date().toISOString()) {
   const room = (id, overwrites) => ({
     id,
     name: "Fixture room",
@@ -158,7 +158,7 @@ function snapshot(seq, count) {
     v: 1,
     guild_id: guild,
     seq,
-    observed_at: at,
+    observed_at: observedAt,
     topics: {
       guild: { ownerId: people[0], afkChannelId: null },
       channels: [
@@ -218,10 +218,13 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
     headers: { Origin: appOrigin },
   });
   const frames = [];
-  socket.addEventListener("message", ({ data }) => frames.push(JSON.parse(data)));
+  socket.addEventListener("message", ({ data }) => frames.push({ data, at: Date.now() }));
   const expectFrame = async (want, timeout = 5_000) => {
     if (!frames.length) await once(socket, "message", { signal: AbortSignal.timeout(timeout) });
-    assert.deepEqual(frames.shift(), want);
+    const { data, at } = frames.shift();
+    assert.equal(typeof data, "string");
+    assert.deepEqual(JSON.parse(data), want);
+    return at;
   };
   const command = (type) => JSON.stringify({ v: 1, type, topics: ["voice"] });
   const send = (type) => socket.send(command(type));
@@ -261,7 +264,10 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
 
     assert.equal(await ingest(origin, 46, leave("106")), 409, "reject a behind snapshot");
     await expectFrame(unavailable);
-    const beforeWake = await source(snapshot(46, 5));
+    await source(snapshot(46, 5, new Date(Date.now() - 60_000).toISOString()));
+    assert.equal(await ingest(origin, 46, leave("106")), 409, "reject a stale covering snapshot");
+    const covering = snapshot(46, 5);
+    const beforeWake = await source(covering);
     assert.equal(await ingest(origin, 46, leave("106")), 204, "recover from a covering snapshot");
     await expectFrame(projected("snapshot", 4, 5));
     assert.equal(await source(), beforeWake);
@@ -288,8 +294,17 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
     assert.equal(await ingest(origin, 48, setRoom([])), 204);
     await expectFrame(projected("patch", 7, 5));
 
-    // No caller touches the Worker while waiting: only the source alarm can clear it.
-    await expectFrame(unavailable, 40_000);
+    // Keep the hub warm to isolate the lease alarm from constructor invalidation.
+    const expiresAt = Date.parse(covering.observed_at) + 30_000;
+    assert.equal(await ingest(origin, 49, join("106", "11")), 204);
+    while (Date.now() + 4_000 < expiresAt) {
+      await delay(4_000);
+      assert.equal(await source(), beforeWake + 1, "the hub must stay warm through lease expiry");
+    }
+    const receivedAt = await expectFrame(unavailable, 8_000);
+    assert.ok(receivedAt >= expiresAt, "the alarm must not clear the baseline early");
+    assert.ok(receivedAt < expiresAt + 8_000, "restricted ingress must not renew the lease");
+    assert.equal(await source(), beforeWake + 1);
     assert.equal(socket.readyState, WebSocket.OPEN, "source expiry is not connection expiry");
     console.log(
       "PASS installed Kit live counts, silence, fan-out revocation, gap recovery, hibernation, and lease expiry",
