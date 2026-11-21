@@ -16,7 +16,8 @@ const source = await readFile(route, "utf8");
 const desktop = { width: 1280, height: 800 };
 const headerCss = "/kit-site-header.css";
 
-async function assertLockup(page, height) {
+async function assertLockup(page, narrow, desktopHeight = 50) {
+  const height = narrow ? 32 : desktopHeight;
   const logo = page.locator("[data-kit-site-header] .brand img:visible");
   await expect(logo).toHaveCount(1);
   await expect(logo).toHaveAttribute("src", "/logo.svg");
@@ -60,14 +61,14 @@ async function checkStandaloneHeader(page, html) {
     ]);
     assert.equal(css.status(), 200);
     assert.match(css.headers()["content-type"], /^text\/css\b/);
-    await assertLockup(page, 50);
+    await assertLockup(page, false);
     await shot(page, "standalone-desktop-1280");
     await page.setViewportSize(mobile);
-    await assertLockup(page, 32);
+    await assertLockup(page, true);
     await shot(page, "standalone-mobile-390");
     await menu(page, "link").click();
     await expect(page.getByRole("link", { name: "Close menu" })).toBeVisible();
-    await assertLockup(page, 32);
+    await assertLockup(page, true);
     await shot(page, "standalone-mobile-open-390");
   } finally {
     await page.unroute(standaloneUrl);
@@ -79,9 +80,10 @@ test("built Ember shell preserves its landmarks and account states without JavaS
 }, async () => {
   await mkdir("artifacts/kit-ember-shell", { recursive: true });
   for (const state of ["guest", "member", "hidden"]) {
+    const search = state === "member" ? member : `?state=${state}`;
     await withKitOfflineBrowser(
-      { page: source, search: state === "member" ? member : `?state=${state}` },
-      async ({ page, html }) => {
+      { page: source, search, searches: ["?legacy=1"] },
+      async ({ page, html, open }) => {
         assert.match(html, /_app\/immutable\/assets\/[^" ]+\.css/);
         assert.equal(await page.locator('a[href="#main"]').count(), 1);
         assert.equal(
@@ -112,7 +114,7 @@ test("built Ember shell preserves its landmarks and account states without JavaS
           await page.setViewportSize(viewport);
           const header = page.getByRole("banner");
           const compact = viewport === mobile;
-          await assertLockup(page, compact ? 32 : 38);
+          await assertLockup(page, compact, 38);
           await expect(header).toHaveCSS("min-height", compact ? "60px" : "68px");
           await expect(header).toHaveCSS("position", "sticky");
           await expect(header.getByRole("link", { name: "Join", exact: true })).toHaveCount(
@@ -207,7 +209,7 @@ test("built Ember shell preserves its landmarks and account states without JavaS
             await expect(sheet).toBeHidden();
           }
         }
-        if (state === "guest") await checkStandaloneHeader(page, html);
+        if (state === "guest") await checkStandaloneHeader(page, await open("?legacy=1"));
       },
     );
   }
