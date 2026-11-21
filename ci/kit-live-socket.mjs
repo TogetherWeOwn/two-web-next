@@ -470,11 +470,11 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
           assert.ok(early.at >= sessionExpiry - idleMember.upgradeMs - 2);
           assert.ok(early.at <= idleMember.at && early.at < expiresAt);
           assert.ok(voiceAlarm.at >= expiresAt, "cold alarm re-arms the original voice deadline");
-          // The wire peer doesn't auto-reply like Undici. Finish its close
-          // handshake before the remaining trials measure idle reconstruction.
+          // Flush the masked Close reply, then disconnect this fixture peer
+          // without depending on the upgraded transport to send a TCP FIN.
           const mask = randomBytes(4);
-          const close = once(idleMember.socket, "close", deadline());
-          idleMember.socket.end(
+          const close = awaitEvent(idleMember.socket, "close", "cold session peer teardown");
+          idleMember.socket.write(
             Buffer.from([
               0x88,
               0x82,
@@ -483,6 +483,7 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
               idleMember.first[3] ^ mask[1],
             ]),
           );
+          idleMember.socket.destroySoon();
           await close;
         }
         assert.equal(
