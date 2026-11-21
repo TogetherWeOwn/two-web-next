@@ -2595,10 +2595,23 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
   const hash = createHash("sha256").update(bearer).digest("hex");
   const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
   const now = Date.now();
+  const start = new Date(now - 3_600_000);
   const end = new Date(now + 3_600_000);
+  const zone = "America/New_York";
+  const localDate = new Intl.DateTimeFormat("en-GB", {
+    timeZone: zone,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(start);
+  const endClock = new Intl.DateTimeFormat("en-GB", {
+    timeZone: zone,
+    timeStyle: "short",
+  }).format(end);
   const path = `/e/${key}?attendees=1`;
+  const deviceZone = "Asia/Tokyo";
   const plain = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
-  const enhanced = await browser.newContext({ baseURL: target.origin });
+  const enhanced = await browser.newContext({ baseURL: target.origin, timezoneId: deviceZone });
   async function assertMobileSeatOrder(page: Page) {
     const time = page.locator(".event-layout-head > [data-testid=kit-event-time]:last-child");
     const seat = page.locator(
@@ -2607,6 +2620,15 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
     await expect(seat).toBeVisible();
     const [block, card] = await Promise.all([time.boundingBox(), seat.boundingBox()]);
     expect(card!.y).toBeGreaterThanOrEqual(block!.y + block!.height);
+  }
+  async function assertScheduledTime(page: Page) {
+    const time = page.getByTestId("kit-event-time");
+    const ends = time.locator("p", { hasText: /^Ends / });
+    await expect(time.getByText(localDate, { exact: true })).toBeVisible();
+    await expect(ends).toContainText(`${endClock} ${zone}`);
+    await expect(ends.locator("time")).toHaveAttribute("datetime", end.toISOString());
+    await expect(page.locator(`time[datetime="${end.toISOString()}"]:visible`)).toHaveCount(1);
+    return ends;
   }
   async function capture(page: Page, name: string) {
     const size = page.viewportSize()?.width === 390 ? "40px" : "89.6px";
@@ -2620,9 +2642,9 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
       await sql`insert into users (id, username, member) values (${userId}, 'Seat fixture', true)`;
       await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
         values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(now + 7_200_000)})`;
-      await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, rsvp_open)
+      await sql`insert into events (event_key, title, description, starts_at, ends_at, timezone, location, status, rsvp_open)
         values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
-          ${new Date(now - 3_600_000)}, ${end}, 'Community voice', 'published', true)`;
+          ${start}, ${end}, ${zone}, 'Community voice', 'published', true)`;
     });
     const noJs = await plain.newPage();
     const guest = await noJs.goto(path);
@@ -2645,9 +2667,12 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
       if (viewport.width === 390) await assertMobileSeatOrder(noJs);
       const rsvp = noJs.getByRole("button", { name: "I'm in", exact: true });
       await expect(rsvp).toBeEnabled();
+      await expect(noJs.getByTestId("kit-seat-card").locator("form")).toHaveAttribute(
+        "action",
+        `/e/${key}/rsvp`,
+      );
       await rsvp.scrollIntoViewIfNeeded();
-      const ends = noJs.locator("p:visible", { hasText: /^Ends / }).last();
-      await expect(ends.locator("time")).toHaveAttribute("datetime", end.toISOString());
+      const ends = await assertScheduledTime(noJs);
       await expect(ends).toBeInViewport();
       const ordered = await ends.evaluate((line) => {
         const button = document.querySelector('[data-testid="rsvp-going"]')!;
@@ -2680,7 +2705,7 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
       const seat = noJs.getByTestId("kit-seat-card");
       await expect(noJs.getByTestId("event-ongoing")).toHaveText("Live");
       await expect(time.locator("[data-live-fresh]:visible").last()).toHaveText("as of");
-      await expect(time.locator("time").last()).toHaveAttribute("datetime", end.toISOString());
+      await assertScheduledTime(noJs);
       await expect(seat.getByRole("heading", { name: "You're in." })).toBeVisible();
       await expect(seat.getByTestId("rsvp-synced")).toHaveText("Synced to Discord.");
       await expect(seat.getByRole("button").or(seat.getByRole("link"))).toHaveCount(0);
@@ -2708,15 +2733,23 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
     }, deadline);
     expect(hidden).toEqual([false, true]);
     await expect(page.locator("[data-live-fresh]:visible")).toHaveCount(0);
-    await expect(page.getByText("Stale", { exact: true })).toHaveCount(2);
+    await expect(
+      page.locator("[data-live-stale]:visible").getByText("Stale", { exact: true }),
+    ).toHaveCount(3);
     await expect(page.getByRole("link", { name: "Refresh the event time" })).toHaveAttribute(
       "href",
       `${target.origin}${path}`,
     );
     await expect(page.getByTestId("rsvp-synced")).toBeVisible();
-    await expect(page.getByTestId("kit-event-time").getByText("live as of")).toBeVisible();
+    const time = page.getByTestId("kit-event-time");
+    await expect(time.getByText("live as of")).toBeVisible();
+    const asOf = (await page.locator("#kit-live-snapshot").getAttribute("data-as-of"))!;
+    await expect(time.locator(`time[datetime="${asOf}"]`)).toBeVisible();
     for (const { size: viewport } of PARITY_VIEWPORTS) {
       await page.setViewportSize(viewport);
+      if (viewport.width === 390) await assertMobileSeatOrder(page);
+      await assertScheduledTime(page);
+      await expect(time.getByText("Stale", { exact: true })).toBeInViewport();
       await capture(page, `kit-review-event-stale-${viewport.width}`);
     }
     const refreshed = page.waitForResponse(
@@ -2727,7 +2760,13 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
     expect((await refreshed).headers()["cache-control"]).toBe("private, no-store");
     await expect(live).toBeVisible();
     await page.getByTestId("event-device-timezone-ends-button").click();
-    await expect(page.getByTestId("event-device-timezone-ends-status")).not.toBeEmpty();
+    const deviceEnd = new Intl.DateTimeFormat("en-GB", {
+      timeZone: deviceZone,
+      timeStyle: "short",
+    }).format(end);
+    await expect(page.getByTestId("event-device-timezone-ends-status")).toContainText(
+      `${deviceEnd} GMT+09:00 (${deviceZone})`,
+    );
     await page.addInitScript(() => {
       Date.now = () => 1;
     });
