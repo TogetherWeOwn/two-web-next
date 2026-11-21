@@ -255,7 +255,8 @@ in `src/join/service.ts`, shared by the profile path) judges and records
 first, then prunes expired rows after every verdict, admitted or refused
 (a throttle-admitted profile write still prunes before the owner check can
 refuse it). Both prunes are bounded by
-`THROTTLE_COUNTER_RETENTION_MINUTES = 5`. `test/member-erasure-coverage.test.ts`
+`THROTTLE_COUNTER_RETENTION_MINUTES = 5` in `src/http/throttle.ts`.
+`test/member-erasure-coverage.test.ts`
 pins this: it fails on any new member-keyed column or `*-write:${...}` bucket
 that is neither erased above nor documented here with its own deletion proof.
 `test/privacy-deletion-exceptions.test.ts` pins the public Deletion wording:
