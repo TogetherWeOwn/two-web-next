@@ -24,10 +24,10 @@ test("the independent browser fixture remains selected and fail-closed in ci-ok"
   const command =
     "node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs";
   const fixtureStep = job.split("\n      - name: Kit disposable browser fixture\n")[1];
-  const parityStep = `if: matrix.fixture == 'parity'\n        run: ${command}`;
-  assert.equal(fixtureStep?.split("\n      - ")[0]?.trim(), parityStep);
-  assert.match(job, /fixture: \[parity, lifeline\]/);
+  assert.equal(fixtureStep?.split("\n      - ")[0]?.trim(), `run: ${command}`);
+  assert(job.includes("ref: ${{ github.sha }}"));
   assert(job.includes("run: node --test ci/kit-lifeline-browser.test.mjs"));
+  assert.match(job, /name: kit-lifeline-\$\{\{ github\.sha \}\}-\$\{\{ github\.run_attempt \}\}/);
   assert.doesNotMatch(job, /continue-on-error:/);
   assert(!checkJob.includes(command));
   assert.match(ok, /KIT_BROWSER_RESULT: \$\{\{ needs\.kit-browser-fixture\.result \}\}/);
