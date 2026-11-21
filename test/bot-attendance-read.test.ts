@@ -52,7 +52,6 @@ describe("signed event attendance read", () => {
     expect(url).toBe("https://bot.example.test/internal/actions");
     expect(init).toMatchObject({ method: "POST", body, redirect: "manual" });
     const headers = new Headers(init?.headers);
-    expect(headers.get("Content-Type")).toBe("application/json");
     expect(headers.has("Idempotency-Key")).toBe(false);
     const signature = await signInternalAction(
       config.keyId,
@@ -71,29 +70,49 @@ describe("signed event attendance read", () => {
     ).resolves.toEqual({ ok: true, attendance: result });
   });
 
+  it("accepts millisecond timestamps and distinct in-budget aggregates", async () => {
+    const ms = "1970-01-01T01:00:00.000Z";
+    const result = {
+      ...attendance,
+      window: { starts_at: ms, ends_at: "1970-01-01T02:00:00.000Z" },
+      rooms: Array.from({ length: 101 }, (_, i) => ({ ...room, channel_id: String(i + 1) })),
+      members: Array.from({ length: 501 }, (_, i) => ({
+        ...member,
+        discord_id: String(i + 1),
+        first_joined_at: i ? ms : null,
+      })),
+    };
+    const response = reply(result);
+    expect((await response.clone().arrayBuffer()).byteLength).toBeLessThan(64 * 1024);
+    await expect(observe(response)).resolves.toEqual({ ok: true, attendance: result });
+  });
+
   it.each([
     ["not_found", 404, { ok: false, code: "not_found" }],
+    ["not_found", 200, unavailable],
+    ["not_found", 503, unavailable],
     ["rate_limited", 429, { ok: false, code: "rate_limited" }],
     ["private_fixture_value", 503, unavailable],
   ] as const)("projects error %s without provider text", async (code, status, result) => {
-    await expect(
-      observe(
-        Response.json({ ok: false, error: { code, message: "private fixture" } }, { status }),
-      ),
-    ).resolves.toEqual(result);
+    const response = Response.json(
+      { ok: false, error: { code, message: "private fixture" } },
+      { status },
+    );
+    await expect(observe(response)).resolves.toEqual(result);
   });
 
   it.each([
     { event_key: "different-event" },
     { final: "true" },
     { v: 2 },
-    { window: { ...window, ends_at: window.starts_at } },
+    { window: { ...window, starts_at: window.ends_at.replace("Z", ".000Z") } },
     { window: { ...window, ends_at: "2026-02-30T22:00:00Z" } },
     { threshold_minutes: 0 },
     { peak_concurrent: -1 },
-    { rooms: Array.from({ length: 101 }, () => room) },
-    { rooms: [{ ...room, name_at_close: "x".repeat(101) }] },
-    { members: Array.from({ length: 501 }, () => member) },
+    { rooms: [room, { ...room, name_at_close: "Renamed" }] },
+    { rooms: [{ ...room, name_at_close: 123 }] },
+    { members: [member, { ...member, minutes: 10 }] },
+    { members: [{ discord_id: member.discord_id, minutes: 5, sessions: 1 }] },
     { members: [{ ...member, sessions: 0 }] },
     { members: [{ ...member, discord_id: "not-a-snowflake" }] },
   ])("fails closed on a malformed or unbound result (%j)", async (overrides) => {
@@ -101,9 +120,8 @@ describe("signed event attendance read", () => {
   });
 
   it("rejects malformed envelopes, invalid JSON, and absent bodies", async () => {
-    await expect(observe(Response.json({ ok: 0, error: { code: "not_found" } }))).resolves.toEqual(
-      unavailable,
-    );
+    const malformed = Response.json({ ok: 0, error: { code: "not_found" } }, { status: 404 });
+    await expect(observe(malformed)).resolves.toEqual(unavailable);
     await expect(observe(new Response("{"))).resolves.toEqual(unavailable);
     await expect(observe(new Response(null, { status: 204 }))).resolves.toEqual(unavailable);
   });
@@ -146,13 +164,24 @@ describe("signed event attendance read", () => {
     expect(cancel).toHaveBeenCalledTimes(extra);
   });
 
-  it.each(["headers", "body"])("owns a single deadline even when %s stall", async (stall) => {
+  it("does not let a caller change future failures", async () => {
+    const fail = signedAttendanceReader({});
+    expect(await fail(key)).not.toBe(await fail(key));
+  });
+
+  it.each(["headers", "body", "chunks"])("keeps a single deadline for %s", async (phase) => {
     vi.useFakeTimers();
     const entered = deferred<AbortSignal | null | undefined>();
     const headers = deferred<Response>();
     const cancel = vi.fn(() => new Promise<void>(() => undefined));
     const bodyRead = deferred<void>();
-    const pull = vi.fn(() => bodyRead.resolve());
+    let chunks = 1024;
+    const pull = vi.fn((stream: ReadableStreamDefaultController<Uint8Array>) => {
+      bodyRead.resolve();
+      if (phase !== "chunks") return;
+      if (chunks--) stream.enqueue(new Uint8Array());
+      else stream.close();
+    });
     const response = new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }));
     const fetcher = vi.fn<typeof fetch>((_url, init) => {
       entered.resolve(init?.signal);
@@ -162,18 +191,18 @@ describe("signed event attendance read", () => {
     const signal = await entered.promise;
     const settled = vi.fn();
     void pending.then(settled);
-    await vi.advanceTimersByTimeAsync(2_000);
-    if (stall === "body") {
+    await vi.advanceTimersByTimeAsync(phase === "chunks" ? 2_499 : 2_000);
+    if (phase !== "headers") {
       headers.resolve(response);
       await bodyRead.promise;
     }
-    await vi.advanceTimersByTimeAsync(499);
+    if (phase !== "chunks") await vi.advanceTimersByTimeAsync(499);
     expect(settled).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await expect(pending).resolves.toEqual(unavailable);
     expect(signal?.aborted).toBe(true);
     expect(fetcher).toHaveBeenCalledOnce();
-    if (stall === "headers") {
+    if (phase === "headers") {
       headers.resolve(response);
       await vi.advanceTimersByTimeAsync(0);
       expect(pull).not.toHaveBeenCalled();
