@@ -643,7 +643,8 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
   const kitJoin = contract === "join" && expected.marker === "kit";
   const signIn =
     /<a\b(?=[^>]*\shref="\/auth\/discord")(?=[^>]*\saria-label="Sign in with Discord")[^>]*>\s*Sign in\s*<\/a>/;
-  if (kitJoin ? guestCaption || !signIn.test(html) : !guestCaption)
+  const siteHeader = /<header\b[^>]*\sdata-kit-site-header(?=[\s=>])[^>]*>[\s\S]*?<\/header>/;
+  if (kitJoin ? guestCaption || !signIn.test(siteHeader.exec(html)?.[0] ?? "") : !guestCaption)
     failures.push(`${label}: guest account chrome`);
   // Check the logout control, not copy that may appear in guest content.
   if (/<form\b[^>]*\saction="\/logout(?:\/everywhere)?"/i.test(html))
@@ -1389,10 +1390,12 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // Join landing fixtures: one per widget state plus the one-shot flash view.
   // The flash view is the privacy pin: a consumed flash answers private, so a
   // guest can never read another member's banner from a shared cache.
+  const joinSignIn = '<a href="/auth/discord" aria-label="Sign in with Discord">Sign in</a>';
+  const joinChrome = joinMarker === "kit" ? joinSignIn : "<p>Welcome, guest</p>";
   const joinShell = (inner) =>
     `<html><head><link rel="canonical" href="https://next.togetherweown.com/join"></head>` +
     `<body><a class="skip-link" href="#main">Skip</a>` +
-    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<header data-kit-site-header><nav aria-label="Primary"><a href="/">Home</a></nav>${joinChrome}</header>` +
     `<main id="main"><section class="join-layout" aria-labelledby="join-heading">` +
     `<div class="join-panel"><h1 id="join-heading">Join Together We Own</h1>` +
     `<p class="join-actions"><a class="btn" href="/join/discord" data-testid="join-oneclick">` +
@@ -1400,9 +1403,6 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     `<a href="https://discord.gg/invite" data-testid="join-invite">` +
     `Join with an invite link instead</a></p></div>` +
     `<div class="join-preview">${inner}</div></section></main>` +
-    (joinMarker === "kit"
-      ? '<a href="/auth/discord" aria-label="Sign in with Discord">Sign in</a>'
-      : '<p><span class="account-caption">Welcome, guest</span></p>') +
     "</body></html>";
   const joinFacade =
     `<div class="strap"><p>Discord's live server preview loads only when you ask for it.</p>` +
@@ -1474,7 +1474,11 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     ["both-zones", (html) => html.replace("</div></section>", `</div>${joinFallback}</section>`)],
     ["presence-without-facade", (html) => html.replace(joinFacade, "")],
     ["no-oneclick", (html) => html.replace('data-testid="join-oneclick"', 'data-testid="x"')],
-    ["no-guest-chrome", (html) => html.replace(/\/auth\/discord|Welcome, guest/, "")],
+    ["no-guest-chrome", (html) => html.replace(joinChrome, "")],
+    [
+      "sign-in-outside-header",
+      (html) => html.replace(joinChrome, "").replace("</main>", `</main>${joinSignIn}`),
+    ],
     ["logout-control", (html) => html.replace("</body>", '<form action="/logout"></form></body>')],
     [
       "hostile-next",
