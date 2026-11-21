@@ -4,6 +4,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+    inputs:
+      before_sha:
+        description: Full commit SHA for the before capture (defaults to the historical baseline)
+        type: string
+        default: fcc8df5378cb76faaf2717677d16261efbe09f63
 
 permissions:
   contents: read
@@ -53,7 +58,7 @@ jobs:
       - name: Check out original app
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: fcc8df5378cb76faaf2717677d16261efbe09f63
+          ref: ${{ inputs.before_sha || 'fcc8df5378cb76faaf2717677d16261efbe09f63' }}
           path: before
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -63,10 +68,11 @@ jobs:
       - name: Verify immutable checkouts
         env:
           FINAL_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BEFORE_SHA: ${{ inputs.before_sha || 'fcc8df5378cb76faaf2717677d16261efbe09f63' }}
         run: |
           test "$(git -C tooling rev-parse HEAD)" = 5ab8dbbef925d03f19809963c06e7edd04032bee
           test "$(git -C after rev-parse HEAD)" = "$FINAL_SHA"
-          test "$(git -C before rev-parse HEAD)" = fcc8df5378cb76faaf2717677d16261efbe09f63
+          test "$(git -C before rev-parse HEAD)" = "$BEFORE_SHA"
       - name: Install locked dependencies
         run: |
           for app in tooling before after; do

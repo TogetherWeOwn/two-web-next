@@ -1,7 +1,10 @@
 <script lang="ts">
 import "./home-presentation.css";
+import "./home-ember.css";
+import Button from "#lib/Button.svelte";
+import EmberFooter from "#lib/EmberFooter.svelte";
 import JsonLd from "#lib/JsonLd.svelte";
-import Shell from "#lib/Shell.svelte";
+import SiteMetadata from "#lib/SiteMetadata.svelte";
 import { seatAvailability } from "../../../src/events/pages-calendar-row";
 import type { HomeUpcomingRow } from "../../../src/events/reads";
 import { groupTeaserEvents } from "../../../src/events/teaser-groups";
@@ -19,11 +22,7 @@ import { siteJsonLd } from "../../../src/seo-json-ld";
 import type { PageProps } from "./$types";
 import "./home-join-band.css";
 
-// Markup contract of Home (src/screens/home.tsx): session-aware header,
-// notice slot, hero, counts, featured, community panels, ladder, events and
-// site JSON-LD are shared, so the existing homepage tests still apply. Panel
-// data comes from the shared readers via +page.server.ts — never recomputed
-// here — and copy comes from src/home-copy, never a pasted sentence.
+// Home chrome renders only the public panels and viewer-specific data supplied by the load.
 let { data }: PageProps = $props();
 const {
   session,
@@ -63,34 +62,52 @@ const nextOwnEvent = $derived(
         .sort((a, b) => a.event.startsAt.getTime() - b.event.startsAt.getTime())[0]
     : undefined,
 );
+// The published teaser feed is ordered by start time.
+const heroRsvp = $derived(!sessionUnavailable && !eventsUnavailable ? nextOwnEvent : undefined);
+const heroEvent = $derived(
+  eventsUnavailable
+    ? undefined
+    : (heroRsvp?.event ??
+        upcomingEvents.find((event: HomeUpcomingRow) => event.startsAt > renderTime)),
+);
 </script>
 
-{#snippet guestChrome()}
-  <div>
-    <span class="account-caption">Welcome, guest</span>
-    <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
-  </div>
+{#snippet primaryLinks()}
+  <nav aria-label="Primary">
+    <a href="/events">Events</a>
+    {#if session?.member}<a href="/leaderboards/members">Leaderboard</a>{/if}
+    <a href="/about">About</a>
+  </nav>
 {/snippet}
 
-{#snippet memberChrome()}
-  <form method="post" action="/logout">
-    <span class="account-caption">Signed in</span>
-    <span class="who">{session?.username}</span>
-    <button type="submit" class="link">Sign out</button>
-  </form>
+{#snippet homeHeader()}
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="ember-home-top" data-kit-site-header>
+    <div class="ember-home-row">
+      <a href="/" aria-current="page"><img src="/logo.svg" width="140" height="39" alt="Together We Own" /></a>
+      <div class="ember-home-desktop">{@render primaryLinks()}</div>
+      <nav class="ember-home-account" aria-label="Account">
+        {#if session}
+          <form method="post" action="/logout">
+            <span class="sr-only">Signed in</span>
+            <span class="who">{session.username}</span>
+            <Button size="sm" type="submit">Sign out</Button>
+          </form>
+        {:else}
+          <span class="sr-only">Welcome, guest</span>
+          <a href="/auth/discord" aria-label="Sign in with Discord" data-testid="signin">Sign in</a>
+          <Button size="sm" variant="primary" href={sessionUnavailable ? "/discord" : "/join"}>Join</Button>
+        {/if}
+      </nav>
+      <details class="ember-home-menu">
+        <summary>Menu</summary>
+        {@render primaryLinks()}
+      </details>
+    </div>
+  </header>
 {/snippet}
 
-<Shell
-  restoredWrite={data.restoredWrite}
-  title="The lobby is open"
-  exactTitle="Together We Own — the lobby is open"
-  {canonical}
-  description="We spent most of our life private. Now you can just turn up."
-  theme="home"
-  activeNav="home"
-  member={session?.member ?? false}
-  accountChrome={session ? memberChrome : guestChrome}
->
+{#snippet homeContent()}
   {#if joinResult}
     <p class="notice" role="status" data-testid="join-result">
       {#if joinResult === "added"}
@@ -109,37 +126,64 @@ const nextOwnEvent = $derived(
     {/if}
   {/if}
   <section class="hero kit-home" aria-labelledby="home-heading">
-    <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
-    <h1 id="home-heading">The lobby is open.</h1>
-    <div class="hero-action">
-      {#if sessionUnavailable}
-        <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
-      {:else if session?.member}
-        <a class="btn" href={inviteUrl}>Open Discord</a>
-      {:else}
-        <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
-      {/if}
-      <p class="lead">We spent most of our life private. Now you can just turn up.</p>
-    </div>
-    {#if !session && !sessionUnavailable && eventsUnavailable}
-      <p>
-        <a href="/discord" data-testid="discord-join">Join with an invite link instead</a>
-      </p>
-    {/if}
-    {#if notice === "join_failed"}
-      <p>
-        <a href={inviteUrl}>Join with an invite link instead</a>
-      </p>
-    {/if}
-    {#if countsSnapshot}
-      <p class="counts" data-testid="member-count" data-stale={countsSnapshot.stale}>
-        <strong>{countsSnapshot.memberCount}</strong> members{#if countsSnapshot.onlineCount != null}
-          {" · "}<strong>{countsSnapshot.onlineCount}</strong> online{/if}
-        {#if countsSnapshot.stale}
-          {" · Last seen "}<time datetime={countsSnapshot.observedAt}>{countsSnapshot.observedAt.replace("T", " ").replace("Z", " UTC")}</time>
+    <div>
+      <p class="ember-home-label">A close-knit gaming clan / mostly evenings / 18+</p>
+      <h1 id="home-heading">
+        {#if heroEvent}
+          {heroRsvp ? "Your next RSVP:" : "Next game night:"} <em>{heroEvent.title}</em>.
+          <span>{heroRsvp ? goingAnnouncementText(heroRsvp.status) : "Come play with us."}</span>
+        {:else}
+          The lobby is <em>open</em>.
         {/if}
-      </p>
-    {/if}
+      </h1>
+      <div class="hero-action">
+        {#if sessionUnavailable}
+          <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
+          <p class="lead">Sign-in is unavailable right now. The invite still works.</p>
+        {:else if session?.member}
+          <a class="btn" href={inviteUrl}>Open Discord</a>
+          <p class="lead">Catch up with the clan in Discord.</p>
+        {:else}
+          <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
+          <p class="lead">{session ? "You're signed in. Join the server to play with us." : "We spent most of our life private. Now you can just turn up."}</p>
+        {/if}
+      </div>
+      {#if !session && !sessionUnavailable && eventsUnavailable}
+        <p><a href="/discord" data-testid="discord-join">Join with an invite link instead</a></p>
+      {/if}
+      {#if notice === "join_failed"}
+        <p><a href={inviteUrl}>Join with an invite link instead</a></p>
+      {/if}
+      {#if countsSnapshot}
+        <p class="counts" data-testid="member-count" data-stale={countsSnapshot.stale}>
+          <strong>{countsSnapshot.memberCount}</strong> members{#if countsSnapshot.onlineCount != null}
+            {" · "}<strong>{countsSnapshot.onlineCount}</strong> online{/if}
+          {#if countsSnapshot.stale}
+            {" · Last seen "}<time datetime={countsSnapshot.observedAt}>{countsSnapshot.observedAt.replace("T", " ").replace("Z", " UTC")}</time>
+          {/if}
+        </p>
+      {/if}
+    </div>
+    <aside class="ember-home-panel" aria-labelledby="home-panel-heading">
+      <h2 id="home-panel-heading">{heroRsvp ? "Your next event" : "On the schedule"}</h2>
+      {#if heroEvent}
+        <div class="ember-home-panel-row">
+          <p><strong>{heroEvent.title}</strong></p>
+          <p><time datetime={heroEvent.startsAt.toISOString()}>{cardTimeLabel(heroEvent.startsAt, heroEvent.timezone)} ({isValidZone(heroEvent.timezone) ? heroEvent.timezone : "UTC"})</time></p>
+        </div>
+        {#if heroEvent.source === "discord"}
+          <a href={inviteUrl}>View event in Discord</a>
+        {:else}
+          <a href={`/e/${encodeURIComponent(heroEvent.eventKey)}`}>View event details</a>
+        {/if}
+      {:else}
+        <div class="ember-home-panel-row">
+          <p><strong>{eventsUnavailable ? "Schedule unavailable" : "No upcoming game nights"}</strong></p>
+          <p>Check Discord for updates.</p>
+        </div>
+        <a href="/discord">Find us on Discord</a>
+      {/if}
+    </aside>
   </section>
   {#if featured.length > 0}
     <section aria-labelledby="featured-heading" data-testid="featured-content">
@@ -344,4 +388,20 @@ const nextOwnEvent = $derived(
     </section>
   {/if}
   <JsonLd testid="site-jsonld" json={siteGraph} />
-</Shell>
+{/snippet}
+
+<SiteMetadata
+  title="The lobby is open"
+  exactTitle="Together We Own — the lobby is open"
+  {canonical}
+  description="We spent most of our life private. Now you can just turn up."
+  theme="home"
+/>
+<div class="base-theme homepage-theme ember-home" data-theme="home">
+  {@render homeHeader()}
+  <main class="ember-home-main" id="main" tabindex="-1">
+    {#if data.restoredWrite}<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>{/if}
+    {@render homeContent()}
+  </main>
+  <EmberFooter />
+</div>

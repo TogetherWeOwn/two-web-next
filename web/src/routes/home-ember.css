@@ -1,0 +1,158 @@
+/* The route owns the canvas, header, hero and footer treatment only. */
+:root .base-theme.ember-home {
+  --theme-page: var(--g0);
+}
+.base-theme .ember-home-top {
+  border-bottom: 1px solid var(--color-hair2);
+}
+.base-theme .ember-home-row,
+.base-theme .ember-home-main {
+  max-width: var(--two-layout-container);
+  margin-inline: auto;
+  padding-inline: var(--two-layout-gutter-wide);
+}
+.ember-home-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-height: calc(var(--space-10) - var(--space-1));
+}
+.ember-home-row img {
+  display: block;
+  height: auto;
+}
+.ember-home-row nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+.ember-home-row .ember-home-account {
+  margin-inline-start: auto;
+  gap: var(--space-3);
+}
+.ember-home-account form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.base-theme .ember-home-row .ember-home-account a.primary {
+  color: var(--on-accent);
+}
+.ember-home-menu {
+  display: none;
+}
+.base-theme .ember-home-row nav a:not(.pill),
+.ember-home-menu summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--t2);
+  font-size: var(--text-small);
+}
+.ember-home-row nav[aria-label="Primary"] a {
+  text-decoration: none;
+}
+.ember-home-row nav[aria-label="Primary"] a:hover {
+  text-decoration: underline;
+}
+.ember-home-menu summary {
+  cursor: pointer;
+  padding-inline: var(--space-2);
+  border: 1px solid var(--color-hair2);
+  border-radius: var(--radius-pill);
+}
+.base-theme .ember-home-main .hero.kit-home {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, min(40%, var(--two-layout-hero-panel)));
+  align-items: end;
+  gap: var(--space-9);
+  overflow: visible;
+}
+.base-theme.ember-home .ember-home-main .hero.kit-home h1 {
+  max-width: none;
+  overflow-wrap: anywhere;
+  text-wrap: wrap;
+}
+.ember-home-main .hero h1 em {
+  color: var(--ember);
+  font-family: var(--font-accent);
+  font-weight: var(--font-weight-regular);
+}
+.ember-home-main .hero h1 span {
+  display: block;
+  color: var(--t3);
+}
+.base-theme .ember-home-main .ember-home-label {
+  margin: 0;
+  color: var(--t3);
+  font: var(--text-label) / var(--leading-label) var(--font-data);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+.base-theme .ember-home-main .hero-action .btn {
+  min-height: var(--space-9);
+  font: var(--font-weight-semibold) var(--text-body) / var(--leading-title) var(--font-ui);
+}
+.ember-home-panel {
+  padding: var(--space-5);
+  border: 1px solid var(--color-hair2);
+  border-radius: var(--radius-l);
+  background: var(--g1);
+  overflow-wrap: anywhere;
+}
+.base-theme .ember-home-panel h2 {
+  margin: 0 0 var(--space-6);
+  font-size: var(--text-body);
+  text-transform: none;
+}
+.ember-home-panel-row {
+  padding: var(--space-inset-room);
+  border-radius: var(--radius-m);
+  background: var(--g2);
+}
+.ember-home-panel-row p {
+  margin: 0;
+}
+.ember-home-panel-row strong {
+  color: var(--t1);
+}
+.ember-home-panel > a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+@media (max-width: 820px) {
+  .base-theme .ember-home-row,
+  .base-theme .ember-home-main {
+    padding-inline: var(--two-layout-gutter-compact);
+  }
+  .ember-home-row {
+    min-height: 60px;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .ember-home-row img {
+    width: 116px;
+  }
+  .ember-home-desktop {
+    display: none;
+  }
+  .ember-home-menu {
+    display: block;
+  }
+  .ember-home-menu[open] nav {
+    position: absolute;
+    inset: 100% 0 auto;
+    flex-wrap: wrap;
+    padding: var(--space-2) var(--two-layout-gutter-compact);
+    background: var(--g1);
+    border-bottom: 1px solid var(--color-hair2);
+  }
+  .base-theme .ember-home-row .who {
+    max-width: clamp(3rem, 20vw, 9rem);
+  }
+  .base-theme .ember-home-main .hero.kit-home {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-7);
+  }
+}
