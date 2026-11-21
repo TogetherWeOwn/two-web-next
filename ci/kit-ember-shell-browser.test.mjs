@@ -17,18 +17,18 @@ const desktop = { width: 1280, height: 800 };
 const headerCss = "/kit-site-header.css";
 
 async function assertLockup(page, narrow, desktopHeight = 50) {
-  const height = narrow ? 32 : desktopHeight;
   const logo = page.locator("[data-kit-site-header] .brand img:visible");
   await expect(logo).toHaveCount(1);
   await expect(logo).toHaveAttribute("src", "/logo.svg");
-  await expect(logo).toHaveCSS("height", `${height}px`);
+  await expect(logo).toHaveCSS("height", narrow ? "32px" : `${desktopHeight}px`);
   const { width, loaded } = await logo.evaluate((img) => ({
     width: img.getBoundingClientRect().width,
     loaded: img.complete && img.naturalWidth > 0,
   }));
   assert.ok(loaded, "full lockup image loaded");
-  if (height === 50) assert.equal(width, 180);
-  else assert.ok(Math.abs(width - (height * 180) / 50) < 1, `full lockup width: ${width}px`);
+  if (narrow) assert.ok(width > 114 && width < 117, `full mobile lockup width: ${width}px`);
+  else if (desktopHeight === 50) assert.equal(width, 180);
+  else assert.ok(Math.abs(width - (desktopHeight * 180) / 50) < 1, `full lockup width: ${width}px`);
 }
 
 async function checkStandaloneHeader(page, html) {

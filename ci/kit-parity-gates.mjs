@@ -639,8 +639,13 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
   }
   if (html.includes("Cross-site POST form submissions"))
     failures.push(`${label}: bare Kit CSRF text (must be the hardened gate)`);
+  const guestCaption = html.includes("Welcome, guest");
+  const kitJoin = contract === "join" && expected.marker === "kit";
+  const signIn =
+    /<a\b(?=[^>]*\shref="\/auth\/discord")(?=[^>]*\saria-label="Sign in with Discord")[^>]*>\s*Sign in\s*<\/a>/;
+  if (kitJoin ? guestCaption || !signIn.test(html) : !guestCaption)
+    failures.push(`${label}: guest account chrome`);
   // Check the logout control, not copy that may appear in guest content.
-  if (!html.includes("Welcome, guest")) failures.push(`${label}: guest account chrome`);
   if (/<form\b[^>]*\saction="\/logout(?:\/everywhere)?"/i.test(html))
     failures.push(`${label}: guest page must not show Sign out`);
   const secretHits = scrubSecrets(html);
@@ -1395,7 +1400,10 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     `<a href="https://discord.gg/invite" data-testid="join-invite">` +
     `Join with an invite link instead</a></p></div>` +
     `<div class="join-preview">${inner}</div></section></main>` +
-    `<p><span class="account-caption">Welcome, guest</span></p></body></html>`;
+    (joinMarker === "kit"
+      ? '<a href="/auth/discord" aria-label="Sign in with Discord">Sign in</a>'
+      : '<p><span class="account-caption">Welcome, guest</span></p>') +
+    "</body></html>";
   const joinFacade =
     `<div class="strap"><p>Discord's live server preview loads only when you ask for it.</p>` +
     `<a class="btn" href="https://discord.com/widget?id=326474832151838730&theme=dark" ` +
@@ -1466,6 +1474,8 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     ["both-zones", (html) => html.replace("</div></section>", `</div>${joinFallback}</section>`)],
     ["presence-without-facade", (html) => html.replace(joinFacade, "")],
     ["no-oneclick", (html) => html.replace('data-testid="join-oneclick"', 'data-testid="x"')],
+    ["no-guest-chrome", (html) => html.replace(/\/auth\/discord|Welcome, guest/, "")],
+    ["logout-control", (html) => html.replace("</body>", '<form action="/logout"></form></body>')],
     [
       "hostile-next",
       (html) =>

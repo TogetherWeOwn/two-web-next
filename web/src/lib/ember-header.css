@@ -1,5 +1,4 @@
-/* B1 uses the same nav, account actions and B2 sheet as the legacy Kit shell.
-   Keep the open sheet above any sticky toolbar in main. */
+/* Keep the shared menu sheet above sticky toolbars in main. */
 .base-theme .ember-header.site-header {
   position: sticky;
   top: 0;

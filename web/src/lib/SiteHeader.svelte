@@ -31,9 +31,7 @@ let {
   /** Server-established session presentation, separate from membership and chrome. */
   authenticated?: boolean;
   menuFallbackOnly?: boolean;
-  /** Use B1 chrome on Ember shells while legacy Kit leaves keep their existing header. */
   ember?: boolean;
-  /** Suppress the default Join action without changing account presentation. */
   hideJoin?: boolean;
 } = $props();
 const menuIsland = '<script src="/islands/site-header-menu.js" defer></' + "script>";
@@ -71,11 +69,9 @@ const offerJoin = $derived(ember && !hideJoin && !hideAccount && !authenticated)
     <nav class="header-account" class:menu-signed-in={authenticated} aria-label="Account">
       {#if accountChrome}
         {@render accountChrome()}
-      {:else if ember}
-        {#if !authenticated}
-          <a class="ember-header-action" href={signInUrl(loginReturnTo)} aria-label="Sign in with Discord" data-testid="signin">Sign in</a>
-        {/if}
-      {:else}
+      {:else if ember && !authenticated}
+        <a class="ember-header-action" href={signInUrl(loginReturnTo)} aria-label="Sign in with Discord" data-testid="signin">Sign in</a>
+      {:else if !ember}
         <div class:menu-desktop-account={authenticated}>
           <span class="account-caption">Welcome, guest</span>
           <a class="btn" href={signInUrl(loginReturnTo)} data-testid="signin">Sign in with Discord</a>

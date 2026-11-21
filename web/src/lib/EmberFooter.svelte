@@ -33,13 +33,7 @@
 
   .footer-content p { color: inherit; margin: 0; }
   footer.ember-footer nav { display: flex; flex-wrap: wrap; gap: var(--two-space-5); justify-content: normal; margin-top: 0; }
-  footer.ember-footer a {
-    align-items: center;
-    color: var(--two-color-text-link);
-    display: inline-flex;
-    min-height: var(--two-size-target-min);
-    text-decoration: none;
-  }
+  footer.ember-footer a { align-items: center; color: var(--two-color-text-link); display: inline-flex; min-height: var(--two-size-target-min); text-decoration: none; }
   footer.ember-footer a:hover, footer.ember-footer a:focus-visible { text-decoration: underline; }
   a:focus-visible { outline: 2px solid var(--two-color-focus-ring); outline-offset: 3px; }
 
