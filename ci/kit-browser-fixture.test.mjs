@@ -1014,7 +1014,7 @@ const cancelled: CalendarPersistedCard = { ...event, key: 'cancelled', eventKey:
 const past: CalendarPersistedCard = { ...event, key: 'past', eventKey: 'past', title: 'Past game night', status: 'past', availability: { state: 'past', text: 'Ended', ongoing: false } };
 </script>
 <svelte:head><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
-<div class="base-theme schedule-theme"><main class="events-page"><CalendarList {state} upcoming={${scenario === "out-of-range" ? "[]" : "[event, discord, cancelled]"}} past={[past]} totalPages={4} outOfRange={${scenario === "out-of-range"}} showPast={${scenario !== "closed"}} member={false} inviteUrl="https://discord.test/invite" loginReturnTo="/events?page=2" /></main></div>`,
+<div class="base-theme schedule-theme"><main class="events-page"><CalendarList {state} zone="UTC" now={new Date('2030-06-15T12:00:00Z')} upcoming={${scenario === "out-of-range" ? "[]" : "[event, discord, cancelled]"}} past={[past]} totalPages={4} outOfRange={${scenario === "out-of-range"}} showPast={${scenario !== "closed"}} member={false} inviteUrl="https://discord.test/invite" loginReturnTo="/events?page=2" /></main></div>`,
       },
       async ({ page }) => {
         assert.equal(
@@ -1033,11 +1033,11 @@ const past: CalendarPersistedCard = { ...event, key: 'past', eventKey: 'past', t
           assert.equal(await page.getByTestId("events-out-of-range").count(), 1);
         } else {
           assert.match(await page.getByTestId("events-list").innerText(), /Game night/i);
+          assert.equal(await page.getByRole("list", { name: /Today · .*15 Jun/ }).count(), 1);
+          assert.equal(await page.getByRole("list", { name: /Today · .*16 Jun/ }).count(), 0);
           if (scenario === "search") {
-            assert.match(
-              await page.getByTestId("events-list").locator("mark").first().innerText(),
-              /^Game$/i,
-            );
+            const title = page.locator("#event-game").getByRole("heading", { level: 3 });
+            assert.match(await title.locator("mark").innerText(), /^Game$/i);
           }
           assert.match(await page.getByTestId("events-pager-next").getAttribute("href"), /page=3/);
           assert.equal(await page.getByTestId("event-cancelled").count(), 1);
