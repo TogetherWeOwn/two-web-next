@@ -68,9 +68,9 @@ const states = {
 
 export const homeEvidenceStates = Object.freeze(Object.keys(states));
 
-export function homeEvidencePage(state) {
+function fixtureData(state) {
   if (!Object.hasOwn(states, state)) throw new Error(`Unknown home evidence state: ${state}`);
-  const data = {
+  return {
     session: null,
     sessionUnavailable: false,
     notice: null,
@@ -86,10 +86,18 @@ export function homeEvidencePage(state) {
     imageHosts: "",
     ...states[state],
   };
+}
+
+export function homeEvidencePage(state, variants = []) {
+  const fixtures = Object.fromEntries([state, ...variants].map((key) => [key, fixtureData(key)]));
   return `<script>
+import { page } from '$app/state';
 import Home from '../+page.svelte';
 import { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO } from '../../../../src/home-copy';
-const data = ${JSON.stringify(data)};
+const fixtures = ${JSON.stringify(fixtures)};
+const key = page.url.searchParams.get('state') ?? ${JSON.stringify(state)};
+if (!Object.hasOwn(fixtures, key)) throw new Error('Unknown home evidence state');
+const data = fixtures[key];
 data.upcomingEvents = data.upcomingEvents.map(event => ({ ...event, startsAt: new Date(event.startsAt) }));
 data.homeCopy = { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO };
 </script>
@@ -167,7 +175,12 @@ export async function assertHomeEvidence(page, state) {
     } else {
       assert.ok(card.x >= band.x + band.width / 2, `${state}: standing is in desktop right column`);
     }
-    await next.focus();
+    await page.locator(".event-band a").last().focus();
+    await page.keyboard.press("Tab");
+    assert.ok(
+      await next.evaluate((el) => el === document.activeElement && el.matches(":focus-visible")),
+      `${state}: Tab reaches the next RSVP link from Upcoming Events`,
+    );
     await page.keyboard.press("Tab");
     assert.ok(
       await board.evaluate(
@@ -260,6 +273,28 @@ export async function assertHomeEvidence(page, state) {
         .getAttribute("href"),
       "https://discord.gg/invite",
     );
+}
+
+// One disposable build, with each state rendered as its own allowlisted SSR navigation.
+export async function withKitHomeEvidenceStates(callback) {
+  const [first, ...variants] = homeEvidenceStates;
+  return withKitOfflineBrowser(
+    {
+      page: homeEvidencePage(first, variants),
+      searches: homeEvidenceStates.map((state) => `?state=${encodeURIComponent(state)}`),
+      now: HOME_EVIDENCE_NOW,
+    },
+    async ({ page, open }) => {
+      await callback(async (state) => {
+        await page.setViewportSize(
+          state === "guest" ? { width: 390, height: 844 } : { width: 1280, height: 720 },
+        );
+        await open(`?state=${encodeURIComponent(state)}`);
+        await assertHomeEvidence(page, state);
+        return page;
+      });
+    },
+  );
 }
 
 export async function withKitHomeEvidence(state, callback) {
