@@ -71,18 +71,16 @@ test("coverage shards preserve serial threads and the merge uses the canonical c
   const shard = job("coverage-shard");
   assert.match(shard, /shard: \[1, 2, 3\]/);
   assert.match(shard, /SHARDS: \$\{\{ strategy\.job-total \}\}/);
-  const capture =
-    'npm run test:coverage -- --shard="$SHARD/$SHARDS" --reporter=dot --reporter=blob';
-  assert(shard.includes(`VITEST_COVERAGE_SHARD: "1"\n        run: ${capture} `));
+  const run = 'npm run test:coverage -- --shard="$SHARD/$SHARDS" --reporter=dot --reporter=blob';
+  assert(shard.includes(`VITEST_COVERAGE_SHARD: "1"\n        run: ${run} `));
   assert.equal(workflow.match(/VITEST_COVERAGE_SHARD:/g)?.length, 1);
   const artifact =
     /if-no-files-found: error\n          overwrite: true\n          retention-days: 30\b/;
   for (const id of ["coverage-shard", "node22-shard"]) assert.match(job(id), artifact);
   const budget = Number(shard.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
   assert.ok(budget > 0 && budget <= 60, `coverage shard timeout ${budget} exceeds 60`);
-  for (const key of ["path", "BLOB_DIR"]) {
+  for (const key of ["path", "BLOB_DIR"])
     assert(mergeJob.includes(key + ": ${{ steps.blob-dir.outputs.path }}"));
-  }
   const merge = `TEST=true VITEST=true NODE_ENV=test node ci/verify-vitest-shards.mjs --coverage-dir "$BLOB_DIR"
           npm run test:coverage -- --merge-reports="$BLOB_DIR" --reporter=dot\n`;
   const result =
@@ -106,16 +104,19 @@ test("coverage replay rejects hidden entries and blobs without coverage", async 
   const dir = await mkdtemp(join(tmpdir(), "coverage-replay-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const argv = ["ci/verify-vitest-shards.mjs", "--coverage-dir", dir];
-  const error = () => spawnSync(process.execPath, argv, { encoding: "utf8" }).stderr;
+  const reject = (diagnostic) => {
+    const { status, stderr } = spawnSync(process.execPath, argv, { encoding: "utf8" });
+    assert.equal(status, 1, stderr);
+    assert.match(stderr, diagnostic);
+  };
   const blob = (map) => `[[null,"1",null,${map}],["2"],{"filepath":"3"},"test/example.test.ts",{}]`;
   for (const shard of [1, 2, 3]) await writeFile(join(dir, `vitest-${shard}.json`), blob("null"));
-  const hidden = join(dir, ".hidden.json");
-  await writeFile(hidden, blob("null"));
-  assert.match(error(), /expected exactly three regular Vitest reports/);
-  await rm(hidden);
-  assert.match(error(), /vitest-1\.json: missing or empty coverage map/);
+  await writeFile(join(dir, ".hidden.json"), blob("null"));
+  reject(/expected exactly three regular Vitest reports/);
+  await rm(join(dir, ".hidden.json"));
+  reject(/vitest-1\.json: missing or empty coverage map/);
   await writeFile(join(dir, "vitest-1.json"), blob('"4"'));
-  assert.match(error(), /vitest-1\.json: missing or empty coverage map/);
+  reject(/vitest-1\.json: missing or empty coverage map/);
 });
 
 test("all split installs require successful dependency admission", () => {
