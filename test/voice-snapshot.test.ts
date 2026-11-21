@@ -37,7 +37,8 @@ it("sends exactly one signed read without an idempotency key or redirects", asyn
   expect(h.get("X-TWO-Signature")).toBe(signed["X-TWO-Signature"]);
   expect(await signedVoiceReader({ ...cfg, baseUrl: "http://bot.example" }, send)()).toBeNull();
   expect(send).toHaveBeenCalledOnce();
-  expect(await respond(wire(), 302)).toBeNull();
+  const redirected = new ReadableStream({ cancel: () => Promise.reject(Error("fixture")) });
+  expect(await respond(redirected, 302)).toBeNull();
 });
 
 it("rejects the whole snapshot on bad fields, totals or caps", async () => {
@@ -78,14 +79,13 @@ it("redacts refusals and emits only fixed signing diagnostics", async () => {
 });
 
 it("accepts the byte ceiling and cancels overflow across chunks", async () => {
-  const encoder = new TextEncoder();
-  const full = encoder.encode(wire().padEnd(256 * 1024, " "));
+  const full = new TextEncoder().encode(wire().padEnd(256 * 1024, " "));
   expect(await respond(full)).toEqual(snapshot);
   const cancel = vi.fn(() => new Promise<void>(() => undefined));
   const stream = new ReadableStream<Uint8Array>({
     start(c) {
       c.enqueue(full);
-      c.enqueue(encoder.encode(" "));
+      c.enqueue(Uint8Array.of(0x20));
     },
     cancel,
   });
