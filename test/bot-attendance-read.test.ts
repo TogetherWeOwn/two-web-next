@@ -40,9 +40,13 @@ it("sends the exact signed POST once and accepts the pinned bot reply", async ()
   const signature = await signInternalAction(config.keyId, config.secret, body, ts, nonce);
   expect(headers).toEqual(new Headers({ ...signature, "Content-Type": "application/json" }));
 });
-it.each([false, true])("keeps final=%s and ignores additive fields", async (final) => {
+it.each([
+  [false, []],
+  [false, [member]],
+  [true, [member]],
+] as const)("keeps final=%s and members %j", async (final, members) => {
   const rooms = final ? [] : [room];
-  const result = { ...attendance, final, rooms, members: final ? [member] : [] };
+  const result = { ...attendance, final, rooms, members };
   const replyRooms = rooms.map((room) => ({ ...room, extra: true }));
   expect(await observe(reply({ ...result, extra: true, rooms: replyRooms }))).toEqual(
     success(result),
