@@ -2,7 +2,7 @@
 // Kit hook uses while Hono retains OAuth/session authority.
 //
 // The bridge is read-only: it verifies the signed __Host session cookie with
-// the same hono primitive Hono uses (parseSigned), hashes the token, and makes
+// the shared Hono-compatible codec, hashes the token, and makes
 // exactly one store.get per request (memoized, so concurrent reads share one
 // decision). It never rotates, revokes, or sets cookies — rotation stays
 // route-specific in Hono's readSession, and flashes stay Hono-consumed until a
@@ -104,6 +104,29 @@ describe("resolveRequestSession (one request, one session decision)", () => {
         moderator: true,
       },
     });
+  });
+
+  it("uses Hono's pair selection for quoted values and duplicate session cookies", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store);
+    const good = await pair(SESSION_COOKIE, token);
+    const wire = good.slice(SESSION_COOKIE.length + 1);
+    const quoted = `${SESSION_COOKIE} = "${wire}"`;
+    const invalid = `${SESSION_COOKIE}=unsigned`;
+    for (const [pairs, status] of [
+      [[quoted, invalid], "authenticated"],
+      [[invalid, good], "guest"],
+    ] as const) {
+      const request = requestWith([...pairs]);
+      const hono = await parseSigned(request.headers.get("cookie") ?? "", SECRET);
+      expect(hono[SESSION_COOKIE] === token).toBe(status === "authenticated");
+      const decision = await resolveRequestSession(request, {
+        sessionSecret: SECRET,
+        store,
+        roleRecheck: null,
+      });
+      expect(decision.status).toBe(status);
+    }
   });
 
   it("reports guest when no session cookie is presented", async () => {

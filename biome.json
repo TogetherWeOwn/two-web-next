@@ -51,6 +51,28 @@
   },
   "overrides": [
     {
+      "includes": ["src/kit-session.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "./index": "Use the framework-neutral session module.",
+                  "./index.tsx": "Use the framework-neutral session module.",
+                  "hono": "Use the framework-neutral session and cookie modules."
+                },
+                "patterns": [
+                  { "group": ["hono/**"], "message": "Use the framework-neutral cookie module." }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": [
         "assets/styles.css",
         "assets/theme.css",
