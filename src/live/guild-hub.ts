@@ -1,6 +1,6 @@
 import { HUB_INGEST_URL, liveIngressConfig } from "./ingress";
 import { encodeLiveProjection } from "./projection";
-import { LiveSequence, type LiveSnapshot, type LiveWatermarks } from "./sequence";
+import { LiveSequence, type LiveWatermarks } from "./sequence";
 import { HUB_SOCKET_URL, type LiveSocketEnv } from "./socket-route";
 import { LiveSockets } from "./sockets";
 import { reduceLiveState } from "./state";
@@ -28,9 +28,11 @@ export class LiveGuildHub {
   readonly #sequence?: LiveSequence<LiveState, LiveDelta>;
   readonly #sockets: LiveSockets;
   readonly #publicRooms: ReadonlySet<string> | null;
-  #leased: LiveSnapshot<LiveState> | null = null;
-  #sourceUntil = 0;
+  // Only a browser command can activate the public lease. The raw guild may
+  // recover independently, including on a restricted-only wake.
+  #publicUntil = 0;
   #nextSocketPull = 0;
+  #pullingPublic = false;
 
   constructor(
     private readonly ctx: DurableObjectState,
@@ -42,8 +44,6 @@ export class LiveGuildHub {
         ? publicVoiceRooms(env.DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS)
         : null;
     this.#sockets = new LiveSockets(ctx, env, () => this.#publicVoice());
-    // Guild state and the last emitted value are both in memory only.
-    this.#sockets.invalidate();
     const config = liveIngressConfig(env);
     if (!config) return;
     this.#guildId = config.guildId;
@@ -81,73 +81,72 @@ export class LiveGuildHub {
     // Only the Worker binding makes this request, from capped and verified bytes.
     const delta = decodeLiveDelta(await request.arrayBuffer(), this.#guildId);
     if (!delta) return new Response(null, { status: 400 });
-    this.#expireSource();
+    const active = this.#publicUntil > Date.now();
     const ingested = this.#sequence.ingest(delta.seq, delta);
-    // ingest() clears a gap synchronously, before its signed pull can resolve.
-    if (!this.#sequence.current) this.#sockets.invalidate();
-    const armed = this.#leaseCurrent();
+    // A warm gap could hide a permission revocation; invalidate before the
+    // pull yields. A cold producer wake only restores raw guild state.
+    if (active && !this.#sequence.current) {
+      this.#publicUntil = 0;
+      this.#sockets.invalidate();
+    }
     const outcome = await ingested;
-    await armed;
-    if (outcome === "applied" || outcome === "resynced") await this.#publish();
+    if (active && outcome === "applied") this.ctx.waitUntil(this.#sockets.publish());
     return new Response(null, {
       status: outcome === "unavailable" ? 409 : outcome === "invalid" ? 400 : 204,
     });
   }
 
-  #expireSource(): void {
-    if (!this.#leased || this.#sourceUntil > Date.now()) return;
-    this.#sequence?.expire();
-    this.#leased = null;
-    this.#sourceUntil = 0;
-    this.#sockets.invalidate();
-  }
-
-  #leaseCurrent(): Promise<void> | undefined {
-    const current = this.#sequence?.current;
-    if (!current?.validUntil || current === this.#leased) return;
-    this.#leased = current;
-    if (this.#sourceUntil === current.validUntil) return;
-    this.#sourceUntil = current.validUntil;
-    if (this.#publicRooms) return this.#sockets.scheduleSource(this.#sourceUntil);
-  }
-
-  async #publish(): Promise<void> {
-    await this.#leaseCurrent();
-    this.ctx.waitUntil(this.#sockets.publish());
-  }
-
-  #publicVoice(): string | null {
+  #publicVoice(): { value: string; until: number } | null {
     const current = this.#sequence?.current;
     const guildId = this.#guildId;
-    if (!guildId || !current || current !== this.#leased || !this.#publicRooms) return null;
-    return encodeLiveProjection(
+    const until = this.#publicUntil;
+    const now = Date.now();
+    if (!guildId || !current || until <= now || !this.#publicRooms) return null;
+    const value = encodeLiveProjection(
       {
         state: current.state,
         guildId,
         pageId: PUBLIC_VOICE_PAGE,
-        sourceUntil: this.#sourceUntil,
+        sourceUntil: until,
         viewer: { kind: "public" },
         page: {
           guildId,
           pageId: PUBLIC_VOICE_PAGE,
           viewerId: null,
-          validUntil: this.#sourceUntil,
+          validUntil: until,
           publicRoomIds: this.#publicRooms,
         },
-        now: Date.now(),
+        now,
       },
       "voice",
     );
+    return value === null ? null : { value, until };
   }
 
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (!this.#sequence) return socket.close(1008);
-    this.#expireSource();
     if (!(await this.#sockets.message(socket, message))) return;
     const now = Date.now();
-    if (!this.#publicRooms || this.#sequence.current || now < this.#nextSocketPull) return;
+    if (
+      !this.#publicRooms ||
+      this.#publicUntil > now ||
+      this.#pullingPublic ||
+      now < this.#nextSocketPull
+    )
+      return;
     this.#nextSocketPull = now + SOCKET_RECOVERY_INTERVAL_MS;
-    if (await this.#sequence.synchronize()) await this.#publish();
+    this.#pullingPublic = true;
+    try {
+      const snapshot = await this.#sequence.refresh();
+      if (!snapshot?.validUntil) return;
+      await this.#sockets.scheduleSource(snapshot.validUntil);
+      // Do not bless a replacement from producer recovery during the await.
+      if (snapshot !== this.#sequence.current) return;
+      this.#publicUntil = snapshot.validUntil;
+      this.ctx.waitUntil(this.#sockets.publish());
+    } finally {
+      this.#pullingPublic = false;
+    }
   }
 
   webSocketClose(socket: WebSocket): void {
@@ -159,7 +158,7 @@ export class LiveGuildHub {
   }
 
   alarm(): Promise<void> {
-    this.#expireSource();
-    return this.#sockets.expire(this.#leased && this.#publicRooms ? this.#sourceUntil : Infinity);
+    if (this.#publicUntil <= Date.now()) this.#publicUntil = 0;
+    return this.#sockets.expire(this.#publicUntil);
   }
 }

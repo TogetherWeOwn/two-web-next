@@ -20,7 +20,7 @@ function connectedSocket(alarm: number, signedIn = true) {
     topics: signedIn ? ["voice"] : null,
     nextResync: 0,
     voiceSeq: signedIn ? 1 : 0,
-    voiceLive: signedIn,
+    voiceUntil: signedIn ? start + 30_000 : 0,
   };
   const socket = {
     readyState: WebSocket.OPEN,
@@ -38,7 +38,7 @@ function connectedSocket(alarm: number, signedIn = true) {
     blockConcurrencyWhile: <T>(fn: () => Promise<T>) => fn(),
     storage: { getAlarm, setAlarm },
   } as unknown as DurableObjectState;
-  const voice = () => (signedIn ? '{"count":2}' : null);
+  const voice = () => (signedIn ? { value: '{"count":2}', until: start + 30_000 } : null);
   const wake = () => new LiveSockets(ctx, { DISCORD_LIVE_SOCKET_ENABLED: "true" }, voice);
   return { socket, getAlarm, setAlarm, wake, sockets: wake() };
 }

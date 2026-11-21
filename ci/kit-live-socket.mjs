@@ -301,13 +301,12 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
   const frames = [];
   socket.addEventListener("message", ({ data }) => frames.push({ data, at: Date.now() }));
   const expectFrame = async (want, timeout = 5_000) => {
-    if (!frames.length) {
-      await awaitEvent(socket, "message", `guest fan-out ${want.type}${want.seq ?? ""}`, timeout);
-    }
+    if (!frames.length) await awaitEvent(socket, "message", JSON.stringify(want), timeout);
     const { data, at } = frames.shift();
     assert.equal(typeof data, "string");
-    assert.deepEqual(JSON.parse(data), want);
-    return at;
+    const actual = JSON.parse(data);
+    assert.deepEqual(actual, want);
+    return { actual, at };
   };
   const command = (type) => JSON.stringify({ v: 1, type, topics: ["voice"] });
   const send = (type) => socket.send(command(type));
@@ -317,18 +316,19 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
   try {
     await awaitEvent(socket, "open", "guest fan-out upgrade");
     send("subscribe");
+    await expectFrame(unavailable);
     await expectFrame(projected("snapshot", 1, null));
     await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
       values (${ref}, '900000000000001377', 'Live fan-out fixture', true, now() + interval '10 minutes')`;
     member = new WebSocket(`${origin}${path}`.replace(/^http:/, "ws:"), {
       headers: { Origin: appOrigin, Cookie: cookie },
     });
-    await awaitEvent(member, "open", "member fan-out upgrade");
-    const baseline = awaitEvent(member, "message", "member fan-out baseline");
+    await awaitEvent(member, "open", "authenticated fan-out upgrade");
+    const baseline = awaitEvent(member, "message", "authenticated fan-out baseline");
     member.send(command("subscribe"));
     assert.deepEqual(JSON.parse((await baseline)[0].data), projected("snapshot", 1, null));
     await sql`update web_sessions set revoked_at = clock_timestamp() where token_hash = ${ref}`;
-    const memberClosed = awaitEvent(member, "close", "member fan-out revocation");
+    const memberClosed = awaitEvent(member, "close", "fan-out after session revocation");
     const revokedFrames = [];
     member.addEventListener("message", ({ data }) => revokedFrames.push(data));
     const [status, , [closure]] = await Promise.all([
@@ -349,20 +349,19 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
     await expectFrame(unavailable);
     await source(snapshot(46, 5, new Date(Date.now() - 60_000).toISOString()));
     assert.equal(await ingest(origin, 46, leave("106")), 409, "reject a stale covering snapshot");
-    const covering = snapshot(46, 5);
-    const beforeWake = await source(covering);
-    assert.equal(await ingest(origin, 46, leave("106")), 204, "recover from a covering snapshot");
+    await delay(5_100); // Browser recovery is throttled separately from producer ingress.
+    await source(snapshot(46, 5));
+    const beforeWake = await source();
+    assert.equal(
+      await ingest(origin, 46, leave("106")),
+      204,
+      "recover raw state from a covering snapshot",
+    );
+    assert.deepEqual(frames, [], "producer recovery must not restart the public lease");
+    send("resync");
+    await expectFrame(unavailable);
     await expectFrame(projected("snapshot", 4, 5));
     assert.equal(await source(), beforeWake);
-
-    // Workerd hibernates an idle hibernatable object after about ten seconds.
-    // Do not issue any network operation during this window or reconnect the client.
-    await delay(15_000);
-    send("resync");
-    await expectFrame(unavailable); // Constructor clears the old baseline on this socket.
-    await expectFrame(unavailable); // Resync cannot use old in-memory data.
-    await expectFrame(projected("snapshot", 5, 5));
-    assert.equal(await source(), beforeWake + 1, "the same socket woke a new hub instance");
 
     const publicRoom = snapshot(46, 5).topics.channels[0];
     const deny = [{ kind: "role", id: guild, allow: "0", deny: permissions }];
@@ -373,24 +372,81 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
       value: { ...publicRoom, overwrites },
     });
     assert.equal(await ingest(origin, 47, setRoom(deny)), 204);
-    await expectFrame(projected("patch", 6, null));
+    await expectFrame(projected("patch", 5, null));
     assert.equal(await ingest(origin, 48, setRoom([])), 204);
-    await expectFrame(projected("patch", 7, 5));
+    await expectFrame(projected("patch", 6, 5));
 
-    // Keep the hub warm to isolate the lease alarm from constructor invalidation.
-    const expiresAt = Date.parse(covering.observed_at) + 30_000;
-    assert.equal(await ingest(origin, 49, join("106", "11")), 204);
-    while (Date.now() + 4_000 < expiresAt) {
-      await delay(4_000);
-      assert.equal(await source(), beforeWake + 1, "the hub must stay warm through lease expiry");
+    // The hibernation and warm controls each run with and without a restricted
+    // update. Only the original deadline may withdraw an idle guest baseline.
+    let cursor = 48;
+    let revision = 6;
+    for (const cold of [false, true]) {
+      const traces = [];
+      for (const restricted of [false, true]) {
+        const doc = snapshot(cursor, 5, new Date(Date.now() - 9_000).toISOString());
+        // Opening the next trial requires expiration of the prior public lease.
+        // First trial: force a sequence gap without changing the public value.
+        if (!cold && !restricted) {
+          doc.seq = cursor += 2;
+          await source(doc);
+          assert.equal(await ingest(origin, cursor, leave("106")), 204);
+          await expectFrame(unavailable);
+          await delay(5_100);
+          doc.observed_at = new Date(Date.now() - 9_000).toISOString();
+        }
+        const generation = await source(doc);
+        send("resync");
+        await expectFrame(unavailable);
+        const baseline = await expectFrame(projected("snapshot", ++revision, 5));
+        const expiresAt = Date.parse(doc.observed_at) + 30_000;
+        if (cold && restricted) {
+          // Stage a covering, still-fresh snapshot before idling the object.
+          const recovered = snapshot(cursor + 1, 5);
+          recovered.topics.voice.push(voice("106", "11"));
+          assert.equal(await source(recovered), generation);
+        }
+        if (cold) await delay(15_000);
+        if (restricted) {
+          assert.equal(await ingest(origin, ++cursor, join("106", "11")), 204);
+          assert.equal(
+            await source(),
+            generation + Number(cold),
+            "restricted ingress reached the expected instance",
+          );
+          assert.deepEqual(
+            frames,
+            [],
+            "restricted ingress must not withdraw or publish a baseline",
+          );
+        }
+        if (!cold) {
+          while (Date.now() + 4_000 < expiresAt) {
+            await delay(4_000);
+            assert.equal(await source(), generation, "warm expiry must not reconstruct the hub");
+          }
+        }
+        const reset = await expectFrame(unavailable, 25_000);
+        assert.ok(reset.at >= expiresAt, "restricted activity must not clear the baseline early");
+        assert.ok(reset.at < expiresAt + 5_000, "restricted activity must not postpone expiry");
+        assert.equal(await source(), generation + Number(cold));
+        assert.equal(
+          socket.readyState,
+          WebSocket.OPEN,
+          "source expiry must leave the guest connected",
+        );
+        assert.deepEqual(frames, [], "expiry emits exactly one control");
+        traces.push([{ ...baseline.actual, seq: baseline.actual.seq - revision }, reset.actual]);
+      }
+      assert.deepEqual(traces[0], traces[1]);
     }
-    const receivedAt = await expectFrame(unavailable, 8_000);
-    assert.ok(receivedAt >= expiresAt, "the alarm must not clear the baseline early");
-    assert.ok(receivedAt < expiresAt + 8_000, "restricted ingress must not renew the lease");
-    assert.equal(await source(), beforeWake + 1);
-    assert.equal(socket.readyState, WebSocket.OPEN, "source expiry is not connection expiry");
+    // The last producer recovery is still fresh. It must not substitute for
+    // the browser-triggered pull or revive the expired public lease by itself.
+    await source(snapshot(cursor + 1, 4));
+    send("resync");
+    await expectFrame(unavailable);
+    await expectFrame(projected("snapshot", revision + 1, null));
     console.log(
-      "PASS installed Kit live counts, silence, fan-out revocation, gap recovery, hibernation, and lease expiry",
+      "PASS installed Kit live counts, fan-out revocation, gap recovery, and warm/cold restricted-ingress silence",
     );
   } finally {
     socket.close();

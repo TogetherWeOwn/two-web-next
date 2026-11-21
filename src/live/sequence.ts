@@ -46,6 +46,31 @@ export class LiveSequence<State, Delta> {
     this.#current = null;
   }
 
+  // Browser recovery reads a new observation, not a producer-triggered pull
+  // or a warm raw cursor. Both paths must cover the same latest watermark.
+  async refresh(): Promise<LiveSnapshot<State> | null> {
+    return this.#install(await this.#load());
+  }
+
+  #load(): Promise<LiveSnapshot<State> | null> {
+    return Promise.resolve()
+      .then(() => this.load())
+      .catch(() => null);
+  }
+
+  #install(snapshot: LiveSnapshot<State> | null): LiveSnapshot<State> | null {
+    if (
+      !snapshot ||
+      !Number.isSafeInteger(snapshot.seq) ||
+      snapshot.seq < this.#minimum ||
+      !fresh(snapshot)
+    ) {
+      return null;
+    }
+    this.#publish(snapshot);
+    return snapshot;
+  }
+
   async synchronize(): Promise<boolean> {
     if (this.current) return true;
     // Commit the latest observed gap before external I/O can yield or fail.
@@ -79,20 +104,9 @@ export class LiveSequence<State, Delta> {
   #recover(): Promise<boolean> {
     this.#recovering = Promise.resolve().then(async () => {
       try {
-        const snapshot = await Promise.resolve()
-          .then(() => this.load())
-          .catch(() => null);
-        // Check against the latest observed gap, not the gap at request time.
-        if (
-          !snapshot ||
-          !Number.isSafeInteger(snapshot.seq) ||
-          snapshot.seq < this.#minimum ||
-          !fresh(snapshot)
-        ) {
-          return false;
-        }
-        this.#publish(snapshot);
-        return true;
+        const snapshot = await this.#load();
+        // An independent refresh may already have covered the latest gap.
+        return this.current !== null || this.#install(snapshot) !== null;
       } finally {
         this.#recovering = null;
       }
