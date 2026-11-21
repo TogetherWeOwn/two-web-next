@@ -4,7 +4,7 @@
 // source cannot catch a wrong branch — these renders fail the three mutants
 // the source-grep suite missed: a hardcoded sessionUnavailable, a skipped
 // flash precedence, and `{:else if session}` in the hero.
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
 import { createKitSsrRenderer, type RenderPage } from "./helpers/kit-ssr-render";
 
@@ -179,6 +179,12 @@ describe("Kit home SSR render: highlights", () => {
 });
 
 describe("Kit home SSR render: Week and Upcoming Events", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(new Date("2030-07-19T12:00:00Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   it.each([null, nonMemberSession, memberSession])("orders the bands for %j", (session) => {
     const html = renderPage(baseData({ session }));
     const headings = /id="(home-heading|community-heading|home-week-heading|home-events-heading)"/g;
@@ -203,25 +209,19 @@ describe("Kit home SSR render: Week and Upcoming Events", () => {
   });
 
   it("uses only this week's future starts and marks only the member's own RSVP", () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    try {
-      vi.setSystemTime(new Date("2030-07-19T12:00:00Z"));
-      const upcomingEvents = [
-        fullnessEvent({ eventKey: "past", title: "Already started", startsAt: new Date(0) }),
-        fullnessEvent({ eventKey: "this-week", title: "Saturday game" }),
-        fullnessEvent({ title: "Later game", startsAt: new Date("2030-07-27T19:00:00Z") }),
-      ];
-      const memberRsvps = [{ eventKey: "this-week", status: "waitlisted" }];
-      for (const session of [null, nonMemberSession, memberSession]) {
-        const html = renderPage(baseData({ session, upcomingEvents, memberRsvps }));
-        const week = html.split('id="home-week-heading"')[1]!.split("</section>")[0]!;
-        expect(week).toContain("Saturday game");
-        expect(week).toContain("Europe/London");
-        expect(week).not.toMatch(/Already started|Later game/);
-        expect(week.includes("You're on the waitlist.")).toBe(session?.member === true);
-      }
-    } finally {
-      vi.useRealTimers();
+    const upcomingEvents = [
+      fullnessEvent({ eventKey: "past", title: "Already started", startsAt: new Date(0) }),
+      fullnessEvent({ eventKey: "this-week", title: "Saturday game" }),
+      fullnessEvent({ title: "Later game", startsAt: new Date("2030-07-27T19:00:00Z") }),
+    ];
+    const memberRsvps = [{ eventKey: "this-week", status: "waitlisted" }];
+    for (const session of [null, nonMemberSession, memberSession]) {
+      const html = renderPage(baseData({ session, upcomingEvents, memberRsvps }));
+      const week = html.split('id="home-week-heading"')[1]!.split("</section>")[0]!;
+      expect(week).toContain("Saturday game");
+      expect(week).toContain("Europe/London");
+      expect(week).not.toMatch(/Already started|Later game/);
+      expect(week.includes("You're on the waitlist.")).toBe(session?.member === true);
     }
   });
 });
