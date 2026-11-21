@@ -2,7 +2,6 @@ import { expect, it, vi } from "vitest";
 import { signInternalAction } from "../src/bot/signer";
 import { signedVoiceReader, type VoiceSnapshot } from "../src/bot/voice-read";
 import { createVoiceSnapshotCache } from "../src/bot/voice-snapshot";
-
 const observed_at = "2026-11-03T19:04:11Z";
 const epoch = Date.parse(observed_at);
 const room = (channel_id: string, member_ids: string[], extra = {}) => ({
@@ -37,16 +36,21 @@ it("sends exactly one signed read without an idempotency key or redirects", asyn
   expect(h.get("X-TWO-Signature")).toBe(signed["X-TWO-Signature"]);
   expect(await signedVoiceReader({ ...cfg, baseUrl: "http://bot.example" }, send)()).toBeNull();
   expect(send).toHaveBeenCalledOnce();
-  expect(await respond(wire(), 302)).toBeNull();
+  const cancel = vi.fn().mockRejectedValue(Error("fixture"));
+  expect(await respond(new ReadableStream({ cancel }), 302)).toBeNull();
+  expect(cancel).toHaveBeenCalledOnce();
 });
 
 it("rejects the whole snapshot on bad fields, totals or caps", async () => {
   const ids = Array.from({ length: 500 }, (_, i) => String(1_000 + i));
+  const rooms = ids.slice(0, 101).map((id, i) => room(String(10 + i), [id]));
+  const atCap = { ...snapshot, rooms: rooms.slice(0, 100), total_in_voice: 100 };
+  expect(await respond(wire(atCap))).toEqual(atCap);
   for (const patch of [
     { v: 2 },
     { observed_at: "2026-02-30T19:04:11Z" },
     { total_in_voice: 4 },
-    { rooms: Array(101).fill(lobby) },
+    { rooms, total_in_voice: 101 },
     { rooms: [room("11", ids), room("12", ["904"], { afk: true })], total_in_voice: 500 },
     { rooms: ["11", "12"].map((id) => room(id, [id + "0"], { afk: true })), total_in_voice: 0 },
     ...[
@@ -75,14 +79,13 @@ it("redacts refusals and emits only fixed signing diagnostics", async () => {
 });
 
 it("accepts the byte ceiling and cancels overflow across chunks", async () => {
-  const encoder = new TextEncoder();
-  const full = encoder.encode(wire().padEnd(256 * 1024, " "));
+  const full = new TextEncoder().encode(wire().padEnd(256 * 1024, " "));
   expect(await respond(full)).toEqual(snapshot);
   const cancel = vi.fn(() => new Promise<void>(() => undefined));
   const stream = new ReadableStream<Uint8Array>({
     start(c) {
       c.enqueue(full);
-      c.enqueue(encoder.encode(" "));
+      c.enqueue(Uint8Array.of(0x20));
     },
     cancel,
   });
@@ -151,15 +154,13 @@ it("returns immediately, coalesces, throttles failures and freezes the last good
 
 it.each([-1_000, 1_000])("uses the older of the two ages (clock skew %s)", async (skew) => {
   const { ctx, jobs, clock, get } = fixture(skew);
-  const read = vi
-    .fn(() => new Promise<VoiceSnapshot>(() => undefined))
-    .mockResolvedValueOnce(snapshot);
+  const read = vi.fn(() => new Promise<VoiceSnapshot>(() => undefined));
+  read.mockResolvedValueOnce(snapshot);
   get(read, ctx, viewer);
   await jobs[0];
-  const start = Math.min(clock.now, epoch);
   const bands = { 30000: "fresh", 30001: "aging", 120000: "aging", 120001: "frozen" };
   for (const [age, freshness] of Object.entries(bands)) {
-    clock.now = start + Number(age);
+    clock.now = epoch + Math.min(skew, 0) + Number(age);
     expect(get(read, ctx, viewer)).toMatchObject({ ageMs: Number(age), freshness });
   }
   expect(jobs).toHaveLength(2);
@@ -174,9 +175,8 @@ it("serializes only proven rooms and current consented identity", async () => {
   await jobs[0];
   const aggregate = { audience: "guest", count: 5, ageMs: 0, freshness: "fresh" };
   expect(get(read, ctx, guest)).toEqual(aggregate);
-  const roomAccess = new Map(viewer.roomAccess)
-    .set("11", access("moderator"))
-    .set("13", access("member"));
+  const roomAccess = new Map(viewer.roomAccess).set("11", access("moderator"));
+  roomAccess.set("13", access("member"));
   const profiles = new Map([
     ["901", { name: "Visible", avatarUrl: "https://cdn.discordapp.com/avatars/901/abc.png" }],
     ["902", { name: "Opted out", show_in_live_rooms: false }],
