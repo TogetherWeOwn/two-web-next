@@ -108,6 +108,7 @@ it("signs the actual pull bytes and only admits valid JSON within the snapshot l
     "POST",
     body,
   ]);
+  expect(init?.redirect).toBe("manual");
   expect(headers.get("X-TWO-Key-Id")).toBe(config.keyId);
   expect(headers.get("X-TWO-Signature")).toBe(
     signature(
