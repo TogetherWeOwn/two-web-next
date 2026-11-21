@@ -172,14 +172,16 @@ describe("Kit home port: header, hero and metadata chrome", () => {
     expect(page).toContain('data-testid="home-events-list"');
     expect(page).toContain('data-testid="home-events-empty"');
     expect(page).toContain('data-testid="home-events-join"');
-    expect(page).toContain('data-testid="home-widget-link"');
-    expect(page).toContain('data-testid="home-discord-invite"');
+    const guestIntro = read(join(root, "web/src/routes/HomeGuestIntro.svelte"));
+    expect(page).toContain("<HomeGuestIntro />");
+    expect(guestIntro).toContain('data-testid="home-widget-link"');
+    expect(guestIntro).toContain('data-testid="home-discord-invite"');
     expect(page).toContain('id="featured-heading"');
-    expect(page).toContain('id="community-heading"');
-    expect(page).toContain('id="discord-heading"');
+    expect(guestIntro).toContain('id="community-heading"');
+    expect(guestIntro).toContain('id="discord-heading"');
     expect(page).toContain('id="home-events-heading"');
     expect(page).toContain("Community ladder");
-    expect(page).toContain('href="/join#join-heading"');
+    expect(guestIntro).toContain('href="/join#join-heading"');
     expect(page).toContain('href="/events"');
   });
 
