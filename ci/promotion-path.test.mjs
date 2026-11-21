@@ -68,7 +68,7 @@ test("only promotion surfaces match, including directly called tooling", () => {
   const included = `.github/workflows/ci.yml .github/actions/gradual-promote/action.yml
     deep/web/wrangler.production.toml tail/wrangler.jsonc drizzle/meta/_journal.json migrations.lock db/migrations/0001.sql
     ci/resolve-promotion-sha.mjs ci/production-deploy-gate.mjs ci/rollback-target.mjs
-    ci/staging-provenance.mjs ci/staging-deploy-gate.mjs ci/db-migrate.mjs
+    ci/staging-provenance.mjs ci/staging-deploy-gate.mjs ci/web-standards.mjs ci/db-migrate.mjs
     ci/migration-runtime-rights.mjs src/up-database.ts bin/version-check.mjs e2e/staging/join.spec.ts
     e2e/watch/guest-journeys.spec.ts playwright.watch.config.ts e2e/watch-guard.mjs e2e/ci-only.mjs
     e2e/watch/events/calendar.spec.ts e2e/staging/events/lists/calendar.spec.ts
@@ -115,9 +115,10 @@ test("failed, capped, incomplete or inconsistent reads produce no verdict label"
     [[file("docs/new.txt", "renamed")], {}],
     [ordinary, { comparison: [...ordinary.slice(0, 100), file("ci/production-deploy-gate.mjs")] }],
   ]) {
-    const run = github(rows, options);
+    const run = github(rows, { labels: [yes, no], ...options });
     await assert.rejects(run.run());
-    assert.deepEqual(run.writes, []);
+    assert.deepEqual([...run.labels], ["unrelated"]);
+    assert.ok(run.writes.every(([method]) => method === "DELETE"));
     assert.ok(run.summary[0].includes("verdict **unknown**"));
   }
 });
@@ -127,7 +128,7 @@ test("ref changes prevent publication, including same-SHA retarget and a race du
     revision: (read) => read > 1 && { base: { sha: base, ref: "other" } },
   });
   await assert.rejects(retarget.run(), /refs or file count changed/);
-  assert.deepEqual(retarget.writes, []);
+  assert.ok(retarget.writes.every(([method]) => method === "DELETE"));
   const moved = github(ordinary, {
     revision: (read) => read > 3 && { head: { sha: "c".repeat(40) } },
   });

@@ -10,7 +10,7 @@ const directPaths = new Set(
    ci/resolve-promotion-sha.mjs ci/production-deploy-gate.mjs ci/rollback-target.mjs
    ci/post-deploy-watch.mjs ci/check-production-secrets.mjs
    ci/operator-constants.mjs ci/wrangler-config.mjs ci/worker-bundle-evidence.mjs
-   ci/staging-deploy-gate.mjs ci/staging-provenance.mjs ci/check-staging-journeys.mjs
+   ci/staging-deploy-gate.mjs ci/staging-provenance.mjs ci/check-staging-journeys.mjs ci/web-standards.mjs
    ci/change-scope.sh ci/e2e-test-helpers.mjs ci/kit-route-flags.mjs ci/staging-kit-route-check.mjs ci/check-jobs-secrets.mjs
    ci/db-migrate.mjs ci/migration-admission.mjs ci/migration-ownership.mjs ci/migration-runtime-rights.mjs
    ci/check-migration-numbers.sh ci/check-snapshot-chain.mjs ci/check-migration-history.mjs
@@ -108,6 +108,10 @@ export async function labelPromotionPath(api, number, summarize) {
   assert.ok(Number.isSafeInteger(number) && number > 0, "Invalid PR number");
   const pull = `/pulls/${number}`;
   const issueLabels = `/issues/${number}/labels`;
+  const remove = async (name) => {
+    const response = await api("DELETE", `${issueLabels}/${encodeURIComponent(name)}`);
+    assert.ok(response.ok || response.status === 404, "Cannot remove verdict label");
+  };
   let snapshot;
   let verdict = "unknown";
   try {
@@ -153,27 +157,18 @@ export async function labelPromotionPath(api, number, summarize) {
         "PR refs or file count changed during classification",
       );
     };
-    const remove = async (name) => {
-      const response = await api("DELETE", `${issueLabels}/${encodeURIComponent(name)}`);
-      assert.ok(response.ok || response.status === 404, "Cannot remove verdict label");
-    };
     await ensureLabel(api, label);
     await fresh();
     await remove(`promotion-path: ${matches ? "no" : "yes"}`);
     await fresh();
-    try {
-      assert.ok(
-        (await api("POST", issueLabels, { labels: [label] })).ok,
-        "Cannot apply verdict label",
-      );
-      await fresh();
-    } catch (error) {
-      // Label writes are not conditional on refs. Retract if freshness cannot
-      // be confirmed after the write; a later run can classify the new refs.
-      await remove(label);
-      throw error;
-    }
+    const applied = await api("POST", issueLabels, { labels: [label] });
+    assert.ok(applied.ok, "Cannot apply verdict label");
+    await fresh();
     verdict = value;
+  } catch (error) {
+    // Serialized runs can retire both stale and just-written verdicts on failure.
+    if (snapshot) await Promise.all([remove("promotion-path: no"), remove("promotion-path: yes")]);
+    throw error;
   } finally {
     summarize(
       `PR #${number} · head \`${snapshot?.head ?? "unavailable"}\` · base \`${snapshot?.base ?? "unavailable"}\` · verdict **${verdict}**\n\nAdvisory only. Labels can be stale or edited and do not waive review.\n`,
