@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import { eventTextHasLineBreak } from "../../../../../../src/admin/event-text";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
@@ -28,16 +29,17 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
 
 {#snippet detail(name: string, label: string, hint: string, limit?: number, type?: "text" | "url")}
   {@const id = `f-${name.replaceAll("_", "-")}`}
+  {@const value = val(name)}
   {@const error = errors[name]}
   {@const description = error ? `${id}-hint ${id}-error` : `${id}-hint`}
   <div class="field">
     <label for={id}>{label}</label>
-    {#if type}
+    {#if type === "url" || (type === "text" && !eventTextHasLineBreak(value))}
       <input
         {id}
         {name}
         {type}
-        value={val(name)}
+        {value}
         data-event-text-limit={limit}
         aria-invalid={error ? "true" : undefined}
         aria-describedby={description}
@@ -46,11 +48,11 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       <textarea
         {id}
         {name}
-        rows={4}
+        rows={type ? 2 : 4}
         data-event-text-limit={limit}
         aria-invalid={error ? "true" : undefined}
         aria-describedby={description}
-      >{val(name)}</textarea>
+      >{value}</textarea>
     {/if}
     <p id={`${id}-hint`} class="hint">{hint}</p>
     {#if error}
@@ -86,31 +88,54 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
   >
     <div class="field">
       <label for="f-title">Title</label>
-      <input
-        id="f-title"
-        name="title"
-        type="text"
-        value={val("title")}
-        data-event-text-limit={100}
-        required
-        aria-invalid={errors.title ? "true" : undefined}
-        aria-describedby={errors.title ? "f-title-error" : undefined}
-      />
+      {#if eventTextHasLineBreak(val("title"))}
+        <textarea
+          id="f-title"
+          name="title"
+          rows={2}
+          data-event-text-limit={100}
+          required
+          aria-invalid={errors.title ? "true" : undefined}
+          aria-describedby={errors.title ? "f-title-error" : undefined}
+        >{val("title")}</textarea>
+      {:else}
+        <input
+          id="f-title"
+          name="title"
+          type="text"
+          value={val("title")}
+          data-event-text-limit={100}
+          required
+          aria-invalid={errors.title ? "true" : undefined}
+          aria-describedby={errors.title ? "f-title-error" : undefined}
+        />
+      {/if}
       {#if errors.title}
         <p id="f-title-error" class="error" role="alert" data-testid="error-title">{errors.title}</p>
       {/if}
     </div>
     <div class="field">
       <label for="f-game">Game</label>
-      <input
-        id="f-game"
-        name="game"
-        type="text"
-        value={val("game")}
-        data-event-text-limit={100}
-        aria-invalid={errors.game ? "true" : undefined}
-        aria-describedby={errors.game ? "f-game-error" : undefined}
-      />
+      {#if eventTextHasLineBreak(val("game"))}
+        <textarea
+          id="f-game"
+          name="game"
+          rows={2}
+          data-event-text-limit={100}
+          aria-invalid={errors.game ? "true" : undefined}
+          aria-describedby={errors.game ? "f-game-error" : undefined}
+        >{val("game")}</textarea>
+      {:else}
+        <input
+          id="f-game"
+          name="game"
+          type="text"
+          value={val("game")}
+          data-event-text-limit={100}
+          aria-invalid={errors.game ? "true" : undefined}
+          aria-describedby={errors.game ? "f-game-error" : undefined}
+        />
+      {/if}
       {#if errors.game}
         <p id="f-game-error" class="error" role="alert" data-testid="error-game">{errors.game}</p>
       {/if}
@@ -207,15 +232,26 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     </div>
     <div class="field">
       <label for="f-location">Location</label>
-      <input
-        id="f-location"
-        name="location"
-        type="text"
-        value={val("location")}
-        data-event-text-limit={255}
-        aria-invalid={errors.location ? "true" : undefined}
-        aria-describedby={errors.location ? "f-location-error" : undefined}
-      />
+      {#if eventTextHasLineBreak(val("location"))}
+        <textarea
+          id="f-location"
+          name="location"
+          rows={2}
+          data-event-text-limit={255}
+          aria-invalid={errors.location ? "true" : undefined}
+          aria-describedby={errors.location ? "f-location-error" : undefined}
+        >{val("location")}</textarea>
+      {:else}
+        <input
+          id="f-location"
+          name="location"
+          type="text"
+          value={val("location")}
+          data-event-text-limit={255}
+          aria-invalid={errors.location ? "true" : undefined}
+          aria-describedby={errors.location ? "f-location-error" : undefined}
+        />
+      {/if}
       {#if errors.location}
         <p id="f-location-error" class="error" role="alert" data-testid="error-location">
           {errors.location}

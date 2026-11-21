@@ -26,7 +26,9 @@ import {
   type KitEventEditRow,
   type KitEventEditView,
 } from "../src/admin/kit-event-edit";
+import { EventEditableFields } from "../src/admin/pages/event-editable-fields";
 import { ROSTER_PAGE_SIZE } from "../src/admin/table-list";
+import { attr, controlNamed, submittedFields } from "./helpers/kit-edit-controls";
 
 const db = {} as Db;
 const now = new Date("2026-06-15T12:00:00.000Z");
@@ -470,6 +472,49 @@ export function renderPage(data) { return render(Page, { props: { data } }).body
   afterAll(() => {
     if (scratch) rmSync(scratch, { recursive: true, force: true });
   });
+
+  for (const field of ["title", "game", "location", "organizer_name"] as const) {
+    it(`${field}: compiled Kit SSR uses the shared multiline control contract`, async () => {
+      const view = await okView();
+      const single = controlNamed(renderPage({ view }), field)!;
+      expect(single.tagName).toBe("input");
+      for (const newline of ["\n", "\r", "\r\n"]) {
+        const loaded = await okView(
+          {},
+          {
+            get: async () => ({ ...baseRow, [field]: `first${newline}second` }),
+          },
+        );
+        const loadedHtml = renderPage({ view: loaded });
+        expect(controlNamed(loadedHtml, field)?.tagName).toBe("textarea");
+        const submitted = submittedFields(loadedHtml);
+        expect(submitted[field]).toBe("first\r\nsecond");
+        expect(loaded.values.saved_baseline).not.toBe("");
+        expect(submitted.saved_baseline).toBe(loaded.values.saved_baseline);
+        const values = { ...view.values, [field]: `first${newline}second` };
+        const errors = { [field]: "Server feedback" };
+        const html = renderPage({
+          view: {
+            ...view,
+            values,
+            errors,
+            fieldsHtml: String(EventEditableFields({ values, errors })),
+            hasErrors: true,
+          },
+        });
+        const id = `f-${field.replaceAll("_", "-")}`;
+        const control = controlNamed(html, field)!;
+        expect(control.tagName).toBe("textarea");
+        expect(attr(control, "rows")).toBe("2");
+        expect(attr(control, "id")).toBe(id);
+        expect(attr(control, "aria-invalid")).toBe("true");
+        expect(attr(control, "aria-describedby")?.split(" ")).toContain(`${id}-error`);
+        expect(attr(control, "data-event-text-limit")).toBe(attr(single, "data-event-text-limit"));
+        expect(attr(control, "required")).toBe(attr(single, "required"));
+        expect(submittedFields(html)[field]).toBe("first\r\nsecond");
+      }
+    });
+  }
 
   // Mutant: change only the page's duplicate form action to /cancel. Form
   // counts stay identical, but each executed status branch must fail here.

@@ -1,6 +1,7 @@
 // Shared escaped fields for Hono and the server-only Kit editor. Keep one
 // renderer for these optional values so the two stacks cannot omit them.
 import type { FC } from "hono/jsx";
+import { eventTextHasLineBreak } from "../event-text";
 import { Field, val } from "./shell";
 
 type Props = { values: Record<string, unknown>; errors: Record<string, string> };
@@ -28,15 +29,21 @@ export const EventHostFields: FC<Props> = ({ values, errors }) => (
       errors={errors}
       hint="Use a name the organizer has agreed to show publicly. Do not enter contact details."
     >
-      {(id) => (
-        <input
-          id={id}
-          name="organizer_name"
-          type="text"
-          value={val(values, "organizer_name")}
-          data-event-text-limit={500}
-        />
-      )}
+      {(id) =>
+        eventTextHasLineBreak(val(values, "organizer_name")) ? (
+          <textarea id={id} name="organizer_name" rows={2} data-event-text-limit={500}>
+            {val(values, "organizer_name")}
+          </textarea>
+        ) : (
+          <input
+            id={id}
+            name="organizer_name"
+            type="text"
+            value={val(values, "organizer_name")}
+            data-event-text-limit={500}
+          />
+        )
+      }
     </Field>
     <Field
       name="join_url"

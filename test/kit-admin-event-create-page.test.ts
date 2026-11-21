@@ -62,6 +62,16 @@ describe("Kit event-create page contract", () => {
     expect(source).toContain("Repeat until (YYYY-MM-DD)");
   });
 
+  it("retains multiline title, game, location and organizer values in the draft form", () => {
+    for (const name of ["title", "game", "location"]) {
+      expect(source).toContain(`{#if eventTextHasLineBreak(val("${name}"))}`);
+      expect(source).toContain(`>{val("${name}")}</textarea>`);
+    }
+    expect(source).toContain('type === "text" && !eventTextHasLineBreak(value)');
+    expect(source).toContain("rows={type ? 2 : 4}");
+    expect(source).toMatch(/detail\("organizer_name",[^\n]+, 500, "text"\)/);
+  });
+
   it("renders the Hono 422 error shape with retained values and the draft marker", () => {
     expect(source).toContain('data-testid="form-errors"');
     expect(source).toContain("Check the highlighted fields and try again.");
