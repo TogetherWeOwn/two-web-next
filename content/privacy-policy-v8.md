@@ -118,15 +118,16 @@ lingering in a cookie.
 third-party analytics or advertising trackers on this site, and no
 third-party scripts. That was wrong in two separate ways, described below.
 
-**Advertising and analytics tags through Cloudflare Zaraz.** A legacy Cloudflare
-Zaraz setup delivered Google Analytics 4, Google Ads and Meta pixel tags on
-this site, with no consent step. Our operator reported Zaraz tracking events on
-3 November 2026 and applied a site-wide rule disabling Zaraz on 4 November 2026
-at about 06:16 UTC. The old tag settings still exist in our Cloudflare account;
-keeping them does not mean they are running. We have not established how long
-these tags were active, how many people they reached, exactly what each event
-contained, or whether Google or Meta still hold that data. This correction does
-not turn any advertising tracking on.
+**Advertising and analytics tags through Cloudflare Zaraz.** Our operator
+reported that a legacy Cloudflare Zaraz setup delivered Google Analytics 4,
+Google Ads and Meta pixel tags on this site, and that no consent step was
+configured in Zaraz. The operator reported Zaraz tracking events on
+3 November 2026 and a site-wide rule disabling Zaraz on 4 November 2026 at
+about 06:16 UTC. The old tag settings still exist in our Cloudflare account;
+keeping them does not mean they are running. We do not know how long these
+tags were active, how many people they reached, what each event contained,
+or what Google or Meta received or kept. This correction does not turn any
+advertising tracking on.
 
 **Performance measurement through Cloudflare Web Analytics.** Separately,
 Cloudflare Web Analytics measured how fast our pages loaded for real visitors
@@ -137,10 +138,11 @@ other websites. When it ran, your browser sent Cloudflare page-load timing and
 Core Web Vitals measurements, which can include the page's address path and a
 description of the page element that was slow or moved.
 
-On 4 November 2026 at 06:36 UTC our operator paused the automatic beacon for
-this site's main address, for every visitor rather than only in some
-countries. One later daily check still counted a single performance sample
-after the pause, and we have not found where it came from. The pause does not
+On 4 November 2026 at 06:36 UTC our operator configured a rule pausing the
+automatic beacon for this site's main address, with no country filter. That
+describes the setting, not a check of what every visitor received. One later
+daily check still counted a single performance sample after the pause, and we
+have not found where it came from. The pause does not
 delete measurements Cloudflare already holds. Turning performance measurement
 back on would be a material change, published as a new version of this
 policy first.
@@ -148,10 +150,10 @@ policy first.
 Cloudflare receives this data as our service provider. Under its customer data
 processing terms it acts as a processor for the personal data those terms
 cover; Cloudflare's own privacy policy also describes some processing it does
-for its own purposes. Cloudflare says it keeps full-detail Web Analytics data
-for 7 days and after that only in aggregated form, and that we can view the
-last 6 months. That viewing window is not a promise about when every Cloudflare
-record is deleted. Cloudflare always handles your IP address to deliver a
+for its own purposes. Cloudflare says it stores unsampled Web Analytics data
+for 7 days and then keeps an aggregated copy of about a tenth of it, and that
+we can access data for the previous six months. That access window is not a
+promise about when every Cloudflare record is deleted. Cloudflare always handles your IP address to deliver a
 page; for the Web Analytics beacon, it says it discards that address at the
 nearest data center and does not store it with the analytics data.
 

@@ -17,6 +17,7 @@ const read = (file: string): string => readFileSync(resolve(root, file), "utf8")
 
 const v6 = read("content/privacy-policy-v6.md");
 const v8 = read("content/privacy-policy-v8.md");
+const v8Flat = v8.replace(/\s+/g, " ");
 
 /** Body of one `## ` section, up to the next heading. */
 function section(markdown: string, heading: string): string {
@@ -65,6 +66,33 @@ describe("privacy policy v8 correction content", () => {
     expect(v8).not.toMatch(/\bcomplian(t|ce)\b/i);
     // Regional exclusion is not shipped; do not claim it.
     expect(v8).not.toMatch(/United Kingdom|European Union|\bEU\b|\bUK\b/);
+  });
+
+  it("describes the pause as configured, not as verified for every visitor", () => {
+    const paras = paragraphs(section(v8, "Cookies and tracking"));
+    const pause = paras.filter((p) => p.includes("06:36 UTC"));
+    expect(pause).toHaveLength(1);
+    expect(pause[0]).toMatch(/operator configured a rule/);
+    expect(pause[0]).toMatch(/no country filter/);
+    expect(pause[0]).toMatch(/single performance sample after the pause/);
+    expect(v8Flat).not.toMatch(/\b(for|to) (every|all) visitors?\b/i);
+    expect(v8Flat).not.toMatch(/\b(everyone|worldwide|globally)\b/i);
+  });
+
+  it("attributes Zaraz facts to the operator and leaves vendor receipt unknown", () => {
+    const paras = paragraphs(section(v8, "Cookies and tracking"));
+    const zaraz = paras.find((p) => p.includes("Google Analytics 4")) ?? "";
+    expect(zaraz).toMatch(/^\*\*[^*]+\*\* Our operator reported/);
+    expect(zaraz).toMatch(/no consent step was configured in Zaraz/);
+    expect(zaraz).toMatch(/what Google or Meta received or kept/);
+    expect(zaraz).not.toMatch(/still hold/);
+    expect(v8Flat).not.toMatch(/with no consent step\b/);
+  });
+
+  it("uses Cloudflare's stated retention without a deletion deadline", () => {
+    expect(v8Flat).toMatch(/stores unsampled Web Analytics data for 7 days/);
+    expect(v8Flat).toMatch(/access data for the previous six months/);
+    expect(v8Flat).toMatch(/not a promise about when every Cloudflare record is deleted/);
   });
 
   it("carries no unresolved editorial markers", () => {
