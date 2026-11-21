@@ -141,8 +141,8 @@ export async function probeWorkloads(owner, runtime) {
   const [intent] = await runtime`UPDATE bot_reconciliation_intents SET resolved_at = now()
     WHERE idempotency_key = ${job.job_id} RETURNING attempts`;
   assert.equal(intent.attempts, 1);
-  await runtime`INSERT INTO announcement_send_claims (idempotency_key, send_attempts, state, started_at)
-    VALUES (${job.job_id}, 1, 'sending', now())`;
+  await runtime`INSERT INTO announcement_send_claims (idempotency_key, channel_alias, send_attempts, state, claim_until)
+    VALUES (${job.job_id}, 'fixture', 1, 'sending', now() + interval '30 seconds')`;
   const [claim] = await runtime`UPDATE announcement_send_claims SET state = 'closed'
     WHERE idempotency_key = ${job.job_id} RETURNING send_attempts`;
   assert.equal(claim.send_attempts, 1);

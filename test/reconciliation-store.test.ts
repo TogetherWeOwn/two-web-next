@@ -42,7 +42,15 @@ describe("dormant reconciliation persistence", () => {
   it("rejects malformed announcement transitions before opening a transaction", async () => {
     const begin = vi.fn();
     const store = pgReconciliationStore({ begin } as never);
-    await expect(store.claimAnnouncement("not-a-uuid")).rejects.toThrow("Invalid announcement key");
+    for (const [key, alias, queuedAt] of [
+      ["not-a-uuid", "fixture", new Date()],
+      [intent.idempotencyKey, "a".repeat(65), new Date()],
+      [intent.idempotencyKey, "fixture", new Date(NaN)],
+    ] as const) {
+      await expect(store.claimAnnouncement(key, alias, queuedAt)).rejects.toThrow(
+        "Invalid announcement carrier",
+      );
+    }
     for (const [attempts, state] of [
       [0, "closed"],
       [1, "sending"],

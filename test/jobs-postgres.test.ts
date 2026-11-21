@@ -29,62 +29,88 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
   it("serializes concurrent announcement claims and counts only acquired sends", async () => {
     const store = pgReconciliationStore(sql);
     const key = crypto.randomUUID();
+    const queuedAt = new Date();
+    const claim = () => store.claimAnnouncement(key, "fixture-channel", queuedAt);
     for (let attempts = 1; attempts <= CALL_INTERNAL_ACTION.tries; attempts++) {
-      const claims = await Promise.all([
-        store.claimAnnouncement(key),
-        store.claimAnnouncement(key),
-      ]);
+      const claims = await Promise.all([claim(), claim()]);
       expect(claims.map((claim) => claim.kind).sort()).toEqual(["claimed", "sending"]);
-      expect(claims.map((claim) => claim.attempts)).toEqual([attempts, attempts]);
-      expect(claims[0].startedAt).toEqual(claims[1].startedAt);
+      expect(claims[0]).toMatchObject({ attempts, claimUntil: expect.any(Date) });
+      expect(claims[1]).toMatchObject({ attempts });
       if (attempts > 1)
         expect(await store.finishAnnouncement(key, attempts - 1, "closed")).toBe(false);
       if (attempts < CALL_INTERNAL_ACTION.tries) {
         expect(await store.finishAnnouncement(key, attempts, "retryable")).toBe(true);
+        // A different alias cannot acquire even an otherwise eligible slot.
+        expect(await store.claimAnnouncement(key, "other-channel", queuedAt)).toEqual({
+          kind: "unavailable",
+        });
       }
     }
     const attempts = CALL_INTERNAL_ACTION.tries;
     await expect(store.finishAnnouncement(key, attempts, "retryable")).rejects.toThrow(
       "Invalid announcement claim settlement",
     );
-    expect(await store.claimAnnouncement(key)).toMatchObject({ kind: "sending", attempts });
+    expect(await claim()).toMatchObject({ kind: "sending", attempts });
     expect(await store.finishAnnouncement(key, attempts, "closed")).toBe(true);
-    expect(await store.claimAnnouncement(key)).toMatchObject({ kind: "closed", attempts });
+    expect(await claim()).toMatchObject({ kind: "closed", attempts });
     expect(await store.finishAnnouncement(key, attempts - 1, "retryable")).toBe(false);
   });
 
-  it("leaves an orphaned announcement fenced when reconciliation cannot commit", async () => {
+  it("keeps a failed hard stop fenced and recovers an abandoned claim without wire diagnostics", async () => {
     const key = crypto.randomUUID();
     const store = pgReconciliationStore(sql);
-    const claim = await store.claimAnnouncement(key);
-    const intent = {
-      idempotencyKey: key,
-      subject: "fixture-channel",
-      attempts: claim.attempts,
-      lastCode: "needs_reconciliation",
-      lastStatus: 409,
-    };
-    await sql`update announcement_send_claims set started_at = now() - interval '1 day'
-      where idempotency_key = ${key}`;
+    const queuedAt = new Date();
+    const claim = () => store.claimAnnouncement(key, "fixture-channel", queuedAt);
+    const evidence = { lastCode: "needs_reconciliation", lastStatus: 409 };
+    expect(await claim()).toMatchObject({ kind: "claimed", attempts: 1 });
+    await expect(store.recordAnnouncement(key, 1, null)).rejects.toThrow("claim changed");
     await sql`insert into bot_reconciliation_intents (idempotency_key, verb, subject, attempts)
       values (${key}, 'event.upsert', 'fixture-event', 1)`;
-    await expect(store.recordAnnouncement(intent)).rejects.toThrow("not an open matching intent");
-    const afterFailure = await pgReconciliationStore(sql).claimAnnouncement(key);
-    expect(afterFailure).toMatchObject({ kind: "sending", attempts: 1 });
-    expect(afterFailure.startedAt.getTime()).toBeLessThan(claim.startedAt.getTime());
-
-    // Clear the injected conflict; the matching claim and scalar intent now commit together.
+    await expect(store.recordAnnouncement(key, 1, evidence)).rejects.toThrow(
+      "not an open matching intent",
+    );
+    expect(await claim()).toMatchObject({ kind: "sending", attempts: 1 });
     await sql`delete from bot_reconciliation_intents where idempotency_key = ${key}`;
-    await store.recordAnnouncement(intent);
-    expect(await store.claimAnnouncement(key)).toMatchObject({ kind: "closed", attempts: 1 });
+
+    await sql`update announcement_send_claims set claim_until = now() - interval '31 days'
+      where idempotency_key = ${key}`;
+    expect(await claim()).toMatchObject({ kind: "abandoned", attempts: 1 });
+    expect(await store.finishAnnouncement(key, 1, "retryable")).toBe(false);
+    await expect(store.recordAnnouncement(key, 1, evidence)).rejects.toThrow("claim changed");
+    await store.recordAnnouncement(key, 1, null);
+    expect(await claim()).toMatchObject({ kind: "closed", attempts: 1 });
     const [saved] = await sql`select verb, subject, attempts, last_code, last_status
       from bot_reconciliation_intents where idempotency_key = ${key}`;
     expect(saved).toEqual({
       verb: "announcement.post",
       subject: "fixture-channel",
       attempts: 1,
-      last_code: "needs_reconciliation",
-      last_status: 409,
+      last_code: null,
+      last_status: null,
+    });
+    expect(await store.pruneClosedAnnouncements()).toBe(0);
+    expect(await store.resolve(key, "123", "not_applied", async () => {})).toBe(true);
+    expect(await store.pruneClosedAnnouncements()).toBe(1);
+    expect(await claim()).toEqual({ kind: "unavailable" }); // Resolved key remains suppressed.
+  });
+
+  it("commits hard-stop diagnostics and never reacquires a pruned original carrier", async () => {
+    const key = crypto.randomUUID();
+    const retired = crypto.randomUUID();
+    const store = pgReconciliationStore(sql);
+    expect(await store.claimAnnouncement(key, "fixture-channel", new Date())).toMatchObject({
+      kind: "claimed",
+    });
+    await store.recordAnnouncement(key, 1, { lastCode: "needs_reconciliation", lastStatus: 409 });
+    const [saved] =
+      await sql`select last_code, last_status from bot_reconciliation_intents where idempotency_key = ${key}`;
+    expect(saved).toEqual({ last_code: "needs_reconciliation", last_status: 409 });
+    const enqueued = new Date(Date.now() - 32 * 86_400_000);
+    await sql`insert into announcement_send_claims (idempotency_key, channel_alias, send_attempts, state, claim_until)
+      values (${retired}, 'fixture-channel', 1, 'closed', now() - interval '31 days')`;
+    expect(await store.pruneClosedAnnouncements()).toBe(1);
+    expect(await store.claimAnnouncement(retired, "fixture-channel", enqueued)).toEqual({
+      kind: "unavailable",
     });
   });
 

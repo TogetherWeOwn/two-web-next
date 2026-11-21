@@ -18,17 +18,30 @@ const SUBJECT = /^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,199}$/;
 const ACTOR = /^[0-9]{1,20}$/;
 const RESOLUTIONS = new Set(["confirmed", "not_applied", "superseded"]);
 
-type AnnouncementSendClaim = {
-  kind: "claimed" | "sending" | "closed";
-  attempts: number;
-  startedAt: Date;
-};
+const CHANNEL_ALIAS = /^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,63}$/;
+const SEND_LEASE_SECONDS = 30; // Room for the 10s bot deadline and bounded DB settlement.
+const CARRIER_AGE_DAYS = 30; // Longer than the queue's maximum retention. Never refresh its timestamp on retry.
+
+type AnnouncementSendClaim =
+  | { kind: "claimed" | "sending" | "abandoned" | "closed"; attempts: number; claimUntil: Date }
+  | { kind: "unavailable" };
 
 type AnnouncementSendRow = {
+  channel_alias: string;
   send_attempts: number;
-  started_at_ms: number;
-  state: "sending" | "retryable" | "closed";
+  claim_until_ms: number;
+  kind: "sending" | "abandoned" | "retryable" | "closed";
 };
+
+function validAnnouncementAttempt(key: string, attempts: number): boolean {
+  return (
+    typeof key === "string" &&
+    UUID.test(key) &&
+    Number.isInteger(attempts) &&
+    attempts >= 1 &&
+    attempts <= CALL_INTERNAL_ACTION.tries
+  );
+}
 
 export type ReconciliationIntent = {
   idempotencyKey: string;
@@ -102,44 +115,61 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
     key: string,
     attempts: number,
     state: "retryable" | "closed",
-  ): Promise<boolean> {
-    const rows = await tx`update announcement_send_claims set state = ${state}
+    orphan = false,
+  ): Promise<string | undefined> {
+    const [row] = await tx`update announcement_send_claims set state = ${state}
       where idempotency_key = ${key}::uuid and state = 'sending' and send_attempts = ${attempts}
-      returning idempotency_key`;
-    return rows.length === 1;
+        and (claim_until <= clock_timestamp()) = ${orphan}
+      returning channel_alias`;
+    return row?.channel_alias as string | undefined;
   }
 
   return {
-    /** Only a committed claim grants a send. An old 'sending' row is never reclaimed. */
-    async claimAnnouncement(key: string): Promise<AnnouncementSendClaim> {
-      if (typeof key !== "string" || !UUID.test(key)) throw new Error("Invalid announcement key");
+    /** Pass the original queue timestamp, not a retry time or a body field. */
+    async claimAnnouncement(
+      key: string,
+      alias: string,
+      queuedAt: Date,
+    ): Promise<AnnouncementSendClaim> {
+      if (
+        typeof key !== "string" ||
+        !UUID.test(key) ||
+        typeof alias !== "string" ||
+        !CHANNEL_ALIAS.test(alias) ||
+        !(queuedAt instanceof Date) ||
+        !Number.isFinite(queuedAt.getTime())
+      )
+        throw new Error("Invalid announcement carrier");
       return bounded(async (tx) => {
-        const [claimed]: AnnouncementSendRow[] = await tx`insert into announcement_send_claims
-          (idempotency_key, send_attempts, state, started_at) values (${key}::uuid, 1, 'sending', clock_timestamp())
+        const [claimed] = await tx`insert into announcement_send_claims as claim
+          (idempotency_key, channel_alias, send_attempts, state, claim_until)
+          select ${key}::uuid, ${alias}, 1, 'sending', clock_timestamp() + make_interval(secs => ${SEND_LEASE_SECONDS})
+          where ${queuedAt.toISOString()}::timestamptz > now() - make_interval(days => ${CARRIER_AGE_DAYS})
+            and ${queuedAt.toISOString()}::timestamptz <= now() + interval '5 seconds'
+            and not exists (select 1 from bot_reconciliation_intents where idempotency_key = ${key}::uuid)
           on conflict (idempotency_key) do update set
-            send_attempts = announcement_send_claims.send_attempts + 1,
-            state = 'sending', started_at = clock_timestamp()
-          where announcement_send_claims.state = 'retryable'
-            and announcement_send_claims.send_attempts < ${CALL_INTERNAL_ACTION.tries}
-          returning send_attempts, state,
-            (extract(epoch from started_at) * 1000)::double precision as started_at_ms`;
+            send_attempts = claim.send_attempts + 1, state = 'sending', claim_until = excluded.claim_until
+          where claim.state = 'retryable' and claim.channel_alias = excluded.channel_alias
+            and claim.send_attempts < ${CALL_INTERNAL_ACTION.tries}
+          returning send_attempts, (extract(epoch from claim_until) * 1000)::double precision as claim_until_ms`;
         if (claimed)
           return {
             kind: "claimed",
             attempts: claimed.send_attempts,
-            startedAt: new Date(claimed.started_at_ms),
+            claimUntil: new Date(claimed.claim_until_ms),
           };
 
-        // A separate statement sees the winning insert even if it committed while the upsert waited.
-        const [current]: AnnouncementSendRow[] = await tx`select send_attempts, state,
-            (extract(epoch from started_at) * 1000)::double precision as started_at_ms
+        // A separate statement sees a winning insert that committed while the upsert waited.
+        const [current]: AnnouncementSendRow[] = await tx`select channel_alias, send_attempts,
+            case when state = 'sending' and claim_until <= clock_timestamp() then 'abandoned' else state end as kind,
+            (extract(epoch from claim_until) * 1000)::double precision as claim_until_ms
           from announcement_send_claims where idempotency_key = ${key}::uuid`;
-        if (!current || current.state === "retryable")
-          throw new Error("Announcement claim unavailable");
+        if (!current || current.channel_alias !== alias || current.kind === "retryable")
+          return { kind: "unavailable" };
         return {
-          kind: current.state,
+          kind: current.kind,
           attempts: current.send_attempts,
-          startedAt: new Date(current.started_at_ms),
+          claimUntil: new Date(current.claim_until_ms),
         };
       });
     },
@@ -150,26 +180,51 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
       state: "retryable" | "closed",
     ): Promise<boolean> {
       if (
-        typeof key !== "string" ||
-        !UUID.test(key) ||
-        !Number.isSafeInteger(attempts) ||
-        attempts < 1 ||
-        attempts > 2147483647 ||
+        !validAnnouncementAttempt(key, attempts) ||
         (state !== "retryable" && state !== "closed") ||
         (state === "retryable" && attempts >= CALL_INTERNAL_ACTION.tries)
       ) {
         throw new Error("Invalid announcement claim settlement");
       }
-      return bounded((tx) => finishAnnouncement(tx, key, attempts, state));
+      return bounded(
+        async (tx) => (await finishAnnouncement(tx, key, attempts, state)) !== undefined,
+      );
     },
-    /** A hard stop or orphaned claim closes only when its scalar evidence commits. */
-    async recordAnnouncement(input: Omit<ReconciliationIntent, "verb">): Promise<void> {
-      const intent = reconciliationIntent({ ...input, verb: "announcement.post" });
+    /** Null evidence recovers an abandoned claim: a reservation does not prove a wire send. */
+    async recordAnnouncement(
+      key: string,
+      attempts: number,
+      evidence: Pick<ReconciliationIntent, "lastCode" | "lastStatus"> | null,
+    ): Promise<void> {
+      if (!validAnnouncementAttempt(key, attempts)) throw new Error("Invalid announcement claim");
       await bounded(async (tx) => {
-        if (!(await finishAnnouncement(tx, intent.idempotencyKey, intent.attempts, "closed"))) {
+        const alias = await finishAnnouncement(tx, key, attempts, "closed", evidence === null);
+        if (alias === undefined)
           throw new Error("Announcement claim changed before reconciliation");
-        }
-        await insert(tx, intent);
+        await insert(
+          tx,
+          reconciliationIntent({
+            idempotencyKey: key,
+            verb: "announcement.post",
+            attempts,
+            subject: alias,
+            lastCode: evidence?.lastCode ?? null,
+            lastStatus: evidence?.lastStatus ?? null,
+          }),
+        );
+      });
+    },
+    /** Owner-only maintenance, unscheduled until integration. Never delete unresolved evidence. */
+    async pruneClosedAnnouncements(): Promise<number> {
+      return bounded(async (tx) => {
+        const rows = await tx`delete from announcement_send_claims where idempotency_key in (
+          select c.idempotency_key from announcement_send_claims c
+          where c.state = 'closed' and c.claim_until <= now() - make_interval(days => ${CARRIER_AGE_DAYS})
+            and not exists (select 1 from bot_reconciliation_intents i
+              where i.idempotency_key = c.idempotency_key and i.resolved_at is null)
+          order by c.claim_until, c.idempotency_key limit 1000 for update skip locked
+        ) returning idempotency_key`;
+        return rows.length;
       });
     },
     async record(input: ReconciliationIntent): Promise<void> {

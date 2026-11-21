@@ -155,7 +155,7 @@
     },
     {
       "path": "drizzle/1038_announcement-send-claims.sql",
-      "sha256": "fa8c16150a6eb4e958219de3da469d8d1638371016d06193af13e4ca3045c436"
+      "sha256": "ba4c448a3d1b2a56823d843b6b268324f6dadf6fc8e8310b9fbd44455d130285"
     }
   ]
 }
