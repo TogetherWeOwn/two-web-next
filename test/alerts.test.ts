@@ -1,6 +1,7 @@
 import { HTTPException } from "hono/http-exception";
 import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import {
   ALERT_WINDOW_MS,
   AlertRateLimit,
@@ -188,8 +189,18 @@ describe("queue.failing", () => {
     dequeued: async () => {},
     failed: async () => {},
   } as unknown as QueueLedger;
-  const msg = (body: unknown, attempts: number) => ({ body, attempts, ack() {}, retry() {} });
-  const ann = { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } };
+  const msg = (body: unknown, attempts: number) => ({
+    body,
+    attempts,
+    timestamp: new Date(),
+    ack() {},
+    retry() {},
+  });
+  const ann = {
+    kind: "announcement",
+    idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
+    action: { channelKey: "c", body: "b" },
+  };
   const failingLines = (spy: { mock: { calls: unknown[][] } }): Record<string, unknown>[] =>
     spy.mock.calls
       .map((c) => String(c[0]))
@@ -205,7 +216,10 @@ describe("queue.failing", () => {
         throw new BotTerminalError("missing secret");
       },
     } as unknown as BotClient;
-    await consume({ messages: [msg(ann, 2)] }, { bot, events, lock, ledger });
+    await consume(
+      { messages: [msg(ann, 2)] },
+      { bot, events, lock, ledger, ...{ announcementReconciliation: announcementStore() } },
+    );
     expect(failingLines(spy)).toEqual([
       {
         level: "critical",
@@ -231,12 +245,12 @@ describe("queue.failing", () => {
     } as unknown as BotClient;
     await consume(
       { messages: [msg(ann, CALL_INTERNAL_ACTION.tries - 1)] },
-      { bot, events, lock, ledger },
+      { bot, events, lock, ledger, ...{ announcementReconciliation: announcementStore() } },
     );
     expect(failingLines(spy)).toHaveLength(0);
     await consume(
       { messages: [msg(ann, CALL_INTERNAL_ACTION.tries)] },
-      { bot, events, lock, ledger },
+      { bot, events, lock, ledger, ...{ announcementReconciliation: announcementStore() } },
     );
     expect(failingLines(spy)).toMatchObject([
       { attempts: CALL_INTERNAL_ACTION.tries, exception: "TypeError" },

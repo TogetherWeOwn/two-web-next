@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import { SYNC_EVENT } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
@@ -98,6 +99,7 @@ function store(over: Partial<EventStore> = {}): EventStore & { mirrored: (string
 function msg(body: unknown, attempts = 1) {
   const r = { body, attempts, acked: false, retried: undefined as number | undefined | "now" };
   return Object.assign(r, {
+    timestamp: new Date(),
     ack() {
       r.acked = true;
     },
@@ -342,7 +344,14 @@ describe("queue ledger timeout guards (released / failed / dequeued)", () => {
         m1Acks += 1;
         return origAck();
       };
-      const p = consume({ messages: [m1, m2] }, { bot, events: store(), lock: memLock(), ledger });
+      const deps = {
+        bot,
+        events: store(),
+        lock: memLock(),
+        ledger,
+        announcementReconciliation: announcementStore(),
+      };
+      const p = consume({ messages: [m1, m2] }, deps);
       await vi.advanceTimersByTimeAsync(5000);
       await p;
       expect(m1.acked).toBe(true);

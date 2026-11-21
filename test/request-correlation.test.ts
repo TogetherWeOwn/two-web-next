@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import type { Env, Session } from "../src/env";
 import { requestLog } from "../src/request-log";
 import { registerEventRoutes } from "../src/events/routes";
@@ -230,31 +231,38 @@ describe("request correlation through queue envelopes (local fixtures)", () => {
       const body = {
         kind: "announcement",
         action: { channelKey: "fixture", body: "fixture" },
-        idempotencyKey: "fixed",
+        idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
         requestId: ID,
       };
       const ack = vi.fn(),
         retry = vi.fn();
+      const timestamp = new Date();
+      const deps = {
+        bot,
+        lock,
+        ledger,
+        events: {} as EventStore,
+        announcementReconciliation: announcementStore(),
+      };
       if (failure === "exhausted throw") {
-        await consume(
-          { messages: [{ body, attempts: 1, ack, retry }] },
-          { bot, lock, ledger, events: {} as EventStore },
-        );
+        const message = { body, timestamp, attempts: 1, ack, retry };
+        await consume({ messages: [message] }, deps);
         expect(retry).toHaveBeenCalledTimes(1);
         expect(ack).not.toHaveBeenCalled();
         expect(body.requestId).toBe(ID);
-        expect(body.idempotencyKey).toBe("fixed");
+        expect(body.idempotencyKey).toBe("94e5ec13-81e8-4d24-8841-19489bda1b15");
         expect(error.mock.calls.some(([line]) => String(line).includes('"queue.failing"'))).toBe(
           false,
         );
       }
       const messages = [ID, OTHER_ID, "cookie-secret", undefined].map((requestId) => ({
         body: { ...body, requestId },
+        timestamp,
         attempts: 5,
         ack,
         retry,
       }));
-      await consume({ messages }, { bot, lock, ledger, events: {} as EventStore });
+      await consume({ messages }, deps);
       const alerts = error.mock.calls
         .map(([line]) => String(line))
         .filter((line) => line.includes('"queue.failing"'))

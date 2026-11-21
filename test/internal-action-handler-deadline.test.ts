@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import { consume } from "../src/jobs/consumer";
 import {
   INTERNAL_ACTION_DEADLINE_MS,
@@ -13,7 +14,7 @@ import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs
 // awaited bare, so one hung call stalled the whole serial batch behind it.
 const ann = {
   kind: "announcement",
-  idempotencyKey: "k",
+  idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
   action: { channelKey: "c", body: "b" },
 } as const;
 const role = {
@@ -25,6 +26,7 @@ const role = {
 function msg(body: unknown, attempts = 1) {
   const r = { body, attempts, acked: false, retried: undefined as number | undefined | "now" };
   return Object.assign(r, {
+    timestamp: new Date(),
     ack() {
       r.acked = true;
     },
@@ -78,14 +80,20 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     const second = msg({ ...role }, 1);
     const p = consume(
       { messages: [first, second] },
-      { bot, events: store(), lock: memLock(), ledger: memLedger().ledger },
+      {
+        bot,
+        events: store(),
+        lock: memLock(),
+        ledger: memLedger().ledger,
+        ...{ announcementReconciliation: announcementStore() },
+      },
     );
     await vi.advanceTimersByTimeAsync(INTERNAL_ACTION_DEADLINE_MS + 1000);
     await p;
     // Bounded wait (first backoff is 5 s), same carrier key, no terminal ack …
     expect(first.retried).toBe(5);
     expect(first.acked).toBe(false);
-    expect(first.body).toMatchObject({ idempotencyKey: "k" });
+    expect(first.body).toMatchObject({ idempotencyKey: ann.idempotencyKey });
     // … and the later message still reaches disposition.
     expect(second.acked).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
@@ -113,7 +121,9 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     const { ledger, rows } = memLedger();
     rows.set("j1", { state: "pending" });
     const last = msg({ ...ann, jobId: "j1" }, 5);
-    const p = consume({ messages: [last] }, { bot, events: store(), lock: memLock(), ledger });
+    const announcementReconciliation = announcementStore(5);
+    const deps = { bot, events: store(), lock: memLock(), ledger, announcementReconciliation };
+    const p = consume({ messages: [last] }, deps);
     await vi.advanceTimersByTimeAsync(INTERNAL_ACTION_DEADLINE_MS + 1000);
     await p;
     expect(last.acked).toBe(true);
@@ -174,7 +184,7 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     await expect(attempt).resolves.toEqual({ retryInSeconds: 5 });
     // Redelivery carries the same carrier (same key), and the bot dedupes it.
     await expect(handleCallInternalAction({ ...ann }, 2, bot)).resolves.toEqual({ done: true });
-    expect(seen).toEqual(["k", "k"]);
+    expect(seen).toEqual([ann.idempotencyKey, ann.idempotencyKey]);
   });
 
   it("fast paths are unchanged: success, refusal, retry-after, transport and terminal throws", async () => {
