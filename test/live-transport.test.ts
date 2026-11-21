@@ -10,17 +10,24 @@ function signature(path: string, timestamp: string, token: string, body: string)
   const digest = createHash("sha256").update(body).digest("hex");
   return `sha256=${createHmac("sha256", key.secret).update(`POST\n${path}\n${timestamp}\n${token}\n${digest}`).digest("hex")}`;
 }
-function request(body: string, suffix = "", timestamp = unix, id = key.keyId) {
-  return new Request(`https://site.example${LIVE_INGEST_PATH}${suffix}`, {
+function request(
+  body: string | ReadableStream<Uint8Array>,
+  suffix = "",
+  timestamp = unix,
+  id = key.keyId,
+) {
+  const init: RequestInit & { duplex: "half" } = {
     method: "POST",
     body,
+    duplex: "half",
     headers: {
       "X-TWO-Key-Id": id,
       "X-TWO-Timestamp": String(timestamp),
       "X-TWO-Nonce": nonce,
       "X-TWO-Signature": signature(LIVE_INGEST_PATH, String(timestamp), nonce, raw),
     },
-  });
+  };
+  return new Request(`https://site.example${LIVE_INGEST_PATH}${suffix}`, init);
 }
 
 it("authenticates the original bytes and rejects reserialization", async () => {
@@ -59,12 +66,24 @@ it("times out during HMAC verification after reading the body", async () => {
     return new Promise((resolve) => setTimeout(() => resolve(true), 3_000));
   });
   try {
-    const result = verifyLiveIngress(request(raw), key, unix * 1000);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        setTimeout(() => {
+          controller.enqueue(new TextEncoder().encode(raw));
+          controller.close();
+        }, 1_000);
+      },
+    });
+    const result = verifyLiveIngress(request(body), key, unix * 1000);
+    await vi.advanceTimersByTimeAsync(1_000);
     await Promise.race([verifying, result]);
     expect(verify).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(2_500);
+    // Body reading and HMAC verification share the deadline from request start.
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(await Promise.race([result, Promise.resolve("pending")])).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
     expect(await Promise.race([result, Promise.resolve("pending")])).toEqual({ status: 400 });
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1_500);
   } finally {
     verify.mockRestore();
     vi.useRealTimers();
