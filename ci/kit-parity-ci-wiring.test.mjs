@@ -255,9 +255,13 @@ test("visual tests re-seed and verify the board state after worker restarts", ()
   assert(honoPoll >= 0 && honoPoll < seedRsvp && seedRsvp < kitPoll);
   assert(loadComplete >= 0 && loadComplete < rankedRow && rankedRow < screenshot);
   assert(emptyBoard >= 0 && emptyBoard < screenshot);
-  assert.equal(
-    (visuals.match(/getByRole\("rowheader", \{ name: KIT_VIEWER_ROW_NAME \}\)/g) ?? []).length,
-    2,
+  assert.match(
+    visuals.slice(rankedRow, emptyBoard),
+    /getByRole\("rowheader", \{ name: KIT_VIEWER_ROW_NAME \}\)/,
+  );
+  assert.match(
+    visuals.slice(emptyBoard, screenshot),
+    /getByRole\("rowheader", \{ name: "QA Member", exact: false \}\),?\s*\)\.toHaveCount\(\s*0,?\s*\)/,
   );
   assert.match(visuals, /rankedRow\)\.toHaveAttribute\("aria-current", "true"\)/);
   assert.match(visuals, /rankedRow\.getByRole\("cell"\)\)\.toHaveText\(\["1", "1"\]\)/);

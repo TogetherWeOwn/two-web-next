@@ -75,7 +75,7 @@ test("successful changed-query listing remains visible without a GitHub summary 
 test("the blocking Check step runs this selftest and the Tier-0 check is required", () => {
   const steps = workflow.split(/\n      - /);
   const checkStep = steps.find((entry) =>
-    entry.startsWith("name: Check (lint + typecheck + coverage gate)\n"),
+    entry.startsWith("name: Check CI contracts and e2e safety\n"),
   );
   assert(checkStep, "the blocking Check step must exist");
   assert.match(checkStep, /node --test[^\n]*ci\/tier0-changed-query-files\.test\.mjs/);

@@ -443,7 +443,11 @@ test("recovery ZIP round-trips inert files through the synthetic validator", () 
     validatePureHonoRecoveryEvidence({
       archive,
       expected: { ...identity, workflow, archiveSha256 },
-      attestation: { ...producer, subjectSha256: archiveSha256 },
+      attestation: {
+        ...producer,
+        subjectSha256: archiveSha256,
+        invocationId: "https://github.com/TogetherWeOwn/two-web-next/actions/runs/123/attempts/2",
+      },
       run: { ...producer, status: "completed", conclusion: "success" },
       decode: decodePureHonoRecoveryZip,
     }),

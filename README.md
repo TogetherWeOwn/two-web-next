@@ -257,8 +257,7 @@ area floors (`src/admin`, `src/events`, `src/join` together with
 `src/write-recovery.tsx`, `src/kit-*`, `src/counts.ts`, `src/seo.ts`) live in
 `vitest.config.ts`. The baseline uses the full suite with the test database;
 without it, skipped live suites may put coverage below the floors. CI's
-`check` job runs the configuration drift check, Biome lint/format gate,
-typecheck and the coverage gate against its Postgres service, writes a job summary
+`coverage-merge` job verifies each shard's files and coverage map before enforcing the floors, writes a job summary
 with the ten least-covered files, and uploads the JSON coverage summary for 14 days,
 including on failure.
 
@@ -517,7 +516,8 @@ recovery also stops at the migration gate after three `/up` reads. An explicit
 manual re-dispatch with `migrations_applied: true` records an audited continuation
 past these migration stops once `db-migrate.yml` (target production) has applied the
 target's migrations; automatic runs ignore that input and halt on those stops
-unless the ledger already proves the target applied. The first promotion
+unless the ledger already proves the target applied. A scoped production migration
+that leaves any target migration deferred does not qualify the target. The first promotion
 after the ledger signal ships needs one manual dispatch because the live
 Worker predates it. Repo
 variable `PRODUCTION_HOLD_UNTIL` (ISO-8601 UTC, at most 24h ahead) pauses all

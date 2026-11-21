@@ -3267,23 +3267,55 @@ test.describe("archive page turns prove successful paging and history", () => {
         },
       ]);
       await page.evaluate("window.__noticeSameDoc = 1");
+      const pageTwoUrl = new URL("/events/past?page=2", KIT_ORIGIN).href;
+      const marker = { name: "x-two-island", value: "past-events" };
+      // Clone the marked response before the island consumes it, so the assertion
+      // doesn't depend on DevTools retaining the body across the history update.
+      const capture = await page.evaluateHandle(
+        ({ url, marker }) => {
+          const captured: { response: Response | null } = { response: null };
+          const originalFetch = window.fetch;
+          window.fetch = async (...args) => {
+            const response = await originalFetch.apply(window, args);
+            if (response.url === url && !captured.response) {
+              const [input, init] = args;
+              const headers = new Headers(
+                init?.headers ?? (input instanceof Request ? input.headers : undefined),
+              );
+              if (headers.get(marker.name) === marker.value) {
+                captured.response = response.clone();
+                window.fetch = originalFetch;
+              }
+            }
+            return response;
+          };
+          return captured;
+        },
+        { url: pageTwoUrl, marker },
+      );
       const responsePromise = page.waitForResponse(
         (response) =>
-          new URL(response.url()).pathname === "/events/past" &&
-          new URL(response.url()).search === "?page=2",
+          response.url() === pageTwoUrl &&
+          response.request().headers()[marker.name] === marker.value,
       );
       await page.locator('a[data-archive-page]:has-text("Older")').click();
       const pagination = await responsePromise;
       expect(pagination.status()).toBe(200);
+      expect(pagination.request().resourceType()).toBe("fetch");
       const paginationHeaders = await pagination.request().allHeaders();
       expect(paginationHeaders["x-two-island"]).toBe("past-events");
       expect(paginationHeaders["sec-fetch-dest"]).toBeUndefined();
       expect(paginationHeaders["sec-fetch-mode"]).toBeUndefined();
       expect((paginationHeaders["cookie"] ?? "").includes(`${name}=`)).toBe(true);
-      expect(await pagination.text()).not.toContain('data-testid="auth-error"');
       await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "2");
       await expect(page.getByTestId("past-events")).not.toHaveAttribute("aria-busy");
       expect(await page.evaluate("window.__noticeSameDoc")).toBe(1);
+      const paginationBody = await capture.evaluate(({ response }) => {
+        if (!response) throw new Error("The page-two archive fetch was not captured");
+        return response.text();
+      });
+      expect(paginationBody).toContain(archiveTurnTitle(4));
+      expect(paginationBody).not.toContain('data-testid="auth-error"');
       expect(
         (await context.cookies(KIT_ORIGIN)).filter((cookie) => cookie.name === name),
       ).toHaveLength(1);
@@ -3627,7 +3659,10 @@ test.describe("kit: member-board visuals", () => {
                   hasText: memberBoardEmptyText("overall", allowsEndedMemberBoardCopy(path)),
                 }),
             ).toBeVisible();
-            await expect(page.getByRole("rowheader", { name: KIT_VIEWER_ROW_NAME })).toHaveCount(0);
+            // Reject any viewer row here, even if its label is malformed.
+            await expect(
+              page.getByRole("rowheader", { name: "QA Member", exact: false }),
+            ).toHaveCount(0);
           }
           await expect.soft(page).toHaveScreenshot(`member-board-${view}-${viewport.name}.png`, {
             fullPage: true,

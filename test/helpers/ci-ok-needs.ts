@@ -8,6 +8,8 @@ export const baseCiOkNeeds = [
   "queue-syntax-smoke",
   "dependency-admission",
   "check",
+  "static-check",
+  "coverage-merge",
   "kit-browser-fixture",
   "node22-compat",
   "scope",
