@@ -21,13 +21,13 @@
 // also proves the DB counters actually move, so the zero assertions in
 // the over-cap suite cannot pass vacuously.
 //
-// Hermetic and DB-free: mounted app (`test/app.ts`) with the in-memory
+// Hermetic and DB-free: mounted app through `fetchApp` with the in-memory
 // fake agent-event store behind a statement-counting wrapper, plus the
 // Hyperdrive-shaped env behind a mocked `postgres` module that counts
 // client opens. No DATABASE_URL, no Discord, no network.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type postgres from "postgres";
-import app from "./app";
+import { fetchApp } from "./helpers/fetch-app";
 import type { Env } from "../src/env";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import { DEFAULT_CONFIG, digest } from "../src/agent-events/service";
@@ -188,13 +188,12 @@ function overCapRequest(headers: Record<string, string>, advertised: boolean) {
 }
 
 async function postJson(env: Env, headers: Record<string, string>, body: string) {
-  const res = await app.request(
-    "/api/agent-events",
-    {
+  const res = await fetchApp(
+    new Request(new URL("/api/agent-events", env.APP_URL), {
       method: "POST",
       headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.1", ...headers },
       body,
-    },
+    }),
     env,
     executionCtx,
   );
@@ -213,7 +212,7 @@ describe("body cap before admission: over-cap refusals spend nothing (fake store
       silence();
       const { fake, counter, env } = await fakeEnv();
       const { request } = overCapRequest({ authorization: `Bearer ${credential}` }, true);
-      const res = await app.request(request, undefined, env, executionCtx);
+      const res = await fetchApp(request, env, executionCtx);
       expect(res.status).toBe(413);
       expect(await res.json()).toMatchObject(ERROR_413);
       expect(counter.statements).toBe(0);
@@ -230,7 +229,7 @@ describe("body cap before admission: over-cap refusals spend nothing (fake store
       silence();
       const { fake, counter, env } = await fakeEnv();
       const { request } = overCapRequest({ authorization: `Bearer ${credential}` }, false);
-      const res = await app.request(request, undefined, env, executionCtx);
+      const res = await fetchApp(request, env, executionCtx);
       expect(res.status).toBe(413);
       expect(await res.json()).toMatchObject(ERROR_413);
       expect(counter.statements).toBe(0);
@@ -277,7 +276,7 @@ describe("body cap before admission: over-cap refusals open no client (Hyperdriv
     async (_label, credential) => {
       silence();
       const { request } = overCapRequest({ authorization: `Bearer ${credential}` }, true);
-      const res = await app.request(request, undefined, hyperdriveEnv, executionCtx);
+      const res = await fetchApp(request, hyperdriveEnv, executionCtx);
       expect(res.status).toBe(413);
       expect(await res.json()).toMatchObject(ERROR_413);
       expect(pgFixture.connects).toBe(0);
@@ -291,7 +290,7 @@ describe("body cap before admission: over-cap refusals open no client (Hyperdriv
   it("a chunked over-cap body with a bearer credential opens zero clients", async () => {
     silence();
     const { request } = overCapRequest({ authorization: `Bearer ${CRED}` }, false);
-    const res = await app.request(request, undefined, hyperdriveEnv, executionCtx);
+    const res = await fetchApp(request, hyperdriveEnv, executionCtx);
     expect(res.status).toBe(413);
     expect(await res.json()).toMatchObject(ERROR_413);
     expect(pgFixture.connects).toBe(0);
