@@ -2171,6 +2171,61 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
       if (!section) throw new Error("Missing calendar section");
       const nodes = (root: Element, selector: string) => [...root.querySelectorAll(selector)];
       const text = (node: Element) => (node.textContent ?? "").replace(/\s+/g, " ").trim();
+      // The description uses white-space: pre-line: collapse horizontal space,
+      // not line breaks, and read the body rather than the disclosure label.
+      const descriptionText = (node: Element) =>
+        (node.textContent ?? "")
+          .replace(/[ \t]+/g, " ")
+          .replace(/ *\n */g, "\n")
+          .replace(/^ | $/g, "");
+      const zoneOf = (node: Element) => node.closest("[data-cal-zone]");
+      const loading = section.querySelector('[data-testid="events-loading"][hidden]');
+      const heading = section.querySelector('#events-heading[tabindex="-1"]');
+      const content = section.querySelector('[data-cal-zone="content"]');
+      const headingLinks = nodes(section, ".schedule-heading a");
+      if (!loading || zoneOf(loading) !== null) throw new Error("Missing stable loading hook");
+      if (
+        !heading ||
+        section.getAttribute("aria-labelledby") !== heading.id ||
+        zoneOf(heading) !== null
+      ) {
+        throw new Error("Missing stable Events heading focus target");
+      }
+      if (!headingLinks.length || headingLinks.some((node) => zoneOf(node) !== null)) {
+        throw new Error("Missing guest Join hook outside replacement zones");
+      }
+      const statusSelector = [
+        "[data-cal-feedback]",
+        '[data-testid="events-view-status"]',
+        '[data-testid="events-search-status"]',
+        '[data-testid="events-past-status"]',
+        '[data-testid="calendar-month-status"]',
+        '[data-testid="events-read-status"]',
+      ];
+      for (const selector of statusSelector) {
+        const status = section.querySelector(selector);
+        if (!status?.matches('[role="status"]') || zoneOf(status) !== null) {
+          throw new Error(`Missing stable status hook ${selector}`);
+        }
+      }
+      const head = section.querySelector('[data-cal-zone="head"]');
+      const viewList = head?.querySelector('[data-testid="events-view-list"]');
+      const viewCalendar = head?.querySelector('[data-testid="events-view-calendar"]');
+      const views = viewList?.closest('nav:not([role]), [role="group"], [role="navigation"]');
+      const viewLabel = views?.getAttribute("aria-label");
+      if (
+        !views ||
+        !viewCalendar ||
+        !views.contains(viewCalendar) ||
+        !head?.contains(views) ||
+        !viewLabel?.trim()
+      ) {
+        throw new Error("Missing shared accessible label for the List/Calendar controls");
+      }
+      const subscribe = section.querySelector('[data-cal-zone="subscribe"]');
+      if (!subscribe?.matches("details") || !subscribe.querySelector(":scope > summary")) {
+        throw new Error("Missing subscription disclosure or its summary");
+      }
       // Bare, empty and "true" spellings are equivalent for presence flags,
       // not for data values, form values, or ARIA state.
       const flags = new Set([
@@ -2206,16 +2261,17 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
       return {
         attributes: attrs(section),
         zones: nodes(section, "[data-cal-zone]").map(attrs),
+        loading: attrs(loading),
         status: nodes(section, '[role="status"]').map((node) => [attrs(node), text(node)]),
-        // Subscribe moves within the head; preserve targets and selection, not visual order.
+        headingLinks: headingLinks.map(link),
+        viewLabel,
+        // Links can move within the head; preserve targets and selection, not visual order.
         headLinks: nodes(section, '[data-cal-zone="head"] a').map(link).sort(),
-        links: nodes(section, 'a:not([data-cal-zone="head"] a, [data-testid="event-card"] a)').map(
-          link,
-        ),
-        subscribe: nodes(
+        links: nodes(
           section,
-          '[data-cal-zone="subscribe"] :is(summary, label, input, button, p)',
-        ).map(control),
+          'a:not(.schedule-heading a, [data-cal-zone="head"] a, [data-testid="event-card"] a)',
+        ).map(link),
+        subscribe: nodes(subscribe, "summary, label, input, button, p").map(control),
         search: nodes(
           section,
           'form[role="search"], form[role="search"] :is(input, select, option, label, button, p)',
@@ -2224,8 +2280,13 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
           control,
         ),
         rows: nodes(section, '[data-testid="event-card"]').map((row) => {
+          if (!content || zoneOf(row) !== content) {
+            throw new Error(`Event row ${row.id} is outside the content zone`);
+          }
           const title = row.querySelector(".schedule-info :is(h3, h4)");
           if (!title) throw new Error(`Missing title for ${row.id}`);
+          // Hono renders location inline; Kit can put it anywhere in the row.
+          const locations = nodes(row, ".schedule-location, p:has(> time) > span:nth-of-type(2)");
           return {
             attrs: attrs(row),
             title: text(title),
@@ -2235,11 +2296,18 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
               row,
               ".schedule-when > span:not(:has(time)), p:has(> time) > span:first-of-type",
             ).map(text),
-            // Hono puts location in the time line; Kit can render it as its own block.
+            location: locations.map((node) => [attrs(node), text(node)]),
             info: nodes(
               row,
-              ".schedule-info :is(p:not(:has(> time)), details, summary, .schedule-badge, .schedule-location), p:has(> time) > span:nth-of-type(2)",
-            ).map((node) => [attrs(node), text(node)]),
+              ".schedule-info :is(p:not(:has(> time)), details, summary, .schedule-badge)",
+            )
+              .filter((node) => !locations.some((location) => location.contains(node)))
+              .map((node) => [
+                attrs(node),
+                node.matches("p.schedule-text, details.schedule-text > p")
+                  ? descriptionText(node)
+                  : text(node),
+              ]),
             attendance: nodes(row, ".schedule-attendance, .schedule-attendance [data-testid]").map(
               (node) => [attrs(node), text(node)],
             ),
