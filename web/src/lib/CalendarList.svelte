@@ -15,10 +15,13 @@ import {
   EVENTS_PAGER_PREV_TESTID,
   EVENTS_PAGER_STATUS_TESTID,
   EVENTS_PAGER_TESTID,
+  calendarSearching,
   calendarUrl,
+  cardDayLabel,
   upcomingEventsOutOfRangeCopy,
   upcomingEventsPageStatusCopy,
   upcomingEventsPageUnreadableCopy,
+  wallDateIso,
 } from "../../../src/islands/contracts";
 import CalendarCard from "./CalendarCard.svelte";
 import CalendarPastDrawer from "./CalendarPastDrawer.svelte";
@@ -29,6 +32,8 @@ import type { CalendarListProps } from "./calendar-list";
 // without JavaScript and the island binder can still upgrade them to fragment swaps.
 let {
   state,
+  zone,
+  now,
   upcoming,
   past,
   totalPages,
@@ -38,7 +43,19 @@ let {
   member,
   inviteUrl,
   loginReturnTo,
-}: CalendarListProps & { pageUnreadable?: boolean } = $props();
+}: CalendarListProps & { pageUnreadable?: boolean; zone: string; now: Date } = $props();
+const searching = $derived(calendarSearching(state));
+const today = $derived(wallDateIso(now, zone));
+const days = $derived.by(() => {
+  const groups = new Map<string, typeof upcoming>();
+  for (const event of upcoming) {
+    const day = wallDateIso(event.startsAt, zone);
+    const rows = groups.get(day);
+    if (rows) rows.push(event);
+    else groups.set(day, [event]);
+  }
+  return groups;
+});
 
 // First from any later or unavailable page; an out-of-range request therefore
 // recovers straight to page one. Previous clamps only out of range.
@@ -52,11 +69,16 @@ const previousPage = $derived(outOfRange ? Math.min(state.page - 1, totalPages) 
     <p data-testid={EVENTS_PAGE_UNREADABLE_TESTID}>{upcomingEventsPageUnreadableCopy(state.page)}</p>
   {/if}
   <h2 class="sr-only">{EVENTS_LIST_HEADING_SR}</h2>
-  <ul data-testid={EVENTS_LIST_TESTID}>
-    {#each upcoming as e (e.key)}
-      <CalendarCard {e} isPast={false} {member} {inviteUrl} {loginReturnTo} />
+  <div class="schedule-days" data-testid={EVENTS_LIST_TESTID}>
+    {#each days as [day, rows] (day)}
+      <svelte:element this={searching ? "p" : "h3"} class="schedule-day" id={`schedule-day-${day}`}>{day === today ? "Today · " : ""}{cardDayLabel(rows[0]!.startsAt, zone)}</svelte:element>
+      <ul role="list" aria-labelledby={`schedule-day-${day}`}>
+        {#each rows as e (e.key)}
+          <CalendarCard {e} isPast={false} titleLevel={searching ? undefined : 4} {member} {inviteUrl} {loginReturnTo} />
+        {/each}
+      </ul>
     {/each}
-  </ul>
+  </div>
   {#if totalPages > 1 || outOfRange || pageUnreadable}
     <nav aria-label={EVENTS_PAGER_LABEL} data-testid={EVENTS_PAGER_TESTID}>
       {#if state.page > 1}<a href={calendarUrl({ ...state, page: 1 })} data-testid={EVENTS_PAGER_FIRST_TESTID}>{EVENTS_PAGER_FIRST_COPY}</a>{" "}{/if}

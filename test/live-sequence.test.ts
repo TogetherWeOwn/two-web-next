@@ -4,6 +4,14 @@ import { type LiveSnapshot, LiveSequence } from "../src/live/sequence";
 const loadFixture = () => vi.fn<() => Promise<LiveSnapshot<string> | null>>();
 const append = (state: string, delta: string) => state + delta;
 
+function deferSnapshot() {
+  let resolveSnapshot!: (snapshot: LiveSnapshot<string>) => void;
+  const pending = new Promise<LiveSnapshot<string>>((resolve) => {
+    resolveSnapshot = resolve;
+  });
+  return { pending, resolveSnapshot };
+}
+
 describe("live guild sequence", () => {
   it("hydrates a cold object, applies the next delta, and ignores replays", async () => {
     const load = loadFixture().mockResolvedValue({ seq: 4, state: "snapshot" });
@@ -28,33 +36,62 @@ describe("live guild sequence", () => {
     expect(sequence.current).toBeNull();
   });
 
-  it("invalidates state after a failed contiguous reduction and ignores known replays", async () => {
-    const load = loadFixture()
-      .mockResolvedValueOnce({ seq: 5, state: "old" })
-      .mockRejectedValueOnce(new Error("transport offline"))
-      .mockResolvedValueOnce({ seq: 5, state: "still behind" })
-      .mockResolvedValueOnce({ seq: 7, state: "authoritative" });
-    const sequence = new LiveSequence(load, () => {
-      throw new Error("invalid transition");
-    });
-    expect(await sequence.synchronize()).toBe(true);
+  it.each(["throws", "returns null"])(
+    "invalidates state and ignores known replays when a contiguous reduction %s",
+    async (failure) => {
+      const load = loadFixture()
+        .mockResolvedValueOnce({ seq: 5, state: "old" })
+        .mockRejectedValueOnce(new Error("transport offline"))
+        .mockResolvedValueOnce({ seq: 5, state: "still behind" })
+        .mockResolvedValueOnce({ seq: 7, state: "authoritative" });
+      const sequence = new LiveSequence(load, () => {
+        if (failure === "throws") throw new Error("invalid transition");
+        return null;
+      });
+      expect(await sequence.synchronize()).toBe(true);
 
-    const recovery = sequence.ingest(6, "must not expose stale state");
+      const recovery = sequence.ingest(6, "must not expose stale state");
+      expect(sequence.current).toBeNull();
+      expect(await recovery).toBe("unavailable");
+      expect(await sequence.ingest(5, "known replay")).toBe("duplicate");
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(await sequence.ingest(6, "still behind")).toBe("unavailable");
+      expect(sequence.current).toBeNull();
+      expect(await sequence.ingest(6, "retry")).toBe("resynced");
+      expect(sequence.current).toEqual({ seq: 7, state: "authoritative" });
+    },
+  );
+
+  it("immediately invalidates a warm baseline on a gap and refuses a behind snapshot", async () => {
+    const { pending, resolveSnapshot } = deferSnapshot();
+    const load = loadFixture()
+      .mockResolvedValueOnce({ seq: 4, state: "warm" })
+      .mockReturnValueOnce(pending);
+    const sequence = new LiveSequence(load, append);
+    expect(await sequence.synchronize()).toBe(true);
+    expect(sequence.current).toEqual({ seq: 4, state: "warm" });
+
+    const recovery = sequence.ingest(6, "gap");
     expect(sequence.current).toBeNull();
-    expect(await recovery).toBe("unavailable");
-    expect(await sequence.ingest(5, "known replay")).toBe("duplicate");
+    await Promise.resolve();
     expect(load).toHaveBeenCalledTimes(2);
-    expect(await sequence.ingest(6, "still behind")).toBe("unavailable");
     expect(sequence.current).toBeNull();
-    expect(await sequence.ingest(6, "retry")).toBe("resynced");
-    expect(sequence.current).toEqual({ seq: 7, state: "authoritative" });
+
+    resolveSnapshot({ seq: 5, state: "behind the gap" });
+    expect(await recovery).toBe("unavailable");
+    expect(sequence.current).toBeNull();
+  });
+
+  it("refuses a loaded NaN cursor without installing state", async () => {
+    const load = loadFixture().mockResolvedValue({ seq: Number.NaN, state: "invalid" });
+    const sequence = new LiveSequence(load, append);
+
+    expect(await sequence.synchronize()).toBe(false);
+    expect(sequence.current).toBeNull();
   });
 
   it("coalesces overlapping pulls and requires coverage of the newest observed gap", async () => {
-    let resolveSnapshot!: (snapshot: LiveSnapshot<string>) => void;
-    const pending = new Promise<LiveSnapshot<string>>((resolve) => {
-      resolveSnapshot = resolve;
-    });
+    const { pending, resolveSnapshot } = deferSnapshot();
     const load = loadFixture().mockReturnValueOnce(pending).mockResolvedValue(null);
     const sequence = new LiveSequence(load, append);
 

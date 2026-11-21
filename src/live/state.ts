@@ -1,9 +1,7 @@
-import { SNAPSHOT_BYTES } from "./transport";
 import { type LiveDelta, type LiveState, snapshotTopics } from "./wire";
 
-function indexed<R>(rows: R[], key: (row: R) => string): Map<string, R> {
-  return new Map(rows.map((row) => [key(row), row]));
-}
+const indexed = <R>(rows: R[], key: (row: R) => string) =>
+  new Map(rows.map((row) => [key(row), row]));
 
 /** Apply the whole batch before checking dependencies. Never mutate the previous baseline. */
 export function reduceLiveState(state: LiveState, delta: LiveDelta): LiveState | null {
@@ -27,12 +25,11 @@ export function reduceLiveState(state: LiveState, delta: LiveDelta): LiveState |
       }
       if (op.topic === "roles") {
         for (const member of rows.members.values()) {
-          if (member.roleIds.includes(op.id)) {
-            rows.members.set(member.userId, {
-              ...member,
-              roleIds: member.roleIds.filter((id) => id !== op.id),
-            });
-          }
+          if (!member.roleIds.includes(op.id)) continue;
+          rows.members.set(member.userId, {
+            ...member,
+            roleIds: member.roleIds.filter((id) => id !== op.id),
+          });
         }
         // If a channel still references the deleted role, require a fresh baseline
         // rather than guessing whether removing a deny would widen room access.
@@ -68,6 +65,5 @@ export function reduceLiveState(state: LiveState, delta: LiveDelta): LiveState |
     voice: [...rows.voice.values()],
     events: [...rows.events.values()],
   };
-  if (new TextEncoder().encode(JSON.stringify(next)).byteLength > SNAPSHOT_BYTES) return null;
   return snapshotTopics(next, delta.guild_id);
 }

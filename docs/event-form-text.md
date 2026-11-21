@@ -29,8 +29,28 @@ contract already permits it; omission is not newly treated as a clear.
 The progressive text-limit island counts trimmed canonical LF code points, matching
 the server. JavaScript is not required for server validation or newline preservation.
 
-## Not part of this change
+## Native controls and verification
 
-Existing event-form controls are unchanged: single-line fields still render as inputs
-and strip breaks. Multiline-aware controls, the Kit edit-controls test helper and
-native-wire browser evidence are delivered separately.
+Hono and SvelteKit render title, game, location and organizer display name as
+two-row textareas only when the stored value or rejected draft contains CR or LF.
+Single-line text inputs retain their IDs, labels, hints and errors. Controls do
+not switch while typing. If you edit a multiline value down to one line, the
+field returns to a text input on the next render. The server preserves accepted
+text with or without JavaScript under the rules above.
+
+Textarea values use LF in the browser DOM and `FormData`, but native URL-encoded
+form submissions send them as CRLF. The [built-Kit edit proof][browser-proof]
+uses a disposable build and submits the native form to the real Hono POST, then
+checks disposable Postgres and a fresh Kit GET. It verifies that 1,001 code points
+on the wire are accepted when they normalize to 1,000 canonical LF code points,
+and that overflow is refused without a write. This fixture does not establish
+that the Kit GET is enabled in production; Hono UI gates do not exercise it.
+
+The [first-form test helper][form-helper] models textarea wire CRLF and common
+text-input sanitization for inputs and textareas without a submitter. It is not a
+full form serializer: selects, external form owners, duplicate-name lists, live
+edits, constraint validation and full input-type sanitization and encoding are
+out of scope.
+
+[browser-proof]: https://github.com/TogetherWeOwn/two-web-next/pull/2626
+[form-helper]: https://github.com/TogetherWeOwn/two-web-next/pull/2581
