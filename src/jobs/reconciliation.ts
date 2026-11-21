@@ -20,9 +20,9 @@ const RESOLUTIONS = new Set(["confirmed", "not_applied", "superseded"]);
 
 const CHANNEL_ALIAS = /^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,63}$/;
 const SEND_LEASE_SECONDS = 30; // Room for the 10s bot deadline and bounded DB settlement.
-const CARRIER_AGE_DAYS = 30; // Longer than the queue's maximum retention. Never refresh its timestamp on retry.
+const CARRIER_AGE_HOURS = 720; // Elapsed time: longer than queue retention, unaffected by DST.
 
-type AnnouncementSendClaim =
+type SendClaim =
   | { kind: "claimed" | "sending" | "abandoned" | "closed"; attempts: number; claimUntil: Date }
   | { kind: "unavailable" };
 
@@ -110,7 +110,7 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
     if (rows.length !== 1) throw new Error("Reconciliation key is not an open matching intent");
   }
 
-  async function finishAnnouncement(
+  async function settleClaim(
     tx: TxClient,
     key: string,
     attempts: number,
@@ -130,11 +130,7 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
 
   return {
     /** Pass the original queue timestamp, not a retry time or a body field. */
-    async claimAnnouncement(
-      key: string,
-      alias: string,
-      queuedAt: Date,
-    ): Promise<AnnouncementSendClaim> {
+    async claimAnnouncement(key: string, alias: string, queuedAt: Date): Promise<SendClaim> {
       if (
         typeof key !== "string" ||
         !UUID.test(key) ||
@@ -148,7 +144,7 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
         const [claimed] = await tx`insert into announcement_send_claims as claim
           (idempotency_key, channel_alias, send_attempts, state, claim_until)
           select ${key}::uuid, ${alias}, 1, 'sending', clock_timestamp() + make_interval(secs => ${SEND_LEASE_SECONDS})
-          where ${queuedAt.toISOString()}::timestamptz > statement_timestamp() - make_interval(days => ${CARRIER_AGE_DAYS})
+          where ${queuedAt.toISOString()}::timestamptz > statement_timestamp() - make_interval(hours => ${CARRIER_AGE_HOURS})
             and ${queuedAt.toISOString()}::timestamptz <= statement_timestamp() + interval '5 seconds'
             and not exists (select 1 from bot_reconciliation_intents where idempotency_key = ${key}::uuid)
           on conflict (idempotency_key) do update set
@@ -156,12 +152,10 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
           where claim.state = 'retryable' and claim.channel_alias = excluded.channel_alias
             and claim.send_attempts < ${CALL_INTERNAL_ACTION.tries}
           returning send_attempts, (extract(epoch from claim_until) * 1000)::double precision as claim_until_ms`;
-        if (claimed)
-          return {
-            kind: "claimed",
-            attempts: claimed.send_attempts,
-            claimUntil: new Date(claimed.claim_until_ms),
-          };
+        if (claimed) {
+          const { send_attempts: attempts, claim_until_ms: deadline } = claimed;
+          return { kind: "claimed", attempts, claimUntil: new Date(deadline) };
+        }
 
         // A separate statement sees a winning insert that committed while the upsert waited.
         const [current]: AnnouncementSendRow[] = await tx`select channel_alias, send_attempts,
@@ -190,9 +184,7 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
       ) {
         throw new Error("Invalid announcement claim settlement");
       }
-      return bounded(
-        async (tx) => (await finishAnnouncement(tx, key, attempts, state)) !== undefined,
-      );
+      return bounded(async (tx) => (await settleClaim(tx, key, attempts, state)) !== undefined);
     },
     /** Null evidence recovers an abandoned claim: a reservation does not prove a wire send. */
     async recordAnnouncement(
@@ -202,7 +194,7 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
     ): Promise<void> {
       if (!validAnnouncementAttempt(key, attempts)) throw new Error("Invalid announcement claim");
       await bounded(async (tx) => {
-        const alias = await finishAnnouncement(tx, key, attempts, "closed", evidence === null);
+        const alias = await settleClaim(tx, key, attempts, "closed", evidence === null);
         if (alias === undefined)
           throw new Error("Announcement claim changed before reconciliation");
         await insert(
@@ -219,13 +211,12 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
       });
     },
     /** Owner-only maintenance, unscheduled until integration. Never delete unresolved evidence. */
-    // Retire by lease end, not enqueue time: the clock-skew allowance and bounded
-    // admission statement both fit in the gap between carrier expiry and deletion.
+    // Retire by lease end to cover enqueue clock skew and in-flight admission statements.
     async pruneClosedAnnouncements(): Promise<number> {
       return bounded(async (tx) => {
         const rows = await tx`delete from announcement_send_claims where idempotency_key in (
           select c.idempotency_key from announcement_send_claims c
-          where c.state = 'closed' and c.claim_until <= now() - make_interval(days => ${CARRIER_AGE_DAYS})
+          where c.state = 'closed' and c.claim_until <= statement_timestamp() - make_interval(hours => ${CARRIER_AGE_HOURS})
             and not exists (select 1 from bot_reconciliation_intents i
               where i.idempotency_key = c.idempotency_key and i.resolved_at is null)
           order by c.claim_until, c.idempotency_key limit 1000 for update skip locked

@@ -18,6 +18,7 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
   let fixture: JobsFixture | undefined;
   let sql: postgres.Sql;
   const own = (prefix: string) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const unavailable = { kind: "unavailable" };
   beforeAll(async () => {
     fixture = await createJobsFixture(process.env.DATABASE_URL!, { max: 4 });
     sql = fixture.client;
@@ -41,9 +42,7 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
       if (attempts < CALL_INTERNAL_ACTION.tries) {
         expect(await store.finishAnnouncement(key, attempts, "retryable")).toBe(true);
         // A different alias cannot acquire even an otherwise eligible slot.
-        expect(await store.claimAnnouncement(key, "other-channel", queuedAt)).toEqual({
-          kind: "unavailable",
-        });
+        expect(await store.claimAnnouncement(key, "other-channel", queuedAt)).toEqual(unavailable);
       }
     }
     const attempts = CALL_INTERNAL_ACTION.tries;
@@ -126,7 +125,6 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     );
     expect(await claim()).toMatchObject({ kind: "sending", attempts: 1 });
     await sql`delete from bot_reconciliation_intents where idempotency_key = ${key}`;
-
     await sql`update announcement_send_claims set claim_until = now() - interval '31 days'
       where idempotency_key = ${key}`;
     expect(await claim()).toMatchObject({ kind: "abandoned", attempts: 1 });
@@ -146,7 +144,7 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     expect(await store.pruneClosedAnnouncements()).toBe(0);
     expect(await store.resolve(key, "123", "not_applied", async () => {})).toBe(true);
     expect(await store.pruneClosedAnnouncements()).toBe(1);
-    expect(await claim()).toEqual({ kind: "unavailable" }); // Resolved key remains suppressed.
+    expect(await claim()).toEqual(unavailable); // Resolved key remains suppressed.
   });
 
   it("commits hard-stop diagnostics and never reacquires a pruned original carrier", async () => {
@@ -169,20 +167,39 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     await sql.begin(async (tx) => {
       const [clock] = await tx<{ expiry: Date; enqueued: Date }[]>`
         select now() + interval '750 milliseconds' as expiry,
-        now() + interval '750 milliseconds' - interval '30 days' as enqueued`;
+        now() + interval '750 milliseconds' - interval '720 hours' as enqueued`;
       if (!clock) throw new Error("Missing fixture transaction time");
       await tx`select pg_sleep_until(${clock.expiry}::timestamptz + interval '5 milliseconds')`;
       expect(await store.pruneClosedAnnouncements()).toBe(1);
       // Run admission in a savepoint so it inherits the pre-expiry transaction timestamp.
-      const delayed = pgReconciliationStore(tx as unknown as postgres.Sql);
-      expect(await delayed.claimAnnouncement(retired, "fixture-channel", clock.enqueued)).toEqual({
-        kind: "unavailable",
-      });
+      const { claimAnnouncement } = pgReconciliationStore(tx as unknown as postgres.Sql);
+      expect(await claimAnnouncement(retired, "fixture-channel", clock.enqueued)).toEqual(
+        unavailable,
+      );
     });
     expect(
       await sql`select state from announcement_send_claims
       where idempotency_key in (${sending}, ${retryable}) order by state`,
     ).toEqual([{ state: "retryable" }, { state: "sending" }]);
+  });
+
+  it("never admits a pruned original carrier after the fall clock change", async () => {
+    await sql.begin(async (tx) => {
+      const key = crypto.randomUUID();
+      // Freeze only the statement clock in this disposable schema and transaction.
+      await tx`select set_config('search_path', quote_ident(current_schema()) || ', pg_catalog', true)`;
+      await tx`set local time zone 'America/New_York'`;
+      await tx`create function statement_timestamp() returns timestamptz stable language sql
+        as $$ select current_setting('fixture.clock')::timestamptz $$`;
+      await tx`insert into announcement_send_claims values (${key}, 'fixture-channel', 1, 'closed', '2026-10-02 01:58:30-04')`;
+      const dst = pgReconciliationStore(tx as unknown as postgres.Sql);
+      await tx`set local fixture.clock = '2026-11-01 01:59:50-04'`;
+      expect(await dst.pruneClosedAnnouncements()).toBe(1);
+      await tx`set local fixture.clock = '2026-11-01 01:00:10-05'`;
+      const queuedAt = new Date("2026-10-02T01:58:00-04:00");
+      expect(await dst.claimAnnouncement(key, "fixture-channel", queuedAt)).toEqual(unavailable);
+      await tx`drop function statement_timestamp()`;
+    });
   });
 
   it("returns filtered, ordered reconciliation windows at both limits", async ({
