@@ -344,6 +344,7 @@ exactly once.
 | `src/kit-worker-response.ts` | http-guard |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
+| `src/live/` | bot |
 | `src/log-budget.ts` | observability |
 | `src/mcp/` | content |
 | `src/media-type.ts` | http-guard |
