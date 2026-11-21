@@ -181,16 +181,25 @@ describe("Kit home SSR render: highlights", () => {
 describe("Kit home SSR render: Week and Upcoming Events", () => {
   it.each([null, nonMemberSession, memberSession])("orders the bands for %j", (session) => {
     const html = renderPage(baseData({ session }));
-    const ids = [
-      ...html.matchAll(
-        /id="(home-heading|community-heading|home-week-heading|home-events-heading)"/g,
-      ),
-    ].map((m) => m[1]);
+    const headings = /id="(home-heading|community-heading|home-week-heading|home-events-heading)"/g;
+    const ids = Array.from(html.matchAll(headings), ([, id]) => id);
     expect(ids).toEqual(
       session?.member
         ? ["home-heading", "home-week-heading", "home-events-heading", "community-heading"]
         : ["home-heading", "community-heading", "home-week-heading", "home-events-heading"],
     );
+  });
+
+  it("links to the full schedule when ongoing games fill the preview", () => {
+    const now = Date.now();
+    const upcomingEvents = ["one", "two", "three"].map((eventKey) =>
+      fullnessEvent({ eventKey, startsAt: new Date(now - 3600e3), endsAt: new Date(now + 3600e3) }),
+    );
+    const html = renderPage(baseData({ upcomingEvents }));
+    expect(html).toContain(
+      '<p>No new starts in this preview. <a href="/events">See all events</a></p>',
+    );
+    expect(html).toContain('data-testid="home-events-list"');
   });
 
   it("uses only this week's future starts and marks only the member's own RSVP", () => {
@@ -200,7 +209,7 @@ describe("Kit home SSR render: Week and Upcoming Events", () => {
       const upcomingEvents = [
         fullnessEvent({ eventKey: "past", title: "Already started", startsAt: new Date(0) }),
         fullnessEvent({ eventKey: "this-week", title: "Saturday game" }),
-        fullnessEvent({ title: "Later game", startsAt: new Date("2030-08-05") }),
+        fullnessEvent({ title: "Later game", startsAt: new Date("2030-07-27T19:00:00Z") }),
       ];
       const memberRsvps = [{ eventKey: "this-week", status: "waitlisted" }];
       for (const session of [null, nonMemberSession, memberSession]) {
@@ -305,7 +314,7 @@ describe("Kit home SSR render: independently degraded panels", () => {
     const html = renderPage(baseData());
     expect(html).toContain('data-testid="home-events-empty"');
     expect(html).toContain("Nothing scheduled yet.");
-    expect(html).toContain("No games starting this week.");
+    expect(html).toContain("No new starts in this preview.");
     expect(html).toContain('data-state="empty"');
     expect(html).toContain('data-testid="home-events-join"');
     for (const session of [null, memberSession]) {

@@ -90,12 +90,10 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
 {/snippet}
 
 {#snippet teaserTime(event: HomeUpcomingRow)}
-  <time datetime={event.startsAt.toISOString()}>
-    {cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})
-  </time>
+  <time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})</time>
 {/snippet}
 
-{#snippet homeHero()}
+{#snippet homeContent()}
   {#if joinResult}
     <p class="notice" role="status" data-testid="join-result">
       {#if joinResult === "added"}
@@ -165,6 +163,7 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
       {/if}
     </aside>
   </section>
+  {@render homeBelowHero()}
 {/snippet}
 
 {#snippet homeFeatured()}
@@ -251,13 +250,11 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
   </section>
 {/snippet}
 
-{#snippet homeContent()}
+{#snippet homeBelowHero()}
   {#if !session?.member}{@render homeHighlights()}{/if}
   <section class="week-band" aria-labelledby="home-week-heading">
     <div class="band-head">
-      <h2 id="home-week-heading">
-        {showMemberDetails ? "Your week," : "This week,"} <span>when we play.</span>
-      </h2>
+      <h2 id="home-week-heading">{showMemberDetails ? "Your week," : "This week,"} <span>when we play.</span></h2>
       <p>
         Times are shown in each event’s time zone.
         {#if showMemberDetails}Your RSVPs are marked in the agenda.{/if}
@@ -280,7 +277,7 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
           {/each}
         </ul>
       {:else}
-        <p>No games starting this week.</p>
+        <p>No new starts in this preview. <a href="/events">See all events</a></p>
       {/if}
     </div>
   </section>
@@ -448,7 +445,6 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
   </header>
   <main class="ember-home-main" id="main" tabindex="-1">
     {#if data.restoredWrite}<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>{/if}
-    {@render homeHero()}
     {@render homeContent()}
   </main>
   <EmberFooter />
