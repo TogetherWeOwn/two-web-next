@@ -1584,36 +1584,32 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # The pinned actionlint checker does not support YAML aliases. Keep the
+  # three Kit browser job setups explicit; coverage-command.test.mjs checks parity.
   kit-browser-fixture:
     name: kit-browser-fixture
     needs: [scope]
-    if: &kit-browser-scope ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     container:
       image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
     steps:
-      - &kit-browser-checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - &kit-browser-node
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: |
             package-lock.json
             web/package-lock.json
-      - &kit-browser-git
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - &kit-browser-root-deps
-        run: npm ci --no-audit --no-fund
-      - &kit-browser-web-deps
-        run: npm ci --prefix web --include=dev --no-audit --no-fund
-      - &kit-browser-chromium
-        name: Install Kit parity Chromium
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Install Kit parity Chromium
         run: npx playwright install --with-deps chromium
       # The two name patterns partition every case in the shared fixture file.
       - name: Kit disposable browser fixture (non-calendar)
@@ -1622,25 +1618,35 @@ jobs:
   kit-browser-calendar:
     name: kit-browser-calendar
     needs: [scope]
-    if: *kit-browser-scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     container:
       image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
     steps:
-      - *kit-browser-checkout
-      - *kit-browser-node
-      - *kit-browser-git
-      - *kit-browser-root-deps
-      - *kit-browser-web-deps
-      - *kit-browser-chromium
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Install Kit parity Chromium
+        run: npx playwright install --with-deps chromium
       - name: Kit disposable browser fixture (calendar)
         run: node --test --test-timeout=300000 --test-name-pattern='^calendar ' ci/kit-browser-fixture.test.mjs
 
   kit-browser-lifeline:
     name: kit-browser-lifeline
     needs: [scope]
-    if: *kit-browser-scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     container:
@@ -1648,12 +1654,22 @@ jobs:
     outputs:
       artifact-id: ${{ steps.lifeline-upload.outputs.artifact-id }}
     steps:
-      - *kit-browser-checkout
-      - *kit-browser-node
-      - *kit-browser-git
-      - *kit-browser-root-deps
-      - *kit-browser-web-deps
-      - *kit-browser-chromium
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Install Kit parity Chromium
+        run: npx playwright install --with-deps chromium
       - name: Kit Lifeline browser fixture
         run: node --test ci/kit-lifeline-browser.test.mjs
       - name: Verify Lifeline screenshots
