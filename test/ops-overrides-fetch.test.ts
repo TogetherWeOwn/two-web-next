@@ -109,8 +109,11 @@ it("stays dark without configuration and rejects even a bare query before contac
   expect(bot).not.toHaveBeenCalled();
 });
 
-it("returns the bounded read-only snapshot with only the bearer for GET and bodyless HEAD", async () => {
-  const compare = await fixture();
+it.each([
+  { label: "with only the bearer", withModerator: false },
+  { label: "without forwarding an accompanying moderator cookie", withModerator: true },
+])("returns the bounded snapshot for GET and bodyless HEAD $label", async ({ withModerator }) => {
+  const compare = await fixture({ withModerator });
   expect((await compare(200)).body).toContain("&lt;example&gt;");
   await compare(200, "HEAD");
   expect(bot).toHaveBeenCalledTimes(4);
