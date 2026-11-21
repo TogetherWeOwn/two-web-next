@@ -11,7 +11,7 @@
 // threshold, channel, retry or cadence:
 // - /join is a page check like / and /events: healthy is 200 + HTML.
 //   The healthy fixture body carries the stable anonymous marker
-//   ("One click with Discord", as pinned by the deploy smoke) so a
+//   (id="join-heading", as pinned by the deploy smoke) so a
 //   body-marker implementation satisfies this suite too; a missing
 //   marker is deliberately not pinned as a failure, because other
 //   hermetic Tail fixtures answer page checks with an empty body.
@@ -54,7 +54,7 @@ const healthySynthetic = (path: string): Probe => {
     return {
       status: 200,
       contentType: "text/html; charset=UTF-8",
-      body: "<main><h1>Join us</h1><p>One click with Discord</p></main>",
+      body: '<main><h1 id="join-heading">Join us</h1></main>',
     };
   return { status: 200, contentType: "text/html; charset=UTF-8", body: "<main>ok</main>" };
 };

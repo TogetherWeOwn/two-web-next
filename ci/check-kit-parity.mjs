@@ -8,7 +8,7 @@
 // unexecuted parity suite can never report a quiet green. Runs only on the
 // runner against report files; it never touches a Worker or any secret.
 //
-// Exit codes: 0 pass, 1 journeys failed, 2 all-skipped or empty report.
+// Exit codes: 0 pass, 1 failed journeys or report diagnostics, 2 all-skipped or empty report.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,7 +43,7 @@ export function runGate({
     return 2;
   }
 
-  const summary = summarizeJourneys(report);
+  const summary = summarizeJourneys(report, { reportKind: "kit-parity" });
   const ledgerJson = `${JSON.stringify(summary, null, 2)}\n`;
   const ledgerMd = formatLedgerMarkdown(summary).replaceAll(
     "Staging journey ledger",
@@ -80,9 +80,11 @@ export function runGate({
     return 2;
   }
   if (summary.verdict === "fail") {
+    const diagnostics = summary.diagnostics.map(({ code }) => code).join(", ");
     stderr.write(
-      `Kit parity journeys failed: ${summary.counts.failed} of ${summary.counts.total} — ` +
-        `see ${ledgerJsonPath} and ${ledgerMdPath}.\n`,
+      `Kit parity ledger failed: ${summary.counts.failed} of ${summary.counts.total} journeys failed` +
+        (diagnostics ? `; report diagnostics: ${diagnostics}` : "") +
+        `. See ${ledgerJsonPath} and ${ledgerMdPath}.\n`,
     );
     return 1;
   }

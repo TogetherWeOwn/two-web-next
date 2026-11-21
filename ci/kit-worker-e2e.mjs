@@ -11,6 +11,9 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
+import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
+import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
+import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -50,6 +53,7 @@ function tail(value, limit = 4000) {
 
 function listen(child, origin, getLog, timeoutMs = 60_000) {
   const started = Date.now();
+  let lastStatus = "no response";
   return new Promise((resolveReady, reject) => {
     const attempt = async () => {
       if (child.exitCode !== null) {
@@ -62,8 +66,11 @@ function listen(child, origin, getLog, timeoutMs = 60_000) {
       }
       try {
         const response = await fetch(`${origin}/favicon.ico`, {
+          redirect: "manual",
           signal: AbortSignal.timeout(1_000),
         });
+        lastStatus = `HTTP ${response.status}`;
+        await response.body?.cancel();
         if (response.ok) {
           resolveReady();
           return;
@@ -74,7 +81,7 @@ function listen(child, origin, getLog, timeoutMs = 60_000) {
       if (Date.now() - started >= timeoutMs) {
         reject(
           new Error(
-            `Timed out waiting for the generated Kit Worker. Worker output:\n${tail(getLog())}`,
+            `Timed out waiting for ${origin}/favicon.ico (${lastStatus}). Worker output:\n${tail(getLog())}`,
           ),
         );
         return;
@@ -110,7 +117,7 @@ const workers = [];
 // Start one loopback Worker. The generated Kit Worker and the direct Hono
 // Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
 // fixture database and vars within each pair.
-async function startWorker(name, main, assetsDirectory, sessionSecret) {
+async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
   const port = await unusedPort();
   const origin = `http://127.0.0.1:${port}`;
   const config = join(scratch, `${name}.wrangler.jsonc`);
@@ -132,6 +139,7 @@ async function startWorker(name, main, assetsDirectory, sessionSecret) {
       DISCORD_MODERATOR_ROLE_IDS: "",
       DISCORD_INVITE_URL: "https://example.invalid/invite",
       AGENT_EVENTS_ENABLED: "false",
+      ...vars,
     },
   };
   await writeFile(config, JSON.stringify(configBody));
@@ -216,18 +224,37 @@ try {
   );
   console.log("PASS generated Worker archive request");
 
+  const manifest = await readFile(join(repo, "src/route-ownership.ts"), "utf8");
+  const homeMarker = expectedMarkerFor(manifest, "/");
+  const home = await fetch(`${origin}/`);
+  const homeHtml = await home.text();
+  assert.equal(home.status, 200, "guest home GET renders");
+  assert.equal(home.headers.get("x-two-renderer"), homeMarker, "home GET follows the manifest");
+  assert.equal(home.headers.get("cache-control"), "private, no-store");
+  if (homeMarker === "kit") assert.equal(kitHomeHeadingText(homeHtml), "The lobby is open.");
+  else assert.match(homeHtml, /<h1 id="home-heading">The lobby is open\.<\/h1>/);
+  // No session-secret binding: a guest still gets the safe invite fallback.
+  assert.match(homeHtml, /href="\/discord"[^>]*data-testid="discord-join"/);
+  assert.doesNotMatch(homeHtml, /data-testid="join"/);
+  assert.doesNotMatch(homeHtml, /data-testid="(?:home-standing|home-event-own-rsvp)"/);
+  const headHome = await fetch(`${origin}/`, { method: "HEAD" });
+  assert.equal(headHome.status, home.status);
+  assert.equal(headHome.headers.get("x-two-renderer"), homeMarker, "home HEAD follows GET");
+  assert.equal(headHome.headers.get("cache-control"), "private, no-store");
+  assert.equal(await headHome.text(), "", "HEAD has no response body");
+  console.log("PASS generated Worker guest home GET and HEAD");
+
   // Content leaves keep #808's zero-stylesheet contract on the served
   // worker. The unit parity harness renders pages without +layout.svelte,
   // so it passes while the served page carries the layout asset link —
-  // this is the built-worker pin: both Kit-owned leaves answer from Kit
+  // this is the built-worker pin: the content leaves answer from Kit
   // with the exact inlined leaf block (its sha256 equals the
   // CSP-allowlisted hash), zero stylesheet links, and the Hono body class
   // so the leaf block owns the canvas.
   const leafModule = await readFile(join(repo, "src", "leaf-critical-css.ts"), "utf8");
   const leafHash = leafModule.match(/LEAF_CRITICAL_CSS_SHA256: string = "([^"]+)"/)?.[1];
   assert.ok(leafHash, "leaf CSS hash is generated");
-  for (const leaf of ["/about", "/faq"]) {
-    const page = await fetch(`${origin}${leaf}`);
+  async function assertContentLeaf(page, leaf) {
     const html = await page.text();
     assert.equal(page.status, 200, `generated Worker serves ${leaf} (got ${page.status})`);
     assert.equal(page.headers.get("x-two-renderer"), "kit", `${leaf} is Kit-owned`);
@@ -252,8 +279,64 @@ try {
     assert.equal(styleBlocks.length, 1, `${leaf} inlines exactly one style block`);
     const servedHash = createHash("sha256").update(styleBlocks[0][1], "utf8").digest("base64");
     assert.equal(servedHash, leafHash, `${leaf} style block matches the CSP hash`);
+    return html;
+  }
+  for (const leaf of ["/about", "/faq"]) {
+    await assertContentLeaf(await fetch(`${origin}${leaf}`), leaf);
   }
   console.log("PASS generated Worker content-leaf zero-stylesheet contract");
+
+  // The host check requires the Request URL and Host header to agree with
+  // APP_URL. Rewrite both inside the fixture, then call the generated Worker
+  // directly so the HTTP connection never leaves loopback.
+  const stagingEntry = join(scratch, "kit-static.mjs");
+  await writeFile(
+    stagingEntry,
+    `import worker from ${JSON.stringify(worker)};
+export default {
+  fetch(request, env, context) {
+    const local = new URL(request.url);
+    const url = new URL(env.APP_URL);
+    url.pathname = local.pathname;
+    url.search = local.search;
+    const stagedRequest = new Request(url, request);
+    stagedRequest.headers.set("host", url.host);
+    return worker.fetch(stagedRequest, env, context);
+  },
+};\n`,
+  );
+  const staging = await startWorker("kit-static", stagingEntry, assets, undefined, {
+    APP_URL: STAGING_ORIGIN,
+    DATABASE_URL: undefined,
+    KIT_ROUTE_ARCHIVE: "true",
+    KIT_ROUTE_STATIC: "true",
+  });
+  await listen(staging.child, staging.origin, () => staging.log);
+  for (const [leaf, marker] of [
+    ["/about", 'data-testid="about-facts"'],
+    ["/faq", 'data-testid="faq-list"'],
+    ["/privacy", 'data-testid="privacy-policy"'],
+    ["/rules", 'data-testid="rules-list"'],
+  ]) {
+    const page = await fetch(`${staging.origin}${leaf}`, { redirect: "manual" });
+    if (STAGING_STATIC_DOCUMENT_READY.get(leaf) === false) {
+      assert.equal(page.status, 200, `${leaf} still serves a document after rollback`);
+      assert.equal(page.headers.get("x-two-renderer"), null, `${leaf} rolls back to Hono`);
+      assert.ok((await page.text()).includes(marker), `${leaf} retains its content on Hono`);
+      continue;
+    }
+    const html = await assertContentLeaf(page, leaf);
+    assert.ok(html.includes(marker), `${leaf} has server-rendered content`);
+    assert.doesNotMatch(html, /<script\b/i, `${leaf} ships no JavaScript`);
+    assert.equal(page.headers.get("set-cookie"), null, `${leaf} does not set a session cookie`);
+    const csp = page.headers.get("content-security-policy")?.split("; ") ?? [];
+    assert.ok(csp.includes("script-src 'self'"), `${leaf} retains strict script CSP`);
+    assert.ok(
+      csp.includes(`style-src 'self' 'sha256-${leafHash}'`),
+      `${leaf} retains strict style CSP`,
+    );
+  }
+  console.log("PASS generated Worker archive-static SSR without database, session, or JavaScript");
 
   // Exercise the post-hook Kit ETag rewrite in the built Worker, not only the
   // framework-free dispatch. Every security header must survive revalidation.
@@ -616,6 +699,11 @@ try {
     }
     await assertParity(`OPTIONS ${path}`, path, { method: "OPTIONS" });
   }
+  await assertParity("POST / stays with Hono", "/", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: "{}",
+  });
   const postApiX = await assertParity("POST /api/x/", "/api/x/", {
     method: "POST",
     headers: jsonHeaders,

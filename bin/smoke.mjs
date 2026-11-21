@@ -15,7 +15,7 @@ const html = [
   ["/privacy", /Privacy policy/],
   ["/events", /id="events-heading"/],
   ["/events/past", /id="past-events-heading"/],
-  ["/join", /One click with Discord/],
+  ["/join", /id="join-heading"/],
 ];
 // HTML leaves that stay non-indexable even on the indexable apex: the archive
 // and the branded 404s carry their noindex in <meta>, so the deploy smoke
@@ -219,6 +219,78 @@ export function securityTxtAssertions(
   return failures;
 }
 
+const htmlNamespace = "http://www.w3.org/1999/xhtml";
+const attr = (node, name) => node.attrs.find((entry) => entry.name === name)?.value;
+
+function* walkMarkup(root) {
+  const nodes = [root];
+  while (nodes.length > 0) {
+    const node = nodes.pop();
+    if (
+      node.namespaceURI === htmlNamespace &&
+      (attr(node, "inert") !== undefined || attr(node, "hidden") !== undefined)
+    ) {
+      continue;
+    }
+    yield node;
+    // Template contents are inert and are not part of childNodes.
+    const children = node.childNodes ?? [];
+    for (let i = children.length - 1; i >= 0; i--) nodes.push(children[i]);
+  }
+}
+
+async function parseMarkup(body) {
+  // Keep callers that don't need a structural HTML assertion dependency-free.
+  const { parse } = await import("parse5");
+  return parse(body);
+}
+
+async function readJoinMarkup(body) {
+  let action = false;
+  let heading = false;
+  for (const node of walkMarkup(await parseMarkup(body))) {
+    if (node.namespaceURI !== htmlNamespace) continue;
+    // A bare /join GET renders this same-origin action without query parameters.
+    if (
+      node.tagName === "a" &&
+      attr(node, "href") === "/join/discord" &&
+      attr(node, "data-testid") === "join-oneclick"
+    ) {
+      action = true;
+    }
+    if (node.tagName === "h2" && attr(node, "id") === "join-card-heading") {
+      const [text] = node.childNodes;
+      if (
+        node.childNodes.length === 1 &&
+        text.nodeName === "#text" &&
+        text.value === "Join with one sign-in"
+      ) {
+        heading = true;
+      }
+    }
+  }
+  return { action, heading };
+}
+
+async function hasGuestKitHomeHeading(body) {
+  const headings = [];
+  for (const node of walkMarkup(await parseMarkup(body))) {
+    if (node.namespaceURI !== htmlNamespace || node.tagName !== "h1") continue;
+    if (attr(node, "id") !== "home-heading") continue;
+    let text = "";
+    for (const part of walkMarkup(node)) {
+      if (part.nodeName === "#text" && !["script", "style"].includes(part.parentNode.tagName)) {
+        text += part.value;
+      }
+    }
+    headings.push(text.replace(/\s+/g, " ").trim());
+  }
+  return (
+    headings.length === 1 &&
+    /^(?:The lobby is open\.|Next game night: \S(?:.*\S)?\. Come play with us\.)$/.test(headings[0])
+  );
+}
+
 // Optional per-route hook for machine verdicts (--json/--ledger): called once
 // per route with (path, failedAssertionCount) after its PASS/FAIL lines.
 // Omitting it leaves the human output byte-identical to previous versions.
@@ -233,6 +305,7 @@ export async function smoke(
     failedBaseline,
     allowMissingBaseline = false,
     failOnReadyWaitCritical = false,
+    expectedJoinRenderer,
     onRoute,
   } = {},
 ) {
@@ -251,6 +324,9 @@ export async function smoke(
   }
   if (versionOverride !== undefined) assertVersionOverride(versionOverride);
   if (expectedVersionId !== undefined) assertExpectedVersionId(expectedVersionId);
+  if (expectedJoinRenderer !== undefined && !["hono", "kit"].includes(expectedJoinRenderer)) {
+    throw new Error("SMOKE_EXPECT_JOIN_RENDERER must be hono or kit");
+  }
   const baseline = failedBaseline === undefined ? undefined : assertFailedBaseline(failedBaseline);
   const overrideVersionId =
     versionOverride === undefined ? undefined : versionIdFromOverride(versionOverride);
@@ -695,8 +771,30 @@ export async function smoke(
           check(false, "valid JSON object", "invalid JSON");
         }
       }
-      if (route.body)
+      const kitJoin = route.path === "/join" && expectedJoinRenderer === "kit";
+      if (route.path === "/join" && expectedJoinRenderer !== undefined) {
+        const renderer = headers.get("x-two-renderer");
+        check(
+          renderer === (expectedJoinRenderer === "kit" ? "kit" : null),
+          expectedJoinRenderer === "kit" ? "x-two-renderer: kit" : "no x-two-renderer (Hono)",
+          renderer === null ? "header missing" : "unexpected renderer header",
+        );
+        const { action, heading } = await readJoinMarkup(body);
+        check(action, "join-oneclick link to /join/discord", "link did not match");
+        if (kitJoin) {
+          check(heading, 'Kit Join card heading "Join with one sign-in"', "heading did not match");
+        }
+      }
+      const kitHome = route.path === "/" && headers.get("x-two-renderer") === "kit";
+      if (kitHome) {
+        check(
+          await hasGuestKitHomeHeading(body),
+          "Kit guest h1#home-heading with the lobby or scheduled text",
+          "heading missing or did not match",
+        );
+      } else if (!kitJoin && route.body) {
         check(route.body.test(body), `body matching ${route.body}`, "body did not match");
+      }
       if (route.redirect && response.status === 302) {
         const location = headers.get("location");
         let target;
@@ -873,6 +971,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           failedBaseline: baseline,
           allowMissingBaseline: allowMissing,
           failOnReadyWaitCritical,
+          // Only callers with a route selection opt into an exact renderer check.
+          expectedJoinRenderer: process.env.SMOKE_EXPECT_JOIN_RENDERER,
           onRoute:
             jsonVerdict || ledgerPath !== undefined
               ? (path, failedAssertions) => {

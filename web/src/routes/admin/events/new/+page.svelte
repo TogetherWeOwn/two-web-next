@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import { eventTextHasLineBreak, textareaInitialText } from "../../../../../../src/admin/event-text";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
@@ -25,6 +26,40 @@ const textLimitsIsland =
   '<script type="module" src="/islands/admin-event-text-limits.js"></' + "script>";
 const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
+
+{#snippet detail(name: string, label: string, hint: string, limit?: number, type?: "text" | "url")}
+  {@const id = `f-${name.replaceAll("_", "-")}`}
+  {@const value = val(name)}
+  {@const error = errors[name]}
+  {@const description = error ? `${id}-hint ${id}-error` : `${id}-hint`}
+  <div class="field">
+    <label for={id}>{label}</label>
+    {#if type === "url" || (type === "text" && !eventTextHasLineBreak(value))}
+      <input
+        {id}
+        {name}
+        {type}
+        {value}
+        data-event-text-limit={limit}
+        aria-invalid={error ? "true" : undefined}
+        aria-describedby={description}
+      />
+    {:else}
+      <textarea
+        {id}
+        {name}
+        rows={type ? 2 : 4}
+        data-event-text-limit={limit}
+        aria-invalid={error ? "true" : undefined}
+        aria-describedby={description}
+      >{type === "text" ? textareaInitialText(value) : value}</textarea>
+    {/if}
+    <p id={`${id}-hint`} class="hint">{hint}</p>
+    {#if error}
+      <p id={`${id}-error`} class="error" role="alert" data-testid={`error-${name}`}>{error}</p>
+    {/if}
+  </div>
+{/snippet}
 
 <AdminShell restoredWrite={data.restoredWrite} title="New event">
 <section>
@@ -53,31 +88,54 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
   >
     <div class="field">
       <label for="f-title">Title</label>
-      <input
-        id="f-title"
-        name="title"
-        type="text"
-        value={val("title")}
-        data-event-text-limit={100}
-        required
-        aria-invalid={errors.title ? "true" : undefined}
-        aria-describedby={errors.title ? "f-title-error" : undefined}
-      />
+      {#if eventTextHasLineBreak(val("title"))}
+        <textarea
+          id="f-title"
+          name="title"
+          rows={2}
+          data-event-text-limit={100}
+          required
+          aria-invalid={errors.title ? "true" : undefined}
+          aria-describedby={errors.title ? "f-title-error" : undefined}
+        >{textareaInitialText(val("title"))}</textarea>
+      {:else}
+        <input
+          id="f-title"
+          name="title"
+          type="text"
+          value={val("title")}
+          data-event-text-limit={100}
+          required
+          aria-invalid={errors.title ? "true" : undefined}
+          aria-describedby={errors.title ? "f-title-error" : undefined}
+        />
+      {/if}
       {#if errors.title}
         <p id="f-title-error" class="error" role="alert" data-testid="error-title">{errors.title}</p>
       {/if}
     </div>
     <div class="field">
       <label for="f-game">Game</label>
-      <input
-        id="f-game"
-        name="game"
-        type="text"
-        value={val("game")}
-        data-event-text-limit={100}
-        aria-invalid={errors.game ? "true" : undefined}
-        aria-describedby={errors.game ? "f-game-error" : undefined}
-      />
+      {#if eventTextHasLineBreak(val("game"))}
+        <textarea
+          id="f-game"
+          name="game"
+          rows={2}
+          data-event-text-limit={100}
+          aria-invalid={errors.game ? "true" : undefined}
+          aria-describedby={errors.game ? "f-game-error" : undefined}
+        >{textareaInitialText(val("game"))}</textarea>
+      {:else}
+        <input
+          id="f-game"
+          name="game"
+          type="text"
+          value={val("game")}
+          data-event-text-limit={100}
+          aria-invalid={errors.game ? "true" : undefined}
+          aria-describedby={errors.game ? "f-game-error" : undefined}
+        />
+      {/if}
       {#if errors.game}
         <p id="f-game-error" class="error" role="alert" data-testid="error-game">{errors.game}</p>
       {/if}
@@ -174,21 +232,35 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     </div>
     <div class="field">
       <label for="f-location">Location</label>
-      <input
-        id="f-location"
-        name="location"
-        type="text"
-        value={val("location")}
-        data-event-text-limit={255}
-        aria-invalid={errors.location ? "true" : undefined}
-        aria-describedby={errors.location ? "f-location-error" : undefined}
-      />
+      {#if eventTextHasLineBreak(val("location"))}
+        <textarea
+          id="f-location"
+          name="location"
+          rows={2}
+          data-event-text-limit={255}
+          aria-invalid={errors.location ? "true" : undefined}
+          aria-describedby={errors.location ? "f-location-error" : undefined}
+        >{textareaInitialText(val("location"))}</textarea>
+      {:else}
+        <input
+          id="f-location"
+          name="location"
+          type="text"
+          value={val("location")}
+          data-event-text-limit={255}
+          aria-invalid={errors.location ? "true" : undefined}
+          aria-describedby={errors.location ? "f-location-error" : undefined}
+        />
+      {/if}
       {#if errors.location}
         <p id="f-location-error" class="error" role="alert" data-testid="error-location">
           {errors.location}
         </p>
       {/if}
     </div>
+    {@render detail("organizer_name", "Organizer display name (optional)", "Use a name the organizer has agreed to show publicly. Do not enter contact details.", 500, "text")}
+    {@render detail("join_url", "Public joining link (optional)", "HTTPS or HTTP link visible to everyone. Never use attendee-only or private links.", undefined, "url")}
+    {@render detail("join_instructions", "Public joining instructions (optional)", "Share only verified details that are safe for anyone to see. Do not enter contact details.", 5000)}
     <div class="field">
       <label for="f-capacity">Capacity (empty = unlimited)</label>
       <input

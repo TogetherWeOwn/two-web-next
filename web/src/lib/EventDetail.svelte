@@ -18,6 +18,7 @@ import {
   RSVP_SYNCED_TESTID,
   RSVP_SYNCING_TESTID,
 } from "../../../src/islands/contracts";
+import { listedSignUpCountText } from "../../../src/islands/contracts-going-count";
 
 // Member metadata, RSVP and roster are escaped server leaves shared with Hono.
 // Mutation ownership and native island mounts stay unchanged; this route is csr=false.
@@ -119,11 +120,12 @@ const detailIslands = $derived([
   theme="event"
   activeNav="event"
   member={model.viewerMember}
+  authenticated={model.viewerAuthenticated}
   loginReturnTo={model.path}
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
-  <div class="event-layout" id={live ? "kit-live-snapshot" : undefined}
-    data-as-of={live?.asOf} data-stale-at={live?.staleAt}>
+  <div class="event-layout" class:live-action={!!live && !savedLive && !model.review}
+    id={live ? "kit-live-snapshot" : undefined} data-as-of={live?.asOf} data-stale-at={live?.staleAt}>
   <div class="event-layout-head">
   <nav class="event-back" aria-label="Event calendar">
     <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
@@ -135,9 +137,7 @@ const detailIslands = $derived([
     {#if model.isDraft}
       <p class="notice" data-testid="event-draft">Draft</p>
     {/if}
-    {#if lifecycle}
-      <div data-testid="event-past"><Tag>Sign-up record</Tag></div>
-    {:else if model.isPast}
+    {#if !model.isEnded && model.isPast}
       <p class="notice" data-testid="event-past">Past event</p>
     {/if}
     {#if model.status === "cancelled"}
@@ -170,18 +170,18 @@ const detailIslands = $derived([
   {:else if live}
     <div class="live-time" data-testid="kit-event-time">
       <TimeBlock start={new Date(model.timeDatetime)} end={new Date(model.endsAt)} asOf={new Date(live.asOf)}
-        state="live" stale={false} viewerZone={model.zoneLabel} serverLive={{ endLabel: model.endsWhenText }} />
+        state="live" stale={false} viewerZone={model.zoneLabel} serverLive />
     </div>
   {:else}
     {@html model.detailHtml.metadata}
   {/if}
   </div>
   <div class="event-layout-rail">
-    {#if lifecycle}
-      <section class="seat-card" aria-labelledby="signup-record-heading">
+    {#if model.isEnded}
+      <section class="seat-card" aria-labelledby="signup-record-heading" data-testid="event-past">
         <div class="seat-card-head"><h2 id="signup-record-heading">Sign-up record</h2></div>
-        <p class="seat-card-note">No Echo for this one. {model.goingCount} signed up.</p>
-        {#if lifecycle.next}<p><a href="/e/{lifecycle.next.key}">Next one: {lifecycle.next.date}</a></p>{/if}
+        <p class="seat-card-note">No Echo for this one. {listedSignUpCountText(model.goingCount)}.</p>
+        {#if model.endedNext}<p><a href="/e/{model.endedNext.key}">Next one: {model.endedNext.date}</a></p>{/if}
       </section>
       {#if model.viewerModerator && model.review}{@html model.review.rsvp}{/if}
     {:else if savedLive}
@@ -205,9 +205,6 @@ const detailIslands = $derived([
           {#if openSeat}<span class="seat-open-snapshot"><Tag variant="ok">{KIT_SIGNUPS_OPEN}</Tag></span>
           {:else if model.seatCard.tag}<span class="seat-card-tag">{model.seatCard.tag.text}</span>{/if}
         </div>
-      {/if}
-      {#if live && !model.review}
-        <p class="seat-card-note live-rsvp-end">Ends <time datetime={model.endsAt}>{model.endsWhenText}</time></p>
       {/if}
       <div class="event-rsvp">{@html model.detailHtml.rsvp}</div>
       {#if openSeat}<a class="seat-action" href={model.icsUrl}>Add to calendar</a>{/if}
@@ -234,7 +231,7 @@ const detailIslands = $derived([
     {/if}
     {@html model.detailHtml.share}
   </div>
-  <div class="event-layout-body">
+  <div class="event-layout-body" class:ended={Boolean(lifecycle)}>
   {#if lifecycle || live}{@html model.detailHtml.metadata}{/if}
   <div class="event-detail-grid">
     <div>
@@ -363,12 +360,16 @@ const detailIslands = $derived([
     .lifecycle-time { flex-direction: column; }
     .lifecycle-figure { font-size: var(--text-figure-compact); }
     .live-time { --two-font-size-figure: var(--text-figure-compact); }
-    .live-rsvp-end { display: none; }
   }
   .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
   .event-layout-rail :global(> section) { border: 0; }
   .event-layout-rail :global(> .event-share) { padding: 0; margin-top: var(--space-2); }
   .event-layout-body { grid-area: body; min-width: 0; }
+  :global(.event-theme) .event-layout-body.ended :global(.event-meta > div) { padding: var(--space-2); }
+  /* Hidden comparison controls still reserve space on the live Hono page. */
+  :global(.event-theme) .event-layout-body.ended :global(.event-meta > div[hidden]),
+  :global(.event-theme) .event-layout-body.ended :global(.event-device-timezone:has(> button[hidden])),
+  .event-layout-body :global(.event-time-comparison:has(button[hidden])) { display: none; }
   .seat-card {
     background: var(--color-g2);
     border: 0;
@@ -452,6 +453,8 @@ const detailIslands = $derived([
   /* Kit breakpoint.compact-max, layout.rail.seat, and layout.sticky-offset. */
   @media (min-width: 821px) {
     .event-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "head rail" "body rail"; column-gap: var(--space-9); align-items: start; }
+    /* Keep the sole scheduled end above the live RSVP action, even in two columns. */
+    .event-layout.live-action { grid-template-areas: "head ." "body rail"; }
     .event-layout-rail { position: sticky; top: 92px; }
   }
 </style>

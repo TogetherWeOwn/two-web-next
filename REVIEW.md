@@ -16,19 +16,20 @@ When evaluating release evidence, apply the
 [merge and production staging contract](CONTRIBUTING.md#merge-and-production-staging-evidence).
 For `TogetherWeOwn/two-web-next` and `TogetherWeOwn/two-bot-next`, the staging
 item is met by the automatic **post-merge, pre-production** staging/e2e/soak
-gate. Do not demand a staging run for an unmerged head, or make artifact equality,
-paired hashes or a comparison to current `main` a merge prerequisite. This is
-not limited to docs/test-only changes and is not proof that staging already ran.
+gate. Do not demand a staging run for an unmerged head, or require artifact
+comparisons to prove pre-merge staging. This is not limited to docs/test-only
+changes and is not proof that staging already ran.
 
-Before merge, verify that the required checks pass on the exact PR head, all
-findings have been fixed or answered with evidence, and applicable security
-reviews and native stages are complete. Require exact-head Actions links and
-conclusions. For promotion-path PRs only, also verify the fresh exact-head
-Release Manager confirmation and evidence described in CONTRIBUTING. The
-final-stage reviewer, or author without native stages, pins the squash merge
-to the reviewed head and records the squash SHA and any required confirmation
-in the release log. An otherwise mergeable PR does not need restacking solely
-because `main` moved.
+Before merge, verify required checks and all predecessor native verdicts on
+the exact PR head, plus fixes or answers for all findings. A push requires
+fresh required verdicts. Require exact-head Actions links and conclusions.
+Follow CONTRIBUTING to recheck promotion-path routing against the live target
+and obtain the final native Release Manager merge decision where required.
+The final reviewer (or author without native stages) pins the squash merge to
+that head, then records the result as described in the contract. Do not
+require a recorded final approval before merge: it records the successful
+merge. An otherwise mergeable PR does not need restacking solely because
+`main` moved.
 
 Distinguish that merge evidence from production qualification: the resulting
 exact `main` SHA still has to pass full CI, staging deploy, staging e2e and soak
@@ -144,7 +145,12 @@ Try to prove your own candidate wrong first:
 3. Check whether the behavior is documented as intentional in README/docs
    (for example, throttle failure handling varies by call site; see
    `docs/throttling.md` for missing stores, unclassified errors, outages,
-   and lock contention). Intentional, documented behavior is not a defect.
+   and lock contention). Before reporting a defect, check the PR's Claims in
+   Attestation and linked docs. For documented intent (e.g. fail-closed until a
+   binding exists, an advisory-only CSS budget, or a removed live region), report
+   only if evidence shows a violation of an existing requirement, a contradiction
+   of the stated contract, or user harm beyond what the PR describes. The private
+   security-reporting exception above still applies.
 4. Pre-existing issues are out of scope unless this PR makes them newly
    reachable or worse; if so, explain the new reachability.
 
@@ -211,6 +217,10 @@ A missing test alone is not a runtime bug. These are blocking findings:
   Preserve gates intentionally defined against the fork point or base-branch policy.
   For publish or artifact jobs, confirm keys, tokens, and secrets cannot reach uploaded
   artifacts or public output. Report a violation as Severe only with the exact job/line and failing path.
+  With `actions/upload-artifact` v4+, artifact names only need to be unique
+  within one run attempt; reruns may reuse them. For upload collisions, flag
+  same-attempt name conflicts, not a missing `run_attempt` suffix by itself.
+  Check that consumers requiring the current attempt select that attempt's artifact.
 - **Generated assets:** `build:assets` generates budgeted outputs from
   `assets/`; see `ci/minify-assets.mjs` for the mapping and the authored CSS
   exceptions. Check generated output for drift or hand-edits, accounting for

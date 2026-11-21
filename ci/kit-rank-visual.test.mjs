@@ -19,7 +19,8 @@ test("built Kit renders both rank sizes with text fallback and forced colours", 
     "utf8",
   );
   await mkdir(directory, { recursive: true });
-  await withKitOfflineBrowser({ page: source, javaScriptEnabled: true }, async ({ page, html }) => {
+  const options = { page: source, javaScriptEnabled: true, headerMenu: true, csr: true };
+  await withKitOfflineBrowser(options, async ({ page, html }) => {
     assert.match(html, /_app\/immutable\/assets\/[^" ]+\.css/);
     for (const name of names) assert.ok(html.includes(`>${name}</span>`), name);
     const labels = page.locator("main .rank-label");

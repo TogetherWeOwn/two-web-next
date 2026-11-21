@@ -82,7 +82,9 @@ is the sanctioned live web apply path, not `npm run db:migrate` from an agent
 workspace. Follow the [operator procedure and recovery gates](runbook.md#neon-web-schema-migrations-separate-operator-action).
 It loads the selected GitHub Environment secret, rejects disabled production,
 plans from the SQL journal/Drizzle ledger, records a pre-apply PITR timestamp,
-applies transactionally and verifies zero pending migrations. The staging
+and applies transactionally. Staging and full-release verification require zero
+pending migrations. Production scoped readback verifies only the approved end,
+reports deferred migrations, and does not qualify a release. The staging
 `deploy.yml` runs the same script for `staging` after CI and before the Worker
 deploy; live production execution always requires separate authorization and is
 never part of a Worker deploy.
@@ -242,6 +244,12 @@ run-owned shard container. The SQL serializes role creation, verifies a test
 lifetime. GitHub jobs run it twice to exercise idempotence. This preparation is
 not part of the live migrator or a bootstrap instruction for shared databases.
 
+The `check` job's **web readiness bridge rehearsal** applies the locked journal
+through `1033` and `1037` in one disposable database. It logs the pinned legacy
+and bridge `/up` results before and after narrowing the synthetic login, and
+checks scoped app and audit access and the unchanged journal. This is database
+compatibility evidence, not staging or deployed Worker rollback qualification.
+
 The runner also refuses at plan time while any reviewed object (the
 runtime-rights table/sequence census, plus the `drizzle` migration ledger and
 its sequence) is owned by a role the migrator cannot
@@ -298,10 +306,11 @@ with `target: production`, behind the `production` Environment:
 
 - Script: `bin/db-backup.sh` (`backup` | `promote-weekly` |
   `rotate` | `check`). Connection comes from `DATABASE_URL` env only —
-  never argv, never logs. Every `wrangler r2 object` call passes
-  `--jurisdiction eu` (overridable via `BACKUP_JURISDICTION`, default
-  `eu`); the bucket default is `two-web-next-backups` (overridable via
-  `BACKUP_BUCKET`).
+  never argv, never logs. Wrangler is the default transport; `BACKUP_TRANSPORT=s3`
+  uses the AWS CLI v2 with region `auto` and bucket-scoped R2 S3 credentials.
+  The default `BACKUP_JURISDICTION=eu` selects Wrangler's `--jurisdiction eu`
+  or the `.eu.r2.cloudflarestorage.com` S3 endpoint. The bucket default remains
+  `two-web-next-backups` (overridable via `BACKUP_BUCKET`).
 - `paperclip-backups` is explicitly out of scope for member-data dumps
   (jurisdiction `default` / location `ENAM`; must never receive them).
 - Schedule: `.github/workflows/db-backup.yml` — nightly `03:17Z` cron
@@ -314,10 +323,21 @@ with `target: production`, behind the `production` Environment:
   that inherits `pg_read_all_data` and no write, DDL or admin role, on the
   PlanetScale direct endpoint, same `pg_dump -Fc` path — direct `5432`, never
   the pooled `6432` port).
-  Also needs Cloudflare credentials from the bound Environment:
-  `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` (staging Environment), or
-  `PRODUCTION_CLOUDFLARE_API_TOKEN` / `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`
-  (production Environment) behind the same `inputs.target` guard.
+- Backup storage credentials depend on the transport and come from the bound
+  Environment. Wrangler (the default when the target's transport variable is
+  unset) uses `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in staging, or
+  the corresponding `PRODUCTION_` secrets in production. S3 uses
+  `R2_ACCOUNT_ID`, `R2_S3_ACCESS_KEY_ID`, and `R2_S3_SECRET_ACCESS_KEY` in staging,
+  or the corresponding `PRODUCTION_` secrets in production. The workflow only
+  passes S3 credentials to the backup, rotation, and check steps when S3 is selected.
+  Set the `BACKUP_TRANSPORT` repository variable to `s3` to opt in for staging
+  only. Production uses `PRODUCTION_BACKUP_TRANSPORT` independently; leave it
+  unset until production cutover is approved.
+- Before narrowing the existing backup-related R2 write grant, verify a staging
+  S3 dispatch and a separately approved production S3 dispatch with read-back.
+  A dispatch does not exercise retention. For rollout verification, also observe
+  the scheduled staging S3 path, including Sunday promotion and deletion when
+  archives are eligible.
 - Branch/target correspondence: `branch` must be empty (defaults to `target`),
   equal to `target`, or `test-*`; staging↔production swaps and other overrides
   refuse before provisioning or I/O. Local operators must declare

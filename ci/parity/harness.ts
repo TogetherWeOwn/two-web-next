@@ -14,6 +14,7 @@
 // It reports what the response alone cannot show: the request-log route the
 // app matched (the tail alert-line label source), any error.alert route, and
 // the outbound calls the request attempted.
+import { withEnv } from "cloudflare:workers";
 import { discordFixtureResponse } from "../../e2e/discord-stub";
 
 /** 2026-07-01T12:00:00Z: a fixed instant before every real run date. */
@@ -156,14 +157,14 @@ export function parityWorker(inner: InnerWorker) {
         redirect: "manual",
       });
       try {
-        const response = await inner.fetch(
-          mapped,
-          {
-            ...env,
-            DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
-          } as never,
-          ctx,
-        );
+        const bindings = {
+          ...env,
+          DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
+        };
+        // Kit reads cloudflare:workers env while Hono also accepts positional bindings.
+        const response = (await withEnv(bindings, () =>
+          inner.fetch(mapped, bindings as never, ctx),
+        )) as Response;
         const out = new Response(response.body, response);
         out.headers.set("x-parity-route", capture.route ?? "");
         out.headers.set("x-parity-alerts", JSON.stringify(capture.alerts));

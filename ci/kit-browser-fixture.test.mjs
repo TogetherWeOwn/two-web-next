@@ -371,7 +371,7 @@ test("Kit fixture opts into compiled JavaScript hydration", async () => {
   });
   const timezoneId = "America/Los_Angeles";
   await withKitOfflineBrowser(
-    { page: fixture, javaScriptEnabled: true, timezoneId },
+    { page: fixture, javaScriptEnabled: true, timezoneId, csr: true, headerMenu: true },
     async ({ page }) => {
       assert.equal(
         await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone),
@@ -380,6 +380,10 @@ test("Kit fixture opts into compiled JavaScript hydration", async () => {
       await page.waitForLoadState("networkidle");
       await page.locator("button").click();
       await page.waitForFunction(() => document.querySelector("button")?.textContent === "1");
+      assert.equal(
+        await page.evaluate(async () => (await fetch("/islands/site-header-menu.js")).status),
+        200,
+      );
     },
   );
 });
@@ -456,6 +460,49 @@ test("Kit fixture denies public JavaScript even with hydration enabled", async (
     }),
     /events-calendar\.js/,
   );
+});
+
+test("Kit fixture serves the menu island only with explicit opt-in", async () => {
+  const path = "/islands/site-header-menu.js";
+  const options = { page: "<p>Fixture</p>", javaScriptEnabled: true };
+  const fetchFulfilled = (page, url) =>
+    page.evaluate(
+      (request) =>
+        fetch(request).then(
+          () => true,
+          () => false,
+        ),
+      url,
+    );
+
+  let menuFetchFulfilled;
+  await assert.rejects(
+    withKitOfflineBrowser(options, async ({ page }) => {
+      menuFetchFulfilled = await fetchFulfilled(page, path);
+    }),
+    /\/islands\/site-header-menu\.js/,
+  );
+  assert.equal(menuFetchFulfilled, false);
+
+  const body = await readFile(new URL(`../public${path}`, import.meta.url), "utf8");
+  let calendarFetchFulfilled;
+  await assert.rejects(
+    withKitOfflineBrowser({ ...options, headerMenu: true }, async ({ page }) => {
+      const response = await page.evaluate(async (url) => {
+        const asset = await fetch(url);
+        return {
+          status: asset.status,
+          type: asset.headers.get("content-type"),
+          body: await asset.text(),
+        };
+      }, path);
+      assert.deepEqual(response, { status: 200, type: "text/javascript", body });
+      calendarFetchFulfilled = await fetchFulfilled(page, "/islands/events-calendar.js");
+    }),
+    /\/islands\/events-calendar\.js/,
+  );
+  // The fixture's cleanup rejection can mask assertions inside the callback.
+  assert.equal(calendarFetchFulfilled, false);
 });
 
 test("Kit fixture renders query data and same-origin static assets", async () => {

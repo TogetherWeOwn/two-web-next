@@ -256,7 +256,8 @@ describe.each(archiveTwins)("%s archive → detail → same results", (twin) => 
       );
       expect(audited.at(-1)).toEqual(expectedIds);
       archiveReturn(html);
-      const refresh = linksIn(html).find((link) => /Refresh attendees/.test(link.label))!.url;
+      const refreshLabel = twin === "Kit" ? "Refresh sign-ups" : "Refresh attendees";
+      const refresh = linksIn(html).find((link) => link.label === refreshLabel)!.url;
       expect(refresh.searchParams.get("attendees") ?? "1").toBe(String(page));
       expect(relative(archiveReturn(await (await detail(twin, refresh, "member")).text()))).toBe(
         relative(archiveReturn(html)),

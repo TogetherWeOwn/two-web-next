@@ -171,11 +171,13 @@ async function resolve(
   session: KitRequestSession = GUEST,
   joinResult: JoinResult | null = null,
   search = "",
+  now?: Date,
 ) {
   const seen: Record<string, string>[] = [];
   const outcome = await resolveKitEventDetail({
     key,
     search,
+    now,
     path: `/e/${key}`,
     env,
     session,
@@ -352,6 +354,52 @@ describe("member-detail review mode", () => {
     expect(renderDetail(outcome.model as unknown as Record<string, unknown>)).toContain(
       "Time unavailable",
     );
+  });
+
+  it("keeps elapsed review in the ended state when the start date is unreadable", async () => {
+    const event = {
+      ...row({
+        status: "published",
+        startsAt: new Date(NaN),
+        endsAt: new Date("2020-01-02T00:00:00Z"),
+        recurrenceIndex: 1,
+      }),
+      goingCount: 0,
+      goingOccupancy: 0,
+    };
+    const upcoming = NEIGHBORS.next!;
+    const unrelated = { ...upcoming, id: 10, eventKey: SUGGESTIONS[0]!.key };
+    const { outcome } = await resolve(
+      KEY,
+      {
+        ...fakeStore({ event, related: [upcoming, unrelated] }),
+        seriesFn: async () => ({
+          hosts: [],
+          previous: upcoming,
+          next: null,
+          upcoming,
+          memberIds: [event.id, upcoming.id],
+        }),
+      },
+      memberSession(MOD_ID, true),
+      null,
+      "?review=1",
+      new Date("2029-12-31T00:00:00Z"),
+    );
+    if (outcome.kind !== "ok") throw new Error(outcome.kind);
+    const { model } = outcome;
+    expect(model.lifecycle).toBeNull();
+    expect(model.detailHtml.share).toContain("Share this event");
+    expect(model.detailHtml.share).not.toContain("Add to calendar");
+    expect(model.detailHtml.metadata).toContain("listed sign-ups");
+    expect(model.detailHtml.roster).not.toContain('data-island="attendees-live"');
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(model as unknown as Record<string, unknown>);
+    expect(html).toContain("Time unavailable");
+    expect(html).toContain('aria-labelledby="signup-record-heading"');
+    expect(html).toContain(`href="/e/${upcoming.eventKey}">Next one: Fri 1 Feb</a>`);
+    expect(html.split(`href="/e/${upcoming.eventKey}"`)).toHaveLength(2);
+    expect(html).toContain(`href="/e/${unrelated.eventKey}"`);
   });
 });
 
@@ -532,8 +580,7 @@ describe("event-detail guest reads", () => {
     // Discovery + share surface.
     expect(model.related).toHaveLength(1);
     expect(model.related[0]).toMatchObject({ key: RELATED[0]!.eventKey, title: "Chess finals" });
-    // Related instants use the served long-offset format, not the grid format.
-    expect(model.related[0]!.whenText).toContain("GMT");
+    expect(model.related[0]!.whenText).toBe("Fri 1 Feb, 19:00 UTC");
     // The sign-in return preserves the query string, as served.
     const queried = await resolve(KEY, fakeStore(), GUEST, null, "?tab=about");
     expect(queried.outcome.kind).toBe("ok");
@@ -549,7 +596,7 @@ describe("event-detail guest reads", () => {
     expect(outcome.headers["x-robots-tag"]).toBeUndefined();
   });
 
-  it("links both neighbors through the served discovery format", async () => {
+  it("links both neighbors through the compact discovery format", async () => {
     const previous = {
       id: 6,
       eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA",
@@ -568,7 +615,7 @@ describe("event-detail guest reads", () => {
     expect(outcome.kind).toBe("ok");
     if (outcome.kind !== "ok") throw new Error("unreachable");
     expect(outcome.model.neighbors.previous?.key).toBe(previous.eventKey);
-    expect(outcome.model.neighbors.previous?.whenText).toContain("GMT");
+    expect(outcome.model.neighbors.previous?.whenText).toBe("Tue 1 Jan, 19:00 UTC");
     const lonely = await resolve(KEY, fakeStore({ neighbors: { previous: null, next: null } }));
     expect(lonely.outcome.kind).toBe("ok");
     if (lonely.outcome.kind !== "ok") throw new Error("unreachable");
@@ -1093,7 +1140,9 @@ describe("Kit detail presentation", () => {
       if (typeof verdict === "string") expect(html).toContain(verdict);
       else expect(html).toMatch(verdict);
       expect(html).toContain('data-testid="event-roster-empty"');
-      expect(html).toContain("No one is listed as going yet.");
+      expect(html).toContain(
+        _label === "ended event" ? "No sign-ups are listed." : "No one is listed as going yet.",
+      );
       expect(html).not.toMatch(/No RSVPs(\.| yet)/);
       expect(html).not.toContain("RSVP to start the list");
     },
@@ -1128,7 +1177,9 @@ describe("Kit detail presentation", () => {
       if (typeof rsvpCopy === "string") expect(html).toContain(rsvpCopy);
       else expect(html).toMatch(rsvpCopy);
       expect(html).toContain('data-testid="event-roster-guest-nudge"');
-      expect(html).toContain("No one is listed as going yet.");
+      expect(html).toContain(
+        _label === "ended event" ? "No sign-ups are listed." : "No one is listed as going yet.",
+      );
       expect(html).not.toMatch(/No RSVPs(\.| yet)/);
       expect(html).not.toContain("sign in to be the first");
     },
@@ -1289,7 +1340,7 @@ describe("Kit detail presentation", () => {
     const pastMemberHtml = renderDetail(
       pastMember.outcome.model as unknown as Record<string, unknown>,
     );
-    expect(pastMemberHtml).toContain("No Echo for this one. 3 signed up.");
+    expect(pastMemberHtml).toContain("No Echo for this one. 3 listed sign-ups.");
     expect(pastMemberHtml).not.toContain(`action="/e/${KEY}/rsvp"`);
     expect(pastMemberHtml).not.toContain("Next one:");
   });
@@ -1577,6 +1628,10 @@ describe("Kit detail presentation", () => {
     expect(broken.outcome.kind).toBe("ok");
     if (broken.outcome.kind !== "ok") throw new Error("unreachable");
     expect(broken.outcome.model.zoneLabel).toBe("UTC");
+    expect(broken.outcome.model.neighbors.next).toMatchObject({
+      whenText: "Fri 1 Feb, 19:00 UTC",
+      datetime: "2030-02-01T19:00:00.000Z",
+    });
     expect(broken.outcome.model.whenText).toBe("2030-01-10T20:00:00.000Z");
   });
 });

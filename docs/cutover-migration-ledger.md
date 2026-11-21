@@ -79,19 +79,25 @@ The sanctioned live apply path is the `db-migrate` workflow
 - Gates run before any install or database access: the ref must be
   `refs/heads/main`, staging requires `STAGING_MIGRATION_HOLD` exactly
   `false`, and `production` requires the `PRODUCTION_DEPLOY_ENABLED`
-  variable to be true.
+  variable to be true and the run SHA to match `PRODUCTION_MIGRATION_APPROVED_SHA`.
 - Secrets come from the matching GitHub Environment only
   (`PLANETSCALE_STAGING_DATABASE_URL` or `PRODUCTION_DATABASE_URL`); the
   unselected target is never exposed and no fallback URL exists.
 - Endpoint rules are enforced in code: direct port `5432`, no pooler;
   staging must be the pinned PlanetScale staging branch and host (retired
   Neon endpoints are refused; the production identity is refused),
-  production must be a direct PlanetScale endpoint (`<id>.pg.psdb.cloud`)
-  with TLS.
+  production must likewise use the pinned direct host and branch with TLS.
+  The production runner checks the actual database and both role identities
+  against the [approved fingerprint](runbook.md#neon-web-schema-migrations-separate-operator-action),
+  including inside the apply transaction. Production plan and locked apply
+  also require the exact next contiguous tags pinned on the protected Environment;
+  see the [operator runbook](runbook.md#neon-web-schema-migrations-separate-operator-action).
 - Steps: numbering guard, read-only `plan` (journal/ledger diff, no
   DDL), `apply` under a Postgres transaction advisory lock with the
-  pre-apply PITR timestamp recorded, then `verify` proves zero pending
-  web migrations.
+  pre-apply PITR timestamp recorded, then a read-only post-check. Staging
+  `verify` proves zero pending web migrations. Production `verify-scope`
+  proves the exact approved ledger end and lists deferred tags; it does not
+  replace full-release verification.
 - Applies never cancel each other: the concurrency group is
   `web-migrate-<target>` with `cancel-in-progress: false`.
 - Staging Worker deploys apply the same script for `staging` inside the
