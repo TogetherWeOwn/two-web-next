@@ -59,11 +59,16 @@
               "level": "error",
               "options": {
                 "paths": {
-                  "./index": "Use the framework-neutral session module.",
-                  "./index.tsx": "Use the framework-neutral session module.",
+                  ".": "Import the framework-neutral module directly, not the app entry.",
+                  "./": "Import the framework-neutral module directly, not the app entry.",
+                  "../src/": "Import the framework-neutral module directly, not the app entry.",
                   "hono": "Use the framework-neutral session and cookie modules."
                 },
                 "patterns": [
+                  {
+                    "group": ["**/index", "**/index.tsx", "**/index.js", "**/index.jsx", "**/src"],
+                    "message": "Import the framework-neutral module directly, not an index or src barrel."
+                  },
                   { "group": ["hono/**"], "message": "Use the framework-neutral cookie module." }
                 ]
               }

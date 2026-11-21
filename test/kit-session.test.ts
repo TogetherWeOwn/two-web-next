@@ -15,6 +15,10 @@
 //   is never reported as a logout, so the UI can show "unknown" instead of
 //   flipping a member to logged-out.
 // Local fixtures only: memory store, serializeSigned-minted cookies, no DB.
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { parseSigned, serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it, vi } from "vitest";
 import { AUTH_STATUS_COOKIE } from "../src/auth-status";
@@ -84,6 +88,44 @@ const seedSession = async (
   await store.create(row);
   return { token, row };
 };
+
+it("lints Hono and alternate app-entry imports out of the Kit session bridge", () => {
+  const biome = resolve("node_modules/@biomejs/biome/bin/biome");
+  const root = mkdtempSync(join(tmpdir(), "kit-session-lint-"));
+  const source = "src/kit-session.ts";
+  try {
+    copyFileSync("biome.json", join(root, "biome.json"));
+    mkdirSync(join(root, "src"));
+    const lintImport = (specifier: string) => {
+      writeFileSync(join(root, source), `import ${JSON.stringify(specifier)};\n`);
+      const result = spawnSync(process.execPath, [biome, "lint", "--vcs-enabled=false", source], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 3000,
+      });
+      if (result.error) throw result.error;
+      return result;
+    };
+    for (const specifier of [
+      "./index",
+      "./index.tsx",
+      "./index.js",
+      "../src/index",
+      "../src/index.js",
+      "../src/",
+      "hono",
+      "hono/utils/cookie",
+    ]) {
+      const { status, stderr } = lintImport(specifier);
+      expect(status, `${specifier}: ${stderr}`).toBe(1);
+      expect(stderr, specifier).toContain("lint/style/noRestrictedImports");
+    }
+    const { status, stderr } = lintImport("./session-cookie");
+    expect(status, stderr).toBe(0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe("resolveRequestSession (one request, one session decision)", () => {
   it("resolves a valid signed session with the row's member/moderator bits", async () => {
