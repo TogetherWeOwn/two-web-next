@@ -3,6 +3,7 @@
 // tokens, SQL or personal data, so they never reach console output,
 // queue.failing or the ledger. Stable failure codes survive (sanitized).
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import { consume } from "../src/jobs/consumer";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "../src/jobs/constants";
 import { BotTerminalError, BotTransportError } from "../src/jobs/types";
@@ -22,6 +23,7 @@ function deps(ledger?: QueueLedger): {
   lock: UniqueLock;
   ledger: QueueLedger;
   failedReasons: string[];
+  announcementReconciliation: ReturnType<typeof announcementStore>;
 } {
   const failedReasons: string[] = [];
   const attempt = {
@@ -67,11 +69,12 @@ function deps(ledger?: QueueLedger): {
       failed: async (_id, _kind, _key, reason) => void failedReasons.push(reason),
     },
     failedReasons,
+    announcementReconciliation: announcementStore(),
   };
 }
 
 function msg(body: unknown, attempts = 1) {
-  return { body, attempts, ack: vi.fn(), retry: vi.fn() };
+  return { body, attempts, timestamp: new Date(), ack: vi.fn(), retry: vi.fn() };
 }
 
 function capture() {

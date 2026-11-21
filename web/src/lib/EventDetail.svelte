@@ -123,8 +123,8 @@ const detailIslands = $derived([
   loginReturnTo={model.path}
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
-  <div class="event-layout" id={live ? "kit-live-snapshot" : undefined}
-    data-as-of={live?.asOf} data-stale-at={live?.staleAt}>
+  <div class="event-layout" class:live-action={!!live && !savedLive && !model.review}
+    id={live ? "kit-live-snapshot" : undefined} data-as-of={live?.asOf} data-stale-at={live?.staleAt}>
   <div class="event-layout-head">
   <nav class="event-back" aria-label="Event calendar">
     <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
@@ -169,7 +169,7 @@ const detailIslands = $derived([
   {:else if live}
     <div class="live-time" data-testid="kit-event-time">
       <TimeBlock start={new Date(model.timeDatetime)} end={new Date(model.endsAt)} asOf={new Date(live.asOf)}
-        state="live" stale={false} viewerZone={model.zoneLabel} serverLive={{ endLabel: model.endsWhenText }} />
+        state="live" stale={false} viewerZone={model.zoneLabel} serverLive />
     </div>
   {:else}
     {@html model.detailHtml.metadata}
@@ -204,9 +204,6 @@ const detailIslands = $derived([
           {#if openSeat}<span class="seat-open-snapshot"><Tag variant="ok">{KIT_SIGNUPS_OPEN}</Tag></span>
           {:else if model.seatCard.tag}<span class="seat-card-tag">{model.seatCard.tag.text}</span>{/if}
         </div>
-      {/if}
-      {#if live && !model.review}
-        <p class="seat-card-note live-rsvp-end">Ends <time datetime={model.endsAt}>{model.endsWhenText}</time></p>
       {/if}
       <div class="event-rsvp">{@html model.detailHtml.rsvp}</div>
       {#if openSeat}<a class="seat-action" href={model.icsUrl}>Add to calendar</a>{/if}
@@ -362,7 +359,6 @@ const detailIslands = $derived([
     .lifecycle-time { flex-direction: column; }
     .lifecycle-figure { font-size: var(--text-figure-compact); }
     .live-time { --two-font-size-figure: var(--text-figure-compact); }
-    .live-rsvp-end { display: none; }
   }
   .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
   .event-layout-rail :global(> section) { border: 0; }
@@ -371,7 +367,8 @@ const detailIslands = $derived([
   :global(.event-theme) .event-layout-body.ended :global(.event-meta > div) { padding: var(--space-2); }
   /* Hidden comparison controls still reserve space on the live Hono page. */
   :global(.event-theme) .event-layout-body.ended :global(.event-meta > div[hidden]),
-  :global(.event-theme) .event-layout-body.ended :global(.event-device-timezone:has(> button[hidden])) { display: none; }
+  :global(.event-theme) .event-layout-body.ended :global(.event-device-timezone:has(> button[hidden])),
+  .event-layout-body :global(.event-time-comparison:has(button[hidden])) { display: none; }
   .seat-card {
     background: var(--color-g2);
     border: 0;
@@ -455,6 +452,8 @@ const detailIslands = $derived([
   /* Kit breakpoint.compact-max, layout.rail.seat, and layout.sticky-offset. */
   @media (min-width: 821px) {
     .event-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "head rail" "body rail"; column-gap: var(--space-9); align-items: start; }
+    /* Keep the sole scheduled end above the live RSVP action, even in two columns. */
+    .event-layout.live-action { grid-template-areas: "head ." "body rail"; }
     .event-layout-rail { position: sticky; top: 92px; }
   }
 </style>

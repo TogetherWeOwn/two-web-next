@@ -160,6 +160,8 @@ export const EventMetadata: FC<{
   /** Kit-only: the C6 facts list owns the host row (and its event-organizer
    * hook), so the metadata list skips it. Hono never sets this. */
   omitHost?: boolean;
+  /** The live Kit C4 block owns the visible times. Keep the comparison inputs. */
+  timeInBlock?: boolean;
 }> = ({
   model,
   showTimeFromNow,
@@ -168,11 +170,12 @@ export const EventMetadata: FC<{
   refreshSeat = false,
   ended = false,
   omitHost = false,
+  timeInBlock = false,
 }) => (
   <dl class="event-meta" aria-label="Event details">
-    <div>
+    <div class={timeInBlock ? "event-time-comparison" : undefined}>
       <dt>Starts</dt>
-      <dd>
+      <dd hidden={timeInBlock}>
         <time datetime={model.timeDatetime || undefined}>
           {model.whenText} ({model.zoneLabel})
         </time>
@@ -184,9 +187,9 @@ export const EventMetadata: FC<{
         <p role="status" aria-live="polite" data-testid="event-device-timezone-starts-status"></p>
       </dd>
     </div>
-    <div>
+    <div class={timeInBlock && model.endsAt ? "event-time-comparison" : undefined}>
       <dt>Ends</dt>
-      <dd>
+      <dd hidden={timeInBlock && Boolean(model.endsAt)}>
         <time datetime={model.endsAt || undefined}>
           {model.endsWhenText} ({model.zoneLabel})
         </time>
@@ -419,6 +422,7 @@ export function withEventDetailHtml<T extends DetailLeavesModel>(
         <EventMetadata
           model={model}
           showTimeFromNow={model.status !== "draft" && !model.isOngoing}
+          timeInBlock={Boolean(model.isOngoing && model.timeDatetime)}
           retainEmptyInstants
           ended={ended}
           omitHost={Boolean(model.organizerName?.trim())}

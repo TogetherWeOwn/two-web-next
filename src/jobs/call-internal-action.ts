@@ -1,7 +1,6 @@
 import { CALL_INTERNAL_ACTION as C, backoffFor } from "./constants";
 import { botRefusalReason, botRetryExhaustedReason, terminalFailureReason } from "./queue-error";
 import { withInternalActionDeadline } from "./internal-action-deadline";
-import { announcementIntent, type ReconciliationIntent } from "./reconciliation";
 import { admitRetryDelay } from "./retry-delay";
 import { BotTerminalError, BotTransportError } from "./types";
 import type {
@@ -48,36 +47,12 @@ export async function dispatchRoleAssign(
   await queue.send(msg);
 }
 
-export const ANNOUNCEMENT_RECONCILIATION_REASON = "announcement.post requires reconciliation";
-
-type ReconciliationOutcome = { failed: string; announcementIntent: ReconciliationIntent };
-
-function reconcileAnnouncement(
-  msg: Extract<QueueMessage, { kind: "announcement" }>,
-  attempts: number,
-  answer?: BotFailure,
-): ReconciliationOutcome {
-  return {
-    failed: ANNOUNCEMENT_RECONCILIATION_REASON,
-    announcementIntent: announcementIntent(
-      msg.idempotencyKey,
-      msg.action.channelKey,
-      attempts,
-      answer,
-    ),
-  };
-}
-
 /** Ports CallInternalAction::handle. `attempts` is 1-based. */
 export async function handleCallInternalAction(
   msg: Extract<QueueMessage, { kind: "announcement" | "role-assign" }>,
   attempts: number,
   bot: BotClient,
-): Promise<Outcome | ReconciliationOutcome> {
-  // Once the carrier passes the bot budget, only local persistence can retry.
-  if (msg.kind === "announcement" && attempts > C.tries)
-    return reconcileAnnouncement(msg, attempts);
-
+): Promise<Outcome> {
   let answer: InternalActionAnswer;
   try {
     // Bounded: a never-settling bot round-trip must not stall the serial
@@ -93,10 +68,9 @@ export async function handleCallInternalAction(
     // Transport: a wait. Laravel release()s here with no tries check of its own; the worker's
     // max-attempts rule then fails it, which is the same cap.
     if (e instanceof BotTransportError) {
-      if (attempts < C.tries) return { retryInSeconds: backoffFor(C.backoffSeconds, attempts) };
-      return msg.kind === "announcement"
-        ? reconcileAnnouncement(msg, attempts)
-        : { failed: `gave up after ${attempts} attempts` };
+      return attempts >= C.tries
+        ? { failed: `gave up after ${attempts} attempts` }
+        : { retryInSeconds: backoffFor(C.backoffSeconds, attempts) };
     }
     // Class-only: the terminal message can carry tokens or personal data.
     if (e instanceof BotTerminalError) return { failed: terminalFailureReason() };
@@ -104,21 +78,10 @@ export async function handleCallInternalAction(
   }
   if (answer.ok) return { done: true };
   const name = msg.kind === "announcement" ? "announcement.post" : "role.assign";
-  // A keyed hard stop must win over a contradictory wire retry flag or status.
-  if (msg.kind === "announcement" && answer.code === "needs_reconciliation")
-    return reconcileAnnouncement(msg, attempts, answer);
-  const unknownAnnouncement =
-    msg.kind === "announcement" &&
-    (answer.code === "in_progress" ||
-      answer.code === "upstream_timeout" ||
-      answer.code === "unavailable");
   // Class-only: keep the stable failure code, never the provider message.
-  if (!answer.retryable && !unknownAnnouncement)
-    return { failed: botRefusalReason(name, answer.code) };
+  if (!answer.retryable) return { failed: botRefusalReason(name, answer.code) };
   if (attempts >= C.tries) {
-    return msg.kind === "announcement"
-      ? reconcileAnnouncement(msg, attempts, answer)
-      : { failed: botRetryExhaustedReason(name, answer.code, attempts) };
+    return { failed: botRetryExhaustedReason(name, answer.code, attempts) };
   }
   // The bot's number is untrusted JSON: admit it into the Cloudflare retry
   // range, falling back to this attempt's configured backoff (TOG-11629).

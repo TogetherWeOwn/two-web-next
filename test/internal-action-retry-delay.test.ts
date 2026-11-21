@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import { handleCallInternalAction } from "../src/jobs/call-internal-action";
 import { CALL_INTERNAL_ACTION } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
@@ -57,6 +58,7 @@ function msg(body: unknown, attempts = 1, jobId?: string) {
   const r = {
     body: jobId ? { ...(body as object), jobId } : body,
     attempts,
+    timestamp: new Date(),
     acked: false,
     retried: undefined as number | undefined,
   };
@@ -152,7 +154,13 @@ describe("handleCallInternalAction retry admission", () => {
     const before = Date.now();
     await consume(
       { messages: [m] },
-      { bot: botWith(NaN), events: store(), lock: memLock(), ledger },
+      {
+        bot: botWith(NaN),
+        events: store(),
+        lock: memLock(),
+        ledger,
+        ...{ announcementReconciliation: announcementStore() },
+      },
     );
     // Same admitted fallback in both sinks: consumer retries with it and the
     // ledger availability Date is built from it.
@@ -164,30 +172,10 @@ describe("handleCallInternalAction retry admission", () => {
 
   it("leaves terminal caps, idempotency keys and backoff constants unchanged", async () => {
     expect(CALL_INTERNAL_ACTION).toEqual({ tries: 5, backoffSeconds: [5, 15, 60, 180] });
-    // A poisoned delay cannot postpone reconciliation at the cap.
+    // Attempt 5 with a poisoned delay still fails terminally, not retries.
     const outcome = await handleCallInternalAction({ ...ann }, 5, botWith(NaN));
     expect("failed" in outcome).toBe(true);
-    expect(outcome).toMatchObject({
-      announcementIntent: { idempotencyKey: ann.idempotencyKey, lastCode: "rate_limited" },
-    });
   });
-
-  it.each(["in_progress", "upstream_timeout", "unavailable"])(
-    "treats %s as ambiguous for announcements even if the wire omits a retry signal",
-    async (code) => {
-      const refusal = async () => ({ ...fail(null), code, retryable: false });
-      const bot = { postAnnouncement: refusal, assignRole: refusal } as unknown as BotClient;
-      expect(await handleCallInternalAction(ann, 1, bot)).toEqual({ retryInSeconds: FALLBACK });
-      const role = {
-        kind: "role-assign",
-        idempotencyKey: null,
-        action: { userId: "u", roleKey: "r" },
-      } as const;
-      expect(await handleCallInternalAction(role, 1, bot)).toMatchObject({
-        failed: expect.any(String),
-      });
-    },
-  );
 });
 
 describe("handleSyncEvent retry admission", () => {

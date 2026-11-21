@@ -11,6 +11,7 @@
 // payload leaks through the warn/error paths.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import { HTTPException } from "hono/http-exception";
 import { ALERT_WINDOW_MS, AlertRateLimit, alertRequestError } from "../src/alerts";
 import { consume } from "../src/jobs/consumer";
@@ -168,6 +169,7 @@ function memStore(): EventStore {
 function track(body: unknown, attempts = 1) {
   const r = { body, attempts, acked: false, retried: undefined as number | undefined | "now" };
   return Object.assign(r, {
+    timestamp: new Date(),
     ack() {
       r.acked = true;
     },
@@ -241,7 +243,14 @@ describe("queue:poison-probe drill", () => {
     const poison = track(poisonAnn, CALL_INTERNAL_ACTION.tries);
     const ordinary = track(ordinaryAnn);
 
-    await consume({ messages: [poison, ordinary] }, { bot, events: memStore(), lock, ledger });
+    const deps = {
+      bot,
+      events: memStore(),
+      lock,
+      ledger,
+      announcementReconciliation: announcementStore(),
+    };
+    await consume({ messages: [poison, ordinary] }, deps);
 
     // Both reach a terminal ack; only the poison lands in the failed ledger.
     expect(poison.acked).toBe(true);

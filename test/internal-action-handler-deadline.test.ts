@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import { consume } from "../src/jobs/consumer";
 import {
   INTERNAL_ACTION_DEADLINE_MS,
@@ -25,6 +26,7 @@ const role = {
 function msg(body: unknown, attempts = 1) {
   const r = { body, attempts, acked: false, retried: undefined as number | undefined | "now" };
   return Object.assign(r, {
+    timestamp: new Date(),
     ack() {
       r.acked = true;
     },
@@ -78,7 +80,13 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     const second = msg({ ...role }, 1);
     const p = consume(
       { messages: [first, second] },
-      { bot, events: store(), lock: memLock(), ledger: memLedger().ledger },
+      {
+        bot,
+        events: store(),
+        lock: memLock(),
+        ledger: memLedger().ledger,
+        ...{ announcementReconciliation: announcementStore() },
+      },
     );
     await vi.advanceTimersByTimeAsync(INTERNAL_ACTION_DEADLINE_MS + 1000);
     await p;
@@ -107,44 +115,20 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("a hung announcement at the cap retries only persistence after a failed record", async () => {
+  it("a hung call at the cap fails terminally instead of retrying", async () => {
     vi.useFakeTimers();
-    const postAnnouncement = vi.fn(() => new Promise(() => {}));
-    const bot = { postAnnouncement } as unknown as BotClient;
+    const bot = { postAnnouncement: () => new Promise(() => {}) } as unknown as BotClient;
     const { ledger, rows } = memLedger();
     rows.set("j1", { state: "pending" });
-    const record = vi.fn(async () => {}).mockRejectedValueOnce(new Error("store unavailable"));
-    const deps = {
-      bot,
-      events: store(),
-      lock: memLock(),
-      ledger,
-      announcementReconciliation: { hasAnnouncement: async () => false, record },
-    };
     const last = msg({ ...ann, jobId: "j1" }, 5);
+    const announcementReconciliation = announcementStore(5);
+    const deps = { bot, events: store(), lock: memLock(), ledger, announcementReconciliation };
     const p = consume({ messages: [last] }, deps);
     await vi.advanceTimersByTimeAsync(INTERNAL_ACTION_DEADLINE_MS + 1000);
     await p;
-    expect(last.acked).toBe(false);
-    expect(last.retried).toBe(180);
-    expect(rows.get("j1")).toMatchObject({ state: "released" });
-    const retry = msg(last.body, 6);
-    await consume({ messages: [retry] }, deps);
-    expect(postAnnouncement).toHaveBeenCalledOnce();
-    expect(record).toHaveBeenNthCalledWith(2, {
-      idempotencyKey: ann.idempotencyKey,
-      verb: "announcement.post",
-      subject: "c",
-      attempts: 6,
-      lastCode: null,
-      lastStatus: null,
-    });
-    expect(retry.acked).toBe(true);
-    expect(retry.retried).toBeUndefined();
-    expect(rows.get("j1")).toMatchObject({
-      state: "failed",
-      reason: "announcement.post requires reconciliation",
-    });
+    expect(last.acked).toBe(true);
+    expect(last.retried).toBeUndefined();
+    expect(rows.get("j1")).toMatchObject({ state: "failed", reason: "gave up after 5 attempts" });
   });
 
   it("late success after the deadline cannot reclassify the disposed outcome", async () => {

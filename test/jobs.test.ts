@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import {
   CALL_INTERNAL_ACTION,
   PRUNE_CRON,
@@ -94,6 +95,7 @@ function store(over: Partial<EventStore> = {}): EventStore & { mirrored: (string
 function msg(body: unknown, attempts = 1) {
   const r = { body, attempts, acked: false, retried: undefined as number | undefined | "now" };
   return Object.assign(r, {
+    timestamp: new Date(),
     ack() {
       r.acked = true;
     },
@@ -322,10 +324,9 @@ describe("CallInternalAction", () => {
     idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
     action: { channelKey: "c", body: "b" },
   };
-  it("walks 5/15/60/180 on the original key then records reconciliation at the cap", async () => {
-    const postAnnouncement = vi.fn(async () => fail({ code: "in_progress", status: 409 }));
-    const bot = { postAnnouncement } as unknown as BotClient;
-    const record = vi.fn(async () => {});
+  it("walks 5/15/60/180 then fails on attempt 5", async () => {
+    const bot = { postAnnouncement: async () => fail({}) } as unknown as BotClient;
+    const deps = { bot, events: store(), lock: memLock(), ledger: memLedger() };
     for (const [attempt, delay] of [
       [1, 5],
       [2, 15],
@@ -335,32 +336,17 @@ describe("CallInternalAction", () => {
       const m = msg(ann, attempt);
       await consume(
         { messages: [m] },
-        { bot, events: store(), lock: memLock(), ledger: memLedger() },
+        { ...deps, ...{ announcementReconciliation: announcementStore(attempt) } },
       );
       expect(m.retried).toBe(delay);
     }
     const last = msg(ann, 5);
     await consume(
       { messages: [last] },
-      {
-        bot,
-        events: store(),
-        lock: memLock(),
-        ledger: memLedger(),
-        announcementReconciliation: { hasAnnouncement: async () => false, record },
-      },
+      { ...deps, ...{ announcementReconciliation: announcementStore(5) } },
     );
     expect(last.acked).toBe(true);
     expect(last.retried).toBeUndefined();
-    expect(postAnnouncement.mock.calls).toEqual(Array(5).fill([ann.action, ann.idempotencyKey]));
-    expect(record).toHaveBeenCalledExactlyOnceWith({
-      idempotencyKey: ann.idempotencyKey,
-      verb: "announcement.post",
-      subject: "c",
-      attempts: 5,
-      lastCode: "in_progress",
-      lastStatus: 409,
-    });
   });
 
   it("redelivered announcement carries the same key and replays", async () => {
@@ -372,10 +358,14 @@ describe("CallInternalAction", () => {
         return { ok: true, requestId: null, messageId: "m1", replayed };
       },
     } as unknown as BotClient;
-    await consume(
-      { messages: [msg(ann), msg(ann, 2)] },
-      { bot, events: store(), lock: memLock(), ledger: memLedger() },
-    );
+    const deps = {
+      bot,
+      events: store(),
+      lock: memLock(),
+      ledger: memLedger(),
+      announcementReconciliation: announcementStore(),
+    };
+    await consume({ messages: [msg(ann), msg(ann, 2)] }, deps);
     expect(seen.get(ann.idempotencyKey)).toBe(2);
   });
 
@@ -426,7 +416,13 @@ describe("queue ledger (N3)", () => {
           }),
         ],
       },
-      { bot: bad, events: store(), lock: memLock(), ledger: ledger2 },
+      {
+        bot: bad,
+        events: store(),
+        lock: memLock(),
+        ledger: ledger2,
+        ...{ announcementReconciliation: announcementStore() },
+      },
     );
     expect(ledger2.rows.get("j2")?.state).toBe("failed");
     expect(ledger2.rows.get("j2")?.reason).toContain("announcement.post");

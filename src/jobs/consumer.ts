@@ -2,12 +2,8 @@ import { alertQueueFailing } from "../alerts";
 import { AlertProbeError } from "../alert-probe-error";
 import { safeRequestId } from "../request-log";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT, backoffFor } from "./constants";
-import {
-  ANNOUNCEMENT_RECONCILIATION_REASON,
-  handleCallInternalAction,
-} from "./call-internal-action";
+import { handleCallInternalAction } from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
-import type { pgReconciliationStore } from "./reconciliation";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
 import { SYNC_RETRY_PERSISTENCE_REASON, SyncRetryPersistenceError } from "./types";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./sync-retry-diagnostic";
@@ -72,26 +68,6 @@ function alertFailing(
   });
 }
 
-type AnnouncementStore = Pick<
-  ReturnType<typeof pgReconciliationStore>,
-  "hasAnnouncement" | "record"
->;
-class AnnouncementStoreError extends Error {}
-
-async function requireAnnouncementStore<T>(op: () => Promise<T>): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error("timed out")), LEDGER_TIMEOUT_MS);
-    });
-    return await Promise.race([Promise.resolve().then(op), deadline]);
-  } catch (cause) {
-    throw new AnnouncementStoreError("announcement reconciliation store unavailable", { cause });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /** Queue consumer for both queues. Terminal outcomes ack (max_retries is only a backstop). */
 export async function consume(
   batch: { messages: readonly Msg[] },
@@ -104,7 +80,6 @@ export async function consume(
     needsSync?: EventStore["needsSync"];
     dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown>;
     probeEnabled?: boolean;
-    announcementReconciliation?: AnnouncementStore;
   },
 ): Promise<void> {
   for (const m of batch.messages) {
@@ -270,22 +245,6 @@ export async function consume(
         // No ledger fixture, bot request, event mutation or uniqueness lock.
         if (deps.probeEnabled) throw new AlertProbeError(body.probeId);
         outcome = { done: true }; // A delayed staging probe cannot page in production.
-      } else if (body.kind === "announcement") {
-        const store = deps.announcementReconciliation;
-        if (
-          store &&
-          (await requireAnnouncementStore(() => store.hasAnnouncement(body.idempotencyKey)))
-        ) {
-          outcome = { failed: ANNOUNCEMENT_RECONCILIATION_REASON };
-        } else {
-          const result = await handleCallInternalAction(body, m.attempts, deps.bot);
-          if ("announcementIntent" in result) {
-            if (!store)
-              throw new AnnouncementStoreError("announcement reconciliation store missing");
-            await requireAnnouncementStore(() => store.record(result.announcementIntent));
-          }
-          outcome = result;
-        }
       } else {
         outcome =
           body.kind === "sync-event"
@@ -298,16 +257,7 @@ export async function consume(
             : await handleCallInternalAction(body, m.attempts, deps.bot);
       }
     } catch (e) {
-      if (e instanceof AnnouncementStoreError) {
-        console.error("announcement reconciliation persistence failed", {
-          exception: queueExceptionClass(e.cause),
-        });
-        // Ledger failure and ack both require durable evidence. Keep retrying
-        // storage even after the bot budget; signal before the transport cap.
-        if (m.attempts >= CALL_INTERNAL_ACTION.tries)
-          alertFailing(body.kind, m.attempts, e.message, { requestId });
-        outcome = { retryInSeconds: backoffFor(CALL_INTERNAL_ACTION.backoffSeconds, m.attempts) };
-      } else if (body.kind === "sync-event" && e instanceof SyncRetryPersistenceError) {
+      if (body.kind === "sync-event" && e instanceof SyncRetryPersistenceError) {
         // Carry the known wait on this delivery, but only a committed result can
         // reopen the durable claim. Recovery must not substitute a short lease.
         console.error("sync retry result persistence failed", SYNC_RETRY_PERSISTENCE_REASON);
