@@ -68,7 +68,6 @@ export default defineConfig({
         "src/counts.ts": { statements: 99, branches: 99, functions: 99, lines: 99 },
         "src/seo.ts": { statements: 99, branches: 99, functions: 99, lines: 99 },
       },
-      // Blobs carry partial maps. Only the unsharded run or merge judges the whole suite.
       ...(coverageShard ? { reporter: [], thresholds: undefined } : {}),
     },
   },

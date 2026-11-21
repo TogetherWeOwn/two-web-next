@@ -1264,13 +1264,13 @@ jobs:
           set -- vitest-blob/*
           test "$#" -eq 3
           for shard in 1 2 3; do test -s "vitest-blob/vitest-$shard.json"; done
+          TEST=true VITEST=true NODE_ENV=test node ci/verify-vitest-shards.mjs "$@"
           npm run test:coverage -- --merge-reports=vitest-blob --reporter=dot
       - name: Require every coverage shard to succeed
         if: ${{ !cancelled() }}
         env:
           SHARD_RESULT: ${{ needs.coverage-shard.result }}
         run: test "$SHARD_RESULT" = success
-      # Changed-lines WARN gate: a missing report after a successful merge fails the step.
       - name: Patch coverage (WARN)
         if: success()
         run: npm run patch:coverage:selftest && npm run patch:coverage

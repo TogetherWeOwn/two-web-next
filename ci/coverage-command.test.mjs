@@ -81,11 +81,12 @@ test("coverage shards preserve serial threads and the merge uses the canonical c
   const budget = Number(shard.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
   assert.ok(budget > 0 && budget <= 60, `coverage shard timeout ${budget} exceeds 60`);
   assert.match(mergeJob, /needs: \[scope, coverage-shard\]/);
-  const reports = 'for shard in 1 2 3; do test -s "vitest-blob/vitest-$shard.json"; done';
-  const merge = "npm run test:coverage -- --merge-reports=vitest-blob --reporter=dot\n";
+  const merge = `for shard in 1 2 3; do test -s "vitest-blob/vitest-$shard.json"; done
+          TEST=true VITEST=true NODE_ENV=test node ci/verify-vitest-shards.mjs "$@"
+          npm run test:coverage -- --merge-reports=vitest-blob --reporter=dot\n`;
   const result =
     'SHARD_RESULT: ${{ needs.coverage-shard.result }}\n        run: test "$SHARD_RESULT" = success';
-  for (const required of [reports, merge, result]) assert(mergeJob.includes(required), required);
+  for (const required of [merge, result]) assert(mergeJob.includes(required), required);
   assert.doesNotMatch(shard + mergeJob, /continue-on-error:/);
   const staticCheck = job("static-check");
   assert.match(staticCheck, /needs: \[scope\]/);
@@ -187,8 +188,6 @@ test("the patch coverage step has no file-presence skip so a missing input fails
     .split(/\n      - /)
     .find((entry) => entry.startsWith("name: Patch coverage (WARN)\n"));
   assert(step, "coverage merge must keep the patch coverage step");
-  // A hashFiles presence check would skip the step on a missing report and
-  // silence the gate; only an earlier failure should skip it in the merge job.
   assert.doesNotMatch(step, /hashFiles\('coverage\/coverage-final\.json'\)/);
   assert.doesNotMatch(step, /continue-on-error:/);
   const guards = step.match(/^        if:.*$/gm) ?? [];
