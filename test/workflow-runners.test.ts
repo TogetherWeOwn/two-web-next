@@ -154,6 +154,7 @@ describe("workflow runner labels", () => {
       "docs-links",
       "a11y",
       "check",
+      "node22-shard",
       "node22-compat",
       "bundle-budget",
       "lighthouse",
