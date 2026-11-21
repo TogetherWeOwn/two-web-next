@@ -17,6 +17,8 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse } from "parse5";
+import { parseSeasonParam } from "../src/hotzones/season.ts";
 import { stripEmberDelta } from "./kit-archive-delta.mjs";
 import { sectionOf } from "./kit-section-contract.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -549,6 +551,15 @@ function countMatches(html, pattern) {
   return [...html.matchAll(pattern)].length;
 }
 
+export function kitHomeHeadingText(html) {
+  const [heading, duplicate] = activeBoardNodes(parse(html)).filter(
+    (n) => "attrs" in n && n.attrs.some((a) => a.name === "id" && a.value === "home-heading"),
+  );
+  if (heading?.nodeName !== "h1" || duplicate) return "";
+  const text = Array.from(activeBoardNodes(heading), (n) => ("value" in n ? n.value : ""));
+  return text.join("").replace(/\s+/g, " ").trim();
+}
+
 // One assertion set per route response. Returns an array of failure labels
 // (empty = pass). Pure: no I/O, no network.
 export function assertRouteContract({ label, html, headers, status, expected }) {
@@ -590,8 +601,12 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
     if (!html.includes('<script src="/islands/past-events.js"'))
       failures.push(`${label}: shared island binder`);
   } else if (contract === "home") {
-    if (!/<h1\b[^>]*>\s*The lobby is open\.\s*<\/h1>/i.test(html))
-      failures.push(`${label}: home heading present`);
+    const kitHeading = /^(?:The lobby is open\.|Next game night: .+\. Come play with us\.)$/;
+    const headingOk =
+      marker === "kit"
+        ? kitHeading.test(kitHomeHeadingText(html))
+        : /<h1\b[^>]*>\s*The lobby is open\.\s*<\/h1>/i.test(html);
+    if (!headingOk) failures.push(`${label}: home heading present`);
     const oauthJoin =
       /<a\b(?=[^>]*\shref="\/auth\/discord")(?=[^>]*\sdata-testid="join")[^>]*>\s*Join with Discord\s*<\/a>/i;
     const inviteFallback =
@@ -967,6 +982,77 @@ function assertFaqContract(label, html, get, expected) {
   });
 }
 
+export function allowsEndedMemberBoardCopy(path) {
+  const season = parseSeasonParam(
+    new URL(path, "https://board.invalid").searchParams.get("season"),
+  );
+  return season?.kind === "window" && Date.now() >= season.end.getTime();
+}
+
+// The old open copy stays valid during rollout, including recovery text, but
+// cannot also claim the season ended. Only a completed window gets ended copy.
+export function memberBoardEmptyText(scope, allowEnded = false) {
+  const viewer = scope === "relative" ? "You are not" : "Nobody is";
+  const prefix = `${viewer} ranked for this season and game`.replaceAll(" ", String.raw`\s+`);
+  const ended = String.raw`This\s+season\s+has\s+ended\.`;
+  const open = String.raw`\s+yet\.(?![\s\S]*\b${ended})`;
+  const ending = allowEnded ? String.raw`(?:${open}|\.\s+${ended})` : open;
+  return new RegExp(String.raw`^\s*${prefix}${ending}(?=\s|$)`);
+}
+
+// Static HTML check only; Playwright checks visibility with the full CSS cascade.
+const INLINE_DISPLAY_NONE = /(?:^|;)\s*display\s*:\s*none\s*(?:!\s*important\s*)?(?:;|$)/i;
+const CSS_COMMENT_OR_STRING = /\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'/g;
+
+function hasInlineDisplayNone(style) {
+  // Drop comments without joining tokens; quoted strings cannot contain declarations.
+  return INLINE_DISPLAY_NONE.test(
+    style.replace(CSS_COMMENT_OR_STRING, (part) => (part.startsWith("/*") ? " " : '""')),
+  );
+}
+
+/** @param {import("parse5").DefaultTreeAdapterMap["node"]} node */
+function* activeBoardNodes(node) {
+  if (
+    "tagName" in node &&
+    (["template", "script", "style", "noscript"].includes(node.tagName) ||
+      node.attrs.some(
+        ({ name, value }) =>
+          name === "hidden" ||
+          name === "inert" ||
+          (name === "style" && hasInlineDisplayNone(value)),
+      ))
+  )
+    return;
+  yield node;
+  if ("childNodes" in node) {
+    for (const child of node.childNodes) yield* activeBoardNodes(child);
+  }
+}
+
+export function memberBoardStatus(html, allowEnded = false) {
+  // Walk the active tree, not the source: comments and template contents do not render.
+  const main = activeBoardNodes(parse(html)).find((node) => node.nodeName === "main");
+  if (!main) return null;
+  for (const node of activeBoardNodes(main)) {
+    if (
+      !("tagName" in node) ||
+      node.tagName !== "p" ||
+      !node.attrs.some(({ name, value }) => name === "role" && value === "status")
+    )
+      continue;
+    const text = [...activeBoardNodes(node)]
+      .map((child) => ("value" in child ? child.value : ""))
+      .join("")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (memberBoardEmptyText("overall", allowEnded).test(text)) return "overall-empty";
+    if (memberBoardEmptyText("relative", allowEnded).test(text)) return "relative-empty";
+    if (text === "Rankings are temporarily unavailable.") return "outage";
+  }
+  return null;
+}
+
 // Member-board contract (src/leaderboards/pages.tsx + Kit +page.svelte):
 // authenticated member view only — Hono memberGate then season/scope/activity
 // grammar (400 before any read), Kit load mirrors the order; both answer
@@ -1011,11 +1097,8 @@ export function assertMembersContract({ label, html, headers, status, expected }
   if (!html.includes('name="season"') || !html.includes('name="activity"'))
     failures.push(`${label}: season + activity inputs present`);
   const hasTable = /<table[\s>]/.test(html);
-  const hasEmptyStatus =
-    html.includes("Nobody is ranked for this season and game yet.") ||
-    html.includes("You are not ranked for this season and game yet.") ||
-    html.includes("Rankings are temporarily unavailable.");
-  if (!hasTable && !hasEmptyStatus) failures.push(`${label}: board table or empty status present`);
+  if (!hasTable && !memberBoardStatus(html, expected.allowEnded))
+    failures.push(`${label}: board table or empty status present`);
   if (hasTable) {
     if (!html.includes('<th scope="col">Rank</th>')) failures.push(`${label}: rank column present`);
     if (!html.includes('<th scope="col">Member</th>'))
@@ -2174,10 +2257,11 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   if (parseManifestEntries(manifestSource).some((entry) => entry.path === "/")) {
     const homeMarker = expectedMarkerFor(manifestSource, "/");
     const join = '<a href="/auth/discord" data-testid="join">Join with Discord</a>';
+    const kitTitle = '<h1 id="home-heading">The lobby is <em>open</em>.</h1>';
     const homeShell =
       `<link rel="canonical" href="https://next.togetherweown.com/">` +
       `<a class="skip-link" href="#main">Skip</a><nav aria-label="Primary"></nav>` +
-      `<main id="main"><h1>The lobby is open.</h1>${join}</main><p>Welcome, guest</p>`;
+      `<main id="main">${homeMarker === "kit" ? kitTitle : "<h1>The lobby is open.</h1>"}${join}</main><p>Welcome, guest</p>`;
     const checkHome = (html, cache = "private, no-store") =>
       assertRouteContract({
         label: "unit/home",
@@ -2192,10 +2276,16 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       });
     const invite = '<a href="/discord" data-testid="discord-join">Join with an invite link</a>';
     const fallbackShell = homeShell.replace(join, invite);
+    const withHeading = (title) => homeShell.replace(/<h1.*?<\/h1>/, title);
+    const script = '<script type="application/json">The lobby is open.</script>';
     for (const [name, html, mutant, cache] of [
       ["good fixture", homeShell],
       ["invite fallback", fallbackShell],
-      ["heading", homeShell.replace("The lobby is open.", "Welcome"), true],
+      ["heading", homeShell.replace("The lobby is", "Welcome"), true],
+      ["inert heading", withHeading(`<template>${kitTitle}</template><!--${kitTitle}-->`), true],
+      ["script heading", withHeading(`<h1 id="home-heading">${script}</h1>`), true],
+      ["hidden heading", withHeading(kitTitle.replace("<h1", "<h1 hidden")), true],
+      ["hidden ancestor", withHeading(`<div hidden>${kitTitle}</div>`), true],
       ["join", homeShell.replace('href="/auth/discord"', 'href="https://evil.test/"'), true],
       ["invite fallback", fallbackShell.replace('href="/discord"', 'href="/join"'), true],
       ["own RSVP", `${homeShell}<p data-testid="home-standing">Own RSVP</p>`, true],
@@ -2485,6 +2575,7 @@ async function runPreviewMode(
       contract: route.contract ?? "archive",
       cache: route.cache ?? null,
       cachePattern: route.cachePattern,
+      allowEnded: route.contract === "members" && allowsEndedMemberBoardCopy(route.path),
     };
     const assertContract =
       route.contract === "members"

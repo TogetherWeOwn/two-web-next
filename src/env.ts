@@ -98,12 +98,11 @@ export type Env = AgentEventsEnv & {
   KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
   // Generated local capture build only; no deployed config defines the build gate.
   SSR_CAPTURE_FIXTURE?: string;
-  // Staging Kit rollout controls (web/wrangler.staging.jsonc only). The exact
-  // staging APP_URL activates a fail-closed route manifest: unset or malformed
-  // values keep the corresponding families on Hono. Preview fixture workers
-  // and production do not set these flags.
+  // Archive and static are default-off Kit rollout controls for the canonical
+  // staging and production origins. Only the literal string "true" opts in.
   KIT_ROUTE_ARCHIVE?: string;
   KIT_ROUTE_STATIC?: string;
+  // These rollout controls remain staging-only.
   KIT_ROUTE_EVENTS?: string;
   KIT_ROUTE_HOME?: string;
   KIT_ROUTE_JOIN?: string;

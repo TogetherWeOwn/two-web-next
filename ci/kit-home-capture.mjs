@@ -59,6 +59,7 @@ for (const tree of ["before", "after"]) {
             );
           });
           if (eventState) await page.locator(".event-band").scrollIntoViewIfNeeded();
+          else await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: "instant" }));
           const name = `${tree}-${state}-${viewport.name}.png`;
           const bytes = await page.screenshot({
             animations: "disabled",
@@ -86,6 +87,31 @@ for (const tree of ["before", "after"]) {
             assert.ok(metrics.scrollWidth <= metrics.width, `${state}: horizontal overflow`);
             assert.equal(metrics.font.split(",")[0].replaceAll('"', "").trim(), "Mona Sans");
             assert.ok(fontLoaded && metrics.fontAvailable, `${state}: heading font did not load`);
+            if (state.endsWith("Agenda")) {
+              const row = page.getByTestId("home-event-discord");
+              await row.focus();
+              await page.keyboard.press("Tab");
+              await page.keyboard.press("Shift+Tab");
+              assert.ok(
+                await row.evaluate(
+                  (element) =>
+                    element.matches(":focus-visible") &&
+                    getComputedStyle(element).outlineStyle === "solid",
+                ),
+              );
+              if (viewport.name === "mobile") {
+                assert.ok(
+                  await row.locator("h4").evaluate((title) => {
+                    const range = document.createRange();
+                    range.selectNodeContents(title);
+                    return range.getClientRects().length > 1;
+                  }),
+                  `${state}: event title did not wrap`,
+                );
+              }
+              await page.screenshot({ path: join(output, `focus-${state}-${viewport.name}.png`) });
+              await row.evaluate((element) => element.blur());
+            }
           }
         }
         if (tree === "after" && state === "guest") {

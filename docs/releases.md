@@ -17,12 +17,12 @@ on `main`.
 ## Cutting a release
 
 Nothing to do by hand: a successful `deploy-production` promote is the cut. The
-release vehicle is the promoted commit itself. Every commit on `main` already
-has exact-head green required checks, including `CodeRabbit` and `Devin Review`
-(rulesets). The promote gate (`ci/production-deploy-gate.mjs`) requires a green
-main `ci` on that exact SHA, plus staging evidence under auto-approve. The tag
-is written only after the deploy job's promotion and identity-aware smoke
-succeed.
+release vehicle is the promoted commit itself. PRs merge to `main` only after
+[the required checks](../CONTRIBUTING.md#branch-protection-and-required-checks)
+pass on the PR head. The promote gate (`ci/production-deploy-gate.mjs`) requires
+a green main `ci` on the exact release SHA, plus staging evidence under
+auto-approve. The tag is written only after the deploy job's promotion and
+identity-aware smoke succeed.
 
 ## Versions and notes
 
