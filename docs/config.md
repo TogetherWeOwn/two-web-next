@@ -275,8 +275,8 @@ These names are deliberately **not** extra rows in the marked inventory:
 - **Live Discord ingress fixture:** `POST /internal/discord-live/v1/ingest` returns 503 unless
   `DISCORD_LIVE_INGEST_ENABLED=true` and `DISCORD_LIVE_HUB`, `APP_URL`, `BOT_ENDPOINT_URL`,
   `DISCORD_GUILD_ID`, `DISCORD_LIVE_INGEST_KEY_ID`, `DISCORD_LIVE_INGEST_SECRET`,
-  `DISCORD_LIVE_SNAPSHOT_KEY_ID` and `DISCORD_LIVE_SNAPSHOT_SECRET` are valid. Use separate signing
-  material for ingress and recovery. Only the installed CI fixture binds `LiveGuildHub`, with the flag off.
+  `DISCORD_LIVE_SNAPSHOT_KEY_ID` and `DISCORD_LIVE_SNAPSHOT_SECRET` are valid, with distinct secrets.
+  Only the installed CI fixture binds `LiveGuildHub`. Keep the flag off: recovery lacks producer epochs.
 - **Injected test seams:** `SESSION_STORE`, `ROSTER_STORE`, `QUEUE_DEPTH_STORE`,
   `ADMIN_DB`, `AGENT_EVENT_SQL`, `THROTTLE_STORE`, `JOIN_DEPS`, `DISCORD_EVENTS` are in-process
   dependency/store objects, not Wrangler string vars or secrets. They are
