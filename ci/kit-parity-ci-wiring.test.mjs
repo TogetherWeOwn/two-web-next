@@ -3,7 +3,12 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import {
+  KIT_VIEWER_ROW_NAME,
+  normalizeKitViewerRow,
+} from "../e2e/kit-parity/member-board-viewer-row.mjs";
 import { createDiscordReadRendezvous } from "./kit-discord-read-rendezvous.mjs";
+import { normalizeSection } from "./kit-section-contract.mjs";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -190,6 +195,33 @@ test("Kit snapshot updates are pinned and generated Kit baselines fail the CI gu
   );
 });
 
+test("Kit member-board parity normalizes only the exact marked viewer row", () => {
+  const bare = normalizeSection(`
+    <tr aria-current="true"> <td>1</td> <th scope="row">QA Member</th> <td>1</td> </tr>
+  `);
+  const labeled = bare.replace("QA Member", "QA Member (you)");
+  const table = (rows) => `<table><tbody>${rows}</tbody></table>`;
+  const unchanged = [
+    bare,
+    labeled.replace(" aria-current", ""),
+    labeled.replace("<tr aria-current>", '<tr aria-current="false">'),
+    labeled.replace("<td>1</td><th", "<td>2</td><th"),
+    labeled.replace("</th><td>1</td>", "</th><td>2</td>"),
+    labeled.replace('scope="row"', 'scope="col"'),
+    labeled.replace("QA Member", "Another Member"),
+    labeled.replace("(you)", "(You)"),
+  ];
+  assert.equal(normalizeKitViewerRow(table(labeled)), table(bare));
+  for (const row of unchanged) {
+    assert.equal(normalizeKitViewerRow(table(row)), table(row));
+  }
+  assert.equal(normalizeKitViewerRow(table(labeled.repeat(2))), table(bare + labeled));
+  assert.match("QA Member", KIT_VIEWER_ROW_NAME);
+  assert.match("QA Member (you)", KIT_VIEWER_ROW_NAME);
+  assert.doesNotMatch("Another QA Member (you)", KIT_VIEWER_ROW_NAME);
+  assert.doesNotMatch("QA Member (You)", KIT_VIEWER_ROW_NAME);
+});
+
 test("visual tests re-seed and verify the board state after worker restarts", () => {
   const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
   const rsvpHelper = spec.match(
@@ -223,7 +255,11 @@ test("visual tests re-seed and verify the board state after worker restarts", ()
   assert(honoPoll >= 0 && honoPoll < seedRsvp && seedRsvp < kitPoll);
   assert(loadComplete >= 0 && loadComplete < rankedRow && rankedRow < screenshot);
   assert(emptyBoard >= 0 && emptyBoard < screenshot);
-  assert.match(visuals, /getByRole\("rowheader", \{ name: "QA Member" \}\)/);
+  assert.equal(
+    (visuals.match(/getByRole\("rowheader", \{ name: KIT_VIEWER_ROW_NAME \}\)/g) ?? []).length,
+    2,
+  );
+  assert.match(visuals, /rankedRow\)\.toHaveAttribute\("aria-current", "true"\)/);
   assert.match(visuals, /rankedRow\.getByRole\("cell"\)\)\.toHaveText\(\["1", "1"\]\)/);
   assert.match(visuals, /test\.setTimeout\(120_000\)/);
 });
