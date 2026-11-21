@@ -195,7 +195,9 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
     const privacy = html.match(
       /<section[^>]*aria-labelledby="profile-privacy-heading"[^>]*>.*?<\/section>/s,
     )?.[0];
-    expect(html).toContain('href="#edit-heading"');
+    expect(html.replace(/<!--.*?-->/gs, "")).toMatch(
+      /data-testid="profile-identity-actions"[^>]*>\s*<a\b[^>]*href="#edit-heading"/,
+    );
     expect(html.match(/<form[^>]*data-testid="profile-form"[^>]*>.*?<\/form>/s)?.[0]).toContain(
       privacy,
     );

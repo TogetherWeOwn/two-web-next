@@ -700,6 +700,18 @@
 
   if (edit) edit.addEventListener("click", openEditor);
 
+  // The Kit identity shortcut is a native anchor unless a save collapsed the form.
+  var identityEdit = document
+    .querySelector('[data-testid="profile-identity-actions"]')
+    ?.querySelector('[href="#edit-heading"]');
+  if (identityEdit)
+    identityEdit.addEventListener("click", function (ev) {
+      if (!form.hidden || ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey)
+        return;
+      ev.preventDefault();
+      openEditor();
+    });
+
   // The new-member call to action jumps to the editor; reopen it first when a
   // save has collapsed it. Without script the plain #edit-heading link works.
   var cta = document.querySelector('[data-testid="profile-new-member-cta"]');

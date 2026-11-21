@@ -220,7 +220,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
           </div>
           <div class="profile-provenance" data-testid="profile-provenance"><Tag>From Discord</Tag></div>
         </div>
-        <div class="profile-identity-actions">
+        <div class="profile-identity-actions" data-testid="profile-identity-actions">
           {#if isOwner}<Button href="#edit-heading">{PROFILE_COPY.edit}</Button>{/if}
           <div data-local-time-compare={member.timezone ?? ""}>
             <button type="button" class="btn profile-secondary" hidden>
