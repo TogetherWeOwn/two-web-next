@@ -541,10 +541,16 @@ test("recovery ZIP bounds member count, total expansion and ratio", (t) => {
   const entries = Array.from({ length: 4098 }, (_, i) => storedEntry(`assets/${i}`, ""));
   assert.equal(decodePureHonoRecoveryZip(zip(entries.slice(1))).length, 4097);
   refuseRecovery(zip(entries));
-  for (const length of [1200, 1201]) {
+  // Fixed raw DEFLATE streams keep this boundary independent of encoder choices.
+  const ratioStreams = [
+    { length: 1200, hex: "63601805a360148c82a10100" },
+    { length: 1201, hex: "63601805a360148c82210200" },
+  ];
+  for (const { length, hex } of ratioStreams) {
     const data = Buffer.alloc(length);
-    const compressed = deflateRawSync(data);
+    const compressed = Buffer.from(hex, "hex");
     assert.equal(compressed.length, 12);
+    assert.deepEqual(zlib.inflateRawSync(compressed), data);
     const archive = zip([recoveryEntry("assets/ratio", data, { compressed })]);
     if (length === 1200) assert.deepEqual(decodePureHonoRecoveryZip(archive)[0].bytes, data);
     else refuseRecovery(archive);
