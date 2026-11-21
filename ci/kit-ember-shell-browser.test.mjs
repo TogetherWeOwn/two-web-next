@@ -31,7 +31,9 @@ async function assertLockup(page, narrow) {
 }
 
 async function checkStandaloneHeader(page, html) {
-  const url = page.url();
+  // Closing the fallback menu leaves #kit-menu in the URL; use a distinct
+  // query so this navigation cannot reuse the document via its fragment.
+  const standaloneUrl = new URL("?standalone-header=1", page.url()).href;
   const assets = ["/styles.css", "/theme-tokens.css", headerCss, "/theme.css"];
   // Keep the built SSR markup, with only public stylesheets and the legacy
   // theme last. Neither the root bundle nor source order can hide a cascade tie.
@@ -43,7 +45,7 @@ async function checkStandaloneHeader(page, html) {
   );
   assert.notEqual(standalone, html);
   assert.doesNotMatch(standalone, /_app\/immutable\//);
-  await page.route(url, (route) =>
+  await page.route(standaloneUrl, (route) =>
     route.fulfill({
       contentType: "text/html",
       headers: { "content-security-policy": "style-src 'self'; script-src 'none'" },
@@ -53,8 +55,8 @@ async function checkStandaloneHeader(page, html) {
   try {
     await page.setViewportSize(desktop);
     const [css] = await Promise.all([
-      page.waitForResponse(new URL(headerCss, url).href),
-      page.goto(url),
+      page.waitForResponse(new URL(headerCss, standaloneUrl).href),
+      page.goto(standaloneUrl),
     ]);
     assert.equal(css.status(), 200);
     assert.match(css.headers()["content-type"], /^text\/css\b/);
@@ -65,9 +67,10 @@ async function checkStandaloneHeader(page, html) {
     await shot(page, "standalone-mobile-390");
     await menu(page, "link").click();
     await expect(page.getByRole("link", { name: "Close menu" })).toBeVisible();
+    await assertLockup(page, true);
     await shot(page, "standalone-mobile-open-390");
   } finally {
-    await page.unroute(url);
+    await page.unroute(standaloneUrl);
   }
 }
 
