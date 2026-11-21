@@ -207,7 +207,8 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
             }),
           `the focused member link must clear the header and toolbar at ${width}×${height}`,
         );
-        if (height === 200) await page.screenshot({ path: `${out}/short-focus-390.png` });
+        const capture = height === 200 ? "short-focus-390" : `regular-focus-${width}`;
+        await page.screenshot({ path: `${out}/${capture}.png` });
       }
 
       await page.setViewportSize({ width: 1280, height: 800 });
