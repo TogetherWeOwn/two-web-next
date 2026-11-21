@@ -181,6 +181,27 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
         await page.screenshot({ path: `${out}/scrolled-${width}.png` });
       }
 
+      await page.setViewportSize({ width: 390, height: 200 });
+      await open("?state=many");
+      await filters.getByRole("link", { name: /^Guides\b/ }).focus();
+      await page.keyboard.press("Tab");
+      assert.ok(
+        await list.getByRole("link", { name: "Fixture Member 1", exact: true }).evaluate((link) => {
+          const { left, top, bottom, width, height } = link.getBoundingClientRect();
+          const header = document.querySelector(".ember-header").getBoundingClientRect();
+          const inset = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop);
+          return (
+            link.matches(":focus-visible") &&
+            inset === header.height &&
+            top >= header.bottom &&
+            bottom <= innerHeight &&
+            link.contains(document.elementFromPoint(left + width / 2, top + height / 2))
+          );
+        }),
+        "the focused member link must clear the header in a 390×200 viewport",
+      );
+      await page.screenshot({ path: `${out}/short-focus-390.png` });
+
       await page.setViewportSize({ width: 1280, height: 800 });
       await open("");
       assert.match((await page.locator("h1").textContent()) ?? "", /here\. Say hi/);
