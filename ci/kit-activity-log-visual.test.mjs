@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
 import { memberRefusal, runWork } from "./kit-activity-log-assert.mjs";
 import { routeA11y } from "./kit-activity-log-metrics.mjs";
 import { viewportPngs } from "./kit-activity-log-png.mjs";
@@ -213,6 +214,41 @@ test("axe injection and evaluation stalls reject before producing audit metrics"
     assert.equal(mark.mock.callCount(), stallAt === "AXE_INJECT" ? 1 : 2);
   }
 });
+
+test("completed axe audits report only counts and fail on incomplete checks", async (t) => {
+  const source = "fixture axe source";
+  const tags = ["wcag2aa"];
+  const document = {};
+  for (const [violations, incomplete, verdict] of [
+    [[], [], "PASS"],
+    [[{}], [], "FAIL"],
+    [[], [{}], "FAIL"],
+  ]) {
+    const mark = t.mock.fn();
+    const run = t.mock.fn(() => ({ violations, incomplete }));
+    const evaluate = t.mock.fn((script, values) =>
+      typeof script === "string"
+        ? undefined
+        : runInNewContext(`(${script})(values)`, { values, document, axe: { run } }),
+    );
+    assert.equal(
+      await routeA11y({ evaluate }, mark, { source, tags }),
+      `a11y: ${verdict} violations=${violations.length} incomplete=${incomplete.length}`,
+    );
+    assert.deepEqual(
+      mark.mock.calls.map(({ arguments: args }) => args),
+      [["AXE_INJECT"], ["AXE_EVALUATE"]],
+    );
+    assert.deepEqual(evaluate.mock.calls[0].arguments, [source]);
+    assert.equal(evaluate.mock.callCount(), 2);
+    assert.equal(run.mock.callCount(), 1);
+    const [root, options] = run.mock.calls[0].arguments;
+    assert.equal(root, document);
+    assert.equal(options.runOnly.type, "tag");
+    assert.deepEqual(options.runOnly.values, tags);
+  }
+});
+
 test("refusal deadlines abort fetch and prevent follow-on reads", async (t) => {
   const lapse = clock(t);
   const late = Promise.withResolvers();
@@ -260,6 +296,9 @@ populated-desktop.png lighthouse: unavailable
     ["COMPLETE\n", 22, "UNKNOWN stage=COMPLETE"],
     ["COMPLETE\nprivate-status\n", 0, "UNKNOWN stage=UNKNOWN"],
     ["COMPLETE\n\0", 0, "UNKNOWN stage=UNKNOWN"],
+    ["", 0, "UNKNOWN stage=UNKNOWN"],
+    ["COMPLETE\n".padEnd(32, "x"), 0, "UNKNOWN stage=UNKNOWN"],
+    ["COMPLETE\n".padEnd(33, "x"), 0, "UNKNOWN stage=UNKNOWN"],
     [null, 0, "UNKNOWN stage=UNKNOWN"],
     ["COMPLETE\n", 0, "PASS stage=COMPLETE"],
   ];
