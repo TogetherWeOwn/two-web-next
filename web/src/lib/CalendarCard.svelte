@@ -77,9 +77,9 @@ const full = $derived(
     </div>
     <div class="schedule-info">
       <!-- Cancelled and transient rows have no detail page (410 / none), so the title is plain text. -->
-      <h3 aria-level={titleLevel}>
+      <svelte:element this={titleLevel === 4 ? "h4" : "h3"}>
         {#if e.kind === "event" && e.status !== "cancelled"}<a href={`/e/${e.eventKey}`}>{#if titleSegments}<span>{@render marked(titleSegments)}</span>{:else}{e.title}{/if}</a>{:else if titleSegments}<span>{@render marked(titleSegments)}</span>{:else}{e.title}{/if}
-      </h3>
+      </svelte:element>
       {#if e.kind === "event" && e.game}<p>{e.game}</p>{/if}
       {#if host !== ""}<p data-testid={EVENT_CARD_HOST_TESTID}>Hosted by {host}</p>{/if}
       {#if draft}{" "}<span class="schedule-badge" data-testid={EVENT_DRAFT_TESTID}>Draft</span>{" "}{/if}

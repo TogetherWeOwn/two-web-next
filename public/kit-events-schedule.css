@@ -92,9 +92,11 @@
 .events-page .schedule-row:has(> .schedule-when) .schedule-actions {
   grid-column: 3;
 }
-.events-page .schedule-row:has(> .schedule-when) .schedule-info h3 {
+.events-page .schedule-row:has(> .schedule-when) .schedule-info :is(h3, h4) {
   margin: 0;
   font: 650 17px / 1.3 var(--font-display);
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
 }
 @media (max-width: 720px) {
   .kit-events-document [data-cal-zone="head"] {

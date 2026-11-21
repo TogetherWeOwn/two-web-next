@@ -5,17 +5,13 @@ import CalendarScreen from "./CalendarScreen.svelte";
 import EmberShell from "./EmberShell.svelte";
 import SiteMetadata from "./SiteMetadata.svelte";
 
-let {
-  canonical,
-  robots,
-  session,
-  screen,
-}: {
+type Props = {
   canonical: string;
   robots?: string;
   session: HeaderSession | null;
   screen: ComponentProps<typeof CalendarScreen>;
-} = $props();
+};
+let { canonical, robots, session, screen }: Props = $props();
 const { member, loginReturnTo } = $derived(screen);
 </script>
 
