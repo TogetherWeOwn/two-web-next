@@ -121,12 +121,9 @@ describe("Kit home SSR render: session-aware header and hero", () => {
     expect(html).toMatch(/<footer class="ember-footer\b[^>]*>[\s\S]*?<nav aria-label="Footer"/);
     expect(html).toContain('href="/auth/discord" data-testid="notice-retry"');
     expect(html).toContain("Your earlier changes were not saved.");
-    expect(html.indexOf('data-testid="auth-error"')).toBeLessThan(
-      html.indexOf('id="home-heading"'),
-    );
+    expect(html).toMatch(/data-testid="auth-error"[\s\S]*?id="home-heading"/);
     expect(html).toContain('<meta name="description"');
   });
-
   it("does not render attendee names from an event fixture for a guest", () => {
     const event = fullnessEvent({
       title: "Public game night",
@@ -389,10 +386,10 @@ function fullnessRow(html: string, key: string): string {
 describe("Kit home SSR render: member standing", () => {
   it("marks matching answers and highlights the earliest future own RSVP only for members", () => {
     const upcomingEvents = [
+      fullnessEvent({ eventKey: "not-going", title: "Public opener" }),
       fullnessEvent({ eventKey: "later", startsAt: new Date("2031-01-01T20:00:00Z") }),
-      fullnessEvent({ eventKey: "first", startsAt: new Date("2030-01-01T20:00:00Z") }),
+      fullnessEvent({ eventKey: "first", startsAt: new Date("2030-08-01T20:00:00Z") }),
       fullnessEvent({ eventKey: "past", startsAt: new Date("2020-01-01T20:00:00Z") }),
-      fullnessEvent({ eventKey: "not-going" }),
     ];
     const memberRsvps = [
       { eventKey: "later", status: "going" },
@@ -408,10 +405,12 @@ describe("Kit home SSR render: member standing", () => {
     expect(standing).toContain('href="/e/first"');
     expect(standing).toContain("You're on the waitlist.");
     expect(standing).not.toContain('href="/e/later"');
-    const hero = html.split('<section class="hero')[1]!.split("</section>")[0]!;
-    expect(hero).toContain('id="home-panel-heading">Your RSVP</h2>');
-    expect(hero).toContain("You're on the waitlist.");
-    expect(hero).toContain('href="/e/first"');
+    const panel = html.split('<aside class="ember-home-panel"')[1]!.split("</aside>")[0]!;
+    expect(html).toMatch(/<h1 id="home-heading">\s*Next game night: <em>Public opener<\/em>/);
+    expect(panel).toContain('id="home-panel-heading">Your RSVP</h2>');
+    expect(panel).toContain("<strong>Game night</strong>");
+    expect(panel).toContain("You're on the waitlist.");
+    expect(panel).toContain('href="/e/first"');
     for (const session of [null, nonMemberSession]) {
       const guestHtml = renderPage(baseData({ session, upcomingEvents, memberRsvps }));
       expect(guestHtml).not.toContain('data-testid="home-standing"');

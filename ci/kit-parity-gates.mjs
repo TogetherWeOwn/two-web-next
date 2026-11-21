@@ -552,16 +552,16 @@ function countMatches(html, pattern) {
 
 export function kitHomeHeadingText(html) {
   const walk = (node) => [node, ...(node.childNodes ?? []).flatMap(walk)];
-  const headings = walk(parse(html)).filter(
-    ({ tagName, attrs }) =>
-      tagName === "h1" && attrs.find(({ name }) => name === "id")?.value === "home-heading",
+  const [heading, duplicate] = walk(parse(html)).filter(
+    (n) => n.tagName === "h1" && n.attrs.some((a) => a.name === "id" && a.value === "home-heading"),
   );
-  const text =
-    headings.length === 1
-      ? walk(headings[0])
-          .map((node) => node.value ?? "")
-          .join("")
-      : "";
+  if (!heading || duplicate) return "";
+  const isHeadingText = (node) =>
+    node.nodeName === "#text" && !["script", "style"].includes(node.parentNode.tagName);
+  const text = walk(heading)
+    .filter(isHeadingText)
+    .map(({ value }) => value)
+    .join("");
   return text.replace(/\s+/g, " ").trim();
 }
 
@@ -2213,12 +2213,14 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       });
     const invite = '<a href="/discord" data-testid="discord-join">Join with an invite link</a>';
     const fallbackShell = homeShell.replace(join, invite);
-    const inertTitle = `<template>${kitTitle}</template><!--${kitTitle}-->`;
+    const withHeading = (title) => homeShell.replace(/<h1.*?<\/h1>/, title);
+    const script = '<script type="application/json">The lobby is open.</script>';
     for (const [name, html, mutant, cache] of [
       ["good fixture", homeShell],
       ["invite fallback", fallbackShell],
       ["heading", homeShell.replace("The lobby is", "Welcome"), true],
-      ["inert heading", homeShell.replace(/<h1.*?<\/h1>/, inertTitle), true],
+      ["inert heading", withHeading(`<template>${kitTitle}</template><!--${kitTitle}-->`), true],
+      ["script heading", withHeading(`<h1 id="home-heading">${script}</h1>`), true],
       ["join", homeShell.replace('href="/auth/discord"', 'href="https://evil.test/"'), true],
       ["invite fallback", fallbackShell.replace('href="/discord"', 'href="/join"'), true],
       ["own RSVP", `${homeShell}<p data-testid="home-standing">Own RSVP</p>`, true],

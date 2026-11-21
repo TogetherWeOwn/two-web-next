@@ -22,7 +22,6 @@ import { siteJsonLd } from "../../../src/seo-json-ld";
 import type { PageProps } from "./$types";
 import "./home-join-band.css";
 
-// Home chrome renders only the public panels and viewer-specific data supplied by the load.
 let { data }: PageProps = $props();
 const {
   session,
@@ -351,7 +350,6 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
   {/if}
   <JsonLd testid="site-jsonld" json={siteGraph} />
 {/snippet}
-
 <SiteMetadata
   title="The lobby is open"
   exactTitle="Together We Own — the lobby is open"
