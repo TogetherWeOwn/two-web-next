@@ -125,8 +125,8 @@ describe("signed event attendance read", () => {
     await expect(observe(new Response(null, { status: 204 }))).resolves.toEqual(unavailable);
   });
 
-  it("rejects unsafe destinations and returned redirects without another fetch", async () => {
-    const cancel = vi.fn();
+  it("refuses unsafe URLs and redirects even if body cancellation rejects", async () => {
+    const cancel = vi.fn().mockRejectedValue(new Error("fixture cancellation failure"));
     const response = new Response(new ReadableStream({ cancel }), {
       status: 302,
       headers: { Location: "https://redirect.example.test/" },
