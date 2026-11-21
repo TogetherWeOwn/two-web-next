@@ -15,8 +15,6 @@ export function renderEventsHtml(
     const screen = { ...projectEventsCalendar(data), joinResult: data.joinResult, island };
     if (island) {
       const { body } = await render(CalendarScreen, { props: screen });
-      // The existing binder admits the canonical and refreshed guest return URL
-      // alongside the swapped zones. It does not need the document or account UI.
       return (
         <>
           <link rel="canonical" href={data.canonical} />

@@ -4,6 +4,7 @@ import type { HeaderSession } from "../../../src/env";
 import CalendarScreen from "./CalendarScreen.svelte";
 import EmberShell from "./EmberShell.svelte";
 import SiteMetadata from "./SiteMetadata.svelte";
+import siteHeaderCss from "./site-header.css?url";
 
 type Props = {
   canonical: string;
@@ -19,6 +20,7 @@ const { member, loginReturnTo } = $derived(screen);
   description="Game nights, tournaments and whatever else the community puts on." />
 <svelte:head>
   <link rel="alternate" type="text/markdown" title="Markdown version" href="/events.md" />
+  <link rel="stylesheet" href={siteHeaderCss} />
 </svelte:head>
 
 {#snippet account()}
