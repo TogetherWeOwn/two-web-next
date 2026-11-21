@@ -695,6 +695,11 @@ test("pure Hono versioned config refuses unsafe observations without echoing dat
     [{ ...fixture, scope: "non-versioned" }, "versioned observation shape"],
     [{ ...fixture, compatibilityDate: undefined }, "runtime compatibility"],
     [{ ...fixture, [sentinel]: [] }, "versioned observation shape"],
+    [{ ...fixture, [Symbol(sentinel)]: [] }, "versioned observation shape"],
+    [
+      Object.defineProperty({ ...fixture }, sentinel, { value: [] }),
+      "versioned observation shape",
+    ],
     [{ ...fixture, routes: [] }, "versioned observation shape"],
     [{ ...fixture, scriptName: sentinel }, "version identity"],
     [{ ...fixture, versionId: `${fixture.versionId}\n` }, "version identity"],
