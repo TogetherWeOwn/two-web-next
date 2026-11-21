@@ -3,7 +3,7 @@ name: Kit live topic browser fixture
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, edited]
-    paths: &fixture-paths
+    paths:
       - .github/workflows/kit-live-topic-browser.yml
       - ci/kit-hydration-harness.mjs
       - ci/kit-live-topic-browser.test.mjs
@@ -13,7 +13,15 @@ on:
       - web/package*.json
   push:
     branches: [main]
-    paths: *fixture-paths
+    # Keep this list in sync with pull_request; actionlint rejects aliases here.
+    paths:
+      - .github/workflows/kit-live-topic-browser.yml
+      - ci/kit-hydration-harness.mjs
+      - ci/kit-live-topic-browser.test.mjs
+      - test/fixtures/kit-live-topic-browser.svelte
+      - src/live/**
+      - package*.json
+      - web/package*.json
 
 permissions:
   contents: read
