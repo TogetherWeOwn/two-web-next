@@ -28,16 +28,14 @@ const person = (userId: string, roleIds: string[] = [], flags = {}) => ({
   pending: false,
   ...flags,
 });
-const event = (id: string, channelId: string | null): LiveState["events"][number] => ({
-  id,
-  channelId,
-  status: "scheduled",
-  title: `event ${id}`,
-  description: null,
-  location: null,
-  startsAt: "2026-11-21T03:00:00Z",
-  endsAt: null,
-});
+const connect = "1048576";
+function withViewer(input: Input, userId: string | null): Input {
+  return {
+    ...input,
+    viewer: userId === null ? { kind: "public" } : { kind: "member", userId, validUntil: 15 },
+    page: { ...input.page, viewerId: userId },
+  };
+}
 const get = (input: Input, topic: Topic): unknown =>
   JSON.parse(encodeLiveProjection(input, topic) ?? "null");
 
@@ -47,13 +45,16 @@ function fixture(): Input {
     now: 10,
     sourceUntil: 20,
     viewer: { kind: "member", userId: "2", validUntil: 15 },
+    pageId: "voice-widget",
     page: {
+      pageId: "voice-widget",
+      guildId: "1",
+      viewerId: "2",
       validUntil: 20,
-      publicRoomIds: new Set(["10", "11", "12"]),
+      publicRoomIds: new Set(["10", "11", "12", "16"]),
       memberRoomIds: new Set(["10", "11", "12", "13", "14"]),
       moveRoomIds: new Set(["10", "11"]),
       ownNickname: true,
-      admitEvent: ({ id }) => id !== "43",
     },
     state: {
       guild: { ownerId: "3", afkChannelId: "12" },
@@ -61,16 +62,17 @@ function fixture(): Input {
         room("10"),
         room("11", [acl("role", "1", "0", view), acl("role", "20", view)]),
         room("12"),
-        room("13", [acl("member", "2", "0", view)]),
+        room("13", [acl("role", "20", view), acl("member", "2", "0", view)]),
         room("14", [
           acl("role", "1", "0", view),
           acl("role", "20", view),
           acl("role", "21", "0", view),
         ]),
         room("15"),
+        room("16", [acl("role", "1", "0", connect)]),
       ],
       roles: [
-        { id: "1", permissions: view },
+        { id: "1", permissions: viewAndConnect },
         { id: "20", permissions: "0" },
         { id: "21", permissions: "0" },
         { id: "22", permissions: "8" },
@@ -90,14 +92,9 @@ function fixture(): Input {
         })),
         { userId: "107", channelId: "11" },
         { userId: "108", channelId: "12" },
+        { userId: "2", channelId: "13" },
       ],
-      events: [
-        event("40", "10"),
-        event("41", "13"),
-        event("42", null),
-        event("43", null),
-        event("44", "15"),
-      ],
+      events: [],
     },
   };
 }
@@ -120,10 +117,12 @@ const voiceRoom = (id: string, count: number, canMove = false) => ({
 
 describe("per-viewer live projection", () => {
   it("sends public aggregate only, suppresses below five, and ignores hidden movement", () => {
-    const input = { ...fixture(), viewer: { kind: "public" as const } };
+    const input = withViewer(fixture(), null);
     const { state } = input;
     expect(get(input, "voice")).toEqual({ count: 5 });
     state.voice = state.voice.filter(({ userId }) => userId !== "107");
+    expect(get(input, "voice")).toEqual({ count: 5 });
+    state.voice.push({ userId: "107", channelId: "16" });
     expect(get(input, "voice")).toEqual({ count: 5 });
     state.voice = state.voice.filter(({ userId }) => userId !== "104");
     expect(get(input, "voice")).toEqual({ count: null });
@@ -138,11 +137,12 @@ describe("per-viewer live projection", () => {
     const input = fixture();
     expect(get(input, "channels")).toEqual({ rooms: ["10", "11", "14"].map(metadata) });
     expect(get(input, "voice")).toEqual({
-      rooms: [voiceRoom("10", 5), voiceRoom("11", 1), voiceRoom("14", 0)],
+      rooms: [voiceRoom("10", 5, true), voiceRoom("11", 1, true), voiceRoom("14", 0)],
     });
     expect(get(input, "members")).toEqual({ member: true, nick: "private nickname" });
     input.state.channels = input.state.channels.map((row) => ({
       ...row,
+      kind: row.id === "11" ? "stage" : row.kind,
       overwrites: row.id === "10" ? [acl("member", "2", viewAndConnect)] : row.overwrites,
     }));
     expect(get(input, "voice")).toEqual({
@@ -158,9 +158,7 @@ describe("per-viewer live projection", () => {
   it("lets owner and administrator bypass Discord overwrites but not the page room boundary", () => {
     const input = fixture();
     for (const userId of ["3", "4"]) {
-      expect(
-        get({ ...input, viewer: { kind: "member", userId, validUntil: 20 } }, "channels"),
-      ).toEqual({
+      expect(get(withViewer(input, userId), "channels")).toEqual({
         rooms: ["10", "11", "13", "14"].map(metadata),
       });
     }
@@ -173,34 +171,39 @@ describe("per-viewer live projection", () => {
       { ...input, page: { ...input.page, validUntil: input.now } },
       { ...input, viewer: { kind: "unknown" as const } },
       { ...input, viewer: { kind: "member" as const, userId: "2", validUntil: input.now } },
-      { ...input, viewer: { kind: "member" as const, userId: "999", validUntil: 20 } },
-      { ...input, viewer: { kind: "member" as const, userId: "106", validUntil: 20 } },
+      withViewer(input, "999"),
+      withViewer(input, "106"),
+      { ...input, viewer: withViewer(input, "3").viewer },
+      { ...input, viewer: { kind: "public" as const } },
+      { ...input, pageId: "other-page" },
+      { ...input, guildId: "9" },
     ];
     for (const expired of invalid) {
       for (const topic of ["voice", "channels", "members", "events"] as const) {
         expect(encodeLiveProjection(expired, topic)).toBeNull();
       }
     }
-    expect(encodeLiveProjection({ ...input, page: { validUntil: 20 } }, "voice")).toBeNull();
-    expect(encodeLiveProjection({ ...input, page: { validUntil: 20 } }, "members")).toBeNull();
+    const noGrant = {
+      ...input,
+      page: { guildId: input.guildId, pageId: input.pageId, viewerId: "2", validUntil: 20 },
+    };
+    expect(encodeLiveProjection(noGrant, "voice")).toBeNull();
+    expect(encodeLiveProjection(noGrant, "members")).toBeNull();
   });
 
-  it("requires exact-row calendar admission and removes inaccessible or canonically mapped rows", () => {
+  it("leaves calendar data unavailable even to a fresh member with a valid source row", () => {
     const input = fixture();
-    const mapped = (id: string) => ({
-      discordId: id,
-      title: `event ${id}`,
+    input.state.events.push({
+      id: "40",
+      channelId: "10",
       status: "scheduled",
+      title: "Calendar event",
       description: null,
       location: null,
       startsAt: "2026-11-21T03:00:00Z",
       endsAt: null,
     });
-    expect(get(input, "events")).toEqual({ events: [mapped("40"), mapped("42")] });
-    expect(
-      get({ ...input, page: { ...input.page, admitEvent: ({ id }) => id === "40" } }, "events"),
-    ).toEqual({ events: [mapped("40")] });
-    expect(encodeLiveProjection({ ...input, page: { validUntil: 20 } }, "events")).toBeNull();
+    expect(encodeLiveProjection(input, "events")).toBeNull();
   });
 
   it("produces stable equality independent of wire order and refuses oversized UTF-8 values", () => {
@@ -209,10 +212,11 @@ describe("per-viewer live projection", () => {
     input.state.channels.reverse();
     input.state.voice.reverse();
     expect(encodeLiveProjection(input, "voice")).toBe(value);
-    input.state.events = Array.from({ length: 100 }, (_, i) => ({
-      ...event(String(i + 200), null),
-      description: "真".repeat(240),
+    input.state.channels = Array.from({ length: 250 }, (_, i) => ({
+      ...room(String(i + 200)),
+      name: "真".repeat(100),
     }));
-    expect(encodeLiveProjection(input, "events")).toBeNull();
+    input.page.memberRoomIds = new Set(input.state.channels.map(({ id }) => id));
+    expect(encodeLiveProjection(input, "channels")).toBeNull();
   });
 });

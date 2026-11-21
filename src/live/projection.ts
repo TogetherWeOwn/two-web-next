@@ -8,7 +8,6 @@ const MAX_VALUE_BYTES = 64 * 1024;
 
 type Channel = LiveState["channels"][number];
 type Member = LiveState["members"][number];
-type Event = LiveState["events"][number];
 export type LiveTopic = "voice" | "channels" | "members" | "events";
 
 type Viewer =
@@ -19,18 +18,20 @@ type Viewer =
 // Resolve this proof on the server for the current viewer/page. Socket messages
 // may pick topics, but never supply proof, page scope, or a viewer identity.
 type PageProof = {
+  guildId: string;
+  pageId: string;
+  viewerId: string | null;
   validUntil: number;
   publicRoomIds?: ReadonlySet<string>;
   memberRoomIds?: ReadonlySet<string>;
   moveRoomIds?: ReadonlySet<string>;
   ownNickname?: true;
-  // Must check current page admission AND canonical mapping for this exact row.
-  admitEvent?: (row: Readonly<Event>) => boolean;
 };
 
 type Projection = {
   state: LiveState;
   guildId: string;
+  pageId: string;
   // Local lease on a healthy synchronized source, not a producer timestamp.
   sourceUntil: number;
   viewer: Viewer;
@@ -83,10 +84,19 @@ function orderById(a: { id: string }, b: { id: string }): number {
 }
 
 function projectedValue(
-  { state, viewer, guildId, sourceUntil, page, now }: Projection,
+  { state, viewer, guildId, pageId, sourceUntil, page, now }: Projection,
   topic: LiveTopic,
 ) {
-  if (viewer.kind === "unknown" || !fresh(sourceUntil, now) || !fresh(page.validUntil, now))
+  // Calendar needs its own row admission and display policy, not voice-widget proof.
+  if (
+    topic === "events" ||
+    viewer.kind === "unknown" ||
+    page.guildId !== guildId ||
+    page.pageId !== pageId ||
+    page.viewerId !== (viewer.kind === "member" ? viewer.userId : null) ||
+    !fresh(sourceUntil, now) ||
+    !fresh(page.validUntil, now)
+  )
     return null;
   const members = new Map(state.members.map((member) => [member.userId, member]));
   const member = viewer.kind === "member" ? members.get(viewer.userId) : undefined;
@@ -112,11 +122,13 @@ function projectedValue(
       )
         return false;
       const bits = permissions(channel);
-      // Public counts must not disclose activity in restricted rooms. A room
-      // with any explicit visibility deny is not eligible for that aggregate.
+      // Omit explicitly restricted rooms even if @everyone can see and join them.
+      const publicBits = VIEW_CHANNEL | CONNECT;
       if (
         !(bits & VIEW_CHANNEL) ||
-        (!member && channel.overwrites.some((row) => BigInt(row.deny) & VIEW_CHANNEL))
+        (!member &&
+          ((bits & publicBits) !== publicBits ||
+            channel.overwrites.some((row) => BigInt(row.deny) & publicBits)))
       )
         return false;
       visible.set(channel.id, bits);
@@ -124,24 +136,6 @@ function projectedValue(
     })
     .sort(orderById);
 
-  if (topic === "events") {
-    const admit = page.admitEvent;
-    if (!admit) return null;
-    return {
-      events: state.events
-        .filter((row) => (row.channelId === null || visible.has(row.channelId)) && admit(row))
-        .sort(orderById)
-        .map(({ id, status, title, description, location, startsAt, endsAt }) => ({
-          discordId: id,
-          status,
-          title,
-          description,
-          location,
-          startsAt,
-          endsAt,
-        })),
-    };
-  }
   if (!approvedRooms) return null;
   if (topic === "channels") {
     return {
@@ -160,14 +154,17 @@ function projectedValue(
   if (!member) return { count: count >= COUNT_FLOOR ? count : null };
   // Do not name occupants without current site-profile consent/identity proof.
   return {
-    rooms: rooms.map(({ id, name }) => ({
+    rooms: rooms.map(({ id, name, kind }) => ({
       channelId: id,
       name,
       count: counts.get(id) ?? 0,
       occupants: [],
       occupiedSince: null,
       eventKey: null,
-      canMove: page.moveRoomIds?.has(id) === true && !!((visible.get(id) ?? 0n) & CONNECT),
+      canMove:
+        kind === "voice" &&
+        page.moveRoomIds?.has(id) === true &&
+        !!((visible.get(id) ?? 0n) & CONNECT),
     })),
   };
 }
