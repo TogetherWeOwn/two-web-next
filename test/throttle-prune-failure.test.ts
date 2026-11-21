@@ -5,6 +5,7 @@
 // join path (no catch) turns a 429 into a 500. Hermetic: an in-memory SQL
 // double with a throwing DELETE, no database required.
 import { describe, expect, it, vi } from "vitest";
+import { checkWebThrottle } from "../src/http/throttle";
 import { checkJoinThrottle } from "../src/join/service";
 import type { Sql } from "../src/sessions";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
@@ -41,6 +42,14 @@ describe("throttle prune failure keeps the decided verdict", () => {
     expect(verdict).toEqual({ limited: true, retryAfter: 30 });
     // No hit recorded for the refusal, even though pruning failed.
     expect(hits).toEqual([bucket, bucket]);
+
+    const failure = new PruneBoomError("fixture prune failure");
+    const direct = fixture(true, failure);
+    direct.hits.push(bucket, bucket);
+    const onPruneFailure = vi.fn();
+    expect(await checkWebThrottle(direct.sql, bucket, 2, onPruneFailure)).toEqual(verdict);
+    expect(onPruneFailure).toHaveBeenCalledExactlyOnceWith({ err: failure });
+    expect(direct.hits).toEqual(hits);
   });
 
   it("an admitted request stays admitted when the prune throws", async () => {
