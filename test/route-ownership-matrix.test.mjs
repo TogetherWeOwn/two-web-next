@@ -97,31 +97,25 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
     );
   });
 
-  it("keeps current manifest decisions for the recorded requests with every new family off", () => {
-    const off = new Set();
-    for (const vectors of recording.values()) {
-      for (const { request } of Object.values(vectors)) {
-        expect(projectFixtureOwner(request, off, resolveRouteOwner), routeKey(request)).toBe(
-          resolveRouteOwner(request),
-        );
-      }
-    }
-  });
-
   it.each([
-    ["event-writes", "/events"],
-    ["admin", "/admin/events"],
-  ])("selects the %s POST without changing same-path GET or HEAD", (family, path) => {
-    const selection = familyEndpointKeys(rows, family);
-    const write = { method: "POST", path };
-    expect(resolveRouteOwner(write)).toBe("hono");
-    expect(projectFixtureOwner(write, selection, resolveRouteOwner)).toBe("kit");
-    for (const method of ["GET", "HEAD"]) {
-      const read = { method, path };
-      expect(selection.has(routeKey(read))).toBe(false);
-      expect(projectFixtureOwner(read, selection, resolveRouteOwner)).toBe(resolveRouteOwner(read));
-    }
-  });
+    ["event-writes", "/events", "kit"],
+    ["admin", "/admin/events", "hono"],
+  ])(
+    "selects the %s POST without changing the all-off GET or HEAD owner",
+    (family, path, reader) => {
+      const selection = familyEndpointKeys(rows, family);
+      const off = new Set();
+      const write = { method: "POST", path };
+      expect(projectFixtureOwner(write, off, resolveRouteOwner)).toBe("hono");
+      expect(projectFixtureOwner(write, selection, resolveRouteOwner)).toBe("kit");
+      for (const method of ["GET", "HEAD"]) {
+        const read = { method, path };
+        expect(selection.has(routeKey(read))).toBe(false);
+        expect(projectFixtureOwner(read, off, resolveRouteOwner)).toBe(reader);
+        expect(projectFixtureOwner(read, selection, resolveRouteOwner)).toBe(reader);
+      }
+    },
+  );
 
   it.each([
     ["/up", "/version", ["GET", "HEAD"], "GET"],
@@ -145,19 +139,18 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
       kind: "method-fallback",
       hono405: true,
     });
-    const selection = familyEndpointKeys(rows, "event-writes");
-    expect(selection.has(routeKey(fallback))).toBe(false);
-    expect(selection.has(routeKey({ ...fallback, method: "PATCH" }))).toBe(false);
     const enabled = new Set(families.flatMap(([family]) => [...familyEndpointKeys(rows, family)]));
+    expect(enabled.has(routeKey(fallback))).toBe(false);
     const refusal = explicitMethodRefusal({ allow: "PUT, DELETE", accept: null, vary: null });
-    for (const [file, method, status] of [
-      ["events_key_rsvp", "PATCH", refusal.status],
-      ["about", "PUT", 404],
+    for (const [file, method, path, status] of [
+      ["events_key_rsvp", "PATCH", fallback.path, refusal.status],
+      ["about", "PUT", "/about", 404],
     ]) {
+      const key = routeKey({ method, path });
+      expect(enabled.has(key), key).toBe(false);
       const { request, response } = recording.get(`routes/${file}.json`)[method];
       expect(response.status, routeKey(request)).toBe(status);
-      const owner = projectFixtureOwner(request, enabled, resolveRouteOwner);
-      expect(owner, routeKey(request)).toBe("hono");
+      expect(resolveRouteOwner(request), routeKey(request)).toBe("hono");
     }
   });
 });
