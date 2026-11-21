@@ -5,7 +5,7 @@
 // and a title edit invalidates the validator.
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import {
@@ -48,7 +48,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const headers = new Headers();
       if (cookie) headers.set("cookie", cookie);
       if (etag) headers.set("if-none-match", etag);
-      return app.request(PATH, { headers }, env);
+      return fetchAppPath(PATH, { headers }, env);
     };
 
     const cookieFor = async (moderator: boolean) => {

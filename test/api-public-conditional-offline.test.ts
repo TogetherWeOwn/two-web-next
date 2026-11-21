@@ -2,7 +2,7 @@
 // route-inventory: GET /api/public/join
 // Conditional reads against the real app without a database.
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import type { Env } from "../src/env";
 import { __resetApiPublicCacheForTests } from "../src/public-data/cache";
 import type { Sql } from "../src/sessions";
@@ -56,7 +56,7 @@ describe("public API conditional runtime without a database (offline)", () => {
   const paths = ["/api/public/join", "/api/public/community"] as const;
 
   const get = (path: string, ifNoneMatch?: string, env: Env & EnvWithThrottle = baseEnv) =>
-    app.request(
+    fetchAppPath(
       path,
       {
         headers: {
@@ -192,7 +192,7 @@ describe("public API conditional runtime without a database (offline)", () => {
         ...baseEnv,
         THROTTLE_STORE: async () => sql as unknown as Sql,
       } as unknown as Env & EnvWithThrottle;
-      const res = await app.request(
+      const res = await fetchAppPath(
         path,
         { headers: { "cf-connecting-ip": ip, "if-none-match": base.etag } },
         throttled,
