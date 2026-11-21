@@ -55,8 +55,8 @@ The repository rulesets enforce the following on `main`:
   `gitleaks`, `e2e-ok` and `pr-size-gate / gate` must pass on the exact head,
   and so must the `Devin Review` check and the organization rulesets
   (`pr-standards`, `CodeQL`). CodeRabbit is advisory, not a required check;
-  answer every finding, but its check does not gate the merge. No approving
-  review is required.
+  answer every finding, but its check does not gate the merge. GitHub does not
+  require an approving PR review; the native review policy below still applies.
 
   The journeys count only through the aggregator in e2e.yml: it fails when the
   scope job fails or the browser journeys fail or are cancelled, and passes a
@@ -78,10 +78,10 @@ A merge to `main` does not reach production on its own. For automatic promotion,
 [the resolver](ci/resolve-promotion-sha.mjs) skips unless the qualified, soaked
 staging SHA equals `PRODUCTION_ACCEPTED_SHA`. The Release Manager accepts the
 exact release SHA; the authorized Operator sets the variable to that SHA.
-Ordinary PRs need **no per-PR Release Manager confirmation**. Changes to the
-promotion path still need exact-head confirmation before merge, as described
-below. Every production deploy, including manual dispatch, still needs Release
-Manager acceptance.
+Ordinary PRs need **no per-PR Release Manager confirmation**. For promotion-path
+PRs, the final native Release Manager review is the exact-head merge
+confirmation. Every production deploy, including manual dispatch, still needs
+separate Release Manager acceptance.
 
 ### Merge and production staging evidence
 
@@ -98,28 +98,71 @@ Before merge, require:
 1. **Exact-head checks and review.** All required checks listed above
    (`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `pr-size-gate / gate`,
    `Devin Review`, the organization `pr-standards` workflow and `CodeQL`)
-   pass on the exact PR head. CodeRabbit is
-   advisory: answer every finding, but it is not a required check. Every finding is fixed or answered with evidence, and applicable
-   security reviews, rulesets and native review stages are complete.
-   Record exact-head GitHub Actions run/job links and conclusions; local output
-   does not replace required Actions evidence.
-2. **Exact-head Release Manager confirmation for promotion-path PRs.** This
-   covers `.github/workflows/**`, actions and tooling that qualify, select,
-   deploy or roll back a production candidate (including
-   `ci/resolve-promotion-sha.mjs` and `ci/production-deploy-gate.mjs`), and
-   deploy, Wrangler or binding config.
-   Obtain a `request_confirmation` on a child card assigned and addressed to the
-   Release Manager. Include the migration ledger evidence or "no migration", the
-   known-good rollback target and the automatic post-merge staging path. A push
-   that changes the PR head requires fresh confirmation. This does not authorize
-   a production deploy; release acceptance is separate.
-3. **Pinned handoff and retained safeguards.** The final-stage reviewer, or the
-   author when no native review stage applies, squash-merges only the reviewed
-   head and, for a promotion-path PR, only if it matches the confirmed SHA.
-   Record the pinned squash SHA and any required confirmation in the release log.
-   Incident, freeze and hold safeguards, identity/capability holds and rollback
-   requirements still apply.
-   An otherwise mergeable PR need not be restacked solely because `main` moved.
+   pass on the exact PR head. CodeRabbit is advisory: answer every finding,
+   but it is not a required check. Route the Security and QA stages assigned by
+   the [review-tier map](.github/review-tiers.yml) and complete them in order.
+   If Release Manager review is required, complete Security and QA before that
+   final stage. A push invalidates all earlier native review and approval
+   verdicts; obtain fresh required verdicts for the new head. Record exact-head
+   Actions run/job links and conclusions; local output does not replace
+   required Actions evidence.
+2. **Route Release Manager review on the exact head.** The author checks the
+   current diff against the successful job summary from the trusted
+   default-branch [`promotion-path` workflow](.github/workflows/promotion-path.yml).
+   Record the PR number, target ref and its live tip SHA, GitHub's reported PR
+   base SHA, the three-dot comparison's merge-base SHA, the head SHA, verdict
+   and Actions job link in the PR. Read the live tip from the target ref; the
+   PR's reported base SHA can lag it. Match the summary's PR number, head SHA
+   and base SHA to the PR fields (`head.sha` and `base.sha`), not to the
+   computed merge base or the `pull_request_target` run's header SHA. The
+   workflow runs from the default branch. The summary does not identify the
+   target ref; do not reuse it after a retarget unless the run is verified for
+   the new target. A PR label alone is not evidence. Add the Release Manager
+   as the final native stage for `promotion-path: yes`; omit it only for a
+   verified `no` and only if it is not independently required.
+
+   Even with a classifier `no`, inspect what the diff changes in the live
+   target's context. Route to the Release Manager for new or changed tooling
+   or inputs that qualify, select, migrate, deploy or roll back a production
+   candidate, whether automatic or manual. This includes changes to what a
+   staging check measures. Check workflows, deploy and binding config; the
+   classifier's path list is not exhaustive. If the Actions verdict is
+   missing, stale or incomplete, record a direct review of the full three-dot
+   diff from the live target tip to the exact head, including both sides of
+   renames, to verify `no`. If `no` is uncertain, add the Release Manager stage.
+
+   The final native Release Manager stage is the only merge confirmation;
+   do not open a duplicate confirmation or child card. Provide migration
+   ledger evidence or "no migration", and record the known-good rollback
+   target and post-merge qualification route where applicable. No fresh
+   production drill is required for merge-only work. Merge confirmation
+   authorizes neither production deployment nor production migration; each
+   still requires its own exact-SHA decision.
+3. **Pin the merge and record the result.** Just before merging, the final-stage
+   reviewer (or the author if there is no native stage) rereads the PR target
+   ref, its live tip, the reported PR base, the three-dot merge base and the
+   head SHA. If any differs from the routing record, reassess the diff and
+   review routing against the current target before merging. A head SHA pin
+   alone does not catch a retarget or an advancing target. If the diff or its
+   review context changes, obtain fresh required predecessor verdicts even if
+   the head and stage order stay the same. An advancing target alone does not
+   invalidate verdicts when the diff and its review context are unchanged.
+   Verify that all required predecessor verdicts cover the current diff and
+   merge head, and that required checks pass on it.
+   Resolve threads only once fixed or answered with evidence. When required,
+   the Release Manager makes the merge go/no-go decision on the verified head
+   before merging. Squash-merge in the same run, pinned to that reviewed head. After GitHub confirms the merge, record the
+   reviewed head and resulting squash SHA in the release log for every merge.
+   Add the Release Manager confirmation when required, and include both SHAs
+   in the final native verdict where a stage applies. Record approval only
+   after a successful merge, using the native approval outcome, not a send-back.
+
+   Production holds and staging rollback-drill checks govern production
+   deployment, not a merge that does not deploy to production. Keep any
+   explicitly applicable merge freeze and other incident or identity/capability
+   safeguards in force. Production deploy, migration and rollback acceptance
+   and safeguards are unchanged. An otherwise mergeable PR need not be
+   restacked solely because `main` moved.
 
 After merge, the resulting **exact `main` SHA** must pass the existing full CI,
 staging deploy, staging e2e and soak gates before automatic production
@@ -147,11 +190,9 @@ and all existing promotion, migration and rollback guards. If matching evidence
 cannot be obtained, hold that candidate's promotion; do not stage an unmerged
 head, infer a pass from a skip, or change a workflow in this documentation PR.
 
-This policy does not change the pipeline or waive any other merge or release
-requirement. Previously rejected requests are not retroactive approvals; obtain
-fresh acceptance for any release candidate and fresh confirmation when the PR
-changes the promotion path. This documentation does not authorize any
-particular merge or production deployment.
+This policy does not change the pipeline. A previous rejection does not
+approve a later head or release candidate. This documentation does not
+authorize any particular merge or production deployment.
 
 ### Pull-request size labels (advisory)
 
@@ -243,9 +284,10 @@ below-cutoff branch rows need `PR_STANDARDS_MODE`.
 | Internal card ID in a commit subject (first checker, `INTERNAL_ID_LEVEL: "warning"`) | Warns only |
 | Advisory references in the PR title or body, or an internal reference in the branch name below the cutoff (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 
-GitHub does not enforce an approval count here, and neither does team policy.
-Independent review comes from Devin Review, a required check that runs on the
-head SHA and re-runs on a new push, plus CodeRabbit, whose check is advisory:
+GitHub does not enforce an approval count here. Follow the native review
+policy above. Independent review also comes from Devin Review, a required
+check that runs on the head SHA and re-runs on a new push, plus CodeRabbit,
+whose check is advisory:
 its findings must each be fixed or answered with evidence, but the check never
 blocks the merge. Review conversations still follow the required thread
 resolution in "Branch protection and required checks", so resolve each

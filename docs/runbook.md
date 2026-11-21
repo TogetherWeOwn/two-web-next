@@ -240,9 +240,8 @@ real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
 4. Follow [the PR contract](../CONTRIBUTING.md). Run the fixture-only test, the
    smoke suite, and the link check below; record the results and verify the two
    dates above against the source pin and `expiry - 90 × 24 hours` in UTC.
-   The required checks under that contract, including `CodeRabbit` and
-   `Devin Review`, must pass on the exact head before the PR merges. No
-   database is needed:
+   The [required checks](../CONTRIBUTING.md#branch-protection-and-required-checks)
+   must pass on the exact head before the PR merges. No database is needed:
 
    ```sh
    env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB npx --no-install vitest run test/security-txt.test.ts
@@ -295,16 +294,22 @@ environment. There is no `[env.staging]` configuration. Do not add `--env
 staging` or invent a different Worker target. Verify the approved account and
 binding isolation before any remote mutation.
 
-1. Apply the exact-head checks, review and retained safeguards in the
-   [merge and production staging contract](../CONTRIBUTING.md#merge-and-production-staging-evidence).
-   Only promotion-path PRs need fresh exact-head Release Manager confirmation
-   before merge. The final-stage reviewer pins the squash merge to the reviewed
-   head; the author does this when no native review stage applies. Record the
-   pinned squash SHA, intended target and any required confirmation in the
-   release log. Staging qualification happens after merge and before production
-   promotion, on the exact `main` SHA. A scope-skipped staging journey or passive
-   job is not qualifying evidence: follow the linked contract's post-merge
-   manual-dispatch caveat rather than claiming automatic eligibility.
+1. Use the [merge and production staging contract](../CONTRIBUTING.md#merge-and-production-staging-evidence)
+   for exact-head checks and promotion-path routing. When Release Manager merge
+   confirmation is required, the final native stage supplies it. The final
+   reviewer (or the author if no native stage applies) squash-merges on the
+   pinned head in the same run. After a successful merge, record the reviewed
+   head, resulting squash SHA, intended target and any required Release Manager
+   confirmation in the release log. Include both SHAs in the final native
+   verdict where a stage applies. A failed merge is not an approval.
+
+   Merge confirmation does not authorize production deployment or migration.
+   Production holds and staging rollback-drill checks apply to production
+   deployment; keep any explicitly applicable merge freeze. Staging
+   qualification happens after merge and before production promotion, on the
+   exact `main` SHA. A scope-skipped staging journey or passive job is not
+   qualifying evidence: follow the linked contract's post-merge manual-dispatch
+   caveat rather than claiming automatic eligibility.
 
    For automatic promotion, the Release Manager accepts the exact release SHA
    and asks the authorized Operator to set the repository Actions variable
