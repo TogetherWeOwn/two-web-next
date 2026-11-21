@@ -163,30 +163,51 @@ describe("Kit home SSR render: session-aware header and hero", () => {
   });
 });
 
-describe("Kit home SSR render: highlights", () => {
-  it("renders four sourced highlights and preserves the community links", () => {
-    const html = renderPage(baseData());
-    const highlights = html.split('data-testid="home-highlights"')[1]!.split("</ul>")[0]!;
-    expect(highlights.match(/<li>/g)).toHaveLength(4);
-    expect(html).toContain('id="community-heading"');
-    expect(html).toContain('id="discord-heading"');
-    expect(html).toContain('href="/join#join-heading" data-testid="home-widget-link"');
-    expect(html).toContain('href="/discord" data-testid="home-discord-invite"');
+describe("Kit home SSR render: guest intro", () => {
+  it.each([null, nonMemberSession])("renders sourced copy and links for %j", (session) => {
+    const html = renderPage(baseData({ session }));
+    const intro = html
+      .split('data-testid="home-guest-intro"')[1]!
+      .split('<section class="week-band"')[0]!;
+    expect(intro).toContain('id="home-guest-intro-heading">What happens here.</h2>');
+    expect(Array.from(intro.matchAll(/<li>.*?<h3>(.*?)<\/h3>/gs), ([, title]) => title)).toEqual([
+      "Grown-ups, mostly evenings",
+      "Turn up, say hello",
+      "Trust and time, not grind",
+      "Ranks from playing",
+    ]);
+    expect(intro).toContain('id="discord-heading"');
+    expect(intro).toContain('href="/join#join-heading" data-testid="home-widget-link"');
+    expect(intro).toContain('href="/discord" data-testid="home-discord-invite"');
     for (const unsupported of ["Raid Night", "Grand Prix", "resets each month", "public log"]) {
       expect(html).not.toContain(unsupported);
     }
+    for (const overrides of [{ eventsUnavailable: true }, { upcomingEvents: [fullnessEvent()] }]) {
+      expect(renderPage(baseData({ session, ...overrides }))).toContain(intro);
+    }
+  });
+
+  it("keeps the legacy member highlights and never renders the guest intro for members", () => {
+    const html = renderPage(baseData({ session: memberSession }));
+    expect(html).not.toContain('data-testid="home-guest-intro"');
+    expect(html).toContain(
+      'id="community-heading">No application. <span>No interview.</span></h2>',
+    );
+    const highlights = html.split('data-testid="home-highlights"')[1]!.split("</ul>")[0]!;
+    expect(highlights.match(/<li>/g)).toHaveLength(4);
   });
 });
 
 describe("Kit home SSR render: Week and Upcoming Events", () => {
   it.each([null, nonMemberSession, memberSession])("orders the bands for %j", (session) => {
     const html = renderPage(baseData({ session }));
-    const headings = /id="(home-heading|community-heading|home-week-heading|home-events-heading)"/g;
+    const headings =
+      /id="(home-heading|home-guest-intro-heading|community-heading|home-week-heading|home-events-heading)"/g;
     const ids = Array.from(html.matchAll(headings), ([, id]) => id);
     expect(ids).toEqual(
       session?.member
         ? ["home-heading", "home-week-heading", "home-events-heading", "community-heading"]
-        : ["home-heading", "community-heading", "home-week-heading", "home-events-heading"],
+        : ["home-heading", "home-guest-intro-heading", "home-week-heading", "home-events-heading"],
     );
   });
 
