@@ -1026,7 +1026,7 @@ const past: CalendarPersistedCard = { ...event, key: 'past', eventKey: 'past', t
           assert.equal(await page.getByRole("list", { name: /Today · .*15 Jun/ }).count(), 1);
           assert.equal(await page.getByRole("list", { name: /Today · .*16 Jun/ }).count(), 0);
           if (scenario === "search") {
-            const title = page.getByRole("heading", { level: 3, name: "Game night", exact: true });
+            const title = page.locator("#event-game").getByRole("heading", { level: 3 });
             assert.match(await title.locator("mark").innerText(), /^Game$/i);
           }
           assert.match(await page.getByTestId("events-pager-next").getAttribute("href"), /page=3/);
