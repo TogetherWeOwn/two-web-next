@@ -743,10 +743,14 @@ test("pure Hono packager accounts for the manifest and ZIP overhead in size limi
     () => packPureHonoRecovery({ ...input, assets: Array(maxEntries - 2) }),
     /member count/,
   );
+  const fixedBytes = input.worker.length + input.effectiveConfig.length;
   const block = Buffer.alloc(1024 * 1024);
   const tooExpanded = Array.from({ length: maxTotalBytes / block.length }, (_, i) =>
     recoveryAsset(`assets/${i}`, block),
   );
+  assert.throws(() => packPureHonoRecovery({ ...input, assets: tooExpanded }), /expanded size/);
+  // The payload now fits exactly; only the generated manifest exceeds the expanded cap.
+  tooExpanded.at(-1).bytes = block.subarray(0, block.length - fixedBytes);
   assert.throws(() => packPureHonoRecovery({ ...input, assets: tooExpanded }), /expanded size/);
   const tooManyLongNames = Array.from({ length: 2000 }, (_, i) =>
     recoveryAsset(`assets/${i}-${"a".repeat(490)}`),
@@ -755,9 +759,13 @@ test("pure Hono packager accounts for the manifest and ZIP overhead in size limi
     () => packPureHonoRecovery({ ...input, assets: tooManyLongNames }),
     /manifest size/,
   );
-  // This asset must STORE (DEFLATE would exceed the ratio cap), leaving no header budget.
-  const tooBigToStore = recoveryAsset("assets/archive.bin", Buffer.alloc(maxArchiveBytes));
-  assert.throws(() => packPureHonoRecovery({ ...input, assets: [tooBigToStore] }), /archive size/);
+  // The zeros must STORE (DEFLATE exceeds the ratio cap). Leave 1280 bytes beyond the
+  // payload: enough with a short name, but less than the headers with a 512-byte name.
+  const bytes = Buffer.alloc(maxArchiveBytes - fixedBytes - 1280);
+  const packWithName = (path) =>
+    packPureHonoRecovery({ ...input, assets: [recoveryAsset(path, bytes)] });
+  assert.ok(packWithName("assets/archive.bin").archive.length <= maxArchiveBytes);
+  assert.throws(() => packWithName(`assets/${"a".repeat(505)}`), /archive size/);
 });
 
 test("pure Hono archive binds a successful main run and hashes every declared member", () => {
