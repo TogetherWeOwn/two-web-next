@@ -11,6 +11,7 @@ import type { Sql } from "../sessions";
 export const WEB_THROTTLE_LOCK_TIMEOUT_MS = 2000;
 
 export type ThrottleVerdict = { limited: false } | { limited: true; retryAfter: number };
+type ThrottlePruneFailure = "deadline" | { err: unknown };
 
 // The privacy policy promises this window for rate-limit counters; change it only with a policy version.
 export const THROTTLE_COUNTER_RETENTION_MINUTES = 5;
@@ -59,7 +60,7 @@ export async function chargeWebThrottle(
 }
 
 /** Run one age-only batch outside the admission transaction. */
-export async function pruneWebThrottle(sql: Sql): Promise<"deadline" | { err: unknown } | null> {
+export async function pruneWebThrottle(sql: Sql): Promise<ThrottlePruneFailure | null> {
   const pruneDelete = (tx: Sql) =>
     tx`DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) AS candidates WHERE web_throttle_hits.id = candidates.id`;
   const pruneStore = sql as Sql & {
@@ -85,4 +86,31 @@ export async function pruneWebThrottle(sql: Sql): Promise<"deadline" | { err: un
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Allow a missing store, refuse a busy bucket, and leave all other admission
+ * errors to the caller's outage policy. Report cleanup failures separately.
+ */
+export async function checkWebThrottle(
+  sql: Sql | null,
+  bucket: string,
+  max: number,
+  onPruneFailure?: (failure: ThrottlePruneFailure) => void,
+): Promise<ThrottleVerdict> {
+  if (!sql) return { limited: false };
+
+  let verdict: ThrottleVerdict;
+  try {
+    verdict = await chargeWebThrottle(sql, bucket, max);
+  } catch (err) {
+    if ((err as { code?: string }).code !== "55P03") throw err;
+    // The admission transaction aborted without inserting a hit.
+    verdict = { limited: true, retryAfter: 1 };
+  }
+  // Prune outside the admission lock, including on refusal. A failure or a
+  // delay never changes the verdict; late settlements are observed by the helper.
+  const failure = await pruneWebThrottle(sql);
+  if (failure !== null) onPruneFailure?.(failure);
+  return verdict;
 }
