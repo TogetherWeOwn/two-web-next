@@ -32,14 +32,10 @@ const kitSheets = new Map<string, string>();
 
 async function mount(context: BrowserContext, twin: DetailTwin, long = false) {
   const destination = adjacentEvent(30, { title: longTitle, location: longVenue });
-  const html = await renderAdjacentDetail(
-    twin,
-    long
-      ? {
-          neighbors: { previous: destination, next: destination },
-        }
-      : {},
-  );
+  const html = await renderAdjacentDetail(twin, {
+    ...(twin === "Kit" ? { event: adjacentEvent(20, { timezone: "Asia/Tokyo" }) } : {}),
+    ...(long ? { neighbors: { previous: destination, next: destination } } : {}),
+  });
   let rootCss = "";
   if (twin === "Kit") {
     if (!kitSheets.has(html)) {
@@ -129,11 +125,24 @@ for (const twin of ["Hono", "Kit"] as const) {
           for (const id of ids) {
             const anchor = page.getByTestId(id);
             const previous = id.endsWith("previous");
-            const when = previous
-              ? "Friday, 7 June 2030 at 15:00 GMT-04:00"
-              : "Friday, 21 June 2030 at 20:00 GMT+01:00";
-            await expect(anchor.locator("time")).toBeVisible();
-            await expect(anchor.locator("time")).toHaveText(when);
+            const [honoLabel, kitLabel, instant] = previous
+              ? [
+                  "Friday, 7 June 2030 at 15:00 GMT-04:00",
+                  "Sat 8 Jun, 04:00 Asia/Tokyo",
+                  "2030-06-07T19:00:00.000Z",
+                ]
+              : [
+                  "Friday, 21 June 2030 at 20:00 GMT+01:00",
+                  "Sat 22 Jun, 04:00 Asia/Tokyo",
+                  "2030-06-21T19:00:00.000Z",
+                ];
+            const when = twin === "Hono" ? honoLabel : kitLabel;
+            const time = anchor.locator("time");
+            await expect(time).toBeVisible();
+            await expect(time).toHaveText(when);
+            await expect(time).toHaveAttribute("datetime", instant);
+            await expect(anchor).toHaveAttribute("href", `/e/${adjacentKey(previous ? 10 : 30)}`);
+            await expect(anchor).toHaveAttribute("rel", previous ? "prev" : "next");
             await expect(anchor).toContainText(previous ? "West room" : "East room");
             await expect(anchor).toHaveAccessibleName(
               new RegExp(
