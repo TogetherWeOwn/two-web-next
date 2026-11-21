@@ -1,5 +1,4 @@
 // route-inventory: GET /
-// route-inventory: HEAD /profile
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { verifySignedCookie } from "../src/http/signed-cookie";
 import { kitAdminRenewalFor, kitDocumentRotationFor, kitSessionBridge } from "../src/kit-session";
