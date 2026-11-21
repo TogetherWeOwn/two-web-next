@@ -1611,9 +1611,10 @@ jobs:
       - run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Install Kit parity Chromium
         run: npx playwright install --with-deps chromium
-      # The two name patterns partition every case in the shared fixture file.
+      # Skip the calendar cases explicitly: a negative name pattern also
+      # matches the file ancestor and can run all of its descendants.
       - name: Kit disposable browser fixture (non-calendar)
-        run: node --test --test-timeout=300000 --test-name-pattern='^(?!calendar )' ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
+        run: node --test --test-timeout=300000 --test-skip-pattern='^calendar ' ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
 
   kit-browser-calendar:
     name: kit-browser-calendar

@@ -22,17 +22,17 @@ test("Kit browser shards partition the fixture workload and fail closed in ci-ok
   const { env, run: script } = ok.steps.find(
     (step) => step.name === "Aggregate change-gated conclusions",
   );
-  const command = "node --test --test-timeout=300000 --test-name-pattern=";
+  const command = "node --test --test-timeout=300000";
   const shards = [
     [
       "kit-browser-fixture",
       "KIT_BROWSER_RESULT",
-      `${command}'^(?!calendar )' ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs`,
+      `${command} --test-skip-pattern='^calendar ' ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs`,
     ],
     [
       "kit-browser-calendar",
       "KIT_CALENDAR_RESULT",
-      `${command}'^calendar ' ci/kit-browser-fixture.test.mjs`,
+      `${command} --test-name-pattern='^calendar ' ci/kit-browser-fixture.test.mjs`,
     ],
     ["kit-browser-lifeline", "KIT_LIFELINE_RESULT", "node --test ci/kit-lifeline-browser.test.mjs"],
   ];
@@ -73,8 +73,42 @@ test("Kit browser shards partition the fixture workload and fail closed in ci-ok
     "${{ needs.kit-browser-lifeline.outputs.artifact-id }}",
   );
 
-  const cwd = await mkdtemp(join(tmpdir(), "kit-lifeline-wiring-"));
+  const cwd = await mkdtemp(join(tmpdir(), "kit-browser-wiring-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
+  await mkdir(join(cwd, "ci"));
+  // Run the actual commands against stand-ins. Node matches name patterns
+  // against ancestors too, so complementary regexes alone do not prove a split.
+  for (const [file, names] of [
+    ["kit-browser-fixture-isolation", ["fixture isolation"]],
+    ["kit-browser-fixture", ["calendar example", "other fixture example"]],
+    ["kit-lifeline-browser", ["Lifeline example"]],
+  ]) {
+    await writeFile(
+      join(cwd, "ci", `${file}.test.mjs`),
+      `import { test } from 'node:test';
+import { appendFileSync } from 'node:fs';
+for (const name of ${JSON.stringify(names)}) {
+  test(name, () => appendFileSync('executed.txt', name + '\\n'));
+}`,
+    );
+  }
+  const executed = join(cwd, "executed.txt");
+  for (const [id, cases] of [
+    ["kit-browser-fixture", ["fixture isolation", "other fixture example"]],
+    ["kit-browser-calendar", ["calendar example"]],
+    ["kit-browser-lifeline", ["Lifeline example"]],
+  ]) {
+    await writeFile(executed, "");
+    const run = spawnSync("sh", ["-c", jobs[id].steps[6].run], {
+      cwd,
+      encoding: "utf8",
+      // Do not inherit NODE_TEST_CONTEXT from this outer test runner.
+      env: { PATH: process.env.PATH },
+    });
+    assert.equal(run.status, 0, `${id}: ${run.stdout}\n${run.stderr}`);
+    assert.deepEqual((await readFile(executed, "utf8")).trim().split("\n").sort(), cases, id);
+  }
+
   const dir = join(cwd, upload.with.path);
   const verify = () => spawnSync("sh", ["-c", lifeline.steps[7].run], { cwd, env: {} }).status;
   assert.equal(verify(), 1);
