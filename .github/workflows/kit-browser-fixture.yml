@@ -196,6 +196,8 @@ jobs:
       - run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
         working-directory: web
       - run: npx playwright install --with-deps chromium
+      - name: Activity-log axe deadline (synthetic Chromium fixture)
+        run: timeout --kill-after=5s 45s node --test ci/kit-activity-log-axe-browser.test.mjs
       - run: node --test ci/kit-hydration-harness.test.mjs ci/kit-browser-fixture.test.mjs ci/kit-browser-fixture-isolation.test.mjs ci/kit-tag-browser.test.mjs
         env:
           KIT_CALENDAR_EVIDENCE_DIR: artifacts/kit-calendar
