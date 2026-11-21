@@ -43,8 +43,9 @@ export const load: PageServerLoad = async ({ url, locals, cookies, setHeaders })
       url: url.href,
       requestId: locals.requestId,
     });
-    // A valid spelling may expand past the length cap when lowercased for lookup.
-    return { ...board, activityInput: activityParam?.trim() || null };
+    // Preserve the validated spelling only for a selected game: lowercase can exceed the cap.
+    const activityInput = activityParam?.trim();
+    return activityInput ? { ...board, activityInput } : board;
   } catch (err) {
     const status = (err as { status?: number })?.status;
     const message = err instanceof Error ? err.message : "";

@@ -252,7 +252,7 @@ describe("members-board binding: requestId forwarding", () => {
       cookies,
       setHeaders,
     });
-    expect(out).toEqual({ board: [], activityInput: null });
+    expect(out).toEqual({ board: [] });
     expect(globalThis.__membersBoardCalls).toHaveLength(1);
     expect(globalThis.__membersBoardCalls[0].requestId).toBe(RAY);
   });

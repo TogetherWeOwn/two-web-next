@@ -17,6 +17,7 @@ import {
   isCoveredByExecutedRun,
   isInJourneyScope,
   isManifestEnabled,
+  memberBoardStatus,
   parseManifestEntries,
   pathsMatchStructurally,
   runGate,
@@ -560,16 +561,42 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
     }).length,
     0,
   );
-  for (const subject of ["Nobody is", "You are not"]) {
-    const html = goodHtml.replace(
-      /<table[\s\S]+<\/table>/,
-      `<p role="status">${subject} ranked for this season and game. This season has ended.</p>`,
-    );
+  const withStatus = (text) =>
+    goodHtml.replace(/<table[\s\S]+<\/table>/, `<p role="status">${text}</p>`);
+  for (const [text, kind] of [
+    ["Nobody is ranked for this season and game yet. Browse events.", "overall-empty"],
+    ["Nobody is ranked for this season and game. This season has ended.", "overall-empty"],
+    ["You are not ranked for this season and game yet. Browse events.", "relative-empty"],
+    ["You are not ranked for this season and game. This season has ended.", "relative-empty"],
+    ["Rankings are temporarily unavailable.", "outage"],
+  ]) {
+    const html = withStatus(text);
+    assert.equal(memberBoardStatus(html), kind);
     assert.deepEqual(
-      assertMembersContract({ label: "unit/members-ended", html, headers, status: 200, expected }),
+      assertMembersContract({
+        label: `unit/members-${kind}`,
+        html,
+        headers,
+        status: 200,
+        expected,
+      }),
       [],
     );
   }
+  const nearMatch = withStatus(
+    "Nobody is ranked for this season and game because the rankings feed is unavailable.",
+  );
+  assert.equal(memberBoardStatus(nearMatch), null);
+  assert.deepEqual(
+    assertMembersContract({
+      label: "unit/members-near-match",
+      html: nearMatch,
+      headers,
+      status: 200,
+      expected,
+    }),
+    ["unit/members-near-match: board table or empty status present"],
+  );
   const mutants = [
     [
       "guest-chrome",
