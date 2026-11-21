@@ -106,6 +106,13 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
   it("a terminal refusal keeps its code in the alert but drops the provider message", async () => {
     const lines = capture();
     const d = deps();
+    d.announcementReconciliation.finishAnnouncement.mockImplementation(
+      async (_key, _attempt, s) => {
+        if (typeof s === "object" && "failed" in s && s.jobId)
+          await d.ledger.failed(s.jobId, "announcement", null, s.failed);
+        return true;
+      },
+    );
     const bot = {
       postAnnouncement: async () => ({
         ok: false,
