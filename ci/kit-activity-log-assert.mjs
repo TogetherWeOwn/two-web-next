@@ -24,15 +24,15 @@ const desc = (from, to) =>
 
 export async function runWork(exercise, cleanup, progress) {
   const stop = new AbortController();
-  const checkTime = () => {
+  const checkTime = (stage = "") => {
     if (stop.signal.aborted || performance.now() >= browserWorkMs)
       throw new visual.BrowserDeadline();
+    if (stage) progress(stage);
   };
   const work = () => exercise({ signal: stop.signal, checkTime });
   const task = withDeadline(work, browserWorkMs - performance.now());
   const verdict = task.finally(() => stop.abort()).then(() => progress("TEARDOWN"));
-  await verdict.catch(() => undefined);
-  await cleanup().finally(() => verdict);
+  await verdict.then(cleanup, cleanup).finally(() => verdict);
   progress("COMPLETE");
 }
 export async function memberRefusal(probe, headers, { signal, checkTime }, fetcher = fetch) {
@@ -56,10 +56,7 @@ async function main(chromium, postgres) {
   const sql = postgres(database, { max: 1, connect_timeout: 5, onnotice: () => {} });
   let launched;
   async function exercise(budget) {
-    const progress = (next) => {
-      budget.checkTime();
-      mark(next);
-    };
+    const progress = budget.checkTime;
     // Same DB-minted signed session as e2e/kit-parity/moderator-fixture.ts.
     async function mint(id, moderator) {
       const bearer = `two_${randomBytes(32).toString("base64url")}`;

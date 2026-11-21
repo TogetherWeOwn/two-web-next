@@ -5,8 +5,7 @@ import { viewportPngs } from "./kit-activity-log-png.mjs";
 
 export const origin = "http://127.0.0.1:8788";
 export const path = "/admin/activity-log";
-// Reserve 30 seconds of the shell watchdog for startup slop and final teardown.
-export const browserWorkMs = 120_000;
+export const browserWorkMs = 120_000; // Leave 30s for startup and teardown.
 export class BrowserDeadline extends Error {}
 export class AssertionFailure extends Error {}
 export async function withDeadline(work, ms = 5_000) {
@@ -162,7 +161,6 @@ export async function collectVisuals(browser, mint, dir, options) {
     const keyboard = name === "keyboard-mobile.png";
     const url = urlFor(empty);
     const stage = reportOnly ? "LIGHTHOUSE" : "CAPTURE";
-    if (reportOnly && (ms <= 0 || performance.now() >= browserWorkMs - 30_000)) return null;
     mark(stage);
     const render = async (page) => {
       mark("FONTS");

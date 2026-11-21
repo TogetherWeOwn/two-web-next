@@ -116,8 +116,9 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     );
     const mint = () => ({ value: consumed.size });
     const outer = hono || expired;
+    const ms = mode === "disallowed" ? 0 : 10;
     const collect = ({ signal } = new AbortController()) =>
-      visual.collectVisuals(browser, mint, ".", { audit: noop, measure, mark, signal, ms: 10 });
+      visual.collectVisuals(browser, mint, ".", { audit: noop, measure, mark, signal, ms });
     const teardown = () => visual.withDeadline(() => fixture.close(), 10_000);
     const report = outer ? runWork(collect, teardown, mark) : collect();
     const early = hono || mode.startsWith("capture-");
@@ -165,50 +166,54 @@ test("refusal deadlines abort fetch and prevent follow-on reads", async (t) => {
   assert.equal(request.mock.callCount(), 1);
 });
 test("fixture CLI exits after cleanup despite a live measurement handle", () => {
-  const harness = new URL("./kit-activity-log-assert.mjs", import.meta.url);
-  const stub = `import { exitFixture } from ${JSON.stringify(harness.href)};
-    setInterval(()=>{},60_000); await exitFixture(Promise.resolve(), RangeError);`;
-  const run = spawnSync(process.execPath, ["-e", stub], { encoding: "utf8", timeout: 3_000 });
-  assert.deepEqual([run.status, run.stdout, run.stderr], [0, "", ""]);
+  const stub = `import { exitFixture } from './ci/kit-activity-log-assert.mjs';
+    import { AssertionFailure, BrowserDeadline } from './ci/kit-activity-log-visual.mjs';
+    const Failure = [null, AssertionFailure, BrowserDeadline, RangeError, Error][process.argv[1]];
+    setInterval(()=>{},60_000); await exitFixture(Failure ? Promise.reject(new Failure('private')) : Promise.resolve(), RangeError);`;
+  for (const [i, code] of [0, 20, 21, 21, 22].entries()) {
+    const run = spawnSync(process.execPath, ["-e", stub, `${i}`], { timeout: 3_000 });
+    assert.deepEqual([run.status, run.stdout.length, run.stderr.length], [code, 0, 0]);
+  }
 });
 test("runner separates watchdog and assertion failures and admits only a valid completion", (t) => {
   const source = readFileSync(new URL("./kit-activity-log-run.sh", import.meta.url), "utf8");
   const [runner] = source.match(/^LC_ALL=C timeout [\s\S]+$/m);
   const root = mkdtempSync(join(tmpdir(), "kit-watchdog-test-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const node = '#!/bin/bash\nprintf "out\\n"; printf "err\\n" >&2; exit "$RESULT"\n';
+  const node = `#!/bin/bash
+printf 'out\\n'; printf 'err\\n' >&2
+case $RESULT in kill) trap '' TERM;; term) ;; *) exit "$RESULT";; esac
+exec sleep 30`;
   writeFileSync(join(root, "node"), node, { mode: 0o700 });
   mkdirSync(join(root, "screenshots"));
-  const stub = `set -euo pipefail; export PATH="$1:$PATH" RESULT=$2
-scratch=$1 RUNNER_TEMP=$1
-timeout() { printf '%s\\n' "$marker" >&2; shift 4; "$@"; }
-`;
+  const command = `set -euo pipefail; export PATH="$1:$PATH" RESULT=$2; scratch=$1 RUNNER_TEMP=$1
+${runner.replace("-k 5s 150s", "-k 0.1s 0.5s")}`;
   const metrics = `populated-desktop.png a11y: PASS violations=0 incomplete=0
 empty-desktop.png a11y: PASS violations=0 incomplete=0
 populated-desktop.png lighthouse: unavailable
 `;
   writeFileSync(join(root, "metrics.txt"), metrics);
   const cases = [
-    ["AXE_EVALUATE\n", 124, true, "WATCHDOG stage=AXE_EVALUATE"],
-    ["TEARDOWN\n", 137, true, "WATCHDOG stage=TEARDOWN"],
-    ["TEARDOWN\n", 137, false, "UNKNOWN stage=TEARDOWN"],
-    ["MODERATOR\n", 20, false, "ASSERTION stage=MODERATOR"],
-    ["FONTS\n", 21, false, "DEADLINE stage=FONTS"],
-    ["CAPTURE\n", 0, false, "UNKNOWN stage=CAPTURE"],
-    ["COMPLETE\n", 1, false, "UNKNOWN stage=COMPLETE"],
-    ["COMPLETE\nprivate-status\n", 0, false, "UNKNOWN stage=UNKNOWN"],
-    ["COMPLETE\n\0", 0, false, "UNKNOWN stage=UNKNOWN"],
-    [null, 0, false, "UNKNOWN stage=UNKNOWN"],
-    ["COMPLETE\n", 0, false, "PASS stage=COMPLETE"],
+    ["AXE_EVALUATE\n", "term", "WATCHDOG stage=AXE_EVALUATE"],
+    ["TEARDOWN\n", "kill", "WATCHDOG stage=TEARDOWN"],
+    ["TEARDOWN\n", 137, "UNKNOWN stage=TEARDOWN"],
+    ["MODERATOR\n", 20, "ASSERTION stage=MODERATOR"],
+    ["FONTS\n", 21, "DEADLINE stage=FONTS"],
+    ["CAPTURE\n", 0, "UNKNOWN stage=CAPTURE"],
+    ["COMPLETE\n", 1, "UNKNOWN stage=COMPLETE"],
+    ["COMPLETE\nprivate-status\n", 0, "UNKNOWN stage=UNKNOWN"],
+    ["COMPLETE\n\0", 0, "UNKNOWN stage=UNKNOWN"],
+    [null, 0, "UNKNOWN stage=UNKNOWN"],
+    ["COMPLETE\n", 0, "PASS stage=COMPLETE"],
   ];
-  const env = { PATH: process.env.PATH, marker: "" };
-  const options = { env, encoding: "utf8", timeout: 3_000 };
+  const options = { env: { PATH: process.env.PATH }, encoding: "utf8", timeout: 3_000 };
   const status = join(root, "browser-stage");
-  for (const [record, exitCode, watchdog, verdict] of cases) {
+  for (const [record, exitCode, verdict] of cases) {
     if (record === null) rmSync(status);
     else writeFileSync(status, record);
-    env.marker = watchdog ? "timeout: sending signal TERM to command 'bash'" : "unused";
-    const run = spawnSync("bash", ["-c", stub + runner, "fixture", root, `${exitCode}`], options);
+    const run = spawnSync("bash", ["-c", command, "fixture", root, `${exitCode}`], options);
+    if (exitCode === "kill")
+      assert.match(readFileSync(join(root, "watchdog.txt"), "utf8"), /sending signal KILL/);
     const passed = verdict.startsWith("PASS");
     const tail = passed ? "PASS: Activity-log fixture, rendered states and route a11y\n" : "";
     assert.deepEqual([run.status, run.stderr], [passed ? 0 : 1, ""]);
