@@ -32,8 +32,7 @@ async function fixturePage() {
       }),
     ),
   );
-  // Only this disposable fixture route uses the query string. The built Home
-  // component receives props, not wire data or a URL-driven feature flag.
+  // Only the disposable fixture reads the query; Home receives projected props.
   return `<script>
 import { page } from '$app/state';
 import Home from '../+page.svelte';
@@ -57,6 +56,8 @@ test("Kit home places and captures each offline voice state at both widths", {
       search: searchFor(states[0]),
       searches: states.slice(1).map(searchFor),
       now: Date.UTC(2026, 9, 20, 12),
+      javaScriptEnabled: true,
+      csr: false,
     },
     async ({ page, open }) => {
       for (const state of states) {
@@ -102,15 +103,16 @@ test("Kit home places and captures each offline voice state at both widths", {
             fullPage: true,
             animations: "disabled",
           });
+          const { violations } = await new AxeBuilder({ page })
+            .include(".hero.kit-home")
+            .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+            .analyze();
+          assert.deepEqual(
+            violations.filter(({ impact }) => impact === "critical" || impact === "serious"),
+            [],
+            `${state} at ${viewport.width}x${viewport.height}: hero accessibility`,
+          );
         }
-        const { violations } = await new AxeBuilder({ page })
-          .include(".hero.kit-home")
-          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
-          .analyze();
-        assert.deepEqual(
-          violations.filter(({ impact }) => impact === "critical" || impact === "serious"),
-          [],
-        );
       }
     },
   );
