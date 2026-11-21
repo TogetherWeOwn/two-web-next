@@ -188,14 +188,13 @@ describe("Kit home SSR render: guest intro", () => {
     }
   });
 
-  it("keeps the legacy member highlights and never renders the guest intro for members", () => {
+  it("replaces member onboarding and the aggregate ladder without removing the community anchor", () => {
     const html = renderPage(baseData({ session: memberSession }));
     expect(html).not.toContain('data-testid="home-guest-intro"');
-    expect(html).toContain(
-      'id="community-heading">No application. <span>No interview.</span></h2>',
-    );
-    const highlights = html.split('data-testid="home-highlights"')[1]!.split("</ul>")[0]!;
-    expect(highlights.match(/<li>/g)).toHaveLength(4);
+    expect(html).not.toContain('data-testid="home-highlights"');
+    expect(html).not.toContain('data-testid="rank-stack"');
+    expect(html).toMatch(/id="community-heading"[^>]*aria-labelledby="home-standing-heading"/);
+    expect(html).toContain('id="home-standing-heading">Where you stand.</h2>');
   });
 });
 
@@ -208,11 +207,12 @@ describe("Kit home SSR render: Week and Upcoming Events", () => {
   });
   it.each([null, nonMemberSession, memberSession])("orders the bands for %j", (session) => {
     const html = renderPage(baseData({ session }));
-    const headings = /id="(home-heading|community-heading|home-week-heading|home-events-heading)"/g;
+    const headings =
+      /<h[12] id="(home-heading|community-heading|home-week-heading|home-events-heading|home-standing-heading)"/g;
     const ids = Array.from(html.matchAll(headings), ([, id]) => id);
     expect(ids).toEqual(
       session?.member
-        ? ["home-heading", "home-week-heading", "home-events-heading", "community-heading"]
+        ? ["home-heading", "home-week-heading", "home-events-heading", "home-standing-heading"]
         : ["home-heading", "community-heading", "home-week-heading", "home-events-heading"],
     );
   });
@@ -460,6 +460,16 @@ function fullnessRow(html: string, key: string): string {
 }
 
 describe("Kit home SSR render: member standing", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(new Date("2030-07-19T12:00:00Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const standingPanel = (html: string) =>
+    html.split('data-testid="home-standing"')[1]?.split("</section>")[0];
+
   it("marks matching answers and highlights the earliest future own RSVP only for members", () => {
     const upcomingEvents = [
       fullnessEvent({ eventKey: "not-going", title: "Public opener" }),
@@ -477,8 +487,13 @@ describe("Kit home SSR render: member standing", () => {
     expect(fullnessRow(html, "later")).toContain("You're going.");
     expect(fullnessRow(html, "first")).toContain("You're on the waitlist.");
     expect(fullnessRow(html, "not-going")).not.toContain("home-event-own-rsvp");
-    const standing = html.split('data-testid="home-standing"')[1]!.split("</section>")[0]!;
+    const standing = standingPanel(html);
     expect(standing).toContain('href="/e/first"');
+    expect(standing).toContain('datetime="2030-08-01T20:00:00.000Z"');
+    expect(standing).toContain('href="/leaderboards/members?scope=relative"');
+    expect(standing).not.toContain('href="/e/past"');
+    expect(standing).not.toContain('href="/e/not-going"');
+    expect(standing).not.toContain("Season 4");
     expect(standing).toContain("You're on the waitlist.");
     expect(standing).not.toContain('href="/e/later"');
     const panel = html.split('<aside class="ember-home-panel"')[1]!.split("</aside>")[0]!;
@@ -491,15 +506,40 @@ describe("Kit home SSR render: member standing", () => {
     for (const session of [null, nonMemberSession]) {
       const guestHtml = renderPage(baseData({ session, upcomingEvents, memberRsvps }));
       expect(guestHtml).not.toContain('data-testid="home-standing"');
+      expect(guestHtml).not.toContain('href="/leaderboards/members?scope=relative"');
+      expect(guestHtml).toContain('data-testid="rank-stack"');
       expect(guestHtml).not.toContain("home-event-own-rsvp");
       expect(guestHtml).not.toContain('id="home-panel-heading">Your RSVP</h2>');
     }
     for (const answers of [[], [{ eventKey: "outside-teaser", status: "going" }]]) {
       const data = baseData({ session: memberSession, upcomingEvents, memberRsvps: answers });
       const publicOnly = renderPage(data);
-      expect(publicOnly).not.toContain('data-testid="home-standing"');
+      const preview = standingPanel(publicOnly);
+      expect(preview).toContain("No upcoming RSVP in this preview.");
+      expect(preview).toContain('href="/events"');
+      expect(preview).not.toContain('href="/e/');
       expect(publicOnly).toContain('id="home-panel-heading">On the schedule</h2>');
     }
+  });
+
+  it("distinguishes schedule failure from no RSVP without rendering retained RSVP data", () => {
+    const data = baseData({
+      session: memberSession,
+      upcomingEvents: [fullnessEvent({ title: "Retained event" })],
+      memberRsvps: [{ eventKey: "game-night-1", status: "going" }],
+      eventsUnavailable: true,
+    });
+    const outage = standingPanel(renderPage(data));
+    expect(outage).toContain("We couldn’t load your next RSVP.");
+    expect(outage).toContain('href="/discord"');
+    expect(outage).toContain('href="/leaderboards/members?scope=relative"');
+    expect(outage).not.toContain("No upcoming RSVP");
+    expect(outage).not.toContain("Retained event");
+    expect(outage).not.toContain("You're going.");
+    expect(standingPanel(renderPage({ ...data, eventsUnavailable: false }))).toContain(
+      "You're going.",
+    );
+    expect(standingPanel(renderPage({ ...data, sessionUnavailable: true }))).toBeUndefined();
   });
 });
 
