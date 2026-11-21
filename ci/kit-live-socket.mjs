@@ -10,6 +10,10 @@ import { SESSION_COOKIE } from "./parity/fixture.mjs";
 
 const path = "/api/discord-live/v1";
 const deadline = () => ({ signal: AbortSignal.timeout(5_000) });
+const awaitEvent = (socket, event, phase, timeout = 5_000) =>
+  once(socket, event, { signal: AbortSignal.timeout(timeout) }).catch((cause) => {
+    throw new Error(`${phase}: waiting for ${event} (readyState=${socket.readyState})`, { cause });
+  });
 
 function refusal(url, headers) {
   return new Promise((resolve, reject) => {
@@ -60,20 +64,20 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
   const open = async (headers) => {
     const socket = new WebSocket(url.replace(/^http:/, "ws:"), { headers });
     sockets.push(socket);
-    await once(socket, "open", deadline()); // Undici requires a valid HTTP 101 and accept key.
+    await awaitEvent(socket, "open", "session scenario upgrade"); // Undici verifies the 101.
     return socket;
   };
   const subscribe = JSON.stringify({ v: 1, type: "subscribe", topics: ["voice"] });
   try {
     const guest = await open(headers);
-    const frame = once(guest, "message", deadline());
+    const frame = awaitEvent(guest, "message", "guest subscribe");
     guest.send(subscribe);
     assert.deepEqual(JSON.parse((await frame)[0].data), {
       v: 1,
       type: "unavailable",
       topic: "voice",
     });
-    const duplicate = once(guest, "close", deadline());
+    const duplicate = awaitEvent(guest, "close", "duplicate subscribe");
     guest.send(subscribe);
     assert.equal((await duplicate)[0].code, 1008);
 
@@ -81,7 +85,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
       values (${ref}, '900000000000001377', 'Live socket fixture', true, now() + interval '10 minutes')`;
     const signedIn = await open({ ...headers, Cookie: cookie });
     await sql`update web_sessions set revoked_at = clock_timestamp() where token_hash = ${ref}`;
-    const closed = once(signedIn, "close", deadline());
+    const closed = awaitEvent(signedIn, "close", "revoked session subscribe");
     let deliveries = 0;
     signedIn.addEventListener("message", () => deliveries++);
     signedIn.send(subscribe);
@@ -92,7 +96,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     await sql`update web_sessions set revoked_at = null where token_hash = ${ref}`;
     const expiring = await open({ ...headers, Cookie: cookie });
     await sql`update web_sessions set expires_at = clock_timestamp() where token_hash = ${ref}`;
-    const expired = once(expiring, "close", deadline());
+    const expired = awaitEvent(expiring, "close", "expired session subscribe");
     expiring.addEventListener("message", () => deliveries++);
     expiring.send(subscribe);
     assert.equal((await expired)[0].code, 1008);
@@ -109,8 +113,8 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     later.addEventListener("message", () => deliveries++);
     // Admit the later lease first so the early one must replace its pending alarm.
     // Neither socket sends a command; only the alarm can close it.
-    const firstClosed = once(first, "close", { signal: AbortSignal.timeout(9_000) });
-    const laterClosed = once(later, "close", { signal: AbortSignal.timeout(15_000) });
+    const firstClosed = awaitEvent(first, "close", "first idle session alarm", 9_000);
+    const laterClosed = awaitEvent(later, "close", "second idle session alarm", 15_000);
     const [firstEvent, laterEvent] = await Promise.all([
       firstClosed.then(([event]) => {
         assert.equal(later.readyState, WebSocket.OPEN);

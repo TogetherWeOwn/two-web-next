@@ -94,6 +94,21 @@ it.each([
   expect(await signedLiveSnapshot(config, decode, async () => response())()).toBeNull();
 });
 
+it("accepts two seconds of forward skew without extending the source lease", async () => {
+  const now = Date.parse("2026-11-21T04:00:00Z");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    const loadAt = (observedAt: number) =>
+      signedLiveSnapshot(config, decode, async () =>
+        Response.json(snapshot(new Date(observedAt).toISOString())),
+      )();
+    expect(await loadAt(now + 2_000)).toEqual({ seq: 11, state: 5, validUntil: now + 30_000 });
+    expect(await loadAt(now + 2_001)).toBeNull();
+  } finally {
+    clock.mockRestore();
+  }
+});
+
 it("signs the actual pull bytes and only admits valid JSON within the snapshot limit", async () => {
   const doc = snapshot();
   const json = JSON.stringify(doc);

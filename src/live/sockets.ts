@@ -236,6 +236,9 @@ export class LiveSockets {
       if (!meta || meta.until <= now) socket.close(1008);
       else next = Math.min(next, meta.until);
     }
-    if (Number.isFinite(next)) await this.scheduleSource(next);
+    // The currently firing alarm cannot serve the next lease.
+    if (Number.isFinite(next)) {
+      await this.ctx.blockConcurrencyWhile(() => this.ctx.storage.setAlarm(next));
+    }
   }
 }
