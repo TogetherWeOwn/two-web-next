@@ -16,19 +16,20 @@ When evaluating release evidence, apply the
 [merge and production staging contract](CONTRIBUTING.md#merge-and-production-staging-evidence).
 For `TogetherWeOwn/two-web-next` and `TogetherWeOwn/two-bot-next`, the staging
 item is met by the automatic **post-merge, pre-production** staging/e2e/soak
-gate. Do not demand a staging run for an unmerged head, or make artifact equality,
-paired hashes or a comparison to current `main` a merge prerequisite. This is
-not limited to docs/test-only changes and is not proof that staging already ran.
+gate. Do not demand a staging run for an unmerged head, or require artifact
+comparisons to prove pre-merge staging. This is not limited to docs/test-only
+changes and is not proof that staging already ran.
 
-Before merge, verify the required checks on the exact PR head, fixes or
-answers for all findings, and completion of the native stages that precede
-the final reviewer. Require exact-head Actions links and conclusions. Follow
-CONTRIBUTING for promotion-path routing and the final native Release Manager
-merge decision where required. The final reviewer (or author without native
-stages) pins the squash merge to the reviewed head, then records the result
-as described in the contract. Do not require a recorded final approval before
-merge: it records the successful merge. An otherwise mergeable PR does not
-need restacking solely because `main` moved.
+Before merge, verify required checks and all predecessor native verdicts on
+the exact PR head, plus fixes or answers for all findings. A push requires
+fresh required verdicts. Require exact-head Actions links and conclusions.
+Follow CONTRIBUTING to recheck promotion-path routing against the live target
+and obtain the final native Release Manager merge decision where required.
+The final reviewer (or author without native stages) pins the squash merge to
+that head, then records the result as described in the contract. Do not
+require a recorded final approval before merge: it records the successful
+merge. An otherwise mergeable PR does not need restacking solely because
+`main` moved.
 
 Distinguish that merge evidence from production qualification: the resulting
 exact `main` SHA still has to pass full CI, staging deploy, staging e2e and soak
