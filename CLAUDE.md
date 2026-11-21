@@ -1,6 +1,7 @@
 # CLAUDE.md
 
-This repository keeps one set of agent instructions in [AGENTS.md](AGENTS.md), so every agent harness
-reads the same rules. Claude Code loads it through the import below. Edit AGENTS.md, not this file.
+The shared repository instructions live in [AGENTS.md](AGENTS.md). The import below makes them
+available when Claude Code loads this file, including setups where direct AGENTS.md loading is
+unavailable. Edit AGENTS.md for shared guidance.
 
 @AGENTS.md
