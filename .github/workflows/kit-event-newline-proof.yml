@@ -5,7 +5,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - .github/workflows/kit-event-newline-proof.yml
-      - e2e/kit-parity/admin-event-newlines.spec.ts
+      - e2e/kit-parity/admin-event-newlines.capture.ts
       - e2e/kit-parity/moderator-fixture.ts
       - playwright.kit-event-newlines.config.ts
       - src/admin/event-text.ts

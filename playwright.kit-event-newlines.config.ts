@@ -11,7 +11,8 @@ if (!["before", "after"].includes(process.env.KIT_EVENT_NEWLINE_PHASE ?? "")) {
 
 export default defineConfig({
   ...parity,
-  testMatch: "admin-event-newlines.spec.ts",
+  // The regular parity fixture does not enable the Kit edit GET.
+  testMatch: "admin-event-newlines.capture.ts",
   outputDir: "artifacts/kit-event-newlines/images",
   reporter: [["list"], ["json", { outputFile: "artifacts/kit-event-newlines/results.json" }]],
   use: { ...parity.use, trace: "off", screenshot: "off", video: "off" },
