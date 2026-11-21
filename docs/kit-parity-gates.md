@@ -144,10 +144,11 @@ In `browser-smoke`, after the seed and before any browser journey mutates
 shared state, the dedicated `events-index.visual.spec.ts` captures the Kit
 `/events` page. Kit dependencies/build and this visual run precede the Hono
 visual suite and critical browser journeys. The full `parity.spec.ts` run stays
-after the critical journeys; it spends one shared QA login and writes then
-withdraws one RSVP on the seeded event. This ordering keeps both visual suites
-on the clean seed state. The parity run is followed by
-`node ci/check-kit-parity.mjs` (loud ledger).
+after the critical journeys. Each parity worker spends one shared QA login and
+inserts one ranking RSVP in the disposable test database before the first
+cache-settling read. Teardown deletes only that worker's inserted row. This
+ordering keeps both visual suites on the clean seed state. The parity run is
+followed by `node ci/check-kit-parity.mjs` (loud ledger).
 
 One baseline integrator owns `e2e/visual/__screenshots__/` and
 `e2e/visual/__screenshots-kit__/`: parallel migration cards never commit
@@ -256,7 +257,9 @@ It retains both recordings, config/output hashes, the comparison and logs. Fixtu
 
 Kit-only `/_app` assets have separate status, validator, cookie and header checks. The separate fatal proof does not fault-inject the all-off configuration.
 
-No Worker is uploaded. Live Hyperdrive, queues, version metadata, tail delivery, edge routing, bot-backed counts/ranks and populated Discord event-binding responses are not verified.
+After a passing replay, the same job uses locked Wrangler 4.156.1 with `versions upload --dry-run --no-bundle`. A private scratch config points `main` and `base_dir` at byte-verified copies of just `_worker.js` and `kit-adapter.js`, with one literal `ESModule` rule for the latter. The asset path resolves to the original installed directory; asset controls, bindings and all-off flags are unchanged. The checked-in production config is not edited.
+
+`upload-rehearsal.json` binds both config digests, both module hashes, the installed output and asset tree (including `_headers` and `.assetsignore`) to the replay's head, run and attempt. The verifier requires an exact two-part JavaScript module match and scratch cleanup. A mismatch fails the proof and leaves a sanitized receipt. The replay exercises source inputs through the fixture, not the serialized runtime. The dry run does not synchronize assets, validate remote assets or upload a Worker. Live Hyperdrive, queues, version metadata, tail delivery, edge routing, bot-backed counts/ranks and populated Discord event-binding responses are not verified.
 
 ## Journey gates (`ci/kit-parity-gates.mjs`)
 

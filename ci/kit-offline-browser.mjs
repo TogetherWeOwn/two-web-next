@@ -64,7 +64,8 @@ export function fixedDateBanner(now) {
 /**
  * `now` (epoch ms) fixes the server clock; `timezoneId` overrides only the browser timezone.
  * `searches` opts in extra exact query strings of the same path; `open(search)` navigates to one.
- * @param {{ source?: string, page: string, search?: string, searches?: string[], now?: number, javaScriptEnabled?: boolean, timezoneId?: string, headerMenu?: boolean }} options
+ * `headerMenu` admits the exact menu island. Set `csr: true` to also hydrate that fixture.
+ * @param {{ source?: string, page: string, search?: string, searches?: string[], now?: number, javaScriptEnabled?: boolean, timezoneId?: string, headerMenu?: boolean, csr?: boolean }} options
  */
 export async function withKitOfflineBrowser(
   {
@@ -76,6 +77,7 @@ export async function withKitOfflineBrowser(
     javaScriptEnabled = false,
     timezoneId,
     headerMenu = false,
+    csr = javaScriptEnabled && !headerMenu,
   },
   callback,
 ) {
@@ -85,7 +87,7 @@ export async function withKitOfflineBrowser(
     }
   }
   const banner = now === undefined ? undefined : fixedDateBanner(now);
-  const options = { source, page: fixture, csr: javaScriptEnabled && !headerMenu };
+  const options = { source, page: fixture, csr };
   return withKitBrowserFixture(options, async ({ root, output }) => {
     const entry = join(root, "fixture-server.mjs");
     await build({
@@ -159,7 +161,7 @@ export async function withKitOfflineBrowser(
           const isMenu = url.pathname === "/islands/site-header-menu.js";
           const directory = isAppAsset ? join(output, "client") : join(root, "public");
           const asset = await readFixtureAsset(directory, url.pathname, {
-            allowJavaScript: javaScriptEnabled && (headerMenu ? isMenu : isAppAsset),
+            allowJavaScript: javaScriptEnabled && ((headerMenu && isMenu) || (csr && isAppAsset)),
           });
           if (asset) return route.fulfill(asset);
         }

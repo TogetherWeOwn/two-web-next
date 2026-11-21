@@ -379,23 +379,34 @@ binding isolation before any remote mutation.
    organization scope. An unset or unrecognized value selects `hono`. Manual
    dispatch from `main` uses only `kit_route_family`, which defaults to `hono`;
    it does not change the next automatic deploy. Choose `archive` for only
-   `GET /events/past`, or `archive-static` to add `GET /about` and `GET /faq`.
+   `GET /events/past`, or `archive-static` to add the four static pages:
+   `/about`, `/faq`, `/privacy`, and `/rules`. Privacy and House Rules opt in
+   only for exact document GETs on the staging origin; HEAD and markdown stay
+   on Hono. To roll back one of those two leaves without changing the family,
+   set its entry to `false` in `STAGING_STATIC_DOCUMENT_READY` in
+   `src/kit-staging-static.ts`.
+   After CI passes and the updated staging revision deploys, the rolled-back
+   leaf must return HTTP 200 without `x-two-renderer: kit`.
    Choose `events`, `home` or `join` for `/events`, `/` or `/join`,
    `events-join` for `/events` and `/join` together, `events-home` for
    `/events` and `/` together, or `ember-pages` for all
    three. Disabled Ember GET entries block
-   selection before migrations or Worker mutations. HEAD follows GET; event
-   detail, OAuth, recovery and write methods are unaffected. After revision
-   verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
+   selection before migrations or Worker mutations. HEAD otherwise follows
+   GET; event detail, OAuth, recovery and write methods are unaffected. After
+   revision verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
    to an unauthenticated GET that does not follow redirects. After changing the
    variable to `events`, confirm the next normal deploy passes
    `node ci/staging-kit-route-check.mjs /events`.
 
    Before changing the persistent variable, verify that the target `main`
-   revision contains both the selector for the new family and the cutovers
-   that enable its GET entries in the route manifest. For a family that adds
-   `/`, that includes the home cutover. Wait for older automatic staging
-   deploys to finish, including any still waiting for their `main` CI runs.
+   revision contains the selector for the new family. Check that the selected
+   GET entries are enabled in the shared route manifest, including the home
+   cutover for a family that adds `/`. For `/privacy` and `/rules` in
+   `archive-static`, check for `true` entries in `STAGING_STATIC_DOCUMENT_READY`
+   in [`src/kit-staging-static.ts`](../src/kit-staging-static.ts) instead; both
+   routes intentionally stay disabled in the shared manifest. Wait for older
+   automatic staging deploys to finish, including any still waiting for their
+   `main` CI runs.
    Automatic deploys check out the triggering CI SHA but read the current
    staging variable at deploy time. An older selector can treat a new family
    as unknown and send `/events` back to Hono.
@@ -493,6 +504,22 @@ migration is performed by its selftest.
   Both the shell gate and runner reject non-`main` refs, invalid targets and
   production unless `PRODUCTION_DEPLOY_ENABLED` is exactly `true` (the same
   flag used for production Worker deploys). Leave it unset/false until approved.
+- Only on the protected `production` GitHub Environment, the authorized Operator
+  sets `PRODUCTION_MIGRATION_APPROVED_SHA` to the full lowercase `main` SHA
+  separately approved for the migration. A missing, malformed or different SHA
+  refuses before checkout. If `main` advances before dispatch, stop and obtain
+  fresh approval for the new tip before the Operator updates the pin. The pin
+  checks the run SHA; it does not select a previous revision. Do not set
+  `PRODUCTION_ACCEPTED_SHA` for a migration: that is a separate Worker promotion
+  control. Clear the migration SHA after the authorized operation; clearing it
+  does not revoke a run that already started.
+- On that same Environment, set `PRODUCTION_MIGRATION_IDENTITY_SHA256` to the
+  lowercase SHA-256 hex digest of the exact approved database name in UTF-8,
+  one NUL byte, then the exact existing Postgres migrator role name in UTF-8
+  (no trailing newline). Use approved operator records, not a live probe or
+  the URL login string. Reserve both variable names for this Environment only:
+  keep them absent at repository and organization scope, since the Actions
+  `vars` context does not attest scope. Neither variable is needed in staging.
 - Staging admission hold: `STAGING_MIGRATION_HOLD` must be exactly `false` to
   release any staging migration or staging deploy. Absent, empty, `true` and
   malformed values all hold. Set it as a repository variable
@@ -510,9 +537,8 @@ migration is performed by its selftest.
   PlanetScale staging branch and host (retired Neon endpoints are refused);
   production is PlanetScale Postgres on its own branch
   and host (direct `<id>.pg.psdb.cloud:5432` endpoint — never the
-  pooled `6432` port). The migrate gate pins the staging host and branch id and
-  refuses the production identity in code, so a production URL in the staging
-  secret fails closed. The driver pins port 5432 and enforces
+  pooled `6432` port). The migrate gate pins each target's host and branch id in
+  code, so a URL for the other target fails closed. The driver pins port 5432 and enforces
   certificate-verified TLS (`sslmode=require|verify-full` plus
   `rejectUnauthorized:true` in `migrationClient`), while
   `channel_binding=require|prefer|disable` values are accepted and stripped
@@ -549,6 +575,11 @@ available. The workflow validates migration numbers, then:
    **pre-migration PITR timestamp** and release SHA in the job summary
    **before DDL**. Ledger initialization, canonical Drizzle journal SQL and
    hash/timestamp inserts, and the zero-pending check all run in that transaction.
+   On production, `plan` and `verify` check `current_database()`, `session_user`
+   and `current_user`; `apply` repeats the check on its own transaction before
+   any DDL. The database must match the URL path and approved fingerprint, and
+   both roles must equal the same approved principal. The check reports only
+   match or refusal, not the database or role names.
    Connection loss fails closed, never reconnects mid-apply; the success receipt
    is printed only after commit. URLs and raw database/SQL errors are never printed.
 3. Both `apply` and the final `verify` require **zero pending web migrations**.

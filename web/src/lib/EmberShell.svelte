@@ -15,7 +15,10 @@ let {
   member?: boolean;
   loginReturnTo?: string | null;
   accountChrome?: Snippet;
+  authenticated?: boolean;
   hideAccount?: boolean;
+  /** Keep pages with an exact script contract on the fragment menu. */
+  menuFallbackOnly?: boolean;
   children: Snippet;
 } = $props();
 </script>

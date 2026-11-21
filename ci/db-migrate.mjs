@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,6 +59,9 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
     refuse(error instanceof Error ? error.message : "Migration admission refused.");
   }
   const target = env.MIGRATION_TARGET;
+  const identity = target === "production" ? env.PRODUCTION_MIGRATION_IDENTITY_SHA256 : undefined;
+  if (target === "production" && !/^[a-f0-9]{64}$/.test(identity ?? ""))
+    refuse("Production migration identity setting is missing or malformed.");
   const secret =
     target === "staging" ? "PLANETSCALE_STAGING_DATABASE_URL" : "PRODUCTION_DATABASE_URL";
   if (!env[secret]) refuse(`Missing ${secret} Environment secret; no fallback is permitted.`);
@@ -93,13 +97,10 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
     refuse("Migrations require the pinned staging endpoint with TLS; value withheld.");
   } else if (
     target === "production" &&
-    // PlanetScale Postgres direct endpoint: <id>.pg.psdb.cloud:5432.
-    // The pooled 6432 port and -pooler hosts are refused: DDL and the
-    // transaction advisory lock must bypass transaction pooling.
-    (!/^[a-z0-9-]+\.pg\.psdb\.cloud$/.test(url.hostname) ||
-      url.hostname.split(".")[0].endsWith("-pooler"))
+    (url.hostname !== PLANETSCALE_PRODUCTION_HOST ||
+      branchIdOf(url.username) !== PLANETSCALE_PRODUCTION_BRANCH_ID)
   ) {
-    refuse("Production migrations require a direct PlanetScale endpoint with TLS; value withheld.");
+    refuse("Migrations require the pinned direct production PlanetScale endpoint; value withheld.");
   }
   // Disposable test databases carry no TLS params or password; their strict
   // hostname/principal check above is the whole gate. Live targets always
@@ -122,7 +123,26 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
   // sslmode=require|verify-full + rejectUnauthorized:true in migrationClient.
   url.searchParams.delete("channel_binding");
   url.port = "5432";
-  return { target, url, testDatabase };
+  return { target, url, testDatabase, identity };
+}
+
+export async function assertProductionIdentity(connection, config, summary) {
+  if (config.target !== "production") return;
+  const [actual] = await connection`select pg_catalog.current_database()::text as database,
+    session_user::text as authenticated, current_user::text as effective`;
+  // Fingerprint the approved database and role, rather than putting either
+  // name in Actions step metadata. PostgreSQL identifiers cannot contain NUL.
+  if (
+    !actual ||
+    actual.database !== config.url.pathname.slice(1) ||
+    !actual.authenticated ||
+    actual.authenticated !== actual.effective ||
+    createHash("sha256").update(`${actual.database}\0${actual.authenticated}`).digest("hex") !==
+      config.identity
+  ) {
+    refuse("Production migration database or role identity did not match; values withheld.");
+  }
+  await summary("Production migration database and role identity matched.");
 }
 
 function journal() {
@@ -305,7 +325,15 @@ export async function runMigration(mode, env = process.env, options = {}) {
   };
   try {
     if (mode !== "apply") {
-      const pending = await plan(client);
+      // In production, a dropped connection must not resume on a new session
+      // after the identity check, even for a read-only plan or verification.
+      const pending =
+        config.target === "production"
+          ? await client.begin("read only", async (transaction) => {
+              await assertProductionIdentity(transaction, config, summary);
+              return plan(transaction);
+            })
+          : await plan(client);
       if (mode === "verify" && pending.length)
         refuse("Post-check failed: web migrations remain pending.");
       return pending;
@@ -314,6 +342,7 @@ export async function runMigration(mode, env = process.env, options = {}) {
     // Sources: https://github.com/porsager/postgres#transactions
     // https://www.postgresql.org/docs/17/explicit-locking.html#ADVISORY-LOCKS
     const remaining = await client.begin(async (transaction) => {
+      await assertProductionIdentity(transaction, config, summary);
       // Defense in depth with the startup pin in migrationClient: even when
       // the role/database default search_path or DateStyle is hostile, this
       // transaction applies canonical SQL to `public`. Never ALTER ROLE or

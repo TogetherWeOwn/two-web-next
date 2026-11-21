@@ -50,7 +50,13 @@ export default defineConfig({
         lines: 94.4,
         "src/admin/**": { statements: 95.9, branches: 94.8, functions: 99, lines: 98.3 },
         "src/events/**": { statements: 92, branches: 86.3, functions: 96.1, lines: 96.7 },
-        "src/join/**": { statements: 96, branches: 92.8, functions: 99, lines: 98.1 },
+        // Keep shared throttle cleanup under the join-area floor after extraction.
+        "src/{join/**,http/throttle.ts}": {
+          statements: 96,
+          branches: 92.8,
+          functions: 99,
+          lines: 98.1,
+        },
         "src/sessions.ts": { statements: 94.7, branches: 79.9, functions: 99, lines: 94.4 },
         "src/jobs/**": { statements: 98.2, branches: 95.8, functions: 95.7, lines: 98.7 },
         "src/bot/**": { statements: 92, branches: 88.8, functions: 99, lines: 93.5 },

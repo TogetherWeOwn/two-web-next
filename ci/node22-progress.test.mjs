@@ -284,6 +284,17 @@ export async function createVitest({ shard }) {
     assert.match(invalid.stderr, error);
     assert.doesNotMatch(invalid.stdout, /merged/);
   }
+  for (const [contents, error] of [
+    ["{", /SyntaxError/],
+    ["{}", /vitest-2\.json: invalid Vitest blob tuple/],
+    ['[["1","99"]]', /vitest-2\.json: invalid Vitest blob reference/],
+  ]) {
+    await writeFile(shard2, contents);
+    const malformed = run();
+    assert.notEqual(malformed.status, 0);
+    assert.match(malformed.stderr, error);
+    assert.doesNotMatch(malformed.stdout, /merged/);
+  }
   await writeFile(shard2, "");
   assert.notEqual(run().status, 0);
 });

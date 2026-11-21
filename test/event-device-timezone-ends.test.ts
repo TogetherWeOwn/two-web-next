@@ -323,6 +323,7 @@ async function renderFixture(view: View, clock: ClockCase) {
     joinResult: null,
     setHeaders: () => {},
     store,
+    now: new Date(row.startsAt.getTime() - 60_000),
   });
   expect(outcome.kind, "Kit fixture must resolve the real detail model").toBe("ok");
   if (outcome.kind !== "ok") throw new Error(`Unexpected detail outcome: ${outcome.kind}`);

@@ -371,7 +371,7 @@ test("Kit fixture opts into compiled JavaScript hydration", async () => {
   });
   const timezoneId = "America/Los_Angeles";
   await withKitOfflineBrowser(
-    { page: fixture, javaScriptEnabled: true, timezoneId },
+    { page: fixture, javaScriptEnabled: true, timezoneId, csr: true, headerMenu: true },
     async ({ page }) => {
       assert.equal(
         await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone),
@@ -380,6 +380,10 @@ test("Kit fixture opts into compiled JavaScript hydration", async () => {
       await page.waitForLoadState("networkidle");
       await page.locator("button").click();
       await page.waitForFunction(() => document.querySelector("button")?.textContent === "1");
+      assert.equal(
+        await page.evaluate(async () => (await fetch("/islands/site-header-menu.js")).status),
+        200,
+      );
     },
   );
 });

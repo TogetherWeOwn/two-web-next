@@ -182,7 +182,7 @@ test("members directory passes Axe with JavaScript", { timeout: 720_000 }, async
   await mkdir(out, { recursive: true });
   const searches = [required.default, required["no-results"], required.guest, required["empty-e1"]];
   await withKitOfflineBrowser(
-    { page: await source(), searches, javaScriptEnabled: true },
+    { page: await source(), searches, javaScriptEnabled: true, headerMenu: true, csr: true },
     async ({ page, open }) => {
       for (const search of searches) {
         await open(search);

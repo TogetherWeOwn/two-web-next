@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone CI tooling has no declaration file.
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
+import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static";
 import {
   KIT_RENDERER_HEADER,
   KIT_RENDERER_VALUE,
@@ -12,6 +13,14 @@ import {
 } from "../src/route-ownership";
 
 const STAGING_APP_URL = "https://next.togetherweown.com";
+const NEW_STATIC_LEAVES = ["/privacy", "/rules"];
+const ACTIVE_STATIC_LEAVES = NEW_STATIC_LEAVES.filter(
+  (path) => STAGING_STATIC_DOCUMENT_READY.get(path) !== false,
+);
+const ARCHIVE_STATIC = { archive: "true", static: "true" };
+const rolloutCandidates = ROUTE_MANIFEST.filter(
+  (entry) => entry.enabled || NEW_STATIC_LEAVES.includes(entry.path),
+);
 const staging = readWranglerConfig(readFileSync("web/wrangler.staging.jsonc", "utf8"));
 const main = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8"));
 const jobs = readWranglerConfig(readFileSync("wrangler.jobs.jsonc", "utf8"));
@@ -35,6 +44,13 @@ function stagingDeps(flags: RolloutFlags = {}) {
     kitRouteJoin: flags.join,
     featuredImageHosts: "",
     honoFetch: vi.fn(async () => new Response("hono", { status: 200 })),
+    sessionFor: vi.fn(async () => ({
+      status: "guest" as const,
+      session: null,
+      returnTo: null,
+      joinResult: null,
+      expiredWrite: null,
+    })),
     resolve: vi.fn(
       async () =>
         new Response("<html>kit page</html>", {
@@ -45,19 +61,28 @@ function stagingDeps(flags: RolloutFlags = {}) {
   };
 }
 
-async function dispatchAt(path: string, flags: RolloutFlags = {}) {
-  const request = new Request(new URL(path, STAGING_APP_URL), {
-    headers: { host: new URL(STAGING_APP_URL).host },
-  });
-  const event = { request, url: new URL(request.url), route: { id: path } };
-  const deps = stagingDeps(flags);
+async function dispatchAt(
+  path: string,
+  flags: RolloutFlags = {},
+  {
+    appUrl = STAGING_APP_URL,
+    method = "GET",
+    pagePath = path,
+    requestOrigin,
+  }: { appUrl?: string; method?: string; pagePath?: string; requestOrigin?: string } = {},
+) {
+  const origin = requestOrigin ?? appUrl;
+  const requestUrl = new URL(path, origin);
+  const request = new Request(requestUrl, { method, headers: { host: requestUrl.host } });
+  const event = { request, url: new URL(pagePath, origin), route: { id: pagePath } };
+  const deps = { ...stagingDeps(flags), appUrl };
   const response = await dispatchHookRequest(event, deps);
   return { deps, response };
 }
 
 describe("Kit staging route rollout", () => {
   it("defaults every currently Kit-enabled route to the Hono fallback", async () => {
-    const kitEnabled = ROUTE_MANIFEST.filter((entry) => entry.enabled);
+    const kitEnabled = rolloutCandidates;
     expect(kitEnabled.length).toBeGreaterThan(0);
 
     for (const route of kitEnabled) {
@@ -137,16 +162,79 @@ describe("Kit staging route rollout", () => {
     );
   });
 
-  it("keeps a manifest-disabled family entry on Hono under archive-static (rollback)", () => {
-    // Kills the `enabled: familyEnabled` mutant: returning /about to
-    // enabled:false must restore Hono even when the static stage is on.
+  it("keeps manifest-disabled About on Hono under archive-static", () => {
     const manifest = stagingManifestFor(
       { APP_URL: STAGING_APP_URL, KIT_ROUTE_ARCHIVE: "true", KIT_ROUTE_STATIC: "true" },
-      [{ method: "GET", path: "/about", enabled: false }],
+      [{ method: "GET", path: "/about", enabled: false, reads: "public" }],
     );
     expect(manifest?.[0]?.enabled).toBe(false);
     expect(resolveRouteOwner({ method: "GET", path: "/about" }, manifest ?? [])).toBe("hono");
   });
+
+  it.each(NEW_STATIC_LEAVES)("can roll back staging %s independently of its family", (path) => {
+    const manifest = stagingManifestFor(
+      { APP_URL: STAGING_APP_URL, KIT_ROUTE_ARCHIVE: "true", KIT_ROUTE_STATIC: "true" },
+      ROUTE_MANIFEST,
+      new Map(NEW_STATIC_LEAVES.map((leaf) => [leaf, leaf !== path])),
+    );
+    expect(resolveRouteOwner({ method: "GET", path }, manifest ?? [])).toBe("hono");
+    for (const sibling of ["/events/past", "/about", "/faq", ...NEW_STATIC_LEAVES]) {
+      if (sibling === path) continue;
+      expect(resolveRouteOwner({ method: "GET", path: sibling }, manifest ?? [])).toBe("kit");
+    }
+  });
+
+  it("requires public GET entries for the staging-only leaves", () => {
+    const manifest = stagingManifestFor(
+      { APP_URL: STAGING_APP_URL, KIT_ROUTE_ARCHIVE: "true", KIT_ROUTE_STATIC: "true" },
+      [
+        { method: "POST", path: "/privacy", enabled: true, reads: "public" },
+        { method: "GET", path: "/rules", enabled: true },
+      ],
+    );
+    expect(manifest?.map((entry) => entry.enabled)).toEqual([false, false]);
+  });
+
+  it.each(NEW_STATIC_LEAVES)("keeps %s on Hono outside the staging document GET", async (path) => {
+    for (const [flags, options, requestPath = path] of [
+      [{ static: "true" }, {}],
+      [{ archive: "TRUE", static: "true" }, {}],
+      [{ archive: "true", static: "yes" }, {}],
+      [{ archive: "true", static: "false" }, {}],
+      [ARCHIVE_STATIC, { appUrl: "https://togetherweown.com" }],
+      [ARCHIVE_STATIC, { requestOrigin: STAGING_APP_URL.replace("https:", "http:") }],
+      [ARCHIVE_STATIC, { requestOrigin: `${STAGING_APP_URL}:8443` }],
+      [ARCHIVE_STATIC, { method: "HEAD" }],
+      [ARCHIVE_STATIC, { method: "POST" }],
+      [ARCHIVE_STATIC, { method: "OPTIONS" }],
+      [ARCHIVE_STATIC, {}, `${path}/`],
+      [ARCHIVE_STATIC, {}, `${path}.md`],
+      [ARCHIVE_STATIC, {}, `${path}/child`],
+      [
+        ARCHIVE_STATIC,
+        {},
+        path.replace(/p|r/, (letter) => `%${letter.charCodeAt(0).toString(16)}`),
+      ],
+      // Kit strips the data suffix from event.url before invoking the hook.
+      [ARCHIVE_STATIC, { pagePath: path }, `${path}/__data.json`],
+    ] as const) {
+      const { deps, response } = await dispatchAt(requestPath, flags, options);
+      expect(deps.honoFetch, requestPath).toHaveBeenCalledOnce();
+      expect(deps.resolve, requestPath).not.toHaveBeenCalled();
+      expect(response.headers.get(KIT_RENDERER_HEADER), requestPath).toBeNull();
+    }
+    expect(resolveRouteOwner({ method: "GET", path })).toBe("hono");
+  });
+
+  it.each(["/about", "/faq"])(
+    "preserves the existing staging HEAD behavior for %s",
+    async (path) => {
+      const { deps, response } = await dispatchAt(path, ARCHIVE_STATIC, { method: "HEAD" });
+      expect(deps.resolve).toHaveBeenCalledOnce();
+      expect(deps.honoFetch).not.toHaveBeenCalled();
+      expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    },
+  );
 
   it("does not let the events flag bypass method, detail, or manifest gates", () => {
     const manifest = stagingManifestFor({ APP_URL: STAGING_APP_URL, KIT_ROUTE_EVENTS: "true" }, [
@@ -176,7 +264,12 @@ describe("Kit staging route rollout", () => {
           KIT_ROUTE_STATIC: "true",
         }),
       ),
-    ).toEqual(["GET /events/past", "GET /about", "GET /faq"]);
+    ).toEqual([
+      "GET /events/past",
+      "GET /about",
+      ...ACTIVE_STATIC_LEAVES.map((path) => `GET ${path}`),
+      "GET /faq",
+    ]);
     expect(
       enabledPaths(stagingManifestFor({ APP_URL: STAGING_APP_URL, KIT_ROUTE_STATIC: "true" })),
     ).toEqual([]);
@@ -185,20 +278,23 @@ describe("Kit staging route rollout", () => {
 
   it.each([
     ["archive only", { archive: "true" }, ["/events/past"]],
-    ["archive-static", { archive: "true", static: "true" }, ["/events/past", "/about", "/faq"]],
+    ["archive-static", ARCHIVE_STATIC, ["/events/past", "/about", "/faq", ...ACTIVE_STATIC_LEAVES]],
     ["events only", { events: "true" }, ["/events"]],
   ] as const)(
     "keeps every unselected Kit route on Hono under %s",
-    async (_name, flags, kitPaths) => {
+    async (name, flags, kitPaths) => {
       // Exhaustive flags-on negative coverage: the flags-off loop above plus
       // one sampled sibling per stage left widening mutants green.
-      const kitEnabled = ROUTE_MANIFEST.filter((entry) => entry.enabled);
+      const kitEnabled = rolloutCandidates;
       expect(kitEnabled.length).toBeGreaterThan(0);
       for (const route of kitEnabled) {
         const path = route.path.replace(":id", "1").replace(":key", "event");
         const expectKit = (kitPaths as readonly string[]).includes(route.path);
         const { deps, response } = await dispatchAt(path, flags);
         if (expectKit) {
+          if (name === "archive-static" && path !== "/events/past") {
+            expect(deps.sessionFor, path).not.toHaveBeenCalled();
+          }
           expect(deps.resolve, path).toHaveBeenCalledOnce();
           expect(deps.honoFetch, path).not.toHaveBeenCalled();
           expect(response.headers.get(KIT_RENDERER_HEADER), path).toBe(KIT_RENDERER_VALUE);
