@@ -26,11 +26,19 @@ function cssCompiler(componentCss: string[]) {
       options: { base: string; onDependency: (path: string) => void },
     ) => Promise<{ build: (candidates: string[]) => string }>;
   };
-  return compile(
-    '@import "../../vendor/design-kit/tokens.css";\n@import "./lib/segmented-control.css";\n@import "./lib/site-header.css";\n' +
-      [readFileSync(join(root, "web/src/app.css"), "utf8"), ...componentCss].join("\n"),
-    { base: join(root, "web/src"), onDependency: () => {} },
-  );
+  const source = (path: string) => readFileSync(join(root, path), "utf8");
+  // app.css loads the real theme first. Strip component references so the
+  // fixture does not shadow its emitted tokens with reference-only definitions.
+  const styles = [
+    source("web/src/app.css"),
+    source("vendor/design-kit/tokens.css"),
+    source("web/src/lib/segmented-control.css"),
+    source("web/src/lib/site-header.css"),
+    ...componentCss,
+  ]
+    .join("\n")
+    .replaceAll('@import "../ember-theme.css" reference;', "");
+  return compile(styles, { base: join(root, "web/src"), onDependency: () => {} });
 }
 
 export async function prepareMemberBoardFixtures() {
@@ -76,8 +84,7 @@ export function renderPage(data) {
                 dev: false,
                 filename: path,
               });
-              if (css)
-                componentCss.push(css.code.replace('@import "../ember-theme.css" reference;', ""));
+              if (css) componentCss.push(css.code);
               return { contents: js.code, loader: "js", resolveDir: dirname(path) };
             });
           },
@@ -241,5 +248,12 @@ export function memberBoardDocument(twin: Twin, scope: Scope) {
     }
     return out;
   };
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${styles}</style></head><body${bodyAttrs}>${inert(body)}</body></html>`;
+  const content =
+    twin === "kit"
+      ? inert(body).replace(
+          'src="/logo.svg"',
+          `src="data:image/svg+xml;base64,${readFileSync(join(root, "public/logo.svg")).toString("base64")}"`,
+        )
+      : inert(body);
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${styles}</style></head><body${bodyAttrs}>${content}</body></html>`;
 }

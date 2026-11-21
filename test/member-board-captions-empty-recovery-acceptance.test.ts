@@ -97,6 +97,7 @@ export function renderPage(data) {
       absWorkingDir: root,
       nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
       alias: { "#lib": join(root, "web/src/lib/") },
+      loader: { ".css": "empty" },
       plugins: [
         {
           name: "board-captions-ssr",

@@ -14,6 +14,7 @@ import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parseActivityParam } from "../src/leaderboards/members";
+import { boardPeriodHarness, compileBoardPeriodKit } from "./helpers/member-board-period-shortcuts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
@@ -161,17 +162,24 @@ describe("Kit member board render", () => {
     expect(clipped).toContain("Around you (5 above and below): Going counts");
   });
 
-  it("round-trips the accepted spelling of a game whose lowercase expands past the limit", () => {
+  it("round-trips the accepted spelling of a game whose lowercase expands past the limit", async () => {
     const activityInput = `${"A".repeat(99)}İ`;
     const activity = activityInput.toLowerCase();
     expect(parseActivityParam(activity)).toMatchObject({ ok: false });
-    const html = renderPage(baseData({ activity, activityInput }));
+    const board = boardPeriodHarness(await compileBoardPeriodKit());
+    const { html, status, data } = await board.request(
+      "Kit",
+      `/leaderboards/members?${new URLSearchParams({ activity: ` ${activityInput} ` })}`,
+    );
+    expect(status).toBe(200);
+    expect(data).toMatchObject({ activity, activityInput });
     const links = [...html.matchAll(/href="(\/leaderboards\/members\?[^" ]+)"/g)];
     const filters = links.map(
       ([, href]) => new URL(href!.replaceAll("&amp;", "&"), "https://example.test").searchParams,
     );
-    expect(filters.filter((filter) => filter.has("activity"))).toHaveLength(6);
-    for (const filter of filters.filter((params) => params.has("activity"))) {
+    const gameLinks = filters.filter((params) => params.has("activity"));
+    expect(gameLinks).toHaveLength(6);
+    for (const filter of gameLinks) {
       expect(parseActivityParam(filter.get("activity"))).toEqual({ ok: true, game: activity });
     }
     expect(html).toContain(`name="activity" type="text" value="${activityInput}"`);

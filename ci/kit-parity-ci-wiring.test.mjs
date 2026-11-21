@@ -214,7 +214,11 @@ test("visual tests re-seed and verify the board state after worker restarts", ()
   const kitPoll = visuals.indexOf("api(kit).get(");
   const loadComplete = visuals.indexOf('await page.waitForLoadState("networkidle");');
   const rankedRow = visuals.indexOf("const rankedRow");
-  const emptyBoard = visuals.indexOf("Nobody is ranked for this season and game yet.");
+  const emptyBoard = visuals.indexOf('page.getByRole("status").filter({');
+  assert.match(
+    visuals,
+    /hasText: \/Nobody is ranked for this season and game[^/]+\/[\s\S]*?\.toBeVisible\(\)/,
+  );
   const screenshot = visuals.indexOf("toHaveScreenshot(");
   assert(honoPoll >= 0 && honoPoll < seedRsvp && seedRsvp < kitPoll);
   assert(loadComplete >= 0 && loadComplete < rankedRow && rankedRow < screenshot);

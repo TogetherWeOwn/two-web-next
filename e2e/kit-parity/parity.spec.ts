@@ -3348,7 +3348,11 @@ test.describe("kit: member-board visuals", () => {
             });
             await expect(rankedRow.getByRole("cell")).toHaveText(["1", "1"]);
           } else {
-            await expect(page.getByText(/Nobody is ranked for this season and game/)).toBeVisible();
+            await expect(
+              page.getByRole("status").filter({
+                hasText: /Nobody is ranked for this season and game(?: yet)?\./,
+              }),
+            ).toBeVisible();
             await expect(page.getByRole("rowheader", { name: "QA Member" })).toHaveCount(0);
           }
           await expect.soft(page).toHaveScreenshot(`member-board-${view}-${viewport.name}.png`, {
