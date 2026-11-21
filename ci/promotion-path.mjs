@@ -17,7 +17,7 @@ const directPaths = new Set(
    bin/smoke.mjs bin/version-check.mjs bin/revision-check.mjs bin/json-smoke.mjs
    ci/robots-directives.mjs lib/loopback-hosts.mjs
    bin/check-moderators.mjs bin/operator-probe-errors.mjs bin/ts-hook.mjs bin/ts-hooks.mjs src/probes/check-moderators.ts src/roles.ts
-   src/worker.ts src/index.tsx src/version.ts src/release-tag.ts src/headers.ts src/route-ownership.ts
+   src/worker.ts src/index.tsx src/version.ts src/release-tag.ts src/headers.ts src/route-ownership.ts web/src/hooks.server.ts web/src/lib/server/hono.ts
    src/up.ts src/up-body.ts src/up-config.ts src/up-database.ts src/up-migrations.ts
    src/up-queue.ts src/up-revision.ts src/up-timeout.ts
    playwright.staging.config.ts playwright.watch.config.ts e2e/ci-only.mjs e2e/watch-guard.mjs e2e/staging-guard.mjs e2e/search-retry.mjs
