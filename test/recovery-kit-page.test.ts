@@ -523,7 +523,7 @@ describe("Kit GET /auth/recover markup contract (Recovery shell parity)", () => 
     // a pre-suffixed title prop (which double-suffixed).
     expect(lib).toContain("title={title}");
     expect(lib).toContain('import EmberShell from "#lib/EmberShell.svelte"');
-    expect(lib).toContain("<EmberShell accountChrome={guestChrome} menuFallbackOnly>");
+    expect(lib).toContain("<EmberShell accountChrome={guestChrome} hideJoin menuFallbackOnly>");
     expect(lib).toContain('<SiteMetadata title={title} theme="home" />');
     expect(lib).not.toContain("{@html");
     expect(lib).not.toContain("<script src");

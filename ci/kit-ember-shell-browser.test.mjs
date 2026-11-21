@@ -44,7 +44,7 @@ test("built Ember shell preserves its landmarks and account states without JavaS
           state === "guest" ? 1 : 0,
         );
         assert.equal(
-          await page.getByRole("link", { name: "Leaderboard" }).count(),
+          await page.getByRole("link", { name: "Ladder" }).count(),
           state === "member" ? 1 : 0,
         );
         for (const viewport of [
@@ -52,6 +52,20 @@ test("built Ember shell preserves its landmarks and account states without JavaS
           { width: 390, height: 844 },
         ]) {
           await page.setViewportSize(viewport);
+          const header = page.getByRole("banner");
+          const compact = viewport.width === 390;
+          await expect(header).toHaveCSS("min-height", compact ? "60px" : "68px");
+          await expect(header).toHaveCSS("position", "sticky");
+          await expect(header.getByRole("link", { name: "Join", exact: true })).toHaveCount(
+            Number(state === "guest"),
+          );
+          await expect(header.getByText(/online/i)).toHaveCount(0);
+          if (!compact) {
+            const primary = header.getByRole("navigation", { name: "Primary" });
+            await expect(primary.getByRole("link")).toHaveText(
+              state === "member" ? ["Events", "Ladder", "About"] : ["Events", "About"],
+            );
+          }
           assert.equal(
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
             true,
@@ -65,12 +79,14 @@ test("built Ember shell preserves its landmarks and account states without JavaS
           const edges = await page.evaluate(() => {
             const main = document.querySelector("main");
             const footerContent = document.querySelector(".footer-content");
+            const brand = document.querySelector(".menu-brand");
             return [
               main.getBoundingClientRect().left + parseFloat(getComputedStyle(main).paddingLeft),
               footerContent.getBoundingClientRect().left,
+              brand.getBoundingClientRect().left,
             ];
           });
-          assert.ok(Math.abs(edges[0] - edges[1]) < 1, `main and footer edges differ: ${edges}`);
+          assert.deepEqual(edges, compact ? [20, 20, 20] : [60, 60, 60]);
           await page.screenshot({
             path: `artifacts/kit-ember-shell/${state}-${viewport.width}.png`,
             fullPage: true,
@@ -100,12 +116,17 @@ test("built Ember shell preserves its landmarks and account states without JavaS
             await expect(account).toHaveCount(Number(state !== "hidden"));
             await expect(link("Profile")).toHaveCount(Number(state === "member"));
             await expect(link("Sign in with Discord")).toHaveCount(Number(state === "guest"));
-            await expect(link("Leaderboard")).toHaveCount(Number(state === "member"));
+            await expect(sheet.getByRole("link", { name: "Join", exact: true })).toHaveCount(
+              Number(state === "guest"),
+            );
+            await expect(link("Ladder")).toHaveCount(Number(state === "member"));
             await expect(page.locator("[inert]")).toHaveCount(0);
             if (state !== "hidden") await expect(account).toHaveCSS("justify-self", "stretch");
             await shot(page, `nojs-${state}-open-390`);
             const close = link("Close menu");
-            const about = page.getByRole("link", { name: "About", exact: true });
+            const about = page
+              .getByRole("navigation", { name: "Footer" })
+              .getByRole("link", { name: "About", exact: true });
             await close.focus();
             for (const target of [about, close, about]) {
               await page.keyboard.press(target === close ? "Shift+Tab" : "Tab");
@@ -166,7 +187,7 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     await expect(sheet.getByText("Close menu")).toBeHidden();
     await shot(page, "keyboard-open-390");
     await expect(row("Sign in with Discord")).toHaveCSS("justify-content", "flex-start");
-    for (const [i, target] of [toggle, row("Sign in with Discord"), toggle, home].entries()) {
+    for (const [i, target] of [toggle, row("Join"), toggle, home].entries()) {
       await page.keyboard.press(i < 2 ? "Shift+Tab" : "Tab");
       await expect(target).toBeFocused();
     }
@@ -191,7 +212,7 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
       await expect(start).toBeFocused();
       await page.setViewportSize({ ...mobile, width: 821 });
       await expect(inert).toHaveCount(0);
-      await expect(home).toBeFocused();
+      await expect(row("Events")).toBeFocused();
     }
     await page.setViewportSize({ ...mobile, width: 320 });
     await expect(toggle).toBeFocused();
@@ -205,7 +226,7 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
       await expect(row("Profile")).toHaveCount(Number(name === "member"));
       await expect(row("Sign out", "button")).toHaveCount(count);
       await expect(sheet.locator("[aria-current]")).toHaveAttribute("aria-current", current);
-      await expect(row("Leaderboard")).toHaveCount(Number(current === "location"));
+      await expect(row("Ladder")).toHaveCount(Number(current === "location"));
       await expect(row("Account", "navigation")).toHaveCount(Number(name !== "hidden"));
       await shot(page, `${name}-menu-open-390`);
     }

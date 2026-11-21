@@ -42,6 +42,17 @@ describe("Ember shell", () => {
     expect(hidden).not.toContain('aria-label="Account"');
   });
 
+  it("offers guest Join without assuming membership implies authentication", () => {
+    const guest = renderPage({ member: true, menuFallbackOnly: true });
+    expect(guest.match(/href="\/join"/g)).toHaveLength(2); // Bar and sheet, one visible at a time.
+    expect(guest).toContain('href="/leaderboards/members"');
+    expect(guest).toContain('href="/about"');
+    expect(guest).not.toContain("Welcome, guest");
+    expect(guest).not.toContain("site-header-menu.js");
+    expect(renderPage({ authenticated: true })).not.toContain('href="/join"');
+    expect(renderPage({ hideJoin: true })).not.toContain('href="/join"');
+  });
+
   it("omits the account area when requested", () => {
     const html = renderPage({ hideAccount: true });
     expect(html).not.toContain('aria-label="Account"');

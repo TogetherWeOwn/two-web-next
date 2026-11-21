@@ -17,7 +17,7 @@ let { title, message, retryUrl, retryLabel, inviteUrl, supportReference }: Recov
 {/snippet}
 
 <SiteMetadata title={title} theme="home" />
-<EmberShell accountChrome={guestChrome} menuFallbackOnly>
+<EmberShell accountChrome={guestChrome} hideJoin menuFallbackOnly>
   <section class="hero recovery-hero" aria-labelledby="recovery-heading">
     <div class="hero-detail hero-detail-left" aria-hidden="true">
       <span></span>
