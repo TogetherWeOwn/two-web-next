@@ -508,13 +508,23 @@ migration is performed by its selftest.
   SHA first, then the pending tags, after the run finishes or the operation is
   abandoned. Clearing them does not revoke a run that already started. Do not
   retry with a different scope without approval.
+- The workflow reads the non-secret pending tags from the GitHub REST endpoint
+  for the `production` Environment variable, not the merged `vars` context.
+  A same-named repository or organization variable cannot substitute. A future
+  approved operation needs an authorized GitHub credential limited to this
+  repository and **Environments: read**, available only as the production
+  Environment secret `PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN`. The default
+  Actions token cannot be granted that permission. The workflow stops before
+  checkout or database access if the credential or scoped setting is missing,
+  unreadable or malformed. Do not provision or authorize credentials as part of
+  a code merge.
 - On that same Environment, set `PRODUCTION_MIGRATION_IDENTITY_SHA256` to the
   lowercase SHA-256 hex digest of the exact approved database name in UTF-8,
   one NUL byte, then the exact existing Postgres migrator role name in UTF-8
   (no trailing newline). Use approved operator records, not a live probe or
-  the URL login string. Reserve all three migration pins for this Environment only:
-  keep them absent at repository and organization scope, since the Actions
-  `vars` context does not attest scope. None is needed in staging.
+  the URL login string. Keep the SHA and identity pins absent at repository and
+  organization scope, since their Actions `vars` context does not attest scope.
+  None of the production migration pins is needed in staging.
 - Staging admission hold: `STAGING_MIGRATION_HOLD` must be exactly `false` to
   release any staging migration or staging deploy. Absent, empty, `true` and
   malformed values all hold. Set it as a repository variable
