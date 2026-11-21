@@ -202,13 +202,11 @@ async function main(chromium, postgres, TimeoutError) {
 }
 
 export async function exitFixture(task, TimeoutError) {
-  try {
-    await task;
-  } catch (error) {
+  await task.catch((error) => {
     if (error instanceof AssertionFailure) process.exit(20);
-    if (error instanceof visual.BrowserDeadline || error instanceof TimeoutError) process.exit(21);
-    process.exit(22);
-  }
+    const deadline = error instanceof visual.BrowserDeadline || error instanceof TimeoutError;
+    process.exit(deadline ? 21 : 22);
+  });
   // Don't wait on abandoned Lighthouse handles after teardown and the final stage write.
   process.exit(0);
 }

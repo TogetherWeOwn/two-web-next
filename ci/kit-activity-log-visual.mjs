@@ -137,21 +137,20 @@ async function guardedPage(browser, mintModerator, [width, height], url, guard) 
       (response) => ({ response }),
       (error) => ({ error }),
     );
-    // The load timeout can precede a later document or asset fetch verdict.
+    // Settle the route guard before attributing any navigation failure.
     await settle();
     const valid = response?.url() === url && kitDocument(response.status(), response.headers());
-    if (error instanceof TimeoutError && !violation && !(reportOnly && unavailable)) throw error;
+    if (error && !violation && (!unavailable || (!reportOnly && error instanceof TimeoutError)))
+      throw error;
     if (!(response ? valid : unavailable)) throw new AssertionFailure("visual provenance drift");
     if (!violation && !unavailable) result = await render(page);
-    // Stop new requests before the final guard verdict, even if Lighthouse is still running.
-    stopped = true;
-    await withDeadline(settle);
-    if (violation || (unavailable && !reportOnly))
-      throw new AssertionFailure("unexpected visual diagnostic");
   } finally {
+    // Stop requests before the final verdict or unwinding to outer browser teardown.
     stopped = true;
   }
-  // Failed captures close via browser teardown, outside the work deadline.
+  await withDeadline(settle);
+  if (violation || (unavailable && !reportOnly))
+    throw new AssertionFailure("unexpected visual diagnostic");
   mark("TEARDOWN");
   await withDeadline(() => context.close());
   if (violation) throw new AssertionFailure("unexpected visual diagnostic");

@@ -23,7 +23,8 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
   const noop = async () => undefined;
   const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
   const modes = "document asset disallowed pending rejected hono fonts capture-fonts";
-  for (const mode of modes.split(" ")) {
+  for (const mode of [...modes.split(" "), "capture-error", "capture-timeout"]) {
+    const navError = mode === "capture-timeout" ? new TimeoutError() : new Error("target closed");
     const shots = [];
     const keys = [];
     const consumed = new Set([0]); // Functional context already rotated its cookie.
@@ -74,6 +75,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
           headers: () => headers,
           dispose: noop,
         };
+        if (mode === "capture-error" || mode === "capture-timeout") throw navError;
         if (closed !== 5 || !["document", "asset", "disallowed"].includes(mode)) return response;
         if (mode === "document") void request(href, true, stall);
         else {
@@ -105,13 +107,14 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     const collect = () => visual.collectVisuals(browser, mint, ".", options);
     const teardown = () => visual.withDeadline(() => fixture.close(), 10_000);
     const report = mode === "hono" ? runWork(collect, teardown, mark) : collect();
-    const early = mode === "hono" || mode === "capture-fonts";
+    const early = mode === "hono" || mode.startsWith("capture-");
     if (mode === "capture-fonts") await assert.rejects(report, visual.BrowserDeadline);
-    else if (early) await assert.rejects(report, /provenance drift/);
+    else if (mode === "hono") await assert.rejects(report, /provenance drift/);
+    else if (early) await assert.rejects(report, (error) => error === navError);
     else if (mode === "disallowed") await assert.rejects(report, /unexpected visual diagnostic/);
     else assert.equal(await report, null);
     if (fakeClock) t.mock.timers.reset();
-    if (mode === "hono") assert.deepEqual(stages, ["CAPTURE"]);
+    if (early && mode !== "capture-fonts") assert.deepEqual(stages, ["CAPTURE"]);
     assert.equal(lateFetch.mock.callCount(), 0);
     assert.equal(closed, early ? Number(mode === "hono") : mode === "disallowed" ? 5 : 6);
     assert.equal(consumed.size, early ? 2 : 7);

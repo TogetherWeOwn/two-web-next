@@ -67,8 +67,7 @@ browser=$!
 result=0
 wait "$browser" 2>/dev/null || result=$?
 browser=
-stage=UNKNOWN
-raw=
+stage=UNKNOWN outcome=UNKNOWN raw=
 # A successful read would mean a NUL or the size cap; only exact, newline-terminated codes at EOF count.
 if [[ -f "$scratch/browser-stage" && ! -L "$scratch/browser-stage" ]] &&
   ! IFS= read -r -d '' -n 32 raw < "$scratch/browser-stage"; then
@@ -77,7 +76,6 @@ if [[ -f "$scratch/browser-stage" && ! -L "$scratch/browser-stage" ]] &&
     $'FONTS\n'|$'AXE_INJECT\n'|$'AXE_EVALUATE\n'|$'LIGHTHOUSE\n'|$'TEARDOWN\n'|$'COMPLETE\n') stage=${raw%$'\n'} ;;
   esac
 fi
-outcome=UNKNOWN
 # 137 by itself is ambiguous: the watchdog's TERM marker also survives KILL escalation.
 if [[ $result == 124 || $result == 137 ]] &&
   grep -Fxq "timeout: sending signal TERM to command 'bash'" "$scratch/watchdog.txt"; then
