@@ -8,14 +8,10 @@ const view = "1024";
 const connect = "1048576";
 const viewAndConnect = "1049600";
 type Overwrites = LiveState["channels"][number]["overwrites"];
-const room = (id: string, overwrites: Overwrites = []) => ({
-  id,
-  kind: "voice" as const,
-  name: `room ${id}`,
-  parentId: null,
-  position: null,
-  overwrites,
-});
+function room(id: string, overwrites: Overwrites = []) {
+  const name = `room ${id}`;
+  return { id, name, kind: "voice" as const, parentId: null, position: null, overwrites };
+}
 function acl(kind: "member" | "role", id: string, allow = "0", deny = "0") {
   return { kind, id, allow, deny };
 }
@@ -76,7 +72,7 @@ function fixture(permissions = viewAndConnect, publicOverwrites: Overwrites = []
         person("2", ["20", "21"]),
         person("3"),
         person("4", ["22"]),
-        ...regulars.concat("107", "108").map((id) => person(id)),
+        ...regulars.concat("107", "108", "109").map((id) => person(id)),
         person("105", [], { bot: true }),
         person("106", [], { pending: true }),
       ],
@@ -85,6 +81,7 @@ function fixture(permissions = viewAndConnect, publicOverwrites: Overwrites = []
         { userId: "107", channelId: "11" },
         { userId: "108", channelId: "12" },
         { userId: "2", channelId: "13" },
+        { userId: "109", channelId: "15" }, // Outside the page room list even with both permissions.
       ],
       events: [],
     },
@@ -183,10 +180,8 @@ describe("per-viewer live projection", () => {
         expect(encodeLiveProjection(expired, topic)).toBeNull();
       }
     }
-    const noGrant = {
-      ...input,
-      page: { guildId: input.guildId, pageId: input.pageId, viewerId: "2", validUntil: 20 },
-    };
+    const { guildId, pageId } = input;
+    const noGrant = { ...input, page: { guildId, pageId, viewerId: "2", validUntil: 20 } };
     expect(encodeLiveProjection(noGrant, "voice")).toBeNull();
     expect(encodeLiveProjection(noGrant, "members")).toBeNull();
   });
@@ -206,17 +201,22 @@ describe("per-viewer live projection", () => {
     expect(encodeLiveProjection(input, "events")).toBeNull();
   });
 
-  it("produces stable equality independent of wire order and refuses oversized UTF-8 values", () => {
+  it("produces stable equality independent of wire order and enforces the UTF-8 byte limit", () => {
     const input = fixture();
     const value = encodeLiveProjection(input, "voice");
     input.state.channels.reverse();
     input.state.voice.reverse();
     expect(encodeLiveProjection(input, "voice")).toBe(value);
-    input.state.channels = Array.from({ length: 250 }, (_, i) => ({
-      ...room(String(i + 200)),
-      name: "真".repeat(100),
-    }));
-    input.page.memberRoomIds = new Set(input.state.channels.map(({ id }) => id));
-    expect(encodeLiveProjection(input, "channels")).toBeNull();
+    // 250 fixed-width IDs with multibyte names need 25 ASCII bytes to reach 64 KiB.
+    for (const pad of [25, 26]) {
+      input.state.channels = Array.from({ length: 250 }, (_, i) => ({
+        ...room(String(i + 200)),
+        name: "真".repeat(67) + (i === 0 ? "x".repeat(pad) : ""),
+      }));
+      input.page.memberRoomIds = new Set(input.state.channels.map(({ id }) => id));
+      const json = encodeLiveProjection(input, "channels");
+      const bytes = json === null ? null : new TextEncoder().encode(json).byteLength;
+      expect(bytes).toBe(pad === 25 ? 65_536 : null);
+    }
   });
 });
