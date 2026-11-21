@@ -2151,10 +2151,14 @@ test("Kit Events groups schedule dates but plots the grid on host-local dates", 
     await page.setViewportSize({ width: 744, height: 844 });
     await page.context().addCookies([{ name: "e2e-parity-bypass", value: "1", url: KIT_ORIGIN }]);
     await page.goto(`${KIT_ORIGIN}/events`);
-    const group = page.getByTestId("events-list").getByRole("list", { name: /15 May/ });
+    const schedule = page.getByTestId("events-list");
+    await expect(schedule.getByRole("heading", { level: 3, name: /15 May/ })).toBeVisible();
+    const group = schedule.getByRole("list", { name: /15 May/ });
+    await expect(group).toHaveAttribute("role", "list"); // WebKit drops implicit roles on unmarked lists.
     await expect(group.getByRole("listitem")).toHaveCount(2);
     const row = group.getByTestId("event-card").first();
-    await expect(row.getByRole("heading", { level: 3 })).toHaveText("E2E May LA");
+    const title = row.getByRole("heading", { name: "E2E May LA", exact: true });
+    await expect(title).toHaveAttribute("aria-level", "4");
     await expect(row.locator(".schedule-location")).toHaveText("Community voice");
     await expect(row.locator(".schedule-actions")).toHaveCSS("grid-column", "3");
     await page.goto(`${KIT_ORIGIN}/events?view=calendar&month=2099-05&past=1`);

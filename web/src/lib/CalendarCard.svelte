@@ -76,7 +76,8 @@ const full = $derived(
     </div>
     <div class="schedule-info">
       <!-- Cancelled and transient rows have no detail page (410 / none), so the title is plain text. -->
-      <h3>
+      <!-- Keep the search title element; upcoming cards sit one level below their day heading. -->
+      <h3 aria-level={isPast ? undefined : 4}>
         {#if e.kind === "event" && e.status !== "cancelled"}<a href={`/e/${e.eventKey}`}>{#if titleSegments}<span>{@render marked(titleSegments)}</span>{:else}{e.title}{/if}</a>{:else if titleSegments}<span>{@render marked(titleSegments)}</span>{:else}{e.title}{/if}
       </h3>
       {#if e.kind === "event" && e.game}<p>{e.game}</p>{/if}

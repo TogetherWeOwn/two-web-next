@@ -69,6 +69,7 @@
 }
 .events-page .schedule-day {
   margin: 16px 16px 0;
+  letter-spacing: inherit;
 }
 .events-page .schedule-row:has(> .schedule-when) {
   grid-template-columns: 9.5rem minmax(0, 1fr) minmax(8rem, 13rem);
