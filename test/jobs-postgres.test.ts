@@ -164,6 +164,10 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
       values (${retired}, 'fixture-channel', 1, 'closed', now() - interval '31 days'),
         (${sending}, 'fixture-channel', 1, 'sending', now() - interval '31 days'),
         (${retryable}, 'fixture-channel', 1, 'retryable', now() - interval '31 days')`;
+    await sql`insert into announcement_send_claims (idempotency_key, channel_alias, send_attempts, state, claim_until)
+      select gen_random_uuid(), 'fixture-channel', 1, 'closed', now() - interval '32 days'
+      from generate_series(1, 1000)`;
+    expect(await store.pruneClosedAnnouncements()).toBe(1000);
     await sql.begin(async (tx) => {
       const [clock] = await tx<{ expiry: Date; enqueued: Date }[]>`
         select now() + interval '750 milliseconds' as expiry,
