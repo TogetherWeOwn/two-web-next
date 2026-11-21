@@ -3627,7 +3627,10 @@ test.describe("kit: member-board visuals", () => {
                   hasText: memberBoardEmptyText("overall", allowsEndedMemberBoardCopy(path)),
                 }),
             ).toBeVisible();
-            await expect(page.getByRole("rowheader", { name: KIT_VIEWER_ROW_NAME })).toHaveCount(0);
+            // Reject any viewer row here, even if its label is malformed.
+            await expect(
+              page.getByRole("rowheader", { name: "QA Member", exact: false }),
+            ).toHaveCount(0);
           }
           await expect.soft(page).toHaveScreenshot(`member-board-${view}-${viewport.name}.png`, {
             fullPage: true,
