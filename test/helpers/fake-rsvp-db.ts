@@ -18,6 +18,8 @@ export type FakeRsvpScript = {
   event: FakeRsvpRow;
   existing: FakeRsvpRow | null;
   throttleCount: { n: number; wait: number };
+  goingCount?: number;
+  waitlistRank?: { event_id: number; user_id: string; position: number };
   /** Evaluated when the final row read runs, so it can echo the insert. */
   finalRow: () => FakeRsvpRow;
 };
@@ -62,14 +64,14 @@ export function fakeRsvpDb(script: FakeRsvpScript): { db: Db; inserted: FakeRsvp
     () => [], // chargeThrottle advisory lock
     () => [{ ...script.throttleCount }], // chargeThrottle budget count
     () => [], // chargeThrottle hit insert
-    () => [], // waitlistPosition (only reached on waitlisted answers)
+    () => (script.waitlistRank ? [script.waitlistRank] : []), // waitlistPosition
   ];
   const tx = {
     execute: async (..._args: unknown[]) => (executeValues[executes++] ?? (() => []))(),
     select: (...args: unknown[]): Chain => {
       const first = args[0] as Record<string, unknown> | undefined;
       if (first && typeof first === "object") {
-        return chainable("n" in first ? [{ n: 0 }] : []);
+        return chainable("n" in first ? [{ n: script.goingCount ?? 0 }] : []);
       }
       return chainable((bareSelects[bare++] ?? (() => []))());
     },

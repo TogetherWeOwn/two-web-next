@@ -9,6 +9,7 @@ import type { Env, Session } from "../src/env";
 import { registerRsvpRoutes } from "../src/events/routes-rsvp";
 import { RSVP_HONEY_FIELD } from "../src/islands/contracts";
 import type { QueueMessage } from "../src/jobs/types";
+import { fakeRsvpDb } from "./helpers/fake-rsvp-db";
 
 vi.mock("../src/jobs/worker", () => ({
   enqueueSyncEvent: async (env: Env, message: QueueMessage) => {
@@ -163,6 +164,96 @@ describe("registered RSVP body caps", () => {
     expect(control.headers.get("location")).toBe(`/events/${KEY}/rsvp`);
     expectNoEffects();
   });
+});
+
+it("caps and authorizes RSVP PUT before spending a budget, then commits before dispatching a waitlisted answer", async () => {
+  const cap = BODY_LIMIT_BYTES.action;
+  const eventId = 42;
+  const handle = fakeRsvpDb({
+    event: {
+      id: eventId,
+      eventKey: KEY,
+      status: "published",
+      rsvpOpen: true,
+      endsAt: new Date(Date.now() + 3_600_000),
+      capacity: 1,
+    },
+    existing: null,
+    goingCount: 1,
+    throttleCount: { n: 0, wait: 1 },
+    waitlistRank: { event_id: eventId, user_id: MEMBER.id, position: 2 },
+    finalRow: () => ({ status: handle.inserted[0]?.status, syncedToDiscordAt: null }),
+  });
+
+  let reachedCommit!: () => void;
+  let releaseCommit!: () => void;
+  const atCommit = new Promise<void>((resolve) => {
+    reachedCommit = resolve;
+  });
+  const commitFence = new Promise<void>((resolve) => {
+    releaseCommit = resolve;
+  });
+  const transaction = vi.fn(async (fn: Parameters<Db["transaction"]>[0]) => {
+    const result = await handle.db.transaction(fn);
+    reachedCommit();
+    await commitFence;
+    return result;
+  });
+  const env = {
+    ...baseEnv,
+    ADMIN_DB: { transaction } as unknown as Db,
+  };
+  const request = (size: number) => {
+    const prefix = "status=going&padding=";
+    return app.request(
+      `/events/${KEY}/rsvp`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: prefix + "x".repeat(size - prefix.length),
+      },
+      env,
+    );
+  };
+
+  readSession.mockResolvedValueOnce({ ...MEMBER, member: false });
+  const oversized = await request(cap + 1);
+  expect(oversized.status).toBe(413);
+  expect(readSession).not.toHaveBeenCalled();
+  expect(transaction).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+
+  const forbidden = await request(cap);
+  expect(forbidden.status).toBe(403);
+  expect(await forbidden.json()).toEqual({ error: "forbidden" });
+  expect(readSession).toHaveBeenCalledOnce();
+  expect(transaction).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+
+  const pending = Promise.resolve(request(cap));
+  try {
+    await Promise.race([
+      atCommit,
+      pending.then((response) => {
+        throw new Error(`RSVP answered ${response.status} before reaching commit`);
+      }),
+    ]);
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(handle.inserted).toMatchObject([{ eventId, userId: MEMBER.id, status: "waitlisted" }]);
+    expect(send).not.toHaveBeenCalled();
+  } finally {
+    releaseCommit();
+  }
+  const accepted = await pending;
+  expect(accepted.status).toBe(201);
+  expect(await accepted.json()).toEqual({
+    data: { status: "waitlisted", synced_to_discord_at: null, waitlist_position: 2 },
+  });
+  expect(send).toHaveBeenCalledOnce();
+  expect(send).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: "sync-event", eventKey: KEY }),
+    { delaySeconds: 10 },
+  );
 });
 
 // A scripted withdrawal transaction, following the existing RSVP DB-double
