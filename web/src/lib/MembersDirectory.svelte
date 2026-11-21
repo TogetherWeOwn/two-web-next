@@ -44,7 +44,6 @@ function href(filter = "active", query = "", page = 1) {
 
 <EmberShell
   member={directory.audience === "member"}
-  hideJoin={directory.audience === "member"}
   accountChrome={directory.audience === "member" ? memberAccount : undefined}
 >
   <MembersDirectoryHeader counts={directory.counts} guest={directory.audience === "guest"} />

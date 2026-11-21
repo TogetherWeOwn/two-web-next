@@ -109,8 +109,7 @@ describe("Kit GET /join markup contract (src/screens/join.tsx parity)", () => {
   });
 
   it("uses the Ember shell while retaining metadata and the restored-write notice", () => {
-    // Keep Join in the page so the action uses the validated return destination.
-    expect(page).toContain("<EmberShell {accountChrome} hideJoin menuFallbackOnly>");
+    expect(page).toContain("<EmberShell {accountChrome} menuFallbackOnly>");
     expect(page).toContain("<SiteMetadata");
     expect(page).toContain('canonical={canonicalUrl(appUrl, "/join")}');
     expect(page).toContain("{#if data.restoredWrite}");

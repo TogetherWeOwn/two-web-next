@@ -16,7 +16,6 @@ let {
   hideAccount = false,
   menuFallbackOnly = false,
   ember = false,
-  hideJoin = false,
 }: {
   /** "leaderboard" also renders the member board link (see the nav below).
     "event" marks Events as the current location on event descendants. */
@@ -32,10 +31,9 @@ let {
   authenticated?: boolean;
   menuFallbackOnly?: boolean;
   ember?: boolean;
-  hideJoin?: boolean;
 } = $props();
 const menuIsland = '<script src="/islands/site-header-menu.js" defer></' + "script>";
-const offerJoin = $derived(ember && !hideJoin && !hideAccount && !authenticated);
+const offerJoin = $derived(ember && !hideAccount && !authenticated && !accountChrome);
 </script>
 
 {#snippet joinLink(extraClass = "")}

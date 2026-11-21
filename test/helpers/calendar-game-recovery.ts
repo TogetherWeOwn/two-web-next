@@ -29,6 +29,8 @@ export function renderKitEvents(...args: Parameters<KitRender>): ReturnType<KitR
       format: "esm",
       platform: "node",
       write: false,
+      outdir: ".",
+      loader: { ".css": "file" },
       tsconfigRaw: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "hono/jsx" } },
       plugins: [
         {
@@ -44,7 +46,7 @@ export function renderKitEvents(...args: Parameters<KitRender>): ReturnType<KitR
         },
       ],
     });
-    const bundleUrl = `data:text/javascript;base64,${Buffer.from(outputFiles[0]!.text).toString("base64")}`;
+    const bundleUrl = `data:text/javascript;base64,${Buffer.from(outputFiles.find((file) => file.path.endsWith(".js"))!.text).toString("base64")}`;
     return ((await import(bundleUrl)) as { renderEventsHtml: KitRender }).renderEventsHtml;
   })();
   return loaded.then((render) => render(...args));

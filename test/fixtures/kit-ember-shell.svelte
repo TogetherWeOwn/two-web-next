@@ -7,7 +7,6 @@ export let data: {
   loginReturnTo?: string | null;
   authenticated?: boolean;
   hideAccount?: boolean;
-  hideJoin?: boolean;
   menuFallbackOnly?: boolean;
   customAccount?: boolean;
 };

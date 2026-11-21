@@ -50,7 +50,7 @@ describe("Ember shell", () => {
     expect(guest).not.toContain("Welcome, guest");
     expect(guest).not.toContain("site-header-menu.js");
     expect(renderPage({ authenticated: true })).not.toContain('href="/join"');
-    expect(renderPage({ hideJoin: true })).not.toContain('href="/join"');
+    expect(renderPage({ customAccount: true })).not.toContain('href="/join"');
   });
 
   it("omits the account area when requested", () => {
