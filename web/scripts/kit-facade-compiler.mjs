@@ -49,9 +49,9 @@ export async function compileKitFacade(adapterSource) {
     stdin: {
       contents: `import adapter from "./kit-adapter.js";
 import { createKitWorkerFacade } from ${sourcePath("kit-worker-facade.ts")};
-import { handleLiveIngress } from ${sourcePath("live/ingress.ts")};
+import { handleLiveRequest } from ${sourcePath("live/socket-route.ts")};
 export { LiveGuildHub } from ${sourcePath("live/guild-hub.ts")};
-export default createKitWorkerFacade(adapter, undefined, handleLiveIngress);
+export default createKitWorkerFacade(adapter, undefined, handleLiveRequest);
 `,
       resolveDir: fileURLToPath(new URL(".", import.meta.url)),
       loader: "js",
@@ -61,7 +61,7 @@ export default createKitWorkerFacade(adapter, undefined, handleLiveIngress);
     format: "esm",
     platform: "neutral",
     target: "es2022",
-    external: ["./kit-adapter.js"],
+    external: ["./kit-adapter.js", "postgres"],
     write: false,
     logLevel: "silent",
   });
