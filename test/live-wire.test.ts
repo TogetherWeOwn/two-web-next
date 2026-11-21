@@ -5,7 +5,9 @@ import { reduceLiveState } from "../src/live/state";
 import { signedLiveSnapshot } from "../src/live/transport";
 import { decodeLiveDelta, type LiveState, snapshotTopics } from "../src/live/wire";
 
-const guildId = "100";
+const guildId = "18446744073709551615";
+const origin = "https://producer.example";
+const config = { keyId: "fixture", secret: "offline signing fixture", origin, guildId };
 const room = { id: "200", name: "HQ", kind: "voice", parentId: null, position: 1, overwrites: [] };
 const member = { userId: "300", roleIds: [], nick: null, bot: false, pending: false };
 const role = { id: guildId, permissions: "1024" };
@@ -32,9 +34,17 @@ const baseline = {
 const update = { topic: "voice", op: "upsert", id: guest.userId, value: occupant };
 const removeRole = (id: string) => ({ topic: "roles", op: "remove", id });
 const envelope = { v: 1, guild_id: guildId, seq: 2, occurred_at: event.startsAt, ops: [update] };
+const snapshotEnvelope = {
+  v: 1,
+  guild_id: guildId,
+  seq: Number.MAX_SAFE_INTEGER,
+  observed_at: "2026-11-21T02:00:00.123456789Z",
+};
 const decode = (value: unknown, id = guildId) =>
   decodeLiveDelta(new Uint8Array(new TextEncoder().encode(JSON.stringify(value))).buffer, id);
 const patch = (...ops: unknown[]) => decode({ ...envelope, ops: [update, ...ops] });
+const pullTopics = (fetcher: typeof fetch) =>
+  signedLiveSnapshot(config, (topics) => snapshotTopics(topics, guildId), fetcher);
 
 function fixture(raw: unknown = baseline): LiveState {
   const state = snapshotTopics(raw, guildId);
@@ -49,7 +59,6 @@ describe("live wire allowlist", () => {
     expect(decode(maxOps)).toEqual(maxOps);
     expect(fixture()).toEqual(baseline);
   });
-
   it.each([
     { ...envelope, v: 2 },
     { ...envelope, seq: 0 },
@@ -61,7 +70,6 @@ describe("live wire allowlist", () => {
   ])("rejects an invalid or over-limit envelope", (bad) => {
     expect(decode(bad)).toBeNull();
   });
-
   it("rejects the entire batch for a wrong guild, wrong key, or non-allowlisted operation", () => {
     expect(decode(envelope, "101")).toBeNull();
     expect(patch({ ...update, id: member.userId })).toBeNull();
@@ -73,7 +81,6 @@ describe("live wire allowlist", () => {
     expect(patch({ topic: "presence", op: "remove", id: member.userId })).toBeNull();
     expect(decodeLiveDelta(Uint8Array.of(255).buffer, guildId)).toBeNull();
   });
-
   it("requires unique keys and complete permission dependencies in snapshot topics", () => {
     expect(snapshotTopics({ ...baseline, members: [member, guest, member] }, guildId)).toBeNull();
     const unknownRole = { ...member, roleIds: ["101"] };
@@ -95,19 +102,17 @@ describe("live wire allowlist", () => {
 });
 
 it("recovers complete state on a gap through one exact signed snapshot pull", async () => {
-  const origin = "https://producer.example";
-  const config = { keyId: "fixture", secret: "offline signing fixture", origin, guildId };
   const snapshot = {
-    v: 1,
-    guild_id: guildId,
+    ...snapshotEnvelope,
     seq: 9,
-    observed_at: event.startsAt,
     topics: { ...baseline, channels: [{ ...room, name: "New HQ" }] },
   };
   const fetcher = vi.fn<typeof fetch>(async () => Response.json(snapshot));
-  const pull = signedLiveSnapshot(config, (topics) => snapshotTopics(topics, guildId), fetcher);
   const before = fixture({ ...baseline, voice: [] });
-  const load = vi.fn().mockResolvedValueOnce({ seq: 2, state: before }).mockImplementation(pull);
+  const load = vi
+    .fn()
+    .mockResolvedValueOnce({ seq: 2, state: before })
+    .mockImplementation(pullTopics(fetcher));
   const sequence = new LiveSequence(load, reduceLiveState);
   expect(await sequence.synchronize()).toBe(true);
   const recovery = sequence.ingest(8, { ...decode(envelope)!, seq: 8 });
@@ -117,7 +122,7 @@ it("recovers complete state on a gap through one exact signed snapshot pull", as
   expect(await sequence.ingest(9, decode({ ...envelope, seq: 9 })!)).toBe("duplicate");
   expect(fetcher).toHaveBeenCalledOnce();
   const [url, init] = fetcher.mock.calls[0]!;
-  const body = '{"action":"live.snapshot","guild_id":"100"}';
+  const body = `{"action":"live.snapshot","guild_id":"${guildId}"}`;
   expect(url).toBe("https://producer.example/internal/actions");
   expect(init).toMatchObject({ method: "POST", redirect: "manual", body });
   const headers = new Headers(init?.headers);
@@ -137,29 +142,29 @@ describe("live batch reduction", () => {
     expect(reduceLiveState(state, delta!)?.voice).toEqual([move.value]);
     expect(state.voice).toEqual([occupant]);
   });
-
   it("withdraws voice and linked events on a channel removal", () => {
     const state = fixture();
     const delta = patch({ topic: "channels", op: "remove", id: room.id });
     const withdrawn = { ...baseline, voice: [], events: [], channels: [] };
     expect(reduceLiveState(state, delta!)).toEqual(withdrawn);
   });
-
   it("clears a departed non-owner's voice without invalidating the baseline", () => {
     const delta = patch({ topic: "members", op: "remove", id: guest.userId });
     const departed = { ...baseline, members: [member], voice: [] };
     expect(reduceLiveState(fixture(), delta!)).toEqual(departed);
   });
-  it.each([0, 1])("caps snapshots and reduced state at 1 MiB + %s UTF-8 bytes", (extra) => {
+  it.each([0, 1])("caps snapshots and reduced state at 1 MiB + %s UTF-8 bytes", async (extra) => {
     const row = { ...member, nick: "é".repeat(100) };
     const crowd = Array.from({ length: 3895 }, (_, i) => ({ ...row, userId: `${i + 1000}` }));
     const state = fixture({ ...baseline, members: [...baseline.members, ...crowd] });
-    const value = { ...event, description: "é".repeat(136) + (extra ? "é" : "x") };
+    const value = { ...event, description: "é".repeat(67) + (extra ? "é" : "x") };
     const delta = patch({ topic: "events", op: "upsert", id: event.id, value });
     const candidate = { ...state, events: [value] };
-    expect(Buffer.byteLength(JSON.stringify(candidate))).toBe(1024 * 1024 + extra);
+    const snapshot = { ...snapshotEnvelope, topics: candidate };
+    expect(Buffer.byteLength(JSON.stringify(snapshot))).toBe(1024 * 1024 + extra);
     expect(reduceLiveState(state, delta!) !== null).toBe(extra === 0);
     expect(snapshotTopics(candidate, guildId) !== null).toBe(extra === 0);
+    expect((await pullTopics(async () => Response.json(snapshot))()) !== null).toBe(extra === 0);
   });
 
   it("drops the current baseline if a contiguous batch loses permission proof", async () => {

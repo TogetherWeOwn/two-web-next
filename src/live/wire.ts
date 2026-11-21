@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { SNAPSHOT_BYTES } from "./transport";
 
+// Compact envelope with a 20-digit guild ID, 16-digit sequence and nanosecond UTC timestamp.
+const SNAPSHOT_ENVELOPE_BYTES = 121;
 export const liveId = z
   .string()
   .regex(/^[1-9][0-9]{0,19}$/)
@@ -53,13 +55,11 @@ const event = z
 
 const idOf = (row: { id: string }) => row.id;
 const userIdOf = (row: { userId: string }) => row.userId;
-
-function collection<R>(schema: z.ZodType<R>, max: number, key: (row: R) => string) {
-  return z
+const collection = <R>(schema: z.ZodType<R>, max: number, key: (row: R) => string) =>
+  z
     .array(schema)
     .max(max)
     .refine((rows) => distinct(rows.map(key)));
-}
 
 const topics = z.strictObject({
   guild,
@@ -71,7 +71,6 @@ const topics = z.strictObject({
 });
 
 export type LiveState = z.infer<typeof topics>;
-
 export function snapshotTopics(value: unknown, guildId: string): LiveState | null {
   const result = topics.safeParse(value);
   if (!result.success) return null;
@@ -99,14 +98,13 @@ export function snapshotTopics(value: unknown, guildId: string): LiveState | nul
     return null;
   if (state.events.some(({ channelId: id }) => id !== null && !voiceRoom(id))) return null;
   const bytes = new TextEncoder().encode(JSON.stringify(state)).byteLength;
-  return bytes <= SNAPSHOT_BYTES ? state : null;
+  return bytes <= SNAPSHOT_BYTES - SNAPSHOT_ENVELOPE_BYTES ? state : null;
 }
 
-function upsert<T extends string, R>(topic: T, value: z.ZodType<R>, key: (row: R) => string) {
-  return z
+const upsert = <T extends string, R>(topic: T, value: z.ZodType<R>, key: (row: R) => string) =>
+  z
     .strictObject({ topic: z.literal(topic), op: z.literal("upsert"), id: liveId, value })
     .refine(({ id, value }) => key(value) === id);
-}
 
 const operation = z.union([
   upsert("channels", channel, idOf),
@@ -131,7 +129,6 @@ const delta = z.strictObject({
 });
 
 export type LiveDelta = z.infer<typeof delta>;
-
 /** Only call with size-bounded, authenticated bytes. Never return partial batches. */
 export function decodeLiveDelta(bytes: ArrayBuffer, guildId: string): LiveDelta | null {
   try {
