@@ -46,7 +46,15 @@ test("Kit events index renders the seeded guest schedule @ desktop and mobile", 
       await blockExternalRequests(context);
       const page = await context.newPage();
       page.on("pageerror", (error) => pageErrors.push(error.message));
+      const css = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === "/kit-events-schedule.css",
+      );
       await gotoKitEvents(page, "/events");
+      expect((await css).ok()).toBe(true);
+      await expect(page.getByRole("main")).toHaveCount(1);
+      await expect(page.getByRole("heading", { level: 1 })).toHaveText("What's on. Say you're in.");
+      await expect(page.getByRole("contentinfo")).toContainText("Together We Own");
+      await expect(page.locator(".schedule-day")).not.toHaveCount(0);
       await expect(page.getByTestId("events-calendar")).toBeVisible();
       await expect(page.getByTestId("event-card")).toHaveCount(SEEDED_UPCOMING_EVENTS.length);
       for (const title of SEEDED_UPCOMING_EVENTS) {
@@ -62,6 +70,7 @@ test("Kit events index renders the seeded guest schedule @ desktop and mobile", 
       expect(documentWidth, `no horizontal overflow @ ${viewport.name}`).toBeLessThanOrEqual(
         viewport.size.width,
       );
+      await attachReviewScreenshot(page, `kit-review-calendar-schedule-${viewport.size.width}`);
       await expect.soft(page).toHaveScreenshot(`kit-events-index-${viewport.name}.png`, {
         fullPage: true,
         mask: [page.locator("time")],
@@ -100,6 +109,7 @@ for (const viewport of [...PARITY_VIEWPORTS.map(({ size }) => size), { width: 32
     await expect(page.getByTestId("events-empty-error")).toHaveCount(0);
     await expect(failed.getByTestId("events-empty-error")).toBeVisible();
     await expect(failed.getByTestId("events-empty-search")).toHaveCount(0);
+    await attachReviewScreenshot(page, `kit-review-calendar-search-miss-${viewport.width}`);
     await attachReviewScreenshot(failed, `kit-review-calendar-error-${viewport.width}`);
 
     const month = "/events?view=calendar&month=2099-05";
@@ -128,3 +138,21 @@ for (const viewport of [...PARITY_VIEWPORTS.map(({ size }) => size), { width: 32
     }
   });
 }
+
+test("Kit events fragment retains switchable regions without the Ember document", async ({
+  request,
+}) => {
+  const path = "/events?view=calendar&month=2099-05";
+  const response = await request.get(`${KIT_ORIGIN}${path}`, {
+    headers: { "x-two-island": "events-calendar" },
+  });
+  expect(response.status()).toBe(200);
+  expect(response.headers()["x-two-renderer"]).toBe("kit");
+  const html = await response.text();
+  expect(html).toContain('rel="canonical"');
+  expect(html).toContain(`/auth/discord?next=${encodeURIComponent(path)}`);
+  for (const region of ["head", "subscribe", "actions", "miss", "content"]) {
+    expect(html).toContain(`data-cal-zone="${region}"`);
+  }
+  expect(html).not.toMatch(/<!doctype|<main\b|<footer\b|<script\b/i);
+});

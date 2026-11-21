@@ -50,23 +50,6 @@ const endLabel = $derived.by(() => {
   const year = endDay.slice(0, -6) !== startDay.slice(0, -6) ? ` ${endDay.slice(0, -6)}` : "";
   return `${cardDayLabel(e.endsAt, tz)}${year}, ${wallTimeHm(e.endsAt, tz)}`;
 });
-const badge = $derived.by(() => {
-  const options = { day: "2-digit", month: "short" } as const;
-  let parts: Intl.DateTimeFormatPart[];
-  try {
-    parts = new Intl.DateTimeFormat("en-GB", { ...options, timeZone: tz }).formatToParts(
-      e.startsAt,
-    );
-  } catch {
-    parts = new Intl.DateTimeFormat("en-GB", { ...options, timeZone: "UTC" }).formatToParts(
-      e.startsAt,
-    );
-  }
-  return {
-    month: parts.find((p) => p.type === "month")?.value,
-    day: parts.find((p) => p.type === "day")?.value,
-  };
-});
 // Hono never marks matches in the past drawer (isPast clears the query), so
 // spans a caller leaves on a past card are ignored rather than rendered.
 const titleSegments = $derived(isPast ? null : e.titleSegments);
@@ -85,8 +68,12 @@ const full = $derived(
 {#snippet marked(segments: { text: string; match: boolean }[])}{#each segments as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}{/snippet}
 
 <li>
-  <article class="schedule-row" id={`event-${e.key}`} data-event-key={e.key} data-testid={EVENT_CARD_TESTID} tabindex="-1">
-    <span class="schedule-date" aria-hidden="true"><span>{badge.month}</span><strong>{badge.day}</strong></span>
+  <article class="schedule-row" class:schedule-live={availability?.ongoing} id={`event-${e.key}`} data-event-key={e.key} data-testid={EVENT_CARD_TESTID} tabindex="-1">
+    <div class="schedule-when">
+      <time datetime={e.startsAt.toISOString()}>{cardTimeLabel(e.startsAt, tz)}</time>
+      {#if e.endsAt}<span>– <time datetime={e.endsAt.toISOString()}>{endLabel}</time></span>{/if}
+      <span>{tz}</span>
+    </div>
     <div class="schedule-info">
       <!-- Cancelled and transient rows have no detail page (410 / none), so the title is plain text. -->
       <h3>
@@ -97,9 +84,7 @@ const full = $derived(
       {#if draft}{" "}<span class="schedule-badge" data-testid={EVENT_DRAFT_TESTID}>Draft</span>{" "}{/if}
       {#if cancelled}{" "}<span class="schedule-badge" data-testid={EVENT_CANCELLED_TESTID}>Cancelled</span>{" "}{/if}
       {#if availability?.ongoing}{" "}<span class="schedule-badge" data-testid={EVENT_ONGOING_TESTID}>{ONGOING_COPY}</span>{" "}{/if}
-      <p>
-        <time datetime={e.startsAt.toISOString()}>{cardTimeLabel(e.startsAt, tz)}</time>{#if e.endsAt}{" · "}<time datetime={e.endsAt.toISOString()}>{endLabel}</time>{/if}{" "}<span>{tz}</span>{#if e.location}{" · "}<span>{e.location}</span>{/if}
-      </p>
+      {#if e.location}<p>{e.location}</p>{/if}
       {#if descriptionPoints.length > DESCRIPTION_LIMIT}
         <details class="schedule-text">
           <summary>
@@ -126,6 +111,8 @@ const full = $derived(
         <a href={inviteUrl} data-testid={EVENT_DISCORD_RSVP_TESTID}>{EVENTS_EMPTY_COPY.discordRsvp}</a>
       {:else if !member && !cancelled}
         <a href={loginUrl(loginReturnTo)} data-testid="signin">{EVENTS_EMPTY_COPY.signIn}</a>
+      {:else if e.kind === "event" && !cancelled}
+        <a class="schedule-details" href={`/e/${e.eventKey}`} aria-label={`Details: ${e.title}`}>Details</a>
       {/if}
     </div>
   </article>

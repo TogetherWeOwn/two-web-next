@@ -92,13 +92,13 @@ let searchStatus = $derived.by(() => {
     { href: calendarUrl({ ...state, view: "list" }), label: "List", current: state.view === "list", testId: EVENTS_VIEW_LIST_TESTID },
     { href: calendarUrl({ ...state, view: "calendar" }), label: "Calendar", current: state.view === "calendar", testId: EVENTS_VIEW_CALENDAR_TESTID },
   ]} />
-  <p>
+  <p class="schedule-links">
     <a href={pastEventsUrl(1, state.q)} data-testid={EVENTS_PAST_ARCHIVE_LINK_TESTID}>{state.q ? "Continue search in past events" : EVENTS_EMPTY_COPY.pastArchive}</a>{" "}
-    <a href={webcalUrl(appUrl, gameFilter)} data-testid={EVENTS_SUBSCRIBE_TESTID}>{EVENTS_EMPTY_COPY.subscribe}</a>{" "}
     <a href="/events.rss">RSS feed</a>{" "}
     <a href={url}>Download calendar (.ics)</a>{" "}
     <a href="/hotzones">Hot zones</a>
   </p>
+  <a class="schedule-subscribe" href={webcalUrl(appUrl, gameFilter)} data-testid={EVENTS_SUBSCRIBE_TESTID}>{EVENTS_EMPTY_COPY.subscribe}</a>
 </div>
 <details class="subscription-help" data-testid="subscription-help" data-cal-zone="subscribe">
   <summary>How to subscribe to the calendar</summary>

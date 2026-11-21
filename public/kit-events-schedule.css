@@ -1,0 +1,203 @@
+/* The Kit endpoint has no client entry or layout stylesheet. Keep these
+   overrides after the shared theme, grid, archive and recovery styles. */
+.kit-events-document {
+  --schedule-column: 1160px;
+  --schedule-gutter: clamp(20px, 4.7vw, 60px);
+}
+.kit-events-document main {
+  max-width: calc(var(--schedule-column) + 2 * var(--schedule-gutter));
+  padding-inline: var(--schedule-gutter);
+}
+.kit-events-document .events-page {
+  padding-block: 56px 24px;
+  overflow-wrap: anywhere;
+}
+.kit-events-document .schedule-heading {
+  border: 0;
+  padding: 0;
+  margin-bottom: 40px;
+}
+.kit-events-document .schedule-heading h1 {
+  font: 560 clamp(36px, 4.7vw, 60px) / 1 var(--font-display);
+  letter-spacing: -0.04em;
+  text-transform: none;
+  margin: 20px 0 16px;
+}
+.kit-events-document .schedule-heading h1 span {
+  color: var(--t3);
+}
+.kit-events-document :is(.strap, .schedule-day h3, .schedule-when, .schedule-badge) {
+  font: 400 13px / 1.4 var(--font-data);
+  letter-spacing: 0.02em;
+}
+.kit-events-document .strap,
+.kit-events-document .schedule-day h3 {
+  color: var(--t3);
+  text-transform: uppercase;
+}
+.kit-events-document .schedule-intro {
+  margin: 0 0 8px;
+  max-width: 54ch;
+  font-size: clamp(16px, 1.5vw, 19px);
+}
+.kit-events-document .events-page [data-cal-zone="head"] {
+  justify-content: start;
+}
+.kit-events-document .schedule-subscribe {
+  margin-inline-start: auto;
+}
+
+.kit-events-document
+  .events-page
+  :is(.schedule-subscribe, .schedule-actions a, .schedule-heading > a) {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 8px 16px;
+  min-height: 44px;
+  color: var(--ink);
+  background: transparent;
+  font: 600 14px / 1.25 var(--font-ui);
+  text-transform: none;
+  text-decoration: none;
+}
+
+.kit-events-document
+  .events-page
+  :is(.schedule-subscribe, .schedule-actions a, .schedule-heading > a):hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+.kit-events-document form[role="search"] {
+  align-items: center;
+  margin: 12px 0;
+}
+
+.kit-events-document form[role="search"] :is(input[type="search"], select, button) {
+  min-height: 44px;
+  border-radius: var(--radius-pill);
+}
+.kit-events-document #events-search-scope {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 14px;
+}
+.kit-events-document .events-page .subscription-help {
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+}
+.kit-events-document .schedule-clock {
+  border-top: 1px solid var(--hair1);
+  padding-block-start: 16px;
+  margin: 16px 0 0;
+  font-size: 14px;
+}
+
+.kit-events-document .schedule-clock strong {
+  color: var(--ink);
+}
+.kit-events-document .schedule-day {
+  padding: 16px 16px 8px;
+}
+.kit-events-document .schedule-day h3 {
+  margin: 0;
+}
+.kit-events-document [data-testid="events-list"] {
+  margin: 0;
+}
+
+.kit-events-document .events-page .schedule-row {
+  grid-template-columns: 9.5rem minmax(0, 1fr) minmax(8rem, 13rem);
+  align-items: start;
+  gap: 16px;
+  padding: 12px 16px;
+  margin: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+}
+
+.kit-events-document .events-page .schedule-live {
+  background: var(--g3);
+}
+.kit-events-document .schedule-when {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  color: var(--t2);
+}
+.kit-events-document .schedule-when > time {
+  flex-basis: 100%;
+  color: var(--ink);
+}
+.kit-events-document .schedule-info h3 {
+  font: 650 17px / 1.3 var(--font-display);
+  letter-spacing: 0;
+}
+.kit-events-document .events-page .schedule-info h3 a {
+  min-height: 24px;
+  display: inline;
+  color: var(--ink);
+}
+.kit-events-document .schedule-info h3 a:hover {
+  color: var(--brand);
+}
+.kit-events-document .schedule-info p,
+.kit-events-document .schedule-attendance {
+  font-size: 14px;
+}
+.kit-events-document .schedule-actions {
+  text-align: end;
+}
+.kit-events-document .events-page .schedule-row .schedule-badge {
+  border-radius: 4px;
+}
+
+/* Footer styles are scoped by Svelte on page routes, but not delivered by +server. */
+.kit-events-document .ember-footer {
+  text-align: start;
+  padding: 32px var(--schedule-gutter);
+  border-color: var(--hair1);
+}
+.kit-events-document .footer-content {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px 24px;
+  max-width: var(--schedule-column);
+  margin: auto;
+}
+.kit-events-document .footer-content :is(p, nav) {
+  margin: 0;
+}
+.kit-events-document .footer-content nav {
+  justify-content: start;
+}
+
+@media (max-width: 720px) {
+  .kit-events-document .events-page {
+    padding-top: 36px;
+  }
+  .kit-events-document .schedule-heading h1 span {
+    display: block;
+  }
+  .kit-events-document .events-page .schedule-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 12px;
+  }
+  .kit-events-document .schedule-when > time {
+    flex-basis: auto;
+  }
+  .kit-events-document .events-page .schedule-actions {
+    grid-column: auto;
+    text-align: start;
+  }
+  .kit-events-document .schedule-subscribe {
+    margin-inline-start: 0;
+  }
+  .kit-events-document .schedule-day {
+    padding-inline: 12px;
+  }
+}
