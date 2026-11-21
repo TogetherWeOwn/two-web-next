@@ -229,12 +229,21 @@ describe.each(SCENARIOS)("provider metadata at queue sinks: $label", (scenario) 
         );
       expect(m.ack).toHaveBeenCalledOnce();
       expect(m.retry).not.toHaveBeenCalled();
-      expect(d.ledger.failed).toHaveBeenCalledExactlyOnceWith(
-        "j1",
-        scenario.body.kind,
-        scenario.action ? "sync-event:e1" : null,
-        reason,
-      );
+      if (scenario.body.kind === "announcement" && !reconcile) {
+        expect(d.announcementReconciliation.finishAnnouncement).toHaveBeenCalledExactlyOnceWith(
+          UUID,
+          scenario.attempts,
+          { jobId: "j1", failed: reason },
+        );
+        expect(d.ledger.failed).not.toHaveBeenCalled();
+      } else {
+        expect(d.ledger.failed).toHaveBeenCalledExactlyOnceWith(
+          "j1",
+          scenario.body.kind,
+          scenario.action ? "sync-event:e1" : null,
+          reason,
+        );
+      }
       expect(
         records
           .filter((r) => r.channel === "error" && r.args[0] === "job failed")

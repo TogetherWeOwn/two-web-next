@@ -280,20 +280,27 @@ describe("queue envelope batch isolation", () => {
     },
   );
 
-  it("checks legacy field types without adding UUID, snowflake or nonblank policy", async () => {
+  it("keeps legacy sync and role fields permissive but rejects malformed announcement identities", async () => {
     const messages = [
       message({ kind: "sync-event", eventKey: "", idempotencyKey: "", jobId: undefined }),
-      message({ kind: "announcement", idempotencyKey: "", action: { channelKey: "", body: "" } }),
+      message({ ...announcement, idempotencyKey: "", jobId: "legacy-announcement-job" }),
       message({
         kind: "role-assign",
         idempotencyKey: null,
         action: { userId: "opaque", roleKey: "" },
       }),
     ];
-    await consume({ messages }, dependencies());
+    const deps = dependencies();
+    await consume({ messages }, deps);
     for (const m of messages) expect(m.ack).toHaveBeenCalledExactlyOnceWith();
     expect(handlers.sync).toHaveBeenCalledTimes(1);
-    expect(handlers.internal).toHaveBeenCalledTimes(2);
+    expect(handlers.internal).toHaveBeenCalledExactlyOnceWith(messages[2]!.body, 1, deps.bot);
+    expect(deps.ledger.failed).toHaveBeenCalledExactlyOnceWith(
+      "legacy-announcement-job",
+      "announcement",
+      null,
+      "announcement.post carrier invalid",
+    );
     expect(console.warn).not.toHaveBeenCalled();
   });
 

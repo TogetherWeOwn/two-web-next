@@ -243,13 +243,13 @@ describe("queue:poison-probe drill", () => {
     const poison = track(poisonAnn, CALL_INTERNAL_ACTION.tries);
     const ordinary = track(ordinaryAnn);
 
-    const deps = {
-      bot,
-      events: memStore(),
-      lock,
-      ledger,
-      announcementReconciliation: announcementStore(),
-    };
+    const announcementReconciliation = announcementStore();
+    announcementReconciliation.finishAnnouncement.mockImplementation(async (_key, _attempt, s) => {
+      if (typeof s === "object" && "failed" in s && s.jobId)
+        await ledger.failed(s.jobId, "announcement", null, s.failed);
+      return true;
+    });
+    const deps = { bot, events: memStore(), lock, ledger, announcementReconciliation };
     await consume({ messages: [poison, ordinary] }, deps);
 
     // Both reach a terminal ack; only the poison lands in the failed ledger.

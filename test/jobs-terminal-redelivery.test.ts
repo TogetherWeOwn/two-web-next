@@ -218,8 +218,16 @@ describe.skipIf(!process.env.DATABASE_URL).each([
     expect(await pgQueueDepth(sql)).toEqual({ ...emptyLiveDepth, failed: 1 });
   });
 
-  it("acknowledges a terminal consumer delivery with one durable failure across redelivery", async () => {
+  it("keeps one durable refusal when interrupted after closing the claim but before ack", async () => {
     const id = randomUUID();
+    const idempotencyKey = randomUUID();
+    const claimStore = pgReconciliationStore(sql);
+    const finishAnnouncement = vi
+      .fn(claimStore.finishAnnouncement)
+      .mockImplementationOnce(async (...args) => {
+        await claimStore.finishAnnouncement(...args);
+        throw new Error("fixture loses the commit response");
+      });
     const ledger = pgQueueLedger(sql);
     await ledger.enqueued({
       jobId: id,
@@ -236,7 +244,7 @@ describe.skipIf(!process.env.DATABASE_URL).each([
       events: {} as EventStore,
       lock: {} as UniqueLock,
       ledger,
-      announcementReconciliation: pgReconciliationStore(sql),
+      announcementReconciliation: { ...claimStore, finishAnnouncement },
     };
     const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -247,7 +255,7 @@ describe.skipIf(!process.env.DATABASE_URL).each([
         const message = {
           body: {
             kind: "announcement",
-            idempotencyKey: id,
+            idempotencyKey,
             jobId: id,
             action: { channelKey: "fixture", body: "synthetic" },
           },
@@ -257,8 +265,18 @@ describe.skipIf(!process.env.DATABASE_URL).each([
           retry: vi.fn(),
         };
         await consume({ messages: [message] }, deps);
-        expect(message.ack).toHaveBeenCalledOnce();
-        expect(message.retry).not.toHaveBeenCalled();
+        if (delivery === 0) {
+          expect(message.ack).not.toHaveBeenCalled();
+          expect(message.retry).toHaveBeenCalledOnce();
+          expect(
+            await claimStore.claimAnnouncement(idempotencyKey, "fixture", timestamp),
+          ).toMatchObject({
+            kind: "closed",
+          });
+        } else {
+          expect(message.ack).toHaveBeenCalledOnce();
+          expect(message.retry).not.toHaveBeenCalled();
+        }
         const rows = await failures();
         expect(rows).toHaveLength(1);
         expect(rows[0]).toMatchObject({ job_id: id, kind: "announcement", key: null });
@@ -272,6 +290,34 @@ describe.skipIf(!process.env.DATABASE_URL).each([
       warnings.mockRestore();
       errors.mockRestore();
     }
+  });
+
+  it("rolls back announcement closure if the failed ledger rejects the refusal", async () => {
+    const id = randomUUID();
+    const claimStore = pgReconciliationStore(sql);
+    const queuedAt = new Date();
+    await pgQueueLedger(sql).enqueued({
+      jobId: id,
+      kind: "announcement",
+      key: null,
+      availableAt: queuedAt,
+    });
+    const claim = () => claimStore.claimAnnouncement(id, "fixture", queuedAt);
+    expect(await claim()).toMatchObject({ kind: "claimed", attempts: 1 });
+    const settlement = { failed: "announcement.post refused", jobId: id };
+    await sql`alter table queue_failed_jobs add constraint fixture_reject_refusal check (kind <> 'announcement') not valid`;
+    try {
+      await expect(claimStore.finishAnnouncement(id, 1, settlement)).rejects.toMatchObject({
+        code: "23514",
+      });
+      expect(await claim()).toMatchObject({ kind: "sending", attempts: 1 });
+      expect(await failures()).toEqual([]);
+    } finally {
+      await sql`alter table queue_failed_jobs drop constraint fixture_reject_refusal`;
+    }
+    expect(await claimStore.finishAnnouncement(id, 1, settlement)).toBe(true);
+    expect(await claim()).toMatchObject({ kind: "closed" });
+    expect(await failures()).toMatchObject([{ job_id: id, reason: settlement.failed }]);
   });
 
   it("upgrades historical duplicates, preserving the first row and same-key dispatches", async () => {
