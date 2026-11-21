@@ -55,6 +55,30 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
           );
           if (viewport.width !== 320)
             await page.screenshot({ path: `${out}/${name}-${viewport.width}.png`, fullPage: true });
+          if (name === "default" || name === "guest") {
+            const header = page.getByRole("banner");
+            const join = header.getByRole("link", { name: "Join", exact: true });
+            const expectedJoin = name === "guest" ? 1 : 0;
+            assert.equal(await join.count(), expectedJoin, `${name} header at ${viewport.width}px`);
+            if (viewport.width === 390) {
+              await header.getByRole("link", { name: "Menu", exact: true }).click();
+              const account = header.getByRole("navigation", { name: "Account" });
+              assert.equal(await account.isVisible(), true);
+              assert.equal(
+                await account.getByRole("link", { name: "Join", exact: true }).count(),
+                expectedJoin,
+              );
+              assert.equal(
+                await account.getByRole("link", { name: "Your profile", exact: true }).count(),
+                1 - expectedJoin,
+              );
+              await page.screenshot({
+                path: `${out}/${name}-menu-open-390.png`,
+                animations: "disabled",
+              });
+              await header.getByRole("link", { name: "Close menu" }).click();
+            }
+          }
         }
       }
       // Default: six newcomers, active list, a Guide and an organizer; opted-out alias hidden.
@@ -125,6 +149,13 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
         await page.setViewportSize({ width, height });
         await open("?state=many");
         const form = page.getByRole("search", { name: "Search members" });
+        const { inset, stickyHeight } = await form.evaluate((node) => ({
+          inset: Number.parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop),
+          stickyHeight:
+            node.closest(".directory-toolbar").getBoundingClientRect().height +
+            document.querySelector(".ember-header").getBoundingClientRect().height,
+        }));
+        assert.ok(inset >= stickyHeight, `${width}px: scroll inset ${inset} < ${stickyHeight}`);
         const top = await form.evaluate((node) => node.getBoundingClientRect().top + scrollY);
         await page.evaluate((y) => scrollTo({ top: y + 200, behavior: "instant" }), top);
         assert.ok(
@@ -149,6 +180,27 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
         }
         await page.screenshot({ path: `${out}/scrolled-${width}.png` });
       }
+
+      await page.setViewportSize({ width: 390, height: 200 });
+      await open("?state=many");
+      await filters.getByRole("link", { name: /^Guides\b/ }).focus();
+      await page.keyboard.press("Tab");
+      assert.ok(
+        await list.getByRole("link", { name: "Fixture Member 1", exact: true }).evaluate((link) => {
+          const { left, top, bottom, width, height } = link.getBoundingClientRect();
+          const header = document.querySelector(".ember-header").getBoundingClientRect();
+          const inset = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop);
+          return (
+            link.matches(":focus-visible") &&
+            inset === header.height &&
+            top >= header.bottom &&
+            bottom <= innerHeight &&
+            link.contains(document.elementFromPoint(left + width / 2, top + height / 2))
+          );
+        }),
+        "the focused member link must clear the header in a 390×200 viewport",
+      );
+      await page.screenshot({ path: `${out}/short-focus-390.png` });
 
       await page.setViewportSize({ width: 1280, height: 800 });
       await open("");

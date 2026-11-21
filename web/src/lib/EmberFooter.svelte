@@ -14,6 +14,7 @@
   @import "../../../vendor/design-kit/tokens.css";
 
   footer.ember-footer {
+    background: var(--two-color-bg-canvas);
     border-top: 1px solid var(--two-color-hair-1);
     color: var(--two-color-text-tertiary);
     font-size: var(--two-font-size-small);
@@ -27,12 +28,18 @@
     gap: var(--two-space-6);
     justify-content: space-between;
     margin: 0 auto;
-    max-width: var(--two-layout-container);
+    max-width: calc(var(--two-layout-container) - 2 * var(--two-layout-gutter-wide));
   }
 
-  p { margin: 0; }
+  .footer-content p { color: inherit; margin: 0; }
   footer.ember-footer nav { display: flex; flex-wrap: wrap; gap: var(--two-space-5); justify-content: normal; margin-top: 0; }
-  footer.ember-footer a { color: var(--two-color-text-link); display: inline; min-height: 0; text-decoration: none; }
+  footer.ember-footer a {
+    align-items: center;
+    color: var(--two-color-text-link);
+    display: inline-flex;
+    min-height: var(--two-size-target-min);
+    text-decoration: none;
+  }
   footer.ember-footer a:hover, footer.ember-footer a:focus-visible { text-decoration: underline; }
   a:focus-visible { outline: 2px solid var(--two-color-focus-ring); outline-offset: 3px; }
 

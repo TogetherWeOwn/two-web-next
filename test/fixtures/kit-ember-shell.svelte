@@ -5,7 +5,10 @@ export let data: {
   activeNav?: "home" | "events" | "event" | "leaderboard";
   member?: boolean;
   loginReturnTo?: string | null;
+  authenticated?: boolean;
   hideAccount?: boolean;
+  hideJoin?: boolean;
+  menuFallbackOnly?: boolean;
   customAccount?: boolean;
 };
 </script>

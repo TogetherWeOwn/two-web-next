@@ -16,18 +16,19 @@ const source = await readFile(route, "utf8");
 const desktop = { width: 1280, height: 800 };
 const headerCss = "/kit-site-header.css";
 
-async function assertLockup(page, narrow) {
+async function assertLockup(page, narrow, desktopHeight = 50) {
+  const height = narrow ? 32 : desktopHeight;
   const logo = page.locator("[data-kit-site-header] .brand img:visible");
   await expect(logo).toHaveCount(1);
   await expect(logo).toHaveAttribute("src", "/logo.svg");
-  await expect(logo).toHaveCSS("height", narrow ? "32px" : "50px");
+  await expect(logo).toHaveCSS("height", `${height}px`);
   const { width, loaded } = await logo.evaluate((img) => ({
     width: img.getBoundingClientRect().width,
     loaded: img.complete && img.naturalWidth > 0,
   }));
   assert.ok(loaded, "full lockup image loaded");
-  if (narrow) assert.ok(width > 114 && width < 117, `full mobile lockup width: ${width}px`);
-  else assert.equal(width, 180);
+  if (height === 50) assert.equal(width, 180);
+  else assert.ok(Math.abs(width - (height * 180) / 50) < 1, `full lockup width: ${width}px`);
 }
 
 async function checkStandaloneHeader(page, html) {
@@ -79,9 +80,10 @@ test("built Ember shell preserves its landmarks and account states without JavaS
 }, async () => {
   await mkdir("artifacts/kit-ember-shell", { recursive: true });
   for (const state of ["guest", "member", "hidden"]) {
+    const search = state === "member" ? member : `?state=${state}`;
     await withKitOfflineBrowser(
-      { page: source, search: state === "member" ? member : `?state=${state}` },
-      async ({ page, html }) => {
+      { page: source, search, searches: ["?legacy=1"] },
+      async ({ page, html, open }) => {
         assert.match(html, /_app\/immutable\/assets\/[^" ]+\.css/);
         assert.equal(await page.locator('a[href="#main"]').count(), 1);
         assert.equal(
@@ -105,12 +107,26 @@ test("built Ember shell preserves its landmarks and account states without JavaS
           state === "guest" ? 1 : 0,
         );
         assert.equal(
-          await page.getByRole("link", { name: "Leaderboard" }).count(),
+          await page.getByRole("link", { name: "Ladder" }).count(),
           state === "member" ? 1 : 0,
         );
         for (const viewport of [desktop, mobile]) {
           await page.setViewportSize(viewport);
-          await assertLockup(page, viewport === mobile);
+          const header = page.getByRole("banner");
+          const compact = viewport === mobile;
+          await assertLockup(page, compact, 38);
+          await expect(header).toHaveCSS("min-height", compact ? "60px" : "68px");
+          await expect(header).toHaveCSS("position", "sticky");
+          await expect(header.getByRole("link", { name: "Join", exact: true })).toHaveCount(
+            Number(state === "guest"),
+          );
+          await expect(header.getByText(/online/i)).toHaveCount(0);
+          if (!compact) {
+            const primary = header.getByRole("navigation", { name: "Primary" });
+            await expect(primary.getByRole("link")).toHaveText(
+              state === "member" ? ["Events", "Ladder", "About"] : ["Events", "About"],
+            );
+          }
           assert.equal(
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
             true,
@@ -124,12 +140,14 @@ test("built Ember shell preserves its landmarks and account states without JavaS
           const edges = await page.evaluate(() => {
             const main = document.querySelector("main");
             const footerContent = document.querySelector(".footer-content");
+            const brand = document.querySelector(".menu-brand");
             return [
               main.getBoundingClientRect().left + parseFloat(getComputedStyle(main).paddingLeft),
               footerContent.getBoundingClientRect().left,
+              brand.getBoundingClientRect().left,
             ];
           });
-          assert.ok(Math.abs(edges[0] - edges[1]) < 1, `main and footer edges differ: ${edges}`);
+          assert.deepEqual(edges, compact ? [20, 20, 20] : [60, 60, 60]);
           await page.screenshot({
             path: `artifacts/kit-ember-shell/${state}-${viewport.width}.png`,
             fullPage: true,
@@ -159,12 +177,17 @@ test("built Ember shell preserves its landmarks and account states without JavaS
             await expect(account).toHaveCount(Number(state !== "hidden"));
             await expect(link("Profile")).toHaveCount(Number(state === "member"));
             await expect(link("Sign in with Discord")).toHaveCount(Number(state === "guest"));
-            await expect(link("Leaderboard")).toHaveCount(Number(state === "member"));
+            await expect(sheet.getByRole("link", { name: "Join", exact: true })).toHaveCount(
+              Number(state === "guest"),
+            );
+            await expect(link("Ladder")).toHaveCount(Number(state === "member"));
             await expect(page.locator("[inert]")).toHaveCount(0);
             if (state !== "hidden") await expect(account).toHaveCSS("justify-self", "stretch");
             await shot(page, `nojs-${state}-open-390`);
             const close = link("Close menu");
-            const about = page.getByRole("link", { name: "About", exact: true });
+            const about = page
+              .getByRole("navigation", { name: "Footer" })
+              .getByRole("link", { name: "About", exact: true });
             await close.focus();
             for (const target of [about, close, about]) {
               await page.keyboard.press(target === close ? "Shift+Tab" : "Tab");
@@ -186,7 +209,7 @@ test("built Ember shell preserves its landmarks and account states without JavaS
             await expect(sheet).toBeHidden();
           }
         }
-        if (state === "guest") await checkStandaloneHeader(page, html);
+        if (state === "guest") await checkStandaloneHeader(page, await open("?legacy=1"));
       },
     );
   }
@@ -226,7 +249,7 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     await expect(sheet.getByText("Close menu")).toBeHidden();
     await shot(page, "keyboard-open-390");
     await expect(row("Sign in with Discord")).toHaveCSS("justify-content", "flex-start");
-    for (const [i, target] of [toggle, row("Sign in with Discord"), toggle, home].entries()) {
+    for (const [i, target] of [toggle, row("Join"), toggle, home].entries()) {
       await page.keyboard.press(i < 2 ? "Shift+Tab" : "Tab");
       await expect(target).toBeFocused();
     }
@@ -251,7 +274,7 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
       await expect(start).toBeFocused();
       await page.setViewportSize({ ...mobile, width: 821 });
       await expect(inert).toHaveCount(0);
-      await expect(home).toBeFocused();
+      await expect(row("Events")).toBeFocused();
     }
     await page.setViewportSize({ ...mobile, width: 320 });
     await expect(toggle).toBeFocused();
@@ -265,16 +288,39 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
       await expect(row("Profile")).toHaveCount(Number(name === "member"));
       await expect(row("Sign out", "button")).toHaveCount(count);
       await expect(sheet.locator("[aria-current]")).toHaveAttribute("aria-current", current);
-      await expect(row("Leaderboard")).toHaveCount(Number(current === "location"));
+      await expect(row("Ladder")).toHaveCount(Number(current === "location"));
       await expect(row("Account", "navigation")).toHaveCount(Number(name !== "hidden"));
       await shot(page, `${name}-menu-open-390`);
     }
+    const header = page.getByRole("banner");
+    const canvas = await header.evaluate((element) => getComputedStyle(element).backgroundColor);
     await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
+    const brand = header.getByRole("link", { name: "Together We Own homepage" });
+    await expect(brand).toHaveCSS("forced-color-adjust", "auto");
+    await expect(brand.locator("img")).toHaveCSS("background-color", canvas);
     await toggle.press("Space");
     await toggle.press("Space");
     await expect(home).toHaveCSS("outline-style", "solid");
     await expect(sheet).toHaveCSS("animation-name", "none");
     await shot(page, "forced-colors-open-390");
+
+    // Playwright viewport widths are integers; pin the exact CSS complement too.
+    const css = await readFile(new URL("../web/src/lib/ember-header.css", import.meta.url), "utf8");
+    assert.match(css, /@media not all and \(max-width: 820px\)/);
+    await open("?state=guest");
+    const join = header.getByRole("link", { name: "Join", exact: true });
+    for (const width of [820, 821]) {
+      await page.setViewportSize({ ...mobile, width });
+      await expect(join).toHaveCount(1);
+      await expect(menu(page)).toHaveCount(Number(width === 820));
+    }
+    await page.setViewportSize(mobile);
+    await brand.focus();
+    await page.keyboard.press("Tab");
+    await expect(join).toBeFocused();
+    await expect(join).toHaveCSS("outline-style", "solid");
+    await shot(page, "forced-colors-guest-390");
+
     const island = new URL("/islands/site-header-menu.js", url).href;
     await page.route(island, (route) => route.abort());
     async function assertFallback(name) {

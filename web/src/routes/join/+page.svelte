@@ -26,8 +26,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
 
 {#snippet accountChrome()}
   <div>
-    <span class="account-caption">Welcome, guest</span>
-    <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+    <a class="ember-header-action" href="/auth/discord" aria-label="Sign in with Discord" data-testid="signin">Sign in</a>
   </div>
 {/snippet}
 
@@ -37,7 +36,8 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
   description={JOIN_INTRO}
   theme="join"
 />
-<EmberShell {accountChrome} menuFallbackOnly>
+<!-- The in-page Join CTA carries the validated return destination. -->
+<EmberShell {accountChrome} hideJoin menuFallbackOnly>
   {#if data.restoredWrite}
     <div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>
   {/if}
