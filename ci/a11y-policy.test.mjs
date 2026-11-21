@@ -301,10 +301,14 @@ test("dependency admission retains its pre-install gates and fails closed downst
     assert(!check.includes(`\n        run: ${command}\n`));
   }
   const guard =
-    /- name: Require successful dependency admission\n        env:\n          DEPENDENCY_ADMISSION_RESULT: \$\{\{ needs\.dependency-admission\.result \}\}\n        run: ([^\n]+)/;
+    /^name: Require successful dependency admission\n        env:\n          DEPENDENCY_ADMISSION_RESULT: \$\{\{ needs\.dependency-admission\.result \}\}\n        run: ([^\n]+)/;
   for (const downstream of [check, job("ci-ok")]) {
-    const match = downstream.match(guard);
+    const step = downstream
+      .split("\n      - ")
+      .find((entry) => entry.startsWith("name: Require successful dependency admission\n"));
+    const match = step?.match(guard);
     assert(match, "Dependency admission must be required unconditionally");
+    assert.doesNotMatch(step, /\bcontinue-on-error\b/, "Admission guard failures must block CI");
     for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
       const execution = spawnSync("bash", ["-c", match[1]], {
         env: { DEPENDENCY_ADMISSION_RESULT: result },

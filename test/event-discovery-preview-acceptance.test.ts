@@ -34,13 +34,16 @@ function destination(overrides: Partial<Preview> = {}): Preview {
 
 // Only persistence is replaced. Both real renderers and Kit's real model
 // conversion must propagate each destination's metadata, not the current row's.
-async function render(twin: DetailTwin, preview: Preview): Promise<string> {
+async function render(twin: DetailTwin, preview: Preview, timezone = "UTC"): Promise<string> {
+  const current = { ...event, timezone };
   const neighbors = { previous: preview, next: preview };
   const series = { hosts: [], ...neighbors };
   const related = [preview];
   const appUrl = "https://example.test";
   if (twin === "Hono") {
-    return String(await EventPage({ e: event, neighbors, series, related, appUrl, jsonLd: "{}" }));
+    return String(
+      await EventPage({ e: current, neighbors, series, related, appUrl, jsonLd: "{}" }),
+    );
   }
   const outcome = await resolveKitEventDetail({
     key: event.eventKey,
@@ -52,7 +55,7 @@ async function render(twin: DetailTwin, preview: Preview): Promise<string> {
     setHeaders: () => {},
     store: {
       dbForFn: async () => ({}) as Db,
-      getEventFn: async () => event,
+      getEventFn: async () => current,
       neighborsFn: async () => neighbors,
       seriesFn: async () => series,
       relatedFn: async () => related,
@@ -107,6 +110,8 @@ for (const twin of ["Hono", "Kit"] as const) {
     });
     afterEach(() => vi.useRealTimers());
 
+    const utcLabel =
+      twin === "Hono" ? "Monday, 2 November 2026 at 18:00 GMT+00:00" : "Mon 2 Nov, 18:00 UTC";
     describe.each(rails)("$testid", ({ testid, label, rel }) => {
       it("RED: shows the destination game rather than the current event's game", async () => {
         const link = anchor(await render(twin, destination()), testid);
@@ -119,7 +124,7 @@ for (const twin of ["Hono", "Kit"] as const) {
         async (game) => {
           const link = anchor(await render(twin, destination({ game })), testid);
           const text = link.text.replace(/[←→]/g, "").replace(/\s+/g, " ").trim();
-          expect(text).toBe(`${label} Monday, 2 November 2026 at 18:00 GMT+00:00 Destination room`);
+          expect(text).toBe(`${label} ${utcLabel} Destination room`);
           expect(link.body).not.toMatch(/<(?:span|p)\b[^>]*>\s*<\/(?:span|p)>/);
         },
       );
@@ -177,19 +182,36 @@ for (const twin of ["Hono", "Kit"] as const) {
         expect(link.text).not.toMatch(/\b(?:Ended|Past event)\b/i);
       });
 
-      it("CONTROL: preserves destination title, host-zone time, location and href", async () => {
-        const link = anchor(
-          await render(twin, destination({ timezone: "America/New_York" })),
-          testid,
-        );
-        expect(link.tag).toContain('href="/e/01ARZ3NDEKTSV4RRFFQ69G5FAA"');
-        if (rel) expect(link.tag).toContain(`rel="${rel}"`);
-        expect(link.text).toContain(label);
-        expect(link.body).toContain('datetime="2026-11-02T18:00:00.000Z"');
-        expect(link.text).toContain("Monday, 2 November 2026 at 13:00 GMT-05:00");
-        expect(link.text).toContain("Destination room");
-        expect(link.text).not.toContain("Current event lobby");
-      });
+      it.each([
+        [
+          "Asia/Tokyo",
+          "America/New_York",
+          "Monday, 2 November 2026 at 13:00 GMT-05:00",
+          "Tue 3 Nov, 03:00 Asia/Tokyo",
+        ],
+        [
+          "Invalid/Zone",
+          "Asia/Tokyo",
+          "Tuesday, 3 November 2026 at 03:00 GMT+09:00",
+          "Mon 2 Nov, 18:00 UTC",
+        ],
+      ])(
+        "CONTROL: preserves destination title, machine time, location and href (current zone: %s)",
+        async (currentZone, destinationZone, honoLabel, kitLabel) => {
+          const link = anchor(
+            await render(twin, destination({ timezone: destinationZone }), currentZone),
+            testid,
+          );
+          expect(link.tag).toContain('href="/e/01ARZ3NDEKTSV4RRFFQ69G5FAA"');
+          if (rel) expect(link.tag).toContain(`rel="${rel}"`);
+          expect(link.text).toContain(label);
+          expect(link.body).toContain('datetime="2026-11-02T18:00:00.000Z"');
+          const when = twin === "Hono" ? honoLabel : kitLabel;
+          expect(link.body).toContain(`<time datetime="2026-11-02T18:00:00.000Z">${when}</time>`);
+          expect(link.text).toContain("Destination room");
+          expect(link.text).not.toContain("Current event lobby");
+        },
+      );
 
       it("CONTROL: does not invent a missing location", async () => {
         const link = anchor(
@@ -197,7 +219,7 @@ for (const twin of ["Hono", "Kit"] as const) {
           testid,
         );
         expect(link.text.replace(/[←→]/g, "").replace(/\s+/g, " ").trim()).toBe(
-          `${label} Monday, 2 November 2026 at 18:00 GMT+00:00`,
+          `${label} ${utcLabel}`,
         );
         expect(link.body).not.toContain("event-related-location");
       });

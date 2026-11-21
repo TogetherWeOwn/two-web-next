@@ -24,6 +24,9 @@ let {
   accountChrome?: Snippet;
   /** Drop the account area entirely, as Hono account={false} does on sessionless pages. */
   hideAccount?: boolean;
+  /** Server-established session presentation, separate from membership and chrome. */
+  authenticated?: boolean;
+  menuFallbackOnly?: boolean;
 } = $props();
 </script>
 
