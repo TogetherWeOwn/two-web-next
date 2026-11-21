@@ -18,7 +18,7 @@ const leaseToken = "11111111-1111-4111-8111-111111111111";
 const sync = { kind: "sync-event", eventKey: "event-1", idempotencyKey: "sync-key", leaseToken };
 const announcement = {
   kind: "announcement",
-  idempotencyKey: "announcement-key",
+  idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
   action: { channelKey: "general", body: "hello" },
 };
 const role = {

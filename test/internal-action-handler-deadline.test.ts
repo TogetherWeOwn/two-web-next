@@ -14,7 +14,7 @@ import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs
 // awaited bare, so one hung call stalled the whole serial batch behind it.
 const ann = {
   kind: "announcement",
-  idempotencyKey: "k",
+  idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
   action: { channelKey: "c", body: "b" },
 } as const;
 const role = {
@@ -93,7 +93,7 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     // Bounded wait (first backoff is 5 s), same carrier key, no terminal ack …
     expect(first.retried).toBe(5);
     expect(first.acked).toBe(false);
-    expect(first.body).toMatchObject({ idempotencyKey: "k" });
+    expect(first.body).toMatchObject({ idempotencyKey: ann.idempotencyKey });
     // … and the later message still reaches disposition.
     expect(second.acked).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
@@ -184,7 +184,7 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     await expect(attempt).resolves.toEqual({ retryInSeconds: 5 });
     // Redelivery carries the same carrier (same key), and the bot dedupes it.
     await expect(handleCallInternalAction({ ...ann }, 2, bot)).resolves.toEqual({ done: true });
-    expect(seen).toEqual(["k", "k"]);
+    expect(seen).toEqual([ann.idempotencyKey, ann.idempotencyKey]);
   });
 
   it("fast paths are unchanged: success, refusal, retry-after, transport and terminal throws", async () => {

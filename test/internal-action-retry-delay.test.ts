@@ -28,7 +28,7 @@ const fail = (retryAfterSeconds: unknown): BotFailure => ({
 
 const ann = {
   kind: "announcement",
-  idempotencyKey: "k",
+  idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
   action: { channelKey: "c", body: "b" },
 } as const;
 
