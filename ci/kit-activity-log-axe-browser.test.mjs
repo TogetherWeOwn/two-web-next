@@ -7,7 +7,7 @@ import {
   BrowserDeadline,
   origin,
   path,
-  withAxeScripting,
+  prepareDesktopAudit,
   withDeadline,
 } from "./kit-activity-log-visual.mjs";
 
@@ -22,9 +22,9 @@ test("activity-log axe execution under the existing browser deadline", {
   t.after(() => browser.close());
   t.diagnostic(`Chromium ${browser.version()}`);
 
-  async function withFixture(javaScriptEnabled, audit, lang = ' lang="en"', extra = "") {
+  async function withFixture(scripting, audit, lang = ' lang="en"', extra = "") {
     const context = await browser.newContext({
-      javaScriptEnabled,
+      javaScriptEnabled: scripting !== false,
       serviceWorkers: "block",
       viewport: { width: 1280, height: 800 },
     });
@@ -39,8 +39,9 @@ test("activity-log axe execution under the existing browser deadline", {
           : route.abort(),
       );
       const page = await context.newPage();
+      const runAudit = scripting === "scoped" ? await prepareDesktopAudit(page) : null;
       await page.goto(url, { waitUntil: "load", timeout: 5_000 });
-      await audit(page);
+      await audit(page, runAudit);
     } finally {
       await context.close();
     }
@@ -71,9 +72,12 @@ test("activity-log axe execution under the existing browser deadline", {
     "scoped audit completes while document-authored scripting stays blocked",
     async () => {
       await withFixture(
-        false,
-        async (page) => {
-          await withAxeScripting(page, async () => {
+        "scoped",
+        async (page, runAudit) => {
+          // Chromium only parses these fallback elements in render-only mode.
+          assert.equal(await page.locator("noscript p").count(), 1);
+          assert.equal(await page.locator("html").getAttribute("data-authored"), null);
+          await runAudit(async () => {
             const directive = await withDeadline(() =>
               page.evaluate(() => {
                 const blocked = new Promise((resolve) => {
@@ -93,9 +97,17 @@ test("activity-log axe execution under the existing browser deadline", {
             assert.equal(await page.locator("html").getAttribute("data-authored"), null);
             assert.equal(await routeA11y(page, () => {}), "a11y: PASS violations=0 incomplete=0");
           });
+          await assert.rejects(
+            withDeadline(
+              () => page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0))),
+              500,
+            ),
+            BrowserDeadline,
+          );
         },
         ' lang="en"',
         `<script>document.documentElement.dataset.authored = 'load'</script>
+       <noscript><p>Render-only fallback</p></noscript>
        <button onclick="document.documentElement.dataset.authored = 'click'">Test button</button>`,
       );
     },
@@ -105,10 +117,10 @@ test("activity-log axe execution under the existing browser deadline", {
     "negative control: missing document language still fails the WCAG AA audit",
     async () => {
       await withFixture(
-        false,
-        async (page) => {
+        "scoped",
+        async (page, runAudit) => {
           assert.match(
-            await withAxeScripting(page, () => routeA11y(page, () => {})),
+            await runAudit(() => routeA11y(page, () => {})),
             /^a11y: FAIL violations=[1-9]\d* incomplete=\d+$/,
           );
         },

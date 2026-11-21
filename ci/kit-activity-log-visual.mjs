@@ -103,39 +103,39 @@ async function inspect(page, empty, keyboard) {
   validateView(content, state, empty, keyboard);
 }
 
-export async function withAxeScripting(page, audit) {
-  // The original document loaded and was captured with scripting disabled. Add
-  // a policy (without replacing the response CSP) before enabling axe's timers.
-  await withDeadline(() =>
-    page.evaluate(() => {
-      const policy = document.createElement("meta");
-      policy.httpEquiv = "Content-Security-Policy";
-      policy.content = "script-src 'none'; worker-src 'none'";
-      document.head.prepend(policy);
-    }),
-  );
+export async function prepareDesktopAudit(page) {
+  // Call on the blank page. Use the same CDP session for both transitions:
+  // a second session cannot clear Playwright's context-wide scripting override.
   const session = await withDeadline(() => page.context().newCDPSession(page));
   const disable = (value) =>
     withDeadline(() => session.send("Emulation.setScriptExecutionDisabled", { value }));
-  const verdict = disable(false).then(() => audit(page));
-  return verdict
-    .finally(() => disable(true))
-    .finally(() => withDeadline(() => session.detach()))
-    .finally(() => verdict); // Keep the first audit failure even if teardown fails too.
+  await disable(true);
+  return async (audit) => {
+    // The page was loaded and captured with scripting disabled. Add a policy
+    // without replacing the original CSP before enabling axe's timers.
+    await withDeadline(() =>
+      page.evaluate(() => {
+        const policy = document.createElement("meta");
+        policy.httpEquiv = "Content-Security-Policy";
+        policy.content = "script-src 'none'; worker-src 'none'";
+        document.head.prepend(policy);
+      }),
+    );
+    const verdict = disable(false).then(audit);
+    // Keep the override attached until context close, including after the audit.
+    return verdict.finally(() => disable(true)).finally(() => verdict);
+  };
 }
 
 async function guardedPage(browser, mintModerator, [width, height], url, render, options) {
-  const { mark, signal, TimeoutError, reportOnly } = options;
+  const { mark, signal, TimeoutError, reportOnly, desktopAudit } = options;
   const context = await browser.newContext({
     viewport: { width, height },
     serviceWorkers: "block",
-    javaScriptEnabled: false,
+    javaScriptEnabled: desktopAudit, // Desktop audit uses a page override before navigation.
   });
   let stopped = false;
   let auditedDocument = false;
-  const lockDocument = () => {
-    auditedDocument = true;
-  };
   const allowed = (req) =>
     allowedRequest(req, url) && !(auditedDocument && req.isNavigationRequest());
   const closed = () => stopped || signal.aborted;
@@ -174,6 +174,7 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
       if (auditedDocument) markViolation();
     });
     if (!reportOnly) page.on("console", markViolation);
+    const runAudit = desktopAudit ? await guard(prepareDesktopAudit(page)) : null;
     // Keep the committed document even if optional Lighthouse loading times out.
     const goto = page.goto(url, { waitUntil: reportOnly ? "commit" : "load" });
     const [navigation] = await guard(Promise.allSettled([goto]));
@@ -184,7 +185,13 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
     const valid = response?.url() === url && kitDocument(response.status(), response.headers());
     if (!(response ? valid : unavailable)) throw new AssertionFailure("visual provenance drift");
     if (unavailable && !reportOnly) throw unavailable;
-    if (response) result = await guard(render(page, unavailable, lockDocument));
+    const audit =
+      runAudit &&
+      ((check) => {
+        auditedDocument = true;
+        return runAudit(check);
+      });
+    if (response) result = await guard(render(page, unavailable, audit));
   } finally {
     stopped = true;
   }
@@ -215,7 +222,8 @@ export async function collectVisuals(browser, mint, dir, options) {
     const url = urlFor(empty);
     const stage = reportOnly ? "LIGHTHOUSE" : "CAPTURE";
     mark(stage);
-    const render = async (page, unavailable, lockDocument) => {
+    const desktopAudit = name.endsWith("desktop.png");
+    const render = async (page, unavailable, runAudit) => {
       mark("FONTS");
       const fonts = () => page.evaluate(() => document.fonts.ready.then(() => true));
       const ready = await withDeadline(fonts).catch((error) => {
@@ -232,13 +240,14 @@ export async function collectVisuals(browser, mint, dir, options) {
         await inspect(page, empty, true);
       }
       await page.screenshot({ path: join(dir, name), animations: "disabled" });
-      if (name.endsWith("desktop.png")) {
-        lockDocument();
-        await withAxeScripting(page, () => audit(page, name));
-      }
+      if (desktopAudit) await runAudit(() => audit(page, name));
       await inspect(page, empty, keyboard);
     };
-    const result = await guardedPage(browser, mint, size, url, render, { ...options, reportOnly });
+    const result = await guardedPage(browser, mint, size, url, render, {
+      ...options,
+      reportOnly,
+      desktopAudit,
+    });
     if (reportOnly) return result;
   }
 }

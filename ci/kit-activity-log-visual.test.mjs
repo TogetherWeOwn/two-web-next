@@ -100,6 +100,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       setDefaultTimeout: noop,
       waitForLoadState: async () => (/^(asset(-dom)?|load)$/.test(mode) ? stall() : undefined),
       goto: async (href, { waitUntil } = {}) => {
+        assert.equal(scriptsDisabled, true);
         url = href;
         const status = consumed.has(cookie) ? 302 : 200;
         consumed.add(cookie);
@@ -137,6 +138,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       keyboard: { press: (key) => keys.push(key) },
       getByTestId: () => ({
         evaluate: () => {
+          assert.equal(scriptsDisabled, true);
           const scroll = closed === 4 && keys.at(-1) === "ArrowRight";
           if (closed === 5 && mode.endsWith("dom")) return [[], [true, scroll, scroll]];
           return [visual.expectedContent(url.includes("?")), [true, scroll, scroll]];
@@ -152,7 +154,6 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
           assert.equal(command, "Emulation.setScriptExecutionDisabled");
           scriptsDisabled = value;
         },
-        detach: () => assert.equal(scriptsDisabled, true),
       }),
     };
     const browser = {
