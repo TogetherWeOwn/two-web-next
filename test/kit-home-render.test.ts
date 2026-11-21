@@ -409,18 +409,21 @@ describe("Kit home SSR render: member standing", () => {
     expect(standing).toContain("You're on the waitlist.");
     expect(standing).not.toContain('href="/e/later"');
     const hero = html.split('<section class="hero')[1]!.split("</section>")[0]!;
-    expect(hero).toContain("Your next RSVP:");
+    expect(hero).toContain('id="home-panel-heading">Your RSVP</h2>');
     expect(hero).toContain("You're on the waitlist.");
     expect(hero).toContain('href="/e/first"');
     for (const session of [null, nonMemberSession]) {
       const guestHtml = renderPage(baseData({ session, upcomingEvents, memberRsvps }));
       expect(guestHtml).not.toContain('data-testid="home-standing"');
       expect(guestHtml).not.toContain("home-event-own-rsvp");
-      expect(guestHtml).not.toContain("Your next RSVP:");
+      expect(guestHtml).not.toContain('id="home-panel-heading">Your RSVP</h2>');
     }
-    expect(
-      renderPage(baseData({ session: memberSession, upcomingEvents, memberRsvps: [] })),
-    ).not.toContain('data-testid="home-standing"');
+    for (const answers of [[], [{ eventKey: "outside-teaser", status: "going" }]]) {
+      const data = baseData({ session: memberSession, upcomingEvents, memberRsvps: answers });
+      const publicOnly = renderPage(data);
+      expect(publicOnly).not.toContain('data-testid="home-standing"');
+      expect(publicOnly).toContain('id="home-panel-heading">On the schedule</h2>');
+    }
   });
 });
 
