@@ -118,9 +118,9 @@ function href(filter = "active", query = "", page = 1) {
   .directory-columns { display: grid; grid-template-columns: minmax(0, 1fr) var(--two-layout-rail-min); gap: var(--two-space-8); padding-block: var(--space-3) var(--space-11); }
   .directory-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding-block: var(--space-3); }
   @media (max-width: 820px) {
-    /* Keep the directory controls below the compact bar, or at the viewport
-       edge after scrolling past the in-flow fragment menu. */
-    :global(html:has(.directory-toolbar)) { scroll-padding-block-start: 240px; }
+    /* Override the compact header's scroll inset to clear both sticky bars. */
+    :global(html:root:has(.directory-toolbar)) { scroll-padding-block-start: 240px; }
+    /* The toolbar sticks to the viewport edge with the in-flow fragment menu. */
     .directory-toolbar { top: var(--two-size-header-compact); flex-direction: column; align-items: stretch; }
     :global(.base-theme:has(> [data-kit-site-header]:target:not([data-menu-ready]))) .directory-toolbar { top: 0; }
     form { flex: auto; max-width: none; }

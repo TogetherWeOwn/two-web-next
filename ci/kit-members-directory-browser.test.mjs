@@ -149,21 +149,13 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
         await page.setViewportSize({ width, height });
         await open("?state=many");
         const form = page.getByRole("search", { name: "Search members" });
-        if (width === 1280) {
-          assert.ok(
-            await form.evaluate((node) => {
-              const inset = Number.parseFloat(
-                getComputedStyle(document.documentElement).scrollPaddingTop,
-              );
-              return (
-                inset >=
-                node.closest(".directory-toolbar").getBoundingClientRect().height +
-                  document.querySelector(".ember-header").getBoundingClientRect().height
-              );
-            }),
-            "desktop scroll padding clears both sticky bars",
-          );
-        }
+        const { inset, stickyHeight } = await form.evaluate((node) => ({
+          inset: Number.parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop),
+          stickyHeight:
+            node.closest(".directory-toolbar").getBoundingClientRect().height +
+            document.querySelector(".ember-header").getBoundingClientRect().height,
+        }));
+        assert.ok(inset >= stickyHeight, `${width}px: scroll inset ${inset} < ${stickyHeight}`);
         const top = await form.evaluate((node) => node.getBoundingClientRect().top + scrollY);
         await page.evaluate((y) => scrollTo({ top: y + 200, behavior: "instant" }), top);
         assert.ok(
