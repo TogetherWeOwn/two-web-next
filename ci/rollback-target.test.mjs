@@ -97,8 +97,8 @@ function recoveryRunAttempt(event = "push") {
   };
 }
 
-const attemptUrl =
-  "https://api.github.com/repos/TogetherWeOwn/two-web-next/actions/runs/123/attempts/2";
+const runsUrl = "https://api.github.com/repos/TogetherWeOwn/two-web-next/actions/runs";
+const attemptUrl = `${runsUrl}/123/attempts/2`;
 const metadataRefusal = "pure Hono recovery run refused: inconsistent GitHub attempt metadata";
 
 for (const event of ["push", "workflow_dispatch"]) {
@@ -121,6 +121,28 @@ for (const event of ["push", "workflow_dispatch"]) {
     });
   });
 }
+
+test("pure Hono run adapter accepts the positive safe integer ID boundaries", async () => {
+  const expected = { ...recoveryFixture().expected, event: "push" };
+  for (const [id, attempt] of [
+    [1, Number.MAX_SAFE_INTEGER],
+    [Number.MAX_SAFE_INTEGER, 1],
+  ]) {
+    const runId = String(id);
+    const runAttempt = String(attempt);
+    const calls = [];
+    const run = await fetchPureHonoRecoveryRun(
+      { ...expected, runId, runAttempt },
+      "fixture-token",
+      async (url) => {
+        calls.push(url);
+        return Response.json({ ...recoveryRunAttempt(), id, run_attempt: attempt });
+      },
+    );
+    assert.deepEqual(calls, [`${runsUrl}/${runId}/attempts/${runAttempt}`]);
+    assert.deepEqual({ runId: run.runId, runAttempt: run.runAttempt }, { runId, runAttempt });
+  }
+});
 
 test("pure Hono run adapter refuses invalid expectations without a request", async () => {
   const expected = { ...recoveryFixture().expected, event: "push" };
