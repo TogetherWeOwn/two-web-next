@@ -535,17 +535,59 @@ jobs:
           path: artifacts/a11y/
           if-no-files-found: error
           retention-days: 14
+  # Run install-independent dependency gates once, before check or future
+  # coverage shards install dependencies. No Postgres or install cache needed.
+  dependency-admission:
+    name: dependency-admission
+    needs: [scope]
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    # Two lockfiles can each exhaust three 120s attempts plus backoff.
+    timeout-minutes: 20
+    steps:
+      - name: Require successful scope
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: test "$SCOPE_RESULT" = success
+      - name: Docs-only or draft fast pass
+        if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
+        run: echo "Docs-only or draft change per scope; no dependency admission required."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Dependency audit selftest (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run deps:audit:selftest
+      - name: npm policy enforcement fixtures
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        env:
+          npm_config_ignore_scripts: "true"
+          npm_config_min_release_age: "3"
+        run: node ci/npm-policy-fixtures.mjs "$RUNNER_TEMP/npm-policy-fixtures.json"
+      - name: Dependency audit (lockfile, including dev dependencies)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run deps:audit
+      - name: Dependency-pin guard selftest and verify (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run deps:pins:selftest && npm run deps:pins
+
   # Name pinned equal to the id. `check` feeds the required `ci-ok` gate.
-  # It needs only `scope`, so it starts alongside a11y, lighthouse and
-  # bundle-budget instead of after them; the steps that gated those jobs'
-  # results (docs-links, the accessibility audit and the performance gate)
-  # live in `ci-ok`, which already needs every one of them.
+  # It waits for scope and dependency admission, not the independent
+  # accessibility, performance or docs jobs; ci-ok aggregates those results.
   # `scope` is not a required check, so a red scope must fail `check` itself
   # (first step): without its outputs every area reads as unselected, and the
   # docs-only fast pass would leave `check` green on a broken verdict.
   check:
     name: check
-    needs: [scope]
+    needs: [scope, dependency-admission]
     # `!cancelled()`, not `always()`: see the note on ci-ok.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -581,6 +623,10 @@ jobs:
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}
         run: test "$SCOPE_RESULT" = success
+      - name: Require successful dependency admission
+        env:
+          DEPENDENCY_ADMISSION_RESULT: ${{ needs.dependency-admission.result }}
+        run: test "$DEPENDENCY_ADMISSION_RESULT" = success
       - name: Docs-only fast pass (no code changed)
         if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
         run: echo "Docs-only or draft change per the scope job; required check passes without the heavy suite."
@@ -646,21 +692,6 @@ jobs:
       - name: Incident issue lifecycle fixtures
         if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/incident-issue-lifecycle.test.mjs
-      - name: Dependency audit selftest (local fixtures)
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run deps:audit:selftest
-      - name: npm policy enforcement fixtures
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        env:
-          npm_config_ignore_scripts: "true"
-          npm_config_min_release_age: "3"
-        run: node ci/npm-policy-fixtures.mjs "$RUNNER_TEMP/npm-policy-fixtures.json"
-      - name: Dependency audit (lockfile, including dev dependencies)
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run deps:audit
-      - name: Dependency-pin guard selftest and verify (local fixtures)
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run deps:pins:selftest && npm run deps:pins
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
       - name: Design-kit provenance and adapter drift
@@ -1500,6 +1531,7 @@ jobs:
         bundle-budget,
         docs-links,
         queue-syntax-smoke,
+        dependency-admission,
         check,
         kit-browser-fixture,
         node22-compat,
@@ -1528,6 +1560,10 @@ jobs:
         env:
           BOT_CONTRACT_RESULT: ${{ needs.bot-contract-drift.result }}
         run: test "$BOT_CONTRACT_RESULT" = success
+      - name: Require successful dependency admission
+        env:
+          DEPENDENCY_ADMISSION_RESULT: ${{ needs.dependency-admission.result }}
+        run: test "$DEPENDENCY_ADMISSION_RESULT" = success
       - name: Require successful docs-links
         env:
           DOCS_LINKS_RESULT: ${{ needs.docs-links.result }}

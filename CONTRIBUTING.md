@@ -185,8 +185,8 @@ worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 `.github/**`, shared config, or anything unknown: run everything) and `draft`.
 `a11y` runs on app/db, `lighthouse` and `bundle-budget` on app, and `docs-links`
 checks relative links and anchors on every PR. `check` runs unless its run was
-cancelled, starts from `scope` alone so it runs in parallel with the audit
-and performance jobs, and skips its heavy steps on docs-only and draft PRs.
+cancelled and waits for `scope` and `dependency-admission`, not the independent
+accessibility or performance jobs. It skips heavy steps on docs-only and draft PRs.
 The independent `kit-browser-fixture` job runs alongside `check` for non-draft,
 non-docs-only full, app or worker scopes. `ci-ok` requires its success when
 selected, and fails on failure, cancellation or an unexpected skip.
@@ -290,9 +290,11 @@ with `GITLEAKS_VERSION`.
 
 ## Dependency security and static analysis
 
-The `check` job runs `npm run deps:audit:selftest` (local fixtures,
-including a loopback registry) and `npm run deps:audit` before installing
-dependencies. The audit reads every lockfile root (`package-lock.json` and
+The `dependency-admission` job runs the audit selftests, npm policy fixtures,
+lockfile audit and dependency-pin guard once, without a database or a workspace
+install. `check` requires its success before installing dependencies, and `ci-ok`
+requires its explicit success. Only docs-only and draft PRs fast-pass inside the
+job. The audit reads every lockfile root (`package-lock.json` and
 `web/package-lock.json`), includes development/optional/peer dependencies, and
 blocks high, critical or unknown severity. It prints one result per lockfile
 (`.` and `web`) and fails when either has a non-excepted finding. A missing

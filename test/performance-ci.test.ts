@@ -918,11 +918,10 @@ describe("performance CI", () => {
     expect(performanceGate.match(/^        run:.*$/m)?.[0]).not.toContain("${{");
     expect(checkoutStep).toContain(`\n        if: ${performanceGateCondition}\n`);
     expect(setupNodeStep).toContain(`\n        if: ${performanceGateCondition}\n`);
-    // check starts from scope alone and keeps the gate's selftests.
-    expect(check).toContain("needs: [scope]");
+    // check does not wait on performance jobs and keeps their gate selftest.
+    expect(check).toContain("needs: [scope, dependency-admission]");
     expect(check).toContain("run: node ci/require-performance.mjs --selftest");
-    expect(check).toContain("run: npm run deps:audit:selftest");
-    expect(check).toContain("run: npm run deps:audit");
+    expect(ciOk).toContain('run: test "$DEPENDENCY_ADMISSION_RESULT" = success');
   });
 
   it("uses a standalone local-only Wrangler config", () => {
