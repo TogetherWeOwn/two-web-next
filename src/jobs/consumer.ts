@@ -8,12 +8,22 @@ import {
 } from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
 import { INTERNAL_ACTION_DEADLINE_MS } from "./internal-action-deadline";
-import { type pgReconciliationStore, validAnnouncementIdentity } from "./reconciliation";
+import {
+  type pgReconciliationStore,
+  validAnnouncementIdentity,
+  validAnnouncementKey,
+} from "./reconciliation";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
 import { SYNC_RETRY_PERSISTENCE_REASON, SyncRetryPersistenceError } from "./types";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./sync-retry-diagnostic";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
-import type { BotClient, EventStore, QueueLedger, QueueMessage, UniqueLock } from "./types";
+import type {
+  AnnouncementSettlement,
+  BotClient,
+  EventStore,
+  QueueLedger,
+  UniqueLock,
+} from "./types";
 
 const LEDGER_TIMEOUT_MS = 2000;
 // The unique-lock cleanup shares the ledger's posture: it must never hold the
@@ -55,7 +65,7 @@ const JOBS = {
 } as const;
 
 function alertFailing(
-  kind: QueueMessage["kind"],
+  kind: keyof typeof JOBS,
   attempts: number,
   exception: string,
   ids: { probeId?: string; requestId?: string },
@@ -76,7 +86,7 @@ function alertFailing(
 
 type AnnouncementStore = Pick<
   ReturnType<typeof pgReconciliationStore>,
-  "claimAnnouncement" | "finishAnnouncement" | "recordAnnouncement"
+  "claimAnnouncement" | "finishAnnouncement" | "recordAnnouncement" | "recoverAnnouncement"
 >;
 async function requireAnnouncementStore<T>(op: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -103,6 +113,7 @@ export async function consume(
     dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown>;
     probeEnabled?: boolean;
     announcementReconciliation?: AnnouncementStore;
+    enqueueAnnouncementSettlement?: (body: AnnouncementSettlement) => Promise<unknown>;
   },
 ): Promise<void> {
   for (const m of batch.messages) {
@@ -116,6 +127,7 @@ export async function consume(
     }
     const requestId = safeRequestId(body.requestId);
     const jobId = typeof body.jobId === "string" ? body.jobId : null;
+    const jobKind = body.kind === "announcement-settlement" ? "announcement" : body.kind;
     const key = body.kind === "sync-event" ? uniqueKey(body.eventKey) : null;
     // Ledger transitions are best-effort: a stale ledger row is a visible backlog
     // on /up, but stalling job processing on the same Postgres outage that already
@@ -253,7 +265,8 @@ export async function consume(
         timeout,
       ]).finally(() => clearTimeout(t));
     };
-    if (jobId) await bounded("reserved", deps.ledger.reserved(jobId));
+    if (jobId && body.kind !== "announcement-settlement")
+      await bounded("reserved", deps.ledger.reserved(jobId));
 
     // Delivery-local only: never infer a previous carrier's cause from a waiting claim.
     let syncRetry: SyncRetryDiagnostic | undefined;
@@ -269,6 +282,18 @@ export async function consume(
         // No ledger fixture, bot request, event mutation or uniqueness lock.
         if (deps.probeEnabled) throw new AlertProbeError(body.probeId);
         outcome = { done: true }; // A delayed staging probe cannot page in production.
+      } else if (body.kind === "announcement-settlement") {
+        const store = deps.announcementReconciliation;
+        if (!store) throw new Error("Missing announcement claim dependencies");
+        const saved = await requireAnnouncementStore(
+          store.recoverAnnouncement(body.idempotencyKey, body.sendAttempts, body),
+        );
+        if (!saved) {
+          // Already persisted, resolved or stale. Do not touch an original carrier's ledger.
+          m.ack();
+          continue;
+        }
+        outcome = { failed: ANNOUNCEMENT_RECONCILIATION_REASON };
       } else if (
         body.kind === "announcement" &&
         !validAnnouncementIdentity(body.idempotencyKey, body.action.channelKey)
@@ -301,9 +326,37 @@ export async function consume(
           } else {
             const result = await handleCallInternalAction(body, claim.attempts, deps.bot);
             if ("announcementEvidence" in result) {
-              await requireAnnouncementStore(
-                store.recordAnnouncement(id, claim.attempts, result.announcementEvidence),
-              );
+              const evidence = result.announcementEvidence;
+              try {
+                await requireAnnouncementStore(
+                  store.recordAnnouncement(id, claim.attempts, evidence),
+                );
+              } catch (error) {
+                // Queue.retry cannot change the original body. Republish only the observed
+                // scalars, not the action, and keep the original unacked until persistence.
+                if (
+                  (evidence.lastCode !== null || evidence.lastStatus !== null) &&
+                  deps.enqueueAnnouncementSettlement
+                ) {
+                  try {
+                    await requireAnnouncementStore(
+                      deps.enqueueAnnouncementSettlement({
+                        kind: "announcement-settlement",
+                        idempotencyKey: id,
+                        sendAttempts: claim.attempts,
+                        ...(validAnnouncementKey(jobId) ? { jobId } : {}),
+                        ...(requestId ? { requestId } : {}),
+                        ...evidence,
+                      }),
+                    );
+                  } catch (enqueueError) {
+                    console.error("announcement settlement enqueue failed", {
+                      exception: queueExceptionClass(enqueueError),
+                    });
+                  }
+                }
+                throw error;
+              }
             } else {
               const settlement =
                 "failed" in result
@@ -334,14 +387,14 @@ export async function consume(
             : await handleCallInternalAction(body, m.attempts, deps.bot);
       }
     } catch (e) {
-      if (body.kind === "announcement") {
+      if (body.kind === "announcement" || body.kind === "announcement-settlement") {
         console.error("announcement reconciliation persistence failed", {
           exception: queueExceptionClass(e),
         });
         // Ledger failure and ack both require durable evidence. Keep retrying
         // storage even after the bot budget; signal before the transport cap.
         if (m.attempts >= CALL_INTERNAL_ACTION.tries)
-          alertFailing(body.kind, m.attempts, "announcement reconciliation persistence failed", {
+          alertFailing(jobKind, m.attempts, "announcement reconciliation persistence failed", {
             requestId,
           });
         outcome = { retryInSeconds: backoffFor(CALL_INTERNAL_ACTION.backoffSeconds, m.attempts) };
@@ -461,9 +514,9 @@ export async function consume(
         }
       }
       console.error("job failed", body.kind, outcome.failed);
-      alertFailing(body.kind, m.attempts, outcome.failed, { requestId }, syncRetry);
+      alertFailing(jobKind, m.attempts, outcome.failed, { requestId }, syncRetry);
       if (jobId && !refusalStamped)
-        await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
+        await bounded("failed", deps.ledger.failed(jobId, jobKind, key, outcome.failed));
     } else if (jobId) {
       await bounded("dequeued", deps.ledger.dequeued(jobId));
     }

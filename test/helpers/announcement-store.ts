@@ -12,5 +12,6 @@ export function announcementStore(attempts = 1, now: () => Date = () => new Date
     })),
     finishAnnouncement: vi.fn<Store["finishAnnouncement"]>().mockResolvedValue(true),
     recordAnnouncement: vi.fn<Store["recordAnnouncement"]>().mockResolvedValue(undefined),
+    recoverAnnouncement: vi.fn<Store["recoverAnnouncement"]>().mockResolvedValue(false),
   };
 }

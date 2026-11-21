@@ -202,6 +202,16 @@ export interface UniqueLock {
 /** Originating web request, not the bot response ID or a deduplication key. */
 type QueueCorrelation = { requestId?: string };
 
+/** Contains no announcement content and cannot drive a bot request. */
+export type AnnouncementSettlement = {
+  kind: "announcement-settlement";
+  idempotencyKey: string;
+  sendAttempts: number;
+  lastCode: string | null;
+  lastStatus: number | null;
+  jobId?: string;
+} & QueueCorrelation;
+
 export type QueueMessage = QueueCorrelation &
   // Optional only for pre-fencing messages: those finish without releasing a lock (TTL recovers it).
   (
@@ -213,6 +223,7 @@ export type QueueMessage = QueueCorrelation &
         jobId?: string;
       }
     | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
+    | AnnouncementSettlement
     | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string }
     | { kind: "alert-probe"; probeId?: string; jobId?: never }
   );
