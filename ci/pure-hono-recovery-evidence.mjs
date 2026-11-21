@@ -1,18 +1,20 @@
 import { createHash } from "node:crypto";
+import {
+  RECOVERY_MANIFEST,
+  RECOVERY_MEMBER_LIMITS,
+  RECOVERY_REQUIRED_FILES,
+  recordRecoveryPath,
+  validRecoveryMemberPath,
+} from "./pure-hono-recovery-members.mjs";
 
 const REPOSITORY = "TogetherWeOwn/two-web-next";
 const MAIN_REF = "refs/heads/main";
 const TARGET = "two-web-next-production";
 const SCHEMA = "two.pure-hono-recovery.v1";
-const MAX_ARCHIVE = 64 * 1024 * 1024;
-const MAX_EXPANDED = 128 * 1024 * 1024;
-const MAX_FILES = 4096;
-const MAX_MANIFEST = 1024 * 1024;
 const SHA = /^[0-9a-f]{40}$/;
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const POSITIVE_ID = /^[1-9][0-9]{0,19}$/;
 const IDENTITY = ["sourceSha", "runId", "runAttempt", "originalVersionId"];
-const REQUIRED = ["worker.js", "effective-config.json"];
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const matches = (pattern, value) => typeof value === "string" && pattern.test(value);
@@ -48,37 +50,23 @@ function validateProvenance(expected, attestation, run, archiveSha256) {
   );
 }
 
-function validPath(path) {
-  return (
-    typeof path === "string" &&
-    path.length <= 512 &&
-    (REQUIRED.includes(path) || path.startsWith("assets/")) &&
-    path.split("/").every((part) => /^[a-zA-Z0-9._-]+$/.test(part) && !part.endsWith("."))
-  );
-}
-
 function inspectMembers(members) {
-  requireEvidence(Array.isArray(members) && members.length <= MAX_FILES + 1, "member count");
+  requireEvidence(
+    Array.isArray(members) && members.length <= RECOVERY_MEMBER_LIMITS.maxEntries,
+    "member count",
+  );
   const files = new Map();
   const paths = new Map();
   let expanded = 0;
   for (const { path, bytes, type } of members) {
-    requireEvidence(path === "manifest.json" || validPath(path), "member path");
+    requireEvidence(validRecoveryMemberPath(path), "member path");
     requireEvidence(
       type === "file" && Buffer.isBuffer(bytes) && !files.has(path),
       "member type or duplicate",
     );
     expanded += bytes.length;
-    requireEvidence(expanded <= MAX_EXPANDED, "expanded size");
-    let prefix = "";
-    for (const part of path.split("/")) {
-      prefix += prefix ? `/${part}` : part;
-      const folded = prefix.toLowerCase();
-      const previous = paths.get(folded);
-      const kind = prefix === path ? "file" : "directory";
-      requireEvidence(!previous || (previous.prefix === prefix && previous.kind === kind), "alias");
-      paths.set(folded, { prefix, kind });
-    }
+    requireEvidence(expanded <= RECOVERY_MEMBER_LIMITS.maxTotalBytes, "expanded size");
+    requireEvidence(recordRecoveryPath(paths, path), "alias");
     files.set(path, bytes);
   }
   return files;
@@ -92,7 +80,9 @@ function inspectMembers(members) {
 // This checks evidence consistency only; it cannot qualify custody or recovery.
 export function validatePureHonoRecoveryEvidence({ archive, expected, attestation, run, decode }) {
   requireEvidence(
-    Buffer.isBuffer(archive) && archive.length > 0 && archive.length <= MAX_ARCHIVE,
+    Buffer.isBuffer(archive) &&
+      archive.length > 0 &&
+      archive.length <= RECOVERY_MEMBER_LIMITS.maxArchiveBytes,
     "archive size",
   );
   const archiveSha256 = digest(archive);
@@ -103,15 +93,18 @@ export function validatePureHonoRecoveryEvidence({ archive, expected, attestatio
   let manifest;
   try {
     files = inspectMembers(decode(Buffer.from(archive)));
-    const raw = files.get("manifest.json");
-    requireEvidence(raw?.length > 0 && raw.length <= MAX_MANIFEST, "manifest size");
+    const raw = files.get(RECOVERY_MANIFEST);
+    requireEvidence(
+      raw?.length > 0 && raw.length <= RECOVERY_MEMBER_LIMITS.maxManifestBytes,
+      "manifest size",
+    );
     manifest = JSON.parse(raw.toString("utf8"));
     // One exact wire encoding rejects duplicate JSON keys and lossy UTF-8 decoding.
     requireEvidence(raw.equals(Buffer.from(JSON.stringify(manifest))), "manifest encoding");
   } catch {
     throw new Error("pure Hono recovery evidence refused: archive members or manifest encoding");
   }
-  files.delete("manifest.json");
+  files.delete(RECOVERY_MANIFEST);
   requireEvidence(
     exactKeys(manifest, ["schema", "target", ...IDENTITY, "files"]) &&
       manifest.schema === SCHEMA &&
@@ -132,7 +125,7 @@ export function validatePureHonoRecoveryEvidence({ archive, expected, attestatio
     seen.add(row.path);
   }
   requireEvidence(
-    REQUIRED.every((path) => files.get(path)?.length > 0),
+    RECOVERY_REQUIRED_FILES.every((path) => files.get(path)?.length > 0),
     "worker or config missing",
   );
   requireEvidence(
