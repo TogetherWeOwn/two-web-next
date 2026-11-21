@@ -1,4 +1,4 @@
-import { createLiveTopic, type TopicFrame } from "../../../src/live/client-topic";
+import { createLiveTopic, type TopicFrame } from "./client-topic";
 
 type Topic = "voice" | "channels" | "members" | "events";
 const MAX_FRAME_CHARS = 1024 * 1024;
@@ -9,20 +9,17 @@ function decode<T>(raw: unknown, topic: Topic, parseValue: (value: unknown) => T
   const msg: unknown = JSON.parse(raw);
   if (!msg || typeof msg !== "object" || !("topic" in msg) || msg.topic !== topic) throw invalid();
   if (!("v" in msg) || msg.v !== 1 || !("type" in msg)) throw invalid();
-  if (msg.type === "reset" && Object.keys(msg).length === 3) return { kind: "reset" };
+  if (msg.type === "unavailable" && Object.keys(msg).length === 3) return { kind: "unavailable" };
   if (
     (msg.type !== "snapshot" && msg.type !== "patch") ||
-    Object.keys(msg).length !== 6 ||
-    !("stream" in msg) ||
-    typeof msg.stream !== "string" ||
-    !msg.stream ||
+    Object.keys(msg).length !== 5 ||
     !("seq" in msg) ||
     typeof msg.seq !== "number" ||
     !("value" in msg)
   ) {
     throw invalid();
   }
-  return { kind: msg.type, stream: msg.stream, seq: msg.seq, value: parseValue(msg.value) };
+  return { kind: msg.type, seq: msg.seq, value: parseValue(msg.value) };
 }
 
 /** Starts no I/O in SSR. The caller supplies its own audience-safe poll and DTO validator. */
@@ -30,22 +27,25 @@ export function createBrowserLiveTopic<T>(
   topic: Topic,
   initial: T | null,
   parseValue: (value: unknown) => T,
-  poll: (signal: AbortSignal) => Promise<T | null>,
+  poll?: (signal: AbortSignal) => Promise<T | null>,
 ) {
+  const request = (type: "subscribe" | "resync") => JSON.stringify({ v: 1, type, topics: [topic] });
   return createLiveTopic(initial, {
     open() {
-      const url = new URL("/api/realtime/v1/ws", window.location.origin);
+      // Read the browsing context only on mount, not on import or SSR subscription.
+      const browser = globalThis as { location?: { origin: string } };
+      const url = new URL("/api/discord-live/v1", browser.location?.origin);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       const socket = new WebSocket(url);
       socket.addEventListener("open", () => {
         if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ v: 1, type: "subscribe", topics: [topic] }));
+          socket.send(request("subscribe"));
         }
       });
       return socket;
     },
     decode: (raw) => decode(raw, topic, parseValue),
-    resync: (socket) => socket.send(JSON.stringify({ v: 1, type: "resync", topic })),
+    resync: (socket) => socket.send(request("resync")),
     poll,
   });
 }

@@ -45,9 +45,10 @@ import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
 import { withEventDetailHtml, type EventDetailHtml } from "./detail-leaves";
 import {
+  cardTimeLabel,
+  effectiveZone,
   formatDetailWhen,
   formatElapsedDuration,
-  formatEventWhen,
   instantIso,
   isValidZone,
 } from "./date-format";
@@ -377,13 +378,11 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
 // Preserve the read-model export used by existing Kit callers.
 export { formatEventWhen } from "./date-format";
 
-function toLink(link: EventLink, now: Date): KitEventDetailLink {
-  // Discovery instants use the served long-offset detail format (the hero
-  // format), not the calendar grid format.
+function toLink(link: EventLink, now: Date, zone: string): KitEventDetailLink {
   return {
     key: link.eventKey,
     title: link.title,
-    whenText: formatEventWhen(link.startsAt, link.timezone),
+    whenText: `${cardTimeLabel(link.startsAt, zone)} ${zone}`,
     datetime: link.startsAt.toISOString(),
     location: link.location,
     game: link.game || null,
@@ -632,13 +631,15 @@ export async function resolveKitEventDetail(
       const pagePath = `/e/${event.eventKey}`;
       const pageCanonical = canonicalUrl(appUrl, pagePath);
       const review = wantsReview ? savedEventReview(event, now, search) : null;
-      const zoneLabel = isValidZone(event.timezone) ? event.timezone : "UTC";
+      // Share the server C4 block's effective zone across discovery links.
+      // This is the current event's configured zone, not a viewer preference.
+      const zoneLabel = effectiveZone(event.timezone);
       const liveTime = liveDetailTime(event, now);
       const nextInRecord = ended ? endedNext(series?.upcoming) : null;
       const canLink = (link: EventLink) =>
         !ended || (link.eventKey !== nextInRecord?.key && isRenderableEventWindow(link));
       const discoveryLink = (link: EventLink | null) =>
-        link && canLink(link) ? toLink(link, now) : null;
+        link && canLink(link) ? toLink(link, now, zoneLabel) : null;
       const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
@@ -731,7 +732,7 @@ export async function resolveKitEventDetail(
                 ? null
                 : discoveryLink(neighbors.next),
           },
-          related: related.filter(canLink).map((link) => toLink(link, now)),
+          related: related.filter(canLink).map((link) => toLink(link, now, zoneLabel)),
           series: series
             ? {
                 hosts: series.hosts,

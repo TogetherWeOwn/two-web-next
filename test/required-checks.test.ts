@@ -248,12 +248,16 @@ describe("required checks always report", () => {
     const ci = readFileSync(join(dir, "ci.yml"), "utf8");
     const leg = job(ci, "node22-compat");
     expect(leg).toContain("name: node22-compat");
-    expect(leg).toMatch(/\n    needs: \[scope\]\n/);
+    expect(leg).toMatch(/\n    needs: \[scope, node22-shard\]\n/);
     expect(leg).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(leg).toContain("image: node:22.23.0-bookworm");
-    expect(leg).toMatch(/node-version: 22\.23\.0\n/);
-    expect(leg).toContain('test "$(node --version)" = "v22.23.0"');
-    expect(leg).toContain("npm run lint && npm run typecheck && npm test");
+    const shard = job(ci, "node22-shard");
+    expect(shard).toContain("image: node:22.23.0-bookworm");
+    expect(shard).toMatch(/node-version: 22\.23\.0\n/);
+    expect(shard).toContain('test "$(node --version)" = "v22.23.0"');
+    expect(shard).toContain('if [ "$SHARD" = 1 ]; then npm run lint && npm run typecheck');
+    expect(shard).toContain('npm test -- --shard="$SHARD/$SHARDS"');
+    expect(leg).toContain("--merge-reports=vitest-blob");
     // Like `check`, the leg always reports: its first step fails on a red
     // scope, and docs-only or draft PRs fast-pass instead of skipping.
     const steps = leg.split("\n    steps:\n")[1] ?? "";

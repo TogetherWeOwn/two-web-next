@@ -27,7 +27,7 @@
 // bodies and exception messages can quote the live token, so none of them is
 // ever a recordAttempt parameter and none is ever logged.
 import { addGuildMemberDetailed, type JoinResult } from "../discord";
-import { chargeWebThrottle, pruneWebThrottle, type ThrottleVerdict } from "../http/throttle";
+import { checkWebThrottle, type ThrottleVerdict } from "../http/throttle";
 import { safeRequestId } from "../request-log";
 import type { Sql } from "../sessions";
 
@@ -140,23 +140,8 @@ export async function checkJoinThrottle(
     // the name is the segment before the first colon.
     const throttle = bucket.split(":", 1)[0] ?? bucket;
     console.warn("Throttle store unavailable; allowing the request.", { throttle });
-    return { limited: false };
   }
-  let verdict: ThrottleVerdict;
-  try {
-    verdict = await chargeWebThrottle(sql, bucket, max);
-  } catch (err) {
-    if ((err as { code?: string }).code !== "55P03") throw err;
-    // Busy pass: the verdict transaction aborted with no hit inserted. Fall
-    // through to the best-effort prune below so a busy pass still drains
-    // expired rows, then answer a refusal — the shared 429 with Retry-After: 1
-    // at every caller (join funnel, generic middleware, profile writes).
-    verdict = { limited: true, retryAfter: 1 };
-  }
-  // Prune outside the admission lock, including on refusal. A failure or a
-  // delay never changes the verdict; late settlements are observed by the helper.
-  const failure = await pruneWebThrottle(sql);
-  if (failure !== null) {
+  return checkWebThrottle(sql, bucket, max, (failure) => {
     // Housekeeping failed or stalled; the verdict below was already decided.
     // Log the exception class only: the message can quote statement bindings.
     // An expired wait logs once as ThrottlePruneDeadline; a late settlement
@@ -164,8 +149,7 @@ export async function checkJoinThrottle(
     console.warn("Join throttle prune failed; keeping the decided verdict.", {
       exception: failure === "deadline" ? "ThrottlePruneDeadline" : exceptionClass(failure.err),
     });
-  }
-  return verdict;
+  });
 }
 
 // Fixture helper only (TOG-19721): the same shape as
