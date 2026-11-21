@@ -455,6 +455,10 @@ test("pure Hono composition refuses unsafe ZIP members and a mismatched manifest
 
 test("pure Hono composition checks the inclusive archive size bound before I/O", async () => {
   const { options, calls } = composedRecoveryFixture({ run: null });
+  options.spawn = () => {
+    calls.push("spawn");
+    assert.fail("unexpected verifier process, including a version probe");
+  };
   const limit = RECOVERY_MEMBER_LIMITS.maxArchiveBytes;
   const oversized = Buffer.alloc(limit + 1);
   for (const archive of [Buffer.alloc(0), oversized]) {
