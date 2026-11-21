@@ -33,6 +33,13 @@ import {
 } from "../kit-parity";
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import { expectSavedReviewActions } from "../saved-review-actions";
+import {
+  KIT_LABELED_VIEWER_CELLS,
+  KIT_VIEWER_ROW_NAME,
+  normalizeKitViewerRow,
+  SEEDED_VIEWER_CELLS,
+  SEEDED_VIEWER_ROW,
+} from "./member-board-viewer-row.mjs";
 import { postParityQaLogin } from "./parity-qa-login.mjs";
 
 // Kit journey parity (docs/kit-parity-gates.md): the journeys run
@@ -294,11 +301,6 @@ function memberGoingRsvp(): Promise<void> {
   });
   return memberRsvpPromise;
 }
-
-// The viewer's ranked row as both renderers emit it, after the shared
-// normalization: rank 1, the seeded going count 1. The bare name also
-// rides the member chrome, so only the table row proves ranked content.
-const RANKED_ROW = '<td>1</td><th scope="row">QA Member</th><td>1</td>';
 
 function expectNoMarker(headers: Record<string, string>, label: string) {
   expect(
@@ -859,15 +861,23 @@ for (const target of targets) {
         expect(body).toContain("Sign out");
         expect(body).not.toContain("Welcome, guest");
         expect(body).not.toContain('href="/members/');
-        const normalized = normalizeSection(body);
         if (ranked) {
-          expect(normalized, `${target.name} ${path}: ranked viewer row`).toContain(RANKED_ROW);
+          const table = memberBoardTable(body);
+          expect(
+            target.name === "kit" ? normalizeKitViewerRow(table) : table,
+            `${target.name} ${path}: ranked viewer row`,
+          ).toContain(SEEDED_VIEWER_ROW);
         } else {
           expect(
             memberBoardStatus(body, allowsEndedMemberBoardCopy(path)),
             `${target.name} ${path}: empty board`,
           ).toBe("overall-empty");
-          expect(normalized, `${target.name} ${path}: no ranked row`).not.toContain(RANKED_ROW);
+          const normalized = expect(
+            normalizeSection(body),
+            `${target.name} ${path}: no ranked row`,
+          );
+          normalized.not.toContain(SEEDED_VIEWER_CELLS);
+          normalized.not.toContain(KIT_LABELED_VIEWER_CELLS);
         }
       }
     });
@@ -2413,11 +2423,12 @@ test("cross-target: normalized member-board tables match", async () => {
       headers: { cookie: await memberCookie(target) },
     });
     expect(response.status()).toBe(200);
-    tables.set(target.name, memberBoardTable(await response.text()));
+    const table = memberBoardTable(await response.text());
+    tables.set(target.name, target.name === "kit" ? normalizeKitViewerRow(table) : table);
   }
   // Non-vacuous equality: the compared tables carry the ranked row, so
   // two empty boards cannot pass for parity.
-  expect(tables.get("hono"), "Hono table carries the ranked row").toContain(RANKED_ROW);
+  expect(tables.get("hono"), "Hono table carries the ranked row").toContain(SEEDED_VIEWER_ROW);
   expect(tables.get("kit"), "Kit table matches Hono table after normalization").toBe(
     tables.get("hono"),
   );
@@ -3634,8 +3645,9 @@ test.describe("kit: member-board visuals", () => {
           await page.waitForLoadState("networkidle");
           if (view === "default" || view === "relative") {
             const rankedRow = page.getByRole("row").filter({
-              has: page.getByRole("rowheader", { name: "QA Member" }),
+              has: page.getByRole("rowheader", { name: KIT_VIEWER_ROW_NAME }),
             });
+            await expect(rankedRow).toHaveAttribute("aria-current", "true");
             await expect(rankedRow.getByRole("cell")).toHaveText(["1", "1"]);
           } else {
             await expect(
@@ -3647,7 +3659,10 @@ test.describe("kit: member-board visuals", () => {
                   hasText: memberBoardEmptyText("overall", allowsEndedMemberBoardCopy(path)),
                 }),
             ).toBeVisible();
-            await expect(page.getByRole("rowheader", { name: "QA Member" })).toHaveCount(0);
+            // Reject any viewer row here, even if its label is malformed.
+            await expect(
+              page.getByRole("rowheader", { name: "QA Member", exact: false }),
+            ).toHaveCount(0);
           }
           await expect.soft(page).toHaveScreenshot(`member-board-${view}-${viewport.name}.png`, {
             fullPage: true,
