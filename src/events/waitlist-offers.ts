@@ -3,6 +3,8 @@ import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { waitlistOffers } from "../db/dormant-schema";
 
+import { declineWaitlistOffer, expireWaitlistOffer } from "./waitlist-offer-transitions";
+
 export {
   claimWaitlistOffer,
   declineWaitlistOffer,
@@ -10,6 +12,46 @@ export {
 } from "./waitlist-offer-transitions";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+/** Dormant member action. userId must come from the authenticated session. */
+export function declineAndAdvanceWaitlistOffer(
+  tx: Tx,
+  eventId: number,
+  rsvpId: number,
+  userId: string,
+  offerId: string,
+) {
+  return releaseAndAdvance(tx, eventId, () =>
+    declineWaitlistOffer(tx, eventId, rsvpId, userId, offerId),
+  );
+}
+
+/** Dormant scheduler action. Never expose expiry as a member mutation. */
+export function expireAndAdvanceWaitlistOffer(
+  tx: Tx,
+  eventId: number,
+  rsvpId: number,
+  offerId: string,
+) {
+  return releaseAndAdvance(tx, eventId, () => expireWaitlistOffer(tx, eventId, rsvpId, offerId));
+}
+
+async function releaseAndAdvance(
+  tx: Tx,
+  eventId: number,
+  release: () => ReturnType<typeof expireWaitlistOffer>,
+) {
+  await requireReadCommitted(tx);
+  // Acquire all allocation locks before releasing the target. This preserves
+  // event -> sorted RSVPs -> sorted offers, even when advancing past the target.
+  const locked = await lockWaitlistRows(tx, eventId);
+  if (!locked) return { transition: { ok: false as const, reason: "not_found" }, newOffers: [] };
+  const transition = await release();
+  // Caller owns the transaction. Do not expose newOffers to members or use
+  // them for delivery until after a successful commit.
+  const newOffers = transition.ok && !transition.replay ? await offerLockedSeats(tx, locked) : [];
+  return { transition, newOffers };
+}
 
 /** Dormant helper: replay a live hold or offer a seat only to the eligible FIFO head. */
 export async function createWaitlistOffer(tx: Tx, rsvpId: number) {
@@ -39,9 +81,9 @@ async function requireReadCommitted(tx: Tx) {
   }
 }
 
-async function offerWaitlistSeats(tx: Tx, eventId: number, rsvpId?: number) {
+async function lockWaitlistRows(tx: Tx, eventId: number, rsvpId?: number) {
   const [event] = await tx.select().from(events).where(eq(events.id, eventId)).for("update");
-  if (!event) return [];
+  if (!event) return null;
   const line = await tx
     .select({ id: rsvps.id, status: rsvps.status })
     .from(rsvps)
@@ -49,7 +91,7 @@ async function offerWaitlistSeats(tx: Tx, eventId: number, rsvpId?: number) {
     .orderBy(asc(rsvps.id))
     .for("update");
   const target = line.find((row) => row.id === rsvpId);
-  if (rsvpId !== undefined && !target) return [];
+  if (rsvpId !== undefined && !target) return null;
   const eventRsvps = tx.select({ id: rsvps.id }).from(rsvps).where(eq(rsvps.eventId, event.id));
   await tx
     .select({ id: waitlistOffers.id })
@@ -57,6 +99,20 @@ async function offerWaitlistSeats(tx: Tx, eventId: number, rsvpId?: number) {
     .where(inArray(waitlistOffers.rsvpId, eventRsvps))
     .orderBy(asc(waitlistOffers.id))
     .for("update");
+  return { event, line, eventRsvps, target };
+}
+
+async function offerWaitlistSeats(tx: Tx, eventId: number, rsvpId?: number) {
+  const locked = await lockWaitlistRows(tx, eventId, rsvpId);
+  return locked ? offerLockedSeats(tx, locked, rsvpId) : [];
+}
+
+async function offerLockedSeats(
+  tx: Tx,
+  { event, line, eventRsvps, target }: NonNullable<Awaited<ReturnType<typeof lockWaitlistRows>>>,
+  rsvpId?: number,
+) {
+  const eventId = event.id;
   // Preserve the database's microseconds across every comparison and stamp.
   // Transaction-start now() could precede a long row-lock wait.
   const [clock] = await tx

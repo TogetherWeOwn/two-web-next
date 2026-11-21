@@ -7,7 +7,9 @@ import {
   allocateWaitlistOffers,
   claimWaitlistOffer,
   createWaitlistOffer,
+  declineAndAdvanceWaitlistOffer,
   declineWaitlistOffer,
+  expireAndAdvanceWaitlistOffer,
   expireWaitlistOffer,
 } from "../../src/events/waitlist-offers";
 import { pgEventStore } from "../../src/jobs/events";
@@ -162,6 +164,94 @@ export function registerWaitlistOfferLifecycle() {
         expect((await offers()).find((offer) => offer.id === old.id)?.state).toBe(state);
       },
     );
+
+    it.each(["declined", "expired"] as const)(
+      "atomically replaces a %s hold once across concurrent releases",
+      async (state) => {
+        const { event, rsvp, rows } = await seed({ users: ["u1", "u2", "u3"] });
+        const old = await made(event, rsvp);
+        if (state === "expired") await lapse(old.id);
+        const release = () =>
+          run((tx) =>
+            state === "expired"
+              ? expireAndAdvanceWaitlistOffer(tx, event.id, rsvp.id, old.id)
+              : declineAndAdvanceWaitlistOffer(tx, event.id, rsvp.id, "u1", old.id),
+          );
+        const results = await Promise.all([release(), release()]);
+        for (const { transition } of results) {
+          expect(transition).toMatchObject({ ok: true, offer: { id: old.id, state } });
+        }
+        const replay = results.find(({ transition }) => transition.ok && transition.replay);
+        expect(replay?.newOffers).toEqual([]);
+        const created = results.flatMap(({ newOffers }) => newOffers);
+        expect(created).toHaveLength(1);
+        const next = created[0]!;
+        expect(next).toMatchObject({ rsvpId: rows[1]!.id, state: "held" });
+        expect(next.notificationKey).not.toBe(old.notificationKey);
+        expect(next.expiresAt.getTime() - next.offeredAt.getTime()).toBe(2 * HOUR);
+        expect(await offers()).toHaveLength(2);
+        expect(await rsvpOf(rsvp.id)).toEqual(rsvp);
+      },
+    );
+
+    it("does not allocate on a premature expiry, non-owner decline or replay after reopening", async () => {
+      const { event, rsvp } = await seed({ capacity: 2, users: ["u1", "u2"] });
+      const old = await made(event, rsvp);
+      const release = (userId: string) =>
+        run((tx) => declineAndAdvanceWaitlistOffer(tx, event.id, rsvp.id, userId, old.id));
+      expect(await release("u2")).toEqual({
+        transition: { ok: false, reason: "not_found" },
+        newOffers: [],
+      });
+      expect(
+        await run((tx) => expireAndAdvanceWaitlistOffer(tx, event.id, rsvp.id, old.id)),
+      ).toEqual({
+        transition: { ok: false, reason: "not_due" },
+        newOffers: [],
+      });
+      expect(await offers()).toEqual([old]);
+      await fx.db.update(events).set({ rsvpOpen: false }).where(eq(events.id, event.id));
+      expect(await release("u1")).toMatchObject({
+        transition: { ok: true, replay: false, offer: { state: "declined" } },
+        newOffers: [],
+      });
+      await fx.db.update(events).set({ rsvpOpen: true }).where(eq(events.id, event.id));
+      expect(await release("u1")).toMatchObject({
+        transition: { ok: true, replay: true },
+        newOffers: [],
+      });
+      expect(await offers()).toMatchObject([{ id: old.id, state: "declined" }]);
+    });
+
+    it("never allocates a replacement for a hold won by a racing claim", async () => {
+      const { event, rsvp, rows } = await seed({ users: ["u1", "u2"] });
+      const old = await made(event, rsvp);
+      const [claimed, release] = await Promise.all([
+        claim(event, rsvp, "u1", old.id),
+        run((tx) => declineAndAdvanceWaitlistOffer(tx, event.id, rsvp.id, "u1", old.id)),
+      ]);
+      expect(release.transition.ok).toBe(!claimed.ok);
+      expect(release.newOffers.map((offer) => offer.rsvpId)).toEqual(
+        claimed.ok ? [] : [rows[1]!.id],
+      );
+      expect(await rsvpOf(rsvp.id)).toMatchObject({ status: claimed.ok ? "going" : "waitlisted" });
+    });
+
+    it("rolls back the decline and its replacement together", async () => {
+      const { event, rsvp, rows } = await seed({ startsInMs: HOUR, users: ["u1", "u2"] });
+      const old = await made(event, rsvp);
+      await expect(
+        run(async (tx) => {
+          const result = await declineAndAdvanceWaitlistOffer(tx, event.id, rsvp.id, "u1", old.id);
+          expect(result).toMatchObject({
+            transition: { ok: true, replay: false, offer: { state: "declined" } },
+            newOffers: [{ rsvpId: rows[1]!.id, state: "held", expiresAt: event.startsAt }],
+          });
+          throw new Error("abort replacement");
+        }),
+      ).rejects.toThrow("abort replacement");
+      expect(await offers()).toEqual([old]);
+    });
 
     it.each([{ rsvpOpen: false }, { status: "cancelled" }, { status: "draft" }])(
       "freezes allocation for %j even with vacancies",
