@@ -99,13 +99,13 @@ describe("required checks always report", () => {
     },
   );
 
-  it("check needs only scope so it starts with the heavy jobs, and ci-ok fails when the audit is not green", () => {
+  it("check waits for dependency admission but not the independent heavy jobs", () => {
     const ci = readFileSync(join(dir, "ci.yml"), "utf8");
     const check = job(ci, "check");
-    // Exactly [scope]: any heavier need re-serializes check behind that job,
-    // which is what made merge-queue ci take ~26 minutes.
+    // The pre-install gate is the only new prerequisite; keep performance and
+    // accessibility jobs off the check job's critical path.
     const needs = check.match(/\n    needs: \[([^\]]*)\]\n/)?.[1]?.split(/,\s*/) ?? [];
-    expect(needs).toEqual(["scope"]);
+    expect(needs).toEqual(["scope", "dependency-admission"]);
     expect(check).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(job(ci, "ci-ok")).toContain('run: test "$A11Y_RESULT" = success');
   });

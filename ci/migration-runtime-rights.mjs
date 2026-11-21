@@ -35,6 +35,7 @@ export const TABLE_RIGHTS = Object.freeze({
   "public.event_echoes": ["INSERT", "SELECT", "UPDATE"],
   "public.event_echo_members": ["DELETE", "INSERT", "SELECT"],
   "public.bot_reconciliation_intents": ["INSERT", "SELECT", "UPDATE"],
+  "public.announcement_send_claims": ["INSERT", "SELECT", "UPDATE"],
   // Dormant offers leave through the RSVP cascade, not direct runtime DELETE.
   "public.waitlist_offers": ["INSERT", "SELECT", "UPDATE"],
 });
