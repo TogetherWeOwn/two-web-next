@@ -143,10 +143,22 @@ export async function assertHomeEvidence(page, state) {
       state === "eventsOutage" ? "unavailable" : "empty",
     );
   }
+  if (state === "guest" && page.viewportSize()?.width === 390) {
+    const menu = page.locator(".ember-home-menu");
+    const events = menu.getByRole("link", { name: "Events" });
+    const summary = menu.locator("summary");
+    assert.equal(await events.isVisible(), false);
+    await summary.press("Enter");
+    const box = await events.boundingBox();
+    assert.ok(box && box.y >= 0 && box.y + box.height <= 844, "open Events link is on-screen");
+    await page.keyboard.press("Tab");
+    assert.equal(await events.evaluate((el) => el === document.activeElement), true);
+    await summary.press("Enter");
+  }
   if (session?.member)
     assert.equal(
       await page
-        .getByRole("region", { name: "The lobby is open." })
+        .locator(".hero-action")
         .getByRole("link", { name: "Open Discord" })
         .getAttribute("href"),
       "https://discord.gg/invite",
@@ -164,6 +176,7 @@ export async function withKitHomeEvidence(state, callback) {
   return withKitOfflineBrowser(
     { page: homeEvidencePage(state), now: HOME_EVIDENCE_NOW },
     async (fixture) => {
+      if (state === "guest") await fixture.page.setViewportSize({ width: 390, height: 844 });
       await assertHomeEvidence(fixture.page, state);
       return callback(fixture);
     },
