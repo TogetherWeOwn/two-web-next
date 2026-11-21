@@ -26,6 +26,7 @@ function github(rows, options = {}) {
   const api = async (method, path, body) => {
     if (method !== "GET") writes.push([method, path]);
     if (method === "GET" && path === pull) {
+      if (options.failPR) return new Response(null, { status: 502 });
       const pr = {
         state: "open",
         head: { sha: head },
@@ -69,6 +70,7 @@ test("only promotion surfaces match, including directly called tooling", () => {
     deep/web/wrangler.production.toml tail/wrangler.jsonc drizzle/meta/_journal.json migrations.lock db/migrations/0001.sql
     ci/resolve-promotion-sha.mjs ci/production-deploy-gate.mjs ci/rollback-target.mjs
     ci/staging-provenance.mjs ci/staging-deploy-gate.mjs ci/web-standards.mjs ci/db-migrate.mjs
+    ci/lighthouse-origin-lib.cjs ci/lighthouserc.cjs ci/quality-budget.json ci/lighthouse-samples.cjs ci/lighthouse-serving-values.cjs ci/lighthouse-preserve-mobile.sh
     ci/migration-runtime-rights.mjs src/up-database.ts bin/version-check.mjs e2e/staging/join.spec.ts
     e2e/watch/guest-journeys.spec.ts playwright.watch.config.ts e2e/watch-guard.mjs e2e/ci-only.mjs
     e2e/watch/events/calendar.spec.ts e2e/staging/events/lists/calendar.spec.ts
@@ -76,7 +78,7 @@ test("only promotion surfaces match, including directly called tooling", () => {
     web/package.json web/scripts/copy-public.mjs ci/kit-route-evidence.mjs bin/ts-hook.mjs bin/ts-hooks.mjs`;
   const excluded = `docs/runbook.md docs/wrangler.md test/fixtures/legacy/verify.sql
     src/routes/events.ts web/src/routes/+page.svelte ci/staging-provenance.test.mjs
-    ci/check-doc-links.mjs e2e/staging/journey-ledger.test.mjs e2e/watch/events/calendar.test.ts`;
+    ci/check-doc-links.mjs ci/lighthouse-summary.mjs e2e/staging/journey-ledger.test.mjs e2e/watch/events/calendar.test.ts`;
   for (const path of included.split(/\s+/)) assert.ok(isPromotionPath(path), path);
   for (const path of excluded.split(/\s+/)) assert.equal(isPromotionPath(path), false, path);
 });
@@ -107,6 +109,7 @@ test("paginates, detects removal and either side of renames, and flips only its 
 
 test("failed, capped, incomplete or inconsistent reads produce no verdict label", async () => {
   for (const [rows, options] of [
+    [ordinary, { failPR: true, labels: [no] }],
     [ordinary.slice(0, 100), { count: 101 }],
     [ordinary, { failPage: 2 }],
     [ordinary, { count: 3000 }],

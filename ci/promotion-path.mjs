@@ -3,7 +3,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 // Direct tooling/config from deploy-production, rollback-production, deploy,
-// e2e-staging and db-migrate. src/index.tsx wires /up and /version; do not
+// e2e-staging, web-quality-origin and db-migrate. src/index.tsx wires /up and /version; do not
 // follow imports into ordinary product code.
 const directPaths = new Set(
   `ci/promotion-path.mjs
@@ -11,6 +11,7 @@ const directPaths = new Set(
    ci/post-deploy-watch.mjs ci/check-production-secrets.mjs
    ci/operator-constants.mjs ci/wrangler-config.mjs ci/worker-bundle-evidence.mjs
    ci/staging-deploy-gate.mjs ci/staging-provenance.mjs ci/check-staging-journeys.mjs ci/web-standards.mjs
+   ci/lighthouse-origin-lib.cjs ci/lighthouserc.cjs ci/quality-budget.json ci/lighthouse-samples.cjs ci/lighthouse-serving-values.cjs ci/lighthouse-preserve-mobile.sh
    ci/change-scope.sh ci/e2e-test-helpers.mjs ci/kit-route-flags.mjs ci/staging-kit-route-check.mjs ci/check-jobs-secrets.mjs
    ci/db-migrate.mjs ci/migration-admission.mjs ci/migration-ownership.mjs ci/migration-runtime-rights.mjs
    ci/check-migration-numbers.sh ci/check-snapshot-chain.mjs ci/check-migration-history.mjs
@@ -166,8 +167,8 @@ export async function labelPromotionPath(api, number, summarize) {
     await fresh();
     verdict = value;
   } catch (error) {
-    // Serialized runs can retire both stale and just-written verdicts on failure.
-    if (snapshot) await Promise.all([remove("promotion-path: no"), remove("promotion-path: yes")]);
+    // The validated PR number lets serialized runs retire owned verdicts even before a snapshot.
+    await Promise.all([remove("promotion-path: no"), remove("promotion-path: yes")]);
     throw error;
   } finally {
     summarize(
