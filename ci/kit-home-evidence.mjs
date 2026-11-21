@@ -68,7 +68,7 @@ const states = {
 
 export const homeEvidenceStates = Object.freeze(Object.keys(states));
 
-function fixtureData(state) {
+export function fixtureData(state) {
   if (!Object.hasOwn(states, state)) throw new Error(`Unknown home evidence state: ${state}`);
   return {
     session: null,
