@@ -117,6 +117,10 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
     state: "retryable" | "closed",
     orphan = false,
   ): Promise<string | undefined> {
+    // A lock-only waiter need not recheck UPDATE predicates. Read the clock after locking.
+    const [locked] = await tx`select 1 from announcement_send_claims
+      where idempotency_key = ${key}::uuid for update`;
+    if (!locked) return undefined;
     const [row] = await tx`update announcement_send_claims set state = ${state}
       where idempotency_key = ${key}::uuid and state = 'sending' and send_attempts = ${attempts}
         and (claim_until <= clock_timestamp()) = ${orphan}
@@ -144,8 +148,8 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
         const [claimed] = await tx`insert into announcement_send_claims as claim
           (idempotency_key, channel_alias, send_attempts, state, claim_until)
           select ${key}::uuid, ${alias}, 1, 'sending', clock_timestamp() + make_interval(secs => ${SEND_LEASE_SECONDS})
-          where ${queuedAt.toISOString()}::timestamptz > now() - make_interval(days => ${CARRIER_AGE_DAYS})
-            and ${queuedAt.toISOString()}::timestamptz <= now() + interval '5 seconds'
+          where ${queuedAt.toISOString()}::timestamptz > statement_timestamp() - make_interval(days => ${CARRIER_AGE_DAYS})
+            and ${queuedAt.toISOString()}::timestamptz <= statement_timestamp() + interval '5 seconds'
             and not exists (select 1 from bot_reconciliation_intents where idempotency_key = ${key}::uuid)
           on conflict (idempotency_key) do update set
             send_attempts = claim.send_attempts + 1, state = 'sending', claim_until = excluded.claim_until
@@ -215,6 +219,8 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
       });
     },
     /** Owner-only maintenance, unscheduled until integration. Never delete unresolved evidence. */
+    // Retire by lease end, not enqueue time: the clock-skew allowance and bounded
+    // admission statement both fit in the gap between carrier expiry and deletion.
     async pruneClosedAnnouncements(): Promise<number> {
       return bounded(async (tx) => {
         const rows = await tx`delete from announcement_send_claims where idempotency_key in (

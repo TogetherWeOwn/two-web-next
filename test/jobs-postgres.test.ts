@@ -56,6 +56,61 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     expect(await store.finishAnnouncement(key, attempts - 1, "retryable")).toBe(false);
   });
 
+  it("does not count a rejected database reservation", async () => {
+    const key = crypto.randomUUID();
+    const store = pgReconciliationStore(sql);
+    const queuedAt = new Date();
+    const claim = () => store.claimAnnouncement(key, "fixture-channel", queuedAt);
+    expect(await claim()).toMatchObject({ kind: "claimed", attempts: 1 });
+    expect(await store.finishAnnouncement(key, 1, "retryable")).toBe(true);
+    await sql`alter table announcement_send_claims add constraint fixture_reject_second_send
+      check (send_attempts <> 2) not valid`;
+    try {
+      await expect(claim()).rejects.toMatchObject({ code: "23514" });
+    } finally {
+      await sql`alter table announcement_send_claims drop constraint fixture_reject_second_send`;
+    }
+    expect(await claim()).toMatchObject({ kind: "claimed", attempts: 2 });
+  });
+
+  it("does not reopen an announcement whose lease expires behind a lock-only holder", async () => {
+    const key = crypto.randomUUID();
+    const store = pgReconciliationStore(sql);
+    await sql`insert into announcement_send_claims (idempotency_key, channel_alias, send_attempts, state, claim_until)
+      values (${key}, 'fixture-channel', 1, 'sending', clock_timestamp() + interval '1 second')`;
+    let markLocked!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      markLocked = resolve;
+    });
+    const settling = locked.then(() => store.finishAnnouncement(key, 1, "retryable"));
+    const holding = sql.begin(async (tx) => {
+      const [holder] = await tx<{ pid: number; claim_until: Date }[]>`
+        select pg_backend_pid() as pid, claim_until
+        from announcement_send_claims where idempotency_key = ${key} for update`;
+      if (!holder) throw new Error("Missing fixture claim to lock");
+      const { pid, claim_until } = holder;
+      markLocked();
+      await expect
+        .poll(
+          async () => {
+            const rows =
+              await sql`select 1 from pg_stat_activity where ${pid} = any(pg_blocking_pids(pid))
+          and clock_timestamp() < ${claim_until}::timestamptz`;
+            return rows.length;
+          },
+          { timeout: 750, interval: 10 },
+        )
+        .toBe(1);
+      await tx`select pg_sleep_until(${claim_until}::timestamptz + interval '5 milliseconds')`;
+    });
+    const [settled] = await Promise.all([settling, holding]);
+    expect(settled).toBe(false);
+    expect(await store.claimAnnouncement(key, "fixture-channel", new Date())).toMatchObject({
+      kind: "abandoned",
+      attempts: 1,
+    });
+  });
+
   it("keeps a failed hard stop fenced and recovers an abandoned claim without wire diagnostics", async () => {
     const key = crypto.randomUUID();
     const store = pgReconciliationStore(sql);
@@ -105,13 +160,29 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     const [saved] =
       await sql`select last_code, last_status from bot_reconciliation_intents where idempotency_key = ${key}`;
     expect(saved).toEqual({ last_code: "needs_reconciliation", last_status: 409 });
-    const enqueued = new Date(Date.now() - 32 * 86_400_000);
+    const sending = crypto.randomUUID();
+    const retryable = crypto.randomUUID();
     await sql`insert into announcement_send_claims (idempotency_key, channel_alias, send_attempts, state, claim_until)
-      values (${retired}, 'fixture-channel', 1, 'closed', now() - interval '31 days')`;
-    expect(await store.pruneClosedAnnouncements()).toBe(1);
-    expect(await store.claimAnnouncement(retired, "fixture-channel", enqueued)).toEqual({
-      kind: "unavailable",
+      values (${retired}, 'fixture-channel', 1, 'closed', now() - interval '31 days'),
+        (${sending}, 'fixture-channel', 1, 'sending', now() - interval '31 days'),
+        (${retryable}, 'fixture-channel', 1, 'retryable', now() - interval '31 days')`;
+    await sql.begin(async (tx) => {
+      const [clock] = await tx<{ expiry: Date; enqueued: Date }[]>`
+        select now() + interval '750 milliseconds' as expiry,
+        now() + interval '750 milliseconds' - interval '30 days' as enqueued`;
+      if (!clock) throw new Error("Missing fixture transaction time");
+      await tx`select pg_sleep_until(${clock.expiry}::timestamptz + interval '5 milliseconds')`;
+      expect(await store.pruneClosedAnnouncements()).toBe(1);
+      // Run admission in a savepoint so it inherits the pre-expiry transaction timestamp.
+      const delayed = pgReconciliationStore(tx as unknown as postgres.Sql);
+      expect(await delayed.claimAnnouncement(retired, "fixture-channel", clock.enqueued)).toEqual({
+        kind: "unavailable",
+      });
     });
+    expect(
+      await sql`select state from announcement_send_claims
+      where idempotency_key in (${sending}, ${retryable}) order by state`,
+    ).toEqual([{ state: "retryable" }, { state: "sending" }]);
   });
 
   it("returns filtered, ordered reconciliation windows at both limits", async ({
