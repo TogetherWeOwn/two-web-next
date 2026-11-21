@@ -74,6 +74,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
   "public/schedule-theme.css": { maxRawBytes: 9728, maxGzipBytes: 2560 },
   "public/kit-events-controls.css": { maxRawBytes: 1536, maxGzipBytes: 768 },
+  "public/kit-events-schedule.css": { maxRawBytes: 4096, maxGzipBytes: 1280 },
   "public/kit-site-header.css": { maxRawBytes: 3584, maxGzipBytes: 1280 },
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/islands/event-time-from-now.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
