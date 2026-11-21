@@ -141,10 +141,26 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
   let cookie: string;
   let env: Env;
   let app: Hono<{ Bindings: Env }>;
-  const store = createMemorySessionStore();
 
   beforeAll(async () => {
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    env = {
+      APP_URL,
+      SESSION_SECRET,
+      DISCORD_CLIENT_ID: "client-id",
+      DISCORD_CLIENT_SECRET: "client-secret",
+      DISCORD_GUILD_ID: "guild",
+      DISCORD_INVITE_URL: "https://discord.gg/invite",
+      DISCORD_BOT_TOKEN: "bot-token",
+      ADMIN_DB: fixture.db,
+    } as Env;
+  });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
+  beforeEach(async () => {
+    // A failed request may rotate the session before its assertions run.
+    const store = createMemorySessionStore();
     const token = newSessionToken();
     await store.create({
       tokenHash: await hashToken(token),
@@ -163,24 +179,9 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
         sameSite: "Lax",
       })
     ).split(";")[0]!;
-    env = {
-      APP_URL,
-      SESSION_SECRET,
-      DISCORD_CLIENT_ID: "client-id",
-      DISCORD_CLIENT_SECRET: "client-secret",
-      DISCORD_GUILD_ID: "guild",
-      DISCORD_INVITE_URL: "https://discord.gg/invite",
-      DISCORD_BOT_TOKEN: "bot-token",
-      ADMIN_DB: fixture.db,
-    } as Env;
     app = new Hono<{ Bindings: Env }>()
       .use("*", sameOrigin)
       .route("/admin", adminApp({ sessionStore: store, db: fixture.db }));
-  });
-  afterAll(async () => {
-    await fixture?.dispose();
-  });
-  beforeEach(async () => {
     await fixture.reset();
     await fixture.db.insert(events).values({
       eventKey: KEY,
