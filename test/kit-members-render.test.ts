@@ -185,7 +185,10 @@ describe("Kit member board render", () => {
     expect(html).toContain(`name="activity" type="text" value="${activityInput}"`);
   });
 
-  it("distinguishes an empty game from an outage and offers no-JS recovery", () => {
+  it("distinguishes an empty game from an outage and offers no-JS recovery", async () => {
+    const { memberBoardStatus } = (await import(
+      new URL("../ci/kit-parity-gates.mjs", import.meta.url).href
+    )) as { memberBoardStatus: (html: string, allowEnded: boolean) => string | null };
     const data = baseData({ season: "2000-02", activity: "valheim", rows: [] });
     const html = renderPage(data);
     expect(html).toContain('aria-label="Season elapsed" max="29" value="29"');
@@ -193,9 +196,14 @@ describe("Kit member board render", () => {
     expect(html).toContain("Nobody is ranked for this season and game.");
     expect(html).toContain('<a href="/leaderboards/members?season=2000-02">show every game</a>');
     for (const scope of ["overall", "relative"]) {
-      const [controls, results] = renderPage({ ...data, scope }).split(
-        /<form[^>]*aria-label="Filter the leaderboard"/,
-      );
+      const ended = renderPage({ ...data, scope });
+      expect(memberBoardStatus(ended, true)).toBe(`${scope}-empty`);
+      const [controls, results] = ended.split(/<form[^>]*aria-label="Filter the leaderboard"/);
+      if (scope === "relative") {
+        expect(results).toContain(
+          '<a href="/leaderboards/members?season=2000-02&amp;activity=valheim">overall board</a>',
+        );
+      }
       expect(controls).toContain('<a href="/profile">profile settings</a>');
       expect(results).not.toContain('href="/profile"');
       expect(results).toContain('<a href="/leaderboards/members">all-time board</a>');

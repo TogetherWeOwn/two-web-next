@@ -137,9 +137,10 @@ const destination = (
       {:else if rows.length === 0}
         <p class="board-panel" role="status">
           {scope === "relative" ? "You are not" : "Nobody is"} ranked for this season and game{seasonTiming?.ended ? "." : " yet."}
+          {#if seasonTiming?.ended}This season has ended.{/if}
           {#if scope === "relative"}See the <a href={destination("overall")}>overall board</a>.{/if}
           {#if seasonTiming?.ended}
-            This season has ended. Try the <a href={destination("overall", "all", null)}>all-time board</a>.
+            Try the <a href={destination("overall", "all", null)}>all-time board</a>.
           {:else}
             Answer going to get ranked for an <a href="/events">event</a> scheduled in this period.
           {/if}
