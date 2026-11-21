@@ -267,6 +267,12 @@ test("dependency admission retains its pre-install gates and fails closed downst
     "(needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')";
   assert.match(admission, /\n    needs: \[scope\]\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   assert.doesNotMatch(admission, /\n    (?:container|services):|\bnpm ci\b/);
+  const nodeVersion = workflow.match(/^  ADMISSION_NODE_VERSION: (.+)$/m)?.[1] ?? "";
+  assert.match(nodeVersion, /^"24\.\d+\.\d+"$/);
+  for (const consumer of [admission, check]) {
+    const setup = consumer.split("\n      - uses: actions/setup-node@")[1]?.split("\n      - ")[0];
+    assert.match(setup, /\n          node-version: \$\{\{ env\.ADMISSION_NODE_VERSION \}\}\n/);
+  }
   assert(
     steps.startsWith(
       '      - name: Require successful scope\n        env:\n          SCOPE_RESULT: ${{ needs.scope.result }}\n        run: test "$SCOPE_RESULT" = success\n',

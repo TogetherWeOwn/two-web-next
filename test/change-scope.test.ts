@@ -608,7 +608,8 @@ describe("check job", () => {
   it("guards every heavy step behind the scope verdict", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
-    const steps = check.split("\n    steps:\n")[1]?.split(/\n      - /) ?? [];
+    const stepList = check.split("\n    steps:")[1] ?? "";
+    const steps = stepList.split(/\n      - /).slice(1);
     expect(steps.length).toBeGreaterThan(10);
     const unguarded = steps.filter(
       (step) =>

@@ -24,6 +24,10 @@ permissions:
   contents: read
   pull-requests: read # The scope job lists changed PR files via the API.
 
+env:
+  # The policy fixtures and workspace installs must use the same bundled npm.
+  ADMISSION_NODE_VERSION: "24.22.3"
+
 # Runs on main are never cancelled in progress: a cancel request marks the run
 # cancelled even when every job then succeeds, and the staging deploy trigger
 # rejects a cancelled conclusion. That left 54 of 60 main runs cancelled on
@@ -561,7 +565,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         with:
-          node-version: 24
+          node-version: ${{ env.ADMISSION_NODE_VERSION }}
           package-manager-cache: false
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
@@ -659,7 +663,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         with:
-          node-version: 24
+          node-version: ${{ env.ADMISSION_NODE_VERSION }}
           cache: npm
           # The Kit install below reads web/package-lock.json, a separate
           # graph from the root lockfile. Hash it into the cache key too so

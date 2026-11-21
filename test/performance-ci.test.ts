@@ -921,6 +921,7 @@ describe("performance CI", () => {
     // check does not wait on performance jobs and keeps their gate selftest.
     expect(check).toContain("needs: [scope, dependency-admission]");
     expect(check).toContain("run: node ci/require-performance.mjs --selftest");
+    expect(check).toMatch(/run: test "\$DEPENDENCY_ADMISSION_RESULT" = success.*run: npm ci/s);
     expect(ciOk).toContain('run: test "$DEPENDENCY_ADMISSION_RESULT" = success');
   });
 
