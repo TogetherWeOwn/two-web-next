@@ -1,19 +1,32 @@
-import axe from "axe-core";
-import lighthouse from "lighthouse";
-import puppeteer from "puppeteer-core";
-import { WCAG_AA_TAGS } from "./a11y-policy.mjs";
+import { withDeadline } from "./kit-activity-log-visual.mjs";
 
-export async function routeA11y(page) {
-  await page.evaluate(axe.source);
-  const { violations, incomplete } = await page.evaluate(async (tags) => {
-    const result = await globalThis.axe.run(document, { runOnly: { type: "tag", values: tags } });
-    return { violations: result.violations.length, incomplete: result.incomplete.length };
-  }, WCAG_AA_TAGS);
+async function loadAxe() {
+  const [{ default: axe }, { WCAG_AA_TAGS }] = await Promise.all([
+    import("axe-core"),
+    import("./a11y-policy.mjs"),
+  ]);
+  return { source: axe.source, tags: WCAG_AA_TAGS };
+}
+export async function routeA11y(page, mark, load = loadAxe) {
+  mark("AXE_INJECT");
+  const { source, tags } = await load();
+  await withDeadline(() => page.evaluate(source));
+  mark("AXE_EVALUATE");
+  const { violations, incomplete } = await withDeadline(() =>
+    page.evaluate(async (values) => {
+      const result = await globalThis.axe.run(document, { runOnly: { type: "tag", values } });
+      return { violations: result.violations.length, incomplete: result.incomplete.length };
+    }, tags),
+  );
   return `a11y: ${violations || incomplete ? "FAIL" : "PASS"} violations=${violations} incomplete=${incomplete}`;
 }
 
 export async function routeLighthouse(port, page, url) {
   // Use the existing guarded target and a log-only Lighthouse audit (no filmstrip or report file).
+  const [{ default: lighthouse }, { default: puppeteer }] = await Promise.all([
+    import("lighthouse"),
+    import("puppeteer-core"),
+  ]);
   const browserURL = `http://127.0.0.1:${port}`;
   const browser = await puppeteer.connect({ browserURL, defaultViewport: null });
   try {

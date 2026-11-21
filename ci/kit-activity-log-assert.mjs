@@ -1,17 +1,32 @@
 // Run from the pinned app checkout, only with the job-private Worker and Postgres.
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { chromium } from "@playwright/test";
 import postgres from "postgres";
 import { requireGithubRunner, requireTestDatabase } from "../e2e/ci-only.mjs";
 import { routeA11y, routeLighthouse } from "./kit-activity-log-metrics.mjs";
-import { collectVisuals, origin, path } from "./kit-activity-log-visual.mjs";
+import {
+  AssertionFailure,
+  BrowserDeadline,
+  browserWorkMs,
+  collectVisuals,
+  origin,
+  path,
+  withDeadline,
+} from "./kit-activity-log-visual.mjs";
 
 const cdpPort = 9222;
 const mod = "900000000000009301";
 const member = "900000000000009302";
 const [a, b] = ["900000000000009311", "900000000000009312"];
-class AssertionFailure extends Error {}
+let stage;
+function mark(next) {
+  const file = `${process.env.TMPDIR}/browser-stage`;
+  // The outer watchdog can stop us mid-write. Keep the last complete stage readable.
+  writeFileSync(`${file}.next`, `${next}\n`, { mode: 0o600 });
+  renameSync(`${file}.next`, file);
+  stage = next;
+}
 function ok(condition, label) {
   if (!condition) throw new AssertionFailure(label);
 }
@@ -22,13 +37,19 @@ const desc = (from, to) =>
 async function main() {
   requireGithubRunner();
   const database = requireTestDatabase(process.env.DATABASE_URL);
+  mark("FIXTURE");
   const secret = readFileSync("ci/kit-worker-dev.mjs", "utf8").match(
     /SESSION_SECRET: "([^"]+)"/,
   )?.[1];
   ok(secret, "fixture-secret");
   const sql = postgres(database, { max: 1, connect_timeout: 5, onnotice: () => {} });
-  let browser;
-  try {
+  let launched;
+  let closing = false;
+  const progress = (next) => {
+    if (closing) throw new BrowserDeadline();
+    mark(next);
+  };
+  async function exercise() {
     // Same DB-minted signed session as e2e/kit-parity/moderator-fixture.ts.
     async function mint(id, moderator) {
       const bearer = `two_${randomBytes(32).toString("base64url")}`;
@@ -58,7 +79,9 @@ async function main() {
         case i % 4 when 0 then ${a} when 1 then ${b} when 2 then '7' end, 'updated',
         timestamptz '2098-01-01 00:00:00+00' + (case when i = 61 then 60 else i end) * interval '1 minute'
       from generate_series(1, 120) as i order by i`;
-    browser = await chromium.launch({
+    progress("LAUNCH");
+    launched = chromium.launch({
+      timeout: Math.max(1, Math.min(15_000, browserWorkMs - performance.now())),
       args: [
         "--proxy-server=http://127.0.0.1:9",
         `--proxy-bypass-list=<-loopback>;${origin}`,
@@ -66,6 +89,8 @@ async function main() {
         `--remote-debugging-port=${cdpPort}`,
       ],
     });
+    const browser = await launched;
+    progress("MODERATOR");
     const context = await browser.newContext({ serviceWorkers: "block", javaScriptEnabled: false });
     await context.route("**/*", (route) =>
       new URL(route.request().url()).origin === origin ? route.continue() : route.abort(),
@@ -100,6 +125,7 @@ async function main() {
     );
     same([snapshot[0].subjects, snapshot[0].n], [[a, b], 2], "moderator:audit-subjects");
 
+    progress("REFUSALS");
     const quiet = await reads();
     const probe = `${path}?subject=kal-120&causer=${a}`;
     const request = (headers) => fetch(`${origin}${probe}`, { headers, redirect: "manual" });
@@ -113,6 +139,7 @@ async function main() {
     ok((await reads()) === quiet, "refused:no-activity-log-reads");
     same(await audits(), snapshot, "refused:no-new-audits");
 
+    progress("PAGINATION_FILTERS");
     same(await view("?page=2", "page2:kit"), desc(70, 21), "page2:newest-first");
     same(await view("?page=3", "page3:kit"), desc(20, 1), "page3:newest-first");
     ok((await page.locator('a[rel="next"]').count()) === 0, "page3:last");
@@ -133,32 +160,49 @@ async function main() {
     const mintModerator = () =>
       mint(mod, true).then((value) => ({ name: cookie, value, domain, path: "/", secure: true }));
     const lighthouse = await collectVisuals(browser, mintModerator, `${scratch}/screenshots`, {
+      mark: progress,
       audit: async (page, name) => {
-        const a11y = await routeA11y(page);
+        const a11y = await routeA11y(page, progress);
         record(`${name} ${a11y}`);
         ok(a11y.startsWith("a11y: PASS "), "visual:a11y");
+        progress("CAPTURE");
       },
       measure: routeLighthouse.bind(null, cdpPort),
     });
     record(`populated-desktop.png ${lighthouse ?? "lighthouse: unavailable"}`);
+  }
+  let failedStage;
+  try {
+    // A single cumulative budget covers even browser RPCs without a native timeout.
+    await withDeadline(exercise, browserWorkMs - performance.now());
+  } catch (error) {
+    failedStage = stage;
+    throw error;
   } finally {
+    closing = true;
     try {
-      await browser?.close();
+      mark("TEARDOWN");
     } finally {
-      // Actions disposes of the service container and all fixture rows.
-      await sql.end({ timeout: 5 });
+      try {
+        await withDeadline(async () => {
+          const browser = await launched?.catch(() => undefined);
+          await browser?.close();
+        }, 10_000);
+      } finally {
+        // Actions disposes of the service container and all fixture rows.
+        await withDeadline(() => sql.end({ timeout: 5 }), 6_000);
+      }
     }
+    mark(failedStage ?? "COMPLETE");
   }
 }
 
 await main().then(
-  () => console.log("PASS kit-activity-log"),
-  (error) => {
-    console.log(
-      `FAIL ${error instanceof AssertionFailure ? error.message : "unexpected-fixture-error"}`,
-    );
-    process.exitCode = 1;
-  },
+  // Teardown and the synchronous stage write finished; don't wait on Lighthouse handles.
+  () => process.exit(0),
+  // Reserved harness verdicts, distinct from Node's own fatal exits.
+  (error) =>
+    process.exit(
+      error instanceof AssertionFailure ? 20 : error instanceof BrowserDeadline ? 21 : 22,
+    ),
 );
-// Browser and DB teardown have settled. Flush the verdict, not abandoned Lighthouse handles.
-process.stdout.write("", () => process.exit());

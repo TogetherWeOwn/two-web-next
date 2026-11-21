@@ -5,6 +5,25 @@ import { viewportPngs } from "./kit-activity-log-png.mjs";
 
 export const origin = "http://127.0.0.1:8788";
 export const path = "/admin/activity-log";
+// Reserve 30 seconds of the shell watchdog for startup slop and final teardown.
+export const browserWorkMs = 120_000;
+export class BrowserDeadline extends Error {}
+export class AssertionFailure extends Error {}
+export async function withDeadline(work, ms = 5_000) {
+  if (ms <= 0) throw new BrowserDeadline();
+  const expires = performance.now() + ms;
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new BrowserDeadline()), ms);
+  });
+  try {
+    const result = await Promise.race([work(), deadline]);
+    if (performance.now() >= expires) throw new BrowserDeadline();
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 const subject = "zz-no-activity";
 const urlFor = (empty) => `${origin}${path}${empty ? `?subject=${subject}` : ""}`;
 const shell = "Skip to content TWO admin Events · Featured · Join attempts · Activity log · Site";
@@ -31,8 +50,8 @@ const kitDocument = (status, headers) =>
   headers["cache-control"] === "private, no-store";
 export function validateView(content, state, empty, keyboard) {
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  if (!same(content, expectedContent(empty))) throw new Error("visual content drift");
-  if (!same(state, [true, keyboard, keyboard])) throw new Error("visual state drift");
+  if (!same(content, expectedContent(empty))) throw new AssertionFailure("visual content drift");
+  if (!same(state, [true, keyboard, keyboard])) throw new AssertionFailure("visual state drift");
 }
 // The asset allowlist also requires the response bytes to match the pinned local build.
 const asset =
@@ -117,18 +136,18 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
     // The load timeout can precede a later document or asset fetch verdict.
     await settle();
     const valid = response?.url() === url && kitDocument(response.status(), response.headers());
-    if (!(response ? valid : unavailable)) throw new Error("visual provenance drift");
+    if (!(response ? valid : unavailable)) throw new AssertionFailure("visual provenance drift");
     if (!violation && !unavailable) result = await render(page);
     await settle();
   } finally {
-    await context.close();
+    await withDeadline(() => context.close());
   }
-  if (violation) throw new Error("unexpected visual diagnostic");
+  if (violation) throw new AssertionFailure("unexpected visual diagnostic");
   return unavailable ? null : result;
 }
 async function boundedMeasurement(measure, ms) {
-  // Leave 20 seconds for request verdicts and teardown under the 150-second runner watchdog.
-  const budget = Math.min(ms, 130_000 - process.uptime() * 1_000);
+  // Leave time for guarded request verdicts and context close inside the work budget.
+  const budget = Math.min(ms, browserWorkMs - 10_000 - performance.now());
   if (budget <= 0) return null;
   const timer = new AbortController();
   const task = Promise.resolve()
@@ -137,15 +156,19 @@ async function boundedMeasurement(measure, ms) {
   const deadline = delay(budget, null, { signal: timer.signal });
   return Promise.race([task, deadline]).finally(() => timer.abort());
 }
-export async function collectVisuals(browser, mint, dir, { audit, measure, ms = 25_000 }) {
+export async function collectVisuals(browser, mint, dir, { audit, measure, mark, ms = 25_000 }) {
   const views = { ...viewportPngs, lighthouse: viewportPngs["populated-desktop.png"] };
   for (const [name, size] of Object.entries(views)) {
     const reportOnly = name === "lighthouse";
     const empty = name.startsWith("empty-");
     const keyboard = name === "keyboard-mobile.png";
     const url = urlFor(empty);
+    const stage = reportOnly ? "LIGHTHOUSE" : "CAPTURE";
+    mark(stage);
     const render = async (page) => {
-      await page.evaluate(() => document.fonts.ready.then(() => true));
+      mark("FONTS");
+      await withDeadline(() => page.evaluate(() => document.fonts.ready.then(() => true)));
+      mark(stage);
       await inspect(page, empty, false);
       if (reportOnly) return boundedMeasurement(() => measure(page, url), ms);
       if (keyboard) {
