@@ -859,7 +859,7 @@ for (const target of targets) {
           expect(normalized, `${target.name} ${path}: ranked viewer row`).toContain(RANKED_ROW);
         } else {
           expect(body, `${target.name} ${path}: empty board`).toContain(
-            "Nobody is ranked for this season and game yet.",
+            "Nobody is ranked for this season and game",
           );
           expect(normalized, `${target.name} ${path}: no ranked row`).not.toContain(RANKED_ROW);
         }
@@ -3348,9 +3348,7 @@ test.describe("kit: member-board visuals", () => {
             });
             await expect(rankedRow.getByRole("cell")).toHaveText(["1", "1"]);
           } else {
-            await expect(
-              page.getByText("Nobody is ranked for this season and game yet."),
-            ).toBeVisible();
+            await expect(page.getByText(/Nobody is ranked for this season and game/)).toBeVisible();
             await expect(page.getByRole("rowheader", { name: "QA Member" })).toHaveCount(0);
           }
           await expect.soft(page).toHaveScreenshot(`member-board-${view}-${viewport.name}.png`, {

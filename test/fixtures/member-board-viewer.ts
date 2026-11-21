@@ -27,7 +27,7 @@ function cssCompiler(componentCss: string[]) {
     ) => Promise<{ build: (candidates: string[]) => string }>;
   };
   return compile(
-    '@import "../../vendor/design-kit/tokens.css";\n@import "./lib/segmented-control.css";\n' +
+    '@import "../../vendor/design-kit/tokens.css";\n@import "./lib/segmented-control.css";\n@import "./lib/site-header.css";\n' +
       [readFileSync(join(root, "web/src/app.css"), "utf8"), ...componentCss].join("\n"),
     { base: join(root, "web/src"), onDependency: () => {} },
   );

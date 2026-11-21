@@ -13,6 +13,7 @@ import type { PageProps } from "./$types";
 let { data }: PageProps = $props();
 const { season, scope, activity, viewerUsername, available, appUrl } = $derived(data);
 const rows: MembersBoardRow[] = $derived(data.rows);
+const activityInput = $derived(data.activityInput ?? activity);
 const now = new Date();
 const periods = utcPeriodShortcuts(now);
 const seasonWindow = $derived(parseSeasonParam(season));
@@ -34,6 +35,7 @@ const seasonTiming = $derived.by(() => {
   const elapsed = (now.getTime() - start.getTime()) / dayMs;
   return {
     days,
+    ended: elapsed >= days,
     elapsed: Math.max(0, Math.min(days, elapsed)),
     label:
       elapsed < 0
@@ -50,22 +52,14 @@ const seasonTiming = $derived.by(() => {
   };
 });
 
-// The reader's positions preserve the bounded, deterministic window. Equal
-// counts only change the display; a clipped leading group has no known start.
-const standings = $derived.by(() => {
-  let first = 0;
-  return rows.map((row, i) => {
-    if (i === 0 || rows[i - 1]?.count !== row.count) first = i;
-    const tied = first !== i || rows[i + 1]?.count === row.count;
-    const rank =
-      first === 0 && tied && rows[0]?.rank !== 1 ? null : (rows[first]?.rank ?? row.rank);
-    return { row, rank, tied };
-  });
-});
+// Label only visible equal counts; keep the reader's positions at both window edges.
+const ties = $derived(
+  rows.map((row, i) => rows[i - 1]?.count === row.count || rows[i + 1]?.count === row.count),
+);
 const destination = (
   nextScope: string,
   nextSeason = season,
-  nextActivity: string | null = activity,
+  nextActivity: string | null = activityInput,
 ) => {
   const params = new URLSearchParams();
   if (nextSeason !== "all") params.set("season", nextSeason);
@@ -116,7 +110,7 @@ const destination = (
     ]} />
     <nav class="board-games" aria-label="Board game">
       <Chip href={destination(scope, season, null)} selected={activity === null}>Every game</Chip>
-      {#if activity !== null}<Chip href={destination(scope)} selected>{activity}</Chip>{/if}
+      {#if activityInput !== null}<Chip href={destination(scope)} selected>{activityInput}</Chip>{/if}
     </nav>
   </div>
   <nav class="schedule-views board-periods" aria-label="Board period">
@@ -124,13 +118,14 @@ const destination = (
     <a href={destination(scope, periods.quarter)} aria-current={season === periods.quarter ? "page" : undefined}>This quarter</a>
     <a href={destination(scope, "all")} aria-current={season === "all" ? "page" : undefined}>All time</a>
   </nav>
+  <p>Manage leaderboard visibility in your <a href="/profile">profile settings</a>.</p>
   <form class="board-filters" method="get" action="/leaderboards/members" aria-label="Filter the leaderboard">
     {#if scope !== "overall"}<input type="hidden" name="scope" value={scope} />{/if}
     <label for="board-season">Season (all, 2026, 2026-09 or 2026-Q3)
       <input id="board-season" name="season" type="text" value={season} />
     </label>
     <label for="board-activity">Game (blank for every game)
-      <input id="board-activity" name="activity" type="text" value={activity ?? ""} />
+      <input id="board-activity" name="activity" type="text" value={activityInput ?? ""} />
     </label>
     <button class="btn" type="submit">Show board</button>
   </form>
@@ -141,20 +136,23 @@ const destination = (
         <p class="board-panel" role="status">Rankings are temporarily unavailable.</p>
       {:else if rows.length === 0}
         <p class="board-panel" role="status">
-          {#if scope === "relative"}
-            You are not ranked for this season and game yet. See the <a href={destination("overall")}>overall board</a>, or answer going to get ranked at an upcoming <a href="/events">event</a>.
+          {scope === "relative" ? "You are not" : "Nobody is"} ranked for this season and game{seasonTiming?.ended ? "." : " yet."}
+          {#if scope === "relative"}See the <a href={destination("overall")}>overall board</a>.{/if}
+          {#if seasonTiming?.ended}
+            This season has ended. Try the <a href={destination("overall", "all", null)}>all-time board</a>.
           {:else}
-            Nobody is ranked for this season and game yet. Browse <a href="/events">events</a> to get ranked{#if activity !== null}, or <a href={destination(scope, season, null)}>show every game</a>{/if}.
+            Answer going to get ranked for an <a href="/events">event</a> scheduled in this period.
           {/if}
+          {#if scope === "overall" && activity !== null}Or <a href={destination(scope, season, null)}>show every game</a>.{/if}
         </p>
       {:else}
         {#if scope === "overall"}
           <ol class="board-leaders" role="list" aria-label="Leading sign-up counts">
-            {#each standings.slice(0, 3) as { row, rank, tied } (row.rank)}
-              <li class="board-panel" class:leader-first={rank === 1}>
-                <span class="leader-position">{rank}</span>
+            {#each rows.slice(0, 3) as row, i (row.rank)}
+              <li class="board-panel" class:leader-first={row.rank === 1}>
+                <span class="leader-position">{row.rank}</span>
                 <strong>{row.username}{row.isViewer ? " (you)" : ""}</strong>
-                <span class="board-mono">{row.count} {row.count === 1 ? "sign-up" : "sign-ups"}{tied ? " · Tied" : ""}</span>
+                <span class="board-mono">{row.count} {row.count === 1 ? "sign-up" : "sign-ups"}{ties[i] ? " · Tied" : ""}</span>
               </li>
             {/each}
           </ol>
@@ -163,24 +161,19 @@ const destination = (
           <caption>{boardCaption({ season, scope, activity })}</caption>
           <thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">Going</th></tr></thead>
           <tbody>
-            {#each standings as { row, rank, tied } (row.rank)}
+            {#each rows as row, i (row.rank)}
               <tr aria-current={row.isViewer ? "true" : undefined}>
-                <td>{tied ? (rank === null ? "Tied" : `${rank} (tied)`) : rank}</td><th scope="row">{row.username}</th><td>{row.count}</td>
+                <td>{row.rank}</td><th scope="row">{row.username}</th><td>{row.count}{ties[i] ? " · Tied" : ""}</td>
               </tr>
             {/each}
           </tbody>
         </table>
-        <p class="board-mono board-footnote">Small differences can change your place when sign-up counts are low.</p>
       {/if}
     </div>
     <aside aria-labelledby="how-it-counts" class="board-panel">
       <h2 id="how-it-counts">How it counts</h2>
-      <ol>
-        <li>Answer going to an event.</li>
-        <li>Each going sign-up counts once, in the period when the event is scheduled.</li>
-        <li>The board orders members by sign-up count, not by who attended.</li>
-      </ol>
-      <p>Don't want to be listed? Change your <a href="/profile">profile settings</a> or read the <a href="/privacy">privacy policy</a>.</p>
+      <p>The board counts current Going sign-ups for published or past events, in the period of the event’s scheduled start. It does not count attendance.</p>
+      <p>Read the <a href="/privacy">privacy policy</a> for more about leaderboard visibility.</p>
     </aside>
   </div>
 </Shell>
@@ -195,9 +188,6 @@ const destination = (
   progress { display: block; width: 100%; height: var(--two-radius-s); margin-top: var(--two-space-2); accent-color: var(--two-color-text-secondary); }
   .board-toolbar, .board-games, .board-filters { display: flex; flex-wrap: wrap; gap: var(--two-space-3); align-items: center; }
   .board-toolbar {
-    position: sticky;
-    top: 0;
-    z-index: 2;
     padding-block: var(--two-space-inset-room);
     background: var(--two-color-bg-canvas);
     border-bottom: 1px solid var(--two-color-line-hairline);
@@ -230,9 +220,6 @@ const destination = (
     border-radius: var(--two-radius-l);
   }
   aside h2 { font-size: var(--two-font-size-body-reading); margin: 0; }
-  aside ol { list-style: decimal; padding-inline-start: var(--two-space-6); }
-  aside li { margin-block: var(--two-space-3); }
-  aside li::marker { color: var(--two-color-text-accent); font-family: var(--two-font-data); }
   aside p { margin-bottom: 0; }
   .board-leaders { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--two-space-3); margin: 0 0 var(--two-space-6); padding: 0; list-style: none; }
   .board-leaders li { display: grid; gap: var(--two-space-2); overflow-wrap: anywhere; }
@@ -256,11 +243,11 @@ const destination = (
   .board-layout :global(.member-board-table :is(td, th):last-child) { text-align: right; }
   .board-layout :global(.member-board-table tr[aria-current="true"] > *) { background: var(--two-color-bg-raised); }
   .board-layout :global(.member-board-table tr[aria-current="true"] > td:first-child) { box-shadow: inset 2px 0 var(--two-color-accent-default); }
-  .board-footnote { margin-top: var(--two-space-4); }
 
   @media (max-width: 820px) {
     .board-heading { padding-block: var(--two-space-7) var(--two-space-6); }
-    .board-toolbar { position: static; }
+    /* Match the mobile shell’s scroll padding (site-header.css). */
+    .board-layout :global(.member-board-table thead th) { top: 12rem; }
     .board-layout { grid-template-columns: minmax(0, 1fr); gap: var(--two-space-7); padding-bottom: var(--two-space-section-compact); }
     .board-leaders { grid-template-columns: minmax(0, 1fr); }
     .board-leaders li { grid-template-columns: auto minmax(0, 1fr); column-gap: var(--two-space-4); }
