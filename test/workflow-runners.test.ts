@@ -164,6 +164,8 @@ describe("workflow runner labels", () => {
       "bundle-budget",
       "lighthouse",
       "kit-browser-fixture",
+      "kit-browser-calendar",
+      "kit-browser-lifeline",
       "ci-ok",
     ]);
     for (const { id, runsOn } of ciJobs) {
