@@ -1,6 +1,6 @@
-<section class="highlights" aria-labelledby="home-guest-intro-heading" data-testid="home-guest-intro">
+<section class="highlights" aria-labelledby="community-heading" data-testid="home-guest-intro">
   <div class="band-head">
-    <h2 id="home-guest-intro-heading">What happens here.</h2>
+    <h2 id="community-heading">What happens here.</h2>
     <p>Not a crowd. A place that knows your name.</p>
   </div>
   <ul class="hl" role="list" data-testid="home-highlights">

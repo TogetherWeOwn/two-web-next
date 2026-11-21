@@ -167,9 +167,10 @@ describe("Kit home SSR render: guest intro", () => {
   it.each([null, nonMemberSession])("renders sourced copy and links for %j", (session) => {
     const html = renderPage(baseData({ session }));
     const intro = html
-      .split('data-testid="home-guest-intro"')[1]!
+      .split('<section class="highlights"')[1]!
       .split('<section class="week-band"')[0]!;
-    expect(intro).toContain('id="home-guest-intro-heading">What happens here.</h2>');
+    expect(intro).toContain('aria-labelledby="community-heading" data-testid="home-guest-intro"');
+    expect(intro).toContain('id="community-heading">What happens here.</h2>');
     expect(Array.from(intro.matchAll(/<li>.*?<h3>(.*?)<\/h3>/gs), ([, title]) => title)).toEqual([
       "Grown-ups, mostly evenings",
       "Turn up, say hello",
@@ -207,13 +208,12 @@ describe("Kit home SSR render: Week and Upcoming Events", () => {
   });
   it.each([null, nonMemberSession, memberSession])("orders the bands for %j", (session) => {
     const html = renderPage(baseData({ session }));
-    const headings =
-      /id="(home-heading|home-guest-intro-heading|community-heading|home-week-heading|home-events-heading)"/g;
+    const headings = /id="(home-heading|community-heading|home-week-heading|home-events-heading)"/g;
     const ids = Array.from(html.matchAll(headings), ([, id]) => id);
     expect(ids).toEqual(
       session?.member
         ? ["home-heading", "home-week-heading", "home-events-heading", "community-heading"]
-        : ["home-heading", "home-guest-intro-heading", "home-week-heading", "home-events-heading"],
+        : ["home-heading", "community-heading", "home-week-heading", "home-events-heading"],
     );
   });
 
