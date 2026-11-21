@@ -54,6 +54,11 @@ function validateProvenance(expected, attestation, run, archiveSha256) {
     same(attestation, producer, producerKeys) && attestation.subjectSha256 === archiveSha256,
     "verified attestation identity or subject digest",
   );
+  const runUrl = `https://github.com/${REPOSITORY}/actions/runs/${run.runId}`;
+  requireEvidence(
+    attestation.invocationId === `${runUrl}/attempts/${run.runAttempt}`,
+    "verified attestation invocation",
+  );
 }
 
 function inspectMembers(members) {
@@ -75,11 +80,11 @@ function inspectMembers(members) {
   return files;
 }
 
-// All three adapters are caller-owned trust boundaries: authenticated run lookup
-// (normalize GitHub's head_sha to run.sourceSha), Sigstore verification with
-// pinned signer policy, and bounded data-only decoding
-// of these exact archive bytes. The decoder must account for every archive entry
-// without extracting it. Never build either provenance input from members.
+// All three adapters are caller-owned trust boundaries: authenticated exact-attempt
+// run lookup (normalize head_sha to run.sourceSha), pinned Sigstore verification,
+// and bounded data-only decoding of these exact archive bytes without extraction.
+// Copy invocationId from the verified SLSA predicate's runDetails.metadata, never
+// synthesize it from the run lookup. Never build either provenance input from members.
 // This checks evidence consistency only; it cannot qualify custody or recovery.
 export function validatePureHonoRecoveryEvidence({ archive, expected, attestation, run, decode }) {
   requireEvidence(
