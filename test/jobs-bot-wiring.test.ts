@@ -13,7 +13,8 @@ import { botClientFor, handleQueue } from "../src/jobs/worker";
 const { query } = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("postgres", () => ({
   default: () => ({
-    begin: (run: (tx: typeof query) => unknown) => run(query),
+    begin: (run: string | ((tx: typeof query) => unknown), work?: (tx: typeof query) => unknown) =>
+      typeof run === "string" ? work!(query) : run(query),
     end: async () => {},
   }),
 }));
@@ -238,45 +239,86 @@ describe("handleQueue with the live bot client", () => {
     expect(fn).toHaveBeenCalledOnce();
   });
 
-  it("does not contact the bot again when the first hard-stop write fails", async () => {
+  it("recovers the observed hard stop across a write outage without re-sending", async () => {
     const { fn } = fetchDouble(refusal(409, "needs_reconciliation", false));
     vi.stubGlobal("fetch", fn);
+    const send = vi.fn<(body: unknown) => Promise<void>>().mockResolvedValue(undefined);
+    const env = envWith({ ...configured, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue });
     let writes = 0;
-    let claimUntil = Date.now() + 30_000;
     const failed = vi.fn();
     query.mockImplementation(async (parts: TemplateStringsArray, ...values: unknown[]) => {
       const text = parts.join("?");
       if (text.includes("insert into queue_failed_jobs")) failed();
       if (text.includes("insert into bot_reconciliation_intents")) {
-        if (++writes === 1) throw new Error("write unavailable");
-        expect(values).toEqual([uuid, "announcement.post", "general", 1, null, null]);
+        expect(values).toEqual([
+          uuid,
+          "announcement.post",
+          "general",
+          1,
+          "needs_reconciliation",
+          409,
+        ]);
+        if (++writes < 3) throw new Error("write unavailable");
         return [{ idempotency_key: uuid }];
       }
       if (writes && text.includes("insert into announcement_send_claims")) return [];
       if (writes && text.includes("case when state"))
-        return [
-          { ...claimRow, claim_until_ms: claimUntil, kind: claimUntil ? "sending" : "abandoned" },
-        ];
+        return [{ ...claimRow, claim_until_ms: Date.now() + 25_000, kind: "sending" }];
       return claimQuery(text);
     });
     const body = { ...announcement(), jobId: uuid };
     const first = delivery(body);
-    await handleQueue(batch(first), envWith(configured));
+    await handleQueue(batch(first), env);
     expect(first.retry).toHaveBeenCalledOnce();
     expect(first.ack).not.toHaveBeenCalled();
     expect(failed).not.toHaveBeenCalled();
+    const recovery = {
+      kind: "announcement-settlement",
+      idempotencyKey: uuid,
+      jobId: uuid,
+      sendAttempts: 1,
+      lastCode: "needs_reconciliation",
+      lastStatus: 409,
+    };
+    expect(send).toHaveBeenCalledExactlyOnceWith(recovery);
 
     const waiting = delivery(body, 2);
-    await handleQueue(batch(waiting), envWith(configured));
+    await handleQueue(batch(waiting), env);
     expect(waiting.retry).toHaveBeenCalledOnce();
     expect(waiting.ack).not.toHaveBeenCalled();
-    claimUntil = 0;
-    const redelivery = { ...delivery(body, 3), timestamp: first.timestamp };
-    await handleQueue(batch(redelivery), envWith(configured));
+    const unavailable = delivery(recovery);
+    await handleQueue(batch(unavailable), env);
+    expect(unavailable.retry).toHaveBeenCalledOnce();
+    expect(unavailable.ack).not.toHaveBeenCalled();
+    expect(failed).not.toHaveBeenCalled();
+    const redelivery = delivery(recovery, 2);
+    await handleQueue(batch(redelivery), env);
     expect(fn).toHaveBeenCalledOnce();
-    expect(writes).toBe(2);
+    expect(writes).toBe(3);
     expect(redelivery.ack).toHaveBeenCalledOnce();
+    expect(failed).toHaveBeenCalledOnce();
   });
+
+  it.each([{ lastCode: "unclassified provider text" }, { lastStatus: 700 }, { sendAttempts: 0 }])(
+    "discards an invalid settlement without touching storage or the bot: %j",
+    async (invalid) => {
+      const { fn } = fetchDouble();
+      vi.stubGlobal("fetch", fn);
+      const message = delivery({
+        kind: "announcement-settlement",
+        idempotencyKey: uuid,
+        sendAttempts: 1,
+        lastCode: "needs_reconciliation",
+        lastStatus: 409,
+        ...invalid,
+      });
+      await handleQueue(batch(message), envWith(configured));
+      expect(message.ack).toHaveBeenCalledOnce();
+      expect(message.retry).not.toHaveBeenCalled();
+      expect(query).not.toHaveBeenCalled();
+      expect(fn).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not charge failed claim writes against the bot send budget", async () => {
     const { fn } = fetchDouble(

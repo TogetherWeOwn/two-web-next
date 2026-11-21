@@ -176,6 +176,29 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     expect(await claim()).toEqual(unavailable); // Resolved key remains suppressed.
   });
 
+  it.each([false, true])(
+    "recovers observed evidence after lease expiry, orphan closed=%s",
+    async (orphanClosed) => {
+      const key = crypto.randomUUID();
+      const store = pgReconciliationStore(sql);
+      const queuedAt = new Date();
+      const claim = () => store.claimAnnouncement(key, "fixture-channel", queuedAt);
+      expect(await claim()).toMatchObject({ kind: "claimed", attempts: 1 });
+      await advanceRetry(key); // Move the sending lease into the past.
+      if (orphanClosed) await store.recordAnnouncement(key, 1, null);
+      const evidence = { lastCode: "needs_reconciliation", lastStatus: 409 };
+      expect(await store.recoverAnnouncement(key, 2, evidence)).toBe(false);
+      expect(await store.recoverAnnouncement(key, 1, evidence)).toBe(true);
+      expect(
+        await store.recoverAnnouncement(key, 1, { lastCode: "in_progress", lastStatus: 503 }),
+      ).toBe(false);
+      expect(await claim()).toMatchObject({ kind: "closed", attempts: 1 });
+      expect(
+        await sql`select last_code, last_status from bot_reconciliation_intents where idempotency_key = ${key}`,
+      ).toEqual([{ last_code: "needs_reconciliation", last_status: 409 }]);
+    },
+  );
+
   it("commits hard-stop diagnostics and never reacquires a pruned original carrier", async () => {
     const key = crypto.randomUUID();
     const retired = crypto.randomUUID();
