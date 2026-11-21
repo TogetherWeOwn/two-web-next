@@ -6,8 +6,18 @@ class FakeSocket extends EventTarget {
     this.dispatchEvent(new Event("close"));
   }
 
-  send(frame: TopicFrame<number, number>) {
+  send = vi.fn<(data: string) => void>();
+
+  receive(frame: TopicFrame<number>) {
     this.dispatchEvent(new MessageEvent("message", { data: frame }));
+  }
+
+  snapshot(value: number, stream = "first") {
+    this.receive({ kind: "snapshot", value, stream, seq: 0 });
+  }
+
+  patch(seq: number, value: number, stream = "first") {
+    this.receive({ kind: "patch", value, stream, seq });
   }
 }
 
@@ -21,8 +31,8 @@ function fixture(
       sockets.push(socket);
       return socket;
     },
-    decode: (data) => data as TopicFrame<number, number>,
-    patch: (value, delta) => value + delta,
+    decode: (data) => data as TopicFrame<number>,
+    resync: (socket) => socket.send("resync"),
     poll: read,
   });
   const seen = vi.fn();
@@ -52,28 +62,30 @@ describe("Kit live topic", () => {
     expect(sockets).toHaveLength(0);
     expect(read).not.toHaveBeenCalled();
     const stop = start();
-    socket(0).send({ kind: "snapshot", seq: 7, value: 4 });
-    socket(0).send({ kind: "patch", seq: 8, patch: 3 });
-    socket(0).send({ kind: "patch", seq: 8, patch: 100 });
-    socket(0).send({ kind: "patch", seq: 6, patch: 100 });
-    expect(seen).toHaveBeenLastCalledWith({ value: 7, source: "live" });
-    expect(seen).toHaveBeenCalledTimes(3);
+    socket(0).snapshot(4);
+    socket(0).patch(1, 7);
+    socket(0).patch(2, 8);
+    socket(0).patch(2, 100);
+    socket(0).patch(1, 100);
+    expect(seen).toHaveBeenLastCalledWith({ value: 8, source: "live" });
+    expect(seen).toHaveBeenCalledTimes(4);
     stop();
   });
 
   it("discards the skipped patch and the old projection, then resyncs before accepting new patches", async () => {
     const { socket, sockets, seen, read, start } = fixture();
     const stop = start();
-    socket(0).send({ kind: "snapshot", seq: 7, value: 4 });
-    socket(0).send({ kind: "patch", seq: 9, patch: 100 });
+    socket(0).snapshot(4);
+    socket(0).patch(2, 100);
     expect(seen).toHaveBeenLastCalledWith({ value: null, source: "stale" });
-    socket(0).send({ kind: "patch", seq: 8, patch: 100 });
-    await vi.advanceTimersByTimeAsync(799);
+    socket(0).patch(1, 100);
+    socket(0).snapshot(100);
+    expect(socket(0).send.mock.calls).toEqual([["resync"]]);
+    await vi.advanceTimersByTimeAsync(0);
     expect(sockets).toHaveLength(1);
     expect(seen).toHaveBeenLastCalledWith({ value: 10, source: "poll" });
-    await vi.advanceTimersByTimeAsync(1);
-    socket(1).send({ kind: "snapshot", seq: 14, value: 5 });
-    socket(1).send({ kind: "patch", seq: 15, patch: 1 });
+    socket(0).snapshot(5, "second");
+    socket(0).patch(1, 6, "second");
     await vi.advanceTimersByTimeAsync(10_000);
     expect(seen).toHaveBeenLastCalledWith({ value: 6, source: "live" });
     expect(read).toHaveBeenCalledTimes(1);
@@ -116,17 +128,15 @@ describe("Kit live topic", () => {
     stop();
   });
 
-  it("accepts a same-sequence replacement snapshot but resyncs on an explicit reset", async () => {
+  it("requests a baseline for an unknown stream and reconnects when it times out", async () => {
     const { socket, seen, start } = fixture();
     const stop = start();
-    socket(0).send({ kind: "snapshot", seq: 7, value: 4 });
-    socket(0).send({ kind: "snapshot", seq: 7, value: 1 });
-    expect(seen).toHaveBeenLastCalledWith({ value: 1, source: "live" });
-    socket(0).send({ kind: "resync" });
+    socket(0).snapshot(4);
+    socket(0).patch(1, 99, "unknown");
     expect(seen).toHaveBeenLastCalledWith({ value: null, source: "stale" });
-    await vi.advanceTimersByTimeAsync(800);
-    // A new stream can legitimately begin with a lower sequence.
-    socket(1).send({ kind: "snapshot", seq: 0, value: 8 });
+    expect(socket(0).send).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(5_800);
+    socket(1).snapshot(8, "second");
     expect(seen).toHaveBeenLastCalledWith({ value: 8, source: "live" });
     stop();
   });
@@ -139,11 +149,13 @@ describe("Kit live topic", () => {
     const { socket, seen, read, start } = fixture();
     read.mockReturnValueOnce(pending);
     const stop = start();
-    socket(0).close();
+    socket(0).snapshot(4);
+    socket(0).receive({ kind: "reset" });
+    expect(seen).toHaveBeenLastCalledWith({ value: null, source: "stale" });
     await vi.advanceTimersByTimeAsync(800);
     const signal = read.mock.lastCall?.[0];
     expect(signal?.aborted).toBe(false);
-    socket(1).send({ kind: "snapshot", seq: 3, value: 9 });
+    socket(1).snapshot(9, "second");
     expect(signal?.aborted).toBe(true);
     resolve(99);
     await vi.advanceTimersByTimeAsync(0);

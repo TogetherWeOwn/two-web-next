@@ -4,27 +4,25 @@ const MAX_RETRY = 30_000;
 
 type Timer = ReturnType<typeof setTimeout>;
 
-export type TopicFrame<T, P> =
-  | { kind: "snapshot"; seq: number; value: T }
-  | { kind: "patch"; seq: number; patch: P }
-  | { kind: "resync" };
+type Cursor = { stream: string; seq: number };
+export type TopicFrame<T> = ({ kind: "snapshot" | "patch"; value: T } & Cursor) | { kind: "reset" };
 
 type TopicState<T> = { value: T | null; source: "ssr" | "live" | "poll" | "stale" };
-type Socket = EventTarget & { close(): void };
+type Socket = EventTarget & { close(): void; send(data: string): void };
 
-interface TopicTransport<T, P> {
+interface TopicTransport<T> {
   open(): Socket;
-  // Decode only validated, viewer-projected data. Ignore control frames with
-  // null; throw for a malformed data frame so we don't apply its successors.
-  decode(data: unknown): TopicFrame<T, P> | null;
-  patch(value: T, patch: P): T;
+  // Decode only validated, viewer-projected data. Ignore unrelated topics
+  // with null; throw for a malformed data frame so we don't use its successors.
+  decode(data: unknown): TopicFrame<T> | null;
+  resync(socket: Socket): void;
   poll(signal: AbortSignal): Promise<T | null>;
 }
 
 /** A per-view Svelte readable. Subscribe during SSR; start it from onMount.
  *  Source describes the transport, not the age of Discord's underlying data.
  */
-export function createLiveTopic<T, P>(initial: T | null, transport: TopicTransport<T, P>) {
+export function createLiveTopic<T>(initial: T | null, transport: TopicTransport<T>) {
   let state: TopicState<T> = { value: initial, source: "ssr" };
   const subscribers = new Set<(state: TopicState<T>) => void>();
   let mounted = false;
@@ -80,15 +78,18 @@ export function createLiveTopic<T, P>(initial: T | null, transport: TopicTranspo
       previous?.close();
     }
 
+    function fallback() {
+      if (pollTick !== undefined) return;
+      // Without continuity we can no longer confirm room access or consent.
+      // Drop that projection; the same-origin poll must authorize its own.
+      publish(null, "stale");
+      if (!stopped) poll();
+    }
+
     function recover() {
       disconnect();
-      if (pollTick === undefined) {
-        // A disconnected stream can no longer confirm room access or consent.
-        // Drop that projection; the same-origin poll must authorize its own.
-        publish(null, "stale");
-        if (stopped) return;
-        poll();
-      }
+      fallback();
+      if (stopped) return;
       retry = setTimeout(connect, retryDelay * (0.8 + Math.random() * 0.2));
       retryDelay = Math.min(retryDelay * 2, MAX_RETRY);
     }
@@ -102,7 +103,8 @@ export function createLiveTopic<T, P>(initial: T | null, transport: TopicTranspo
         return;
       }
       socket = connection;
-      let current: { seq: number; value: T } | undefined;
+      let current: Cursor | undefined;
+      let resyncing = false;
 
       function lost() {
         if (socket === connection) recover();
@@ -112,33 +114,39 @@ export function createLiveTopic<T, P>(initial: T | null, transport: TopicTranspo
       connection.addEventListener("error", lost);
       connection.addEventListener("message", (event) => {
         if (socket !== connection || !(event instanceof MessageEvent)) return;
+        let frame: TopicFrame<T> | null;
         try {
-          const frame = transport.decode(event.data);
+          frame = transport.decode(event.data);
           if (!frame) return;
-          if (frame.kind === "resync" || !Number.isSafeInteger(frame.seq) || frame.seq < 0) {
+          if (frame.kind === "reset" || !Number.isSafeInteger(frame.seq) || frame.seq < 0) {
             lost();
             return;
           }
-          if (current && frame.seq < current.seq) return;
+          const sameStream = frame.stream === current?.stream;
           if (frame.kind === "snapshot") {
+            if (sameStream || frame.seq !== 0) return;
+            resyncing = false;
             stopPolling();
             clearTimeout(firstFrame);
             retryDelay = 1_000;
-            current = frame;
           } else {
-            if (frame.seq === current?.seq) return;
-            if (!current || frame.seq !== current.seq + 1) {
-              // The next connection starts with a fresh authoritative snapshot.
-              lost();
+            if (resyncing || (current && sameStream && frame.seq <= current.seq)) return;
+            if (!current || !sameStream || frame.seq !== current.seq + 1) {
+              resyncing = true;
+              fallback();
+              if (stopped) return;
+              clearTimeout(firstFrame);
+              firstFrame = setTimeout(lost, RESPONSE_DEADLINE);
+              transport.resync(connection);
               return;
             }
-            current = { seq: frame.seq, value: transport.patch(current.value, frame.patch) };
           }
+          current = { stream: frame.stream, seq: frame.seq };
         } catch {
           lost();
           return;
         }
-        publish(current.value, "live");
+        publish(frame.value, "live");
       });
     }
 
