@@ -9,7 +9,7 @@ vi.mock(import("../src/live/socket-route"), async (actual) => ({
 
 const readSession = vi.mocked(readLiveSocketSession);
 const sessionRef = "a".repeat(64);
-const liveRow = { userId: "101", member: true, validUntil: 1_300_000 };
+const liveRow = { userId: "101", member: true, remainingMs: 310_000 };
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -47,7 +47,12 @@ function connectedSocket(
     send: vi.fn(),
     close: vi.fn(),
   };
-  const ctx = { getWebSockets: () => [server] } as unknown as DurableObjectState;
+  const setAlarm = vi.fn();
+  const ctx = {
+    getWebSockets: () => [server],
+    blockConcurrencyWhile: <T>(callback: () => Promise<T>) => callback(),
+    storage: { getAlarm: async () => start + 300_000, setAlarm },
+  } as unknown as DurableObjectState;
   const instance = () => new LiveSockets(ctx, { DISCORD_LIVE_SOCKET_ENABLED: "true" }, project);
   let sockets = instance();
   return {
@@ -55,6 +60,8 @@ function connectedSocket(
     message: (text: string, refresh = async () => false) =>
       sockets.message(server as unknown as WebSocket, text, refresh),
     publish: () => sockets.publish(),
+    expire: () => sockets.expire(0),
+    setAlarm,
     wake: () => {
       sockets = instance();
     },
@@ -63,7 +70,7 @@ function connectedSocket(
 
 beforeEach(() => {
   readSession.mockReset().mockResolvedValue(liveRow);
-  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.useFakeTimers({ toFake: ["Date", "performance"] });
   vi.setSystemTime(start);
 });
 afterEach(() => vi.useRealTimers());
@@ -155,6 +162,7 @@ describe("live WebSocket message bounds", () => {
 
   it.each([
     ["revoked", 1008],
+    ["expired during lookup", 1008],
     ["lookup failed", 1011],
   ])("closes without a fresh snapshot when post-pull authorization is %s", async (state, code) => {
     const { message, server } = connectedSocket(
@@ -173,12 +181,51 @@ describe("live WebSocket message bounds", () => {
     });
     await entered.promise;
     if (state === "revoked") readSession.mockResolvedValueOnce(null);
-    else readSession.mockRejectedValueOnce(new Error("session lookup failed"));
+    else if (state === "expired during lookup") {
+      readSession.mockImplementationOnce(async () => {
+        vi.setSystemTime(start + 2_050);
+        return { ...liveRow, remainingMs: 50 };
+      });
+    } else readSession.mockRejectedValueOnce(new Error("session lookup failed"));
     pull.resolve(true);
     await resyncing;
     expect(readSession).toHaveBeenCalledTimes(2);
     expect(server.close.mock.calls).toEqual([[code]]);
     expect(server.send).not.toHaveBeenCalled();
+  });
+
+  it("does not publish a patch when the lookup consumes the remaining lifetime", async () => {
+    let value = '{"count":5}';
+    const { message, publish, server } = connectedSocket(
+      () => ({ value, until: start + 30_000 }),
+      sessionRef,
+    );
+    await message(subscribe);
+    server.send.mockClear();
+    value = '{"count":6}';
+    readSession.mockImplementationOnce(async () => {
+      vi.setSystemTime(start + 51);
+      return { ...liveRow, remainingMs: 50 };
+    });
+    await publish();
+    expect(server.close.mock.calls).toEqual([[1008]]);
+    expect(server.send).not.toHaveBeenCalled();
+  });
+
+  it("keeps the shortened alarm across wake and never extends it on a fresh read", async () => {
+    const { message, server, expire, setAlarm, wake } = connectedSocket(undefined, sessionRef);
+    readSession.mockResolvedValueOnce({ ...liveRow, remainingMs: 2_500 });
+    await message(JSON.stringify({ v: 1, type: "subscribe", topics: ["members"] }));
+    expect(setAlarm.mock.calls).toEqual([[start + 2_500]]);
+    wake();
+    vi.setSystemTime(start + 2_499);
+    await expire();
+    expect(server.close).not.toHaveBeenCalled();
+    expect(setAlarm).toHaveBeenLastCalledWith(start + 2_500);
+    await message(resync("members"));
+    vi.setSystemTime(start + 2_500);
+    await expire();
+    expect(server.close.mock.calls).toEqual([[1008]]);
   });
 
   it("rejects a resync for an unsubscribed topic even after the cooldown", async () => {
