@@ -6,14 +6,7 @@ import { signedLiveSnapshot } from "../src/live/transport";
 import { decodeLiveDelta, type LiveState, snapshotTopics } from "../src/live/wire";
 
 const guildId = "100";
-const room = {
-  id: "200",
-  name: "Test room",
-  kind: "voice",
-  parentId: null,
-  position: 1,
-  overwrites: [],
-};
+const room = { id: "200", name: "HQ", kind: "voice", parentId: null, position: 1, overwrites: [] };
 const member = { userId: "300", roleIds: [], nick: null, bot: false, pending: false };
 const role = { id: guildId, permissions: "1024" };
 const guest = { ...member, userId: "301" };
@@ -87,10 +80,17 @@ describe("live wire allowlist", () => {
     ).toBeNull();
     expect(snapshotTopics({ ...baseline, roles: [] }, guildId)).toBeNull();
     expect(snapshotTopics({ ...baseline, channels: [] }, guildId)).toBeNull();
-    const category = { ...room, id: "201", kind: "category", parentId: "201" };
-    expect(snapshotTopics({ ...baseline, channels: [room, category] }, guildId)).toBeNull();
-    expect(patch({ topic: "channels", op: "upsert", id: category.id, value: category })).toBeNull();
+    const category = { ...room, id: "201", kind: "category" };
+    const nested = { ...category, parentId: category.id };
+    expect(snapshotTopics({ ...baseline, channels: [room, nested] }, guildId)).toBeNull();
+    expect(patch({ topic: "channels", op: "upsert", id: nested.id, value: nested })).toBeNull();
     expect(snapshotTopics({ ...baseline, rawDiscord: {} }, guildId)).toBeNull();
+    const child = { ...room, parentId: category.id };
+    const grouped = { ...baseline, channels: [child, category] };
+    expect(snapshotTopics(grouped, guildId)).toEqual(grouped);
+    expect(snapshotTopics({ ...baseline, channels: [child] }, guildId)).toBeNull();
+    const nonCategory = { ...category, kind: "other" };
+    expect(snapshotTopics({ ...baseline, channels: [child, nonCategory] }, guildId)).toBeNull();
   });
 });
 
@@ -104,9 +104,9 @@ it("recovers complete state on a gap through one exact signed snapshot pull", as
   const snapshot = {
     v: 1,
     guild_id: guildId,
-    seq: 8,
+    seq: 9,
     observed_at: event.startsAt,
-    topics: baseline,
+    topics: { ...baseline, channels: [{ ...room, name: "New HQ" }] },
   };
   const fetcher = vi.fn<typeof fetch>(async () => Response.json(snapshot));
   const pull = signedLiveSnapshot(config, (topics) => snapshotTopics(topics, guildId), fetcher);
@@ -117,7 +117,8 @@ it("recovers complete state on a gap through one exact signed snapshot pull", as
   const recovery = sequence.ingest(8, { ...decode(envelope)!, seq: 8 });
   expect(sequence.current).toBeNull();
   expect(await recovery).toBe("resynced");
-  expect(sequence.current).toEqual({ seq: 8, state: baseline });
+  expect(sequence.current).toEqual({ seq: snapshot.seq, state: snapshot.topics });
+  expect(await sequence.ingest(9, decode({ ...envelope, seq: 9 })!)).toBe("duplicate");
   expect(fetcher).toHaveBeenCalledOnce();
   const [url, init] = fetcher.mock.calls[0]!;
   const body = '{"action":"live.snapshot","guild_id":"100"}';
