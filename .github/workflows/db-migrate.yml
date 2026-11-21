@@ -66,7 +66,7 @@ jobs:
         shell: bash
         env:
           # github.token cannot be granted Environments: read.
-          GH_TOKEN: ${{ secrets.PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN }}
+          GH_TOKEN: ${{ inputs.target == 'production' && secrets.PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN || '' }}
         run: |
           set -euo pipefail
           name=PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS

@@ -238,7 +238,9 @@ test("production scope comes only from the protected Environment API", (t) => {
   assert.ok(dbMigrate.indexOf(step) < dbMigrate.indexOf("actions/checkout"));
   assert.match(step, /if: \$\{\{ inputs\.target == 'production' \}\}/);
   const credential = "secrets.PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN";
-  assert.ok(step.includes(`GH_TOKEN: \${{ ${credential} }}`));
+  assert.ok(
+    step.includes(`GH_TOKEN: \${{ inputs.target == 'production' && ${credential} || '' }}`),
+  );
   assert.equal(dbMigrate.split(credential).length, 2, "scope credential is used only here");
   assert.doesNotMatch(dbMigrate, /vars\.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS/);
   const script = step.split("run: |\n")[1];
