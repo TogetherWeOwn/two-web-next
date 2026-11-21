@@ -69,11 +69,13 @@ const scrollProbe = `(async () => {
   if (inner) inner.scrollTop += 120;
   else window.scrollBy(0, 120);
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  const top = inner ? Math.max(0, inner.getBoundingClientRect().top) : 0;
-  const menu = document.querySelector("#kit-menu");
+  const shell = document.querySelector("[data-kit-site-header]");
+  const shellBottom = shell && getComputedStyle(shell).position === "sticky" ? shell.getBoundingClientRect().bottom : 0;
+  const top = Math.max(shellBottom, inner?.getBoundingClientRect().top ?? 0);
+  const menu = shell?.querySelector("#kit-menu");
   const menuBox = menu?.getBoundingClientRect();
   const result = {
-    barBottom: menu?.closest("header")?.getBoundingClientRect().bottom,
+    shellBottom,
     menuHit: menuBox && menu.contains(document.elementFromPoint(
       menuBox.x + menuBox.width / 2, menuBox.y + menuBox.height / 2,
     )),
@@ -132,7 +134,7 @@ for (const twin of ["hono", "kit"] as const) {
               headers: Array<{ top: number; bottom: number; text: string }>;
               top: number;
               tableBottom: number;
-              barBottom?: number;
+              shellBottom: number;
               menuHit?: boolean;
             }>(scrollProbe);
             if (twin === "kit" && viewport.name === "mobile") {
@@ -140,7 +142,7 @@ for (const twin of ["hono", "kit"] as const) {
               for (const header of scrolled.headers) {
                 expect
                   .soft(header.top, "Board headings clear the compact site header")
-                  .toBeGreaterThanOrEqual(scrolled.barBottom ?? 60);
+                  .toBeGreaterThanOrEqual(Math.max(60, scrolled.shellBottom));
               }
             }
             expect(

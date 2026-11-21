@@ -282,6 +282,22 @@ export async function runMigration(mode, env = process.env, options = {}) {
   if (!["plan", "apply", "verify"].includes(mode)) refuse("Mode must be plan, apply or verify.");
   const config = migrationConfig(env, options);
   const migrations = journal();
+  const approvedPending =
+    config.target === "production" ? env.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS : undefined;
+  if (config.target === "production") {
+    // Only a non-empty, ordered suffix of this release can apply and leave zero pending.
+    if (
+      typeof approvedPending !== "string" ||
+      !approvedPending ||
+      approvedPending !==
+        migrations
+          .slice(-approvedPending.split(",").length)
+          .map((entry) => entry.tag)
+          .join(",")
+    ) {
+      refuse("Production migration scope must pin an exact ordered suffix of the release journal.");
+    }
+  }
   const report = options.report ?? console.log;
   const summary = async (text) => {
     await report(text);
@@ -317,10 +333,12 @@ export async function runMigration(mode, env = process.env, options = {}) {
       throw error;
     }
     const pending = await pendingMigrations(connection, migrations);
+    const tags = pending.map((entry) => entry.tag);
+    if (config.target === "production" && mode !== "verify" && tags.join(",") !== approvedPending) {
+      refuse("Production migration pending tags do not match the approved scope.");
+    }
     await summary(`### Web migrations: ${config.target} / ${mode}`);
-    await summary(
-      `Pending: ${pending.length}${pending.length ? ` (${pending.map((entry) => entry.tag).join(", ")})` : ""}`,
-    );
+    await summary(`Pending: ${tags.length}${tags.length ? ` (${tags.join(", ")})` : ""}`);
     return pending;
   };
   try {
@@ -341,7 +359,7 @@ export async function runMigration(mode, env = process.env, options = {}) {
     // sql.begin pins one connection and rejects on loss: never resume unlocked.
     // Sources: https://github.com/porsager/postgres#transactions
     // https://www.postgresql.org/docs/17/explicit-locking.html#ADVISORY-LOCKS
-    const remaining = await client.begin(async (transaction) => {
+    const apply = async (transaction) => {
       await assertProductionIdentity(transaction, config, summary);
       // Defense in depth with the startup pin in migrationClient: even when
       // the role/database default search_path or DateStyle is hostile, this
@@ -399,7 +417,13 @@ export async function runMigration(mode, env = process.env, options = {}) {
       const remaining = await pendingMigrations(transaction, migrations);
       if (remaining.length) refuse("Post-check failed: web migrations remain pending.");
       return remaining;
-    });
+    };
+    // The locked production scope check must see commits made after the
+    // identity read, even when the role or database defaults to a fixed snapshot.
+    const remaining =
+      config.target === "production"
+        ? await client.begin("isolation level read committed", apply)
+        : await client.begin(apply);
     await summary("Post-check: zero pending web migrations.");
     return remaining;
   } finally {
