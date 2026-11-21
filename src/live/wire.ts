@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SNAPSHOT_BYTES } from "./transport";
 
 export const liveId = z
   .string()
@@ -96,9 +97,9 @@ export function snapshotTopics(value: unknown, guildId: string): LiveState | nul
   if (state.members.some(({ roleIds }) => roleIds.some((id) => !roles.has(id)))) return null;
   if (state.voice.some(({ userId, channelId }) => !users.has(userId) || !voiceRoom(channelId)))
     return null;
-  if (state.events.some(({ channelId }) => channelId !== null && !voiceRoom(channelId)))
-    return null;
-  return state;
+  if (state.events.some(({ channelId: id }) => id !== null && !voiceRoom(id))) return null;
+  const bytes = new TextEncoder().encode(JSON.stringify(state)).byteLength;
+  return bytes <= SNAPSHOT_BYTES ? state : null;
 }
 
 function upsert<T extends string, R>(topic: T, value: z.ZodType<R>, key: (row: R) => string) {

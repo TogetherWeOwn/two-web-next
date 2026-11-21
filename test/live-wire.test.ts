@@ -75,9 +75,9 @@ describe("live wire allowlist", () => {
   });
 
   it("requires unique keys and complete permission dependencies in snapshot topics", () => {
-    expect(snapshotTopics({ ...baseline, members: [member, member] }, guildId)).toBeNull();
+    expect(snapshotTopics({ ...baseline, members: [member, guest, member] }, guildId)).toBeNull();
     const unknownRole = { ...member, roleIds: ["101"] };
-    expect(snapshotTopics({ ...baseline, members: [unknownRole] }, guildId)).toBeNull();
+    expect(snapshotTopics({ ...baseline, members: [unknownRole, guest] }, guildId)).toBeNull();
     expect(snapshotTopics({ ...baseline, roles: [] }, guildId)).toBeNull();
     expect(snapshotTopics({ ...baseline, channels: [] }, guildId)).toBeNull();
     const category = { ...room, id: "201", kind: "category" };
@@ -151,14 +151,15 @@ describe("live batch reduction", () => {
     expect(reduceLiveState(fixture(), delta!)).toEqual(departed);
   });
 
-  it("caps the serialized state in UTF-8 bytes", () => {
+  it.each(["x", "é"])("caps snapshots and reduced state by UTF-8 bytes (%s)", (char) => {
     const row = { ...member, nick: "é".repeat(100) };
     const crowd = Array.from({ length: 3895 }, (_, i) => ({ ...row, userId: `${i + 1000}` }));
     const state = fixture({ ...baseline, members: [...baseline.members, ...crowd] });
-    const editEvent = (description: string) =>
-      patch({ topic: "events", op: "upsert", id: event.id, value: { ...event, description } });
-    expect(reduceLiveState(state, editEvent("x".repeat(200))!)).not.toBeNull();
-    expect(reduceLiveState(state, editEvent("é".repeat(200))!)).toBeNull();
+    const value = { ...event, description: char.repeat(200) };
+    const delta = patch({ topic: "events", op: "upsert", id: event.id, value });
+    const accepted = char === "x";
+    expect(reduceLiveState(state, delta!) !== null).toBe(accepted);
+    expect(snapshotTopics({ ...state, events: [value] }, guildId) !== null).toBe(accepted);
   });
 
   it("drops the current baseline if a contiguous batch loses permission proof", async () => {

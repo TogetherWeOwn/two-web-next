@@ -1,4 +1,3 @@
-import { SNAPSHOT_BYTES } from "./transport";
 import { type LiveDelta, type LiveState, snapshotTopics } from "./wire";
 
 function indexed<R>(rows: R[], key: (row: R) => string): Map<string, R> {
@@ -68,6 +67,5 @@ export function reduceLiveState(state: LiveState, delta: LiveDelta): LiveState |
     voice: [...rows.voice.values()],
     events: [...rows.events.values()],
   };
-  if (new TextEncoder().encode(JSON.stringify(next)).byteLength > SNAPSHOT_BYTES) return null;
   return snapshotTopics(next, delta.guild_id);
 }
