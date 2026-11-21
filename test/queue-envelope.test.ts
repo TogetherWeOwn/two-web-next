@@ -283,12 +283,7 @@ describe("queue envelope batch isolation", () => {
   it("keeps legacy sync and role fields permissive but rejects malformed announcement identities", async () => {
     const messages = [
       message({ kind: "sync-event", eventKey: "", idempotencyKey: "", jobId: undefined }),
-      message({
-        kind: "announcement",
-        idempotencyKey: "",
-        action: { channelKey: "", body: "" },
-        jobId: "legacy-announcement-job",
-      }),
+      message({ ...announcement, idempotencyKey: "", jobId: "legacy-announcement-job" }),
       message({
         kind: "role-assign",
         idempotencyKey: null,
