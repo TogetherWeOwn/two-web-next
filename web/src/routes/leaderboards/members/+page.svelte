@@ -164,7 +164,7 @@ const destination = (
           <tbody>
             {#each rows as row, i (row.rank)}
               <tr aria-current={row.isViewer ? "true" : undefined}>
-                <td>{row.rank}</td><th scope="row">{row.username}</th><td>{row.count}{ties[i] ? " · Tied" : ""}</td>
+                <td>{row.rank}</td><th scope="row">{row.username}{row.isViewer ? " (you)" : ""}</th><td>{row.count}{ties[i] ? " · Tied" : ""}</td>
               </tr>
             {/each}
           </tbody>

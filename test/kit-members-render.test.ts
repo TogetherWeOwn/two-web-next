@@ -136,12 +136,24 @@ describe("Kit member board render", () => {
     expect(html).toContain("Ranked by events signed up for (going), not by attendance.");
     expect(html).toContain('content="Members ranked by events they signed up for as going."');
     expect(html).toContain('aria-label="Leading sign-up counts"');
-    expect(html).toContain("Vic (you)");
+    expect(html).toContain('<th scope="row">Vic (you)</th>');
     expect(html).toContain("current Going sign-ups for published or past events");
     expect(html.match(/3 · Tied/g)).toHaveLength(2);
     expect(html).toContain('<td>2</td><th scope="row">Mira</th>');
     expect(html).toContain('<th scope="row">Jo</th>');
     expect(html).not.toContain("Season elapsed");
+  });
+
+  it.each(["overall", "relative"])("labels the fourth row as the viewer in %s", (scope) => {
+    const rows = [1, 2, 3, 4].map((rank) => ({
+      rank,
+      username: `Member ${rank}`,
+      count: 5 - rank,
+      isViewer: rank === 4,
+    }));
+    const html = renderPage(baseData({ scope, rows, viewerUsername: "Member 4" }));
+    expect(html).toContain('<tr aria-current="true"><td>4</td><th scope="row">Member 4 (you)</th>');
+    expect(html).toContain('<th scope="row">Member 3</th>');
   });
 
   it("keeps the same ranks when the window clips either end of a tie", () => {
