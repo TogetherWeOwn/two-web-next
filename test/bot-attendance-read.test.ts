@@ -17,7 +17,6 @@ const unavailable = { ok: false, code: "bot_unreachable" };
 const observe = (response: Response) => signedAttendanceReader(config, async () => response)(key);
 const success = (attendance: unknown) => ({ ok: true, attendance });
 const reply = (result: unknown, status = 200) => Response.json({ ok: true, result }, { status });
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => {
@@ -25,9 +24,7 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
-
 afterEach(() => vi.useRealTimers());
-
 it("sends the exact signed POST once and accepts the pinned bot reply", async () => {
   const fetcher = vi.fn<typeof fetch>().mockResolvedValue(reply(golden));
   expect(await signedAttendanceReader(config, fetcher)(key)).toEqual(success(golden));
@@ -43,13 +40,14 @@ it("sends the exact signed POST once and accepts the pinned bot reply", async ()
   const signature = await signInternalAction(config.keyId, config.secret, body, ts, nonce);
   expect(headers).toEqual(new Headers({ ...signature, "Content-Type": "application/json" }));
 });
-
 it.each([false, true])("keeps final=%s and ignores additive fields", async (final) => {
-  const result = { ...attendance, final, rooms: final ? [] : [room] };
-  const rooms = final ? [] : [{ ...room, extra: true }];
-  await expect(observe(reply({ ...result, extra: true, rooms }))).resolves.toEqual(success(result));
+  const rooms = final ? [] : [room];
+  const result = { ...attendance, final, rooms, members: final ? [member] : [] };
+  const replyRooms = rooms.map((room) => ({ ...room, extra: true }));
+  expect(await observe(reply({ ...result, extra: true, rooms: replyRooms }))).toEqual(
+    success(result),
+  );
 });
-
 it("accepts millisecond timestamps, in-budget aggregates, and room-name boundaries", async () => {
   const ms = "1970-01-01T01:00:00.000Z";
   const result = {
@@ -69,22 +67,31 @@ it("accepts millisecond timestamps, in-budget aggregates, and room-name boundari
   expect((await response.clone().arrayBuffer()).byteLength).toBeLessThan(64 * 1024);
   await expect(observe(response)).resolves.toEqual(success(result));
 });
-
 it.each([
-  ["not_found", 404, { ok: false, code: "not_found" }],
-  ["not_found", 200, unavailable],
-  ["not_found", 503, unavailable],
-  ["rate_limited", 429, { ok: false, code: "rate_limited" }],
-  ["rate_limited", 500, unavailable],
-  ["busy", 503, { ok: false, code: "busy" }],
-  ["busy", 502, unavailable],
-  ["private_fixture_value", 503, unavailable],
-] as const)("projects error %s without provider text", async (code, status, result) => {
+  ["malformed", 400],
+  ["unauthorized", 401],
+  ["stale_request", 401],
+  ["action_not_allowed", 403],
+  ["not_found", 404],
+  ["replayed", 409],
+  ["in_progress", 409],
+  ["needs_reconciliation", 409],
+  ["discord_rejected", 422],
+  ["rate_limited", 429],
+  ["internal", 500],
+  ["discord_unavailable", 502],
+  ["busy", 503],
+  ["upstream_timeout", 504],
+  ["not_found", 200, false],
+  ["not_found", 503, false],
+  ["rate_limited", 500, false],
+  ["busy", 502, false],
+  ["private_fixture_value", 503, false],
+] as const)("projects %s at HTTP %i", async (code, status, valid?: boolean) => {
   const error = { code, message: "private fixture" };
-  const response = Response.json({ ok: false, error }, { status });
-  await expect(observe(response)).resolves.toEqual(result);
+  const result = await observe(Response.json({ ok: false, error }, { status }));
+  expect(result).toEqual(valid === false ? unavailable : { ok: false, code });
 });
-
 it.each([
   { event_key: "different-event" },
   { final: "true" },
@@ -105,7 +112,6 @@ it.each([
 ])("fails closed on a malformed or unbound result (%j)", async (overrides) => {
   await expect(observe(reply({ ...attendance, ...overrides }))).resolves.toEqual(unavailable);
 });
-
 it("rejects malformed envelopes, invalid JSON or UTF-8, and absent bodies", async () => {
   for (const response of [
     reply(attendance, 206),
@@ -122,7 +128,6 @@ it("rejects malformed envelopes, invalid JSON or UTF-8, and absent bodies", asyn
   await expect(observe(new Response(bytes))).resolves.toEqual(unavailable);
   await expect(observe(new Response(null, { status: 204 }))).resolves.toEqual(unavailable);
 });
-
 it("refuses unsafe URLs and redirects even if body cancellation rejects", async () => {
   const cancel = vi.fn().mockRejectedValue(new Error("fixture cancellation failure"));
   const response = new Response(new ReadableStream({ cancel }), {
@@ -130,16 +135,15 @@ it("refuses unsafe URLs and redirects even if body cancellation rejects", async 
     headers: { Location: "https://redirect.example.test/" },
   });
   const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response);
-  for (const baseUrl of [undefined, "http://bot.example.test", "https://user@bot.example.test"]) {
-    const read = signedAttendanceReader({ ...config, baseUrl }, fetcher);
-    await expect(read(key)).resolves.toEqual(unavailable);
-  }
+  for (const baseUrl of [undefined, "http://bot.example.test", "https://user@bot.example.test"])
+    expect(await signedAttendanceReader({ ...config, baseUrl }, fetcher)(key)).toEqual(unavailable);
+  const unconfigured = signedAttendanceReader({}, fetcher);
+  expect(await unconfigured(key)).not.toBe(await unconfigured(key));
   expect(fetcher).not.toHaveBeenCalled();
   await expect(signedAttendanceReader(config, fetcher)(key)).resolves.toEqual(unavailable);
   expect(fetcher).toHaveBeenCalledTimes(1);
   expect(cancel).toHaveBeenCalledOnce();
 });
-
 it.each([0, 1])("enforces the cumulative byte cap (+%i bytes)", async (extra) => {
   const encoded = new TextEncoder().encode(JSON.stringify({ ok: true, result: attendance }));
   const padding = new Uint8Array(256 * 1024 - encoded.length + extra).fill(32);
@@ -153,15 +157,8 @@ it.each([0, 1])("enforces the cumulative byte cap (+%i bytes)", async (extra) =>
     },
     cancel,
   });
-  await expect(observe(new Response(body))).resolves.toEqual(
-    extra ? unavailable : success(attendance),
-  );
+  expect(await observe(new Response(body))).toEqual(extra ? unavailable : success(attendance));
   expect(cancel).toHaveBeenCalledTimes(extra);
-});
-
-it("does not let a caller change future failures", async () => {
-  const fail = signedAttendanceReader({});
-  expect(await fail(key)).not.toBe(await fail(key));
 });
 it("rejects late buffered EOF before the timeout callback runs", async () => {
   vi.useFakeTimers({ toFake: ["performance"] });
@@ -171,7 +168,6 @@ it("rejects late buffered EOF before the timeout callback runs", async () => {
   const stream = body.pipeThrough(clock);
   await expect(observe(new Response(stream))).resolves.toEqual(unavailable);
 });
-
 it.each(["headers", "body", "chunks"])("keeps a single deadline for %s", async (phase) => {
   vi.useFakeTimers();
   const entered = deferred<AbortSignal | null | undefined>();
