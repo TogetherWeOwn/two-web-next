@@ -1,4 +1,5 @@
 import { test, expect, localOrigin } from "./fixtures";
+import { homeArrivalHeading, signOutToHome } from "./staging/home-arrival";
 
 // Sign-out journey: the stubbed OAuth join from join.spec.ts, then the header
 // Sign out form POSTs /logout. The server answers 303 to / with the session
@@ -56,12 +57,12 @@ test("sign out answers 303 to / as guest and the old session cannot replay", asy
   const logoutRequest = page.waitForRequest(
     (request) => request.url().endsWith("/logout") && request.method() === "POST",
   );
-  await page.getByRole("button", { name: "Sign out" }).click();
-  await logoutRequest;
+  const homeUrl = `${localOrigin}/`;
+  const [guestHome] = await Promise.all([signOutToHome(page, homeUrl), logoutRequest]);
 
   // The 303 lands on / as a guest: join CTA back, no member chrome.
-  await expect(page).toHaveURL(`${localOrigin}/`);
-  await expect(page.getByRole("heading", { name: "The lobby is open." })).toBeVisible();
+  await expect(page).toHaveURL(homeUrl);
+  await expect(await homeArrivalHeading(page, guestHome, "guest")).toBeVisible();
   await expect(page.getByTestId("join")).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
   await expect(page.getByTestId("signin")).toBeVisible();
