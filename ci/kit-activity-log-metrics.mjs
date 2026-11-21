@@ -1,17 +1,15 @@
 import { withDeadline } from "./kit-activity-log-visual.mjs";
 
 export async function routeA11y(page, mark, fixture) {
+  const evaluate = (...args) => withDeadline(() => page.evaluate(...args));
   mark("AXE_INJECT");
-  const source = fixture?.source ?? (await import("axe-core")).default.source;
-  await withDeadline(() => page.evaluate(source));
+  await evaluate(fixture?.source ?? (await import("axe-core")).default.source);
   mark("AXE_EVALUATE");
-  const tags = fixture?.tags ?? (await import("./a11y-policy.mjs")).WCAG_AA_TAGS;
-  const { violations, incomplete } = await withDeadline(() =>
-    page.evaluate(async (values) => {
-      const result = await globalThis.axe.run(document, { runOnly: { type: "tag", values } });
-      return { violations: result.violations.length, incomplete: result.incomplete.length };
-    }, tags),
-  );
+  const WCAG_AA_TAGS = fixture?.tags ?? (await import("./a11y-policy.mjs")).WCAG_AA_TAGS;
+  const { violations, incomplete } = await evaluate(async (tags) => {
+    const result = await globalThis.axe.run(document, { runOnly: { type: "tag", values: tags } });
+    return { violations: result.violations.length, incomplete: result.incomplete.length };
+  }, WCAG_AA_TAGS);
   return `a11y: ${violations || incomplete ? "FAIL" : "PASS"} violations=${violations} incomplete=${incomplete}`;
 }
 

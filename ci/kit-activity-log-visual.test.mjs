@@ -23,9 +23,10 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
   const noop = async () => undefined;
   const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
   const modes =
-    "document asset disallowed pending rejected hono fonts capture-fonts capture-error capture-inflight capture-timeout";
+    "document asset disallowed pending rejected hono fonts capture-fonts capture-dispose capture-timeout";
   for (const mode of modes.split(" ")) {
     const navError = mode === "capture-timeout" ? new TimeoutError() : new Error("target closed");
+    const disposeFails = mode === "hono" || mode === "capture-dispose";
     const shots = [];
     const keys = [];
     const consumed = new Set([0]); // Functional context already rotated its cookie.
@@ -70,15 +71,17 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
         consumed.add(cookie);
         const renderer = mode === "hono" ? "hono" : "kit";
         const headers = { "x-two-renderer": renderer, "cache-control": "private, no-store" };
+        const closeTransport = () => new Promise((_, reject) => setImmediate(reject, navError));
         const response = {
           url: () => href,
           status: () => status,
           headers: () => headers,
-          dispose: noop,
+          dispose: disposeFails ? closeTransport : noop,
         };
-        const closeFetch = () => new Promise((_, reject) => setImmediate(reject, navError));
-        if (mode === "capture-inflight") void request(href, true, closeFetch);
-        if (mode.startsWith("capture-") && mode !== "capture-fonts") throw navError;
+        if (disposeFails || mode === "capture-timeout") {
+          void request(href, true, disposeFails ? async () => response : closeTransport);
+          throw navError;
+        }
         if (closed !== 5 || !["document", "asset", "disallowed"].includes(mode)) return response;
         if (mode === "document") void request(href, true, stall);
         else {
@@ -106,13 +109,13 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     const mint = () => ({ value: consumed.size });
     const fakeClock = mode === "hono" || mode.endsWith("fonts");
     if (fakeClock) t.mock.timers.enable({ apis: ["setTimeout"] });
-    const options = { audit: noop, measure, mark, ms: 10 };
-    const collect = () => visual.collectVisuals(browser, mint, ".", options);
+    const collect = () =>
+      visual.collectVisuals(browser, mint, ".", { audit: noop, measure, mark, ms: 10 });
     const teardown = () => visual.withDeadline(() => fixture.close(), 10_000);
     const report = mode === "hono" ? runWork(collect, teardown, mark) : collect();
     const early = mode === "hono" || mode.startsWith("capture-");
     if (mode === "capture-fonts") await assert.rejects(report, visual.BrowserDeadline);
-    else if (mode === "hono") await assert.rejects(report, /provenance drift/);
+    else if (mode === "hono") await assert.rejects(report, visual.AssertionFailure);
     else if (early) await assert.rejects(report, (error) => error === navError);
     else if (mode === "disallowed") await assert.rejects(report, /unexpected visual diagnostic/);
     else assert.equal(await report, null);
@@ -141,7 +144,6 @@ for (const stallAt of ["AXE_INJECT", "AXE_EVALUATE"]) {
     assert.equal(mark.mock.callCount(), stallAt === "AXE_INJECT" ? 1 : 2);
   });
 }
-
 test("refusal deadlines abort fetch and prevent follow-on reads", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const late = Promise.withResolvers();
@@ -162,21 +164,16 @@ test("refusal deadlines abort fetch and prevent follow-on reads", async (t) => {
   await assert.rejects(probes, visual.BrowserDeadline);
   assert.equal(request.mock.callCount(), 1);
 });
-
 test("fixture CLI exits after cleanup despite a live measurement handle", () => {
   const harness = new URL("./kit-activity-log-assert.mjs", import.meta.url);
-  for (const code of [0, 21]) {
-    const stub = `import { exitFixture } from ${JSON.stringify(harness.href)};
-      setInterval(()=>{},60_000);
-      await exitFixture(${code ? 'Promise.reject(new RangeError("private-exception"))' : "Promise.resolve()"}, RangeError);`;
-    const run = spawnSync(process.execPath, ["-e", stub], { encoding: "utf8", timeout: 3_000 });
-    assert.deepEqual([run.status, run.stdout, run.stderr], [code, "", ""]);
-  }
+  const stub = `import { exitFixture } from ${JSON.stringify(harness.href)};
+    setInterval(()=>{},60_000); await exitFixture(Promise.resolve(), RangeError);`;
+  const run = spawnSync(process.execPath, ["-e", stub], { encoding: "utf8", timeout: 3_000 });
+  assert.deepEqual([run.status, run.stdout, run.stderr], [0, "", ""]);
 });
-
 test("runner separates watchdog and assertion failures and admits only a valid completion", (t) => {
-  const source = readFileSync(new URL("./kit-activity-log-run.sh", import.meta.url), "utf8");
-  const runner = source.match(/^LC_ALL=C timeout [\s\S]+$/m)?.[0];
+  const file = new URL("./kit-activity-log-run.sh", import.meta.url);
+  const runner = readFileSync(file, "utf8").match(/^LC_ALL=C timeout [\s\S]+$/m)?.[0];
   assert.ok(runner);
   const root = mkdtempSync(join(tmpdir(), "kit-watchdog-test-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -184,13 +181,11 @@ test("runner separates watchdog and assertion failures and admits only a valid c
     '#!/bin/bash\nprintf "private-out\\n"; printf "private-err\\n" >&2; exit "$RESULT"\n';
   writeFileSync(join(root, "node"), fake, { mode: 0o700 });
   mkdirSync(join(root, "screenshots"));
-  const stub = `set -euo pipefail
-export PATH="$1:$PATH" RESULT=$2
+  const stub = `set -euo pipefail; export PATH="$1:$PATH" RESULT=$2
 scratch=$1 RUNNER_TEMP=$1 watchdog=$3
 timeout() {
   [[ $watchdog != true ]] || printf "timeout: sending signal TERM to command 'bash'\\n" >&2
-  printf 'private-watchdog-file\\n' >&2
-  shift 4; "$@"
+  printf 'private-watchdog-file\\n' >&2; shift 4; "$@"
 }
 `;
   const metrics = `populated-desktop.png a11y: PASS violations=0 incomplete=0

@@ -12,7 +12,6 @@ const member = "900000000000009302";
 const [a, b] = ["900000000000009311", "900000000000009312"];
 function mark(next) {
   const file = `${process.env.TMPDIR}/browser-stage`;
-  // The outer watchdog can stop us mid-write. Keep the last complete stage readable.
   writeFileSync(`${file}.next`, `${next}\n`, { mode: 0o600 });
   renameSync(`${file}.next`, file);
 }
@@ -29,9 +28,9 @@ export async function runWork(exercise, cleanup, progress) {
     stop.signal.throwIfAborted();
     if (performance.now() >= browserWorkMs) throw new visual.BrowserDeadline();
   };
+  const work = () => exercise({ signal: stop.signal, checkTime });
   const abort = () => stop.abort(new visual.BrowserDeadline());
   try {
-    const work = () => exercise({ signal: stop.signal, checkTime });
     await withDeadline(work, browserWorkMs - performance.now()).finally(abort);
     progress("TEARDOWN");
   } catch (error) {
@@ -41,7 +40,6 @@ export async function runWork(exercise, cleanup, progress) {
   await cleanup();
   progress("COMPLETE");
 }
-
 export async function memberRefusal(probe, headers, { signal, checkTime }, fetcher = fetch) {
   const request = (headers) => {
     checkTime();
@@ -54,7 +52,6 @@ export async function memberRefusal(probe, headers, { signal, checkTime }, fetch
   checkTime();
   return request;
 }
-
 async function main(chromium, postgres) {
   requireGithubRunner();
   const database = requireTestDatabase(process.env.DATABASE_URL);

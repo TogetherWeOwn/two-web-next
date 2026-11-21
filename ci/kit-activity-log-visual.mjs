@@ -14,13 +14,10 @@ export async function withDeadline(work, ms = 5_000) {
   const expires = performance.now() + ms;
   const deadline = Promise.withResolvers();
   const timer = setTimeout(() => deadline.reject(new BrowserDeadline()), ms);
-  try {
-    const result = await Promise.race([work(), deadline.promise]);
-    if (performance.now() >= expires) throw new BrowserDeadline();
-    return result;
-  } finally {
-    clearTimeout(timer);
-  }
+  const task = Promise.resolve().then(work);
+  const result = await Promise.race([task, deadline.promise]).finally(() => clearTimeout(timer));
+  if (performance.now() >= expires) throw new BrowserDeadline();
+  return result;
 }
 const subject = "zz-no-activity";
 const urlFor = (empty) => `${origin}${path}${empty ? `?subject=${subject}` : ""}`;
@@ -54,22 +51,21 @@ export function validateView(content, state, empty, keyboard) {
 // The asset allowlist also requires the response bytes to match the pinned local build.
 const asset =
   /^\/(?:styles\.css|admin-rsvp-review\.css|site\.webmanifest|favicon\.(?:ico|svg)|icons\/(?:icon-(?:192|512)|maskable-512|apple-touch-icon)\.png|fonts\/(?:mona-sans-latin-(?:var|wght)|fragment-mono-latin-400|instrument-serif-latin-400-italic)\.woff2|islands\/auth-status\.js|_app\/immutable\/(?:assets|entry|nodes|chunks)\/[\w.-]+\.(?:css|js))$/;
-async function serve(route, url) {
+async function serve(route, url, unavailable) {
   const req = route.request();
   const file = req.url().startsWith(origin) ? req.url().slice(origin.length) : "";
   const document = req.isNavigationRequest();
   if (req.method() !== "GET" || !(document ? req.url() === url : asset.test(file))) return false;
-  const res = await route.fetch({ maxRedirects: 0, timeout: 5_000 }).catch(() => null);
-  if (!res) return null;
+  const res = await route.fetch({ maxRedirects: 0, timeout: 5_000 });
   try {
+    const pinned = () => readFile(`web/.svelte-kit/cloudflare${file}`).catch(() => null);
     const valid = document
       ? kitDocument(res.status(), res.headers())
-      : res.status() === 200 &&
-        (await readFile(`web/.svelte-kit/cloudflare${file}`)).equals(await res.body());
+      : res.status() === 200 && (await pinned())?.equals(await res.body());
     if (valid) await route.fulfill({ response: res });
-    return valid;
+    return valid ?? false;
   } finally {
-    await res.dispose();
+    await res.dispose().catch(unavailable);
   }
 }
 
@@ -99,15 +95,14 @@ async function inspect(page, empty, keyboard) {
   validateView(content, state, empty, keyboard);
 }
 
-async function guardedPage(browser, mintModerator, [width, height], url, guard) {
-  const { render, reportOnly, mark } = guard;
+async function guardedPage(browser, mintModerator, [width, height], url, render, reportOnly, mark) {
   const context = await browser.newContext({
     viewport: { width, height },
     serviceWorkers: "block",
     javaScriptEnabled: false,
   });
   let violation = false;
-  let unavailable = false;
+  let transport;
   let stopped = false;
   let result;
   const pending = new Set();
@@ -116,15 +111,15 @@ async function guardedPage(browser, mintModerator, [width, height], url, guard) 
   };
   try {
     await context.addCookies([await mintModerator()]);
+    const unavailable = (error) => (transport ??= error);
     await context.route("**/*", async (route) => {
       if (stopped) return route.abort().catch(() => undefined);
-      const check = serve(route, url).catch(() => false);
+      const check = serve(route, url, unavailable).catch(unavailable);
       pending.add(check);
       const verified = await check;
       violation ||= verified === false;
-      unavailable ||= verified === null;
       pending.delete(check);
-      if (!verified) await route.abort().catch(() => undefined);
+      if (verified !== true) await route.abort().catch(() => undefined);
     });
     const page = await context.newPage();
     page.setDefaultTimeout(5_000);
@@ -137,23 +132,24 @@ async function guardedPage(browser, mintModerator, [width, height], url, guard) 
       (response) => ({ response }),
       (error) => ({ error }),
     );
-    // Settle the route guard before attributing any navigation failure.
+    // The load timeout can precede a later document or asset fetch verdict.
     await settle();
     const valid = response?.url() === url && kitDocument(response.status(), response.headers());
-    if (error && !violation && !(reportOnly && unavailable)) throw error;
-    if (!(response ? valid : unavailable)) throw new AssertionFailure("visual provenance drift");
-    if (!violation && !unavailable) result = await render(page);
+    if (error && !violation && !(reportOnly && transport)) throw error;
+    if (!(response ? valid : transport || violation))
+      throw new AssertionFailure("visual provenance drift");
+    if (!violation && !transport) result = await render(page);
   } finally {
     // Stop requests before the final verdict or unwinding to outer browser teardown.
     stopped = true;
   }
   await withDeadline(settle);
-  if (violation || (unavailable && !reportOnly))
-    throw new AssertionFailure("unexpected visual diagnostic");
+  if (violation) throw new AssertionFailure("unexpected visual diagnostic");
+  if (transport && !reportOnly) throw transport;
   mark("TEARDOWN");
   await withDeadline(() => context.close());
   if (violation) throw new AssertionFailure("unexpected visual diagnostic");
-  return unavailable ? null : result;
+  return transport ? null : result;
 }
 async function boundedMeasurement(measure, ms) {
   const budget = Math.min(ms, browserWorkMs - 12_000 - performance.now());
@@ -196,7 +192,7 @@ export async function collectVisuals(browser, mint, dir, { audit, measure, mark,
       if (name.endsWith("desktop.png")) await audit(page, name);
       await inspect(page, empty, keyboard);
     };
-    const result = await guardedPage(browser, mint, size, url, { render, reportOnly, mark });
+    const result = await guardedPage(browser, mint, size, url, render, reportOnly, mark);
     if (reportOnly) return result;
   }
 }

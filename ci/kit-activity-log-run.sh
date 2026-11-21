@@ -68,27 +68,22 @@ result=0
 wait "$browser" 2>/dev/null || result=$?
 browser=
 stage=UNKNOWN outcome=UNKNOWN raw=
-# A successful read would mean a NUL or the size cap; only exact, newline-terminated codes at EOF count.
+# A successful read would mean a NUL or the size cap; require one exact code and newline at EOF.
+allowed='^(FIXTURE|LAUNCH|MODERATOR|REFUSALS|PAGINATION_FILTERS|CAPTURE|FONTS|AXE_INJECT|AXE_EVALUATE|LIGHTHOUSE|TEARDOWN|COMPLETE)'$'\n$'
 if [[ -f "$scratch/browser-stage" && ! -L "$scratch/browser-stage" ]] &&
-  ! IFS= read -r -d '' -n 32 raw < "$scratch/browser-stage"; then
-  case "$raw" in
-    $'FIXTURE\n'|$'LAUNCH\n'|$'MODERATOR\n'|$'REFUSALS\n'|$'PAGINATION_FILTERS\n'|$'CAPTURE\n'|\
-    $'FONTS\n'|$'AXE_INJECT\n'|$'AXE_EVALUATE\n'|$'LIGHTHOUSE\n'|$'TEARDOWN\n'|$'COMPLETE\n') stage=${raw%$'\n'} ;;
-  esac
+  ! IFS= read -r -d '' -n 32 raw < "$scratch/browser-stage" && [[ $raw =~ $allowed ]]; then
+  stage=${raw%$'\n'}
 fi
 # 137 by itself is ambiguous: the watchdog's TERM marker also survives KILL escalation.
-if [[ $result == 124 || $result == 137 ]] &&
-  grep -Fxq "timeout: sending signal TERM to command 'bash'" "$scratch/watchdog.txt"; then
-  outcome=WATCHDOG
-elif [[ $stage == COMPLETE && $result == 0 ]]; then
-  outcome=PASS
-elif [[ $stage != UNKNOWN && $stage != COMPLETE ]]; then
-  case "$result" in
-    20) outcome=ASSERTION ;;
-    21) outcome=DEADLINE ;;
-    22) outcome=ERROR ;;
-  esac
-fi
+case "$stage:$result" in
+  *:124|*:137)
+    if grep -Fxq "timeout: sending signal TERM to command 'bash'" "$scratch/watchdog.txt"; then outcome=WATCHDOG; fi ;;
+  COMPLETE:0) outcome=PASS ;;
+  COMPLETE:*|UNKNOWN:*) ;;
+  *:20) outcome=ASSERTION ;;
+  *:21) outcome=DEADLINE ;;
+  *:22) outcome=ERROR ;;
+esac
 printf 'Activity-log browser: outcome=%s stage=%s\n' "$outcome" "$stage"
 if [[ -f "$scratch/metrics.txt" ]]; then
   pattern='((populated|empty)-desktop\.png a11y: (PASS|FAIL) violations=[0-9]+ incomplete=[0-9]+|populated-desktop\.png lighthouse: (unavailable|report-only total_bytes=[0-9]+ fcp_ms=[0-9]+))'
