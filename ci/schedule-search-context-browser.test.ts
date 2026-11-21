@@ -42,7 +42,7 @@ async function visibleCards(page: Page) {
     .locator('[data-testid="events-list"] [data-testid="event-card"]')
     .evaluateAll((cards) =>
       cards.map((card) => {
-        const heading = card.querySelector("h3")!;
+        const heading = card.querySelector("h3, h4")!;
         const excerpt = card.querySelector(".schedule-excerpt")!;
         return {
           key: card.getAttribute("data-event-key"),

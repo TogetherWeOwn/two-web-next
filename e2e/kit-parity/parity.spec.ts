@@ -2157,7 +2157,8 @@ test("Kit Events groups schedule dates but plots the grid on host-local dates", 
     await expect(group).toHaveAttribute("role", "list"); // WebKit drops implicit roles on unmarked lists.
     await expect(group.getByRole("listitem")).toHaveCount(2);
     const row = group.getByTestId("event-card").first();
-    await expect(row.getByRole("heading", { level: 4, name: /^E2E May LA$/ })).toBeVisible();
+    const title = row.getByRole("heading", { level: 4, name: /^E2E May LA$/ });
+    await expect(title.and(row.locator("h4"))).toBeVisible();
     await expect(row.locator(".schedule-location")).toHaveText("Community voice");
     await expect(row.locator(".schedule-actions")).toHaveCSS("grid-column", "3");
     await page.goto(`${KIT_ORIGIN}/events?view=calendar&month=2099-05&past=1`);
