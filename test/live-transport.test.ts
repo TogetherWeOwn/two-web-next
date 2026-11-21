@@ -1,0 +1,88 @@
+import { createHash, createHmac } from "node:crypto";
+import { expect, it, vi } from "vitest";
+import { LiveSequence } from "../src/live/sequence";
+import { LIVE_INGEST_PATH, signedLiveSnapshot, verifyLiveIngress } from "../src/live/transport";
+
+const key = { keyId: "fixture", secret: "offline signing fixture" };
+const unix = 1_800_000_000;
+const nonce = "a".repeat(32);
+const raw = '{ "name": "é" }\n';
+function signature(path: string, timestamp: string, token: string, body: string) {
+  const digest = createHash("sha256").update(body).digest("hex");
+  return `sha256=${createHmac("sha256", key.secret).update(`POST\n${path}\n${timestamp}\n${token}\n${digest}`).digest("hex")}`;
+}
+function request(body: string, suffix = "", timestamp = unix, id = key.keyId) {
+  return new Request(`https://site.example${LIVE_INGEST_PATH}${suffix}`, {
+    method: "POST",
+    body,
+    headers: {
+      "X-TWO-Key-Id": id,
+      "X-TWO-Timestamp": String(timestamp),
+      "X-TWO-Nonce": nonce,
+      "X-TWO-Signature": signature(LIVE_INGEST_PATH, String(timestamp), nonce, raw),
+    },
+  });
+}
+
+it("authenticates the original bytes and rejects reserialization", async () => {
+  const result = await verifyLiveIngress(request(raw), key, unix * 1000);
+  expect(result).toEqual({ status: 200, bytes: new TextEncoder().encode(raw).buffer });
+  expect(await verifyLiveIngress(request('{"name":"é"}'), key, unix * 1000)).toEqual({
+    status: 401,
+  });
+});
+
+it.each([
+  request(raw, "?other=1"),
+  request(raw, "", unix - 61),
+  request(raw, "", unix + 61),
+  request(raw, "", unix, "fixture, fixture"),
+  request(raw, "", unix, "other"),
+])("rejects requests outside the signing scope", async (req) => {
+  expect(await verifyLiveIngress(req, key, unix * 1000)).toEqual({ status: 401 });
+});
+
+it("caps the actual ingest body even without a length header", async () => {
+  expect(await verifyLiveIngress(request("x".repeat(65_537)), key, unix * 1000)).toEqual({
+    status: 413,
+  });
+});
+
+const config = { ...key, origin: "https://producer.example", guildId: "1234" };
+const snapshot = {
+  v: 1,
+  guild_id: config.guildId,
+  seq: 11,
+  observed_at: "2026-11-21T02:10:00Z",
+  topics: { voice: 5 },
+};
+const decode = (topics: Record<string, unknown>) =>
+  typeof topics.voice === "number" ? topics.voice : null;
+
+it("signs one exact live.snapshot pull and returns only decoded state", async () => {
+  const fetcher = vi.fn<typeof fetch>(async () => Response.json(snapshot));
+  const sequence = new LiveSequence(signedLiveSnapshot(config, decode, fetcher), (state) => state);
+  expect(await sequence.ingest(11, null)).toBe("resynced");
+  expect(sequence.current).toEqual({ seq: 11, state: 5 });
+  expect(fetcher).toHaveBeenCalledOnce();
+  const [url, init] = fetcher.mock.calls[0]!;
+  const body = '{"action":"live.snapshot","guild_id":"1234"}';
+  expect(url).toBe("https://producer.example/internal/actions");
+  expect(init).toMatchObject({ method: "POST", redirect: "manual", body });
+  const headers = new Headers(init?.headers);
+  const [timestamp, nonce, mac] = ["Timestamp", "Nonce", "Signature"].map(
+    (h) => headers.get(`X-TWO-${h}`)!,
+  );
+  expect(headers.get("X-TWO-Key-Id")).toBe(key.keyId);
+  expect(mac).toBe(signature("/internal/actions", timestamp!, nonce!, body));
+});
+
+it.each([
+  () => Response.json({ ...snapshot, guild_id: "4321" }),
+  () => Response.json({ ...snapshot, topics: {} }),
+  () => Response.json({ ...snapshot, seq: -1 }),
+  () => Response.redirect("https://other.example/"),
+  () => new Response("x".repeat(1_048_577)),
+])("does not supply a watermark for a rejected snapshot", async (response) => {
+  expect(await signedLiveSnapshot(config, decode, async () => response())()).toBeNull();
+});
