@@ -225,11 +225,37 @@ try {
     const entry = join(scratch, "kit-live.mjs");
     await writeFile(
       entry,
-      `import worker, { LiveGuildHub } from ${JSON.stringify(worker)};
-export { LiveGuildHub };
+      `import worker, { LiveGuildHub as InstalledHub } from ${JSON.stringify(worker)};
+const controlPath = "/__fixture/live-source";
+export class LiveGuildHub extends InstalledHub {
+  constructor(ctx, env) {
+    const kv = ctx.storage.kv;
+    super(ctx, env, async (url, request) => {
+      if (url !== env.BOT_ENDPOINT_URL + "/internal/actions" || request.method !== "POST") {
+        return new Response(null, { status: 400 });
+      }
+      const body = JSON.parse(request.body);
+      const snapshot = kv.get("fixture-snapshot");
+      return body.action === "live.snapshot" && body.guild_id === env.DISCORD_GUILD_ID && snapshot
+        ? Response.json(snapshot)
+        : new Response(null, { status: 503 });
+    });
+    this.kv = kv;
+    this.generation = (kv.get("fixture-generation") ?? 0) + 1;
+    kv.put("fixture-generation", this.generation);
+  }
+  async fetch(request) {
+    if (new URL(request.url).pathname !== controlPath) return super.fetch(request);
+    if (request.method === "POST") this.kv.put("fixture-snapshot", await request.json());
+    return Response.json({ generation: this.generation });
+  }
+}
 export default {
   fetch(request, env, context) {
     const incoming = new URL(request.url);
+    if (incoming.pathname === controlPath) {
+      return env.DISCORD_LIVE_HUB.getByName(env.DISCORD_GUILD_ID).fetch(request);
+    }
     const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
     const secure = new Request(url, request);
     secure.headers.set("host", url.host);
@@ -243,14 +269,16 @@ export default {
       BOT_ENDPOINT_URL: "https://bot-live.invalid",
       DISCORD_LIVE_INGEST_ENABLED: "true",
       DISCORD_LIVE_SOCKET_ENABLED: "true",
+      DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "10,11",
       DISCORD_LIVE_INGEST_KEY_ID: "fixture-ingest",
       DISCORD_LIVE_INGEST_SECRET: "fixture-ingest-value",
       DISCORD_LIVE_SNAPSHOT_KEY_ID: "fixture-snapshot",
       DISCORD_LIVE_SNAPSHOT_SECRET: "fixture-snapshot-value",
     });
     await listen(live.child, live.origin, () => live.log);
-    const { verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
+    const { verifyKitLiveFanout, verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
     await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
+    await verifyKitLiveFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
   }
 
   const archive = await fetch(`${origin}/events/past`);
