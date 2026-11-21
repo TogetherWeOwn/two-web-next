@@ -143,9 +143,12 @@ Before merge, require:
    ref, its live tip, the reported PR base, the three-dot merge base and the
    head SHA. If any differs from the routing record, reassess the diff and
    review routing against the current target before merging. A head SHA pin
-   alone does not catch a retarget or an advancing target. Verify that all
-   required predecessor verdicts cover the head being merged and that required
-   checks pass on it.
+   alone does not catch a retarget or an advancing target. If the diff or its
+   review context changes, obtain fresh required predecessor verdicts even if
+   the head and stage order stay the same. An advancing target alone does not
+   invalidate verdicts when the diff and its review context are unchanged.
+   Verify that all required predecessor verdicts cover the current diff and
+   merge head, and that required checks pass on it.
    Resolve threads only once fixed or answered with evidence. When required,
    the Release Manager makes the merge go/no-go decision on the verified head
    before merging. Squash-merge in the same run, pinned to that reviewed head. After GitHub confirms the merge, record the
