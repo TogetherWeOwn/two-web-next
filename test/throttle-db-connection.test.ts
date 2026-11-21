@@ -138,6 +138,19 @@ describe("throttle runtime connection wiring", () => {
     }
   });
 
+  it.each([null, undefined])(
+    "propagates a %s admission rejection without pruning",
+    async (reason) => {
+      const begin = vi.fn().mockRejectedValue(reason);
+      await expect(checkWebThrottle({ begin } as unknown as Sql, "probe:fixture", 10)).rejects.toBe(
+        reason,
+      );
+      expect(begin).toHaveBeenCalledTimes(1);
+      expect(prune).not.toHaveBeenCalled();
+      expect(hits.size).toBe(0);
+    },
+  );
+
   it("keeps the injected store ahead of either runtime URL", async () => {
     expect(
       await throttleStore(

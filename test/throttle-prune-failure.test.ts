@@ -60,6 +60,50 @@ describe("throttle prune failure keeps the decided verdict", () => {
     expect(hits).toEqual([bucket]);
   });
 
+  it("keeps a refusal when the prune reporter throws", async () => {
+    const { hits, sql } = fixture(true);
+    const bucket = "prune-reporter-throws";
+    hits.push(bucket);
+    const report = vi.fn(() => {
+      throw new Error("fixture reporter throw");
+    });
+
+    expect(await checkWebThrottle(sql, bucket, 1, report)).toEqual({
+      limited: true,
+      retryAfter: 30,
+    });
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(hits).toEqual([bucket]);
+  });
+
+  it("admits without waiting for a prune reporter that later rejects", async () => {
+    const { hits, sql } = fixture(true);
+    const bucket = "prune-reporter-rejects";
+    let rejectReport!: (reason: Error) => void;
+    const pendingReport = new Promise<void>((_, reject) => {
+      rejectReport = reject;
+    });
+    // A Vitest mock observes promise settlements itself and would mask a leak.
+    let reports = 0;
+    const report = () => {
+      reports++;
+      return pendingReport;
+    };
+
+    expect(await checkWebThrottle(sql, bucket, 1, report)).toEqual({ limited: false });
+    expect(reports).toBe(1);
+    expect(hits).toEqual([bucket]);
+    const onUnhandled = vi.fn();
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      rejectReport(new Error("fixture reporter rejection"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(onUnhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
   it("logs the exception class, never the message, and keeps the refusal", async () => {
     const { hits, sql } = fixture(true, new PruneBoomError("prune boom detail"));
     const bucket = "prune-failure-warn-class";

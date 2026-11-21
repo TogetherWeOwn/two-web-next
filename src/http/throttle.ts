@@ -96,7 +96,7 @@ export async function checkWebThrottle(
   sql: Sql | null,
   bucket: string,
   max: number,
-  onPruneFailure?: (failure: ThrottlePruneFailure) => void,
+  onPruneFailure?: (failure: ThrottlePruneFailure) => void | Promise<void>,
 ): Promise<ThrottleVerdict> {
   if (!sql) return { limited: false };
 
@@ -104,13 +104,19 @@ export async function checkWebThrottle(
   try {
     verdict = await chargeWebThrottle(sql, bucket, max);
   } catch (err) {
-    if ((err as { code?: string }).code !== "55P03") throw err;
+    if ((err as { code?: unknown } | null | undefined)?.code !== "55P03") throw err;
     // The admission transaction aborted without inserting a hit.
     verdict = { limited: true, retryAfter: 1 };
   }
   // Prune outside the admission lock, including on refusal. A failure or a
   // delay never changes the verdict; late settlements are observed by the helper.
   const failure = await pruneWebThrottle(sql);
-  if (failure !== null) onPruneFailure?.(failure);
+  if (failure !== null && onPruneFailure) {
+    // Reporting is best effort too. Observe throws and rejections without
+    // delaying or replacing the decided verdict or logging reporter errors.
+    void Promise.resolve()
+      .then(() => onPruneFailure(failure))
+      .catch(() => undefined);
+  }
   return verdict;
 }
