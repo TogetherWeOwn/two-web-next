@@ -150,16 +150,16 @@ describe("live batch reduction", () => {
     const departed = { ...baseline, members: [member], voice: [] };
     expect(reduceLiveState(fixture(), delta!)).toEqual(departed);
   });
-
-  it.each(["x", "é"])("caps snapshots and reduced state by UTF-8 bytes (%s)", (char) => {
+  it.each([0, 1])("caps snapshots and reduced state at 1 MiB + %s UTF-8 bytes", (extra) => {
     const row = { ...member, nick: "é".repeat(100) };
     const crowd = Array.from({ length: 3895 }, (_, i) => ({ ...row, userId: `${i + 1000}` }));
     const state = fixture({ ...baseline, members: [...baseline.members, ...crowd] });
-    const value = { ...event, description: char.repeat(200) };
+    const value = { ...event, description: "é".repeat(136) + (extra ? "é" : "x") };
     const delta = patch({ topic: "events", op: "upsert", id: event.id, value });
-    const accepted = char === "x";
-    expect(reduceLiveState(state, delta!) !== null).toBe(accepted);
-    expect(snapshotTopics({ ...state, events: [value] }, guildId) !== null).toBe(accepted);
+    const candidate = { ...state, events: [value] };
+    expect(Buffer.byteLength(JSON.stringify(candidate))).toBe(1024 * 1024 + extra);
+    expect(reduceLiveState(state, delta!) !== null).toBe(extra === 0);
+    expect(snapshotTopics(candidate, guildId) !== null).toBe(extra === 0);
   });
 
   it("drops the current baseline if a contiguous batch loses permission proof", async () => {
