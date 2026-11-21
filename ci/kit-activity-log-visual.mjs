@@ -12,17 +12,24 @@ export class AssertionFailure extends Error {}
 export async function withDeadline(work, ms = 5_000) {
   if (ms <= 0) throw new BrowserDeadline();
   const expires = performance.now() + ms;
-  let timer;
-  const deadline = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new BrowserDeadline()), ms);
-  });
+  const deadline = Promise.withResolvers();
+  const timer = setTimeout(() => deadline.reject(new BrowserDeadline()), ms);
   try {
-    const result = await Promise.race([work(), deadline]);
+    const result = await Promise.race([work(), deadline.promise]);
     if (performance.now() >= expires) throw new BrowserDeadline();
     return result;
   } finally {
     clearTimeout(timer);
   }
+}
+export async function withCleanup(work, cleanup) {
+  try {
+    await work();
+  } catch (error) {
+    await cleanup(false).catch(() => undefined);
+    throw error;
+  }
+  await cleanup(true);
 }
 const subject = "zz-no-activity";
 const urlFor = (empty) => `${origin}${path}${empty ? `?subject=${subject}` : ""}`;
@@ -101,7 +108,8 @@ async function inspect(page, empty, keyboard) {
   validateView(content, state, empty, keyboard);
 }
 
-async function guardedPage(browser, mintModerator, [width, height], url, render, reportOnly) {
+async function guardedPage(browser, mintModerator, [width, height], url, guard) {
+  const { render, reportOnly, TimeoutError, mark } = guard;
   const context = await browser.newContext({
     viewport: { width, height },
     serviceWorkers: "block",
@@ -109,18 +117,20 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
   });
   let violation = false;
   let unavailable = false;
+  let stopped = false;
   let result;
   const pending = new Set();
   const settle = async () => {
     while (pending.size) await Promise.all(pending);
   };
-  try {
+  async function capture() {
     await context.addCookies([await mintModerator()]);
     await context.route("**/*", async (route) => {
+      if (stopped) return route.abort().catch(() => undefined);
       const check = serve(route, url).catch(() => false);
       pending.add(check);
       const verified = await check;
-      violation ||= verified === false || (verified === null && !reportOnly);
+      violation ||= verified === false;
       unavailable ||= verified === null;
       pending.delete(check);
       if (!verified) await route.abort().catch(() => undefined);
@@ -132,22 +142,35 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
     };
     page.on("pageerror", markViolation);
     if (!reportOnly) page.on("console", markViolation);
-    const response = await page.goto(url).catch(() => null);
+    const { response, error } = await page.goto(url).then(
+      (response) => ({ response }),
+      (error) => ({ error }),
+    );
     // The load timeout can precede a later document or asset fetch verdict.
     await settle();
     const valid = response?.url() === url && kitDocument(response.status(), response.headers());
+    if (error instanceof TimeoutError && !violation && !(reportOnly && unavailable)) throw error;
     if (!(response ? valid : unavailable)) throw new AssertionFailure("visual provenance drift");
     if (!violation && !unavailable) result = await render(page);
-    await settle();
-  } finally {
-    await withDeadline(() => context.close());
+    // Stop new requests before the final guard verdict, even if Lighthouse is still running.
+    stopped = true;
+    await withDeadline(settle);
+    if (violation || (unavailable && !reportOnly))
+      throw new AssertionFailure("unexpected visual diagnostic");
   }
+  await withCleanup(capture, async (succeeded) => {
+    stopped = true;
+    await withDeadline(() => context.close()).catch((error) => {
+      if (succeeded) mark("TEARDOWN");
+      throw error;
+    });
+  });
   if (violation) throw new AssertionFailure("unexpected visual diagnostic");
   return unavailable ? null : result;
 }
 async function boundedMeasurement(measure, ms) {
   // Leave time for guarded request verdicts and context close inside the work budget.
-  const budget = Math.min(ms, browserWorkMs - 10_000 - performance.now());
+  const budget = Math.min(ms, browserWorkMs - 12_000 - performance.now());
   if (budget <= 0) return null;
   const timer = new AbortController();
   const task = Promise.resolve()
@@ -156,7 +179,8 @@ async function boundedMeasurement(measure, ms) {
   const deadline = delay(budget, null, { signal: timer.signal });
   return Promise.race([task, deadline]).finally(() => timer.abort());
 }
-export async function collectVisuals(browser, mint, dir, { audit, measure, mark, ms = 25_000 }) {
+export async function collectVisuals(browser, mint, dir, options) {
+  const { audit, measure, mark, TimeoutError = BrowserDeadline, ms = 25_000 } = options;
   const views = { ...viewportPngs, lighthouse: viewportPngs["populated-desktop.png"] };
   for (const [name, size] of Object.entries(views)) {
     const reportOnly = name === "lighthouse";
@@ -164,13 +188,22 @@ export async function collectVisuals(browser, mint, dir, { audit, measure, mark,
     const keyboard = name === "keyboard-mobile.png";
     const url = urlFor(empty);
     const stage = reportOnly ? "LIGHTHOUSE" : "CAPTURE";
+    if (reportOnly && (ms <= 0 || performance.now() >= browserWorkMs - 30_000)) return null;
     mark(stage);
     const render = async (page) => {
       mark("FONTS");
-      await withDeadline(() => page.evaluate(() => document.fonts.ready.then(() => true)));
+      const ready = await withDeadline(() =>
+        page.evaluate(() => document.fonts.ready.then(() => true)),
+      ).then(
+        () => true,
+        (error) => {
+          if (reportOnly && error instanceof BrowserDeadline) return false;
+          throw error;
+        },
+      );
       mark(stage);
       await inspect(page, empty, false);
-      if (reportOnly) return boundedMeasurement(() => measure(page, url), ms);
+      if (reportOnly) return ready ? boundedMeasurement(() => measure(page, url), ms) : null;
       if (keyboard) {
         for (let n = 0; n < 11; n++) await page.keyboard.press("Tab");
         await page.keyboard.press("ArrowRight");
@@ -181,7 +214,8 @@ export async function collectVisuals(browser, mint, dir, { audit, measure, mark,
       if (name.endsWith("desktop.png")) await audit(page, name);
       await inspect(page, empty, keyboard);
     };
-    const result = await guardedPage(browser, mint, size, url, render, reportOnly);
+    const guard = { render, reportOnly, TimeoutError, mark };
+    const result = await guardedPage(browser, mint, size, url, guard);
     if (reportOnly) return result;
   }
 }

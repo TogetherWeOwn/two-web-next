@@ -1,34 +1,26 @@
 // Run from the pinned app checkout, only with the job-private Worker and Postgres.
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { appendFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { chromium } from "@playwright/test";
+import { chromium, errors } from "@playwright/test";
 import postgres from "postgres";
 import { requireGithubRunner, requireTestDatabase } from "../e2e/ci-only.mjs";
 import { routeA11y, routeLighthouse } from "./kit-activity-log-metrics.mjs";
-import {
-  AssertionFailure,
-  BrowserDeadline,
-  browserWorkMs,
-  collectVisuals,
-  origin,
-  path,
-  withDeadline,
-} from "./kit-activity-log-visual.mjs";
+import * as visual from "./kit-activity-log-visual.mjs";
+
+const { origin, path, browserWorkMs, withDeadline } = visual;
 
 const cdpPort = 9222;
 const mod = "900000000000009301";
 const member = "900000000000009302";
 const [a, b] = ["900000000000009311", "900000000000009312"];
-let stage;
 function mark(next) {
   const file = `${process.env.TMPDIR}/browser-stage`;
   // The outer watchdog can stop us mid-write. Keep the last complete stage readable.
   writeFileSync(`${file}.next`, `${next}\n`, { mode: 0o600 });
   renameSync(`${file}.next`, file);
-  stage = next;
 }
 function ok(condition, label) {
-  if (!condition) throw new AssertionFailure(label);
+  if (!condition) throw new visual.AssertionFailure(label);
 }
 const same = (got, want, label) => ok(JSON.stringify(got) === JSON.stringify(want), label);
 const desc = (from, to) =>
@@ -44,9 +36,13 @@ async function main() {
   ok(secret, "fixture-secret");
   const sql = postgres(database, { max: 1, connect_timeout: 5, onnotice: () => {} });
   let launched;
-  let closing = false;
+  const stop = new AbortController();
+  const checkTime = () => {
+    stop.signal.throwIfAborted();
+    if (performance.now() >= browserWorkMs) throw new visual.BrowserDeadline();
+  };
   const progress = (next) => {
-    if (closing) throw new BrowserDeadline();
+    checkTime();
     mark(next);
   };
   async function exercise() {
@@ -128,7 +124,10 @@ async function main() {
     progress("REFUSALS");
     const quiet = await reads();
     const probe = `${path}?subject=kal-120&causer=${a}`;
-    const request = (headers) => fetch(`${origin}${probe}`, { headers, redirect: "manual" });
+    const request = (headers) => {
+      checkTime();
+      return fetch(`${origin}${probe}`, { headers, redirect: "manual", signal: stop.signal });
+    };
     const denied = await request({ cookie: `${cookie}=${memberToken}` });
     same([denied.status, denied.headers.get("x-two-renderer")], [403, "kit"], "member:kit-403");
     ok(!(await denied.text()).includes("kal-120"), "member:no-row");
@@ -136,7 +135,9 @@ async function main() {
     same([guest.status, guest.headers.get("x-two-renderer")], [302, "kit"], "guest:kit-302");
     const target = `/auth/discord?next=${encodeURIComponent(probe)}`;
     same(guest.headers.get("location"), target, "guest:return-path");
+    checkTime();
     ok((await reads()) === quiet, "refused:no-activity-log-reads");
+    checkTime();
     same(await audits(), snapshot, "refused:no-new-audits");
 
     progress("PAGINATION_FILTERS");
@@ -159,50 +160,49 @@ async function main() {
     // A successful moderator GET rotates the session, so never seed a second context with it.
     const mintModerator = () =>
       mint(mod, true).then((value) => ({ name: cookie, value, domain, path: "/", secure: true }));
-    const lighthouse = await collectVisuals(browser, mintModerator, `${scratch}/screenshots`, {
-      mark: progress,
-      audit: async (page, name) => {
-        const a11y = await routeA11y(page, progress);
-        record(`${name} ${a11y}`);
-        ok(a11y.startsWith("a11y: PASS "), "visual:a11y");
-        progress("CAPTURE");
+    const lighthouse = await visual.collectVisuals(
+      browser,
+      mintModerator,
+      `${scratch}/screenshots`,
+      {
+        mark: progress,
+        audit: async (page, name) => {
+          const a11y = await routeA11y(page, progress);
+          record(`${name} ${a11y}`);
+          ok(a11y.startsWith("a11y: PASS "), "visual:a11y");
+          progress("CAPTURE");
+        },
+        measure: routeLighthouse.bind(null, cdpPort),
+        TimeoutError: errors.TimeoutError,
       },
-      measure: routeLighthouse.bind(null, cdpPort),
-    });
+    );
     record(`populated-desktop.png ${lighthouse ?? "lighthouse: unavailable"}`);
   }
-  let failedStage;
-  try {
-    // A single cumulative budget covers even browser RPCs without a native timeout.
+  async function work() {
     await withDeadline(exercise, browserWorkMs - performance.now());
-  } catch (error) {
-    failedStage = stage;
-    throw error;
-  } finally {
-    closing = true;
-    try {
-      mark("TEARDOWN");
-    } finally {
-      try {
-        await withDeadline(async () => {
-          const browser = await launched?.catch(() => undefined);
-          await browser?.close();
-        }, 10_000);
-      } finally {
-        // Actions disposes of the service container and all fixture rows.
-        await withDeadline(() => sql.end({ timeout: 5 }), 6_000);
-      }
-    }
-    mark(failedStage ?? "COMPLETE");
+    // On work failure leave the last reached stage intact, even if cleanup stalls.
+    mark("TEARDOWN");
   }
+  async function cleanup() {
+    stop.abort(new visual.BrowserDeadline());
+    try {
+      await withDeadline(async () => (await launched?.catch(() => undefined))?.close(), 10_000);
+    } finally {
+      // Actions disposes of the service container and all fixture rows.
+      await withDeadline(() => sql.end({ timeout: 5 }), 6_000);
+    }
+  }
+  await visual.withCleanup(work, cleanup);
+  mark("COMPLETE");
 }
 
 await main().then(
   // Teardown and the synchronous stage write finished; don't wait on Lighthouse handles.
   () => process.exit(0),
-  // Reserved harness verdicts, distinct from Node's own fatal exits.
-  (error) =>
-    process.exit(
-      error instanceof AssertionFailure ? 20 : error instanceof BrowserDeadline ? 21 : 22,
-    ),
+  (error) => {
+    if (error instanceof visual.AssertionFailure) process.exit(20);
+    if (error instanceof visual.BrowserDeadline || error instanceof errors.TimeoutError)
+      process.exit(21);
+    process.exit(22);
+  },
 );
