@@ -2216,6 +2216,26 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
           .replace(/ *\n */g, "\n")
           .replace(/^ | $/g, "");
       const zoneOf = (node: Element) => node.closest("[data-cal-zone]");
+      const zones = nodes(section, "[data-cal-zone]");
+      if (zones.some((zone) => zone.parentElement?.closest("[data-cal-zone]"))) {
+        throw new Error("Calendar replacement zones must not be nested");
+      }
+      // The actions zone is replaceable, but must keep its past-scope input
+      // in the stable GET form even though the default response omits it.
+      const searchForm = section.querySelector('form[role="search"]');
+      const actions = section.querySelector('[data-cal-zone="actions"]');
+      if (!searchForm || zoneOf(searchForm) || actions?.closest("form") !== searchForm) {
+        throw new Error("Missing replaceable actions zone inside the stable search form");
+      }
+      for (const selector of [
+        '[data-testid="events-search"]',
+        'select[name="game"]',
+        '[data-testid="events-read-retry"]',
+        '[data-testid="events-read-clear"]',
+      ]) {
+        const hook = section.querySelector(selector);
+        if (!hook || zoneOf(hook) !== null) throw new Error(`Missing stable hook ${selector}`);
+      }
       const loading = section.querySelector('[data-testid="events-loading"][hidden]');
       const heading = section.querySelector('#events-heading[tabindex="-1"]');
       const content = section.querySelector('[data-cal-zone="content"]');
@@ -2250,14 +2270,30 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
       const viewCalendar = head?.querySelector('[data-testid="events-view-calendar"]');
       const views = viewList?.closest('nav:not([role]), [role="group"], [role="navigation"]');
       const viewLabel = views?.getAttribute("aria-label");
+      const isExposed = (node: Element) => {
+        if (node.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+        // A closed disclosure exposes only its first direct summary.
+        for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+          if (
+            parent.matches("details:not([open])") &&
+            !parent.querySelector(":scope > summary")?.contains(node)
+          ) {
+            return false;
+          }
+        }
+        return true;
+      };
       if (
-        !views ||
+        !viewList ||
         !viewCalendar ||
+        !views ||
         !views.contains(viewCalendar) ||
         !head?.contains(views) ||
-        !viewLabel?.trim()
+        !viewLabel?.trim() ||
+        !isExposed(viewList) ||
+        !isExposed(viewCalendar)
       ) {
-        throw new Error("Missing shared accessible label for the List/Calendar controls");
+        throw new Error("Missing exposed, labelled List/Calendar controls");
       }
       const subscribe = section.querySelector('[data-cal-zone="subscribe"]');
       if (!subscribe?.matches("details") || !subscribe.querySelector(":scope > summary")) {
@@ -2291,13 +2327,27 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
       const control = (node: Element) => ({
         tag: node.localName,
         attrs: attrs(node),
+        disabled: node.matches(":disabled"),
         text: node.matches("form, select") ? null : text(node),
         value:
           node instanceof HTMLInputElement || node instanceof HTMLSelectElement ? node.value : null,
       });
+      const rowInfoText = (node: Element) => {
+        // Compare disclosure contents separately from their container. The
+        // summary's explicit line break separates the excerpt from the label.
+        if (node.matches("details.schedule-text")) return null;
+        if (node.matches("details.schedule-text > summary")) {
+          const summary = node.cloneNode(true) as Element;
+          for (const br of nodes(summary, "br")) br.replaceWith(" ");
+          return text(summary);
+        }
+        return node.matches("p.schedule-text, details.schedule-text > p")
+          ? descriptionText(node)
+          : text(node);
+      };
       return {
         attributes: attrs(section),
-        zones: nodes(section, "[data-cal-zone]").map(attrs),
+        zones: zones.map(attrs),
         loading: attrs(loading),
         status: nodes(section, '[role="status"]').map((node) => [attrs(node), text(node)]),
         headingLinks: headingLinks.map(link),
@@ -2328,7 +2378,11 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
             attrs: attrs(row),
             title: text(title),
             links: nodes(row, "a").map(link),
-            when: nodes(row, "time").map((time) => [time.getAttribute("datetime"), text(time)]),
+            when: nodes(row, "time").map((time) => [
+              time.getAttribute("datetime"),
+              text(time),
+              time.closest("[hidden]") !== null,
+            ]),
             zone: nodes(
               row,
               ".schedule-when > span:not(:has(time)), p:has(> time) > span:first-of-type",
@@ -2339,12 +2393,7 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
               ".schedule-info :is(p:not(:has(> time)), details, summary, .schedule-badge)",
             )
               .filter((node) => !locations.some((location) => location.contains(node)))
-              .map((node) => [
-                attrs(node),
-                node.matches("p.schedule-text, details.schedule-text > p")
-                  ? descriptionText(node)
-                  : text(node),
-              ]),
+              .map((node) => [attrs(node), rowInfoText(node)]),
             attendance: nodes(row, ".schedule-attendance, .schedule-attendance [data-testid]").map(
               (node) => [attrs(node), text(node)],
             ),
@@ -2941,6 +2990,86 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
       await sql`delete from web_session_grace where user_id = ${userId}`;
       await sql`delete from web_sessions where user_id = ${userId}`;
       await sql`delete from users where id = ${userId}`;
+    });
+  }
+});
+
+test("Kit guest discovery links use the live detail zone at both widths", async ({ browser }) => {
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const key = (id: number) => `01J${String(id).padStart(23, "0")}`;
+  const eventKey = key(985);
+  const zone = "America/New_York";
+  const now = Date.now();
+  const later = (days: number) =>
+    new Date(new Date(now + days * 86_400_000).setUTCHours(2, 34, 0, 0));
+  const next = { key: key(986), title: "Open tables", start: later(1) };
+  const series = { key: key(987), title: "Community game night: round two", start: later(7) };
+  const context = await browser.newContext({
+    javaScriptEnabled: false,
+    timezoneId: "Pacific/Auckland",
+  });
+  try {
+    await withSessionDb(async (sql) => {
+      const [root] = await sql<{ id: number }[]>`
+        insert into events (event_key, title, game, starts_at, ends_at, timezone, status,
+                            recurrence_frequency, recurrence_count, recurrence_index)
+        values (${eventKey}, 'Community game night', 'Tabletop', ${new Date(now - 3_600_000)},
+                ${new Date(now + 3_600_000)}, ${zone}, 'published', 'weekly', 2, 1)
+        returning id`;
+      for (const row of [next, series]) {
+        await sql`insert into events (event_key, title, game, starts_at, ends_at, timezone, location,
+                                      status, parent_event_id, recurrence_index)
+          values (${row.key}, ${row.title}, 'Tabletop', ${row.start},
+                  ${new Date(+row.start + 7_200_000)}, 'UTC', 'Community voice', 'published',
+                  ${row === series ? root!.id : null}, ${row === series ? 2 : null})`;
+      }
+    });
+    const page = await context.newPage();
+    // Use the compact label's parts and order, not en-GB's “Sept” or US date order.
+    const clock = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+    const label = (start: Date) => {
+      const parts = new Map(clock.formatToParts(start).map(({ type, value }) => [type, value]));
+      return `${parts.get("weekday")} ${parts.get("day")} ${parts.get("month")}, ${parts.get("hour")}:${parts.get("minute")} ${zone}`;
+    };
+    for (const { size: viewport } of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport);
+      const response = await page.goto(`${KIT_ORIGIN}/e/${eventKey}`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      await expect(page.getByTestId("kit-event-time")).toContainText(zone);
+      for (const [testid, row] of [
+        ["event-series-next", series],
+        ["event-next", next],
+        ["event-related-link", series],
+      ] as const) {
+        const link = page.getByTestId(testid).filter({ hasText: row.title });
+        const when = label(row.start);
+        await expect(link).toBeVisible();
+        await expect(link).toHaveAttribute("href", `/e/${row.key}`);
+        await expect(link).toHaveAccessibleName(new RegExp(when));
+        await expect(link.locator("time")).toHaveText(when);
+        await expect(link.locator("time")).toHaveAttribute("datetime", row.start.toISOString());
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+      const name = `kit-review-event-discovery-${viewport.width}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    }
+  } finally {
+    await context.close();
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key in (${eventKey}, ${next.key}, ${series.key})`;
     });
   }
 });
