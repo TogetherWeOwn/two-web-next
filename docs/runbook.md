@@ -630,15 +630,17 @@ using controlled provider-side evidence. Do not cancel in-flight DDL casually.
 **Rollback:** a Worker rollback does not undo schema/data. SQL failure rolls back
 the pending transaction, including ledger initialization on a fresh DB. Existing
 history stays intact. On connection loss, do not infer commit success. For
-production, do not re-dispatch the apply workflow to resolve an uncertain
-commit. Under a separately approved recovery procedure, the authorized database
-operator runs only the read-only `verify-scope` command in the protected context
-with the original release SHA, migrator identity and scope pins. Success means
-only that the ledger matches the exact approved end and the reported tail is
-still pending. If it is earlier, later or not a canonical prefix, stop and
-reconcile the ledger with the original preflight/PITR evidence; refusal does not
-authorize replay or a wider scope. Do not change the pins to force a result. For
-staging, re-plan and verify under the approved recovery procedure before retrying.
+production, do not replay apply to resolve an uncertain commit. Under separate
+recovery approval, dispatch `db-migrate.yml` on `main` with `target=production`
+and `readback_only=true`. This skips plan and apply, and runs only `verify-scope`
+for database access under the same protected Environment. The original approved
+SHA must still match the run, and the original migrator identity and scope pins
+must remain in place. Success means only that the ledger matches the exact
+approved end and the reported tail is still pending. If `main` moved, the pins
+no longer match, or the ledger is earlier, later or non-canonical, stop and
+reconcile with the original preflight/PITR evidence through the authorized
+operator. Do not change the pins, widen the scope or replay to force a result.
+For staging, re-plan and verify under the approved recovery procedure before retrying.
 After a successful but harmful migration, prefer a reviewed forward repair.
 If authorized PITR is required, pause writers and coordinate **both** consumers,
 verify the recorded timestamp is eligible, and use the provider's documented

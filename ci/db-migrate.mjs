@@ -283,7 +283,9 @@ function approvedRange(migrations, pin) {
   const start = migrations.findIndex((entry) => entry.tag === tags[0]);
   const end = start + tags.length;
   if (start < 0 || tags.some((tag, index) => migrations[start + index]?.tag !== tag)) {
-    refuse("Production migration scope must pin an exact contiguous segment of the release journal.");
+    refuse(
+      "Production migration scope must pin an exact contiguous segment of the release journal.",
+    );
   }
   return { start, end };
 }

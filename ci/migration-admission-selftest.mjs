@@ -193,6 +193,8 @@ test("db-migrate admits staging and production through one explicit gate before 
   assert.match(gate, /Migrations require main/);
   assert.match(gate, /Unknown migration target/);
   assert.match(gate, /Production migrations are disabled/);
+  assert.match(gate, /Readback-only is production-only/);
+  assert.match(gate, /READBACK_ONLY: \$\{\{ inputs\.readback_only \}\}/);
   const shaSetting =
     "${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_APPROVED_SHA || '' }}";
   assert.ok(gate.includes(`PRODUCTION_MIGRATION_APPROVED_SHA: ${shaSetting}`));
@@ -225,8 +227,14 @@ test("db-migrate admits staging and production through one explicit gate before 
       "PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: ${{ steps.production-scope.outputs.pending_tags }}",
     ),
   );
-  for (const mode of ["plan", "apply", "verify", "verify-scope"])
-    assert.ok(dbMigrate.includes(`node ci/db-migrate.mjs ${mode}\n`));
+  assert.match(dbMigrate, /readback_only:\n[^\n]+\n        type: boolean\n        default: false/);
+  for (const mode of ["plan", "apply"]) {
+    assert.ok(
+      dbMigrate.includes(
+        `if: \${{ !inputs.readback_only }}\n        run: node ci/db-migrate.mjs ${mode}\n`,
+      ),
+    );
+  }
   for (const mode of ["apply", "verify", "verify-scope"])
     assert.ok(dbMigrate.includes(`node ci/db-migrate.mjs ${mode}\n        env: *migration-env`));
   for (const [target, mode] of [

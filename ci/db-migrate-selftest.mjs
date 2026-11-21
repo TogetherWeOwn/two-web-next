@@ -555,12 +555,52 @@ test("production applies and reads back a bounded range without applying the def
       const before = await migrationState(client);
       const overlap = await approvedScopeEnv(client, tags.slice(start - 1, end));
       await assert.rejects(run("apply", overlap), scopeRefusal);
-      await assert.rejects(run("verify-scope", approved), /ledger has not reached the approved end/);
-      assert.deepEqual((await run("plan", approved)).map((entry) => entry.tag), scope);
+      await assert.rejects(
+        run("verify-scope", approved),
+        /ledger has not reached the approved end/,
+      );
+      assert.deepEqual(
+        (await run("plan", approved)).map((entry) => entry.tag),
+        scope,
+      );
       assert.deepEqual(await migrationState(client), before);
+
+      const [first] = before.ledger;
+      const refusesEditedHash = async (mode) => {
+        await client`update drizzle.__drizzle_migrations set hash = 'edited' where id = ${first.id}`;
+        const edited = await migrationState(client);
+        output.length = 0;
+        await assert.rejects(run(mode, approved), /not an exact prefix/);
+        assert.ok(!output.some((line) => line.startsWith("Pre-migration PITR timestamp")));
+        assert.deepEqual(await migrationState(client), edited);
+        await client`update drizzle.__drizzle_migrations set hash = ${first.hash} where id = ${first.id}`;
+      };
+      await refusesEditedHash("apply");
+
+      // The SQL succeeds, but the final ledger insert is silently skipped.
+      // Only the in-transaction end check can catch that before committing DDL.
+      await client.unsafe(`create function drizzle.skip_approved_end() returns trigger
+        language plpgsql as $$ begin
+          if new.created_at = ${journal.entries[end - 1].when} then return null; end if;
+          return new;
+        end; $$`);
+      await client`create trigger skip_approved_end before insert on drizzle.__drizzle_migrations
+        for each row execute function drizzle.skip_approved_end()`;
+      output.length = 0;
+      await assert.rejects(run("apply", approved), /ledger has not reached the approved end/);
+      assert.ok(!output.some((line) => line.startsWith("Scoped apply:")));
+      const rolledBack = await migrationState(client);
+      assert.deepEqual(rolledBack.ledger, before.ledger);
+      assert.deepEqual(rolledBack.columns, before.columns);
+      await client`drop trigger skip_approved_end on drizzle.__drizzle_migrations`;
+      await client`drop function drizzle.skip_approved_end()`;
+
       for (const mode of ["apply", "verify-scope"]) {
         output.length = 0;
-        assert.deepEqual((await run(mode, approved)).map((entry) => entry.tag), deferred);
+        assert.deepEqual(
+          (await run(mode, approved)).map((entry) => entry.tag),
+          deferred,
+        );
         assert.ok(output.includes(`Deferred web migrations: ${deferred.join(", ")}.`));
         assert.ok(!output.some((line) => line.includes("zero pending web migrations")));
       }
@@ -573,6 +613,7 @@ test("production applies and reads back a bounded range without applying the def
       const [{ tailTable }] =
         await client`select to_regclass('public.announcement_send_claims') as "tailTable"`;
       assert.equal(tailTable, null);
+      await refusesEditedHash("verify-scope");
       await assert.rejects(run("verify", approved), /remain pending/);
       await assert.rejects(run("apply", approved), scopeRefusal);
       assert.deepEqual(await migrationState(client), after);
