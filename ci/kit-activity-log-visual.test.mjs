@@ -29,7 +29,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
   const lapse = clock(t);
   const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
   const modes =
-    "dom late late-method capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled";
+    "dom asset-dom asset-body late late-method capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled";
   for (const mode of modes.split(" ")) {
     const hono = mode === "hono";
     const expired = mode === "capture-budget";
@@ -43,7 +43,8 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     let closed = 0;
     let closing = false;
     let cookie = 0;
-    let url, intercept, observe;
+    let url, intercept;
+    let observe;
     const navigation = Promise.withResolvers();
     const abortNavigation = t.mock.fn(() => {
       navigation.reject(navError);
@@ -51,12 +52,19 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     });
     const lateFetch = t.mock.fn(stall);
     const lateFulfill = t.mock.fn(noop);
+    const assetBody = t.mock.fn(stall);
     const stages = [];
     const request = (href, nav, fetch, abort = noop, fulfill = noop, method = "GET") => {
       const req = { url: () => href, isNavigationRequest: () => nav, method: () => method };
       observe?.(req);
       // Playwright emits request events during close but doesn't call route handlers.
-      if (!closing) return intercept({ request: () => req, fetch, fulfill, abort });
+      if (closing) return;
+      return intercept({
+        request: () => req,
+        fetch,
+        fulfill,
+        abort,
+      });
     };
     const lateRequest = () => {
       const href = `${visual.origin}/${mode === "late" ? "unexpected.css" : "styles.css"}`;
@@ -84,7 +92,8 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       evaluate: () =>
         mode === "capture-fonts" || (mode === "fonts" && closed === 5) ? lapse(5_000) : true,
       setDefaultTimeout: noop,
-      goto: async (href) => {
+      waitForLoadState: async () => (/^asset(-dom)?$/.test(mode) ? stall() : undefined),
+      goto: async (href, { waitUntil } = {}) => {
         url = href;
         const status = consumed.has(cookie) ? 302 : 200;
         consumed.add(cookie);
@@ -107,12 +116,14 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
           throw navError;
         }
         if (dom) await request(href, true, async () => response);
-        if (closed !== 5 || !["document", "asset", "disallowed"].includes(mode)) return response;
+        if (closed !== 5 || !/^(document|asset|disallowed)/.test(mode)) return response;
         if (mode === "document") void request(href, true, stall);
         else {
           await request(href, true, async () => response);
-          void request(`${visual.origin}/styles.css`, false, stall);
+          const css = () => ({ ...response, body: assetBody });
+          void request(`${visual.origin}/styles.css`, false, mode === "asset-body" ? css : stall);
           if (mode === "disallowed") void request(`${visual.origin}/unexpected.css`, false, noop);
+          if (waitUntil === "commit" || mode === "asset-body") return response;
         }
         throw new Error("navigation timed out first");
       },
@@ -121,7 +132,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       getByTestId: () => ({
         evaluate: () => {
           const scroll = closed === 4 && keys.at(-1) === "ArrowRight";
-          if (closed === 5 && mode === "dom") return [[], [true, scroll, scroll]];
+          if (closed === 5 && mode.endsWith("dom")) return [[], [true, scroll, scroll]];
           return [visual.expectedContent(url.includes("?")), [true, scroll, scroll]];
         },
       }),
@@ -136,34 +147,45 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       stages.push(stage);
       if (stage === "TEARDOWN" && closed === 5 && mode === "pending") lateRequest();
     };
-    const zero = mode === "dom" || mode === "disallowed";
-    const options = { audit: noop, measure, mark, ms: zero ? 0 : 10, TimeoutError };
+    const drift = mode.endsWith("dom");
+    const denied = mode === "disallowed" || mode === "asset-body";
+    const options = { audit: noop, measure, mark, ms: drift || denied ? 0 : 10, TimeoutError };
     const collect = ({ signal } = new AbortController()) =>
       visual.collectVisuals(browser, mint, ".", { ...options, signal });
     const report = hono || expired ? runWork(collect, mark, fixture.close) : collect();
     if (mode === "capture-fonts" || expired) await assert.rejects(report, visual.BrowserDeadline);
-    else if (mode === "dom") await assert.rejects(report, /visual content drift/);
+    else if (drift) await assert.rejects(report, /visual content drift/, mode);
     else if (hono || lateDenied) await assert.rejects(report, visual.AssertionFailure);
-    else if (mode === "disallowed") await assert.rejects(report, /unexpected visual diagnostic/);
+    else if (denied) await assert.rejects(report, /unexpected visual diagnostic/, mode);
     else if (mode === "capture-timeout") {
       await assert.rejects(report, TimeoutError);
       await assert.rejects(navigation.promise, (error) => error === navError);
       assert.equal(abortNavigation.mock.callCount(), 1);
     } else if (early) await assert.rejects(report, (error) => error === navError);
     else assert.equal(await report, null);
-    assert.equal(lateFetch.mock.callCount(), 0, mode);
-    assert.equal(lateFulfill.mock.callCount(), 0, mode);
+    assert.deepEqual([lateFetch.mock.callCount(), lateFulfill.mock.callCount()], [0, 0], mode);
+    if (mode === "asset-body") assert.equal(assetBody.mock.callCount(), 1);
     if (early) assert.equal(stages.at(-1), mode.endsWith("fonts") ? "FONTS" : "CAPTURE");
-    assert.equal(closed, early ? Number(hono || expired) : zero ? 5 : 6);
+    assert.equal(closed, early ? Number(hono || expired) : drift || denied ? 5 : 6);
     assert.equal(consumed.size, early ? 2 : 7);
-    assert.equal(
-      measure.mock.callCount(),
-      Number(lateDenied || ["pending", "rejected"].includes(mode)),
-    );
+    assert.equal(measure.mock.callCount(), Number(lateDenied || /^(pending|rejected)$/.test(mode)));
     if (stalled) await new Promise(setImmediate);
     assert.deepEqual(shots, early ? [] : Object.keys(viewportPngs));
     assert.deepEqual(keys, early ? [] : [...Array(11).fill("Tab"), "ArrowRight"]);
   }
+});
+
+test("fixture CLI exits after cleanup despite a live measurement handle", () => {
+  const expectExit = (code, ...args) => {
+    const run = spawnSync(process.execPath, args, { env: {}, timeout: 3_000 });
+    assert.deepEqual([run.status, run.stdout.length, run.stderr.length], [code, 0, 0]);
+  };
+  expectExit(22, "ci/kit-activity-log-assert.mjs");
+  const stub = `import { exitFixture } from './ci/kit-activity-log-assert.mjs';
+    import { AssertionFailure, BrowserDeadline } from './ci/kit-activity-log-visual.mjs';
+    const Failure = [null, AssertionFailure, BrowserDeadline, RangeError, Error][process.argv[1]];
+    setInterval(()=>{},60_000); await exitFixture(Failure ? Promise.reject(new Failure('private')) : Promise.resolve(), RangeError);`;
+  for (const [i, code] of [0, 20, 21, 21, 22].entries()) expectExit(code, "-e", stub, `${i}`);
 });
 
 test("fixture cleanup attempts both closes, preserving the first failure without completing", async (t) => {
@@ -193,26 +215,6 @@ test("refusal deadlines abort fetch and prevent follow-on reads", async (t) => {
   late.resolve("denied");
   await assert.rejects(probes, visual.BrowserDeadline);
   assert.equal(request.mock.callCount(), 1);
-});
-test("fixture CLI exits after cleanup despite a live measurement handle", () => {
-  const preload = `import { registerHooks } from 'node:module';
-    const url = 'data:text/javascript,export const chromium=null,errors={TimeoutError:RangeError};export default null';
-    registerHooks({resolve(id, ctx, next) {return ['@playwright/test','postgres'].includes(id) ? {url,shortCircuit:true} : next(id,ctx)}});`;
-  const argv = [
-    "--import",
-    `data:text/javascript,${encodeURIComponent(preload)}`,
-    "ci/kit-activity-log-assert.mjs",
-  ];
-  const entry = spawnSync(process.execPath, argv, { env: {}, timeout: 3_000 });
-  assert.deepEqual([entry.status, entry.stdout.length, entry.stderr.length], [22, 0, 0]);
-  const stub = `import { exitFixture } from './ci/kit-activity-log-assert.mjs';
-    import { AssertionFailure, BrowserDeadline } from './ci/kit-activity-log-visual.mjs';
-    const Failure = [null, AssertionFailure, BrowserDeadline, RangeError, Error][process.argv[1]];
-    setInterval(()=>{},60_000); await exitFixture(Failure ? Promise.reject(new Failure('private')) : Promise.resolve(), RangeError);`;
-  for (const [i, code] of [0, 20, 21, 21, 22].entries()) {
-    const run = spawnSync(process.execPath, ["-e", stub, `${i}`], { timeout: 3_000 });
-    assert.deepEqual([run.status, run.stdout.length, run.stderr.length], [code, 0, 0]);
-  }
 });
 test("only the protected diagnostic publishes the validated directory", () => {
   const url = new URL("../.github/workflows/kit-activity-log-diagnostic.yml", import.meta.url);

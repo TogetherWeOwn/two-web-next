@@ -48,9 +48,14 @@ export async function memberRefusal(probe, headers, { signal, checkTime }, fetch
   ok(!body.includes("kal-120"), "member:no-row");
   return send;
 }
-async function main(chromium, postgres, TimeoutError) {
+async function main() {
   requireGithubRunner();
   const database = requireTestDatabase(process.env.DATABASE_URL);
+  const { chromium, errors } = await import("@playwright/test");
+  const { default: postgres } = await import("postgres");
+  await exitFixture(exerciseFixture(chromium, postgres, errors, database), errors.TimeoutError);
+}
+async function exerciseFixture(chromium, postgres, { TimeoutError }, database) {
   mark("FIXTURE");
   const secret = readFileSync("ci/kit-worker-dev.mjs", "utf8").match(
     /SESSION_SECRET: "([^"]+)"/,
@@ -59,7 +64,6 @@ async function main(chromium, postgres, TimeoutError) {
   const sql = postgres(database, { max: 1, connect_timeout: 5, onnotice: () => {} });
   let launched;
   const closeBrowser = async () => (await launched?.catch(() => undefined))?.close();
-  // Actions disposes of the container and rows.
   const closeDatabase = () => sql.end({ timeout: 5 });
   async function exercise(budget) {
     // Same DB-minted signed session as e2e/kit-parity/moderator-fixture.ts.
@@ -198,8 +202,4 @@ export async function exitFixture(task, TimeoutError) {
   };
   process.exit(await task.then(() => 0, classify));
 }
-if (import.meta.main) {
-  const { chromium, errors } = await import("@playwright/test");
-  const { default: postgres } = await import("postgres");
-  await exitFixture(main(chromium, postgres, errors.TimeoutError), errors.TimeoutError);
-}
+if (import.meta.main) await main().catch(() => process.exit(22));
