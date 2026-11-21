@@ -27,6 +27,8 @@ await mkdir(output, { recursive: true });
 const gitSha = (dir) =>
   execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const manifest = { state, tooling: gitSha(tooling), captures: [], errors: [] };
+const memberMarkup = {};
+const compareMember = state === "member" && process.env.COMPARE_HOME_INTRO === "true";
 const viewports = [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 390, height: 844 },
@@ -45,7 +47,16 @@ for (const tree of ["before", "after"]) {
           : homeEvidencePage(state),
         now: Date.UTC(2026, 9, 20, 12),
       },
-      async ({ page }) => {
+      async ({ page, html }) => {
+        if (compareMember) {
+          // Compare the authored Home markup, not Kit's build-dependent asset URLs.
+          const start = html.indexOf('<div class="base-theme homepage-theme ember-home"');
+          const end = html.indexOf("</footer>", start);
+          assert.ok(start >= 0 && end > start, "member Home wrapper or footer missing");
+          memberMarkup[tree] = createHash("sha256")
+            .update(html.slice(start, end + "</footer>".length))
+            .digest("hex");
+        }
         for (const viewport of viewports) {
           await page.setViewportSize({ width: viewport.width, height: viewport.height });
           const fontLoaded = await page.evaluate(async () => {
@@ -135,6 +146,11 @@ for (const tree of ["before", "after"]) {
   } catch (error) {
     manifest.errors.push(`${tree}: ${error.message}`);
   }
+}
+if (compareMember) {
+  manifest.memberMarkup = memberMarkup;
+  if (!memberMarkup.before || memberMarkup.before !== memberMarkup.after)
+    manifest.errors.push("member Home markup differs between the base and head");
 }
 await writeFile(join(output, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 if (manifest.errors.length || manifest.captures.length !== 4) {

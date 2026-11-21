@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import AxeBuilder from "@axe-core/playwright";
 import { homeVoiceFixture } from "../test/fixtures/kit-home-voice.ts";
-import { homeEvidenceData } from "./kit-home-evidence.mjs";
+import { fixtureData } from "./kit-home-evidence.mjs";
 import { withKitOfflineBrowser } from "./kit-offline-browser.mjs";
 
 const states = /** @type {const} */ ([
@@ -22,7 +22,7 @@ async function fixturePage() {
     await Promise.all(
       states.map(async (state) => {
         const member = ["beforeMember", "member", "quiet", "frozen"].includes(state);
-        const data = homeEvidenceData(member ? "memberEvents" : "guestEvents");
+        const data = fixtureData(member ? "memberAgenda" : "guestEvents");
         const voice =
           state === "beforeGuest" || state === "beforeMember"
             ? undefined

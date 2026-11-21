@@ -8,7 +8,9 @@ import { test } from "node:test";
 import { verifyPureHonoRecoveryAttestation } from "./pure-hono-recovery-attestation.mjs";
 import { validatePureHonoRecoveryEvidence } from "./pure-hono-recovery-evidence.mjs";
 import { RECOVERY_MEMBER_LIMITS } from "./pure-hono-recovery-members.mjs";
+import { packPureHonoRecovery } from "./pure-hono-recovery-packager.mjs";
 import { fetchPureHonoRecoveryRun } from "./pure-hono-recovery-run.mjs";
+import { verifyPureHonoRecoveryEvidence } from "./pure-hono-recovery-verifier.mjs";
 import {
   ROLLBACK_ENVIRONMENTS,
   assertRollbackDrillGreen,
@@ -21,6 +23,8 @@ import {
   rollbackEnvironment,
   stagingBusyRuns,
 } from "./rollback-target.mjs";
+import { decodePureHonoRecoveryZip } from "./route-evidence-artifact-zip.mjs";
+import { zip } from "./route-evidence-zip-fixture.mjs";
 
 const recoveryDigest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const recoveryInvocation =
@@ -31,6 +35,7 @@ function recoveryFixture({
   changeFiles,
   changeManifest,
   encodeManifest = JSON.stringify,
+  encodeArchive = (members) => Buffer.from(JSON.stringify(members)),
 } = {}) {
   const identity = {
     sourceSha: "a".repeat(40),
@@ -64,9 +69,10 @@ function recoveryFixture({
   };
   changeFiles?.(members);
   changeManifest?.(manifest);
-  const archive = Buffer.from(
-    JSON.stringify([...members, { path: "manifest.json", bytes: encodeManifest(manifest) }]),
-  );
+  const archive = encodeArchive([
+    ...members,
+    { path: "manifest.json", bytes: encodeManifest(manifest) },
+  ]);
   const archiveSha256 = recoveryDigest(archive);
   return {
     archive,
@@ -90,8 +96,7 @@ const attestationRefusal = "pure Hono recovery attestation refused: ";
 const unavailable = `${attestationRefusal}pinned verifier or its JSON output unavailable`;
 const ghSuccess = (stdout) => ({ status: 0, signal: null, stdout: Buffer.from(stdout) });
 
-function checkedAttestationFixture() {
-  const input = recoveryFixture();
+function checkedAttestationFixture(input = recoveryFixture()) {
   const expected = { ...input.expected, signerWorkflow, signerDigest };
   const certificate = {
     issuer: verifierIssuer,
@@ -349,6 +354,137 @@ const runsUrl = "https://api.github.com/repos/TogetherWeOwn/two-web-next/actions
 const attemptUrl = `${runsUrl}/123/attempts/2`;
 const metadataRefusal = "pure Hono recovery run refused: inconsistent GitHub attempt metadata";
 
+function composedRecoveryFixture({
+  run = recoveryRunAttempt(),
+  encodeArchive = (members) =>
+    zip(
+      members.map(({ path, bytes }) => ({
+        name: path,
+        data: bytes,
+        madeBy: 0x0314,
+        version: 20,
+        attrs: (0o100644 << 16) >>> 0,
+      })),
+    ),
+  ...archiveOptions
+} = {}) {
+  const fixture = checkedAttestationFixture(recoveryFixture({ ...archiveOptions, encodeArchive }));
+  const calls = [];
+  const { archive } = fixture.input;
+  const originalBytes = Buffer.from(archive);
+  const options = {
+    archive,
+    expected: { ...fixture.expected, event: "push" },
+    token: "fixture-token",
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return Response.json(run);
+    },
+    spawn: syntheticGh((_command, args) => {
+      calls.push("attest");
+      assert.deepEqual(readFileSync(args[2]), originalBytes);
+      return ghSuccess(JSON.stringify(fixture.checked ? [fixture.checked] : []));
+    }),
+  };
+  return { fixture, options, calls };
+}
+
+test("pure Hono composition verifies the exact attempt and real ZIP and snapshots its inputs", async () => {
+  const { options, calls } = composedRecoveryFixture();
+  const result = { archiveSha256: options.expected.archiveSha256, fileCount: 3 };
+  const pending = verifyPureHonoRecoveryEvidence(options);
+  assert.deepEqual(calls, [attemptUrl]);
+  options.archive.fill(0);
+  for (const key of Object.keys(options.expected)) delete options.expected[key];
+  options.archive = options.expected = options.spawn = undefined;
+  assert.deepEqual(await pending, result);
+  assert.deepEqual(calls, [attemptUrl, "attest"]);
+});
+
+test("pure Hono composition refuses missing or inconsistent provenance before ZIP decoding", async () => {
+  // If decoding is reached with these bytes, it fails with an archive members error instead.
+  const encodeArchive = () => Buffer.from("not a ZIP");
+  const wrongRun = composedRecoveryFixture({
+    encodeArchive,
+    run: { ...recoveryRunAttempt(), run_attempt: 1 },
+  });
+  await assert.rejects(verifyPureHonoRecoveryEvidence(wrongRun.options), {
+    message: metadataRefusal,
+  });
+  assert.deepEqual(wrongRun.calls, [attemptUrl]);
+
+  const missingRun = composedRecoveryFixture({ encodeArchive, run: null });
+  await assert.rejects(verifyPureHonoRecoveryEvidence(missingRun.options), {
+    message: metadataRefusal,
+  });
+  assert.deepEqual(missingRun.calls, [attemptUrl]);
+
+  const missingAttestation = composedRecoveryFixture({ encodeArchive });
+  delete missingAttestation.fixture.checked;
+  await assert.rejects(
+    verifyPureHonoRecoveryEvidence(missingAttestation.options),
+    /verified result count$/,
+  );
+  assert.deepEqual(missingAttestation.calls, [attemptUrl, "attest"]);
+
+  const wrongInvocation = composedRecoveryFixture({ encodeArchive });
+  const { certificate, metadata } = wrongInvocation.fixture;
+  certificate.runInvocationURI = metadata.invocationId = recoveryInvocation.replace(/2$/, "1");
+  await assert.rejects(
+    verifyPureHonoRecoveryEvidence(wrongInvocation.options),
+    /verified attestation identity/,
+  );
+  assert.deepEqual(wrongInvocation.calls, [attemptUrl, "attest"]);
+});
+
+test("pure Hono composition refuses drift from the pinned archive digest", async () => {
+  const { options, calls } = composedRecoveryFixture();
+  options.archive[0] ^= 1;
+  await assert.rejects(verifyPureHonoRecoveryEvidence(options), /pinned archive digest$/);
+  assert.deepEqual(calls, [attemptUrl]);
+});
+
+test("pure Hono composition refuses unsafe ZIP members and a mismatched manifest", async () => {
+  for (const [mutation, reason] of [
+    [{ changeFiles: (files) => files.push(files[2]) }, /archive members/],
+    [{ changeManifest: (manifest) => (manifest.originalVersionId = V2) }, /manifest identity/],
+  ]) {
+    const { options, calls } = composedRecoveryFixture(mutation);
+    await assert.rejects(verifyPureHonoRecoveryEvidence(options), reason);
+    assert.deepEqual(calls, [attemptUrl, "attest"]);
+  }
+});
+
+test("pure Hono composition checks the inclusive archive size bound before I/O", async () => {
+  const { options, calls } = composedRecoveryFixture({ run: null });
+  options.spawn = () => {
+    calls.push("spawn");
+    assert.fail("unexpected verifier process, including a version probe");
+  };
+  const limit = RECOVERY_MEMBER_LIMITS.maxArchiveBytes;
+  const oversized = Buffer.alloc(limit + 1);
+  for (const archive of [Buffer.alloc(0), oversized]) {
+    await assert.rejects(verifyPureHonoRecoveryEvidence({ ...options, archive }), /archive size$/);
+  }
+  assert.deepEqual(calls, []);
+
+  // At the limit, proceed to the exact attempt lookup, but not past missing provenance.
+  await assert.rejects(
+    verifyPureHonoRecoveryEvidence({ ...options, archive: oversized.subarray(0, limit) }),
+    { message: metadataRefusal },
+  );
+  assert.deepEqual(calls, [attemptUrl]);
+});
+
+test("pure Hono composition does not default to live I/O", async () => {
+  for (const missing of ["fetchImpl", "spawn"]) {
+    const { options, calls } = composedRecoveryFixture();
+    delete options[missing];
+    await assert.rejects(verifyPureHonoRecoveryEvidence(options), /missing verifier I\/O$/);
+    assert.deepEqual(calls, []);
+  }
+});
+
 for (const event of ["push", "workflow_dispatch"]) {
   test(`pure Hono run adapter authenticates one exact ${event} attempt for the validator`, async () => {
     const input = recoveryFixture();
@@ -477,6 +613,159 @@ test("pure Hono run adapter sanitizes transport refusals without retry or fallba
     );
     assert.deepEqual(calls, [attemptUrl]);
   }
+});
+
+const recoveryAsset = (path, bytes = Buffer.alloc(0)) => ({ path, bytes });
+
+function packagerInput() {
+  const { expected, run } = recoveryFixture();
+  return {
+    worker: Buffer.from("export default {};\n"),
+    effectiveConfig: Buffer.from('{ "name": "synthetic" }\n'),
+    assets: [recoveryAsset("assets/version.json", Buffer.from("{}"))],
+    sourceSha: expected.sourceSha,
+    originalVersionId: expected.originalVersionId,
+    run,
+  };
+}
+
+test("pure Hono packager deterministically round-trips the exact supplied bytes", () => {
+  const input = packagerInput();
+  const binary = Buffer.from(Array.from({ length: 1024 }, (_, i) => i % 251));
+  input.assets.push(
+    recoveryAsset("assets/a.bin", binary),
+    recoveryAsset("assets/z.bin", Buffer.alloc(4096)),
+  );
+  const packed = packPureHonoRecovery(input);
+  assert.deepEqual(packPureHonoRecovery({ ...input, assets: input.assets.toReversed() }), packed);
+  const { archive, archiveSha256 } = packed;
+  assert.equal(archiveSha256, recoveryDigest(archive));
+  assert.equal(archive.readUInt16LE(8), 8, "first asset uses DEFLATE");
+  const { expected, attestation, run } = recoveryFixture();
+  assert.deepEqual(
+    validatePureHonoRecoveryEvidence({
+      archive,
+      expected: { ...expected, archiveSha256 },
+      attestation: { ...attestation, subjectSha256: archiveSha256 },
+      run,
+      decode: decodePureHonoRecoveryZip,
+    }),
+    { archiveSha256, fileCount: 5 },
+  );
+  const members = decodePureHonoRecoveryZip(archive);
+  const expectedFiles = [
+    input.assets[1],
+    input.assets[0],
+    input.assets[2],
+    { path: "effective-config.json", bytes: input.effectiveConfig },
+    { path: "worker.js", bytes: input.worker },
+  ];
+  assert.deepEqual(
+    members.slice(0, -1),
+    expectedFiles.map((file) => ({ ...file, type: "file" })),
+  );
+  const manifest = members.at(-1);
+  assert.equal(manifest.path, "manifest.json");
+  assert.deepEqual(
+    JSON.parse(manifest.bytes.toString()).files,
+    expectedFiles.map(({ path, bytes }) => ({
+      path,
+      bytes: bytes.length,
+      sha256: recoveryDigest(bytes),
+    })),
+  );
+});
+
+test("pure Hono packager refuses invalid producer identity and missing payloads", () => {
+  const input = packagerInput();
+  for (const change of [
+    { run: undefined },
+    { run: { ...input.run, conclusion: "failure" } },
+    { run: { ...input.run, status: "in_progress" } },
+    { run: { ...input.run, ref: "refs/heads/release" } },
+    { run: { ...input.run, repository: "Other/two-web-next" } },
+    { run: { ...input.run, workflow: ".github/workflows/../ci.yml" } },
+    { run: { ...input.run, runId: "0123" } },
+    { run: { ...input.run, runAttempt: "9007199254740992" } },
+    { sourceSha: "b".repeat(40) },
+    { originalVersionId: "invalid" },
+  ])
+    assert.throws(
+      () => packPureHonoRecovery({ ...input, ...change }),
+      /successful main producer identity/,
+    );
+  assert.throws(
+    () => packPureHonoRecovery({ ...input, worker: Buffer.alloc(0) }),
+    /worker or config missing/,
+  );
+  assert.throws(
+    () => packPureHonoRecovery({ ...input, effectiveConfig: undefined }),
+    /worker or config missing/,
+  );
+  assert.throws(() => packPureHonoRecovery({ ...input, assets: [] }), /assets missing/);
+  assert.throws(
+    () => packPureHonoRecovery({ ...input, assets: [{ path: "assets/a" }] }),
+    /asset bytes/,
+  );
+});
+
+test("pure Hono packager refuses unsafe, reserved, duplicate and aliased asset paths", () => {
+  const input = packagerInput();
+  const packPaths = (...paths) =>
+    packPureHonoRecovery({ ...input, assets: paths.map((path) => recoveryAsset(path)) });
+  for (const path of [
+    "manifest.json",
+    "worker.js",
+    "effective-config.json",
+    "assets/../a",
+    "assets/AUX.txt",
+    "assets/lpt0/file",
+    "assets/a.",
+    "assets/é",
+    `assets/${"x/".repeat(31)}y`,
+    `assets/${"a".repeat(506)}`,
+  ])
+    assert.throws(() => packPaths(path), /asset path/);
+  for (const pair of [
+    ["assets/a", "assets/a"],
+    ["assets/a", "assets/A"],
+    ["assets/Dir/x", "assets/dir/y"],
+    ["assets/a", "assets/a/b"],
+    ["assets/a/b", "assets/a"],
+  ])
+    assert.throws(() => packPaths(...pair), /duplicate or aliased path/);
+});
+
+test("pure Hono packager accounts for the manifest and ZIP overhead in size limits", () => {
+  const input = packagerInput();
+  const { maxEntries, maxTotalBytes, maxArchiveBytes } = RECOVERY_MEMBER_LIMITS;
+  assert.throws(
+    () => packPureHonoRecovery({ ...input, assets: Array(maxEntries - 2) }),
+    /member count/,
+  );
+  const fixedBytes = input.worker.length + input.effectiveConfig.length;
+  const block = Buffer.alloc(1024 * 1024);
+  const tooExpanded = Array.from({ length: maxTotalBytes / block.length }, (_, i) =>
+    recoveryAsset(`assets/${i}`, block),
+  );
+  assert.throws(() => packPureHonoRecovery({ ...input, assets: tooExpanded }), /expanded size/);
+  // The payload now fits exactly; only the generated manifest exceeds the expanded cap.
+  tooExpanded.at(-1).bytes = block.subarray(0, block.length - fixedBytes);
+  assert.throws(() => packPureHonoRecovery({ ...input, assets: tooExpanded }), /expanded size/);
+  const tooManyLongNames = Array.from({ length: 2000 }, (_, i) =>
+    recoveryAsset(`assets/${i}-${"a".repeat(490)}`),
+  );
+  assert.throws(
+    () => packPureHonoRecovery({ ...input, assets: tooManyLongNames }),
+    /manifest size/,
+  );
+  // The zeros must STORE (DEFLATE exceeds the ratio cap). Leave 1280 bytes beyond the
+  // payload: enough with a short name, but less than the headers with a 512-byte name.
+  const bytes = Buffer.alloc(maxArchiveBytes - fixedBytes - 1280);
+  const packWithName = (path) =>
+    packPureHonoRecovery({ ...input, assets: [recoveryAsset(path, bytes)] });
+  assert.ok(packWithName("assets/archive.bin").archive.length <= maxArchiveBytes);
+  assert.throws(() => packWithName(`assets/${"a".repeat(505)}`), /archive size/);
 });
 
 test("pure Hono archive binds a successful main run and hashes every declared member", () => {

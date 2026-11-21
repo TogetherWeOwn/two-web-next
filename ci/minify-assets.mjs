@@ -28,6 +28,7 @@ import { ARTIFACTS, HONO_CONSUMERS, build as buildEmberTokens } from "./build-em
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const esbuild = join(repoRoot, "node_modules", ".bin", "esbuild");
+const headerAsset = "public/kit-site-header.css";
 
 // Theme stylesheets are authored in public/ with no assets/ source, so they
 // are skipped here and a new authored file must extend this list explicitly;
@@ -54,6 +55,8 @@ function budgetPathsFor(root) {
 }
 
 function sourceFor(entry) {
+  // Keep the canonical source shared by Kit's root bundle and the leaf CSS generator.
+  if (entry === headerAsset) return "web/src/lib/site-header.css";
   // public/islands/<name>.js -> assets/islands/<name>.js; public/styles.css -> assets/styles.css.
   return entry.replace(/^public\//, "assets/");
 }
@@ -215,7 +218,7 @@ function selftest() {
     cpSync(join(repoRoot, "public"), join(scratch, "public"), { recursive: true });
     cpSync(join(repoRoot, "vendor"), join(scratch, "vendor"), { recursive: true });
     cpSync(join(repoRoot, "lib"), join(scratch, "lib"), { recursive: true });
-    for (const path of [...HONO_CONSUMERS, ...ARTIFACTS]) {
+    for (const path of [...HONO_CONSUMERS, ...ARTIFACTS, sourceFor(headerAsset)]) {
       mkdirSync(dirname(join(scratch, path)), { recursive: true });
       copyFileSync(join(repoRoot, path), join(scratch, path));
     }

@@ -9,8 +9,8 @@ import {
 
 const REPOSITORY = "TogetherWeOwn/two-web-next";
 const MAIN_REF = "refs/heads/main";
-const TARGET = "two-web-next-production";
-const SCHEMA = "two.pure-hono-recovery.v1";
+export const RECOVERY_TARGET = "two-web-next-production";
+export const RECOVERY_SCHEMA = "two.pure-hono-recovery.v1";
 const {
   maxArchiveBytes: MAX_ARCHIVE,
   maxTotalBytes: MAX_EXPANDED,
@@ -35,23 +35,33 @@ function requireEvidence(condition, reason) {
   if (!condition) throw new Error(`pure Hono recovery evidence refused: ${reason}`);
 }
 
-function validateProvenance(expected, attestation, run, archiveSha256) {
-  requireEvidence(
+const PRODUCER_KEYS = ["repository", "ref", "workflow", "runId", "runAttempt", "sourceSha"];
+const mainProducer = (expected) => ({ ...expected, repository: REPOSITORY, ref: MAIN_REF });
+
+export function validRecoveryIdentity(expected) {
+  return (
     matches(SHA, expected?.sourceSha) &&
-      matches(POSITIVE_ID, expected?.runId) &&
-      matches(POSITIVE_ID, expected?.runAttempt) &&
-      matches(UUID, expected?.originalVersionId) &&
-      matches(/^\.github\/workflows\/[a-z0-9_-]+\.ya?ml$/, expected?.workflow),
-    "expected identity",
+    matches(POSITIVE_ID, expected?.runId) &&
+    matches(POSITIVE_ID, expected?.runAttempt) &&
+    matches(UUID, expected?.originalVersionId) &&
+    matches(/^\.github\/workflows\/[a-z0-9_-]+\.ya?ml$/, expected?.workflow)
   );
-  const producer = { ...expected, repository: REPOSITORY, ref: MAIN_REF };
-  const producerKeys = ["repository", "ref", "workflow", "runId", "runAttempt", "sourceSha"];
-  requireEvidence(
-    same(run, producer, producerKeys) && run.status === "completed" && run.conclusion === "success",
-    "successful main run",
+}
+
+export function matchesSuccessfulMainRecoveryRun(run, expected) {
+  return (
+    same(run, mainProducer(expected), PRODUCER_KEYS) &&
+    run.status === "completed" &&
+    run.conclusion === "success"
   );
+}
+
+function validateProvenance(expected, attestation, run, archiveSha256) {
+  requireEvidence(validRecoveryIdentity(expected), "expected identity");
+  requireEvidence(matchesSuccessfulMainRecoveryRun(run, expected), "successful main run");
   requireEvidence(
-    same(attestation, producer, producerKeys) && attestation.subjectSha256 === archiveSha256,
+    same(attestation, mainProducer(expected), PRODUCER_KEYS) &&
+      attestation.subjectSha256 === archiveSha256,
     "verified attestation identity or subject digest",
   );
   const runUrl = `https://github.com/${REPOSITORY}/actions/runs/${run.runId}`;
@@ -110,8 +120,8 @@ export function validatePureHonoRecoveryEvidence({ archive, expected, attestatio
   files.delete(RECOVERY_MANIFEST);
   requireEvidence(
     exactKeys(manifest, ["schema", "target", ...IDENTITY, "files"]) &&
-      manifest.schema === SCHEMA &&
-      manifest.target === TARGET &&
+      manifest.schema === RECOVERY_SCHEMA &&
+      manifest.target === RECOVERY_TARGET &&
       same(manifest, expected, IDENTITY),
     "manifest identity",
   );
