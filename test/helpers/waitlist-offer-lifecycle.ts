@@ -90,6 +90,18 @@ export function registerWaitlistOfferLifecycle() {
 
     const allocate = (eventId: number) => run((tx) => allocateWaitlistOffers(tx, eventId));
 
+    async function expectLockWaiter(holderPid: number) {
+      const deadline = performance.now() + 5000;
+      let blocked = 0;
+      while (!blocked && performance.now() < deadline) {
+        const rows = await fx.client`select count(*)::int as n from pg_stat_activity
+          where wait_event_type = 'Lock' and ${holderPid} = any(pg_blocking_pids(pid))`;
+        blocked = rows[0]!.n as number;
+        if (!blocked) await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(blocked).toBeGreaterThan(0);
+    }
+
     it("allocates only the free seats in exact FIFO order without touching RSVP mirrors", async () => {
       const { event, rows } = await seed({
         capacity: 5,
@@ -223,19 +235,92 @@ export function registerWaitlistOfferLifecycle() {
       expect(await offers()).toMatchObject([{ id: old.id, state: "declined" }]);
     });
 
-    it("never allocates a replacement for a hold won by a racing claim", async () => {
-      const { event, rsvp, rows } = await seed({ users: ["u1", "u2"] });
-      const old = await made(event, rsvp);
-      const [claimed, release] = await Promise.all([
-        claim(event, rsvp, "u1", old.id),
-        run((tx) => declineAndAdvanceWaitlistOffer(tx, event.id, rsvp.id, "u1", old.id)),
-      ]);
-      expect(release.transition.ok).toBe(!claimed.ok);
-      expect(release.newOffers.map((offer) => offer.rsvpId)).toEqual(
-        claimed.ok ? [] : [rows[1]!.id],
-      );
-      expect(await rsvpOf(rsvp.id)).toMatchObject({ status: claimed.ok ? "going" : "waitlisted" });
-    });
+    it.each([
+      { capacity: 4, rsvpOpen: true, replaces: true },
+      { capacity: 1, rsvpOpen: true, replaces: false },
+      { capacity: 4, rsvpOpen: false, replaces: false },
+    ])(
+      "settles only the targeted expiry with $capacity seats and RSVP open=$rsvpOpen",
+      async (patch) => {
+        const { event, rsvp, rows } = await seed({ capacity: 2, users: ["u1", "u2", "u3", "u4"] });
+        const [target, other] = await allocate(event.id);
+        await lapse(target!.id);
+        await lapse(other!.id);
+        await fx.db
+          .update(events)
+          .set({ capacity: patch.capacity, rsvpOpen: patch.rsvpOpen })
+          .where(eq(events.id, event.id));
+        const before = (await offers()).find((offer) => offer.id === other!.id);
+        expect(before).toMatchObject({ state: "held" });
+
+        const { transition, newOffers } = await run((tx) =>
+          expireAndAdvanceWaitlistOffer(tx, event.id, rsvp.id, target!.id),
+        );
+        expect(transition).toMatchObject({ ok: true, replay: false, offer: { state: "expired" } });
+        expect(newOffers.map((offer) => offer.rsvpId)).toEqual(patch.replaces ? [rows[2]!.id] : []);
+        const after = await offers();
+        expect(after).toHaveLength(2 + newOffers.length);
+        expect(after.find((offer) => offer.id === target!.id)?.state).toBe("expired");
+        expect(after.find((offer) => offer.id === other!.id)).toEqual(before);
+        expect(after).toEqual(expect.arrayContaining(newOffers));
+      },
+    );
+
+    it.each(["claim", "decline"] as const)(
+      "allocates only when %s wins the event lock",
+      async (winner) => {
+        // Keep a spare seat so an erroneous allocation after a refusal is visible.
+        const { event, rsvp, rows } = await seed({ capacity: 2, users: ["u1", "u2"] });
+        const old = await made(event, rsvp);
+        const accept = (tx: Parameters<Parameters<typeof fx.db.transaction>[0]>[0]) =>
+          claimWaitlistOffer(tx, event.id, rsvp.id, "u1", old.id);
+        const release = (tx: Parameters<typeof accept>[0]) =>
+          declineAndAdvanceWaitlistOffer(tx, event.id, rsvp.id, "u1", old.id);
+        const claimWins = winner === "claim";
+        let contender: Promise<unknown> | undefined;
+        try {
+          await run(async (tx) => {
+            const [holder] = await tx.execute<{ pid: number }>(
+              sql`select pg_backend_pid() as pid from events where id = ${event.id} for update`,
+            );
+            contender = claimWins
+              ? run(release).then((res) =>
+                  expect(res).toEqual({
+                    transition: { ok: false, reason: "not_held" },
+                    newOffers: [],
+                  }),
+                )
+              : run(accept).then((res) => expect(res).toEqual({ ok: false, reason: "not_held" }));
+            await Promise.race([
+              expectLockWaiter(holder!.pid),
+              contender.then(() => {
+                throw new Error("contender finished before event lock release");
+              }),
+            ]);
+            if (claimWins) {
+              expect(await accept(tx)).toMatchObject({ ok: true, offer: { state: "accepted" } });
+            } else {
+              expect(await release(tx)).toMatchObject({
+                transition: { ok: true, replay: false, offer: { state: "declined" } },
+                newOffers: [{ rsvpId: rows[1]!.id, state: "held" }],
+              });
+            }
+          });
+        } finally {
+          await contender;
+        }
+        const persisted = await offers();
+        expect(persisted).toHaveLength(claimWins ? 1 : 2);
+        expect(persisted.find((offer) => offer.id === old.id)?.state).toBe(
+          claimWins ? "accepted" : "declined",
+        );
+        if (!claimWins)
+          expect(persisted).toContainEqual(
+            expect.objectContaining({ rsvpId: rows[1]!.id, state: "held" }),
+          );
+        expect(await rsvpOf(rsvp.id)).toMatchObject({ status: claimWins ? "going" : "waitlisted" });
+      },
+    );
 
     it("rolls back the decline and its replacement together", async () => {
       const { event, rsvp, rows } = await seed({ startsInMs: HOUR, users: ["u1", "u2"] });
@@ -301,15 +386,7 @@ export function registerWaitlistOfferLifecycle() {
           ? expire(event, rsvp, offer.id)
           : (action === "claim" ? claim : decline)(event, rsvp, "u1", offer.id);
       try {
-        const deadline = performance.now() + 5000;
-        let blocked = 0;
-        while (!blocked && performance.now() < deadline) {
-          const rows = await fx.client`select count(*)::int as n from pg_stat_activity
-          where wait_event_type = 'Lock' and ${holderPid} = any(pg_blocking_pids(pid))`;
-          blocked = rows[0]!.n as number;
-          if (!blocked) await new Promise((r) => setTimeout(r, 20));
-        }
-        expect(blocked).toBeGreaterThan(0);
+        await expectLockWaiter(holderPid);
         expect((await offers())[0]!.state).toBe("held");
       } finally {
         release();

@@ -49,7 +49,8 @@ async function releaseAndAdvance(
   const transition = await release();
   // Caller owns the transaction. Do not expose newOffers to members or use
   // them for delivery until after a successful commit.
-  const newOffers = transition.ok && !transition.replay ? await offerLockedSeats(tx, locked) : [];
+  const newOffers =
+    transition.ok && !transition.replay ? await offerLockedSeats(tx, locked, "replace") : [];
   return { transition, newOffers };
 }
 
@@ -104,15 +105,16 @@ async function lockWaitlistRows(tx: Tx, eventId: number, rsvpId?: number) {
 
 async function offerWaitlistSeats(tx: Tx, eventId: number, rsvpId?: number) {
   const locked = await lockWaitlistRows(tx, eventId, rsvpId);
-  return locked ? offerLockedSeats(tx, locked, rsvpId) : [];
+  return locked ? offerLockedSeats(tx, locked) : [];
 }
 
 async function offerLockedSeats(
   tx: Tx,
   { event, line, eventRsvps, target }: NonNullable<Awaited<ReturnType<typeof lockWaitlistRows>>>,
-  rsvpId?: number,
+  mode: "reconcile" | "replace" = "reconcile",
 ) {
   const eventId = event.id;
+  const rsvpId = target?.id;
   // Preserve the database's microseconds across every comparison and stamp.
   // Transaction-start now() could precede a long row-lock wait.
   const [clock] = await tx
@@ -120,16 +122,19 @@ async function offerLockedSeats(
     .from(events)
     .where(eq(events.id, event.id));
   const now = sql`${clock!.now}::timestamptz`;
-  await tx
-    .update(waitlistOffers)
-    .set({ state: "expired", updatedAt: now })
-    .where(
-      and(
-        inArray(waitlistOffers.rsvpId, eventRsvps),
-        eq(waitlistOffers.state, "held"),
-        lte(waitlistOffers.expiresAt, now),
-      ),
-    );
+  // A targeted release leaves other holds reserved until separately settled.
+  if (mode === "reconcile") {
+    await tx
+      .update(waitlistOffers)
+      .set({ state: "expired", updatedAt: now })
+      .where(
+        and(
+          inArray(waitlistOffers.rsvpId, eventRsvps),
+          eq(waitlistOffers.state, "held"),
+          lte(waitlistOffers.expiresAt, now),
+        ),
+      );
+  }
   const [eligible] = await tx
     .select({ open: sql<boolean>`${events.startsAt} > ${now}` })
     .from(events)
@@ -166,7 +171,7 @@ async function offerLockedSeats(
       ),
     )
     .orderBy(asc(rsvps.createdAt), sql`coalesce(${rsvps.legacyId}, ${rsvps.id})`, asc(rsvps.id));
-  const limit = rsvpId === undefined ? free : 1;
+  const limit = target || mode === "replace" ? 1 : free;
   const heads = await (limit === null ? fifo : fifo.limit(limit));
   if (heads.length === 0 || (rsvpId !== undefined && heads[0]?.id !== rsvpId)) return [];
   const expiresAt = sql`least(${now} + interval '2 hours', (select starts_at from events where id = ${eventId}))`;
