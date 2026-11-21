@@ -8,7 +8,7 @@ import {
 } from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
 import { INTERNAL_ACTION_DEADLINE_MS } from "./internal-action-deadline";
-import type { pgReconciliationStore } from "./reconciliation";
+import { type pgReconciliationStore, validAnnouncementIdentity } from "./reconciliation";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
 import { SYNC_RETRY_PERSISTENCE_REASON, SyncRetryPersistenceError } from "./types";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./sync-retry-diagnostic";
@@ -262,12 +262,18 @@ export async function consume(
       console.warn("sync retry classified", projectSyncRetryDiagnostic(receipt));
     };
     let outcome: Outcome;
+    let refusalStamped = false;
     try {
       if (body.kind === "alert-probe") {
         // Poison only the synthetic job, only when the runtime's QA gate is on.
         // No ledger fixture, bot request, event mutation or uniqueness lock.
         if (deps.probeEnabled) throw new AlertProbeError(body.probeId);
         outcome = { done: true }; // A delayed staging probe cannot page in production.
+      } else if (
+        body.kind === "announcement" &&
+        !validAnnouncementIdentity(body.idempotencyKey, body.action.channelKey)
+      ) {
+        outcome = { failed: "announcement.post carrier invalid" };
       } else if (body.kind === "announcement") {
         const store = deps.announcementReconciliation;
         if (!store || !m.timestamp) throw new Error("Missing announcement claim dependencies");
@@ -277,6 +283,8 @@ export async function consume(
         );
         if (claim.kind === "unavailable") {
           outcome = { failed: "announcement.post carrier unavailable" };
+        } else if (claim.kind === "waiting") {
+          outcome = { retryInSeconds: claim.retryInSeconds };
         } else if (claim.kind === "closed") {
           outcome = { done: true };
         } else if (claim.kind === "abandoned") {
@@ -297,13 +305,19 @@ export async function consume(
                 store.recordAnnouncement(id, claim.attempts, result.announcementEvidence),
               );
             } else {
-              const state = "retryInSeconds" in result ? "retryable" : "closed";
+              const settlement =
+                "failed" in result
+                  ? { ...result, jobId }
+                  : "retryInSeconds" in result
+                    ? result
+                    : "closed";
               if (
                 !(await requireAnnouncementStore(
-                  store.finishAnnouncement(id, claim.attempts, state),
+                  store.finishAnnouncement(id, claim.attempts, settlement),
                 ))
               )
                 throw new Error("Announcement claim changed before settlement");
+              refusalStamped = "failed" in result;
             }
             outcome = result;
           }
@@ -448,7 +462,8 @@ export async function consume(
       }
       console.error("job failed", body.kind, outcome.failed);
       alertFailing(body.kind, m.attempts, outcome.failed, { requestId }, syncRetry);
-      if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
+      if (jobId && !refusalStamped)
+        await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
     } else if (jobId) {
       await bounded("dequeued", deps.ledger.dequeued(jobId));
     }
