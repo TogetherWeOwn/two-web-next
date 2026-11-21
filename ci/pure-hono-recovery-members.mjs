@@ -5,7 +5,16 @@ export const RECOVERY_MEMBER_LIMITS = Object.freeze({
   maxTotalBytes: 128 * 1024 * 1024,
   maxEntries: 4097, // up to 4096 payload files plus the manifest
   maxManifestBytes: 1024 * 1024,
+  maxRatio: 100,
 });
+
+const DOS_DEVICE = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i;
+
+export function validRecoveryZipPath(path) {
+  if (!validRecoveryMemberPath(path)) return false;
+  const parts = path.split("/");
+  return parts.length <= 32 && !parts.some((part) => DOS_DEVICE.test(part));
+}
 
 export function validRecoveryMemberPath(path) {
   return (
