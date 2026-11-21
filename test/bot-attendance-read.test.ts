@@ -24,13 +24,9 @@ const attendance = {
   final: true,
 };
 
-function observe(response: Response) {
-  return signedAttendanceReader(config, vi.fn<typeof fetch>().mockResolvedValue(response))(key);
-}
-
-function reply(result: unknown) {
-  return Response.json({ ok: true, result });
-}
+const observe = (response: Response) =>
+  signedAttendanceReader(config, vi.fn<typeof fetch>().mockResolvedValue(response))(key);
+const reply = (result: unknown) => Response.json({ ok: true, result });
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -65,9 +61,8 @@ describe("signed event attendance read", () => {
 
   it("keeps provisional attendance and ignores additive fields", async () => {
     const result = { ...attendance, final: false };
-    await expect(
-      observe(reply({ ...result, extra: true, rooms: [{ ...room, extra: true }] })),
-    ).resolves.toEqual({ ok: true, attendance: result });
+    const response = reply({ ...result, extra: true, rooms: [{ ...room, extra: true }] });
+    await expect(observe(response)).resolves.toEqual({ ok: true, attendance: result });
   });
 
   it("accepts millisecond timestamps and distinct in-budget aggregates", async () => {
@@ -92,6 +87,8 @@ describe("signed event attendance read", () => {
     ["not_found", 200, unavailable],
     ["not_found", 503, unavailable],
     ["rate_limited", 429, { ok: false, code: "rate_limited" }],
+    ["busy", 503, { ok: false, code: "busy" }],
+    ["busy", 502, unavailable],
     ["private_fixture_value", 503, unavailable],
   ] as const)("projects error %s without provider text", async (code, status, result) => {
     const response = Response.json(
@@ -111,6 +108,8 @@ describe("signed event attendance read", () => {
     { peak_concurrent: -1 },
     { rooms: [room, { ...room, name_at_close: "Renamed" }] },
     { rooms: [{ ...room, name_at_close: 123 }] },
+    { rooms: [{ ...room, name_at_close: "" }] },
+    { rooms: [{ ...room, name_at_close: "a".repeat(101) }] },
     { members: [member, { ...member, minutes: 10 }] },
     { members: [{ discord_id: member.discord_id, minutes: 5, sessions: 1 }] },
     { members: [{ ...member, sessions: 0 }] },

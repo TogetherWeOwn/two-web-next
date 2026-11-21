@@ -62,7 +62,8 @@ export function parseAttendanceResult(result: unknown, eventKey: string): Attend
   for (const room of result.rooms) {
     if (!object(room)) return null;
     const { channel_id, name_at_close } = room;
-    if (!snowflake(channel_id) || rooms.has(channel_id) || typeof name_at_close !== "string")
+    if (!snowflake(channel_id) || rooms.has(channel_id)) return null;
+    if (typeof name_at_close !== "string" || !name_at_close.length || name_at_close.length > 100)
       return null;
     rooms.set(channel_id, { channel_id, name_at_close });
   }
@@ -96,10 +97,11 @@ function parseReply(doc: unknown, response: Response, eventKey: string): Attenda
   if (!object(doc)) return null;
   if (!response.ok && doc.ok === false && object(doc.error)) {
     // Only retain closed vocabulary, never arbitrary provider text.
-    if (response.status === 404 && doc.error.code === "not_found")
-      return { ok: false, code: "not_found" };
-    const code = diagnosticCode(doc.error.code);
-    return code === "unknown" ? null : { ok: false, code };
+    const { code } = doc.error;
+    if (code === "not_found") return response.status === 404 ? { ok: false, code } : null;
+    if (code === "busy") return response.status === 503 ? { ok: false, code } : null;
+    const safeCode = diagnosticCode(code);
+    return safeCode === "unknown" ? null : { ok: false, code: safeCode };
   }
   if (!response.ok || doc.ok !== true) return null;
   const attendance = parseAttendanceResult(doc.result, eventKey);
@@ -160,11 +162,10 @@ export function signedAttendanceReader(
         for (let reads = 1; !controller.signal.aborted; reads++) {
           const { done, value } = await reader.read();
           if (controller.signal.aborted) return unavailable;
-          if (done) {
+          if (done)
             return (
               parseReply(JSON.parse(text + decoder.decode()), response, eventKey) ?? unavailable
             );
-          }
           size += value.byteLength;
           if (size > MAX_RESPONSE_BYTES) return unavailable;
           if (value.byteLength) text += decoder.decode(value, { stream: true });
