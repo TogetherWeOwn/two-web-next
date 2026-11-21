@@ -16,19 +16,15 @@
 //   ", lines {a}, {b} over 80 characters" for overlong trimmed lines.
 //   d counts distinct trimmed nonblank names (case-sensitive); r counts raw
 //   code points; splitting is CRLF/CR/LF like the server validator.
-// - Hint and count sit BEFORE their label (helper text above the field), so
-//   the existing `</label><p id="*-error"` adjacency contract is untouched
-//   and control accessible names are unchanged.
+// - Hint and count sit above their own field in Hono and below it in Kit.
+//   In both, a field error sits directly after the label and neither hint
+//   nor count is part of the control's accessible name.
 // - aria-describedby is exactly "hint count", with the field-error id
 //   appended while its error renders. No native maxlength anywhere: UTF-16
 //   maxlengths cannot express code-point limits.
 // - Count nodes are plain text: no aria-live and no role, so typing never
 //   announces. Over-budget state is words ("over the limit"), never color
 //   alone. Timezone and the new-member CTA are unchanged.
-//
-// Failing-first Test Author handoff: these assertions fail until the Builder
-// lands the SSR change. Builder must not edit this file; defects return as a
-// bounded follow-up.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -36,9 +32,11 @@ import { dirname, join } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { jsx } from "hono/jsx";
+import { parseFragment } from "parse5";
 import { beforeAll, describe, expect, it } from "vitest";
 import { ProfilePage } from "../src/profiles/pages";
 import type { MemberView } from "../src/profiles/store";
+import { attr, elements } from "./helpers/kit-edit-controls";
 
 const BIO_HINT_ID = "profile-bio-hint";
 const BIO_COUNT_ID = "profile-bio-count";
@@ -97,23 +95,38 @@ const expectHintPair = (
   countId: string,
   hintCopy: string,
   countText: string,
+  fieldId: string,
+  position: "above" | "below" = "above",
 ) => {
-  const hintTag = openingTag(html, hintId);
-  expect(hintTag, `${hintId} renders`).not.toBeNull();
-  expect(hintTag).toContain('class="profile-hint"');
+  const nodes = elements(parseFragment(html));
+  const hint = nodes.find((node) => attr(node, "id") === hintId);
+  const count = nodes.find((node) => attr(node, "id") === countId);
+  const label = nodes.find((node) => attr(node, "id") === fieldId)?.parentNode;
+  if (
+    !hint ||
+    !count ||
+    !label ||
+    !("tagName" in label) ||
+    label.tagName !== "label" ||
+    !label.parentNode
+  ) {
+    throw new Error(`Expected ${hintId}, ${countId} and a label for ${fieldId}`);
+  }
+  expect(hint.tagName).toBe("p");
+  expect(attr(hint, "class")?.split(/\s+/)).toContain("profile-hint");
   expect(nodeText(html, hintId)).toBe(hintCopy);
-  const countTag = openingTag(html, countId);
-  expect(countTag, `${countId} renders`).not.toBeNull();
-  expect(countTag).not.toMatch(/aria-live/);
-  expect(countTag).not.toMatch(/\brole=/);
+  expect(count.tagName).toBe("p");
+  expect(attr(count, "aria-live")).toBeUndefined();
+  expect(attr(count, "role")).toBeUndefined();
   expect(nodeText(html, countId)).toBe(countText);
-  // Helper text above the field: hint, then count, then the label.
-  expect(html).toMatch(
-    new RegExp(
-      `<p\\b[^>]*\\bid="${hintId}"[^>]*>[\\s\\S]*?</p>\\s*` +
-        `<p\\b[^>]*\\bid="${countId}"[^>]*>[\\s\\S]*?</p>\\s*<label\\b`,
-    ),
-  );
+
+  const siblings = label.parentNode.childNodes.filter((node) => "tagName" in node);
+  const labelIndex = siblings.indexOf(label);
+  const pair =
+    position === "above"
+      ? siblings.slice(labelIndex - 2, labelIndex)
+      : siblings.slice(labelIndex + 1, labelIndex + 3);
+  expect(pair.map((node) => attr(node, "id"))).toEqual([hintId, countId]);
 };
 
 const expectNoMaxlength = (html: string, id: string) => {
@@ -182,7 +195,14 @@ describe("Hono profile editor: composition hints and counts", () => {
   it("bio control carries hint+count association, exact copy, initial count, no maxlength", () => {
     const html = renderHono();
     expect(describedBy(html, "profile-bio")).toBe(`${BIO_HINT_ID} ${BIO_COUNT_ID}`);
-    expectHintPair(html, BIO_HINT_ID, BIO_COUNT_ID, BIO_HINT_COPY, "12 of 1000 characters");
+    expectHintPair(
+      html,
+      BIO_HINT_ID,
+      BIO_COUNT_ID,
+      BIO_HINT_COPY,
+      "12 of 1000 characters",
+      "profile-bio",
+    );
     expectNoMaxlength(html, "profile-bio");
   });
 
@@ -195,6 +215,7 @@ describe("Hono profile editor: composition hints and counts", () => {
       GAMES_COUNT_ID,
       GAMES_HINT_COPY,
       "1 of 20 games, 5 of 1700 characters",
+      "profile-games-text",
     );
     expectNoMaxlength(html, "profile-games-text");
   });
@@ -400,7 +421,15 @@ describe("Kit profile editor: composition hints and counts", () => {
   it("bio control carries hint+count association, exact copy, initial count, no maxlength", () => {
     const html = renderView(kitProps());
     expect(describedBy(html, "profile-bio")).toBe(`${BIO_HINT_ID} ${BIO_COUNT_ID}`);
-    expectHintPair(html, BIO_HINT_ID, BIO_COUNT_ID, BIO_HINT_COPY, "9 of 1000 characters");
+    expectHintPair(
+      html,
+      BIO_HINT_ID,
+      BIO_COUNT_ID,
+      BIO_HINT_COPY,
+      "9 of 1000 characters",
+      "profile-bio",
+      "below",
+    );
     expectNoMaxlength(html, "profile-bio");
   });
 
@@ -413,6 +442,8 @@ describe("Kit profile editor: composition hints and counts", () => {
       GAMES_COUNT_ID,
       GAMES_HINT_COPY,
       "1 of 20 games, 5 of 1700 characters",
+      "profile-games-text",
+      "below",
     );
     expectNoMaxlength(html, "profile-games-text");
   });
