@@ -65,9 +65,9 @@ const states = {
 
 export const homeEvidenceStates = Object.freeze(Object.keys(states));
 
-export function homeEvidencePage(state) {
+export function homeEvidenceData(state) {
   if (!Object.hasOwn(states, state)) throw new Error(`Unknown home evidence state: ${state}`);
-  const data = {
+  return {
     session: null,
     sessionUnavailable: false,
     notice: null,
@@ -83,6 +83,10 @@ export function homeEvidencePage(state) {
     imageHosts: "",
     ...states[state],
   };
+}
+
+export function homeEvidencePage(state) {
+  const data = homeEvidenceData(state);
   return `<script>
 import Home from '../+page.svelte';
 import { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO } from '../../../../src/home-copy';

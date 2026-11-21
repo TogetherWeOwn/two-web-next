@@ -6,6 +6,14 @@
 // flash precedence, and `{:else if session}` in the hero.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
+import {
+  allowedRoom,
+  homeVoiceFixture,
+  memberId,
+  optedOutName,
+  privateRoom,
+  roomId,
+} from "./fixtures/kit-home-voice";
 import { createKitSsrRenderer, type RenderPage } from "./helpers/kit-ssr-render";
 
 let renderPage: RenderPage;
@@ -61,6 +69,71 @@ beforeAll(async () => {
 
 afterAll(() => {
   cleanup?.();
+});
+
+describe("Kit home SSR render: offline voice composition", () => {
+  beforeEach(() => void vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime("2030-07-19T12:00Z"));
+  afterEach(() => void vi.useRealTimers());
+  it("keeps the shipped hero for missing, suppressed, or wrongly scoped voice data", async () => {
+    const data = baseData({ upcomingEvents: [fullnessEvent({ title: "Friday Raid" })] });
+    const baseline = renderPage(data);
+    expect(baseline).toContain("Next game night: <em>Friday Raid</em>");
+    expect(baseline).not.toMatch(/In voice now|Voice rooms|Pull me in/);
+    for (const state of ["absent", "belowFloor", "member"] as const) {
+      expect(renderPage(data, { voice: await homeVoiceFixture(state) })).toBe(baseline);
+    }
+    expect(renderPage({ ...data, voice: await homeVoiceFixture("guest") })).toBe(baseline);
+    const outage = { ...data, sessionUnavailable: true };
+    expect(renderPage(outage, { voice: await homeVoiceFixture("guest") })).toBe(renderPage(outage));
+  });
+
+  it("renders only the floor-gated aggregate for a guest and keeps the join destination", async () => {
+    const voice = await homeVoiceFixture("guest");
+    const html = renderPage(baseData(), { voice });
+    expect(voice).toEqual({
+      audience: "guest",
+      snapshot: { count: 5, ageMs: 12_000, freshness: "fresh" },
+    });
+    expect(html).toContain("5 of us are in voice right now.");
+    expect(html.match(/<h1\b/g)).toHaveLength(1);
+    expect(html).toContain('href="/auth/discord" data-testid="join"');
+    expect(html).not.toContain(allowedRoom);
+    expect(html).not.toContain("Mika");
+  });
+
+  it("retains the RSVP panel and keeps raw IDs, private rooms and opted-out names out of HTML and fixture data", async () => {
+    const voice = await homeVoiceFixture("member");
+    const event = fullnessEvent({ title: "Friday Raid" });
+    const html = renderPage(
+      baseData({
+        session: memberSession,
+        upcomingEvents: [event],
+        memberRsvps: [{ eventKey: event.eventKey, status: "going" }],
+      }),
+      { voice },
+    );
+    const heading = html.match(/<h1\b[^>]*>(.*?)<\/h1>/)?.[1];
+    expect(heading).toContain("3 in voice rooms you can see.");
+    expect(heading).toContain("Friday Raid is at Sat 20 Jul, 20:00 (Europe/London).");
+    expect(html).toContain(allowedRoom);
+    expect(html).toContain("Mika");
+    expect(html).toContain("Your RSVP");
+    expect(html).toContain(`href="${INVITE_URL}">Open Discord`);
+    for (const hidden of [roomId, memberId, privateRoom, optedOutName, "channelId", "canMove"]) {
+      expect(JSON.stringify(voice)).not.toContain(hidden);
+      expect(html).not.toContain(hidden);
+    }
+  });
+
+  it("distinguishes observed quiet rooms from frozen activity without a move control", async () => {
+    const data = baseData({ session: memberSession });
+    const quiet = renderPage(data, { voice: await homeVoiceFixture("quiet") });
+    expect(quiet).toContain("It's quiet in the rooms you can see.");
+    const frozen = renderPage(data, { voice: await homeVoiceFixture("frozen") });
+    expect(frozen).toContain("Last synced 3 min ago");
+    expect(frozen).toContain("Live numbers are catching up.");
+    expect(frozen).not.toMatch(/In voice now|Pull me in/);
+  });
 });
 
 describe("Kit home SSR render: session-aware header and hero", () => {

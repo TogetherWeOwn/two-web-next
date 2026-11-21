@@ -12,10 +12,14 @@ let {
   view,
   nextEvent,
   liveEvent,
+  headingId,
+  showActions = true,
 }: {
   view: VoiceView;
   nextEvent?: NextVoiceEvent | null;
   liveEvent?: LiveVoiceEvent;
+  headingId?: string;
+  showActions?: boolean;
 } = $props();
 let sentence = $derived(liveSentence(view, nextEvent, liveEvent));
 let frozen = $derived(view.snapshot?.freshness === "frozen");
@@ -27,17 +31,19 @@ let frozen = $derived(view.snapshot?.freshness === "frozen");
       <span aria-hidden="true"></span>From our Discord · {freshnessLabel(view.snapshot)}
     </p>
   {/if}
-  <h1>{sentence.lead}{#if sentence.accent}{" "}<em>{sentence.accent}</em>{/if}</h1>
-  <div class="action">
-    {#if view.audience === "guest"}
-      <Button size="lg" variant="primary" href="/join/discord">Join with Discord</Button>
-      <p>One tap. The bot adds you to the server, gives you your first rank and brings you back here.</p>
-    {:else if frozen}
-      <Button size="lg" href="/discord">Open Discord</Button>
-    {:else}
-      <Button size="lg" href="/events">See what's on</Button>
-    {/if}
-  </div>
+  <h1 id={headingId}>{sentence.lead}{#if sentence.accent}{" "}<em>{sentence.accent}</em>{/if}</h1>
+  {#if showActions}
+    <div class="action">
+      {#if view.audience === "guest"}
+        <Button size="lg" variant="primary" href="/join/discord">Join with Discord</Button>
+        <p>One tap. The bot adds you to the server, gives you your first rank and brings you back here.</p>
+      {:else if frozen}
+        <Button size="lg" href="/discord">Open Discord</Button>
+      {:else}
+        <Button size="lg" href="/events">See what's on</Button>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
