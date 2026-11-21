@@ -764,10 +764,11 @@ These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
 
 Squash-merge only; PR titles follow Conventional Commits and the body follows the
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
-`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review` are required
-on the exact head, with no approving review. The final-stage reviewer merges when
-native review stages apply; otherwise the author merges. Pin the squash merge to
-that reviewed head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
+The [required checks](CONTRIBUTING.md#branch-protection-and-required-checks) must
+pass on the exact head. GitHub does not require an approving PR review; the native
+review policy still applies. The final-stage reviewer merges when native review
+stages apply; otherwise the author merges. Pin the squash merge to that reviewed
+head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
 for the promotion-path PR exception, post-merge staging qualification and
 per-release Release Manager acceptance, and [AGENTS.md](AGENTS.md) for agent guidance.
 

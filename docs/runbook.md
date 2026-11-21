@@ -240,9 +240,8 @@ real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
 4. Follow [the PR contract](../CONTRIBUTING.md). Run the fixture-only test, the
    smoke suite, and the link check below; record the results and verify the two
    dates above against the source pin and `expiry - 90 × 24 hours` in UTC.
-   The required checks under that contract, including `CodeRabbit` and
-   `Devin Review`, must pass on the exact head before the PR merges. No
-   database is needed:
+   The [required checks](../CONTRIBUTING.md#branch-protection-and-required-checks)
+   must pass on the exact head before the PR merges. No database is needed:
 
    ```sh
    env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB npx --no-install vitest run test/security-txt.test.ts

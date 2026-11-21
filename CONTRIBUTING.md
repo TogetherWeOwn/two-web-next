@@ -109,15 +109,17 @@ Before merge, require:
 2. **Route Release Manager review on the exact head.** The author checks the
    current diff against the successful job summary from the trusted
    default-branch [`promotion-path` workflow](.github/workflows/promotion-path.yml).
-   Record the PR number, target ref and its live tip SHA, comparison base and
-   head SHAs, verdict and Actions job link in the PR. Read the live tip from the
-   target ref; the PR's reported base SHA can lag it. Match the summary's PR
-   number and comparison SHAs, not the run's header SHA: `pull_request_target`
-   runs the default-branch workflow. The summary does not identify the target
-   ref; do not reuse it after a retarget unless the run is verified for the new
-   target. A PR label alone is not evidence. Add the Release Manager as the
-   final native stage for `promotion-path: yes`; omit it only for a verified
-   `no` and only if it is not independently required.
+   Record the PR number, target ref and its live tip SHA, GitHub's reported PR
+   base SHA, the three-dot comparison's merge-base SHA, the head SHA, verdict
+   and Actions job link in the PR. Read the live tip from the target ref; the
+   PR's reported base SHA can lag it. Match the summary's PR number, head SHA
+   and base SHA to the PR fields (`head.sha` and `base.sha`), not to the
+   computed merge base or the `pull_request_target` run's header SHA. The
+   workflow runs from the default branch. The summary does not identify the
+   target ref; do not reuse it after a retarget unless the run is verified for
+   the new target. A PR label alone is not evidence. Add the Release Manager
+   as the final native stage for `promotion-path: yes`; omit it only for a
+   verified `no` and only if it is not independently required.
 
    Even with a classifier `no`, inspect what the diff changes in the live
    target's context. Route to the Release Manager for new or changed tooling
@@ -138,11 +140,12 @@ Before merge, require:
    still requires its own exact-SHA decision.
 3. **Pin the merge and record the result.** Just before merging, the final-stage
    reviewer (or the author if there is no native stage) rereads the PR target
-   ref, its live tip, and the comparison base and head SHAs. If any differs
-   from the routing record, reassess the diff and review routing against the
-   current target before merging. A head SHA pin alone does not catch a
-   retarget or an advancing target. Verify that all required predecessor
-   verdicts cover the head being merged and that required checks pass on it.
+   ref, its live tip, the reported PR base, the three-dot merge base and the
+   head SHA. If any differs from the routing record, reassess the diff and
+   review routing against the current target before merging. A head SHA pin
+   alone does not catch a retarget or an advancing target. Verify that all
+   required predecessor verdicts cover the head being merged and that required
+   checks pass on it.
    Resolve threads only once fixed or answered with evidence. When required,
    the Release Manager makes the merge go/no-go decision on the verified head
    before merging. Squash-merge in the same run, pinned to that reviewed head. After GitHub confirms the merge, record the
