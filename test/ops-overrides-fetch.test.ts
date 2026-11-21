@@ -23,9 +23,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function fixture(configured: string | undefined = control) {
+function request(ip: string, method: string, authorization: string, query = "", cookie?: string) {
+  return new Request(`${env.APP_URL}/admin/ops-overrides${query}`, {
+    method,
+    headers: {
+      authorization,
+      ...(cookie === undefined ? {} : { cookie }),
+      origin: env.APP_URL,
+      accept: "text/html",
+      "cf-connecting-ip": ip,
+    },
+  });
+}
+
+async function fixture({ configured = control, withModerator = false } = {}) {
   const sessions = createMemorySessionStore();
-  const cookie = await cookieFor(sessions, MODERATOR);
+  const cookie = withModerator ? await cookieFor(sessions, MODERATOR) : undefined;
   const get = vi.spyOn(sessions, "get");
   const bindings = {
     ...env,
@@ -39,25 +52,14 @@ async function fixture(configured: string | undefined = control) {
   // synthetic client so running the oracle cannot consume the adapter's budget.
   const honoClient = `192.0.2.${++client}`;
   const fetchClient = `192.0.2.${++client}`;
-  const request = (ip: string, method: string, authorization: string, query: string) =>
-    new Request(`${env.APP_URL}/admin/ops-overrides${query}`, {
-      method,
-      headers: {
-        authorization,
-        cookie,
-        origin: env.APP_URL,
-        accept: "text/html",
-        "cf-connecting-ip": ip,
-      },
-    });
   return async (status: number, method = "GET", authorization = bearer, query = "") => {
     const legacy = await app.request(
-      request(honoClient, method, authorization, query),
+      request(honoClient, method, authorization, query, cookie),
       undefined,
       bindings,
     );
     const adapted = await fetchOpsOverrides(
-      request(fetchClient, method, authorization, query),
+      request(fetchClient, method, authorization, query, cookie),
       bindings,
     );
     if (!adapted) throw new Error("adapter did not handle a shipped method");
@@ -91,7 +93,7 @@ async function fixture(configured: string | undefined = control) {
 it.each(["", `Bearer ${evidence}`, `Bearer ${qa}`, "Bearer wrong", `bearer ${control}`])(
   "denies a moderator cookie without an exact control bearer (%j)",
   async (authorization) => {
-    const compare = await fixture();
+    const compare = await fixture({ withModerator: true });
     const { headers } = await compare(401, "GET", authorization);
     expect(headers.get("www-authenticate")).toBe("Bearer");
     await compare(401, "HEAD", authorization);
@@ -100,14 +102,14 @@ it.each(["", `Bearer ${evidence}`, `Bearer ${qa}`, "Bearer wrong", `bearer ${con
 );
 
 it("stays dark without configuration and rejects even a bare query before contacting the bot", async () => {
-  await (await fixture(""))(404, "GET", bearer, "?token=synthetic");
+  await (await fixture({ configured: "" }))(404, "GET", bearer, "?token=synthetic");
   const compare = await fixture();
   await compare(400, "GET", bearer, "?");
   await compare(400, "GET", "", "?token=synthetic");
   expect(bot).not.toHaveBeenCalled();
 });
 
-it("returns the bounded read-only snapshot for GET and the same outcome without a body for HEAD", async () => {
+it("returns the bounded read-only snapshot with only the bearer for GET and bodyless HEAD", async () => {
   const compare = await fixture();
   expect((await compare(200)).body).toContain("&lt;example&gt;");
   await compare(200, "HEAD");
@@ -147,10 +149,28 @@ it("preserves the attempt bucket across GET and HEAD, including refill and refun
   expect(bot).toHaveBeenCalledTimes(4);
 });
 
+it("shares one attempt budget with the mounted route for the same client", async () => {
+  const ip = `192.0.2.${++client}`;
+  const bindings = { ...env, OPS_CONTROL_TOKEN: control };
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const legacy = await app.request(request(ip, "GET", "Bearer wrong"), undefined, bindings);
+    expect(legacy.status).toBe(401);
+  }
+  const adapted = await fetchOpsOverrides(request(ip, "HEAD", bearer), bindings);
+  expect(adapted?.status).toBe(429);
+  expect(adapted?.headers.get("retry-after")).toBe("1");
+  expect(bot).not.toHaveBeenCalled();
+});
+
 it.each(["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])(
   "refuses %s before admission with fixed JSON and Allow",
   async (method) => {
-    const { headers, body } = await (await fixture(""))(405, method, "", "?token=synthetic");
+    const { headers, body } = await (await fixture({ configured: "" }))(
+      405,
+      method,
+      "",
+      "?token=synthetic",
+    );
     expect(headers.get("allow")).toBe("GET, HEAD");
     expect(body).toBe('{"error":"method_not_allowed"}');
     expect(bot).not.toHaveBeenCalled();
