@@ -59,7 +59,7 @@ export async function compileKitFixture({ fixture, ssrOnly = false }) {
 // The caller owns the returned server and must close it, including on assertion failures.
 export async function serveKitFixture({ fixture, styles = "", bodyClass = "", routes = {} }) {
   const { body, head, css, js } = await compileKitFixture({ fixture });
-  const server = createServer((request, response) => {
+  return listenOnLoopback((request, response) => {
     if (request.url === "/style.css") {
       response.writeHead(200, { "content-type": "text/css" }).end(styles + css);
     } else if (request.url === "/fixture.js") {
@@ -76,6 +76,10 @@ export async function serveKitFixture({ fixture, styles = "", bodyClass = "", ro
       response.writeHead(404).end();
     }
   });
+}
+
+export async function listenOnLoopback(handler) {
+  const server = createServer(handler);
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
