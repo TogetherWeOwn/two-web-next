@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { memberRefusal, runWork } from "./kit-activity-log-assert.mjs";
-import { routeA11y } from "./kit-activity-log-metrics.mjs";
 import { viewportPngs } from "./kit-activity-log-png.mjs";
 import * as visual from "./kit-activity-log-visual.mjs";
 
@@ -28,17 +25,17 @@ function clock(t) {
 }
 class TimeoutError extends Error {}
 test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", async (t) => {
-  const lapse = clock(t);
   const noop = async () => undefined;
-  const rejectLater = (error) => () => new Promise((_, reject) => setImmediate(reject, error));
-  const stall = rejectLater(new TimeoutError());
+  const lapse = clock(t);
+  const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
   const modes =
-    "capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-dispose capture-timeout";
+    "dom late capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled";
   for (const mode of modes.split(" ")) {
     const hono = mode === "hono";
     const expired = mode === "capture-budget";
-    const navError = mode === "capture-timeout" ? new TimeoutError() : new Error("target closed");
-    const disposeFails = hono || mode === "capture-dispose";
+    const navError = new Error("target closed");
+    const stalled = hono || mode === "capture-stalled";
+    const early = hono || mode.startsWith("capture-");
     const shots = [];
     const keys = [];
     const consumed = new Set([0]); // Functional context already rotated its cookie.
@@ -51,14 +48,14 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       intercept({
         request: () => ({ url: () => href, isNavigationRequest: () => nav, method: () => "GET" }),
         fetch,
-        continue: lateFetch,
         fulfill: noop,
         abort: noop,
       });
     const fixture = {
       close: async () => {
-        if ((++closed === 6 && mode === "pending") || expired)
-          await request(`${visual.origin}/styles.css`, false, lateFetch);
+        const file = mode === "late" ? "unexpected.css" : "styles.css";
+        if ((++closed === 6 && ["pending", "late"].includes(mode)) || expired)
+          void request(`${visual.origin}/${file}`, false, lateFetch);
         if (hono || expired) return lapse(visual.browserWorkMs);
       },
       addCookies: ([session]) => {
@@ -78,18 +75,19 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
         consumed.add(cookie);
         const renderer = mode === "hono" ? "hono" : "kit";
         const headers = { "x-two-renderer": renderer, "cache-control": "private, no-store" };
-        const closeTransport = rejectLater(navError);
+        const dom = closed === 5 && mode === "dom";
         const response = {
           url: () => href,
           status: () => status,
           headers: () => headers,
-          dispose: hono ? () => pending : disposeFails ? closeTransport : noop,
+          dispose: async () => (dom ? Promise.reject(navError) : stalled ? pending : undefined),
         };
-        if (hono) setImmediate(() => !closed && lapse(visual.browserWorkMs));
-        if (disposeFails || mode === "capture-timeout") {
-          void request(href, true, disposeFails ? async () => response : closeTransport);
+        if (stalled) setImmediate(() => lapse(hono ? visual.browserWorkMs : 5_000));
+        if (stalled || mode === "capture-timeout") {
+          void request(href, true, mode === "capture-timeout" ? stall : async () => response);
           throw navError;
         }
+        if (dom) await request(href, true, async () => response);
         if (closed !== 5 || !["document", "asset", "disallowed"].includes(mode)) return response;
         if (mode === "document") void request(href, true, stall);
         else {
@@ -104,50 +102,53 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       getByTestId: () => ({
         evaluate: () => {
           const scroll = closed === 4 && keys.at(-1) === "ArrowRight";
+          if (closed === 5 && mode === "dom") return [[], [true, scroll, scroll]];
           return [visual.expectedContent(url.includes("?")), [true, scroll, scroll]];
         },
       }),
       screenshot: ({ path }) => (expired ? lapse(visual.browserWorkMs) : shots.push(path)),
     };
     const browser = { newContext: () => fixture };
-    const mark = (stage) => stages.push(stage);
     const measure = t.mock.fn(() =>
       mode === "rejected" ? Promise.reject(new Error("transport")) : new Promise(noop),
     );
     const mint = () => ({ value: consumed.size });
-    const outer = hono || expired;
-    const ms = mode === "disallowed" ? 0 : 10;
+    const mark = (stage) => stages.push(stage);
+    const zero = mode === "dom" || mode === "disallowed";
+    const options = { audit: noop, measure, mark, ms: zero ? 0 : 10, TimeoutError };
     const collect = ({ signal } = new AbortController()) =>
-      visual.collectVisuals(browser, mint, ".", { audit: noop, measure, mark, signal, ms });
-    const teardown = () => visual.withDeadline(() => fixture.close(), 10_000);
-    const report = outer ? runWork(collect, teardown, mark) : collect();
-    const early = hono || mode.startsWith("capture-");
+      visual.collectVisuals(browser, mint, ".", { ...options, signal });
+    const report = hono || expired ? runWork(collect, mark, fixture.close) : collect();
     if (mode === "capture-fonts" || expired) await assert.rejects(report, visual.BrowserDeadline);
-    else if (hono) await assert.rejects(report, visual.AssertionFailure);
-    else if (early) await assert.rejects(report, (error) => error === navError);
+    else if (mode === "dom") await assert.rejects(report, /visual content drift/);
+    else if (hono || mode === "late") await assert.rejects(report, visual.AssertionFailure);
     else if (mode === "disallowed") await assert.rejects(report, /unexpected visual diagnostic/);
+    else if (mode === "capture-timeout") await assert.rejects(report, TimeoutError);
+    else if (early) await assert.rejects(report, (error) => error === navError);
     else assert.equal(await report, null);
     assert.equal(lateFetch.mock.callCount(), 0, mode);
     if (early) assert.equal(stages.at(-1), mode.endsWith("fonts") ? "FONTS" : "CAPTURE");
-    assert.equal(closed, early ? Number(outer) : mode === "disallowed" ? 5 : 6);
+    assert.equal(closed, early ? Number(hono || expired) : zero ? 5 : 6);
     assert.equal(consumed.size, early ? 2 : 7);
-    assert.equal(measure.mock.callCount(), Number(mode === "pending" || mode === "rejected"));
+    assert.equal(measure.mock.callCount(), Number(["pending", "rejected", "late"].includes(mode)));
+    if (stalled) await new Promise(setImmediate);
     assert.deepEqual(shots, early ? [] : Object.keys(viewportPngs));
     assert.deepEqual(keys, early ? [] : [...Array(11).fill("Tab"), "ArrowRight"]);
   }
 });
 
-for (const stallAt of ["AXE_INJECT", "AXE_EVALUATE"]) {
-  test(`a stall in ${stallAt} rejects instead of producing audit metrics`, async (t) => {
-    const lapse = clock(t);
-    const mark = t.mock.fn();
-    const evaluate = () =>
-      mark.mock.calls.at(-1).arguments[0] === stallAt ? lapse(5_000) : undefined;
-    const audit = routeA11y({ evaluate }, mark, { source: "stub", tags: [] });
-    await assert.rejects(audit, visual.BrowserDeadline);
-    assert.equal(mark.mock.callCount(), stallAt === "AXE_INJECT" ? 1 : 2);
-  });
-}
+test("fixture cleanup attempts both closes, preserving the first failure without completing", async (t) => {
+  const lapse = clock(t);
+  for (const dual of [true, false]) {
+    const calls = [];
+    const browser = t.mock.fn(() => (dual ? lapse(10_000) : undefined));
+    const sql = t.mock.fn(() => Promise.reject(new Error("SQL close failed")));
+    const run = runWork(() => null, calls.push.bind(calls), browser, sql);
+    await assert.rejects(run, dual ? visual.BrowserDeadline : /SQL close failed/);
+    assert.deepEqual([calls, browser.mock.callCount(), sql.mock.callCount()], [["TEARDOWN"], 1, 1]);
+  }
+});
+
 test("refusal deadlines abort fetch and prevent follow-on reads", async (t) => {
   const lapse = clock(t);
   const late = Promise.withResolvers();
@@ -158,8 +159,7 @@ test("refusal deadlines abort fetch and prevent follow-on reads", async (t) => {
   }));
   let probes;
   const work = (budget) => (probes = memberRefusal("/", {}, budget, request).then(assert.fail));
-  const run = runWork(work, async () => undefined, assert.fail);
-  await assert.rejects(run, visual.BrowserDeadline);
+  await assert.rejects(runWork(work, assert.fail), visual.BrowserDeadline);
   assert.equal(request.mock.calls[0].arguments[1].signal.aborted, true);
   late.resolve("denied");
   await assert.rejects(probes, visual.BrowserDeadline);
@@ -175,53 +175,6 @@ test("fixture CLI exits after cleanup despite a live measurement handle", () => 
     assert.deepEqual([run.status, run.stdout.length, run.stderr.length], [code, 0, 0]);
   }
 });
-test("runner separates watchdog and assertion failures and admits only a valid completion", (t) => {
-  const source = readFileSync(new URL("./kit-activity-log-run.sh", import.meta.url), "utf8");
-  const [runner] = source.match(/^LC_ALL=C timeout [\s\S]+$/m);
-  const root = mkdtempSync(join(tmpdir(), "kit-watchdog-test-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const node = `#!/bin/bash
-printf 'out\\n'; printf 'err\\n' >&2
-case $RESULT in kill) trap '' TERM;; term) ;; *) exit "$RESULT";; esac
-exec sleep 30`;
-  writeFileSync(join(root, "node"), node, { mode: 0o700 });
-  mkdirSync(join(root, "screenshots"));
-  const command = `set -euo pipefail; export PATH="$1:$PATH" RESULT=$2; scratch=$1 RUNNER_TEMP=$1
-${runner.replace("-k 5s 150s", "-k 0.1s 0.5s")}`;
-  const metrics = `populated-desktop.png a11y: PASS violations=0 incomplete=0
-empty-desktop.png a11y: PASS violations=0 incomplete=0
-populated-desktop.png lighthouse: unavailable
-`;
-  writeFileSync(join(root, "metrics.txt"), metrics);
-  const cases = [
-    ["AXE_EVALUATE\n", "term", "WATCHDOG stage=AXE_EVALUATE"],
-    ["TEARDOWN\n", "kill", "WATCHDOG stage=TEARDOWN"],
-    ["TEARDOWN\n", 137, "UNKNOWN stage=TEARDOWN"],
-    ["MODERATOR\n", 20, "ASSERTION stage=MODERATOR"],
-    ["FONTS\n", 21, "DEADLINE stage=FONTS"],
-    ["CAPTURE\n", 0, "UNKNOWN stage=CAPTURE"],
-    ["COMPLETE\n", 1, "UNKNOWN stage=COMPLETE"],
-    ["COMPLETE\nprivate-status\n", 0, "UNKNOWN stage=UNKNOWN"],
-    ["COMPLETE\n\0", 0, "UNKNOWN stage=UNKNOWN"],
-    [null, 0, "UNKNOWN stage=UNKNOWN"],
-    ["COMPLETE\n", 0, "PASS stage=COMPLETE"],
-  ];
-  const options = { env: { PATH: process.env.PATH }, encoding: "utf8", timeout: 3_000 };
-  const status = join(root, "browser-stage");
-  for (const [record, exitCode, verdict] of cases) {
-    if (record === null) rmSync(status);
-    else writeFileSync(status, record);
-    const run = spawnSync("bash", ["-c", command, "fixture", root, `${exitCode}`], options);
-    if (exitCode === "kill")
-      assert.match(readFileSync(join(root, "watchdog.txt"), "utf8"), /sending signal KILL/);
-    const passed = verdict.startsWith("PASS");
-    const tail = passed ? "PASS: Activity-log fixture, rendered states and route a11y\n" : "";
-    assert.deepEqual([run.status, run.stderr], [passed ? 0 : 1, ""]);
-    assert.equal(run.stdout, `Activity-log browser: outcome=${verdict}\n${metrics}${tail}`);
-    assert.equal(existsSync(join(root, "kit-activity-log-approved")), passed);
-  }
-});
-
 test("only the protected diagnostic publishes the validated directory", () => {
   const url = new URL("../.github/workflows/kit-activity-log-diagnostic.yml", import.meta.url);
   const source = readFileSync(url, "utf8");

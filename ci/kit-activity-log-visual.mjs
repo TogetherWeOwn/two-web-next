@@ -50,22 +50,25 @@ export function validateView(content, state, empty, keyboard) {
 // The asset allowlist also requires the response bytes to match the pinned local build.
 const asset =
   /^\/(?:styles\.css|admin-rsvp-review\.css|site\.webmanifest|favicon\.(?:ico|svg)|icons\/(?:icon-(?:192|512)|maskable-512|apple-touch-icon)\.png|fonts\/(?:mona-sans-latin-(?:var|wght)|fragment-mono-latin-400|instrument-serif-latin-400-italic)\.woff2|islands\/auth-status\.js|_app\/immutable\/(?:assets|entry|nodes|chunks)\/[\w.-]+\.(?:css|js))$/;
-async function serve(route, url, offline, deny) {
+async function serve(route, url, stopped, offline, deny) {
   const req = route.request();
   const file = req.url().startsWith(origin) ? req.url().slice(origin.length) : "";
   const document = req.isNavigationRequest();
   if (req.method() !== "GET" || !(document ? req.url() === url : asset.test(file))) return deny();
+  if (stopped()) return;
   const res = await route.fetch({ maxRedirects: 0, timeout: 5_000 });
   try {
     const pinned = () => readFile(`web/.svelte-kit/cloudflare${file}`).catch(() => null);
     const valid = document
       ? kitDocument(res.status(), res.headers())
       : res.status() === 200 && (await pinned())?.equals(await res.body());
+    if (!valid) deny();
+    if (stopped()) return;
     if (valid) await route.fulfill({ response: res });
-    else deny();
     return valid;
   } finally {
-    await res.dispose().catch(offline);
+    // Disposal cannot delay or replace a policy verdict.
+    void res.dispose().catch(offline);
   }
 }
 
@@ -95,54 +98,63 @@ async function inspect(page, empty, keyboard) {
   validateView(content, state, empty, keyboard);
 }
 
-async function guardedPage(browser, mintModerator, [width, height], url, render, reportOnly, opts) {
+async function guardedPage(browser, mintModerator, [width, height], url, render, options) {
+  const { mark, signal, TimeoutError, reportOnly } = options;
   const context = await browser.newContext({
     viewport: { width, height },
     serviceWorkers: "block",
     javaScriptEnabled: false,
   });
   let stopped = false;
+  const closed = () => stopped || signal.aborted;
   let unavailable;
   let result;
   const pending = new Set();
   const settle = async () => {
     while (pending.size) await Promise.all(pending);
   };
-  const drift = Promise.withResolvers();
-  const markViolation = () => drift.reject(new AssertionFailure("unexpected visual diagnostic"));
-  const guard = (work) => Promise.race([drift.promise, work]);
+  const { promise, reject } = Promise.withResolvers();
+  const markViolation = () => reject(new AssertionFailure("unexpected visual diagnostic"));
+  const guard = (work) => Promise.race([promise, work]);
   const offline = (error) => (unavailable ??= error);
   try {
     await context.addCookies([await mintModerator()]);
     await context.route("**/*", async (route) => {
-      if (stopped || opts.signal.aborted) return route.abort().catch(() => undefined);
-      const check = serve(route, url, offline, markViolation).catch(offline);
+      const check = serve(route, url, closed, offline, markViolation).catch((error) => {
+        // Record a required document timeout before abort makes goto fail generically.
+        if (!reportOnly && error instanceof TimeoutError && route.request().isNavigationRequest())
+          reject(error);
+        offline(error);
+      });
       pending.add(check);
       const verified = await check;
       pending.delete(check);
-      if (verified !== true) await route.abort().catch(() => undefined);
+      if (!verified) await route.abort().catch(() => undefined);
     });
     const page = await guard(context.newPage());
     page.setDefaultTimeout(5_000);
     page.on("pageerror", markViolation);
     if (!reportOnly) page.on("console", markViolation);
-    const nav = await guard(page.goto(url).catch((error) => ({ error })));
-    const response = nav && !("error" in nav) ? nav : null;
+    const [navigation] = await guard(Promise.allSettled([page.goto(url)]));
+    // The load timeout can precede a later document or asset fetch verdict.
     await guard(withDeadline(settle));
-    if (nav && "error" in nav && !(reportOnly && unavailable)) throw nav.error;
+    if (navigation.status === "rejected" && !(reportOnly && unavailable)) throw navigation.reason;
+    const response = navigation.status === "fulfilled" ? navigation.value : null;
     const valid = response?.url() === url && kitDocument(response.status(), response.headers());
     if (!(response ? valid : unavailable)) throw new AssertionFailure("visual provenance drift");
-    if (!unavailable) result = await guard(render(page));
+    if (unavailable && !reportOnly) throw unavailable;
+    if (response) result = await guard(render(page, unavailable));
   } finally {
     stopped = true;
   }
   await guard(withDeadline(settle));
-  if (unavailable && !reportOnly) throw unavailable;
-  opts.mark("TEARDOWN");
+  mark("TEARDOWN");
   await guard(withDeadline(() => context.close()));
+  if (unavailable && !reportOnly) throw unavailable;
   return unavailable ? null : result;
 }
 async function boundedMeasurement(measure, ms) {
+  // Reserve time for verdicts and teardown within the cumulative browser budget.
   const budget = Math.min(ms, browserWorkMs - 12_000 - performance.now());
   if (budget <= 0) return null;
   const timer = new AbortController();
@@ -162,16 +174,16 @@ export async function collectVisuals(browser, mint, dir, options) {
     const url = urlFor(empty);
     const stage = reportOnly ? "LIGHTHOUSE" : "CAPTURE";
     mark(stage);
-    const render = async (page) => {
+    const render = async (page, unavailable) => {
       mark("FONTS");
       const fonts = () => page.evaluate(() => document.fonts.ready.then(() => true));
       const ready = await withDeadline(fonts).catch((error) => {
-        if (reportOnly && error instanceof BrowserDeadline) return false;
-        throw error;
+        if (!reportOnly || !(error instanceof BrowserDeadline)) throw error;
       });
       mark(stage);
       await inspect(page, empty, false);
-      if (reportOnly) return ready ? boundedMeasurement(() => measure(page, url), ms) : null;
+      if (reportOnly)
+        return ready && !unavailable ? boundedMeasurement(() => measure(page, url), ms) : null;
       if (keyboard) {
         for (let n = 0; n < 11; n++) await page.keyboard.press("Tab");
         await page.keyboard.press("ArrowRight");
@@ -182,7 +194,7 @@ export async function collectVisuals(browser, mint, dir, options) {
       if (name.endsWith("desktop.png")) await audit(page, name);
       await inspect(page, empty, keyboard);
     };
-    const result = await guardedPage(browser, mint, size, url, render, reportOnly, options);
+    const result = await guardedPage(browser, mint, size, url, render, { ...options, reportOnly });
     if (reportOnly) return result;
   }
 }
