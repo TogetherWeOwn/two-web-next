@@ -60,6 +60,29 @@ jobs:
               fi ;;
             *) printf '%s\n' 'Unknown migration target.' >&2; exit 1 ;;
           esac
+      - name: Read approved production migration scope
+        id: production-scope
+        if: ${{ inputs.target == 'production' }}
+        shell: bash
+        env:
+          # github.token cannot be granted Environments: read.
+          GH_TOKEN: ${{ inputs.target == 'production' && secrets.PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN || '' }}
+        run: |
+          set -euo pipefail
+          name=PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS
+          if [[ -z "${GH_TOKEN:-}" ]] || ! tags="$(
+            exec 2>/dev/null
+            gh api --hostname github.com --method GET \
+              "repos/$GITHUB_REPOSITORY/environments/production/variables/$name" |
+              jq -ers --arg name "$name" '
+                select(length == 1) | .[0] | select(.name == $name) | .value | strings |
+                select(test("\\A[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*\\z"))
+              '
+          )"; then
+            printf '%s\n' 'Production migration scope must be readable as a valid production Environment variable.' >&2
+            exit 1
+          fi
+          printf 'pending_tags=%s\n' "$tags" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -101,6 +124,7 @@ jobs:
           # Non-secret pins, provisioned only on the protected production Environment.
           PRODUCTION_MIGRATION_APPROVED_SHA: ${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_APPROVED_SHA || '' }}
           PRODUCTION_MIGRATION_IDENTITY_SHA256: ${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_IDENTITY_SHA256 || '' }}
+          PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: ${{ steps.production-scope.outputs.pending_tags }}
           STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}
           # Provision ONLY as secrets on the matching GitHub Environment.
           # The unselected target is not exposed to the process. No DATABASE_URL fallback.

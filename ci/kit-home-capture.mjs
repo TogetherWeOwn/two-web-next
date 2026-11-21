@@ -59,6 +59,7 @@ for (const tree of ["before", "after"]) {
             );
           });
           if (eventState) await page.locator(".event-band").scrollIntoViewIfNeeded();
+          else await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: "instant" }));
           const name = `${tree}-${state}-${viewport.name}.png`;
           const bytes = await page.screenshot({
             animations: "disabled",

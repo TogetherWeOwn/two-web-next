@@ -29,7 +29,7 @@ jobs:
       matrix:
         state: ${{ fromJSON(inputs.comparison == 'ember-bands' && '["guestAgenda","memberAgenda","guestEvents","guest","eventsOutage"]' || '["guest","member","guestEvents","memberEvents","staleCounts","quietOnline","nonmember","sessionOutage","eventsOutage","missingCounts","joinFailed","joinAdded","alreadyMember"]') }}
     env:
-      BASELINE_SHA: ${{ inputs.comparison == 'ember-bands' && '850853c4343816126a7425a31afbff43a3fd8608' || '9d09c1adcc528020b4e8a74575a6848e99b95271' }}
+      BASELINE_SHA: ${{ inputs.comparison == 'ember-bands' && '1019f5cad75075c2330cd31bfe4d6f028aaa11b8' || '9d09c1adcc528020b4e8a74575a6848e99b95271' }}
     steps:
       - name: Check out pinned fixture tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

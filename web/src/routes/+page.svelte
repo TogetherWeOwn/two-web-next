@@ -22,7 +22,6 @@ import { siteJsonLd } from "../../../src/seo-json-ld";
 import type { PageProps } from "./$types";
 import "./home-join-band.css";
 
-// Home chrome renders only the public panels and viewer-specific data supplied by the load.
 let { data }: PageProps = $props();
 const {
   session,
@@ -75,11 +74,11 @@ const nextOwnEvent = $derived(
         .sort((a, b) => a.event.startsAt.getTime() - b.event.startsAt.getTime())[0]
     : undefined,
 );
-// The published teaser feed is ordered by start time.
 const heroRsvp = $derived(!sessionUnavailable && !eventsUnavailable ? nextOwnEvent : undefined);
-const heroEvent = $derived(eventsUnavailable ? undefined : (
-  heroRsvp?.event ?? upcomingEvents.find((event: HomeUpcomingRow) => event.startsAt > renderTime)
-));
+const nextPublicEvent = $derived(
+  upcomingEvents.find((event: HomeUpcomingRow) => event.startsAt > renderTime),
+);
+const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? nextPublicEvent));
 </script>
 
 {#snippet primaryLinks()}
@@ -116,11 +115,10 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (
   {/if}
   <section class="hero kit-home" aria-labelledby="home-heading">
     <div>
-      <p class="ember-home-label">A close-knit gaming clan / mostly evenings / 18+</p>
+      <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
       <h1 id="home-heading">
-        {#if heroEvent}
-          {heroRsvp ? "Your next RSVP:" : "Next game night:"} <em>{heroEvent.title}</em>.
-          <span>{heroRsvp ? goingAnnouncementText(heroRsvp.status) : "Come play with us."}</span>
+        {#if !eventsUnavailable && nextPublicEvent}
+          Next game night: <em>{nextPublicEvent.title}</em>. <span>Come play with us.</span>
         {:else}
           The lobby is <em>open</em>.
         {/if}
@@ -154,22 +152,16 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (
       {/if}
     </div>
     <aside class="ember-home-panel" aria-labelledby="home-panel-heading">
-      <h2 id="home-panel-heading">{heroRsvp ? "Your next event" : "On the schedule"}</h2>
-      <div class="ember-home-panel-row">
-        {#if heroEvent}
-          <p><strong>{heroEvent.title}</strong></p>
-          <p><time datetime={heroEvent.startsAt.toISOString()}>{cardTimeLabel(heroEvent.startsAt, heroEvent.timezone)} ({isValidZone(heroEvent.timezone) ? heroEvent.timezone : "UTC"})</time></p>
-        {:else}
-          <p><strong>{eventsUnavailable ? "Schedule unavailable" : "No upcoming game nights"}</strong></p>
-          <p>Check Discord for updates.</p>
-        {/if}
-      </div>
-      {#if !heroEvent}
-        <a href="/discord">Find us on Discord</a>
-      {:else if heroEvent.source === "discord"}
-        <a href={inviteUrl}>Open Discord</a>
+      <h2 id="home-panel-heading">{heroRsvp ? "Your RSVP" : "On the schedule"}</h2>
+      {#if heroEvent}
+        <p><strong>{heroEvent.title}</strong></p>
+        <p><time datetime={heroEvent.startsAt.toISOString()}>{cardTimeLabel(heroEvent.startsAt, heroEvent.timezone)} ({isValidZone(heroEvent.timezone) ? heroEvent.timezone : "UTC"})</time></p>
+        {#if heroRsvp}<p>{goingAnnouncementText(heroRsvp.status)}</p>{/if}
+        {#if heroEvent.source === "discord"}<a href={inviteUrl}>Open Discord</a>
+        {:else}<a href={`/e/${encodeURIComponent(heroEvent.eventKey)}`}>View event details</a>{/if}
       {:else}
-        <a href={`/e/${encodeURIComponent(heroEvent.eventKey)}`}>View event details</a>
+        <p><strong>{eventsUnavailable ? "Schedule unavailable" : "No upcoming game nights"}</strong></p>
+        <a href="/discord">Find us on Discord</a>
       {/if}
     </aside>
   </section>
@@ -422,7 +414,6 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (
   {/if}
   <JsonLd testid="site-jsonld" json={siteGraph} />
 {/snippet}
-
 <SiteMetadata
   title="The lobby is open"
   exactTitle="Together We Own — the lobby is open"

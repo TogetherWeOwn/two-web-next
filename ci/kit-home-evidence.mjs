@@ -170,6 +170,8 @@ export async function assertHomeEvidence(page, state) {
     const summary = menu.locator("summary");
     assert.equal(await events.isVisible(), false);
     await summary.press("Enter");
+    const box = await events.boundingBox();
+    assert.ok(box && box.y >= 0 && box.y + box.height <= 844, "open Events link is on-screen");
     await page.keyboard.press("Tab");
     assert.equal(await events.evaluate((el) => el === document.activeElement), true);
     await summary.press("Enter");
@@ -195,6 +197,7 @@ export async function withKitHomeEvidence(state, callback) {
   return withKitOfflineBrowser(
     { page: homeEvidencePage(state), now: HOME_EVIDENCE_NOW },
     async (fixture) => {
+      if (state === "guest") await fixture.page.setViewportSize({ width: 390, height: 844 });
       await assertHomeEvidence(fixture.page, state);
       return callback(fixture);
     },
