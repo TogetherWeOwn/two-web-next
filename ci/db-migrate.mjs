@@ -278,30 +278,58 @@ export function migrationClient(config, hooks = {}) {
   });
 }
 
+function approvedRange(migrations, pin) {
+  const tags = typeof pin === "string" ? pin.split(",") : [];
+  const start = migrations.findIndex((entry) => entry.tag === tags[0]);
+  const end = start + tags.length;
+  if (start < 0 || tags.some((tag, index) => migrations[start + index]?.tag !== tag)) {
+    refuse(
+      "Production migration scope must pin an exact contiguous segment of the release journal.",
+    );
+  }
+  return { start, end };
+}
+
 export async function runMigration(mode, env = process.env, options = {}) {
-  if (!["plan", "apply", "verify"].includes(mode)) refuse("Mode must be plan, apply or verify.");
+  if (!["plan", "apply", "verify", "verify-scope"].includes(mode))
+    refuse("Mode must be plan, apply, verify or verify-scope.");
   const config = migrationConfig(env, options);
   const migrations = journal();
-  const approvedPending =
-    config.target === "production" ? env.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS : undefined;
-  if (config.target === "production") {
-    // Only a non-empty, ordered suffix of this release can apply and leave zero pending.
-    if (
-      typeof approvedPending !== "string" ||
-      !approvedPending ||
-      approvedPending !==
-        migrations
-          .slice(-approvedPending.split(",").length)
-          .map((entry) => entry.tag)
-          .join(",")
-    ) {
-      refuse("Production migration scope must pin an exact ordered suffix of the release journal.");
-    }
-  }
+  const scope =
+    config.target === "production"
+      ? approvedRange(migrations, env.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS)
+      : undefined;
+  if (mode === "verify-scope" && !scope) refuse("Scoped readback is production-only.");
   const report = options.report ?? console.log;
   const summary = async (text) => {
     await report(text);
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${text}\n`);
+  };
+  const postCheck = (remaining, approvedEnd) => {
+    if (approvedEnd === undefined) {
+      if (remaining.length) refuse("Post-check failed: web migrations remain pending.");
+      return;
+    }
+    // pendingMigrations validated every row against the full canonical journal.
+    // Its tail length identifies the exact prefix, not just tag membership.
+    const prefix = migrations.length - remaining.length;
+    if (prefix < approvedEnd)
+      refuse("Scoped post-check failed: ledger has not reached the approved end.");
+    if (prefix > approvedEnd)
+      refuse("Scoped post-check failed: ledger has advanced past the approved end.");
+  };
+  const reportPostCheck = async (remaining) => {
+    if (!scope) {
+      await summary("Post-check: zero pending web migrations.");
+      return;
+    }
+    const endTag = migrations[scope.end - 1].tag;
+    await summary(
+      `Scoped ${mode === "apply" ? "apply" : "readback"}: ledger matches the approved end (${endTag}).`,
+    );
+    const deferred = remaining.map((entry) => entry.tag).join(", ");
+    await summary(`Deferred web migrations: ${deferred || "none"}.`);
+    if (remaining.length) await summary("This is not full-release migration verification.");
   };
   let connectionLost = false;
   const client = migrationClient(config, {
@@ -333,13 +361,19 @@ export async function runMigration(mode, env = process.env, options = {}) {
       throw error;
     }
     const pending = await pendingMigrations(connection, migrations);
-    const tags = pending.map((entry) => entry.tag);
-    if (config.target === "production" && mode !== "verify" && tags.join(",") !== approvedPending) {
-      refuse("Production migration pending tags do not match the approved scope.");
+    if (mode === "verify-scope") return pending;
+    let selected = pending;
+    if (scope && mode !== "verify") {
+      if (migrations.length - pending.length !== scope.start) {
+        refuse("Production migration pending tags do not match the approved scope.");
+      }
+      selected = pending.slice(0, scope.end - scope.start);
     }
+    const tags = selected.map((entry) => entry.tag);
+    const label = selected === pending ? "Pending" : "Pending in approved scope";
     await summary(`### Web migrations: ${config.target} / ${mode}`);
-    await summary(`Pending: ${tags.length}${tags.length ? ` (${tags.join(", ")})` : ""}`);
-    return pending;
+    await summary(`${label}: ${tags.length}${tags.length ? ` (${tags.join(", ")})` : ""}`);
+    return selected;
   };
   try {
     if (mode !== "apply") {
@@ -349,11 +383,13 @@ export async function runMigration(mode, env = process.env, options = {}) {
         config.target === "production"
           ? await client.begin("read only", async (transaction) => {
               await assertProductionIdentity(transaction, config, summary);
-              return plan(transaction);
+              const pending = await plan(transaction);
+              if (mode === "verify-scope") postCheck(pending, scope.end);
+              return pending;
             })
           : await plan(client);
-      if (mode === "verify" && pending.length)
-        refuse("Post-check failed: web migrations remain pending.");
+      if (mode === "verify") postCheck(pending);
+      if (mode === "verify-scope") await reportPostCheck(pending);
       return pending;
     }
     // sql.begin pins one connection and rejects on loss: never resume unlocked.
@@ -415,7 +451,7 @@ export async function runMigration(mode, env = process.env, options = {}) {
           values (${migration.hash}, ${migration.folderMillis})`;
       }
       const remaining = await pendingMigrations(transaction, migrations);
-      if (remaining.length) refuse("Post-check failed: web migrations remain pending.");
+      postCheck(remaining, scope?.end);
       return remaining;
     };
     // The locked production scope check must see commits made after the
@@ -424,7 +460,7 @@ export async function runMigration(mode, env = process.env, options = {}) {
       config.target === "production"
         ? await client.begin("isolation level read committed", apply)
         : await client.begin(apply);
-    await summary("Post-check: zero pending web migrations.");
+    await reportPostCheck(remaining);
     return remaining;
   } finally {
     await client.end({ timeout: 5 });

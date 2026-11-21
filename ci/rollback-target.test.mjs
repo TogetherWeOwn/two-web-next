@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { validatePureHonoRecoveryEvidence } from "./pure-hono-recovery-evidence.mjs";
+import { fetchPureHonoRecoveryRun } from "./pure-hono-recovery-run.mjs";
 import {
   ROLLBACK_ENVIRONMENTS,
   assertRollbackDrillGreen,
@@ -78,6 +79,157 @@ function recoveryFixture({
       })),
   };
 }
+
+function recoveryRunAttempt(event = "push") {
+  const repo = { id: 100, full_name: "TogetherWeOwn/two-web-next", fork: false };
+  return {
+    id: 123,
+    run_attempt: 2,
+    repository: { ...repo },
+    head_repository: { ...repo },
+    path: ".github/workflows/archive-hono-recovery.yml@main",
+    head_sha: "a".repeat(40),
+    head_branch: "main",
+    event,
+    status: "completed",
+    conclusion: "success",
+    url: "https://example.invalid/ignored",
+  };
+}
+
+const runsUrl = "https://api.github.com/repos/TogetherWeOwn/two-web-next/actions/runs";
+const attemptUrl = `${runsUrl}/123/attempts/2`;
+const metadataRefusal = "pure Hono recovery run refused: inconsistent GitHub attempt metadata";
+
+for (const event of ["push", "workflow_dispatch"]) {
+  test(`pure Hono run adapter authenticates one exact ${event} attempt for the validator`, async () => {
+    const input = recoveryFixture();
+    const calls = [];
+    const run = await fetchPureHonoRecoveryRun(
+      { ...input.expected, event },
+      "fixture-token",
+      async (url, options) => {
+        calls.push([url, options.method ?? "GET", options.redirect, options.headers.Authorization]);
+        return Response.json(recoveryRunAttempt(event));
+      },
+    );
+    assert.deepEqual(calls, [[attemptUrl, "GET", "error", "Bearer fixture-token"]]);
+    assert.deepEqual(run, input.run);
+    assert.deepEqual(validatePureHonoRecoveryEvidence({ ...input, run }), {
+      archiveSha256: input.expected.archiveSha256,
+      fileCount: 3,
+    });
+  });
+}
+
+test("pure Hono run adapter accepts the positive safe integer ID boundaries", async () => {
+  const expected = { ...recoveryFixture().expected, event: "push" };
+  for (const [id, attempt] of [
+    [1, Number.MAX_SAFE_INTEGER],
+    [Number.MAX_SAFE_INTEGER, 1],
+  ]) {
+    const runId = String(id);
+    const runAttempt = String(attempt);
+    const calls = [];
+    const run = await fetchPureHonoRecoveryRun(
+      { ...expected, runId, runAttempt },
+      "fixture-token",
+      async (url) => {
+        calls.push(url);
+        return Response.json({ ...recoveryRunAttempt(), id, run_attempt: attempt });
+      },
+    );
+    assert.deepEqual(calls, [`${runsUrl}/${runId}/attempts/${runAttempt}`]);
+    assert.deepEqual({ runId: run.runId, runAttempt: run.runAttempt }, { runId, runAttempt });
+  }
+});
+
+test("pure Hono run adapter refuses invalid expectations without a request", async () => {
+  const expected = { ...recoveryFixture().expected, event: "push" };
+  let calls = 0;
+  for (const invalid of [
+    { runId: "0123" },
+    { runId: "123\n" },
+    { runId: "9007199254740992" },
+    { runAttempt: 2 },
+    { runAttempt: "0" },
+    { runAttempt: "2/../1" },
+    { sourceSha: "a".repeat(39) },
+    { workflow: "https://example.invalid/archive.yml" },
+    { event: undefined },
+    { event: "pull_request_target" },
+  ]) {
+    await assert.rejects(
+      fetchPureHonoRecoveryRun({ ...expected, ...invalid }, "fixture-token", async () => {
+        calls++;
+        return Response.json(recoveryRunAttempt());
+      }),
+      { message: "pure Hono recovery run refused: invalid expected producer" },
+    );
+  }
+  assert.equal(calls, 0);
+});
+
+for (const [label, metadata] of [
+  ["wrong run", { id: 124 }],
+  ["wrong attempt", { run_attempt: 1 }],
+  ["missing attempt", { run_attempt: undefined }],
+  ["string attempt", { run_attempt: "2" }],
+  ["wrong source SHA", { head_sha: "b".repeat(40) }],
+  ["wrong writer workflow", { path: ".github/workflows/ci.yml@main" }],
+  ["wrong workflow ref", { path: ".github/workflows/archive-hono-recovery.yml@release" }],
+  ["unqualified workflow path", { path: ".github/workflows/archive-hono-recovery.yml" }],
+  ["foreign run repository", { repository: { id: 100, full_name: "Elsewhere/repo", fork: false } }],
+  [
+    "foreign head repository",
+    { head_repository: { id: 100, full_name: "Elsewhere/repo", fork: false } },
+  ],
+  [
+    "forked head repository",
+    { head_repository: { ...recoveryRunAttempt().head_repository, fork: true } },
+  ],
+  [
+    "different repository ID",
+    { head_repository: { ...recoveryRunAttempt().head_repository, id: 101 } },
+  ],
+  ["wrong branch", { head_branch: "release" }],
+  ["different main-safe event", { event: "workflow_dispatch" }],
+  ["unfinished run", { status: "in_progress" }],
+  ["failed run", { conclusion: "failure" }],
+  ["malformed repository", { head_repository: null }],
+]) {
+  test(`pure Hono run adapter refuses ${label}`, async () => {
+    const expected = { ...recoveryFixture().expected, event: "push" };
+    await assert.rejects(
+      fetchPureHonoRecoveryRun(expected, "fixture-token", async () =>
+        Response.json({ ...recoveryRunAttempt(), ...metadata }),
+      ),
+      { message: metadataRefusal },
+    );
+  });
+}
+
+test("pure Hono run adapter sanitizes transport refusals without retry or fallback", async () => {
+  const expected = { ...recoveryFixture().expected, event: "push" };
+  for (const fail of [
+    () => {
+      throw new Error("untrusted transport detail");
+    },
+    () => new Response("untrusted response detail", { status: 404 }),
+    () => new Response("malformed JSON detail"),
+    () => Response.redirect("https://example.invalid/ignored"),
+  ]) {
+    const calls = [];
+    await assert.rejects(
+      fetchPureHonoRecoveryRun(expected, "fixture-token", async (url) => {
+        calls.push(url);
+        return fail();
+      }),
+      { message: "pure Hono recovery run refused: GitHub metadata unavailable" },
+    );
+    assert.deepEqual(calls, [attemptUrl]);
+  }
+});
 
 test("pure Hono archive binds a successful main run and hashes every declared member", () => {
   const input = recoveryFixture();

@@ -31,6 +31,7 @@ const pinnedHostedJobs = new Map([
   ["kit-activity-log-diagnostic.yml", "browser"],
   ["kit-home-evidence.yml", "capture"],
   ["kit-event-evidence.yml", "capture"],
+  ["kit-event-newline-proof.yml", "capture"],
   ["admin-stale-save-ubuntu24-proof.yml", "recovery-proof"],
   ["kit-footer-browser.yml", "footer-browser"],
   ["xfs-qualification.yml", "fixture"],
