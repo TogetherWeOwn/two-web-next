@@ -230,7 +230,12 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
       await expect(row("Account", "navigation")).toHaveCount(Number(name !== "hidden"));
       await shot(page, `${name}-menu-open-390`);
     }
+    const header = page.getByRole("banner");
+    const canvas = await header.evaluate((element) => getComputedStyle(element).backgroundColor);
     await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
+    const brand = header.getByRole("link", { name: "Together We Own homepage" });
+    await expect(brand).toHaveCSS("forced-color-adjust", "auto");
+    await expect(brand.locator("img")).toHaveCSS("background-color", canvas);
     await toggle.press("Space");
     await toggle.press("Space");
     await expect(home).toHaveCSS("outline-style", "solid");

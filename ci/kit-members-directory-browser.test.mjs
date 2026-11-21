@@ -72,7 +72,10 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
                 await account.getByRole("link", { name: "Your profile", exact: true }).count(),
                 1 - expectedJoin,
               );
-              await page.screenshot({ path: `${out}/${name}-menu-open-390.png` });
+              await page.screenshot({
+                path: `${out}/${name}-menu-open-390.png`,
+                animations: "disabled",
+              });
               await header.getByRole("link", { name: "Close menu" }).click();
             }
           }

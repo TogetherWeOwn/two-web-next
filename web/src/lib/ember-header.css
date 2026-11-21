@@ -116,6 +116,11 @@
   }
 }
 @media (forced-colors: active) {
+  /* The SVG has a fixed light wordmark. Keep its backing without opting out the link. */
+  .base-theme .ember-header .menu-brand img {
+    forced-color-adjust: none;
+    background-color: var(--two-color-bg-canvas);
+  }
   .base-theme .ember-header .main-nav a[aria-current] {
     text-decoration: underline;
   }
