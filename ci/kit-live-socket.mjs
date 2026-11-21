@@ -11,18 +11,84 @@ import { SESSION_COOKIE } from "./parity/fixture.mjs";
 const path = "/api/discord-live/v1";
 const deadline = () => ({ signal: AbortSignal.timeout(5_000) });
 
+function upgradeRequest(url, headers) {
+  return request(url, {
+    ...deadline(),
+    headers: {
+      Upgrade: "websocket",
+      Connection: "Upgrade",
+      "Sec-WebSocket-Key": randomBytes(16).toString("base64"),
+      "Sec-WebSocket-Version": "13",
+      ...headers,
+    },
+  });
+}
+
+// Observe the first frame on an idle socket, not a client event or TCP EOF.
+function openIdle(url, headers) {
+  return new Promise((resolve, reject) => {
+    const req = upgradeRequest(url, headers);
+    req.on("response", (response) => {
+      response.resume();
+      reject(new Error(`Idle WebSocket upgrade refused (${response.statusCode})`));
+    });
+    req.on("upgrade", (response, socket, head) => {
+      const accept = createHash("sha1") // RFC 6455 handshake, not a signature.
+        .update(`${req.getHeader("Sec-WebSocket-Key")}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+        .digest("base64");
+      if (
+        response.statusCode !== 101 ||
+        response.headers.upgrade?.toLowerCase() !== "websocket" ||
+        !response.headers.connection
+          ?.toLowerCase()
+          .split(/\s*,\s*/)
+          .includes("upgrade") ||
+        response.headersDistinct["sec-websocket-accept"]?.length !== 1 ||
+        response.headers["sec-websocket-accept"] !== accept ||
+        response.headers["sec-websocket-protocol"] !== undefined ||
+        response.headers["sec-websocket-extensions"] !== undefined
+      ) {
+        socket.destroy();
+        reject(new Error(`Invalid idle WebSocket upgrade (${response.statusCode})`));
+        return;
+      }
+      const peer = { socket, first: null, at: null, error: null };
+      socket.on("error", (error) => {
+        peer.error = error;
+      });
+      if (head.length) socket.unshift(head);
+      socket.on("readable", () => {
+        if (peer.first === null) {
+          peer.first = socket.read(4);
+          if (peer.first !== null) peer.at = Date.now();
+        }
+      });
+      resolve(peer);
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+async function awaitServerClose(peer, expiry, label) {
+  assert.ok(Number.isFinite(expiry));
+  while (!peer.first && !peer.error && !peer.socket.destroyed && Date.now() < expiry + 4_000) {
+    await delay(25);
+  }
+  assert.equal(
+    peer.first?.length,
+    4,
+    `${label}: no complete Close frame before teardown or timeout`,
+  );
+  assert.equal(peer.first[0], 0x88, `${label}: first frame must be Close, not data`);
+  assert.equal(peer.first[1], 2, `${label}: expected an unmasked Close with only a status`);
+  assert.equal(peer.first.readUInt16BE(2), 1008, `${label}: expected policy close`);
+  assert.ok(peer.at >= expiry && peer.at < expiry + 4_000, `${label}: close outside lease window`);
+}
+
 function refusal(url, headers) {
   return new Promise((resolve, reject) => {
-    const req = request(url, {
-      ...deadline(),
-      headers: {
-        Upgrade: "websocket",
-        Connection: "Upgrade",
-        "Sec-WebSocket-Key": randomBytes(16).toString("base64"),
-        "Sec-WebSocket-Version": "13",
-        ...headers,
-      },
-    });
+    const req = upgradeRequest(url, headers);
     req.on("response", (response) => {
       response.resume();
       resolve(response.statusCode);
@@ -57,6 +123,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
   const laterSession = await fixtureSession(secret);
   const sql = postgres(databaseUrl, { max: 1 });
   const sockets = [];
+  const idlePeers = [];
   const open = async (headers) => {
     const socket = new WebSocket(url.replace(/^http:/, "ws:"), { headers });
     sockets.push(socket);
@@ -68,17 +135,26 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     const guest = await open(headers);
     const frame = once(guest, "message", deadline());
     guest.send(subscribe);
-    assert.deepEqual(JSON.parse((await frame)[0].data), {
-      v: 1,
-      type: "unavailable",
-      topic: "voice",
-    });
+    const unavailable = { v: 1, type: "unavailable", topic: "voice" };
+    assert.deepEqual(JSON.parse((await frame)[0].data), unavailable);
     const duplicate = once(guest, "close", deadline());
     guest.send(subscribe);
     assert.equal((await duplicate)[0].code, 1008);
 
     await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
       values (${ref}, '900000000000001377', 'Live socket fixture', true, now() + interval '10 minutes')`;
+    const expiring = await open({ ...headers, Cookie: cookie });
+    await sql`update web_sessions set expires_at = clock_timestamp() + interval '3 seconds' where token_hash = ${ref}`;
+    const expiry = Promise.all([
+      once(expiring, "message", deadline()),
+      once(expiring, "close", deadline()),
+    ]);
+    expiring.send(subscribe);
+    const [[message], [close]] = await expiry;
+    assert.deepEqual(JSON.parse(message.data), unavailable);
+    assert.equal(close.code, 1008);
+
+    await sql`update web_sessions set expires_at = clock_timestamp() + interval '10 minutes' where token_hash = ${ref}`;
     const signedIn = await open({ ...headers, Cookie: cookie });
     await sql`update web_sessions set revoked_at = clock_timestamp() where token_hash = ${ref}`;
     const closed = once(signedIn, "close", deadline());
@@ -90,42 +166,38 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     assert.equal(await refusal(url, { ...headers, Cookie: cookie }), 401);
 
     await sql`update web_sessions set revoked_at = null where token_hash = ${ref}`;
-    const expiring = await open({ ...headers, Cookie: cookie });
+    const lapsing = await open({ ...headers, Cookie: cookie });
     await sql`update web_sessions set expires_at = clock_timestamp() where token_hash = ${ref}`;
-    const expired = once(expiring, "close", deadline());
-    expiring.addEventListener("message", () => deliveries++);
-    expiring.send(subscribe);
+    const expired = once(lapsing, "close", deadline());
+    lapsing.addEventListener("message", () => deliveries++);
+    lapsing.send(subscribe);
     assert.equal((await expired)[0].code, 1008);
     assert.equal(deliveries, 0);
 
-    await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
+    const [laterLease] =
+      await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
       values (${laterSession.ref}, '900000000000001378', 'Later live socket', true,
-        clock_timestamp() + interval '10 seconds')`;
-    await sql`update web_sessions set expires_at = clock_timestamp() + interval '5 seconds'
-      where token_hash = ${ref}`;
-    const later = await open({ ...headers, Cookie: laterSession.cookie });
-    const first = await open({ ...headers, Cookie: cookie });
-    first.addEventListener("message", () => deliveries++);
-    later.addEventListener("message", () => deliveries++);
-    // Admit the later lease first so the early one must replace its pending alarm.
-    // Neither socket sends a command; only the alarm can close it.
-    const firstClosed = once(first, "close", { signal: AbortSignal.timeout(9_000) });
-    const laterClosed = once(later, "close", { signal: AbortSignal.timeout(15_000) });
-    const [firstEvent, laterEvent] = await Promise.all([
-      firstClosed.then(([event]) => {
-        assert.equal(later.readyState, WebSocket.OPEN);
-        return event;
-      }),
-      laterClosed.then(([event]) => event),
-    ]);
-    assert.equal(firstEvent.code, 1008);
-    assert.equal(laterEvent.code, 1008);
-    assert.equal(deliveries, 0);
+        clock_timestamp() + interval '10 seconds') returning expires_at`;
+    const [firstLease] =
+      await sql`update web_sessions set expires_at = clock_timestamp() + interval '5 seconds'
+      where token_hash = ${ref} returning expires_at`;
+    // Admit the later lease first. Neither client sends a frame before its alarm.
+    const later = await openIdle(url, { ...headers, Cookie: laterSession.cookie });
+    idlePeers.push(later);
+    const first = await openIdle(url, { ...headers, Cookie: cookie });
+    idlePeers.push(first);
+    await awaitServerClose(first, new Date(firstLease.expires_at).getTime(), "first idle lease");
+    assert.ok(
+      !later.first && !later.error && !later.socket.destroyed && !later.socket.readableEnded,
+      "later lease must stay open after the first alarm",
+    );
+    await awaitServerClose(later, new Date(laterLease.expires_at).getTime(), "later idle lease");
     console.log(
-      "PASS installed Kit live socket 101, guest control, revocation, and staggered idle session expiry",
+      "PASS installed Kit live socket 101, guest control, shortened and staggered idle expiry, and revocation",
     );
   } finally {
     for (const socket of sockets) socket.close();
+    for (const peer of idlePeers) peer.socket.destroy();
     try {
       await sql`delete from web_sessions where token_hash in (${ref}, ${laterSession.ref})`;
     } finally {

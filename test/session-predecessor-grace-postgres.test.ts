@@ -55,28 +55,49 @@ describe.skipIf(!url)("postgres predecessor grace", () => {
   });
 
   it("reads only the exact live row and reports the earlier of expiry and lineage cap", async () => {
-    const expiresAt = new Date(Date.now() + 3600_000);
+    const [clock] = await fixture.client<{ expires_at: Date }[]>`
+      select clock_timestamp() + interval '1 hour' as expires_at`;
+    const expiresAt = clock!.expires_at;
     await store.create(session("strict-source", USER, expiresAt));
     expect(await store.rotate("strict-source", session("strict-successor", USER, expiresAt))).toBe(
       true,
     );
     expect(await store.get("strict-source")).toMatchObject({ userId: USER });
     expect(await store.getLive("strict-source")).toBeNull();
-    expect(await store.getLive("strict-successor")).toEqual({
-      userId: USER,
-      member: true,
-      validUntil: expiresAt.getTime(),
-    });
-    const [row] = await fixture.client<{ cap: Date }[]>`
-      update web_sessions set created_at = clock_timestamp() - interval '23 hours 30 minutes'
-      where token_hash = 'strict-successor'
-      returning created_at + interval '24 hours' as cap`;
-    expect(await store.getLive("strict-successor")).toMatchObject({
-      validUntil: row?.cap.getTime(),
-    });
+    const live = await store.getLive("strict-successor");
+    expect(live).toMatchObject({ userId: USER, member: true });
+    expect(live?.remainingMs).toBeGreaterThan(3_500_000);
+    expect(live?.remainingMs).toBeLessThanOrEqual(3_600_000);
+    await fixture.client`update web_sessions set created_at = clock_timestamp() - interval '23 hours 30 minutes'
+      where token_hash = 'strict-successor'`;
+    const capped = await store.getLive("strict-successor");
+    expect(capped?.remainingMs).toBeGreaterThan(1_700_000);
+    expect(capped?.remainingMs).toBeLessThanOrEqual(1_800_000);
     await fixture.client`update web_sessions set created_at = clock_timestamp() - interval '24 hours'
       where token_hash = 'strict-successor'`;
     expect(await store.getLive("strict-successor")).toBeNull();
+  });
+
+  it("refuses a revoked exact row with future sliding expiry and a fresh lineage", async () => {
+    const hash = "strict-revoked";
+    await store.create(session(hash));
+    await fixture.client`update web_sessions set expires_at = clock_timestamp() + interval '1 hour'
+      where token_hash = ${hash}`;
+    expect(await store.getLive(hash)).not.toBeNull();
+    const [revoked] = await fixture.client`update web_sessions set revoked_at = clock_timestamp()
+      where token_hash = ${hash} returning token_hash`;
+    expect(revoked?.token_hash).toBe(hash);
+    expect(await store.getLive(hash)).toBeNull();
+  });
+
+  it("refuses an unrevoked exact row with expired sliding expiry and a fresh lineage", async () => {
+    const hash = "strict-expired";
+    await store.create(session(hash));
+    const [expired] = await fixture.client`update web_sessions
+      set expires_at = clock_timestamp() - interval '1 second'
+      where token_hash = ${hash} and revoked_at is null returning token_hash`;
+    expect(expired?.token_hash).toBe(hash);
+    expect(await store.getLive(hash)).toBeNull();
   });
 
   it("refuses at the exact deadline and after, without touching the live successor", async () => {
