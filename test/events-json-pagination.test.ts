@@ -4,7 +4,7 @@
 // row. Real app + agent-testdb/CI Postgres only.
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import {
@@ -84,7 +84,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events.json page clamp (agent-testdb
   };
 
   const collection = async (query = "") => {
-    const res = await app.request(
+    const res = await fetchAppPath(
       `/events.json${query}`,
       { headers: { cookie: await cookieFor() } },
       env,

@@ -8,7 +8,7 @@ import { getEventRow, getPublicEvent, listFeed, listJson } from "../src/events/r
 import { waitlistPosition } from "../src/events/waitlist";
 import { createMemorySessionStore } from "../src/sessions";
 import * as throttle from "../src/throttle";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { calendarRow, KEY } from "./helpers/ics-wire-fixture";
 import { cookieFor, env as baseEnv, MEMBER, MODERATOR } from "./helpers/member-data";
 
@@ -52,7 +52,7 @@ function fixture() {
       if (actor !== "guest")
         headers.set("cookie", await cookieFor(store, actor === "moderator" ? MODERATOR : MEMBER));
       if (validator !== undefined) headers.set("if-none-match", validator);
-      return app.request(path, { method, headers }, env);
+      return fetchAppPath(path, { method, headers }, env);
     },
   };
 }
