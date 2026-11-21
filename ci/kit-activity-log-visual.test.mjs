@@ -29,33 +29,45 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
   const lapse = clock(t);
   const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
   const modes =
-    "dom late capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled";
+    "dom late late-method capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled";
   for (const mode of modes.split(" ")) {
     const hono = mode === "hono";
     const expired = mode === "capture-budget";
     const navError = new Error("target closed");
     const stalled = hono || mode === "capture-stalled";
     const early = hono || mode.startsWith("capture-");
+    const lateDenied = mode.startsWith("late");
     const shots = [];
     const keys = [];
     const consumed = new Set([0]); // Functional context already rotated its cookie.
     let closed = 0;
+    let closing = false;
     let cookie = 0;
-    let url, intercept;
+    let url, intercept, observe;
+    const navigation = Promise.withResolvers();
+    const abortNavigation = t.mock.fn(() => {
+      navigation.reject(navError);
+      return pending;
+    });
     const lateFetch = t.mock.fn(stall);
+    const lateFulfill = t.mock.fn(noop);
     const stages = [];
-    const request = (href, nav, fetch) =>
-      intercept({
-        request: () => ({ url: () => href, isNavigationRequest: () => nav, method: () => "GET" }),
-        fetch,
-        fulfill: noop,
-        abort: noop,
-      });
+    const request = (href, nav, fetch, abort = noop, fulfill = noop, method = "GET") => {
+      const req = { url: () => href, isNavigationRequest: () => nav, method: () => method };
+      observe?.(req);
+      // Playwright emits request events during close but doesn't call route handlers.
+      if (!closing) return intercept({ request: () => req, fetch, fulfill, abort });
+    };
+    const lateRequest = () => {
+      const href = `${visual.origin}/${mode === "late" ? "unexpected.css" : "styles.css"}`;
+      const method = mode === "late-method" ? "POST" : "GET";
+      void request(href, false, lateFetch, noop, lateFulfill, method);
+    };
     const fixture = {
       close: async () => {
-        const file = mode === "late" ? "unexpected.css" : "styles.css";
-        if ((++closed === 6 && ["pending", "late"].includes(mode)) || expired)
-          void request(`${visual.origin}/${file}`, false, lateFetch);
+        closing = true;
+        await Promise.resolve();
+        if ((++closed === 6 && (mode === "pending" || lateDenied)) || expired) lateRequest();
         if (hono || expired) return lapse(visual.browserWorkMs);
       },
       addCookies: ([session]) => {
@@ -65,7 +77,9 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
         intercept = handler;
       },
       newPage: () => fixture,
-      on: noop,
+      on: (event, handler) => {
+        if (event === "request") observe = handler;
+      },
       evaluate: () =>
         mode === "capture-fonts" || (mode === "fonts" && closed === 5) ? lapse(5_000) : true,
       setDefaultTimeout: noop,
@@ -83,8 +97,12 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
           dispose: async () => (dom ? Promise.reject(navError) : stalled ? pending : undefined),
         };
         if (stalled) setImmediate(() => lapse(hono ? visual.browserWorkMs : 5_000));
-        if (stalled || mode === "capture-timeout") {
-          void request(href, true, mode === "capture-timeout" ? stall : async () => response);
+        if (mode === "capture-timeout") {
+          void request(href, true, stall, abortNavigation);
+          return navigation.promise;
+        }
+        if (stalled) {
+          void request(href, true, async () => response);
           throw navError;
         }
         if (dom) await request(href, true, async () => response);
@@ -108,12 +126,20 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       }),
       screenshot: ({ path }) => (expired ? lapse(visual.browserWorkMs) : shots.push(path)),
     };
-    const browser = { newContext: () => fixture };
+    const browser = {
+      newContext: () => {
+        closing = false;
+        return fixture;
+      },
+    };
     const measure = t.mock.fn(() =>
       mode === "rejected" ? Promise.reject(new Error("transport")) : new Promise(noop),
     );
     const mint = () => ({ value: consumed.size });
-    const mark = (stage) => stages.push(stage);
+    const mark = (stage) => {
+      stages.push(stage);
+      if (stage === "TEARDOWN" && closed === 5 && mode === "pending") lateRequest();
+    };
     const zero = mode === "dom" || mode === "disallowed";
     const options = { audit: noop, measure, mark, ms: zero ? 0 : 10, TimeoutError };
     const collect = ({ signal } = new AbortController()) =>
@@ -121,16 +147,23 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     const report = hono || expired ? runWork(collect, mark, fixture.close) : collect();
     if (mode === "capture-fonts" || expired) await assert.rejects(report, visual.BrowserDeadline);
     else if (mode === "dom") await assert.rejects(report, /visual content drift/);
-    else if (hono || mode === "late") await assert.rejects(report, visual.AssertionFailure);
+    else if (hono || lateDenied) await assert.rejects(report, visual.AssertionFailure);
     else if (mode === "disallowed") await assert.rejects(report, /unexpected visual diagnostic/);
-    else if (mode === "capture-timeout") await assert.rejects(report, TimeoutError);
-    else if (early) await assert.rejects(report, (error) => error === navError);
+    else if (mode === "capture-timeout") {
+      await assert.rejects(report, TimeoutError);
+      await assert.rejects(navigation.promise, (error) => error === navError);
+      assert.equal(abortNavigation.mock.callCount(), 1);
+    } else if (early) await assert.rejects(report, (error) => error === navError);
     else assert.equal(await report, null);
     assert.equal(lateFetch.mock.callCount(), 0, mode);
+    assert.equal(lateFulfill.mock.callCount(), 0, mode);
     if (early) assert.equal(stages.at(-1), mode.endsWith("fonts") ? "FONTS" : "CAPTURE");
     assert.equal(closed, early ? Number(hono || expired) : zero ? 5 : 6);
     assert.equal(consumed.size, early ? 2 : 7);
-    assert.equal(measure.mock.callCount(), Number(["pending", "rejected", "late"].includes(mode)));
+    assert.equal(
+      measure.mock.callCount(),
+      Number(lateDenied || ["pending", "rejected"].includes(mode)),
+    );
     if (stalled) await new Promise(setImmediate);
     assert.deepEqual(shots, early ? [] : Object.keys(viewportPngs));
     assert.deepEqual(keys, early ? [] : [...Array(11).fill("Tab"), "ArrowRight"]);
