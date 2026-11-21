@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pgReconciliationReads } from "../src/admin/reconciliation-reads";
@@ -6,6 +7,7 @@ import {
   reconciliationServiceFor,
 } from "../src/admin/reconciliation-service";
 import { pgPruneStores, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
+import { pgReconciliationStore } from "../src/jobs/reconciliation";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 import { registerJobsServerTimeoutsAcceptance } from "./helpers/jobs-server-timeouts-acceptance";
 import { env } from "./helpers/member-data";
@@ -22,6 +24,29 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
   });
   afterAll(async () => {
     await fixture?.dispose();
+  });
+
+  it("makes an announcement key visible to operators and keeps it stopped after resolution", async () => {
+    const store = pgReconciliationStore(sql);
+    const idempotencyKey = randomUUID();
+    const intent = {
+      idempotencyKey,
+      subject: "general",
+      attempts: 1,
+      lastCode: "needs_reconciliation",
+      lastStatus: 409,
+    };
+    expect(await store.hasAnnouncement(idempotencyKey)).toBe(false);
+    await store.record({ ...intent, verb: "announcement.post" });
+    expect(await store.hasAnnouncement(idempotencyKey)).toBe(true);
+    const open = await pgReconciliationReads(sql).listOpen();
+    expect(open).toContainEqual(expect.objectContaining({ ...intent, verb: "announcement.post" }));
+    await sql`update bot_reconciliation_intents set resolved_at = now(), resolved_by = '123',
+      resolution = 'confirmed' where idempotency_key = ${idempotencyKey}::uuid`;
+    expect(await store.hasAnnouncement(idempotencyKey)).toBe(true);
+    expect(
+      (await pgReconciliationReads(sql).listOpen()).map((row) => row.idempotencyKey),
+    ).not.toContain(idempotencyKey);
   });
 
   it("returns filtered, ordered reconciliation windows at both limits", async ({

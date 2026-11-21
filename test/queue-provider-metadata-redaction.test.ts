@@ -86,7 +86,11 @@ function dependencies(action: "event.upsert" | "event.cancel" = "event.upsert") 
     acquire: vi.fn().mockResolvedValue(LEASE),
     release: vi.fn().mockResolvedValue(undefined),
   };
-  return { events, ledger, lock, now: () => NOW };
+  const announcementReconciliation = {
+    hasAnnouncement: vi.fn().mockResolvedValue(false),
+    record: vi.fn().mockResolvedValue(undefined),
+  };
+  return { events, ledger, lock, announcementReconciliation, now: () => NOW };
 }
 
 function provider(pick: (init: RequestInit) => string, retryable: boolean, status = 422) {
@@ -202,9 +206,20 @@ describe.each(SCENARIOS)("provider metadata at queue sinks: $label", (scenario) 
         requestId: SECRET,
         retryable: scenario.retryable,
       });
-      const reason = scenario.retryable
-        ? `The bot refused ${scenario.name} with a retryable \`unknown\` on all ${scenario.attempts} attempts.`
-        : `The bot refused ${scenario.name} with \`unknown\``;
+      let reason = `The bot refused ${scenario.name} with \`unknown\``;
+      if (scenario.retryable && scenario.body.kind === "announcement") {
+        reason = "announcement.post requires reconciliation";
+        expect(d.announcementReconciliation.record).toHaveBeenCalledExactlyOnceWith({
+          idempotencyKey: UUID,
+          verb: "announcement.post",
+          subject: announcement.action.channelKey,
+          attempts: scenario.attempts,
+          lastCode: "unknown",
+          lastStatus: 422,
+        });
+      } else if (scenario.retryable) {
+        reason = `The bot refused ${scenario.name} with a retryable \`unknown\` on all ${scenario.attempts} attempts.`;
+      }
       expect(m.ack).toHaveBeenCalledOnce();
       expect(m.retry).not.toHaveBeenCalled();
       expect(d.ledger.failed).toHaveBeenCalledExactlyOnceWith(

@@ -17,6 +17,7 @@ import {
 import { consume } from "./consumer";
 import { trackingQueue } from "./ledger";
 import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
+import { pgReconciliationStore } from "./reconciliation";
 import type {
   BotClient,
   EventStore,
@@ -185,6 +186,7 @@ export async function handleQueue(
         return work;
       },
       probeEnabled: qaEnabled(env.APP_URL, env.QA_AUTH_TOKEN),
+      announcementReconciliation: pgReconciliationStore(sql),
     });
   } finally {
     // Force-close timed-out best-effort SQL without holding the invocation open.

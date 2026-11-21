@@ -1,8 +1,7 @@
 // The jobs worker sends through the real signed bot client (TOG-12401).
 //
 // Announcement and role-assign go through the actual `handleQueue` entry point
-// with a global fetch double (no ledger id, so no SQL runs; pools are lazy and
-// never connect). Sync-event needs an event store, so it runs the same
+// with fetch and SQL doubles. Sync-event needs an event store, so it runs the same
 // `botClientFor(env)` through `consume` with a fake store. Missing BOT_* config
 // must end as a terminal, alerting failure, never a success ack.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +9,14 @@ import type { JobsEnv } from "../src/env";
 import { consume } from "../src/jobs/consumer";
 import type { EventStore, QueueLedger, SyncAttempt, UniqueLock } from "../src/jobs/types";
 import { botClientFor, handleQueue } from "../src/jobs/worker";
+
+const { query } = vi.hoisted(() => ({ query: vi.fn() }));
+vi.mock("postgres", () => ({
+  default: () => ({
+    begin: (run: (tx: typeof query) => unknown) => run(query),
+    end: async () => {},
+  }),
+}));
 
 const configured = {
   BOT_ENDPOINT_URL: "https://bot-staging.internal.example",
@@ -70,6 +77,7 @@ const batch = (...messages: ReturnType<typeof delivery>[]) =>
 
 let errors: string[];
 beforeEach(() => {
+  query.mockReset().mockResolvedValue([]);
   errors = [];
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -106,6 +114,58 @@ describe("handleQueue with the live bot client", () => {
       '{"action":"announcement.post","channel_key":"general","body":"hello"}',
     );
     expect(queueFailingAlerts()).toEqual([]);
+  });
+
+  it.each([false, true])("persists a hard stop before ack; retryable=%s", async (retryable) => {
+    const { fn } = fetchDouble(refusal(409, "needs_reconciliation", retryable));
+    vi.stubGlobal("fetch", fn);
+    let persisted: unknown[] | undefined;
+    query.mockImplementation(async (parts: TemplateStringsArray, ...values: unknown[]) => {
+      const text = parts.join("?");
+      if (text.includes("insert into bot_reconciliation_intents")) {
+        persisted = values;
+        return [{ idempotency_key: uuid }];
+      }
+      if (text.includes("select 1 from bot_reconciliation_intents")) {
+        expect(values).toEqual([uuid]);
+        return persisted ? [{}] : [];
+      }
+      return [];
+    });
+    const first = delivery(announcement());
+    first.ack.mockImplementation(() => {
+      expect(persisted).toEqual([
+        uuid,
+        "announcement.post",
+        "general",
+        1,
+        "needs_reconciliation",
+        409,
+      ]);
+    });
+    await handleQueue(batch(first), envWith(configured));
+    const duplicate = delivery(announcement(), 2);
+    await handleQueue(batch(duplicate), envWith(configured));
+    expect(first.ack).toHaveBeenCalledOnce();
+    expect(duplicate.ack).toHaveBeenCalledOnce();
+    expect(first.retry).not.toHaveBeenCalled();
+    expect(duplicate.retry).not.toHaveBeenCalled();
+    expect(fn).toHaveBeenCalledOnce();
+  });
+
+  it("retries a failed lookup without contacting the bot and continues the batch", async () => {
+    const { fn } = fetchDouble(json(200, { ok: true, result: { outcome: "assigned" } }));
+    vi.stubGlobal("fetch", fn);
+    query.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("private SQL context"));
+    const m = delivery(announcement(), 5);
+    const following = delivery(roleAssign());
+    await handleQueue(batch(m, following), envWith(configured));
+    expect(m.ack).not.toHaveBeenCalled();
+    expect(m.retry).toHaveBeenCalledWith({ delaySeconds: 180 });
+    expect(following.ack).toHaveBeenCalledOnce();
+    expect(fn).toHaveBeenCalledOnce();
+    expect(queueFailingAlerts()).toHaveLength(1);
+    expect(errors.join(" ")).not.toContain("private SQL context");
   });
 
   it("signs and sends role.assign without an idempotency key", async () => {

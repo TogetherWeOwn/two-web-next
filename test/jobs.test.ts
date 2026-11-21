@@ -317,9 +317,15 @@ describe("SyncEventToDiscord", () => {
 });
 
 describe("CallInternalAction", () => {
-  const ann = { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } };
-  it("walks 5/15/60/180 then fails on attempt 5", async () => {
-    const bot = { postAnnouncement: async () => fail({}) } as unknown as BotClient;
+  const ann = {
+    kind: "announcement",
+    idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
+    action: { channelKey: "c", body: "b" },
+  };
+  it("walks 5/15/60/180 on the original key then records reconciliation at the cap", async () => {
+    const postAnnouncement = vi.fn(async () => fail({ code: "in_progress", status: 409 }));
+    const bot = { postAnnouncement } as unknown as BotClient;
+    const record = vi.fn(async () => {});
     for (const [attempt, delay] of [
       [1, 5],
       [2, 15],
@@ -336,10 +342,25 @@ describe("CallInternalAction", () => {
     const last = msg(ann, 5);
     await consume(
       { messages: [last] },
-      { bot, events: store(), lock: memLock(), ledger: memLedger() },
+      {
+        bot,
+        events: store(),
+        lock: memLock(),
+        ledger: memLedger(),
+        announcementReconciliation: { hasAnnouncement: async () => false, record },
+      },
     );
     expect(last.acked).toBe(true);
     expect(last.retried).toBeUndefined();
+    expect(postAnnouncement.mock.calls).toEqual(Array(5).fill([ann.action, ann.idempotencyKey]));
+    expect(record).toHaveBeenCalledExactlyOnceWith({
+      idempotencyKey: ann.idempotencyKey,
+      verb: "announcement.post",
+      subject: "c",
+      attempts: 5,
+      lastCode: "in_progress",
+      lastStatus: 409,
+    });
   });
 
   it("redelivered announcement carries the same key and replays", async () => {
@@ -355,7 +376,7 @@ describe("CallInternalAction", () => {
       { messages: [msg(ann), msg(ann, 2)] },
       { bot, events: store(), lock: memLock(), ledger: memLedger() },
     );
-    expect(seen.get("k")).toBe(2);
+    expect(seen.get(ann.idempotencyKey)).toBe(2);
   });
 
   it("role.assign sends no key", async () => {

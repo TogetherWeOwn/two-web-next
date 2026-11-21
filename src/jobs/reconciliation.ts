@@ -1,8 +1,7 @@
-// Dormant persistence only: no handler or queue settlement is wired to this store.
 import type postgres from "postgres";
 import { diagnosticCode } from "../bot/diagnostic-code";
 import { LEDGER_DB_TIMEOUT_MS } from "./constants";
-import type { TxClient } from "./types";
+import type { BotFailure, TxClient } from "./types";
 
 export const SYNC_RECONCILIATION_MARKER = "request requires reconciliation";
 
@@ -27,7 +26,25 @@ export type ReconciliationIntent = {
   lastStatus: number | null;
 };
 
-/** Validate again at the persistence boundary, not just at a future caller. */
+/** The queue projects only the channel alias and admitted wire diagnostics. */
+export function announcementIntent(
+  idempotencyKey: string,
+  channelKey: string,
+  attempts: number,
+  answer?: BotFailure,
+): ReconciliationIntent {
+  const status = answer?.status ?? 0;
+  return {
+    idempotencyKey,
+    verb: "announcement.post",
+    subject: SUBJECT.test(channelKey) ? channelKey : "unknown-channel",
+    attempts,
+    lastCode: answer ? diagnosticCode(answer.code) : null,
+    lastStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null,
+  };
+}
+
+/** Validate again at the persistence boundary. */
 export function reconciliationIntent(input: ReconciliationIntent): ReconciliationIntent {
   if (
     typeof input.idempotencyKey !== "string" ||
@@ -86,6 +103,16 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
   }
 
   return {
+    async hasAnnouncement(key: string): Promise<boolean> {
+      // The live bot client rejects legacy non-UUID keys before sending them.
+      if (!UUID.test(key)) return false;
+      return bounded(async (tx) => {
+        // A resolution does not re-arm the original queue carrier.
+        const rows = await tx`select 1 from bot_reconciliation_intents
+          where idempotency_key = ${key}::uuid and verb = 'announcement.post'`;
+        return rows.length > 0;
+      });
+    },
     async record(input: ReconciliationIntent): Promise<void> {
       const intent = reconciliationIntent(input);
       await bounded((tx) => insert(tx, intent));
