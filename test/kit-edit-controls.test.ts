@@ -13,6 +13,14 @@ describe("event edit input/textarea fixture subset", () => {
     ).toEqual({ organizer_name: "JordanSmith" });
   });
 
+  it.each([
+    ["url", "join_url", "https://example.com/join"],
+    ["email", "contact_email", "organizer@example.com"],
+  ])("trims ASCII whitespace from %s input values", (type, name, value) => {
+    const html = `<form><input type="${type}" name="${name}" value=" &#9;${value}&#12; "></form>`;
+    expect(submittedFields(html)).toEqual({ [name]: value });
+  });
+
   it("omits disabled, unchecked and submitter-only controls, retaining explicit blank", () => {
     expect(
       submittedFields(`<form>

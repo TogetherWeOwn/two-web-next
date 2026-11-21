@@ -10,6 +10,7 @@ import * as writeback from "../src/admin/writeback";
 import { activityLog, events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
+import { SESSION_COOKIE } from "../src/session-cookie";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -155,7 +156,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       expiresAt: new Date(Date.now() + 3600_000),
     });
     cookie = (
-      await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+      await serializeSigned(SESSION_COOKIE, token, SESSION_SECRET, {
         path: "/",
         secure: true,
         httpOnly: true,
@@ -202,11 +203,23 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       env,
     );
 
-  // The saved_baseline the guarded edit GET renders right now.
-  const editToken = async (): Promise<string> => {
+  const getEditPage = async () => {
     const res = await app.request(APP_URL + `/admin/events/${KEY}`, { headers: { cookie } }, env);
     expect(res.status).toBe(200);
-    const tag = (await res.text()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+    // Replay the rotated bearer. A grace-period response would not rotate again.
+    const replacement = res.headers
+      .getSetCookie()
+      .find((value) => value.startsWith(`${SESSION_COOKIE}=`))
+      ?.split(";", 1)[0];
+    if (!replacement || replacement === cookie) throw new Error("edit GET did not rotate session");
+    cookie = replacement;
+    return res.text();
+  };
+
+  // The saved_baseline the guarded edit GET renders right now.
+  const editToken = async (): Promise<string> => {
+    const html = await getEditPage();
+    const tag = html.match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
     const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
     if (!token) throw new Error("edit page carries no saved_baseline token");
     return token;
@@ -390,9 +403,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       expect((await post(`/admin/events/${KEY}`, await withBaseline("edit", values))).status).toBe(
         303,
       );
-      const res = await app.request(`${APP_URL}/admin/events/${KEY}`, { headers: { cookie } }, env);
-      expect(res.status).toBe(200);
-      const html = await res.text();
+      const html = await getEditPage();
       expect(html).not.toContain("\r");
       expect(html).toContain("one\ntwo\nthree");
       expect(html).toContain("ramp\nlift");
