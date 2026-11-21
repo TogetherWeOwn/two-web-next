@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
 import { test } from "node:test";
-import { crc32, deflateRawSync } from "node:zlib";
+import zlib, { crc32, deflateRawSync } from "node:zlib";
 import { validatePureHonoRecoveryEvidence } from "./pure-hono-recovery-evidence.mjs";
 import { readRouteEvidenceArtifact } from "./route-evidence-artifact-bytes.mjs";
 import {
@@ -525,16 +526,14 @@ test("recovery ZIP accounts for every byte before the central directory", () => 
   }
 });
 
-test("recovery ZIP bounds member count, manifest bytes, total expansion and ratio", () => {
+test("recovery ZIP bounds member count, manifest bytes, total expansion and ratio", (t) => {
   const entries = Array.from({ length: 4098 }, (_, i) =>
     recoveryEntry(`assets/${i}`, "", { method: 0 }),
   );
   assert.equal(decodePureHonoRecoveryZip(zip(entries.slice(1))).length, 4097);
   refuseRecovery(zip(entries));
-
   const mib = 1024 ** 2;
-  const oversized = recoveryEntry("manifest.json", Buffer.alloc(mib + 1), { method: 0 });
-  refuseRecovery(zip([oversized]));
+  refuseRecovery(zip([recoveryEntry("manifest.json", Buffer.alloc(mib + 1), { method: 0 })]));
   refuseRecovery(zip([recoveryEntry("assets/ratio", Buffer.alloc(mib))]));
 
   // Reuse a genuine 1 MiB member whose compressed size clears the 100:1 cap.
@@ -542,6 +541,16 @@ test("recovery ZIP bounds member count, manifest bytes, total expansion and rati
   createHash("shake256", { outputLength: 16384 }).update("fixture").digest().copy(data);
   const fields = { compressed: deflateRawSync(data), usize: data.length, crc: crc32(data) };
   const chunks = Array.from({ length: 129 }, (_, i) => recoveryEntry(`assets/${i}`, "", fields));
+  const inflate = t.mock.method(zlib, "inflateRawSync");
+  syncBuiltinESMExports();
+  t.after(() => {
+    inflate.mock.restore();
+    syncBuiltinESMExports();
+  });
   assert.deepEqual(decodePureHonoRecoveryZip(zip(chunks.slice(0, 1)))[0].bytes, data);
+  assert.equal(inflate.mock.callCount(), 1);
+  inflate.mock.resetCalls();
   refuseRecovery(zip(chunks));
+  refuseRecovery(zip(chunks.slice(0, 2), { localSuffix: Buffer.of(0) }));
+  assert.equal(inflate.mock.callCount(), 0);
 });
