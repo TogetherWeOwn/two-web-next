@@ -41,6 +41,7 @@ const destination = (
   activeNav="leaderboard"
   mainClass="events-page"
   loginReturnTo={destination(scope)}
+  authenticated={true}
   accountChrome={memberChrome}
 >
   <p class="strap">Members only</p>

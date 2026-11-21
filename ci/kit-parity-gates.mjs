@@ -552,18 +552,12 @@ function countMatches(html, pattern) {
 }
 
 export function kitHomeHeadingText(html) {
-  const walk = (node) => [node, ...(node.childNodes ?? []).flatMap(walk)];
-  const [heading, duplicate] = walk(parse(html)).filter(
-    (n) => n.tagName === "h1" && n.attrs.some((a) => a.name === "id" && a.value === "home-heading"),
+  const [heading, duplicate] = activeBoardNodes(parse(html)).filter(
+    (n) => "attrs" in n && n.attrs.some((a) => a.name === "id" && a.value === "home-heading"),
   );
-  if (!heading || duplicate) return "";
-  const isHeadingText = (node) =>
-    node.nodeName === "#text" && !["script", "style"].includes(node.parentNode.tagName);
-  const text = walk(heading)
-    .filter(isHeadingText)
-    .map(({ value }) => value)
-    .join("");
-  return text.replace(/\s+/g, " ").trim();
+  if (heading?.nodeName !== "h1" || duplicate) return "";
+  const text = Array.from(activeBoardNodes(heading), (n) => ("value" in n ? n.value : ""));
+  return text.join("").replace(/\s+/g, " ").trim();
 }
 
 // One assertion set per route response. Returns an array of failure labels
@@ -2290,6 +2284,8 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       ["heading", homeShell.replace("The lobby is", "Welcome"), true],
       ["inert heading", withHeading(`<template>${kitTitle}</template><!--${kitTitle}-->`), true],
       ["script heading", withHeading(`<h1 id="home-heading">${script}</h1>`), true],
+      ["hidden heading", withHeading(kitTitle.replace("<h1", "<h1 hidden")), true],
+      ["hidden ancestor", withHeading(`<div hidden>${kitTitle}</div>`), true],
       ["join", homeShell.replace('href="/auth/discord"', 'href="https://evil.test/"'), true],
       ["invite fallback", fallbackShell.replace('href="/discord"', 'href="/join"'), true],
       ["own RSVP", `${homeShell}<p data-testid="home-standing">Own RSVP</p>`, true],

@@ -406,7 +406,8 @@ describe("Kit home SSR render: member standing", () => {
     expect(standing).toContain("You're on the waitlist.");
     expect(standing).not.toContain('href="/e/later"');
     const panel = html.split('<aside class="ember-home-panel"')[1]!.split("</aside>")[0]!;
-    expect(html).toMatch(/<h1 id="home-heading">\s*Next game night: <em>Public opener<\/em>/);
+    const heading = html.split('<h1 id="home-heading">')[1]?.split("</h1>")[0];
+    expect(heading).toContain("Next game night: <em>Public opener</em>.");
     expect(panel).toContain('id="home-panel-heading">Your RSVP</h2>');
     expect(panel).toContain("<strong>Game night</strong>");
     expect(panel).toContain("You're on the waitlist.");
