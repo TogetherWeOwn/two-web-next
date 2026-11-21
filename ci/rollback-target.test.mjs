@@ -354,7 +354,16 @@ const metadataRefusal = "pure Hono recovery run refused: inconsistent GitHub att
 
 function composedRecoveryFixture({
   run = recoveryRunAttempt(),
-  encodeArchive = (members) => zip(members.map(({ path, bytes }) => ({ name: path, data: bytes }))),
+  encodeArchive = (members) =>
+    zip(
+      members.map(({ path, bytes }) => ({
+        name: path,
+        data: bytes,
+        madeBy: 0x0314,
+        version: 20,
+        attrs: (0o100644 << 16) >>> 0,
+      })),
+    ),
   ...archiveOptions
 } = {}) {
   const fixture = checkedAttestationFixture(recoveryFixture({ ...archiveOptions, encodeArchive }));
