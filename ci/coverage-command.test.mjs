@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const check = workflow.slice(workflow.indexOf("\n  check:\n"));
+const job = (id) => workflow.split(`\n  ${id}:\n`)[1]?.split(/\n  [\w-]+:\n/)[0];
+const mergeJob = job("coverage-merge");
 const args = ["run", "--coverage", "--pool=threads"];
 
 test("the independent browser fixture remains selected and fail-closed in ci-ok", () => {
@@ -59,35 +61,36 @@ test("the independent browser fixture remains selected and fail-closed in ci-ok"
   assert.notEqual(run({ SCOPE_RESULT: "failure", KIT_BROWSER_RESULT: "skipped" }), 0);
 });
 
-test("the required check keeps full coverage in isolated serial threads inside main's job budget", async () => {
+test("coverage shards preserve serial threads and the merge uses the canonical coverage config", async () => {
   assert.equal(
     manifest.scripts["test:coverage"],
     `npm run generate:first-party && vitest ${args.join(" ")}`,
   );
   assert.equal(manifest.scripts["pretest:coverage"], undefined);
   assert.equal(manifest.scripts["posttest:coverage"], undefined);
-  // main owns the budget (raised 10 -> 20 -> 40 for shared-runner
-  // container setup, then 40 -> 60 when the full suite reached 38m and
-  // runner noise started cancelling green runs at the 40m ceiling);
-  // isolated threads must fit inside it, never widen it.
-  const budget = Number(check.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
-  assert.ok(budget > 0 && budget <= 60, `check timeout-minutes ${budget} exceeds main's 60`);
-  const step = check.match(
-    /      - name: Check \(lint \+ typecheck \+ coverage gate\)\n([\s\S]*?)(?=      - )/,
-  );
-  assert.equal(
-    step?.[1].match(/^        run: (.+)$/m)?.[1],
-    "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs",
-  );
-  // Only the docs-only/draft scope gate (TOG-11811/TOG-14880) may guard the step; nothing may bypass it.
-  assert.doesNotMatch(step[1], /continue-on-error:/);
-  const guards = step[1].match(/^        if:.*$/gm) ?? [];
-  assert.equal(guards.length, 1);
-  assert.ok(
-    guards[0].includes("needs.scope.outputs.docs_only != 'true'") &&
-      guards[0].includes("needs.scope.outputs.draft != 'true'"),
-    `Step guard must stay scope-gated: ${guards[0]}`,
-  );
+  const shard = job("coverage-shard");
+  assert.match(shard, /shard: \[1, 2, 3\]/);
+  assert.match(shard, /SHARDS: \$\{\{ strategy\.job-total \}\}/);
+  const run = 'npm run test:coverage -- --shard="$SHARD/$SHARDS" --reporter=dot --reporter=blob';
+  assert(shard.includes(`VITEST_COVERAGE_SHARD: "1"\n        run: ${run} `));
+  assert.equal(workflow.match(/VITEST_COVERAGE_SHARD:/g)?.length, 1);
+  const artifact =
+    /if-no-files-found: error\n          overwrite: true\n          retention-days: 30\b/;
+  for (const id of ["coverage-shard", "node22-shard"]) assert.match(job(id), artifact);
+  const budget = Number(shard.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
+  assert.ok(budget > 0 && budget <= 60, `coverage shard timeout ${budget} exceeds 60`);
+  for (const key of ["path", "BLOB_DIR"])
+    assert(mergeJob.includes(key + ": ${{ steps.blob-dir.outputs.path }}"));
+  const merge = `TEST=true VITEST=true NODE_ENV=test node ci/verify-vitest-shards.mjs --coverage-dir "$BLOB_DIR"
+          npm run test:coverage -- --merge-reports="$BLOB_DIR" --reporter=dot\n`;
+  const result =
+    'SHARD_RESULT: ${{ needs.coverage-shard.result }}\n        run: test "$SHARD_RESULT" = success';
+  for (const required of [merge, result]) assert(mergeJob.includes(required), required);
+  const staticCheck = job("static-check");
+  assert.match(staticCheck, /run: npm run lint && npm run typecheck && npm run e2e:typecheck\n/);
+  assert.doesNotMatch(shard + mergeJob + staticCheck, /continue-on-error:/);
+  const gate = 'run: test "$STATIC_RESULT" = success && test "$COVERAGE_RESULT" = success\n';
+  assert(job("ci-ok").includes(gate));
   const config = await readFile(new URL("../vitest.config.ts", import.meta.url), "utf8");
   assert.match(
     config,
@@ -95,6 +98,36 @@ test("the required check keeps full coverage in isolated serial threads inside m
   );
   assert.match(config, /fileParallelism: false/);
   assert.doesNotMatch(config, /\bisolate:\s*false/);
+});
+
+test("coverage replay rejects hidden entries and blobs without coverage", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "coverage-replay-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const argv = ["ci/verify-vitest-shards.mjs", "--coverage-dir", dir];
+  const reject = (diagnostic) => {
+    const { status, stderr } = spawnSync(process.execPath, argv, { encoding: "utf8" });
+    assert.equal(status, 1, stderr);
+    assert.match(stderr, diagnostic);
+  };
+  const blob = (map) => `[[null,"1",null,${map}],["2"],{"filepath":"3"},"test/example.test.ts",{}]`;
+  for (const shard of [1, 2, 3]) await writeFile(join(dir, `vitest-${shard}.json`), blob("null"));
+  await writeFile(join(dir, ".hidden.json"), blob("null"));
+  reject(/expected exactly three regular Vitest reports/);
+  await rm(join(dir, ".hidden.json"));
+  reject(/vitest-1\.json: missing or empty coverage map/);
+  await writeFile(join(dir, "vitest-1.json"), blob('"4"'));
+  reject(/vitest-1\.json: missing or empty coverage map/);
+});
+
+test("all split installs require successful dependency admission", () => {
+  for (const id of ["static-check", "coverage-shard", "coverage-merge"]) {
+    const extra = id === "coverage-merge" ? ", coverage-shard" : "";
+    assert(job(id).includes(`    needs: [scope, dependency-admission${extra}]\n`), id);
+    assert.match(
+      job(id),
+      /^    if: \$\{\{ !cancelled\(\) && needs\.scope\.result == 'success' && needs\.dependency-admission\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true' \}\}$/m,
+    );
+  }
 });
 
 test("the coverage gate keeps area floors and summary scopes for the high-blast-radius areas", async () => {
@@ -224,20 +257,17 @@ test("the patch coverage CLI exits 1 when its coverage input is missing", {
 });
 
 test("the patch coverage step has no file-presence skip so a missing input fails the job", async () => {
-  const step = check
+  const step = mergeJob
     .split(/\n      - /)
     .find((entry) => entry.startsWith("name: Patch coverage (WARN)\n"));
-  assert(step, "check must keep the patch coverage step");
+  assert(step, "coverage merge must keep the patch coverage step");
   // A hashFiles presence check would skip the step on a missing report and
-  // silence the gate; only the docs-only/draft scope guard may skip it.
+  // silence the gate; the job already carries the docs-only/draft scope guard.
   assert.doesNotMatch(step, /hashFiles\('coverage\/coverage-final\.json'\)/);
   assert.doesNotMatch(step, /continue-on-error:/);
   const guards = step.match(/^        if:.*$/gm) ?? [];
   assert.equal(guards.length, 1);
-  assert.equal(
-    guards[0],
-    "        if: success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')",
-  );
+  assert.equal(guards[0], "        if: success()");
   assert.equal(
     step.match(/^        run: (.+)$/m)?.[1],
     "npm run patch:coverage:selftest && npm run patch:coverage",
@@ -250,17 +280,24 @@ test("the patch coverage step has no file-presence skip so a missing input fails
 // expression evaluator that supports only what the guards use and throws on
 // anything else, so a new construct cannot silently pass.
 const checkJob = check.split(/\n  [a-z][a-z0-9-]*:\n/)[1];
-const checkSteps = checkJob
-  .split(/\n      - /)
-  .slice(1)
-  .map((entry) => ({
-    label: entry.match(/^name: (.+)$/m)?.[1] ?? entry.split("\n", 1)[0],
-    id: entry.match(/^        id: ([\w-]+)$/m)?.[1],
-    guard: entry.match(/^        if: (.+)$/m)?.[1] ?? "success()",
-  }));
-const AUDIT = "Dependency audit (lockfile, including dev dependencies)";
+const parseSteps = (job) =>
+  job
+    .split(/\n      - /)
+    .slice(1)
+    .map((entry) => ({
+      label: entry.match(/^name: (.+)$/m)?.[1] ?? entry.split("\n", 1)[0],
+      id: entry.match(/^        id: ([\w-]+)$/m)?.[1],
+      guard: entry.match(/^        if: (.+)$/m)?.[1] ?? "success()",
+    }));
+const checkSteps = parseSteps(checkJob);
+const mergeSteps = parseSteps(mergeJob);
+const auditStep = parseSteps(job("dependency-admission")).find(
+  (step) => step.label === "Dependency audit (lockfile, including dev dependencies)",
+);
+const ADMISSION = "Require successful dependency admission";
 const INSTALL = "run: npm ci --no-audit --no-fund";
-const COVERAGE = "Check (lint + typecheck + coverage gate)";
+const CHECK_CONTRACTS = "Check CI contracts and e2e safety";
+const COVERAGE = "Merge Vitest coverage with the repository thresholds";
 const TIER0 = "Tier-0 check (validators + authz + EXPLAIN)";
 const PATCH = "Patch coverage (WARN)";
 const SUMMARY = "Coverage job summary";
@@ -341,13 +378,13 @@ function evaluateGuard(guard, { jobFailed, scope, reportPresent, stepOutcomes })
   return Boolean(result) && (!implicitSuccess || !jobFailed);
 }
 
-// Walk the check job's steps in order. `failing` names the one step that fails
+// Walk the job's steps in order. `failing` names the one step that fails
 // when it runs; a step whose guard is false is skipped without failing the job.
-function simulateCheckJob({ failing, alsoFailing, scope, reportPresent = true }) {
+function simulateCheckJob({ failing, alsoFailing, scope, reportPresent = true, steps }) {
   const outcomes = new Map();
   const stepOutcomes = new Map();
   let jobFailed = false;
-  for (const { label, id, guard } of checkSteps) {
+  for (const { label, id, guard } of steps ?? checkSteps) {
     const runs = evaluateGuard(guard, { jobFailed, scope, reportPresent, stepOutcomes });
     const outcome = !runs
       ? "skipped"
@@ -363,6 +400,8 @@ function simulateCheckJob({ failing, alsoFailing, scope, reportPresent = true })
 }
 
 const codeScope = { docs_only: "false", draft: "false", full: "true", app: "true" };
+const simulateCoverage = (opts) =>
+  simulateCheckJob({ scope: codeScope, ...opts, steps: mergeSteps });
 
 test("bounded CSS evidence is collected only after the Kit budget fails", () => {
   const perf = "Kit performance budgets (worker + generated assets)";
@@ -377,7 +416,7 @@ test("bounded CSS evidence is collected only after the Kit budget fails", () => 
   assert.equal(partial.get(cleanup), "success");
   for (const scenario of [
     { scope: codeScope },
-    { failing: COVERAGE, scope: codeScope },
+    { failing: CHECK_CONTRACTS, scope: codeScope },
     { scope: { ...codeScope, draft: "true" } },
     { scope: { ...codeScope, docs_only: "true" } },
     { scope: { ...codeScope, full: "false", app: "false", worker: "false" } },
@@ -405,17 +444,18 @@ test("the shipping Kit route step reports overages but still fails on bad measur
   assert.doesNotMatch(step, /continue-on-error:/);
 });
 
-test("the check job models the guarded steps the simulation relies on", () => {
+test("check and coverage merge keep the guarded steps in order", () => {
   const labels = checkSteps.map((step) => step.label);
-  for (const label of [AUDIT, INSTALL, COVERAGE, TIER0, PATCH, SUMMARY, UPLOAD]) {
-    assert(labels.includes(label), `check job must keep the "${label}" step`);
-  }
-  assert(labels.indexOf(AUDIT) < labels.indexOf(INSTALL));
-  assert(labels.indexOf(INSTALL) < labels.indexOf(COVERAGE));
-  assert(labels.indexOf(COVERAGE) < labels.indexOf(TIER0));
-  assert(labels.indexOf(TIER0) < labels.indexOf(PATCH));
-  assert(labels.indexOf(PATCH) < labels.indexOf(SUMMARY));
-  assert(labels.indexOf(SUMMARY) < labels.indexOf(UPLOAD));
+  assert(auditStep, "dependency-admission must run the lockfile audit");
+  assert(!labels.includes(auditStep.label), "check must not repeat the lockfile audit");
+  for (const [actual, expected] of [
+    [labels, [ADMISSION, INSTALL, CHECK_CONTRACTS, TIER0]],
+    [mergeSteps.map((step) => step.label), [COVERAGE, PATCH, SUMMARY, UPLOAD]],
+  ])
+    assert.deepEqual(
+      actual.filter((label) => expected.includes(label)),
+      expected,
+    );
 });
 
 test("the Tier-0 check guard requires success and keeps the docs-only/draft scope", () => {
@@ -428,62 +468,59 @@ test("the Tier-0 check guard requires success and keeps the docs-only/draft scop
 
 test("the coverage summary and upload keep collecting evidence after a failure", () => {
   for (const label of [SUMMARY, UPLOAD]) {
-    const guard = checkSteps.find((step) => step.label === label)?.guard;
-    assert.equal(
-      guard,
-      "always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-summary.json') != ''",
-    );
+    const guard = mergeSteps.find((step) => step.label === label)?.guard;
+    assert.equal(guard, "${{ !cancelled() && hashFiles('coverage/coverage-summary.json') != '' }}");
   }
 });
 
-for (const [label, failing] of [
-  ["a failed dependency audit (npm install skipped)", AUDIT],
-  ["a failed npm install", INSTALL],
-  ["a failed coverage run", COVERAGE],
-]) {
-  test(`Tier-0 and patch coverage are skipped after ${label}`, () => {
+for (const failing of [ADMISSION, INSTALL, CHECK_CONTRACTS]) {
+  test(`Tier-0 is skipped after ${failing} fails`, () => {
     const outcomes = simulateCheckJob({ failing, scope: codeScope });
     assert.equal(outcomes.get(TIER0), "skipped");
-    assert.equal(outcomes.get(PATCH), "skipped");
   });
 }
 
 test("a failed dependency audit skips npm install and every later success-guarded step", () => {
-  const outcomes = simulateCheckJob({ failing: AUDIT, scope: codeScope, reportPresent: false });
-  assert.equal(outcomes.get(INSTALL), "skipped");
-  assert.equal(outcomes.get(COVERAGE), "skipped");
-  assert.equal(outcomes.get(SUMMARY), "skipped");
-  assert.equal(outcomes.get(UPLOAD), "skipped");
+  // The guard's exit status for all admission results is tested in a11y-policy.test.mjs.
+  const outcomes = simulateCheckJob({ failing: ADMISSION, scope: codeScope, reportPresent: false });
+  for (const label of [INSTALL, CHECK_CONTRACTS, TIER0]) {
+    assert.equal(outcomes.get(label), "skipped", label);
+  }
 });
 
 test("Tier-0 and patch coverage run when every earlier step succeeded", () => {
   const outcomes = simulateCheckJob({ scope: codeScope });
   assert.equal(outcomes.get(TIER0), "success");
-  assert.equal(outcomes.get(PATCH), "success");
+  assert.equal(simulateCoverage().get(PATCH), "success");
   // A missing report is the patch gate's own fail-closed case: it still runs.
-  const noReport = simulateCheckJob({ scope: codeScope, reportPresent: false });
+  const noReport = simulateCoverage({ reportPresent: false });
   assert.equal(noReport.get(PATCH), "success");
 });
 
 test("a patch coverage failure on a good run does not hide the evidence steps", () => {
-  const outcomes = simulateCheckJob({ failing: PATCH, scope: codeScope });
+  const outcomes = simulateCoverage({ failing: PATCH });
   assert.equal(outcomes.get(SUMMARY), "success");
   assert.equal(outcomes.get(UPLOAD), "success");
 });
 
 test("the coverage summary and upload still run after a failed coverage run that wrote a report", () => {
-  const outcomes = simulateCheckJob({ failing: COVERAGE, scope: codeScope });
+  const outcomes = simulateCoverage({ failing: COVERAGE });
+  assert.equal(outcomes.get(PATCH), "skipped");
   assert.equal(outcomes.get(SUMMARY), "success");
   assert.equal(outcomes.get(UPLOAD), "success");
-  const noReport = simulateCheckJob({ failing: COVERAGE, scope: codeScope, reportPresent: false });
+  const noReport = simulateCoverage({ failing: COVERAGE, reportPresent: false });
   assert.equal(noReport.get(SUMMARY), "skipped");
   assert.equal(noReport.get(UPLOAD), "skipped");
 });
 
 for (const scopeName of ["docs_only", "draft"]) {
-  test(`Tier-0 and patch coverage are skipped on a ${scopeName} scope`, () => {
-    const outcomes = simulateCheckJob({ scope: { ...codeScope, [scopeName]: "true" } });
-    for (const label of [AUDIT, COVERAGE, TIER0, PATCH, SUMMARY, UPLOAD]) {
+  test(`Tier-0 is skipped on a ${scopeName} scope`, () => {
+    const scope = { ...codeScope, [scopeName]: "true" };
+    assert(auditStep);
+    assert(!evaluateGuard(auditStep.guard, { jobFailed: false, scope }));
+    const outcomes = simulateCheckJob({ scope });
+    assert.equal(outcomes.get(ADMISSION), "success");
+    for (const label of [INSTALL, CHECK_CONTRACTS, TIER0]) {
       assert.equal(outcomes.get(label), "skipped", label);
     }
   });

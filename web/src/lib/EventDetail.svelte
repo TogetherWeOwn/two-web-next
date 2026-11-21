@@ -120,6 +120,7 @@ const detailIslands = $derived([
   theme="event"
   activeNav="event"
   member={model.viewerMember}
+  authenticated={model.viewerAuthenticated}
   loginReturnTo={model.path}
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >

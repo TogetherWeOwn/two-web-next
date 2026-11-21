@@ -120,8 +120,8 @@ describe("signed event attendance read", () => {
     await expect(observe(malformed)).resolves.toEqual(unavailable);
     await expect(observe(new Response("{"))).resolves.toEqual(unavailable);
     const bytes = new Uint8Array(await reply(attendance).arrayBuffer());
-    bytes[bytes.indexOf(0xc3)] = 0xff; // Corrupt the lead byte of the room name's é.
-    await expect(observe(new Response(bytes))).resolves.toEqual(unavailable);
+    const truncated = Uint8Array.of(...bytes, 0xc3); // Incomplete UTF-8 after valid JSON.
+    await expect(observe(new Response(truncated))).resolves.toEqual(unavailable);
     await expect(observe(new Response(null, { status: 204 }))).resolves.toEqual(unavailable);
   });
 

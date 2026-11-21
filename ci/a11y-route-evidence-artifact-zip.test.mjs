@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
 import { test } from "node:test";
+import zlib, { crc32, deflateRawSync } from "node:zlib";
+import { validatePureHonoRecoveryEvidence } from "./pure-hono-recovery-evidence.mjs";
 import { readRouteEvidenceArtifact } from "./route-evidence-artifact-bytes.mjs";
-import { crc32, deflateRawSync } from "node:zlib";
 import {
+  decodePureHonoRecoveryZip,
   extractRouteEvidenceZip,
   ROUTE_EVIDENCE_ZIP_LIMITS,
 } from "./route-evidence-artifact-zip.mjs";
@@ -15,21 +18,27 @@ function zip(entries, opts = {}) {
   let offset = 0;
   for (const e of entries) {
     const name = Buffer.from(e.name, "latin1");
-    const data = Buffer.from(e.data ?? "");
+    const data = Buffer.isBuffer(e.data) ? e.data : Buffer.from(e.data ?? "");
     const method = e.method ?? 8;
-    const compressed = method === 8 ? deflateRawSync(data) : data;
-    const body = Buffer.concat([compressed, Buffer.from(e.trailing ?? "")]);
+    const compressed = e.compressed ?? (method === 8 ? deflateRawSync(data) : data);
+    const body = e.trailing ? Buffer.concat([compressed, Buffer.from(e.trailing)]) : compressed;
+    const gap = Buffer.from(e.gap ?? "");
+    const localExtra = e.localExtra ?? Buffer.alloc(0);
+    const extra = e.extra ?? Buffer.alloc(0);
+    const comment = Buffer.from(e.comment ?? "");
     const usize = e.usize ?? data.length;
     const crc = e.crc ?? crc32(data);
     const flags = e.flags ?? 0;
     const lh = Buffer.alloc(30);
     lh.writeUInt32LE(0x04034b50, 0);
+    lh.writeUInt16LE(e.version ?? 0, 4);
     lh.writeUInt16LE(flags, 6);
     lh.writeUInt16LE(method, 8);
     lh.writeUInt32LE(crc, 14);
     lh.writeUInt32LE(body.length, 18);
     lh.writeUInt32LE(usize, 22);
     lh.writeUInt16LE(name.length, 26);
+    lh.writeUInt16LE(localExtra.length, 28);
     const descriptor = Buffer.alloc(flags & 8 ? (e.unsigned ? 12 : 16) : 0);
     if (descriptor.length) {
       const at = e.unsigned ? 0 : 4;
@@ -38,22 +47,28 @@ function zip(entries, opts = {}) {
       descriptor.writeUInt32LE(body.length, at + 4);
       descriptor.writeUInt32LE(usize, at + 8);
     }
-    locals.push(lh, name, body, descriptor);
+    locals.push(gap, lh, name, localExtra, body, descriptor);
     const cd = Buffer.alloc(46);
     cd.writeUInt32LE(0x02014b50, 0);
     cd.writeUInt16LE(e.madeBy ?? 20, 4);
+    cd.writeUInt16LE(e.version ?? 0, 6);
     cd.writeUInt16LE(flags, 8);
     cd.writeUInt16LE(method, 10);
     cd.writeUInt32LE(crc, 16);
     cd.writeUInt32LE(body.length, 20);
     cd.writeUInt32LE(usize, 24);
     cd.writeUInt16LE(name.length, 28);
+    cd.writeUInt16LE(extra.length, 30);
+    cd.writeUInt16LE(comment.length, 32);
     cd.writeUInt32LE(e.attrs ?? 0, 38);
-    cd.writeUInt32LE(e.local ?? offset, 42);
-    cds.push(cd, name);
-    offset += 30 + name.length + body.length + descriptor.length;
+    cd.writeUInt32LE(e.local ?? offset + gap.length, 42);
+    cds.push([cd, name, extra, comment]);
+    offset += gap.length + 30 + name.length + localExtra.length + body.length + descriptor.length;
   }
-  const cdBuf = Buffer.concat(cds);
+  const localSuffix = Buffer.from(opts.localSuffix ?? "");
+  locals.push(localSuffix);
+  offset += localSuffix.length;
+  const cdBuf = Buffer.concat((opts.reverseCentral ? cds.reverse() : cds).flat());
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
   end.writeUInt16LE(entries.length, 8);
@@ -373,4 +388,194 @@ test("error text never echoes archive-controlled content", () => {
       return true;
     },
   );
+});
+
+const regularFile = { madeBy: 0x0314, version: 20, attrs: (0o100644 << 16) >>> 0 };
+function recoveryEntry(name, data = "x", fields = {}) {
+  return { ...regularFile, name, data, ...fields };
+}
+const refuseRecovery = (archive) =>
+  assert.throws(() => decodePureHonoRecoveryZip(archive), {
+    message: "pure Hono recovery evidence refused: unsafe archive",
+  });
+const cdOffset = (archive) => archive.readUInt32LE(archive.length - 6);
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+test("recovery ZIP round-trips inert files through the synthetic validator", () => {
+  const payload = [
+    recoveryEntry("worker.js", 'throw new Error("inert fixture");'),
+    recoveryEntry("effective-config.json", "{}", { method: 0, version: 10 }),
+    recoveryEntry("assets/nested/version.json", "{}", { flags: 0x0800 }),
+  ];
+  const identity = {
+    sourceSha: "a".repeat(40),
+    runId: "123",
+    runAttempt: "2",
+    originalVersionId: "11111111-1111-4111-8111-111111111111",
+  };
+  const manifest = JSON.stringify({
+    schema: "two.pure-hono-recovery.v1",
+    target: "two-web-next-production",
+    ...identity,
+    files: payload.map(({ name, data }) => ({
+      path: name,
+      bytes: Buffer.byteLength(data),
+      sha256: sha256(data),
+    })),
+  });
+  const entries = [recoveryEntry("manifest.json", manifest), ...payload];
+  const archive = zip(entries, { reverseCentral: true });
+  const archiveSha256 = sha256(archive);
+  // Invented trust inputs exercise consistency only, not GitHub or Sigstore.
+  const workflow = ".github/workflows/synthetic-recovery.yml";
+  const producer = {
+    ...identity,
+    workflow,
+    repository: "TogetherWeOwn/two-web-next",
+    ref: "refs/heads/main",
+  };
+  const files = decodePureHonoRecoveryZip(archive);
+  const paths = files.map(({ path }) => path);
+  const centralOrder = entries.map(({ name }) => name).reverse();
+  assert.deepEqual(paths, centralOrder);
+  assert.deepEqual(files[0], { path: payload[2].name, bytes: Buffer.from("{}"), type: "file" });
+  assert.deepEqual(
+    validatePureHonoRecoveryEvidence({
+      archive,
+      expected: { ...identity, workflow, archiveSha256 },
+      attestation: {
+        ...producer,
+        subjectSha256: archiveSha256,
+        invocationId: "https://github.com/TogetherWeOwn/two-web-next/actions/runs/123/attempts/2",
+      },
+      run: { ...producer, status: "completed", conclusion: "success" },
+      decode: decodePureHonoRecoveryZip,
+    }),
+    { archiveSha256, fileCount: payload.length },
+  );
+  assert.equal(extractRouteEvidenceZip(zip(entries.slice(0, -1))).size, entries.length - 1);
+  assert.throws(() => extractRouteEvidenceZip(archive), refused);
+});
+
+test("recovery ZIP admits path boundaries and refuses invalid names and aliases", () => {
+  for (const path of [`assets/${"a".repeat(505)}`, `assets/${"a/".repeat(30)}b`]) {
+    assert.equal(decodePureHonoRecoveryZip(zip([recoveryEntry(path)]))[0].path, path);
+  }
+  for (const names of [
+    ["private.txt"],
+    ["assets/../private"],
+    ["assets/a\\private"],
+    ["assets/a."],
+    ["assets/a//b"],
+    ["assets/é"],
+    ["assets/NUL.txt"],
+    [`assets/${"a".repeat(506)}`],
+    [`assets/${"a/".repeat(31)}b`],
+    ["assets/a", "assets/a"],
+    ["assets/a", "assets/A"],
+    ["assets/A/x", "assets/a/y"],
+    ["assets/a/x", "assets/a"],
+  ]) {
+    refuseRecovery(zip(names.map((name) => recoveryEntry(name))));
+  }
+});
+
+test("recovery ZIP refuses unsupported metadata, contradictory headers and bad payloads", () => {
+  for (const fields of [
+    { madeBy: 20 },
+    { attrs: (0o120777 << 16) >>> 0 },
+    { attrs: (0o010644 << 16) >>> 0 },
+    { attrs: ((0o100644 << 16) | 0x10) >>> 0 },
+    { attrs: (0o040755 << 16) >>> 0 },
+    { flags: 8 },
+    { flags: 0x4000 },
+    { version: 45 },
+    { extra: Buffer.from([1, 0, 0, 0]) },
+    { localExtra: Buffer.from([1, 0, 0, 0]) },
+    { comment: "x" },
+    { crc: 1 },
+    { usize: 2 },
+    { trailing: "x" },
+  ]) {
+    refuseRecovery(zip([recoveryEntry("assets/a", "x", fields)]));
+  }
+  const entry = recoveryEntry("worker.js");
+  for (const offset of [4, 6, 10, 14, 18, 22, 26, 30]) {
+    const archive = zip([entry]);
+    archive[offset] ^= 1;
+    refuseRecovery(archive);
+  }
+  const abbreviated = zip([entry]);
+  abbreviated.writeUInt32LE(cdOffset(abbreviated) - 29, cdOffset(abbreviated) + 42);
+  refuseRecovery(abbreviated);
+  refuseRecovery(zip([entry]).subarray(0, -1));
+  refuseRecovery(zip([]));
+});
+
+test("recovery ZIP accounts for every byte before the central directory", () => {
+  const hidden = zip([recoveryEntry("assets/hidden")]);
+  const gap = hidden.subarray(0, cdOffset(hidden));
+  const worker = recoveryEntry("worker.js");
+  const config = recoveryEntry("effective-config.json");
+  for (const archive of [
+    zip([{ ...worker, gap }, config]),
+    zip([worker, { ...config, gap }]),
+    zip([worker, config], { localSuffix: gap }),
+  ]) {
+    assert.equal(extractRouteEvidenceZip(archive).size, 2); // legacy gap behavior unchanged
+    refuseRecovery(archive);
+  }
+});
+
+const mib = 1024 ** 2;
+const storedEntry = (name, data) => recoveryEntry(name, data, { method: 0 });
+
+test("recovery ZIP admits exact archive and manifest sizes and refuses one byte over", () => {
+  const assetMax = 64 * mib - zip([storedEntry("assets/a", "")]).length;
+  const limits = { "manifest.json": mib, "assets/a": assetMax };
+  for (const [name, length] of Object.entries(limits)) {
+    const data = Buffer.alloc(length + 1);
+    const [file] = decodePureHonoRecoveryZip(zip([storedEntry(name, data.subarray(1))]));
+    assert.equal(file.bytes.length, length);
+    refuseRecovery(zip([storedEntry(name, data)]));
+  }
+});
+
+test("recovery ZIP bounds member count, total expansion and ratio", (t) => {
+  const entries = Array.from({ length: 4098 }, (_, i) => storedEntry(`assets/${i}`, ""));
+  assert.equal(decodePureHonoRecoveryZip(zip(entries.slice(1))).length, 4097);
+  refuseRecovery(zip(entries));
+  // Fixed raw DEFLATE streams keep this boundary independent of encoder choices.
+  const ratioStreams = [
+    { length: 1200, hex: "63601805a360148c82a10100" },
+    { length: 1201, hex: "63601805a360148c82210200" },
+  ];
+  for (const { length, hex } of ratioStreams) {
+    const data = Buffer.alloc(length);
+    const compressed = Buffer.from(hex, "hex");
+    assert.equal(compressed.length, 12);
+    assert.deepEqual(zlib.inflateRawSync(compressed), data);
+    const archive = zip([recoveryEntry("assets/ratio", data, { compressed })]);
+    if (length === 1200) assert.deepEqual(decodePureHonoRecoveryZip(archive)[0].bytes, data);
+    else refuseRecovery(archive);
+  }
+
+  // Reuse a genuine 1 MiB member whose compressed size clears the 100:1 cap.
+  const data = Buffer.alloc(mib);
+  createHash("shake256", { outputLength: 16384 }).update("fixture").digest().copy(data);
+  const fields = { compressed: deflateRawSync(data), usize: data.length, crc: crc32(data) };
+  const chunks = Array.from({ length: 128 }, (_, i) => recoveryEntry(`assets/${i}`, "", fields));
+  assert.equal(decodePureHonoRecoveryZip(zip(chunks)).length, chunks.length);
+  const inflate = t.mock.method(zlib, "inflateRawSync");
+  syncBuiltinESMExports();
+  t.after(() => {
+    inflate.mock.restore();
+    syncBuiltinESMExports();
+  });
+  assert.deepEqual(decodePureHonoRecoveryZip(zip(chunks.slice(0, 1)))[0].bytes, data);
+  assert.equal(inflate.mock.callCount(), 1);
+  inflate.mock.resetCalls();
+  refuseRecovery(zip([...chunks, storedEntry("assets/over", "x")]));
+  refuseRecovery(zip(chunks.slice(0, 2), { localSuffix: Buffer.of(0) }));
+  assert.equal(inflate.mock.callCount(), 0);
 });
