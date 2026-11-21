@@ -251,14 +251,13 @@ node ci/coverage-summary.mjs
 
 Coverage includes every
 `src/**/*.{ts,tsx}` file, even if no test imports it. Global and aggregate
-area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`, `src/jobs`,
-`src/bot`, `src/agent-events`, `src/profiles`, `src/auth`, `src/invite.ts`,
-`src/return-journey.ts`, `src/write-recovery.tsx`, `src/kit-*`, `src/counts.ts`,
-`src/seo.ts`) live in `vitest.config.ts`. The
-baseline uses the full suite with the test database; without it, skipped live
-suites may put coverage below the floors. CI's
-`check` job runs the configuration drift check, Biome lint/format gate,
-typecheck and the coverage gate against its Postgres service, writes a job summary
+area floors (`src/admin`, `src/events`, `src/join` together with
+`src/http/throttle.ts`, `src/sessions.ts`, `src/jobs`, `src/bot`, `src/agent-events`,
+`src/profiles`, `src/auth`, `src/invite.ts`, `src/return-journey.ts`,
+`src/write-recovery.tsx`, `src/kit-*`, `src/counts.ts`, `src/seo.ts`) live in
+`vitest.config.ts`. The baseline uses the full suite with the test database;
+without it, skipped live suites may put coverage below the floors. CI's
+`coverage-merge` job verifies each shard's files and coverage map before enforcing the floors, writes a job summary
 with the ten least-covered files, and uploads the JSON coverage summary for 14 days,
 including on failure.
 
@@ -764,10 +763,12 @@ These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
 
 Squash-merge only; PR titles follow Conventional Commits and the body follows the
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
-`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review` are required
-on the exact head, with no approving review. The final-stage reviewer merges when
-native review stages apply; otherwise the author merges. Pin the squash merge to
-that reviewed head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
+`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint` and the other
+[required checks](CONTRIBUTING.md#branch-protection-and-required-checks) must pass
+on the exact head. GitHub does not require an approving PR review; the native
+review policy still applies. The final-stage reviewer merges when native review
+stages apply; otherwise the author merges. Pin the squash merge to that reviewed
+head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
 for the promotion-path PR exception, post-merge staging qualification and
 per-release Release Manager acceptance, and [AGENTS.md](AGENTS.md) for agent guidance.
 

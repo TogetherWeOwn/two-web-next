@@ -1017,6 +1017,55 @@ test("join accepts rendered Join but rejects rendered Home with the shared foote
   }
 });
 
+test("Home smoke accepts only the guest headings on Kit responses", async (t) => {
+  const heading = (inner) => `<h1 id="home-heading">${inner}</h1>`;
+  const scheduled =
+    "Next game night: <em>Games &amp; Friends</em>.\n<span>Come play with us.</span>";
+  const cases = [
+    { name: "Hono lobby", body: fixtures["/"][2], ok: true },
+    { name: "Hono with Kit scheduled copy", body: heading(scheduled), ok: false },
+    { name: "old Kit lobby", kit: true, body: heading("The lobby is open."), ok: true },
+    { name: "Kit empty", kit: true, body: heading("The lobby is <em>open</em>."), ok: true },
+    { name: "Kit scheduled", kit: true, body: heading(scheduled), ok: true },
+    {
+      name: "Kit wrong copy",
+      kit: true,
+      body: heading("The lobby is open. Not really."),
+      ok: false,
+    },
+    {
+      name: "Kit member RSVP",
+      kit: true,
+      body: heading("Your next RSVP: <em>Games &amp; Friends</em>. <span>You're going.</span>"),
+      ok: false,
+    },
+    {
+      name: "Kit missing heading with decoy text",
+      kit: true,
+      body: `<title>The lobby is open.</title><h2 id="home-heading">${scheduled}</h2><template>${heading(scheduled)}</template>`,
+      ok: false,
+    },
+    {
+      name: "Kit hidden heading",
+      kit: true,
+      body: `<div hidden>${heading(scheduled)}</div>`,
+      ok: false,
+    },
+  ];
+  for (const { name, kit, body, ok } of cases) {
+    const { url } = await stub(t, (path, response) => {
+      if (path !== "/") return;
+      response.body = body;
+      if (kit) response.headers["x-two-renderer"] = "kit";
+    });
+    const result = await run(url);
+    assert.equal(result.ok, ok, `${name}: ${result.output}`);
+    if (ok) assert.match(result.output, /^PASS \/$/m, name);
+    else if (kit) assert.match(result.output, /FAIL \/: expected Kit guest h1#home-heading/, name);
+    else assert.match(result.output, /FAIL \/: expected body matching/, name);
+  }
+});
+
 test("CLI enforces the selected staging Join renderer and its public action", async (t) => {
   const action = '<a href="/join/discord" data-testid="join-oneclick">Join with Discord</a>';
   const hono = `${fixtures["/join"][2]}${action}`;

@@ -20,7 +20,7 @@ trap 'exit 143' TERM
 export HOME="$scratch/home" TMPDIR="$scratch" PLAYWRIGHT_BROWSERS_PATH="$scratch/browsers"
 export CI=true WRANGLER_SEND_METRICS=false
 export DATABASE_URL=postgres://agent_test@127.0.0.1:5432/two_web_next
-mkdir -- "$HOME"
+mkdir -- "$HOME" "$scratch/screenshots"
 cd "$GITHUB_WORKSPACE/app"
 quiet() {
   local label=$1
@@ -47,7 +47,7 @@ quiet 'disposable read observer' psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'CRE
 quiet 'journey fixture seed' node e2e/seed.mjs
 quiet 'Chromium' ./node_modules/.bin/playwright install --with-deps chromium
 quiet 'Kit Worker build' npm run build --prefix web
-cp -- "$GITHUB_WORKSPACE/harness/ci/kit-activity-log-assert.mjs" ci/
+cp -- "$GITHUB_WORKSPACE/harness/ci/kit-activity-log-"{assert,metrics,png,visual}.mjs ci/
 
 setsid node ci/kit-worker-dev.mjs </dev/null >/dev/null 2>&1 &
 server=$!
@@ -60,7 +60,17 @@ until [[ $(curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:
   sleep 1
 done
 printf 'Kit Worker ready on the fixture origin\n'
-timeout -k 5s 90s node ci/kit-activity-log-assert.mjs </dev/null 2>/dev/null &
+timeout -k 5s 150s node ci/kit-activity-log-assert.mjs </dev/null >/dev/null 2>&1 &
 browser=$!
-quiet 'activity-log diagnostic' wait "$browser"
+result=0
+wait "$browser" || result=$?
 browser=
+if [[ -f "$scratch/metrics.txt" ]]; then
+  pattern='((populated|empty)-desktop\.png a11y: (PASS|FAIL) violations=[0-9]+ incomplete=[0-9]+|populated-desktop\.png lighthouse: (unavailable|report-only total_bytes=[0-9]+ fcp_ms=[0-9]+))'
+  ! grep -qEvx "$pattern" "$scratch/metrics.txt" || exit 1
+  grep -Ex "$pattern" "$scratch/metrics.txt"
+fi
+(( result == 0 )) || { printf '::error::Activity-log fixture or evidence checks failed\n'; exit 1; }
+[[ $(wc -l < "$scratch/metrics.txt") == 3 ]]
+printf 'PASS: Activity-log fixture, rendered states and route a11y\n'
+mv -T -- "$scratch/screenshots" "$RUNNER_TEMP/kit-activity-log-approved"
