@@ -1,9 +1,8 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { buildVectors, listPublicFiles, METHODS } from "../ci/parity/vectors.mjs";
 import { explicitMethodRefusal } from "../src/http/method";
 import { resolveRouteOwner } from "../src/route-ownership";
+import { coverage } from "./fixtures/parity/hono-9822a6e60c6b2229c8b823bb481c87fb29fa85c9/index.json";
 import inventory from "./fixtures/route-inventory.json";
 import { rows } from "./fixtures/route-kit-map.json";
 import {
@@ -12,9 +11,24 @@ import {
   routeKey,
 } from "./helpers/route-ownership-matrix";
 
-const publicFiles = listPublicFiles(fileURLToPath(new URL("../public", import.meta.url)));
-const { coverage, vectors } = buildVectors({ inventory, publicFiles, kitPaths: [], throttles: [] });
-const registrationKeys = new Set(coverage.map((row) => row.entry));
+const goldenDir = new URL(
+  "./fixtures/parity/hono-9822a6e60c6b2229c8b823bb481c87fb29fa85c9/",
+  import.meta.url,
+);
+// Read the snapshot as data; do not load the Worker recorder in Vitest.
+const recording = new Map(
+  ["routes", "kit", "static"].flatMap((section) => {
+    const dir = new URL(`${section}/`, goldenDir);
+    return readdirSync(dir)
+      .filter((file) => file.endsWith(".json"))
+      .map((file) => [
+        `${section}/${file}`,
+        JSON.parse(readFileSync(new URL(file, dir), "utf8")).vectors,
+      ]);
+  }),
+);
+const registrationKeys = new Set(inventory.map(routeKey));
+const methods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 
 const families = [
   ["ops", 18],
@@ -29,9 +43,7 @@ const families = [
 ];
 
 function goldenStatus(file, vector) {
-  const path = `./fixtures/parity/hono-9822a6e60c6b2229c8b823bb481c87fb29fa85c9/routes/${file}.json`;
-  return JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8")).vectors[vector].response
-    .status;
+  return recording.get(`routes/${file}.json`)[vector].response.status;
 }
 
 describe("route ownership preparation matrix (not runtime dispatch)", () => {
@@ -51,22 +63,28 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
     expect(tagged).toHaveLength(74);
     for (const row of tagged) {
       expect(Object.hasOwn(counts, row.family), routeKey(row)).toBe(true);
-      expect(METHODS).toContain(row.method);
+      expect(methods).toContain(row.method);
     }
     expect(rows.filter((row) => row.kind === "method-fallback")).toHaveLength(11);
     expect(rows.filter((row) => row.kind === "middleware")).toHaveLength(6);
-    expect(publicFiles.length).toBeGreaterThan(0);
-    expect(
-      coverage.filter((row) => row.entry.startsWith("STATIC ")).map((row) => row.entry),
-    ).toEqual(publicFiles.map((path) => `STATIC GET ${path}`));
+    const assets = [...recording].filter(([file]) => file.startsWith("static/"));
+    expect(assets.length).toBeGreaterThan(0);
+    expect(assets.map(([, vectors]) => `STATIC ${routeKey(vectors.GET.request)}`).sort()).toEqual(
+      coverage
+        .filter(({ entry }) => entry.startsWith("STATIC "))
+        .map(({ entry }) => entry)
+        .sort(),
+    );
   });
 
-  it("keeps current manifest decisions when no new families are selected", () => {
+  it("keeps current manifest decisions for the recorded requests with every new family off", () => {
     const off = new Set();
-    for (const pair of vectors) {
-      expect(projectFixtureOwner(pair, off, resolveRouteOwner), routeKey(pair)).toBe(
-        resolveRouteOwner(pair),
-      );
+    for (const vectors of recording.values()) {
+      for (const { request } of Object.values(vectors)) {
+        expect(projectFixtureOwner(request, off, resolveRouteOwner), routeKey(request)).toBe(
+          resolveRouteOwner(request),
+        );
+      }
     }
   });
 
@@ -92,7 +110,7 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
     expect(familyEndpointKeys(rows, "ops").has(routeKey({ method: registered, path }))).toBe(true);
     const selection = new Set(released.map((method) => routeKey({ method, path })));
     const probes = [path, sibling, `${path}/`].flatMap((candidate) =>
-      METHODS.map((method) => ({ method, path: candidate })),
+      methods.map((method) => ({ method, path: candidate })),
     );
     expect(probes.every((pair) => resolveRouteOwner(pair) === "hono")).toBe(true);
     const projected = probes.filter(
