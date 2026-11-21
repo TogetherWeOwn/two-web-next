@@ -608,13 +608,15 @@ describe("check job", () => {
   it("guards every heavy step behind the scope verdict", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
-    const steps = check.split("\n    steps:\n")[1]?.split(/\n      - /) ?? [];
+    const stepList = check.split("\n    steps:")[1] ?? "";
+    const steps = stepList.split(/\n      - /).slice(1);
     expect(steps.length).toBeGreaterThan(10);
     const unguarded = steps.filter(
       (step) =>
         !step.includes("Docs-only fast pass") &&
-        // The scope guard is deliberately unconditional: pinned below.
-        !step.includes("Require successful scope") &&
+        // Both prerequisite guards are deliberately unconditional.
+        !step.startsWith("name: Require successful scope\n") &&
+        !step.startsWith("name: Require successful dependency admission\n") &&
         !step.includes("needs.scope.outputs.docs_only != 'true'"),
     );
     expect(unguarded.map((step) => step.split("\n")[0])).toEqual([]);
@@ -642,9 +644,9 @@ describe("ci heavy-job scope gates", () => {
     expect(block).toContain("needs.scope.outputs.app == 'true'");
   });
 
-  it("check still runs on every verdict, from scope alone so it starts with the heavy jobs", () => {
+  it("check still runs on every verdict and waits only for scope and dependency admission", () => {
     const block = jobBlock("check");
-    expect(block).toMatch(/\n    needs: \[scope\]\n/);
+    expect(block).toMatch(/\n    needs: \[scope, dependency-admission\]\n/);
     expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   });
 

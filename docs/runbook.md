@@ -1117,7 +1117,22 @@ The telemetry query returns only the newest 100 events. Keep each window to
    guess the source. Deploys are not tagged yet.
 3. Baseline: `node bin/smoke.mjs https://next.togetherweown.com | tee "$RUN_DIR/smoke-base.log"`.
    Record any existing failures. The rehearsal compares against this
-   baseline; it does not require it to be green.
+   baseline; it does not require it to be green. Before rolling back, prepare N's
+   own smoke and its locked dev dependencies (`parse5` is needed for Kit Home).
+   Stop before step 5 if preparation fails.
+
+   ```bash
+   (
+     set -euo pipefail
+     : "${N_SHA:?}"
+     mkdir "$RUN_DIR/n"
+     paths=(bin ci package.json package-lock.json)
+     if git cat-file -e "$N_SHA:.npmrc" 2>/dev/null; then paths+=(.npmrc); fi
+     git archive "$N_SHA" "${paths[@]}" | tar -x -C "$RUN_DIR/n"
+     npm ci --prefix "$RUN_DIR/n" --include=dev --ignore-scripts --no-audit --no-fund
+   )
+   ```
+
 4. In a second terminal, start the probe loop:
    `probe | tee "$RUN_DIR/probe-rollback.log"`.
 5. Roll back, with timestamps:
@@ -1147,8 +1162,6 @@ The telemetry query returns only the newest 100 events. Keep each window to
    ```bash
    (
      set -euo pipefail
-     : "${N_SHA:?}"
-     mkdir -p "$RUN_DIR/n" && git archive "$N_SHA" bin ci | tar -x -C "$RUN_DIR/n"
      node "$RUN_DIR/n/bin/smoke.mjs" https://next.togetherweown.com | tee "$RUN_DIR/smoke-n.log"
    )
    ```
