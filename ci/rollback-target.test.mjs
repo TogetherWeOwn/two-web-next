@@ -20,6 +20,8 @@ import {
 } from "./rollback-target.mjs";
 
 const recoveryDigest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const recoveryInvocation =
+  "https://github.com/TogetherWeOwn/two-web-next/actions/runs/123/attempts/2";
 
 function recoveryFixture({
   prepareFiles,
@@ -66,7 +68,7 @@ function recoveryFixture({
   return {
     archive,
     expected: { ...identity, workflow: producer.workflow, archiveSha256 },
-    attestation: { ...producer, subjectSha256: archiveSha256 },
+    attestation: { ...producer, subjectSha256: archiveSha256, invocationId: recoveryInvocation },
     run: { ...producer, status: "completed", conclusion: "success" },
     decode: (input) =>
       JSON.parse(input.toString("utf8")).map(({ path, bytes, type = "file" }) => ({
@@ -96,6 +98,22 @@ for (const [label, change, reason] of [
   ["different signed source", (x) => (x.attestation.sourceSha = "b".repeat(40)), /attestation/],
   ["different signer", (x) => (x.attestation.workflow = ".github/workflows/ci.yml"), /attestation/],
   ["forked signer", (x) => (x.attestation.repository = "Other/two-web-next"), /attestation/],
+  ["missing signed invocation", (x) => delete x.attestation.invocationId, /attestation invocation/],
+  [
+    "signed invocation for a different attempt",
+    (x) => (x.attestation.invocationId = recoveryInvocation.replace(/2$/, "1")),
+    /attestation invocation/,
+  ],
+  [
+    "signed invocation for a different run",
+    (x) => (x.attestation.invocationId = recoveryInvocation.replace("/123/", "/124/")),
+    /attestation invocation/,
+  ],
+  [
+    "signed invocation from another repository",
+    (x) => (x.attestation.invocationId = recoveryInvocation.replace("TogetherWeOwn", "Other")),
+    /attestation invocation/,
+  ],
   ["different run source", (x) => (x.run.sourceSha = "b".repeat(40)), /successful main run/],
   ["missing run source", (x) => delete x.run.sourceSha, /successful main run/],
   ["stale run attempt", (x) => (x.run.runAttempt = "1"), /successful main run/],
@@ -105,9 +123,11 @@ for (const [label, change, reason] of [
   test(`pure Hono archive refuses ${label} before decoding`, () => {
     const input = recoveryFixture();
     change(input);
+    const decode = input.decode;
     let decoded = false;
-    input.decode = () => {
+    input.decode = (archive) => {
       decoded = true;
+      return decode(archive);
     };
     assert.throws(() => validatePureHonoRecoveryEvidence(input), reason);
     assert.equal(decoded, false);
