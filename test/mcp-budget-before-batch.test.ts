@@ -7,12 +7,12 @@
 // OPTIONS preflight is never throttled.
 // Real app + agent-testdb/CI Postgres only.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import app from "./app";
 import type { Env } from "../src/env";
 import { __resetApiPublicCacheForTests } from "../src/public-data/cache";
 import { createMemorySessionStore, type SessionStore, type Sql } from "../src/sessions";
 import type { EnvWithThrottle } from "../src/throttle";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { fetchMcp } from "./helpers/mcp-fetch";
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -132,7 +132,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     });
 
     const post = async (body: unknown, ip: string): Promise<RpcResponse> => {
-      const res = await app.request(
+      const res = await fetchMcp(
         "/mcp",
         {
           method: "POST",
@@ -205,7 +205,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it("still answers OPTIONS preflight while the caller is over budget (control)", async () => {
       const ip = "192.0.2.93";
       spendBudget(ip);
-      const preflight = await app.request(
+      const preflight = await fetchMcp(
         "/mcp",
         {
           method: "OPTIONS",

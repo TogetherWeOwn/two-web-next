@@ -23,6 +23,7 @@ import {
   LIST_EVENTS_TRIMMED_NOTICE,
 } from "../src/public-data/routes";
 import app from "./app";
+import { fetchMcp } from "./helpers/mcp-fetch";
 
 vi.mock("../src/admin/db", () => ({ dbFor: async () => ({}) }));
 vi.mock("../src/events/reads", async (importOriginal) => ({
@@ -115,7 +116,7 @@ async function callTool(protocol: Protocol, name: string, args: Record<string, u
           },
         }
       : {};
-  const response = await app.request(
+  const response = await fetchMcp(
     "/mcp",
     {
       method: "POST",

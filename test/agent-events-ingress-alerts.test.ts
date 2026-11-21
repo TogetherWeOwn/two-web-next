@@ -6,10 +6,10 @@
 //
 // DB-free: mounted app with the in-memory fake agent-event store, no
 // DATABASE_URL, no Discord, no network. Follows the route-refusal nightly
-// contract: drive only through the mounted app (`test/app.ts`).
+// contract: drive only through the mounted app via `fetchApp`.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type postgres from "postgres";
-import app from "./app";
+import { fetchApp } from "./helpers/fetch-app";
 import type { Env } from "../src/env";
 import { DEFAULT_CONFIG } from "../src/agent-events/service";
 import { makeFakeAgentDb } from "./helpers/fake-agent-ingress-db";
@@ -112,16 +112,15 @@ describe("agent-events ingress error alerts", () => {
       AGENT_EVENT_SQL: sabotageGrantLookup(fake.sql, new HandlerBoomError("boom")),
     } as unknown as Env;
 
-    const res = await app.request(
-      "/api/agent-events",
-      {
+    const res = await fetchApp(
+      new Request(new URL("/api/agent-events", env.APP_URL), {
         method: "POST",
         headers: {
           authorization: `Bearer ${CRED}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({ op: "create", idempotency_key: "alert-500-001" }),
-      },
+      }),
       env,
       executionCtx,
     );
@@ -162,16 +161,15 @@ describe("agent-events ingress error alerts", () => {
       AGENT_EVENT_SQL: sabotageGrantLookup(fake.sql, new OutageBoomError("conn refused")),
     } as unknown as Env;
 
-    const res = await app.request(
-      "/api/agent-events",
-      {
+    const res = await fetchApp(
+      new Request(new URL("/api/agent-events", env.APP_URL), {
         method: "POST",
         headers: {
           authorization: `Bearer ${CRED}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({ op: "create", idempotency_key: "alert-503-001" }),
-      },
+      }),
       env,
       executionCtx,
     );
@@ -212,16 +210,15 @@ describe("agent-events ingress error alerts", () => {
     }
     const env = { ...baseEnv, AGENT_EVENT_SQL: outageSql } as unknown as Env;
 
-    const res = await app.request(
-      "/api/agent-events",
-      {
+    const res = await fetchApp(
+      new Request(new URL("/api/agent-events", env.APP_URL), {
         method: "POST",
         headers: {
           authorization: `Bearer ${CRED}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({ op: "create", idempotency_key: "alert-admit-503-001" }),
-      },
+      }),
       env,
       executionCtx,
     );
@@ -251,28 +248,26 @@ describe("agent-events ingress error alerts", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const env = await grantEnv();
 
-    const unauthenticated = await app.request(
-      "/api/agent-events",
-      {
+    const unauthenticated = await fetchApp(
+      new Request(new URL("/api/agent-events", env.APP_URL), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ op: "create", idempotency_key: "alert-4xx-001" }),
-      },
+      }),
       env,
       executionCtx,
     );
     expect(unauthenticated.status).toBe(401);
 
-    const forbidden = await app.request(
-      "/api/agent-events",
-      {
+    const forbidden = await fetchApp(
+      new Request(new URL("/api/agent-events", env.APP_URL), {
         method: "POST",
         headers: {
           authorization: `Bearer ${CRED}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({ op: "delete", idempotency_key: "alert-4xx-002" }),
-      },
+      }),
       env,
       executionCtx,
     );
