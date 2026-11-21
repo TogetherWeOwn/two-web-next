@@ -250,15 +250,21 @@ test("the patch coverage step has no file-presence skip so a missing input fails
 // expression evaluator that supports only what the guards use and throws on
 // anything else, so a new construct cannot silently pass.
 const checkJob = check.split(/\n  [a-z][a-z0-9-]*:\n/)[1];
-const checkSteps = checkJob
-  .split(/\n      - /)
-  .slice(1)
-  .map((entry) => ({
-    label: entry.match(/^name: (.+)$/m)?.[1] ?? entry.split("\n", 1)[0],
-    id: entry.match(/^        id: ([\w-]+)$/m)?.[1],
-    guard: entry.match(/^        if: (.+)$/m)?.[1] ?? "success()",
-  }));
-const AUDIT = "Dependency audit (lockfile, including dev dependencies)";
+const admissionJob = workflow.split("\n  dependency-admission:\n")[1].split(/\n  [\w-]+:\n/)[0];
+const parseSteps = (job) =>
+  job
+    .split(/\n      - /)
+    .slice(1)
+    .map((entry) => ({
+      label: entry.match(/^name: (.+)$/m)?.[1] ?? entry.split("\n", 1)[0],
+      id: entry.match(/^        id: ([\w-]+)$/m)?.[1],
+      guard: entry.match(/^        if: (.+)$/m)?.[1] ?? "success()",
+    }));
+const checkSteps = parseSteps(checkJob);
+const auditStep = parseSteps(admissionJob).find(
+  (step) => step.label === "Dependency audit (lockfile, including dev dependencies)",
+);
+const ADMISSION = "Require successful dependency admission";
 const INSTALL = "run: npm ci --no-audit --no-fund";
 const COVERAGE = "Check (lint + typecheck + coverage gate)";
 const TIER0 = "Tier-0 check (validators + authz + EXPLAIN)";
@@ -407,10 +413,12 @@ test("the shipping Kit route step reports overages but still fails on bad measur
 
 test("the check job models the guarded steps the simulation relies on", () => {
   const labels = checkSteps.map((step) => step.label);
-  for (const label of [AUDIT, INSTALL, COVERAGE, TIER0, PATCH, SUMMARY, UPLOAD]) {
+  for (const label of [ADMISSION, INSTALL, COVERAGE, TIER0, PATCH, SUMMARY, UPLOAD]) {
     assert(labels.includes(label), `check job must keep the "${label}" step`);
   }
-  assert(labels.indexOf(AUDIT) < labels.indexOf(INSTALL));
+  assert(auditStep, "dependency-admission must run the lockfile audit");
+  assert(!labels.includes(auditStep.label), "check must not repeat the lockfile audit");
+  assert(labels.indexOf(ADMISSION) < labels.indexOf(INSTALL));
   assert(labels.indexOf(INSTALL) < labels.indexOf(COVERAGE));
   assert(labels.indexOf(COVERAGE) < labels.indexOf(TIER0));
   assert(labels.indexOf(TIER0) < labels.indexOf(PATCH));
@@ -437,7 +445,6 @@ test("the coverage summary and upload keep collecting evidence after a failure",
 });
 
 for (const [label, failing] of [
-  ["a failed dependency audit (npm install skipped)", AUDIT],
   ["a failed npm install", INSTALL],
   ["a failed coverage run", COVERAGE],
 ]) {
@@ -449,11 +456,11 @@ for (const [label, failing] of [
 }
 
 test("a failed dependency audit skips npm install and every later success-guarded step", () => {
-  const outcomes = simulateCheckJob({ failing: AUDIT, scope: codeScope, reportPresent: false });
-  assert.equal(outcomes.get(INSTALL), "skipped");
-  assert.equal(outcomes.get(COVERAGE), "skipped");
-  assert.equal(outcomes.get(SUMMARY), "skipped");
-  assert.equal(outcomes.get(UPLOAD), "skipped");
+  // The guard's exit status for all admission results is tested in a11y-policy.test.mjs.
+  const outcomes = simulateCheckJob({ failing: ADMISSION, scope: codeScope, reportPresent: false });
+  for (const label of [INSTALL, COVERAGE, TIER0, PATCH, SUMMARY, UPLOAD]) {
+    assert.equal(outcomes.get(label), "skipped", label);
+  }
 });
 
 test("Tier-0 and patch coverage run when every earlier step succeeded", () => {
@@ -482,8 +489,12 @@ test("the coverage summary and upload still run after a failed coverage run that
 
 for (const scopeName of ["docs_only", "draft"]) {
   test(`Tier-0 and patch coverage are skipped on a ${scopeName} scope`, () => {
-    const outcomes = simulateCheckJob({ scope: { ...codeScope, [scopeName]: "true" } });
-    for (const label of [AUDIT, COVERAGE, TIER0, PATCH, SUMMARY, UPLOAD]) {
+    const scope = { ...codeScope, [scopeName]: "true" };
+    assert(auditStep);
+    assert(!evaluateGuard(auditStep.guard, { jobFailed: false, scope }));
+    const outcomes = simulateCheckJob({ scope });
+    assert.equal(outcomes.get(ADMISSION), "success");
+    for (const label of [INSTALL, COVERAGE, TIER0, PATCH, SUMMARY, UPLOAD]) {
       assert.equal(outcomes.get(label), "skipped", label);
     }
   });
