@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Signed-cookie vectors for route parity: every cookie src/ signs with
-// hono/cookie, signed with a fixed fixture secret. A second renderer must
-// produce and accept the same bytes. `--write` regenerates
+// Signed-cookie vectors for route parity: discover Hono and shared-writer
+// call sites under src/, but generate the reference bytes with hono/cookie
+// and a fixed fixture secret. A second renderer must produce and accept
+// the same bytes. `--write` regenerates
 // test/fixtures/parity/signed-cookies.json; the default checks it.
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -12,7 +13,8 @@ import { generateSignedCookie } from "hono/cookie";
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const VECTORS_PATH = "test/fixtures/parity/signed-cookies.json";
 export const VECTOR_SECRET = "parity-signed-cookie-vector-secret-not-a-real-key";
-const SIGN_CALL = /(?:setSignedCookie\(\s*c\s*,\s*|generateSignedCookie\(\s*)([A-Z_][A-Z0-9_]*)/g;
+const SIGN_CALL =
+  /\b(?:setSignedCookie\(\s*c\s*,\s*|(?:generateSignedCookie|signedCookieHeader)\(\s*)([A-Z_][A-Z0-9_]*)/g;
 const OPTIONS = { path: "/", secure: true, httpOnly: true, sameSite: "Lax" };
 // Representative plaintexts: what each cookie carries in production, plus one
 // value with every character class the signer must encode.
