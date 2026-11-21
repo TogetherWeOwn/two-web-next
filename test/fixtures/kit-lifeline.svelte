@@ -7,13 +7,18 @@ import { composeLifeline, type LifelineFacts } from "../../web/src/lib/lifeline"
 let {
   state,
   showLifeline = true,
+  attendeePage = 2,
+  savedSeat = false,
 }: {
   state: "upcoming" | "frozen" | "cancelled" | "ended" | "ended-recorded";
   showLifeline?: boolean;
+  attendeePage?: 1 | 2;
+  savedSeat?: boolean;
 } = $props();
 
 const eventKey = "fixture-raid";
 const path = `/e/${eventKey}`;
+const secondPage = `${path}?attendees=2`;
 const time = (clock: string) => Date.parse(`2026-11-21T${clock}:00Z`);
 const iso = (clock: string) => new Date(time(clock)).toISOString();
 const fact = (clock: string) => ({ eventKey, at: time(clock) });
@@ -65,7 +70,7 @@ const _model: KitEventDetailModel = $derived(
     rsvpClosed: state === "cancelled" ? "cancelled" : ended ? "past" : null,
     canonical: `https://event-detail.example.test${path}`,
     path,
-    attendeesRefreshHref: `${path}?attendees=2`,
+    attendeesRefreshHref: attendeePage === 2 ? secondPage : path,
     robots: null,
     icsUrl: `/events/${eventKey}.ics`,
     googleCalendarUrl: null,
@@ -75,9 +80,13 @@ const _model: KitEventDetailModel = $derived(
     durationText: "1h",
     zoneLabel: "Europe/London",
     timeDatetime: iso("20:00"),
-    attendees: [],
-    attendeesPaging: { page: 2, prevHref: path, nextHref: null },
-    answer: null,
+    attendees: attendeePage === 1 ? [{ id: "1", name: "Fixture attendee" }] : [],
+    attendeesPaging: {
+      page: attendeePage,
+      prevHref: attendeePage === 2 ? path : null,
+      nextHref: attendeePage === 1 ? secondPage : null,
+    },
+    answer: savedSeat ? { status: "going", syncedToDiscordAt: null } : null,
     waitlistPosition: null,
     neighbors: { previous: null, next: null },
     related: [],
@@ -99,7 +108,7 @@ const _steps = $derived(
   showLifeline
     ? composeLifeline(
         { ...schedule, rsvpOpen: state === "upcoming" },
-        { opened: fact("18:00"), ...examples[state].facts },
+        { opened: fact("18:00"), ...(savedSeat ? { viewerRsvp } : {}), ...examples[state].facts },
         examples[state].now,
       )
     : undefined,
