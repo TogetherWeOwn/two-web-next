@@ -6,6 +6,7 @@ import {
   SESSION_REF_PATTERN,
   SESSION_UNTIL,
 } from "./socket-route";
+import { readTimedSocketSession } from "./socket-session";
 
 const MAX_SOCKETS = 64;
 const MAX_MESSAGE_BYTES = 512;
@@ -39,12 +40,8 @@ const attachment = z.strictObject({
 type SocketMeta = z.infer<typeof attachment>;
 
 function decode(message: string | ArrayBuffer) {
-  if (
-    typeof message !== "string" ||
-    message.length > MAX_MESSAGE_BYTES ||
-    new TextEncoder().encode(message).byteLength > MAX_MESSAGE_BYTES
-  )
-    return null;
+  if (typeof message !== "string" || message.length > MAX_MESSAGE_BYTES) return null;
+  if (new TextEncoder().encode(message).byteLength > MAX_MESSAGE_BYTES) return null;
   try {
     return command.safeParse(JSON.parse(message)).data ?? null;
   } catch {
@@ -121,7 +118,8 @@ export class LiveSockets {
     try {
       if (!(await this.#authorize(socket, meta))) return false;
       // A producer event can clear the previous baseline while the row read is pending.
-      const current = attachment.parse(socket.deserializeAttachment());
+      const current = this.#active(socket);
+      if (!current) return false;
       current.topics ??= incoming.topics;
       current.nextResync = Date.now() + RESYNC_INTERVAL_MS;
       socket.serializeAttachment(current);
@@ -136,7 +134,8 @@ export class LiveSockets {
       if (!hadVoice) this.#clearVoice(socket, current);
       const refreshed = await refreshVoice();
       if (!(await this.#authorize(socket, current))) return false;
-      const latest = attachment.parse(socket.deserializeAttachment());
+      const latest = this.#active(socket);
+      if (!latest) return false;
       if (refreshed && this.#voice(socket, latest, true)) return true;
       if (hadVoice && latest.voiceUntil) this.#clearVoice(socket, latest);
       return false;
@@ -148,14 +147,30 @@ export class LiveSockets {
   }
 
   async #authorize(socket: WebSocket, meta: SocketMeta): Promise<boolean> {
-    if (meta.ref !== null) {
-      const row = await readLiveSocketSession(this.env, meta.ref);
-      if (!row || !Number.isFinite(row.validUntil) || row.validUntil <= Date.now()) {
-        return this.#close(socket, 1008);
+    if (meta.ref === null) return true;
+    const row = await readTimedSocketSession(meta.ref, (ref) =>
+      readLiveSocketSession(this.env, ref),
+    );
+    if (!row) return this.#close(socket, 1008);
+    if (row.validUntil >= meta.until) return true;
+    // Shorten the hibernating lease without overwriting a concurrent update.
+    return this.ctx.blockConcurrencyWhile(async () => {
+      const current = this.#active(socket);
+      if (!current) return false;
+      if (row.validUntil <= Date.now()) return this.#close(socket, 1008);
+      if (row.validUntil < current.until) {
+        current.until = row.validUntil;
+        socket.serializeAttachment(current);
+        await this.#schedule(current.until);
       }
-    }
-    if (meta.until <= Date.now()) return this.#close(socket, 1008);
-    return socket.readyState === WebSocket.OPEN;
+      return true;
+    });
+  }
+
+  #active(socket: WebSocket): SocketMeta | false {
+    if (socket.readyState !== WebSocket.OPEN) return false;
+    const meta = attachment.parse(socket.deserializeAttachment());
+    return meta.until <= Date.now() ? this.#close(socket, 1008) : meta;
   }
 
   #close(socket: WebSocket, code: number): false {
@@ -229,9 +244,9 @@ export class LiveSockets {
         if (!meta?.voiceUntil || preview.value === meta.voicePrevious) return;
         this.#publishing.add(socket);
         try {
-          if ((await this.#authorize(socket, meta)) && !this.#sending.has(socket)) {
-            this.#voice(socket, attachment.parse(socket.deserializeAttachment()), false);
-          }
+          if (!(await this.#authorize(socket, meta)) || this.#sending.has(socket)) return;
+          const current = this.#active(socket);
+          if (current) this.#voice(socket, current, false);
         } catch {
           this.#close(socket, 1011);
         } finally {
