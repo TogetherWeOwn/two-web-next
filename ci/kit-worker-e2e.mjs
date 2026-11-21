@@ -267,15 +267,32 @@ export class LiveGuildHub extends InstalledHub {
   }
   async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname !== controlPath) return super.fetch(request);
+    if (url.pathname !== controlPath) {
+      this.firstEvent ??= request.method === "POST" ? "ingress" : "upgrade";
+      return super.fetch(request);
+    }
+    this.firstEvent ??= "control";
     if (request.method === "POST") {
       this.kv.put("fixture-snapshot", await request.json());
       this.setSnapshotHold(url.searchParams.has("hold"));
     }
     if (request.method === "DELETE") this.setSnapshotHold(false);
-    return Response.json({ generation: this.generation, alarms: this.kv.get("fixture-alarms") ?? [] });
+    return Response.json({
+      generation: this.generation,
+      firstEvent: this.firstEvent,
+      alarms: this.kv.get("fixture-alarms") ?? [],
+    });
+  }
+  webSocketMessage(socket, message) {
+    this.firstEvent ??= "message";
+    return super.webSocketMessage(socket, message);
+  }
+  webSocketClose(socket) {
+    this.firstEvent ??= "close";
+    return super.webSocketClose(socket);
   }
   alarm() {
+    this.firstEvent ??= "alarm";
     const alarms = this.kv.get("fixture-alarms") ?? [];
     this.kv.put("fixture-alarms", [...alarms.slice(-1), { generation: this.generation, at: Date.now() }]);
     return super.alarm();

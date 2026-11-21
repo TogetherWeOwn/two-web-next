@@ -28,9 +28,9 @@ function upgradeRequest(url, headers) {
   });
 }
 
-// Observe the first server frame on an idle upgrade, not TCP EOF or Undici's
-// CLOSING state (which it also sets for transport errors).
+// Observe the first frame on an idle socket, not a client event or TCP EOF.
 function openIdle(url, headers) {
+  const started = performance.now();
   return new Promise((resolve, reject) => {
     const req = upgradeRequest(url, headers);
     req.on("response", (response) => {
@@ -57,7 +57,8 @@ function openIdle(url, headers) {
         reject(new Error(`Invalid idle WebSocket upgrade (${response.statusCode})`));
         return;
       }
-      const peer = { socket, first: null, at: null, error: null };
+      const upgradeMs = Math.ceil(performance.now() - started); // Bounds the full SQL debit.
+      const peer = { socket, first: null, at: null, error: null, upgradeMs };
       socket.on("error", (error) => {
         peer.error = error;
       });
@@ -83,13 +84,15 @@ async function awaitServerClose(peer, expiry, label) {
   assert.equal(
     peer.first?.length,
     4,
-    `${label}: no complete policy close before teardown or timeout`,
+    `${label}: no complete Close frame before teardown or timeout`,
   );
-  const [opcode, size] = peer.first;
-  assert.equal(opcode, 0x88, `${label}: first frame must be Close, not data`);
-  assert.equal(size, 2, `${label}: expected an unmasked Close with only a status`);
+  assert.equal(peer.first[0], 0x88, `${label}: first frame must be Close, not data`);
+  assert.equal(peer.first[1], 2, `${label}: expected an unmasked Close with only a status`);
   assert.equal(peer.first.readUInt16BE(2), 1008, `${label}: expected policy close`);
-  assert.ok(peer.at >= expiry && peer.at < expiry + 4_000, `${label}: close outside lease window`);
+  assert.ok(
+    peer.at >= expiry - peer.upgradeMs - 2 && peer.at < expiry + 4_000, // 2 ms for rounding.
+    `${label}: closed ${peer.at - expiry} ms from DB expiry (upgrade ${peer.upgradeMs} ms)`,
+  );
 }
 
 function refusal(url, headers) {
@@ -141,17 +144,26 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     const guest = await open(headers);
     const frame = awaitEvent(guest, "message", "guest subscribe");
     guest.send(subscribe);
-    assert.deepEqual(JSON.parse((await frame)[0].data), {
-      v: 1,
-      type: "unavailable",
-      topic: "voice",
-    });
+    const unavailable = { v: 1, type: "unavailable", topic: "voice" };
+    assert.deepEqual(JSON.parse((await frame)[0].data), unavailable);
     const duplicate = awaitEvent(guest, "close", "duplicate subscribe");
     guest.send(subscribe);
     assert.equal((await duplicate)[0].code, 1008);
 
     await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
       values (${ref}, '900000000000001377', 'Live socket fixture', true, now() + interval '10 minutes')`;
+    const expiring = await open({ ...headers, Cookie: cookie });
+    await sql`update web_sessions set expires_at = clock_timestamp() + interval '3 seconds' where token_hash = ${ref}`;
+    const expiry = Promise.all([
+      awaitEvent(expiring, "message", "shortened session subscribe"),
+      awaitEvent(expiring, "close", "shortened session alarm"),
+    ]);
+    expiring.send(subscribe);
+    const [[message], [close]] = await expiry;
+    assert.deepEqual(JSON.parse(message.data), unavailable);
+    assert.equal(close.code, 1008);
+
+    await sql`update web_sessions set expires_at = clock_timestamp() + interval '10 minutes' where token_hash = ${ref}`;
     const signedIn = await open({ ...headers, Cookie: cookie });
     await sql`update web_sessions set revoked_at = clock_timestamp() where token_hash = ${ref}`;
     const closed = awaitEvent(signedIn, "close", "revoked session subscribe");
@@ -163,11 +175,11 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     assert.equal(await refusal(url, { ...headers, Cookie: cookie }), 401);
 
     await sql`update web_sessions set revoked_at = null where token_hash = ${ref}`;
-    const expiring = await open({ ...headers, Cookie: cookie });
+    const lapsing = await open({ ...headers, Cookie: cookie });
     await sql`update web_sessions set expires_at = clock_timestamp() where token_hash = ${ref}`;
-    const expired = awaitEvent(expiring, "close", "expired session subscribe");
-    expiring.addEventListener("message", () => deliveries++);
-    expiring.send(subscribe);
+    const expired = awaitEvent(lapsing, "close", "expired session subscribe");
+    lapsing.addEventListener("message", () => deliveries++);
+    lapsing.send(subscribe);
     assert.equal((await expired)[0].code, 1008);
     assert.equal(deliveries, 0);
 
@@ -178,28 +190,20 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     const [firstLease] =
       await sql`update web_sessions set expires_at = clock_timestamp() + interval '5 seconds'
       where token_hash = ${ref} returning expires_at`;
+    // Admit the later lease first. Neither client sends a frame before its alarm.
     const later = await openIdle(url, { ...headers, Cookie: laterSession.cookie });
     idlePeers.push(later);
     const first = await openIdle(url, { ...headers, Cookie: cookie });
     idlePeers.push(first);
-    // Neither client sends a frame before its lease alarm.
-    await awaitServerClose(
-      first,
-      new Date(firstLease.expires_at).getTime(),
-      "first idle session alarm",
-    );
+    await awaitServerClose(first, new Date(firstLease.expires_at).getTime(), "first idle lease");
     assert.ok(
       !later.first && !later.error && !later.socket.destroyed && !later.socket.readableEnded,
-      "later lease must stay open after first alarm",
+      "later lease must stay open after the first alarm",
     );
-    await awaitServerClose(
-      later,
-      new Date(laterLease.expires_at).getTime(),
-      "second idle session alarm",
-    );
+    await awaitServerClose(later, new Date(laterLease.expires_at).getTime(), "later idle lease");
     assert.equal(deliveries, 0);
     console.log(
-      "PASS installed Kit live socket 101, guest control, revocation, and staggered idle session expiry",
+      "PASS installed Kit live socket 101, guest control, shortened and staggered idle expiry, and revocation",
     );
   } finally {
     for (const socket of sockets) socket.close();
@@ -439,8 +443,6 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
           assert.ok(sessionExpiry + 5_000 < expiresAt, "session deadline precedes voice deadline");
           idleMember = await openIdle(`${origin}${path}`, { Origin: appOrigin, Cookie: cookie });
           await awaitServerClose(idleMember, sessionExpiry, "cold session alarm");
-          idleMember.socket.destroy();
-          idleMember = undefined;
           assert.equal(socket.readyState, WebSocket.OPEN);
           assert.deepEqual(frames, [], "earlier cold alarm must preserve the guest baseline");
         }
@@ -472,8 +474,24 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
         if (sessionExpiry !== undefined) {
           const [early, voiceAlarm] = after.alarms;
           assert.equal(early.generation, generation + 1, "session alarm reconstructs the hub");
-          assert.ok(early.at >= sessionExpiry && early.at < expiresAt);
+          assert.ok(early.at >= sessionExpiry - idleMember.upgradeMs - 2);
+          assert.ok(early.at <= idleMember.at && early.at < expiresAt);
           assert.ok(voiceAlarm.at >= expiresAt, "cold alarm re-arms the original voice deadline");
+          // Flush the masked Close reply, then disconnect this fixture peer
+          // without depending on the upgraded transport to send a TCP FIN.
+          const mask = randomBytes(4);
+          const close = awaitEvent(idleMember.socket, "close", "cold session peer teardown");
+          idleMember.socket.write(
+            Buffer.from([
+              0x88,
+              0x82,
+              ...mask,
+              idleMember.first[2] ^ mask[0],
+              idleMember.first[3] ^ mask[1],
+            ]),
+          );
+          idleMember.socket.destroySoon();
+          await close;
         }
         assert.equal(
           socket.readyState,
@@ -502,27 +520,27 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
       send("resync");
       await expectFrame(unavailable);
       await expectFrame(projected("snapshot", ++revision, 5));
-      // Leave room for workerd's idle eviction without crossing the 30s lease.
-      const idle = mode === "warm" ? 5_100 : 22_000;
-      const { alarms: beforeIdle } = await controlRequest();
+      // Give idle eviction headroom while keeping the resync strictly before
+      // the initial 30-second lease expires.
+      const idle = mode === "warm" ? 5_100 : 20_000;
       const next = snapshot(cursor + 2, 6, new Date(Date.now() + idle - 23_000).toISOString());
-      if (mode === "producer wake") {
-        const recovered = snapshot(cursor + 1, 5);
-        recovered.topics.voice.push(voice("106", "11"));
-        await source(recovered);
-      } else {
-        await source(next);
-      }
+      const staged = mode === "producer wake" ? snapshot(cursor + 1, 5) : next;
+      if (mode === "producer wake") staged.topics.voice.push(voice("106", "11"));
+      const { alarms: beforeIdle } = await controlRequest({
+        method: "POST",
+        body: JSON.stringify(staged),
+      });
       await delay(idle);
       if (mode === "producer wake") {
         assert.equal(await ingest(origin, cursor + 1, join("106", "11")), 204);
         const afterIngress = await controlRequest({ method: "POST", body: JSON.stringify(next) });
-        assert.deepEqual(
-          afterIngress.alarms,
-          beforeIdle,
-          "producer ingress must be the wake event",
+        assert.equal(
+          afterIngress.generation,
+          generation + 1,
+          `producer ingress must reconstruct the hub (first event: ${afterIngress.firstEvent})`,
         );
-        assert.equal(afterIngress.generation, generation + 1, "producer ingress reconstructs hub");
+        assert.equal(afterIngress.firstEvent, "ingress", "the probe did not wake the hub");
+        assert.deepEqual(afterIngress.alarms, beforeIdle, "no competing producer-wake alarm");
       }
       assert.deepEqual(frames, [], `${mode}: no frame before resync`);
       send("resync");
@@ -531,6 +549,7 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
       const afterResync = await controlRequest();
       assert.deepEqual(afterResync.alarms, beforeIdle, `${mode}: no competing alarm before resync`);
       assert.equal(afterResync.generation, generation + Number(mode !== "warm"), mode);
+      if (mode === "cold") assert.equal(afterResync.firstEvent, "message", "resync wakes the hub");
       assert.deepEqual(frames, [], `${mode}: exactly one snapshot`);
       await expectFrame(unavailable, 12_000);
       cursor += 2;
