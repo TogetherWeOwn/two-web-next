@@ -62,11 +62,11 @@ const nextOwnEvent = $derived(
         .sort((a, b) => a.event.startsAt.getTime() - b.event.startsAt.getTime())[0]
     : undefined,
 );
-// The published teaser feed is ordered by start time.
 const heroRsvp = $derived(!sessionUnavailable && !eventsUnavailable ? nextOwnEvent : undefined);
-const heroEvent = $derived(eventsUnavailable ? undefined : (
-  heroRsvp?.event ?? upcomingEvents.find((event: HomeUpcomingRow) => event.startsAt > renderTime)
-));
+const nextPublicEvent = $derived(
+  upcomingEvents.find((event: HomeUpcomingRow) => event.startsAt > renderTime),
+);
+const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? nextPublicEvent));
 </script>
 
 {#snippet primaryLinks()}

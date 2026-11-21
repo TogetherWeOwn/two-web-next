@@ -53,7 +53,7 @@ jobs:
       - name: Check out original app
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 9d09c1adcc528020b4e8a74575a6848e99b95271
+          ref: fcc8df5378cb76faaf2717677d16261efbe09f63
           path: before
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -66,7 +66,7 @@ jobs:
         run: |
           test "$(git -C tooling rev-parse HEAD)" = 5ab8dbbef925d03f19809963c06e7edd04032bee
           test "$(git -C after rev-parse HEAD)" = "$FINAL_SHA"
-          test "$(git -C before rev-parse HEAD)" = 9d09c1adcc528020b4e8a74575a6848e99b95271
+          test "$(git -C before rev-parse HEAD)" = fcc8df5378cb76faaf2717677d16261efbe09f63
       - name: Install locked dependencies
         run: |
           for app in tooling before after; do
