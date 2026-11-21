@@ -155,9 +155,11 @@ describe("resolveRequestSession (one request, one session decision)", () => {
     const wire = good.slice(SESSION_COOKIE.length + 1);
     const quoted = `${SESSION_COOKIE} = "${wire}"`;
     const invalid = `${SESSION_COOKIE}=unsigned`;
+    const malformed = `${SESSION_COOKIE}=un"quoted`;
     for (const [pairs, status] of [
       [[quoted, invalid], "authenticated"],
       [[invalid, good], "guest"],
+      [[malformed, good], "authenticated"],
     ] as const) {
       const request = requestWith([...pairs]);
       const hono = await parseSigned(request.headers.get("cookie") ?? "", SECRET);
