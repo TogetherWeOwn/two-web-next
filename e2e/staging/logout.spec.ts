@@ -1,6 +1,6 @@
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import { test, expect, stagingOrigin } from "./fixtures";
-import { homeArrivalHeading } from "./home-arrival";
+import { homeArrivalHeading, signOutToHome } from "./home-arrival";
 import { loginQaMember } from "./qa-login";
 
 // Fresh member session per file: event pages rotate the bearer on read, so a
@@ -33,16 +33,7 @@ test("staging QA member signs out to guest and the old session cannot replay", a
   expect(live?.value).toBeTruthy();
 
   const homeUrl = `${stagingOrigin}/`;
-  const [guestHome] = await Promise.all([
-    page.waitForResponse(
-      (response) =>
-        response.url() === homeUrl &&
-        response.request().method() === "GET" &&
-        response.request().isNavigationRequest() &&
-        response.frame() === page.mainFrame(),
-    ),
-    page.getByRole("button", { name: "Sign out" }).click(),
-  ]);
+  const guestHome = await signOutToHome(page, homeUrl);
 
   // The 303 lands on / as a guest: join CTA back, no member chrome.
   await expect(page).toHaveURL(homeUrl);

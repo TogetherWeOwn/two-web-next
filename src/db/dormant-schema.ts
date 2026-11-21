@@ -82,6 +82,32 @@ export const eventEchoes = pgTable(
   ],
 );
 
+// Durable send fence for the announcement carrier, separate from queue delivery attempts.
+export const announcementSendClaims = pgTable(
+  "announcement_send_claims",
+  {
+    idempotencyKey: uuid("idempotency_key").primaryKey(),
+    channelAlias: text("channel_alias").notNull(),
+    sendAttempts: integer("send_attempts").notNull(),
+    state: text("state").notNull(),
+    claimUntil: timestamp("claim_until", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index("announcement_send_claims_retired_idx")
+      .on(t.claimUntil, t.idempotencyKey)
+      .where(sql`${t.state} = 'closed'`),
+    check(
+      "announcement_send_claims_alias_valid",
+      sql`${t.channelAlias} ~ '^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,63}$'`,
+    ),
+    check("announcement_send_claims_attempts_positive", sql`${t.sendAttempts} > 0`),
+    check(
+      "announcement_send_claims_state_known",
+      sql`${t.state} in ('sending', 'retryable', 'closed')`,
+    ),
+  ],
+);
+
 export const botReconciliationIntents = pgTable(
   "bot_reconciliation_intents",
   {

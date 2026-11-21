@@ -40,8 +40,12 @@ for (const twin of ["Hono", "Kit"] as const) {
         expect(next).toContain(`href="/e/${adjacentKey(30)}"`);
         expect(text(previous)).toContain("Friday game night");
         expect(text(next)).toContain("Friday game night");
-        expect(text(previous)).toContain("Friday, 7 June 2030 at 15:00 GMT-04:00");
-        expect(text(next)).toContain("Friday, 21 June 2030 at 20:00 GMT+01:00");
+        expect(text(previous)).toContain(
+          twin === "Hono" ? "Friday, 7 June 2030 at 15:00 GMT-04:00" : "Fri 7 Jun, 19:00 UTC",
+        );
+        expect(text(next)).toContain(
+          twin === "Hono" ? "Friday, 21 June 2030 at 20:00 GMT+01:00" : "Fri 21 Jun, 19:00 UTC",
+        );
         expect(text(previous)).toContain("West room");
         expect(text(next)).toContain("East room");
         expect(previous).not.toContain("Current event lobby");
@@ -55,30 +59,35 @@ for (const twin of ["Hono", "Kit"] as const) {
         "2030-11-03T05:30:00.000Z",
         "America/New_York",
         "Sunday, 3 November 2030 at 01:30 GMT-04:00",
+        "Sun 3 Nov, 01:30 America/New_York",
       ],
       [
         "second fold",
         "2030-11-03T06:30:00.000Z",
         "America/New_York",
         "Sunday, 3 November 2030 at 01:30 GMT-05:00",
+        "Sun 3 Nov, 01:30 America/New_York",
       ],
       [
         "year rollover",
         "2030-12-31T23:30:00.000Z",
         "Asia/Tokyo",
         "Wednesday, 1 January 2031 at 08:30 GMT+09:00",
+        "Wed 1 Jan, 08:30 Asia/Tokyo",
       ],
       [
         "invalid zone fallback",
         "2030-12-31T23:30:00.000Z",
         "Invalid/Zone",
         "2030-12-31T23:30:00.000Z",
+        "Tue 31 Dec, 23:30 UTC",
       ],
     ])(
-      "AP02 RED: %s uses the destination zone and machine instant on every directional link",
-      async (_name, instant, timezone, expected) => {
+      "AP02 RED: %s preserves the renderer’s wall time and machine instant on every directional link",
+      async (_name, instant, timezone, honoLabel, kitLabel) => {
         const destination = adjacentEvent(40, { startsAt: new Date(instant), timezone });
         const html = await renderAdjacentDetail(twin, {
+          event: adjacentEvent(20, { timezone }),
           neighbors: { previous: destination, next: destination },
         });
         for (const rail of rails) {
@@ -87,7 +96,7 @@ for (const twin of ["Hono", "Kit"] as const) {
             const times = [...anchor.matchAll(/<time\b[^>]*>[\s\S]*?<\/time>/g)];
             expect(times, `${rail}-${direction} contains one native time`).toHaveLength(1);
             expect(times[0]![0]).toContain(`datetime="${instant}"`);
-            expect(text(times[0]![0])).toBe(expected);
+            expect(text(times[0]![0])).toBe(twin === "Hono" ? honoLabel : kitLabel);
           }
         }
       },
@@ -170,7 +179,8 @@ for (const twin of ["Hono", "Kit"] as const) {
         for (const rail of rails) {
           const anchor = link(html, `${rail}-${direction}`);
           expect(anchor).toContain("<time");
-          expect(text(anchor)).toContain(direction === "previous" ? "7 June 2030" : "21 June 2030");
+          const day = direction === "previous" ? "7" : "21";
+          expect(text(anchor)).toContain(twin === "Hono" ? `${day} June 2030` : `${day} Jun`);
           expect(text(anchor)).toContain(direction === "previous" ? "West room" : "East room");
         }
       },
