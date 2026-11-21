@@ -104,7 +104,10 @@ jobs:
           npx --no-install playwright test --config playwright.kit-event-newlines.config.ts
           expected=16
           if [ "$KIT_EVENT_NEWLINE_PHASE" = before ]; then expected=4; fi
-          test "$(find artifacts/kit-event-newlines/images -name 'kit-review-moderator-event-newlines-*.png' -size +0c | wc -l)" -eq "$expected"
+          # Playwright also copies each PNG into a nested attachments directory.
+          actual=$(find artifacts/kit-event-newlines/images -mindepth 2 -maxdepth 2 -type f -name 'kit-review-moderator-event-newlines-*.png' -size +0c | wc -l)
+          printf 'Named original captures: %d (expected %d)\n' "$actual" "$expected"
+          test "$actual" -eq "$expected"
       - name: Upload synthetic viewport images and results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -113,6 +116,6 @@ jobs:
           path: |
             artifacts/kit-event-newlines/provenance.txt
             artifacts/kit-event-newlines/results.json
-            artifacts/kit-event-newlines/images/**/kit-review-moderator-event-newlines-*.png
+            artifacts/kit-event-newlines/images/*/kit-review-moderator-event-newlines-*.png
           if-no-files-found: error
           retention-days: 14
