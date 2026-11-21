@@ -69,7 +69,7 @@ describe("Kit home SSR render: session-aware header and hero", () => {
       const html = renderPage(baseData({ session }));
       const hero = html.split('<section class="hero')[1]!.split("</section>")[0]!;
       expect(hero).toContain('id="home-heading"');
-      expect(hero).toContain("The lobby is open.");
+      expect(hero).toContain("The lobby is <em>open</em>.");
       expect(hero).toContain('data-testid="member-count"');
       expect(hero).not.toContain("In voice now");
       expect(hero).not.toContain("Pull me into");
@@ -115,6 +115,15 @@ describe("Kit home SSR render: session-aware header and hero", () => {
     expect(html).not.toContain('data-testid="notice"');
   });
 
+  it("renders Home landmarks and preserves the restored-write and sign-in recovery", () => {
+    const html = renderPage(baseData({ restoredWrite: true, notice: "signin_failed" }));
+    expect(html.match(/<header\b/g)).toHaveLength(1);
+    expect(html).toMatch(/<footer class="ember-footer\b[^>]*>[\s\S]*?<nav aria-label="Footer"/);
+    expect(html).toContain('href="/auth/discord" data-testid="notice-retry"');
+    expect(html).toContain("Your earlier changes were not saved.");
+    expect(html).toMatch(/data-testid="auth-error"[\s\S]*?id="home-heading"/);
+    expect(html).toContain('<meta name="description"');
+  });
   it("does not render attendee names from an event fixture for a guest", () => {
     const event = fullnessEvent({
       title: "Public game night",
@@ -122,7 +131,7 @@ describe("Kit home SSR render: session-aware header and hero", () => {
       attendees: [{ username: "SyntheticPrivateName" }],
     });
     const html = renderPage(baseData({ upcomingEvents: [event] }));
-    expect(html).toContain("Public game night");
+    expect(html).toContain("Next game night: <em>Public game night</em>");
     expect(html).toContain("1 of 4 going");
     expect(html).not.toContain("SyntheticPrivateName");
     expect(html).not.toContain("SyntheticHostName");
@@ -269,6 +278,7 @@ describe("Kit home SSR render: independently degraded panels", () => {
     const html = renderPage(baseData({ eventsUnavailable: true }));
     expect(html).toContain('data-state="unavailable"');
     expect(html).toContain("Game nights are unavailable right now.");
+    expect(html).toContain("<strong>Schedule unavailable</strong>");
     expect(html).not.toContain('data-testid="home-suggest-event"');
     expect(html).toContain('data-testid="member-count"');
   });
@@ -315,6 +325,8 @@ describe("Kit home SSR render: independently degraded panels", () => {
       expect(html).toContain("What’s on.");
       expect(html).toContain("Come along.");
       expect(html).toContain("Community night");
+      const panel = html.split('<aside class="ember-home-panel"')[1]!.split("</aside>")[0]!;
+      expect(panel).toContain(`<a href="${INVITE_URL}">Open Discord</a>`);
       expect(html).toContain(`href="${INVITE_URL}" data-testid="home-event-discord"`);
       expect(html).toContain("RSVP in Discord");
       expect(html).not.toContain("You’re in");
@@ -374,10 +386,10 @@ function fullnessRow(html: string, key: string): string {
 describe("Kit home SSR render: member standing", () => {
   it("marks matching answers and highlights the earliest future own RSVP only for members", () => {
     const upcomingEvents = [
+      fullnessEvent({ eventKey: "not-going", title: "Public opener" }),
       fullnessEvent({ eventKey: "later", startsAt: new Date("2031-01-01T20:00:00Z") }),
-      fullnessEvent({ eventKey: "first", startsAt: new Date("2030-01-01T20:00:00Z") }),
+      fullnessEvent({ eventKey: "first", startsAt: new Date("2030-08-01T20:00:00Z") }),
       fullnessEvent({ eventKey: "past", startsAt: new Date("2020-01-01T20:00:00Z") }),
-      fullnessEvent({ eventKey: "not-going" }),
     ];
     const memberRsvps = [
       { eventKey: "later", status: "going" },
@@ -393,14 +405,25 @@ describe("Kit home SSR render: member standing", () => {
     expect(standing).toContain('href="/e/first"');
     expect(standing).toContain("You're on the waitlist.");
     expect(standing).not.toContain('href="/e/later"');
+    const panel = html.split('<aside class="ember-home-panel"')[1]!.split("</aside>")[0]!;
+    const heading = html.split('<h1 id="home-heading">')[1]?.split("</h1>")[0];
+    expect(heading).toContain("Next game night: <em>Public opener</em>.");
+    expect(panel).toContain('id="home-panel-heading">Your RSVP</h2>');
+    expect(panel).toContain("<strong>Game night</strong>");
+    expect(panel).toContain("You're on the waitlist.");
+    expect(panel).toContain('href="/e/first"');
     for (const session of [null, nonMemberSession]) {
       const guestHtml = renderPage(baseData({ session, upcomingEvents, memberRsvps }));
       expect(guestHtml).not.toContain('data-testid="home-standing"');
       expect(guestHtml).not.toContain("home-event-own-rsvp");
+      expect(guestHtml).not.toContain('id="home-panel-heading">Your RSVP</h2>');
     }
-    expect(
-      renderPage(baseData({ session: memberSession, upcomingEvents, memberRsvps: [] })),
-    ).not.toContain('data-testid="home-standing"');
+    for (const answers of [[], [{ eventKey: "outside-teaser", status: "going" }]]) {
+      const data = baseData({ session: memberSession, upcomingEvents, memberRsvps: answers });
+      const publicOnly = renderPage(data);
+      expect(publicOnly).not.toContain('data-testid="home-standing"');
+      expect(publicOnly).toContain('id="home-panel-heading">On the schedule</h2>');
+    }
   });
 });
 

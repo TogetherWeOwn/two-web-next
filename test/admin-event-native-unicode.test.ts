@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EventFormPage } from "../src/admin/pages";
 import type { EventRow } from "../src/admin/store";
 import { parseHumanEventForm, ValidationError } from "../src/admin/validation";
+import { attr, controlNamed, submittedFields } from "./helpers/kit-edit-controls";
 
 const base = {
   title: "Game night",
@@ -61,7 +62,11 @@ const row: EventRow = {
 function text(characters: string[], count: number): string {
   return Array.from({ length: count }, (_, i) => characters[i % characters.length]).join("");
 }
-function form(mode: "new" | "edit", values = base, errors: Record<string, string> = {}): string {
+function form(
+  mode: "new" | "edit",
+  values: Record<string, unknown> = base,
+  errors: Record<string, string> = {},
+): string {
   return String(EventFormPage({ mode, row, values, errors }));
 }
 const source = readFileSync(
@@ -82,6 +87,38 @@ const { eventTextLimitError, bindAdminEventTextLimits } = runInNewContext(
 
 // These always-on fixtures prove SSR wiring and parity, not native browser behavior.
 describe("admin event code-point contract", () => {
+  for (const mode of ["new", "edit"] as const) {
+    for (const field of ["title", "game", "location", "organizer_name"]) {
+      it(`${mode}: ${field} selects a visible multiline control with the same field wiring`, () => {
+        const id = `f-${field.replaceAll("_", "-")}`;
+        const single = controlNamed(form(mode, { ...base, [field]: "Jordan Smith" }), field)!;
+        expect(single.tagName).toBe("input");
+        expect(attr(single, "type")).toBe("text");
+        for (const newline of ["\n", "\r", "\r\n"]) {
+          const html = form(
+            mode,
+            { ...base, [field]: `${newline}Jordan${newline}Smith` },
+            { [field]: "Server feedback" },
+          );
+          const control = controlNamed(html, field)!;
+          expect(control.tagName).toBe("textarea");
+          expect(attr(control, "rows")).toBe("2");
+          expect(attr(control, "id")).toBe(id);
+          expect(attr(control, "aria-invalid")).toBe("true");
+          expect(attr(control, "aria-describedby")?.split(" ")).toContain(`${id}-error`);
+          expect(attr(control, "data-event-text-limit")).toBe(
+            attr(single, "data-event-text-limit"),
+          );
+          expect(attr(control, "required")).toBe(attr(single, "required"));
+          if (field === "organizer_name") {
+            expect(attr(control, "aria-describedby")?.split(" ")).toContain(`${id}-hint`);
+          }
+          expect(html).toContain(`<a href="#${id}">`);
+          expect(submittedFields(html)[field]).toBe("\r\nJordan\r\nSmith");
+        }
+      });
+    }
+  }
   for (const { field, max } of limits) {
     it.each(patterns)(
       `${field} measures $label code points like the unchanged server`,
@@ -285,6 +322,81 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
     afterAll(async () => {
       await browser?.close();
     });
+
+    // Unlike the submit-event fixtures below, this captures the browser's
+    // actual urlencoded request. Disable JS to exercise the unenhanced form and avoid client-side
+    // validation changing which fixture POSTs reach the parser.
+    async function nativeSubmission(values: Record<string, unknown>) {
+      const context = await browser.newContext({ javaScriptEnabled: false });
+      try {
+        const nativePage = await context.newPage();
+        await nativePage.route("**/*", async (route) => {
+          await route.fulfill({
+            contentType: "text/html",
+            body: route.request().method() === "POST" ? "Saved fixture" : form("edit", values),
+          });
+        });
+        await nativePage.goto("https://next.example.test/admin/events/new");
+        const domFields = await nativePage.evaluate<Record<string, string>>(
+          "Object.fromEntries(new FormData(document.querySelector('form')))",
+        );
+        const requestPromise = nativePage.waitForRequest((request) => request.method() === "POST");
+        await nativePage.locator('[data-testid="save-event"]').click();
+        const request = await requestPromise;
+        expect(request.headers()["content-type"]).toBe("application/x-www-form-urlencoded");
+        const wireFields = Object.fromEntries(new URLSearchParams(request.postData()!));
+        return { domFields, wireFields };
+      } finally {
+        await context.close();
+      }
+    }
+
+    for (const field of ["title", "game", "location", "organizer_name"] as const) {
+      for (const newline of ["\n", "\r", "\r\n"]) {
+        it(`preserves accepted ${field} ${JSON.stringify(newline)} on untouched native save`, async () => {
+          const value = `Jordan${newline}Smith`;
+          expect(parseHumanEventForm({ ...base, [field]: value })[field]).toBe("Jordan\nSmith");
+          const { domFields, wireFields } = await nativeSubmission({ ...base, [field]: value });
+          expect(domFields[field]).toBe("Jordan\nSmith");
+          expect(wireFields[field]).toBe("Jordan\r\nSmith");
+          expect(parseHumanEventForm(wireFields)[field]).toBe("Jordan\nSmith");
+        });
+      }
+    }
+
+    for (const { field, max } of limits) {
+      for (const character of ["x", "😀"]) {
+        it(`counts ${field} ${character} LF/FormData and CRLF native wire equally at N/N+1`, async () => {
+          for (const count of [max - 2, max - 1]) {
+            const value = `${character.repeat(count)}\ny`;
+            const expectedWire = value.replace(/\n/g, "\r\n");
+            const { domFields, wireFields } = await nativeSubmission({ ...base, [field]: value });
+            expect(domFields[field]).toBe(value);
+            expect(wireFields[field]).toBe(expectedWire);
+            expect([...value]).toHaveLength(count + 2);
+            expect([...expectedWire]).toHaveLength(count + 3);
+            if (count === max - 2) {
+              const parsedDom = parseHumanEventForm(domFields);
+              expect(
+                field === "accessibility_notes" ? parsedDom.accessibilityNotes : parsedDom[field],
+              ).toBe(value);
+              const parsedWire = parseHumanEventForm(wireFields);
+              expect(
+                field === "accessibility_notes" ? parsedWire.accessibilityNotes : parsedWire[field],
+              ).toBe(value);
+            } else {
+              expect(() => parseHumanEventForm(domFields)).toThrow(ValidationError);
+              expect(() => parseHumanEventForm(wireFields)).toThrow(ValidationError);
+              try {
+                parseHumanEventForm(wireFields);
+              } catch (error) {
+                expect((error as ValidationError).fields).toHaveProperty(field);
+              }
+            }
+          }
+        });
+      }
+    }
 
     async function load(currentMode: "new" | "edit") {
       mode = currentMode;
