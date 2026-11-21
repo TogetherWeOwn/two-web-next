@@ -1,8 +1,7 @@
 // The jobs worker sends through the real signed bot client (TOG-12401).
 //
 // Announcement and role-assign go through the actual `handleQueue` entry point
-// with a global fetch double (no ledger id, so no SQL runs; pools are lazy and
-// never connect). Sync-event needs an event store, so it runs the same
+// with fetch and SQL doubles. Sync-event needs an event store, so it runs the same
 // `botClientFor(env)` through `consume` with a fake store. Missing BOT_* config
 // must end as a terminal, alerting failure, never a success ack.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +9,14 @@ import type { JobsEnv } from "../src/env";
 import { consume } from "../src/jobs/consumer";
 import type { EventStore, QueueLedger, SyncAttempt, UniqueLock } from "../src/jobs/types";
 import { botClientFor, handleQueue } from "../src/jobs/worker";
+
+const { query } = vi.hoisted(() => ({ query: vi.fn() }));
+vi.mock("postgres", () => ({
+  default: () => ({
+    begin: (run: (tx: typeof query) => unknown) => run(query),
+    end: async () => {},
+  }),
+}));
 
 const configured = {
   BOT_ENDPOINT_URL: "https://bot-staging.internal.example",
@@ -70,7 +77,18 @@ const batch = (...messages: ReturnType<typeof delivery>[]) =>
   ({ messages }) as unknown as MessageBatch<unknown>;
 
 let errors: string[];
+const claimRow = { send_attempts: 1, claim_until_ms: 0, channel_alias: "general" };
+function claimQuery(text: string) {
+  if (text.includes("insert into announcement_send_claims"))
+    return [{ ...claimRow, claim_until_ms: Date.now() + 30_000 }];
+  if (text.includes("from announcement_send_claims")) return [{}];
+  if (text.includes("update announcement_send_claims")) return [claimRow];
+  return [];
+}
 beforeEach(() => {
+  query
+    .mockReset()
+    .mockImplementation(async (parts: TemplateStringsArray) => claimQuery(parts.join("?")));
   errors = [];
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -107,6 +125,117 @@ describe("handleQueue with the live bot client", () => {
       '{"action":"announcement.post","channel_key":"general","body":"hello"}',
     );
     expect(queueFailingAlerts()).toEqual([]);
+  });
+
+  it.each([false, true])("persists a hard stop before ack; retryable=%s", async (retryable) => {
+    const { fn } = fetchDouble(refusal(409, "needs_reconciliation", retryable));
+    vi.stubGlobal("fetch", fn);
+    let persisted: unknown[] | undefined;
+    query.mockImplementation(async (parts: TemplateStringsArray, ...values: unknown[]) => {
+      const text = parts.join("?");
+      if (text.includes("insert into bot_reconciliation_intents")) {
+        persisted = values;
+        return [{ idempotency_key: uuid }];
+      }
+      if (persisted) {
+        if (text.includes("insert into announcement_send_claims")) return [];
+        if (text.includes("from announcement_send_claims"))
+          return [{ ...claimRow, kind: "closed" }];
+      }
+      return claimQuery(text);
+    });
+    const first = delivery(announcement());
+    first.ack.mockImplementation(() => {
+      expect(persisted).toEqual([
+        uuid,
+        "announcement.post",
+        "general",
+        1,
+        "needs_reconciliation",
+        409,
+      ]);
+    });
+    await handleQueue(batch(first), envWith(configured));
+    const duplicate = delivery(announcement(), 2);
+    await handleQueue(batch(duplicate), envWith(configured));
+    expect(first.ack).toHaveBeenCalledOnce();
+    expect(duplicate.ack).toHaveBeenCalledOnce();
+    expect(first.retry).not.toHaveBeenCalled();
+    expect(duplicate.retry).not.toHaveBeenCalled();
+    expect(fn).toHaveBeenCalledOnce();
+  });
+
+  it("does not contact the bot again when the first hard-stop write fails", async () => {
+    const { fn } = fetchDouble(refusal(409, "needs_reconciliation", false));
+    vi.stubGlobal("fetch", fn);
+    let writes = 0;
+    let claimUntil = Date.now() + 30_000;
+    const failed = vi.fn();
+    query.mockImplementation(async (parts: TemplateStringsArray, ...values: unknown[]) => {
+      const text = parts.join("?");
+      if (text.includes("insert into queue_failed_jobs")) failed();
+      if (text.includes("insert into bot_reconciliation_intents")) {
+        if (++writes === 1) throw new Error("write unavailable");
+        expect(values).toEqual([uuid, "announcement.post", "general", 1, null, null]);
+        return [{ idempotency_key: uuid }];
+      }
+      if (writes && text.includes("insert into announcement_send_claims")) return [];
+      if (writes && text.includes("case when state"))
+        return [
+          { ...claimRow, claim_until_ms: claimUntil, kind: claimUntil ? "sending" : "abandoned" },
+        ];
+      return claimQuery(text);
+    });
+    const body = { ...announcement(), jobId: uuid };
+    const first = delivery(body);
+    await handleQueue(batch(first), envWith(configured));
+    expect(first.retry).toHaveBeenCalledOnce();
+    expect(first.ack).not.toHaveBeenCalled();
+    expect(failed).not.toHaveBeenCalled();
+
+    const waiting = delivery(body, 2);
+    await handleQueue(batch(waiting), envWith(configured));
+    expect(waiting.retry).toHaveBeenCalledOnce();
+    expect(waiting.ack).not.toHaveBeenCalled();
+    claimUntil = 0;
+    const redelivery = { ...delivery(body, 3), timestamp: first.timestamp };
+    await handleQueue(batch(redelivery), envWith(configured));
+    expect(fn).toHaveBeenCalledOnce();
+    expect(writes).toBe(2);
+    expect(redelivery.ack).toHaveBeenCalledOnce();
+  });
+
+  it("does not charge failed claim writes against the bot send budget", async () => {
+    const { fn } = fetchDouble(
+      json(200, { ok: true, result: { outcome: "assigned" } }),
+      refusal(409, "in_progress", true),
+    );
+    vi.stubGlobal("fetch", fn);
+    let claimFailures = 0;
+    const record = vi.fn(() => [{ idempotency_key: uuid }]);
+    query.mockImplementation(async (parts: TemplateStringsArray) => {
+      const text = parts.join("?");
+      if (text.includes("insert into announcement_send_claims") && claimFailures++ < 5)
+        throw new Error("private SQL context");
+      return text.includes("insert into bot_reconciliation_intents") ? record() : claimQuery(text);
+    });
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const m = delivery(announcement(), attempt);
+      const following = delivery(roleAssign());
+      await handleQueue(batch(...(attempt === 5 ? [m, following] : [m])), envWith(configured));
+      if (attempt === 5) expect(following.ack).toHaveBeenCalledOnce();
+      expect(m.retry).toHaveBeenCalledOnce();
+      expect(m.ack).not.toHaveBeenCalled();
+    }
+    expect(fn).toHaveBeenCalledOnce(); // Only the following role assignment.
+    expect(queueFailingAlerts()).toHaveLength(1);
+    expect(errors.join(" ")).not.toContain("private SQL context");
+    const recovered = delivery(announcement(), 6);
+    await handleQueue(batch(recovered), envWith(configured));
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(record).not.toHaveBeenCalled();
+    expect(recovered.retry).toHaveBeenCalledWith({ delaySeconds: 5 });
+    expect(recovered.ack).not.toHaveBeenCalled();
   });
 
   it("signs and sends role.assign without an idempotency key", async () => {

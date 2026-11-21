@@ -269,7 +269,8 @@ describe("request correlation through queue envelopes (local fixtures)", () => {
         .map((line) => JSON.parse(line));
       expect(alerts.map((line) => line.request_id)).toEqual([ID, OTHER_ID, undefined, undefined]);
       expect(JSON.stringify(alerts)).not.toContain("cookie-secret");
-      expect(ack).toHaveBeenCalledTimes(4);
+      expect(ack).toHaveBeenCalledTimes(failure === "terminal" ? 4 : 0);
+      expect(retry).toHaveBeenCalledTimes(failure === "terminal" ? 0 : 5);
     },
   );
 });

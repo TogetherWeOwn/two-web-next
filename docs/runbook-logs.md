@@ -807,7 +807,17 @@ Workers Logs search over the incident window, a `SELECT`, or a source file.
 | `bot unreachable` | The signed fetch rejected (DNS failure, connection refused, abort/timeout, or a redirect the runtime refused to hand back), thrown as a `BotTransportError` with one fixed string and the raw rejection as the structural `cause` (`src/bot/client-transport.ts:206`). Transport, never refusal: no `code` and no `retryable` were observed. | A wait, never a recorded refusal: the job retries with backoff, exactly as if the bot were down. | There is no direct line to search. On the sync path, tally `sync retry classified` with `"sync_retry_class":"BotTransportError"` over the window (see [sync-event retry-cause diagnostics](#sync-event-retry-cause-diagnostics)); on the announcement/role path, per-attempt waits emit no line at all, so check `queue.failing` for the job kind after exhaustion. Use the queue message's idempotency key when present. `role.assign` has none: correlate by incident window instead. `CallInternalAction` alone does not distinguish roles from announcements. Never use a cookie or secret value. | None in logs. The fixed string travels as the exception message only; receipts carry the class `BotTransportError`, never the raw rejection text |
 | `bot answered with a redirect (3xx); not followed` | The bot answered 3xx (`3xx` is the answered status, 300-399), thrown as a `BotTransportError` (`src/bot/client-transport.ts:211`). The transport sends `redirect: manual` and never follows: a redirect would forward signed bodies and headers to an unvalidated origin. Same transport disposition as `bot unreachable`. | Same wait-and-retry as `bot unreachable`. A sustained burst points at the bot endpoint answering redirects (misconfigured base URL or a proxy in front of it), not at member behavior. | Same as `bot unreachable`: no direct line; tally `"sync_retry_class":"BotTransportError"` on the sync path, `queue.failing` after exhaustion. Then read the configured `BOT_ENDPOINT_URL` and compare it with the refused statuses. | None in logs. The status number rides in the exception message only; no `Location` target, URL or body ever does |
 
-Three dispositions, three different shapes. A refused-but-retryable answer is
+For queued `announcement.post`, the code `needs_reconciliation` overrides the
+wire retry flag and stops the announcement immediately. Ambiguous outcomes use
+the original key and count only durable send claims, not carrier deliveries.
+A hard stop, exhausted send budget, or abandoned claim goes to Admin →
+Reconciliation as `announcement.post requires reconciliation`. An abandoned
+claim records the reservation count, not proof of a send or a bot response.
+`announcement reconciliation persistence failed` means the carrier was retried
+without acknowledging it. Repeated storage failures alert before the transport
+cap; a fenced claim never admits a second send without a committed retry result.
+
+A refused-but-retryable answer is
 the bot saying no-for-now: it carries a `code` and `retryable: true`, and on
 the sync path it also appears as `sync_retry_class: BotFailure` in the
 [queue retry-cause table](#sync-event-retry-cause-diagnostics) (which uses its

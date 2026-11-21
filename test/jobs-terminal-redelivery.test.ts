@@ -227,11 +227,10 @@ describe.skipIf(!process.env.DATABASE_URL).each([
       key: null,
       availableAt: new Date(Date.now() - 1000),
     });
-    const bot = {
-      postAnnouncement: async () => {
-        throw new BotTerminalError("synthetic terminal failure");
-      },
-    } as unknown as BotClient;
+    const postAnnouncement = vi.fn(async () => {
+      throw new BotTerminalError("synthetic terminal failure");
+    });
+    const bot = { postAnnouncement } as unknown as BotClient;
     const deps = {
       bot,
       events: {} as EventStore,
@@ -268,6 +267,7 @@ describe.skipIf(!process.env.DATABASE_URL).each([
         expect(await pgQueueDepth(sql)).toEqual({ ...emptyLiveDepth, failed: 1 });
       }
       expect(warnings).not.toHaveBeenCalled();
+      expect(postAnnouncement).toHaveBeenCalledOnce();
     } finally {
       warnings.mockRestore();
       errors.mockRestore();

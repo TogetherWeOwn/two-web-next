@@ -2,8 +2,13 @@ import { alertQueueFailing } from "../alerts";
 import { AlertProbeError } from "../alert-probe-error";
 import { safeRequestId } from "../request-log";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT, backoffFor } from "./constants";
-import { handleCallInternalAction } from "./call-internal-action";
+import {
+  ANNOUNCEMENT_RECONCILIATION_REASON,
+  handleCallInternalAction,
+} from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
+import { INTERNAL_ACTION_DEADLINE_MS } from "./internal-action-deadline";
+import type { pgReconciliationStore } from "./reconciliation";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
 import { SYNC_RETRY_PERSISTENCE_REASON, SyncRetryPersistenceError } from "./types";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./sync-retry-diagnostic";
@@ -20,6 +25,7 @@ const LOCK_TIMEOUT_MS = 2000;
 type Msg = {
   body: unknown;
   attempts: number;
+  timestamp?: Date;
   ack(): void;
   retry(o?: { delaySeconds?: number }): void;
 };
@@ -68,6 +74,22 @@ function alertFailing(
   });
 }
 
+type AnnouncementStore = Pick<
+  ReturnType<typeof pgReconciliationStore>,
+  "claimAnnouncement" | "finishAnnouncement" | "recordAnnouncement"
+>;
+async function requireAnnouncementStore<T>(op: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("timed out")), LEDGER_TIMEOUT_MS);
+    });
+    return await Promise.race([op, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Queue consumer for both queues. Terminal outcomes ack (max_retries is only a backstop). */
 export async function consume(
   batch: { messages: readonly Msg[] },
@@ -80,6 +102,7 @@ export async function consume(
     needsSync?: EventStore["needsSync"];
     dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown>;
     probeEnabled?: boolean;
+    announcementReconciliation?: AnnouncementStore;
   },
 ): Promise<void> {
   for (const m of batch.messages) {
@@ -245,6 +268,46 @@ export async function consume(
         // No ledger fixture, bot request, event mutation or uniqueness lock.
         if (deps.probeEnabled) throw new AlertProbeError(body.probeId);
         outcome = { done: true }; // A delayed staging probe cannot page in production.
+      } else if (body.kind === "announcement") {
+        const store = deps.announcementReconciliation;
+        if (!store || !m.timestamp) throw new Error("Missing announcement claim dependencies");
+        const { idempotencyKey: id, action } = body;
+        const claim = await requireAnnouncementStore(
+          store.claimAnnouncement(id, action.channelKey, m.timestamp),
+        );
+        if (claim.kind === "unavailable") {
+          outcome = { failed: "announcement.post carrier unavailable" };
+        } else if (claim.kind === "closed") {
+          outcome = { done: true };
+        } else if (claim.kind === "abandoned") {
+          // A failed settlement leaves the send fenced. Do not infer a wire outcome.
+          await requireAnnouncementStore(store.recordAnnouncement(id, claim.attempts, null));
+          outcome = { failed: ANNOUNCEMENT_RECONCILIATION_REASON };
+        } else {
+          const remainingMs = claim.claimUntil.getTime() - (deps.now?.() ?? new Date()).getTime();
+          if (
+            claim.kind === "sending" ||
+            remainingMs <= INTERNAL_ACTION_DEADLINE_MS + LEDGER_TIMEOUT_MS
+          ) {
+            outcome = { retryInSeconds: Math.max(1, Math.ceil(remainingMs / 1000)) };
+          } else {
+            const result = await handleCallInternalAction(body, claim.attempts, deps.bot);
+            if ("announcementEvidence" in result) {
+              await requireAnnouncementStore(
+                store.recordAnnouncement(id, claim.attempts, result.announcementEvidence),
+              );
+            } else {
+              const state = "retryInSeconds" in result ? "retryable" : "closed";
+              if (
+                !(await requireAnnouncementStore(
+                  store.finishAnnouncement(id, claim.attempts, state),
+                ))
+              )
+                throw new Error("Announcement claim changed before settlement");
+            }
+            outcome = result;
+          }
+        }
       } else {
         outcome =
           body.kind === "sync-event"
@@ -257,7 +320,18 @@ export async function consume(
             : await handleCallInternalAction(body, m.attempts, deps.bot);
       }
     } catch (e) {
-      if (body.kind === "sync-event" && e instanceof SyncRetryPersistenceError) {
+      if (body.kind === "announcement") {
+        console.error("announcement reconciliation persistence failed", {
+          exception: queueExceptionClass(e),
+        });
+        // Ledger failure and ack both require durable evidence. Keep retrying
+        // storage even after the bot budget; signal before the transport cap.
+        if (m.attempts >= CALL_INTERNAL_ACTION.tries)
+          alertFailing(body.kind, m.attempts, "announcement reconciliation persistence failed", {
+            requestId,
+          });
+        outcome = { retryInSeconds: backoffFor(CALL_INTERNAL_ACTION.backoffSeconds, m.attempts) };
+      } else if (body.kind === "sync-event" && e instanceof SyncRetryPersistenceError) {
         // Carry the known wait on this delivery, but only a committed result can
         // reopen the durable claim. Recovery must not substitute a short lease.
         console.error("sync retry result persistence failed", SYNC_RETRY_PERSISTENCE_REASON);

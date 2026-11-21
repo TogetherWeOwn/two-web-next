@@ -236,21 +236,26 @@ describe("queue.failing", () => {
     ]);
   });
 
-  it("a redeliverable throw alerts only on the final attempt", async () => {
+  it("a redeliverable role throw alerts only on the final attempt", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const role = {
+      kind: "role-assign",
+      idempotencyKey: null,
+      action: { userId: "u", roleKey: "r" },
+    };
     const bot = {
-      postAnnouncement: async () => {
+      assignRole: async () => {
         throw new TypeError("boom");
       },
     } as unknown as BotClient;
     await consume(
-      { messages: [msg(ann, CALL_INTERNAL_ACTION.tries - 1)] },
-      { bot, events, lock, ledger, ...{ announcementReconciliation: announcementStore() } },
+      { messages: [msg(role, CALL_INTERNAL_ACTION.tries - 1)] },
+      { bot, events, lock, ledger },
     );
     expect(failingLines(spy)).toHaveLength(0);
     await consume(
-      { messages: [msg(ann, CALL_INTERNAL_ACTION.tries)] },
-      { bot, events, lock, ledger, ...{ announcementReconciliation: announcementStore() } },
+      { messages: [msg(role, CALL_INTERNAL_ACTION.tries)] },
+      { bot, events, lock, ledger },
     );
     expect(failingLines(spy)).toMatchObject([
       { attempts: CALL_INTERNAL_ACTION.tries, exception: "TypeError" },
