@@ -215,9 +215,18 @@ describe.each(SCENARIOS)("provider metadata at queue sinks: $label", (scenario) 
         requestId: SECRET,
         retryable: scenario.retryable,
       });
-      const reason = scenario.retryable
-        ? `The bot refused ${scenario.name} with a retryable \`unknown\` on all ${scenario.attempts} attempts.`
-        : `The bot refused ${scenario.name} with \`unknown\``;
+      const reconcile = scenario.retryable && scenario.body.kind === "announcement";
+      const reason = reconcile
+        ? "announcement.post requires reconciliation"
+        : scenario.retryable
+          ? `The bot refused ${scenario.name} with a retryable \`unknown\` on all ${scenario.attempts} attempts.`
+          : `The bot refused ${scenario.name} with \`unknown\``;
+      if (reconcile)
+        expect(d.announcementReconciliation.recordAnnouncement).toHaveBeenCalledWith(
+          UUID,
+          scenario.attempts,
+          { lastCode: "unknown", lastStatus: 422 },
+        );
       expect(m.ack).toHaveBeenCalledOnce();
       expect(m.retry).not.toHaveBeenCalled();
       expect(d.ledger.failed).toHaveBeenCalledExactlyOnceWith(

@@ -1,4 +1,4 @@
-// Dormant persistence only: no handler or queue settlement is wired to this store.
+// Durable reconciliation intents and the announcement send fence.
 import type postgres from "postgres";
 import { diagnosticCode } from "../bot/diagnostic-code";
 import { CALL_INTERNAL_ACTION, LEDGER_DB_TIMEOUT_MS } from "./constants";

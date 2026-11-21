@@ -172,9 +172,10 @@ describe("handleCallInternalAction retry admission", () => {
 
   it("leaves terminal caps, idempotency keys and backoff constants unchanged", async () => {
     expect(CALL_INTERNAL_ACTION).toEqual({ tries: 5, backoffSeconds: [5, 15, 60, 180] });
-    // Attempt 5 with a poisoned delay still fails terminally, not retries.
+    // A poisoned delay cannot postpone reconciliation at the cap.
     const outcome = await handleCallInternalAction({ ...ann }, 5, botWith(NaN));
     expect("failed" in outcome).toBe(true);
+    expect(outcome).toMatchObject({ announcementEvidence: { lastCode: "rate_limited" } });
   });
 });
 

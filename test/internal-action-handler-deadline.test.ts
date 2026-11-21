@@ -115,7 +115,7 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("a hung call at the cap fails terminally instead of retrying", async () => {
+  it("a hung announcement at the cap records uncertainty instead of retrying", async () => {
     vi.useFakeTimers();
     const bot = { postAnnouncement: () => new Promise(() => {}) } as unknown as BotClient;
     const { ledger, rows } = memLedger();
@@ -128,7 +128,18 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     await p;
     expect(last.acked).toBe(true);
     expect(last.retried).toBeUndefined();
-    expect(rows.get("j1")).toMatchObject({ state: "failed", reason: "gave up after 5 attempts" });
+    expect(announcementReconciliation.recordAnnouncement).toHaveBeenCalledWith(
+      ann.idempotencyKey,
+      5,
+      {
+        lastCode: null,
+        lastStatus: null,
+      },
+    );
+    expect(rows.get("j1")).toMatchObject({
+      state: "failed",
+      reason: "announcement.post requires reconciliation",
+    });
   });
 
   it("late success after the deadline cannot reclassify the disposed outcome", async () => {

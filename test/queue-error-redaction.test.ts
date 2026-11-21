@@ -163,7 +163,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     leakFree(lines, d.failedReasons);
   });
 
-  it("an exhausted unexpected throw alerts as its class across sync-event and internal-action", async () => {
+  it("an exhausted announcement throw holds its claim without exposing diagnostics", async () => {
     const lines = capture();
     const d = deps();
     const bot = {
@@ -188,11 +188,15 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
       SYNC_EVENT.tries,
     );
     await consume({ messages: [a, s] }, { ...d, bot });
-    expect(a.ack).toHaveBeenCalledOnce();
+    expect(a.ack).not.toHaveBeenCalled();
+    expect(a.retry).toHaveBeenCalledOnce();
     expect(s.ack).toHaveBeenCalledOnce();
     const failing = failingLines(lines);
     expect(failing).toHaveLength(2);
-    expect(failing[0]).toMatchObject({ exception: "TypeError" });
+    expect(failing[0]).toMatchObject({
+      exception: "announcement reconciliation persistence failed",
+    });
+    expect(lines).toContainEqual(expect.stringContaining('"exception":"TypeError"'));
     expect(failing[1]).toMatchObject({ exception: "RangeError" });
     // No second log line per message, and the throw path keeps job identity + attempts.
     expect(failing[0]).toMatchObject({
@@ -312,7 +316,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     expect(attempt.ack).not.toHaveBeenCalled();
 
     // Without a jobId there is no ledger row, so capture the alert reason instead.
-    const d2 = deps();
+    const d2 = { ...deps(), announcementReconciliation: announcementStore(5) };
     const terminal = {
       postAnnouncement: async () => ({
         ok: false,
@@ -336,8 +340,6 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     await consume({ messages: [last] }, { ...d2, bot: terminal });
     expect(last.ack).toHaveBeenCalledOnce();
     expect(last.retry).not.toHaveBeenCalled();
-    expect(d2.failedReasons).toEqual([
-      `The bot refused announcement.post with a retryable \`unknown\` on all ${CALL_INTERNAL_ACTION.tries} attempts.`,
-    ]);
+    expect(d2.failedReasons).toEqual(["announcement.post requires reconciliation"]);
   });
 });

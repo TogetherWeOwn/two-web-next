@@ -324,8 +324,11 @@ describe("CallInternalAction", () => {
     idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
     action: { channelKey: "c", body: "b" },
   };
-  it("walks 5/15/60/180 then fails on attempt 5", async () => {
-    const bot = { postAnnouncement: async () => fail({}) } as unknown as BotClient;
+  it("walks 5/15/60/180 on the original key then records reconciliation", async () => {
+    const postAnnouncement = vi.fn(async () =>
+      fail({ code: "in_progress", status: 409, retryable: false }),
+    );
+    const bot = { postAnnouncement } as unknown as BotClient;
     const deps = { bot, events: store(), lock: memLock(), ledger: memLedger() };
     for (const [attempt, delay] of [
       [1, 5],
@@ -341,10 +344,13 @@ describe("CallInternalAction", () => {
       expect(m.retried).toBe(delay);
     }
     const last = msg(ann, 5);
-    await consume(
-      { messages: [last] },
-      { ...deps, ...{ announcementReconciliation: announcementStore(5) } },
-    );
+    const durable = announcementStore(5);
+    await consume({ messages: [last] }, { ...deps, announcementReconciliation: durable });
+    expect(postAnnouncement.mock.calls).toEqual(Array(5).fill([ann.action, ann.idempotencyKey]));
+    expect(durable.recordAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.idempotencyKey, 5, {
+      lastCode: "in_progress",
+      lastStatus: 409,
+    });
     expect(last.acked).toBe(true);
     expect(last.retried).toBeUndefined();
   });
@@ -355,7 +361,7 @@ describe("CallInternalAction", () => {
       postAnnouncement: async (_a: unknown, key: string) => {
         const replayed = seen.has(key);
         seen.set(key, (seen.get(key) ?? 0) + 1);
-        return { ok: true, requestId: null, messageId: "m1", replayed };
+        return replayed ? { ok: true, requestId: null, messageId: "m1", replayed } : fail({});
       },
     } as unknown as BotClient;
     const deps = {
