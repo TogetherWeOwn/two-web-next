@@ -257,8 +257,7 @@ area floors (`src/admin`, `src/events`, `src/join` together with
 `src/write-recovery.tsx`, `src/kit-*`, `src/counts.ts`, `src/seo.ts`) live in
 `vitest.config.ts`. The baseline uses the full suite with the test database;
 without it, skipped live suites may put coverage below the floors. CI's
-`check` job runs the configuration drift check, Biome lint/format gate,
-typecheck and the coverage gate against its Postgres service, writes a job summary
+`coverage-merge` job verifies each shard's files and coverage map before enforcing the floors, writes a job summary
 with the ten least-covered files, and uploads the JSON coverage summary for 14 days,
 including on failure.
 

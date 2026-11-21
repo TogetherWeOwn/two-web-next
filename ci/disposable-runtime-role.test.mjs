@@ -6,7 +6,7 @@ const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf
 
 test("disposable migration workflows prepare the role before migrations", () => {
   for (const [path, expected] of [
-    [".github/workflows/ci.yml", 2],
+    [".github/workflows/ci.yml", 3],
     [".github/workflows/e2e.yml", 1],
     [".github/workflows/kit-edit-regression-proof.yml", 1],
     [".github/workflows/discovery-title-evidence.yml", 1],
