@@ -5,7 +5,8 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
-const facadePath = fileURLToPath(new URL("../../src/kit-worker-facade.ts", import.meta.url));
+const sourcePath = (name) =>
+  JSON.stringify(fileURLToPath(new URL(`../../src/${name}`, import.meta.url)));
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
 // The companion name is fixed so the generated entry and adapter can be placed
@@ -46,7 +47,12 @@ export async function compileKitFacade(adapterSource) {
 
   const result = await build({
     stdin: {
-      contents: `import adapter from "./kit-adapter.js";\nimport { createKitWorkerFacade } from ${JSON.stringify(facadePath)};\nexport default createKitWorkerFacade(adapter);\n`,
+      contents: `import adapter from "./kit-adapter.js";
+import { createKitWorkerFacade } from ${sourcePath("kit-worker-facade.ts")};
+import { handleLiveIngress } from ${sourcePath("live/ingress.ts")};
+export { LiveGuildHub } from ${sourcePath("live/guild-hub.ts")};
+export default createKitWorkerFacade(adapter, undefined, handleLiveIngress);
+`,
       resolveDir: fileURLToPath(new URL(".", import.meta.url)),
       loader: "js",
       sourcefile: "kit-facade-entry.js",
