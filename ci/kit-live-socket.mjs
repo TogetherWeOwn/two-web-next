@@ -26,6 +26,7 @@ function upgradeRequest(url, headers) {
 
 // Observe the first frame on an idle socket, not a client event or TCP EOF.
 function openIdle(url, headers) {
+  const started = performance.now();
   return new Promise((resolve, reject) => {
     const req = upgradeRequest(url, headers);
     req.on("response", (response) => {
@@ -52,7 +53,8 @@ function openIdle(url, headers) {
         reject(new Error(`Invalid idle WebSocket upgrade (${response.statusCode})`));
         return;
       }
-      const peer = { socket, first: null, at: null, error: null };
+      const upgradeMs = Math.ceil(performance.now() - started); // Bounds the full SQL debit.
+      const peer = { socket, first: null, at: null, error: null, upgradeMs };
       socket.on("error", (error) => {
         peer.error = error;
       });
@@ -83,7 +85,10 @@ async function awaitServerClose(peer, expiry, label) {
   assert.equal(peer.first[0], 0x88, `${label}: first frame must be Close, not data`);
   assert.equal(peer.first[1], 2, `${label}: expected an unmasked Close with only a status`);
   assert.equal(peer.first.readUInt16BE(2), 1008, `${label}: expected policy close`);
-  assert.ok(peer.at >= expiry && peer.at < expiry + 4_000, `${label}: close outside lease window`);
+  assert.ok(
+    peer.at >= expiry - peer.upgradeMs - 2 && peer.at < expiry + 4_000, // 2 ms for rounding.
+    `${label}: closed ${peer.at - expiry} ms from DB expiry (upgrade ${peer.upgradeMs} ms)`,
+  );
 }
 
 function refusal(url, headers) {
