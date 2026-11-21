@@ -88,10 +88,8 @@ describe("signed event attendance read", () => {
     ["busy", 502, unavailable],
     ["private_fixture_value", 503, unavailable],
   ] as const)("projects error %s without provider text", async (code, status, result) => {
-    const response = Response.json(
-      { ok: false, error: { code, message: "private fixture" } },
-      { status },
-    );
+    const error = { code, message: "private fixture" };
+    const response = Response.json({ ok: false, error }, { status });
     await expect(observe(response)).resolves.toEqual(result);
   });
 
@@ -122,6 +120,8 @@ describe("signed event attendance read", () => {
     const bytes = new Uint8Array(await reply(attendance).arrayBuffer());
     const truncated = Uint8Array.of(...bytes, 0xc3); // Incomplete UTF-8 after valid JSON.
     await expect(observe(new Response(truncated))).resolves.toEqual(unavailable);
+    bytes[bytes.indexOf(0xc3)] = 0xff; // Corrupt é inside the quoted room name.
+    await expect(observe(new Response(bytes))).resolves.toEqual(unavailable);
     await expect(observe(new Response(null, { status: 204 }))).resolves.toEqual(unavailable);
   });
 
