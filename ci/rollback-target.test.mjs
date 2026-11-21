@@ -696,10 +696,7 @@ test("pure Hono versioned config refuses unsafe observations without echoing dat
     [{ ...fixture, compatibilityDate: undefined }, "runtime compatibility"],
     [{ ...fixture, [sentinel]: [] }, "versioned observation shape"],
     [{ ...fixture, [Symbol(sentinel)]: [] }, "versioned observation shape"],
-    [
-      Object.defineProperty({ ...fixture }, sentinel, { value: [] }),
-      "versioned observation shape",
-    ],
+    [Object.defineProperty({ ...fixture }, sentinel, { value: [] }), "versioned observation shape"],
     [{ ...fixture, routes: [] }, "versioned observation shape"],
     [{ ...fixture, scriptName: sentinel }, "version identity"],
     [{ ...fixture, versionId: `${fixture.versionId}\n` }, "version identity"],
@@ -740,12 +737,15 @@ test("pure Hono versioned config refuses unsafe observations without echoing dat
     "versioned observation shape",
   ]);
   for (const [input, error] of cases) {
-    assert.throws(() => projectPureHonoVersionedConfig(input), (failure) => {
-      assert.equal(failure.message, `pure Hono versioned config refused: ${error}`);
-      assert.ok(!String(failure.stack).includes(sentinel));
-      assert.equal(failure.cause, undefined);
-      return true;
-    });
+    assert.throws(
+      () => projectPureHonoVersionedConfig(input),
+      (failure) => {
+        assert.equal(failure.message, `pure Hono versioned config refused: ${error}`);
+        assert.ok(!String(failure.stack).includes(sentinel));
+        assert.equal(failure.cause, undefined);
+        return true;
+      },
+    );
   }
 });
 
