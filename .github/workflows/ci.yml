@@ -1425,10 +1425,11 @@ jobs:
       - name: Merge Node 22 Vitest reports
         if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
         run: |
-          # Vitest accepts partial input, so check for each expected file first.
+          # Vitest can replay valid blobs that omit test files.
           set -- vitest-blob/*
           test "$#" -eq 3
           for shard in 1 2 3; do test -s "vitest-blob/vitest-$shard.json"; done
+          TEST=true VITEST=true NODE_ENV=test node ci/verify-vitest-shards.mjs "$@"
           node node_modules/vitest/vitest.mjs run --merge-reports=vitest-blob --reporter=dot
 
   bundle-budget:
