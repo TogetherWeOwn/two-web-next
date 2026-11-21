@@ -4,11 +4,13 @@ import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
+import { mergePatchInput, type PatchBase } from "../src/admin/store";
 import { ValidationError, wallToUtc } from "../src/admin/validation";
 import * as writeback from "../src/admin/writeback";
 import { activityLog, events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
+import { SESSION_COOKIE } from "../src/session-cookie";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -93,15 +95,72 @@ it("keeps the shared wallToUtc error keys and second-fold resolution unchanged",
   );
 });
 
+describe("mergePatchInput newline policy", () => {
+  const patchBase: PatchBase = {
+    title: "Stored",
+    game: null,
+    description: "one\r\ntwo\rthree",
+    accessibilityNotes: "ramp\r\nlift",
+    timezone: "UTC",
+    location: "hall\rroom",
+    organizer_name: "Ada\r\nLovelace",
+    join_url: "https://example.com/join",
+    join_instructions: "step 1\r\nstep 2\rstep 3",
+    capacity: null,
+    startsAt: new Date("2026-11-04T20:00:00Z"),
+    endsAt: new Date("2026-11-04T22:00:00Z"),
+  };
+
+  it("keeps omitted stored CRLF and lone CR exactly (raw machine policy)", () => {
+    const input = mergePatchInput(patchBase, { title: "Renamed" });
+    expect(input.title).toBe("Renamed");
+    expect(input.description).toBe("one\r\ntwo\rthree");
+    expect(input.accessibilityNotes).toBe("ramp\r\nlift");
+    expect(input.location).toBe("hall\rroom");
+    expect(input.organizer_name).toBe("Ada\r\nLovelace");
+    expect(input.join_instructions).toBe("step 1\r\nstep 2\rstep 3");
+  });
+
+  it("still clears organizer, join link and accessibility notes on explicit blank", () => {
+    for (const blank of ["", "  \r\n\t "]) {
+      const input = mergePatchInput(patchBase, {
+        organizer_name: blank,
+        join_url: blank,
+        accessibility_notes: blank,
+      });
+      expect(input.organizer_name).toBeNull();
+      expect(input.join_url).toBeNull();
+      expect(input.accessibilityNotes).toBeNull();
+      expect(input.join_instructions).toBe("step 1\r\nstep 2\rstep 3");
+    }
+  });
+});
+
 describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated test DB)", () => {
   let fixture: MemberDataFixture;
   let cookie: string;
   let env: Env;
   let app: Hono<{ Bindings: Env }>;
-  const store = createMemorySessionStore();
 
   beforeAll(async () => {
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    env = {
+      APP_URL,
+      SESSION_SECRET,
+      DISCORD_CLIENT_ID: "client-id",
+      DISCORD_CLIENT_SECRET: "client-secret",
+      DISCORD_GUILD_ID: "guild",
+      DISCORD_INVITE_URL: "https://discord.gg/invite",
+      DISCORD_BOT_TOKEN: "bot-token",
+      ADMIN_DB: fixture.db,
+    } as Env;
+  });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
+  beforeEach(async () => {
+    // A failed request may rotate the session before its assertions run.
+    const store = createMemorySessionStore();
     const token = newSessionToken();
     await store.create({
       tokenHash: await hashToken(token),
@@ -113,31 +172,16 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       expiresAt: new Date(Date.now() + 3600_000),
     });
     cookie = (
-      await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+      await serializeSigned(SESSION_COOKIE, token, SESSION_SECRET, {
         path: "/",
         secure: true,
         httpOnly: true,
         sameSite: "Lax",
       })
     ).split(";")[0]!;
-    env = {
-      APP_URL,
-      SESSION_SECRET,
-      DISCORD_CLIENT_ID: "client-id",
-      DISCORD_CLIENT_SECRET: "client-secret",
-      DISCORD_GUILD_ID: "guild",
-      DISCORD_INVITE_URL: "https://discord.gg/invite",
-      DISCORD_BOT_TOKEN: "bot-token",
-      ADMIN_DB: fixture.db,
-    } as Env;
     app = new Hono<{ Bindings: Env }>()
       .use("*", sameOrigin)
       .route("/admin", adminApp({ sessionStore: store, db: fixture.db }));
-  });
-  afterAll(async () => {
-    await fixture?.dispose();
-  });
-  beforeEach(async () => {
     await fixture.reset();
     await fixture.db.insert(events).values({
       eventKey: KEY,
@@ -160,11 +204,23 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       env,
     );
 
-  // The saved_baseline the guarded edit GET renders right now.
-  const editToken = async (): Promise<string> => {
+  const getEditPage = async () => {
     const res = await app.request(APP_URL + `/admin/events/${KEY}`, { headers: { cookie } }, env);
     expect(res.status).toBe(200);
-    const tag = (await res.text()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+    // Replay the rotated bearer. A grace-period response would not rotate again.
+    const replacement = res.headers
+      .getSetCookie()
+      .find((value) => value.startsWith(`${SESSION_COOKIE}=`))
+      ?.split(";", 1)[0];
+    if (!replacement || replacement === cookie) throw new Error("edit GET did not rotate session");
+    cookie = replacement;
+    return res.text();
+  };
+
+  // The saved_baseline the guarded edit GET renders right now.
+  const editToken = async (): Promise<string> => {
+    const html = await getEditPage();
+    const tag = html.match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
     const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
     if (!token) throw new Error("edit page carries no saved_baseline token");
     return token;
@@ -281,6 +337,129 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       expect(await fixture.db.select().from(activityLog)).toEqual([]);
     });
   }
+
+  describe("human newline normalization", () => {
+    const sevenFields = [
+      { name: "title", column: "title", max: 100 },
+      { name: "game", column: "game", max: 100 },
+      { name: "location", column: "location", max: 255 },
+      { name: "organizer_name", column: "organizer_name", max: 500 },
+      { name: "description", column: "description", max: 1000 },
+      { name: "accessibility_notes", column: "accessibilityNotes", max: 1000 },
+      { name: "join_instructions", column: "join_instructions", max: 5000 },
+    ] as const;
+    // N code points after normalisation: mixed CRLF, CR and LF breaks, astral filler.
+    const mixed = (n: number) => `a\r\n😀\rb\n${"😀".repeat(n - 6)}`;
+    const mixedStored = (n: number) => `a\n😀\nb\n${"😀".repeat(n - 6)}`;
+    const nonMutating = async (run: () => Promise<Response> | Response, status: number) => {
+      const before = await fixture.db.select().from(events);
+      const res = await run();
+      expect(res.status).toBe(status);
+      expect(await fixture.db.select().from(events)).toEqual(before);
+      expect(await fixture.db.select().from(activityLog)).toEqual([]);
+      return res;
+    };
+    const savedRow = async (res: Response, mode: "new" | "edit") => {
+      const key =
+        mode === "edit"
+          ? KEY
+          : new URL(res.headers.get("location")!, APP_URL).pathname.split("/").pop()!;
+      const [row] = await fixture.db.select().from(events).where(eq(events.eventKey, key));
+      return row!;
+    };
+
+    for (const mode of ["new", "edit"] as const) {
+      const path = mode === "new" ? "/admin/events" : `/admin/events/${KEY}`;
+      for (const { name, column, max } of sevenFields) {
+        it(`${mode}: ${name} saves ${max} normalised characters as LF`, async () => {
+          const res = await post(path, await withBaseline(mode, { ...FORM, [name]: mixed(max) }));
+          expect(res.status).toBe(303);
+          const row = (await savedRow(res, mode)) as Record<string, unknown>;
+          expect(row[column]).toBe(mixedStored(max));
+          expect(String(row[column])).not.toContain("\r");
+        });
+        it(`${mode}: ${name} at ${max + 1} answers 422 without writes`, async () => {
+          const values = await withBaseline(mode, { ...FORM, [name]: mixed(max + 1) });
+          const res = await nonMutating(() => post(path, values), 422);
+          const html = await res.text();
+          expect([...html.matchAll(/data-testid="error-([^"]+)"/g)].map((m) => m[1])).toEqual([
+            name,
+          ]);
+        });
+        it(`${mode}: ${name} refuses a raw BOM without writes`, async () => {
+          const values = await withBaseline(mode, { ...FORM, [name]: "\uFEFFa\r\nb" });
+          const res = await nonMutating(() => post(path, values), 422);
+          expect(await res.text()).toContain('data-testid="error-' + name + '"');
+        });
+      }
+    }
+
+    it("edit: the re-rendered form shows saved LF values with no CR", async () => {
+      const values = {
+        ...FORM,
+        description: "one\r\ntwo\rthree",
+        accessibility_notes: "ramp\r\nlift",
+        join_instructions: "a\r\nb",
+      };
+      expect((await post(`/admin/events/${KEY}`, await withBaseline("edit", values))).status).toBe(
+        303,
+      );
+      const html = await getEditPage();
+      expect(html).not.toContain("\r");
+      expect(html).toContain("one\ntwo\nthree");
+      expect(html).toContain("ramp\nlift");
+    });
+
+    it("edit: an explicit blank organizer clears the stored value", async () => {
+      await fixture.db
+        .update(events)
+        .set({ organizer_name: "Ada\nLovelace" })
+        .where(eq(events.eventKey, KEY));
+      const res = await post(
+        `/admin/events/${KEY}`,
+        await withBaseline("edit", { ...FORM, organizer_name: "\r\n \t" }),
+      );
+      expect(res.status).toBe(303);
+      expect((await savedRow(res, "edit")).organizer_name).toBeNull();
+    });
+
+    it("rejects a cross-origin POST with no writes", async () => {
+      await nonMutating(
+        () =>
+          app.request(
+            `${APP_URL}/admin/events/${KEY}`,
+            {
+              method: "POST",
+              headers: { cookie, origin: "https://evil.example.test" },
+              body: new URLSearchParams({ ...FORM, description: "a\r\nb" }),
+            },
+            env,
+          ),
+        403,
+      );
+    });
+
+    it("refuses a POST without the session cookie with no writes", async () => {
+      const before = await fixture.db.select().from(events);
+      const res = await app.request(
+        `${APP_URL}/admin/events/${KEY}`,
+        {
+          method: "POST",
+          headers: { origin: APP_URL },
+          body: new URLSearchParams({ ...FORM, description: "a\r\nb" }),
+        },
+        env,
+      );
+      expect(res.status).toBe(303);
+      expect(res.status).not.toBe(200);
+      expect(res.headers.get("location")).toBe(
+        `/auth/recover?next=${encodeURIComponent(`/admin/events/${KEY}`)}`,
+      );
+      expect(res.headers.get("cache-control")).toBe("no-store, private");
+      expect(await fixture.db.select().from(events)).toEqual(before);
+      expect(await fixture.db.select().from(activityLog)).toEqual([]);
+    });
+  });
 
   afterEach(() => {
     vi.restoreAllMocks();
