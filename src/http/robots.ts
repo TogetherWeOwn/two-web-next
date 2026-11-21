@@ -1,6 +1,6 @@
 // Production apex. Anything else serving HTML is staging, a preview, or a
 // dev/test host — crawlers must not index it.
-const PRODUCTION_APEX = "togetherweown.com";
+export const PRODUCTION_APEX = "togetherweown.com";
 
 const hostOf = (value: string): string | null => {
   try {

@@ -116,7 +116,7 @@ for (const twin of ["Hono", "Kit"] as const) {
         .toMatch(twin === "Kit" ? (kitAvailability ?? availability) : availability);
       if (twin === "Kit" && ongoing && result.html.includes('data-testid="rsvp-going"')) {
         expect(result.html).toMatch(
-          /class="seat-card-note live-rsvp-end[^>]*>Ends <time[^>]*>[\s\S]*data-testid="rsvp-going"/,
+          /data-testid="kit-event-time"[\s\S]*<p[^>]*>Ends <time datetime="2035-10-20T13:00:00.000Z">[\s\S]*data-testid="kit-seat-card"[\s\S]*data-testid="rsvp-going"/,
         );
       }
       if (now >= END) {

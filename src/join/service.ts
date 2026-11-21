@@ -27,11 +27,15 @@
 // bodies and exception messages can quote the live token, so none of them is
 // ever a recordAttempt parameter and none is ever logged.
 import { addGuildMemberDetailed, type JoinResult } from "../discord";
-import { chargeWebThrottle, type ThrottleVerdict } from "../http/throttle";
+import { chargeWebThrottle, pruneWebThrottle, type ThrottleVerdict } from "../http/throttle";
 import { safeRequestId } from "../request-log";
 import type { Sql } from "../sessions";
 
-export { type ThrottleVerdict, WEB_THROTTLE_LOCK_TIMEOUT_MS } from "../http/throttle";
+export {
+  THROTTLE_COUNTER_RETENTION_MINUTES,
+  type ThrottleVerdict,
+  WEB_THROTTLE_LOCK_TIMEOUT_MS,
+} from "../http/throttle";
 
 export const JOIN_OUTCOMES = [
   "added",
@@ -49,15 +53,6 @@ export type JoinOutcome = (typeof JOIN_OUTCOMES)[number];
  */
 export const JOIN_THROTTLE_PER_MINUTE = 10;
 export const JOIN_THROTTLE_BUCKET = "join";
-// The privacy policy promises this window for rate-limit counters; change it only with a policy version.
-export const THROTTLE_COUNTER_RETENTION_MINUTES = 5;
-
-/**
- * Named wait for the best-effort throttle prune: the already-decided verdict
- * returns after at most this long, whether or not the database cancels the
- * statement.
- */
-const THROTTLE_PRUNE_WAIT_MS = 2_000;
 
 function exceptionClass(err: unknown): string {
   return err instanceof Error
@@ -158,54 +153,17 @@ export async function checkJoinThrottle(
     // at every caller (join funnel, generic middleware, profile writes).
     verdict = { limited: true, retryAfter: 1 };
   }
-  // Global expiry cleanup stays outside the per-bucket admission lock so it
-  // never prolongs it. Refused requests prune too: a bucket under sustained
-  // refused load would otherwise accumulate expired rows until some request
-  // is admitted. The prune is age-only, so it records no hit and never moves
-  // a request across the admit/refuse boundary. One bounded oldest-first
-  // batch per request (1,000 rows, the established cleanup batch, skip-locked
-  // so rows held by unrelated transactions wait for a later pass). It is
-  // best-effort: a throwing prune must not flip a decided refusal into an
-  // admission (the generic middleware catch) or a 500 on the direct join path
-  // (no catch there) — and a stalled prune must not hold the decided verdict
-  // either. The answer waits at most THROTTLE_PRUNE_WAIT_MS, independently of
-  // the transaction-local statement timeout; the server cancels a slow DELETE
-  // without changing pooled settings, while connection/transport stalls still
-  // cannot hold the caller. A late settlement is observed without a second
-  // warning or a verdict change.
-  const pruneDelete = (tx: Sql) =>
-    tx`DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) AS candidates WHERE web_throttle_hits.id = candidates.id`;
-  const pruneStore = sql as Sql & {
-    begin: (run: (tx: Sql) => Promise<void>) => Promise<void>;
-  };
-  const prune = (async () => {
-    try {
-      await pruneStore.begin(async (tx) => {
-        await tx.unsafe(`SET LOCAL statement_timeout = '${THROTTLE_PRUNE_WAIT_MS}ms'`);
-        await pruneDelete(tx);
-      });
-      return null;
-    } catch (err) {
-      return { err };
-    }
-  })();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<"deadline">((resolve) => {
-    timer = setTimeout(() => resolve("deadline"), THROTTLE_PRUNE_WAIT_MS);
-  });
-  try {
-    const failure = await Promise.race([prune, deadline]);
-    if (failure !== null) {
-      // Housekeeping failed or stalled; the verdict below was already decided.
-      // Log the exception class only: the message can quote statement bindings.
-      // An expired wait logs once as ThrottlePruneDeadline; a late settlement
-      // causes no second warning.
-      console.warn("Join throttle prune failed; keeping the decided verdict.", {
-        exception: failure === "deadline" ? "ThrottlePruneDeadline" : exceptionClass(failure.err),
-      });
-    }
-  } finally {
-    clearTimeout(timer);
+  // Prune outside the admission lock, including on refusal. A failure or a
+  // delay never changes the verdict; late settlements are observed by the helper.
+  const failure = await pruneWebThrottle(sql);
+  if (failure !== null) {
+    // Housekeeping failed or stalled; the verdict below was already decided.
+    // Log the exception class only: the message can quote statement bindings.
+    // An expired wait logs once as ThrottlePruneDeadline; a late settlement
+    // causes no second warning.
+    console.warn("Join throttle prune failed; keeping the decided verdict.", {
+      exception: failure === "deadline" ? "ThrottlePruneDeadline" : exceptionClass(failure.err),
+    });
   }
   return verdict;
 }

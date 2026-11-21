@@ -957,14 +957,14 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     expect(rsvp).toContain(
       "where at < clock_timestamp() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})",
     );
-    const service = read("src/join/service.ts");
-    expect(service).toContain("THROTTLE_COUNTER_RETENTION_MINUTES = 5");
-    expect(service).toContain(
+    const throttle = read("src/http/throttle.ts");
+    expect(throttle).toContain("THROTTLE_COUNTER_RETENTION_MINUTES = 5");
+    expect(throttle).toContain(
       "WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})",
     );
     // Bounded oldest-first batch, off the admission path.
-    expect(service).toContain("ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED");
-    expect(service).toContain(
+    expect(throttle).toContain("ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED");
+    expect(throttle).toContain(
       "DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits",
     );
     const doc = read("docs/member-erasure.md");

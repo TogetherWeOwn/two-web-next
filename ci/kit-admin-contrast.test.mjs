@@ -17,7 +17,7 @@ import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit.ts";
 import { EventFormPage, FeaturedFormPage } from "../src/admin/pages.tsx";
 import { EventEditableFields } from "../src/admin/pages/event-editable-fields.tsx";
 import { parseRecurrenceForm } from "../src/admin/recurrence.ts";
-import { parseEventForm, ValidationError } from "../src/admin/validation.ts";
+import { parseHumanEventForm, ValidationError } from "../src/admin/validation.ts";
 
 const output = resolve("web/.svelte-kit/output");
 const evidence = process.env.KIT_ADMIN_CONTRAST_EVIDENCE_DIR;
@@ -56,7 +56,7 @@ function rejectedFields(values, ...parsers) {
   }
   return fields;
 }
-const createErrors = rejectedFields(createRejected, parseEventForm, parseRecurrenceForm);
+const createErrors = rejectedFields(createRejected, parseHumanEventForm, parseRecurrenceForm);
 assert.deepEqual(
   Object.keys(createErrors).sort(),
   ["accessibility_notes", "join_instructions", "join_url", "organizer_name", "recurrence_count"],
@@ -81,6 +81,22 @@ async function focusOutlineColor(locator) {
   assert.equal(outline.style, "solid", `${locator} has a solid outline`);
   assert.ok(outline.width > 0, `${locator} has a nonzero outline`);
   return outline.color;
+}
+
+async function assertSingleServerError(page, id, message) {
+  const control = page.locator(`#${id}`);
+  assert.deepEqual(
+    (await control.getAttribute("aria-describedby"))
+      .split(/\s+/)
+      .filter((id) => id.endsWith("-error")),
+    [`${id}-error`],
+  );
+  const errors = await page.locator(`.field:has(#${id}) .error:visible`).allTextContents();
+  assert.deepEqual(
+    errors.map((text) => text.trim()),
+    [message],
+  );
+  assert.equal(await control.evaluate((el) => el.validationMessage), message);
 }
 
 before(async () => {
@@ -122,7 +138,7 @@ before(async () => {
   assert.equal(populatedEvent.kind, "ok");
   // The rejected edit keeps the saved heading; the form echoes the submission.
   const editRejected = { ...event.view.values, title: editRejectedTitle };
-  const editErrors = rejectedFields(editRejected, parseEventForm);
+  const editErrors = rejectedFields(editRejected, parseHumanEventForm);
   assert.deepEqual(Object.keys(editErrors), ["title"], "only the title is rejected");
   fixtures = [
     { name: "event-new", path: "/admin/events/new", data: buildEventCreateView() },
@@ -385,12 +401,20 @@ describe("Kit admin contrast", () => {
                 createRejected.recurrence_count,
               );
               assert.equal(await page.locator("fieldset #f-recurrence-count-error").count(), 1);
+              for (const field of ["accessibility_notes", "organizer_name", "join_instructions"]) {
+                await assertSingleServerError(
+                  page,
+                  `f-${field.replaceAll("_", "-")}`,
+                  createErrors[field],
+                );
+              }
             }
           }
           const summary = page.locator("[data-admin-validation-summary]");
           const summaryLink = summary.locator("a").first();
           if (name === "event-edit-invalid") {
             assert.equal(await page.locator("#f-title-error").count(), 1);
+            await assertSingleServerError(page, "f-title", "Keep the title to 100 characters.");
             assert.equal(await summary.locator('a[href="#f-title"]').count(), 1);
             assert.equal(await page.locator("#f-title").inputValue(), editRejectedTitle);
             assert.equal(
@@ -460,9 +484,7 @@ describe("Kit admin contrast", () => {
             );
           if (isTextLimit) {
             assert.ok(
-              measured.some(
-                ({ text }) => text === "Keep the accessibility_notes to 1000 characters.",
-              ),
+              measured.some(({ text }) => text === "Keep accessibility notes to 1000 characters."),
             );
           }
           if (isInvalid) {
@@ -485,8 +507,6 @@ describe("Kit admin contrast", () => {
               ),
             );
           }
-          assert.deepEqual(unexpected, [], "no live or mutating requests");
-          assert.deepEqual(errors, [], "shipped islands execute without errors");
           assert.deepEqual(
             result.incomplete,
             [],
@@ -542,6 +562,34 @@ describe("Kit admin contrast", () => {
               });
             }
           }
+          if (name === "event-edit-invalid") {
+            // Save moves focus, so exercise submission after checking the summary link.
+            await page.emulateMedia({ forcedColors: "none" });
+            const form = page.locator("form[data-event-editor]");
+            await form.evaluate((el) => {
+              el.addEventListener("submit", (event) => {
+                // Observe a real submit event without sending a POST.
+                event.preventDefault();
+                el.setAttribute("data-submitted-title", new FormData(el).get("title"));
+              });
+            });
+            const save = page.getByTestId("save-event");
+            await save.click();
+            assert.equal(await form.getAttribute("data-submitted-title"), null);
+
+            const title = page.locator("#f-title");
+            await title.fill("Corrected game night");
+            assert.equal(await title.evaluate((el) => el.validity.valid), true);
+            assert.equal(
+              (await page.locator("#f-title-error").textContent()).trim(),
+              "Keep the title to 100 characters.",
+            );
+            assert.equal(await summary.isVisible(), true);
+            await save.click();
+            assert.equal(await form.getAttribute("data-submitted-title"), "Corrected game night");
+          }
+          assert.deepEqual(unexpected, [], "no live or mutating requests");
+          assert.deepEqual(errors, [], "shipped islands execute without errors");
         } finally {
           await context.close();
         }
