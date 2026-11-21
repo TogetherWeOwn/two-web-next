@@ -11,11 +11,16 @@ on:
         description: Harness PR squash commit from the merge handoff (not a checkout ref)
         required: true
         type: string
+      publication_admitted:
+        description: Confirm separate one-shot admission, in-order reviewers, and early deletion owner
+        required: true
+        default: false
+        type: boolean
 
 permissions: {}
 
 env:
-  APP_SHA: b2025dceb93efbc0cac0a7149afe7ded42269afb
+  APP_SHA: bf486005e1c0a7395af7011411255af8f58510b9
 
 jobs:
   provenance:
@@ -32,10 +37,12 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           REVIEWED_HEAD: ${{ inputs.reviewed_head }}
           SQUASH_SHA: ${{ inputs.squash_sha }}
+          PUBLICATION_ADMITTED: ${{ inputs.publication_admitted }}
         run: |
           set -euo pipefail
           trap 'echo "::error::Diagnostic provenance refused"' ERR
           [[ "$GITHUB_REPOSITORY" == TogetherWeOwn/two-web-next && "$GITHUB_REF" == refs/heads/main &&
+             "$GITHUB_EVENT_NAME" == workflow_dispatch && "$PUBLICATION_ADMITTED" == true &&
              "$PROTECTED" == true && "$WORKFLOW_SHA" == "$GITHUB_SHA" && "$GITHUB_RUN_ATTEMPT" == 1 ]] || false
           [[ "$REVIEWED_HEAD" =~ ^[a-f0-9]{40}$ && "$SQUASH_SHA" =~ ^[a-f0-9]{40}$ ]] || false
           api="repos/$GITHUB_REPOSITORY"
@@ -48,7 +55,8 @@ jobs:
           status=$(gh api "$api/compare/$SQUASH_SHA...$WORKFLOW_SHA?per_page=1" --jq .status)
           [[ "$status" == ahead || "$status" == identical ]] || false
           for file in .github/workflows/kit-activity-log-diagnostic.yml ci/kit-activity-log-run.sh \
-            ci/kit-activity-log-overlay.mjs ci/kit-activity-log-assert.mjs; do
+            ci/kit-activity-log-overlay.mjs ci/kit-activity-log-assert.mjs ci/kit-activity-log-metrics.mjs \
+            ci/kit-activity-log-png.mjs ci/kit-activity-log-visual.mjs; do
             pinned=$(gh api "$api/contents/$file?ref=$REVIEWED_HEAD" --jq 'select(.type == "file") | .sha')
             [[ "$pinned" =~ ^[a-f0-9]{40}$ ]] || false
             for sha in "$SQUASH_SHA" "$WORKFLOW_SHA"; do
@@ -110,6 +118,21 @@ jobs:
         run: |
           exec env -i PATH="$PATH" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" GITHUB_ACTIONS="$GITHUB_ACTIONS" \
             RUNNER_OS="$RUNNER_OS" RUNNER_TEMP="$RUNNER_TEMP" RUNNER_TRACKING_ID="${RUNNER_TRACKING_ID:?}" bash harness/ci/kit-activity-log-run.sh
+      - name: Validate publication directory
+        shell: bash
+        run: |
+          node --input-type=module - <<'JS' >> "$GITHUB_STEP_SUMMARY"
+          import { validatePngDirectory } from './harness/ci/kit-activity-log-png.mjs';
+          const inventory = validatePngDirectory(`${process.env.RUNNER_TEMP}/kit-activity-log-approved`);
+          for (const { name, sha256 } of inventory) console.log(`- ${name}: SHA-256 ${sha256}`);
+          JS
+      - name: Publish only the approved viewport captures
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-activity-log-viewports
+          path: ${{ runner.temp }}/kit-activity-log-approved/
+          retention-days: 1
+          if-no-files-found: error
       - name: Clear fixture state
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/kit-activity-log" "$GITHUB_WORKSPACE/app"
+        run: rm -rf -- "$RUNNER_TEMP/kit-activity-log" "$RUNNER_TEMP/kit-activity-log-approved" "$GITHUB_WORKSPACE/app"
