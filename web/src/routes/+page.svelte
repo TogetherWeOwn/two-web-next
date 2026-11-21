@@ -20,6 +20,7 @@ import {
 import { canonicalUrl } from "../../../src/seo";
 import { siteJsonLd } from "../../../src/seo-json-ld";
 import type { PageProps } from "./$types";
+import HomeGuestIntro from "./HomeGuestIntro.svelte";
 import "./home-join-band.css";
 
 let { data }: PageProps = $props();
@@ -251,7 +252,7 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
 {/snippet}
 
 {#snippet homeBelowHero()}
-  {#if !session?.member}{@render homeHighlights()}{/if}
+  {#if !session?.member}<HomeGuestIntro />{/if}
   <section class="week-band" aria-labelledby="home-week-heading">
     <div class="band-head">
       <h2 id="home-week-heading">{showMemberDetails ? "Your week," : "This week,"} <span>when we play.</span></h2>

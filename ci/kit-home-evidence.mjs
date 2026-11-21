@@ -135,6 +135,32 @@ export async function assertHomeEvidence(page, state) {
     assert.equal(await count(id), memberWithRsvp ? 1 : 0, `${state}: ${id}`);
   assert.equal(await count("notice"), state === "joinFailed" ? 1 : 0, `${state}: notice`);
   assert.equal(await page.getByTestId("home-highlights").locator("li").count(), 4);
+  const intro = page.getByTestId("home-guest-intro");
+  assert.equal(await intro.count(), session?.member ? 0 : 1, `${state}: guest intro`);
+  if (!session?.member) {
+    const items = intro.getByRole("listitem");
+    const boxes = await Promise.all((await items.all()).map((item) => item.boundingBox()));
+    const mobile = page.viewportSize().width <= 820;
+    assert.ok(
+      boxes.every((box, i) => {
+        if (!box) return false;
+        if (i === 0) return true;
+        const previous = boxes[i - 1];
+        return mobile ? box.y > previous.y : box.x > previous.x && box.y === previous.y;
+      }),
+      `${state}: four highlights in reading order`,
+    );
+    const lobby = intro.getByRole("link", { name: "View the Discord lobby" });
+    const invite = intro.getByRole("link", { name: "Open Discord" });
+    assert.equal(await lobby.getAttribute("href"), "/join#join-heading");
+    assert.equal(await invite.getAttribute("href"), "/discord");
+    await lobby.focus();
+    await page.keyboard.press("Tab");
+    assert.ok(await invite.evaluate((el) => el.matches(":focus-visible")));
+    await page.keyboard.press("Shift+Tab");
+    assert.ok(await lobby.evaluate((el) => el.matches(":focus-visible")));
+    await lobby.evaluate((el) => el.blur());
+  }
   if (!session?.member && state !== "sessionOutage" && state !== "joinFailed")
     assert.match(await page.getByTestId("join-band").innerText(), /Approve once with Discord/);
   assert.equal(
