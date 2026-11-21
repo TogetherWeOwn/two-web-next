@@ -12,7 +12,9 @@ let {
   member = false,
   loginReturnTo = null,
   accountChrome,
+  authenticated = false,
   hideAccount = false,
+  menuFallbackOnly = false,
 }: {
   /** "leaderboard" also renders the member board link (see the nav below).
     "event" marks Events as the current location on event descendants. */
@@ -24,11 +26,14 @@ let {
   accountChrome?: Snippet;
   /** Drop the account area entirely, as Hono account={false} does on sessionless pages. */
   hideAccount?: boolean;
+  /** Server-established session presentation, separate from membership and chrome. */
+  authenticated?: boolean;
+  menuFallbackOnly?: boolean;
 } = $props();
+const menuIsland = '<script src="/islands/site-header-menu.js" defer></' + "script>";
 </script>
 
-<a class="skip-link" href="#main">Skip to content</a>
-<header class="bar site-header" data-kit-site-header>
+{#snippet menuContent()}
   <nav class="main-nav" aria-label="Primary">
     <a href="/" aria-current={activeNav === "home" ? "page" : undefined}>Home</a>
     <a
@@ -49,15 +54,35 @@ let {
     <img src="/logo.svg" width="180" height="50" alt="Together We Own" />
   </a>
   {#if !hideAccount}
-    <nav class="header-account" aria-label="Account">
+    <nav class="header-account" class:menu-signed-in={authenticated} aria-label="Account">
       {#if accountChrome}
         {@render accountChrome()}
       {:else}
-        <div>
+        <div class:menu-desktop-account={authenticated}>
           <span class="account-caption">Welcome, guest</span>
           <a class="btn" href={signInUrl(loginReturnTo)} data-testid="signin">Sign in with Discord</a>
         </div>
       {/if}
+      {#if authenticated}
+        <form class="menu-account-actions" method="post" action="/logout">
+          {#if member || activeNav === "leaderboard"}<a href="/profile">Profile</a>{/if}
+          <button type="submit" data-testid="menu-signout">Sign out</button>
+        </form>
+      {/if}
     </nav>
   {/if}
+{/snippet}
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="bar site-header" id="menu-sheet" data-kit-site-header>
+  <a class="brand menu-brand" href="/" aria-label="Together We Own homepage">
+    <img src="/logo.svg" width="180" height="50" alt="Together We Own" />
+  </a>
+  <a class="menu-toggle" id="kit-menu" href="#menu-sheet" aria-label="Menu" aria-controls="kit-menu-panel">
+    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+  </a>
+  <div class="menu-sheet" id="kit-menu-panel">
+    {@render menuContent()}
+    <a class="menu-close" href="#kit-menu">Close menu</a>
+  </div>
 </header>
+{#if !menuFallbackOnly}{@html menuIsland}{/if}
