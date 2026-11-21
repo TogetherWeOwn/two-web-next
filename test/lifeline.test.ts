@@ -3,9 +3,9 @@ import { expect, it } from "vitest";
 import type { LifelineFacts } from "../web/src/lib/lifeline";
 
 // Node strips the types without making root Vitest resolve the Kit tsconfig.
-const { composeLifeline } = createRequire(import.meta.url)(
-  "../web/src/lib/lifeline.ts",
-) as typeof import("../web/src/lib/lifeline");
+const require = createRequire(import.meta.url);
+const { composeLifeline } =
+  require("../web/src/lib/lifeline.ts") as typeof import("../web/src/lib/lifeline");
 
 const min = 60_000;
 const eventKey = "raid";
