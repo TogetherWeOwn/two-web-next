@@ -516,9 +516,12 @@ migration is performed by its selftest.
   operation's exact, non-empty list of full journal tags in order, separated by
   commas without spaces. Use the approved scope, not tags inferred from the
   live ledger. Set the pending tags before setting the approved SHA. Clear the
-  SHA first, then the pending tags, after the run finishes or the operation is
-  abandoned. Clearing them does not revoke a run that already started. Do not
-  retry with a different scope without approval.
+  SHA first, then the pending tags, after the operation finishes or is abandoned.
+  If commit is uncertain, keep the original pins only while pursuing the
+  separately approved readback below. Clear them when readback finishes or is
+  abandoned. This does not authorize another apply. Clearing the pins does not
+  revoke a run that already started. Do not retry with a different scope without
+  approval.
 - The workflow reads the non-secret pending tags from the GitHub REST endpoint
   for the `production` Environment variable, not the merged `vars` context.
   A same-named repository or organization variable cannot substitute. A future

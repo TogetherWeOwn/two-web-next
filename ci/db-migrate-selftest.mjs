@@ -217,6 +217,17 @@ test("the workflow's actual shell gate denies disabled production and non-main r
     }).status,
     1,
   );
+  const stagingReadback = spawnSync("bash", ["-c", script], {
+    env: { ...process.env, ...mainEnv, READBACK_ONLY: "true" },
+    encoding: "utf8",
+  });
+  assert.equal(stagingReadback.status, 1);
+  assert.match(stagingReadback.stderr, /Readback-only is production-only/);
+  const productionReadback = spawnSync("bash", ["-c", script], {
+    env: { ...process.env, ...mainEnv, ...productionEnv, READBACK_ONLY: "true" },
+    encoding: "utf8",
+  });
+  assert.equal(productionReadback.status, 0, productionReadback.stderr);
   assert.ok(workflow.includes("    runs-on: ubuntu-latest\n"));
   assert.match(workflow, /environment: \$\{\{ inputs.target \}\}/);
   assert.match(workflow, /cancel-in-progress: false/);
