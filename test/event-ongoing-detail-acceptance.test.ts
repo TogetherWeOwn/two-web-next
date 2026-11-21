@@ -162,6 +162,7 @@ for (const twin of ["Hono", "Kit"] as const) {
         "/islands/going-count.js",
         ...(twin === "Kit" ? ["/islands/kit-live-event-time.js"] : []),
         "/islands/rsvp-button.js",
+        ...(twin === "Kit" ? ["/islands/site-header-menu.js"] : []),
       ]);
       expect(surface.scripts.every((script) => script.body === "")).toBe(true);
       expect(surface.handlers).toEqual([]);
