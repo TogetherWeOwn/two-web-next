@@ -2,7 +2,7 @@
 // Kit hook uses while Hono retains OAuth/session authority.
 //
 // The bridge is read-only: it verifies the signed __Host session cookie with
-// the same hono primitive Hono uses (parseSigned), hashes the token, and makes
+// the shared Hono-compatible codec, hashes the token, and makes
 // exactly one store.get per request (memoized, so concurrent reads share one
 // decision). It never rotates, revokes, or sets cookies — rotation stays
 // route-specific in Hono's readSession, and flashes stay Hono-consumed until a
@@ -15,6 +15,10 @@
 //   is never reported as a logout, so the UI can show "unknown" instead of
 //   flipping a member to logged-out.
 // Local fixtures only: memory store, serializeSigned-minted cookies, no DB.
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { parseSigned, serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it, vi } from "vitest";
 import { AUTH_STATUS_COOKIE } from "../src/auth-status";
@@ -85,6 +89,44 @@ const seedSession = async (
   return { token, row };
 };
 
+it("lints Hono and alternate app-entry imports out of the Kit session bridge", () => {
+  const biome = resolve("node_modules/@biomejs/biome/bin/biome");
+  const root = mkdtempSync(join(tmpdir(), "kit-session-lint-"));
+  const source = "src/kit-session.ts";
+  try {
+    copyFileSync("biome.json", join(root, "biome.json"));
+    mkdirSync(join(root, "src"));
+    const lintImport = (specifier: string) => {
+      writeFileSync(join(root, source), `import ${JSON.stringify(specifier)};\n`);
+      const result = spawnSync(process.execPath, [biome, "lint", "--vcs-enabled=false", source], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 3000,
+      });
+      if (result.error) throw result.error;
+      return result;
+    };
+    for (const specifier of [
+      "./index",
+      "./index.tsx",
+      "./index.js",
+      "../src/index",
+      "../src/index.js",
+      "../src/",
+      "hono",
+      "hono/utils/cookie",
+    ]) {
+      const { status, stderr } = lintImport(specifier);
+      expect(status, `${specifier}: ${stderr}`).toBe(1);
+      expect(stderr, specifier).toContain("lint/style/noRestrictedImports");
+    }
+    const { status, stderr } = lintImport("./session-cookie");
+    expect(status, stderr).toBe(0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 describe("resolveRequestSession (one request, one session decision)", () => {
   it("resolves a valid signed session with the row's member/moderator bits", async () => {
     const store = createMemorySessionStore();
@@ -104,6 +146,31 @@ describe("resolveRequestSession (one request, one session decision)", () => {
         moderator: true,
       },
     });
+  });
+
+  it("uses Hono's pair selection for quoted values and duplicate session cookies", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store);
+    const good = await pair(SESSION_COOKIE, token);
+    const wire = good.slice(SESSION_COOKIE.length + 1);
+    const quoted = `${SESSION_COOKIE} = "${wire}"`;
+    const invalid = `${SESSION_COOKIE}=unsigned`;
+    const malformed = `${SESSION_COOKIE}=un"quoted`;
+    for (const [pairs, status] of [
+      [[quoted, invalid], "authenticated"],
+      [[invalid, good], "guest"],
+      [[malformed, good], "authenticated"],
+    ] as const) {
+      const request = requestWith([...pairs]);
+      const hono = await parseSigned(request.headers.get("cookie") ?? "", SECRET);
+      expect(hono[SESSION_COOKIE] === token).toBe(status === "authenticated");
+      const decision = await resolveRequestSession(request, {
+        sessionSecret: SECRET,
+        store,
+        roleRecheck: null,
+      });
+      expect(decision.status).toBe(status);
+    }
   });
 
   it("reports guest when no session cookie is presented", async () => {
