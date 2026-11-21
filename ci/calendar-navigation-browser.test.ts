@@ -2,9 +2,14 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
-import { GAME_ORIGIN, type GameTwin } from "../test/helpers/calendar-game-recovery";
+import {
+  GAME_ORIGIN,
+  gameRecoveryFixture,
+  gameRow,
+  type GameTwin,
+} from "../test/helpers/calendar-game-recovery";
 import {
   firstPageName,
   hidePastName,
@@ -28,7 +33,13 @@ beforeEach(() => __resetAnonEventCacheForTests());
 const publicRoot = resolve("public");
 const entry = "/events?game=Chess&past=1&page=2";
 
-async function open(twin: GameTwin, path = entry, width = 390, javaScriptEnabled = true) {
+async function open(
+  twin: GameTwin,
+  path = entry,
+  width = 390,
+  javaScriptEnabled = true,
+  render?: ReturnType<typeof navigationRouteFixture>["request"],
+) {
   const fixture = navigationRouteFixture();
   const requests: { path: string; fragment: boolean; method: string }[] = [];
   const errors: string[] = [];
@@ -54,7 +65,7 @@ async function open(twin: GameTwin, path = entry, width = 390, javaScriptEnabled
         fail = false;
         return route.fulfill({ status: 503, contentType: "text/html", body: "Unavailable" });
       }
-      const response = await fixture.request(twin, url.pathname + url.search, fragment);
+      const response = await (render ?? fixture.request)(twin, url.pathname + url.search, fragment);
       return route.fulfill({
         status: response.status,
         headers: Object.fromEntries(response.headers),
@@ -142,6 +153,80 @@ function clean(journey: Awaited<ReturnType<typeof open>>, documents = 1) {
 for (const twin of ["Hono", "Kit"] as const) {
   describe(`${twin}: shipped schedule navigation in Chromium`, () => {
     for (const width of [1280, 390]) {
+      it(`${width}: calendar status badges keep whole words within their cells`, async () => {
+        const fixture = gameRecoveryFixture({
+          upcomingRows: [
+            {
+              ...gameRow(1, "Chess"),
+              title: "Cooperative expedition",
+              startsAt: new Date("2099-05-05T20:00:00Z"),
+              endsAt: new Date("2099-05-05T22:00:00Z"),
+            },
+            {
+              ...gameRow(2, "Chess"),
+              title: "Chess tournament",
+              startsAt: new Date("2099-05-05T22:00:00Z"),
+              endsAt: new Date("2099-05-05T23:00:00Z"),
+              status: "cancelled",
+            },
+          ],
+        });
+        const path = "/events?view=calendar&month=2099-05";
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2099-05-05T21:00:00Z"));
+        const response = await fixture.render(twin, path).finally(() => vi.useRealTimers());
+        const journey = await open(twin, path, width, true, async () => response.clone());
+        const { page } = journey;
+        const badges = page.locator("[data-cal-jump] .schedule-badge");
+        expect(await badges.allTextContents()).toEqual(["Happening now", "Cancelled"]);
+        await page.evaluate(async () => {
+          await document.fonts.ready;
+        });
+        const lines = await badges.evaluateAll((nodes) =>
+          nodes.map((badge) => {
+            const text = Array.from(badge.childNodes).find(
+              (node): node is Text => node instanceof Text && node.data.trim() !== "",
+            );
+            if (!text) throw new Error("Missing calendar badge text");
+            const box = badge.getBoundingClientRect();
+            const cell = badge.closest("td")?.getBoundingClientRect();
+            if (!cell || box.left < cell.left || box.right > cell.right)
+              throw new Error("Badge overflows its calendar cell");
+            return Array.from(text.data.matchAll(/\S+/g), (word) => {
+              const range = document.createRange();
+              range.setStart(text, word.index);
+              range.setEnd(text, word.index + word[0].length);
+              return Array.from(range.getClientRects(), ({ left, right }) =>
+                left >= box.left && right <= box.right ? word[0] : "overflow",
+              );
+            });
+          }),
+        );
+        expect(lines).toEqual([[["Happening"], ["now"]], [["Cancelled"]]]);
+        clean(journey);
+        if (process.env.GITHUB_ACTIONS === "true") {
+          const dir = "artifacts/a11y/calendar-badge-wrap";
+          mkdirSync(dir, { recursive: true });
+          const name = `${twin.toLowerCase()}-${width}x${width === 390 ? 844 : 800}`;
+          const cell = page.locator('td[data-date="2099-05-05"]');
+          const scrollToCell = () =>
+            cell.evaluate((node) => node.scrollIntoView({ block: "center", inline: "nearest" }));
+          await scrollToCell();
+          await page.screenshot({ path: resolve(dir, `${name}-after.png`) });
+          await badges.evaluateAll((nodes) => {
+            for (const badge of nodes as HTMLElement[]) {
+              // Recreate the old inherited wrap and padding on the same rendered page.
+              badge.style.overflowWrap = "inherit";
+              badge.style.maxInlineSize = "none";
+              badge.style.fontSize = "inherit";
+              badge.style.paddingInline = ".5rem";
+            }
+          });
+          await scrollToCell();
+          await page.screenshot({ path: resolve(dir, `${name}-before.png`) });
+        }
+      });
+
       it(`${width}: CONTROL: a closed preview stays absent until a native Show turn opens it`, async () => {
         const journey = await open(twin, "/events?game=Chess&page=2", width);
         const { page } = journey;

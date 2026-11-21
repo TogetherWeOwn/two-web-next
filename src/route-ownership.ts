@@ -26,6 +26,7 @@ import { STAGING_APP_URL } from "./qa";
 import { newRequestId, safeRequestId } from "./request-log";
 import { withStreamedBody } from "./html-stream";
 import { applySingleValidator } from "./http/conditional";
+import { PRODUCTION_APEX } from "./http/robots";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitHomePanels } from "./kit-home-panels";
 import type { KitLocals } from "./kit-session";
@@ -35,6 +36,7 @@ import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 import { type MemberRead, memberReadResponse } from "./member-reads";
 import { JOIN_RESULT_COOKIE, deleteOpts } from "./return-journey";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
+import { STAGING_STATIC_DOCUMENT_READY } from "./kit-staging-static";
 import { isTrustedHost } from "./trust-hosts";
 
 export type RouteOwner = "kit" | "hono";
@@ -52,6 +54,8 @@ export interface OwnedRoute {
   // Native rendering stays off until explicitly enabled.
   enabled: boolean;
   reads?: RouteReads;
+  // An exact-origin staging document opt-in; no implicit HEAD or Kit data route.
+  documentGetOnly?: true;
 }
 
 export interface RouteDecision {
@@ -60,8 +64,8 @@ export interface RouteDecision {
 }
 
 // The archive page, events list, hot-zone heatmaps, member board and the
-// about/faq, join and recovery leaves render natively; privacy/rules/profile
-// reads and the remaining admin routes stay on Hono pending enablement review.
+// about/faq, join and recovery leaves render natively. Privacy and rules are
+// staging-only opt-ins; profile and the remaining admin routes stay on Hono.
 // Returning an entry to `enabled: false` restores Hono ownership for rollback.
 // Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
@@ -339,11 +343,11 @@ export function fixtureManifestFor(env: {
   return routes;
 }
 
-// Staging Kit starts with every route on Hono. The reviewed deploy workflow
-// may opt into only the exact GET entries listed below, and only if the shared
-// manifest enables them. The staging hostname or any rollout flag selects this
-// restrictive manifest, even with a misconfigured APP_URL. Only the exact
-// staging APP_URL can enable a family; absent or malformed flags keep it off.
+// Staging Kit starts with every route on Hono. The staging hostname or any
+// rollout flag selects this restrictive manifest, even with a misconfigured
+// APP_URL. Only the exact staging APP_URL can enable a family; absent or
+// malformed flags keep it off. Staging-only approvals do not change the
+// shared manifest used outside the rollout.
 export function stagingManifestFor(
   env: {
     APP_URL?: string;
@@ -354,6 +358,7 @@ export function stagingManifestFor(
     KIT_ROUTE_JOIN?: string;
   },
   routes: OwnedRoute[] = ROUTE_MANIFEST,
+  staticDocumentReady = STAGING_STATIC_DOCUMENT_READY,
 ): OwnedRoute[] | undefined {
   let app: URL | undefined;
   try {
@@ -378,6 +383,14 @@ export function stagingManifestFor(
   const homeEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_HOME === "true";
   const joinEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_JOIN === "true";
   return routes.map((entry) => {
+    const documentReady = staticDocumentReady.get(entry.path);
+    if (entry.method === "GET" && documentReady !== undefined) {
+      return {
+        ...entry,
+        enabled: staticEnabled && entry.reads === "public" && documentReady,
+        documentGetOnly: true,
+      };
+    }
     const familyEnabled =
       entry.method === "GET" &&
       ((entry.path === "/events" && eventsEnabled) ||
@@ -387,6 +400,53 @@ export function stagingManifestFor(
         ((entry.path === "/about" || entry.path === "/faq") && staticEnabled));
     return { ...entry, enabled: entry.enabled && familyEnabled };
   });
+}
+
+const PRODUCTION_APP_URL = `https://${PRODUCTION_APEX}`;
+const PRODUCTION_DOCUMENT_VARY = [
+  "X-Two-Island",
+  "Sec-Fetch-Dest",
+  "Sec-Fetch-Mode",
+  "Purpose",
+  "Sec-Purpose",
+  "X-Moz",
+];
+type ProductionRollout = Pick<HookDispatchDeps, "appUrl" | "kitRouteArchive" | "kitRouteStatic">;
+
+function isProductionRolloutPath(url: URL, deps: ProductionRollout): boolean {
+  return (
+    deps.appUrl === PRODUCTION_APP_URL &&
+    url.origin === PRODUCTION_APP_URL &&
+    deps.kitRouteArchive === "true" &&
+    (url.pathname === "/events/past" ||
+      (deps.kitRouteStatic === "true" && (url.pathname === "/about" || url.pathname === "/faq")))
+  );
+}
+
+// A request at the production apex must never fall through to the staging or
+// preview manifests. Only canonical public document GETs can opt in here.
+export function productionManifestFor(
+  event: Pick<HookEventLike, "request" | "url" | "isDataRequest">,
+  deps: ProductionRollout,
+  routes: OwnedRoute[] = ROUTE_MANIFEST,
+): OwnedRoute[] | undefined {
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.hostname !== PRODUCTION_APEX && event.url.hostname !== PRODUCTION_APEX) {
+    return undefined;
+  }
+  if (
+    !isProductionRolloutPath(requestUrl, deps) ||
+    event.url.origin !== PRODUCTION_APP_URL ||
+    event.url.pathname !== requestUrl.pathname ||
+    !isKitNoticeDocument(event.request, event.isDataRequest) ||
+    // Older Firefox sends X-Moz: prefetch without Fetch Metadata.
+    /(?:^|,)\s*prefetch\s*(?:,|$)/i.test(event.request.headers.get("x-moz") ?? "")
+  ) {
+    return [];
+  }
+  return routes
+    .filter((entry) => entry.method === "GET" && entry.path === requestUrl.pathname)
+    .map((entry) => ({ ...entry, enabled: entry.enabled && entry.reads === "public" }));
 }
 
 // Response header set only on the Kit-rendered branch of the hook, so the
@@ -481,6 +541,7 @@ function enabledRouteFor(
   decision: RouteDecision,
   manifest: OwnedRoute[],
   stripData = true,
+  originalUrl?: string,
 ): OwnedRoute | undefined {
   const normalized = normalizePath(decision.path, stripData);
   if (normalized === null) return undefined;
@@ -489,7 +550,13 @@ function enabledRouteFor(
   const lookup = upper === "HEAD" ? "GET" : upper;
   const candidates = manifest.filter((entry) => entry.method.toUpperCase() === lookup);
   const best = bestMatch(normalized, candidates);
-  return best?.enabled ? best : undefined;
+  if (!best?.enabled) return undefined;
+  if (best.documentGetOnly) {
+    const documentUrl = originalUrl ? new URL(originalUrl) : undefined;
+    if (documentUrl && documentUrl.origin !== STAGING_APP_URL) return undefined;
+    if (upper !== "GET" || (documentUrl?.pathname ?? decision.path) !== best.path) return undefined;
+  }
+  return best;
 }
 
 export function resolveRouteOwner(
@@ -499,8 +566,8 @@ export function resolveRouteOwner(
   return enabledRouteFor(decision, manifest) ? "kit" : "hono";
 }
 
-// Hook entry point: pure function of method + path. Reads nothing else, so the
-// body is still unread and the URL (query included) is intact for the owner.
+// Hook entry point: checks the method and URL, leaving the body unread and
+// the original URL (query included) intact for the owner.
 export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST, url?: URL) {
   // Kit has already stripped a literal data suffix from event.url. Do not
   // strip again: an encoded suffix is not a Kit data request.
@@ -508,6 +575,7 @@ export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MAN
     { method: request.method, path: (url ?? new URL(request.url)).pathname },
     manifest,
     !url,
+    request.url,
   );
 }
 
@@ -563,9 +631,8 @@ export interface HookDispatchDeps {
   appUrl: string;
   // Signature-only notice peek, independent of the public route's session store.
   sessionSecret?: string;
-  // Staging-only rollout controls. The staging APP_URL selects a fail-closed
-  // manifest that admits only these reviewed families; unset or malformed
-  // values keep every route on Hono. Preview/local parity stays unchanged.
+  // Archive and static opt-ins are shared by the separate staging and
+  // production selectors. Events, home and join are staging-only.
   kitRouteArchive?: string;
   kitRouteStatic?: string;
   kitRouteEvents?: string;
@@ -931,7 +998,27 @@ export async function dispatchHookRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
 ): Promise<Response> {
-  const response = await dispatchOwnedRequest(event, deps);
+  let response = await dispatchOwnedRequest(event, deps);
+  // Keep opted-in responses out of HTTP caches so a rollback reaches the
+  // Worker. The renderer-scoped in-memory archive cache is unaffected.
+  if (
+    (event.request.method === "GET" || event.request.method === "HEAD") &&
+    isProductionRolloutPath(new URL(event.request.url), deps)
+  ) {
+    const headers = new Headers(response.headers);
+    headers.set("cache-control", "private, no-store");
+    const vary = headers.get("vary")?.toLowerCase().split(/,\s*/) ?? [];
+    if (!vary.includes("*")) {
+      for (const name of PRODUCTION_DOCUMENT_VARY) {
+        if (!vary.includes(name.toLowerCase())) headers.append("vary", name);
+      }
+    }
+    response = new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
   return applySingleValidator(event.request, response);
 }
 
@@ -949,6 +1036,7 @@ async function dispatchOwnedRequest(
   const route = decideRoute(
     event.request,
     deps.manifest ??
+      productionManifestFor(event, deps) ??
       fixtureManifestFor({
         APP_URL: deps.appUrl,
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,

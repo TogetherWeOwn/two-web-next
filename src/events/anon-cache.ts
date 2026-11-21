@@ -95,8 +95,12 @@ export function anonEventsKey(method: string, pathAndSearch: string, island: boo
   return `${method} /events${pathAndSearch} island=${island ? "1" : "0"}`;
 }
 
-export function anonPastKey(method: string, page: number): string {
-  return `${method} /events/past page=${page}`;
+export function anonPastKey(
+  method: string,
+  page: number,
+  renderer: "hono" | "kit" = "hono",
+): string {
+  return `${method} /events/past page=${page} renderer=${renderer}`;
 }
 
 export interface AnonEligibility {

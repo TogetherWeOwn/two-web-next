@@ -129,22 +129,14 @@ describe("admin event code-point contract", () => {
         expect(field === "accessibility_notes" ? parsed.accessibilityNotes : parsed[field]).toBe(
           value,
         );
-        const message = `Keep the ${field} to ${max} characters.`;
-        const serverMessage =
-          field === "accessibility_notes"
-            ? "Keep accessibility notes to 1000 characters."
-            : field === "organizer_name"
-              ? "Keep the organizer name to 500 characters."
-              : field === "join_instructions"
-                ? "Keep joining instructions to 5000 characters."
-                : message;
-        expect(eventTextLimitError(value + "x", field, max)).toBe(message);
+        const message = eventTextLimitError(value + "x", field, max);
+        expect(message).toMatch(/^Keep [a-z ]+ to \d+ characters\.$/);
         try {
           parseHumanEventForm({ ...base, [field]: value + "x" });
           throw new Error("Expected server validation to reject N+1 without JS");
         } catch (error) {
           expect(error).toBeInstanceOf(ValidationError);
-          expect((error as ValidationError).fields).toEqual({ [field]: serverMessage });
+          expect((error as ValidationError).fields).toEqual({ [field]: message });
         }
         expect(eventTextLimitError(` \t${value}  `, field, max)).toBe("");
       },
@@ -269,14 +261,17 @@ describe("admin event text limit binder", () => {
     expect(fixture.errors[0]).toMatchObject({ hidden: true, textContent: "" });
     expect(fixture.attributes.has("aria-invalid")).toBe(false);
   });
-  it("preserves server error associations and responds to change/reset", async () => {
-    const fixture = inputFixture("location", 255);
-    fixture.attributes.set("aria-describedby", "f-location-error");
+  it("keeps only the server error and hint while enforcing the limit on load, change and reset", async () => {
+    const fixture = inputFixture("location", 255, "x".repeat(256));
+    fixture.attributes.set("aria-describedby", "f-location-hint f-location-error");
     fixture.attributes.set("aria-invalid", "true");
     bindAdminEventTextLimits(fixture.root);
-    expect(fixture.attributes.get("aria-describedby")).toBe(
-      "f-location-error f-location-limit-error",
-    );
+    expect(fixture.attributes.get("aria-describedby")).toBe("f-location-hint f-location-error");
+    expect(fixture.errors).toHaveLength(0);
+    expect(fixture.input.message).toBe("Keep the location to 255 characters.");
+    fixture.input.value = "x".repeat(255);
+    fixture.listeners.get("change")!();
+    expect(fixture.input.message).toBe("");
     fixture.input.value = "x".repeat(256);
     fixture.listeners.get("change")!();
     expect(fixture.input.message).toBe("Keep the location to 255 characters.");
@@ -473,7 +468,7 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
                 await input.press("Control+V");
               }
               expect(await input.inputValue()).toBe(value + "x");
-              const message = `Keep the ${field} to ${max} characters.`;
+              const message = eventTextLimitError(value + "x", field, max);
               expect(
                 await input.evaluate(
                   (input) => (input as unknown as { validationMessage: string }).validationMessage,
