@@ -180,28 +180,24 @@ it("caps and authorizes RSVP PUT before spending a budget, then commits before d
     },
     existing: null,
     goingCount: 1,
+    rejectPromotionLookup: true,
     throttleCount: { n: 0, wait: 1 },
     waitlistRank: { event_id: eventId, user_id: MEMBER.id, position: 2 },
     finalRow: () => ({ status: handle.inserted[0]?.status, syncedToDiscordAt: null }),
   });
 
-  let reachedCommit!: () => void;
-  let releaseCommit!: () => void;
-  const atCommit = new Promise<void>((resolve) => {
-    reachedCommit = resolve;
-  });
-  const commitFence = new Promise<void>((resolve) => {
-    releaseCommit = resolve;
-  });
-  const transaction = vi.fn(async (fn: Parameters<Db["transaction"]>[0]) => {
-    const result = await handle.db.transaction(fn);
-    reachedCommit();
-    await commitFence;
-    return result;
+  const transaction = vi.fn(async (fn: Parameters<Db["transaction"]>[0]) =>
+    handle.db.transaction(fn),
+  );
+  let committed = false;
+  const commitAtDispatch: boolean[] = [];
+  const queueSend = vi.fn(async (_message: unknown) => {
+    commitAtDispatch.push(committed);
   });
   const env = {
     ...baseEnv,
     ADMIN_DB: { transaction } as unknown as Db,
+    SYNC_EVENT_QUEUE: { send: queueSend },
   };
   const request = (size: number) => {
     const prefix = "status=going&padding=";
@@ -221,15 +217,31 @@ it("caps and authorizes RSVP PUT before spending a budget, then commits before d
   expect(oversized.status).toBe(413);
   expect(readSession).not.toHaveBeenCalled();
   expect(transaction).not.toHaveBeenCalled();
-  expect(send).not.toHaveBeenCalled();
+  expect(queueSend).not.toHaveBeenCalled();
 
   const forbidden = await request(cap);
-  expect(forbidden.status).toBe(403);
-  expect(await forbidden.json()).toEqual({ error: "forbidden" });
   expect(readSession).toHaveBeenCalledOnce();
   expect(transaction).not.toHaveBeenCalled();
-  expect(send).not.toHaveBeenCalled();
+  expect(queueSend).not.toHaveBeenCalled();
+  expect(forbidden.status).toBe(403);
+  expect(await forbidden.json()).toEqual({ error: "forbidden" });
 
+  // Fence only the accepted request so refusal regressions fail without waiting for commit.
+  let reachedCommit!: () => void;
+  let releaseCommit!: () => void;
+  const atCommit = new Promise<void>((resolve) => {
+    reachedCommit = resolve;
+  });
+  const commitFence = new Promise<void>((resolve) => {
+    releaseCommit = resolve;
+  });
+  transaction.mockImplementationOnce(async (fn) => {
+    const result = await handle.db.transaction(fn);
+    reachedCommit();
+    await commitFence;
+    committed = true;
+    return result;
+  });
   const pending = Promise.resolve(request(cap));
   try {
     await Promise.race([
@@ -240,7 +252,7 @@ it("caps and authorizes RSVP PUT before spending a budget, then commits before d
     ]);
     expect(transaction).toHaveBeenCalledOnce();
     expect(handle.inserted).toMatchObject([{ eventId, userId: MEMBER.id, status: "waitlisted" }]);
-    expect(send).not.toHaveBeenCalled();
+    expect(queueSend).not.toHaveBeenCalled();
   } finally {
     releaseCommit();
   }
@@ -249,8 +261,8 @@ it("caps and authorizes RSVP PUT before spending a budget, then commits before d
   expect(await accepted.json()).toEqual({
     data: { status: "waitlisted", synced_to_discord_at: null, waitlist_position: 2 },
   });
-  expect(send).toHaveBeenCalledOnce();
-  expect(send).toHaveBeenCalledWith(
+  expect(commitAtDispatch).toEqual([true]);
+  expect(queueSend).toHaveBeenCalledWith(
     expect.objectContaining({ kind: "sync-event", eventKey: KEY }),
     { delaySeconds: 10 },
   );

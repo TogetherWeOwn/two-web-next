@@ -10,6 +10,8 @@
 // Select chains are thenables: every builder method returns another chainable
 // resolving to the scripted value.
 
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import type { Db } from "../../src/db/index";
 
 export type FakeRsvpRow = Record<string, unknown>;
@@ -19,6 +21,7 @@ export type FakeRsvpScript = {
   existing: FakeRsvpRow | null;
   throttleCount: { n: number; wait: number };
   goingCount?: number;
+  rejectPromotionLookup?: boolean;
   waitlistRank?: { event_id: number; user_id: string; position: number };
   /** Evaluated when the final row read runs, so it can echo the insert. */
   finalRow: () => FakeRsvpRow;
@@ -58,19 +61,30 @@ export function fakeRsvpDb(script: FakeRsvpScript): { db: Db; inserted: FakeRsvp
     () => [script.finalRow()],
   ];
   let executes = 0;
-  const executeValues: Array<() => unknown> = [
+  const executeValues: Array<(query: SQL) => unknown> = [
     () => [], // writeRsvp advisory lock
     () => [], // pruneThrottle
     () => [], // chargeThrottle advisory lock
     () => [{ ...script.throttleCount }], // chargeThrottle budget count
     () => [], // chargeThrottle hit insert
-    () => (script.waitlistRank ? [script.waitlistRank] : []), // waitlistPosition
+    (query) => {
+      const rank = script.waitlistRank;
+      if (!rank) return [];
+      const { params } = new PgDialect().sqlToQuery(query);
+      return params.length === 2 && params[0] === rank.event_id && params[1] === rank.user_id
+        ? [rank]
+        : [];
+    },
   ];
   const tx = {
-    execute: async (..._args: unknown[]) => (executeValues[executes++] ?? (() => []))(),
+    execute: async (query: SQL) => (executeValues[executes++] ?? (() => []))(query),
     select: (...args: unknown[]): Chain => {
       const first = args[0] as Record<string, unknown> | undefined;
       if (first && typeof first === "object") {
+        // The initial waitlist lock is before the insert; head selection is after it.
+        if (script.rejectPromotionLookup && "id" in first && inserted.length > 0) {
+          throw new Error("a full event must not select waitlist heads for promotion");
+        }
         return chainable("n" in first ? [{ n: script.goingCount ?? 0 }] : []);
       }
       return chainable((bareSelects[bare++] ?? (() => []))());
