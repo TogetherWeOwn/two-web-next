@@ -71,6 +71,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
         if (hono || expired) return lapse(visual.browserWorkMs);
       },
       addCookies: ([session]) => {
+        closing = false;
         cookie = session.value;
       },
       route: (_, handler) => {
@@ -126,12 +127,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       }),
       screenshot: ({ path }) => (expired ? lapse(visual.browserWorkMs) : shots.push(path)),
     };
-    const browser = {
-      newContext: () => {
-        closing = false;
-        return fixture;
-      },
-    };
+    const browser = { newContext: () => fixture };
     const measure = t.mock.fn(() =>
       mode === "rejected" ? Promise.reject(new Error("transport")) : new Promise(noop),
     );
@@ -199,6 +195,16 @@ test("refusal deadlines abort fetch and prevent follow-on reads", async (t) => {
   assert.equal(request.mock.callCount(), 1);
 });
 test("fixture CLI exits after cleanup despite a live measurement handle", () => {
+  const preload = `import { registerHooks } from 'node:module';
+    const url = 'data:text/javascript,export const chromium=null,errors={TimeoutError:RangeError};export default null';
+    registerHooks({resolve(id, ctx, next) {return ['@playwright/test','postgres'].includes(id) ? {url,shortCircuit:true} : next(id,ctx)}});`;
+  const argv = [
+    "--import",
+    `data:text/javascript,${encodeURIComponent(preload)}`,
+    "ci/kit-activity-log-assert.mjs",
+  ];
+  const entry = spawnSync(process.execPath, argv, { env: {}, timeout: 3_000 });
+  assert.deepEqual([entry.status, entry.stdout.length, entry.stderr.length], [22, 0, 0]);
   const stub = `import { exitFixture } from './ci/kit-activity-log-assert.mjs';
     import { AssertionFailure, BrowserDeadline } from './ci/kit-activity-log-visual.mjs';
     const Failure = [null, AssertionFailure, BrowserDeadline, RangeError, Error][process.argv[1]];
