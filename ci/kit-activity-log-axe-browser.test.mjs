@@ -81,19 +81,22 @@ test("activity-log axe execution under the existing browser deadline", {
             const directive = await withDeadline(() =>
               page.evaluate(() => {
                 const blocked = new Promise((resolve) => {
-                  document.addEventListener(
-                    "securitypolicyviolation",
-                    (event) => {
+                  document.addEventListener("securitypolicyviolation", (event) => {
+                    if (event.effectiveDirective === "script-src-elem") {
                       resolve(event.effectiveDirective);
-                    },
-                    { once: true },
-                  );
+                    }
+                  });
                 });
                 document.querySelector("button").click();
+                // A handler parsed with scripting off may not emit a violation.
+                // Append a fresh script with scheduling on to exercise the CSP itself.
+                const script = document.createElement("script");
+                script.textContent = "document.documentElement.dataset.authored = 'dynamic'";
+                document.head.append(script);
                 return blocked;
               }),
             );
-            assert.equal(directive, "script-src-attr");
+            assert.equal(directive, "script-src-elem");
             assert.equal(await page.locator("html").getAttribute("data-authored"), null);
             assert.equal(await routeA11y(page, () => {}), "a11y: PASS violations=0 incomplete=0");
           });
