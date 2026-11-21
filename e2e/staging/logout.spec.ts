@@ -1,5 +1,6 @@
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import { test, expect, stagingOrigin } from "./fixtures";
+import { homeArrivalHeading } from "./home-arrival";
 import { loginQaMember } from "./qa-login";
 
 // Fresh member session per file: event pages rotate the bearer on read, so a
@@ -31,11 +32,21 @@ test("staging QA member signs out to guest and the old session cannot replay", a
   const live = (await context.cookies()).find((item) => item.name === "__Host-two_session");
   expect(live?.value).toBeTruthy();
 
-  await page.getByRole("button", { name: "Sign out" }).click();
+  const homeUrl = `${stagingOrigin}/`;
+  const [guestHome] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.url() === homeUrl &&
+        response.request().method() === "GET" &&
+        response.request().isNavigationRequest() &&
+        response.frame() === page.mainFrame(),
+    ),
+    page.getByRole("button", { name: "Sign out" }).click(),
+  ]);
 
   // The 303 lands on / as a guest: join CTA back, no member chrome.
-  await expect(page).toHaveURL(`${stagingOrigin}/`);
-  await expect(page.getByRole("heading", { name: "The lobby is open." })).toBeVisible();
+  await expect(page).toHaveURL(homeUrl);
+  await expect(await homeArrivalHeading(page, guestHome, "guest")).toBeVisible();
   await expect(page.getByTestId("join")).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
   await expect(page.getByTestId("signin")).toBeVisible();
