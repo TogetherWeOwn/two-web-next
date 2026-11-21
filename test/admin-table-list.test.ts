@@ -1,4 +1,5 @@
 import { drizzle } from "drizzle-orm/postgres-js";
+import { parse } from "parse5";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import type { Db } from "../src/db/index";
@@ -21,6 +22,22 @@ import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { eventEditorBrowser } from "./helpers/admin-event-editor";
+import { attr, elements } from "./helpers/kit-edit-controls";
+
+function expectEventTitle(html: string, value: string) {
+  const editor = elements(parse(html)).find(
+    (el) => el.tagName === "form" && attr(el, "data-event-editor") !== undefined,
+  );
+  if (!editor) throw new Error("no event editor form rendered");
+  const title = elements(editor).find((el) => attr(el, "name") === "title");
+  expect(title).toMatchObject({
+    tagName: "input",
+    attrs: expect.arrayContaining([
+      { name: "type", value: "text" },
+      { name: "value", value },
+    ]),
+  });
+}
 
 const injection = "%' OR 1=1; DROP TABLE users;--";
 function link(html: string, rel: "next" | "prev") {
@@ -700,7 +717,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         );
         expect(response.status).toBe(422);
         const html = await response.text();
-        expect(html).toContain('name="title" type="text" value="Rejected draft"');
+        expectEventTitle(html, fields.title);
         expect(html).toContain('data-event-editor="" data-event-draft=""');
         expect(html).toContain('<script src="/islands/admin-event-editor.js" defer=""></script>');
         const persisted = (await fixture.db.select().from(events)).find(
@@ -733,7 +750,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         );
         expect(retry.status).toBe(303);
         const saved = await request("/events/01K00000000000000000000011");
-        expect(saved).toContain('name="title" type="text" value="Rejected draft"');
+        expectEventTitle(saved, fields.title);
         expect(saved).not.toContain("data-event-draft");
         expect(
           eventEditorBrowser({ initial: { ...fields, capacity: "2" } }).navigate("sort")

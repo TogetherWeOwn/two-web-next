@@ -217,6 +217,17 @@ test("the workflow's actual shell gate denies disabled production and non-main r
     }).status,
     1,
   );
+  const stagingReadback = spawnSync("bash", ["-c", script], {
+    env: { ...process.env, ...mainEnv, READBACK_ONLY: "true" },
+    encoding: "utf8",
+  });
+  assert.equal(stagingReadback.status, 1);
+  assert.match(stagingReadback.stderr, /Readback-only is production-only/);
+  const productionReadback = spawnSync("bash", ["-c", script], {
+    env: { ...process.env, ...mainEnv, ...productionEnv, READBACK_ONLY: "true" },
+    encoding: "utf8",
+  });
+  assert.equal(productionReadback.status, 0, productionReadback.stderr);
   assert.ok(workflow.includes("    runs-on: ubuntu-latest\n"));
   assert.match(workflow, /environment: \$\{\{ inputs.target \}\}/);
   assert.match(workflow, /cancel-in-progress: false/);
@@ -475,12 +486,12 @@ const approvedTags = tags.slice(-4);
 const approvedPrefixLength = tags.length - approvedTags.length;
 const scopeRefusal = /pending tags do not match the approved scope/;
 
-async function approvedSuffixEnv(client) {
+async function approvedScopeEnv(client, scope = approvedTags) {
   const [{ db, role }] = await client`select current_database() as db, session_user as role`;
   return {
     ...productionEnv,
     PRODUCTION_MIGRATION_IDENTITY_SHA256: identityHash(db, role),
-    PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: approvedTags.join(","),
+    PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: scope.join(","),
   };
 }
 
@@ -489,27 +500,30 @@ test("production refuses an invalid scope pin and applies only the approved orde
     await fixture(async ({ client, run }) => {
       await seedPrefix(client, approvedPrefixLength);
       assert.equal((await run("plan")).length, approvedTags.length);
-      const approved = await approvedSuffixEnv(client);
+      const approved = await approvedScopeEnv(client);
+      const before = await migrationState(client);
       for (const pin of [
         undefined,
         "",
         approvedTags.join(", "),
         [...approvedTags].reverse().join(","),
-        approvedTags.slice(0, -1).join(","),
+        [approvedTags[0], approvedTags[2]].join(","),
         [...approvedTags, approvedTags.at(-1)].join(","),
         [...approvedTags.slice(0, -1), "9999_unknown"].join(","),
       ]) {
         await assert.rejects(
           run("apply", { ...approved, PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: pin }),
-          /scope must pin an exact ordered suffix/,
+          /scope must pin an exact contiguous segment/,
         );
       }
+      assert.deepEqual(await migrationState(client), before);
       assert.deepEqual(
         (await run("plan", approved)).map((entry) => entry.tag),
         approvedTags,
       );
       await assert.rejects(run("verify", approved), /remain pending/);
       await run("apply", approved);
+      assert.equal((await run("verify-scope", approved)).length, 0);
       assert.equal((await run("verify", approved)).length, 0);
       await assert.rejects(run("apply", approved), scopeRefusal);
       await client`update drizzle.__drizzle_migrations set hash = 'edited' where id = 1`;
@@ -534,10 +548,102 @@ async function migrationState(client) {
   };
 }
 
+test("production applies and reads back a bounded range without applying the deferred tail", async () => {
+  const start = tags.indexOf("1034_event-echoes");
+  const end = tags.indexOf("1038_announcement-send-claims");
+  assert.ok(start > 0 && end - start === 4);
+  const scope = tags.slice(start, end);
+  const deferred = tags.slice(end);
+  await withJournalPrefix(async (seedPrefix) => {
+    await fixture(async ({ client, run, output }) => {
+      const approved = await approvedScopeEnv(client, scope);
+      await seedPrefix(client, start - 1);
+      const earlier = await migrationState(client);
+      await assert.rejects(run("apply", approved), scopeRefusal);
+      assert.deepEqual(await migrationState(client), earlier);
+
+      await seedPrefix(client, start);
+      const before = await migrationState(client);
+      const overlap = await approvedScopeEnv(client, tags.slice(start - 1, end));
+      await assert.rejects(run("apply", overlap), scopeRefusal);
+      await assert.rejects(
+        run("verify-scope", approved),
+        /ledger has not reached the approved end/,
+      );
+      assert.deepEqual(
+        (await run("plan", approved)).map((entry) => entry.tag),
+        scope,
+      );
+      assert.deepEqual(await migrationState(client), before);
+
+      const [first] = before.ledger;
+      const refusesEditedHash = async (mode) => {
+        await client`update drizzle.__drizzle_migrations set hash = 'edited' where id = ${first.id}`;
+        const edited = await migrationState(client);
+        output.length = 0;
+        await assert.rejects(run(mode, approved), /not an exact prefix/);
+        assert.ok(!output.some((line) => line.startsWith("Pre-migration PITR timestamp")));
+        assert.deepEqual(await migrationState(client), edited);
+        await client`update drizzle.__drizzle_migrations set hash = ${first.hash} where id = ${first.id}`;
+      };
+      await refusesEditedHash("apply");
+
+      // The SQL succeeds, but the final ledger insert is silently skipped.
+      // Only the in-transaction end check can catch that before committing DDL.
+      await client.unsafe(`create function drizzle.skip_approved_end() returns trigger
+        language plpgsql as $$ begin
+          if new.created_at = ${journal.entries[end - 1].when} then return null; end if;
+          return new;
+        end; $$`);
+      await client`create trigger skip_approved_end before insert on drizzle.__drizzle_migrations
+        for each row execute function drizzle.skip_approved_end()`;
+      output.length = 0;
+      await assert.rejects(run("apply", approved), /ledger has not reached the approved end/);
+      assert.ok(!output.some((line) => line.startsWith("Scoped apply:")));
+      const rolledBack = await migrationState(client);
+      assert.deepEqual(rolledBack.ledger, before.ledger);
+      assert.deepEqual(rolledBack.columns, before.columns);
+      await client`drop trigger skip_approved_end on drizzle.__drizzle_migrations`;
+      await client`drop function drizzle.skip_approved_end()`;
+
+      for (const mode of ["apply", "verify-scope"]) {
+        output.length = 0;
+        assert.deepEqual(
+          (await run(mode, approved)).map((entry) => entry.tag),
+          deferred,
+        );
+        assert.ok(output.includes(`Deferred web migrations: ${deferred.join(", ")}.`));
+        assert.ok(!output.some((line) => line.includes("zero pending web migrations")));
+      }
+      const after = await migrationState(client);
+      assert.deepEqual(after.ledger.slice(0, start), before.ledger);
+      assert.deepEqual(
+        after.ledger.slice(start).map((row) => Number(row.created_at)),
+        journal.entries.slice(start, end).map((entry) => entry.when),
+      );
+      const [{ tailTable }] =
+        await client`select to_regclass('public.announcement_send_claims') as "tailTable"`;
+      assert.equal(tailTable, null);
+      await refusesEditedHash("verify-scope");
+      await assert.rejects(run("verify", approved), /remain pending/);
+      await assert.rejects(run("apply", approved), scopeRefusal);
+      assert.deepEqual(await migrationState(client), after);
+
+      await seedPrefix(client, end + 1);
+      const later = await migrationState(client);
+      await assert.rejects(
+        run("verify-scope", approved),
+        /ledger has advanced past the approved end/,
+      );
+      assert.deepEqual(await migrationState(client), later);
+    });
+  });
+});
+
 test("production refuses earlier and later exact prefixes, including drift after plan, without writes", async () => {
   await withJournalPrefix(async (seedPrefix) => {
     await fixture(async ({ client, run, output }) => {
-      const approved = await approvedSuffixEnv(client);
+      const approved = await approvedScopeEnv(client);
       const assertRefused = async (...modes) => {
         const before = await migrationState(client);
         output.length = 0;
@@ -572,7 +678,7 @@ test("production apply sees a prefix committed between identity and lock despite
   await withJournalPrefix(async (seedPrefix) => {
     await fixture(async ({ client, run, env, output }) => {
       await seedPrefix(client, approvedPrefixLength);
-      const approved = await approvedSuffixEnv(client);
+      const approved = await approvedScopeEnv(client);
       const [{ db }] = await client`select current_database() as db`;
       await client`alter database ${client(db)} set default_transaction_isolation to 'repeatable read'`;
       assert.deepEqual(
@@ -676,7 +782,7 @@ test("production refuses a missing pin before access and a changed identity befo
   });
 });
 
-test("production plan and verify check identity inside the journal transaction", async () => {
+test("production plan and both verification modes check identity inside the journal transaction", async () => {
   await fixture(async ({ client, env }) => {
     const [{ db, role }] = await client`select current_database() as db, session_user as role`;
     const approved = {
@@ -699,7 +805,8 @@ test("production plan and verify check identity inside the journal transaction",
       });
     assert.equal((await run("plan")).length, journal.entries.length);
     await assert.rejects(run("verify"), /remain pending/);
-    assert.deepEqual(checked, ["plan", "verify"]);
+    await assert.rejects(run("verify-scope"), /ledger has not reached the approved end/);
+    assert.deepEqual(checked, ["plan", "verify", "verify-scope"]);
   });
 });
 
