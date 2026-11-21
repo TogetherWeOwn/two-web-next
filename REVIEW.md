@@ -20,15 +20,15 @@ gate. Do not demand a staging run for an unmerged head, or make artifact equalit
 paired hashes or a comparison to current `main` a merge prerequisite. This is
 not limited to docs/test-only changes and is not proof that staging already ran.
 
-Before merge, verify that the required checks pass on the exact PR head, all
-findings have been fixed or answered with evidence, and applicable security
-reviews and native stages are complete. Require exact-head Actions links and
-conclusions. For promotion-path PRs only, also verify the fresh exact-head
-Release Manager confirmation and evidence described in CONTRIBUTING. The
-final-stage reviewer, or author without native stages, pins the squash merge
-to the reviewed head and records the squash SHA and any required confirmation
-in the release log. An otherwise mergeable PR does not need restacking solely
-because `main` moved.
+Before merge, verify the required checks on the exact PR head, fixes or
+answers for all findings, and completion of the native stages that precede
+the final reviewer. Require exact-head Actions links and conclusions. Follow
+CONTRIBUTING for promotion-path routing and the final native Release Manager
+merge decision where required. The final reviewer (or author without native
+stages) pins the squash merge to the reviewed head, then records the result
+as described in the contract. Do not require a recorded final approval before
+merge: it records the successful merge. An otherwise mergeable PR does not
+need restacking solely because `main` moved.
 
 Distinguish that merge evidence from production qualification: the resulting
 exact `main` SHA still has to pass full CI, staging deploy, staging e2e and soak

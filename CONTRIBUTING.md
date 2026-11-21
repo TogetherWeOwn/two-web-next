@@ -98,11 +98,12 @@ Before merge, require:
 1. **Exact-head checks and review.** All required checks listed above
    (`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `pr-size-gate / gate`,
    `Devin Review`, the organization `pr-standards` workflow and `CodeQL`)
-   pass on the exact PR head. CodeRabbit is
-   advisory: answer every finding, but it is not a required check. Follow
-   applicable rulesets and complete any earlier native review stages before
-   handing off to the final reviewer. Record exact-head GitHub Actions run/job
-   links and conclusions; local output does not replace required Actions evidence.
+   pass on the exact PR head. CodeRabbit is advisory: answer every finding,
+   but it is not a required check. Route the Security and QA stages assigned by
+   the [review-tier map](.github/review-tiers.yml) and complete them in order.
+   If Release Manager review is required, complete Security and QA before that
+   final stage. Record exact-head Actions run/job links and conclusions; local
+   output does not replace required Actions evidence.
 2. **Route Release Manager review on the exact head.** The author checks the
    current diff against the successful job summary from the trusted
    default-branch [`promotion-path` workflow](.github/workflows/promotion-path.yml).
@@ -110,34 +111,39 @@ Before merge, require:
    comparison, and link the run in the PR. Use the summary's SHAs, not the run's
    header SHA: `pull_request_target` runs the default-branch workflow. The PR
    label alone is not evidence. Use `promotion-path: yes` to add the Release
-   Manager as the final native stage; a verified `promotion-path: no` omits
-   that stage unless it is independently required.
+   Manager as the final native stage; omit it only for a verified `no` and only
+   if it is not independently required.
 
-   Without usable Actions evidence, the author may record a direct review of
-   the full PR diff for the exact base and head SHAs (the three-dot comparison),
-   including both sides of renames. Check
-   workflows, deploy and binding config, and tooling that qualifies, selects,
-   migrates, deploys or rolls back a production candidate. A missing, stale or
-   incomplete verdict is not itself a `no`. A new or unverified route to
-   automatic production is not a `no` even if the classifier misses it. If the
-   author cannot verify `no`, add the Release Manager stage.
+   Even with a successful classifier `no`, inspect what the diff changes. Route
+   to the Release Manager if it changes an existing promotion or qualification
+   input (including what a staging check measures), adds a route to automatic
+   production, or if you cannot rule either out. Check workflows, deploy and
+   binding config, and all inputs that qualify, select, migrate, deploy or roll
+   back a production candidate; the classifier's path list is not exhaustive.
+   When the Actions verdict is missing, stale or incomplete, record a direct
+   review of the full three-dot diff for the current base and head SHAs,
+   including both sides of renames, to verify `no`. If `no` is uncertain, add
+   the Release Manager stage.
 
-   The final native Release Manager approval is the only merge confirmation;
+   The final native Release Manager stage is the only merge confirmation;
    do not open a duplicate confirmation or child card. Provide migration
    ledger evidence or "no migration", and record the known-good rollback
    target and post-merge qualification route where applicable. No fresh
    production drill is required for merge-only work. Any push invalidates the
-   earlier decision.
-   Merge confirmation authorizes neither deployment nor migration; each
-   still requires its own exact-SHA decision.
-3. **Pin the merge and record the result.** The final-stage reviewer (or the
-   author if there is no native stage) confirms the current head, verifies the
-   required checks and resolves threads only once fixed or answered with
-   evidence. Squash-merge in the same run, pinned to that reviewed head. The
-   final reviewer then records the reviewed head and resulting squash SHA in
-   the native approval verdict and, when applicable, records both SHAs and the
-   confirmation in the release log. Do not record approval if the merge fails.
-   Use the native approval outcome after a successful merge, not a send-back.
+   earlier decision. Merge confirmation authorizes neither production deployment
+   nor production migration; each still requires its own exact-SHA decision.
+3. **Pin the merge and record the result.** Just before merging, the final-stage
+   reviewer (or the author if there is no native stage) checks the current PR
+   target, base SHA and head SHA. Revalidate routing if they no longer match
+   the reviewed comparison; a head SHA pin alone does not catch a retarget.
+   Verify the required checks and resolve threads only once fixed or answered
+   with evidence. When required, the Release Manager makes the merge go/no-go
+   decision on the verified head before merging. Squash-merge in the same run,
+   pinned to that reviewed head. After GitHub confirms the merge, record the
+   reviewed head and resulting squash SHA in the release log for every merge.
+   Add the Release Manager confirmation when required, and include both SHAs
+   in the final native verdict where a stage applies. Record approval only
+   after a successful merge, using the native approval outcome, not a send-back.
 
    Production holds and staging rollback-drill checks govern production
    deployment, not a merge that does not deploy to production. Keep any

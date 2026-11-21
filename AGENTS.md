@@ -69,7 +69,7 @@ A user-visible change to a page, component, CSS, typography, navigation, form, o
 - Behavior matches the request.
 - Tests and the `npm run check` gates pass on GitHub Actions for the exact PR head, with run/job links recorded. AI contributors do not run local full suites or CI mirrors; local focused reproduction is diagnostic only. Human local verification follows CONTRIBUTING.md.
 - A UI change carries the evidence listed under UI changes.
-- Every required check in [CONTRIBUTING.md](CONTRIBUTING.md#branch-protection-and-required-checks) is green on the exact head SHA that merges. GitHub does not require an approving PR review; the native review policy still applies.
+- `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint` and the other [required checks](CONTRIBUTING.md#branch-protection-and-required-checks) are green on the exact head SHA that merges. GitHub does not require an approving PR review; the native review policy still applies.
 - Every review finding is fixed, or answered with evidence.
 - Follow [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence) to verify the exact-head promotion-path verdict and route review. Where Release Manager merge confirmation is required, use the final native stage, not a separate interaction or child card. A push invalidates the earlier decision.
 - The final-stage reviewer (or the author if there is no native stage) squash-merges in the same run, pinned to the reviewed head. Record the reviewed head and squash SHA as described in CONTRIBUTING.md; never approve a failed merge. Merge confirmation does not authorize production deployment or migration. Keep the separate exact-SHA release decisions and post-merge staging qualification.

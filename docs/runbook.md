@@ -299,9 +299,10 @@ binding isolation before any remote mutation.
    for exact-head checks and promotion-path routing. When Release Manager merge
    confirmation is required, the final native stage supplies it. The final
    reviewer (or the author if no native stage applies) squash-merges on the
-   pinned head in the same run. Record the reviewed head and resulting squash
-   SHA in the native verdict and the release log as applicable, along with the
-   intended target in the release log. A failed merge is not an approval.
+   pinned head in the same run. After a successful merge, record the reviewed
+   head, resulting squash SHA, intended target and any required Release Manager
+   confirmation in the release log. Include both SHAs in the final native
+   verdict where a stage applies. A failed merge is not an approval.
 
    Merge confirmation does not authorize production deployment or migration.
    Production holds and staging rollback-drill checks apply to production
