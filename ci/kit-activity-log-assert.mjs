@@ -2,6 +2,7 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { appendFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { requireGithubRunner, requireTestDatabase } from "../e2e/ci-only.mjs";
+import { routeA11y, routeLighthouse } from "./kit-activity-log-metrics.mjs";
 import * as visual from "./kit-activity-log-visual.mjs";
 
 const { origin, path, browserWorkMs, withDeadline, collectVisuals, AssertionFailure } = visual;
@@ -168,7 +169,6 @@ async function main(chromium, postgres, TimeoutError) {
     );
     budget.checkTime("TEARDOWN");
     await withDeadline(() => context.close());
-    const { routeA11y, routeLighthouse } = await import("./kit-activity-log-metrics.mjs");
     const scratch = process.env.TMPDIR;
     const record = (text) => appendFileSync(`${scratch}/metrics.txt`, `${text}\n`);
     // A successful moderator GET rotates the session, so never seed a second context with it.
@@ -179,7 +179,7 @@ async function main(chromium, postgres, TimeoutError) {
       TimeoutError,
       mark: budget.checkTime,
       audit: async (page, name) => {
-        const a11y = await routeA11y(page);
+        const a11y = await routeA11y(page, budget.checkTime);
         record(`${name} ${a11y}`);
         ok(a11y.startsWith("a11y: PASS "), "visual:a11y");
         budget.checkTime("CAPTURE");

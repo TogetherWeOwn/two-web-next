@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { memberRefusal, runWork } from "./kit-activity-log-assert.mjs";
+import { routeA11y } from "./kit-activity-log-metrics.mjs";
 import { viewportPngs } from "./kit-activity-log-png.mjs";
 import * as visual from "./kit-activity-log-visual.mjs";
 
@@ -149,6 +152,16 @@ test("fixture cleanup attempts both closes, preserving the first failure without
   }
 });
 
+test("axe injection and evaluation stalls reject before producing audit metrics", async (t) => {
+  const lapse = clock(t);
+  for (const stallAt of ["AXE_INJECT", "AXE_EVALUATE"]) {
+    const mark = t.mock.fn();
+    const evaluate = () => (mark.mock.calls.at(-1).arguments[0] === stallAt ? lapse(5_000) : null);
+    const audit = routeA11y({ evaluate }, mark, { source: "stub", tags: [] });
+    await assert.rejects(audit, visual.BrowserDeadline);
+    assert.equal(mark.mock.callCount(), stallAt === "AXE_INJECT" ? 1 : 2);
+  }
+});
 test("refusal deadlines abort fetch and prevent follow-on reads", async (t) => {
   const lapse = clock(t);
   const late = Promise.withResolvers();
@@ -175,6 +188,53 @@ test("fixture CLI exits after cleanup despite a live measurement handle", () => 
     assert.deepEqual([run.status, run.stdout.length, run.stderr.length], [code, 0, 0]);
   }
 });
+test("runner separates watchdog and assertion failures and admits only a valid completion", (t) => {
+  const source = readFileSync(new URL("./kit-activity-log-run.sh", import.meta.url), "utf8");
+  const [runner] = source.match(/^LC_ALL=C timeout [\s\S]+$/m);
+  const root = mkdtempSync(join(tmpdir(), "kit-watchdog-test-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const node = `#!/bin/bash
+printf 'out\\n'; printf 'err\\n' >&2
+case $RESULT in kill) trap '' TERM;; term) ;; *) exit "$RESULT";; esac
+exec sleep 30`;
+  writeFileSync(join(root, "node"), node, { mode: 0o700 });
+  mkdirSync(join(root, "screenshots"));
+  const command = `set -euo pipefail; export PATH="$1:$PATH" RESULT=$2; scratch=$1 RUNNER_TEMP=$1
+${runner.replace("-k 5s 150s", "-k 0.1s 0.5s")}`;
+  const metrics = `populated-desktop.png a11y: PASS violations=0 incomplete=0
+empty-desktop.png a11y: PASS violations=0 incomplete=0
+populated-desktop.png lighthouse: unavailable
+`;
+  writeFileSync(join(root, "metrics.txt"), metrics);
+  const cases = [
+    ["AXE_EVALUATE\n", "term", "WATCHDOG stage=AXE_EVALUATE"],
+    ["TEARDOWN\n", "kill", "WATCHDOG stage=TEARDOWN"],
+    ["TEARDOWN\n", 137, "UNKNOWN stage=TEARDOWN"],
+    ["MODERATOR\n", 20, "ASSERTION stage=MODERATOR"],
+    ["FONTS\n", 21, "DEADLINE stage=FONTS"],
+    ["CAPTURE\n", 0, "UNKNOWN stage=CAPTURE"],
+    ["COMPLETE\n", 1, "UNKNOWN stage=COMPLETE"],
+    ["COMPLETE\nprivate-status\n", 0, "UNKNOWN stage=UNKNOWN"],
+    ["COMPLETE\n\0", 0, "UNKNOWN stage=UNKNOWN"],
+    [null, 0, "UNKNOWN stage=UNKNOWN"],
+    ["COMPLETE\n", 0, "PASS stage=COMPLETE"],
+  ];
+  const options = { env: { PATH: process.env.PATH }, encoding: "utf8", timeout: 3_000 };
+  const status = join(root, "browser-stage");
+  for (const [record, exitCode, verdict] of cases) {
+    if (record === null) rmSync(status);
+    else writeFileSync(status, record);
+    const run = spawnSync("bash", ["-c", command, "fixture", root, `${exitCode}`], options);
+    if (exitCode === "kill")
+      assert.match(readFileSync(join(root, "watchdog.txt"), "utf8"), /sending signal KILL/);
+    const passed = verdict.startsWith("PASS");
+    const tail = passed ? "PASS: Activity-log fixture, rendered states and route a11y\n" : "";
+    assert.deepEqual([run.status, run.stderr], [passed ? 0 : 1, ""]);
+    assert.equal(run.stdout, `Activity-log browser: outcome=${verdict}\n${metrics}${tail}`);
+    assert.equal(existsSync(join(root, "kit-activity-log-approved")), passed);
+  }
+});
+
 test("only the protected diagnostic publishes the validated directory", () => {
   const url = new URL("../.github/workflows/kit-activity-log-diagnostic.yml", import.meta.url);
   const source = readFileSync(url, "utf8");
