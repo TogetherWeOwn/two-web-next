@@ -65,12 +65,14 @@ export function liveSentence(view: VoiceView, next?: NextVoiceEvent | null, live
   if (view.snapshot && (view.audience === "guest" || view.snapshot.rooms.length > 0)) {
     const count =
       view.audience === "guest" ? view.snapshot.count : visibleCount(view.snapshot.rooms);
-    lead =
-      count < 3
-        ? "It's quiet in the rooms you can see."
-        : view.audience === "guest"
+    if (count >= 3) {
+      lead =
+        view.audience === "guest"
           ? `${count} of us are in voice right now.`
           : `${count} in voice rooms you can see.`;
+    } else if (view.audience === "member" && count === 0) {
+      lead = "It's quiet in the rooms you can see.";
+    }
   }
   return { lead, accent: nextPhrase(lead) };
 }

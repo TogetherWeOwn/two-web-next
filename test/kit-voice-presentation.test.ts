@@ -29,6 +29,24 @@ it("does not turn absent or privacy-suppressed voice into an observed zero", () 
   expect(quiet).toContain("0 people");
 });
 
+it.each([
+  [1, "person"],
+  [2, "people"],
+])("does not call %i in voice quiet", (count, noun) => {
+  const { view, nextEvent } = voiceViews.quiet;
+  const html = render({
+    view: {
+      ...view,
+      snapshot: { ...view.snapshot, rooms: [{ ...view.snapshot.rooms[0], count }] },
+    },
+    nextEvent,
+  });
+  expect(html).not.toContain("It's quiet");
+  expect(html).toContain("Next up.");
+  expect(html).toContain("Friday Raid is at 21:00 BST.");
+  expect(html).toContain(`1 visible room · ${count} ${noun}`);
+});
+
 it("scopes live event counts and renders only projected room details", () => {
   const html = render(voiceViews.member);
   expect(html).toContain("4 in event rooms you can see.");
