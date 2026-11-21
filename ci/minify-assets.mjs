@@ -41,6 +41,7 @@ const AUTHORED_CSS = new Set([
   "public/operator-overrides-theme.css",
   "public/schedule-theme.css",
   "public/kit-events-controls.css",
+  "public/kit-events-schedule.css",
 ]);
 // Budget entries are read from the checked root (not captured at import),
 // so --selftest can copy the budget fragments into a scratch root and prove
