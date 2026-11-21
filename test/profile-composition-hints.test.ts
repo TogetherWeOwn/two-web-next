@@ -112,8 +112,10 @@ const expectHintPair = (
   ) {
     throw new Error(`Expected ${hintId}, ${countId} and a label for ${fieldId}`);
   }
+  expect(hint.tagName).toBe("p");
   expect(attr(hint, "class")?.split(/\s+/)).toContain("profile-hint");
   expect(nodeText(html, hintId)).toBe(hintCopy);
+  expect(count.tagName).toBe("p");
   expect(attr(count, "aria-live")).toBeUndefined();
   expect(attr(count, "role")).toBeUndefined();
   expect(nodeText(html, countId)).toBe(countText);
