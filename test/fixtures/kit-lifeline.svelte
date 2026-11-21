@@ -1,27 +1,98 @@
-<script module lang="ts">
-import Lifeline from "../../web/src/lib/Lifeline.svelte";
+<script lang="ts">
+import { withEventDetailHtml } from "../../src/events/detail-leaves";
+import type { KitEventDetailModel } from "../../src/events/kit-detail";
+import EventDetail from "../../web/src/lib/EventDetail.svelte";
 import { composeLifeline, type LifelineFacts } from "../../web/src/lib/lifeline";
 
+let { state, showLifeline = true }: {
+  state: "upcoming" | "frozen" | "cancelled" | "ended";
+  showLifeline?: boolean;
+} = $props();
+
 const eventKey = "fixture-raid";
+const path = `/e/${eventKey}`;
 const time = (clock: string) => Date.parse(`2026-11-21T${clock}:00Z`);
+const iso = (clock: string) => new Date(time(clock)).toISOString();
 const fact = (clock: string) => ({ eventKey, at: time(clock) });
 const schedule = { eventKey, startsAt: time("20:00"), endsAt: time("21:00") };
-const view = (now: string, facts: LifelineFacts) =>
-  composeLifeline(schedule, { opened: fact("18:00"), ...facts }, time(now));
 const viewerRsvp = fact("18:23");
 const terminalSiteReminder = { ...fact("19:32"), sent: 8, unavailable: 2 };
 const roomSnapshot = { observedAt: time("20:00"), fetchFailed: false, eventKeys: [eventKey] };
 const cancelled = { ...fact("20:01"), reason: "The host cancelled because of severe weather." };
-export const examples = {
-  upcoming: view("19:00", { viewerRsvp }),
-  frozen: view("20:12", { terminalSiteReminder, roomSnapshot }),
-  cancelled: view("20:12", { viewerRsvp, cancelled, roomSnapshot }),
-  ended: view("21:50", { terminalSiteReminder, echo: fact("21:41") }),
-};
+const examples = {
+  upcoming: { now: time("19:00"), facts: {} },
+  frozen: { now: time("20:12"), facts: { terminalSiteReminder, roomSnapshot } },
+  cancelled: { now: time("20:12"), facts: { viewerRsvp, cancelled, roomSnapshot } },
+  // This event has no recorded Echo; the existing ended rail stays truthful too.
+  ended: { now: time("21:50"), facts: { terminalSiteReminder } },
+} satisfies Record<typeof state, { now: number; facts: LifelineFacts }>;
+
+const model: KitEventDetailModel = $derived(withEventDetailHtml({
+  seatCard: {
+    heading: state === "upcoming" || state === "frozen" ? "Your RSVP" : "RSVPs closed",
+    tag: state === "frozen" ? { tone: "warn", text: "Paused" } : null,
+    note: null,
+  },
+  eventKey,
+  title: "Saturday co-op raid",
+  game: "Guild Wars 2",
+  description: "Bring a level 80 character. New raiders are welcome; we’ll explain each encounter before we start.",
+  shareDescription: "A casual co-op raid for new and returning players.",
+  accessibilityNotes: null,
+  location: "Community Discord",
+  directionsUrl: null,
+  organizerName: "Raid hosts",
+  joinUrl: null,
+  joinInstructions: null,
+  status: state === "cancelled" ? "cancelled" : "published",
+  isDraft: false,
+  isPast: state === "ended",
+  isOngoing: state === "frozen",
+  isEnded: state === "ended",
+  lifecycle: state === "ended" ? { date: "21 Nov 2026", endTime: "21:00" } : null,
+  endedNext: null,
+  liveTime: state === "frozen" ? { asOf: iso("20:12"), staleAt: iso("20:14") } : undefined,
+  goingCount: 8,
+  goingOccupancy: 8,
+  capacity: 10,
+  rsvpOpen: state === "upcoming",
+  rsvpClosed: state === "cancelled" ? "cancelled" : state === "ended" ? "past" : null,
+  canonical: `https://event-detail.example.test${path}`,
+  path,
+  attendeesRefreshHref: path,
+  robots: null,
+  icsUrl: `/events/${eventKey}.ics`,
+  googleCalendarUrl: null,
+  copyLink: `https://event-detail.example.test${path}`,
+  whenText: "Sat, 21 Nov, 20:00",
+  endsWhenText: "Sat, 21 Nov, 21:00",
+  durationText: "1h",
+  zoneLabel: "Europe/London",
+  timeDatetime: iso("20:00"),
+  attendees: [],
+  attendeesPaging: { page: 1, prevHref: null, nextHref: null },
+  answer: null,
+  waitlistPosition: null,
+  neighbors: { previous: null, next: null },
+  related: [],
+  series: null,
+  showJoinPitch: false,
+  joinReturnTo: path,
+  joinResult: null,
+  viewerAuthenticated: true,
+  viewerMember: true,
+  viewerModerator: false,
+  viewerUsername: "Fixture player",
+  endsAt: iso("21:00"),
+  jsonLd: "{}",
+  siteJsonLd: "{}",
+} satisfies Omit<KitEventDetailModel, "detailHtml">));
+
+const steps = $derived(showLifeline ? composeLifeline(
+  { ...schedule, rsvpOpen: state === "upcoming" },
+  { opened: fact("18:00"), ...examples[state].facts },
+  examples[state].now,
+) : undefined);
 </script>
 
-<main>
-  {#each Object.entries(examples) as [state, steps] (state)}
-    <div data-fixture={state}><Lifeline {steps} /></div>
-  {/each}
-</main>
+<EventDetail {model} lifeline={steps} />

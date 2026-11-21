@@ -1,5 +1,6 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
+import Lifeline from "#lib/Lifeline.svelte";
 import Shell from "#lib/Shell.svelte";
 import Tag from "#lib/Tag.svelte";
 import TimeBlock from "#lib/TimeBlock.svelte";
@@ -19,11 +20,20 @@ import {
   RSVP_SYNCING_TESTID,
 } from "../../../src/islands/contracts";
 import { listedSignUpCountText } from "../../../src/islands/contracts-going-count";
+import type { LifelineStep } from "./lifeline";
 
 // Member metadata, RSVP and roster are escaped server leaves shared with Hono.
 // Mutation ownership and native island mounts stay unchanged; this route is csr=false.
-let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrite?: boolean } =
-  $props();
+let {
+  model,
+  restoredWrite = false,
+  lifeline,
+}: {
+  model: KitEventDetailModel;
+  restoredWrite?: boolean;
+  /** Composed presentation only; the isolated fixture is the sole caller. */
+  lifeline?: readonly LifelineStep[];
+} = $props();
 const facts = $derived(kitEventFacts(model));
 const lifecycle = $derived(model.lifecycle);
 const live = $derived(model.liveTime);
@@ -232,6 +242,7 @@ const detailIslands = $derived([
   </div>
   <div class="event-layout-body" class:ended={Boolean(lifecycle)}>
   {#if lifecycle || live}{@html model.detailHtml.metadata}{/if}
+  {#if lifeline?.length}<Lifeline steps={lifeline} zone={model.zoneLabel} />{/if}
   <div class="event-detail-grid">
     <div>
       {#if model.description}
