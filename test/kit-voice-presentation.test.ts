@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { liveSentence } from "../web/src/lib/voice-view";
 import { voiceViews } from "./fixtures/kit-voice-views";
 import { createKitSsrRenderer, type RenderPage } from "./helpers/kit-ssr-render";
 
@@ -65,11 +64,11 @@ it("does not call an empty permission-filtered room list quiet", () => {
 });
 
 it("keeps a long title within the headline budget without losing the time or scope", () => {
-  const { lead, accent } = liveSentence(voiceViews.member.view, {
-    title: "A very long synthetic event title ".repeat(4),
-    timeLabel: "21:00 BST",
+  const html = render({
+    view: voiceViews.member.view,
+    nextEvent: { title: "A very long synthetic event title ".repeat(4), timeLabel: "21:00 BST" },
   });
-  expect(lead).toBe("6 in voice rooms you can see.");
-  expect(accent).toMatch(/… is at 21:00 BST\.$/);
-  expect(`${lead} ${accent}`.length).toBeLessThan(120);
+  const headline = (html.match(/<h1\b[^>]*>(.*?)<\/h1>/s)?.[1] ?? "").replace(/<[^>]*>/g, "");
+  expect(headline).toMatch(/^6 in voice rooms you can see\. .+… is at 21:00 BST\.$/);
+  expect(headline.length).toBeLessThan(120);
 });
