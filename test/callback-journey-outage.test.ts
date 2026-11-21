@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
+import { signedCookieHeader, verifySignedCookie } from "../src/http/signed-cookie";
 import { createMemorySessionStore, hashToken } from "../src/sessions";
 
 const flows = ["join", "auth"] as const;
@@ -32,6 +33,10 @@ async function fixture(flow: Flow) {
   const create = vi.spyOn(store, "create");
   const replace = vi.spyOn(store, "replace");
   const bindings = { ...env, SESSION_STORE: store, JOIN_DEPS: { store: async () => null } };
+  const fetch = vi.fn(() => {
+    throw new Error("Unexpected outbound call in callback journey fixture");
+  });
+  vi.stubGlobal("fetch", fetch);
   const start = await app.request(
     flow === "join" ? "/join/discord?next=/profile&source=fixture" : "/auth/discord?next=/profile",
     {},
@@ -39,14 +44,8 @@ async function fixture(flow: Flow) {
   );
   expect(start.status).toBe(302);
   const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
-  const cookie = start.headers
-    .getSetCookie()
-    .map((line) => line.split(";")[0])
-    .join("; ");
-  const fetch = vi.fn(() => {
-    throw new Error("Unexpected outbound call in callback outage fixture");
-  });
-  vi.stubGlobal("fetch", fetch);
+  const startCookies = start.headers.getSetCookie();
+  const cookie = startCookies.map((line) => line.split(";")[0]).join("; ");
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
   const info = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -64,6 +63,8 @@ async function fixture(flow: Flow) {
     log,
     state,
     cookie,
+    startCookies,
+    bindings,
     request: (suffix = "", presentedState = state) =>
       app.request(
         `${callbackPath(flow)}?code=fixture-oauth-code-canary&state=${presentedState}${suffix}`,
@@ -190,6 +191,39 @@ describe.each(flows)("%s callback journey failure classification", (flow) => {
     assertNoAdmission(f, res);
     assertCookies(flow, res);
   });
+});
+
+it("hands Hono OAuth state through the shared cookie helper to the callback", async () => {
+  const f = await fixture("auth");
+  const name = stateCookie("auth");
+  const prefix = `${name}=`;
+  const issued = f.startCookies.find((line) => line.startsWith(prefix));
+  const [pair = "", ...attributes] = issued?.split("; ") ?? [];
+  const scope = ["Path=/", "HttpOnly", "Secure", "SameSite=Lax"];
+  expect(attributes.sort()).toEqual(["Max-Age=600", ...scope].sort());
+
+  const state = await verifySignedCookie(pair.slice(prefix.length), env.SESSION_SECRET);
+  if (!state) throw new Error("The shared reader did not verify the Hono state cookie");
+  expect(state).toBe(f.state);
+  const header = await signedCookieHeader(name, state, env.SESSION_SECRET, 600);
+  const cookie = header.slice(0, header.indexOf(";"));
+
+  // A real consent denial takes the admitted path without a Discord exchange.
+  // The redirect alone would also pass for a replayed denial.
+  const query = new URLSearchParams({ state, error: "access_denied" });
+  const res = await app.request(
+    `${callbackPath("auth")}?${query}`,
+    { headers: { cookie, accept: "text/html" } },
+    f.bindings,
+  );
+  expect(res.status).toBe(302);
+  expect(res.headers.get("location")).toBe("/?n=signin_denied");
+  expect(f.consume).toHaveBeenCalledExactlyOnceWith(await hashToken(f.state), "auth");
+  const cleared = res.headers.getSetCookie().find((line) => line.startsWith(prefix));
+  expect(cleared?.split("; ").sort()).toEqual([prefix, "Max-Age=0", ...scope].sort());
+  expect(f.fetch).not.toHaveBeenCalled();
+  expect(f.create).not.toHaveBeenCalled();
+  expect(f.replace).not.toHaveBeenCalled();
 });
 
 it("auth replayed denial retains signin_denied without upstream or session work", async () => {
