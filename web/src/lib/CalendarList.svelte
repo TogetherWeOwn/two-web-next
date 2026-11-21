@@ -15,12 +15,13 @@ import {
   EVENTS_PAGER_PREV_TESTID,
   EVENTS_PAGER_STATUS_TESTID,
   EVENTS_PAGER_TESTID,
+  calendarSearching,
   calendarUrl,
   cardDayLabel,
-  wallDateIso,
   upcomingEventsOutOfRangeCopy,
   upcomingEventsPageStatusCopy,
   upcomingEventsPageUnreadableCopy,
+  wallDateIso,
 } from "../../../src/islands/contracts";
 import CalendarCard from "./CalendarCard.svelte";
 import CalendarPastDrawer from "./CalendarPastDrawer.svelte";
@@ -43,6 +44,7 @@ let {
   inviteUrl,
   loginReturnTo,
 }: CalendarListProps & { pageUnreadable?: boolean; zone: string; now: Date } = $props();
+const searching = $derived(calendarSearching(state));
 const today = $derived(wallDateIso(now, zone));
 const days = $derived.by(() => {
   const groups = new Map<string, typeof upcoming>();
@@ -69,10 +71,10 @@ const previousPage = $derived(outOfRange ? Math.min(state.page - 1, totalPages) 
   <h2 class="sr-only">{EVENTS_LIST_HEADING_SR}</h2>
   <div class="schedule-days" data-testid={EVENTS_LIST_TESTID}>
     {#each days as [day, rows] (day)}
-      <h3 class="schedule-day" id={`schedule-day-${day}`}>{day === today ? "Today · " : ""}{cardDayLabel(rows[0]!.startsAt, zone)}</h3>
+      <svelte:element this={searching ? "p" : "h3"} class="schedule-day" id={`schedule-day-${day}`}>{day === today ? "Today · " : ""}{cardDayLabel(rows[0]!.startsAt, zone)}</svelte:element>
       <ul role="list" aria-labelledby={`schedule-day-${day}`}>
         {#each rows as e (e.key)}
-          <CalendarCard {e} isPast={false} {member} {inviteUrl} {loginReturnTo} />
+          <CalendarCard {e} isPast={false} titleLevel={searching ? undefined : 4} {member} {inviteUrl} {loginReturnTo} />
         {/each}
       </ul>
     {/each}

@@ -30,10 +30,11 @@ const DESCRIPTION_LIMIT = 240; // code points, never UTF-16 units
 let {
   e,
   isPast,
+  titleLevel,
   member,
   inviteUrl,
   loginReturnTo,
-}: { e: CalendarListCard; isPast: boolean } & CalendarViewer = $props();
+}: { e: CalendarListCard; isPast: boolean; titleLevel?: 4 } & CalendarViewer = $props();
 
 const transient = $derived(e.kind === "discord");
 const cancelled = $derived(e.kind === "event" && e.status === "cancelled");
@@ -76,8 +77,7 @@ const full = $derived(
     </div>
     <div class="schedule-info">
       <!-- Cancelled and transient rows have no detail page (410 / none), so the title is plain text. -->
-      <!-- Keep the search title element; upcoming cards sit one level below their day heading. -->
-      <h3 aria-level={isPast ? undefined : 4}>
+      <h3 aria-level={titleLevel}>
         {#if e.kind === "event" && e.status !== "cancelled"}<a href={`/e/${e.eventKey}`}>{#if titleSegments}<span>{@render marked(titleSegments)}</span>{:else}{e.title}{/if}</a>{:else if titleSegments}<span>{@render marked(titleSegments)}</span>{:else}{e.title}{/if}
       </h3>
       {#if e.kind === "event" && e.game}<p>{e.game}</p>{/if}

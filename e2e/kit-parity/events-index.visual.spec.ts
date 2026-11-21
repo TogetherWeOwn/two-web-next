@@ -46,9 +46,7 @@ test("Kit events index renders the seeded guest schedule @ desktop and mobile", 
       await blockExternalRequests(context);
       const page = await context.newPage();
       page.on("pageerror", (error) => pageErrors.push(error.message));
-      const css = page.waitForResponse(
-        (response) => new URL(response.url()).pathname === "/kit-events-schedule.css",
-      );
+      const css = page.waitForResponse(new URL("/kit-events-schedule.css", KIT_ORIGIN).href);
       await gotoKitEvents(page, "/events");
       expect((await css).ok()).toBe(true);
       await expect(page.getByRole("main")).toHaveCount(1);
