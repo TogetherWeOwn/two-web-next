@@ -1289,18 +1289,19 @@ jobs:
           persist-credentials: false
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: npm ci --no-audit --no-fund
+      - id: blob-dir
+        run: dir=$(mktemp -d "$RUNNER_TEMP/coverage-blobs.XXXXXX") && printf 'path=%s\n' "$dir" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: coverage-vitest-*
-          path: vitest-blob
+          path: ${{ steps.blob-dir.outputs.path }}
           merge-multiple: true
       - name: Merge Vitest coverage with the repository thresholds
+        env:
+          BLOB_DIR: ${{ steps.blob-dir.outputs.path }}
         run: |
-          set -- vitest-blob/*
-          test "$#" -eq 3
-          for shard in 1 2 3; do test -s "vitest-blob/vitest-$shard.json"; done
-          TEST=true VITEST=true NODE_ENV=test node ci/verify-vitest-shards.mjs "$@"
-          npm run test:coverage -- --merge-reports=vitest-blob --reporter=dot
+          TEST=true VITEST=true NODE_ENV=test node ci/verify-vitest-shards.mjs --coverage-dir "$BLOB_DIR"
+          npm run test:coverage -- --merge-reports="$BLOB_DIR" --reporter=dot
       - name: Require every coverage shard to succeed
         if: ${{ !cancelled() }}
         env:
@@ -1319,6 +1320,7 @@ jobs:
           name: coverage-${{ github.sha }}
           path: coverage/
           if-no-files-found: error
+          overwrite: true
           retention-days: 14
 
   # Node 22 compatibility leg: package.json `engines` declares a 22 range

@@ -256,8 +256,10 @@ area floors (`src/admin`, `src/events`, `src/join` together with
 `src/profiles`, `src/auth`, `src/invite.ts`, `src/return-journey.ts`,
 `src/write-recovery.tsx`, `src/kit-*`, `src/counts.ts`, `src/seo.ts`) live in
 `vitest.config.ts`. The baseline uses the full suite with the test database;
-without it, skipped live suites may put coverage below the floors. CI verifies each shard's
-file inventory before enforcing the floors and retains coverage JSON for 14 days, even on failure.
+without it, skipped live suites may put coverage below the floors. CI's
+`coverage-merge` job verifies each shard's files and coverage map before enforcing the floors, writes a job summary
+with the ten least-covered files, and uploads the JSON coverage summary for 14 days,
+including on failure.
 
 When intentionally raising a floor, re-measure with the same locked provider
 and Node 24 against the test database, leave a one-percentage-point margin

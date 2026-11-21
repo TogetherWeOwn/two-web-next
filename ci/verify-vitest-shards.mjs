@@ -1,8 +1,8 @@
-import { readFile } from "node:fs/promises";
-import { relative } from "node:path";
+import { readdir, readFile } from "node:fs/promises";
+import { join, relative } from "node:path";
 import { createVitest } from "vitest/node";
 
-// Vitest 5 writes a Flatted tuple. Follow only its file-table references;
+// Vitest 5 writes a Flatted tuple with file and coverage references.
 // Vitest itself decodes and replays the complete report after this check.
 function blobPaths(content, filename) {
   const table = JSON.parse(content);
@@ -17,6 +17,12 @@ function blobPaths(content, filename) {
   }
   const files = dereference(table[0]?.[1]);
   if (!Array.isArray(files)) throw new Error(`${filename}: invalid Vitest file table`);
+  if (requireCoverage) {
+    const map = table[0][3] == null ? null : dereference(table[0][3]);
+    if (!map || typeof map !== "object" || Array.isArray(map) || !Object.keys(map).length) {
+      throw new Error(`${filename}: missing or empty coverage map`);
+    }
+  }
   return files.map((ref) => {
     const filepath = dereference(dereference(ref)?.filepath);
     if (typeof filepath !== "string") throw new Error(`${filename}: invalid Vitest filepath`);
@@ -24,7 +30,17 @@ function blobPaths(content, filename) {
   });
 }
 
-const reports = process.argv.slice(2);
+async function coverageReports(dir) {
+  const files = await readdir(dir, { withFileTypes: true });
+  const expected = [1, 2, 3].map((shard) => `vitest-${shard}.json`);
+  if (files.length === 3 && files.every((file) => file.isFile() && expected.includes(file.name))) {
+    return expected.map((name) => join(dir, name));
+  }
+  throw new Error(`${dir}: expected exactly three regular Vitest reports`);
+}
+
+const requireCoverage = process.argv[2] === "--coverage-dir";
+const reports = requireCoverage ? await coverageReports(process.argv[3]) : process.argv.slice(2);
 for (const [index, filename] of reports.entries()) {
   const paths = blobPaths(await readFile(filename, "utf8"), filename);
   const vitest = await createVitest({ watch: false, shard: `${index + 1}/${reports.length}` });
