@@ -421,6 +421,7 @@ describe("acceptance: Kit duplicate form submits to duplicate, never cancel", ()
   const root = fileURLToPath(new URL("../", import.meta.url).href);
   let scratch = "";
   let renderPage: (data: { view: KitEventEditView }) => string;
+  let renderCreatePage: (data: Record<string, unknown>) => string;
 
   beforeAll(async () => {
     scratch = mkdtempSync(
@@ -435,7 +436,9 @@ describe("acceptance: Kit duplicate form submits to duplicate, never cancel", ()
       entry,
       `import { render } from "svelte/server";
 import Page from ${JSON.stringify(join(root, "web/src/routes/admin/events/[key]/+page.svelte"))};
-export function renderPage(data) { return render(Page, { props: { data } }).body; }`,
+import CreatePage from ${JSON.stringify(join(root, "web/src/routes/admin/events/new/+page.svelte"))};
+export function renderPage(data) { return render(Page, { props: { data } }).body; }
+export function renderCreatePage(data) { return render(CreatePage, { props: { data } }).body; }`,
     );
     const outfile = join(scratch, "bundle.mjs");
     await build({
@@ -466,7 +469,7 @@ export function renderPage(data) { return render(Page, { props: { data } }).body
         },
       ],
     });
-    renderPage = (await import(pathToFileURL(outfile).href)).renderPage;
+    ({ renderPage, renderCreatePage } = await import(pathToFileURL(outfile).href));
   });
 
   afterAll(() => {
@@ -491,7 +494,7 @@ export function renderPage(data) { return render(Page, { props: { data } }).body
         expect(submitted[field]).toBe("first\r\nsecond");
         expect(loaded.values.saved_baseline).not.toBe("");
         expect(submitted.saved_baseline).toBe(loaded.values.saved_baseline);
-        const values = { ...view.values, [field]: `first${newline}second` };
+        const values = { ...view.values, [field]: `${newline}first${newline}second` };
         const errors = { [field]: "Server feedback" };
         const html = renderPage({
           view: {
@@ -511,10 +514,37 @@ export function renderPage(data) { return render(Page, { props: { data } }).body
         expect(attr(control, "aria-describedby")?.split(" ")).toContain(`${id}-error`);
         expect(attr(control, "data-event-text-limit")).toBe(attr(single, "data-event-text-limit"));
         expect(attr(control, "required")).toBe(attr(single, "required"));
-        expect(submittedFields(html)[field]).toBe("first\r\nsecond");
+        expect(submittedFields(html)[field]).toBe("\r\nfirst\r\nsecond");
       }
     });
   }
+
+  it("compiled Kit create SSR retains multiline values in correctly named controls", () => {
+    const limits = { title: 100, game: 100, location: 255, organizer_name: 500 };
+    const fields = Object.keys(limits) as (keyof typeof limits)[];
+    const single = renderCreatePage({ values: Object.fromEntries(fields.map((f) => [f, f])) });
+    const errors = Object.fromEntries(fields.map((f) => [f, "Server feedback"]));
+    for (const newline of ["\n", "\r", "\r\n"]) {
+      const values = Object.fromEntries(fields.map((f) => [f, `${newline}${f}${newline}second`]));
+      const html = renderCreatePage({ values, errors });
+      const submitted = submittedFields(html);
+      for (const field of fields) {
+        const id = `f-${field.replaceAll("_", "-")}`;
+        expect(controlNamed(single, field)?.tagName).toBe("input");
+        const control = controlNamed(html, field)!;
+        expect(control.tagName).toBe("textarea");
+        expect(attr(control, "id")).toBe(id);
+        expect(attr(control, "rows")).toBe("2");
+        expect(attr(control, "data-event-text-limit")).toBe(String(limits[field]));
+        expect(attr(control, "required") !== undefined).toBe(field === "title");
+        expect(attr(control, "aria-invalid")).toBe("true");
+        expect(attr(control, "aria-describedby")).toBe(
+          field === "organizer_name" ? `${id}-hint ${id}-error` : `${id}-error`,
+        );
+        expect(submitted[field]).toBe(`\r\n${field}\r\nsecond`);
+      }
+    }
+  });
 
   // Mutant: change only the page's duplicate form action to /cancel. Form
   // counts stay identical, but each executed status branch must fail here.

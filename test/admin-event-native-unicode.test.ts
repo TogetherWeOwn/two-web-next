@@ -97,7 +97,7 @@ describe("admin event code-point contract", () => {
         for (const newline of ["\n", "\r", "\r\n"]) {
           const html = form(
             mode,
-            { ...base, [field]: `Jordan${newline}Smith` },
+            { ...base, [field]: `${newline}Jordan${newline}Smith` },
             { [field]: "Server feedback" },
           );
           const control = controlNamed(html, field)!;
@@ -114,7 +114,7 @@ describe("admin event code-point contract", () => {
             expect(attr(control, "aria-describedby")?.split(" ")).toContain(`${id}-hint`);
           }
           expect(html).toContain(`<a href="#${id}">`);
-          expect(submittedFields(html)[field]).toBe("Jordan\r\nSmith");
+          expect(submittedFields(html)[field]).toBe("\r\nJordan\r\nSmith");
         }
       });
     }

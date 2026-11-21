@@ -1,8 +1,7 @@
 // Shared escaped editable fields; form actions and recovery stay with each page.
 import type { FC } from "hono/jsx";
-import { eventTextHasLineBreak } from "../event-text";
+import { EventAccessibilityField, EventHostFields, eventTextControl } from "./event-public-fields";
 import { Field, val } from "./shell";
-import { EventAccessibilityField, EventHostFields } from "./event-public-fields";
 
 export const EventEditableFields: FC<{
   values: Record<string, unknown>;
@@ -10,39 +9,10 @@ export const EventEditableFields: FC<{
 }> = ({ values, errors }) => (
   <>
     <Field name="title" label="Title" errors={errors}>
-      {(id) =>
-        eventTextHasLineBreak(val(values, "title")) ? (
-          <textarea id={id} name="title" rows={2} data-event-text-limit={100} required>
-            {val(values, "title")}
-          </textarea>
-        ) : (
-          <input
-            id={id}
-            name="title"
-            type="text"
-            value={val(values, "title")}
-            data-event-text-limit={100}
-            required
-          />
-        )
-      }
+      {(id) => eventTextControl(id, "title", val(values, "title"), 100, true)}
     </Field>
     <Field name="game" label="Game" errors={errors}>
-      {(id) =>
-        eventTextHasLineBreak(val(values, "game")) ? (
-          <textarea id={id} name="game" rows={2} data-event-text-limit={100}>
-            {val(values, "game")}
-          </textarea>
-        ) : (
-          <input
-            id={id}
-            name="game"
-            type="text"
-            value={val(values, "game")}
-            data-event-text-limit={100}
-          />
-        )
-      }
+      {(id) => eventTextControl(id, "game", val(values, "game"), 100)}
     </Field>
     <Field name="description" label="Description" errors={errors}>
       {(id) => (
@@ -76,21 +46,7 @@ export const EventEditableFields: FC<{
       )}
     </Field>
     <Field name="location" label="Location" errors={errors}>
-      {(id) =>
-        eventTextHasLineBreak(val(values, "location")) ? (
-          <textarea id={id} name="location" rows={2} data-event-text-limit={255}>
-            {val(values, "location")}
-          </textarea>
-        ) : (
-          <input
-            id={id}
-            name="location"
-            type="text"
-            value={val(values, "location")}
-            data-event-text-limit={255}
-          />
-        )
-      }
+      {(id) => eventTextControl(id, "location", val(values, "location"), 255)}
     </Field>
     <EventHostFields values={values} errors={errors} />
     <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>

@@ -1,6 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
-import { eventTextHasLineBreak } from "../../../../../../src/admin/event-text";
+import { eventTextHasLineBreak, textareaInitialText } from "../../../../../../src/admin/event-text";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
@@ -52,7 +52,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         data-event-text-limit={limit}
         aria-invalid={error ? "true" : undefined}
         aria-describedby={description}
-      >{value}</textarea>
+      >{type === "text" ? textareaInitialText(value) : value}</textarea>
     {/if}
     <p id={`${id}-hint`} class="hint">{hint}</p>
     {#if error}
@@ -97,7 +97,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
           required
           aria-invalid={errors.title ? "true" : undefined}
           aria-describedby={errors.title ? "f-title-error" : undefined}
-        >{val("title")}</textarea>
+        >{textareaInitialText(val("title"))}</textarea>
       {:else}
         <input
           id="f-title"
@@ -124,7 +124,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
           data-event-text-limit={100}
           aria-invalid={errors.game ? "true" : undefined}
           aria-describedby={errors.game ? "f-game-error" : undefined}
-        >{val("game")}</textarea>
+        >{textareaInitialText(val("game"))}</textarea>
       {:else}
         <input
           id="f-game"
@@ -240,7 +240,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
           data-event-text-limit={255}
           aria-invalid={errors.location ? "true" : undefined}
           aria-describedby={errors.location ? "f-location-error" : undefined}
-        >{val("location")}</textarea>
+        >{textareaInitialText(val("location"))}</textarea>
       {:else}
         <input
           id="f-location"
