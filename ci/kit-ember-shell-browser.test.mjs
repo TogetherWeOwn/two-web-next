@@ -13,6 +13,67 @@ const shot = (page, name) =>
 const route = new URL("../test/fixtures/kit-ember-shell-route.svelte", import.meta.url);
 const source = await readFile(route, "utf8");
 
+const desktop = { width: 1280, height: 800 };
+const headerCss = "/kit-site-header.css";
+
+async function assertLockup(page, height) {
+  const logo = page.locator("[data-kit-site-header] .brand img:visible");
+  await expect(logo).toHaveCount(1);
+  await expect(logo).toHaveAttribute("src", "/logo.svg");
+  await expect(logo).toHaveCSS("height", `${height}px`);
+  const { width, loaded } = await logo.evaluate((img) => ({
+    width: img.getBoundingClientRect().width,
+    loaded: img.complete && img.naturalWidth > 0,
+  }));
+  assert.ok(loaded, "full lockup image loaded");
+  if (height === 50) assert.equal(width, 180);
+  else assert.ok(Math.abs(width - (height * 180) / 50) < 1, `full lockup width: ${width}px`);
+}
+
+async function checkStandaloneHeader(page, html) {
+  // Closing the fallback menu leaves #kit-menu in the URL; use a distinct
+  // query so this navigation cannot reuse the document via its fragment.
+  const standaloneUrl = new URL("?standalone-header=1", page.url()).href;
+  const assets = ["/styles.css", "/theme-tokens.css", headerCss, "/theme.css"];
+  // Keep the built SSR markup, with only public stylesheets and the legacy
+  // theme last. Neither the root bundle nor source order can hide a cascade tie.
+  const standalone = html.replace(
+    /<head>[\s\S]*?<\/head>/,
+    `<head><meta name="viewport" content="width=device-width, initial-scale=1">${assets
+      .map((name) => `<link rel="stylesheet" href="${name}">`)
+      .join("")}</head>`,
+  );
+  assert.notEqual(standalone, html);
+  assert.doesNotMatch(standalone, /_app\/immutable\//);
+  await page.route(standaloneUrl, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      headers: { "content-security-policy": "style-src 'self'; script-src 'none'" },
+      body: standalone,
+    }),
+  );
+  try {
+    await page.setViewportSize(desktop);
+    const [css] = await Promise.all([
+      page.waitForResponse(new URL(headerCss, standaloneUrl).href),
+      page.goto(standaloneUrl),
+    ]);
+    assert.equal(css.status(), 200);
+    assert.match(css.headers()["content-type"], /^text\/css\b/);
+    await assertLockup(page, 50);
+    await shot(page, "standalone-desktop-1280");
+    await page.setViewportSize(mobile);
+    await assertLockup(page, 32);
+    await shot(page, "standalone-mobile-390");
+    await menu(page, "link").click();
+    await expect(page.getByRole("link", { name: "Close menu" })).toBeVisible();
+    await assertLockup(page, 32);
+    await shot(page, "standalone-mobile-open-390");
+  } finally {
+    await page.unroute(standaloneUrl);
+  }
+}
+
 test("built Ember shell preserves its landmarks and account states without JavaScript", {
   timeout: 720_000,
 }, async () => {
@@ -47,13 +108,11 @@ test("built Ember shell preserves its landmarks and account states without JavaS
           await page.getByRole("link", { name: "Ladder" }).count(),
           state === "member" ? 1 : 0,
         );
-        for (const viewport of [
-          { width: 1280, height: 800 },
-          { width: 390, height: 844 },
-        ]) {
+        for (const viewport of [desktop, mobile]) {
           await page.setViewportSize(viewport);
           const header = page.getByRole("banner");
-          const compact = viewport.width === 390;
+          const compact = viewport === mobile;
+          await assertLockup(page, compact ? 32 : 38);
           await expect(header).toHaveCSS("min-height", compact ? "60px" : "68px");
           await expect(header).toHaveCSS("position", "sticky");
           await expect(header.getByRole("link", { name: "Join", exact: true })).toHaveCount(
@@ -148,6 +207,7 @@ test("built Ember shell preserves its landmarks and account states without JavaS
             await expect(sheet).toBeHidden();
           }
         }
+        if (state === "guest") await checkStandaloneHeader(page, html);
       },
     );
   }

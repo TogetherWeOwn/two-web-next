@@ -20,6 +20,17 @@ const event = {
   goingCount: 3,
   capacity: null,
 };
+const agenda = [
+  event,
+  {
+    source: "discord",
+    discordId: "community-night",
+    title: "Community game night with a long title that wraps on smaller screens",
+    startsAt: "2026-10-23T19:00:00.000Z",
+    timezone: "America/Argentina/Buenos_Aires",
+  },
+  { ...event, eventKey: "later", title: "Strategy night", startsAt: "2026-11-01T19:00:00.000Z" },
+];
 const observedAt = new Date(HOME_EVIDENCE_NOW).toISOString();
 const freshSnapshot = { memberCount: 42, onlineCount: 7, observedAt, stale: false };
 const zeroOnline = { ...freshSnapshot, onlineCount: 0 };
@@ -27,6 +38,12 @@ const states = {
   guest: {},
   member: { session: member },
   guestEvents: { upcomingEvents: [event] },
+  guestAgenda: { upcomingEvents: agenda },
+  memberAgenda: {
+    session: member,
+    upcomingEvents: agenda,
+    memberRsvps: [{ eventKey: event.eventKey, status: "waitlisted" }],
+  },
   memberEvents: {
     session: member,
     upcomingEvents: [event],
@@ -113,10 +130,37 @@ export async function assertHomeEvidence(page, state) {
       /It's quiet right now|evenings are busiest|In voice now/,
     );
   }
+  const memberWithRsvp = state === "memberEvents" || state === "memberAgenda";
   for (const id of ["home-standing", "home-event-own-rsvp"])
-    assert.equal(await count(id), state === "memberEvents" ? 1 : 0, `${state}: ${id}`);
+    assert.equal(await count(id), memberWithRsvp ? 1 : 0, `${state}: ${id}`);
   assert.equal(await count("notice"), state === "joinFailed" ? 1 : 0, `${state}: notice`);
   assert.equal(await page.getByTestId("home-highlights").locator("li").count(), 4);
+  const intro = page.getByTestId("home-guest-intro");
+  assert.equal(await intro.count(), session?.member ? 0 : 1, `${state}: guest intro`);
+  if (!session?.member) {
+    const items = intro.getByRole("listitem");
+    const boxes = await Promise.all((await items.all()).map((item) => item.boundingBox()));
+    const mobile = page.viewportSize().width <= 820;
+    assert.ok(
+      boxes.every((box, i) => {
+        if (!box) return false;
+        if (i === 0) return true;
+        const previous = boxes[i - 1];
+        return mobile ? box.y > previous.y : box.x > previous.x && box.y === previous.y;
+      }),
+      `${state}: four highlights in reading order`,
+    );
+    const lobby = intro.getByRole("link", { name: "View the Discord lobby" });
+    const invite = intro.getByRole("link", { name: "Open Discord" });
+    assert.equal(await lobby.getAttribute("href"), "/join#join-heading");
+    assert.equal(await invite.getAttribute("href"), "/discord");
+    await lobby.focus();
+    await page.keyboard.press("Tab");
+    assert.ok(await invite.evaluate((el) => el.matches(":focus-visible")));
+    await page.keyboard.press("Shift+Tab");
+    assert.ok(await lobby.evaluate((el) => el.matches(":focus-visible")));
+    await lobby.evaluate((el) => el.blur());
+  }
   if (!session?.member && state !== "sessionOutage" && state !== "joinFailed")
     assert.match(await page.getByTestId("join-band").innerText(), /Approve once with Discord/);
   assert.equal(
