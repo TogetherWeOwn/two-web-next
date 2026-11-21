@@ -22,15 +22,6 @@ export async function withDeadline(work, ms = 5_000) {
     clearTimeout(timer);
   }
 }
-export async function withCleanup(work, cleanup) {
-  try {
-    await work();
-  } catch (error) {
-    await cleanup(false).catch(() => undefined);
-    throw error;
-  }
-  await cleanup(true);
-}
 const subject = "zz-no-activity";
 const urlFor = (empty) => `${origin}${path}${empty ? `?subject=${subject}` : ""}`;
 const shell = "Skip to content TWO admin Events · Featured · Join attempts · Activity log · Site";
@@ -123,7 +114,7 @@ async function guardedPage(browser, mintModerator, [width, height], url, guard) 
   const settle = async () => {
     while (pending.size) await Promise.all(pending);
   };
-  async function capture() {
+  try {
     await context.addCookies([await mintModerator()]);
     await context.route("**/*", async (route) => {
       if (stopped) return route.abort().catch(() => undefined);
@@ -157,19 +148,16 @@ async function guardedPage(browser, mintModerator, [width, height], url, guard) 
     await withDeadline(settle);
     if (violation || (unavailable && !reportOnly))
       throw new AssertionFailure("unexpected visual diagnostic");
-  }
-  await withCleanup(capture, async (succeeded) => {
+  } finally {
     stopped = true;
-    await withDeadline(() => context.close()).catch((error) => {
-      if (succeeded) mark("TEARDOWN");
-      throw error;
-    });
-  });
+  }
+  // Failed captures close via browser teardown, outside the work deadline.
+  mark("TEARDOWN");
+  await withDeadline(() => context.close());
   if (violation) throw new AssertionFailure("unexpected visual diagnostic");
   return unavailable ? null : result;
 }
 async function boundedMeasurement(measure, ms) {
-  // Leave time for guarded request verdicts and context close inside the work budget.
   const budget = Math.min(ms, browserWorkMs - 12_000 - performance.now());
   if (budget <= 0) return null;
   const timer = new AbortController();
@@ -194,13 +182,10 @@ export async function collectVisuals(browser, mint, dir, options) {
       mark("FONTS");
       const ready = await withDeadline(() =>
         page.evaluate(() => document.fonts.ready.then(() => true)),
-      ).then(
-        () => true,
-        (error) => {
-          if (reportOnly && error instanceof BrowserDeadline) return false;
-          throw error;
-        },
-      );
+      ).catch((error) => {
+        if (reportOnly && error instanceof BrowserDeadline) return false;
+        throw error;
+      });
       mark(stage);
       await inspect(page, empty, false);
       if (reportOnly) return ready ? boundedMeasurement(() => measure(page, url), ms) : null;

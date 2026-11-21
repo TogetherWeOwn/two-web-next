@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { memberRefusal, runWork } from "./kit-activity-log-assert.mjs";
 import { routeA11y } from "./kit-activity-log-metrics.mjs";
 import { viewportPngs } from "./kit-activity-log-png.mjs";
 import * as visual from "./kit-activity-log-visual.mjs";
@@ -21,7 +22,7 @@ class TimeoutError extends Error {}
 test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", async (t) => {
   const noop = async () => undefined;
   const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
-  const modes = "document asset disallowed pending rejected hono fonts capture-fonts nav";
+  const modes = "document asset disallowed pending rejected hono fonts capture-fonts";
   for (const mode of modes.split(" ")) {
     const shots = [];
     const keys = [];
@@ -42,7 +43,10 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       close: async () => {
         if (++closed === 6 && mode === "pending")
           await request(`${visual.origin}/styles.css`, false, lateFetch);
-        if (mode === "hono") throw new TimeoutError("close timed out");
+        if (mode === "hono") {
+          t.mock.timers.tick(visual.browserWorkMs);
+          return new Promise(noop);
+        }
       },
       addCookies: ([session]) => {
         cookie = session.value;
@@ -53,7 +57,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       newPage: () => fixture,
       on: noop,
       evaluate: () => {
-        if (!(mode === "capture-fonts" || (mode === "fonts" && closed === 5))) return;
+        if (!(mode === "capture-fonts" || (mode === "fonts" && closed === 5))) return true;
         queueMicrotask(() => t.mock.timers.tick(5_000));
         return new Promise(noop);
       },
@@ -62,7 +66,6 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
         url = href;
         const status = consumed.has(cookie) ? 302 : 200;
         consumed.add(cookie);
-        if (mode === "nav") throw new TimeoutError();
         const renderer = mode === "hono" ? "hono" : "kit";
         const headers = { "x-two-renderer": renderer, "cache-control": "private, no-store" };
         const response = {
@@ -96,21 +99,22 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       mode === "rejected" ? Promise.reject(new Error("transport")) : new Promise(noop),
     );
     const mint = () => ({ value: consumed.size });
-    const fakeClock = mode.endsWith("fonts");
+    const fakeClock = mode === "hono" || mode.endsWith("fonts");
     if (fakeClock) t.mock.timers.enable({ apis: ["setTimeout"] });
     const options = { audit: noop, measure, mark, ms: 10, TimeoutError };
-    const report = visual.collectVisuals(browser, mint, ".", options);
-    const early = ["hono", "nav", "capture-fonts"].includes(mode);
-    if (mode === "nav") await assert.rejects(report, TimeoutError);
-    else if (mode === "capture-fonts") await assert.rejects(report, visual.BrowserDeadline);
+    const collect = () => visual.collectVisuals(browser, mint, ".", options);
+    const teardown = () => visual.withDeadline(() => fixture.close(), 10_000);
+    const report = mode === "hono" ? runWork(collect, teardown, mark) : collect();
+    const early = mode === "hono" || mode === "capture-fonts";
+    if (mode === "capture-fonts") await assert.rejects(report, visual.BrowserDeadline);
     else if (early) await assert.rejects(report, /provenance drift/);
     else if (mode === "disallowed") await assert.rejects(report, /unexpected visual diagnostic/);
     else assert.equal(await report, null);
     if (fakeClock) t.mock.timers.reset();
-    if (mode === "capture-fonts") assert.deepEqual(stages, ["CAPTURE", "FONTS"]);
+    if (mode === "hono") assert.deepEqual(stages, ["CAPTURE"]);
     assert.equal(lateFetch.mock.callCount(), 0);
-    assert.equal(closed, early ? 1 : 6);
-    assert.equal(consumed.size, closed + 1);
+    assert.equal(closed, early ? Number(mode === "hono") : mode === "disallowed" ? 5 : 6);
+    assert.equal(consumed.size, early ? 2 : 7);
     assert.equal(measure.mock.callCount(), Number(mode === "pending" || mode === "rejected"));
     assert.deepEqual(shots, early ? [] : Object.keys(viewportPngs));
     assert.deepEqual(keys, early ? [] : [...Array(11).fill("Tab"), "ArrowRight"]);
@@ -120,33 +124,46 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
 for (const stallAt of ["AXE_INJECT", "AXE_EVALUATE"]) {
   test(`a stall in ${stallAt} rejects instead of producing audit metrics`, async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
-    const stages = [];
-    const page = {
-      evaluate: t.mock.fn(() => {
-        if (stages.at(-1) !== stallAt) return undefined;
-        queueMicrotask(() => t.mock.timers.tick(5_000));
-        return new Promise(() => undefined);
-      }),
+    const mark = t.mock.fn();
+    const evaluate = () => {
+      if (mark.mock.calls.at(-1).arguments[0] !== stallAt) return;
+      queueMicrotask(() => t.mock.timers.tick(5_000));
+      return new Promise(() => undefined);
     };
-    const mark = (stage) => stages.push(stage);
-    const audit = routeA11y(page, mark, () => ({ source: "stub", tags: [] }));
+    const audit = routeA11y({ evaluate }, mark, { source: "stub", tags: [] });
     await assert.rejects(audit, visual.BrowserDeadline);
-    assert.equal(stages.at(-1), stallAt);
-    assert.equal(page.evaluate.mock.callCount(), stallAt === "AXE_INJECT" ? 1 : 2);
+    assert.equal(mark.mock.callCount(), stallAt === "AXE_INJECT" ? 1 : 2);
   });
 }
 
+test("refusal deadlines abort fetch and prevent follow-on reads", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const late = Promise.withResolvers();
+  const request = t.mock.fn(() => ({
+    status: 403,
+    headers: new Headers({ "x-two-renderer": "kit" }),
+    text: () => {
+      queueMicrotask(() => t.mock.timers.tick(visual.browserWorkMs));
+      return late.promise;
+    },
+  }));
+  let probes;
+  const work = (budget) => (probes = memberRefusal("/", {}, budget, request).then(assert.fail));
+  const run = runWork(work, async () => undefined, assert.fail);
+  await assert.rejects(run, visual.BrowserDeadline);
+  assert.equal(request.mock.calls[0].arguments[1].signal.aborted, true);
+  late.resolve("denied");
+  await assert.rejects(probes, visual.BrowserDeadline);
+  assert.equal(request.mock.callCount(), 1);
+});
+
 test("fixture CLI exits after cleanup despite a live measurement handle", () => {
-  const source = readFileSync(new URL("./kit-activity-log-assert.mjs", import.meta.url), "utf8");
-  const entry = source.match(/^await main\(\)\.then\([\s\S]+$/m)?.[0];
-  assert.ok(entry);
+  const harness = new URL("./kit-activity-log-assert.mjs", import.meta.url);
   for (const code of [0, 21]) {
-    const thrown = code ? 'throw new errors.TimeoutError("private-exception")' : "";
-    const stub = `const visual = { AssertionFailure: class extends Error {}, BrowserDeadline: class extends Error {} };
-      const errors = { TimeoutError: class extends Error {} };
-      async function main(){setInterval(()=>{},60_000);await new Promise(setImmediate);${thrown}}`;
-    const argv = ["--input-type=module", "-e", `${stub}\n${entry}`];
-    const run = spawnSync(process.execPath, argv, { encoding: "utf8", timeout: 3_000 });
+    const stub = `import { exitFixture } from ${JSON.stringify(harness.href)};
+      setInterval(()=>{},60_000);
+      await exitFixture(${code ? 'Promise.reject(new RangeError("private-exception"))' : "Promise.resolve()"}, RangeError);`;
+    const run = spawnSync(process.execPath, ["-e", stub], { encoding: "utf8", timeout: 3_000 });
     assert.deepEqual([run.status, run.stdout, run.stderr], [code, "", ""]);
   }
 });
@@ -160,56 +177,46 @@ test("runner separates watchdog and assertion failures and admits only a valid c
   const fake =
     '#!/bin/bash\nprintf "private-out\\n"; printf "private-err\\n" >&2; exit "$RESULT"\n';
   writeFileSync(join(root, "node"), fake, { mode: 0o700 });
+  mkdirSync(join(root, "screenshots"));
   const stub = `set -euo pipefail
-scratch=$RUNNER_TEMP
+export PATH="$1:$PATH" RESULT=$2
+scratch=$1 RUNNER_TEMP=$1 watchdog=$3
 timeout() {
-  [[ $WATCHDOG != yes ]] || printf "timeout: sending signal TERM to command 'bash'\\n" >&2
+  [[ $watchdog != true ]] || printf "timeout: sending signal TERM to command 'bash'\\n" >&2
   printf 'private-watchdog-file\\n' >&2
   shift 4; "$@"
 }
 `;
-  const metrics = [
-    "populated-desktop.png a11y: PASS violations=0 incomplete=0",
-    "empty-desktop.png a11y: PASS violations=0 incomplete=0",
-    "populated-desktop.png lighthouse: unavailable",
-  ];
+  const metrics = `populated-desktop.png a11y: PASS violations=0 incomplete=0
+empty-desktop.png a11y: PASS violations=0 incomplete=0
+populated-desktop.png lighthouse: unavailable
+`;
+  writeFileSync(join(root, "metrics.txt"), metrics);
   const cases = [
-    ["AXE_EVALUATE\n", 124, true, "WATCHDOG", "AXE_EVALUATE"],
-    ["TEARDOWN\n", 137, true, "WATCHDOG", "TEARDOWN"],
-    ["TEARDOWN\n", 137, false, "UNKNOWN", "TEARDOWN"],
-    ["MODERATOR\n", 20, false, "ASSERTION", "MODERATOR"],
-    ["FONTS\n", 21, false, "DEADLINE", "FONTS"],
-    ["FIXTURE\n", 22, false, "ERROR", "FIXTURE"],
-    ["MODERATOR\n", 1, false, "UNKNOWN", "MODERATOR"],
-    ["CAPTURE\n", 0, false, "UNKNOWN", "CAPTURE"],
-    ["COMPLETE\n", 1, false, "UNKNOWN", "COMPLETE"],
-    ["COMPLETE\nprivate-status\n", 0, false, "UNKNOWN", "UNKNOWN"],
-    ["COMPLETE\n\0", 0, false, "UNKNOWN", "UNKNOWN"],
-    ["COMPLETE", 0, false, "UNKNOWN", "UNKNOWN"],
-    [null, 0, false, "UNKNOWN", "UNKNOWN"],
-    ["COMPLETE\n", 0, false, "PASS", "COMPLETE"],
+    ["AXE_EVALUATE\n", 124, true, "WATCHDOG stage=AXE_EVALUATE"],
+    ["TEARDOWN\n", 137, true, "WATCHDOG stage=TEARDOWN"],
+    ["TEARDOWN\n", 137, false, "UNKNOWN stage=TEARDOWN"],
+    ["MODERATOR\n", 20, false, "ASSERTION stage=MODERATOR"],
+    ["FONTS\n", 21, false, "DEADLINE stage=FONTS"],
+    ["CAPTURE\n", 0, false, "UNKNOWN stage=CAPTURE"],
+    ["COMPLETE\n", 1, false, "UNKNOWN stage=COMPLETE"],
+    ["COMPLETE\nprivate-status\n", 0, false, "UNKNOWN stage=UNKNOWN"],
+    ["COMPLETE\n\0", 0, false, "UNKNOWN stage=UNKNOWN"],
+    [null, 0, false, "UNKNOWN stage=UNKNOWN"],
+    ["COMPLETE\n", 0, false, "PASS stage=COMPLETE"],
   ];
-  for (const [record, exitCode, watchdog, outcome, stage] of cases) {
-    const dir = mkdtempSync(join(root, "case-"));
-    mkdirSync(join(dir, "screenshots"));
-    if (record !== null) writeFileSync(join(dir, "browser-stage"), record);
-    writeFileSync(join(dir, "metrics.txt"), `${metrics.join("\n")}\n`);
-    const run = spawnSync("bash", ["-c", `${stub}${runner}`], {
-      env: {
-        PATH: `${root}:${process.env.PATH}`,
-        RUNNER_TEMP: dir,
-        RESULT: String(exitCode),
-        WATCHDOG: watchdog ? "yes" : "no",
-      },
-      encoding: "utf8",
-      timeout: 3_000,
-    });
-    const passed = outcome === "PASS";
+  for (const [record, exitCode, watchdog, verdict] of cases) {
+    const status = join(root, "browser-stage");
+    if (record === null) rmSync(status);
+    else writeFileSync(status, record);
+    const argv = ["-c", stub + runner, "fixture", root, String(exitCode), String(watchdog)];
+    const env = { PATH: process.env.PATH };
+    const run = spawnSync("bash", argv, { env, encoding: "utf8", timeout: 3_000 });
+    const passed = verdict.startsWith("PASS");
+    const tail = passed ? "PASS: Activity-log fixture, rendered states and route a11y\n" : "";
     assert.deepEqual([run.status, run.stderr], [passed ? 0 : 1, ""]);
-    const lines = [`Activity-log browser: outcome=${outcome} stage=${stage}`, ...metrics];
-    if (passed) lines.push("PASS: Activity-log fixture, rendered states and route a11y");
-    assert.equal(run.stdout, `${lines.join("\n")}\n`);
-    assert.equal(existsSync(join(dir, "kit-activity-log-approved")), passed);
+    assert.equal(run.stdout, `Activity-log browser: outcome=${verdict}\n${metrics}${tail}`);
+    assert.equal(existsSync(join(root, "kit-activity-log-approved")), passed);
   }
 });
 

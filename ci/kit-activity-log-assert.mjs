@@ -1,14 +1,11 @@
 // Run from the pinned app checkout, only with the job-private Worker and Postgres.
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { appendFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { chromium, errors } from "@playwright/test";
-import postgres from "postgres";
 import { requireGithubRunner, requireTestDatabase } from "../e2e/ci-only.mjs";
 import { routeA11y, routeLighthouse } from "./kit-activity-log-metrics.mjs";
 import * as visual from "./kit-activity-log-visual.mjs";
 
-const { origin, path, browserWorkMs, withDeadline } = visual;
-
+const { origin, path, browserWorkMs, withDeadline, collectVisuals, AssertionFailure } = visual;
 const cdpPort = 9222;
 const mod = "900000000000009301";
 const member = "900000000000009302";
@@ -20,13 +17,45 @@ function mark(next) {
   renameSync(`${file}.next`, file);
 }
 function ok(condition, label) {
-  if (!condition) throw new visual.AssertionFailure(label);
+  if (!condition) throw new AssertionFailure(label);
 }
 const same = (got, want, label) => ok(JSON.stringify(got) === JSON.stringify(want), label);
 const desc = (from, to) =>
   Array.from({ length: from - to + 1 }, (_, k) => `kal-${String(from - k).padStart(3, "0")}`);
 
-async function main() {
+export async function runWork(exercise, cleanup, progress) {
+  const stop = new AbortController();
+  const checkTime = () => {
+    stop.signal.throwIfAborted();
+    if (performance.now() >= browserWorkMs) throw new visual.BrowserDeadline();
+  };
+  const abort = () => stop.abort(new visual.BrowserDeadline());
+  try {
+    const work = () => exercise({ signal: stop.signal, checkTime });
+    await withDeadline(work, browserWorkMs - performance.now()).finally(abort);
+    progress("TEARDOWN");
+  } catch (error) {
+    await cleanup().catch(() => undefined);
+    throw error;
+  }
+  await cleanup();
+  progress("COMPLETE");
+}
+
+export async function memberRefusal(probe, headers, { signal, checkTime }, fetcher = fetch) {
+  const request = (headers) => {
+    checkTime();
+    return fetcher(`${origin}${probe}`, { headers, redirect: "manual", signal });
+  };
+  const denied = await request(headers);
+  same([denied.status, denied.headers.get("x-two-renderer")], [403, "kit"], "member:kit-403");
+  checkTime();
+  ok(!(await denied.text()).includes("kal-120"), "member:no-row");
+  checkTime();
+  return request;
+}
+
+async function main(chromium, postgres, TimeoutError) {
   requireGithubRunner();
   const database = requireTestDatabase(process.env.DATABASE_URL);
   mark("FIXTURE");
@@ -36,16 +65,11 @@ async function main() {
   ok(secret, "fixture-secret");
   const sql = postgres(database, { max: 1, connect_timeout: 5, onnotice: () => {} });
   let launched;
-  const stop = new AbortController();
-  const checkTime = () => {
-    stop.signal.throwIfAborted();
-    if (performance.now() >= browserWorkMs) throw new visual.BrowserDeadline();
-  };
-  const progress = (next) => {
-    checkTime();
-    mark(next);
-  };
-  async function exercise() {
+  async function exercise(budget) {
+    const progress = (next) => {
+      budget.checkTime();
+      mark(next);
+    };
     // Same DB-minted signed session as e2e/kit-parity/moderator-fixture.ts.
     async function mint(id, moderator) {
       const bearer = `two_${randomBytes(32).toString("base64url")}`;
@@ -77,7 +101,6 @@ async function main() {
       from generate_series(1, 120) as i order by i`;
     progress("LAUNCH");
     launched = chromium.launch({
-      timeout: Math.max(1, Math.min(15_000, browserWorkMs - performance.now())),
       args: [
         "--proxy-server=http://127.0.0.1:9",
         `--proxy-bypass-list=<-loopback>;${origin}`,
@@ -124,20 +147,14 @@ async function main() {
     progress("REFUSALS");
     const quiet = await reads();
     const probe = `${path}?subject=kal-120&causer=${a}`;
-    const request = (headers) => {
-      checkTime();
-      return fetch(`${origin}${probe}`, { headers, redirect: "manual", signal: stop.signal });
-    };
-    const denied = await request({ cookie: `${cookie}=${memberToken}` });
-    same([denied.status, denied.headers.get("x-two-renderer")], [403, "kit"], "member:kit-403");
-    ok(!(await denied.text()).includes("kal-120"), "member:no-row");
+    const request = await memberRefusal(probe, { cookie: `${cookie}=${memberToken}` }, budget);
     const guest = await request();
     same([guest.status, guest.headers.get("x-two-renderer")], [302, "kit"], "guest:kit-302");
     const target = `/auth/discord?next=${encodeURIComponent(probe)}`;
     same(guest.headers.get("location"), target, "guest:return-path");
-    checkTime();
+    budget.checkTime();
     ok((await reads()) === quiet, "refused:no-activity-log-reads");
-    checkTime();
+    budget.checkTime();
     same(await audits(), snapshot, "refused:no-new-audits");
 
     progress("PAGINATION_FILTERS");
@@ -160,31 +177,20 @@ async function main() {
     // A successful moderator GET rotates the session, so never seed a second context with it.
     const mintModerator = () =>
       mint(mod, true).then((value) => ({ name: cookie, value, domain, path: "/", secure: true }));
-    const lighthouse = await visual.collectVisuals(
-      browser,
-      mintModerator,
-      `${scratch}/screenshots`,
-      {
-        mark: progress,
-        audit: async (page, name) => {
-          const a11y = await routeA11y(page, progress);
-          record(`${name} ${a11y}`);
-          ok(a11y.startsWith("a11y: PASS "), "visual:a11y");
-          progress("CAPTURE");
-        },
-        measure: routeLighthouse.bind(null, cdpPort),
-        TimeoutError: errors.TimeoutError,
+    const lighthouse = await collectVisuals(browser, mintModerator, `${scratch}/screenshots`, {
+      mark: progress,
+      audit: async (page, name) => {
+        const a11y = await routeA11y(page, progress);
+        record(`${name} ${a11y}`);
+        ok(a11y.startsWith("a11y: PASS "), "visual:a11y");
+        progress("CAPTURE");
       },
-    );
+      measure: routeLighthouse.bind(null, cdpPort),
+      TimeoutError,
+    });
     record(`populated-desktop.png ${lighthouse ?? "lighthouse: unavailable"}`);
   }
-  async function work() {
-    await withDeadline(exercise, browserWorkMs - performance.now());
-    // On work failure leave the last reached stage intact, even if cleanup stalls.
-    mark("TEARDOWN");
-  }
   async function cleanup() {
-    stop.abort(new visual.BrowserDeadline());
     try {
       await withDeadline(async () => (await launched?.catch(() => undefined))?.close(), 10_000);
     } finally {
@@ -192,17 +198,22 @@ async function main() {
       await withDeadline(() => sql.end({ timeout: 5 }), 6_000);
     }
   }
-  await visual.withCleanup(work, cleanup);
-  mark("COMPLETE");
+  await runWork(exercise, cleanup, mark);
 }
 
-await main().then(
-  // Teardown and the synchronous stage write finished; don't wait on Lighthouse handles.
-  () => process.exit(0),
-  (error) => {
-    if (error instanceof visual.AssertionFailure) process.exit(20);
-    if (error instanceof visual.BrowserDeadline || error instanceof errors.TimeoutError)
-      process.exit(21);
+export async function exitFixture(task, TimeoutError) {
+  try {
+    await task;
+  } catch (error) {
+    if (error instanceof AssertionFailure) process.exit(20);
+    if (error instanceof visual.BrowserDeadline || error instanceof TimeoutError) process.exit(21);
     process.exit(22);
-  },
-);
+  }
+  // Don't wait on abandoned Lighthouse handles after teardown and the final stage write.
+  process.exit(0);
+}
+if (import.meta.main) {
+  const { chromium, errors } = await import("@playwright/test");
+  const { default: postgres } = await import("postgres");
+  await exitFixture(main(chromium, postgres, errors.TimeoutError), errors.TimeoutError);
+}

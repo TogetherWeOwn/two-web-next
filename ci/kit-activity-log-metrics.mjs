@@ -1,17 +1,11 @@
 import { withDeadline } from "./kit-activity-log-visual.mjs";
 
-async function loadAxe() {
-  const [{ default: axe }, { WCAG_AA_TAGS }] = await Promise.all([
-    import("axe-core"),
-    import("./a11y-policy.mjs"),
-  ]);
-  return { source: axe.source, tags: WCAG_AA_TAGS };
-}
-export async function routeA11y(page, mark, load = loadAxe) {
+export async function routeA11y(page, mark, fixture) {
   mark("AXE_INJECT");
-  const { source, tags } = await load();
+  const source = fixture?.source ?? (await import("axe-core")).default.source;
   await withDeadline(() => page.evaluate(source));
   mark("AXE_EVALUATE");
+  const tags = fixture?.tags ?? (await import("./a11y-policy.mjs")).WCAG_AA_TAGS;
   const { violations, incomplete } = await withDeadline(() =>
     page.evaluate(async (values) => {
       const result = await globalThis.axe.run(document, { runOnly: { type: "tag", values } });
@@ -23,10 +17,8 @@ export async function routeA11y(page, mark, load = loadAxe) {
 
 export async function routeLighthouse(port, page, url) {
   // Use the existing guarded target and a log-only Lighthouse audit (no filmstrip or report file).
-  const [{ default: lighthouse }, { default: puppeteer }] = await Promise.all([
-    import("lighthouse"),
-    import("puppeteer-core"),
-  ]);
+  const { default: lighthouse } = await import("lighthouse");
+  const { default: puppeteer } = await import("puppeteer-core");
   const browserURL = `http://127.0.0.1:${port}`;
   const browser = await puppeteer.connect({ browserURL, defaultViewport: null });
   try {
