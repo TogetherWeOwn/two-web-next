@@ -230,9 +230,13 @@ cancelled and waits for `scope` and `dependency-admission`, not the independent
 accessibility or performance jobs. It skips heavy steps on docs-only and draft PRs.
 For non-draft code changes, static checks and coverage shards run in parallel after dependency admission.
 `ci-ok` requires static checks and coverage replay, which verifies shard inputs before enforcing unchanged floors.
-The independent `kit-browser-fixture` job runs alongside `check` for non-draft,
-non-docs-only full, app or worker scopes. `ci-ok` requires its success when
-selected, and fails on failure, cancellation or an unexpected skip.
+Three independent Kit browser jobs run alongside `check` for non-draft,
+non-docs-only full, app or worker scopes. `kit-browser-calendar` runs the
+shared fixture cases named `calendar …`; `kit-browser-fixture` runs the rest
+and the isolation test. `kit-browser-lifeline` runs the Lifeline test and
+uploads its eight screenshots. `ci-ok` requires every selected job's success
+and a Lifeline upload ID. Failure, cancellation or an unexpected skip fails
+the gate.
 The Node 22.23.0 `engines` floor is asserted in each of three `node22-shard`
 jobs. The first shard also runs lint and typecheck. Each runs its share of the
 unit suite serially against its own Postgres service. For a selected run,

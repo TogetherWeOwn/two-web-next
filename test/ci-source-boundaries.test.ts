@@ -25,6 +25,8 @@ describe("CI workflow source boundaries", () => {
     ["coverage-shard", "24-bookworm"],
     ["coverage-merge", "24-bookworm"],
     ["kit-browser-fixture", "24-bookworm"],
+    ["kit-browser-calendar", "24-bookworm"],
+    ["kit-browser-lifeline", "24-bookworm"],
     ["lighthouse", "24-bookworm"],
     ["node22-shard", "22.23.0-bookworm"],
     ["node22-compat", "22.23.0-bookworm"],
