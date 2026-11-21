@@ -153,6 +153,7 @@ describe("workflow runner labels", () => {
       "queue-syntax-smoke",
       "docs-links",
       "a11y",
+      "dependency-admission",
       "check",
       "static-check",
       "coverage-shard",

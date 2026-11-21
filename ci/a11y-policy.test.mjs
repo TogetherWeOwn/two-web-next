@@ -183,8 +183,8 @@ test("audit artifacts omit Wrangler's synthetic session and DB configuration val
 test("the required ci-ok gate runs after a non-green audit and rejects every non-success result", async () => {
   const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
-  // check no longer waits on the audit; the guard below lives in ci-ok.
-  assert.match(check, /\n    needs: \[scope\]\n/);
+  // check waits on dependency admission, not the accessibility audit.
+  assert.match(check, /\n    needs: \[scope, dependency-admission\]\n/);
   const ciOk = workflow.split("\n  ci-ok:\n")[1];
   const needs = ciOk.match(/\n    needs:\s*\[([^\]]*)\]/)?.[1];
   assert(needs, "ci-ok must declare its dependencies");
@@ -198,6 +198,7 @@ test("the required ci-ok gate runs after a non-green audit and rejects every non
     "bundle-budget",
     "docs-links",
     "queue-syntax-smoke",
+    "dependency-admission",
     "check",
     "kit-browser-fixture",
     "node22-compat",
@@ -256,6 +257,68 @@ test("the required CI job fails first when scope did not succeed, before any gua
   }
 });
 
+test("dependency admission retains its pre-install gates and fails closed downstream", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const job = (name) => workflow.split(`\n  ${name}:\n`)[1].split(/\n  [\w-]+:\n/)[0];
+  const admission = job("dependency-admission");
+  const check = job("check");
+  const steps = admission.split("\n    steps:\n")[1];
+  const selected =
+    "(needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')";
+  assert.match(admission, /\n    needs: \[scope\]\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
+  assert.doesNotMatch(admission, /\n    (?:container|services):|\bnpm ci\b/);
+  const nodeVersion = workflow.match(/^  ADMISSION_NODE_VERSION: (.+)$/m)?.[1] ?? "";
+  assert.match(nodeVersion, /^"24\.\d+\.\d+"$/);
+  for (const consumer of [admission, check]) {
+    const setup = consumer.split("\n      - uses: actions/setup-node@")[1]?.split("\n      - ")[0];
+    assert.match(setup, /\n          node-version: \$\{\{ env\.ADMISSION_NODE_VERSION \}\}\n/);
+  }
+  assert(
+    steps.startsWith(
+      '      - name: Require successful scope\n        env:\n          SCOPE_RESULT: ${{ needs.scope.result }}\n        run: test "$SCOPE_RESULT" = success\n',
+    ),
+  );
+  assert.match(
+    steps,
+    /Docs-only or draft fast pass\n        if: needs\.scope\.outputs\.docs_only == 'true' \|\| needs\.scope\.outputs\.draft == 'true'/,
+  );
+  assert.match(
+    steps,
+    /npm_config_ignore_scripts: "true"\n          npm_config_min_release_age: "3"/,
+  );
+  for (const command of [
+    "npm run deps:audit:selftest",
+    'node ci/npm-policy-fixtures.mjs "$RUNNER_TEMP/npm-policy-fixtures.json"',
+    "npm run deps:audit",
+    "npm run deps:pins:selftest && npm run deps:pins",
+  ]) {
+    const step = steps
+      .split("\n      - ")
+      .find((entry) => entry.split("\n").includes(`        run: ${command}`));
+    assert(step, `Admission gate missing: ${command}`);
+    assert(step.includes(`\n        if: ${selected}\n`));
+    assert(!step.includes("continue-on-error"));
+    assert(!check.includes(`\n        run: ${command}\n`));
+  }
+  const guard =
+    /- name: Require successful dependency admission\n        env:\n          DEPENDENCY_ADMISSION_RESULT: \$\{\{ needs\.dependency-admission\.result \}\}\n        run: ([^\n]+)/;
+  for (const downstream of [check, job("ci-ok")]) {
+    const match = downstream.match(guard);
+    assert(match, "Dependency admission must be required unconditionally");
+    for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
+      const execution = spawnSync("bash", ["-c", match[1]], {
+        env: { DEPENDENCY_ADMISSION_RESULT: result },
+      });
+      assert.equal(
+        execution.status,
+        result === "success" ? 0 : 1,
+        `Admission result ${result || "missing"}`,
+      );
+    }
+  }
+  assert(check.indexOf("Require successful dependency admission") < check.indexOf("run: npm ci"));
+});
+
 test("the required CI job has a bounded coverage allowance without relaxing its gates", async () => {
   const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
@@ -264,8 +327,6 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
   assert.match(check, /\n      - run: npm ci --no-audit --no-fund\n/);
   const steps = check.split(/\n      - /).slice(1);
   for (const command of [
-    "npm run deps:audit:selftest",
-    "npm run deps:audit",
     "timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads",
     "npm run test:smoke",
     "npm run db:migrate",

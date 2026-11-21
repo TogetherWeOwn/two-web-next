@@ -2,7 +2,15 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __resetAnonEventCacheForTests, retireAnonEventCaches } from "../src/events/anon-cache";
+import {
+  ANON_PAST_TTL_MS,
+  __resetAnonEventCacheForTests,
+  anonCacheSource,
+  anonPastKey,
+  readAnonCache,
+  retireAnonEventCaches,
+  writeAnonCache,
+} from "../src/events/anon-cache";
 import { dispatchPastArchiveRequest, loadPastArchivePage } from "../src/kit-past-events";
 import {
   HONO_FALLBACK_ROUTE_ID,
@@ -49,6 +57,26 @@ describe("Kit past archive response parity", () => {
     expect(second.headers.get("content-type")).toContain("text/html");
     expect(second.headers.get("x-two-past-cacheable")).toBeNull();
     expect(await first.text()).toBe(html);
+  });
+
+  it("keeps Hono archive HTML separate from Kit for the same page and source", async () => {
+    const source = anonCacheSource(env);
+    const honoKey = anonPastKey("GET", 2);
+    const kitRequest = request("https://example.test/events/past?page=2");
+    const resolve = vi.fn(async () => cachedResponse());
+
+    // Hono uses this key for the canonical path and aliases decoded to it.
+    writeAnonCache(
+      honoKey,
+      source,
+      { status: 200, cacheControl: "public, max-age=300", vary: "Cookie", body: "Hono archive" },
+      ANON_PAST_TTL_MS,
+      1000,
+    );
+    const kit = await dispatchPastArchiveRequest(kitRequest, env, resolve, allow, 2000);
+    expect(await kit.text()).toBe(html);
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(readAnonCache(honoKey, source, 2000)?.body).toBe("Hono archive");
   });
 
   it("does not settle a render overtaken by an event-cache retirement", async () => {
@@ -382,6 +410,30 @@ describe("hook archive dispatch", () => {
     expect(response.status).toBe(429);
     expect(resolve).not.toHaveBeenCalled();
     expect(guard).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the archive guard in front of an opted-in production render", async () => {
+    const appUrl = "https://togetherweown.com";
+    const req = request(`${appUrl}/events/past?page=2`);
+    const resolve = vi.fn(async () => cachedResponse());
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    const guard = vi.fn(async () => new Response("limited", { status: 429 }));
+    const response = await dispatchHookRequest(
+      { request: req, url: new URL(req.url), route: { id: "/events/past" } },
+      {
+        appUrl,
+        kitRouteArchive: "true",
+        honoFetch,
+        resolve,
+        pastArchive: (request, render, id) =>
+          dispatchPastArchiveRequest(request, env, render, guard, 1000, id),
+      },
+    );
+
+    expect(response.status).toBe(429);
+    expect(guard).toHaveBeenCalledExactlyOnceWith(req, env, expect.any(String));
+    expect(resolve).not.toHaveBeenCalled();
+    expect(honoFetch).not.toHaveBeenCalled();
   });
 
   it("does not wrap non-archive public routes", async () => {
