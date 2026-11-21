@@ -2161,38 +2161,92 @@ test("Kit calendar styles survive a swap into the old document", async ({ page }
   await expect(html).toHaveAttribute("data-rollout-shell", "old");
 });
 
-test("cross-target: normalized events-calendar sections match", async ({ playwright, page }) => {
-  // Normalize serializer noise and the Kit wrapper, not the tabs' links or selection.
-  const calendarSection = async (html: string) =>
-    normalizeSection(
-      await page.evaluate((html) => {
-        const document = new DOMParser().parseFromString(html, "text/html");
-        const section = document.querySelector('section[data-testid="events-calendar"]');
-        if (!section) throw new Error("Missing calendar section");
-        const segments = section.querySelector('nav.segments[aria-label="How to show the events"]');
-        if (segments) {
-          section.querySelector('link[rel=stylesheet][href="/kit-events-controls.css"]')?.remove();
-          const group = document.createElement("div");
-          group.className = "schedule-views";
-          group.setAttribute("role", "group");
-          group.setAttribute("aria-label", "How to show the events");
-          while (segments.firstChild) group.appendChild(segments.firstChild);
-          segments.replaceWith(group);
-        }
-        for (const element of [section, ...section.querySelectorAll("*")]) {
-          const attrs = [...element.attributes].sort((a, b) => a.name.localeCompare(b.name));
-          for (const { name, value } of attrs) {
-            element.removeAttribute(name);
-            element.setAttribute(name, value);
-          }
-        }
-        const comments = document.createTreeWalker(section, NodeFilter.SHOW_COMMENT);
-        const markers: Node[] = [];
-        while (comments.nextNode()) markers.push(comments.currentNode);
-        for (const marker of markers) marker.parentNode?.removeChild(marker);
-        return section.outerHTML;
-      }, html),
-    );
+test("cross-target: Events schedule behavior matches", async ({ playwright, page }) => {
+  // Compare the island contract independently of the intentional Ember layout.
+  const calendarSection = (html: string) =>
+    page.evaluate((html) => {
+      const section = new DOMParser()
+        .parseFromString(html, "text/html")
+        .querySelector('section[data-testid="events-calendar"]');
+      if (!section) throw new Error("Missing calendar section");
+      const nodes = (root: Element, selector: string) => [...root.querySelectorAll(selector)];
+      const text = (node: Element) => (node.textContent ?? "").replace(/\s+/g, " ").trim();
+      // Bare, empty and "true" spellings are equivalent for presence flags,
+      // not for data values, form values, or ARIA state.
+      const flags = new Set([
+        "checked",
+        "data-cal-feedback",
+        "data-copy-feed",
+        "data-copy-toast",
+        "disabled",
+        "hidden",
+        "multiple",
+        "open",
+        "readonly",
+        "required",
+        "selected",
+      ]);
+      const attrs = (node: Element) =>
+        [...node.attributes]
+          .filter(({ name }) => name !== "class")
+          .map(({ name, value }) =>
+            flags.has(name) && !(name === "hidden" && value === "until-found")
+              ? name
+              : `${name}=${value}`,
+          )
+          .sort();
+      const link = (node: Element) => [text(node), attrs(node)];
+      const control = (node: Element) => ({
+        tag: node.localName,
+        attrs: attrs(node),
+        text: node.matches("form, select") ? null : text(node),
+        value:
+          node instanceof HTMLInputElement || node instanceof HTMLSelectElement ? node.value : null,
+      });
+      return {
+        attributes: attrs(section),
+        zones: nodes(section, "[data-cal-zone]").map(attrs),
+        status: nodes(section, '[role="status"]').map((node) => [attrs(node), text(node)]),
+        // Subscribe moves within the head; preserve targets and selection, not visual order.
+        headLinks: nodes(section, '[data-cal-zone="head"] a').map(link).sort(),
+        links: nodes(section, 'a:not([data-cal-zone="head"] a, [data-testid="event-card"] a)').map(
+          link,
+        ),
+        subscribe: nodes(
+          section,
+          '[data-cal-zone="subscribe"] :is(summary, label, input, button, p)',
+        ).map(control),
+        search: nodes(
+          section,
+          'form[role="search"], form[role="search"] :is(input, select, option, label, button, p)',
+        ).map(control),
+        buttons: nodes(section, 'button:not(form button, [data-cal-zone="subscribe"] button)').map(
+          control,
+        ),
+        rows: nodes(section, '[data-testid="event-card"]').map((row) => {
+          const title = row.querySelector(".schedule-info :is(h3, h4)");
+          if (!title) throw new Error(`Missing title for ${row.id}`);
+          return {
+            attrs: attrs(row),
+            title: text(title),
+            links: nodes(row, "a").map(link),
+            when: nodes(row, "time").map((time) => [time.getAttribute("datetime"), text(time)]),
+            zone: nodes(
+              row,
+              ".schedule-when > span:not(:has(time)), p:has(> time) > span:first-of-type",
+            ).map(text),
+            // Hono puts location in the time line; Kit can render it as its own block.
+            info: nodes(
+              row,
+              ".schedule-info :is(p:not(:has(> time)), details, summary, .schedule-badge, .schedule-location), p:has(> time) > span:nth-of-type(2)",
+            ).map((node) => [attrs(node), text(node)]),
+            attendance: nodes(row, ".schedule-attendance, .schedule-attendance [data-testid]").map(
+              (node) => [attrs(node), text(node)],
+            ),
+          };
+        }),
+      };
+    }, html);
   const bodies = new Map<string, string>();
   for (const target of targets) {
     // A fresh jar prevents authentication by the shared QA-login cookie.
@@ -2221,10 +2275,11 @@ test("cross-target: normalized events-calendar sections match", async ({ playwri
   // two empty lists cannot pass for parity.
   const hono = await calendarSection(bodies.get("hono")!);
   const kit = await calendarSection(bodies.get("kit")!);
-  expect(hono, "Hono events-calendar section carries the seeded row").toContain(
-    "E2E Community Night",
-  );
-  expect(kit, "Kit matches the Hono calendar contract after normalization").toBe(hono);
+  expect(
+    hono.rows.map(({ title }) => title),
+    "Hono carries the seeded row",
+  ).toContain("E2E Community Night");
+  expect(kit, "Kit matches the Hono calendar contract").toEqual(hono);
 });
 
 test("cross-target: normalized member-board tables match", async () => {
