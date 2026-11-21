@@ -537,7 +537,12 @@ for (const target of targets) {
       expect(scrubSecrets(body)).toEqual([]);
       expect(body).toContain('data-testid="join-oneclick"');
       expect(body).toContain('data-testid="join-invite"');
-      expect(body).toContain("Welcome, guest");
+      if (target.name === "kit") {
+        expect(body).toContain('href="/auth/discord" aria-label="Sign in with Discord"');
+        expect(body).not.toContain("Welcome, guest");
+      } else {
+        expect(body).toContain("Welcome, guest");
+      }
       expect(body).not.toContain("Sign out");
       expect(body).not.toContain("<iframe");
       // Exactly one widget zone across the three isolate states (cold facade,

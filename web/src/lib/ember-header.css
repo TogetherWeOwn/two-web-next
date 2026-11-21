@@ -45,7 +45,8 @@
   background: var(--two-color-accent-hover);
 }
 @media (min-width: 821px) {
-  :root:has(.ember-header) {
+  /* Let pages with their own sticky toolbars reserve more space. */
+  :where(:root):has(.ember-header) {
     scroll-padding-top: var(--two-size-header-wide);
   }
   .base-theme .ember-header.site-header {
