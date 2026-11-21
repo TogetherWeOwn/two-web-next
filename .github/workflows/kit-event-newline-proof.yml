@@ -1,0 +1,118 @@
+name: Kit event newline proof
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - .github/workflows/kit-event-newline-proof.yml
+      - e2e/kit-parity/admin-event-newlines.spec.ts
+      - e2e/kit-parity/moderator-fixture.ts
+      - playwright.kit-event-newlines.config.ts
+      - src/admin/event-text.ts
+      - src/admin/pages/event-editable-fields.tsx
+      - src/admin/pages/event-public-fields.tsx
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kit-event-newline-proof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    name: Kit event newline ${{ matrix.phase }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [before, after]
+    services:
+      postgres:
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
+        env:
+          POSTGRES_USER: agent_test
+          POSTGRES_DB: two_web_next
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_test -d two_web_next"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://agent_test@127.0.0.1:5432/two_web_next
+      KIT_EVENT_NEWLINE_PHASE: ${{ matrix.phase }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      HISTORICAL_CONTROLS_SHA: d537b720bfedbbef33b31a9ef3e142ce52200c44
+      npm_config_ignore_scripts: "true"
+      npm_config_min_release_age: "3"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install pinned tools
+        run: |
+          npm ci --include=dev --no-audit --no-fund
+          npm ci --prefix web --include=dev --no-audit --no-fund
+          npx --no-install playwright install --with-deps chromium
+      - name: Migrate disposable service only
+        run: |
+          node --input-type=module -e 'import {requireGithubRunner, requireTestDatabase} from "./e2e/ci-only.mjs"; requireGithubRunner(); requireTestDatabase(process.env.DATABASE_URL);'
+          psql -h 127.0.0.1 -U agent_test -d two_web_next -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
+          npm run db:migrate
+      - name: Build exact-head loopback fixture
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          git merge-base --is-ancestor "$HISTORICAL_CONTROLS_SHA" HEAD
+          controls=(src/admin/pages/event-editable-fields.tsx src/admin/pages/event-public-fields.tsx)
+          ownership=src/route-ownership.ts
+          trap 'git restore --source=HEAD -- "$ownership" "${controls[@]}"' EXIT
+          source_sha="$HEAD_SHA"
+          if [ "$KIT_EVENT_NEWLINE_PHASE" = before ]; then
+            source_sha="$HISTORICAL_CONTROLS_SHA"
+            git restore --source="$source_sha" -- "${controls[@]}"
+          fi
+          # Enable only the edit GET in the disposable build. The app source
+          # at HEAD is not changed; POST still goes to the original handler.
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {readFileSync, writeFileSync} from 'node:fs';
+          const path = 'src/route-ownership.ts';
+          const source = readFileSync(path, 'utf8');
+          const entry = 'method: "GET",\n    path: "/admin/events/:key",\n    enabled: ';
+          assert.equal(source.split(entry).length, 2, 'one exact edit GET');
+          assert.match(source, /path: "\/admin\/events\/:key",\n    enabled: (false|true),\n    reads: \{ resource: "events", action: "view", route: "admin\.events\.edit" \}/);
+          writeFileSync(path, source.replace(entry + 'false', entry + 'true'));
+          JS
+          mkdir -p artifacts/kit-event-newlines
+          {
+            printf 'head=%s\nphase=%s\ncontrol_source=%s\nfixture_overlay=enable Kit ownership of event edit GET only\n' "$HEAD_SHA" "$KIT_EVENT_NEWLINE_PHASE" "$source_sha"
+            sha256sum "$ownership" "${controls[@]}"
+          } > artifacts/kit-event-newlines/provenance.txt
+          npm run build --prefix web
+      - name: Verify browser evidence and retain captures
+        run: |
+          git diff --exit-code -- src/route-ownership.ts src/admin/pages/event-editable-fields.tsx src/admin/pages/event-public-fields.tsx
+          npx --no-install playwright test --config playwright.kit-event-newlines.config.ts
+          expected=16
+          if [ "$KIT_EVENT_NEWLINE_PHASE" = before ]; then expected=4; fi
+          test "$(find artifacts/kit-event-newlines/images -name 'kit-review-moderator-event-newlines-*.png' -size +0c | wc -l)" -eq "$expected"
+      - name: Upload synthetic viewport images and results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-event-newlines-${{ matrix.phase }}-${{ github.event.pull_request.head.sha }}
+          path: |
+            artifacts/kit-event-newlines/provenance.txt
+            artifacts/kit-event-newlines/results.json
+            artifacts/kit-event-newlines/images/**/kit-review-moderator-event-newlines-*.png
+          if-no-files-found: error
+          retention-days: 14
