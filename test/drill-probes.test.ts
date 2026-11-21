@@ -223,13 +223,13 @@ describe("queue:poison-probe drill", () => {
     const { lock } = memLock();
     const poisonAnn = {
       kind: "announcement",
-      idempotencyKey: "poison-key",
+      idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
       action: { channelKey: "c", body: "poison-body" },
       jobId: "poison-job",
     };
     const ordinaryAnn = {
       kind: "announcement",
-      idempotencyKey: "ordinary-key",
+      idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b16",
       action: { channelKey: "c", body: "ordinary-body" },
       jobId: "ordinary-job",
     };

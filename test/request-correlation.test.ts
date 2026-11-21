@@ -231,7 +231,7 @@ describe("request correlation through queue envelopes (local fixtures)", () => {
       const body = {
         kind: "announcement",
         action: { channelKey: "fixture", body: "fixture" },
-        idempotencyKey: "fixed",
+        idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
         requestId: ID,
       };
       const ack = vi.fn(),
@@ -250,7 +250,7 @@ describe("request correlation through queue envelopes (local fixtures)", () => {
         expect(retry).toHaveBeenCalledTimes(1);
         expect(ack).not.toHaveBeenCalled();
         expect(body.requestId).toBe(ID);
-        expect(body.idempotencyKey).toBe("fixed");
+        expect(body.idempotencyKey).toBe("94e5ec13-81e8-4d24-8841-19489bda1b15");
         expect(error.mock.calls.some(([line]) => String(line).includes('"queue.failing"'))).toBe(
           false,
         );
