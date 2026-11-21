@@ -88,7 +88,9 @@ const nextOwnEvent = $derived(
   description="We spent most of our life private. Now you can just turn up."
   theme="home"
   activeNav="home"
+  menuFallbackOnly={notice?.startsWith("signin_")}
   member={session?.member ?? false}
+  authenticated={session != null}
   accountChrome={session ? memberChrome : guestChrome}
 >
   {#if joinResult}

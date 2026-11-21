@@ -39,6 +39,29 @@ describe("dormant reconciliation persistence", () => {
     }
   });
 
+  it("rejects malformed announcement transitions before opening a transaction", async () => {
+    const begin = vi.fn();
+    const store = pgReconciliationStore({ begin } as never);
+    for (const [key, alias, queuedAt] of [
+      ["not-a-uuid", "fixture", new Date()],
+      [intent.idempotencyKey, "a".repeat(65), new Date()],
+      [intent.idempotencyKey, "fixture", new Date(NaN)],
+    ] as const) {
+      await expect(store.claimAnnouncement(key, alias, queuedAt)).rejects.toThrow(
+        "Invalid announcement carrier",
+      );
+    }
+    for (const [attempts, state] of [
+      [0, "closed"],
+      [1, "sending"],
+    ] as const) {
+      await expect(
+        store.finishAnnouncement(intent.idempotencyKey, attempts, state as "closed"),
+      ).rejects.toThrow("Invalid announcement claim settlement");
+    }
+    expect(begin).not.toHaveBeenCalled();
+  });
+
   it("propagates persistence failures and refuses absent receipts", async () => {
     const failure = new Error("database unavailable");
     const sql = { begin: vi.fn().mockRejectedValue(failure) };
