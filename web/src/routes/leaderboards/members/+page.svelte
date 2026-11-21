@@ -88,6 +88,7 @@ const destination = (
   activeNav="leaderboard"
   mainClass="events-page"
   loginReturnTo={destination(scope)}
+  authenticated={true}
   accountChrome={memberChrome}
 >
   <div class="board-heading">
