@@ -92,7 +92,10 @@ const nextVoiceEvent = $derived.by(() => {
   if (eventsUnavailable) return undefined;
   if (!nextPublicEvent) return null;
   const { title, startsAt, timezone } = nextPublicEvent;
-  return { title, timeLabel: `${cardTimeLabel(startsAt, timezone)} (${isValidZone(timezone) ? timezone : "UTC"})` };
+  return {
+    title,
+    timeLabel: `${cardTimeLabel(startsAt, timezone)} (${isValidZone(timezone) ? timezone : "UTC"})`,
+  };
 });
 </script>
 
