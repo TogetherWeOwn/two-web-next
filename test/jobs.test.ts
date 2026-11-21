@@ -123,6 +123,60 @@ describe("retry constants match the Laravel originals (two-web @ 3965a6e8)", () 
 });
 
 describe("SyncEventToDiscord", () => {
+  it.each([
+    { requestAttempts: 6, carrier: 1, age: 59_999, retry: true },
+    { requestAttempts: 1, carrier: 6, age: 59_999, retry: true },
+    { requestAttempts: 6, carrier: 6, age: 60_000, retry: false },
+    { requestAttempts: 6, carrier: 6, age: null, retry: false },
+  ])(
+    "protects only fresh active owners at the retry caps: $requestAttempts/$carrier/$age",
+    async ({ requestAttempts, carrier, age, retry }) => {
+      const clock = new Date("2099-01-01T00:01:00Z");
+      const claimSync = vi.fn<EventStore["claimSync"]>();
+      const deferSync = vi.fn<EventStore["deferSync"]>();
+      const completeSync = vi.fn<EventStore["completeSync"]>();
+      const failSync = vi.fn<EventStore["failSync"]>();
+      const events = store({
+        prepareSync: async (_eventKey, idempotencyKey, mirroredAt) => ({
+          eventKey: "e1",
+          idempotencyKey,
+          mirroredAt,
+          revision: 1,
+          state: "pending",
+          requestAttempts,
+          nextAttemptAt: null,
+          claimStartedAt: age === null ? null : new Date(clock.getTime() - age),
+          action: "event.upsert",
+          payload,
+        }),
+        claimSync,
+        deferSync,
+        completeSync,
+        failSync,
+      });
+      const upsertEvent = vi.fn();
+      const result = await handleSyncEvent(
+        { eventKey: "e1", idempotencyKey: "original-key" },
+        carrier,
+        {
+          bot: { upsertEvent } as unknown as BotClient,
+          events,
+          now: () => clock,
+        },
+      );
+      expect(result).toEqual(
+        retry
+          ? { retryInSeconds: SYNC_EVENT.uniqueForSeconds }
+          : { failed: "request retry budget exhausted; unresolved identity retained" },
+      );
+      expect(upsertEvent).not.toHaveBeenCalled();
+      expect(claimSync).not.toHaveBeenCalled();
+      expect(deferSync).not.toHaveBeenCalled();
+      expect(completeSync).not.toHaveBeenCalled();
+      expect(failSync).not.toHaveBeenCalled();
+    },
+  );
+
   it("dispatch debounces, is unique, and keeps one idempotency key", async () => {
     const sent: { body: any; o: any }[] = [];
     const q = { send: async (body: unknown, o?: unknown) => void sent.push({ body, o }) };
