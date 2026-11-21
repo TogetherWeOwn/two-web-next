@@ -71,7 +71,13 @@ describe("inactive Kit facade compiler", () => {
       ],
     });
     const url = `data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0]!.text).toString("base64")}`;
-    const worker = (await import(/* @vite-ignore */ url)).default;
+    const { default: worker, LiveGuildHub } = await import(/* @vite-ignore */ url);
+    expect(typeof LiveGuildHub).toBe("function");
+    const disabled = await worker.fetch(
+      new Request("https://togetherweown.com/internal/discord-live/v1/ingest", { method: "POST" }),
+      { APP_URL: "https://togetherweown.com" },
+    );
+    expect(disabled.status).toBe(503);
     const response = await worker.fetch(new Request("https://togetherweown.com/"), {
       APP_URL: "https://togetherweown.com",
     });
