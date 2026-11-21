@@ -60,7 +60,7 @@ describe("privacy policy v8 correction content", () => {
   });
 
   it("keeps historical unknowns and makes no unsupported claims", () => {
-    expect(v8).toMatch(/We have not established/);
+    expect(v8Flat).toMatch(/We do not know how long these tags were active/);
     expect(v8).not.toMatch(/\b129\b/);
     expect(v8).not.toMatch(/\b(has|have|was|were) been deleted\b|\bwere deleted\b/);
     expect(v8).not.toMatch(/\bcomplian(t|ce)\b/i);
