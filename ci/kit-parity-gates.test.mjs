@@ -362,7 +362,9 @@ test("an enabled nested-reads member board is covered by the executed parity run
   );
 });
 
-const membersPreviewStub = `
+const membersPreviewStub = (now = null) => `
+const now = ${JSON.stringify(now)};
+if (now) Date.now = () => Date.parse(now);
 const archivePage =
   \`<html><head><link rel="canonical" href="https://x.invalid/"></head>\` +
   \`<body><a class="skip-link" href="#main">Skip</a>\` +
@@ -403,7 +405,10 @@ globalThis.fetch = async (input, init = {}) => {
     if (url.search.includes("season=bogus") || url.search.includes("scope=") && !url.search.includes("scope=relative") || url.search.includes("activity=chess")) {
       return new Response("Unknown", { status: 400, headers: { "content-type": "text/plain", "cache-control": "private, no-store" } });
     }
-    return new Response(membersPage, { status: 200, headers: { "content-type": "text/html", "cache-control": "private, no-store", ...(url.hostname.startsWith("kit.") ? { "x-two-renderer": "kit" } : {}) } });
+    const page = now && url.searchParams.get("season") === "2026"
+      ? membersPage.replace(/<table>[\\s\\S]+<\\/table>/, '<p role="status">Nobody is ranked for this season and game. This season has ended.</p>')
+      : membersPage;
+    return new Response(page, { status: 200, headers: { "content-type": "text/html", "cache-control": "private, no-store", ...(url.hostname.startsWith("kit.") ? { "x-two-renderer": "kit" } : {}) } });
   }
   return new Response(archivePage, { status: 200, headers: { "content-type": "text/html" } });
 };
@@ -416,7 +421,7 @@ test("preview member-board journeys execute with a QA session and pass", () => {
       HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
       KIT_PARITY_QA_TOKEN: "test-token",
     },
-    stub: membersPreviewStub,
+    stub: membersPreviewStub(),
   });
   // The stub serves only the archive + member-board contracts, so other
   // routes fail in this run; the member journeys themselves must all pass.
@@ -426,6 +431,29 @@ test("preview member-board journeys execute with a QA session and pass", () => {
   void status;
 });
 
+test("preview member-board accepts ended copy only from the UTC season close", () => {
+  for (const [now, verdict] of [
+    ["2026-12-31T23:59:59.999Z", "failed"],
+    ["2027-01-01T00:00:00.000Z", "passed"],
+  ]) {
+    const { output } = runScript({
+      env: {
+        KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+        HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+        KIT_PARITY_QA_TOKEN: "test-token",
+      },
+      stub: membersPreviewStub(now),
+    });
+    for (const [renderer, check] of [
+      ["Kit", "contract"],
+      ["Hono", "no Kit marker"],
+    ]) {
+      const expected = `[${verdict}] preview ${renderer} /leaderboards/members?season=2026: ${check}`;
+      assert.ok(output.includes(expected), `${now}: expected ${expected}`);
+    }
+  }
+});
+
 test("preview member-board journeys skip loud without a QA token", () => {
   const { status, output } = runScript({
     env: {
@@ -433,7 +461,7 @@ test("preview member-board journeys skip loud without a QA token", () => {
       HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
       KIT_PARITY_QA_TOKEN: "",
     },
-    stub: membersPreviewStub,
+    stub: membersPreviewStub(),
   });
   assert.match(output, /\[skipped\] preview [^\n]*leaderboards\/members[^\n]*KIT_PARITY_QA_TOKEN/);
   // The guest bounce needs no session and still executes; only the
@@ -641,8 +669,26 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
       "board table or empty status present",
     ],
     [
+      "empty-status-inline-hidden",
+      () => withBoardMarkup(`<p role="status" style="display:none">${openCopy}</p>`),
+      "board table or empty status present",
+    ],
+    [
+      "empty-status-with-inline-hidden-parent",
+      () =>
+        withBoardMarkup(
+          `<div style="color:red; DISPLAY: none !important"><p role="status">${openCopy}</p></div>`,
+        ),
+      "board table or empty status present",
+    ],
+    [
       "ended-copy-in-all-time-board",
       () => withStatus(endedCopy),
+      "board table or empty status present",
+    ],
+    [
+      "combined-copy-in-all-time-board",
+      () => withStatus(`${openCopy} This season has ended.`),
       "board table or empty status present",
     ],
     [

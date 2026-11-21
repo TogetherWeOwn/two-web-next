@@ -18,6 +18,7 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "parse5";
+import { parseSeasonParam } from "../src/hotzones/season.ts";
 import { stripEmberDelta } from "./kit-archive-delta.mjs";
 import { sectionOf } from "./kit-section-contract.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -968,22 +969,36 @@ function assertFaqContract(label, html, get, expected) {
   });
 }
 
-// The old open copy stays valid during the rollout. Only a known ended
-// window can also use the ended wording, in both HTTP and browser assertions.
+export function allowsEndedMemberBoardCopy(path) {
+  const season = parseSeasonParam(
+    new URL(path, "https://board.invalid").searchParams.get("season"),
+  );
+  return season?.kind === "window" && Date.now() >= season.end.getTime();
+}
+
+// The old open copy stays valid during rollout, including recovery text, but
+// cannot also claim the season ended. Only a completed window gets ended copy.
 export function memberBoardEmptyText(scope, allowEnded = false) {
   const viewer = scope === "relative" ? "You are not" : "Nobody is";
-  const ending = allowEnded
-    ? String.raw`(?: yet\.|\.\s+This season has ended\.)`
-    : String.raw` yet\.`;
+  const open = String.raw` yet\.(?![\s\S]*\bThis season has ended\.)`;
+  const ending = allowEnded ? String.raw`(?:${open}|\.\s+This season has ended\.)` : open;
   return new RegExp(String.raw`^\s*${viewer} ranked for this season and game${ending}(?=\s|$)`);
 }
+
+// Static HTML check only; Playwright checks visibility with the full CSS cascade.
+const INLINE_DISPLAY_NONE = /(?:^|;)\s*display\s*:\s*none\s*(?:!\s*important\s*)?(?:;|$)/i;
 
 /** @param {import("parse5").DefaultTreeAdapterMap["node"]} node */
 function* activeBoardNodes(node) {
   if (
     "tagName" in node &&
     (["template", "script", "style", "noscript"].includes(node.tagName) ||
-      node.attrs.some(({ name }) => name === "hidden" || name === "inert"))
+      node.attrs.some(
+        ({ name, value }) =>
+          name === "hidden" ||
+          name === "inert" ||
+          (name === "style" && INLINE_DISPLAY_NONE.test(value)),
+      ))
   )
     return;
   yield node;
@@ -2530,6 +2545,7 @@ async function runPreviewMode(
       contract: route.contract ?? "archive",
       cache: route.cache ?? null,
       cachePattern: route.cachePattern,
+      allowEnded: route.contract === "members" && allowsEndedMemberBoardCopy(route.path),
     };
     const assertContract =
       route.contract === "members"

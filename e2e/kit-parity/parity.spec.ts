@@ -8,9 +8,12 @@ import {
 } from "@playwright/test";
 import postgres from "postgres";
 import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
-import { memberBoardEmptyText, memberBoardStatus } from "../../ci/kit-parity-gates.mjs";
+import {
+  allowsEndedMemberBoardCopy,
+  memberBoardEmptyText,
+  memberBoardStatus,
+} from "../../ci/kit-parity-gates.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
-import { parseSeasonParam } from "../../src/hotzones/season";
 import { QA_IDENTITIES } from "../../src/qa";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
@@ -296,11 +299,6 @@ function memberGoingRsvp(): Promise<void> {
 // normalization: rank 1, the seeded going count 1. The bare name also
 // rides the member chrome, so only the table row proves ranked content.
 const RANKED_ROW = '<td>1</td><th scope="row">QA Member</th><td>1</td>';
-
-function allowsEndedMemberBoardCopy(path: string): boolean {
-  const season = parseSeasonParam(new URL(path, KIT_ORIGIN).searchParams.get("season"));
-  return season?.kind === "window" && Date.now() >= season.end.getTime();
-}
 
 function expectNoMarker(headers: Record<string, string>, label: string) {
   expect(
