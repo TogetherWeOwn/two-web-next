@@ -31,42 +31,62 @@ const registrationKeys = new Set(inventory.map(routeKey));
 const methods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 
 const families = [
-  ["ops", 18],
-  ["assets", 0],
-  ["feeds", 5],
-  ["public-api", 5],
-  ["admin", 20],
-  ["auth", 9],
-  ["event-writes", 10],
-  ["member-writes", 4],
-  ["machine", 3],
+  ["ops", "API-3", 18],
+  ["assets", null, 0],
+  ["feeds", "API-4", 5],
+  ["public-api", "API-4", 5],
+  ["admin", "API-5", 20],
+  ["auth", "API-6", 9],
+  ["event-writes", "API-7", 10],
+  ["member-writes", "API-8", 4],
+  ["machine", "API-9", 3],
 ];
-
-function goldenStatus(file, vector) {
-  return recording.get(`routes/${file}.json`)[vector].response.status;
-}
+const fallbackKeys = [
+  "ALL /events/:key/rsvp",
+  ...["/admin/ops-overrides", "/admin/queue/source-evidence/:id"].flatMap((path) =>
+    ["DELETE", "OPTIONS", "PATCH", "POST", "PUT"].map((method) => routeKey({ method, path })),
+  ),
+];
+const middlewareKeys = [
+  "/*",
+  "/admin/*",
+  "/admin/queue/*",
+  "/leaderboards/members",
+  "/members/*",
+  "/profile",
+].map((path) => routeKey({ method: "ALL", path }));
+const nonEndpoints = new Set([...fallbackKeys, ...middlewareKeys]);
 
 describe("route ownership preparation matrix (not runtime dispatch)", () => {
-  it.each(families)("selects only %s endpoint registration pairs", (family, count) => {
+  it.each(families)("selects only %s endpoint registration pairs", (family, slice, count) => {
+    // Classify by the reviewed migration slice, not by the family or kind under test.
+    const expected = rows.filter((row) => {
+      if (slice === null || row.slice !== slice || nonEndpoints.has(routeKey(row))) return false;
+      if (slice !== "API-4") return true;
+      const publicApi = row.path.startsWith("/api/public/") || row.path === "/openapi.json";
+      return family === "public-api" ? publicApi : !publicApi;
+    });
     const selection = familyEndpointKeys(rows, family);
     expect(selection.size).toBe(count);
+    expect(selection).toEqual(new Set(expected.map(routeKey)));
     const changed = rows.filter(
       (row) => projectFixtureOwner(row, selection, () => "hono") === "kit",
     );
-    expect(changed).toEqual(rows.filter((row) => row.family === family && row.kind === "endpoint"));
+    expect(changed).toEqual(expected);
     for (const key of selection) expect(registrationKeys.has(key), key).toBe(true);
   });
 
   it("accounts for separately classified endpoints, method fallbacks, middleware and assets", () => {
-    const counts = Object.fromEntries(families);
+    const names = new Set(families.map(([family]) => family));
     const tagged = rows.filter((row) => row.kind === "endpoint" && row.family !== null);
     expect(tagged).toHaveLength(74);
     for (const row of tagged) {
-      expect(Object.hasOwn(counts, row.family), routeKey(row)).toBe(true);
+      expect(names.has(row.family), routeKey(row)).toBe(true);
       expect(methods).toContain(row.method);
     }
-    expect(rows.filter((row) => row.kind === "method-fallback")).toHaveLength(11);
-    expect(rows.filter((row) => row.kind === "middleware")).toHaveLength(6);
+    const keysFor = (kind) => rows.filter((row) => row.kind === kind).map(routeKey);
+    expect(keysFor("method-fallback").sort()).toEqual([...fallbackKeys].sort());
+    expect(keysFor("middleware").sort()).toEqual([...middlewareKeys].sort());
     const assets = [...recording].filter(([file]) => file.startsWith("static/"));
     expect(assets.length).toBeGreaterThan(0);
     expect(assets.map(([, vectors]) => `STATIC ${routeKey(vectors.GET.request)}`).sort()).toEqual(
@@ -128,8 +148,16 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
     const selection = familyEndpointKeys(rows, "event-writes");
     expect(selection.has(routeKey(fallback))).toBe(false);
     expect(selection.has(routeKey({ ...fallback, method: "PATCH" }))).toBe(false);
+    const enabled = new Set(families.flatMap(([family]) => [...familyEndpointKeys(rows, family)]));
     const refusal = explicitMethodRefusal({ allow: "PUT, DELETE", accept: null, vary: null });
-    expect(goldenStatus("events_key_rsvp", "PATCH")).toBe(refusal.status);
-    expect(goldenStatus("about", "PUT")).toBe(404);
+    for (const [file, method, status] of [
+      ["events_key_rsvp", "PATCH", refusal.status],
+      ["about", "PUT", 404],
+    ]) {
+      const { request, response } = recording.get(`routes/${file}.json`)[method];
+      expect(response.status, routeKey(request)).toBe(status);
+      const owner = projectFixtureOwner(request, enabled, resolveRouteOwner);
+      expect(owner, routeKey(request)).toBe("hono");
+    }
   });
 });
