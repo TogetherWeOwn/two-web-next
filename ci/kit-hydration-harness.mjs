@@ -12,7 +12,7 @@ const { compile } = createRequire(new URL("../web/package.json", import.meta.url
 
 // Compile a trusted Svelte fixture without starting a server. The client bundle
 // hydrates the server-rendered body inside #fixture.
-export async function compileKitFixture({ fixture }) {
+export async function compileKitFixture({ fixture, props = {} }) {
   let css = "";
   async function bundle(generate, contents) {
     const result = await build({
@@ -39,16 +39,17 @@ export async function compileKitFixture({ fixture }) {
     return result.outputFiles[0].text;
   }
   const modulePath = JSON.stringify(fixture);
+  const fixtureProps = `JSON.parse(${JSON.stringify(JSON.stringify(props))})`;
   const ssr = await bundle(
     "server",
-    `import { render } from 'svelte/server'; import Fixture from ${modulePath}; export const { body, head } = render(Fixture);`,
+    `import { render } from 'svelte/server'; import Fixture from ${modulePath}; export const { body, head } = render(Fixture, { props: ${fixtureProps} });`,
   );
   const { body, head } = await import(
     `data:text/javascript;base64,${Buffer.from(ssr).toString("base64")}`
   );
   const js = await bundle(
     "client",
-    `import { hydrate } from 'svelte'; import Fixture from ${modulePath}; hydrate(Fixture, { target: document.getElementById('fixture'), recover: false }); document.documentElement.dataset.hydrated = 'true';`,
+    `import { hydrate } from 'svelte'; import Fixture from ${modulePath}; hydrate(Fixture, { target: document.getElementById('fixture'), props: ${fixtureProps}, recover: false }); document.documentElement.dataset.hydrated = 'true';`,
   );
   return { body, head, css, js };
 }
