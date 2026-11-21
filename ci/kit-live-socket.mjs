@@ -36,6 +36,15 @@ function refusal(url, headers) {
   });
 }
 
+async function fixtureSession(secret) {
+  const token = `two_${randomBytes(32).toString("base64url")}`;
+  const ref = createHash("sha256").update(token).digest("hex");
+  const cookie = (
+    await generateSignedCookie(SESSION_COOKIE, token, secret, { secure: true, path: "/" })
+  ).split(";", 1)[0];
+  return { ref, cookie };
+}
+
 export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret) {
   const url = `${origin}${path}`;
   const headers = { Origin: appOrigin };
@@ -44,12 +53,9 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
   assert.equal(await refusal(url, { ...headers, Cookie: `${SESSION_COOKIE}=malformed` }), 401);
   assert.equal((await fetch(url, { headers, ...deadline() })).status, 426);
 
+  const { ref, cookie } = await fixtureSession(secret);
+  const laterSession = await fixtureSession(secret);
   const sql = postgres(databaseUrl, { max: 1 });
-  const token = `two_${randomBytes(32).toString("base64url")}`;
-  const ref = createHash("sha256").update(token).digest("hex");
-  const cookie = (
-    await generateSignedCookie(SESSION_COOKIE, token, secret, { secure: true, path: "/" })
-  ).split(";", 1)[0];
   const sockets = [];
   const open = async (headers) => {
     const socket = new WebSocket(url.replace(/^http:/, "ws:"), { headers });
@@ -91,13 +97,37 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     expiring.send(subscribe);
     assert.equal((await expired)[0].code, 1008);
     assert.equal(deliveries, 0);
+
+    await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
+      values (${laterSession.ref}, '900000000000001378', 'Later live socket', true,
+        clock_timestamp() + interval '10 seconds')`;
+    await sql`update web_sessions set expires_at = clock_timestamp() + interval '5 seconds'
+      where token_hash = ${ref}`;
+    const later = await open({ ...headers, Cookie: laterSession.cookie });
+    const first = await open({ ...headers, Cookie: cookie });
+    first.addEventListener("message", () => deliveries++);
+    later.addEventListener("message", () => deliveries++);
+    // Admit the later lease first so the early one must replace its pending alarm.
+    // Neither socket sends a command; only the alarm can close it.
+    const firstClosed = once(first, "close", { signal: AbortSignal.timeout(9_000) });
+    const laterClosed = once(later, "close", { signal: AbortSignal.timeout(15_000) });
+    const [firstEvent, laterEvent] = await Promise.all([
+      firstClosed.then(([event]) => {
+        assert.equal(later.readyState, WebSocket.OPEN);
+        return event;
+      }),
+      laterClosed.then(([event]) => event),
+    ]);
+    assert.equal(firstEvent.code, 1008);
+    assert.equal(laterEvent.code, 1008);
+    assert.equal(deliveries, 0);
     console.log(
-      "PASS installed Kit live socket 101, guest control, revocation, and session expiry",
+      "PASS installed Kit live socket 101, guest control, revocation, and staggered idle session expiry",
     );
   } finally {
     for (const socket of sockets) socket.close();
     try {
-      await sql`delete from web_sessions where token_hash = ${ref}`;
+      await sql`delete from web_sessions where token_hash in (${ref}, ${laterSession.ref})`;
     } finally {
       await sql.end({ timeout: 1 });
     }
@@ -172,7 +202,7 @@ async function ingest(origin, seq, op) {
   return response.status;
 }
 
-export async function verifyKitLiveFanout(origin, appOrigin) {
+export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret) {
   const control = `${origin}/__fixture/live-source`;
   const source = async (doc) => {
     const response = await fetch(control, {
@@ -193,13 +223,36 @@ export async function verifyKitLiveFanout(origin, appOrigin) {
     if (!frames.length) await once(socket, "message", { signal: AbortSignal.timeout(timeout) });
     assert.deepEqual(frames.shift(), want);
   };
-  const send = (type) => socket.send(JSON.stringify({ v: 1, type, topics: ["voice"] }));
+  const command = (type) => JSON.stringify({ v: 1, type, topics: ["voice"] });
+  const send = (type) => socket.send(command(type));
+  const { ref, cookie } = await fixtureSession(secret);
+  const sql = postgres(databaseUrl, { max: 1 });
+  let member;
   try {
     await once(socket, "open", deadline());
     send("subscribe");
     await expectFrame(projected("snapshot", 1, null));
-    assert.equal(await ingest(origin, 41, join("105", "10")), 204);
-    await expectFrame(projected("patch", 2, 5));
+    await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
+      values (${ref}, '900000000000001377', 'Live fan-out fixture', true, now() + interval '10 minutes')`;
+    member = new WebSocket(`${origin}${path}`.replace(/^http:/, "ws:"), {
+      headers: { Origin: appOrigin, Cookie: cookie },
+    });
+    await once(member, "open", deadline());
+    const baseline = once(member, "message", deadline());
+    member.send(command("subscribe"));
+    assert.deepEqual(JSON.parse((await baseline)[0].data), projected("snapshot", 1, null));
+    await sql`update web_sessions set revoked_at = clock_timestamp() where token_hash = ${ref}`;
+    const memberClosed = once(member, "close", deadline());
+    const revokedFrames = [];
+    member.addEventListener("message", ({ data }) => revokedFrames.push(data));
+    const [status, , [closure]] = await Promise.all([
+      ingest(origin, 41, join("105", "10")),
+      expectFrame(projected("patch", 2, 5)),
+      memberClosed,
+    ]);
+    assert.equal(status, 204);
+    assert.equal(closure.code, 1008);
+    assert.deepEqual(revokedFrames, [], "fan-out must not send after session revocation");
     assert.equal(await ingest(origin, 42, join("106", "11")), 204);
     await delay(200);
     assert.deepEqual(frames, [], "a restricted-room update must be silent");
@@ -239,9 +292,15 @@ export async function verifyKitLiveFanout(origin, appOrigin) {
     await expectFrame(unavailable, 40_000);
     assert.equal(socket.readyState, WebSocket.OPEN, "source expiry is not connection expiry");
     console.log(
-      "PASS installed Kit live counts, silence, gap recovery, hibernation, and lease expiry",
+      "PASS installed Kit live counts, silence, fan-out revocation, gap recovery, hibernation, and lease expiry",
     );
   } finally {
     socket.close();
+    member?.close();
+    try {
+      await sql`delete from web_sessions where token_hash = ${ref}`;
+    } finally {
+      await sql.end({ timeout: 1 });
+    }
   }
 }

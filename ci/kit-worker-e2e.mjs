@@ -278,7 +278,7 @@ export default {
     await listen(live.child, live.origin, () => live.log);
     const { verifyKitLiveFanout, verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
     await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
-    await verifyKitLiveFanout(live.origin, "https://kit-live.invalid");
+    await verifyKitLiveFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
   }
 
   const archive = await fetch(`${origin}/events/past`);
