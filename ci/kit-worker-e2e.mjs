@@ -230,24 +230,57 @@ const controlPath = "/__fixture/live-source";
 export class LiveGuildHub extends InstalledHub {
   constructor(ctx, env) {
     const kv = ctx.storage.kv;
+    let hold = false;
     super(ctx, env, async (url, request) => {
       if (url !== env.BOT_ENDPOINT_URL + "/internal/actions" || request.method !== "POST") {
         return new Response(null, { status: 400 });
       }
       const body = JSON.parse(request.body);
       const snapshot = kv.get("fixture-snapshot");
-      return body.action === "live.snapshot" && body.guild_id === env.DISCORD_GUILD_ID && snapshot
-        ? Response.json(snapshot)
-        : new Response(null, { status: 503 });
+      if (body.action !== "live.snapshot" || body.guild_id !== env.DISCORD_GUILD_ID || !snapshot) {
+        return new Response(null, { status: 503 });
+      }
+      // Use a timer in the pull's own request context, bounded by its abort signal.
+      while (hold && !request.signal.aborted) await new Promise((resolve) => setTimeout(resolve, 20));
+      request.signal.throwIfAborted();
+      return Response.json(snapshot);
     });
     this.kv = kv;
     this.generation = (kv.get("fixture-generation") ?? 0) + 1;
     kv.put("fixture-generation", this.generation);
+    this.setSnapshotHold = (value) => { hold = value; };
   }
   async fetch(request) {
-    if (new URL(request.url).pathname !== controlPath) return super.fetch(request);
-    if (request.method === "POST") this.kv.put("fixture-snapshot", await request.json());
-    return Response.json({ generation: this.generation });
+    const url = new URL(request.url);
+    if (url.pathname !== controlPath) {
+      this.firstEvent ??= request.method === "POST" ? "ingress" : "upgrade";
+      return super.fetch(request);
+    }
+    this.firstEvent ??= "control";
+    if (request.method === "POST") {
+      this.kv.put("fixture-snapshot", await request.json());
+      this.setSnapshotHold(url.searchParams.has("hold"));
+    }
+    if (request.method === "DELETE") this.setSnapshotHold(false);
+    return Response.json({
+      generation: this.generation,
+      firstEvent: this.firstEvent,
+      alarms: this.kv.get("fixture-alarms") ?? [],
+    });
+  }
+  webSocketMessage(socket, message) {
+    this.firstEvent ??= "message";
+    return super.webSocketMessage(socket, message);
+  }
+  webSocketClose(socket) {
+    this.firstEvent ??= "close";
+    return super.webSocketClose(socket);
+  }
+  alarm() {
+    this.firstEvent ??= "alarm";
+    const alarms = this.kv.get("fixture-alarms") ?? [];
+    this.kv.put("fixture-alarms", [...alarms.slice(-1), { generation: this.generation, at: Date.now() }]);
+    return super.alarm();
   }
 }
 export default {

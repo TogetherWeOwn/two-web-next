@@ -30,6 +30,11 @@ const attachment = z.strictObject({
   nextResync: z.number().int().nonnegative(),
   voiceSeq: z.number().int().nonnegative(),
   voiceUntil: z.number().int().nonnegative(),
+  // Comparison only: this is the public count, never a source for a send.
+  voicePrevious: z
+    .string()
+    .regex(/^\{"count":(?:null|[1-9][0-9]{0,5})\}$/)
+    .nullable(),
 });
 
 type SocketMeta = z.infer<typeof attachment>;
@@ -47,8 +52,6 @@ function decode(message: string | ArrayBuffer) {
 export class LiveSockets {
   readonly #sending = new WeakSet<WebSocket>();
   readonly #publishing = new WeakSet<WebSocket>();
-  // Current public projection only. Never serialize it into an attachment.
-  readonly #lastVoice = new WeakMap<WebSocket, string>();
 
   constructor(
     private readonly ctx: DurableObjectState,
@@ -73,6 +76,7 @@ export class LiveSockets {
         nextResync: 0,
         voiceSeq: 0,
         voiceUntil: 0,
+        voicePrevious: null,
       });
       if (!meta.success || (ref === null) !== (expiry === null) || until <= now) {
         return new Response(null, { status: 400 });
@@ -87,7 +91,11 @@ export class LiveSockets {
     });
   }
 
-  async message(socket: WebSocket, message: string | ArrayBuffer): Promise<boolean> {
+  async message(
+    socket: WebSocket,
+    message: string | ArrayBuffer,
+    refreshVoice: () => Promise<boolean>,
+  ): Promise<boolean> {
     if (socket.readyState !== WebSocket.OPEN) return false;
     if (this.env.DISCORD_LIVE_SOCKET_ENABLED !== "true") return this.#close(socket, 1008);
     const meta = attachment.safeParse(socket.deserializeAttachment()).data;
@@ -116,10 +124,21 @@ export class LiveSockets {
       current.nextResync = Date.now() + RESYNC_INTERVAL_MS;
       socket.serializeAttachment(current);
       for (const item of incoming.topics) {
-        if (item === "voice") this.#voice(socket, current, true);
-        else this.#unavailable(socket, item);
+        if (item !== "voice") this.#unavailable(socket, item);
       }
-      return incoming.topics.includes("voice");
+      if (!incoming.topics.includes("voice")) return false;
+      if (incoming.type === "subscribe" && this.#voice(socket, current, true)) return true;
+
+      // An explicit resync must not take a raw-cache shortcut after producer activity.
+      const hadVoice = current.voiceUntil > Date.now();
+      if (!hadVoice) this.#clearVoice(socket, current);
+      const refreshed = await refreshVoice();
+      if (!(await this.#authorize(socket, current))) return false;
+      const latest = this.#active(socket);
+      if (!latest) return false;
+      if (refreshed && this.#voice(socket, latest, true)) return true;
+      if (hadVoice && latest.voiceUntil) this.#clearVoice(socket, latest);
+      return false;
     } catch {
       return this.#close(socket, 1011);
     } finally {
@@ -163,33 +182,28 @@ export class LiveSockets {
     socket.send(JSON.stringify({ v: 1, type: "unavailable", topic }));
   }
 
-  #voice(socket: WebSocket, meta: SocketMeta, force: boolean): void {
+  #voice(socket: WebSocket, meta: SocketMeta, force: boolean): boolean {
     const projection = this.projectVoice(); // Read current proof after any auth await.
-    if (projection === null) {
-      if (force && meta.voiceUntil) this.#clearVoice(socket, meta);
-      else if (force) this.#unavailable(socket, "voice");
-      return;
-    }
+    if (projection === null) return false;
     const { value, until } = projection;
-    const previous = this.#lastVoice.get(socket);
-    const sameLease = meta.voiceUntil === until && previous !== undefined;
-    const changed = !sameLease || value !== previous;
-    if (!changed && !force) return;
-    if (changed && meta.voiceSeq >= MAX_VOICE_REVISIONS) {
-      this.#close(socket, 1012);
-      return;
-    }
-    const type = force || !sameLease ? "snapshot" : "patch";
+    const live = meta.voiceUntil > Date.now();
+    if (!force && !live) return false;
+    const changed = !live || value !== meta.voicePrevious;
+    if (!changed && !force) return true;
+    if (changed && meta.voiceSeq >= MAX_VOICE_REVISIONS) return this.#close(socket, 1012);
+    const type = force ? "snapshot" : "patch";
     if (changed) meta.voiceSeq++;
-    this.#lastVoice.set(socket, value);
-    meta.voiceUntil = until;
+    meta.voicePrevious = value;
+    // Another viewer's command cannot renew this socket's lease.
+    meta.voiceUntil = force ? until : Math.min(meta.voiceUntil, until);
     socket.serializeAttachment(meta);
     socket.send(`{"v":1,"type":"${type}","topic":"voice","seq":${meta.voiceSeq},"value":${value}}`);
+    return true;
   }
 
   #clearVoice(socket: WebSocket, meta: SocketMeta): void {
     meta.voiceUntil = 0;
-    this.#lastVoice.delete(socket);
+    meta.voicePrevious = null;
     socket.serializeAttachment(meta);
     this.#unavailable(socket, "voice");
   }
@@ -220,14 +234,17 @@ export class LiveSockets {
     if (preview === null) return;
     await Promise.all(
       sockets.map(async (socket) => {
-        if (socket.readyState !== WebSocket.OPEN || this.#publishing.has(socket)) return;
-        const meta = attachment.safeParse(socket.deserializeAttachment()).data;
-        if (!meta?.topics?.includes("voice")) return;
-        if (meta.voiceUntil === preview.until && preview.value === this.#lastVoice.get(socket))
+        if (
+          socket.readyState !== WebSocket.OPEN ||
+          this.#sending.has(socket) ||
+          this.#publishing.has(socket)
+        )
           return;
+        const meta = attachment.safeParse(socket.deserializeAttachment()).data;
+        if (!meta?.voiceUntil || preview.value === meta.voicePrevious) return;
         this.#publishing.add(socket);
         try {
-          if (!(await this.#authorize(socket, meta))) return;
+          if (!(await this.#authorize(socket, meta)) || this.#sending.has(socket)) return;
           const current = this.#active(socket);
           if (current) this.#voice(socket, current, false);
         } catch {

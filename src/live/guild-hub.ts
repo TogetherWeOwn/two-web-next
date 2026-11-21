@@ -8,6 +8,7 @@ import { signedLiveSnapshot } from "./transport";
 import { decodeLiveDelta, type LiveDelta, liveId, type LiveState, snapshotTopics } from "./wire";
 
 const WATERMARKS = "live-watermarks-v1";
+const SOCKET_PULL_AFTER = "live-socket-pull-after-v1";
 const SOCKET_RECOVERY_INTERVAL_MS = 5_000;
 const PUBLIC_VOICE_PAGE = "public-voice";
 
@@ -31,7 +32,6 @@ export class LiveGuildHub {
   // Only a browser command can activate the public lease. The raw guild may
   // recover independently, including on a restricted-only wake.
   #publicUntil = 0;
-  #nextSocketPull = 0;
   #pullingPublic = false;
 
   constructor(
@@ -123,30 +123,31 @@ export class LiveGuildHub {
     return value === null ? null : { value, until };
   }
 
-  async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    if (!this.#sequence) return socket.close(1008);
-    if (!(await this.#sockets.message(socket, message))) return;
+  async #refreshPublic(): Promise<boolean> {
+    if (!this.#sequence || !this.#publicRooms || this.#pullingPublic) return false;
+    const kv = this.ctx.storage.kv;
     const now = Date.now();
-    if (
-      !this.#publicRooms ||
-      this.#publicUntil > now ||
-      this.#pullingPublic ||
-      now < this.#nextSocketPull
-    )
-      return;
-    this.#nextSocketPull = now + SOCKET_RECOVERY_INTERVAL_MS;
+    if (now < (kv.get<number>(SOCKET_PULL_AFTER) ?? 0)) return false;
+    // Producer activity must not reset the browser pull budget on re-entry.
+    kv.put(SOCKET_PULL_AFTER, now + SOCKET_RECOVERY_INTERVAL_MS);
     this.#pullingPublic = true;
     try {
       const snapshot = await this.#sequence.refresh();
-      if (!snapshot?.validUntil) return;
+      if (!snapshot?.validUntil) return false;
       await this.#sockets.scheduleSource(snapshot.validUntil);
       // Do not bless a replacement from producer recovery during the await.
-      if (snapshot !== this.#sequence.current) return;
+      if (snapshot !== this.#sequence.current) return false;
       this.#publicUntil = snapshot.validUntil;
       this.ctx.waitUntil(this.#sockets.publish());
+      return true;
     } finally {
       this.#pullingPublic = false;
     }
+  }
+
+  async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (!this.#sequence) return socket.close(1008);
+    await this.#sockets.message(socket, message, () => this.#refreshPublic());
   }
 
   webSocketClose(socket: WebSocket): void {
