@@ -79,10 +79,12 @@ case "$stage:$result" in
   *:124|*:137)
     if grep -Fxq "timeout: sending signal TERM to command 'bash'" "$scratch/watchdog.txt"; then outcome=WATCHDOG; fi ;;
   COMPLETE:0) outcome=PASS ;;
-  COMPLETE:*|UNKNOWN:*) ;;
+  COMPLETE:*) ;;
+  # Startup can return a typed error before recording its first stage.
+  *:22) outcome=ERROR ;;
+  UNKNOWN:*) ;;
   *:20) outcome=ASSERTION ;;
   *:21) outcome=DEADLINE ;;
-  *:22) outcome=ERROR ;;
 esac
 printf 'Activity-log browser: outcome=%s stage=%s\n' "$outcome" "$stage"
 if [[ -f "$scratch/metrics.txt" ]]; then
