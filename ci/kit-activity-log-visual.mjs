@@ -50,16 +50,19 @@ export function validateView(content, state, empty, keyboard) {
 // The asset allowlist also requires the response bytes to match the pinned local build.
 const asset =
   /^\/(?:styles\.css|admin-rsvp-review\.css|site\.webmanifest|favicon\.(?:ico|svg)|icons\/(?:icon-(?:192|512)|maskable-512|apple-touch-icon)\.png|fonts\/(?:mona-sans-latin-(?:var|wght)|fragment-mono-latin-400|instrument-serif-latin-400-italic)\.woff2|islands\/auth-status\.js|_app\/immutable\/(?:assets|entry|nodes|chunks)\/[\w.-]+\.(?:css|js))$/;
+const assetFile = (href) => (href.startsWith(origin) ? href.slice(origin.length) : "");
+const allowedRequest = (req, url) =>
+  req.method() === "GET" &&
+  (req.isNavigationRequest() ? req.url() === url : asset.test(assetFile(req.url())));
 async function serve(route, url, stopped, offline, deny) {
   const req = route.request();
-  const file = req.url().startsWith(origin) ? req.url().slice(origin.length) : "";
-  const document = req.isNavigationRequest();
-  if (req.method() !== "GET" || !(document ? req.url() === url : asset.test(file))) return deny();
+  if (!allowedRequest(req, url)) return deny();
   if (stopped()) return;
+  const file = assetFile(req.url());
   const res = await route.fetch({ maxRedirects: 0, timeout: 5_000 });
   try {
     const pinned = () => readFile(`web/.svelte-kit/cloudflare${file}`).catch(() => null);
-    const valid = document
+    const valid = req.isNavigationRequest()
       ? kitDocument(res.status(), res.headers())
       : res.status() === 200 && (await pinned())?.equals(await res.body());
     if (!valid) deny();
@@ -119,6 +122,10 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
   const offline = (error) => (unavailable ??= error);
   try {
     await context.addCookies([await mintModerator()]);
+    // Playwright stops calling route handlers during close but still emits request events.
+    context.on("request", (req) => {
+      if (closed() && !allowedRequest(req, url)) markViolation();
+    });
     await context.route("**/*", async (route) => {
       const check = serve(route, url, closed, offline, markViolation).catch((error) => {
         // Record a required document timeout before abort makes goto fail generically.
