@@ -24,6 +24,10 @@ permissions:
   contents: read
   pull-requests: read # The scope job lists changed PR files via the API.
 
+env:
+  # The policy fixtures and workspace installs must use the same bundled npm.
+  ADMISSION_NODE_VERSION: "24.22.3"
+
 # Runs on main are never cancelled in progress: a cancel request marks the run
 # cancelled even when every job then succeeds, and the staging deploy trigger
 # rejects a cancelled conclusion. That left 54 of 60 main runs cancelled on
@@ -213,7 +217,7 @@ jobs:
         run: node --test ci/install-hook-inventory.test.mjs ci/asset-output-boundary.test.mjs
       - name: Kit CSS collector and evidence selftests
         if: github.event_name == 'pull_request'
-        run: node --test ci/kit-css-collect.test.mjs ci/kit-css-evidence.test.mjs ci/kit-activity-log-overlay.test.mjs ci/kit-activity-log-png.test.mjs
+        run: node --test ci/kit-css-collect.test.mjs ci/kit-css-evidence.test.mjs ci/kit-activity-log-overlay.test.mjs ci/kit-activity-log-png.test.mjs ci/kit-activity-log-visual.test.mjs
       - name: Install locked workflow parser without hooks
         if: github.event_name == 'pull_request'
         run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
@@ -535,17 +539,59 @@ jobs:
           path: artifacts/a11y/
           if-no-files-found: error
           retention-days: 14
+  # Run install-independent dependency gates once, before check or future
+  # coverage shards install dependencies. No Postgres or install cache needed.
+  dependency-admission:
+    name: dependency-admission
+    needs: [scope]
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    # Two lockfiles can each exhaust three 120s attempts plus backoff.
+    timeout-minutes: 20
+    steps:
+      - name: Require successful scope
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: test "$SCOPE_RESULT" = success
+      - name: Docs-only or draft fast pass
+        if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
+        run: echo "Docs-only or draft change per scope; no dependency admission required."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        with:
+          node-version: ${{ env.ADMISSION_NODE_VERSION }}
+          package-manager-cache: false
+      - name: Dependency audit selftest (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run deps:audit:selftest
+      - name: npm policy enforcement fixtures
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        env:
+          npm_config_ignore_scripts: "true"
+          npm_config_min_release_age: "3"
+        run: node ci/npm-policy-fixtures.mjs "$RUNNER_TEMP/npm-policy-fixtures.json"
+      - name: Dependency audit (lockfile, including dev dependencies)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run deps:audit
+      - name: Dependency-pin guard selftest and verify (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run deps:pins:selftest && npm run deps:pins
+
   # Name pinned equal to the id. `check` feeds the required `ci-ok` gate.
-  # It needs only `scope`, so it starts alongside a11y, lighthouse and
-  # bundle-budget instead of after them; the steps that gated those jobs'
-  # results (docs-links, the accessibility audit and the performance gate)
-  # live in `ci-ok`, which already needs every one of them.
+  # It waits for scope and dependency admission, not the independent
+  # accessibility, performance or docs jobs; ci-ok aggregates those results.
   # `scope` is not a required check, so a red scope must fail `check` itself
   # (first step): without its outputs every area reads as unselected, and the
   # docs-only fast pass would leave `check` green on a broken verdict.
   check:
     name: check
-    needs: [scope]
+    needs: [scope, dependency-admission]
     # `!cancelled()`, not `always()`: see the note on ci-ok.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -581,6 +627,10 @@ jobs:
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}
         run: test "$SCOPE_RESULT" = success
+      - name: Require successful dependency admission
+        env:
+          DEPENDENCY_ADMISSION_RESULT: ${{ needs.dependency-admission.result }}
+        run: test "$DEPENDENCY_ADMISSION_RESULT" = success
       - name: Docs-only fast pass (no code changed)
         if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
         run: echo "Docs-only or draft change per the scope job; required check passes without the heavy suite."
@@ -613,7 +663,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         with:
-          node-version: 24
+          node-version: ${{ env.ADMISSION_NODE_VERSION }}
           cache: npm
           # The Kit install below reads web/package-lock.json, a separate
           # graph from the root lockfile. Hash it into the cache key too so
@@ -646,21 +696,6 @@ jobs:
       - name: Incident issue lifecycle fixtures
         if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/incident-issue-lifecycle.test.mjs
-      - name: Dependency audit selftest (local fixtures)
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run deps:audit:selftest
-      - name: npm policy enforcement fixtures
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        env:
-          npm_config_ignore_scripts: "true"
-          npm_config_min_release_age: "3"
-        run: node ci/npm-policy-fixtures.mjs "$RUNNER_TEMP/npm-policy-fixtures.json"
-      - name: Dependency audit (lockfile, including dev dependencies)
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run deps:audit
-      - name: Dependency-pin guard selftest and verify (local fixtures)
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run deps:pins:selftest && npm run deps:pins
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
       - name: Design-kit provenance and adapter drift
@@ -1205,16 +1240,16 @@ jobs:
   # `ci-ok` fails unless it succeeds, so a red or skipped leg blocks the
   # merge instead of reading green. test/required-checks.test.ts pins the
   # floor and the surface.
-  node22-compat:
-    name: node22-compat
+  node22-shard:
+    name: node22-shard (${{ matrix.shard }})
     needs: [scope]
-    # `!cancelled()`, not `always()`: see the note on ci-ok.
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}
     runs-on: ubuntu-latest
-    # The lint + typecheck + unit-test suite runs 28-30m; 30m cancelled
-    # green runs on runner noise (worst observed pass 29m32s, 28s of
-    # margin). 45m keeps a ~34% margin; the progress sidecar samples the
-    # first 43m (MAX_SAMPLES in ci/node22-progress.mjs tracks this ceiling).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    # Keep the previous ceiling; the progress sidecar samples the first 43m.
     timeout-minutes: 45
     # Same container/service isolation as `check` (own network namespace, so
     # localhost:5432 cannot collide on the shared Docker host), at the exact
@@ -1229,19 +1264,10 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - name: Require successful scope
-        env:
-          SCOPE_RESULT: ${{ needs.scope.result }}
-        run: test "$SCOPE_RESULT" = success
-      - name: Docs-only fast pass (no code changed)
-        if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
-        run: echo "Docs-only or draft change per the scope job; Node 22 compatibility leg passes without the suite."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         with:
           persist-credentials: false
       - name: Job-private localhost:5432 forward to the Postgres service
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
           # On hosted/overflow runners the job container's root does not own the
           # runner-owned checkout, so Git refuses it as dubious ownership.
@@ -1251,7 +1277,6 @@ jobs:
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         with:
           node-version: 22.23.0
           cache: npm
@@ -1263,38 +1288,88 @@ jobs:
       # The test plan for this leg is the version in the log: fail here, before
       # any suite runs, if the runner is not the exact engines floor.
       - name: Assert the exact Node 22.23.0 engines floor
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
           node --version
           test "$(node --version)" = "v22.23.0"
       - run: npm ci --no-audit --no-fund
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
       # Unit files SSR-compile .svelte through web's svelte/compiler, so the
       # Kit workspace installs before the suite (same reason as `check`).
       - name: Install Kit workspace dependencies
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Prepare disposable runtime role
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: PGPASSWORD=ci psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Apply migrations
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - name: Node 22 progress diagnostics selftests (local fixtures)
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        if: matrix.shard == 1
         run: node --test ci/node22-progress.test.mjs
-      - name: Lint + typecheck + unit tests on Node 22.23.0
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      - name: Run Node 22.23.0 Vitest shard
         run: |
           node ci/node22-progress.mjs "$$" &
           diagnostics_pid=$!
           trap 'kill "$diagnostics_pid" 2>/dev/null || :; wait "$diagnostics_pid" 2>/dev/null || :' EXIT
-          npm run lint && npm run typecheck && npm test
+          if [ "$SHARD" = 1 ]; then npm run lint && npm run typecheck || exit $?; fi
+          npm test -- --shard="$SHARD/$SHARDS" --reporter=dot --reporter=blob --outputFile.blob="vitest-$SHARD.json"
         env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Upload Node 22 shard report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node22-vitest-${{ matrix.shard }}
+          path: vitest-${{ matrix.shard }}.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30 # Matches GitHub Actions rerun eligibility.
+
+  node22-compat:
+    name: node22-compat
+    needs: [scope, node22-shard]
+    # Always report a verdict unless the workflow itself was cancelled.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Keep the shard checkout path and exact Node floor for Vitest's replay.
+    container:
+      image: node:22.23.0-bookworm@sha256:e0d149b4727ac0c20d9774e801e423d7a946a0bffced886f42cfe9cd3c67820a
+    steps:
+      - name: Require successful scope
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: test "$SCOPE_RESULT" = success
+      - name: Docs-only fast pass (no code changed)
+        if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
+        run: echo "Docs-only or draft change per the scope job; Node 22 compatibility leg passes without the suite."
+      - name: Require every selected Node 22 shard to succeed
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        env:
+          SHARD_RESULT: ${{ needs.node22-shard.result }}
+        run: test "$SHARD_RESULT" = success
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        with:
+          persist-credentials: false
+      - run: npm ci --no-audit --no-fund
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        with:
+          pattern: node22-vitest-*
+          path: vitest-blob
+          merge-multiple: true
+      - name: Merge Node 22 Vitest reports
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        run: |
+          # Vitest can replay valid blobs that omit test files.
+          set -- vitest-blob/*
+          test "$#" -eq 3
+          for shard in 1 2 3; do test -s "vitest-blob/vitest-$shard.json"; done
+          TEST=true VITEST=true NODE_ENV=test node ci/verify-vitest-shards.mjs "$@"
+          node node_modules/vitest/vitest.mjs run --merge-reports=vitest-blob --reporter=dot
 
   bundle-budget:
     name: bundle-budget
@@ -1460,6 +1535,7 @@ jobs:
         bundle-budget,
         docs-links,
         queue-syntax-smoke,
+        dependency-admission,
         check,
         kit-browser-fixture,
         node22-compat,
@@ -1488,6 +1564,10 @@ jobs:
         env:
           BOT_CONTRACT_RESULT: ${{ needs.bot-contract-drift.result }}
         run: test "$BOT_CONTRACT_RESULT" = success
+      - name: Require successful dependency admission
+        env:
+          DEPENDENCY_ADMISSION_RESULT: ${{ needs.dependency-admission.result }}
+        run: test "$DEPENDENCY_ADMISSION_RESULT" = success
       - name: Require successful docs-links
         env:
           DOCS_LINKS_RESULT: ${{ needs.docs-links.result }}

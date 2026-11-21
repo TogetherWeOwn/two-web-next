@@ -185,22 +185,25 @@ worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 `.github/**`, shared config, or anything unknown: run everything) and `draft`.
 `a11y` runs on app/db, `lighthouse` and `bundle-budget` on app, and `docs-links`
 checks relative links and anchors on every PR. `check` runs unless its run was
-cancelled, starts from `scope` alone so it runs in parallel with the audit
-and performance jobs, and skips its heavy steps on docs-only and draft PRs.
+cancelled and waits for `scope` and `dependency-admission`, not the independent
+accessibility or performance jobs. It skips heavy steps on docs-only and draft PRs.
 The independent `kit-browser-fixture` job runs alongside `check` for non-draft,
 non-docs-only full, app or worker scopes. `ci-ok` requires its success when
 selected, and fails on failure, cancellation or an unexpected skip.
-`node22-compat` reports the same way on the exact Node 22.23.0 `engines`
-floor — the version asserted in its log — running lint, typecheck and the
-unit suite, so the declared 22 range is verified beside the Node 24 jobs;
-the `ci-ok` aggregator requires `docs-links`, `node22-compat` and every
+The Node 22.23.0 `engines` floor is asserted in each of three `node22-shard`
+jobs. The first shard also runs lint and typecheck. Each runs its share of the
+unit suite serially against its own Postgres service. For a selected run,
+`node22-compat` requires the matrix to succeed and checks that each Vitest
+report lists exactly the files assigned by the configured sequencer before
+replaying all three reports. It fast-passes on docs-only and draft PRs.
+The `ci-ok` aggregator requires `docs-links`, `node22-compat` and every
 selected job's result, and reports the overall conclusion. In a run
 cancelled by a newer run on the same PR, both conclude cancelled rather than
 failed, and the newer run's `ci-ok` decides the merge. Main pushes and the nightly schedule
 run the full suite. The `ci-ok`-as-required-check ruleset cutover is an
 OPERATOR step after merge plus green probes — never part of a PR.
 
-During Node 22 lint/typecheck/tests, `ci/node22-progress.mjs` emits a
+During each Node 22 shard, `ci/node22-progress.mjs` emits a
 `[node22-progress]` JSON snapshot immediately and every 60 seconds, at most
 43 times (through minute 42). Each snapshot has at most 32 process rows and
 8 KiB of output. It observes the step shell's main-thread descendant tree,
@@ -287,9 +290,14 @@ with `GITLEAKS_VERSION`.
 
 ## Dependency security and static analysis
 
-The `check` job runs `npm run deps:audit:selftest` (local fixtures,
-including a loopback registry) and `npm run deps:audit` before installing
-dependencies. The audit reads every lockfile root (`package-lock.json` and
+The `dependency-admission` job runs the audit selftests, npm policy fixtures,
+lockfile audit and dependency-pin guard once, without a database or a workspace
+install. `check` requires its success before installing dependencies, and `ci-ok`
+requires its explicit success. Both jobs share an exact Node patch release so
+`check` installs with the npm release that passed the policy fixtures. To refresh
+audit evidence, rerun all jobs; rerunning only failed jobs can reuse successful
+admission. Only docs-only and draft PRs fast-pass inside the job. The audit reads
+every lockfile root (`package-lock.json` and
 `web/package-lock.json`), includes development/optional/peer dependencies, and
 blocks high, critical or unknown severity. It prints one result per lockfile
 (`.` and `web`) and fails when either has a non-excepted finding. A missing
