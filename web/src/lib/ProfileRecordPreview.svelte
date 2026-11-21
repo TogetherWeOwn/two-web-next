@@ -4,7 +4,9 @@ import Tag from "./Tag.svelte";
 
 // This preview deliberately has no Echo data shape or live reader.
 type Entry = { day: string; date: string; title: string; detail: string; kind: "Guide" | "Joined" };
-type Preview = { kind: "record" | "withheld"; entries: readonly [Entry, ...Entry[]] } | { kind: "new" };
+type Preview =
+  | { kind: "record" | "withheld"; entries: readonly [Entry, ...Entry[]] }
+  | { kind: "new" };
 let { preview }: { preview: Preview } = $props();
 </script>
 
