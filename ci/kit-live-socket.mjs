@@ -15,29 +15,72 @@ const awaitEvent = (socket, event, phase, timeout = 5_000) =>
     throw new Error(`${phase}: waiting for ${event} (readyState=${socket.readyState})`, { cause });
   });
 
-// Undici enters CLOSING on the server's close frame, before the local
-// upgrade proxy necessarily delivers TCP EOF.
-async function awaitServerClose(socket, expiry, label) {
+function upgradeRequest(url, headers) {
+  return request(url, {
+    ...deadline(),
+    headers: {
+      Upgrade: "websocket",
+      Connection: "Upgrade",
+      "Sec-WebSocket-Key": randomBytes(16).toString("base64"),
+      "Sec-WebSocket-Version": "13",
+      ...headers,
+    },
+  });
+}
+
+// Observe the first server frame on an idle upgrade, not TCP EOF or Undici's
+// CLOSING state (which it also sets for transport errors).
+function openIdle(url, headers) {
+  return new Promise((resolve, reject) => {
+    const req = upgradeRequest(url, headers);
+    req.on("response", (response) => {
+      response.resume();
+      reject(new Error(`Idle WebSocket upgrade refused (${response.statusCode})`));
+    });
+    req.on("upgrade", (response, socket, head) => {
+      if (response.statusCode !== 101) {
+        socket.destroy();
+        reject(new Error(`Idle WebSocket upgrade returned ${response.statusCode}, expected 101`));
+        return;
+      }
+      const peer = { socket, first: null, at: null, error: null };
+      socket.on("error", (error) => {
+        peer.error = error;
+      });
+      if (head.length) socket.unshift(head);
+      socket.on("readable", () => {
+        if (peer.first === null) {
+          peer.first = socket.read(4);
+          if (peer.first !== null) peer.at = Date.now();
+        }
+      });
+      resolve(peer);
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+async function awaitServerClose(peer, expiry, label) {
   assert.ok(Number.isFinite(expiry));
-  while (socket.readyState === WebSocket.OPEN && Date.now() < expiry + 4_000) {
+  while (!peer.first && !peer.error && !peer.socket.destroyed && Date.now() < expiry + 4_000) {
     await delay(25);
   }
-  assert.notEqual(socket.readyState, WebSocket.OPEN, `${label}: no server close`);
-  assert.ok(Date.now() >= expiry, `${label}: server closed before expiry`);
+  assert.equal(
+    peer.first?.length,
+    4,
+    `${label}: no complete policy close before teardown or timeout`,
+  );
+  const [opcode, size] = peer.first;
+  assert.equal(opcode, 0x88, `${label}: first frame must be Close, not data`);
+  assert.equal(size, 2, `${label}: expected an unmasked Close with only a status`);
+  assert.equal(peer.first.readUInt16BE(2), 1008, `${label}: expected policy close`);
+  assert.ok(peer.at >= expiry && peer.at < expiry + 4_000, `${label}: close outside lease window`);
 }
 
 function refusal(url, headers) {
   return new Promise((resolve, reject) => {
-    const req = request(url, {
-      ...deadline(),
-      headers: {
-        Upgrade: "websocket",
-        Connection: "Upgrade",
-        "Sec-WebSocket-Key": randomBytes(16).toString("base64"),
-        "Sec-WebSocket-Version": "13",
-        ...headers,
-      },
-    });
+    const req = upgradeRequest(url, headers);
     req.on("response", (response) => {
       response.resume();
       resolve(response.statusCode);
@@ -72,6 +115,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
   const laterSession = await fixtureSession(secret);
   const sql = postgres(databaseUrl, { max: 1 });
   const sockets = [];
+  const idlePeers = [];
   const open = async (headers) => {
     const socket = new WebSocket(url.replace(/^http:/, "ws:"), { headers });
     sockets.push(socket);
@@ -120,17 +164,20 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     const [firstLease] =
       await sql`update web_sessions set expires_at = clock_timestamp() + interval '5 seconds'
       where token_hash = ${ref} returning expires_at`;
-    const later = await open({ ...headers, Cookie: laterSession.cookie });
-    const first = await open({ ...headers, Cookie: cookie });
-    first.addEventListener("message", () => deliveries++);
-    later.addEventListener("message", () => deliveries++);
+    const later = await openIdle(url, { ...headers, Cookie: laterSession.cookie });
+    idlePeers.push(later);
+    const first = await openIdle(url, { ...headers, Cookie: cookie });
+    idlePeers.push(first);
     // Neither client sends a frame before its lease alarm.
     await awaitServerClose(
       first,
       new Date(firstLease.expires_at).getTime(),
       "first idle session alarm",
     );
-    assert.equal(later.readyState, WebSocket.OPEN, "later lease must stay open after first alarm");
+    assert.ok(
+      !later.first && !later.error && !later.socket.destroyed && !later.socket.readableEnded,
+      "later lease must stay open after first alarm",
+    );
     await awaitServerClose(
       later,
       new Date(laterLease.expires_at).getTime(),
@@ -142,6 +189,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     );
   } finally {
     for (const socket of sockets) socket.close();
+    for (const peer of idlePeers) peer.socket.destroy();
     try {
       await sql`delete from web_sessions where token_hash in (${ref}, ${laterSession.ref})`;
     } finally {
@@ -363,18 +411,13 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
           assert.equal(await source(recovered), generation);
         }
         let sessionExpiry;
-        const idleFrames = [];
         if (cold && !restricted) {
           const [lease] = await sql`update web_sessions set revoked_at = null,
             expires_at = clock_timestamp() + interval '16 seconds'
             where token_hash = ${ref} returning expires_at`;
           sessionExpiry = new Date(lease.expires_at).getTime();
           assert.ok(sessionExpiry + 5_000 < expiresAt, "session deadline precedes voice deadline");
-          idleMember = new WebSocket(`${origin}${path}`.replace(/^http:/, "ws:"), {
-            headers: { Origin: appOrigin, Cookie: cookie },
-          });
-          idleMember.addEventListener("message", ({ data }) => idleFrames.push(data));
-          await awaitEvent(idleMember, "open", "cold alarm session upgrade");
+          idleMember = await openIdle(`${origin}${path}`, { Origin: appOrigin, Cookie: cookie });
           await awaitServerClose(idleMember, sessionExpiry, "cold session alarm");
           assert.equal(socket.readyState, WebSocket.OPEN);
           assert.deepEqual(frames, [], "earlier cold alarm must preserve the guest baseline");
@@ -409,7 +452,6 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
           assert.equal(early.generation, generation + 1, "session alarm reconstructs the hub");
           assert.ok(early.at >= sessionExpiry && early.at < expiresAt);
           assert.ok(voiceAlarm.at >= expiresAt, "cold alarm re-arms the original voice deadline");
-          assert.deepEqual(idleFrames, [], "the idle session socket receives no data");
         }
         assert.equal(
           socket.readyState,
@@ -469,7 +511,7 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
   } finally {
     socket.close();
     member?.close();
-    idleMember?.close();
+    idleMember?.socket.destroy();
     try {
       await sql`delete from web_sessions where token_hash = ${ref}`;
     } finally {
