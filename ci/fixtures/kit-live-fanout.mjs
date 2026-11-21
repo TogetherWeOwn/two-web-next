@@ -29,12 +29,12 @@ function room(id, restricted) {
   };
 }
 
-function snapshot(seq, count) {
+function snapshot(seq, count, observedAt = new Date().toISOString()) {
   return {
     v: 1,
     guild_id: guild,
     seq,
-    observed_at: new Date().toISOString(),
+    observed_at: observedAt,
     topics: {
       guild: { ownerId: people[0], afkChannelId: null },
       channels: [room("10", false), room("11", true), room("12", false)],
@@ -84,16 +84,23 @@ async function ingest(origin, seq, op) {
 function connect(url, headers) {
   const socket = new WebSocket(url, { headers });
   const frames = [];
-  socket.addEventListener("message", ({ data }) => frames.push(data));
+  socket.addEventListener("message", ({ data }) => frames.push({ data, at: Date.now() }));
   return {
     socket,
     frames,
     ready: once(socket, "open", deadline()),
     async frame(want, timeout = 5_000) {
-      if (!frames.length) await once(socket, "message", deadline(timeout));
-      const frame = frames.shift();
-      assert.ok(Buffer.byteLength(frame) <= 128, "public frames are bounded");
-      assert.deepEqual(JSON.parse(frame), want);
+      const label = `${want.topic} ${want.type}${want.seq === undefined ? "" : ` ${want.seq}`}`;
+      if (!frames.length) {
+        await once(socket, "message", deadline(timeout)).catch((cause) => {
+          throw new Error(`Waiting for ${label} (readyState=${socket.readyState})`, { cause });
+        });
+      }
+      const { data, at } = frames.shift();
+      assert.equal(typeof data, "string", `${label} must be a text frame`);
+      assert.ok(Buffer.byteLength(data) <= 128, "public frames are bounded");
+      assert.deepEqual(JSON.parse(data), want, label);
+      return at;
     },
     subscribe(topics) {
       socket.send(JSON.stringify({ v: 1, type: "subscribe", topics }));
@@ -154,8 +161,11 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
 
     assert.equal(await ingest(origin, 46, leave("106")), 409, "reject a behind snapshot");
     await guest.frame(unavailable("voice"));
-    const generation = await source(snapshot(46, 5));
-    assert.equal(await ingest(origin, 46, leave("106")), 204, "recover from a covering snapshot");
+    await source(snapshot(46, 5, new Date(Date.now() - 60_000).toISOString()));
+    assert.equal(await ingest(origin, 46, leave("106")), 409, "reject a stale covering snapshot");
+    const covering = snapshot(46, 5);
+    const generation = await source(covering);
+    assert.equal(await ingest(origin, 46, leave("106")), 204, "recover with a fresh observation");
     await guest.frame(projected("snapshot", 4, 5));
     const roomPolicy = (restricted) => ({
       topic: "channels",
@@ -168,21 +178,31 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     assert.equal(await ingest(origin, 48, roomPolicy(false)), 204);
     await guest.frame(projected("patch", 6, 5));
 
-    // Keep the same instance warm without sending any event that could renew its lease.
+    const sourceUntil = Date.parse(covering.observed_at) + 30_000;
+    // Keep the same instance warm and send a restricted delta late in the lease.
     const keepWarm = async () => {
       for (let i = 0; i < 7; i++) {
         await delay(4_000);
         assert.equal(await source(), generation);
+        if (i === 3) {
+          assert.ok(Date.now() < sourceUntil, "restricted ingress must precede source expiry");
+          assert.equal(await ingest(origin, 49, join("106", "11")), 204);
+        }
       }
     };
-    await Promise.all([guest.frame(unavailable("voice"), 40_000), keepWarm()]);
+    const [withdrawnAt] = await Promise.all([
+      guest.frame(unavailable("voice"), 35_000),
+      keepWarm(),
+    ]);
+    assert.ok(withdrawnAt >= sourceUntil, "the source alarm must not clear the baseline early");
+    assert.ok(withdrawnAt < sourceUntil + 4_000, "restricted ingress must not renew the lease");
     assert.equal(await source(), generation, "lease alarm ran without a hibernation wake");
     assert.equal(
       guest.socket.readyState,
       WebSocket.OPEN,
       "source expiry keeps the guest socket open",
     );
-    assert.equal(await source(snapshot(48, 5)), generation);
+    assert.equal(await source(snapshot(49, 5)), generation);
     const warmResyncAt = performance.now();
     guest.resyncVoice();
     await guest.frame(unavailable("voice"));
@@ -193,7 +213,7 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     );
 
     // Change the fixture response to the next signed pull. The warm hub still has five.
-    assert.equal(await source(snapshot(49, 6)), generation);
+    assert.equal(await source(snapshot(50, 6)), generation);
     // Workerd can hibernate after about 10 seconds idle. Leave all callers quiet
     // until the same guest sends resync, before the renewed 30-second source alarm.
     await delay(15_000);

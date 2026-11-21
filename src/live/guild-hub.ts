@@ -8,7 +8,6 @@ import { signedLiveSnapshot } from "./transport";
 import { decodeLiveDelta, type LiveDelta, liveId, type LiveState, snapshotTopics } from "./wire";
 
 const WATERMARKS = "live-watermarks-v1";
-const SOURCE_LEASE_MS = 30_000;
 const SOCKET_RECOVERY_INTERVAL_MS = 5_000;
 const PUBLIC_VOICE_PAGE = "public-voice";
 
@@ -86,6 +85,7 @@ export class LiveGuildHub {
     // ingest() clears a gap synchronously, before its signed pull can resolve.
     if (this.#leased && !this.#sequence.current) {
       this.#leased = null;
+      this.#sourceUntil = 0;
       this.#sockets.invalidate();
     }
     const armed = this.#leaseCurrent();
@@ -107,9 +107,10 @@ export class LiveGuildHub {
 
   #leaseCurrent(): Promise<void> | undefined {
     const current = this.#sequence?.current;
-    if (!this.#publicRooms || !current || current === this.#leased) return;
+    if (!this.#publicRooms || current?.validUntil === undefined || current === this.#leased) return;
     this.#leased = current;
-    this.#sourceUntil = Date.now() + SOURCE_LEASE_MS;
+    if (current.validUntil === this.#sourceUntil) return;
+    this.#sourceUntil = current.validUntil;
     return this.#sockets.scheduleExpiry(this.#sourceUntil);
   }
 
