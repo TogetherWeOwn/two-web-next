@@ -182,23 +182,36 @@ for (const twin of ["Hono", "Kit"] as const) {
         expect(link.text).not.toMatch(/\b(?:Ended|Past event)\b/i);
       });
 
-      it("CONTROL: preserves destination title, machine time, location and href", async () => {
-        const link = anchor(
-          await render(twin, destination({ timezone: "America/New_York" }), "Asia/Tokyo"),
-          testid,
-        );
-        expect(link.tag).toContain('href="/e/01ARZ3NDEKTSV4RRFFQ69G5FAA"');
-        if (rel) expect(link.tag).toContain(`rel="${rel}"`);
-        expect(link.text).toContain(label);
-        expect(link.body).toContain('datetime="2026-11-02T18:00:00.000Z"');
-        const when =
-          twin === "Hono"
-            ? "Monday, 2 November 2026 at 13:00 GMT-05:00"
-            : "Tue 3 Nov, 03:00 Asia/Tokyo";
-        expect(link.body).toContain(`<time datetime="2026-11-02T18:00:00.000Z">${when}</time>`);
-        expect(link.text).toContain("Destination room");
-        expect(link.text).not.toContain("Current event lobby");
-      });
+      it.each([
+        [
+          "Asia/Tokyo",
+          "America/New_York",
+          "Monday, 2 November 2026 at 13:00 GMT-05:00",
+          "Tue 3 Nov, 03:00 Asia/Tokyo",
+        ],
+        [
+          "Invalid/Zone",
+          "Asia/Tokyo",
+          "Tuesday, 3 November 2026 at 03:00 GMT+09:00",
+          "Mon 2 Nov, 18:00 UTC",
+        ],
+      ])(
+        "CONTROL: preserves destination title, machine time, location and href (current zone: %s)",
+        async (currentZone, destinationZone, honoLabel, kitLabel) => {
+          const link = anchor(
+            await render(twin, destination({ timezone: destinationZone }), currentZone),
+            testid,
+          );
+          expect(link.tag).toContain('href="/e/01ARZ3NDEKTSV4RRFFQ69G5FAA"');
+          if (rel) expect(link.tag).toContain(`rel="${rel}"`);
+          expect(link.text).toContain(label);
+          expect(link.body).toContain('datetime="2026-11-02T18:00:00.000Z"');
+          const when = twin === "Hono" ? honoLabel : kitLabel;
+          expect(link.body).toContain(`<time datetime="2026-11-02T18:00:00.000Z">${when}</time>`);
+          expect(link.text).toContain("Destination room");
+          expect(link.text).not.toContain("Current event lobby");
+        },
+      );
 
       it("CONTROL: does not invent a missing location", async () => {
         const link = anchor(

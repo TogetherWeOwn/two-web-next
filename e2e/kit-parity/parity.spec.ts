@@ -2816,14 +2816,20 @@ test("Kit guest discovery links use the live detail zone at both widths", async 
       }
     });
     const page = await context.newPage();
-    const clock = new Intl.DateTimeFormat("en-GB", {
+    // Use the compact label's parts and order, not en-GB's “Sept” or US date order.
+    const clock = new Intl.DateTimeFormat("en-US", {
       timeZone: zone,
       weekday: "short",
       day: "numeric",
       month: "short",
       hour: "2-digit",
       minute: "2-digit",
+      hourCycle: "h23",
     });
+    const label = (start: Date) => {
+      const parts = new Map(clock.formatToParts(start).map(({ type, value }) => [type, value]));
+      return `${parts.get("weekday")} ${parts.get("day")} ${parts.get("month")}, ${parts.get("hour")}:${parts.get("minute")} ${zone}`;
+    };
     for (const { size: viewport } of PARITY_VIEWPORTS) {
       await page.setViewportSize(viewport);
       const response = await page.goto(`${KIT_ORIGIN}/e/${eventKey}`);
@@ -2836,7 +2842,7 @@ test("Kit guest discovery links use the live detail zone at both widths", async 
         ["event-related-link", series],
       ] as const) {
         const link = page.getByTestId(testid).filter({ hasText: row.title });
-        const when = `${clock.format(row.start)} ${zone}`;
+        const when = label(row.start);
         await expect(link).toBeVisible();
         await expect(link).toHaveAttribute("href", `/e/${row.key}`);
         await expect(link).toHaveAccessibleName(new RegExp(when));
