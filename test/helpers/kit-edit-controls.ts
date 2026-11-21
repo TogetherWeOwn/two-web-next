@@ -46,7 +46,13 @@ export function disabled(el: Element): boolean {
   return false;
 }
 
-/** Successful input/textarea controls in this form, without a submitter. */
+/**
+ * First-form input/textarea fixture subset, without a submitter. Textarea values
+ * use native urlencoded CRLF (not DOM FormData's LF); text inputs drop breaks.
+ * Not a browser: no selects, external form owners, duplicate-name lists, live
+ * edits, constraint validation, or complete input-type sanitization/encoding.
+ * Use actual browser requests for wire-fidelity claims.
+ */
 export function submittedFields(html: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const el of controls(firstForm(html))) {
@@ -57,10 +63,19 @@ export function submittedFields(html: string): Record<string, string> {
       if (["button", "submit", "reset", "image", "file"].includes(type)) continue;
       if (["checkbox", "radio"].includes(type) && attr(el, "checked") === undefined) continue;
     }
-    out[name] =
+    let value =
       el.tagName === "textarea"
-        ? textOf(el)
+        ? textOf(el).replace(/\r\n?/g, "\n").replace(/\n/g, "\r\n")
         : (attr(el, "value") ?? (["checkbox", "radio"].includes(type) ? "on" : ""));
+    if (
+      el.tagName === "input" &&
+      ["text", "search", "tel", "password", "url", "email"].includes(type)
+    ) {
+      value = value.replace(/[\r\n]/g, "");
+      if (type === "url" || type === "email")
+        value = value.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
+    }
+    out[name] = value;
   }
   return out;
 }

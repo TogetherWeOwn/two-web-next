@@ -2785,6 +2785,86 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
   }
 });
 
+test("Kit guest discovery links use the live detail zone at both widths", async ({ browser }) => {
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const key = (id: number) => `01J${String(id).padStart(23, "0")}`;
+  const eventKey = key(985);
+  const zone = "America/New_York";
+  const now = Date.now();
+  const later = (days: number) =>
+    new Date(new Date(now + days * 86_400_000).setUTCHours(2, 34, 0, 0));
+  const next = { key: key(986), title: "Open tables", start: later(1) };
+  const series = { key: key(987), title: "Community game night: round two", start: later(7) };
+  const context = await browser.newContext({
+    javaScriptEnabled: false,
+    timezoneId: "Pacific/Auckland",
+  });
+  try {
+    await withSessionDb(async (sql) => {
+      const [root] = await sql<{ id: number }[]>`
+        insert into events (event_key, title, game, starts_at, ends_at, timezone, status,
+                            recurrence_frequency, recurrence_count, recurrence_index)
+        values (${eventKey}, 'Community game night', 'Tabletop', ${new Date(now - 3_600_000)},
+                ${new Date(now + 3_600_000)}, ${zone}, 'published', 'weekly', 2, 1)
+        returning id`;
+      for (const row of [next, series]) {
+        await sql`insert into events (event_key, title, game, starts_at, ends_at, timezone, location,
+                                      status, parent_event_id, recurrence_index)
+          values (${row.key}, ${row.title}, 'Tabletop', ${row.start},
+                  ${new Date(+row.start + 7_200_000)}, 'UTC', 'Community voice', 'published',
+                  ${row === series ? root!.id : null}, ${row === series ? 2 : null})`;
+      }
+    });
+    const page = await context.newPage();
+    // Use the compact label's parts and order, not en-GB's “Sept” or US date order.
+    const clock = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+    const label = (start: Date) => {
+      const parts = new Map(clock.formatToParts(start).map(({ type, value }) => [type, value]));
+      return `${parts.get("weekday")} ${parts.get("day")} ${parts.get("month")}, ${parts.get("hour")}:${parts.get("minute")} ${zone}`;
+    };
+    for (const { size: viewport } of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport);
+      const response = await page.goto(`${KIT_ORIGIN}/e/${eventKey}`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      await expect(page.getByTestId("kit-event-time")).toContainText(zone);
+      for (const [testid, row] of [
+        ["event-series-next", series],
+        ["event-next", next],
+        ["event-related-link", series],
+      ] as const) {
+        const link = page.getByTestId(testid).filter({ hasText: row.title });
+        const when = label(row.start);
+        await expect(link).toBeVisible();
+        await expect(link).toHaveAttribute("href", `/e/${row.key}`);
+        await expect(link).toHaveAccessibleName(new RegExp(when));
+        await expect(link.locator("time")).toHaveText(when);
+        await expect(link.locator("time")).toHaveAttribute("datetime", row.start.toISOString());
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+      const name = `kit-review-event-discovery-${viewport.width}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    }
+  } finally {
+    await context.close();
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key in (${eventKey}, ${next.key}, ${series.key})`;
+    });
+  }
+});
+
 // Successful archive page turns with browser history restoration.
 //
 // Isolated deterministic fixture: 24 dated rows plus the seeded past night

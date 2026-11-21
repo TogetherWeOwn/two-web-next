@@ -5,7 +5,7 @@ import EventDetail from "../../web/src/lib/EventDetail.svelte";
 import { composeLifeline, type LifelineFacts } from "../../web/src/lib/lifeline";
 
 let { state, showLifeline = true }: {
-  state: "upcoming" | "frozen" | "cancelled" | "ended";
+  state: "upcoming" | "frozen" | "cancelled" | "ended" | "ended-recorded";
   showLifeline?: boolean;
 } = $props();
 
@@ -23,9 +23,10 @@ const examples = {
   upcoming: { now: time("19:00"), facts: {} },
   frozen: { now: time("20:12"), facts: { terminalSiteReminder, roomSnapshot } },
   cancelled: { now: time("20:12"), facts: { viewerRsvp, cancelled, roomSnapshot } },
-  // This event has no recorded Echo; the existing ended rail stays truthful too.
   ended: { now: time("21:50"), facts: { terminalSiteReminder } },
+  "ended-recorded": { now: time("21:50"), facts: { terminalSiteReminder, echo: fact("21:41") } },
 } satisfies Record<typeof state, { now: number; facts: LifelineFacts }>;
+const ended = $derived(state === "ended" || state === "ended-recorded");
 
 const model: KitEventDetailModel = $derived(withEventDetailHtml({
   seatCard: {
@@ -46,17 +47,17 @@ const model: KitEventDetailModel = $derived(withEventDetailHtml({
   joinInstructions: null,
   status: state === "cancelled" ? "cancelled" : "published",
   isDraft: false,
-  isPast: state === "ended",
+  isPast: ended,
   isOngoing: state === "frozen",
-  isEnded: state === "ended",
-  lifecycle: state === "ended" ? { date: "21 Nov 2026", endTime: "21:00" } : null,
+  isEnded: ended,
+  lifecycle: ended ? { date: "21 Nov 2026", endTime: "21:00" } : null,
   endedNext: null,
   liveTime: state === "frozen" ? { asOf: iso("20:12"), staleAt: iso("20:14") } : undefined,
   goingCount: 8,
   goingOccupancy: 8,
   capacity: 10,
   rsvpOpen: state === "upcoming",
-  rsvpClosed: state === "cancelled" ? "cancelled" : state === "ended" ? "past" : null,
+  rsvpClosed: state === "cancelled" ? "cancelled" : ended ? "past" : null,
   canonical: `https://event-detail.example.test${path}`,
   path,
   attendeesRefreshHref: path,

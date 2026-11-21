@@ -54,14 +54,45 @@ function existingControls(page) {
     .evaluateAll((elements) => elements.map((el) => el.outerHTML));
 }
 
+// Expected clock (empty for an untimed plan) | actor and state | title | optional detail.
+const opened = "18:00|Bot · Recorded|Sign-ups opened";
+const seat = "18:23|You, on this site · Recorded|Your seat is saved";
+const reminder = "19:32|Site · Recorded|Reminder results recorded|8 sent · 2 unavailable";
+const waitingRoom = "20:00|Bot · Waiting|Room opens|Waiting on the bot.";
+const ended = `${opened}\n${reminder}\n${waitingRoom}\n21:15|Bot · Recorded|Counting window closed`;
 const examples = {
-  upcoming:
-    /Sign-ups opened.*Save a seat while sign-ups are open.*Site · Next.*Reminder ping.*Bot · Planned/s,
-  frozen:
-    /8 sent · 2 unavailable.*Bot · Counting now.*Waiting on the bot\. Last synced 12 min ago/s,
-  cancelled: /Your seat is saved.*Event room seen.*Event cancelled.*severe weather\./s,
-  ended: /Counting window closed.*Site · Waiting.*Echo freezes.*Waiting on the site\./s,
+  upcoming: `${opened}\n|Site · Planned|Save a seat while sign-ups are open\n19:30|Site · Next|Reminder ping\n19:45|Bot · Planned|Bot counts who’s in\n20:00|Bot · Planned|Room opens\n21:25|Site · Planned|Echo freezes`,
+  frozen: `${opened}\n${reminder}\n19:45|Bot · Counting now|Bot counts who’s in\n${waitingRoom} Last synced 12 min ago\n21:25|Site · Next|Echo freezes`,
+  cancelled: `${opened}\n${seat}\n20:00|Bot · Recorded|Event room seen\n20:01|Bot · Recorded|Event cancelled|The host cancelled because of severe weather.`,
+  ended: `${ended}\n21:25|Site · Waiting|Echo freezes|Waiting on the site.`,
+  "ended-recorded": `${ended}\n21:41|Site · Recorded|Echo frozen`,
 };
+
+async function assertRows(section, expected, state, width) {
+  const rows = await section.locator("ol > li").all();
+  const labels = expected.split("\n");
+  assert.equal(rows.length, labels.length, `${state}: row count`);
+  for (const [index, row] of rows.entries()) {
+    const [clock, meta, title, detail] = labels[index].split("|");
+    const context = `${state}: ${title} at ${width}px`;
+    const readLabel = (label) => row.locator(`${label}:visible`).allTextContents();
+    const copy = await Promise.all([".meta", ".title", ".detail"].map(readLabel));
+    assert.deepEqual(copy, [[meta], [title], detail ? [detail] : []], context);
+    if (!clock) {
+      assert.equal(await row.locator("time").count(), 0, context);
+      continue;
+    }
+    const stamp = row.locator(`time[datetime="2026-11-21T${clock}:00.000Z"]:visible`, {
+      hasText: `${clock} Europe/London`,
+    });
+    const time = (await stamp.isVisible()) ? await stamp.boundingBox() : null;
+    const entry = await row.locator(".entry:visible").boundingBox();
+    assert.ok(time && entry, `${context}: visible timestamp and entry bounds`);
+    const above = time.y + time.height <= entry.y;
+    const aligned = time.y >= entry.y && time.y < entry.y + entry.height;
+    assert.ok(width === 390 ? above : aligned && time.x + time.width <= entry.x, context);
+  }
+}
 
 test("EventDetail places the read-only Lifeline after the seat rail and preserves RSVP", async () => {
   const webRequire = createRequire(file("web/package.json"));
@@ -93,9 +124,8 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
       for (const [state, expected] of Object.entries(examples)) {
         await openFixture(page, renderFixture({ state }), styles);
         assert.equal(await section.count(), 1);
-        const text = (await section.textContent()) ?? "";
-        assert.match(text, expected);
-        assert.doesNotMatch(text, /Pull me in|no.show/i);
+        await assertRows(section, expected, state, width);
+        assert.doesNotMatch((await section.textContent()) ?? "", /Pull me in|no.show/i);
         assert.equal(
           await section.locator("a, button, form, script, [tabindex], [aria-live]").count(),
           0,
@@ -104,8 +134,6 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
           await section.locator('[aria-current="step"]').count(),
           Number(state === "upcoming" || state === "frozen"),
         );
-        if (state === "cancelled") assert.equal(await section.getByRole("listitem").count(), 4);
-        if (state === "ended") assert.doesNotMatch(text, /Echo frozen/);
         assert.ok(await section.evaluate((el) => el.scrollWidth <= el.clientWidth));
         assert.ok(
           await section.evaluate((el, compact) => {
