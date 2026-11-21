@@ -249,71 +249,75 @@ test("db-migrate admits staging and production through one explicit gate before 
   }
 });
 
-test("production scope comes only from the protected Environment API", (t) => {
-  const scope = dbMigrate.split("      - name: Read approved production migration scope\n")[1];
+test("production scope rejects broader vars and requires a current protected value", (t) => {
+  const [, preflight, migrate] = dbMigrate.split(/^  (?:production-scope-preflight|migrate):\n/m);
+  assert.ok(preflight && migrate, "separate preflight and protected job");
+  assert.match(preflight, /if: \$\{\{ inputs\.target == 'production' \}\}/);
+  assert.doesNotMatch(preflight, /^\s+environment:/m);
+  assert.match(preflight, /permissions: \{\}/);
+  assert.match(preflight, /checked_attempt: \$\{\{ steps\.check\.outputs\.checked_attempt \}\}/);
+  assert.match(migrate, /needs: production-scope-preflight/);
+  assert.ok(
+    migrate.includes(
+      "if: ${{ !cancelled() && (inputs.target != 'production' || needs.production-scope-preflight.result == 'success') }}",
+    ),
+  );
+  assert.match(migrate, /environment: \$\{\{ inputs\.target \}\}/);
+
+  const scope = migrate.split("      - name: Read approved production migration scope\n")[1];
   assert.ok(scope, "dedicated production scope step");
   const [step] = scope.split("\n      - ");
-  assert.ok(dbMigrate.indexOf(step) < dbMigrate.indexOf("actions/checkout"));
+  assert.ok(migrate.indexOf(step) < migrate.indexOf("actions/checkout"));
   assert.match(step, /if: \$\{\{ inputs\.target == 'production' \}\}/);
-  const credential = "secrets.PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN";
-  assert.ok(
-    step.includes(`GH_TOKEN: \${{ inputs.target == 'production' && ${credential} || '' }}`),
+  assert.match(
+    step,
+    /CHECKED_ATTEMPT: \$\{\{ needs\.production-scope-preflight\.outputs\.checked_attempt \}\}/,
   );
-  assert.equal(dbMigrate.split(credential).length, 2, "scope credential is used only here");
-  assert.doesNotMatch(dbMigrate, /vars\.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS/);
-  const script = step.split("run: |\n")[1];
-  assert.ok(script);
-  const name = "PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS";
+  assert.match(step, /APPROVED_TAGS: \$\{\{ vars\.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS \}\}/);
+  assert.doesNotMatch(dbMigrate, /PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN|\bgh api\b/);
+  assert.doesNotMatch(preflight + step, /\bsecrets\.|\b(?:curl|wget)\b/);
+
   const directory = mkdtempSync(join(tmpdir(), "migration-scope-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const outputPath = join(directory, "output");
-  const fixture = (response, ghStatus = 0, token = "fixture-only") => {
+  const fixture = (block, env = {}) => {
+    const script = block.split("run: |\n")[1];
+    assert.ok(script);
     writeFileSync(outputPath, "");
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `gh() {
-          [[ "$*" == 'api --hostname github.com --method GET repos/fixture/repo/environments/production/variables/${name}' ]] || exit 99
-          printf '%s' "$FIXTURE_RESPONSE"
-          if [[ "$FIXTURE_STATUS" != 0 ]]; then printf '%s\\n' "$GH_TOKEN" >&2; fi
-          return "$FIXTURE_STATUS"
-        }
-        ${script}`,
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          PATH: process.env.PATH,
-          GH_TOKEN: token,
-          GITHUB_REPOSITORY: "fixture/repo",
-          GITHUB_OUTPUT: outputPath,
-          FIXTURE_RESPONSE: JSON.stringify(response),
-          FIXTURE_STATUS: String(ghStatus),
-          [name]: "1034_broader_scope",
-        },
-      },
-    );
+    const result = spawnSync("bash", ["-c", script], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, GITHUB_OUTPUT: outputPath, GITHUB_RUN_ATTEMPT: "2", ...env },
+    });
     return { ...result, output: readFileSync(outputPath, "utf8") };
   };
-  const valid = { name, value: "1034_exact,1035_exact" };
+  const pins = [
+    "PRODUCTION_MIGRATION_APPROVED_SHA",
+    "PRODUCTION_MIGRATION_IDENTITY_SHA256",
+    "PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS",
+  ];
+  for (const name of pins) assert.ok(preflight.includes(`${name}: \${{ vars.${name} }}`));
+  const clean = fixture(preflight);
+  assert.equal(clean.status, 0, clean.stderr);
+  assert.equal(clean.output, "checked_attempt=2\n");
+
+  const valid = "1034_exact,1035_exact";
   for (const refusal of [
-    fixture({ message: "Not Found" }, 1),
-    fixture(valid, 1),
-    fixture(valid, 0, ""),
-    fixture({ ...valid, value: "" }),
-    fixture({ ...valid, value: `${valid.value}\n` }),
-    fixture({ ...valid, name: "WRONG_VARIABLE" }),
+    ...pins.map((name) => fixture(preflight, { [name]: "1034_broader_scope" })),
+    fixture(step, { APPROVED_TAGS: valid }),
+    fixture(step, { CHECKED_ATTEMPT: "1", APPROVED_TAGS: valid }),
+    fixture(step, { CHECKED_ATTEMPT: "2" }),
+    fixture(step, { CHECKED_ATTEMPT: "2", APPROVED_TAGS: `${valid}\n` }),
+    fixture(step, { CHECKED_ATTEMPT: "2", APPROVED_TAGS: "1034_exact, 1035_exact" }),
   ]) {
     assert.equal(refusal.status, 1);
     assert.equal(refusal.output, "");
     assert.equal(refusal.stdout, "");
     assert.match(refusal.stderr, /Production migration scope/);
-    assert.doesNotMatch(refusal.stderr, /fixture-only|1034_broader_scope/);
+    assert.doesNotMatch(refusal.stderr, /1034_broader_scope|1034_exact/);
   }
-  const accepted = fixture(valid);
+  const accepted = fixture(step, { CHECKED_ATTEMPT: "2", APPROVED_TAGS: valid });
   assert.equal(accepted.status, 0, accepted.stderr);
-  assert.equal(accepted.output, `pending_tags=${valid.value}\n`);
+  assert.equal(accepted.output, `pending_tags=${valid}\n`);
 });
 
 test("deploy holds the direct staging migration path before dependencies or mutations", () => {
