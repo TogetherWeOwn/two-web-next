@@ -1,7 +1,6 @@
 // route-inventory: GET /up
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { default as postgres, Sql, TransactionSql } from "postgres";
-import app from "./app";
 import type { Env } from "../src/env";
 import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
 import { discardFailedJob, listFailedJobs } from "../src/jobs/redrive";
@@ -23,6 +22,7 @@ import {
 } from "../src/up";
 import { createLedgerFixture } from "./helpers/queue-ledger-fixture";
 import { healthSql } from "./helpers/up";
+import { requestApp } from "./helpers/fetch-app";
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -159,7 +159,7 @@ describe("/up additive ready-wait signal", () => {
     [1800, "warning"],
     [1800.1, "critical"],
   ])("classifies %s seconds as %s without changing readiness", async (age, severity) => {
-    const res = await app.request(
+    const res = await requestApp(
       "/up",
       {},
       withStore(healthSql({ queue: [depthRow({ oldest_ready_wait_age_seconds: age })] })),
@@ -178,7 +178,7 @@ describe("/up additive ready-wait signal", () => {
   });
 
   it("retained failures and old creation age alone do not trip ready-wait severity", async () => {
-    const res = await app.request(
+    const res = await requestApp(
       "/up",
       {},
       withStore(
@@ -206,7 +206,7 @@ describe("/up additive ready-wait signal", () => {
         ready_wait_severity: "healthy",
       },
     });
-    const retry = await app.request(
+    const retry = await requestApp(
       "/up",
       {},
       withStore(healthSql({ queue: [depthRow({ oldest_pending_age_seconds: 39706 })] })),
@@ -216,7 +216,7 @@ describe("/up additive ready-wait signal", () => {
   });
 
   it("keeps the depth status and ready-wait severity independent", async () => {
-    const res = await app.request(
+    const res = await requestApp(
       "/up",
       {},
       withStore(healthSql({ queue: [depthRow({ pending: 100, total: 101 })] })),
@@ -232,7 +232,7 @@ describe("/up additive ready-wait signal", () => {
     vi.useFakeTimers();
     try {
       const pending = Promise.resolve(
-        app.request("/up", {}, withStore(healthSql({ queue: never }))),
+        requestApp("/up", {}, withStore(healthSql({ queue: never }))),
       );
       await vi.advanceTimersByTimeAsync(QUEUE_READ_TIMEOUT_MS);
       const res = await pending;
@@ -251,7 +251,7 @@ describe("/up additive ready-wait signal", () => {
 
 describe("GET /up", () => {
   it("answers 200 fully migrated with only additive queue fields", async () => {
-    const res = await app.request("/up", {}, withStore(healthSql({ queue: [depthRow()] })));
+    const res = await requestApp("/up", {}, withStore(healthSql({ queue: [depthRow()] })));
     expect(res.status).toBe(200);
     expect(res.headers.get("x-two-origin")).toBe("two-web-next");
     expect(await res.json()).toEqual({
@@ -265,7 +265,7 @@ describe("GET /up", () => {
     expect(res.headers.getSetCookie()).toEqual([]);
   });
   it("answers 200 for queue-only degradation", async () => {
-    const res = await app.request(
+    const res = await requestApp(
       "/up",
       {},
       withStore(healthSql({ queue: [depthRow({ pending: 25, total: 26 })] })),
@@ -280,7 +280,7 @@ describe("GET /up", () => {
     });
   });
   it("stays 200 with degraded top-level when only the queue ledger fails", async () => {
-    const res = await app.request(
+    const res = await requestApp(
       "/up",
       {},
       withStore(healthSql({ queue: new Error("queue table missing") })),
@@ -296,7 +296,7 @@ describe("GET /up", () => {
     });
   });
   it("answers 503 without DB configuration", async () => {
-    const res = await app.request("/up", {}, env);
+    const res = await requestApp("/up", {}, env);
     expect(res.status).toBe(503);
     expect(res.headers.get("x-two-origin")).toBe("two-web-next");
     expect(await res.json()).toEqual({
@@ -311,7 +311,7 @@ describe("GET /up", () => {
   });
   it("answers 503 with one missing migration, even if a newer bot row exists", async () => {
     const migrations = [...applied.filter((_, i) => i !== 1), { created_at: "9999999999999" }];
-    const res = await app.request(
+    const res = await requestApp(
       "/up",
       {},
       withStore(healthSql({ migrations, queue: [depthRow()] })),
@@ -329,7 +329,7 @@ describe("GET /up", () => {
     });
   });
   it("answers 503 when the migration repository will not answer, preserving a successful ping", async () => {
-    const res = await app.request(
+    const res = await requestApp(
       "/up",
       {},
       withStore(healthSql({ migrations: new Error("secret query"), queue: [depthRow()] })),
@@ -346,7 +346,7 @@ describe("GET /up", () => {
   it("answers 503 db:error for a failed DB ping and never leaks error messages", async () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const res = await app.request(
+      const res = await requestApp(
         "/up",
         {},
         withStore(
@@ -376,7 +376,7 @@ describe("GET /up", () => {
     }
   });
   it("a malformed DATABASE_URL answers 503 db:error, not 500", async () => {
-    const res = await app.request("/up", {}, { ...env, DATABASE_URL: "not a url" });
+    const res = await requestApp("/up", {}, { ...env, DATABASE_URL: "not a url" });
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({
       db: "error",
@@ -406,7 +406,7 @@ describe("/up required Worker secrets", () => {
     ]);
   });
   it("answers 200 with the pinned body shape when every secret is present", async () => {
-    const res = await app.request("/up", {}, withStore(healthSql({ queue: [depthRow()] })));
+    const res = await requestApp("/up", {}, withStore(healthSql({ queue: [depthRow()] })));
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual([
@@ -433,7 +433,7 @@ describe("/up required Worker secrets", () => {
     async (name, value) => {
       const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
-        const res = await app.request(
+        const res = await requestApp(
           "/up",
           {},
           without(name, value, withStore(healthSql({ queue: [depthRow()] }))),
@@ -467,7 +467,7 @@ describe("/up required Worker secrets", () => {
   it("still answers 503 for a DB failure with every secret present, adding no config key", async () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const res = await app.request(
+      const res = await requestApp(
         "/up",
         {},
         withStore(healthSql({ ping: new Error("down"), queue: [depthRow()] })),
@@ -488,7 +488,7 @@ describe("/up required Worker secrets", () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const broken = REQUIRED_SECRETS.reduce((next, name) => without(name, "absent", next), env);
-      const res = await app.request("/up", {}, broken);
+      const res = await requestApp("/up", {}, broken);
       expect(res.status).toBe(503);
       const text = await res.text();
       expect(JSON.parse(text)).toEqual({
@@ -539,7 +539,7 @@ describe("/up revision marker", () => {
 
   it("adds nothing to the body when the Worker has no version_metadata binding", async () => {
     // Production declares no binding: its /up body must stay exactly as before.
-    const res = await app.request("/up", {}, ready());
+    const res = await requestApp("/up", {}, ready());
     expect(Object.keys((await res.json()) as object).sort()).toEqual([
       "db",
       "migration_ledger",
@@ -550,7 +550,7 @@ describe("/up revision marker", () => {
   });
 
   it("reports the Worker Version ID and the deploy commit, leaving the rest untouched", async () => {
-    const res = await app.request("/up", {}, marked({ id: versionId, tag: sha }));
+    const res = await requestApp("/up", {}, marked({ id: versionId, tag: sha }));
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({
@@ -566,7 +566,7 @@ describe("/up revision marker", () => {
   it("is informational: a 503 readiness failure still carries the marker", async () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const res = await app.request("/up", {}, {
+      const res = await requestApp("/up", {}, {
         ...withStore(healthSql({ ping: new Error("db down") })),
         CF_VERSION_METADATA: { id: versionId, tag: sha },
       } as Env);
@@ -754,7 +754,7 @@ describe("/up bounded reads", () => {
       vi.useFakeTimers();
       try {
         const res = Promise.resolve(
-          app.request("/up", {}, withStore(healthSql({ [stage]: never, queue: never }))),
+          requestApp("/up", {}, withStore(healthSql({ [stage]: never, queue: never }))),
         );
         await vi.advanceTimersByTimeAsync(QUEUE_READ_TIMEOUT_MS - 1);
         let resolved = false;
@@ -989,7 +989,7 @@ describe.skipIf(!process.env.DATABASE_URL)("/up queue.failed redrive linkage", (
     expect(body.queue.failed).toBe(2);
     expect(body.status).toBe("healthy");
 
-    const res = await app.request("/up", {}, withStore(redirectMigrations(sql)));
+    const res = await requestApp("/up", {}, withStore(redirectMigrations(sql)));
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ status: "healthy", queue: { failed: 2 } });
 
@@ -1012,7 +1012,7 @@ describe.skipIf(!process.env.DATABASE_URL)("/up queue.failed redrive linkage", (
     expect((await pgQueueDepth(sql)).failed).toBe(1);
     expect((await listFailedJobs(sql)).map((r) => r.jobId)).toEqual([keep]);
 
-    const res = await app.request("/up", {}, withStore(redirectMigrations(sql)));
+    const res = await requestApp("/up", {}, withStore(redirectMigrations(sql)));
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ queue: { failed: 1 } });
 
@@ -1030,7 +1030,7 @@ describe.skipIf(!process.env.DATABASE_URL)("/up queue.failed redrive linkage", (
       expect(body.queue).toMatchObject({ status: "unknown", failed: null });
 
       // Real SQL end to end: the DB gate stays ok, so the route stays 200.
-      const res = await app.request("/up", {}, withStore(redirectMigrations(sql)));
+      const res = await requestApp("/up", {}, withStore(redirectMigrations(sql)));
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
         status: "degraded",

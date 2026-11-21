@@ -12,10 +12,10 @@
 // failing closed on queue.status / ready_wait_severity unknown.
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import app from "./app";
 import type { Env } from "../src/env";
 import { QUEUE_CRITICAL_AT, QUEUE_READ_TIMEOUT_MS, QUEUE_WARN_AT, upBody } from "../src/up";
 import { healthSql } from "./helpers/up";
+import { requestApp } from "./helpers/fetch-app";
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -66,7 +66,7 @@ describe("unknown queue decision: degraded on unknown, keeping 200", () => {
   });
 
   it("stays HTTP 200 with degraded top-level when only the queue ledger fails", async () => {
-    const res = await app.request(
+    const res = await requestApp(
       "/up",
       {},
       withStore(healthSql({ queue: new Error("queue table missing") })),
@@ -86,7 +86,7 @@ describe("unknown queue decision: degraded on unknown, keeping 200", () => {
     vi.useFakeTimers();
     try {
       const pending = Promise.resolve(
-        app.request("/up", {}, withStore(healthSql({ queue: never }))),
+        requestApp("/up", {}, withStore(healthSql({ queue: never }))),
       );
       await vi.advanceTimersByTimeAsync(QUEUE_READ_TIMEOUT_MS);
       const res = await pending;
@@ -158,7 +158,7 @@ describe("unknown queue decision: healthy and degraded depths unchanged", () => 
   });
 
   it("a DB failure with an unreadable queue stays 503 degraded, never 200 or 500", async () => {
-    const res = await app.request(
+    const res = await requestApp(
       "/up",
       {},
       withStore(
