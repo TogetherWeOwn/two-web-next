@@ -1,12 +1,13 @@
 // Run from the pinned app checkout, only with the job-private Worker and Postgres.
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { chromium } from "@playwright/test";
 import postgres from "postgres";
 import { requireGithubRunner, requireTestDatabase } from "../e2e/ci-only.mjs";
+import { routeA11y, routeLighthouse } from "./kit-activity-log-metrics.mjs";
+import { collectVisuals, origin, path } from "./kit-activity-log-visual.mjs";
 
-const origin = "http://127.0.0.1:8788";
-const path = "/admin/activity-log";
+const cdpPort = 9222;
 const mod = "900000000000009301";
 const member = "900000000000009302";
 const [a, b] = ["900000000000009311", "900000000000009312"];
@@ -58,7 +59,12 @@ async function main() {
         timestamptz '2098-01-01 00:00:00+00' + (case when i = 61 then 60 else i end) * interval '1 minute'
       from generate_series(1, 120) as i order by i`;
     browser = await chromium.launch({
-      args: ["--proxy-server=http://127.0.0.1:9", `--proxy-bypass-list=<-loopback>;${origin}`],
+      args: [
+        "--proxy-server=http://127.0.0.1:9",
+        `--proxy-bypass-list=<-loopback>;${origin}`,
+        "--remote-debugging-address=127.0.0.1",
+        `--remote-debugging-port=${cdpPort}`,
+      ],
     });
     const context = await browser.newContext({ serviceWorkers: "block", javaScriptEnabled: false });
     await context.route("**/*", (route) =>
@@ -120,6 +126,21 @@ async function main() {
       [[a, b], [a, b], [a, b], [a], [b]],
       "audit:subjects",
     );
+    await context.close();
+    const scratch = process.env.TMPDIR;
+    const record = (text) => appendFileSync(`${scratch}/metrics.txt`, `${text}\n`);
+    // A successful moderator GET rotates the session, so never seed a second context with it.
+    const mintModerator = () =>
+      mint(mod, true).then((value) => ({ name: cookie, value, domain, path: "/", secure: true }));
+    const lighthouse = await collectVisuals(browser, mintModerator, `${scratch}/screenshots`, {
+      audit: async (page, name) => {
+        const a11y = await routeA11y(page);
+        record(`${name} ${a11y}`);
+        ok(a11y.startsWith("a11y: PASS "), "visual:a11y");
+      },
+      measure: routeLighthouse.bind(null, cdpPort),
+    });
+    record(`populated-desktop.png ${lighthouse ?? "lighthouse: unavailable"}`);
   } finally {
     try {
       await browser?.close();
@@ -130,7 +151,7 @@ async function main() {
   }
 }
 
-main().then(
+await main().then(
   () => console.log("PASS kit-activity-log"),
   (error) => {
     console.log(
@@ -139,3 +160,5 @@ main().then(
     process.exitCode = 1;
   },
 );
+// Browser and DB teardown have settled. Flush the verdict, not abandoned Lighthouse handles.
+process.stdout.write("", () => process.exit());
