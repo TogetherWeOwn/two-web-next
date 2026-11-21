@@ -359,7 +359,7 @@ export async function runMigration(mode, env = process.env, options = {}) {
     // sql.begin pins one connection and rejects on loss: never resume unlocked.
     // Sources: https://github.com/porsager/postgres#transactions
     // https://www.postgresql.org/docs/17/explicit-locking.html#ADVISORY-LOCKS
-    const remaining = await client.begin(async (transaction) => {
+    const apply = async (transaction) => {
       await assertProductionIdentity(transaction, config, summary);
       // Defense in depth with the startup pin in migrationClient: even when
       // the role/database default search_path or DateStyle is hostile, this
@@ -417,7 +417,13 @@ export async function runMigration(mode, env = process.env, options = {}) {
       const remaining = await pendingMigrations(transaction, migrations);
       if (remaining.length) refuse("Post-check failed: web migrations remain pending.");
       return remaining;
-    });
+    };
+    // The locked production scope check must see commits made after the
+    // identity read, even when the role or database defaults to a fixed snapshot.
+    const remaining =
+      config.target === "production"
+        ? await client.begin("isolation level read committed", apply)
+        : await client.begin(apply);
     await summary("Post-check: zero pending web migrations.");
     return remaining;
   } finally {

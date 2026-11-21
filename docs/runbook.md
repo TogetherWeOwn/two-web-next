@@ -582,8 +582,10 @@ available. The workflow validates migration numbers, then:
    advisory lock, rechecks history and (on production) the exact pending tags,
    and records the database clock's UTC
    **pre-migration PITR timestamp** and release SHA in the job summary
-   **before DDL**. Ledger initialization, canonical Drizzle journal SQL and
-   hash/timestamp inserts, and the zero-pending check all run in that transaction.
+   **before DDL**. Production `apply` uses `READ COMMITTED` so the locked history
+   check sees commits made after the identity check. Ledger initialization,
+   canonical Drizzle journal SQL and hash/timestamp inserts, and the zero-pending
+   check all run in that transaction.
    On production, `plan` and `verify` check `current_database()`, `session_user`
    and `current_user`; `apply` repeats the check on its own transaction before
    any DDL. The database must match the URL path and approved fingerprint, and

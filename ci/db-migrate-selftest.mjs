@@ -518,29 +518,32 @@ test("production refuses an invalid scope pin and applies only the approved orde
   });
 });
 
+async function migrationState(client) {
+  return {
+    columns: [
+      ...(await client`
+      select c.relname, a.attname from pg_attribute a
+      join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname in ('public', 'drizzle') and a.attnum > 0 and not a.attisdropped
+      order by n.nspname, c.relname, a.attnum`),
+    ],
+    ledger: [...(await client`select * from drizzle.__drizzle_migrations order by id`)],
+    sequence: [
+      ...(await client`select last_value, is_called from drizzle.__drizzle_migrations_id_seq`),
+    ],
+  };
+}
+
 test("production refuses earlier and later exact prefixes, including drift after plan, without writes", async () => {
   await withJournalPrefix(async (seedPrefix) => {
     await fixture(async ({ client, run, output }) => {
       const approved = await approvedSuffixEnv(client);
-      const state = async () => ({
-        columns: [
-          ...(await client`
-          select c.relname, a.attname from pg_attribute a
-          join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
-          where n.nspname in ('public', 'drizzle') and a.attnum > 0 and not a.attisdropped
-          order by n.nspname, c.relname, a.attnum`),
-        ],
-        ledger: [...(await client`select * from drizzle.__drizzle_migrations order by id`)],
-        sequence: [
-          ...(await client`select last_value, is_called from drizzle.__drizzle_migrations_id_seq`),
-        ],
-      });
       const assertRefused = async (...modes) => {
-        const before = await state();
+        const before = await migrationState(client);
         output.length = 0;
         for (const mode of modes) await assert.rejects(run(mode, approved), scopeRefusal);
         assert.ok(!output.some((line) => line.startsWith("Pre-migration PITR timestamp")));
-        assert.deepEqual(await state(), before);
+        assert.deepEqual(await migrationState(client), before);
       };
 
       await seedPrefix(client, approvedPrefixLength - 1);
@@ -561,6 +564,51 @@ test("production refuses earlier and later exact prefixes, including drift after
       });
       await assertRefused("apply", "plan");
       await assert.rejects(run("verify", approved), /remain pending/);
+    });
+  });
+});
+
+test("production apply sees a prefix committed between identity and lock despite a repeatable-read default", async () => {
+  await withJournalPrefix(async (seedPrefix) => {
+    await fixture(async ({ client, run, env, output }) => {
+      await seedPrefix(client, approvedPrefixLength);
+      const approved = await approvedSuffixEnv(client);
+      const [{ db }] = await client`select current_database() as db`;
+      await client`alter database ${client(db)} set default_transaction_isolation to 'repeatable read'`;
+      assert.deepEqual(
+        (await run("plan", approved)).map((entry) => entry.tag),
+        approvedTags,
+      );
+      output.length = 0;
+      let committedState;
+      await assert.rejects(
+        runMigration(
+          "apply",
+          { ...env, ...approved },
+          {
+            testDatabase: true,
+            report: async (line) => {
+              output.push(line);
+              if (line !== "Production migration database and role identity matched.") return;
+              // The runner awaits this report before attempting its lock. Hold
+              // the same advisory lock around the other writer's Drizzle commit.
+              const [{ acquired }] =
+                await client`select pg_try_advisory_lock(11161001) as acquired`;
+              assert.equal(acquired, true);
+              try {
+                await seedPrefix(client, approvedPrefixLength + 1);
+                committedState = await migrationState(client);
+              } finally {
+                await client`select pg_advisory_unlock(11161001)`;
+              }
+            },
+          },
+        ),
+        scopeRefusal,
+      );
+      assert.equal(committedState?.ledger.length, approvedPrefixLength + 1);
+      assert.ok(!output.some((line) => line.startsWith("Pre-migration PITR timestamp")));
+      assert.deepEqual(await migrationState(client), committedState);
     });
   });
 });
