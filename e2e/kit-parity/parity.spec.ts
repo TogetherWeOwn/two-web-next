@@ -3257,22 +3257,36 @@ test.describe("archive page turns prove successful paging and history", () => {
       ]);
       await page.evaluate("window.__noticeSameDoc = 1");
       const pageTwoUrl = new URL("/events/past?page=2", KIT_ORIGIN).href;
-      // Clone the real response before the island consumes it, so the assertion
+      const marker = { name: "x-two-island", value: "past-events" };
+      // Clone the marked response before the island consumes it, so the assertion
       // doesn't depend on DevTools retaining the body across the history update.
-      const capture = await page.evaluateHandle((url) => {
-        const captured: { response: Response | null } = { response: null };
-        const originalFetch = window.fetch;
-        window.fetch = async (...args) => {
-          const response = await originalFetch.apply(window, args);
-          if (response.url === url && !captured.response) {
-            captured.response = response.clone();
-            window.fetch = originalFetch;
-          }
-          return response;
-        };
-        return captured;
-      }, pageTwoUrl);
-      const responsePromise = page.waitForResponse((response) => response.url() === pageTwoUrl);
+      const capture = await page.evaluateHandle(
+        ({ url, marker }) => {
+          const captured: { response: Response | null } = { response: null };
+          const originalFetch = window.fetch;
+          window.fetch = async (...args) => {
+            const response = await originalFetch.apply(window, args);
+            if (response.url === url && !captured.response) {
+              const [input, init] = args;
+              const headers = new Headers(
+                init?.headers ?? (input instanceof Request ? input.headers : undefined),
+              );
+              if (headers.get(marker.name) === marker.value) {
+                captured.response = response.clone();
+                window.fetch = originalFetch;
+              }
+            }
+            return response;
+          };
+          return captured;
+        },
+        { url: pageTwoUrl, marker },
+      );
+      const responsePromise = page.waitForResponse(
+        (response) =>
+          response.url() === pageTwoUrl &&
+          response.request().headers()[marker.name] === marker.value,
+      );
       await page.locator('a[data-archive-page]:has-text("Older")').click();
       const pagination = await responsePromise;
       expect(pagination.status()).toBe(200);
