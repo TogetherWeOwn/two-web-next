@@ -33,7 +33,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
   const lapse = clock(t);
   const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
   const modes =
-    "dom load asset-dom asset-body late late-method capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled audit-navigation";
+    "dom load asset-dom asset-body late late-method capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled audit-navigation audit-frame-navigation";
   for (const mode of modes.split(" ")) {
     const hono = mode === "hono";
     const expired = mode === "capture-budget";
@@ -50,7 +50,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     let closing = false;
     let cookie = 0;
     let url, intercept;
-    let observe;
+    let observe, frameNavigated;
     const navigation = Promise.withResolvers();
     const abortNavigation = t.mock.fn(() => {
       navigation.reject(navError);
@@ -94,6 +94,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       newPage: () => fixture,
       on: (event, handler) => {
         if (event === "request") observe = handler;
+        if (event === "framenavigated") frameNavigated = handler;
       },
       evaluate: () =>
         mode === "capture-fonts" || (mode === "fonts" && closed === 5) ? lapse(5_000) : true,
@@ -122,6 +123,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
           void request(href, true, async () => response);
           throw navError;
         }
+        if (mode === "audit-frame-navigation") frameNavigated?.();
         if (dom || mode === "load") await request(href, true, async () => response);
         if (closed !== 5 || !/^(document|asset|disallowed)/.test(mode)) return response;
         if (mode === "document") void request(href, true, stall);
@@ -167,6 +169,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       assert.equal(shots.at(-1), name);
       audits.push(name);
       if (mode === "audit-navigation") await request(url, true, lateFetch, noop, lateFulfill);
+      if (mode === "audit-frame-navigation") frameNavigated?.();
     };
     const measure = t.mock.fn(() =>
       mode === "rejected" ? Promise.reject(new Error("transport")) : new Promise(noop),
@@ -182,11 +185,12 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     const collect = ({ signal } = new AbortController()) =>
       visual.collectVisuals(browser, mint, ".", { ...options, signal });
     const report = hono || expired ? runWork(collect, mark, fixture.close) : collect();
-    if (mode === "audit-navigation") {
-      await assert.rejects(report, /unexpected visual diagnostic/);
+    if (mode === "audit-navigation" || mode === "audit-frame-navigation") {
+      await assert.rejects(report, /unexpected visual diagnostic/, mode);
       assert.equal(lateFetch.mock.callCount(), 0);
       assert.equal(lateFulfill.mock.callCount(), 0);
       assert.deepEqual(shots, ["populated-desktop.png"]);
+      assert.deepEqual(audits, shots);
       continue;
     }
     if (mode === "capture-fonts" || expired) await assert.rejects(report, visual.BrowserDeadline);
