@@ -54,9 +54,9 @@ const assetFile = (href) => (href.startsWith(origin) ? href.slice(origin.length)
 const allowedRequest = (req, url) =>
   req.method() === "GET" &&
   (req.isNavigationRequest() ? req.url() === url : asset.test(assetFile(req.url())));
-async function serve(route, url, stopped, offline, deny) {
+async function serve(route, allowed, stopped, offline, deny) {
   const req = route.request();
-  if (!allowedRequest(req, url)) return deny();
+  if (!allowed(req)) return deny();
   if (stopped()) return;
   const file = assetFile(req.url());
   const document = req.isNavigationRequest();
@@ -103,6 +103,27 @@ async function inspect(page, empty, keyboard) {
   validateView(content, state, empty, keyboard);
 }
 
+export async function withAxeScripting(page, audit) {
+  // The original document loaded and was captured with scripting disabled. Add
+  // a policy (without replacing the response CSP) before enabling axe's timers.
+  await withDeadline(() =>
+    page.evaluate(() => {
+      const policy = document.createElement("meta");
+      policy.httpEquiv = "Content-Security-Policy";
+      policy.content = "script-src 'none'; worker-src 'none'";
+      document.head.prepend(policy);
+    }),
+  );
+  const session = await withDeadline(() => page.context().newCDPSession(page));
+  const disable = (value) =>
+    withDeadline(() => session.send("Emulation.setScriptExecutionDisabled", { value }));
+  const verdict = disable(false).then(() => audit(page));
+  return verdict
+    .finally(() => disable(true))
+    .finally(() => withDeadline(() => session.detach()))
+    .finally(() => verdict); // Keep the first audit failure even if teardown fails too.
+}
+
 async function guardedPage(browser, mintModerator, [width, height], url, render, options) {
   const { mark, signal, TimeoutError, reportOnly } = options;
   const context = await browser.newContext({
@@ -111,6 +132,12 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
     javaScriptEnabled: false,
   });
   let stopped = false;
+  let auditedDocument = false;
+  const lockDocument = () => {
+    auditedDocument = true;
+  };
+  const allowed = (req) =>
+    allowedRequest(req, url) && !(auditedDocument && req.isNavigationRequest());
   const closed = () => stopped || signal.aborted;
   let unavailable = false;
   let result;
@@ -126,10 +153,10 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
     await context.addCookies([await mintModerator()]);
     // Playwright stops calling route handlers during close but still emits request events.
     context.on("request", (req) => {
-      if (closed() && !allowedRequest(req, url)) markViolation();
+      if (closed() && !allowed(req)) markViolation();
     });
     await context.route("**/*", async (route) => {
-      const check = serve(route, url, closed, offline, markViolation).catch((error) => {
+      const check = serve(route, allowed, closed, offline, markViolation).catch((error) => {
         // Record a required document timeout before abort makes goto fail generically.
         if (!reportOnly && error instanceof TimeoutError && route.request().isNavigationRequest())
           reject(error);
@@ -143,6 +170,9 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
     const page = await guard(context.newPage());
     page.setDefaultTimeout(5_000);
     page.on("pageerror", markViolation);
+    page.on("framenavigated", () => {
+      if (auditedDocument) markViolation();
+    });
     if (!reportOnly) page.on("console", markViolation);
     // Keep the committed document even if optional Lighthouse loading times out.
     const goto = page.goto(url, { waitUntil: reportOnly ? "commit" : "load" });
@@ -154,7 +184,7 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
     const valid = response?.url() === url && kitDocument(response.status(), response.headers());
     if (!(response ? valid : unavailable)) throw new AssertionFailure("visual provenance drift");
     if (unavailable && !reportOnly) throw unavailable;
-    if (response) result = await guard(render(page, unavailable));
+    if (response) result = await guard(render(page, unavailable, lockDocument));
   } finally {
     stopped = true;
   }
@@ -185,7 +215,7 @@ export async function collectVisuals(browser, mint, dir, options) {
     const url = urlFor(empty);
     const stage = reportOnly ? "LIGHTHOUSE" : "CAPTURE";
     mark(stage);
-    const render = async (page, unavailable) => {
+    const render = async (page, unavailable, lockDocument) => {
       mark("FONTS");
       const fonts = () => page.evaluate(() => document.fonts.ready.then(() => true));
       const ready = await withDeadline(fonts).catch((error) => {
@@ -202,7 +232,10 @@ export async function collectVisuals(browser, mint, dir, options) {
         await inspect(page, empty, true);
       }
       await page.screenshot({ path: join(dir, name), animations: "disabled" });
-      if (name.endsWith("desktop.png")) await audit(page, name);
+      if (name.endsWith("desktop.png")) {
+        lockDocument();
+        await withAxeScripting(page, () => audit(page, name));
+      }
       await inspect(page, empty, keyboard);
     };
     const result = await guardedPage(browser, mint, size, url, render, { ...options, reportOnly });

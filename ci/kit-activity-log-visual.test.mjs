@@ -33,7 +33,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
   const lapse = clock(t);
   const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
   const modes =
-    "dom load asset-dom asset-body late late-method capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled";
+    "dom load asset-dom asset-body late late-method capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled audit-navigation";
   for (const mode of modes.split(" ")) {
     const hono = mode === "hono";
     const expired = mode === "capture-budget";
@@ -42,7 +42,9 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     const early = hono || mode.startsWith("capture-");
     const lateDenied = mode.startsWith("late");
     const shots = [];
+    const audits = [];
     const keys = [];
+    let scriptsDisabled;
     const consumed = new Set([0]); // Functional context already rotated its cookie.
     let closed = 0;
     let closing = false;
@@ -140,9 +142,31 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
           return [visual.expectedContent(url.includes("?")), [true, scroll, scroll]];
         },
       }),
-      screenshot: ({ path }) => (expired ? lapse(visual.browserWorkMs) : shots.push(path)),
+      screenshot: ({ path }) => {
+        assert.equal(scriptsDisabled, true);
+        return expired ? lapse(visual.browserWorkMs) : shots.push(path);
+      },
+      context: () => fixture,
+      newCDPSession: () => ({
+        send: (command, { value }) => {
+          assert.equal(command, "Emulation.setScriptExecutionDisabled");
+          scriptsDisabled = value;
+        },
+        detach: () => assert.equal(scriptsDisabled, true),
+      }),
     };
-    const browser = { newContext: () => fixture };
+    const browser = {
+      newContext: ({ javaScriptEnabled }) => {
+        scriptsDisabled = !javaScriptEnabled;
+        return fixture;
+      },
+    };
+    const audit = async (_, name) => {
+      assert.equal(scriptsDisabled, false);
+      assert.equal(shots.at(-1), name);
+      audits.push(name);
+      if (mode === "audit-navigation") await request(url, true, lateFetch, noop, lateFulfill);
+    };
     const measure = t.mock.fn(() =>
       mode === "rejected" ? Promise.reject(new Error("transport")) : new Promise(noop),
     );
@@ -153,10 +177,17 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     };
     const drift = mode.endsWith("dom");
     const denied = mode === "disallowed" || mode === "asset-body";
-    const options = { audit: noop, measure, mark, ms: drift || denied ? 0 : 10, TimeoutError };
+    const options = { audit, measure, mark, ms: drift || denied ? 0 : 10, TimeoutError };
     const collect = ({ signal } = new AbortController()) =>
       visual.collectVisuals(browser, mint, ".", { ...options, signal });
     const report = hono || expired ? runWork(collect, mark, fixture.close) : collect();
+    if (mode === "audit-navigation") {
+      await assert.rejects(report, /unexpected visual diagnostic/);
+      assert.equal(lateFetch.mock.callCount(), 0);
+      assert.equal(lateFulfill.mock.callCount(), 0);
+      assert.deepEqual(shots, ["populated-desktop.png"]);
+      continue;
+    }
     if (mode === "capture-fonts" || expired) await assert.rejects(report, visual.BrowserDeadline);
     else if (drift) await assert.rejects(report, /visual content drift/, mode);
     else if (hono || lateDenied) await assert.rejects(report, visual.AssertionFailure);
@@ -175,6 +206,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     assert.equal(measure.mock.callCount(), Number(lateDenied || /^(pending|rejected)$/.test(mode)));
     if (stalled) await new Promise(setImmediate);
     assert.deepEqual(shots, early ? [] : Object.keys(viewportPngs));
+    assert.deepEqual(audits, early ? [] : ["populated-desktop.png", "empty-desktop.png"]);
     assert.deepEqual(keys, early ? [] : [...Array(11).fill("Tab"), "ArrowRight"]);
   }
 });
@@ -285,6 +317,8 @@ populated-desktop.png lighthouse: unavailable
   writeFileSync(join(root, "metrics.txt"), metrics);
   const cases = [
     ["AXE_EVALUATE\n", "term", "WATCHDOG stage=AXE_EVALUATE"],
+    ["AXE_EVALUATE\n", 20, "ASSERTION stage=AXE_EVALUATE"],
+    ["AXE_EVALUATE\n", 21, "DEADLINE stage=AXE_EVALUATE"],
     ["TEARDOWN\n", "kill", "WATCHDOG stage=TEARDOWN"],
     ["TEARDOWN\n", 137, "UNKNOWN stage=TEARDOWN"],
     ["MODERATOR\n", 20, "ASSERTION stage=MODERATOR"],

@@ -3,7 +3,13 @@ import { test } from "node:test";
 import { chromium } from "@playwright/test";
 import { requireGithubRunner } from "../e2e/ci-only.mjs";
 import { routeA11y } from "./kit-activity-log-metrics.mjs";
-import { BrowserDeadline, origin, path } from "./kit-activity-log-visual.mjs";
+import {
+  BrowserDeadline,
+  origin,
+  path,
+  withAxeScripting,
+  withDeadline,
+} from "./kit-activity-log-visual.mjs";
 
 requireGithubRunner();
 
@@ -16,7 +22,7 @@ test("activity-log axe execution under the existing browser deadline", {
   t.after(() => browser.close());
   t.diagnostic(`Chromium ${browser.version()}`);
 
-  async function withFixture(javaScriptEnabled, audit, lang = ' lang="en"') {
+  async function withFixture(javaScriptEnabled, audit, lang = ' lang="en"', extra = "") {
     const context = await browser.newContext({
       javaScriptEnabled,
       serviceWorkers: "block",
@@ -28,7 +34,7 @@ test("activity-log axe execution under the existing browser deadline", {
         route.request().url() === url && route.request().isNavigationRequest()
           ? route.fulfill({
               contentType: "text/html; charset=utf-8",
-              body: `<!doctype html><html${lang}><title>Audit fixture</title><main><h1>Activity log fixture</h1></main></html>`,
+              body: `<!doctype html><html${lang}><title>Audit fixture</title><main><h1>Activity log fixture</h1>${extra}</main></html>`,
             })
           : route.abort(),
       );
@@ -62,13 +68,47 @@ test("activity-log axe execution under the existing browser deadline", {
   );
 
   await t.test(
+    "scoped audit completes while document-authored scripting stays blocked",
+    async () => {
+      await withFixture(
+        false,
+        async (page) => {
+          await withAxeScripting(page, async () => {
+            const directive = await withDeadline(() =>
+              page.evaluate(() => {
+                const blocked = new Promise((resolve) => {
+                  document.addEventListener(
+                    "securitypolicyviolation",
+                    (event) => {
+                      resolve(event.effectiveDirective);
+                    },
+                    { once: true },
+                  );
+                });
+                document.querySelector("button").click();
+                return blocked;
+              }),
+            );
+            assert.equal(directive, "script-src-attr");
+            assert.equal(await page.locator("html").getAttribute("data-authored"), null);
+            assert.equal(await routeA11y(page, () => {}), "a11y: PASS violations=0 incomplete=0");
+          });
+        },
+        ' lang="en"',
+        `<script>document.documentElement.dataset.authored = 'load'</script>
+       <button onclick="document.documentElement.dataset.authored = 'click'">Test button</button>`,
+      );
+    },
+  );
+
+  await t.test(
     "negative control: missing document language still fails the WCAG AA audit",
     async () => {
       await withFixture(
-        true,
+        false,
         async (page) => {
           assert.match(
-            await routeA11y(page, () => {}),
+            await withAxeScripting(page, () => routeA11y(page, () => {})),
             /^a11y: FAIL violations=[1-9]\d* incomplete=\d+$/,
           );
         },
