@@ -36,15 +36,16 @@ export async function assertHomeEvidence() {
       `export async function withKitOfflineBrowser({ source }, capture) {
   if (process.env.CAPTURE_CASE === "incomplete" && source.endsWith("after")) return;
   let focused = false;
+  let scrollY;
   const page = {
-    setViewportSize: async () => {},
+    setViewportSize: async () => { scrollY = 1; },
     locator: () => ({
       focus: async () => { focused = true; },
       evaluate: async () => process.env.CAPTURE_CASE !== "focus-hidden",
     }),
     screenshot: async (options) => {
       if (options.fullPage !== true) throw new Error("full-page capture required");
-      if (!options.path && focused) throw new Error("ordinary capture retained focus");
+      if (!options.path && (focused || scrollY !== 0)) throw new Error("ordinary capture retained focus or scroll");
       return Buffer.from("fixture image");
     },
     evaluate: async (fn) => {
@@ -61,7 +62,8 @@ export async function assertHomeEvidence() {
       try { return await fn(); } finally { delete globalThis.document; }
     },
   };
-  await capture({ page });
+  globalThis.window = { scrollTo: ({ top }) => { scrollY = top; } };
+  try { await capture({ page }); } finally { delete globalThis.window; }
 }`,
     );
     const script = new URL("./kit-home-capture.mjs", import.meta.url);
