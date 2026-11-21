@@ -2179,6 +2179,22 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
           .replace(/ *\n */g, "\n")
           .replace(/^ | $/g, "");
       const zoneOf = (node: Element) => node.closest("[data-cal-zone]");
+      const zones = nodes(section, "[data-cal-zone]");
+      if (zones.some((zone) => zone.parentElement?.closest("[data-cal-zone]"))) {
+        throw new Error("Calendar replacement zones must not be nested");
+      }
+      // The island retains these nodes across swaps. The actions zone inside
+      // the search form is replaceable; the form and bound controls are not.
+      for (const selector of [
+        'form[role="search"]',
+        '[data-testid="events-search"]',
+        'select[name="game"]',
+        '[data-testid="events-read-retry"]',
+        '[data-testid="events-read-clear"]',
+      ]) {
+        const hook = section.querySelector(selector);
+        if (!hook || zoneOf(hook) !== null) throw new Error(`Missing stable hook ${selector}`);
+      }
       const loading = section.querySelector('[data-testid="events-loading"][hidden]');
       const heading = section.querySelector('#events-heading[tabindex="-1"]');
       const content = section.querySelector('[data-cal-zone="content"]');
@@ -2213,14 +2229,18 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
       const viewCalendar = head?.querySelector('[data-testid="events-view-calendar"]');
       const views = viewList?.closest('nav:not([role]), [role="group"], [role="navigation"]');
       const viewLabel = views?.getAttribute("aria-label");
+      const unavailable = '[hidden], [inert], [aria-hidden="true"]';
       if (
-        !views ||
+        !viewList ||
         !viewCalendar ||
+        !views ||
         !views.contains(viewCalendar) ||
         !head?.contains(views) ||
-        !viewLabel?.trim()
+        !viewLabel?.trim() ||
+        viewList.closest(unavailable) ||
+        viewCalendar.closest(unavailable)
       ) {
-        throw new Error("Missing shared accessible label for the List/Calendar controls");
+        throw new Error("Missing exposed, labelled List/Calendar controls");
       }
       const subscribe = section.querySelector('[data-cal-zone="subscribe"]');
       if (!subscribe?.matches("details") || !subscribe.querySelector(":scope > summary")) {
@@ -2254,13 +2274,27 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
       const control = (node: Element) => ({
         tag: node.localName,
         attrs: attrs(node),
+        disabled: node.matches(":disabled"),
         text: node.matches("form, select") ? null : text(node),
         value:
           node instanceof HTMLInputElement || node instanceof HTMLSelectElement ? node.value : null,
       });
+      const rowInfoText = (node: Element) => {
+        // Compare disclosure contents separately from their container. The
+        // summary's explicit line break separates the excerpt from the label.
+        if (node.matches("details.schedule-text")) return null;
+        if (node.matches("details.schedule-text > summary")) {
+          const summary = node.cloneNode(true) as Element;
+          for (const br of nodes(summary, "br")) br.replaceWith(" ");
+          return text(summary);
+        }
+        return node.matches("p.schedule-text, details.schedule-text > p")
+          ? descriptionText(node)
+          : text(node);
+      };
       return {
         attributes: attrs(section),
-        zones: nodes(section, "[data-cal-zone]").map(attrs),
+        zones: zones.map(attrs),
         loading: attrs(loading),
         status: nodes(section, '[role="status"]').map((node) => [attrs(node), text(node)]),
         headingLinks: headingLinks.map(link),
@@ -2291,7 +2325,11 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
             attrs: attrs(row),
             title: text(title),
             links: nodes(row, "a").map(link),
-            when: nodes(row, "time").map((time) => [time.getAttribute("datetime"), text(time)]),
+            when: nodes(row, "time").map((time) => [
+              time.getAttribute("datetime"),
+              text(time),
+              time.closest("[hidden]") !== null,
+            ]),
             zone: nodes(
               row,
               ".schedule-when > span:not(:has(time)), p:has(> time) > span:first-of-type",
@@ -2302,12 +2340,7 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
               ".schedule-info :is(p:not(:has(> time)), details, summary, .schedule-badge)",
             )
               .filter((node) => !locations.some((location) => location.contains(node)))
-              .map((node) => [
-                attrs(node),
-                node.matches("p.schedule-text, details.schedule-text > p")
-                  ? descriptionText(node)
-                  : text(node),
-              ]),
+              .map((node) => [attrs(node), rowInfoText(node)]),
             attendance: nodes(row, ".schedule-attendance, .schedule-attendance [data-testid]").map(
               (node) => [attrs(node), text(node)],
             ),
