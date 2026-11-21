@@ -50,7 +50,8 @@ function decode(message: string | ArrayBuffer) {
 }
 
 export class LiveSockets {
-  readonly #sending = new WeakSet<WebSocket>();
+  // All commands are serialized, but only a voice command replaces its baseline.
+  readonly #sending = new WeakMap<WebSocket, boolean>();
   readonly #publishing = new WeakSet<WebSocket>();
 
   constructor(
@@ -114,7 +115,8 @@ export class LiveSockets {
       return this.#close(socket, 1008);
     }
 
-    this.#sending.add(socket);
+    const sendsVoice = incoming.topics.includes("voice");
+    this.#sending.set(socket, sendsVoice);
     try {
       if (!(await this.#authorize(socket, meta))) return false;
       // A producer event can clear the previous baseline while the row read is pending.
@@ -126,7 +128,7 @@ export class LiveSockets {
       for (const item of incoming.topics) {
         if (item !== "voice") this.#unavailable(socket, item);
       }
-      if (!incoming.topics.includes("voice")) return false;
+      if (!sendsVoice) return false;
       if (incoming.type === "subscribe" && this.#voice(socket, current, true)) return true;
 
       // An explicit resync must not take a raw-cache shortcut after producer activity.
@@ -236,7 +238,7 @@ export class LiveSockets {
       sockets.map(async (socket) => {
         if (
           socket.readyState !== WebSocket.OPEN ||
-          this.#sending.has(socket) ||
+          this.#sending.get(socket) ||
           this.#publishing.has(socket)
         )
           return;
@@ -244,7 +246,7 @@ export class LiveSockets {
         if (!meta?.voiceUntil || preview.value === meta.voicePrevious) return;
         this.#publishing.add(socket);
         try {
-          if (!(await this.#authorize(socket, meta)) || this.#sending.has(socket)) return;
+          if (!(await this.#authorize(socket, meta)) || this.#sending.get(socket)) return;
           const current = this.#active(socket);
           if (current) this.#voice(socket, current, false);
         } catch {

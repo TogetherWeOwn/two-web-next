@@ -201,6 +201,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
       "later lease must stay open after the first alarm",
     );
     await awaitServerClose(later, new Date(laterLease.expires_at).getTime(), "later idle lease");
+    assert.equal(deliveries, 0);
     console.log(
       "PASS installed Kit live socket 101, guest control, shortened and staggered idle expiry, and revocation",
     );
@@ -216,7 +217,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
 }
 
 const ingestPath = "/internal/discord-live/v1/ingest";
-const guild = "326474832151838730";
+export const LIVE_FIXTURE_GUILD = "900000000000001390";
 const people = ["101", "102", "103", "104", "105", "106"];
 const permissions = String((1 << 10) | (1 << 20));
 const at = "2026-11-20T00:00:00Z";
@@ -237,16 +238,16 @@ function snapshot(seq, count, observedAt = new Date().toISOString()) {
   });
   return {
     v: 1,
-    guild_id: guild,
+    guild_id: LIVE_FIXTURE_GUILD,
     seq,
     observed_at: observedAt,
     topics: {
       guild: { ownerId: people[0], afkChannelId: null },
       channels: [
         room("10", []),
-        room("11", [{ kind: "role", id: guild, allow: "0", deny: permissions }]),
+        room("11", [{ kind: "role", id: LIVE_FIXTURE_GUILD, allow: "0", deny: permissions }]),
       ],
-      roles: [{ id: guild, permissions }],
+      roles: [{ id: LIVE_FIXTURE_GUILD, permissions }],
       members: people.map((userId) => ({
         userId,
         nick: null,
@@ -261,7 +262,13 @@ function snapshot(seq, count, observedAt = new Date().toISOString()) {
 }
 
 async function ingest(origin, seq, op) {
-  const body = JSON.stringify({ v: 1, guild_id: guild, seq, occurred_at: at, ops: [op] });
+  const body = JSON.stringify({
+    v: 1,
+    guild_id: LIVE_FIXTURE_GUILD,
+    seq,
+    occurred_at: at,
+    ops: [op],
+  });
   const timestamp = String(Math.floor(Date.now() / 1000));
   const nonce = randomBytes(16).toString("hex");
   const digest = createHash("sha256").update(body).digest("hex");
@@ -369,7 +376,7 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
     assert.equal(await source(), beforeWake);
 
     const publicRoom = snapshot(46, 5).topics.channels[0];
-    const deny = [{ kind: "role", id: guild, allow: "0", deny: permissions }];
+    const deny = [{ kind: "role", id: LIVE_FIXTURE_GUILD, allow: "0", deny: permissions }];
     const setRoom = (overwrites) => ({
       topic: "channels",
       op: "upsert",
@@ -517,13 +524,12 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
       // the initial 30-second lease expires.
       const idle = mode === "warm" ? 5_100 : 20_000;
       const next = snapshot(cursor + 2, 6, new Date(Date.now() + idle - 23_000).toISOString());
-      if (mode === "producer wake") {
-        const recovered = snapshot(cursor + 1, 5);
-        recovered.topics.voice.push(voice("106", "11"));
-        await source(recovered);
-      } else {
-        await source(next);
-      }
+      const staged = mode === "producer wake" ? snapshot(cursor + 1, 5) : next;
+      if (mode === "producer wake") staged.topics.voice.push(voice("106", "11"));
+      const { alarms: beforeIdle } = await controlRequest({
+        method: "POST",
+        body: JSON.stringify(staged),
+      });
       await delay(idle);
       if (mode === "producer wake") {
         assert.equal(await ingest(origin, cursor + 1, join("106", "11")), 204);
@@ -534,12 +540,14 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
           `producer ingress must reconstruct the hub (first event: ${afterIngress.firstEvent})`,
         );
         assert.equal(afterIngress.firstEvent, "ingress", "the probe did not wake the hub");
+        assert.deepEqual(afterIngress.alarms, beforeIdle, "no competing producer-wake alarm");
       }
       assert.deepEqual(frames, [], `${mode}: no frame before resync`);
       send("resync");
       const result = await expectFrame(projected("snapshot", ++revision, 6));
       assert.ok(result.at < Date.parse(initial.observed_at) + 30_000, `${mode}: pre-expiry`);
       const afterResync = await controlRequest();
+      assert.deepEqual(afterResync.alarms, beforeIdle, `${mode}: no competing alarm before resync`);
       assert.equal(afterResync.generation, generation + Number(mode !== "warm"), mode);
       if (mode === "cold") assert.equal(afterResync.firstEvent, "message", "resync wakes the hub");
       assert.deepEqual(frames, [], `${mode}: exactly one snapshot`);

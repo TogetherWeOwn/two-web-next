@@ -15,6 +15,14 @@ const subscribe = command("subscribe");
 const resync = command("resync");
 const unavailable = [JSON.stringify({ v: 1, type: "unavailable", topic: "voice" })];
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function connectedSocket(
   alarm: number,
   signedIn = true,
@@ -105,16 +113,55 @@ it("preserves earlier alarms and concurrent attachment changes without extending
   expect(readSession).toHaveBeenCalledTimes(2);
 });
 
-it("reauthorizes the session after the resync pull", async () => {
+it("publishes voice while a members-only resync awaits its session lookup", async () => {
+  const { socket, message, publish } = connectedSocket(start + 300_000);
+  socket.serializeAttachment({ ...socket.deserializeAttachment(), topics: ["voice", "members"] });
+  const lookup = deferred<typeof row>();
+  readSession.mockReturnValueOnce(lookup.promise);
+  const resyncing = message(command("resync", "members"));
+  try {
+    await publish();
+    expect(socket.send.mock.calls).toEqual([
+      ['{"v":1,"type":"patch","topic":"voice","seq":2,"value":{"count":2}}'],
+    ]);
+  } finally {
+    lookup.resolve(row);
+    await resyncing;
+  }
+  expect(socket.send).toHaveBeenLastCalledWith('{"v":1,"type":"unavailable","topic":"members"}');
+  expect(socket.close).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["revoked", 1008],
+  ["lookup failed", 1011],
+  ["lookup consumed the remaining lifetime", 1008],
+])("closes without a fresh snapshot when the post-pull session is %s", async (state, code) => {
   const { socket, message } = connectedSocket(start + 300_000);
-  const refresh = vi.fn(async () => {
-    readSession.mockResolvedValueOnce(null);
-    return true;
+  // The original attachment is still live when the second lookup exhausts its row lifetime.
+  readSession.mockResolvedValueOnce({ ...row, remainingMs: 300_000 });
+  const entered = deferred<void>();
+  const pull = deferred<boolean>();
+  const refresh = vi.fn(() => {
+    entered.resolve();
+    return pull.promise;
   });
-  await message(resync, refresh);
+  const resyncing = message(resync, refresh);
+  await entered.promise;
+  if (state === "revoked") readSession.mockResolvedValueOnce(null);
+  else if (state === "lookup failed") {
+    readSession.mockRejectedValueOnce(new Error("session lookup failed"));
+  } else {
+    readSession.mockImplementationOnce(async () => {
+      vi.setSystemTime(start + row.remainingMs);
+      return row;
+    });
+  }
+  pull.resolve(true);
+  await resyncing;
   expect(refresh).toHaveBeenCalledOnce();
   expect(readSession).toHaveBeenCalledTimes(2);
-  expect(socket.close).toHaveBeenCalledWith(1008);
+  expect(socket.close.mock.calls).toEqual([[code]]);
   expect(socket.send).not.toHaveBeenCalled();
 });
 
