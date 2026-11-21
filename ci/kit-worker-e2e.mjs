@@ -127,12 +127,6 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
     compatibility_date: "2026-09-29",
     compatibility_flags: ["nodejs_compat"],
     assets: { directory: assetsDirectory, binding: "ASSETS", run_worker_first: true },
-    ...(args.length && main === worker && name === "kit"
-      ? {
-          durable_objects: { bindings: [{ name: "DISCORD_LIVE_HUB", class_name: "LiveGuildHub" }] },
-          migrations: [{ tag: "live-v1", new_sqlite_classes: ["LiveGuildHub"] }],
-        }
-      : {}),
     vars: {
       APP_URL: origin,
       DATABASE_URL: databaseUrl,
@@ -209,16 +203,6 @@ try {
     listen(kit.child, kit.origin, () => kit.log),
     listen(hono.child, hono.origin, () => hono.log),
   ]);
-
-  if (args.length) {
-    const disabled = await fetch(`${origin}/internal/discord-live/v1/ingest`, {
-      method: "POST",
-      redirect: "manual",
-    });
-    assert.equal(disabled.status, 503, "the installed live route defaults off");
-    assert.equal(disabled.headers.get("cache-control"), "no-store");
-    assert.equal(await disabled.text(), "");
-  }
 
   const archive = await fetch(`${origin}/events/past`);
   const archiveHtml = await archive.text();

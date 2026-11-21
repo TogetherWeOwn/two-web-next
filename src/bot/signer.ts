@@ -14,10 +14,8 @@ const enc = new TextEncoder();
 const hex = (buf: ArrayBuffer): string =>
   [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 
-export async function sha256Hex(data: string | ArrayBuffer): Promise<string> {
-  return hex(
-    await crypto.subtle.digest("SHA-256", typeof data === "string" ? enc.encode(data) : data),
-  );
+export async function sha256Hex(data: string): Promise<string> {
+  return hex(await crypto.subtle.digest("SHA-256", enc.encode(data)));
 }
 
 export async function hmacSha256Hex(secret: string, data: string): Promise<string> {

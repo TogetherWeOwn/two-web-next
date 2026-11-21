@@ -49,7 +49,6 @@ type Facade<T> = {
 export function createKitWorkerFacade<T extends object>(
   adapter: T,
   protect: KitWorkerProtector = protectKitWorkerResponse,
-  intercept?: (request: Request, env: Env) => Promise<Response | null>,
 ): Facade<T> {
   if (adapter === null || typeof adapter !== "object") {
     throw new TypeError("kit worker facade: adapter must be an object");
@@ -101,10 +100,6 @@ export function createKitWorkerFacade<T extends object>(
       const [request, env] = args;
       if (!(request instanceof Request))
         throw new TypeError("kit worker facade: request must be a Request");
-      // Bound machine routes (and future upgrades) must not enter Kit or have
-      // their responses reconstructed by the document response protector.
-      const intercepted = intercept && (await intercept(request, env as Env));
-      if (intercepted) return intercepted;
       const slot: HonoDataSlot = {};
       honoDataSlots.set(request, slot);
       try {
