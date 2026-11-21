@@ -90,3 +90,11 @@ it("keeps a long title within the headline budget without losing the time or sco
   expect(headline).toMatch(/^6 in voice rooms you can see\. .+… is at 21:00 BST\.$/);
   expect(headline.length).toBeLessThan(120);
 });
+
+it.each([72, 73])("handles a %i-character title at the headline cutoff", (length) => {
+  const title = "X".repeat(length);
+  const view = voiceViews.member.view;
+  const html = render({ view, nextEvent: { title, timeLabel: "21:00 BST" } });
+  const label = length === 72 ? title : `${"X".repeat(71)}…`;
+  expect(html).toContain(`${label} is at 21:00 BST.`);
+});
