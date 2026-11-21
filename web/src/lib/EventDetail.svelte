@@ -189,7 +189,9 @@ const detailIslands = $derived([
     {#if model.isEnded}
       <section class="seat-card" aria-labelledby="signup-record-heading" data-testid="event-past">
         <div class="seat-card-head"><h2 id="signup-record-heading">Sign-up record</h2></div>
-        <p class="seat-card-note">No Echo for this one. {listedSignUpCountText(model.goingCount)}.</p>
+        <p class="seat-card-note">
+          {#if !lifeline?.some((step) => step.id === "echo")}No Echo for this one.{" "}{/if}{listedSignUpCountText(model.goingCount)}.
+        </p>
         {#if model.endedNext}<p><a href="/e/{model.endedNext.key}">Next one: {model.endedNext.date}</a></p>{/if}
       </section>
       {#if model.viewerModerator && model.review}{@html model.review.rsvp}{/if}

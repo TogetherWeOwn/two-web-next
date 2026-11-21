@@ -120,6 +120,9 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
       assert.equal(await section.count(), 0);
       const before = await existingControls(page);
       await capture("before");
+      const signupRecord = page.getByRole("region", { name: "Sign-up record" });
+      await openFixture(page, renderFixture({ state: "ended", showLifeline: false }), styles);
+      assert.match(await signupRecord.innerText(), /No Echo for this one\./);
 
       for (const [state, expected] of Object.entries(examples)) {
         await openFixture(page, renderFixture({ state }), styles);
@@ -151,6 +154,9 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
           `${state} at ${width}px: Lifeline must follow the header and rail in DOM and fit the layout`,
         );
         if (state === "upcoming") assert.deepEqual(await existingControls(page), before);
+        if (state === "ended" || state === "ended-recorded") {
+          assert.doesNotMatch(await signupRecord.innerText(), /No Echo for this one\./);
+        }
         await capture(state);
       }
       assert.ok((await page.consoleMessages()).every((message) => message.type() !== "error"));
