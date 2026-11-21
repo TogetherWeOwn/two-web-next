@@ -640,8 +640,8 @@ function versionedConfigFixture() {
     bindings: {
       ASSETS: { kind: "assets" },
       CF_VERSION_METADATA: { kind: "version_metadata" },
-      DB: { kind: "hyperdrive", id: "a".repeat(32) },
-      BOT_DB: { kind: "hyperdrive", id: "b".repeat(32) },
+      DB: { kind: "hyperdrive", id: "7489f6ad630042148cdef83602f27b8a" },
+      BOT_DB: { kind: "hyperdrive", id: "14c00d84d1d446c1b117861f3b49473f" },
       INTERNAL_ACTION_QUEUE: {
         kind: "queue",
         queueName: "two-web-next-production-internal-action",
@@ -722,6 +722,7 @@ test("pure Hono versioned config refuses unsafe observations without echoing dat
     ["ASSETS", { kind: "assets", headers: sentinel }, "binding shape"],
     ["DB", { kind: "hyperdrive", id: "0".repeat(32) }, "Hyperdrive identity"],
     ["DB", bindings.BOT_DB, "Hyperdrive identity"],
+    ["BOT_DB", { kind: "hyperdrive", id: "a".repeat(32) }, "Hyperdrive identity"],
   ]) {
     cases.push([{ ...fixture, bindings: { ...bindings, [name]: replacement } }, error]);
   }

@@ -13,6 +13,10 @@ const PUBLIC_VARS = {
   DISCORD_MODERATOR_ROLE_IDS: "1546777855801954408,1546777856984481792",
   FEATURED_IMAGE_HOSTS: "",
 };
+const HYPERDRIVE_IDS = {
+  DB: "7489f6ad630042148cdef83602f27b8a",
+  BOT_DB: "14c00d84d1d446c1b117861f3b49473f",
+};
 const QUEUE_NAMES = {
   INTERNAL_ACTION_QUEUE: "two-web-next-production-internal-action",
   SYNC_EVENT_QUEUE: "two-web-next-production-sync-event",
@@ -21,8 +25,7 @@ const SECRET_NAMES = [...REQUIRED_PRODUCTION_SECRETS].sort();
 const BINDING_NAMES = [
   "ASSETS",
   "CF_VERSION_METADATA",
-  "DB",
-  "BOT_DB",
+  ...Object.keys(HYPERDRIVE_IDS),
   ...Object.keys(QUEUE_NAMES),
   ...Object.keys(PUBLIC_VARS),
   ...SECRET_NAMES,
@@ -43,8 +46,8 @@ function hasExactFields(record, keys) {
     typeof record === "object" &&
     !isProxy(record) &&
     Object.getPrototypeOf(record) === Object.prototype &&
-    Reflect.ownKeys(record).length === keys.length &&
-    keys.every((key) => dataField(record, key))
+    keys.every((key) => dataField(record, key)) &&
+    Reflect.ownKeys(record).length === keys.length
   );
 }
 
@@ -72,15 +75,6 @@ function binding(value, kind, fields = []) {
   if (!hasExactFields(value, ["kind", ...fields]) || value.kind !== kind) refuse("binding shape");
 }
 
-function hyperdrive(value) {
-  binding(value, "hyperdrive", ["id"]);
-  const { id } = value;
-  if (typeof id !== "string" || id.length !== 32 || !/^[0-9a-f]{32}$/.test(id) || /^0+$/.test(id)) {
-    refuse("Hyperdrive identity");
-  }
-  return { kind: "hyperdrive", id };
-}
-
 // Only accepts an explicitly normalized versioned observation. No defaults,
 // filesystem, API access, source-config normalization or raw observation hash.
 // The result is not the packager's effectiveConfig Buffer.
@@ -99,8 +93,9 @@ export function projectPureHonoVersionedConfig(observation) {
   const { scriptName, versionId, compatibilityDate, compatibilityFlags, bindings } = observation;
   if (
     scriptName !== RECOVERY_TARGET ||
-    !validRecoveryVersionId(versionId) ||
+    typeof versionId !== "string" ||
     versionId.length !== 36 ||
+    !validRecoveryVersionId(versionId) ||
     versionId === "00000000-0000-0000-0000-000000000000"
   ) {
     refuse("version identity");
@@ -111,16 +106,16 @@ export function projectPureHonoVersionedConfig(observation) {
   if (!hasExactFields(bindings, BINDING_NAMES)) refuse("binding inventory");
   binding(bindings.ASSETS, "assets");
   binding(bindings.CF_VERSION_METADATA, "version_metadata");
-  const db = hyperdrive(bindings.DB);
-  const bot = hyperdrive(bindings.BOT_DB);
-  if (db.id === bot.id) refuse("Hyperdrive identity");
 
   const projected = {
     ASSETS: { kind: "assets" },
     CF_VERSION_METADATA: { kind: "version_metadata" },
-    DB: db,
-    BOT_DB: bot,
   };
+  for (const [name, id] of Object.entries(HYPERDRIVE_IDS)) {
+    binding(bindings[name], "hyperdrive", ["id"]);
+    if (bindings[name].id !== id) refuse("Hyperdrive identity");
+    projected[name] = { kind: "hyperdrive", id };
+  }
   for (const [name, queueName] of Object.entries(QUEUE_NAMES)) {
     binding(bindings[name], "queue", ["queueName"]);
     if (bindings[name].queueName !== queueName) refuse("queue identity");
