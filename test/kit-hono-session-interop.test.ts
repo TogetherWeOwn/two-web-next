@@ -86,11 +86,12 @@ it.each([
   expect(sessionHeaders(kitSuccessorOnHono)).toEqual([]);
 
   vi.setSystemTime(START + GRACE_MS);
-  expect(await readKit(initial.cookie)).toMatchObject(guest);
+  // Let Hono see the expired predecessor before any other read can prune it.
   const expired = await readHono(initial.cookie);
   expect(expired.status).toBe(200);
-  expect(await expired.text()).toContain("Sign in with Discord");
+  expect(await expired.text()).toContain('data-testid="join"');
   expect(sessionHeaders(expired)).toEqual([]);
+  expect(await readKit(initial.cookie)).toMatchObject(guest);
 
   // Hono reads the still-live Kit bearer, then rotates it through the shared
   // session service. Kit must accept the new Hono cookie and the now-retired
