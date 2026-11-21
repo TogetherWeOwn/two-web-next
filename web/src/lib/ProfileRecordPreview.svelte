@@ -40,7 +40,13 @@ let { preview }: { preview: Preview } = $props();
 
 <style>
   section { margin-block: var(--space-6); }
-  h2 { margin: 0 0 var(--space-3); font: var(--font-weight-display) var(--text-h3)/var(--leading-heading) var(--font-display); }
+  section > h2 {
+    margin: 0 0 var(--space-3);
+    font: var(--font-weight-display) var(--text-h3)/var(--leading-heading) var(--font-display);
+    font-stretch: var(--font-width-display);
+    letter-spacing: var(--tracking-h3);
+    text-transform: none;
+  }
   ol, p { margin: 0; }
   ol { padding: 0; list-style: none; }
   li {

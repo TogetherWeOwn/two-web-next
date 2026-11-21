@@ -56,6 +56,30 @@ test("Kit profile Record fixture renders permitted content in parsed SSR", async
     async ({ page, open }) => {
       const main = page.getByRole("main");
       const headings = [[], ["Echo trail", "Record"], ["Record"], ["Record"]];
+      const recordText = [
+        "Record",
+        "18 Oct 2026",
+        "Guide role given",
+        "Helps new members find their feet.",
+        "Guide",
+        "4 Sep 2026",
+        "Joined Together We Own",
+        "Joined the Discord community.",
+        "Joined",
+      ];
+      const expectedText = {
+        before: [],
+        record: [
+          "Echo trail",
+          "Layout preview only. No Echo observations are shown.",
+          ...recordText,
+        ],
+        new: ["Record", "Your record starts with your first event.", "Find an event"],
+        "opt-out": recordText,
+      };
+      const actions = main.locator(
+        'a, button, form, input, select, textarea, summary, [role="button"], [role="link"], [contenteditable], [tabindex]',
+      );
       for (const [index, state] of states.entries()) {
         await open(search(state));
         assert.equal(await main.getByRole("heading", { level: 1 }).textContent(), "Lumen");
@@ -63,29 +87,35 @@ test("Kit profile Record fixture renders permitted content in parsed SSR", async
           await main.getByRole("heading", { level: 2 }).allTextContents(),
           headings[index],
         );
+        // Walk parsed SSR text rather than visible text: hidden and aria-hidden text still counts.
+        const text = await main.evaluate((element) => {
+          const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+          const parts = [];
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const part = node.textContent.trim();
+            if (part) parts.push(part);
+          }
+          return parts;
+        });
+        assert.deepEqual(text, [
+          "Synthetic profile fixture — not a member record",
+          "Lumen",
+          "@lumen-example",
+          ...expectedText[state],
+        ]);
         const hasEntries = state === "record" || state === "opt-out";
         const dates = await main
           .locator("time")
           .evaluateAll((times) => times.map((t) => t.dateTime));
         assert.deepEqual(dates, hasEntries ? ["2026-10-18", "2026-09-04"] : []);
-        const rows = await main.getByRole("listitem").allTextContents();
-        assert.equal(rows.length, hasEntries ? 2 : 0);
-        if (hasEntries) {
-          assert.match(rows[0], /Guide role given/);
-          assert.match(rows[1], /Joined Together We Own/);
-        }
-        const links = main.getByRole("link");
-        assert.deepEqual(await links.allTextContents(), state === "new" ? ["Find an event"] : []);
+        assert.equal(await main.getByRole("listitem").count(), hasEntries ? 2 : 0);
+        assert.equal(await actions.count(), state === "new" ? 1 : 0);
+        const eventLink = main.getByRole("link", { name: "Find an event", exact: true });
+        if (state === "new") assert.equal(await eventLink.getAttribute("href"), "/events");
         assert.equal(
-          await main.getByText("Your record starts with your first event.").count(),
-          state === "new" ? 1 : 0,
+          await main.locator('img, svg, canvas, meter, progress, [role="img"]').count(),
+          0,
         );
-        if (state === "new") assert.equal(await links.first().getAttribute("href"), "/events");
-        assert.doesNotMatch(
-          await main.innerText(),
-          /You and Lumen|rank position|events together|\b0 (?:events|Echoes)\b|Moderators only/i,
-        );
-        assert.equal(await main.getByRole("img").count(), 0);
         for (const viewport of [
           { width: 1280, height: 800 },
           { width: 390, height: 844 },
@@ -95,6 +125,21 @@ test("Kit profile Record fixture renders permitted content in parsed SSR", async
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
             true,
           );
+          for (const styles of await main.locator("h2").evaluateAll((elements) =>
+            elements.map((element) => {
+              const css = getComputedStyle(element);
+              return [
+                css.textTransform,
+                css.fontStretch,
+                Number.parseFloat(css.letterSpacing) / Number.parseFloat(css.fontSize),
+              ];
+            }),
+          )) {
+            const [textTransform, width, tracking] = styles;
+            assert.equal(textTransform, "none");
+            assert.equal(width, "108%");
+            assert.ok(Math.abs(tracking - -0.025) < 0.0001);
+          }
           if (state === "record") {
             const trail = await main.getByRole("region", { name: "Echo trail" }).boundingBox();
             const record = await main.getByRole("region", { name: "Record" }).boundingBox();
@@ -104,7 +149,7 @@ test("Kit profile Record fixture renders permitted content in parsed SSR", async
             const copy = await main
               .getByText("Your record starts with your first event.")
               .boundingBox();
-            const action = await links.first().boundingBox();
+            const action = await eventLink.boundingBox();
             assert.ok(copy && action && copy.y + copy.height <= action.y);
           }
           if (directory) {
