@@ -75,6 +75,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/schedule-theme.css": { maxRawBytes: 9728, maxGzipBytes: 2560 },
   "public/kit-events-controls.css": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/kit-events-schedule.css": { maxRawBytes: 4096, maxGzipBytes: 1280 },
+  "public/kit-site-header.css": { maxRawBytes: 3584, maxGzipBytes: 1280 },
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/islands/event-time-from-now.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
   "public/islands/kit-live-event-time.js": { maxRawBytes: 5120, maxGzipBytes: 2304 },
@@ -854,17 +855,23 @@ test("bundle checker breach against a fragment ceiling exits 1", (t) => {
 
 test("only the Kit controls stylesheet has advisory byte targets", (t) => {
   const { root } = bundleFixture(t, {});
-  for (const name of ["kit-events-controls.css.json", "schedule-theme.css.json"]) {
+  for (const name of [
+    "kit-events-controls.css.json",
+    "kit-site-header.css.json",
+    "schedule-theme.css.json",
+  ]) {
     const path = `ci/budgets/bundle/${name}`;
     writeFile(root, path, readFileSync(join(repoRoot, path)));
   }
   const controls = "public/kit-events-controls.css";
+  const header = "public/kit-site-header.css";
   const schedule = "public/schedule-theme.css";
   const parts = Array.from({ length: 40 }, (_, i) =>
     createHash("sha256").update(String(i)).digest("base64"),
   );
   const payload = Buffer.from(parts.join(""));
   writeFile(root, controls, payload);
+  writeFile(root, header, "/* fits */");
   writeFile(root, schedule, "/* fits */");
   const logs = [];
   const diagnostics = [];
@@ -874,6 +881,19 @@ test("only the Kit controls stylesheet has advisory byte targets", (t) => {
   assert.ok(diagnostics.includes(`bundle budget: warning: ${controls}: ${overages} (advisory)`));
   assert.ok(logs.some((line) => line.includes("passed with advisory warnings")));
 
+  writeFile(root, header, " ".repeat(3585));
+  assert.equal(runBundle(root, output), 1);
+  assert.ok(diagnostics.some((line) => line.includes(`${header}: raw 3585B over 3584B`)));
+
+  writeFile(root, header, payload);
+  assert.equal(runBundle(root, output), 1);
+  assert.ok(
+    diagnostics.some((line) =>
+      line.includes(`${header}: gzip ${gzipSync(payload).length}B over 1280B`),
+    ),
+  );
+
+  writeFile(root, header, "/* fits */");
   writeFile(root, schedule, " ".repeat(9729));
   assert.equal(runBundle(root, output), 1);
   assert.ok(diagnostics.some((line) => line.includes(`${schedule}: raw 9729B over 9728B`)));

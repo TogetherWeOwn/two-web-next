@@ -62,6 +62,7 @@
         "public/admin-rsvp-review.css",
         "public/admin-theme.css",
         "public/theme.css",
+        "public/kit-site-header.css",
         "public/profile-theme.css",
         "public/schedule-theme.css",
         "public/event-theme.css",

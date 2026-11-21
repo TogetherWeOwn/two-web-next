@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { verifyPureHonoRecoveryAttestation } from "./pure-hono-recovery-attestation.mjs";
 import { validatePureHonoRecoveryEvidence } from "./pure-hono-recovery-evidence.mjs";
+import { RECOVERY_MEMBER_LIMITS } from "./pure-hono-recovery-members.mjs";
 import { fetchPureHonoRecoveryRun } from "./pure-hono-recovery-run.mjs";
 import {
   ROLLBACK_ENVIRONMENTS,
@@ -79,6 +81,252 @@ function recoveryFixture({
       })),
   };
 }
+
+const signerWorkflow = "TrustedOrg/build/.github/workflows/sign.yml";
+const signerDigest = "b".repeat(40);
+const verifierIssuer = "https://token.actions.githubusercontent.com";
+const provenanceV1 = "https://slsa.dev/provenance/v1";
+const attestationRefusal = "pure Hono recovery attestation refused: ";
+const unavailable = `${attestationRefusal}pinned verifier or its JSON output unavailable`;
+const ghSuccess = (stdout) => ({ status: 0, signal: null, stdout: Buffer.from(stdout) });
+
+function checkedAttestationFixture() {
+  const input = recoveryFixture();
+  const expected = { ...input.expected, signerWorkflow, signerDigest };
+  const certificate = {
+    issuer: verifierIssuer,
+    sourceRepositoryURI: "https://github.com/TogetherWeOwn/two-web-next",
+    sourceRepositoryRef: "refs/heads/main",
+    sourceRepositoryDigest: expected.sourceSha,
+    buildConfigURI: `https://github.com/TogetherWeOwn/two-web-next/${expected.workflow}@refs/heads/main`,
+    buildSignerDigest: signerDigest,
+    subjectAlternativeName: `https://github.com/${signerWorkflow}@${signerDigest}`,
+    runInvocationURI: recoveryInvocation,
+  };
+  const metadata = { invocationId: recoveryInvocation };
+  const statement = {
+    predicateType: provenanceV1,
+    subject: [{ name: "original-name.zip", digest: { sha256: expected.archiveSha256 } }],
+    predicate: { runDetails: { metadata } },
+  };
+  const checked = {
+    attestation: {},
+    verificationResult: { signature: { certificate }, statement },
+  };
+  return { input, expected, checked, certificate, metadata, statement };
+}
+
+function syntheticGh(verify, version = "2.103.3") {
+  return (command, args, options) =>
+    args[0] === "--version"
+      ? ghSuccess(`gh version ${version} (2026-10-26)\n`)
+      : verify(command, args, options);
+}
+
+function verifyFixture({ input, expected, checked }) {
+  return verifyPureHonoRecoveryAttestation(
+    input.archive,
+    expected,
+    syntheticGh(() => ghSuccess(JSON.stringify([checked]))),
+  );
+}
+
+test("pure Hono attestation verifies exact bytes with pinned policy and feeds the validator", () => {
+  const { input, expected, checked } = checkedAttestationFixture();
+  let directory;
+  const attestation = verifyPureHonoRecoveryAttestation(
+    input.archive,
+    expected,
+    syntheticGh((command, args, options) => {
+      const path = args[2];
+      directory = dirname(path);
+      assert.equal(command, "gh");
+      assert.deepEqual(
+        args,
+        [
+          ["attestation", "verify", path],
+          ["--hostname", "github.com"],
+          ["--repo", "TogetherWeOwn/two-web-next"],
+          ["--signer-workflow", signerWorkflow],
+          ["--signer-digest", signerDigest],
+          ["--source-ref", "refs/heads/main"],
+          ["--source-digest", "a".repeat(40)],
+          ["--cert-oidc-issuer", verifierIssuer],
+          ["--predicate-type", provenanceV1],
+          ["--digest-alg", "sha256"],
+          ["--format", "json"],
+        ].flat(),
+      );
+      assert.equal(options.shell, false);
+      assert.equal(options.timeout, 30_000);
+      assert.equal(options.killSignal, "SIGKILL");
+      assert.equal(options.maxBuffer, 2 * 1024 * 1024);
+      assert.deepEqual(options.stdio, ["ignore", "pipe", "ignore"]);
+      assert.equal(statSync(directory).mode & 0o777, 0o700);
+      assert.equal(statSync(path).mode & 0o777, 0o600);
+      assert.deepEqual(readFileSync(path), input.archive);
+      return ghSuccess(JSON.stringify([checked]));
+    }),
+  );
+  assert.equal(existsSync(directory), false);
+  assert.deepEqual(attestation, input.attestation);
+  assert.deepEqual(validatePureHonoRecoveryEvidence({ ...input, attestation }), {
+    archiveSha256: expected.archiveSha256,
+    fileCount: 3,
+  });
+});
+
+test("pure Hono attestation refuses invalid pins or archives before spawning", () => {
+  const { input, expected } = checkedAttestationFixture();
+  let calls = 0;
+  const spawn = () => calls++;
+  for (const invalid of [
+    { archiveSha256: "a" },
+    { signerDigest: undefined },
+    { sourceSha: "--help" },
+    { workflow: "../untrusted.yml" },
+    { signerWorkflow: `other.invalid/${signerWorkflow}` },
+  ]) {
+    assert.throws(
+      () => verifyPureHonoRecoveryAttestation(input.archive, { ...expected, ...invalid }, spawn),
+      {
+        message: `${attestationRefusal}invalid pins`,
+      },
+    );
+  }
+  for (const archive of [
+    new Uint8Array(1),
+    Buffer.alloc(0),
+    Buffer.alloc(RECOVERY_MEMBER_LIMITS.maxArchiveBytes + 1),
+  ]) {
+    assert.throws(() => verifyPureHonoRecoveryAttestation(archive, expected, spawn), {
+      message: `${attestationRefusal}archive size`,
+    });
+  }
+  assert.throws(
+    () => verifyPureHonoRecoveryAttestation(Buffer.from("other bytes"), expected, spawn),
+    {
+      message: `${attestationRefusal}pinned archive digest`,
+    },
+  );
+  assert.equal(calls, 0);
+});
+
+for (const [label, change, reason] of [
+  [
+    "a wrong subject digest",
+    ({ statement }) => (statement.subject[0].digest.sha256 = "0".repeat(64)),
+    "identity or subject digest",
+  ],
+  [
+    "a wrong caller workflow",
+    ({ certificate }) => (certificate.buildConfigURI = `https://github.com/${signerWorkflow}`),
+    "identity or subject digest",
+  ],
+  [
+    "a wrong source digest",
+    ({ certificate }) => (certificate.sourceRepositoryDigest = signerDigest),
+    "identity or subject digest",
+  ],
+  [
+    "a wrong signer digest",
+    ({ certificate }) => (certificate.buildSignerDigest = "a".repeat(40)),
+    "identity or subject digest",
+  ],
+  ["a missing signed invocation", ({ metadata }) => delete metadata.invocationId, "invocation"],
+  [
+    "a mismatched signed invocation",
+    ({ metadata }) => (metadata.invocationId = recoveryInvocation.replace(/2$/, "1")),
+    "invocation",
+  ],
+  [
+    "a missing certificate invocation",
+    ({ certificate }) => delete certificate.runInvocationURI,
+    "invocation",
+  ],
+  [
+    "a malformed invocation in both places",
+    ({ certificate, metadata }) => {
+      certificate.runInvocationURI = metadata.invocationId = `${recoveryInvocation}?extra`;
+    },
+    "invocation",
+  ],
+]) {
+  test(`pure Hono attestation refuses ${label}`, () => {
+    const fixture = checkedAttestationFixture();
+    change(fixture);
+    assert.throws(() => verifyFixture(fixture), {
+      message: `${attestationRefusal}verified ${reason}`,
+    });
+  });
+}
+
+test("pure Hono attestation preserves a signed invocation for the independent attempt check", () => {
+  const fixture = checkedAttestationFixture();
+  const otherInvocation = recoveryInvocation.replace(/2$/, "1");
+  fixture.metadata.invocationId = fixture.certificate.runInvocationURI = otherInvocation;
+  const attestation = verifyFixture(fixture);
+  assert.equal(attestation.invocationId, otherInvocation);
+  assert.equal(attestation.runAttempt, "1");
+  assert.throws(
+    () => validatePureHonoRecoveryEvidence({ ...fixture.input, attestation }),
+    /verified attestation identity/,
+  );
+});
+
+test("pure Hono attestation sanitizes verifier failures and always removes the private copy", () => {
+  const { input, expected, checked } = checkedAttestationFixture();
+  for (const [verify, reason] of [
+    [
+      () => ghSuccess(JSON.stringify([checked, checked])),
+      `${attestationRefusal}verified result count`,
+    ],
+    [
+      () => ghSuccess(JSON.stringify({ verificationResult: checked.verificationResult })),
+      `${attestationRefusal}verified result count`,
+    ],
+    [() => ghSuccess("untrusted JSON detail"), unavailable],
+    [() => ghSuccess([0xff]), unavailable],
+    [() => ghSuccess(Buffer.alloc(2 * 1024 * 1024 + 1)), unavailable],
+    [() => ({ ...ghSuccess("untrusted stdout"), status: 1 }), unavailable],
+    [
+      () => ({ ...ghSuccess(""), signal: "SIGKILL", error: new Error("untrusted timeout detail") }),
+      unavailable,
+    ],
+    [
+      () => {
+        throw new Error("untrusted spawn detail");
+      },
+      unavailable,
+    ],
+  ]) {
+    const paths = [];
+    assert.throws(
+      () =>
+        verifyPureHonoRecoveryAttestation(
+          input.archive,
+          expected,
+          syntheticGh((_command, args) => {
+            paths.push(args[2]);
+            return verify();
+          }),
+        ),
+      { message: reason },
+    );
+    assert.equal(paths.length, 1);
+    assert.equal(existsSync(dirname(paths[0])), false);
+  }
+  const calls = [];
+  assert.throws(
+    () =>
+      verifyPureHonoRecoveryAttestation(input.archive, expected, (command, args) => {
+        calls.push([command, args]);
+        return ghSuccess("gh version 2.103.2 (2026-10-25)\n");
+      }),
+    { message: unavailable },
+  );
+  assert.deepEqual(calls, [["gh", ["--version"]]]);
+});
 
 function recoveryRunAttempt(event = "push") {
   const repo = { id: 100, full_name: "TogetherWeOwn/two-web-next", fork: false };
