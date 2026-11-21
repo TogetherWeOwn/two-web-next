@@ -6,6 +6,7 @@ import {
   SESSION_REF_PATTERN,
   SESSION_UNTIL,
 } from "./socket-route";
+import { readTimedSocketSession } from "./socket-session";
 
 const MAX_SOCKETS = 64;
 const MAX_MESSAGE_BYTES = 512;
@@ -27,12 +28,8 @@ const attachment = z.strictObject({
 });
 
 function decode(message: string | ArrayBuffer) {
-  if (
-    typeof message !== "string" ||
-    message.length > MAX_MESSAGE_BYTES ||
-    new TextEncoder().encode(message).byteLength > MAX_MESSAGE_BYTES
-  )
-    return null;
+  if (typeof message !== "string" || message.length > MAX_MESSAGE_BYTES) return null;
+  if (new TextEncoder().encode(message).byteLength > MAX_MESSAGE_BYTES) return null;
   try {
     return command.safeParse(JSON.parse(message)).data ?? null;
   } catch {
@@ -47,6 +44,12 @@ export class LiveSockets {
     private readonly ctx: DurableObjectState,
     private readonly env: LiveSocketEnv,
   ) {}
+
+  #scheduleExpiry(until: number): Promise<void> {
+    return this.ctx.storage.transaction(async (txn) => {
+      if (until < ((await txn.getAlarm()) ?? Infinity)) await txn.setAlarm(until);
+    });
+  }
 
   async accept(request: Request): Promise<Response> {
     if (request.method !== "GET" || request.headers.get("upgrade") !== "websocket") {
@@ -63,8 +66,7 @@ export class LiveSockets {
       }
       if (this.ctx.getWebSockets().length >= MAX_SOCKETS)
         return new Response(null, { status: 429 });
-      const nextAlarm = await this.ctx.storage.getAlarm();
-      if (nextAlarm === null || until < nextAlarm) await this.ctx.storage.setAlarm(until);
+      await this.#scheduleExpiry(until);
       const { 0: client, 1: server } = new WebSocketPair();
       this.ctx.acceptWebSocket(server);
       server.serializeAttachment(meta.data);
@@ -94,16 +96,20 @@ export class LiveSockets {
 
     this.#sending.add(socket);
     try {
+      const until = meta.until;
       if (meta.ref !== null) {
-        const row = await readLiveSocketSession(this.env, meta.ref);
+        const row = await readTimedSocketSession(meta.ref, (ref) =>
+          readLiveSocketSession(this.env, ref),
+        );
         if (socket.readyState !== WebSocket.OPEN) return;
-        if (!row || !Number.isFinite(row.validUntil) || row.validUntil <= Date.now()) {
-          return socket.close(1008);
-        }
+        if (!row) return socket.close(1008);
+        meta.until = Math.min(until, row.validUntil);
       }
-      if (meta.until <= Date.now()) return socket.close(1008);
       meta.nextResync = Date.now() + RESYNC_INTERVAL_MS;
       socket.serializeAttachment(meta);
+      if (meta.until < until) await this.#scheduleExpiry(meta.until);
+      if (socket.readyState !== WebSocket.OPEN) return;
+      if (meta.until <= Date.now()) return socket.close(1008);
       // No policy adapter is wired in this slice. Never infer payload access from admission.
       for (const item of incoming.topics) {
         socket.send(JSON.stringify({ v: 1, type: "unavailable", topic: item }));

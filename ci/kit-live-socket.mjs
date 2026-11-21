@@ -61,17 +61,26 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     const guest = await open(headers);
     const frame = once(guest, "message", deadline());
     guest.send(subscribe);
-    assert.deepEqual(JSON.parse((await frame)[0].data), {
-      v: 1,
-      type: "unavailable",
-      topic: "voice",
-    });
+    const unavailable = { v: 1, type: "unavailable", topic: "voice" };
+    assert.deepEqual(JSON.parse((await frame)[0].data), unavailable);
     const duplicate = once(guest, "close", deadline());
     guest.send(subscribe);
     assert.equal((await duplicate)[0].code, 1008);
 
     await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
       values (${ref}, '900000000000001377', 'Live socket fixture', true, now() + interval '10 minutes')`;
+    const expiring = await open({ ...headers, Cookie: cookie });
+    await sql`update web_sessions set expires_at = clock_timestamp() + interval '3 seconds' where token_hash = ${ref}`;
+    const expiry = Promise.all([
+      once(expiring, "message", deadline()),
+      once(expiring, "close", deadline()),
+    ]);
+    expiring.send(subscribe);
+    const [[message], [close]] = await expiry;
+    assert.deepEqual(JSON.parse(message.data), unavailable);
+    assert.equal(close.code, 1008);
+
+    await sql`update web_sessions set expires_at = clock_timestamp() + interval '10 minutes' where token_hash = ${ref}`;
     const signedIn = await open({ ...headers, Cookie: cookie });
     await sql`update web_sessions set revoked_at = clock_timestamp() where token_hash = ${ref}`;
     const closed = once(signedIn, "close", deadline());
@@ -81,7 +90,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     assert.equal((await closed)[0].code, 1008);
     assert.equal(deliveries, 0);
     assert.equal(await refusal(url, { ...headers, Cookie: cookie }), 401);
-    console.log("PASS installed Kit live socket 101, guest control, and strict session revocation");
+    console.log("PASS Kit live socket upgrade, guest control, shortened expiry, and revocation");
   } finally {
     for (const socket of sockets) socket.close();
     try {
