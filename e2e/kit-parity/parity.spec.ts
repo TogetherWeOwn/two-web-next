@@ -9,6 +9,7 @@ import {
 import postgres from "postgres";
 import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
+import { QA_IDENTITIES } from "../../src/qa";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
   expectedKitMarker,
@@ -37,7 +38,7 @@ import { postParityQaLogin } from "./parity-qa-login.mjs";
 // targets (re-signed for the Kit fixture's own secret) — the token and
 // cookie values never appear in assertions or artifacts, and every body
 // is scrubbed. The journey also makes its viewer the board's one ranked
-// member with a single going RSVP on the seeded event, withdrawn in
+// member with a single going RSVP on the seeded event, deleted in
 // afterAll: no earlier journey leaves a going RSVP behind, so without it
 // both boards render their empty state and ranked content is unprovable.
 // Login journeys (member RSVP, moderator admin, profile edit) stay Hono-only
@@ -60,20 +61,14 @@ test.beforeAll(async ({ playwright }) => {
       }),
     );
   }
-  // Ranked RSVP before the first cache-settling read: anonymous /events
-  // entries are isolate-local (src/events/anon-cache.ts) and the RSVP PUT
-  // retires only the Hono isolate, so establishing the going RSVP here means
-  // every guest entry settled later on either isolate already carries
-  // count=1. This spends the journey's one memoized QA login early; the
-  // afterAll withdrawal and the exactly-one-login assertion are unchanged.
-  await memberGoingRsvp();
-  // Leave the shared jar guest-clean: the QA login above stores its session
-  // cookie in the Hono context, and every later api(hono) call would send
-  // it — turning the guest-contract tests (public cache-control on /events,
-  // the 302 member-board bounce) into member reads. Recreate the context
-  // instead: the memoized pair stays live (the RSVP PUT never rotates), so
-  // later memberCookie() calls replay it explicitly with no second login.
   const hono = targets.find((target) => target.name === "hono")!;
+  await memberCookie(hono);
+  // Seed the ranked count before the first cache-settling read on either
+  // isolate (src/events/anon-cache.ts).
+  await memberGoingRsvp();
+  // The QA login above populates the Hono jar. Recreate that context so
+  // subsequent guest requests stay anonymous; member requests replay the
+  // memoized cookie explicitly without another login.
   await contexts.get(hono.name)!.dispose();
   contexts.set(
     hono.name,
@@ -86,14 +81,12 @@ test.beforeAll(async ({ playwright }) => {
 
 test.afterAll(async () => {
   try {
-    // Undo the journey's one ranked RSVP while its Hono context is alive,
-    // so the seeded event is left exactly as the earlier journeys left it.
-    if (memberRsvpCreated) {
-      const hono = targets.find((target) => target.name === "hono")!;
-      const withdrawn = await api(hono).delete(`/events/${SEEDED_EVENT_KEY}/rsvp`, {
-        headers: { cookie: await memberCookie(hono), Origin: "https://localhost:8787" },
+    const id = memberRsvpId;
+    if (id !== null) {
+      await withSessionDb(async (sql) => {
+        const deleted = await sql`delete from rsvps where id = ${id} returning id`;
+        expect(deleted, "worker's ranked RSVP deleted").toHaveLength(1);
       });
-      expect(withdrawn.status(), "ranked RSVP withdrawn").toBe(204);
     }
   } finally {
     for (const context of contexts.values()) await context.dispose();
@@ -271,25 +264,26 @@ async function sessionCount(): Promise<number> {
 // The board's one ranked member: the QA viewer answers going to the seeded
 // published event (e2e/seed.mjs, "E2E Community Night", 2099, no game).
 // Earlier journeys withdraw or cancel every going RSVP they create, so
-// this idempotent write — memoized within a worker, replayed after a restart,
-// and withdrawn in afterAll — gives both renderers a ranked row to serve.
+// a worker inserts and owns this fixture row, without spending the RSVP
+// limiter budget reserved for the journeys. A restarted worker seeds anew.
 // Its 2099 start and missing game also pin the season=2026 and activity=valheim
 // views to their empty state below.
 const SEEDED_EVENT_KEY = "01J00000000000000000000001";
-let memberRsvpCreated = false;
+let memberRsvpId: number | null = null;
 let memberRsvpPromise: Promise<void> | null = null;
 function memberGoingRsvp(): Promise<void> {
-  memberRsvpPromise ??= (async () => {
-    const hono = targets.find((target) => target.name === "hono")!;
-    const response = await api(hono).put(`/events/${SEEDED_EVENT_KEY}/rsvp`, {
-      headers: { cookie: await memberCookie(hono), Origin: "https://localhost:8787" },
-      data: { status: "going" },
-    });
-    expect([200, 201], "ranked RSVP created or refreshed").toContain(response.status());
-    memberRsvpCreated = true;
-    const body = (await response.json()) as { data?: { status?: string } };
-    expect(body.data?.status, "ranked RSVP holds a seat, not the waitlist").toBe("going");
-  })().catch((error: unknown) => {
+  memberRsvpPromise ??= withSessionDb(async (sql) => {
+    const rows = await sql<{ id: number; status: string }[]>`
+      insert into rsvps (event_id, user_id, status)
+      select id, ${QA_IDENTITIES["qa-member"]!.discordId}, 'going'
+      from events where event_key = ${SEEDED_EVENT_KEY}
+      on conflict (event_id, user_id) do nothing
+      returning id, status`;
+    const [inserted] = rows;
+    memberRsvpId = inserted?.id ?? null;
+    expect(rows, "worker inserted its ranked RSVP without replacing another row").toHaveLength(1);
+    expect(inserted?.status, "ranked RSVP holds a seat, not the waitlist").toBe("going");
+  }).catch((error: unknown) => {
     memberRsvpPromise = null;
     throw error;
   });
@@ -2601,10 +2595,23 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
   const hash = createHash("sha256").update(bearer).digest("hex");
   const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
   const now = Date.now();
+  const start = new Date(now - 3_600_000);
   const end = new Date(now + 3_600_000);
+  const zone = "America/New_York";
+  const localDate = new Intl.DateTimeFormat("en-GB", {
+    timeZone: zone,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(start);
+  const endClock = new Intl.DateTimeFormat("en-GB", {
+    timeZone: zone,
+    timeStyle: "short",
+  }).format(end);
   const path = `/e/${key}?attendees=1`;
+  const deviceZone = "Asia/Tokyo";
   const plain = await browser.newContext({ baseURL: target.origin, javaScriptEnabled: false });
-  const enhanced = await browser.newContext({ baseURL: target.origin });
+  const enhanced = await browser.newContext({ baseURL: target.origin, timezoneId: deviceZone });
   async function assertMobileSeatOrder(page: Page) {
     const time = page.locator(".event-layout-head > [data-testid=kit-event-time]:last-child");
     const seat = page.locator(
@@ -2613,6 +2620,15 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
     await expect(seat).toBeVisible();
     const [block, card] = await Promise.all([time.boundingBox(), seat.boundingBox()]);
     expect(card!.y).toBeGreaterThanOrEqual(block!.y + block!.height);
+  }
+  async function assertScheduledTime(page: Page) {
+    const time = page.getByTestId("kit-event-time");
+    const ends = time.locator("p", { hasText: /^Ends / });
+    await expect(time.getByText(localDate, { exact: true })).toBeVisible();
+    await expect(ends).toContainText(`${endClock} ${zone}`);
+    await expect(ends.locator("time")).toHaveAttribute("datetime", end.toISOString());
+    await expect(page.locator(`time[datetime="${end.toISOString()}"]:visible`)).toHaveCount(1);
+    return ends;
   }
   async function capture(page: Page, name: string) {
     const size = page.viewportSize()?.width === 390 ? "40px" : "89.6px";
@@ -2626,9 +2642,9 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
       await sql`insert into users (id, username, member) values (${userId}, 'Seat fixture', true)`;
       await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
         values (${hash}, ${hash}, ${userId}, 'Seat fixture', true, false, ${new Date(now + 7_200_000)})`;
-      await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status, rsvp_open)
+      await sql`insert into events (event_key, title, description, starts_at, ends_at, timezone, location, status, rsvp_open)
         values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
-          ${new Date(now - 3_600_000)}, ${end}, 'Community voice', 'published', true)`;
+          ${start}, ${end}, ${zone}, 'Community voice', 'published', true)`;
     });
     const noJs = await plain.newPage();
     const guest = await noJs.goto(path);
@@ -2651,9 +2667,12 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
       if (viewport.width === 390) await assertMobileSeatOrder(noJs);
       const rsvp = noJs.getByRole("button", { name: "I'm in", exact: true });
       await expect(rsvp).toBeEnabled();
+      await expect(noJs.getByTestId("kit-seat-card").locator("form")).toHaveAttribute(
+        "action",
+        `/e/${key}/rsvp`,
+      );
       await rsvp.scrollIntoViewIfNeeded();
-      const ends = noJs.locator("p:visible", { hasText: /^Ends / }).last();
-      await expect(ends.locator("time")).toHaveAttribute("datetime", end.toISOString());
+      const ends = await assertScheduledTime(noJs);
       await expect(ends).toBeInViewport();
       const ordered = await ends.evaluate((line) => {
         const button = document.querySelector('[data-testid="rsvp-going"]')!;
@@ -2686,7 +2705,7 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
       const seat = noJs.getByTestId("kit-seat-card");
       await expect(noJs.getByTestId("event-ongoing")).toHaveText("Live");
       await expect(time.locator("[data-live-fresh]:visible").last()).toHaveText("as of");
-      await expect(time.locator("time").last()).toHaveAttribute("datetime", end.toISOString());
+      await assertScheduledTime(noJs);
       await expect(seat.getByRole("heading", { name: "You're in." })).toBeVisible();
       await expect(seat.getByTestId("rsvp-synced")).toHaveText("Synced to Discord.");
       await expect(seat.getByRole("button").or(seat.getByRole("link"))).toHaveCount(0);
@@ -2714,15 +2733,23 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
     }, deadline);
     expect(hidden).toEqual([false, true]);
     await expect(page.locator("[data-live-fresh]:visible")).toHaveCount(0);
-    await expect(page.getByText("Stale", { exact: true })).toHaveCount(2);
+    await expect(
+      page.locator("[data-live-stale]:visible").getByText("Stale", { exact: true }),
+    ).toHaveCount(3);
     await expect(page.getByRole("link", { name: "Refresh the event time" })).toHaveAttribute(
       "href",
       `${target.origin}${path}`,
     );
     await expect(page.getByTestId("rsvp-synced")).toBeVisible();
-    await expect(page.getByTestId("kit-event-time").getByText("live as of")).toBeVisible();
+    const time = page.getByTestId("kit-event-time");
+    await expect(time.getByText("live as of")).toBeVisible();
+    const asOf = (await page.locator("#kit-live-snapshot").getAttribute("data-as-of"))!;
+    await expect(time.locator(`time[datetime="${asOf}"]`)).toBeVisible();
     for (const { size: viewport } of PARITY_VIEWPORTS) {
       await page.setViewportSize(viewport);
+      if (viewport.width === 390) await assertMobileSeatOrder(page);
+      await assertScheduledTime(page);
+      await expect(time.getByText("Stale", { exact: true })).toBeInViewport();
       await capture(page, `kit-review-event-stale-${viewport.width}`);
     }
     const refreshed = page.waitForResponse(
@@ -2733,7 +2760,13 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
     expect((await refreshed).headers()["cache-control"]).toBe("private, no-store");
     await expect(live).toBeVisible();
     await page.getByTestId("event-device-timezone-ends-button").click();
-    await expect(page.getByTestId("event-device-timezone-ends-status")).not.toBeEmpty();
+    const deviceEnd = new Intl.DateTimeFormat("en-GB", {
+      timeZone: deviceZone,
+      timeStyle: "short",
+    }).format(end);
+    await expect(page.getByTestId("event-device-timezone-ends-status")).toContainText(
+      `${deviceEnd} GMT+09:00 (${deviceZone})`,
+    );
     await page.addInitScript(() => {
       Date.now = () => 1;
     });
@@ -2748,6 +2781,86 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
       await sql`delete from web_session_grace where user_id = ${userId}`;
       await sql`delete from web_sessions where user_id = ${userId}`;
       await sql`delete from users where id = ${userId}`;
+    });
+  }
+});
+
+test("Kit guest discovery links use the live detail zone at both widths", async ({ browser }) => {
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+  const key = (id: number) => `01J${String(id).padStart(23, "0")}`;
+  const eventKey = key(985);
+  const zone = "America/New_York";
+  const now = Date.now();
+  const later = (days: number) =>
+    new Date(new Date(now + days * 86_400_000).setUTCHours(2, 34, 0, 0));
+  const next = { key: key(986), title: "Open tables", start: later(1) };
+  const series = { key: key(987), title: "Community game night: round two", start: later(7) };
+  const context = await browser.newContext({
+    javaScriptEnabled: false,
+    timezoneId: "Pacific/Auckland",
+  });
+  try {
+    await withSessionDb(async (sql) => {
+      const [root] = await sql<{ id: number }[]>`
+        insert into events (event_key, title, game, starts_at, ends_at, timezone, status,
+                            recurrence_frequency, recurrence_count, recurrence_index)
+        values (${eventKey}, 'Community game night', 'Tabletop', ${new Date(now - 3_600_000)},
+                ${new Date(now + 3_600_000)}, ${zone}, 'published', 'weekly', 2, 1)
+        returning id`;
+      for (const row of [next, series]) {
+        await sql`insert into events (event_key, title, game, starts_at, ends_at, timezone, location,
+                                      status, parent_event_id, recurrence_index)
+          values (${row.key}, ${row.title}, 'Tabletop', ${row.start},
+                  ${new Date(+row.start + 7_200_000)}, 'UTC', 'Community voice', 'published',
+                  ${row === series ? root!.id : null}, ${row === series ? 2 : null})`;
+      }
+    });
+    const page = await context.newPage();
+    // Use the compact label's parts and order, not en-GB's “Sept” or US date order.
+    const clock = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+    const label = (start: Date) => {
+      const parts = new Map(clock.formatToParts(start).map(({ type, value }) => [type, value]));
+      return `${parts.get("weekday")} ${parts.get("day")} ${parts.get("month")}, ${parts.get("hour")}:${parts.get("minute")} ${zone}`;
+    };
+    for (const { size: viewport } of PARITY_VIEWPORTS) {
+      await page.setViewportSize(viewport);
+      const response = await page.goto(`${KIT_ORIGIN}/e/${eventKey}`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      await expect(page.getByTestId("kit-event-time")).toContainText(zone);
+      for (const [testid, row] of [
+        ["event-series-next", series],
+        ["event-next", next],
+        ["event-related-link", series],
+      ] as const) {
+        const link = page.getByTestId(testid).filter({ hasText: row.title });
+        const when = label(row.start);
+        await expect(link).toBeVisible();
+        await expect(link).toHaveAttribute("href", `/e/${row.key}`);
+        await expect(link).toHaveAccessibleName(new RegExp(when));
+        await expect(link.locator("time")).toHaveText(when);
+        await expect(link.locator("time")).toHaveAttribute("datetime", row.start.toISOString());
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+      const name = `kit-review-event-discovery-${viewport.width}`;
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    }
+  } finally {
+    await context.close();
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key in (${eventKey}, ${next.key}, ${series.key})`;
     });
   }
 });

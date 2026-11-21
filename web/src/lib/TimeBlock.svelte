@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onMount } from "svelte";
 import { structuredTime, toInstant, type Instant } from "./structured-time";
+import Tag from "./Tag.svelte";
 import TextLink from "./TextLink.svelte";
 
 // Only no-store SSR callers with a native watcher may opt into a dated Live snapshot.
@@ -25,7 +26,7 @@ let {
   stale?: boolean;
   roomCount?: number;
   refreshHref?: string;
-  serverLive?: { endLabel: string };
+  serverLive?: boolean;
 } = $props();
 
 let mounted = $state(false);
@@ -109,12 +110,15 @@ onMount(() => {
 {#if time}
   <div class="time-block" data-state={eventState}>
     <time datetime={time.datetime} class:cancelled={eventState === "cancelled"}>{#if nativeLive}<span data-live-fresh>Live</span><span hidden data-live-stale>{time.localTime}</span>{:else}{eventState === "ended" ? shortDate : eventState === "live" && !withdrawn ? "Live" : time.localTime}{/if}</time>
+    {#if nativeLive}<span hidden data-live-stale><Tag variant="warn">Stale</Tag></span>{/if}
     <div class="details">
       <div>{time.localDate}{#if eventState !== "live" || !serverLive}{#if (viewerZone || browserZone) && time.zone === (viewerZone || browserZone)}, your time{#if browserZone && !viewerZone}{" (from your browser)"}{/if}{:else}, UTC fallback{/if}{/if}</div>
       <div class="anchor">
-        {time.zone}{" · "}{time.utcTime} UTC{#if nativeLive}<span data-live-fresh>{" · "}since {sinceLabel}</span>{:else if eventState === "upcoming" && countdown && !withdrawn}{" · "}{countdown}{:else if eventState === "live" && !withdrawn}{" · "}since {sinceLabel}{#if roomCount !== undefined && Number.isSafeInteger(roomCount) && roomCount >= 0}{" · "}{roomCount} in the room{/if}{:else if eventState === "ended"}{" · "}{endedTime ? `ended ${endedTime.localTime}` : "Ended"}{#if echoFrozen}{" · "}Echo frozen{/if}{:else if eventState === "cancelled"}{" · "}Cancelled{/if}{#if hasClaim && snapshot}{" · "}{#if nativeLive}<span data-live-fresh>as of</span><span hidden data-live-stale>live as of</span> <time datetime={snapshot.datetime}>{snapshotLabel}</time><span id="kit-live-refresh"></span>{:else}{withdrawn && eventState === "live" ? "live as of" : "as of"} <time datetime={snapshot.datetime}>{snapshotLabel}</time>{#if withdrawn && refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{/if}{:else if eventState === "live" && !snapshot}{" · "}Live status unavailable{#if refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{/if}
+        {!serverLive || time.zone !== "UTC" ? `${time.zone} · ` : ""}{time.utcTime} UTC{#if nativeLive}<span data-live-fresh>{" · "}since {sinceLabel}</span>{:else if eventState === "upcoming" && countdown && !withdrawn}{" · "}{countdown}{:else if eventState === "live" && !withdrawn}{" · "}since {sinceLabel}{#if roomCount !== undefined && Number.isSafeInteger(roomCount) && roomCount >= 0}{" · "}{roomCount} in the room{/if}{:else if eventState === "ended"}{" · "}{endedTime ? `ended ${endedTime.localTime}` : "Ended"}{#if echoFrozen}{" · "}Echo frozen{/if}{:else if eventState === "cancelled"}{" · "}Cancelled{/if}{#if hasClaim && snapshot}{" · "}{#if nativeLive}<span data-live-fresh>as of</span><span hidden data-live-stale>live as of</span> <time datetime={snapshot.datetime}>{snapshotLabel}</time><span id="kit-live-refresh"></span>{:else}{withdrawn && eventState === "live" ? "live as of" : "as of"} <time datetime={snapshot.datetime}>{snapshotLabel}</time>{#if withdrawn && refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{/if}{:else if eventState === "live" && !snapshot}{" · "}Live status unavailable{#if refreshPath}{" · "}{@render refreshLink(refreshPath)}{/if}{/if}
       </div>
-      {#if eventState === "live" && serverLive && endedTime}<p>Ends <time datetime={endedTime.datetime}>{serverLive.endLabel}</time></p>{/if}
+      {#if eventState === "live" && serverLive && endedTime}
+        <p>Ends <time datetime={endedTime.datetime}>{endedTime.localDate === time.localDate ? "" : `${endedTime.localDate}, `}{endedTime.localTime} {endedTime.zone}{endedTime.zone === "UTC" ? "" : ` · ${endedTime.utcTime} UTC`}</time></p>
+      {/if}
     </div>
   </div>
 {:else}

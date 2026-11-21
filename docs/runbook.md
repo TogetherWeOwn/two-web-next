@@ -379,23 +379,34 @@ binding isolation before any remote mutation.
    organization scope. An unset or unrecognized value selects `hono`. Manual
    dispatch from `main` uses only `kit_route_family`, which defaults to `hono`;
    it does not change the next automatic deploy. Choose `archive` for only
-   `GET /events/past`, or `archive-static` to add `GET /about` and `GET /faq`.
+   `GET /events/past`, or `archive-static` to add the four static pages:
+   `/about`, `/faq`, `/privacy`, and `/rules`. Privacy and House Rules opt in
+   only for exact document GETs on the staging origin; HEAD and markdown stay
+   on Hono. To roll back one of those two leaves without changing the family,
+   set its entry to `false` in `STAGING_STATIC_DOCUMENT_READY` in
+   `src/kit-staging-static.ts`.
+   After CI passes and the updated staging revision deploys, the rolled-back
+   leaf must return HTTP 200 without `x-two-renderer: kit`.
    Choose `events`, `home` or `join` for `/events`, `/` or `/join`,
    `events-join` for `/events` and `/join` together, `events-home` for
    `/events` and `/` together, or `ember-pages` for all
    three. Disabled Ember GET entries block
-   selection before migrations or Worker mutations. HEAD follows GET; event
-   detail, OAuth, recovery and write methods are unaffected. After revision
-   verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
+   selection before migrations or Worker mutations. HEAD otherwise follows
+   GET; event detail, OAuth, recovery and write methods are unaffected. After
+   revision verification, each selected page must return HTTP 200 and `x-two-renderer: kit`
    to an unauthenticated GET that does not follow redirects. After changing the
    variable to `events`, confirm the next normal deploy passes
    `node ci/staging-kit-route-check.mjs /events`.
 
    Before changing the persistent variable, verify that the target `main`
-   revision contains both the selector for the new family and the cutovers
-   that enable its GET entries in the route manifest. For a family that adds
-   `/`, that includes the home cutover. Wait for older automatic staging
-   deploys to finish, including any still waiting for their `main` CI runs.
+   revision contains the selector for the new family. Check that the selected
+   GET entries are enabled in the shared route manifest, including the home
+   cutover for a family that adds `/`. For `/privacy` and `/rules` in
+   `archive-static`, check for `true` entries in `STAGING_STATIC_DOCUMENT_READY`
+   in [`src/kit-staging-static.ts`](../src/kit-staging-static.ts) instead; both
+   routes intentionally stay disabled in the shared manifest. Wait for older
+   automatic staging deploys to finish, including any still waiting for their
+   `main` CI runs.
    Automatic deploys check out the triggering CI SHA but read the current
    staging variable at deploy time. An older selector can treat a new family
    as unknown and send `/events` back to Hono.
