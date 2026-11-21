@@ -223,13 +223,13 @@ describe("queue:poison-probe drill", () => {
     const { lock } = memLock();
     const poisonAnn = {
       kind: "announcement",
-      idempotencyKey: "poison-key",
+      idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
       action: { channelKey: "c", body: "poison-body" },
       jobId: "poison-job",
     };
     const ordinaryAnn = {
       kind: "announcement",
-      idempotencyKey: "ordinary-key",
+      idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b16",
       action: { channelKey: "c", body: "ordinary-body" },
       jobId: "ordinary-job",
     };
@@ -243,13 +243,13 @@ describe("queue:poison-probe drill", () => {
     const poison = track(poisonAnn, CALL_INTERNAL_ACTION.tries);
     const ordinary = track(ordinaryAnn);
 
-    const deps = {
-      bot,
-      events: memStore(),
-      lock,
-      ledger,
-      announcementReconciliation: announcementStore(),
-    };
+    const announcementReconciliation = announcementStore();
+    announcementReconciliation.finishAnnouncement.mockImplementation(async (_key, _attempt, s) => {
+      if (typeof s === "object" && "failed" in s && s.jobId)
+        await ledger.failed(s.jobId, "announcement", null, s.failed);
+      return true;
+    });
+    const deps = { bot, events: memStore(), lock, ledger, announcementReconciliation };
     await consume({ messages: [poison, ordinary] }, deps);
 
     // Both reach a terminal ack; only the poison lands in the failed ledger.

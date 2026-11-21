@@ -18,7 +18,7 @@ const leaseToken = "11111111-1111-4111-8111-111111111111";
 const sync = { kind: "sync-event", eventKey: "event-1", idempotencyKey: "sync-key", leaseToken };
 const announcement = {
   kind: "announcement",
-  idempotencyKey: "announcement-key",
+  idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
   action: { channelKey: "general", body: "hello" },
 };
 const role = {
@@ -280,20 +280,32 @@ describe("queue envelope batch isolation", () => {
     },
   );
 
-  it("checks legacy field types without adding UUID, snowflake or nonblank policy", async () => {
+  it("keeps legacy sync and role fields permissive but rejects malformed announcement identities", async () => {
     const messages = [
       message({ kind: "sync-event", eventKey: "", idempotencyKey: "", jobId: undefined }),
-      message({ kind: "announcement", idempotencyKey: "", action: { channelKey: "", body: "" } }),
+      message({
+        kind: "announcement",
+        idempotencyKey: "",
+        action: { channelKey: "", body: "" },
+        jobId: "legacy-announcement-job",
+      }),
       message({
         kind: "role-assign",
         idempotencyKey: null,
         action: { userId: "opaque", roleKey: "" },
       }),
     ];
-    await consume({ messages }, dependencies());
+    const deps = dependencies();
+    await consume({ messages }, deps);
     for (const m of messages) expect(m.ack).toHaveBeenCalledExactlyOnceWith();
     expect(handlers.sync).toHaveBeenCalledTimes(1);
-    expect(handlers.internal).toHaveBeenCalledTimes(2);
+    expect(handlers.internal).toHaveBeenCalledExactlyOnceWith(messages[2]!.body, 1, deps.bot);
+    expect(deps.ledger.failed).toHaveBeenCalledExactlyOnceWith(
+      "legacy-announcement-job",
+      "announcement",
+      null,
+      "announcement.post carrier invalid",
+    );
     expect(console.warn).not.toHaveBeenCalled();
   });
 

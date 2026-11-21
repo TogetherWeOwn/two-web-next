@@ -106,6 +106,13 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
   it("a terminal refusal keeps its code in the alert but drops the provider message", async () => {
     const lines = capture();
     const d = deps();
+    d.announcementReconciliation.finishAnnouncement.mockImplementation(
+      async (_key, _attempt, s) => {
+        if (typeof s === "object" && "failed" in s && s.jobId)
+          await d.ledger.failed(s.jobId, "announcement", null, s.failed);
+        return true;
+      },
+    );
     const bot = {
       postAnnouncement: async () => ({
         ok: false,
@@ -119,7 +126,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     } as unknown as BotClient;
     const m = msg({
       kind: "announcement",
-      idempotencyKey: "k",
+      idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
       action: { channelKey: "c", body: "b" },
       jobId: "j1",
     });
@@ -151,7 +158,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const m = msg(
       {
         kind: "announcement",
-        idempotencyKey: "k",
+        idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
         action: { channelKey: "c", body: "b" },
         jobId: "j2",
       },
@@ -177,7 +184,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const a = msg(
       {
         kind: "announcement",
-        idempotencyKey: "k",
+        idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
         action: { channelKey: "c", body: "b" },
         jobId: "j3",
       },
@@ -308,7 +315,11 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
       }),
     } as unknown as BotClient;
     const attempt = msg(
-      { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } },
+      {
+        kind: "announcement",
+        idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
+        action: { channelKey: "c", body: "b" },
+      },
       1,
     );
     await consume({ messages: [attempt] }, { ...d, bot: retryable });
@@ -331,7 +342,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const last = msg(
       {
         kind: "announcement",
-        idempotencyKey: "k",
+        idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
         action: { channelKey: "c", body: "b" },
         jobId: "j7",
       },

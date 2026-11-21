@@ -196,7 +196,11 @@ describe("queue.failing", () => {
     ack() {},
     retry() {},
   });
-  const ann = { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } };
+  const ann = {
+    kind: "announcement",
+    idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
+    action: { channelKey: "c", body: "b" },
+  };
   const failingLines = (spy: { mock: { calls: unknown[][] } }): Record<string, unknown>[] =>
     spy.mock.calls
       .map((c) => String(c[0]))
