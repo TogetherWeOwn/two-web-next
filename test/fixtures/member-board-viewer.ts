@@ -33,7 +33,7 @@ function cssCompiler(componentCss: string[]) {
     source("web/src/app.css"),
     source("vendor/design-kit/tokens.css"),
     source("web/src/lib/segmented-control.css"),
-    source("web/src/lib/site-header.css"),
+    // Add the layout's sticky shell when the board supplies its scroll offset.
     ...componentCss,
   ]
     .join("\n")
@@ -137,10 +137,13 @@ export function memberBoardDocument(twin: Twin, scope: Scope) {
   const candidates = [...html.matchAll(/class="([^"]+)"/g)].flatMap((match) =>
     match[1]!.split(/\s+/),
   );
-  // Real served order for the schedule shell (src/page-shell.tsx): styles,
-  // theme-tokens, theme, schedule-theme. Tokens must precede the sheets that
-  // consume them, or sticky headers resolve --surface to transparent.
-  const css = ["styles", "theme-tokens", "theme", "schedule-theme"]
+  // Match each shell's external stylesheet links. Kit gets its --surface
+  // alias from app.css, not the Hono-only theme-tokens.css fallback.
+  const sheets =
+    twin === "hono"
+      ? ["styles", "theme-tokens", "theme", "schedule-theme"]
+      : ["styles", "theme", "schedule-theme"];
+  const css = sheets
     .map((name) => readFileSync(join(root, `public/${name}.css`), "utf8"))
     .join("\n");
   const styles = css + (twin === "kit" ? `\n${compileCss.build(candidates)}` : "");

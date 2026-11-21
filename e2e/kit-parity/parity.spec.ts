@@ -8,6 +8,7 @@ import {
 } from "@playwright/test";
 import postgres from "postgres";
 import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
+import { memberBoardStatus } from "../../ci/kit-parity-gates.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { QA_IDENTITIES } from "../../src/qa";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
@@ -858,8 +859,8 @@ for (const target of targets) {
         if (ranked) {
           expect(normalized, `${target.name} ${path}: ranked viewer row`).toContain(RANKED_ROW);
         } else {
-          expect(body, `${target.name} ${path}: empty board`).toContain(
-            "Nobody is ranked for this season and game",
+          expect(memberBoardStatus(body), `${target.name} ${path}: empty board`).toBe(
+            "overall-empty",
           );
           expect(normalized, `${target.name} ${path}: no ranked row`).not.toContain(RANKED_ROW);
         }
@@ -3350,7 +3351,7 @@ test.describe("kit: member-board visuals", () => {
           } else {
             await expect(
               page.getByRole("status").filter({
-                hasText: /Nobody is ranked for this season and game(?: yet)?\./,
+                hasText: /^Nobody is ranked for this season and game(?: yet)?\.(?=\s|$)/,
               }),
             ).toBeVisible();
             await expect(page.getByRole("rowheader", { name: "QA Member" })).toHaveCount(0);

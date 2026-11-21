@@ -967,6 +967,18 @@ function assertFaqContract(label, html, get, expected) {
   });
 }
 
+// Inspect the opening sentence of the status paragraph inside the board's main.
+export function memberBoardStatus(html) {
+  const main = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/)?.[1] ?? "";
+  const message = main.match(
+    /<p\b[^>]*\srole="status"[^>]*>\s*(?:(Nobody is|You are not) ranked for this season and game(?: yet)?\.)(?=\s|<)/,
+  )?.[1];
+  if (message) return message === "Nobody is" ? "overall-empty" : "relative-empty";
+  if (/<p\b[^>]*\srole="status"[^>]*>\s*Rankings are temporarily unavailable\.\s*<\/p>/.test(main))
+    return "outage";
+  return null;
+}
+
 // Member-board contract (src/leaderboards/pages.tsx + Kit +page.svelte):
 // authenticated member view only — Hono memberGate then season/scope/activity
 // grammar (400 before any read), Kit load mirrors the order; both answer
@@ -1011,10 +1023,8 @@ export function assertMembersContract({ label, html, headers, status, expected }
   if (!html.includes('name="season"') || !html.includes('name="activity"'))
     failures.push(`${label}: season + activity inputs present`);
   const hasTable = /<table[\s>]/.test(html);
-  const hasEmptyStatus =
-    /(?:Nobody is|You are not) ranked for this season and game(?: yet)?\./.test(html) ||
-    html.includes("Rankings are temporarily unavailable.");
-  if (!hasTable && !hasEmptyStatus) failures.push(`${label}: board table or empty status present`);
+  if (!hasTable && !memberBoardStatus(html))
+    failures.push(`${label}: board table or empty status present`);
   if (hasTable) {
     if (!html.includes('<th scope="col">Rank</th>')) failures.push(`${label}: rank column present`);
     if (!html.includes('<th scope="col">Member</th>'))

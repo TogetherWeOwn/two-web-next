@@ -217,7 +217,7 @@ test("visual tests re-seed and verify the board state after worker restarts", ()
   const emptyBoard = visuals.indexOf('page.getByRole("status").filter({');
   assert.match(
     visuals,
-    /hasText: \/Nobody is ranked for this season and game[^/]+\/[\s\S]*?\.toBeVisible\(\)/,
+    /hasText: \/\^Nobody is ranked for this season and game[^/]+\/[\s\S]*?\.toBeVisible\(\)/,
   );
   const screenshot = visuals.indexOf("toHaveScreenshot(");
   assert(honoPoll >= 0 && honoPoll < seedRsvp && seedRsvp < kitPoll);
