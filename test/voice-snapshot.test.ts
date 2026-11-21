@@ -2,7 +2,6 @@ import { expect, it, vi } from "vitest";
 import { signInternalAction } from "../src/bot/signer";
 import { signedVoiceReader, type VoiceSnapshot } from "../src/bot/voice-read";
 import { createVoiceSnapshotCache } from "../src/bot/voice-snapshot";
-
 const observed_at = "2026-11-03T19:04:11Z";
 const epoch = Date.parse(observed_at);
 const room = (channel_id: string, member_ids: string[], extra = {}) => ({
@@ -37,8 +36,9 @@ it("sends exactly one signed read without an idempotency key or redirects", asyn
   expect(h.get("X-TWO-Signature")).toBe(signed["X-TWO-Signature"]);
   expect(await signedVoiceReader({ ...cfg, baseUrl: "http://bot.example" }, send)()).toBeNull();
   expect(send).toHaveBeenCalledOnce();
-  const redirected = new ReadableStream({ cancel: () => Promise.reject(Error("fixture")) });
-  expect(await respond(redirected, 302)).toBeNull();
+  const cancel = vi.fn().mockRejectedValue(Error("fixture"));
+  expect(await respond(new ReadableStream({ cancel }), 302)).toBeNull();
+  expect(cancel).toHaveBeenCalledOnce();
 });
 
 it("rejects the whole snapshot on bad fields, totals or caps", async () => {
