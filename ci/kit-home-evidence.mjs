@@ -156,7 +156,7 @@ export async function assertHomeEvidence(page, state) {
   if (session?.member)
     assert.equal(
       await page
-        .locator("section[aria-labelledby=home-heading]")
+        .locator(".hero-action")
         .getByRole("link", { name: "Open Discord" })
         .getAttribute("href"),
       "https://discord.gg/invite",

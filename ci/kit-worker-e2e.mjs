@@ -12,7 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
-import { expectedMarkerFor } from "./kit-parity-gates.mjs";
+import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
 
@@ -231,7 +231,8 @@ try {
   assert.equal(home.status, 200, "guest home GET renders");
   assert.equal(home.headers.get("x-two-renderer"), homeMarker, "home GET follows the manifest");
   assert.equal(home.headers.get("cache-control"), "private, no-store");
-  assert.match(homeHtml, /<h1 id="home-heading">The lobby is open\.<\/h1>/);
+  if (homeMarker === "kit") assert.equal(kitHomeHeadingText(homeHtml), "The lobby is open.");
+  else assert.match(homeHtml, /<h1 id="home-heading">The lobby is open\.<\/h1>/);
   // No session-secret binding: a guest still gets the safe invite fallback.
   assert.match(homeHtml, /href="\/discord"[^>]*data-testid="discord-join"/);
   assert.doesNotMatch(homeHtml, /data-testid="join"/);

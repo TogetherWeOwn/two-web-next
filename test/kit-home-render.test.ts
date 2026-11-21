@@ -69,7 +69,7 @@ describe("Kit home SSR render: session-aware header and hero", () => {
       const html = renderPage(baseData({ session }));
       const hero = html.split('<section class="hero')[1]!.split("</section>")[0]!;
       expect(hero).toContain('id="home-heading"');
-      expect(hero.replace(/<[^>]+>/g, "")).toContain("The lobby is open.");
+      expect(hero).toContain("The lobby is <em>open</em>.");
       expect(hero).toContain('data-testid="member-count"');
       expect(hero).not.toContain("In voice now");
       expect(hero).not.toContain("Pull me into");
@@ -120,8 +120,7 @@ describe("Kit home SSR render: session-aware header and hero", () => {
     expect(html).toContain('href="#main">Skip to content</a>');
     expect(html.match(/<header\b/g)).toHaveLength(1);
     expect(html).toContain('id="main" tabindex="-1"');
-    expect(html).toContain('<footer class="ember-footer');
-    expect(html).toContain('aria-label="Footer"');
+    expect(html).toMatch(/<footer class="ember-footer">[\s\S]*?<nav aria-label="Footer"/);
     expect(html).toContain('href="/auth/discord" data-testid="notice-retry"');
     expect(html).toContain("Your earlier changes were not saved.");
     expect(html.indexOf('data-testid="auth-error"')).toBeLessThan(
@@ -349,6 +348,8 @@ describe("Kit home SSR render: independently degraded panels", () => {
       expect(html).toContain("What’s on.");
       expect(html).toContain("Come along.");
       expect(html).toContain("Community night");
+      const panel = html.split('<aside class="ember-home-panel"')[1]!.split("</aside>")[0]!;
+      expect(panel).toContain(`<a href="${INVITE_URL}">Open Discord</a>`);
       expect(html).toContain(`href="${INVITE_URL}" data-testid="home-event-discord"`);
       expect(html).toContain("RSVP in Discord");
       expect(html).not.toContain("You’re in");

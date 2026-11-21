@@ -64,12 +64,9 @@ const nextOwnEvent = $derived(
 );
 // The published teaser feed is ordered by start time.
 const heroRsvp = $derived(!sessionUnavailable && !eventsUnavailable ? nextOwnEvent : undefined);
-const heroEvent = $derived(
-  eventsUnavailable
-    ? undefined
-    : (heroRsvp?.event ??
-        upcomingEvents.find((event: HomeUpcomingRow) => event.startsAt > renderTime)),
-);
+const heroEvent = $derived(eventsUnavailable ? undefined : (
+  heroRsvp?.event ?? upcomingEvents.find((event: HomeUpcomingRow) => event.startsAt > renderTime)
+));
 </script>
 
 {#snippet primaryLinks()}
@@ -78,33 +75,6 @@ const heroEvent = $derived(
     {#if session?.member}<a href="/leaderboards/members">Leaderboard</a>{/if}
     <a href="/about">About</a>
   </nav>
-{/snippet}
-
-{#snippet homeHeader()}
-  <a class="skip-link" href="#main">Skip to content</a>
-  <header class="ember-home-top" data-kit-site-header>
-    <div class="ember-home-row">
-      <a href="/" aria-current="page"><img src="/logo.svg" width="140" height="39" alt="Together We Own" /></a>
-      <div class="ember-home-desktop">{@render primaryLinks()}</div>
-      <nav class="ember-home-account" aria-label="Account">
-        {#if session}
-          <form method="post" action="/logout">
-            <span class="sr-only">Signed in</span>
-            <span class="who">{session.username}</span>
-            <Button size="sm" type="submit">Sign out</Button>
-          </form>
-        {:else}
-          <span class="sr-only">Welcome, guest</span>
-          <a href="/auth/discord" aria-label="Sign in with Discord" data-testid="signin">Sign in</a>
-          <Button size="sm" variant="primary" href={sessionUnavailable ? "/discord" : "/join"}>Join</Button>
-        {/if}
-      </nav>
-      <details class="ember-home-menu">
-        <summary>Menu</summary>
-        {@render primaryLinks()}
-      </details>
-    </div>
-  </header>
 {/snippet}
 
 {#snippet homeContent()}
@@ -166,22 +136,21 @@ const heroEvent = $derived(
     </div>
     <aside class="ember-home-panel" aria-labelledby="home-panel-heading">
       <h2 id="home-panel-heading">{heroRsvp ? "Your next event" : "On the schedule"}</h2>
-      {#if heroEvent}
-        <div class="ember-home-panel-row">
+      <div class="ember-home-panel-row">
+        {#if heroEvent}
           <p><strong>{heroEvent.title}</strong></p>
           <p><time datetime={heroEvent.startsAt.toISOString()}>{cardTimeLabel(heroEvent.startsAt, heroEvent.timezone)} ({isValidZone(heroEvent.timezone) ? heroEvent.timezone : "UTC"})</time></p>
-        </div>
-        {#if heroEvent.source === "discord"}
-          <a href={inviteUrl}>View event in Discord</a>
         {:else}
-          <a href={`/e/${encodeURIComponent(heroEvent.eventKey)}`}>View event details</a>
-        {/if}
-      {:else}
-        <div class="ember-home-panel-row">
           <p><strong>{eventsUnavailable ? "Schedule unavailable" : "No upcoming game nights"}</strong></p>
           <p>Check Discord for updates.</p>
-        </div>
+        {/if}
+      </div>
+      {#if !heroEvent}
         <a href="/discord">Find us on Discord</a>
+      {:else if heroEvent.source === "discord"}
+        <a href={inviteUrl}>Open Discord</a>
+      {:else}
+        <a href={`/e/${encodeURIComponent(heroEvent.eventKey)}`}>View event details</a>
       {/if}
     </aside>
   </section>
@@ -398,7 +367,30 @@ const heroEvent = $derived(
   theme="home"
 />
 <div class="base-theme homepage-theme ember-home" data-theme="home">
-  {@render homeHeader()}
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="ember-home-top" data-kit-site-header>
+    <div class="ember-home-row">
+      <a class="brand" href="/" aria-current="page"><img src="/logo.svg" width="140" height="39" alt="Together We Own" /></a>
+      <div class="ember-home-desktop">{@render primaryLinks()}</div>
+      <nav class="ember-home-account" aria-label="Account">
+        {#if session}
+          <form method="post" action="/logout">
+            <span class="sr-only">Signed in</span>
+            <span class="who">{session.username}</span>
+            <Button size="sm" type="submit">Sign out</Button>
+          </form>
+        {:else}
+          <span class="sr-only">Welcome, guest</span>
+          <a href="/auth/discord" aria-label="Sign in with Discord" data-testid="signin">Sign in</a>
+          <Button size="sm" variant="primary" href={sessionUnavailable ? "/discord" : "/join"}>Join</Button>
+        {/if}
+      </nav>
+      <details class="ember-home-menu">
+        <summary>Menu</summary>
+        {@render primaryLinks()}
+      </details>
+    </div>
+  </header>
   <main class="ember-home-main" id="main" tabindex="-1">
     {#if data.restoredWrite}<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>{/if}
     {@render homeContent()}

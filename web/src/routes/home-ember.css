@@ -1,4 +1,3 @@
-/* The route owns the canvas, header, hero and footer treatment only. */
 :root .base-theme.ember-home {
   --theme-page: var(--g0);
 }
@@ -17,23 +16,17 @@
   gap: var(--space-8);
   min-height: calc(var(--space-10) - var(--space-1));
 }
-.ember-home-row img {
-  display: block;
-  height: auto;
-}
-.ember-home-row nav {
-  display: flex;
-  align-items: center;
-  gap: var(--space-6);
-}
-.ember-home-row .ember-home-account {
-  margin-inline-start: auto;
-  gap: var(--space-3);
-}
+.ember-home-row nav,
 .ember-home-account form {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+}
+.ember-home-row nav[aria-label="Primary"] {
+  gap: var(--space-6);
+}
+.ember-home-account {
+  margin-inline-start: auto;
 }
 .base-theme .ember-home-row .ember-home-account a.primary {
   color: var(--on-accent);
@@ -51,9 +44,6 @@
 }
 .ember-home-row nav[aria-label="Primary"] a {
   text-decoration: none;
-}
-.ember-home-row nav[aria-label="Primary"] a:hover {
-  text-decoration: underline;
 }
 .ember-home-menu summary {
   cursor: pointer;
@@ -89,10 +79,6 @@
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
 }
-.base-theme .ember-home-main .hero-action .btn {
-  min-height: var(--space-9);
-  font: var(--font-weight-semibold) var(--text-body) / var(--leading-title) var(--font-ui);
-}
 .ember-home-panel {
   padding: var(--space-5);
   border: 1px solid var(--color-hair2);
@@ -113,9 +99,6 @@
 .ember-home-panel-row p {
   margin: 0;
 }
-.ember-home-panel-row strong {
-  color: var(--t1);
-}
 .ember-home-panel > a {
   display: inline-flex;
   align-items: center;
@@ -133,6 +116,7 @@
   }
   .ember-home-row img {
     width: 116px;
+    height: auto;
   }
   .ember-home-desktop {
     display: none;

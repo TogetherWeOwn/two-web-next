@@ -17,6 +17,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseFragment } from "parse5";
 import { stripEmberDelta } from "./kit-archive-delta.mjs";
 import { sectionOf } from "./kit-section-contract.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -549,6 +550,12 @@ function countMatches(html, pattern) {
   return [...html.matchAll(pattern)].length;
 }
 
+export function kitHomeHeadingText(html) {
+  const heading = /<h1 id="home-heading">([\s\S]*?)<\/h1>/.exec(html)?.[1] ?? "";
+  const text = (node) => node.value ?? node.childNodes?.map(text).join("") ?? "";
+  return text(parseFragment(heading)).replace(/\s+/g, " ").trim();
+}
+
 // One assertion set per route response. Returns an array of failure labels
 // (empty = pass). Pure: no I/O, no network.
 export function assertRouteContract({ label, html, headers, status, expected }) {
@@ -590,8 +597,12 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
     if (!html.includes('<script src="/islands/past-events.js"'))
       failures.push(`${label}: shared island binder`);
   } else if (contract === "home") {
-    if (!/<h1\b[^>]*>\s*The lobby is open\.\s*<\/h1>/i.test(html))
-      failures.push(`${label}: home heading present`);
+    const kitHeading = /^(?:The lobby is open\.|Next game night: .+\. Come play with us\.)$/;
+    const headingOk =
+      marker === "kit"
+        ? kitHeading.test(kitHomeHeadingText(html))
+        : /<h1\b[^>]*>\s*The lobby is open\.\s*<\/h1>/i.test(html);
+    if (!headingOk) failures.push(`${label}: home heading present`);
     const oauthJoin =
       /<a\b(?=[^>]*\shref="\/auth\/discord")(?=[^>]*\sdata-testid="join")[^>]*>\s*Join with Discord\s*<\/a>/i;
     const inviteFallback =
@@ -2177,7 +2188,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     const homeShell =
       `<link rel="canonical" href="https://next.togetherweown.com/">` +
       `<a class="skip-link" href="#main">Skip</a><nav aria-label="Primary"></nav>` +
-      `<main id="main"><h1>The lobby is open.</h1>${join}</main><p>Welcome, guest</p>`;
+      `<main id="main">${homeMarker === "kit" ? '<h1 id="home-heading">The lobby is <em>open</em>.</h1>' : "<h1>The lobby is open.</h1>"}${join}</main><p>Welcome, guest</p>`;
     const checkHome = (html, cache = "private, no-store") =>
       assertRouteContract({
         label: "unit/home",
@@ -2195,7 +2206,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     for (const [name, html, mutant, cache] of [
       ["good fixture", homeShell],
       ["invite fallback", fallbackShell],
-      ["heading", homeShell.replace("The lobby is open.", "Welcome"), true],
+      ["heading", homeShell.replace("The lobby is", "Welcome"), true],
       ["join", homeShell.replace('href="/auth/discord"', 'href="https://evil.test/"'), true],
       ["invite fallback", fallbackShell.replace('href="/discord"', 'href="/join"'), true],
       ["own RSVP", `${homeShell}<p data-testid="home-standing">Own RSVP</p>`, true],

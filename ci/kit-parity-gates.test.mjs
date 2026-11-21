@@ -1143,7 +1143,7 @@ globalThis.fetch = async (input) => {
     : '<a data-testid="join" href="/auth/discord">Join with Discord</a>';
   const html = '<link rel="canonical" href="https://next.togetherweown.com/">' +
     '<a class="skip-link" href="#main">Skip</a><nav aria-label="Primary"></nav>' +
-    '<main id="main"><h1>The lobby is open.</h1>' + join +
+    '<main id="main">' + (kit ? '<h1 id="home-heading">Next game night: <em>Fixture</em>. <span>Come play with us.</span></h1>' : '<h1>The lobby is open.</h1>') + join +
     '<h2>Sign out of Discord before switching accounts</h2></main><p>Welcome, guest</p>';
   return new Response(html, { status: 200, headers: { "content-type": "text/html", "cache-control": "private, no-store", ...(kit ? { "x-two-renderer": "kit" } : {}) } });
 };
