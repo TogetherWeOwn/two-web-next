@@ -1012,8 +1012,7 @@ export function assertMembersContract({ label, html, headers, status, expected }
     failures.push(`${label}: season + activity inputs present`);
   const hasTable = /<table[\s>]/.test(html);
   const hasEmptyStatus =
-    html.includes("Nobody is ranked for this season and game yet.") ||
-    html.includes("You are not ranked for this season and game yet.") ||
+    /(?:Nobody is|You are not) ranked for this season and game(?: yet)?\./.test(html) ||
     html.includes("Rankings are temporarily unavailable.");
   if (!hasTable && !hasEmptyStatus) failures.push(`${label}: board table or empty status present`);
   if (hasTable) {
