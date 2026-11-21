@@ -8,6 +8,11 @@ import {
 } from "@playwright/test";
 import postgres from "postgres";
 import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
+import {
+  allowsEndedMemberBoardCopy,
+  memberBoardEmptyText,
+  memberBoardStatus,
+} from "../../ci/kit-parity-gates.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { QA_IDENTITIES } from "../../src/qa";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
@@ -858,9 +863,10 @@ for (const target of targets) {
         if (ranked) {
           expect(normalized, `${target.name} ${path}: ranked viewer row`).toContain(RANKED_ROW);
         } else {
-          expect(body, `${target.name} ${path}: empty board`).toContain(
-            "Nobody is ranked for this season and game yet.",
-          );
+          expect(
+            memberBoardStatus(body, allowsEndedMemberBoardCopy(path)),
+            `${target.name} ${path}: empty board`,
+          ).toBe("overall-empty");
           expect(normalized, `${target.name} ${path}: no ranked row`).not.toContain(RANKED_ROW);
         }
       }
@@ -3500,7 +3506,8 @@ test("Kit worker answers traffic within the liveness bound", async ({ playwright
 const MEMBER_BOARD_VIEWS: Array<[name: string, path: string]> = [
   ["default", "/leaderboards/members"],
   ["relative", "/leaderboards/members?scope=relative"],
-  ["season", "/leaderboards/members?season=2026"],
+  // A completed leap-month window keeps season progress stable across CI dates.
+  ["season", "/leaderboards/members?season=2000-02"],
   ["activity", "/leaderboards/members?activity=valheim"],
 ];
 
@@ -3600,7 +3607,13 @@ test.describe("kit: member-board visuals", () => {
             await expect(rankedRow.getByRole("cell")).toHaveText(["1", "1"]);
           } else {
             await expect(
-              page.getByText("Nobody is ranked for this season and game yet."),
+              page
+                .getByRole("main")
+                .getByRole("status")
+                .and(page.locator("p"))
+                .filter({
+                  hasText: memberBoardEmptyText("overall", allowsEndedMemberBoardCopy(path)),
+                }),
             ).toBeVisible();
             await expect(page.getByRole("rowheader", { name: "QA Member" })).toHaveCount(0);
           }
