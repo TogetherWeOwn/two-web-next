@@ -1,28 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { signedAttendanceReader } from "../src/bot/attendance-read";
 import { signInternalAction } from "../src/bot/signer";
+import contract from "./fixtures/bot-site-contract-v2.json";
 
-const key = "01KTESTEVENT000000000000000";
+const fixture = contract.verbs["event.attendance.read"];
+const key = fixture.request.event_key;
+const golden = fixture.results.read;
+const { window } = golden;
+const [fixtureRoom] = golden.rooms;
+const [member] = golden.members;
+if (!fixtureRoom || !member) throw new Error("Attendance fixture needs a room and a member");
+const room = { ...fixtureRoom, name_at_close: "Café Night" };
+const attendance = { ...golden, rooms: [room], members: [member] };
 const config = { baseUrl: "https://bot.example.test/other", keyId: "fixture", secret: "synthetic" };
 const unavailable = { ok: false, code: "bot_unreachable" };
-const window = { starts_at: "2026-10-20T20:00:00Z", ends_at: "2026-10-20T22:00:00Z" };
-const room = { channel_id: "100000000000000001", name_at_close: "Café Night" };
-const member = {
-  discord_id: "100000000000000002",
-  minutes: 5,
-  sessions: 1,
-  first_joined_at: window.starts_at,
-};
-const attendance = {
-  v: 1,
-  event_key: key,
-  window,
-  threshold_minutes: 10,
-  peak_concurrent: 1,
-  rooms: [room],
-  members: [member],
-  final: true,
-};
 
 const observe = (response: Response) =>
   signedAttendanceReader(config, vi.fn<typeof fetch>().mockResolvedValue(response))(key);
@@ -39,9 +30,12 @@ function deferred<T>() {
 afterEach(() => vi.useRealTimers());
 
 describe("signed event attendance read", () => {
-  it("sends the exact signed canonical POST once without redirect following", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(reply(attendance));
-    expect(await signedAttendanceReader(config, fetcher)(key)).toEqual({ ok: true, attendance });
+  it("sends the exact signed POST once and accepts the pinned bot reply", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(reply(golden));
+    expect(await signedAttendanceReader(config, fetcher)(key)).toEqual({
+      ok: true,
+      attendance: golden,
+    });
     expect(fetcher).toHaveBeenCalledTimes(1);
     const [url, init] = fetcher.mock.calls[0] ?? [];
     const body = `{"action":"event.attendance.read","event_key":"${key}"}`;
@@ -65,12 +59,15 @@ describe("signed event attendance read", () => {
     await expect(observe(response)).resolves.toEqual({ ok: true, attendance: result });
   });
 
-  it("accepts millisecond timestamps and distinct in-budget aggregates", async () => {
+  it("accepts millisecond timestamps, in-budget aggregates, and room-name boundaries", async () => {
     const ms = "1970-01-01T01:00:00.000Z";
     const result = {
       ...attendance,
       window: { starts_at: ms, ends_at: "1970-01-01T02:00:00.000Z" },
-      rooms: Array.from({ length: 101 }, (_, i) => ({ ...room, channel_id: String(i + 1) })),
+      rooms: Array.from({ length: 101 }, (_, i) => ({
+        channel_id: String(i + 1),
+        name_at_close: "a".repeat(i === 0 ? 100 : 1),
+      })),
       members: Array.from({ length: 501 }, (_, i) => ({
         ...member,
         discord_id: String(i + 1),
@@ -118,15 +115,18 @@ describe("signed event attendance read", () => {
     await expect(observe(reply({ ...attendance, ...overrides }))).resolves.toEqual(unavailable);
   });
 
-  it("rejects malformed envelopes, invalid JSON, and absent bodies", async () => {
+  it("rejects malformed envelopes, invalid JSON or UTF-8, and absent bodies", async () => {
     const malformed = Response.json({ ok: 0, error: { code: "not_found" } }, { status: 404 });
     await expect(observe(malformed)).resolves.toEqual(unavailable);
     await expect(observe(new Response("{"))).resolves.toEqual(unavailable);
+    const bytes = new Uint8Array(await reply(attendance).arrayBuffer());
+    bytes[bytes.indexOf(0xc3)] = 0xff; // Corrupt the lead byte of the room name's é.
+    await expect(observe(new Response(bytes))).resolves.toEqual(unavailable);
     await expect(observe(new Response(null, { status: 204 }))).resolves.toEqual(unavailable);
   });
 
-  it("rejects unsafe destinations and returned redirects without another fetch", async () => {
-    const cancel = vi.fn();
+  it("refuses unsafe URLs and redirects even if body cancellation rejects", async () => {
+    const cancel = vi.fn().mockRejectedValue(new Error("fixture cancellation failure"));
     const response = new Response(new ReadableStream({ cancel }), {
       status: 302,
       headers: { Location: "https://redirect.example.test/" },

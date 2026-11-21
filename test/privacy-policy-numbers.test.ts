@@ -138,7 +138,7 @@ const CLAIMS: Claim[] = [
     label: "Rate-limit counters",
     anchor: "Rate-limit counters",
     phrase: `${spell(THROTTLE_COUNTER_RETENTION_MINUTES)} minutes`,
-    pin: "THROTTLE_COUNTER_RETENTION_MINUTES, src/join/service.ts",
+    pin: "THROTTLE_COUNTER_RETENTION_MINUTES, src/http/throttle.ts",
   },
   {
     label: "Activity stats budget",

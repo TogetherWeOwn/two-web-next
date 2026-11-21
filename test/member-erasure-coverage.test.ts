@@ -224,7 +224,7 @@ const MEMBER_BUCKETS = [
   {
     prefix: "profile-write",
     constructedIn: "src/profiles/routes-admission.ts",
-    prunedIn: "src/join/service.ts",
+    prunedIn: "src/http/throttle.ts",
   },
 ] as const;
 
@@ -234,8 +234,8 @@ const hasThrottlePrune = (rel: string): boolean => {
   if (/5\s*minutes/.test(text)) return true;
   // Shared retention constant: the prune bound must resolve to 5 minutes.
   if (!/THROTTLE_COUNTER_RETENTION_MINUTES/.test(text)) return false;
-  const service = readFileSync(join(root, "src/join/service.ts"), "utf8");
-  return /THROTTLE_COUNTER_RETENTION_MINUTES\s*=\s*5\b/.test(service);
+  const throttle = readFileSync(join(root, "src/http/throttle.ts"), "utf8");
+  return /THROTTLE_COUNTER_RETENTION_MINUTES\s*=\s*5\b/.test(throttle);
 };
 
 describe("member-erasure coverage (DB-free migration introspection)", () => {
