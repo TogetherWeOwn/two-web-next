@@ -407,7 +407,7 @@ describe("queue ledger (N3)", () => {
     expect(ledger.rows.has("j1")).toBe(false); // dequeued on terminal success
 
     const bad = {
-      postAnnouncement: async () => fail({ retryable: false, code: "action_not_allowed" }),
+      assignRole: async () => fail({ retryable: false, code: "action_not_allowed" }),
     } as unknown as BotClient;
     const ledger2 = memLedger();
     ledger2.rows.set("j2", { state: "pending" });
@@ -415,9 +415,9 @@ describe("queue ledger (N3)", () => {
       {
         messages: [
           msg({
-            kind: "announcement",
-            idempotencyKey: "k",
-            action: { channelKey: "c", body: "b" },
+            kind: "role-assign",
+            idempotencyKey: null,
+            action: { userId: "1", roleKey: "fixture" },
             jobId: "j2",
           }),
         ],
@@ -427,11 +427,10 @@ describe("queue ledger (N3)", () => {
         events: store(),
         lock: memLock(),
         ledger: ledger2,
-        ...{ announcementReconciliation: announcementStore() },
       },
     );
     expect(ledger2.rows.get("j2")?.state).toBe("failed");
-    expect(ledger2.rows.get("j2")?.reason).toContain("announcement.post");
+    expect(ledger2.rows.get("j2")?.reason).toContain("role.assign");
   });
 
   it("releases back to pending with the retry's availability on a retry outcome", async () => {

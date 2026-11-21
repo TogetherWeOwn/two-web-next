@@ -127,6 +127,79 @@ describe("handleQueue with the live bot client", () => {
     expect(queueFailingAlerts()).toEqual([]);
   });
 
+  it.each([
+    { idempotencyKey: "not-a-uuid" },
+    { action: { channelKey: "alias with spaces", body: "hello" } },
+  ])("settles an invalid announcement identity without retrying: %j", async (invalid) => {
+    const { fn } = fetchDouble();
+    vi.stubGlobal("fetch", fn);
+    const failed = vi.fn();
+    const claim = vi.fn();
+    query.mockImplementation(async (parts: TemplateStringsArray, ...values: unknown[]) => {
+      const text = parts.join("?");
+      if (text.includes("insert into queue_failed_jobs")) failed(...values);
+      if (text.includes("insert into announcement_send_claims")) claim();
+      return claimQuery(text);
+    });
+    const m = delivery({ ...announcement(), ...invalid, jobId: uuid });
+    m.ack.mockImplementation(() => expect(failed).toHaveBeenCalledOnce());
+
+    await handleQueue(batch(m), envWith(configured));
+
+    expect(m.ack).toHaveBeenCalledOnce();
+    expect(m.retry).not.toHaveBeenCalled();
+    expect(claim).not.toHaveBeenCalled();
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("waits on the committed retry delay without sending on an early duplicate", async () => {
+    const { fn, seen } = fetchDouble(
+      json(
+        429,
+        { ok: false, error: { code: "rate_limited", retryable: true } },
+        {
+          "retry-after": "120",
+        },
+      ),
+      json(200, { ok: true, result: { message_id: "m1" } }),
+    );
+    vi.stubGlobal("fetch", fn);
+    let due = false;
+    let delayed = false;
+    query.mockImplementation(async (parts: TemplateStringsArray, ...values: unknown[]) => {
+      const text = parts.join("?");
+      if (text.includes("update announcement_send_claims") && values[0] === "retryable") {
+        expect(values).toContain(120);
+        delayed = true;
+      }
+      if (delayed && !due) {
+        if (text.includes("insert into announcement_send_claims")) return [];
+        if (text.includes("case when state"))
+          return [{ ...claimRow, kind: "retryable", retry_in_seconds: 119 }];
+      }
+      if (due && text.includes("insert into announcement_send_claims"))
+        return [{ ...claimRow, send_attempts: 2, claim_until_ms: Date.now() + 30_000 }];
+      return claimQuery(text);
+    });
+    const first = delivery(announcement());
+    await handleQueue(batch(first), envWith(configured));
+    expect(first.retry).toHaveBeenCalledWith({ delaySeconds: 120 });
+
+    const early = delivery(announcement(), 2);
+    await handleQueue(batch(early), envWith(configured));
+    expect(early.retry).toHaveBeenCalledWith({ delaySeconds: 119 });
+    expect(early.ack).not.toHaveBeenCalled();
+    expect(fn).toHaveBeenCalledOnce();
+
+    due = true;
+    const eligible = delivery(announcement(), 3);
+    await handleQueue(batch(eligible), envWith(configured));
+    expect(eligible.ack).toHaveBeenCalledOnce();
+    expect(
+      seen.map(({ init }) => (init.headers as Record<string, string>)["Idempotency-Key"]),
+    ).toEqual([uuid, uuid]);
+  });
+
   it.each([false, true])("persists a hard stop before ack; retryable=%s", async (retryable) => {
     const { fn } = fetchDouble(refusal(409, "needs_reconciliation", retryable));
     vi.stubGlobal("fetch", fn);
@@ -296,6 +369,17 @@ describe("handleQueue with the live bot client", () => {
     const alerts = queueFailingAlerts();
     expect(alerts).toHaveLength(1);
     expect(alerts[0]).toContain("malformed");
+    const writes = query.mock.calls.filter(([parts]) =>
+      parts.join("?").includes("insert into queue_failed_jobs"),
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.slice(1)).toEqual([
+      uuid,
+      "announcement",
+      null,
+      expect.stringContaining("malformed"),
+      uuid,
+    ]);
   });
 
   it.each([

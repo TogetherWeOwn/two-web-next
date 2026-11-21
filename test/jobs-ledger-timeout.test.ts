@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { announcementStore } from "./helpers/announcement-store";
 import { SYNC_EVENT } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
@@ -317,7 +316,7 @@ describe("queue ledger timeout guards (released / failed / dequeued)", () => {
     });
     try {
       const bot = {
-        postAnnouncement: async () => botFail({ retryable: false, code: "action_not_allowed" }),
+        assignRole: async () => botFail({ retryable: false, code: "action_not_allowed" }),
       } as unknown as BotClient;
       const base = memLedger();
       const ledger = {
@@ -330,14 +329,14 @@ describe("queue ledger timeout guards (released / failed / dequeued)", () => {
           return base.failed(id, kind, key, reason);
         },
       };
-      const ann = (jobId: string) => ({
-        kind: "announcement",
-        idempotencyKey: `k-${jobId}`,
-        action: { channelKey: "c", body: "b" },
+      const role = (jobId: string) => ({
+        kind: "role-assign",
+        idempotencyKey: null,
+        action: { userId: "1", roleKey: "fixture" },
         jobId,
       });
-      const m1 = msg(ann("j1"), 1);
-      const m2 = msg(ann("j2"), 1);
+      const m1 = msg(role("j1"), 1);
+      const m2 = msg(role("j2"), 1);
       let m1Acks = 0;
       const origAck = m1.ack.bind(m1);
       m1.ack = () => {
@@ -349,7 +348,6 @@ describe("queue ledger timeout guards (released / failed / dequeued)", () => {
         events: store(),
         lock: memLock(),
         ledger,
-        announcementReconciliation: announcementStore(),
       };
       const p = consume({ messages: [m1, m2] }, deps);
       await vi.advanceTimersByTimeAsync(5000);
