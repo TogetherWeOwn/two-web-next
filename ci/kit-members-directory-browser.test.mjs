@@ -178,26 +178,37 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
         await page.screenshot({ path: `${out}/scrolled-${width}.png` });
       }
 
-      await page.setViewportSize({ width: 390, height: 200 });
-      await open("?state=many");
-      await filters.getByRole("link", { name: /^Guides\b/ }).focus();
-      await page.keyboard.press("Tab");
-      assert.ok(
-        await list.getByRole("link", { name: "Fixture Member 1", exact: true }).evaluate((link) => {
-          const { left, top, bottom, width, height } = link.getBoundingClientRect();
-          const header = document.querySelector("[data-kit-site-header]").getBoundingClientRect();
-          const inset = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop);
-          return (
-            link.matches(":focus-visible") &&
-            inset === header.height &&
-            top >= header.bottom &&
-            bottom <= innerHeight &&
-            link.contains(document.elementFromPoint(left + width / 2, top + height / 2))
-          );
-        }),
-        "the focused member link must clear the header in a 390×200 viewport",
-      );
-      await page.screenshot({ path: `${out}/short-focus-390.png` });
+      for (const { width, height } of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+        { width: 390, height: 200 },
+      ]) {
+        await page.setViewportSize({ width, height });
+        await open("?state=many");
+        await filters.getByRole("link", { name: /^Guides\b/ }).focus();
+        await page.keyboard.press("Tab");
+        assert.ok(
+          await list
+            .getByRole("link", { name: "Fixture Member 1", exact: true })
+            .evaluate((link) => {
+              const { left, top, bottom, width, height } = link.getBoundingClientRect();
+              const header = document
+                .querySelector("[data-kit-site-header]")
+                .getBoundingClientRect();
+              const toolbar = document.querySelector(".directory-toolbar").getBoundingClientRect();
+              const inset = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop);
+              return (
+                link.matches(":focus-visible") &&
+                (innerHeight > 360 || inset === header.height) &&
+                top >= Math.max(header.bottom, toolbar.bottom) &&
+                bottom <= innerHeight &&
+                link.contains(document.elementFromPoint(left + width / 2, top + height / 2))
+              );
+            }),
+          `the focused member link must clear the header and toolbar at ${width}×${height}`,
+        );
+        if (height === 200) await page.screenshot({ path: `${out}/short-focus-390.png` });
+      }
 
       await page.setViewportSize({ width: 1280, height: 800 });
       await open("");
