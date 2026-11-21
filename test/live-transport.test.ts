@@ -107,6 +107,7 @@ it.each([
   () => Response.json({ ...snapshot, seq: -1 }),
   () => Response.redirect("https://other.example/"),
   () => Response.json({ ...snapshot, observed_at: "2026-02-30T02:10:00Z" }),
+  () => Response.json({ ...snapshot, observed_at: "2024-02-29T02:10:00.1234567890Z" }),
 ])("does not supply a watermark for a rejected snapshot", async (response) => {
   expect(await signedLiveSnapshot(config, decode, async () => response())()).toBeNull();
 });

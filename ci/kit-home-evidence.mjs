@@ -46,9 +46,12 @@ const states = {
   },
   memberEvents: {
     session: member,
-    upcomingEvents: [event],
+    upcomingEvents: [
+      { ...event, title: "Game night with a long title that wraps on smaller screens" },
+    ],
     memberRsvps: [{ eventKey: event.eventKey, status: "going" }],
   },
+  memberEventsOutage: { session: member, eventsUnavailable: true },
   staleCounts: {
     countsSnapshot: { ...zeroOnline, observedAt: "2026-10-20T11:00:00.000Z", stale: true },
     upcomingEvents: [event],
@@ -65,9 +68,9 @@ const states = {
 
 export const homeEvidenceStates = Object.freeze(Object.keys(states));
 
-export function homeEvidencePage(state) {
+export function fixtureData(state) {
   if (!Object.hasOwn(states, state)) throw new Error(`Unknown home evidence state: ${state}`);
-  const data = {
+  return {
     session: null,
     sessionUnavailable: false,
     notice: null,
@@ -83,10 +86,18 @@ export function homeEvidencePage(state) {
     imageHosts: "",
     ...states[state],
   };
+}
+
+export function homeEvidencePage(state, variants = []) {
+  const fixtures = Object.fromEntries([state, ...variants].map((key) => [key, fixtureData(key)]));
   return `<script>
+import { page } from '$app/state';
 import Home from '../+page.svelte';
 import { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO } from '../../../../src/home-copy';
-const data = ${JSON.stringify(data)};
+const fixtures = ${JSON.stringify(fixtures)};
+const key = page.url.searchParams.get('state') ?? ${JSON.stringify(state)};
+if (!Object.hasOwn(fixtures, key)) throw new Error('Unknown home evidence state');
+const data = fixtures[key];
 data.upcomingEvents = data.upcomingEvents.map(event => ({ ...event, startsAt: new Date(event.startsAt) }));
 data.homeCopy = { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO };
 </script>
@@ -131,10 +142,58 @@ export async function assertHomeEvidence(page, state) {
     );
   }
   const memberWithRsvp = state === "memberEvents" || state === "memberAgenda";
-  for (const id of ["home-standing", "home-event-own-rsvp"])
-    assert.equal(await count(id), memberWithRsvp ? 1 : 0, `${state}: ${id}`);
+  assert.equal(await count("home-event-own-rsvp"), memberWithRsvp ? 1 : 0, `${state}: RSVP badge`);
+  const standing = page.getByTestId("home-standing");
+  assert.equal(await standing.count(), session?.member ? 1 : 0, `${state}: standing panel`);
+  assert.equal(await count("rank-stack"), session?.member ? 0 : 1, `${state}: public rank ladder`);
+  if (session?.member) {
+    const next = standing.getByRole("link").first();
+    const board = standing.getByRole("link", { name: "See where you place" });
+    const outage = states[state].eventsUnavailable;
+    const href = memberWithRsvp ? "/e/game-night-1" : outage ? "/discord" : "/events";
+    assert.equal(await next.getAttribute("href"), href);
+    assert.equal(await board.getAttribute("href"), "/leaderboards/members?scope=relative");
+    assert.match(
+      await standing.innerText(),
+      state === "memberAgenda"
+        ? /on the waitlist/
+        : memberWithRsvp
+          ? /going/
+          : outage
+            ? /couldn’t load your next RSVP/
+            : /No upcoming RSVP in this preview/,
+    );
+    const band = await standing.boundingBox();
+    const card = await standing.locator(".standing-card").boundingBox();
+    const events = await page.locator(".event-band").boundingBox();
+    assert.ok(
+      band && card && events && band.y >= events.y + events.height,
+      `${state}: standing order`,
+    );
+    if (page.viewportSize().width <= 820) {
+      assert.equal(card.width, band.width, `${state}: standing fills mobile column`);
+    } else {
+      assert.ok(card.x >= band.x + band.width / 2, `${state}: standing is in desktop right column`);
+    }
+    await page.locator(".event-band a").last().focus();
+    await page.keyboard.press("Tab");
+    assert.ok(
+      await next.evaluate((el) => el === document.activeElement && el.matches(":focus-visible")),
+      `${state}: Tab reaches the next RSVP link from Upcoming Events`,
+    );
+    await page.keyboard.press("Tab");
+    assert.ok(
+      await board.evaluate(
+        (el) => el.matches(":focus-visible") && getComputedStyle(el).outlineStyle === "solid",
+      ),
+    );
+    await board.evaluate((el) => el.blur());
+  }
   assert.equal(await count("notice"), state === "joinFailed" ? 1 : 0, `${state}: notice`);
-  assert.equal(await page.getByTestId("home-highlights").locator("li").count(), 4);
+  assert.equal(
+    await page.getByTestId("home-highlights").locator("li").count(),
+    session?.member ? 0 : 4,
+  );
   const intro = page.getByTestId("home-guest-intro");
   assert.equal(await intro.count(), session?.member ? 0 : 1, `${state}: guest intro`);
   if (!session?.member) {
@@ -184,7 +243,7 @@ export async function assertHomeEvidence(page, state) {
   } else {
     assert.equal(
       await page.getByTestId("home-events-empty").getAttribute("data-state"),
-      state === "eventsOutage" ? "unavailable" : "empty",
+      states[state].eventsUnavailable ? "unavailable" : "empty",
     );
   }
   if (state === "guest" && page.viewportSize()?.width === 390) {
@@ -214,6 +273,28 @@ export async function assertHomeEvidence(page, state) {
         .getAttribute("href"),
       "https://discord.gg/invite",
     );
+}
+
+// One disposable build, with each state rendered as its own allowlisted SSR navigation.
+export async function withKitHomeEvidenceStates(callback) {
+  const [first, ...variants] = homeEvidenceStates;
+  return withKitOfflineBrowser(
+    {
+      page: homeEvidencePage(first, variants),
+      searches: homeEvidenceStates.map((state) => `?state=${encodeURIComponent(state)}`),
+      now: HOME_EVIDENCE_NOW,
+    },
+    async ({ page, open }) => {
+      await callback(async (state) => {
+        await page.setViewportSize(
+          state === "guest" ? { width: 390, height: 844 } : { width: 1280, height: 720 },
+        );
+        await open(`?state=${encodeURIComponent(state)}`);
+        await assertHomeEvidence(page, state);
+        return page;
+      });
+    },
+  );
 }
 
 export async function withKitHomeEvidence(state, callback) {

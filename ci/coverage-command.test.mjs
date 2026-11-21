@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 
 const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -13,30 +14,110 @@ const job = (id) => workflow.split(`\n  ${id}:\n`)[1]?.split(/\n  [\w-]+:\n/)[0]
 const mergeJob = job("coverage-merge");
 const args = ["run", "--coverage", "--pool=threads"];
 
-test("the independent browser fixture remains selected and fail-closed in ci-ok", () => {
-  const job = workflow.split("\n  kit-browser-fixture:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
-  const checkJob = check.split(/\n  [\w-]+:\n/)[1];
-  const ok = workflow.split("\n  ci-ok:\n")[1];
-  assert(job && ok && checkJob);
-  assert.match(job, /needs: \[scope\]/);
-  assert.match(
-    job,
-    /if: \$\{\{ !cancelled\(\) && needs\.scope\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true' && \(needs\.scope\.outputs\.full == 'true' \|\| needs\.scope\.outputs\.app == 'true' \|\| needs\.scope\.outputs\.worker == 'true'\) \}\}/,
+test("Kit browser shards partition the fixture workload and fail closed in ci-ok", async (t) => {
+  const { jobs } = parse(workflow);
+  const fixture = jobs["kit-browser-fixture"];
+  const lifeline = jobs["kit-browser-lifeline"];
+  const ok = jobs["ci-ok"];
+  const { env, run: script } = ok.steps.find(
+    (step) => step.name === "Aggregate change-gated conclusions",
   );
-  const command =
-    "node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs";
-  const fixtureStep = job.split("\n      - name: Kit disposable browser fixture\n")[1];
-  assert.equal(fixtureStep?.split("\n      - ")[0]?.trim(), `run: ${command}`);
-  assert(job.includes("ref: ${{ github.sha }}"));
-  assert(job.includes("run: node --test ci/kit-lifeline-browser.test.mjs"));
-  assert.match(job, /name: kit-lifeline-\$\{\{ github\.sha \}\}-\$\{\{ github\.run_attempt \}\}/);
-  assert.doesNotMatch(job, /continue-on-error:/);
-  assert(!checkJob.includes(command));
-  assert.match(ok, /KIT_BROWSER_RESULT: \$\{\{ needs\.kit-browser-fixture\.result \}\}/);
-  const script = ok.match(
-    /- name: Aggregate change-gated conclusions\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
-  )?.[1];
-  assert(script);
+  const command = "node --test --test-timeout=300000";
+  const shards = [
+    [
+      "kit-browser-fixture",
+      "KIT_BROWSER_RESULT",
+      `${command} --test-skip-pattern='^calendar ' ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs`,
+    ],
+    [
+      "kit-browser-calendar",
+      "KIT_CALENDAR_RESULT",
+      `${command} --test-name-pattern='^calendar ' ci/kit-browser-fixture.test.mjs`,
+    ],
+    ["kit-browser-lifeline", "KIT_LIFELINE_RESULT", "node --test ci/kit-lifeline-browser.test.mjs"],
+  ];
+  assert.equal(
+    fixture.if,
+    "${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}",
+  );
+  assert.deepEqual(fixture.steps[0].with, {
+    ref: "${{ github.sha }}",
+    "persist-credentials": false,
+  });
+  for (const [id, variable, testCommand] of shards) {
+    const shard = jobs[id];
+    assert.deepEqual(shard.needs, ["scope"]);
+    assert.equal(shard.if, fixture.if);
+    assert.equal(shard["timeout-minutes"], 30);
+    assert.deepEqual(shard.container, fixture.container);
+    assert.deepEqual(shard.steps.slice(0, 6), fixture.steps.slice(0, 6));
+    assert.equal(shard.steps[6].run, testCommand);
+    assert(!jobs.check.steps.some((step) => step.run?.includes(testCommand)));
+    for (const step of shard.steps) assert.equal(step.if, undefined);
+    for (const part of [shard, ...shard.steps]) assert.equal(part["continue-on-error"], undefined);
+    assert(ok.needs.includes(id));
+    assert.equal(env[variable], `\${{ needs.${id}.result }}`);
+  }
+
+  const upload = lifeline.steps.at(-1);
+  assert.equal(upload.id, "lifeline-upload");
+  assert.match(upload.uses, /^actions\/upload-artifact@[0-9a-f]{40}$/);
+  assert.deepEqual(upload.with, {
+    name: "kit-lifeline-${{ github.sha }}-${{ github.run_attempt }}",
+    path: "artifacts/kit-lifeline/",
+    "if-no-files-found": "error",
+  });
+  assert.equal(lifeline.outputs["artifact-id"], "${{ steps.lifeline-upload.outputs.artifact-id }}");
+  assert.equal(
+    env.KIT_LIFELINE_ARTIFACT_ID,
+    "${{ needs.kit-browser-lifeline.outputs.artifact-id }}",
+  );
+
+  const cwd = await mkdtemp(join(tmpdir(), "kit-browser-wiring-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  await mkdir(join(cwd, "ci"));
+  // Run the actual commands against stand-ins. Node matches name patterns
+  // against ancestors too, so complementary regexes alone do not prove a split.
+  for (const [file, names] of [
+    ["kit-browser-fixture-isolation", ["fixture isolation"]],
+    ["kit-browser-fixture", ["calendar example", "other fixture example"]],
+    ["kit-lifeline-browser", ["Lifeline example"]],
+  ]) {
+    await writeFile(
+      join(cwd, "ci", `${file}.test.mjs`),
+      `import { test } from 'node:test';
+import { appendFileSync } from 'node:fs';
+for (const name of ${JSON.stringify(names)}) {
+  test(name, () => appendFileSync('executed.txt', name + '\\n'));
+}`,
+    );
+  }
+  const executed = join(cwd, "executed.txt");
+  for (const [id, cases] of [
+    ["kit-browser-fixture", ["fixture isolation", "other fixture example"]],
+    ["kit-browser-calendar", ["calendar example"]],
+    ["kit-browser-lifeline", ["Lifeline example"]],
+  ]) {
+    await writeFile(executed, "");
+    const run = spawnSync("sh", ["-c", jobs[id].steps[6].run], {
+      cwd,
+      encoding: "utf8",
+      // Do not inherit NODE_TEST_CONTEXT from this outer test runner.
+      env: { PATH: process.env.PATH },
+    });
+    assert.equal(run.status, 0, `${id}: ${run.stdout}\n${run.stderr}`);
+    assert.deepEqual((await readFile(executed, "utf8")).trim().split("\n").sort(), cases, id);
+  }
+
+  const dir = join(cwd, upload.with.path);
+  const verify = () => spawnSync("sh", ["-c", lifeline.steps[7].run], { cwd, env: {} }).status;
+  assert.equal(verify(), 1);
+  await mkdir(dir, { recursive: true });
+  for (const state of ["upcoming", "frozen", "cancelled", "ended"])
+    for (const width of [1280, 390]) await writeFile(join(dir, `${state}-${width}.png`), "fixture");
+  assert.equal(verify(), 0);
+  await writeFile(join(dir, "ended-390.png"), "");
+  assert.equal(verify(), 1);
   const base = {
     SCOPE_RESULT: "success",
     DRAFT: "false",
@@ -50,18 +131,35 @@ test("the independent browser fixture remains selected and fail-closed in ci-ok"
     LIGHTHOUSE_RESULT: "success",
     BUDGET_RESULT: "success",
     KIT_BROWSER_RESULT: "success",
+    KIT_CALENDAR_RESULT: "success",
+    KIT_LIFELINE_RESULT: "success",
+    KIT_LIFELINE_ARTIFACT_ID: "42",
   };
-  const run = (env) => spawnSync("bash", ["-c", script], { env: { ...base, ...env } }).status;
+  const run = (overrides) =>
+    spawnSync("bash", ["-c", script], { env: { ...base, ...overrides } }).status;
   for (const area of ["FULL", "APP", "WORKER"]) {
     assert.equal(run({ [area]: "true" }), 0);
-    for (const result of ["failure", "cancelled", "skipped", ""])
-      assert.notEqual(run({ [area]: "true", KIT_BROWSER_RESULT: result }), 0);
+    for (const [, variable] of shards)
+      for (const result of ["failure", "cancelled", "skipped", ""])
+        assert.equal(
+          run({ [area]: "true", [variable]: result }),
+          1,
+          `${area}: ${variable}=${result}`,
+        );
+    for (const id of ["", "0", "not-an-id"])
+      assert.equal(run({ [area]: "true", KIT_LIFELINE_ARTIFACT_ID: id }), 1);
   }
-  assert.equal(run({ KIT_BROWSER_RESULT: "skipped" }), 0);
-  assert.equal(run({ FULL: "true", DRAFT: "true", KIT_BROWSER_RESULT: "skipped" }), 0);
-  assert.equal(run({ DOCS_ONLY: "true", KIT_BROWSER_RESULT: "skipped" }), 0);
-  assert.notEqual(run({ DOCS_ONLY: "", KIT_BROWSER_RESULT: "skipped" }), 0);
-  assert.notEqual(run({ SCOPE_RESULT: "failure", KIT_BROWSER_RESULT: "skipped" }), 0);
+  const skipped = {
+    KIT_BROWSER_RESULT: "skipped",
+    KIT_CALENDAR_RESULT: "skipped",
+    KIT_LIFELINE_RESULT: "skipped",
+    KIT_LIFELINE_ARTIFACT_ID: "",
+  };
+  assert.equal(run(skipped), 0);
+  assert.equal(run({ ...skipped, FULL: "true", DRAFT: "true" }), 0);
+  assert.equal(run({ ...skipped, FULL: "true", DOCS_ONLY: "true" }), 0);
+  assert.equal(run({ ...skipped, DOCS_ONLY: "" }), 1);
+  assert.equal(run({ ...skipped, SCOPE_RESULT: "failure" }), 1);
 });
 
 test("coverage shards preserve serial threads and the merge uses the canonical coverage config", async () => {
