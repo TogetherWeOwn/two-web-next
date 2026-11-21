@@ -22,7 +22,6 @@ const { member, loginReturnTo } = $derived(screen);
   <link rel="alternate" type="text/markdown" title="Markdown version" href="/events.md" />
   <link rel="stylesheet" href={siteHeaderCss} />
 </svelte:head>
-
 {#snippet account()}
   {#if member}
     <a class="btn" href="/discord">Open Discord</a>

@@ -29,6 +29,7 @@ export function renderKitEvents(...args: Parameters<KitRender>): ReturnType<KitR
       format: "esm",
       platform: "node",
       write: false,
+      loader: { ".css": "dataurl" }, // Fixture-only equivalent of Vite's CSS URL import.
       tsconfigRaw: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "hono/jsx" } },
       plugins: [
         {
