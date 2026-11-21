@@ -225,3 +225,15 @@ jobs:
           path: artifacts/kit-calendar/
           if-no-files-found: error
           retention-days: 14
+      - run: node --test ci/kit-profile-record-browser.test.mjs
+        id: record-fixture
+        env:
+          KIT_PROFILE_RECORD_EVIDENCE_DIR: artifacts/kit-profile-record
+      - name: Retain profile Record fixture evidence
+        if: ${{ !cancelled() && (steps.record-fixture.outcome == 'success' || steps.record-fixture.outcome == 'failure') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-profile-record-fixture
+          path: artifacts/kit-profile-record/
+          if-no-files-found: error
+          retention-days: 14
