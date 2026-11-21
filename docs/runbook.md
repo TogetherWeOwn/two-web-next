@@ -240,9 +240,8 @@ real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
 4. Follow [the PR contract](../CONTRIBUTING.md). Run the fixture-only test, the
    smoke suite, and the link check below; record the results and verify the two
    dates above against the source pin and `expiry - 90 × 24 hours` in UTC.
-   The required checks under that contract, including `CodeRabbit` and
-   `Devin Review`, must pass on the exact head before the PR merges. No
-   database is needed:
+   The [required checks](../CONTRIBUTING.md#branch-protection-and-required-checks)
+   must pass on the exact head before the PR merges. No database is needed:
 
    ```sh
    env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB npx --no-install vitest run test/security-txt.test.ts
@@ -295,16 +294,22 @@ environment. There is no `[env.staging]` configuration. Do not add `--env
 staging` or invent a different Worker target. Verify the approved account and
 binding isolation before any remote mutation.
 
-1. Apply the exact-head checks, review and retained safeguards in the
-   [merge and production staging contract](../CONTRIBUTING.md#merge-and-production-staging-evidence).
-   Only promotion-path PRs need fresh exact-head Release Manager confirmation
-   before merge. The final-stage reviewer pins the squash merge to the reviewed
-   head; the author does this when no native review stage applies. Record the
-   pinned squash SHA, intended target and any required confirmation in the
-   release log. Staging qualification happens after merge and before production
-   promotion, on the exact `main` SHA. A scope-skipped staging journey or passive
-   job is not qualifying evidence: follow the linked contract's post-merge
-   manual-dispatch caveat rather than claiming automatic eligibility.
+1. Use the [merge and production staging contract](../CONTRIBUTING.md#merge-and-production-staging-evidence)
+   for exact-head checks and promotion-path routing. When Release Manager merge
+   confirmation is required, the final native stage supplies it. The final
+   reviewer (or the author if no native stage applies) squash-merges on the
+   pinned head in the same run. After a successful merge, record the reviewed
+   head, resulting squash SHA, intended target and any required Release Manager
+   confirmation in the release log. Include both SHAs in the final native
+   verdict where a stage applies. A failed merge is not an approval.
+
+   Merge confirmation does not authorize production deployment or migration.
+   Production holds and staging rollback-drill checks apply to production
+   deployment; keep any explicitly applicable merge freeze. Staging
+   qualification happens after merge and before production promotion, on the
+   exact `main` SHA. A scope-skipped staging journey or passive job is not
+   qualifying evidence: follow the linked contract's post-merge manual-dispatch
+   caveat rather than claiming automatic eligibility.
 
    For automatic promotion, the Release Manager accepts the exact release SHA
    and asks the authorized Operator to set the repository Actions variable
@@ -511,15 +516,36 @@ migration is performed by its selftest.
   fresh approval for the new tip before the Operator updates the pin. The pin
   checks the run SHA; it does not select a previous revision. Do not set
   `PRODUCTION_ACCEPTED_SHA` for a migration: that is a separate Worker promotion
-  control. Clear the migration SHA after the authorized operation; clearing it
-  does not revoke a run that already started.
+  control. With the matching approved SHA, set
+  `PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS` on that same Environment to the
+  operation's exact, non-empty list of full journal tags in order, separated by
+  commas without spaces. Use the approved scope, not tags inferred from the
+  live ledger. Set the pending tags before setting the approved SHA. Clear the
+  SHA first, then the pending tags, after the operation finishes or is abandoned.
+  If commit is uncertain, keep the original pins only while pursuing the
+  separately approved readback below. Clear them when readback finishes or is
+  abandoned. This does not authorize another apply. Clearing the pins does not
+  revoke a run that already started. Do not retry with a different scope without
+  approval.
+- The workflow reads the non-secret pending tags from the GitHub REST endpoint
+  for the `production` Environment variable, not the merged `vars` context.
+  A same-named repository or organization variable cannot substitute. A future
+  approved operation needs an authorized GitHub credential limited to this
+  repository and **Environments: read**, available only as the production
+  Environment secret `PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN`. The default
+  Actions token cannot be granted that permission. The workflow stops before
+  checkout if the credential or scoped setting is missing, unreadable or
+  syntactically invalid. After checkout, the runner rejects a list that is not
+  an exact contiguous segment of the locked release journal before connecting
+  to PostgreSQL. The approved segment can end below the journal tip. Do not
+  provision or authorize credentials as part of a code merge.
 - On that same Environment, set `PRODUCTION_MIGRATION_IDENTITY_SHA256` to the
   lowercase SHA-256 hex digest of the exact approved database name in UTF-8,
   one NUL byte, then the exact existing Postgres migrator role name in UTF-8
   (no trailing newline). Use approved operator records, not a live probe or
-  the URL login string. Reserve both variable names for this Environment only:
-  keep them absent at repository and organization scope, since the Actions
-  `vars` context does not attest scope. Neither variable is needed in staging.
+  the URL login string. Keep the SHA and identity pins absent at repository and
+  organization scope, since their Actions `vars` context does not attest scope.
+  None of the production migration pins is needed in staging.
 - Staging admission hold: `STAGING_MIGRATION_HOLD` must be exactly `false` to
   release any staging migration or staging deploy. Absent, empty, `true` and
   malformed values all hold. Set it as a repository variable
@@ -570,23 +596,34 @@ available. The workflow validates migration numbers, then:
 1. `plan` reads the canonical SQL/journal and `drizzle.__drizzle_migrations`,
    lists pending tags and counts in logs/job summary, and performs **no DDL**.
    This is a journal diff, not a SQL execution rehearsal.
+   Production lists only the approved segment and requires its first tag to
+   be the first pending tag after the exact live ledger prefix.
 2. `apply` starts one connection-bound transaction, acquires the web transaction
-   advisory lock, rechecks history, and records the database clock's UTC
-   **pre-migration PITR timestamp** and release SHA in the job summary
-   **before DDL**. Ledger initialization, canonical Drizzle journal SQL and
-   hash/timestamp inserts, and the zero-pending check all run in that transaction.
-   On production, `plan` and `verify` check `current_database()`, `session_user`
-   and `current_user`; `apply` repeats the check on its own transaction before
-   any DDL. The database must match the URL path and approved fingerprint, and
-   both roles must equal the same approved principal. The check reports only
-   match or refusal, not the database or role names.
+   advisory lock, rechecks the full ledger and (on production) the approved start,
+   and records the database clock's UTC **pre-migration PITR timestamp** and
+   release SHA in the job summary **before DDL**. Production `apply` uses
+   `READ COMMITTED` so the locked history check sees commits made after the
+   identity check. It executes only the approved canonical SQL and ledger
+   inserts, then requires the exact canonical prefix through the approved end
+   before committing. Staging still applies the full pending suffix and requires
+   zero pending in the same transaction.
+   Production checks `current_database()`, `session_user` and `current_user`
+   within the same transaction as each command's journal access. The database
+   must match the URL path and approved fingerprint, and both roles must equal
+   the same approved principal. The check reports only match or refusal, not
+   the database or role names.
    Connection loss fails closed, never reconnects mid-apply; the success receipt
    is printed only after commit. URLs and raw database/SQL errors are never printed.
-3. Both `apply` and the final `verify` require **zero pending web migrations**.
-   Save the workflow URL, release SHA, timestamp and count with release evidence
-   before the Worker deployment. A successful journal check does not establish
-   bot schema readiness or run staging E2E. Staging E2E at the tested revision
-   remains required before any production deployment.
+3. The workflow follows staging apply with full-release `verify` (**zero pending
+   web migrations**). It follows production apply with read-only `verify-scope`,
+   which checks the full ledger again and requires exactly the approved end,
+   neither earlier nor later. Both scoped receipts list deferred journal tags.
+   A scoped success is not a full-release verdict, cannot qualify a release with
+   deferred migrations, and does not justify setting `migrations_applied: true`
+   for a Worker that requires them. Standalone `verify` still requires zero
+   pending against the full journal. Save the workflow URL, release SHA, PITR
+   timestamp and ledger result with the operation evidence. Bot schema readiness,
+   exact-revision staging E2E and the existing promotion gates still apply.
 
 SQL hashes/timestamps must be an exact prefix of the release journal. Edited,
 gapped, foreign/bot or newer history fails closed; never delete/forge the ledger,
@@ -600,9 +637,19 @@ using controlled provider-side evidence. Do not cancel in-flight DDL casually.
 
 **Rollback:** a Worker rollback does not undo schema/data. SQL failure rolls back
 the pending transaction, including ledger initialization on a fresh DB. Existing
-history stays intact. On connection loss, do not infer commit success: re-plan and
-verify under the approved recovery procedure before retrying. After a successful
-but harmful migration, prefer a reviewed forward repair.
+history stays intact. On connection loss, do not infer commit success. For
+production, do not replay apply to resolve an uncertain commit. Under separate
+recovery approval, dispatch `db-migrate.yml` on `main` with `target=production`
+and `readback_only=true`. This skips plan and apply, and runs only `verify-scope`
+for database access under the same protected Environment. The original approved
+SHA must still match the run, and the original migrator identity and scope pins
+must remain in place. Success means only that the ledger matches the exact
+approved end and the reported tail is still pending. If `main` moved, the pins
+no longer match, or the ledger is earlier, later or non-canonical, stop and
+reconcile with the original preflight/PITR evidence through the authorized
+operator. Do not change the pins, widen the scope or replay to force a result.
+For staging, re-plan and verify under the approved recovery procedure before retrying.
+After a successful but harmful migration, prefer a reviewed forward repair.
 If authorized PITR is required, pause writers and coordinate **both** consumers,
 verify the recorded timestamp is eligible, and use the provider's documented
 restore procedure (Neon branch restore or PlanetScale backup/restore). Restore can overwrite all databases on the branch and lose later
@@ -1117,7 +1164,22 @@ The telemetry query returns only the newest 100 events. Keep each window to
    guess the source. Deploys are not tagged yet.
 3. Baseline: `node bin/smoke.mjs https://next.togetherweown.com | tee "$RUN_DIR/smoke-base.log"`.
    Record any existing failures. The rehearsal compares against this
-   baseline; it does not require it to be green.
+   baseline; it does not require it to be green. Before rolling back, prepare N's
+   own smoke and its locked dev dependencies (`parse5` is needed for Kit Home).
+   Stop before step 5 if preparation fails.
+
+   ```bash
+   (
+     set -euo pipefail
+     : "${N_SHA:?}"
+     mkdir "$RUN_DIR/n"
+     paths=(bin ci package.json package-lock.json)
+     if git cat-file -e "$N_SHA:.npmrc" 2>/dev/null; then paths+=(.npmrc); fi
+     git archive "$N_SHA" "${paths[@]}" | tar -x -C "$RUN_DIR/n"
+     npm ci --prefix "$RUN_DIR/n" --include=dev --ignore-scripts --no-audit --no-fund
+   )
+   ```
+
 4. In a second terminal, start the probe loop:
    `probe | tee "$RUN_DIR/probe-rollback.log"`.
 5. Roll back, with timestamps:
@@ -1147,8 +1209,6 @@ The telemetry query returns only the newest 100 events. Keep each window to
    ```bash
    (
      set -euo pipefail
-     : "${N_SHA:?}"
-     mkdir -p "$RUN_DIR/n" && git archive "$N_SHA" bin ci | tar -x -C "$RUN_DIR/n"
      node "$RUN_DIR/n/bin/smoke.mjs" https://next.togetherweown.com | tee "$RUN_DIR/smoke-n.log"
    )
    ```

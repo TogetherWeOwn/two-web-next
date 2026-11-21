@@ -7,9 +7,10 @@ GitHub Actions uses its own Postgres 17 service container. The runner rejects
 all other databases before connecting; do not pass staging/production URLs.
 
 The `a11y` job is selected by `scope`; it does not gate the standalone `check`
-job, which depends only on `scope` and runs alongside the audit. The required
-`ci-ok` job aggregates `scope`, `check`, `docs-links` and the selected audit and
-performance results. For an in-scope, non-draft run, `a11y` must succeed; a
+job, which waits for `scope` and `dependency-admission` and runs alongside `a11y`.
+The required `ci-ok` job aggregates `scope`, `dependency-admission`, `check`,
+`docs-links` and the selected accessibility and performance results. For an
+in-scope, non-draft run, `a11y` must succeed; a
 failed or cancelled audit, or a skipped audit that `scope` selected, fails
 `ci-ok`. A skipped audit is accepted only when it is out of scope or the PR is a
 draft. Scope/check/docs-links failures and other failed or unexpectedly skipped

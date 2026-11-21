@@ -97,6 +97,7 @@ export function renderPage(data) {
       absWorkingDir: root,
       nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
       alias: { "#lib": join(root, "web/src/lib/") },
+      loader: { ".css": "empty" },
       plugins: [
         {
           name: "board-captions-ssr",
@@ -251,14 +252,14 @@ for (const twin of TWINS) {
     });
 
     it("relative-empty names the ranked path and links events", () => {
-      const query: BoardQuery = { season: "2026-09", scope: "relative", activity: "chess" };
+      const query: BoardQuery = { season: "9999-09", scope: "relative", activity: "chess" };
       const region = boardRegion(renderTwin(twin, query, []), `${twin} relative-empty`);
       expect(region).toContain("going to get ranked");
       expect(region).toMatch(/href="\/events("|\?)/);
     });
 
     it("overall-empty with a game filter links events and clears the filter", () => {
-      const query: BoardQuery = { season: "2026-09", scope: "overall", activity: "chess" };
+      const query: BoardQuery = { season: "9999-09", scope: "overall", activity: "chess" };
       const region = boardRegion(renderTwin(twin, query, []), `${twin} overall-empty`);
       expect(region).toMatch(/href="\/events("|\?)/);
       expect(region).toContain(`href="${boardPath({ ...query, activity: null })}"`);
