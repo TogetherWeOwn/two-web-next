@@ -120,7 +120,7 @@ describe("workflow runner labels", () => {
     for (const [name, ids] of [
       ["release.yml", ["tag"]],
       ["rollback-production.yml", ["preflight", "rollback-production", "notify"]],
-      ["db-migrate.yml", ["migrate"]],
+      ["db-migrate.yml", ["production-scope-preflight", "migrate"]],
     ] as const) {
       const workflow = workflows.find((entry) => entry.name === name);
       expect(workflow, name).toBeDefined();
