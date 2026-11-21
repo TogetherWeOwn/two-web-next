@@ -1,21 +1,17 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { viewportPngs } from "./kit-activity-log-png.mjs";
-import {
-  collectVisuals,
-  expectedContent,
-  origin,
-  validateView,
-} from "./kit-activity-log-visual.mjs";
+import * as visual from "./kit-activity-log-visual.mjs";
 
 test("capture refuses fixture content and keyboard drift", () => {
-  assert.equal(expectedContent(true).at(-1), "/admin/activity-log?page=1");
+  assert.equal(visual.expectedContent(true).at(-1), "/admin/activity-log?page=1");
   const state = [true, false, false];
-  const content = expectedContent(false);
-  validateView(content, state, false, false);
-  assert.throws(() => validateView(content, [true, true, false], false, true), /state/);
-  assert.throws(() => validateView(["unapproved"], state, false, false), /content/);
+  const content = visual.expectedContent(false);
+  visual.validateView(content, state, false, false);
+  assert.throws(() => visual.validateView(content, [true, true, false], false, true), /state/);
+  assert.throws(() => visual.validateView(["unapproved"], state, false, false), /content/);
 });
 
 test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", async (t) => {
@@ -28,13 +24,9 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     let closed = 0;
     let cookie = 0;
     let url, intercept;
-    const request = (href, document, fetch) =>
+    const request = (href, nav, fetch) =>
       intercept({
-        request: () => ({
-          url: () => href,
-          isNavigationRequest: () => document,
-          method: () => "GET",
-        }),
+        request: () => ({ url: () => href, isNavigationRequest: () => nav, method: () => "GET" }),
         fetch,
         fulfill: noop,
         abort: noop,
@@ -67,8 +59,8 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
         if (mode === "document") void request(href, true, stall);
         else {
           await request(href, true, async () => response);
-          void request(`${origin}/styles.css`, false, stall);
-          if (mode === "disallowed") void request(`${origin}/unexpected.css`, false, noop);
+          void request(`${visual.origin}/styles.css`, false, stall);
+          if (mode === "disallowed") void request(`${visual.origin}/unexpected.css`, false, noop);
         }
         throw new Error("navigation timed out first");
       },
@@ -77,7 +69,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       getByTestId: () => ({
         evaluate: () => {
           const scroll = closed === 4 && keys.at(-1) === "ArrowRight";
-          return [expectedContent(url.includes("?")), [true, scroll, scroll]];
+          return [visual.expectedContent(url.includes("?")), [true, scroll, scroll]];
         },
       }),
       screenshot: ({ path }) => shots.push(path),
@@ -87,7 +79,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       mode === "rejected" ? Promise.reject(new Error("transport")) : new Promise(noop),
     );
     const mint = () => ({ value: consumed.size });
-    const report = collectVisuals(browser, mint, ".", { audit: noop, measure, ms: 10 });
+    const report = visual.collectVisuals(browser, mint, ".", { audit: noop, measure, ms: 10 });
     if (mode === "hono") await assert.rejects(report, /provenance drift/);
     else if (mode === "disallowed") await assert.rejects(report, /unexpected visual diagnostic/);
     else assert.equal(await report, null);
@@ -97,6 +89,16 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     assert.deepEqual(shots, mode === "hono" ? [] : Object.keys(viewportPngs));
     assert.deepEqual(keys, mode === "hono" ? [] : [...Array(11).fill("Tab"), "ArrowRight"]);
   }
+});
+
+test("fixture CLI exits after cleanup despite a live measurement handle", () => {
+  const source = readFileSync(new URL("./kit-activity-log-assert.mjs", import.meta.url), "utf8");
+  const entry = source.match(/^(?:await )?main\(\)\.then\([\s\S]+$/m)?.[0];
+  assert.ok(entry);
+  const stub = "async function main(){setInterval(()=>{},60_000);await new Promise(setImmediate);}";
+  const argv = ["--input-type=module", "-e", `${stub}\n${entry}`];
+  const run = execFileSync(process.execPath, argv, { timeout: 3_000 });
+  assert.equal(run.toString(), "PASS kit-activity-log\n");
 });
 
 test("only the protected diagnostic publishes the validated directory", () => {

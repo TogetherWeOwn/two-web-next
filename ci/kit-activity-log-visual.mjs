@@ -17,7 +17,6 @@ const rows = Array.from({ length: 50 }, (_, index) => {
   const who = ["900000000000009311", "900000000000009312", "7 (legacy ID)", "—"][n % 4];
   return `${who}|kal-${String(n).padStart(3, "0")}|2098-01-01 ${time} UTC|Synthetic k${n} (updated)`;
 });
-
 export function expectedContent(empty) {
   const cells = empty ? ["No activity matches these filters."] : rows;
   const table = cells.join(" ").replaceAll("|", " ");
@@ -30,13 +29,11 @@ const kitDocument = (status, headers) =>
   status === 200 &&
   headers["x-two-renderer"] === "kit" &&
   headers["cache-control"] === "private, no-store";
-
 export function validateView(content, state, empty, keyboard) {
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   if (!same(content, expectedContent(empty))) throw new Error("visual content drift");
   if (!same(state, [true, keyboard, keyboard])) throw new Error("visual state drift");
 }
-
 // The asset allowlist also requires the response bytes to match the pinned local build.
 const asset =
   /^\/(?:styles\.css|admin-rsvp-review\.css|site\.webmanifest|favicon\.(?:ico|svg)|icons\/(?:icon-(?:192|512)|maskable-512|apple-touch-icon)\.png|fonts\/(?:mona-sans-latin-(?:var|wght)|fragment-mono-latin-400|instrument-serif-latin-400-italic)\.woff2|islands\/auth-status\.js|_app\/immutable\/(?:assets|entry|nodes|chunks)\/[\w.-]+\.(?:css|js))$/;
@@ -52,9 +49,8 @@ async function serve(route, url) {
       ? kitDocument(res.status(), res.headers())
       : res.status() === 200 &&
         (await readFile(`web/.svelte-kit/cloudflare${file}`)).equals(await res.body());
-    if (!valid) return false;
-    await route.fulfill({ response: res });
-    return true;
+    if (valid) await route.fulfill({ response: res });
+    return valid;
   } finally {
     await res.dispose();
   }
@@ -130,7 +126,6 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
   if (violation) throw new Error("unexpected visual diagnostic");
   return unavailable ? null : result;
 }
-
 async function boundedMeasurement(measure, ms) {
   // Leave 20 seconds for request verdicts and teardown under the 150-second runner watchdog.
   const budget = Math.min(ms, 130_000 - process.uptime() * 1_000);
@@ -142,7 +137,6 @@ async function boundedMeasurement(measure, ms) {
   const deadline = delay(budget, null, { signal: timer.signal });
   return Promise.race([task, deadline]).finally(() => timer.abort());
 }
-
 export async function collectVisuals(browser, mint, dir, { audit, measure, ms = 25_000 }) {
   const views = { ...viewportPngs, lighthouse: viewportPngs["populated-desktop.png"] };
   for (const [name, size] of Object.entries(views)) {

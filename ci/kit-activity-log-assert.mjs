@@ -151,7 +151,7 @@ async function main() {
   }
 }
 
-main().then(
+await main().then(
   () => console.log("PASS kit-activity-log"),
   (error) => {
     console.log(
@@ -160,3 +160,5 @@ main().then(
     process.exitCode = 1;
   },
 );
+// Browser and DB teardown have settled. Flush the verdict, not abandoned Lighthouse handles.
+process.stdout.write("", () => process.exit());
