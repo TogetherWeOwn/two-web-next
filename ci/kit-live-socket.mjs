@@ -102,28 +102,31 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     assert.equal((await expired)[0].code, 1008);
     assert.equal(deliveries, 0);
 
-    await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
+    const [laterLease] =
+      await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
       values (${laterSession.ref}, '900000000000001378', 'Later live socket', true,
-        clock_timestamp() + interval '10 seconds')`;
-    await sql`update web_sessions set expires_at = clock_timestamp() + interval '5 seconds'
-      where token_hash = ${ref}`;
+        clock_timestamp() + interval '10 seconds') returning expires_at`;
+    const [firstLease] =
+      await sql`update web_sessions set expires_at = clock_timestamp() + interval '5 seconds'
+      where token_hash = ${ref} returning expires_at`;
     const later = await open({ ...headers, Cookie: laterSession.cookie });
     const first = await open({ ...headers, Cookie: cookie });
     first.addEventListener("message", () => deliveries++);
     later.addEventListener("message", () => deliveries++);
-    // Admit the later lease first so the early one must replace its pending alarm.
-    // Neither socket sends a command; only the alarm can close it.
-    const firstClosed = awaitEvent(first, "close", "first idle session alarm", 9_000);
-    const laterClosed = awaitEvent(later, "close", "second idle session alarm", 15_000);
-    const [firstEvent, laterEvent] = await Promise.all([
-      firstClosed.then(([event]) => {
-        assert.equal(later.readyState, WebSocket.OPEN);
-        return event;
-      }),
-      laterClosed.then(([event]) => event),
-    ]);
-    assert.equal(firstEvent.code, 1008);
-    assert.equal(laterEvent.code, 1008);
+    // No client frame: Undici enters CLOSING on the server's close frame,
+    // before the local upgrade proxy necessarily delivers TCP EOF.
+    const awaitServerClose = async (socket, lease, label) => {
+      const expiry = new Date(lease.expires_at).getTime();
+      assert.ok(Number.isFinite(expiry));
+      while (socket.readyState === WebSocket.OPEN && Date.now() < expiry + 4_000) {
+        await delay(25);
+      }
+      assert.notEqual(socket.readyState, WebSocket.OPEN, `${label}: no server close`);
+      assert.ok(Date.now() >= expiry, `${label}: server closed before expiry`);
+    };
+    await awaitServerClose(first, firstLease, "first idle session alarm");
+    assert.equal(later.readyState, WebSocket.OPEN, "later lease must stay open after first alarm");
+    await awaitServerClose(later, laterLease, "second idle session alarm");
     assert.equal(deliveries, 0);
     console.log(
       "PASS installed Kit live socket 101, guest control, revocation, and staggered idle session expiry",
@@ -364,10 +367,39 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
     }
     // The last producer recovery is still fresh. It must not substitute for
     // the browser-triggered pull or revive the expired public lease by itself.
-    await source(snapshot(cursor + 1, 4));
+    await source(snapshot(++cursor, 4));
     send("resync");
     await expectFrame(unavailable);
-    await expectFrame(projected("snapshot", revision + 1, null));
+    await expectFrame(projected("snapshot", ++revision, null));
+
+    // Match explicit, pre-expiry resync on the same socket whether the hub
+    // stayed warm, wakes for the command, or was woken first by hidden ingress.
+    for (const mode of ["warm", "cold", "producer wake"]) {
+      await delay(5_100);
+      const initial = snapshot(++cursor, 5);
+      const generation = await source(initial);
+      send("resync");
+      await expectFrame(projected("snapshot", ++revision, 5));
+      const recovered = snapshot(cursor + 1, 5);
+      recovered.topics.voice.push(voice("106", "11"));
+      if (mode === "producer wake") await source(recovered);
+      // A different public value proves resync used the new observation, not
+      // either the original projection or the producer-only recovery.
+      if (mode !== "producer wake") await source(snapshot(cursor + 2, 6));
+      await delay(mode === "warm" ? 5_100 : 15_000);
+      if (mode === "producer wake") {
+        assert.equal(await ingest(origin, cursor + 1, join("106", "11")), 204);
+        assert.equal(await source(snapshot(cursor + 2, 6)), generation + 1);
+      }
+      assert.deepEqual(frames, [], `${mode}: no frame before resync`);
+      send("resync");
+      const result = await expectFrame(projected("snapshot", ++revision, 6));
+      assert.ok(result.at < Date.parse(initial.observed_at) + 30_000, `${mode}: pre-expiry`);
+      assert.equal(await source(), generation + Number(mode !== "warm"), mode);
+      assert.deepEqual(frames, [], `${mode}: exactly one snapshot`);
+      cursor += 2;
+    }
+    console.log("PASS installed Kit pre-expiry resync on the warm and hibernating socket");
     console.log(
       "PASS installed Kit live counts, fan-out revocation, gap recovery, and warm/cold restricted-ingress silence",
     );

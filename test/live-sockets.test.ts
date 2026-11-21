@@ -6,7 +6,7 @@ const subscribe = JSON.stringify({ v: 1, type: "subscribe", topics: ["voice"] })
 const resync = (topic: string) => JSON.stringify({ v: 1, type: "resync", topics: [topic] });
 const unavailable = JSON.stringify({ v: 1, type: "unavailable", topic: "voice" });
 
-function connectedGuest() {
+function connectedGuest(project = () => null as { value: string; until: number } | null) {
   let meta: unknown = {
     v: 1,
     ref: null,
@@ -14,7 +14,8 @@ function connectedGuest() {
     topics: null,
     nextResync: 0,
     voiceSeq: 0,
-    voiceLive: false,
+    voiceUntil: 0,
+    voicePrevious: null,
   };
   const server = {
     readyState: WebSocket.OPEN,
@@ -26,10 +27,15 @@ function connectedGuest() {
     close: vi.fn(),
   };
   const ctx = { getWebSockets: () => [server] } as unknown as DurableObjectState;
-  const sockets = new LiveSockets(ctx, { DISCORD_LIVE_SOCKET_ENABLED: "true" }, () => null);
+  const instance = () => new LiveSockets(ctx, { DISCORD_LIVE_SOCKET_ENABLED: "true" }, project);
+  let sockets = instance();
   return {
     server,
-    message: (text: string) => sockets.message(server as unknown as WebSocket, text),
+    message: (text: string, refresh = async () => false) =>
+      sockets.message(server as unknown as WebSocket, text, refresh),
+    wake: () => {
+      sockets = instance();
+    },
   };
 }
 
@@ -70,6 +76,33 @@ describe("live WebSocket message bounds", () => {
     expect(server.close).not.toHaveBeenCalled();
     expect(server.send.mock.calls).toEqual([[unavailable], [unavailable]]);
   });
+
+  it.each([false, true])(
+    "resync uses fresh proof and preserves the count revision (wake=%s)",
+    async (wake) => {
+      const value = '{"count":5}';
+      let proof: { value: string; until: number } | null = { value, until: start + 30_000 };
+      const guest = connectedGuest(() => proof);
+      await guest.message(subscribe);
+      vi.setSystemTime(start + 5_000);
+      if (wake) {
+        guest.wake();
+        proof = null;
+      }
+      const refresh = vi.fn(async () => {
+        proof = { value, until: start + 35_000 };
+        return true;
+      });
+      await guest.message(resync("voice"), refresh);
+      expect(refresh).toHaveBeenCalledOnce();
+      const baseline = `{"v":1,"type":"snapshot","topic":"voice","seq":1,"value":${value}}`;
+      expect(guest.server.send.mock.calls).toEqual([[baseline], [baseline]]);
+
+      vi.setSystemTime(start + 10_000);
+      await guest.message(resync("voice"));
+      expect(guest.server.send.mock.calls).toEqual([[baseline], [baseline], [unavailable]]);
+    },
+  );
 
   it("rejects a resync for an unsubscribed topic even after the cooldown", async () => {
     const { message, server } = connectedGuest();
