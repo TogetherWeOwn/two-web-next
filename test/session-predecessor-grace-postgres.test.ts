@@ -54,6 +54,31 @@ describe.skipIf(!url)("postgres predecessor grace", () => {
     expect(skewMs).toBeLessThanOrEqual(10_500);
   });
 
+  it("reads only the exact live row and reports the earlier of expiry and lineage cap", async () => {
+    const expiresAt = new Date(Date.now() + 3600_000);
+    await store.create(session("strict-source", USER, expiresAt));
+    expect(await store.rotate("strict-source", session("strict-successor", USER, expiresAt))).toBe(
+      true,
+    );
+    expect(await store.get("strict-source")).toMatchObject({ userId: USER });
+    expect(await store.getLive("strict-source")).toBeNull();
+    expect(await store.getLive("strict-successor")).toEqual({
+      userId: USER,
+      member: true,
+      validUntil: expiresAt.getTime(),
+    });
+    const [row] = await fixture.client<{ cap: Date }[]>`
+      update web_sessions set created_at = clock_timestamp() - interval '23 hours 30 minutes'
+      where token_hash = 'strict-successor'
+      returning created_at + interval '24 hours' as cap`;
+    expect(await store.getLive("strict-successor")).toMatchObject({
+      validUntil: row?.cap.getTime(),
+    });
+    await fixture.client`update web_sessions set created_at = clock_timestamp() - interval '24 hours'
+      where token_hash = 'strict-successor'`;
+    expect(await store.getLive("strict-successor")).toBeNull();
+  });
+
   it("refuses at the exact deadline and after, without touching the live successor", async () => {
     await store.create(session("deadline-source"));
     expect(await store.rotate("deadline-source", session("deadline-successor"))).toBe(true);
