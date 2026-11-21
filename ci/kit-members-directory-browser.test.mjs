@@ -55,6 +55,27 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
           );
           if (viewport.width !== 320)
             await page.screenshot({ path: `${out}/${name}-${viewport.width}.png`, fullPage: true });
+          if (name === "default" || name === "guest") {
+            const header = page.getByRole("banner");
+            const join = header.getByRole("link", { name: "Join", exact: true });
+            const expectedJoin = name === "guest" ? 1 : 0;
+            assert.equal(await join.count(), expectedJoin, `${name} header at ${viewport.width}px`);
+            if (viewport.width === 390) {
+              await header.getByRole("link", { name: "Menu", exact: true }).click();
+              const account = header.getByRole("navigation", { name: "Account" });
+              assert.equal(await account.isVisible(), true);
+              assert.equal(
+                await account.getByRole("link", { name: "Join", exact: true }).count(),
+                expectedJoin,
+              );
+              assert.equal(
+                await account.getByRole("link", { name: "Your profile", exact: true }).count(),
+                1 - expectedJoin,
+              );
+              await page.screenshot({ path: `${out}/${name}-menu-open-390.png` });
+              await header.getByRole("link", { name: "Close menu" }).click();
+            }
+          }
         }
       }
       // Default: six newcomers, active list, a Guide and an organizer; opted-out alias hidden.

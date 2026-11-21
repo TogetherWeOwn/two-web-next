@@ -33,7 +33,7 @@ let {
   menuFallbackOnly?: boolean;
   /** Use B1 chrome on Ember shells while legacy Kit leaves keep their existing header. */
   ember?: boolean;
-  /** Recovery supplies its own Join link as the account action. */
+  /** Suppress the default Join action without changing account presentation. */
   hideJoin?: boolean;
 } = $props();
 const menuIsland = '<script src="/islands/site-header-menu.js" defer></' + "script>";
