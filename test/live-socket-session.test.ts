@@ -22,6 +22,8 @@ it("allows only absent session cookies to become guests without a session lookup
   for (const raw of ["", "theme=dark", `${SESSION_COOKIE}-other=${token}`, `theme=${cookie}`]) {
     expect(await resolveLiveSocketSession(raw, undefined, getLive)).toEqual({ kind: "guest" });
   }
+  const atLimit = "theme=".padEnd(8192, "x");
+  expect(await resolveLiveSocketSession(atLimit, signingKey, getLive)).toEqual({ kind: "guest" });
   for (const raw of [
     SESSION_COOKIE,
     `${SESSION_COOKIE}=`,
@@ -30,7 +32,7 @@ it("allows only absent session cookies to become guests without a session lookup
     `theme=dark, ${cookie}`,
     await signed(token, "different fixture key"),
     await signed("wrong bearer shape"),
-    `theme=${"x".repeat(8192)}`,
+    `${atLimit}x`,
   ]) {
     expect(await resolveLiveSocketSession(raw, signingKey, getLive)).toEqual(denied);
   }
