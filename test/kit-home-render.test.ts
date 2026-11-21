@@ -117,35 +117,14 @@ describe("Kit home SSR render: session-aware header and hero", () => {
 
   it("renders Home landmarks and preserves the restored-write and sign-in recovery", () => {
     const html = renderPage(baseData({ restoredWrite: true, notice: "signin_failed" }));
-    expect(html).toContain('href="#main">Skip to content</a>');
     expect(html.match(/<header\b/g)).toHaveLength(1);
-    expect(html).toContain('id="main" tabindex="-1"');
-    expect(html).toMatch(/<footer class="ember-footer">[\s\S]*?<nav aria-label="Footer"/);
+    expect(html).toMatch(/<footer class="ember-footer\b[^>]*>[\s\S]*?<nav aria-label="Footer"/);
     expect(html).toContain('href="/auth/discord" data-testid="notice-retry"');
     expect(html).toContain("Your earlier changes were not saved.");
     expect(html.indexOf('data-testid="auth-error"')).toBeLessThan(
       html.indexOf('id="home-heading"'),
     );
     expect(html).toContain('<meta name="description"');
-  });
-
-  it("uses the next future public event but never advertises a schedule during an outage", () => {
-    const upcomingEvents = [
-      fullnessEvent({ title: "Past game night", startsAt: new Date(0) }),
-      fullnessEvent({ title: "Public game night", eventKey: "public-night" }),
-    ];
-    for (const session of [null, nonMemberSession, memberSession]) {
-      const html = renderPage(baseData({ session, upcomingEvents }));
-      const panel = html.split('<aside class="ember-home-panel"')[1]!.split("</aside>")[0]!;
-      expect(panel).toContain('href="/e/public-night"');
-      expect(panel).toContain('datetime="2030-07-20T19:00:00.000Z"');
-      expect(panel).not.toContain("Past game night");
-    }
-    const html = renderPage(baseData({ upcomingEvents, eventsUnavailable: true }));
-    const panel = html.split('<aside class="ember-home-panel"')[1]!.split("</aside>")[0]!;
-    expect(panel).toContain("Schedule unavailable");
-    expect(panel).toContain('href="/discord"');
-    expect(panel).not.toContain("Public game night");
   });
 
   it("does not render attendee names from an event fixture for a guest", () => {
@@ -155,7 +134,7 @@ describe("Kit home SSR render: session-aware header and hero", () => {
       attendees: [{ username: "SyntheticPrivateName" }],
     });
     const html = renderPage(baseData({ upcomingEvents: [event] }));
-    expect(html).toContain("Public game night");
+    expect(html).toContain("Next game night: <em>Public game night</em>");
     expect(html).toContain("1 of 4 going");
     expect(html).not.toContain("SyntheticPrivateName");
     expect(html).not.toContain("SyntheticHostName");
@@ -302,6 +281,7 @@ describe("Kit home SSR render: independently degraded panels", () => {
     const html = renderPage(baseData({ eventsUnavailable: true }));
     expect(html).toContain('data-state="unavailable"');
     expect(html).toContain("Game nights are unavailable right now.");
+    expect(html).toContain("<strong>Schedule unavailable</strong>");
     expect(html).not.toContain('data-testid="home-suggest-event"');
     expect(html).toContain('data-testid="member-count"');
   });

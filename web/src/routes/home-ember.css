@@ -35,10 +35,14 @@
   display: none;
 }
 .base-theme .ember-home-row nav a:not(.pill),
-.ember-home-menu summary {
+.ember-home-menu summary,
+.ember-home-panel > a {
   display: inline-flex;
   align-items: center;
   min-height: 44px;
+}
+.base-theme .ember-home-row nav a:not(.pill),
+.ember-home-menu summary {
   color: var(--t2);
   font-size: var(--text-small);
 }
@@ -98,11 +102,6 @@
 }
 .ember-home-panel-row p {
   margin: 0;
-}
-.ember-home-panel > a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
 }
 @media (max-width: 820px) {
   .base-theme .ember-home-row,
