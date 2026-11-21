@@ -9,6 +9,7 @@ import { verifyPureHonoRecoveryAttestation } from "./pure-hono-recovery-attestat
 import { validatePureHonoRecoveryEvidence } from "./pure-hono-recovery-evidence.mjs";
 import { RECOVERY_MEMBER_LIMITS } from "./pure-hono-recovery-members.mjs";
 import { fetchPureHonoRecoveryRun } from "./pure-hono-recovery-run.mjs";
+import { verifyPureHonoRecoveryEvidence } from "./pure-hono-recovery-verifier.mjs";
 import {
   ROLLBACK_ENVIRONMENTS,
   assertRollbackDrillGreen,
@@ -21,6 +22,7 @@ import {
   rollbackEnvironment,
   stagingBusyRuns,
 } from "./rollback-target.mjs";
+import { zip } from "./route-evidence-zip-fixture.mjs";
 
 const recoveryDigest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const recoveryInvocation =
@@ -31,6 +33,7 @@ function recoveryFixture({
   changeFiles,
   changeManifest,
   encodeManifest = JSON.stringify,
+  encodeArchive = (members) => Buffer.from(JSON.stringify(members)),
 } = {}) {
   const identity = {
     sourceSha: "a".repeat(40),
@@ -64,9 +67,10 @@ function recoveryFixture({
   };
   changeFiles?.(members);
   changeManifest?.(manifest);
-  const archive = Buffer.from(
-    JSON.stringify([...members, { path: "manifest.json", bytes: encodeManifest(manifest) }]),
-  );
+  const archive = encodeArchive([
+    ...members,
+    { path: "manifest.json", bytes: encodeManifest(manifest) },
+  ]);
   const archiveSha256 = recoveryDigest(archive);
   return {
     archive,
@@ -90,8 +94,7 @@ const attestationRefusal = "pure Hono recovery attestation refused: ";
 const unavailable = `${attestationRefusal}pinned verifier or its JSON output unavailable`;
 const ghSuccess = (stdout) => ({ status: 0, signal: null, stdout: Buffer.from(stdout) });
 
-function checkedAttestationFixture() {
-  const input = recoveryFixture();
+function checkedAttestationFixture(input = recoveryFixture()) {
   const expected = { ...input.expected, signerWorkflow, signerDigest };
   const certificate = {
     issuer: verifierIssuer,
@@ -348,6 +351,137 @@ function recoveryRunAttempt(event = "push") {
 const runsUrl = "https://api.github.com/repos/TogetherWeOwn/two-web-next/actions/runs";
 const attemptUrl = `${runsUrl}/123/attempts/2`;
 const metadataRefusal = "pure Hono recovery run refused: inconsistent GitHub attempt metadata";
+
+function composedRecoveryFixture({
+  run = recoveryRunAttempt(),
+  encodeArchive = (members) =>
+    zip(
+      members.map(({ path, bytes }) => ({
+        name: path,
+        data: bytes,
+        madeBy: 0x0314,
+        version: 20,
+        attrs: (0o100644 << 16) >>> 0,
+      })),
+    ),
+  ...archiveOptions
+} = {}) {
+  const fixture = checkedAttestationFixture(recoveryFixture({ ...archiveOptions, encodeArchive }));
+  const calls = [];
+  const { archive } = fixture.input;
+  const originalBytes = Buffer.from(archive);
+  const options = {
+    archive,
+    expected: { ...fixture.expected, event: "push" },
+    token: "fixture-token",
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return Response.json(run);
+    },
+    spawn: syntheticGh((_command, args) => {
+      calls.push("attest");
+      assert.deepEqual(readFileSync(args[2]), originalBytes);
+      return ghSuccess(JSON.stringify(fixture.checked ? [fixture.checked] : []));
+    }),
+  };
+  return { fixture, options, calls };
+}
+
+test("pure Hono composition verifies the exact attempt and real ZIP and snapshots its inputs", async () => {
+  const { options, calls } = composedRecoveryFixture();
+  const result = { archiveSha256: options.expected.archiveSha256, fileCount: 3 };
+  const pending = verifyPureHonoRecoveryEvidence(options);
+  assert.deepEqual(calls, [attemptUrl]);
+  options.archive.fill(0);
+  for (const key of Object.keys(options.expected)) delete options.expected[key];
+  options.archive = options.expected = options.spawn = undefined;
+  assert.deepEqual(await pending, result);
+  assert.deepEqual(calls, [attemptUrl, "attest"]);
+});
+
+test("pure Hono composition refuses missing or inconsistent provenance before ZIP decoding", async () => {
+  // If decoding is reached with these bytes, it fails with an archive members error instead.
+  const encodeArchive = () => Buffer.from("not a ZIP");
+  const wrongRun = composedRecoveryFixture({
+    encodeArchive,
+    run: { ...recoveryRunAttempt(), run_attempt: 1 },
+  });
+  await assert.rejects(verifyPureHonoRecoveryEvidence(wrongRun.options), {
+    message: metadataRefusal,
+  });
+  assert.deepEqual(wrongRun.calls, [attemptUrl]);
+
+  const missingRun = composedRecoveryFixture({ encodeArchive, run: null });
+  await assert.rejects(verifyPureHonoRecoveryEvidence(missingRun.options), {
+    message: metadataRefusal,
+  });
+  assert.deepEqual(missingRun.calls, [attemptUrl]);
+
+  const missingAttestation = composedRecoveryFixture({ encodeArchive });
+  delete missingAttestation.fixture.checked;
+  await assert.rejects(
+    verifyPureHonoRecoveryEvidence(missingAttestation.options),
+    /verified result count$/,
+  );
+  assert.deepEqual(missingAttestation.calls, [attemptUrl, "attest"]);
+
+  const wrongInvocation = composedRecoveryFixture({ encodeArchive });
+  const { certificate, metadata } = wrongInvocation.fixture;
+  certificate.runInvocationURI = metadata.invocationId = recoveryInvocation.replace(/2$/, "1");
+  await assert.rejects(
+    verifyPureHonoRecoveryEvidence(wrongInvocation.options),
+    /verified attestation identity/,
+  );
+  assert.deepEqual(wrongInvocation.calls, [attemptUrl, "attest"]);
+});
+
+test("pure Hono composition refuses drift from the pinned archive digest", async () => {
+  const { options, calls } = composedRecoveryFixture();
+  options.archive[0] ^= 1;
+  await assert.rejects(verifyPureHonoRecoveryEvidence(options), /pinned archive digest$/);
+  assert.deepEqual(calls, [attemptUrl]);
+});
+
+test("pure Hono composition refuses unsafe ZIP members and a mismatched manifest", async () => {
+  for (const [mutation, reason] of [
+    [{ changeFiles: (files) => files.push(files[2]) }, /archive members/],
+    [{ changeManifest: (manifest) => (manifest.originalVersionId = V2) }, /manifest identity/],
+  ]) {
+    const { options, calls } = composedRecoveryFixture(mutation);
+    await assert.rejects(verifyPureHonoRecoveryEvidence(options), reason);
+    assert.deepEqual(calls, [attemptUrl, "attest"]);
+  }
+});
+
+test("pure Hono composition checks the inclusive archive size bound before I/O", async () => {
+  const { options, calls } = composedRecoveryFixture({ run: null });
+  options.spawn = () => {
+    calls.push("spawn");
+    assert.fail("unexpected verifier process, including a version probe");
+  };
+  const limit = RECOVERY_MEMBER_LIMITS.maxArchiveBytes;
+  const oversized = Buffer.alloc(limit + 1);
+  for (const archive of [Buffer.alloc(0), oversized]) {
+    await assert.rejects(verifyPureHonoRecoveryEvidence({ ...options, archive }), /archive size$/);
+  }
+  assert.deepEqual(calls, []);
+
+  // At the limit, proceed to the exact attempt lookup, but not past missing provenance.
+  await assert.rejects(
+    verifyPureHonoRecoveryEvidence({ ...options, archive: oversized.subarray(0, limit) }),
+    { message: metadataRefusal },
+  );
+  assert.deepEqual(calls, [attemptUrl]);
+});
+
+test("pure Hono composition does not default to live I/O", async () => {
+  for (const missing of ["fetchImpl", "spawn"]) {
+    const { options, calls } = composedRecoveryFixture();
+    delete options[missing];
+    await assert.rejects(verifyPureHonoRecoveryEvidence(options), /missing verifier I\/O$/);
+    assert.deepEqual(calls, []);
+  }
+});
 
 for (const event of ["push", "workflow_dispatch"]) {
   test(`pure Hono run adapter authenticates one exact ${event} attempt for the validator`, async () => {
