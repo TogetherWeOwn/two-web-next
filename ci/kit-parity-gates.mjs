@@ -980,13 +980,23 @@ export function allowsEndedMemberBoardCopy(path) {
 // cannot also claim the season ended. Only a completed window gets ended copy.
 export function memberBoardEmptyText(scope, allowEnded = false) {
   const viewer = scope === "relative" ? "You are not" : "Nobody is";
-  const open = String.raw` yet\.(?![\s\S]*\bThis season has ended\.)`;
-  const ending = allowEnded ? String.raw`(?:${open}|\.\s+This season has ended\.)` : open;
-  return new RegExp(String.raw`^\s*${viewer} ranked for this season and game${ending}(?=\s|$)`);
+  const prefix = `${viewer} ranked for this season and game`.replaceAll(" ", String.raw`\s+`);
+  const ended = String.raw`This\s+season\s+has\s+ended\.`;
+  const open = String.raw`\s+yet\.(?![\s\S]*\b${ended})`;
+  const ending = allowEnded ? String.raw`(?:${open}|\.\s+${ended})` : open;
+  return new RegExp(String.raw`^\s*${prefix}${ending}(?=\s|$)`);
 }
 
 // Static HTML check only; Playwright checks visibility with the full CSS cascade.
 const INLINE_DISPLAY_NONE = /(?:^|;)\s*display\s*:\s*none\s*(?:!\s*important\s*)?(?:;|$)/i;
+const CSS_COMMENT_OR_STRING = /\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'/g;
+
+function hasInlineDisplayNone(style) {
+  // Drop comments without joining tokens; quoted strings cannot contain declarations.
+  return INLINE_DISPLAY_NONE.test(
+    style.replace(CSS_COMMENT_OR_STRING, (part) => (part.startsWith("/*") ? " " : '""')),
+  );
+}
 
 /** @param {import("parse5").DefaultTreeAdapterMap["node"]} node */
 function* activeBoardNodes(node) {
@@ -997,7 +1007,7 @@ function* activeBoardNodes(node) {
         ({ name, value }) =>
           name === "hidden" ||
           name === "inert" ||
-          (name === "style" && INLINE_DISPLAY_NONE.test(value)),
+          (name === "style" && hasInlineDisplayNone(value)),
       ))
   )
     return;

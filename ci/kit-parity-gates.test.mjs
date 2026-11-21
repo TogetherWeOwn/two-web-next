@@ -17,6 +17,7 @@ import {
   isCoveredByExecutedRun,
   isInJourneyScope,
   isManifestEnabled,
+  memberBoardEmptyText,
   memberBoardStatus,
   parseManifestEntries,
   pathsMatchStructurally,
@@ -549,6 +550,26 @@ test("preview join-attempts journeys skip loud without a QA token", () => {
   void status;
 });
 
+test("member-board empty text matches raw browser text across whitespace", () => {
+  for (const [scope, subject] of [
+    ["overall", "Nobody is"],
+    ["relative", "You are not"],
+  ]) {
+    const allTime = memberBoardEmptyText(scope);
+    const endedWindow = memberBoardEmptyText(scope, true);
+    const base = `${subject} ranked for this season and game`;
+    const ended = "This season\nhas ended.";
+    assert.equal(allTime.test(`${base} yet. ${ended}`), false);
+    assert.equal(endedWindow.test(`${base} yet. ${ended}`), false);
+    assert.equal(allTime.test(`${base}. ${ended}`), false);
+    assert.equal(endedWindow.test(`${base}. ${ended}`), true);
+    assert.equal(
+      allTime.test(`${base.replace("this season", "this\nseason")} yet. Browse events.`),
+      true,
+    );
+  }
+});
+
 test("member-board contract passes a good fixture and fails planted mutants", () => {
   const goodHtml =
     `<html><head><link rel="canonical" href="https://next.togetherweown.com/leaderboards/members">` +
@@ -598,6 +619,14 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
     memberBoardStatus(
       withBoardMarkup(
         "<p role='status'>Nobody is <em>ranked</em>\nfor this season and game&nbsp;yet.</p>",
+      ),
+    ),
+    "overall-empty",
+  );
+  assert.equal(
+    memberBoardStatus(
+      withBoardMarkup(
+        `<p role="status" style="/* display: none; */ --note: ';display:none;'">${openCopy}</p>`,
       ),
     ),
     "overall-empty",
@@ -678,6 +707,14 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
       () =>
         withBoardMarkup(
           `<div style="color:red; DISPLAY: none !important"><p role="status">${openCopy}</p></div>`,
+        ),
+      "board table or empty status present",
+    ],
+    [
+      "empty-status-inline-hidden-with-css-comment",
+      () =>
+        withBoardMarkup(
+          `<p role="status" style="display: none /* hide until ready */">${openCopy}</p>`,
         ),
       "board table or empty status present",
     ],
