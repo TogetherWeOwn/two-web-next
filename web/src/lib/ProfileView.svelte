@@ -217,17 +217,19 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
               Timezone: {member.timezone ||
                 (isOwner ? PROFILE_EMPTY_COPY.timezoneOwner : PROFILE_EMPTY_COPY.timezoneOther)}
             </p>
+            <div data-local-time-compare={member.timezone ?? ""}>
+              <button type="button" class="btn profile-secondary" hidden>
+                Compare local times
+              </button>
+            </div>
           </div>
           <div class="profile-provenance" data-testid="profile-provenance"><Tag>From Discord</Tag></div>
         </div>
-        <div class="profile-identity-actions" data-testid="profile-identity-actions">
-          {#if isOwner}<Button href="#edit-heading">{PROFILE_COPY.edit}</Button>{/if}
-          <div data-local-time-compare={member.timezone ?? ""}>
-            <button type="button" class="btn profile-secondary" hidden>
-              Compare local times
-            </button>
+        {#if isOwner}
+          <div class="profile-identity-actions" data-testid="profile-identity-actions">
+            <Button href="#edit-heading">{PROFILE_COPY.edit}</Button>
           </div>
-        </div>
+        {/if}
       </div>
       <div class="profile-details">
         <section aria-labelledby="profile-about-heading">
@@ -528,10 +530,12 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
     letter-spacing: var(--tracking-label); text-transform: uppercase;
   }
   .profile-provenance { margin-top: var(--space-3); }
-  .profile-identity-actions { display: flex; flex-wrap: wrap; align-self: end; gap: var(--space-2); }
-  .profile-identity-actions:not(:has(> :global(a), button:not([hidden]))) { display: none; }
+  .profile-identity-actions { align-self: end; }
+  [data-local-time-compare] { flex-basis: 100%; }
+  [data-local-time-compare]:has(> button[hidden]) { display: none; }
+  .profile-meta [data-local-time-compare] > :global([role="status"]) { margin-top: var(--space-3); }
   /* Match the kit's A1 pill treatment without replacing island-owned controls. */
-  .profile-theme :is(.profile-identity-actions, .profile-editor) .btn {
+  .profile-theme :is(.profile-meta, .profile-editor) .btn {
     min-height: 44px; padding: 0 var(--space-5); border-radius: var(--radius-pill);
     font-size: var(--text-ui); font-weight: var(--font-weight-semibold);
     font-stretch: var(--font-width-button); text-transform: none; letter-spacing: normal;
