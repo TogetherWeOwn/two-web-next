@@ -1,14 +1,15 @@
 import { z } from "zod";
 
-export const liveId = z.string().regex(/^[1-9][0-9]{0,19}$/);
-const liveTime = z.iso
-  .datetime()
-  .max(30)
-  .regex(/T\d\d:\d\d:\d\d(?:\.\d+)?Z$/);
+export const liveId = z
+  .string()
+  .regex(/^[1-9][0-9]{0,19}$/)
+  .refine((id) => id.length < 20 || id <= "18446744073709551615");
+const liveTime = z.iso.datetime().max(30);
 const permissions = z.string().regex(/^(0|[1-9][0-9]{0,39})$/);
 const shortText = z.string().min(1).max(100);
+const distinct = (ids: string[]) => new Set(ids).size === ids.length;
 const guild = z.strictObject({ ownerId: liveId, afkChannelId: liveId.nullable() });
-const channel = z.strictObject({
+const channelRow = z.strictObject({
   id: liveId,
   name: shortText,
   kind: z.enum(["voice", "stage", "category", "other"]),
@@ -26,6 +27,7 @@ const channel = z.strictObject({
     .max(100)
     .refine((rows) => distinct(rows.map(({ kind, id }) => `${kind}:${id}`))),
 });
+const channel = channelRow.refine(({ kind, parentId }) => kind !== "category" || parentId === null);
 const role = z.strictObject({ id: liveId, permissions });
 const member = z.strictObject({
   userId: liveId,
@@ -47,10 +49,6 @@ const event = z
     endsAt: liveTime.nullable(),
   })
   .refine(({ startsAt, endsAt }) => endsAt === null || Date.parse(endsAt) > Date.parse(startsAt));
-
-function distinct(ids: string[]): boolean {
-  return new Set(ids).size === ids.length;
-}
 
 const idOf = (row: { id: string }) => row.id;
 const userIdOf = (row: { userId: string }) => row.userId;

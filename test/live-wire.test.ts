@@ -16,7 +16,8 @@ const room = {
 };
 const member = { userId: "300", roleIds: [], nick: null, bot: false, pending: false };
 const role = { id: guildId, permissions: "1024" };
-const occupant = { userId: member.userId, channelId: room.id };
+const guest = { ...member, userId: "301" };
+const occupant = { userId: guest.userId, channelId: room.id };
 const event = {
   id: "400",
   channelId: room.id,
@@ -31,11 +32,12 @@ const baseline = {
   guild: { ownerId: member.userId, afkChannelId: null },
   channels: [room],
   roles: [role],
-  members: [member],
+  members: [member, guest],
   voice: [occupant],
   events: [event],
 };
-const update = { topic: "voice", op: "upsert", id: member.userId, value: occupant };
+const update = { topic: "voice", op: "upsert", id: guest.userId, value: occupant };
+const removeRole = (id: string) => ({ topic: "roles", op: "remove", id });
 const envelope = { v: 1, guild_id: guildId, seq: 2, occurred_at: event.startsAt, ops: [update] };
 
 const decode = (value: unknown, id = guildId) =>
@@ -68,7 +70,9 @@ describe("live wire allowlist", () => {
 
   it("rejects the entire batch for a wrong guild, wrong key, or non-allowlisted operation", () => {
     expect(decode(envelope, "101")).toBeNull();
-    expect(patch({ ...update, id: "301" })).toBeNull();
+    expect(patch({ ...update, id: member.userId })).toBeNull();
+    expect(patch(removeRole("18446744073709551615"))).not.toBeNull();
+    expect(patch(removeRole("18446744073709551616"))).toBeNull();
     expect(patch({ ...update, value: { ...occupant, token: "fixture-only" } })).toBeNull();
     expect(patch({ ...update, op: "remove" })).toBeNull();
     expect(patch({ topic: "guild", op: "upsert", id: "101", value: baseline.guild })).toBeNull();
@@ -83,6 +87,9 @@ describe("live wire allowlist", () => {
     ).toBeNull();
     expect(snapshotTopics({ ...baseline, roles: [] }, guildId)).toBeNull();
     expect(snapshotTopics({ ...baseline, channels: [] }, guildId)).toBeNull();
+    const category = { ...room, id: "201", kind: "category", parentId: "201" };
+    expect(snapshotTopics({ ...baseline, channels: [room, category] }, guildId)).toBeNull();
+    expect(patch({ topic: "channels", op: "upsert", id: category.id, value: category })).toBeNull();
     expect(snapshotTopics({ ...baseline, rawDiscord: {} }, guildId)).toBeNull();
   });
 });
@@ -103,10 +110,8 @@ it("recovers complete state on a gap through one exact signed snapshot pull", as
   };
   const fetcher = vi.fn<typeof fetch>(async () => Response.json(snapshot));
   const pull = signedLiveSnapshot(config, (topics) => snapshotTopics(topics, guildId), fetcher);
-  const load = vi
-    .fn()
-    .mockResolvedValueOnce({ seq: 2, state: completeState() })
-    .mockImplementation(pull);
+  const before = completeState({ ...baseline, voice: [] });
+  const load = vi.fn().mockResolvedValueOnce({ seq: 2, state: before }).mockImplementation(pull);
   const sequence = new LiveSequence(load, reduceLiveState);
   expect(await sequence.synchronize()).toBe(true);
   const recovery = sequence.ingest(8, { ...decode(envelope)!, seq: 8 });
@@ -120,13 +125,7 @@ it("recovers complete state on a gap through one exact signed snapshot pull", as
   expect(init).toMatchObject({ method: "POST", redirect: "manual", body });
   const headers = new Headers(init?.headers);
   const digest = createHash("sha256").update(body).digest("hex");
-  const canonical = [
-    "POST",
-    "/internal/actions",
-    headers.get("X-TWO-Timestamp"),
-    headers.get("X-TWO-Nonce"),
-    digest,
-  ].join("\n");
+  const canonical = `POST\n/internal/actions\n${headers.get("X-TWO-Timestamp")}\n${headers.get("X-TWO-Nonce")}\n${digest}`;
   expect(headers.get("X-TWO-Key-Id")).toBe(config.keyId);
   expect(headers.get("X-TWO-Signature")).toBe(
     `sha256=${createHmac("sha256", config.secret).update(canonical).digest("hex")}`,
@@ -154,9 +153,24 @@ describe("live batch reduction", () => {
     });
   });
 
+  it("clears a departed non-owner's voice without invalidating the baseline", () => {
+    const delta = patch({ topic: "members", op: "remove", id: guest.userId });
+    expect(reduceLiveState(completeState(), delta!)).toEqual({
+      ...baseline,
+      members: [member],
+      voice: [],
+    });
+  });
+
   it("drops the current baseline if a contiguous batch loses permission proof", async () => {
-    const state = completeState();
-    const delta = patch({ topic: "roles", op: "remove", id: guildId });
+    const ordinaryRole = { ...role, id: "101" };
+    const overwrite = { kind: "role", id: ordinaryRole.id, allow: "1024", deny: "0" };
+    const state = completeState({
+      ...baseline,
+      roles: [role, ordinaryRole],
+      channels: [{ ...room, overwrites: [overwrite] }],
+    });
+    const delta = patch(removeRole(ordinaryRole.id));
     const sequence = new LiveSequence(async () => ({ state, seq: 1 }), reduceLiveState);
     expect(await sequence.synchronize()).toBe(true);
     expect(await sequence.ingest(2, delta!)).toBe("unavailable");
