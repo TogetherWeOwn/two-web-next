@@ -2183,10 +2183,14 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
       if (zones.some((zone) => zone.parentElement?.closest("[data-cal-zone]"))) {
         throw new Error("Calendar replacement zones must not be nested");
       }
-      // The island retains these nodes across swaps. The actions zone inside
-      // the search form is replaceable; the form and bound controls are not.
+      // The actions zone is replaceable, but must keep its past-scope input
+      // in the stable GET form even though the default response omits it.
+      const searchForm = section.querySelector('form[role="search"]');
+      const actions = section.querySelector('[data-cal-zone="actions"]');
+      if (!searchForm || zoneOf(searchForm) || actions?.closest("form") !== searchForm) {
+        throw new Error("Missing replaceable actions zone inside the stable search form");
+      }
       for (const selector of [
-        'form[role="search"]',
         '[data-testid="events-search"]',
         'select[name="game"]',
         '[data-testid="events-read-retry"]',
@@ -2229,7 +2233,19 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
       const viewCalendar = head?.querySelector('[data-testid="events-view-calendar"]');
       const views = viewList?.closest('nav:not([role]), [role="group"], [role="navigation"]');
       const viewLabel = views?.getAttribute("aria-label");
-      const unavailable = '[hidden], [inert], [aria-hidden="true"]';
+      const isExposed = (node: Element) => {
+        if (node.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+        // A closed disclosure exposes only its first direct summary.
+        for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+          if (
+            parent.matches("details:not([open])") &&
+            !parent.querySelector(":scope > summary")?.contains(node)
+          ) {
+            return false;
+          }
+        }
+        return true;
+      };
       if (
         !viewList ||
         !viewCalendar ||
@@ -2237,8 +2253,8 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
         !views.contains(viewCalendar) ||
         !head?.contains(views) ||
         !viewLabel?.trim() ||
-        viewList.closest(unavailable) ||
-        viewCalendar.closest(unavailable)
+        !isExposed(viewList) ||
+        !isExposed(viewCalendar)
       ) {
         throw new Error("Missing exposed, labelled List/Calendar controls");
       }
