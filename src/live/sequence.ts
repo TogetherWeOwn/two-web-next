@@ -2,15 +2,17 @@ export type LiveSnapshot<State> = Readonly<{ seq: number; state: State }>;
 type IngestResult = "applied" | "duplicate" | "invalid" | "resynced" | "unavailable";
 
 /** One guild's in-memory cursor. The caller validates and authenticates both
- * inputs. The reducer must return a new state and the loader must be bounded. */
+ * inputs. The reducer returns a new state or null when continuity cannot be
+ * proven; the loader must be bounded. */
 export class LiveSequence<State, Delta> {
   #current: LiveSnapshot<State> | null = null;
+  #applied = 0;
   #minimum = 0;
   #recovering: Promise<boolean> | null = null;
 
   constructor(
     private readonly load: () => Promise<LiveSnapshot<State> | null>,
-    private readonly reduce: (state: State, delta: Delta) => State,
+    private readonly reduce: (state: State, delta: Delta) => State | null,
   ) {}
 
   get current(): LiveSnapshot<State> | null {
@@ -24,11 +26,19 @@ export class LiveSequence<State, Delta> {
 
   async ingest(seq: number, delta: Delta): Promise<IngestResult> {
     if (!Number.isSafeInteger(seq) || seq < 1) return "invalid";
+    if (seq <= this.#applied) return "duplicate";
     const current = this.#current;
-    if (current && seq <= current.seq) return "duplicate";
     if (current && seq === current.seq + 1) {
-      this.#current = { seq, state: this.reduce(current.state, delta) };
-      return "applied";
+      try {
+        const next = this.reduce(current.state, delta);
+        if (next !== null) {
+          this.#current = { seq, state: next };
+          this.#applied = seq;
+          return "applied";
+        }
+      } catch {
+        this.#current = null;
+      }
     }
 
     // Losing a delta can also mean losing a permission revocation. Stop
@@ -47,6 +57,7 @@ export class LiveSequence<State, Delta> {
           return false;
         }
         this.#current = snapshot;
+        this.#applied = snapshot.seq;
         return true;
       } catch {
         return false;

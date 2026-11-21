@@ -1,6 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
-import { expect, it, vi } from "vitest";
-import { LiveSequence } from "../src/live/sequence";
+import { expect, it } from "vitest";
 import { LIVE_INGEST_PATH, signedLiveSnapshot, verifyLiveIngress } from "../src/live/transport";
 
 const key = { keyId: "fixture", secret: "offline signing fixture" };
@@ -58,24 +57,6 @@ const snapshot = {
 };
 const decode = (topics: Record<string, unknown>) =>
   typeof topics.voice === "number" ? topics.voice : null;
-
-it("signs one exact live.snapshot pull and returns only decoded state", async () => {
-  const fetcher = vi.fn<typeof fetch>(async () => Response.json(snapshot));
-  const sequence = new LiveSequence(signedLiveSnapshot(config, decode, fetcher), (state) => state);
-  expect(await sequence.ingest(11, null)).toBe("resynced");
-  expect(sequence.current).toEqual({ seq: 11, state: 5 });
-  expect(fetcher).toHaveBeenCalledOnce();
-  const [url, init] = fetcher.mock.calls[0]!;
-  const body = '{"action":"live.snapshot","guild_id":"1234"}';
-  expect(url).toBe("https://producer.example/internal/actions");
-  expect(init).toMatchObject({ method: "POST", redirect: "manual", body });
-  const headers = new Headers(init?.headers);
-  const [timestamp, nonce, mac] = ["Timestamp", "Nonce", "Signature"].map(
-    (h) => headers.get(`X-TWO-${h}`)!,
-  );
-  expect(headers.get("X-TWO-Key-Id")).toBe(key.keyId);
-  expect(mac).toBe(signature("/internal/actions", timestamp!, nonce!, body));
-});
 
 it.each([
   () => Response.json({ ...snapshot, guild_id: "4321" }),

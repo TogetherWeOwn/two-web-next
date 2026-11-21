@@ -28,19 +28,23 @@ describe("live guild sequence", () => {
     expect(sequence.current).toBeNull();
   });
 
-  it("suppresses stale state during a gap and until a covering snapshot succeeds", async () => {
+  it("invalidates state after a failed contiguous reduction and ignores known replays", async () => {
     const load = loadFixture()
-      .mockResolvedValueOnce({ seq: 3, state: "old" })
+      .mockResolvedValueOnce({ seq: 5, state: "old" })
       .mockRejectedValueOnce(new Error("transport offline"))
       .mockResolvedValueOnce({ seq: 5, state: "still behind" })
       .mockResolvedValueOnce({ seq: 7, state: "authoritative" });
-    const sequence = new LiveSequence(load, append);
+    const sequence = new LiveSequence(load, () => {
+      throw new Error("invalid transition");
+    });
     expect(await sequence.synchronize()).toBe(true);
 
-    const gap = sequence.ingest(6, "must not be reduced");
+    const recovery = sequence.ingest(6, "must not expose stale state");
     expect(sequence.current).toBeNull();
-    expect(await gap).toBe("unavailable");
-    expect(await sequence.ingest(4, "late missing delta")).toBe("unavailable");
+    expect(await recovery).toBe("unavailable");
+    expect(await sequence.ingest(5, "known replay")).toBe("duplicate");
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(await sequence.ingest(6, "still behind")).toBe("unavailable");
     expect(sequence.current).toBeNull();
     expect(await sequence.ingest(6, "retry")).toBe("resynced");
     expect(sequence.current).toEqual({ seq: 7, state: "authoritative" });
