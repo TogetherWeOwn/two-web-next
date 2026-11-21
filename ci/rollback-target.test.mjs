@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { validatePureHonoRecoveryEvidence } from "./pure-hono-recovery-evidence.mjs";
 import {
   ROLLBACK_ENVIRONMENTS,
   assertRollbackDrillGreen,
@@ -16,6 +18,134 @@ import {
   rollbackEnvironment,
   stagingBusyRuns,
 } from "./rollback-target.mjs";
+
+const recoveryDigest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+function recoveryFixture({ changeFiles, changeManifest, encodeManifest = JSON.stringify } = {}) {
+  const identity = {
+    sourceSha: "a".repeat(40),
+    runId: "123",
+    runAttempt: "2",
+    originalVersionId: "11111111-1111-4111-8111-111111111111",
+  };
+  const producer = {
+    repository: "TogetherWeOwn/two-web-next",
+    ref: "refs/heads/main",
+    workflow: ".github/workflows/archive-hono-recovery.yml",
+    runId: identity.runId,
+    runAttempt: identity.runAttempt,
+  };
+  const members = [
+    { path: "worker.js", bytes: "worker fixture" },
+    { path: "effective-config.json", bytes: "{}" },
+    { path: "assets/version.json", bytes: "{}" },
+  ];
+  const manifest = {
+    schema: "two.pure-hono-recovery.v1",
+    target: "two-web-next-production",
+    ...identity,
+    files: members.map(({ path, bytes }) => ({
+      path,
+      bytes: Buffer.byteLength(bytes),
+      sha256: recoveryDigest(bytes),
+    })),
+  };
+  changeFiles?.(members);
+  changeManifest?.(manifest);
+  const archive = Buffer.from(
+    JSON.stringify([...members, { path: "manifest.json", bytes: encodeManifest(manifest) }]),
+  );
+  const archiveSha256 = recoveryDigest(archive);
+  return {
+    archive,
+    expected: { ...identity, workflow: producer.workflow, archiveSha256 },
+    attestation: { ...producer, sourceSha: identity.sourceSha, subjectSha256: archiveSha256 },
+    run: { ...producer, status: "completed", conclusion: "success" },
+    decode: (input) =>
+      JSON.parse(input.toString("utf8")).map(({ path, bytes, type = "file" }) => ({
+        path,
+        type,
+        bytes: Buffer.from(bytes),
+      })),
+  };
+}
+
+test("pure Hono archive binds a successful main run and hashes every declared member", () => {
+  const input = recoveryFixture();
+  assert.deepEqual(validatePureHonoRecoveryEvidence(input), {
+    archiveSha256: input.expected.archiveSha256,
+    fileCount: 3,
+  });
+});
+
+for (const [label, change, reason] of [
+  ["different archive bytes", (x) => x.archive.fill(0), /pinned archive digest/],
+  ["no verified attestation", (x) => delete x.attestation, /verified attestation/],
+  [
+    "different signed subject",
+    (x) => (x.attestation.subjectSha256 = "0".repeat(64)),
+    /attestation/,
+  ],
+  ["different signed source", (x) => (x.attestation.sourceSha = "b".repeat(40)), /attestation/],
+  ["different signer", (x) => (x.attestation.workflow = ".github/workflows/ci.yml"), /attestation/],
+  ["forked signer", (x) => (x.attestation.repository = "Other/two-web-next"), /attestation/],
+  ["stale run attempt", (x) => (x.run.runAttempt = "1"), /successful main run/],
+  ["failed run", (x) => (x.run.conclusion = "failure"), /successful main run/],
+  ["non-main run", (x) => (x.run.ref = "refs/heads/dev"), /successful main run/],
+]) {
+  test(`pure Hono archive refuses ${label} before decoding`, () => {
+    const input = recoveryFixture();
+    change(input);
+    let decoded = false;
+    input.decode = () => {
+      decoded = true;
+    };
+    assert.throws(() => validatePureHonoRecoveryEvidence(input), reason);
+    assert.equal(decoded, false);
+  });
+}
+
+for (const [label, mutation, reason] of [
+  ["changed asset bytes", { changeFiles: (files) => (files[2].bytes = "[]") }, /file digest/],
+  ["missing asset", { changeFiles: (files) => files.pop() }, /file set/],
+  [
+    "undeclared asset",
+    { changeFiles: (files) => files.push({ path: "assets/extra", bytes: "" }) },
+    /file set/,
+  ],
+  ["duplicate member", { changeFiles: (files) => files.push(files[2]) }, /archive members/],
+  ["linked asset", { changeFiles: (files) => (files[2].type = "symlink") }, /archive members/],
+  [
+    "path traversal",
+    { changeFiles: (files) => (files[2].path = "assets/../worker.js") },
+    /archive members/,
+  ],
+  [
+    "directory alias",
+    { changeFiles: (files) => files.push({ path: "assets/Version.json/x", bytes: "" }) },
+    /archive members/,
+  ],
+  ["duplicate declaration", { changeManifest: (m) => (m.files[2] = m.files[1]) }, /file set/],
+  [
+    "wrong original UUID",
+    { changeManifest: (m) => (m.originalVersionId = V2) },
+    /manifest identity/,
+  ],
+  [
+    "duplicate JSON key",
+    { encodeManifest: (m) => `{"target":"other",${JSON.stringify(m).slice(1)}` },
+    /manifest encoding/,
+  ],
+  [
+    "empty asset set",
+    { changeFiles: (files) => files.pop(), changeManifest: (m) => m.files.pop() },
+    /assets missing/,
+  ],
+]) {
+  test(`pure Hono archive refuses ${label}`, () => {
+    assert.throws(() => validatePureHonoRecoveryEvidence(recoveryFixture(mutation)), reason);
+  });
+}
 
 const V1 = "11111111-1111-4111-8111-111111111111";
 const V2 = "22222222-2222-4222-8222-222222222222";
