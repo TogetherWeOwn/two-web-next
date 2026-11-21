@@ -1,5 +1,7 @@
 import { validProbeId } from "../alert-probe-error";
+import { diagnosticCode } from "../bot/diagnostic-code";
 import { safeRequestId } from "../request-log";
+import { validAnnouncementAttempt, validAnnouncementKey } from "./reconciliation";
 import type { QueueMessage } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -35,6 +37,18 @@ export function isQueueMessage(value: unknown): value is QueueMessage {
         isRecord(value.action) &&
         typeof value.action.channelKey === "string" &&
         typeof value.action.body === "string"
+      );
+    case "announcement-settlement":
+      return (
+        validAnnouncementAttempt(value.idempotencyKey, value.sendAttempts) &&
+        (value.jobId === undefined || validAnnouncementKey(value.jobId)) &&
+        (value.lastCode !== null || value.lastStatus !== null) &&
+        (value.lastCode === null || value.lastCode === diagnosticCode(value.lastCode)) &&
+        (value.lastStatus === null ||
+          (typeof value.lastStatus === "number" &&
+            Number.isInteger(value.lastStatus) &&
+            value.lastStatus >= 100 &&
+            value.lastStatus <= 599))
       );
     case "role-assign":
       return (

@@ -24,13 +24,12 @@ const CHANNEL_ALIAS = /^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,63}$/;
 const SEND_LEASE_SECONDS = 30; // Room for the 10s bot deadline and bounded DB settlement.
 const CARRIER_AGE_HOURS = 720; // Elapsed time: longer than queue retention, unaffected by DST.
 
+export function validAnnouncementKey(key: unknown): key is string {
+  return typeof key === "string" && UUID.test(key);
+}
+
 export function validAnnouncementIdentity(key: unknown, alias: unknown): boolean {
-  return (
-    typeof key === "string" &&
-    UUID.test(key) &&
-    typeof alias === "string" &&
-    CHANNEL_ALIAS.test(alias)
-  );
+  return validAnnouncementKey(key) && typeof alias === "string" && CHANNEL_ALIAS.test(alias);
 }
 
 type SendClaim =
@@ -46,10 +45,10 @@ type AnnouncementSendRow = {
   kind: "sending" | "abandoned" | "retryable" | "closed";
 };
 
-function validAnnouncementAttempt(key: string, attempts: number): boolean {
+export function validAnnouncementAttempt(key: unknown, attempts: unknown): boolean {
   return (
-    typeof key === "string" &&
-    UUID.test(key) &&
+    validAnnouncementKey(key) &&
+    typeof attempts === "number" &&
     Number.isInteger(attempts) &&
     attempts >= 1 &&
     attempts <= CALL_INTERNAL_ACTION.tries
@@ -128,7 +127,7 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
     key: string,
     attempts: number,
     retryInSeconds: number | null,
-    orphan = false,
+    orphan: boolean | null = false,
   ): Promise<string | undefined> {
     const state = retryInSeconds === null ? "closed" : "retryable";
     // A lock-only waiter need not recheck UPDATE predicates. Read the clock after locking.
@@ -140,10 +139,25 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
         claim_until = case when ${retryInSeconds}::int is null then claim_until
           else clock_timestamp() + make_interval(secs => ${retryInSeconds}) end
       where idempotency_key = ${key}::uuid and state = 'sending' and send_attempts = ${attempts}
-        and (claim_until <= clock_timestamp()) = ${orphan}
+        and coalesce((claim_until <= clock_timestamp()) = ${orphan}::boolean, true)
       returning channel_alias`;
     return row?.channel_alias as string | undefined;
   }
+
+  const announcementIntent = (
+    key: string,
+    attempts: number,
+    subject: string,
+    evidence: Pick<ReconciliationIntent, "lastCode" | "lastStatus"> | null,
+  ) =>
+    reconciliationIntent({
+      idempotencyKey: key,
+      verb: "announcement.post",
+      attempts,
+      subject,
+      lastCode: evidence?.lastCode ?? null,
+      lastStatus: evidence?.lastStatus ?? null,
+    });
 
   return {
     /** Pass the original queue timestamp, not a retry time or a body field. */
@@ -240,17 +254,36 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
         const alias = await settleClaim(tx, key, attempts, null, evidence === null);
         if (alias === undefined)
           throw new Error("Announcement claim changed before reconciliation");
-        await insert(
-          tx,
-          reconciliationIntent({
-            idempotencyKey: key,
-            verb: "announcement.post",
-            attempts,
-            subject: alias,
-            lastCode: evidence?.lastCode ?? null,
-            lastStatus: evidence?.lastStatus ?? null,
-          }),
-        );
+        await insert(tx, announcementIntent(key, attempts, alias, evidence));
+      });
+    },
+    /** A settlement carrier can close only its original attempt; it cannot reserve a send. */
+    async recoverAnnouncement(
+      key: string,
+      attempts: number,
+      evidence: Pick<ReconciliationIntent, "lastCode" | "lastStatus">,
+    ): Promise<boolean> {
+      if (!validAnnouncementAttempt(key, attempts)) throw new Error("Invalid announcement claim");
+      return bounded(async (tx) => {
+        const alias = await settleClaim(tx, key, attempts, null, null);
+        if (alias !== undefined) {
+          await insert(tx, announcementIntent(key, attempts, alias, evidence));
+          return true;
+        }
+        // An expired original carrier may have closed the same claim first. Fill only
+        // gaps in its unresolved intent; never create an intent for a closed success/refusal.
+        const intent = announcementIntent(key, attempts, "recovery", evidence);
+        const rows = await tx`update bot_reconciliation_intents i
+          set last_code = coalesce(i.last_code, ${intent.lastCode}::text),
+              last_status = coalesce(i.last_status, ${intent.lastStatus}::int)
+          from announcement_send_claims c
+          where c.idempotency_key = ${key}::uuid and c.state = 'closed' and c.send_attempts = ${attempts}
+            and i.idempotency_key = c.idempotency_key and i.verb = 'announcement.post'
+            and i.subject = c.channel_alias and i.attempts = c.send_attempts and i.resolved_at is null
+            and ((i.last_code is null and ${intent.lastCode}::text is not null)
+              or (i.last_status is null and ${intent.lastStatus}::int is not null))
+          returning i.idempotency_key`;
+        return rows.length === 1;
       });
     },
     /** Owner-only maintenance, unscheduled until integration. Never delete unresolved evidence. */

@@ -187,6 +187,9 @@ export async function handleQueue(
       },
       probeEnabled: qaEnabled(env.APP_URL, env.QA_AUTH_TOKEN),
       announcementReconciliation: pgReconciliationStore(sql),
+      enqueueAnnouncementSettlement: env.INTERNAL_ACTION_QUEUE
+        ? (body) => env.INTERNAL_ACTION_QUEUE.send(body)
+        : undefined,
     });
   } finally {
     // Force-close timed-out best-effort SQL without holding the invocation open.
