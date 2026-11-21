@@ -33,7 +33,7 @@ function cssCompiler(componentCss: string[]) {
     source("web/src/app.css"),
     source("vendor/design-kit/tokens.css"),
     source("web/src/lib/segmented-control.css"),
-    // Add the layout's sticky shell when the board supplies its scroll offset.
+    source("web/src/lib/site-header.css"),
     ...componentCss,
   ]
     .join("\n")

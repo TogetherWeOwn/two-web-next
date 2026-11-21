@@ -21,8 +21,9 @@ export const csr = false;
 // INSERT would refuse the board, so the hook records the queued view after
 // the boundary releases a 200 (src/kit-members.ts header).
 export const load: PageServerLoad = async ({ url, locals, cookies, setHeaders }) => {
+  const activityParam = url.searchParams.get("activity");
   try {
-    return await loadMembersBoardData({
+    const board = await loadMembersBoardData({
       env,
       session: {
         // No bridge decision merged into locals reads as an outage, never a
@@ -34,7 +35,7 @@ export const load: PageServerLoad = async ({ url, locals, cookies, setHeaders })
       },
       seasonParam: url.searchParams.get("season"),
       scopeParam: url.searchParams.get("scope"),
-      activityParam: url.searchParams.get("activity"),
+      activityParam,
       setHeaders,
       dbForFn: dbFor,
       queueBoardViewFn: (db, entry, requestId) =>
@@ -42,6 +43,9 @@ export const load: PageServerLoad = async ({ url, locals, cookies, setHeaders })
       url: url.href,
       requestId: locals.requestId,
     });
+    // Preserve the validated spelling only for a selected game: lowercase can exceed the cap.
+    const activityInput = activityParam?.trim();
+    return activityInput ? { ...board, activityInput } : board;
   } catch (err) {
     const status = (err as { status?: number })?.status;
     const message = err instanceof Error ? err.message : "";

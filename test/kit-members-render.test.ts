@@ -13,8 +13,14 @@ import { dirname, join } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { parseActivityParam } from "../src/leaderboards/members";
+import { boardPeriodHarness, compileBoardPeriodKit } from "./helpers/member-board-period-shortcuts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+const testRequire = createRequire(import.meta.url);
+const { memberBoardStatus } = testRequire("../ci/kit-parity-gates.mjs") as {
+  memberBoardStatus: (html: string, allowEnded: boolean) => string | null;
+};
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
 const { compile } = webRequire("svelte/compiler") as {
   compile: (
@@ -65,6 +71,7 @@ export function renderPage(data) {
     absWorkingDir: root,
     nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
     alias: { "#lib": join(root, "web/src/lib/") },
+    loader: { ".css": "empty" },
     plugins: [
       {
         name: "kit-members-svelte-ssr",
@@ -114,5 +121,112 @@ describe("Kit member board render", () => {
     );
     // Events is a sibling section here, never the current page.
     expect(nav![1]).toContain('<a href="/events">Events</a>');
+  });
+
+  it("shows equal visible sign-up counts as ties without changing the reader's order", () => {
+    const html = renderPage(
+      baseData({
+        rows: [
+          { username: "Vic", count: 3, rank: 1, isViewer: true },
+          { username: "Mira", count: 3, rank: 2, isViewer: false },
+          { username: "Jo", count: 1, rank: 3, isViewer: false },
+        ],
+      }),
+    );
+    expect(html).toContain("Ranked by events signed up for (going), not by attendance.");
+    expect(html).toContain('content="Members ranked by events they signed up for as going."');
+    expect(html).toContain('aria-label="Leading sign-up counts"');
+    expect(html).toContain('<th scope="row">Vic (you)</th>');
+    expect(html).toContain("current Going sign-ups for published or past events");
+    expect(html.match(/3 · Tied/g)).toHaveLength(2);
+    expect(html).toContain('<td>2</td><th scope="row">Mira</th>');
+    expect(html).toContain('<th scope="row">Jo</th>');
+    expect(html).not.toContain("Season elapsed");
+  });
+
+  it.each(["overall", "relative"])("labels the fourth row as the viewer in %s", (scope) => {
+    const rows = [1, 2, 3, 4].map((rank) => ({
+      rank,
+      username: `Member ${rank}`,
+      count: 5 - rank,
+      isViewer: rank === 4,
+    }));
+    const html = renderPage(baseData({ scope, rows, viewerUsername: "Member 4" }));
+    expect(html).toContain('<tr aria-current="true"><td>4</td><th scope="row">Member 4 (you)</th>');
+    expect(html).toContain('<th scope="row">Member 3</th>');
+  });
+
+  it("keeps the same ranks when the window clips either end of a tie", () => {
+    const rows = [3, 3, 2, 1, 1].map((count, i) => ({
+      username: `Member ${i}`,
+      count,
+      rank: i + 7,
+      isViewer: i === 2,
+    }));
+    const full = renderPage(baseData({ rows }));
+    const clipped = renderPage(baseData({ scope: "relative", rows: rows.slice(1, -1) }));
+    for (const [rank, member] of [
+      [8, 1],
+      [10, 3],
+    ]) {
+      const cells = `<td>${rank}</td><th scope="row">Member ${member}</th>`;
+      expect(full).toContain(cells);
+      expect(clipped).toContain(cells);
+    }
+    expect(clipped).not.toContain("Tied");
+    expect(clipped).not.toContain("Leading sign-up counts");
+    expect(clipped).toContain("Around you (5 above and below): Going counts");
+  });
+
+  it("round-trips the accepted spelling of a game whose lowercase expands past the limit", async () => {
+    const activityInput = `${"A".repeat(99)}İ`;
+    const activity = activityInput.toLowerCase();
+    expect(parseActivityParam(activity)).toMatchObject({ ok: false });
+    const board = boardPeriodHarness(await compileBoardPeriodKit());
+    const { html, status, data } = await board.request(
+      "Kit",
+      `/leaderboards/members?${new URLSearchParams({ activity: ` ${activityInput} ` })}`,
+    );
+    expect(status).toBe(200);
+    expect(data).toMatchObject({ activity, activityInput });
+    const links = [...html.matchAll(/href="(\/leaderboards\/members\?[^" ]+)"/g)];
+    const filters = links.map(
+      ([, href]) => new URL(href!.replaceAll("&amp;", "&"), "https://example.test").searchParams,
+    );
+    const gameLinks = filters.filter((params) => params.has("activity"));
+    expect(gameLinks).toHaveLength(6);
+    for (const filter of gameLinks) {
+      expect(parseActivityParam(filter.get("activity"))).toEqual({ ok: true, game: activity });
+    }
+    expect(html).toContain(`name="activity" type="text" value="${activityInput}"`);
+  });
+
+  it("distinguishes an empty game from an outage and offers no-JS recovery", () => {
+    const data = baseData({ season: "2000-02", activity: "valheim", rows: [] });
+    const html = renderPage(data);
+    expect(html).toContain('aria-label="Season elapsed" max="29" value="29"');
+    expect(html).toContain("Ended 1 March 2000 (UTC)");
+    expect(html).toContain("Nobody is ranked for this season and game.");
+    expect(html).toContain('<a href="/leaderboards/members?season=2000-02">show every game</a>');
+    for (const scope of ["overall", "relative"]) {
+      const ended = renderPage({ ...data, scope });
+      expect(memberBoardStatus(ended, true)).toBe(`${scope}-empty`);
+      const [controls, results] = ended.split(/<form[^>]*aria-label="Filter the leaderboard"/);
+      if (scope === "relative") {
+        expect(results).toContain(
+          '<a href="/leaderboards/members?season=2000-02&amp;activity=valheim">overall board</a>',
+        );
+      }
+      expect(controls).toContain('<a href="/profile">profile settings</a>');
+      expect(results).not.toContain('href="/profile"');
+      expect(results).toContain('<a href="/leaderboards/members">all-time board</a>');
+      expect(results).not.toContain('href="/events"');
+      expect(results).not.toContain("opted out");
+    }
+    expect(html).not.toContain("Leading sign-up counts");
+    expect(html).not.toContain("Hidden (only you see this)");
+    const outage = renderPage({ ...data, available: false });
+    expect(outage).toContain("Rankings are temporarily unavailable.");
+    expect(outage).not.toContain("Nobody is ranked");
   });
 });
