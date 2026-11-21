@@ -58,19 +58,13 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
           if (name !== "default" && name !== "guest") continue;
           const header = page.getByRole("banner");
           const join = header.getByRole("link", { name: "Join", exact: true });
-          const expectedJoin = Number(name === "guest");
-          assert.equal(await join.count(), expectedJoin, `${name} header at ${viewport.width}px`);
+          const guest = name === "guest";
+          assert.equal(await join.count(), Number(guest), `${name} header at ${viewport.width}px`);
           if (viewport.width !== 390) continue;
           await header.getByRole("link", { name: "Menu", exact: true }).click();
           const account = header.getByRole("navigation", { name: "Account" });
-          assert.ok(await account.isVisible());
-          const actions = { Join: expectedJoin, "Your profile": 1 - expectedJoin };
-          for (const [label, count] of Object.entries(actions)) {
-            assert.equal(
-              await account.getByRole("link", { name: label, exact: true }).count(),
-              count,
-            );
-          }
+          const actions = guest ? ["Sign in", "Join"] : ["Your profile"];
+          assert.deepEqual(await account.getByRole("link").allTextContents(), actions);
           await page.screenshot({
             path: `${out}/${name}-menu-open-390.png`,
             animations: "disabled",
@@ -145,13 +139,21 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
       ]) {
         await page.setViewportSize({ width, height });
         await open("?state=many");
+        const header = page.getByRole("banner");
+        assert.equal(await header.evaluate((node) => getComputedStyle(node).position), "sticky");
         const form = page.getByRole("search", { name: "Search members" });
-        const { inset, stickyHeight } = await form.evaluate((node) => ({
-          inset: Number.parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop),
-          stickyHeight:
-            node.closest(".directory-toolbar").getBoundingClientRect().height +
-            document.querySelector(".ember-header").getBoundingClientRect().height,
-        }));
+        const { inset, stickyHeight } = await form.evaluate((node) => {
+          const header = document.querySelector("[data-kit-site-header]");
+          const headerHeight =
+            getComputedStyle(header).position === "sticky"
+              ? header.getBoundingClientRect().height
+              : 0;
+          return {
+            inset: Number.parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop),
+            stickyHeight:
+              node.closest(".directory-toolbar").getBoundingClientRect().height + headerHeight,
+          };
+        });
         assert.ok(inset >= stickyHeight, `${width}px: scroll inset ${inset} < ${stickyHeight}`);
         const top = await form.evaluate((node) => node.getBoundingClientRect().top + scrollY);
         await page.evaluate((y) => scrollTo({ top: y + 200, behavior: "instant" }), top);
@@ -185,7 +187,7 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
       assert.ok(
         await list.getByRole("link", { name: "Fixture Member 1", exact: true }).evaluate((link) => {
           const { left, top, bottom, width, height } = link.getBoundingClientRect();
-          const header = document.querySelector(".ember-header").getBoundingClientRect();
+          const header = document.querySelector("[data-kit-site-header]").getBoundingClientRect();
           const inset = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop);
           return (
             link.matches(":focus-visible") &&

@@ -2,7 +2,7 @@
 import type { Snippet } from "svelte";
 import EmberFooter from "#lib/EmberFooter.svelte";
 import SiteHeader from "#lib/SiteHeader.svelte";
-import headerCss from "./ember-header.css?url";
+import headerCss from "./ember-header.css?url&no-inline";
 
 let {
   activeNav,
