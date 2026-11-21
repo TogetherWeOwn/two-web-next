@@ -12,13 +12,21 @@
   .base-theme [data-kit-site-header] {
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: 3;
     background: var(--g0, var(--color-page));
     grid-template: 59px / 1fr auto;
     min-height: 60px;
     row-gap: 0;
     padding: 0 var(--space-4);
     border-bottom: 1px solid var(--color-hair1, var(--line));
+  }
+  /* The fragment sheet scrolls in flow; reserve space only for a sticky bar. */
+  [data-kit-site-header]:is(:not(:target), [data-menu-ready])
+    ~ main.events-page
+    .member-board-table
+    thead
+    th {
+    top: 60px;
   }
   [data-kit-site-header] .menu-brand img {
     width: auto;

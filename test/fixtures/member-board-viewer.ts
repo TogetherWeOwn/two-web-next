@@ -132,8 +132,7 @@ export function memberBoardDocument(twin: Twin, scope: Scope) {
   const css = ["styles", "theme-tokens", "theme", "schedule-theme"]
     .map((name) => readFileSync(join(root, `public/${name}.css`), "utf8"))
     .join("\n");
-  // Mirror the Kit layout's header import; unstyled menu chrome shifts the
-  // table's scroll origin even when the header is outside the capture.
+  // Mirror the Kit layout's header import for the scrolled mobile bar.
   const styles =
     twin === "kit"
       ? `${css}\n${compileCss.build(candidates)}\n${readFileSync(join(root, "web/src/lib/site-header.css"), "utf8")}`
@@ -145,7 +144,11 @@ export function memberBoardDocument(twin: Twin, scope: Scope) {
   const head = html.match(/<head[^>]*>([\s\S]*?)<\/head>/)?.[1] ?? "";
   const bodyMatch = html.match(/<body([^>]*)>([\s\S]*?)<\/body>/);
   const bodyAttrs = bodyMatch?.[1] ?? "";
-  const body = bodyMatch?.[2] ?? html;
+  let body = bodyMatch?.[2] ?? html;
+  if (twin === "kit") {
+    const logo = readFileSync(join(root, "public/logo.svg")).toString("base64");
+    body = body.replaceAll('src="/logo.svg"', `src="data:image/svg+xml;base64,${logo}"`);
+  }
   // Strip link/script chrome by walking angle-bracket tokens instead of tag
   // regexes (CodeQL js/bad-tag-filter): drop link tokens and lone script
   // closers case-insensitively, and skip raw script bodies through </script>.

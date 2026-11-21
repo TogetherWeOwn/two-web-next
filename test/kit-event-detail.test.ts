@@ -580,8 +580,7 @@ describe("event-detail guest reads", () => {
     // Discovery + share surface.
     expect(model.related).toHaveLength(1);
     expect(model.related[0]).toMatchObject({ key: RELATED[0]!.eventKey, title: "Chess finals" });
-    // Related instants use the served long-offset format, not the grid format.
-    expect(model.related[0]!.whenText).toContain("GMT");
+    expect(model.related[0]!.whenText).toBe("Fri 1 Feb, 19:00 UTC");
     // The sign-in return preserves the query string, as served.
     const queried = await resolve(KEY, fakeStore(), GUEST, null, "?tab=about");
     expect(queried.outcome.kind).toBe("ok");
@@ -597,7 +596,7 @@ describe("event-detail guest reads", () => {
     expect(outcome.headers["x-robots-tag"]).toBeUndefined();
   });
 
-  it("links both neighbors through the served discovery format", async () => {
+  it("links both neighbors through the compact discovery format", async () => {
     const previous = {
       id: 6,
       eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA",
@@ -616,7 +615,7 @@ describe("event-detail guest reads", () => {
     expect(outcome.kind).toBe("ok");
     if (outcome.kind !== "ok") throw new Error("unreachable");
     expect(outcome.model.neighbors.previous?.key).toBe(previous.eventKey);
-    expect(outcome.model.neighbors.previous?.whenText).toContain("GMT");
+    expect(outcome.model.neighbors.previous?.whenText).toBe("Tue 1 Jan, 19:00 UTC");
     const lonely = await resolve(KEY, fakeStore({ neighbors: { previous: null, next: null } }));
     expect(lonely.outcome.kind).toBe("ok");
     if (lonely.outcome.kind !== "ok") throw new Error("unreachable");
@@ -1629,6 +1628,10 @@ describe("Kit detail presentation", () => {
     expect(broken.outcome.kind).toBe("ok");
     if (broken.outcome.kind !== "ok") throw new Error("unreachable");
     expect(broken.outcome.model.zoneLabel).toBe("UTC");
+    expect(broken.outcome.model.neighbors.next).toMatchObject({
+      whenText: "Fri 1 Feb, 19:00 UTC",
+      datetime: "2030-02-01T19:00:00.000Z",
+    });
     expect(broken.outcome.model.whenText).toBe("2030-01-10T20:00:00.000Z");
   });
 });

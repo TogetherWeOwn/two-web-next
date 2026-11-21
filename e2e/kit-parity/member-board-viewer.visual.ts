@@ -70,7 +70,13 @@ const scrollProbe = `(async () => {
   else window.scrollBy(0, 120);
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   const top = inner ? Math.max(0, inner.getBoundingClientRect().top) : 0;
+  const menu = document.querySelector("#kit-menu");
+  const menuBox = menu?.getBoundingClientRect();
   const result = {
+    barBottom: menu?.closest("header")?.getBoundingClientRect().bottom,
+    menuHit: menuBox && menu.contains(document.elementFromPoint(
+      menuBox.x + menuBox.width / 2, menuBox.y + menuBox.height / 2,
+    )),
     moved: before - firstRow.getBoundingClientRect().top,
     headers: headers.map(header => ({ top: header.getBoundingClientRect().top,
       bottom: header.getBoundingClientRect().bottom, text: header.textContent.trim() })),
@@ -126,7 +132,17 @@ for (const twin of ["hono", "kit"] as const) {
               headers: Array<{ top: number; bottom: number; text: string }>;
               top: number;
               tableBottom: number;
+              barBottom?: number;
+              menuHit?: boolean;
             }>(scrollProbe);
+            if (twin === "kit" && viewport.name === "mobile") {
+              expect.soft(scrolled.menuHit, "Menu remains reachable while scrolling").toBe(true);
+              for (const header of scrolled.headers) {
+                expect
+                  .soft(header.top, "Board headings clear the compact site header")
+                  .toBeGreaterThanOrEqual(scrolled.barBottom ?? 60);
+              }
+            }
             expect(
               scrolled.moved,
               `${label}: fixture must actually scroll body rows`,

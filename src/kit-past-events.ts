@@ -62,7 +62,7 @@ export async function dispatchPastArchiveRequest(
   const limited = await guard(request, env, requestId);
   if (limited) return limited;
   // Kit data requests still execute the read guard/load but their JSON payload
-  // is not the HTML representation cached by Hono.
+  // is not the archive HTML. Kit documents never reuse Hono's cached shell.
   const htmlRequest = url.pathname === "/events/past";
   const page = normalizePastPage(Number.parseInt(url.searchParams.get("page") ?? "1", 10));
   const eligible =
@@ -80,7 +80,7 @@ export async function dispatchPastArchiveRequest(
       flashed: false,
     });
   const source = eligible ? anonCacheSource(env) : null;
-  const key = eligible ? anonPastKey(request.method, page) : null;
+  const key = eligible ? anonPastKey(request.method, page, "kit") : null;
   if (source && key) {
     const hit = readAnonCache(key, source, now);
     if (hit) {
