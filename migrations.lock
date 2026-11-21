@@ -152,6 +152,10 @@
     {
       "path": "drizzle/1037_waitlist-offers.sql",
       "sha256": "4b7c07db0f11ee89a392c7bf4b02e791087a18f0692d46b49f2aafedfe958c7b"
+    },
+    {
+      "path": "drizzle/1038_announcement-send-claims.sql",
+      "sha256": "fa8c16150a6eb4e958219de3da469d8d1638371016d06193af13e4ca3045c436"
     }
   ]
 }

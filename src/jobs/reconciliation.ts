@@ -1,7 +1,7 @@
 // Dormant persistence only: no handler or queue settlement is wired to this store.
 import type postgres from "postgres";
 import { diagnosticCode } from "../bot/diagnostic-code";
-import { LEDGER_DB_TIMEOUT_MS } from "./constants";
+import { CALL_INTERNAL_ACTION, LEDGER_DB_TIMEOUT_MS } from "./constants";
 import type { TxClient } from "./types";
 
 export const SYNC_RECONCILIATION_MARKER = "request requires reconciliation";
@@ -17,6 +17,18 @@ const VERBS = new Set([
 const SUBJECT = /^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,199}$/;
 const ACTOR = /^[0-9]{1,20}$/;
 const RESOLUTIONS = new Set(["confirmed", "not_applied", "superseded"]);
+
+type AnnouncementSendClaim = {
+  kind: "claimed" | "sending" | "closed";
+  attempts: number;
+  startedAt: Date;
+};
+
+type AnnouncementSendRow = {
+  send_attempts: number;
+  started_at_ms: number;
+  state: "sending" | "retryable" | "closed";
+};
 
 export type ReconciliationIntent = {
   idempotencyKey: string;
@@ -85,7 +97,81 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
     if (rows.length !== 1) throw new Error("Reconciliation key is not an open matching intent");
   }
 
+  async function finishAnnouncement(
+    tx: TxClient,
+    key: string,
+    attempts: number,
+    state: "retryable" | "closed",
+  ): Promise<boolean> {
+    const rows = await tx`update announcement_send_claims set state = ${state}
+      where idempotency_key = ${key}::uuid and state = 'sending' and send_attempts = ${attempts}
+      returning idempotency_key`;
+    return rows.length === 1;
+  }
+
   return {
+    /** Only a committed claim grants a send. An old 'sending' row is never reclaimed. */
+    async claimAnnouncement(key: string): Promise<AnnouncementSendClaim> {
+      if (typeof key !== "string" || !UUID.test(key)) throw new Error("Invalid announcement key");
+      return bounded(async (tx) => {
+        const [claimed]: AnnouncementSendRow[] = await tx`insert into announcement_send_claims
+          (idempotency_key, send_attempts, state, started_at) values (${key}::uuid, 1, 'sending', clock_timestamp())
+          on conflict (idempotency_key) do update set
+            send_attempts = announcement_send_claims.send_attempts + 1,
+            state = 'sending', started_at = clock_timestamp()
+          where announcement_send_claims.state = 'retryable'
+            and announcement_send_claims.send_attempts < ${CALL_INTERNAL_ACTION.tries}
+          returning send_attempts, state,
+            (extract(epoch from started_at) * 1000)::double precision as started_at_ms`;
+        if (claimed)
+          return {
+            kind: "claimed",
+            attempts: claimed.send_attempts,
+            startedAt: new Date(claimed.started_at_ms),
+          };
+
+        // A separate statement sees the winning insert even if it committed while the upsert waited.
+        const [current]: AnnouncementSendRow[] = await tx`select send_attempts, state,
+            (extract(epoch from started_at) * 1000)::double precision as started_at_ms
+          from announcement_send_claims where idempotency_key = ${key}::uuid`;
+        if (!current || current.state === "retryable")
+          throw new Error("Announcement claim unavailable");
+        return {
+          kind: current.state,
+          attempts: current.send_attempts,
+          startedAt: new Date(current.started_at_ms),
+        };
+      });
+    },
+    /** Fence stale completions. The last attempt can close but cannot reopen for a send. */
+    async finishAnnouncement(
+      key: string,
+      attempts: number,
+      state: "retryable" | "closed",
+    ): Promise<boolean> {
+      if (
+        typeof key !== "string" ||
+        !UUID.test(key) ||
+        !Number.isSafeInteger(attempts) ||
+        attempts < 1 ||
+        attempts > 2147483647 ||
+        (state !== "retryable" && state !== "closed") ||
+        (state === "retryable" && attempts >= CALL_INTERNAL_ACTION.tries)
+      ) {
+        throw new Error("Invalid announcement claim settlement");
+      }
+      return bounded((tx) => finishAnnouncement(tx, key, attempts, state));
+    },
+    /** A hard stop or orphaned claim closes only when its scalar evidence commits. */
+    async recordAnnouncement(input: Omit<ReconciliationIntent, "verb">): Promise<void> {
+      const intent = reconciliationIntent({ ...input, verb: "announcement.post" });
+      await bounded(async (tx) => {
+        if (!(await finishAnnouncement(tx, intent.idempotencyKey, intent.attempts, "closed"))) {
+          throw new Error("Announcement claim changed before reconciliation");
+        }
+        await insert(tx, intent);
+      });
+    },
     async record(input: ReconciliationIntent): Promise<void> {
       const intent = reconciliationIntent(input);
       await bounded((tx) => insert(tx, intent));

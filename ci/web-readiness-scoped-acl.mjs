@@ -6,7 +6,7 @@ const tables = {
   "SELECT, INSERT, UPDATE, DELETE":
     "users profiles discord_event_snapshots job_unique_locks queue_jobs featured_contents rsvps join_attempts web_throttle_hits web_sessions web_oauth_journeys web_session_grace",
   "SELECT, INSERT, UPDATE":
-    "events event_sync_attempts event_echoes bot_reconciliation_intents waitlist_offers",
+    "events event_sync_attempts event_echoes bot_reconciliation_intents waitlist_offers announcement_send_claims",
   "SELECT, INSERT, DELETE":
     "agent_event_idempotency_keys agent_event_audits agent_event_hits member_data_access_logs event_search_logs board_view_logs queue_failed_jobs event_echo_members",
   "SELECT, INSERT": "activity_log",
@@ -141,6 +141,11 @@ export async function probeWorkloads(owner, runtime) {
   const [intent] = await runtime`UPDATE bot_reconciliation_intents SET resolved_at = now()
     WHERE idempotency_key = ${job.job_id} RETURNING attempts`;
   assert.equal(intent.attempts, 1);
+  await runtime`INSERT INTO announcement_send_claims (idempotency_key, send_attempts, state, started_at)
+    VALUES (${job.job_id}, 1, 'sending', now())`;
+  const [claim] = await runtime`UPDATE announcement_send_claims SET state = 'closed'
+    WHERE idempotency_key = ${job.job_id} RETURNING send_attempts`;
+  assert.equal(claim.send_attempts, 1);
 
   await runtime`INSERT INTO activity_log (description, created_at) VALUES ('fixture', now() - interval '91 days')`;
   await runtime`INSERT INTO agent_event_audits (operation, request_id, result, created_at)

@@ -5,7 +5,9 @@ import {
   reconciliationService,
   reconciliationServiceFor,
 } from "../src/admin/reconciliation-service";
+import { CALL_INTERNAL_ACTION } from "../src/jobs/constants";
 import { pgPruneStores, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
+import { pgReconciliationStore } from "../src/jobs/reconciliation";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 import { registerJobsServerTimeoutsAcceptance } from "./helpers/jobs-server-timeouts-acceptance";
 import { env } from "./helpers/member-data";
@@ -22,6 +24,68 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
   });
   afterAll(async () => {
     await fixture?.dispose();
+  });
+
+  it("serializes concurrent announcement claims and counts only acquired sends", async () => {
+    const store = pgReconciliationStore(sql);
+    const key = crypto.randomUUID();
+    for (let attempts = 1; attempts <= CALL_INTERNAL_ACTION.tries; attempts++) {
+      const claims = await Promise.all([
+        store.claimAnnouncement(key),
+        store.claimAnnouncement(key),
+      ]);
+      expect(claims.map((claim) => claim.kind).sort()).toEqual(["claimed", "sending"]);
+      expect(claims.map((claim) => claim.attempts)).toEqual([attempts, attempts]);
+      expect(claims[0].startedAt).toEqual(claims[1].startedAt);
+      if (attempts > 1)
+        expect(await store.finishAnnouncement(key, attempts - 1, "closed")).toBe(false);
+      if (attempts < CALL_INTERNAL_ACTION.tries) {
+        expect(await store.finishAnnouncement(key, attempts, "retryable")).toBe(true);
+      }
+    }
+    const attempts = CALL_INTERNAL_ACTION.tries;
+    await expect(store.finishAnnouncement(key, attempts, "retryable")).rejects.toThrow(
+      "Invalid announcement claim settlement",
+    );
+    expect(await store.claimAnnouncement(key)).toMatchObject({ kind: "sending", attempts });
+    expect(await store.finishAnnouncement(key, attempts, "closed")).toBe(true);
+    expect(await store.claimAnnouncement(key)).toMatchObject({ kind: "closed", attempts });
+    expect(await store.finishAnnouncement(key, attempts - 1, "retryable")).toBe(false);
+  });
+
+  it("leaves an orphaned announcement fenced when reconciliation cannot commit", async () => {
+    const key = crypto.randomUUID();
+    const store = pgReconciliationStore(sql);
+    const claim = await store.claimAnnouncement(key);
+    const intent = {
+      idempotencyKey: key,
+      subject: "fixture-channel",
+      attempts: claim.attempts,
+      lastCode: "needs_reconciliation",
+      lastStatus: 409,
+    };
+    await sql`update announcement_send_claims set started_at = now() - interval '1 day'
+      where idempotency_key = ${key}`;
+    await sql`insert into bot_reconciliation_intents (idempotency_key, verb, subject, attempts)
+      values (${key}, 'event.upsert', 'fixture-event', 1)`;
+    await expect(store.recordAnnouncement(intent)).rejects.toThrow("not an open matching intent");
+    const afterFailure = await pgReconciliationStore(sql).claimAnnouncement(key);
+    expect(afterFailure).toMatchObject({ kind: "sending", attempts: 1 });
+    expect(afterFailure.startedAt.getTime()).toBeLessThan(claim.startedAt.getTime());
+
+    // Clear the injected conflict; the matching claim and scalar intent now commit together.
+    await sql`delete from bot_reconciliation_intents where idempotency_key = ${key}`;
+    await store.recordAnnouncement(intent);
+    expect(await store.claimAnnouncement(key)).toMatchObject({ kind: "closed", attempts: 1 });
+    const [saved] = await sql`select verb, subject, attempts, last_code, last_status
+      from bot_reconciliation_intents where idempotency_key = ${key}`;
+    expect(saved).toEqual({
+      verb: "announcement.post",
+      subject: "fixture-channel",
+      attempts: 1,
+      last_code: "needs_reconciliation",
+      last_status: 409,
+    });
   });
 
   it("returns filtered, ordered reconciliation windows at both limits", async ({
