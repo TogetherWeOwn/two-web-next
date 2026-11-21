@@ -1,4 +1,3 @@
-import { diagnosticCode } from "./diagnostic-code";
 import { encodeCanonicalJson, INTERNAL_ACTIONS_PATH, newNonce, signInternalAction } from "./signer";
 
 export type AttendanceMember = {
@@ -8,16 +7,7 @@ export type AttendanceMember = {
   first_joined_at: string | null;
 };
 export type AttendanceRoom = { channel_id: string; name_at_close: string };
-export type AttendancePayload = {
-  v: 1;
-  event_key: string;
-  window: { starts_at: string; ends_at: string };
-  threshold_minutes: number;
-  peak_concurrent: number;
-  rooms: AttendanceRoom[];
-  members: AttendanceMember[];
-  final: boolean;
-};
+export type AttendancePayload = NonNullable<ReturnType<typeof parseAttendanceResult>>;
 export type AttendanceResult =
   | { ok: true; attendance: AttendancePayload }
   | { ok: false; code: string };
@@ -26,12 +16,10 @@ export type AttendanceReadConfig = { baseUrl?: string; keyId?: string; secret?: 
 
 const BUDGET_MS = 2_500;
 const MAX_RESPONSE_BYTES = 256 * 1024;
-const SNOWFLAKE = /^\d{1,20}$/;
 const ISO_ZULU = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const object = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-const snowflake = (value: unknown): value is string =>
-  typeof value === "string" && SNOWFLAKE.test(value);
+const snowflake = (v: unknown): v is string => typeof v === "string" && /^\d{1,20}$/.test(v);
 const integer = (value: unknown, min: number): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= min;
 function timestamp(value: unknown): value is string {
@@ -42,7 +30,7 @@ function timestamp(value: unknown): value is string {
 }
 
 /** Reject malformed known fields; project only v1 fields from additive replies. */
-export function parseAttendanceResult(result: unknown, eventKey: string): AttendancePayload | null {
+export function parseAttendanceResult(result: unknown, eventKey: string) {
   if (!object(result) || result.v !== 1 || result.event_key !== eventKey) return null;
   const { window, threshold_minutes, peak_concurrent, final } = result;
   if (
@@ -54,7 +42,8 @@ export function parseAttendanceResult(result: unknown, eventKey: string): Attend
     !integer(peak_concurrent, 0) ||
     typeof final !== "boolean" ||
     !Array.isArray(result.rooms) ||
-    !Array.isArray(result.members)
+    !Array.isArray(result.members) ||
+    (final && !result.members.length)
   )
     return null;
   // The transport byte cap bounds both lists; the producer has no per-list cap.
@@ -63,8 +52,7 @@ export function parseAttendanceResult(result: unknown, eventKey: string): Attend
     if (!object(room)) return null;
     const { channel_id, name_at_close } = room;
     if (!snowflake(channel_id) || rooms.has(channel_id)) return null;
-    if (typeof name_at_close !== "string" || !name_at_close.length || name_at_close.length > 100)
-      return null;
+    if (typeof name_at_close !== "string" || !/^.{1,100}$/su.test(name_at_close)) return null;
     rooms.set(channel_id, { channel_id, name_at_close });
   }
   const members = new Map<string, AttendanceMember>();
@@ -82,7 +70,7 @@ export function parseAttendanceResult(result: unknown, eventKey: string): Attend
     members.set(discord_id, { discord_id, minutes, sessions, first_joined_at });
   }
   return {
-    v: 1,
+    v: 1 as const,
     event_key: eventKey,
     window: { starts_at: window.starts_at, ends_at: window.ends_at },
     threshold_minutes,
@@ -93,17 +81,30 @@ export function parseAttendanceResult(result: unknown, eventKey: string): Attend
   };
 }
 
-function parseReply(doc: unknown, response: Response, eventKey: string): AttendanceResult | null {
+// Retain only documented status/code pairs; never project provider text.
+const ERROR_STATUS = new Map<string, number>([
+  ["malformed", 400],
+  ["unauthorized", 401],
+  ["stale_request", 401],
+  ["action_not_allowed", 403],
+  ["not_found", 404],
+  ["replayed", 409],
+  ["in_progress", 409],
+  ["needs_reconciliation", 409],
+  ["discord_rejected", 422],
+  ["rate_limited", 429],
+  ["internal", 500],
+  ["discord_unavailable", 502],
+  ["busy", 503],
+  ["upstream_timeout", 504],
+]);
+function parseReply(doc: unknown, status: number, eventKey: string): AttendanceResult | null {
   if (!object(doc)) return null;
-  if (!response.ok && doc.ok === false && object(doc.error)) {
-    // Only retain closed vocabulary, never arbitrary provider text.
+  if (doc.ok === false && object(doc.error) && !("result" in doc)) {
     const { code } = doc.error;
-    if (code === "not_found") return response.status === 404 ? { ok: false, code } : null;
-    if (code === "busy") return response.status === 503 ? { ok: false, code } : null;
-    const safeCode = diagnosticCode(code);
-    return safeCode === "unknown" ? null : { ok: false, code: safeCode };
+    if (typeof code === "string" && ERROR_STATUS.get(code) === status) return { ok: false, code };
   }
-  if (!response.ok || doc.ok !== true) return null;
+  if (status !== 200 || doc.ok !== true || "error" in doc) return null;
   const attendance = parseAttendanceResult(doc.result, eventKey);
   return attendance ? { ok: true, attendance } : null;
 }
@@ -120,21 +121,18 @@ export function signedAttendanceReader(
 ): AttendanceReader {
   return async (eventKey) => {
     const unavailable = { ok: false, code: "bot_unreachable" } as const;
-    if (!cfg.baseUrl || !cfg.keyId || !cfg.secret) return unavailable;
+    const { baseUrl, keyId, secret } = cfg;
+    if (!baseUrl || !keyId || !secret) return unavailable;
     try {
-      const url = new URL(INTERNAL_ACTIONS_PATH, cfg.baseUrl);
+      const url = new URL(INTERNAL_ACTIONS_PATH, baseUrl);
       if (url.protocol !== "https:" || url.username || url.password) return unavailable;
       const body = encodeCanonicalJson({ action: "event.attendance.read", event_key: eventKey });
-      const headers = await signInternalAction(
-        cfg.keyId,
-        cfg.secret,
-        body,
-        Math.floor(Date.now() / 1000),
-        newNonce(),
-      );
+      const ts = Math.floor(Date.now() / 1000);
+      const headers = await signInternalAction(keyId, secret, body, ts, newNonce());
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+      const expiresAt = performance.now() + BUDGET_MS;
       const deadline = new Promise<AttendanceResult>((resolve) => {
         timer = setTimeout(() => {
           controller.abort();
@@ -163,9 +161,7 @@ export function signedAttendanceReader(
           const { done, value } = await reader.read();
           if (controller.signal.aborted) return unavailable;
           if (done)
-            return (
-              parseReply(JSON.parse(text + decoder.decode()), response, eventKey) ?? unavailable
-            );
+            return parseReply(JSON.parse(text + decoder.decode()), status, eventKey) ?? unavailable;
           size += value.byteLength;
           if (size > MAX_RESPONSE_BYTES) return unavailable;
           if (value.byteLength) text += decoder.decode(value, { stream: true });
@@ -175,7 +171,8 @@ export function signedAttendanceReader(
         return unavailable;
       };
       try {
-        return await Promise.race([read(), deadline]);
+        const result = await Promise.race([read(), deadline]);
+        return performance.now() < expiresAt ? result : unavailable;
       } finally {
         clearTimeout(timer);
         if (reader) cancelBody(reader);
