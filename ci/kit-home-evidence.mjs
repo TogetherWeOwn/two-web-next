@@ -130,12 +130,9 @@ export async function assertHomeEvidence(page, state) {
       /It's quiet right now|evenings are busiest|In voice now/,
     );
   }
+  const memberWithRsvp = state === "memberEvents" || state === "memberAgenda";
   for (const id of ["home-standing", "home-event-own-rsvp"])
-    assert.equal(
-      await count(id),
-      ["memberEvents", "memberAgenda"].includes(state) ? 1 : 0,
-      `${state}: ${id}`,
-    );
+    assert.equal(await count(id), memberWithRsvp ? 1 : 0, `${state}: ${id}`);
   assert.equal(await count("notice"), state === "joinFailed" ? 1 : 0, `${state}: notice`);
   assert.equal(await page.getByTestId("home-highlights").locator("li").count(), 4);
   if (!session?.member && state !== "sessionOutage" && state !== "joinFailed")

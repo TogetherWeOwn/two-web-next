@@ -200,11 +200,7 @@ describe("Kit home SSR render: Week and Upcoming Events", () => {
       const upcomingEvents = [
         fullnessEvent({ eventKey: "past", title: "Already started", startsAt: new Date(0) }),
         fullnessEvent({ eventKey: "this-week", title: "Saturday game" }),
-        fullnessEvent({
-          eventKey: "later",
-          title: "Later game",
-          startsAt: new Date("2030-08-05T18:00:00Z"),
-        }),
+        fullnessEvent({ title: "Later game", startsAt: new Date("2030-08-05") }),
       ];
       const memberRsvps = [{ eventKey: "this-week", status: "waitlisted" }];
       for (const session of [null, nonMemberSession, memberSession]) {
