@@ -610,6 +610,21 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
       "board table or empty status present",
     ],
     [
+      "empty-copy-without-status-role",
+      () =>
+        withStatus("Nobody is ranked for this season and game yet.").replace(' role="status"', ""),
+      "board table or empty status present",
+    ],
+    [
+      "empty-status-outside-main",
+      () =>
+        withStatus("Nobody is ranked for this season and game yet.").replace(
+          /(<p role="status">[^<]*<\/p>)(<\/main>)/,
+          "$2$1",
+        ),
+      "board table or empty status present",
+    ],
+    [
       "follow-index",
       (html) => html.replace('content="noindex, nofollow"', 'content="index, follow"'),
       "member board never indexes",
