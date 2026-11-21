@@ -9,8 +9,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import { parseFragment } from "parse5";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { MemberView } from "../src/profiles/store";
+import { attr, elements } from "./helpers/kit-edit-controls";
 
 const APP_URL = "https://next.example.test";
 
@@ -195,9 +197,15 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
     const privacy = html.match(
       /<section[^>]*aria-labelledby="profile-privacy-heading"[^>]*>.*?<\/section>/s,
     )?.[0];
-    expect(html.replace(/<!--.*?-->/gs, "")).toMatch(
-      /data-testid="profile-identity-actions"[^>]*>\s*<a\b[^>]*href="#edit-heading"/,
+    const identityActions = elements(parseFragment(html)).find(
+      (el) => attr(el, "data-testid") === "profile-identity-actions",
     );
+    expect(
+      identityActions?.childNodes.some(
+        (node) =>
+          "tagName" in node && node.tagName === "a" && attr(node, "href") === "#edit-heading",
+      ),
+    ).toBe(true);
     expect(html.match(/<form[^>]*data-testid="profile-form"[^>]*>.*?<\/form>/s)?.[0]).toContain(
       privacy,
     );
