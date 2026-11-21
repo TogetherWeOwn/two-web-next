@@ -1,3 +1,5 @@
+import { diagnosticCode } from "../bot/diagnostic-code";
+import { SYNC_RECONCILIATION_MARKER, type ReconciliationIntent } from "./reconciliation";
 import { SYNC_EVENT, backoffFor } from "./constants";
 import { withInternalActionDeadline } from "./internal-action-deadline";
 import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./queue-error";
@@ -6,6 +8,7 @@ import { BotTerminalError, BotTransportError, SyncRetryPersistenceError } from "
 import type { BotClient, BotFailure, EventStore, UniqueLock } from "./types";
 import { safeRequestId } from "../request-log";
 import {
+  dataField,
   refusalRetryCode,
   syncRetryDiagnostic,
   type SyncRetryDiagnostic,
@@ -26,9 +29,12 @@ export type Outcome =
       intentRedeliveryBackoffSeconds?: number;
     };
 
+export type SyncOutcome = Outcome | { reconciliation: ReconciliationIntent };
+
 export const uniqueKey = (eventKey: string) => `sync-event:${eventKey}`;
 
 const LOCK_TIMEOUT_MS = 2000;
+export const SYNC_CLAIM_ACTIVE_MS = 60_000;
 /**
  * Per-op bound for the producer's lock-acquire and queue-send.
  * Every neighboring op races a deadline; acquire and send were awaited bare,
@@ -177,7 +183,7 @@ export async function handleSyncEvent(
     now?: () => Date;
     onRetryDiagnostic?: (receipt: SyncRetryDiagnostic) => void | Promise<void>;
   },
-): Promise<Outcome> {
+): Promise<SyncOutcome> {
   const now = deps.now ?? (() => new Date());
   const waiting = (seconds: number = SYNC_EVENT.debounceSeconds): Outcome =>
     attempts >= SYNC_EVENT.tries
@@ -196,6 +202,9 @@ export async function handleSyncEvent(
     prepared.terminalReason ??
     (prepared as unknown as { terminal_reason?: string | null }).terminal_reason ??
     null;
+  if (terminalIntent === SYNC_RECONCILIATION_MARKER) {
+    return { failed: "request requires reconciliation; unresolved identity retained" };
+  }
   if (prepared.state === "failed" && terminalIntent) {
     // Late settlement commit: the UPDATE landed after the client's race gave
     // up, so the alert and the failed row were never written. Settle again —
@@ -220,8 +229,36 @@ export async function handleSyncEvent(
       ),
     };
   }
-  if (prepared.requestAttempts >= SYNC_EVENT.tries) {
-    return { failed: "request retry budget exhausted; unresolved identity retained" };
+  if (
+    (prepared.requestAttempts >= SYNC_EVENT.tries || attempts >= SYNC_EVENT.tries) &&
+    !prepared.nextAttemptAt &&
+    prepared.claimStartedAt &&
+    now().getTime() - prepared.claimStartedAt.getTime() < SYNC_CLAIM_ACTIVE_MS
+  ) {
+    // A duplicate must not retire the last carrier while its owner is settling.
+    return { retryInSeconds: SYNC_EVENT.uniqueForSeconds };
+  }
+  const stopped = (attempt: typeof prepared, answer?: BotFailure): SyncOutcome => {
+    const status = dataField(answer, "status");
+    return {
+      reconciliation: {
+        idempotencyKey: attempt.idempotencyKey,
+        verb: attempt.action,
+        subject: attempt.eventKey,
+        attempts: Math.max(1, attempt.requestAttempts),
+        lastCode: answer ? diagnosticCode(dataField(answer, "code")) : null,
+        lastStatus:
+          typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
+            ? status
+            : null,
+      },
+    };
+  };
+  if (
+    prepared.requestAttempts >= SYNC_EVENT.tries ||
+    (attempts >= SYNC_EVENT.tries && prepared.requestAttempts > 0 && !prepared.nextAttemptAt)
+  ) {
+    return stopped(prepared);
   }
   // Claims stay closed until their result commits. A lost response/deadline
   // cannot become eligible again merely because a short lease expired.
@@ -252,11 +289,11 @@ export async function handleSyncEvent(
     } catch {}
   };
   let retryDeadline: Date | null | undefined;
-  const retry = async (seconds: number): Promise<Outcome> => {
-    const exhausted = attempt.requestAttempts >= SYNC_EVENT.tries;
-    retryDeadline = exhausted ? null : new Date(now().getTime() + seconds * 1000);
+  const retry = async (seconds: number, answer?: BotFailure): Promise<SyncOutcome> => {
+    if (attempt.requestAttempts >= SYNC_EVENT.tries) return stopped(attempt, answer);
+    retryDeadline = new Date(now().getTime() + seconds * 1000);
     await deps.events.deferSync(attempt, retryDeadline);
-    return exhausted || attempts >= SYNC_EVENT.tries
+    return attempts >= SYNC_EVENT.tries
       ? { failed: "carrier exhausted; unresolved identity retained" }
       : { retryInSeconds: seconds };
   };
@@ -280,6 +317,7 @@ export async function handleSyncEvent(
         : deps.bot.upsertEvent(attempt.payload, msg.idempotencyKey),
     );
     if (!answer.ok) {
+      if (dataField(answer, "code") === "needs_reconciliation") return stopped(attempt, answer);
       if (!answer.retryable)
         return {
           definitive: true,
@@ -290,7 +328,7 @@ export async function handleSyncEvent(
         };
       // Record the refusal before persistence can throw and obscure its cause.
       reportRetry("BotFailure", answer);
-      return await retry(admitRetryDelay(answer.retryAfterSeconds, backoff()));
+      return await retry(admitRetryDelay(answer.retryAfterSeconds, backoff()), answer);
     }
     await deps.events.completeSync(attempt, answer.discordEventId);
     return { done: true };
@@ -312,12 +350,8 @@ export async function handleSyncEvent(
       reportRetry("BotTransportError");
       return retry(backoff());
     }
-    await deps.events.deferSync(
-      attempt,
-      attempt.requestAttempts >= SYNC_EVENT.tries
-        ? null
-        : new Date(now().getTime() + backoff() * 1000),
-    );
+    if (attempt.requestAttempts >= SYNC_EVENT.tries) return stopped(attempt);
+    await deps.events.deferSync(attempt, new Date(now().getTime() + backoff() * 1000));
     throw e;
   }
 }

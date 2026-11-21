@@ -7,7 +7,8 @@ import { toQueueMessage } from "./envelope";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
 import { SYNC_RETRY_PERSISTENCE_REASON, SyncRetryPersistenceError } from "./types";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./sync-retry-diagnostic";
-import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
+import { handleSyncEvent, uniqueKey, type SyncOutcome } from "./sync-event";
+import type { ReconciliationIntent } from "./reconciliation";
 import type { BotClient, EventStore, QueueLedger, QueueMessage, UniqueLock } from "./types";
 
 const LEDGER_TIMEOUT_MS = 2000;
@@ -76,6 +77,7 @@ export async function consume(
     events: EventStore;
     lock: UniqueLock;
     ledger: QueueLedger;
+    reconciliation?: { recordSync(intent: ReconciliationIntent): Promise<void> };
     now?: () => Date;
     needsSync?: EventStore["needsSync"];
     dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown>;
@@ -238,7 +240,7 @@ export async function consume(
       syncRetry = receipt;
       console.warn("sync retry classified", projectSyncRetryDiagnostic(receipt));
     };
-    let outcome: Outcome;
+    let outcome: SyncOutcome;
     try {
       if (body.kind === "alert-probe") {
         // Poison only the synthetic job, only when the runtime's QA gate is on.
@@ -316,6 +318,28 @@ export async function consume(
         }
         continue;
       }
+    }
+    if ("reconciliation" in outcome) {
+      try {
+        if (!deps.reconciliation) throw new Error("reconciliation store unavailable");
+        let timer: ReturnType<typeof setTimeout>;
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("timed out")), LEDGER_TIMEOUT_MS);
+        });
+        await Promise.race([
+          deps.reconciliation.recordSync(outcome.reconciliation),
+          timeout,
+        ]).finally(() => clearTimeout(timer));
+      } catch (error) {
+        console.error("reconciliation persistence failed", {
+          exception: queueExceptionClass(error),
+        });
+        if (jobId)
+          await bounded("released", deps.ledger.released(jobId, deps.now?.() ?? new Date()));
+        m.retry();
+        continue;
+      }
+      outcome = { failed: "request requires reconciliation; unresolved identity retained" };
     }
     if ("retryInSeconds" in outcome) {
       if (jobId)

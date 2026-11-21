@@ -215,6 +215,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
   const deps = (bot: BotClient) => ({
     bot,
     events: pgEventStore(sql),
+    reconciliation: pgReconciliationStore(sql),
     lock: pgUniqueLock(sql),
     ledger: pgQueueLedger(sql),
     dispatchPending: (key: string) => enqueueSyncEvent(env, buildSyncMessage(key, "published")!),
@@ -851,11 +852,31 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       await consume({ messages: [other] }, deps(bot));
       expect(other.ack).toHaveBeenCalledOnce();
       expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
-      // Explicit operator recovery renews only the budget/eligibility, never
-      // action/payload/key or the fact that this request was already attempted.
-      // No automatic edit/reconcile performs this renewal.
-      await sql`update event_sync_attempts set request_attempts = 1, next_attempt_at = now() - interval '1 second'
-        where idempotency_key = ${original.idempotencyKey}::uuid`;
+      expect(
+        await sql`select idempotency_key, verb, subject, attempts, resolved_at
+        from bot_reconciliation_intents`,
+      ).toMatchObject([
+        {
+          idempotency_key: original.idempotencyKey,
+          verb: "event.upsert",
+          subject: eventKey,
+          attempts: 6,
+          resolved_at: null,
+        },
+      ]);
+      // Simulate an explicit resolution with its receipt. No automatic
+      // edit/reconcile renews eligibility or changes the action/payload/key.
+      expect(
+        await pgReconciliationStore(sql).resolve(
+          original.idempotencyKey,
+          "123",
+          "not_applied",
+          async (tx) => {
+            await tx`update event_sync_attempts set request_attempts = 1, next_attempt_at = now() - interval '1 second', terminal_reason = null
+            where idempotency_key = ${original.idempotencyKey}::uuid`;
+          },
+        ),
+      ).toBe(true);
       bot.upsertEvent.mockResolvedValue({ ok: true, requestId: null, discordEventId: "discord-1" });
       await reconcileEvents({
         events: pgEventStore(sql),
@@ -1112,9 +1133,21 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
           now: () => new Date(clock),
         });
         expect(sent).toHaveLength(1);
-        expect(await handleSyncEvent(original, 1, dependencies)).toEqual({ retryInSeconds: 300 });
+        expect(await handleSyncEvent(original, 1, dependencies)).toEqual({
+          failed: "request requires reconciliation; unresolved identity retained",
+        });
         expect(bot.upsertEvent).toHaveBeenCalledOnce();
-        await events.deferSync(pending, new Date(start + 3600_000));
+        expect(
+          await pgReconciliationStore(sql).resolve(
+            original.idempotencyKey,
+            "123",
+            "not_applied",
+            async (tx) => {
+              await tx`update event_sync_attempts set terminal_reason = null, next_attempt_at = ${new Date(start + 3600_000)}
+                where idempotency_key = ${original.idempotencyKey}::uuid`;
+            },
+          ),
+        ).toBe(true);
       }
       await reconcileEvents({
         events,
