@@ -8,7 +8,7 @@ const DEADLINE_MS = 2_500;
 const DELTA_BYTES = 64 * 1024;
 export const SNAPSHOT_BYTES = 1024 * 1024;
 const HMAC = { name: "HMAC", hash: "SHA-256" };
-const utcTimestamp = z.iso.datetime();
+export const utcTimestamp = z.iso.datetime().max(30);
 type LiveKey = { keyId: string; secret: string };
 class TooLarge extends Error {}
 

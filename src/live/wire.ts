@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SNAPSHOT_BYTES } from "./transport";
+import { SNAPSHOT_BYTES, utcTimestamp } from "./transport";
 
 // Compact envelope with a 20-digit guild ID, 16-digit sequence and nanosecond UTC timestamp.
 const SNAPSHOT_ENVELOPE_BYTES = 121;
@@ -7,7 +7,6 @@ export const liveId = z
   .string()
   .regex(/^[1-9][0-9]{0,19}$/)
   .refine((id) => id.length < 20 || id <= "18446744073709551615");
-const liveTime = z.iso.datetime().max(30);
 const permissions = z.string().regex(/^(0|[1-9][0-9]{0,39})$/);
 const shortText = z.string().min(1).max(100);
 const distinct = (ids: string[]) => new Set(ids).size === ids.length;
@@ -48,8 +47,8 @@ const event = z
     title: shortText,
     description: z.string().max(1000).nullable(),
     location: shortText.nullable(),
-    startsAt: liveTime,
-    endsAt: liveTime.nullable(),
+    startsAt: utcTimestamp,
+    endsAt: utcTimestamp.nullable(),
   })
   .refine(({ startsAt, endsAt }) => endsAt === null || Date.parse(endsAt) > Date.parse(startsAt));
 
@@ -124,7 +123,7 @@ const delta = z.strictObject({
   v: z.literal(1),
   guild_id: liveId,
   seq: z.number().int().positive(),
-  occurred_at: liveTime,
+  occurred_at: utcTimestamp,
   ops: z.array(operation).min(1).max(128),
 });
 

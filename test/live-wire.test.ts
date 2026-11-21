@@ -45,7 +45,6 @@ const decode = (value: unknown, id = guildId) =>
 const patch = (...ops: unknown[]) => decode({ ...envelope, ops: [update, ...ops] });
 const pullTopics = (fetcher: typeof fetch) =>
   signedLiveSnapshot(config, (topics) => snapshotTopics(topics, guildId), fetcher);
-
 function fixture(raw: unknown = baseline): LiveState {
   const state = snapshotTopics(raw, guildId);
   if (!state) throw new Error("Invalid live state fixture");
@@ -166,7 +165,6 @@ describe("live batch reduction", () => {
     expect(snapshotTopics(candidate, guildId) !== null).toBe(extra === 0);
     expect((await pullTopics(async () => Response.json(snapshot))()) !== null).toBe(extra === 0);
   });
-
   it("drops the current baseline if a contiguous batch loses permission proof", async () => {
     const ordinaryRole = { ...role, id: "101" };
     const overwrite = { kind: "role", id: ordinaryRole.id, allow: "1024", deny: "0" };
