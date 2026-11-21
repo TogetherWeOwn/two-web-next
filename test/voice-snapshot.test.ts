@@ -21,8 +21,8 @@ const respond = (body: BodyInit, status = 200) =>
   signedVoiceReader(cfg, async () => new Response(body, { status }))();
 
 it("sends exactly one signed read without an idempotency key or redirects", async () => {
-  const rooms = [{ ...lobby, event_key: "raid", occupied_since: observed_at }];
-  const value = { ...snapshot, rooms };
+  const event_key = "raid:phase.1_".padEnd(200, "a");
+  const value = { ...snapshot, rooms: [{ ...lobby, event_key, occupied_since: observed_at }] };
   const send = vi.fn<typeof fetch>(async () => new Response(wire(value)));
   expect(await signedVoiceReader(cfg, send)()).toEqual(value);
   const [url, request] = send.mock.calls[0]!;
@@ -42,18 +42,20 @@ it("sends exactly one signed read without an idempotency key or redirects", asyn
 
 it("rejects the whole snapshot on bad fields, totals or caps", async () => {
   const ids = Array.from({ length: 500 }, (_, i) => String(1_000 + i));
-  const many = room("11", ids);
   for (const patch of [
     { v: 2 },
     { observed_at: "2026-02-30T19:04:11Z" },
     { total_in_voice: 4 },
     { rooms: Array(101).fill(lobby) },
-    { rooms: [many, room("12", ["904"], { afk: true })], total_in_voice: 500 },
+    { rooms: [room("11", ids), room("12", ["904"], { afk: true })], total_in_voice: 500 },
+    { rooms: ["11", "12"].map((id) => room(id, [id + "0"], { afk: true })), total_in_voice: 0 },
     ...[
       { name: "🔥".repeat(101) },
       { member_ids: ["bad"] },
       { occupied_since: 10 },
       { event_key: [] },
+      { event_key: "raid night" },
+      { event_key: "a".repeat(201) },
     ].map((roomPatch) => ({ rooms: [{ ...lobby, ...roomPatch }] })),
   ])
     expect(await respond(wire({ ...snapshot, ...patch }))).toBeNull();
@@ -120,16 +122,13 @@ function fixture(skew = 0) {
   const jobs: Promise<unknown>[] = [];
   const ctx = { waitUntil: (p: Promise<unknown>) => void jobs.push(p) };
   const clock = { now: epoch + skew };
-  const get = createVoiceSnapshotCache(() => clock.now);
-  return { ctx, jobs, clock, get };
+  return { ctx, jobs, clock, get: createVoiceSnapshotCache(() => clock.now) };
 }
 
 it("returns immediately, coalesces, throttles failures and freezes the last good value", async () => {
   const { ctx, jobs, clock, get } = fixture();
-  const read = vi
-    .fn(async () => snapshot)
-    .mockResolvedValueOnce(snapshot)
-    .mockRejectedValueOnce(Error());
+  const read = vi.fn(async () => snapshot);
+  read.mockResolvedValueOnce(snapshot).mockRejectedValueOnce(Error());
   expect(get(read, ctx, viewer)).toBeNull();
   expect(get(read, ctx, viewer)).toBeNull();
   expect(jobs).toHaveLength(1);
@@ -181,6 +180,7 @@ it("serializes only proven rooms and current consented identity", async () => {
   const profiles = new Map([
     ["901", { name: "Visible", avatarUrl: "https://cdn.discordapp.com/avatars/901/abc.png" }],
     ["902", { name: "Opted out", show_in_live_rooms: false }],
+    ["904", { name: "Opted out in restricted room", show_in_live_rooms: false }],
     ["906", { name: "AFK occupant" }],
   ]);
   const output = JSON.stringify(get(read, ctx, { session, roomAccess, profiles }));
@@ -189,5 +189,8 @@ it("serializes only proven rooms and current consented identity", async () => {
   expect(JSON.parse(output)).toMatchObject({ rooms: [visible, idle] });
   expect(output).not.toMatch(/90[1-6]|Opted out|AFK occupant|Room 11|Room 12|cdn.discordapp/);
   const moderator = { session: { ...session, moderator: true }, roomAccess, profiles };
-  expect(get(read, ctx, moderator)).toMatchObject({ rooms: [visible, { channelId: "11" }, idle] });
+  const restricted = { channelId: "11", count: 1, occupants: [] };
+  const moderated = JSON.stringify(get(read, ctx, moderator));
+  expect(JSON.parse(moderated)).toMatchObject({ rooms: [visible, restricted, idle] });
+  expect(moderated).not.toMatch(/90[1-6]|Opted out|AFK occupant|Room 12|cdn.discordapp/);
 });

@@ -6,20 +6,16 @@ import { INTERNAL_ACTIONS_PATH, newNonce, signInternalAction } from "./signer";
 const BODY = '{"action":"voice.snapshot"}';
 const MAX_BYTES = 256 * 1024;
 const snowflake = z.string().regex(/^\d{1,20}$/);
-const text = (max: number) =>
-  z
-    .string()
-    .min(1)
-    .refine((s) => [...s].length <= max);
+const eventKey = z.string().regex(/^[A-Za-z0-9._:-]{1,200}$/);
 const room = z.object({
   channel_id: snowflake,
-  name: text(100),
+  name: z.string().regex(/^.{1,100}$/su),
   position: z.int32().nullable(),
   user_limit: z.uint32(),
   member_ids: z.array(snowflake).max(500),
   afk: z.boolean().optional(),
   occupied_since: z.iso.datetime().nullable().optional(),
-  event_key: text(64).optional(),
+  event_key: eventKey.optional(),
 });
 const shape = z.object({
   v: z.literal(1),
@@ -29,12 +25,13 @@ const shape = z.object({
 });
 const snapshot = shape.refine(({ rooms, total_in_voice }) => {
   const members = rooms.flatMap((r) => r.member_ids);
-  const count = rooms.filter((r) => !r.afk).reduce((n, r) => n + r.member_ids.length, 0);
+  const nonAfk = rooms.filter((r) => !r.afk);
   return (
     members.length <= 500 &&
     new Set(members).size === members.length &&
     new Set(rooms.map((r) => r.channel_id)).size === rooms.length &&
-    count === total_in_voice
+    rooms.length - nonAfk.length <= 1 &&
+    nonAfk.reduce((n, r) => n + r.member_ids.length, 0) === total_in_voice
   );
 });
 const success = z.object({ ok: z.literal(true), result: snapshot });
