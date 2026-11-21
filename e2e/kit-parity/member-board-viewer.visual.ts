@@ -69,7 +69,9 @@ const scrollProbe = `(async () => {
   if (inner) inner.scrollTop += 120;
   else window.scrollBy(0, 120);
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  const top = inner ? Math.max(0, inner.getBoundingClientRect().top) : 0;
+  const shell = document.querySelector("[data-kit-site-header]");
+  const shellBottom = shell && getComputedStyle(shell).position === "sticky" ? shell.getBoundingClientRect().bottom : 0;
+  const top = Math.max(shellBottom, inner?.getBoundingClientRect().top ?? 0);
   const result = {
     moved: before - firstRow.getBoundingClientRect().top,
     headers: headers.map(header => ({ top: header.getBoundingClientRect().top,
