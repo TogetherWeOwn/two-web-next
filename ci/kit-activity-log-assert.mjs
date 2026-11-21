@@ -25,32 +25,25 @@ const desc = (from, to) =>
 export async function runWork(exercise, cleanup, progress) {
   const stop = new AbortController();
   const checkTime = () => {
-    stop.signal.throwIfAborted();
-    if (performance.now() >= browserWorkMs) throw new visual.BrowserDeadline();
+    if (stop.signal.aborted || performance.now() >= browserWorkMs)
+      throw new visual.BrowserDeadline();
   };
   const work = () => exercise({ signal: stop.signal, checkTime });
-  const abort = () => stop.abort(new visual.BrowserDeadline());
-  try {
-    await withDeadline(work, browserWorkMs - performance.now()).finally(abort);
-    progress("TEARDOWN");
-  } catch (error) {
-    await cleanup().catch(() => undefined);
-    throw error;
-  }
-  await cleanup();
+  const task = withDeadline(work, browserWorkMs - performance.now());
+  const verdict = task.finally(() => stop.abort()).then(() => progress("TEARDOWN"));
+  await verdict.catch(() => undefined);
+  await cleanup().finally(() => verdict);
   progress("COMPLETE");
 }
 export async function memberRefusal(probe, headers, { signal, checkTime }, fetcher = fetch) {
-  const request = (headers) => {
-    checkTime();
-    return fetcher(`${origin}${probe}`, { headers, redirect: "manual", signal });
-  };
-  const denied = await request(headers);
+  const send = (headers) => fetcher(`${origin}${probe}`, { headers, redirect: "manual", signal });
+  checkTime();
+  const denied = await send(headers);
   same([denied.status, denied.headers.get("x-two-renderer")], [403, "kit"], "member:kit-403");
+  const body = await denied.text();
   checkTime();
-  ok(!(await denied.text()).includes("kal-120"), "member:no-row");
-  checkTime();
-  return request;
+  ok(!body.includes("kal-120"), "member:no-row");
+  return send;
 }
 async function main(chromium, postgres) {
   requireGithubRunner();
@@ -109,7 +102,9 @@ async function main(chromium, postgres) {
     progress("MODERATOR");
     const context = await browser.newContext({ serviceWorkers: "block", javaScriptEnabled: false });
     await context.route("**/*", (route) =>
-      new URL(route.request().url()).origin === origin ? route.continue() : route.abort(),
+      !budget.signal.aborted && new URL(route.request().url()).origin === origin
+        ? route.continue()
+        : route.abort(),
     );
     const domain = new URL(origin).hostname;
     await context.addCookies([
@@ -145,6 +140,7 @@ async function main(chromium, postgres) {
     const quiet = await reads();
     const probe = `${path}?subject=kal-120&causer=${a}`;
     const request = await memberRefusal(probe, { cookie: `${cookie}=${memberToken}` }, budget);
+    budget.checkTime();
     const guest = await request();
     same([guest.status, guest.headers.get("x-two-renderer")], [302, "kit"], "guest:kit-302");
     const target = `/auth/discord?next=${encodeURIComponent(probe)}`;
@@ -168,13 +164,15 @@ async function main(chromium, postgres) {
       [[a, b], [a, b], [a, b], [a], [b]],
       "audit:subjects",
     );
-    await context.close();
+    progress("TEARDOWN");
+    await withDeadline(() => context.close());
     const scratch = process.env.TMPDIR;
     const record = (text) => appendFileSync(`${scratch}/metrics.txt`, `${text}\n`);
     // A successful moderator GET rotates the session, so never seed a second context with it.
     const mintModerator = () =>
       mint(mod, true).then((value) => ({ name: cookie, value, domain, path: "/", secure: true }));
     const lighthouse = await collectVisuals(browser, mintModerator, `${scratch}/screenshots`, {
+      signal: budget.signal,
       mark: progress,
       audit: async (page, name) => {
         const a11y = await routeA11y(page, progress);
@@ -198,13 +196,11 @@ async function main(chromium, postgres) {
 }
 
 export async function exitFixture(task, TimeoutError) {
-  await task.catch((error) => {
-    if (error instanceof AssertionFailure) process.exit(20);
-    const deadline = error instanceof visual.BrowserDeadline || error instanceof TimeoutError;
-    process.exit(deadline ? 21 : 22);
-  });
-  // Don't wait on abandoned Lighthouse handles after teardown and the final stage write.
-  process.exit(0);
+  const classify = (error) => {
+    if (error instanceof AssertionFailure) return 20;
+    return error instanceof visual.BrowserDeadline || error instanceof TimeoutError ? 21 : 22;
+  };
+  process.exit(await task.then(() => 0, classify));
 }
 if (import.meta.main) {
   const { chromium, errors } = await import("@playwright/test");

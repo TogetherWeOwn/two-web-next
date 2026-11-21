@@ -12,10 +12,10 @@ export class AssertionFailure extends Error {}
 export async function withDeadline(work, ms = 5_000) {
   if (ms <= 0) throw new BrowserDeadline();
   const expires = performance.now() + ms;
-  const deadline = Promise.withResolvers();
-  const timer = setTimeout(() => deadline.reject(new BrowserDeadline()), ms);
+  const { promise, reject } = Promise.withResolvers();
+  const timer = setTimeout(reject, ms, new BrowserDeadline());
   const task = Promise.resolve().then(work);
-  const result = await Promise.race([task, deadline.promise]).finally(() => clearTimeout(timer));
+  const result = await Promise.race([task, promise]).finally(() => clearTimeout(timer));
   if (performance.now() >= expires) throw new BrowserDeadline();
   return result;
 }
@@ -51,11 +51,11 @@ export function validateView(content, state, empty, keyboard) {
 // The asset allowlist also requires the response bytes to match the pinned local build.
 const asset =
   /^\/(?:styles\.css|admin-rsvp-review\.css|site\.webmanifest|favicon\.(?:ico|svg)|icons\/(?:icon-(?:192|512)|maskable-512|apple-touch-icon)\.png|fonts\/(?:mona-sans-latin-(?:var|wght)|fragment-mono-latin-400|instrument-serif-latin-400-italic)\.woff2|islands\/auth-status\.js|_app\/immutable\/(?:assets|entry|nodes|chunks)\/[\w.-]+\.(?:css|js))$/;
-async function serve(route, url, unavailable) {
+async function serve(route, url, offline, deny) {
   const req = route.request();
   const file = req.url().startsWith(origin) ? req.url().slice(origin.length) : "";
   const document = req.isNavigationRequest();
-  if (req.method() !== "GET" || !(document ? req.url() === url : asset.test(file))) return false;
+  if (req.method() !== "GET" || !(document ? req.url() === url : asset.test(file))) return deny();
   const res = await route.fetch({ maxRedirects: 0, timeout: 5_000 });
   try {
     const pinned = () => readFile(`web/.svelte-kit/cloudflare${file}`).catch(() => null);
@@ -63,9 +63,10 @@ async function serve(route, url, unavailable) {
       ? kitDocument(res.status(), res.headers())
       : res.status() === 200 && (await pinned())?.equals(await res.body());
     if (valid) await route.fulfill({ response: res });
-    return valid ?? false;
+    else deny();
+    return valid;
   } finally {
-    await res.dispose().catch(unavailable);
+    await res.dispose().catch(offline);
   }
 }
 
@@ -95,61 +96,52 @@ async function inspect(page, empty, keyboard) {
   validateView(content, state, empty, keyboard);
 }
 
-async function guardedPage(browser, mintModerator, [width, height], url, render, reportOnly, mark) {
+async function guardedPage(browser, mintModerator, [width, height], url, render, reportOnly, opts) {
   const context = await browser.newContext({
     viewport: { width, height },
     serviceWorkers: "block",
     javaScriptEnabled: false,
   });
-  let violation = false;
-  let transport;
   let stopped = false;
+  let unavailable;
   let result;
   const pending = new Set();
   const settle = async () => {
     while (pending.size) await Promise.all(pending);
   };
+  const drift = Promise.withResolvers();
+  const markViolation = () => drift.reject(new AssertionFailure("unexpected visual diagnostic"));
+  const guard = (work) => Promise.race([drift.promise, work]);
+  const offline = (error) => (unavailable ??= error);
   try {
     await context.addCookies([await mintModerator()]);
-    const unavailable = (error) => (transport ??= error);
     await context.route("**/*", async (route) => {
-      if (stopped) return route.abort().catch(() => undefined);
-      const check = serve(route, url, unavailable).catch(unavailable);
+      if (stopped || opts.signal.aborted) return route.abort().catch(() => undefined);
+      const check = serve(route, url, offline, markViolation).catch(offline);
       pending.add(check);
       const verified = await check;
-      violation ||= verified === false;
       pending.delete(check);
       if (verified !== true) await route.abort().catch(() => undefined);
     });
-    const page = await context.newPage();
+    const page = await guard(context.newPage());
     page.setDefaultTimeout(5_000);
-    const markViolation = () => {
-      violation = true;
-    };
     page.on("pageerror", markViolation);
     if (!reportOnly) page.on("console", markViolation);
-    const { response, error } = await page.goto(url).then(
-      (response) => ({ response }),
-      (error) => ({ error }),
-    );
-    // The load timeout can precede a later document or asset fetch verdict.
-    await settle();
+    const nav = await guard(page.goto(url).catch((error) => ({ error })));
+    const response = nav && !("error" in nav) ? nav : null;
+    await guard(withDeadline(settle));
+    if (nav && "error" in nav && !(reportOnly && unavailable)) throw nav.error;
     const valid = response?.url() === url && kitDocument(response.status(), response.headers());
-    if (error && !violation && !(reportOnly && transport)) throw error;
-    if (!(response ? valid : transport || violation))
-      throw new AssertionFailure("visual provenance drift");
-    if (!violation && !transport) result = await render(page);
+    if (!(response ? valid : unavailable)) throw new AssertionFailure("visual provenance drift");
+    if (!unavailable) result = await guard(render(page));
   } finally {
-    // Stop requests before the final verdict or unwinding to outer browser teardown.
     stopped = true;
   }
-  await withDeadline(settle);
-  if (violation) throw new AssertionFailure("unexpected visual diagnostic");
-  if (transport && !reportOnly) throw transport;
-  mark("TEARDOWN");
-  await withDeadline(() => context.close());
-  if (violation) throw new AssertionFailure("unexpected visual diagnostic");
-  return transport ? null : result;
+  await guard(withDeadline(settle));
+  if (unavailable && !reportOnly) throw unavailable;
+  opts.mark("TEARDOWN");
+  await guard(withDeadline(() => context.close()));
+  return unavailable ? null : result;
 }
 async function boundedMeasurement(measure, ms) {
   const budget = Math.min(ms, browserWorkMs - 12_000 - performance.now());
@@ -161,7 +153,8 @@ async function boundedMeasurement(measure, ms) {
   const deadline = delay(budget, null, { signal: timer.signal });
   return Promise.race([task, deadline]).finally(() => timer.abort());
 }
-export async function collectVisuals(browser, mint, dir, { audit, measure, mark, ms = 25_000 }) {
+export async function collectVisuals(browser, mint, dir, options) {
+  const { audit, measure, mark, ms = 25_000 } = options;
   const views = { ...viewportPngs, lighthouse: viewportPngs["populated-desktop.png"] };
   for (const [name, size] of Object.entries(views)) {
     const reportOnly = name === "lighthouse";
@@ -173,9 +166,8 @@ export async function collectVisuals(browser, mint, dir, { audit, measure, mark,
     mark(stage);
     const render = async (page) => {
       mark("FONTS");
-      const ready = await withDeadline(() =>
-        page.evaluate(() => document.fonts.ready.then(() => true)),
-      ).catch((error) => {
+      const fonts = () => page.evaluate(() => document.fonts.ready.then(() => true));
+      const ready = await withDeadline(fonts).catch((error) => {
         if (reportOnly && error instanceof BrowserDeadline) return false;
         throw error;
       });
@@ -192,7 +184,7 @@ export async function collectVisuals(browser, mint, dir, { audit, measure, mark,
       if (name.endsWith("desktop.png")) await audit(page, name);
       await inspect(page, empty, keyboard);
     };
-    const result = await guardedPage(browser, mint, size, url, render, reportOnly, mark);
+    const result = await guardedPage(browser, mint, size, url, render, reportOnly, options);
     if (reportOnly) return result;
   }
 }

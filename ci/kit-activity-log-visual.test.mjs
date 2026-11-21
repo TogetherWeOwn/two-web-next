@@ -18,15 +18,27 @@ test("capture refuses fixture content and keyboard drift", () => {
   assert.throws(() => visual.validateView(["unapproved"], state, false, false), /content/);
 });
 
+const pending = Promise.withResolvers().promise;
+function clock(t) {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  return (ms, work = pending) => {
+    t.mock.timers.tick(ms);
+    return work;
+  };
+}
 class TimeoutError extends Error {}
 test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", async (t) => {
+  const lapse = clock(t);
   const noop = async () => undefined;
-  const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
+  const rejectLater = (error) => () => new Promise((_, reject) => setImmediate(reject, error));
+  const stall = rejectLater(new TimeoutError());
   const modes =
-    "document asset disallowed pending rejected hono fonts capture-fonts capture-dispose capture-timeout";
+    "capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-dispose capture-timeout";
   for (const mode of modes.split(" ")) {
+    const hono = mode === "hono";
+    const expired = mode === "capture-budget";
     const navError = mode === "capture-timeout" ? new TimeoutError() : new Error("target closed");
-    const disposeFails = mode === "hono" || mode === "capture-dispose";
+    const disposeFails = hono || mode === "capture-dispose";
     const shots = [];
     const keys = [];
     const consumed = new Set([0]); // Functional context already rotated its cookie.
@@ -39,17 +51,15 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       intercept({
         request: () => ({ url: () => href, isNavigationRequest: () => nav, method: () => "GET" }),
         fetch,
+        continue: lateFetch,
         fulfill: noop,
         abort: noop,
       });
     const fixture = {
       close: async () => {
-        if (++closed === 6 && mode === "pending")
+        if ((++closed === 6 && mode === "pending") || expired)
           await request(`${visual.origin}/styles.css`, false, lateFetch);
-        if (mode === "hono") {
-          t.mock.timers.tick(visual.browserWorkMs);
-          return new Promise(noop);
-        }
+        if (hono || expired) return lapse(visual.browserWorkMs);
       },
       addCookies: ([session]) => {
         cookie = session.value;
@@ -59,11 +69,8 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       },
       newPage: () => fixture,
       on: noop,
-      evaluate: () => {
-        if (!(mode === "capture-fonts" || (mode === "fonts" && closed === 5))) return true;
-        queueMicrotask(() => t.mock.timers.tick(5_000));
-        return new Promise(noop);
-      },
+      evaluate: () =>
+        mode === "capture-fonts" || (mode === "fonts" && closed === 5) ? lapse(5_000) : true,
       setDefaultTimeout: noop,
       goto: async (href) => {
         url = href;
@@ -71,13 +78,14 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
         consumed.add(cookie);
         const renderer = mode === "hono" ? "hono" : "kit";
         const headers = { "x-two-renderer": renderer, "cache-control": "private, no-store" };
-        const closeTransport = () => new Promise((_, reject) => setImmediate(reject, navError));
+        const closeTransport = rejectLater(navError);
         const response = {
           url: () => href,
           status: () => status,
           headers: () => headers,
-          dispose: disposeFails ? closeTransport : noop,
+          dispose: hono ? () => pending : disposeFails ? closeTransport : noop,
         };
+        if (hono) setImmediate(() => !closed && lapse(visual.browserWorkMs));
         if (disposeFails || mode === "capture-timeout") {
           void request(href, true, disposeFails ? async () => response : closeTransport);
           throw navError;
@@ -89,7 +97,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
           void request(`${visual.origin}/styles.css`, false, stall);
           if (mode === "disallowed") void request(`${visual.origin}/unexpected.css`, false, noop);
         }
-        throw new TimeoutError("navigation timed out first");
+        throw new Error("navigation timed out first");
       },
       waitForFunction: () => assert.equal(keys.at(-1), "ArrowRight"),
       keyboard: { press: (key) => keys.push(key) },
@@ -99,7 +107,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
           return [visual.expectedContent(url.includes("?")), [true, scroll, scroll]];
         },
       }),
-      screenshot: ({ path }) => shots.push(path),
+      screenshot: ({ path }) => (expired ? lapse(visual.browserWorkMs) : shots.push(path)),
     };
     const browser = { newContext: () => fixture };
     const mark = (stage) => stages.push(stage);
@@ -107,22 +115,20 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       mode === "rejected" ? Promise.reject(new Error("transport")) : new Promise(noop),
     );
     const mint = () => ({ value: consumed.size });
-    const fakeClock = mode === "hono" || mode.endsWith("fonts");
-    if (fakeClock) t.mock.timers.enable({ apis: ["setTimeout"] });
-    const collect = () =>
-      visual.collectVisuals(browser, mint, ".", { audit: noop, measure, mark, ms: 10 });
+    const outer = hono || expired;
+    const collect = ({ signal } = new AbortController()) =>
+      visual.collectVisuals(browser, mint, ".", { audit: noop, measure, mark, signal, ms: 10 });
     const teardown = () => visual.withDeadline(() => fixture.close(), 10_000);
-    const report = mode === "hono" ? runWork(collect, teardown, mark) : collect();
-    const early = mode === "hono" || mode.startsWith("capture-");
-    if (mode === "capture-fonts") await assert.rejects(report, visual.BrowserDeadline);
-    else if (mode === "hono") await assert.rejects(report, visual.AssertionFailure);
+    const report = outer ? runWork(collect, teardown, mark) : collect();
+    const early = hono || mode.startsWith("capture-");
+    if (mode === "capture-fonts" || expired) await assert.rejects(report, visual.BrowserDeadline);
+    else if (hono) await assert.rejects(report, visual.AssertionFailure);
     else if (early) await assert.rejects(report, (error) => error === navError);
     else if (mode === "disallowed") await assert.rejects(report, /unexpected visual diagnostic/);
     else assert.equal(await report, null);
-    if (fakeClock) t.mock.timers.reset();
-    if (early && mode !== "capture-fonts") assert.deepEqual(stages, ["CAPTURE"]);
-    assert.equal(lateFetch.mock.callCount(), 0);
-    assert.equal(closed, early ? Number(mode === "hono") : mode === "disallowed" ? 5 : 6);
+    assert.equal(lateFetch.mock.callCount(), 0, mode);
+    if (early) assert.equal(stages.at(-1), mode.endsWith("fonts") ? "FONTS" : "CAPTURE");
+    assert.equal(closed, early ? Number(outer) : mode === "disallowed" ? 5 : 6);
     assert.equal(consumed.size, early ? 2 : 7);
     assert.equal(measure.mock.callCount(), Number(mode === "pending" || mode === "rejected"));
     assert.deepEqual(shots, early ? [] : Object.keys(viewportPngs));
@@ -132,28 +138,22 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
 
 for (const stallAt of ["AXE_INJECT", "AXE_EVALUATE"]) {
   test(`a stall in ${stallAt} rejects instead of producing audit metrics`, async (t) => {
-    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const lapse = clock(t);
     const mark = t.mock.fn();
-    const evaluate = () => {
-      if (mark.mock.calls.at(-1).arguments[0] !== stallAt) return;
-      queueMicrotask(() => t.mock.timers.tick(5_000));
-      return new Promise(() => undefined);
-    };
+    const evaluate = () =>
+      mark.mock.calls.at(-1).arguments[0] === stallAt ? lapse(5_000) : undefined;
     const audit = routeA11y({ evaluate }, mark, { source: "stub", tags: [] });
     await assert.rejects(audit, visual.BrowserDeadline);
     assert.equal(mark.mock.callCount(), stallAt === "AXE_INJECT" ? 1 : 2);
   });
 }
 test("refusal deadlines abort fetch and prevent follow-on reads", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const lapse = clock(t);
   const late = Promise.withResolvers();
   const request = t.mock.fn(() => ({
     status: 403,
     headers: new Headers({ "x-two-renderer": "kit" }),
-    text: () => {
-      queueMicrotask(() => t.mock.timers.tick(visual.browserWorkMs));
-      return late.promise;
-    },
+    text: () => lapse(visual.browserWorkMs, late.promise),
   }));
   let probes;
   const work = (budget) => (probes = memberRefusal("/", {}, budget, request).then(assert.fail));
@@ -172,21 +172,16 @@ test("fixture CLI exits after cleanup despite a live measurement handle", () => 
   assert.deepEqual([run.status, run.stdout, run.stderr], [0, "", ""]);
 });
 test("runner separates watchdog and assertion failures and admits only a valid completion", (t) => {
-  const file = new URL("./kit-activity-log-run.sh", import.meta.url);
-  const runner = readFileSync(file, "utf8").match(/^LC_ALL=C timeout [\s\S]+$/m)?.[0];
-  assert.ok(runner);
+  const source = readFileSync(new URL("./kit-activity-log-run.sh", import.meta.url), "utf8");
+  const [runner] = source.match(/^LC_ALL=C timeout [\s\S]+$/m);
   const root = mkdtempSync(join(tmpdir(), "kit-watchdog-test-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const fake =
-    '#!/bin/bash\nprintf "private-out\\n"; printf "private-err\\n" >&2; exit "$RESULT"\n';
-  writeFileSync(join(root, "node"), fake, { mode: 0o700 });
+  const node = '#!/bin/bash\nprintf "out\\n"; printf "err\\n" >&2; exit "$RESULT"\n';
+  writeFileSync(join(root, "node"), node, { mode: 0o700 });
   mkdirSync(join(root, "screenshots"));
   const stub = `set -euo pipefail; export PATH="$1:$PATH" RESULT=$2
-scratch=$1 RUNNER_TEMP=$1 watchdog=$3
-timeout() {
-  [[ $watchdog != true ]] || printf "timeout: sending signal TERM to command 'bash'\\n" >&2
-  printf 'private-watchdog-file\\n' >&2; shift 4; "$@"
-}
+scratch=$1 RUNNER_TEMP=$1
+timeout() { printf '%s\\n' "$marker" >&2; shift 4; "$@"; }
 `;
   const metrics = `populated-desktop.png a11y: PASS violations=0 incomplete=0
 empty-desktop.png a11y: PASS violations=0 incomplete=0
@@ -206,13 +201,14 @@ populated-desktop.png lighthouse: unavailable
     [null, 0, false, "UNKNOWN stage=UNKNOWN"],
     ["COMPLETE\n", 0, false, "PASS stage=COMPLETE"],
   ];
+  const env = { PATH: process.env.PATH, marker: "" };
+  const options = { env, encoding: "utf8", timeout: 3_000 };
+  const status = join(root, "browser-stage");
   for (const [record, exitCode, watchdog, verdict] of cases) {
-    const status = join(root, "browser-stage");
     if (record === null) rmSync(status);
     else writeFileSync(status, record);
-    const argv = ["-c", stub + runner, "fixture", root, String(exitCode), String(watchdog)];
-    const env = { PATH: process.env.PATH };
-    const run = spawnSync("bash", argv, { env, encoding: "utf8", timeout: 3_000 });
+    env.marker = watchdog ? "timeout: sending signal TERM to command 'bash'" : "unused";
+    const run = spawnSync("bash", ["-c", stub + runner, "fixture", root, `${exitCode}`], options);
     const passed = verdict.startsWith("PASS");
     const tail = passed ? "PASS: Activity-log fixture, rendered states and route a11y\n" : "";
     assert.deepEqual([run.status, run.stderr], [passed ? 0 : 1, ""]);
