@@ -3248,7 +3248,8 @@ test("Kit worker answers traffic within the liveness bound", async ({ playwright
 const MEMBER_BOARD_VIEWS: Array<[name: string, path: string]> = [
   ["default", "/leaderboards/members"],
   ["relative", "/leaderboards/members?scope=relative"],
-  ["season", "/leaderboards/members?season=2026"],
+  // A completed leap-month window keeps season progress stable across CI dates.
+  ["season", "/leaderboards/members?season=2000-02"],
   ["activity", "/leaderboards/members?activity=valheim"],
 ];
 

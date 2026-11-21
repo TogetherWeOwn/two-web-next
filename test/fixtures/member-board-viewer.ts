@@ -19,17 +19,18 @@ type RenderKit = (data: Data) => string;
 let renderKit: RenderKit;
 let compileCss: Awaited<ReturnType<typeof cssCompiler>>;
 
-function cssCompiler() {
+function cssCompiler(componentCss: string[]) {
   const { compile } = webRequire("@tailwindcss/node") as {
     compile: (
       css: string,
       options: { base: string; onDependency: (path: string) => void },
     ) => Promise<{ build: (candidates: string[]) => string }>;
   };
-  return compile(readFileSync(join(root, "web/src/app.css"), "utf8"), {
-    base: join(root, "web/src"),
-    onDependency: () => {},
-  });
+  return compile(
+    '@import "../../vendor/design-kit/tokens.css";\n@import "./lib/segmented-control.css";\n' +
+      [readFileSync(join(root, "web/src/app.css"), "utf8"), ...componentCss].join("\n"),
+    { base: join(root, "web/src"), onDependency: () => {} },
+  );
 }
 
 export async function prepareMemberBoardFixtures() {
@@ -37,7 +38,7 @@ export async function prepareMemberBoardFixtures() {
     compile: (
       source: string,
       options: { generate: string; dev: boolean; filename: string },
-    ) => { js: { code: string } };
+    ) => { js: { code: string }; css: { code: string } | null };
   };
   const scratch = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "member-board-viewer-"),
@@ -45,6 +46,7 @@ export async function prepareMemberBoardFixtures() {
   try {
     const entry = join(scratch, "entry.mjs");
     const outfile = join(scratch, "render.mjs");
+    const componentCss: string[] = [];
     writeFileSync(
       entry,
       `import { render } from "svelte/server";
@@ -63,19 +65,21 @@ export function renderPage(data) {
       absWorkingDir: root,
       nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
       alias: { "#lib": join(root, "web/src/lib/") },
+      loader: { ".css": "empty" },
       plugins: [
         {
           name: "member-board-viewer-ssr",
           setup(plugin) {
-            plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => ({
-              contents: compile(readFileSync(path, "utf8"), {
+            plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
+              const { js, css } = compile(readFileSync(path, "utf8"), {
                 generate: "server",
                 dev: false,
                 filename: path,
-              }).js.code,
-              loader: "js",
-              resolveDir: dirname(path),
-            }));
+              });
+              if (css)
+                componentCss.push(css.code.replace('@import "../ember-theme.css" reference;', ""));
+              return { contents: js.code, loader: "js", resolveDir: dirname(path) };
+            });
           },
         },
       ],
@@ -83,7 +87,7 @@ export function renderPage(data) {
     ({ renderPage: renderKit } = (await import(pathToFileURL(outfile).href)) as {
       renderPage: RenderKit;
     });
-    compileCss = await cssCompiler();
+    compileCss = await cssCompiler(componentCss);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

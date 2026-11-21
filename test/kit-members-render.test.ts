@@ -65,6 +65,7 @@ export function renderPage(data) {
     absWorkingDir: root,
     nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
     alias: { "#lib": join(root, "web/src/lib/") },
+    loader: { ".css": "empty" },
     plugins: [
       {
         name: "kit-members-svelte-ssr",
@@ -114,5 +115,56 @@ describe("Kit member board render", () => {
     );
     // Events is a sibling section here, never the current page.
     expect(nav![1]).toContain('<a href="/events">Events</a>');
+  });
+
+  it("shows equal visible sign-up counts as ties without changing the reader's order", () => {
+    const html = renderPage(
+      baseData({
+        rows: [
+          { username: "Vic", count: 3, rank: 1, isViewer: true },
+          { username: "Mira", count: 3, rank: 2, isViewer: false },
+          { username: "Jo", count: 1, rank: 3, isViewer: false },
+        ],
+      }),
+    );
+    expect(html).toContain("Ranked by events signed up for (going), not by attendance.");
+    expect(html).toContain('content="Members ranked by events they signed up for as going."');
+    expect(html).toContain('aria-label="Leading sign-up counts"');
+    expect(html).toContain("Vic (you)");
+    expect(html.match(/1 \(tied\)/g)).toHaveLength(2);
+    expect(html).not.toContain("2 (tied)");
+    expect(html).toContain('<th scope="row">Jo</th>');
+    expect(html).not.toContain("Season elapsed");
+  });
+
+  it("does not assign an exact tie rank at the clipped start of the relative window", () => {
+    const html = renderPage(
+      baseData({
+        scope: "relative",
+        rows: [
+          { username: "Mira", count: 3, rank: 8, isViewer: false },
+          { username: "Vic", count: 3, rank: 9, isViewer: true },
+        ],
+      }),
+    );
+    expect(html.match(/>Tied</g)).toHaveLength(2);
+    expect(html).not.toContain("8 (tied)");
+    expect(html).not.toContain("Leading sign-up counts");
+    expect(html).toContain("Around you (5 above and below): Going counts");
+  });
+
+  it("distinguishes an empty game from an outage and offers no-JS recovery", () => {
+    const data = baseData({ season: "2000-02", activity: "valheim", rows: [] });
+    const html = renderPage(data);
+    expect(html).toContain('aria-label="Season elapsed" max="29" value="29"');
+    expect(html).toContain("Ended 1 March 2000 (UTC)");
+    expect(html).toContain("Nobody is ranked for this season and game yet.");
+    expect(html).toContain('<a href="/leaderboards/members?season=2000-02">show every game</a>');
+    expect(html).toContain('<a href="/profile">profile settings</a>');
+    expect(html).not.toContain("Leading sign-up counts");
+    expect(html).not.toContain("Hidden (only you see this)");
+    const outage = renderPage({ ...data, available: false });
+    expect(outage).toContain("Rankings are temporarily unavailable.");
+    expect(outage).not.toContain("Nobody is ranked");
   });
 });
