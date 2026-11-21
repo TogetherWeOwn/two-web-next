@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { PER_REQUEST_STATEMENT_TIMEOUT_LOCAL } from "../src/db/connection";
 import type { Env } from "../src/env";
-import { chargeWebThrottle } from "../src/http/throttle";
+import { chargeWebThrottle, checkWebThrottle } from "../src/http/throttle";
 import { checkJoinThrottle } from "../src/join/service";
 import type { Sql } from "../src/sessions";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -98,6 +98,58 @@ describe("throttle runtime connection wiring", () => {
       "SET LOCAL statement_timeout = '2000ms'",
     ]);
   });
+
+  it("allows a missing store but leaves the redacted warning to the join adapter", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const onPruneFailure = vi.fn();
+      const direct = await checkWebThrottle(null, "probe:fixture-client", 10, onPruneFailure);
+      expect(direct).toEqual({ limited: false });
+      expect(onPruneFailure).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(await checkJoinThrottle(null, "probe:fixture-client", 10)).toEqual(direct);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "Throttle store unavailable; allowing the request.",
+        { throttle: "probe" },
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each(["55P03", "57014"])("matches the join verdict or rejection for %s", async (code) => {
+    const error = Object.assign(new Error("fixture admission failure"), { code });
+    for (const check of [checkWebThrottle, checkJoinThrottle]) {
+      const begin = vi
+        .fn((run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql))
+        .mockRejectedValueOnce(error);
+      prune.mockClear();
+      const verdict = check({ begin } as unknown as Sql, "probe:fixture", 10);
+      if (code === "55P03") {
+        expect(await verdict).toEqual({ limited: true, retryAfter: 1 });
+        expect(begin).toHaveBeenCalledTimes(2);
+        expect(prune).toHaveBeenCalledTimes(1);
+      } else {
+        await expect(verdict).rejects.toBe(error);
+        expect(begin).toHaveBeenCalledTimes(1);
+        expect(prune).not.toHaveBeenCalled();
+      }
+      expect(hits.size).toBe(0);
+    }
+  });
+
+  it.each([null, undefined])(
+    "propagates a %s admission rejection without pruning",
+    async (reason) => {
+      const begin = vi.fn().mockRejectedValue(reason);
+      await expect(checkWebThrottle({ begin } as unknown as Sql, "probe:fixture", 10)).rejects.toBe(
+        reason,
+      );
+      expect(begin).toHaveBeenCalledTimes(1);
+      expect(prune).not.toHaveBeenCalled();
+      expect(hits.size).toBe(0);
+    },
+  );
 
   it("keeps the injected store ahead of either runtime URL", async () => {
     expect(
