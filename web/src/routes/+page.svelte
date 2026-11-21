@@ -127,7 +127,7 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
           <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
           <p class="lead">Sign-in is unavailable right now. The invite still works.</p>
         {:else if session?.member}
-          <a class="btn" href={inviteUrl}>Open Discord</a>
+          <a id="discord-heading" class="btn" href={inviteUrl}>Open Discord</a>
           <p class="lead">Catch up with the clan in Discord.</p>
         {:else}
           <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>

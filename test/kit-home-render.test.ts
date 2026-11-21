@@ -141,7 +141,10 @@ describe("Kit home SSR render: session-aware header and hero", () => {
     const html = renderPage(baseData({ session: memberSession }));
     expect(html).toContain('<form method="post" action="/logout">');
     expect(html).toContain("Member");
-    expect(html).toContain(`href="${INVITE_URL}">Open Discord</a>`);
+    expect(html).toContain(
+      `<a id="discord-heading" class="btn" href="${INVITE_URL}">Open Discord</a>`,
+    );
+    expect(html.match(/id="discord-heading"/g)).toHaveLength(1);
     expect(html).not.toContain('data-testid="signin"');
     expect(html).not.toContain('data-testid="join"');
   });
@@ -160,6 +163,8 @@ describe("Kit home SSR render: session-aware header and hero", () => {
     const html = renderPage(baseData({ sessionUnavailable: true, eventsUnavailable: false }));
     expect(html).toContain("Welcome, guest");
     expect(html).toContain('data-testid="discord-join">Join with an invite link</a>');
+    expect(html).toContain('<h3 id="discord-heading">In the Discord</h3>');
+    expect(html.match(/id="discord-heading"/g)).toHaveLength(1);
   });
 });
 
@@ -177,7 +182,8 @@ describe("Kit home SSR render: guest intro", () => {
       "Trust and time, not grind",
       "Ranks from playing",
     ]);
-    expect(intro).toContain('id="discord-heading"');
+    expect(intro).toContain('<h3 id="discord-heading">In the Discord</h3>');
+    expect(html.match(/id="discord-heading"/g)).toHaveLength(1);
     expect(intro).toContain('href="/join#join-heading" data-testid="home-widget-link"');
     expect(intro).toContain('href="/discord" data-testid="home-discord-invite"');
     for (const unsupported of ["Raid Night", "Grand Prix", "resets each month", "public log"]) {
