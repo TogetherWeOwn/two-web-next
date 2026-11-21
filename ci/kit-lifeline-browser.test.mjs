@@ -26,7 +26,7 @@ test("Lifeline renders each synthetic state without JavaScript or routes", async
     upcoming: /Sign-ups opened.*Your seat is saved.*Site · Next.*Reminder ping/s,
     frozen:
       /8 sent · 2 unavailable.*Bot · Counting now.*Waiting on the bot\. Last synced 12 min ago/s,
-    cancelled: /Event cancelled.*The host cancelled because of severe weather\./s,
+    cancelled: /Event room seen.*Event cancelled.*severe weather\./s,
     ended: /Counting window closed.*Echo frozen/s,
   };
   const browser = await chromium.launch();
@@ -47,9 +47,8 @@ test("Lifeline renders each synthetic state without JavaScript or routes", async
           await section.locator('[aria-current="step"]').count(),
           Number(state === "upcoming" || state === "frozen"),
         );
-        if (state === "cancelled") assert.equal(await section.getByRole("listitem").count(), 3);
-        const fits = await section.evaluate((el) => el.scrollWidth <= el.clientWidth);
-        assert.ok(fits, `${state} fits at ${width}px`);
+        if (state === "cancelled") assert.equal(await section.getByRole("listitem").count(), 4);
+        assert.ok(await section.evaluate((el) => el.scrollWidth <= el.clientWidth));
         await page.screenshot({ path: `artifacts/kit-lifeline/${state}-${width}.png` });
       }
       const messages = await page.consoleMessages();

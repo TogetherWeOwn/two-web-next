@@ -73,12 +73,10 @@ export function composeLifeline(schedule: LifelineSchedule, facts: LifelineFacts
   if (reminder && matches(reminder)) {
     const counts = `${reminder.sent} sent · ${reminder.unavailable} unavailable`;
     add("reminder", "Site", "Reminder results recorded", "recorded", reminder.at, counts);
-  } else {
-    plan("reminder", "Site", "Reminder ping", reminderAt);
-  }
+  } else plan("reminder", "Site", "Reminder ping", reminderAt);
 
   const snapshot = roomSnapshot && roomSnapshot.observedAt <= cutoff ? roomSnapshot : undefined;
-  const age = snapshot ? now - snapshot.observedAt : 0;
+  const age = snapshot ? cutoff - snapshot.observedAt : 0;
   const frozen = snapshot && (age > 2 * minute || snapshot.fetchFailed);
   const linked = snapshot?.eventKeys.includes(eventKey);
   if (snapshot && !frozen && linked && snapshot.observedAt >= startsAt) {

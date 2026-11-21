@@ -75,8 +75,11 @@ it("ticks counting only after the window and waits for the real Echo row", () =>
 it("ends at the recorded cancellation and discards plans and later facts", () => {
   expect(row("cancelled", min, { cancelled: fact(2 * min) })).toBeUndefined();
   expect(row("cancelled", min, { cancelled: fact(0, "other") })).toBeUndefined();
-  const cancelled = { ...fact(60 * min), reason: "Storm" };
-  const rows = timeline(180 * min, { opened: fact(0), echo: fact(170 * min), cancelled });
-  expect(rows.map((step) => step.id)).toEqual(["opened", "cancelled"]);
+  const cancelled = { ...fact(61 * min), reason: "Storm" };
+  const roomSnapshot = { observedAt: 60 * min, fetchFailed: false, eventKeys: [eventKey] };
+  const facts = { opened: fact(0), echo: fact(170 * min), cancelled, roomSnapshot };
+  const rows = timeline(180 * min, facts);
+  expect(rows).toEqual(timeline(cancelled.at, facts));
+  expect(rows.map((step) => step.id)).toEqual(["opened", "room", "cancelled"]);
   expect(rows.at(-1)).toMatchObject({ state: "recorded", at: cancelled.at, detail: "Storm" });
 });

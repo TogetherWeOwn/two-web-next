@@ -10,12 +10,12 @@ const view = (now: string, facts: LifelineFacts) =>
   composeLifeline(schedule, { opened: fact("18:00"), ...facts }, time(now));
 const viewerRsvp = fact("18:23");
 const terminalSiteReminder = { ...fact("19:32"), sent: 8, unavailable: 2 };
-const roomSnapshot = { observedAt: time("20:00"), fetchFailed: true, eventKeys: [eventKey] };
-const cancelled = { ...fact("19:06"), reason: "The host cancelled because of severe weather." };
+const roomSnapshot = { observedAt: time("20:00"), fetchFailed: false, eventKeys: [eventKey] };
+const cancelled = { ...fact("20:01"), reason: "The host cancelled because of severe weather." };
 export const examples = {
   upcoming: view("19:00", { viewerRsvp }),
   frozen: view("20:12", { terminalSiteReminder, roomSnapshot }),
-  cancelled: view("19:07", { viewerRsvp, cancelled }),
+  cancelled: view("20:12", { viewerRsvp, cancelled, roomSnapshot }),
   ended: view("21:50", { terminalSiteReminder, echo: fact("21:41") }),
 };
 </script>
