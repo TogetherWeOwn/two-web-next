@@ -1,6 +1,7 @@
 import { accessibleJoinOneclick } from "../join-oneclick";
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import { test, expect, emptyStorageState, memberStorageState, stagingOrigin } from "./fixtures";
+import { homeArrivalHeading } from "./home-arrival";
 import { loginQaMember } from "./qa-login";
 
 // Join-funnel staging journey. Runs explicitly unauthenticated for the funnel
@@ -18,8 +19,8 @@ test("staging join funnel answers without a session and entries redirect to Disc
   page,
   browser,
 }) => {
-  await page.goto("/");
-  await expect(page.getByRole("heading", { name: "The lobby is open." })).toBeVisible();
+  const home = await page.goto("/");
+  await expect(await homeArrivalHeading(page, home, "guest")).toBeVisible();
   const cta = page.getByTestId("join");
   await expect(cta).toBeVisible();
   expect(await cta.getAttribute("href")).toBe("/auth/discord");
@@ -98,8 +99,8 @@ test("staging QA member session opens the member profile after the funnel", asyn
   const context = await browser.newContext({ storageState: memberStorageState });
   try {
     const authed = await context.newPage();
-    await authed.goto("/");
-    await expect(authed.getByRole("heading", { name: "The lobby is open." })).toBeVisible();
+    const home = await authed.goto("/");
+    await expect(await homeArrivalHeading(authed, home, "member")).toBeVisible();
     await authed.goto("/profile");
     await expect(authed.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
   } finally {

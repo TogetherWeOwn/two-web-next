@@ -219,40 +219,76 @@ export function securityTxtAssertions(
   return failures;
 }
 
-async function readJoinMarkup(body) {
-  // Staging installs parse5. Keep callers without a renderer expectation dependency-free.
-  const { parse } = await import("parse5");
-  const nodes = [parse(body)];
-  let action = false;
-  let heading = false;
+const htmlNamespace = "http://www.w3.org/1999/xhtml";
+const attr = (node, name) => node.attrs.find((entry) => entry.name === name)?.value;
+
+function* walkMarkup(root) {
+  const nodes = [root];
   while (nodes.length > 0) {
     const node = nodes.pop();
-    if (node.namespaceURI === "http://www.w3.org/1999/xhtml") {
-      const attr = (name) => node.attrs.find((entry) => entry.name === name)?.value;
-      if (attr("inert") !== undefined || attr("hidden") !== undefined) continue;
-      // A bare /join GET renders this same-origin action without query parameters.
+    if (
+      node.namespaceURI === htmlNamespace &&
+      (attr(node, "inert") !== undefined || attr(node, "hidden") !== undefined)
+    ) {
+      continue;
+    }
+    yield node;
+    // Template contents are inert and are not part of childNodes.
+    const children = node.childNodes ?? [];
+    for (let i = children.length - 1; i >= 0; i--) nodes.push(children[i]);
+  }
+}
+
+async function parseMarkup(body) {
+  // Keep callers that don't need a structural HTML assertion dependency-free.
+  const { parse } = await import("parse5");
+  return parse(body);
+}
+
+async function readJoinMarkup(body) {
+  let action = false;
+  let heading = false;
+  for (const node of walkMarkup(await parseMarkup(body))) {
+    if (node.namespaceURI !== htmlNamespace) continue;
+    // A bare /join GET renders this same-origin action without query parameters.
+    if (
+      node.tagName === "a" &&
+      attr(node, "href") === "/join/discord" &&
+      attr(node, "data-testid") === "join-oneclick"
+    ) {
+      action = true;
+    }
+    if (node.tagName === "h2" && attr(node, "id") === "join-card-heading") {
+      const [text] = node.childNodes;
       if (
-        node.tagName === "a" &&
-        attr("href") === "/join/discord" &&
-        attr("data-testid") === "join-oneclick"
+        node.childNodes.length === 1 &&
+        text.nodeName === "#text" &&
+        text.value === "Join with one sign-in"
       ) {
-        action = true;
-      }
-      if (node.tagName === "h2" && attr("id") === "join-card-heading") {
-        const [text] = node.childNodes;
-        if (
-          node.childNodes.length === 1 &&
-          text.nodeName === "#text" &&
-          text.value === "Join with one sign-in"
-        ) {
-          heading = true;
-        }
+        heading = true;
       }
     }
-    // Template contents are inert and are not part of childNodes.
-    for (const child of node.childNodes ?? []) nodes.push(child);
   }
   return { action, heading };
+}
+
+async function hasGuestKitHomeHeading(body) {
+  const headings = [];
+  for (const node of walkMarkup(await parseMarkup(body))) {
+    if (node.namespaceURI !== htmlNamespace || node.tagName !== "h1") continue;
+    if (attr(node, "id") !== "home-heading") continue;
+    let text = "";
+    for (const part of walkMarkup(node)) {
+      if (part.nodeName === "#text" && !["script", "style"].includes(part.parentNode.tagName)) {
+        text += part.value;
+      }
+    }
+    headings.push(text.replace(/\s+/g, " ").trim());
+  }
+  return (
+    headings.length === 1 &&
+    /^(?:The lobby is open\.|Next game night: \S(?:.*\S)?\. Come play with us\.)$/.test(headings[0])
+  );
 }
 
 // Optional per-route hook for machine verdicts (--json/--ledger): called once
@@ -749,8 +785,16 @@ export async function smoke(
           check(heading, 'Kit Join card heading "Join with one sign-in"', "heading did not match");
         }
       }
-      if (!kitJoin && route.body)
+      const kitHome = route.path === "/" && headers.get("x-two-renderer") === "kit";
+      if (kitHome) {
+        check(
+          await hasGuestKitHomeHeading(body),
+          "Kit guest h1#home-heading with the lobby or scheduled text",
+          "heading missing or did not match",
+        );
+      } else if (!kitJoin && route.body) {
         check(route.body.test(body), `body matching ${route.body}`, "body did not match");
+      }
       if (route.redirect && response.status === 302) {
         const location = headers.get("location");
         let target;
