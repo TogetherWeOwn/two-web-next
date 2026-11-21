@@ -9,6 +9,7 @@ import { compileKitFixture } from "./kit-hydration-harness.mjs";
 const file = (path) => fileURLToPath(new URL(`../${path}`, import.meta.url));
 const origin = "https://event-detail.example.test";
 const path = "/e/fixture-raid";
+const eventUrl = `${origin}${path}?attendees=2`;
 const publicAssets = new Set([
   "/styles.css",
   "/theme.css",
@@ -25,7 +26,7 @@ async function openFixture(page, { body, head }, styles, enhanced = false) {
     const request = route.request();
     const url = new URL(request.url());
     if (url.origin !== origin) return route.abort();
-    if (url.pathname === path && request.method() === "GET") {
+    if (url.href === eventUrl && request.method() === "GET") {
       return route.fulfill({
         contentType: "text/html; charset=utf-8",
         body: `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${head}<style>${styles}</style></head><body>${body}</body></html>`,
@@ -34,7 +35,7 @@ async function openFixture(page, { body, head }, styles, enhanced = false) {
     if (publicAssets.has(url.pathname))
       return route.fulfill({ path: file(`public${url.pathname}`) });
     if (url.pathname === `${path}/rsvp` && request.method() === "POST") {
-      return route.fulfill({ body: "Synthetic form submission" });
+      return route.fulfill({ status: 303, headers: { location: eventUrl } });
     }
     if (enhanced && url.pathname === "/events/fixture-raid/rsvp" && request.method() === "PUT") {
       return route.fulfill({ json: { data: { status: "going" } } });
@@ -45,7 +46,7 @@ async function openFixture(page, { body, head }, styles, enhanced = false) {
     // This fixture executes only the RSVP island; no other script or endpoint goes live.
     return route.fulfill({ status: 204 });
   });
-  await page.goto(`${origin}${path}`);
+  await page.goto(eventUrl);
 }
 
 function existingControls(page) {
@@ -102,7 +103,8 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
   const css = await compile(readFileSync(file("web/src/app.css"), "utf8"), options);
   const fixture = file("test/fixtures/kit-lifeline.svelte");
   const { renderFixture, css: scoped } = await compileKitFixture({ fixture, ssrOnly: true });
-  const styles = `${css.build(new Scanner({ sources: css.sources }).scan())}\n${scoped}`;
+  const sharedHeader = readFileSync(file("web/src/lib/site-header.css"), "utf8");
+  const styles = `${css.build(new Scanner({ sources: css.sources }).scan())}\n${sharedHeader}\n${scoped}`;
   const browser = await chromium.launch();
   try {
     for (const width of [1280, 390]) {
@@ -110,12 +112,22 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
       const viewport = { width, height: compact ? 844 : 800 };
       const page = await browser.newPage({ viewport, javaScriptEnabled: false });
       const section = page.getByRole("region", { name: "Lifeline" });
-      const capture = (state) =>
-        page.screenshot({
+      const capture = async (state) => {
+        const context = `${state} at ${width}px`;
+        assert.ok(
+          await page.locator("html").evaluate((el) => el.scrollWidth <= el.clientWidth),
+          `${context}: page must fit the viewport`,
+        );
+        if (compact) {
+          const panel = page.locator("#kit-menu-panel");
+          assert.equal(await panel.evaluate((el) => getComputedStyle(el).display), "none", context);
+        }
+        await page.screenshot({
           path: `artifacts/kit-lifeline/${state}-${width}.png`,
           fullPage: true,
           animations: "disabled",
         });
+      };
       await openFixture(page, renderFixture({ state: "upcoming", showLifeline: false }), styles);
       assert.equal(await section.count(), 0);
       const before = await existingControls(page);
@@ -164,12 +176,18 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
       const going = compact
         ? page.getByRole("complementary", { name: "Your seat" }).locator('button[value="going"]')
         : page.getByTestId("rsvp-going");
-      const submit = page.waitForRequest((request) => request.method() === "POST");
       await going.focus();
-      await going.press("Enter");
-      const request = await submit;
-      assert.equal(request.url(), `${origin}${path}/rsvp`);
+      const [request] = await Promise.all([
+        page.waitForRequest((request) => request.method() === "POST"),
+        page.waitForEvent("framenavigated", {
+          predicate: (frame) => frame === page.mainFrame() && frame.url() === eventUrl,
+        }),
+        going.press("Enter"),
+      ]);
+      assert.equal(request.url(), `${origin}${path}/rsvp?attendees=2`);
       assert.equal(request.postData(), "status=going");
+      assert.equal((await request.response())?.status(), 303);
+      assert.equal(await page.getByTestId("event-attendees-current-page").innerText(), "Page 2");
       await page.close();
     }
 
