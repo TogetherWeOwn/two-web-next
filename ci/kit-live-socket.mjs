@@ -498,7 +498,9 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
       send("resync");
       await expectFrame(unavailable);
       await expectFrame(projected("snapshot", ++revision, 5));
-      const idle = mode === "warm" ? 5_100 : 15_000;
+      // Give idle eviction headroom while keeping the resync strictly before
+      // the initial 30-second lease expires.
+      const idle = mode === "warm" ? 5_100 : 20_000;
       const next = snapshot(cursor + 2, 6, new Date(Date.now() + idle - 23_000).toISOString());
       if (mode === "producer wake") {
         const recovered = snapshot(cursor + 1, 5);
@@ -510,13 +512,17 @@ export async function verifyKitLiveFanout(origin, appOrigin, databaseUrl, secret
       await delay(idle);
       if (mode === "producer wake") {
         assert.equal(await ingest(origin, cursor + 1, join("106", "11")), 204);
-        assert.equal(await source(next), generation + 1);
+        const afterIngress = await controlRequest({ method: "POST", body: JSON.stringify(next) });
+        assert.equal(afterIngress.generation, generation + 1, "producer ingress reconstructs the hub");
+        assert.equal(afterIngress.firstEvent, "ingress", "the probe did not wake the hub");
       }
       assert.deepEqual(frames, [], `${mode}: no frame before resync`);
       send("resync");
       const result = await expectFrame(projected("snapshot", ++revision, 6));
       assert.ok(result.at < Date.parse(initial.observed_at) + 30_000, `${mode}: pre-expiry`);
-      assert.equal(await source(), generation + Number(mode !== "warm"), mode);
+      const afterResync = await controlRequest();
+      assert.equal(afterResync.generation, generation + Number(mode !== "warm"), mode);
+      if (mode === "cold") assert.equal(afterResync.firstEvent, "message", "resync wakes the hub");
       assert.deepEqual(frames, [], `${mode}: exactly one snapshot`);
       await expectFrame(unavailable, 12_000);
       cursor += 2;
