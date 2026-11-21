@@ -4,7 +4,10 @@ import "./home-ember.css";
 import Button from "#lib/Button.svelte";
 import EmberFooter from "#lib/EmberFooter.svelte";
 import JsonLd from "#lib/JsonLd.svelte";
+import LiveSentence from "#lib/LiveSentence.svelte";
 import SiteMetadata from "#lib/SiteMetadata.svelte";
+import VoicePanel from "#lib/VoicePanel.svelte";
+import type { VoiceView } from "#lib/voice-view.ts";
 import { seatAvailability } from "../../../src/events/pages-calendar-row";
 import type { HomeUpcomingRow } from "../../../src/events/reads";
 import { groupTeaserEvents } from "../../../src/events/teaser-groups";
@@ -23,7 +26,9 @@ import type { PageProps } from "./$types";
 import HomeGuestIntro from "./HomeGuestIntro.svelte";
 import "./home-join-band.css";
 
-let { data }: PageProps = $props();
+// Kit passes only its usual page props. The offline render fixture passes
+// an audience projection separately; the shipped load never produces one.
+let { data, voice }: PageProps & { voice?: VoiceView } = $props();
 const {
   session,
   sessionUnavailable,
@@ -80,6 +85,19 @@ const nextPublicEvent = $derived(
   upcomingEvents.find((event: HomeUpcomingRow) => event.startsAt > renderTime),
 );
 const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? nextPublicEvent));
+const voiceAudience = $derived(session?.member ? "member" : "guest");
+const homeVoice = $derived(
+  !sessionUnavailable && voice?.snapshot && voice.audience === voiceAudience ? voice : undefined,
+);
+const nextVoiceEvent = $derived.by(() => {
+  if (eventsUnavailable) return undefined;
+  if (!nextPublicEvent) return null;
+  const { title, startsAt, timezone } = nextPublicEvent;
+  return {
+    title,
+    timeLabel: `${cardTimeLabel(startsAt, timezone)} (${isValidZone(timezone) ? timezone : "UTC"})`,
+  };
+});
 </script>
 
 {#snippet primaryLinks()}
@@ -92,6 +110,22 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
 
 {#snippet teaserTime(event: HomeUpcomingRow)}
   <time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})</time>
+{/snippet}
+
+{#snippet schedulePanel()}
+  <aside class="ember-home-panel" aria-labelledby="home-panel-heading">
+    <h2 id="home-panel-heading">{heroRsvp ? "Your RSVP" : "On the schedule"}</h2>
+    {#if heroEvent}
+      <p><strong>{heroEvent.title}</strong></p>
+      <p><time datetime={heroEvent.startsAt.toISOString()}>{cardTimeLabel(heroEvent.startsAt, heroEvent.timezone)} ({isValidZone(heroEvent.timezone) ? heroEvent.timezone : "UTC"})</time></p>
+      {#if heroRsvp}<p>{goingAnnouncementText(heroRsvp.status)}</p>{/if}
+      {#if heroEvent.source === "discord"}<a href={inviteUrl}>Open Discord</a>
+      {:else}<a href={`/e/${encodeURIComponent(heroEvent.eventKey)}`}>View event details</a>{/if}
+    {:else}
+      <p><strong>{eventsUnavailable ? "Schedule unavailable" : "No upcoming game nights"}</strong></p>
+      <a href="/discord">Find us on Discord</a>
+    {/if}
+  </aside>
 {/snippet}
 
 {#snippet homeContent()}
@@ -115,19 +149,23 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
   <section class="hero kit-home" aria-labelledby="home-heading">
     <div>
       <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
-      <h1 id="home-heading">
-        {#if !eventsUnavailable && nextPublicEvent}
-          Next game night: <em>{nextPublicEvent.title}</em>. <span>Come play with us.</span>
-        {:else}
-          The lobby is <em>open</em>.
-        {/if}
-      </h1>
+      {#if homeVoice}
+        <LiveSentence view={homeVoice} nextEvent={nextVoiceEvent} headingId="home-heading" showActions={false} />
+      {:else}
+        <h1 id="home-heading">
+          {#if !eventsUnavailable && nextPublicEvent}
+            Next game night: <em>{nextPublicEvent.title}</em>. <span>Come play with us.</span>
+          {:else}
+            The lobby is <em>open</em>.
+          {/if}
+        </h1>
+      {/if}
       <div class="hero-action">
         {#if sessionUnavailable}
           <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
           <p class="lead">Sign-in is unavailable right now. The invite still works.</p>
         {:else if session?.member}
-          <a class="btn" href={inviteUrl}>Open Discord</a>
+          <a id="discord-heading" class="btn" href={inviteUrl}>Open Discord</a>
           <p class="lead">Catch up with the clan in Discord.</p>
         {:else}
           <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
@@ -150,19 +188,14 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
         </p>
       {/if}
     </div>
-    <aside class="ember-home-panel" aria-labelledby="home-panel-heading">
-      <h2 id="home-panel-heading">{heroRsvp ? "Your RSVP" : "On the schedule"}</h2>
-      {#if heroEvent}
-        <p><strong>{heroEvent.title}</strong></p>
-        <p><time datetime={heroEvent.startsAt.toISOString()}>{cardTimeLabel(heroEvent.startsAt, heroEvent.timezone)} ({isValidZone(heroEvent.timezone) ? heroEvent.timezone : "UTC"})</time></p>
-        {#if heroRsvp}<p>{goingAnnouncementText(heroRsvp.status)}</p>{/if}
-        {#if heroEvent.source === "discord"}<a href={inviteUrl}>Open Discord</a>
-        {:else}<a href={`/e/${encodeURIComponent(heroEvent.eventKey)}`}>View event details</a>{/if}
-      {:else}
-        <p><strong>{eventsUnavailable ? "Schedule unavailable" : "No upcoming game nights"}</strong></p>
-        <a href="/discord">Find us on Discord</a>
-      {/if}
-    </aside>
+    {#if homeVoice}
+      <div class="home-voice-panels">
+        <VoicePanel view={homeVoice} />
+        {@render schedulePanel()}
+      </div>
+    {:else}
+      {@render schedulePanel()}
+    {/if}
   </section>
   {@render homeBelowHero()}
 {/snippet}
@@ -194,46 +227,6 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
       </div>
     </section>
   {/if}
-{/snippet}
-
-{#snippet homeHighlights()}
-  <section class="highlights" aria-labelledby="community-heading">
-    <div class="band-head">
-      <h2 id="community-heading">No application. <span>No interview.</span></h2>
-      <p>Not a crowd. A place that knows your name.</p>
-    </div>
-    <ul class="hl" role="list" data-testid="home-highlights">
-      <li>
-        <p class="hl-cadence">Est. 1998 · 18+</p>
-        <h3>Grown-ups, mostly evenings</h3>
-        <p>We've played together since 1998: forum years, then voice years. It's an adult clan, and we're mostly on in the evenings.</p>
-      </li>
-      <li>
-        <p class="hl-cadence">Voice-first</p>
-        <h3>Turn up, say hello</h3>
-        <p>The community lives in voice. Small enough that people notice when you come back.</p>
-      </li>
-      <li>
-        <p class="hl-cadence">Everyone starts as a Prospect</p>
-        <h3>Trust and time, not grind</h3>
-        <p>Show up a few times, play, and you become a Member. No tryout and no skill bar.</p>
-      </li>
-      <li>
-        <p class="hl-cadence">5 XP per voice minute</p>
-        <h3>Ranks from playing</h3>
-        <p>Messages and voice time earn XP. At set levels the bot gives you a role reward, and it never takes one away.</p>
-      </li>
-    </ul>
-    <section class="discord-preview" aria-labelledby="discord-heading">
-      <h3 id="discord-heading">In the Discord</h3>
-      <p>Visit the join page for the server preview and ways to join.</p>
-      <p>
-        <a href="/join#join-heading" data-testid="home-widget-link">View the Discord lobby</a>
-        {" · "}
-        <a href="/discord" data-testid="home-discord-invite">Open Discord</a>
-      </p>
-    </section>
-  </section>
 {/snippet}
 
 {#snippet homeLadder()}
@@ -376,22 +369,37 @@ const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? n
     {/if}
   </section>
   {@render homeFeatured()}
-  {#if session?.member}{@render homeHighlights()}{/if}
-  {@render homeLadder()}
-  {#if nextOwnEvent}
-    <section aria-labelledby="home-standing-heading" data-testid="home-standing">
-      <h2 id="home-standing-heading">Where you stand.</h2>
-      <div class="card">
-        <p>Next</p>
-        <p><a href={`/e/${encodeURIComponent(nextOwnEvent.event.eventKey)}`}>{nextOwnEvent.event.title}</a></p>
-        <p>
-          <time datetime={nextOwnEvent.event.startsAt.toISOString()}>{cardTimeLabel(nextOwnEvent.event.startsAt, nextOwnEvent.event.timezone)} ({isValidZone(nextOwnEvent.event.timezone) ? nextOwnEvent.event.timezone : "UTC"})</time>
-          {" · "}{goingAnnouncementText(nextOwnEvent.status)}
-        </p>
+  {#if showMemberDetails}
+    <section id="community-heading" class="standing-band" aria-labelledby="home-standing-heading" data-testid="home-standing">
+      <div class="standing-card">
+        <h2 id="home-standing-heading">Where you stand.</h2>
+        <dl>
+          <div>
+            <dt>Next RSVP</dt>
+            <dd>
+              {#if eventsUnavailable}
+                <p>We couldn’t load your next RSVP.</p>
+                <a href="/discord">Check Discord for game nights</a>
+              {:else if heroRsvp}
+                <a href={`/e/${encodeURIComponent(heroRsvp.event.eventKey)}`}>{heroRsvp.event.title}</a>
+                <p>{@render teaserTime(heroRsvp.event)}</p>
+                <p><span class="schedule-rsvp">{goingAnnouncementText(heroRsvp.status)}</span></p>
+              {:else}
+                <p>No upcoming RSVP in this preview.</p>
+                <a href="/events">Browse all events</a>
+              {/if}
+            </dd>
+          </div>
+          <div>
+            <dt>Leaderboard</dt>
+            <dd><a href="/leaderboards/members?scope=relative">See where you place</a></dd>
+          </div>
+        </dl>
       </div>
     </section>
   {/if}
   {#if !session?.member}
+    {@render homeLadder()}
     <section class="join-band" aria-labelledby="join-band-heading" data-testid="join-band">
       <div>
         <h2 id="join-band-heading">Pull up a <em>chair.</em></h2>

@@ -71,6 +71,10 @@
   display: block;
   color: var(--t3);
 }
+.home-voice-panels {
+  display: grid;
+  gap: var(--two-space-3);
+}
 .ember-home-panel {
   padding: var(--space-5);
   border: 1px solid var(--color-hair2);

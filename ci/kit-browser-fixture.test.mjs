@@ -5,7 +5,12 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { homeEvidencePage, homeEvidenceStates, withKitHomeEvidence } from "./kit-home-evidence.mjs";
+import {
+  homeEvidencePage,
+  homeEvidenceStates,
+  withKitHomeEvidence,
+  withKitHomeEvidenceStates,
+} from "./kit-home-evidence.mjs";
 import {
   fixedDateBanner,
   readFixtureAsset,
@@ -163,13 +168,16 @@ test("Kit home evidence rejects unknown fixture states", () => {
   assert.throws(() => homeEvidencePage("__proto__"), /Unknown home evidence state/);
 });
 
-for (const state of homeEvidenceStates) {
-  test(`Kit home evidence renders ${state} offline`, async () => {
-    await withKitHomeEvidence(state, async ({ page }) => {
-      assert.equal(await page.getByRole("heading", { level: 1 }).count(), 1, state);
-    });
+test("Kit home evidence renders all states offline", async (t) => {
+  await withKitHomeEvidenceStates(async (openState) => {
+    for (const state of homeEvidenceStates) {
+      await t.test(state, async () => {
+        const page = await openState(state);
+        assert.equal(await page.getByRole("heading", { level: 1 }).count(), 1, state);
+      });
+    }
   });
-}
+});
 
 test("Kit home hero presents its heading and action at desktop and mobile widths", async () => {
   await withKitHomeEvidence("guest", async ({ page }) => {
