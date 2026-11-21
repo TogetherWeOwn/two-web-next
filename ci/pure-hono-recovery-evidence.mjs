@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import {
   RECOVERY_MANIFEST,
   RECOVERY_MEMBER_LIMITS,
-  RECOVERY_REQUIRED_FILES,
+  RECOVERY_REQUIRED_FILES as REQUIRED,
   recordRecoveryPath,
   validRecoveryMemberPath,
 } from "./pure-hono-recovery-members.mjs";
@@ -11,6 +11,12 @@ const REPOSITORY = "TogetherWeOwn/two-web-next";
 const MAIN_REF = "refs/heads/main";
 const TARGET = "two-web-next-production";
 const SCHEMA = "two.pure-hono-recovery.v1";
+const {
+  maxArchiveBytes: MAX_ARCHIVE,
+  maxTotalBytes: MAX_EXPANDED,
+  maxEntries: MAX_ENTRIES,
+  maxManifestBytes: MAX_MANIFEST,
+} = RECOVERY_MEMBER_LIMITS;
 const SHA = /^[0-9a-f]{40}$/;
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const POSITIVE_ID = /^[1-9][0-9]{0,19}$/;
@@ -51,10 +57,7 @@ function validateProvenance(expected, attestation, run, archiveSha256) {
 }
 
 function inspectMembers(members) {
-  requireEvidence(
-    Array.isArray(members) && members.length <= RECOVERY_MEMBER_LIMITS.maxEntries,
-    "member count",
-  );
+  requireEvidence(Array.isArray(members) && members.length <= MAX_ENTRIES, "member count");
   const files = new Map();
   const paths = new Map();
   let expanded = 0;
@@ -65,7 +68,7 @@ function inspectMembers(members) {
       "member type or duplicate",
     );
     expanded += bytes.length;
-    requireEvidence(expanded <= RECOVERY_MEMBER_LIMITS.maxTotalBytes, "expanded size");
+    requireEvidence(expanded <= MAX_EXPANDED, "expanded size");
     requireEvidence(recordRecoveryPath(paths, path), "alias");
     files.set(path, bytes);
   }
@@ -80,9 +83,7 @@ function inspectMembers(members) {
 // This checks evidence consistency only; it cannot qualify custody or recovery.
 export function validatePureHonoRecoveryEvidence({ archive, expected, attestation, run, decode }) {
   requireEvidence(
-    Buffer.isBuffer(archive) &&
-      archive.length > 0 &&
-      archive.length <= RECOVERY_MEMBER_LIMITS.maxArchiveBytes,
+    Buffer.isBuffer(archive) && archive.length > 0 && archive.length <= MAX_ARCHIVE,
     "archive size",
   );
   const archiveSha256 = digest(archive);
@@ -94,10 +95,7 @@ export function validatePureHonoRecoveryEvidence({ archive, expected, attestatio
   try {
     files = inspectMembers(decode(Buffer.from(archive)));
     const raw = files.get(RECOVERY_MANIFEST);
-    requireEvidence(
-      raw?.length > 0 && raw.length <= RECOVERY_MEMBER_LIMITS.maxManifestBytes,
-      "manifest size",
-    );
+    requireEvidence(raw?.length > 0 && raw.length <= MAX_MANIFEST, "manifest size");
     manifest = JSON.parse(raw.toString("utf8"));
     // One exact wire encoding rejects duplicate JSON keys and lossy UTF-8 decoding.
     requireEvidence(raw.equals(Buffer.from(JSON.stringify(manifest))), "manifest encoding");
@@ -125,7 +123,7 @@ export function validatePureHonoRecoveryEvidence({ archive, expected, attestatio
     seen.add(row.path);
   }
   requireEvidence(
-    RECOVERY_REQUIRED_FILES.every((path) => files.get(path)?.length > 0),
+    REQUIRED.every((path) => files.get(path)?.length > 0),
     "worker or config missing",
   );
   requireEvidence(

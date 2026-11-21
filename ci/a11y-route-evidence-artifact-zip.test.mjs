@@ -18,16 +18,14 @@ function zip(entries, opts = {}) {
   let offset = 0;
   for (const e of entries) {
     const name = Buffer.from(e.name, "latin1");
-    const data = Buffer.from(e.data ?? "");
+    const data = Buffer.isBuffer(e.data) ? e.data : Buffer.from(e.data ?? "");
     const method = e.method ?? 8;
     const compressed = e.compressed ?? (method === 8 ? deflateRawSync(data) : data);
-    const body = Buffer.concat([compressed, Buffer.from(e.trailing ?? "")]);
+    const body = e.trailing ? Buffer.concat([compressed, Buffer.from(e.trailing)]) : compressed;
     const gap = Buffer.from(e.gap ?? "");
     const localExtra = e.localExtra ?? Buffer.alloc(0);
     const extra = e.extra ?? Buffer.alloc(0);
     const comment = Buffer.from(e.comment ?? "");
-    locals.push(gap);
-    offset += gap.length;
     const usize = e.usize ?? data.length;
     const crc = e.crc ?? crc32(data);
     const flags = e.flags ?? 0;
@@ -49,7 +47,7 @@ function zip(entries, opts = {}) {
       descriptor.writeUInt32LE(body.length, at + 4);
       descriptor.writeUInt32LE(usize, at + 8);
     }
-    locals.push(lh, name, localExtra, body, descriptor);
+    locals.push(gap, lh, name, localExtra, body, descriptor);
     const cd = Buffer.alloc(46);
     cd.writeUInt32LE(0x02014b50, 0);
     cd.writeUInt16LE(e.madeBy ?? 20, 4);
@@ -63,14 +61,14 @@ function zip(entries, opts = {}) {
     cd.writeUInt16LE(extra.length, 30);
     cd.writeUInt16LE(comment.length, 32);
     cd.writeUInt32LE(e.attrs ?? 0, 38);
-    cd.writeUInt32LE(e.local ?? offset, 42);
-    cds.push(cd, name, extra, comment);
-    offset += 30 + name.length + localExtra.length + body.length + descriptor.length;
+    cd.writeUInt32LE(e.local ?? offset + gap.length, 42);
+    cds.push([cd, name, extra, comment]);
+    offset += gap.length + 30 + name.length + localExtra.length + body.length + descriptor.length;
   }
   const localSuffix = Buffer.from(opts.localSuffix ?? "");
   locals.push(localSuffix);
   offset += localSuffix.length;
-  const cdBuf = Buffer.concat(cds);
+  const cdBuf = Buffer.concat((opts.reverseCentral ? cds.reverse() : cds).flat());
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
   end.writeUInt16LE(entries.length, 8);
@@ -392,14 +390,10 @@ test("error text never echoes archive-controlled content", () => {
   );
 });
 
-const recoveryEntry = (name, data = "x", fields = {}) => ({
-  name,
-  data,
-  madeBy: 0x0314,
-  version: 20,
-  attrs: (0o100644 << 16) >>> 0,
-  ...fields,
-});
+const regularFile = { madeBy: 0x0314, version: 20, attrs: (0o100644 << 16) >>> 0 };
+function recoveryEntry(name, data = "x", fields = {}) {
+  return { ...regularFile, name, data, ...fields };
+}
 const refuseRecovery = (archive) =>
   assert.throws(() => decodePureHonoRecoveryZip(archive), {
     message: "pure Hono recovery evidence refused: unsafe archive",
@@ -430,7 +424,7 @@ test("recovery ZIP round-trips inert files through the synthetic validator", () 
     })),
   });
   const entries = [recoveryEntry("manifest.json", manifest), ...payload];
-  const archive = zip(entries);
+  const archive = zip(entries, { reverseCentral: true });
   const archiveSha256 = sha256(archive);
   // Invented trust inputs exercise consistency only, not GitHub or Sigstore.
   const workflow = ".github/workflows/synthetic-recovery.yml";
@@ -441,11 +435,10 @@ test("recovery ZIP round-trips inert files through the synthetic validator", () 
     ref: "refs/heads/main",
   };
   const files = decodePureHonoRecoveryZip(archive);
-  assert.deepEqual(
-    files.map(({ path }) => path),
-    entries.map(({ name }) => name),
-  );
-  assert.deepEqual(files[3], { path: payload[2].name, bytes: Buffer.from("{}"), type: "file" });
+  const paths = files.map(({ path }) => path);
+  const centralOrder = entries.map(({ name }) => name).reverse();
+  assert.deepEqual(paths, centralOrder);
+  assert.deepEqual(files[0], { path: payload[2].name, bytes: Buffer.from("{}"), type: "file" });
   assert.deepEqual(
     validatePureHonoRecoveryEvidence({
       archive,
@@ -460,7 +453,10 @@ test("recovery ZIP round-trips inert files through the synthetic validator", () 
   assert.throws(() => extractRouteEvidenceZip(archive), refused);
 });
 
-test("recovery ZIP refuses out-of-profile names, duplicates and implicit directory aliases", () => {
+test("recovery ZIP admits path boundaries and refuses invalid names and aliases", () => {
+  for (const path of [`assets/${"a".repeat(505)}`, `assets/${"a/".repeat(30)}b`]) {
+    assert.equal(decodePureHonoRecoveryZip(zip([recoveryEntry(path)]))[0].path, path);
+  }
   for (const names of [
     ["private.txt"],
     ["assets/../private"],
@@ -509,6 +505,7 @@ test("recovery ZIP refuses unsupported metadata, contradictory headers and bad p
   abbreviated.writeUInt32LE(cdOffset(abbreviated) - 29, cdOffset(abbreviated) + 42);
   refuseRecovery(abbreviated);
   refuseRecovery(zip([entry]).subarray(0, -1));
+  refuseRecovery(zip([]));
 });
 
 test("recovery ZIP accounts for every byte before the central directory", () => {
@@ -526,21 +523,39 @@ test("recovery ZIP accounts for every byte before the central directory", () => 
   }
 });
 
-test("recovery ZIP bounds member count, manifest bytes, total expansion and ratio", (t) => {
-  const entries = Array.from({ length: 4098 }, (_, i) =>
-    recoveryEntry(`assets/${i}`, "", { method: 0 }),
-  );
+const mib = 1024 ** 2;
+const storedEntry = (name, data) => recoveryEntry(name, data, { method: 0 });
+
+test("recovery ZIP admits exact archive and manifest sizes and refuses one byte over", () => {
+  const assetMax = 64 * mib - zip([storedEntry("assets/a", "")]).length;
+  const limits = { "manifest.json": mib, "assets/a": assetMax };
+  for (const [name, length] of Object.entries(limits)) {
+    const data = Buffer.alloc(length + 1);
+    const [file] = decodePureHonoRecoveryZip(zip([storedEntry(name, data.subarray(1))]));
+    assert.equal(file.bytes.length, length);
+    refuseRecovery(zip([storedEntry(name, data)]));
+  }
+});
+
+test("recovery ZIP bounds member count, total expansion and ratio", (t) => {
+  const entries = Array.from({ length: 4098 }, (_, i) => storedEntry(`assets/${i}`, ""));
   assert.equal(decodePureHonoRecoveryZip(zip(entries.slice(1))).length, 4097);
   refuseRecovery(zip(entries));
-  const mib = 1024 ** 2;
-  refuseRecovery(zip([recoveryEntry("manifest.json", Buffer.alloc(mib + 1), { method: 0 })]));
-  refuseRecovery(zip([recoveryEntry("assets/ratio", Buffer.alloc(mib))]));
+  for (const length of [1200, 1201]) {
+    const data = Buffer.alloc(length);
+    const compressed = deflateRawSync(data);
+    assert.equal(compressed.length, 12);
+    const archive = zip([recoveryEntry("assets/ratio", data, { compressed })]);
+    if (length === 1200) assert.deepEqual(decodePureHonoRecoveryZip(archive)[0].bytes, data);
+    else refuseRecovery(archive);
+  }
 
   // Reuse a genuine 1 MiB member whose compressed size clears the 100:1 cap.
   const data = Buffer.alloc(mib);
   createHash("shake256", { outputLength: 16384 }).update("fixture").digest().copy(data);
   const fields = { compressed: deflateRawSync(data), usize: data.length, crc: crc32(data) };
-  const chunks = Array.from({ length: 129 }, (_, i) => recoveryEntry(`assets/${i}`, "", fields));
+  const chunks = Array.from({ length: 128 }, (_, i) => recoveryEntry(`assets/${i}`, "", fields));
+  assert.equal(decodePureHonoRecoveryZip(zip(chunks)).length, chunks.length);
   const inflate = t.mock.method(zlib, "inflateRawSync");
   syncBuiltinESMExports();
   t.after(() => {
@@ -550,7 +565,7 @@ test("recovery ZIP bounds member count, manifest bytes, total expansion and rati
   assert.deepEqual(decodePureHonoRecoveryZip(zip(chunks.slice(0, 1)))[0].bytes, data);
   assert.equal(inflate.mock.callCount(), 1);
   inflate.mock.resetCalls();
-  refuseRecovery(zip(chunks));
+  refuseRecovery(zip([...chunks, storedEntry("assets/over", "x")]));
   refuseRecovery(zip(chunks.slice(0, 2), { localSuffix: Buffer.of(0) }));
   assert.equal(inflate.mock.callCount(), 0);
 });
