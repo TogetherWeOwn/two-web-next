@@ -19,17 +19,26 @@ type RenderKit = (data: Data) => string;
 let renderKit: RenderKit;
 let compileCss: Awaited<ReturnType<typeof cssCompiler>>;
 
-function cssCompiler() {
+function cssCompiler(componentCss: string[]) {
   const { compile } = webRequire("@tailwindcss/node") as {
     compile: (
       css: string,
       options: { base: string; onDependency: (path: string) => void },
     ) => Promise<{ build: (candidates: string[]) => string }>;
   };
-  return compile(readFileSync(join(root, "web/src/app.css"), "utf8"), {
-    base: join(root, "web/src"),
-    onDependency: () => {},
-  });
+  const source = (path: string) => readFileSync(join(root, path), "utf8");
+  // app.css loads the real theme first. Strip component references so the
+  // fixture does not shadow its emitted tokens with reference-only definitions.
+  const styles = [
+    source("web/src/app.css"),
+    source("vendor/design-kit/tokens.css"),
+    source("web/src/lib/segmented-control.css"),
+    // Add the layout's sticky shell when the board supplies its scroll offset.
+    ...componentCss,
+  ]
+    .join("\n")
+    .replaceAll('@import "../ember-theme.css" reference;', "");
+  return compile(styles, { base: join(root, "web/src"), onDependency: () => {} });
 }
 
 export async function prepareMemberBoardFixtures() {
@@ -37,7 +46,7 @@ export async function prepareMemberBoardFixtures() {
     compile: (
       source: string,
       options: { generate: string; dev: boolean; filename: string },
-    ) => { js: { code: string } };
+    ) => { js: { code: string }; css: { code: string } | null };
   };
   const scratch = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "member-board-viewer-"),
@@ -45,6 +54,7 @@ export async function prepareMemberBoardFixtures() {
   try {
     const entry = join(scratch, "entry.mjs");
     const outfile = join(scratch, "render.mjs");
+    const componentCss: string[] = [];
     writeFileSync(
       entry,
       `import { render } from "svelte/server";
@@ -63,19 +73,20 @@ export function renderPage(data) {
       absWorkingDir: root,
       nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
       alias: { "#lib": join(root, "web/src/lib/") },
+      loader: { ".css": "empty" },
       plugins: [
         {
           name: "member-board-viewer-ssr",
           setup(plugin) {
-            plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => ({
-              contents: compile(readFileSync(path, "utf8"), {
+            plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
+              const { js, css } = compile(readFileSync(path, "utf8"), {
                 generate: "server",
                 dev: false,
                 filename: path,
-              }).js.code,
-              loader: "js",
-              resolveDir: dirname(path),
-            }));
+              });
+              if (css) componentCss.push(css.code);
+              return { contents: js.code, loader: "js", resolveDir: dirname(path) };
+            });
           },
         },
       ],
@@ -83,7 +94,7 @@ export function renderPage(data) {
     ({ renderPage: renderKit } = (await import(pathToFileURL(outfile).href)) as {
       renderPage: RenderKit;
     });
-    compileCss = await cssCompiler();
+    compileCss = await cssCompiler(componentCss);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -126,10 +137,13 @@ export function memberBoardDocument(twin: Twin, scope: Scope) {
   const candidates = [...html.matchAll(/class="([^"]+)"/g)].flatMap((match) =>
     match[1]!.split(/\s+/),
   );
-  // Real served order for the schedule shell (src/page-shell.tsx): styles,
-  // theme-tokens, theme, schedule-theme. Tokens must precede the sheets that
-  // consume them, or sticky headers resolve --surface to transparent.
-  const css = ["styles", "theme-tokens", "theme", "schedule-theme"]
+  // Match each shell's external stylesheet links. Kit gets its --surface
+  // alias from app.css, not the Hono-only theme-tokens.css fallback.
+  const sheets =
+    twin === "hono"
+      ? ["styles", "theme-tokens", "theme", "schedule-theme"]
+      : ["styles", "theme", "schedule-theme"];
+  const css = sheets
     .map((name) => readFileSync(join(root, `public/${name}.css`), "utf8"))
     .join("\n");
   const styles = css + (twin === "kit" ? `\n${compileCss.build(candidates)}` : "");
@@ -237,5 +251,12 @@ export function memberBoardDocument(twin: Twin, scope: Scope) {
     }
     return out;
   };
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${styles}</style></head><body${bodyAttrs}>${inert(body)}</body></html>`;
+  const content =
+    twin === "kit"
+      ? inert(body).replace(
+          'src="/logo.svg"',
+          `src="data:image/svg+xml;base64,${readFileSync(join(root, "public/logo.svg")).toString("base64")}"`,
+        )
+      : inert(body);
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${styles}</style></head><body${bodyAttrs}>${content}</body></html>`;
 }

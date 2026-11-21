@@ -42,13 +42,13 @@ while lowering it, or deleting the row, fails the gate.
 
 | Dimension | Rule | Checked by | Runs at |
 |-----------|------|-----------|---------|
-| Types | Zero type errors | `npm run typecheck` | every PR (`check` job) |
-| Lint | Zero errors from our config | `npm run lint` | every PR (`check` job) |
+| Types | Zero type errors | `npm run typecheck` | every PR (`static-check` job) |
+| Lint | Zero errors from our config | `npm run lint` | every PR (`static-check` job) |
 | Fetch await | Every `fetch(...)` in `src/**` awaited, returned, or chained | `npm run scan:fetch-await` | every PR (`check` job, HARD) |
 | Shared ast-grep rules | Vendored `sg-rules/ts-*.yml` report only; fixtures in `sg-tests/` pass | `npm run scan:rules-test` (fixtures) inside the fetch-await CI step | every PR (`check` job; scan WARN, fixtures HARD) |
 | Secrets | No secrets in source | `bash .github/scripts/gitleaks-scan.sh` | every PR (`gitleaks` required check) |
-| Coverage of changed lines | Added TS lines ≥ 80% executed | `npm run patch:coverage` (`--strict` flips it HARD) | every PR (`check` job, WARN: reports only) |
-| Project coverage | Zero threshold violations: statements 90.8, branches 84.2, functions 92.3, lines 94.4, plus per-area floors (`vitest.config.ts:40`) | `npm run test:coverage` | every PR (`check` job) |
+| Coverage of changed lines | Added TS lines ≥ 80% executed | `npm run patch:coverage` (`--strict` flips it HARD) | every PR (`coverage-merge` job, WARN: reports only) |
+| Project coverage | Zero threshold violations: statements 90.8, branches 84.2, functions 92.3, lines 94.4, plus per-area floors (`vitest.config.ts`) | `npm run test:coverage` | every PR (`coverage-merge` job) |
 | Security: code | No sink or secret-literal findings; scanner and partial-parse errors fail closed | Semgrep HARD step in `.github/workflows/ci.yml` (`--strict --error`, planted-finding selftest) | every PR (`check` job) |
 | Test inventory | Every test file reachable from CI | `npm run test:inventory -- --strict` | every PR (`check` job, HARD) |
 | Bundle size | Served assets within budget | `npm run budget` | `bundle-budget` job, blocks merge |

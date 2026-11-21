@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -186,10 +187,14 @@ test("db-migrate admits staging and production through one explicit gate before 
   const gateIndex = dbMigrate.indexOf("Ref and production enable gate");
   const checkoutIndex = dbMigrate.indexOf("actions/checkout");
   assert.ok(gateIndex > 0 && checkoutIndex > gateIndex, "gate must run before checkout");
-  const gate = dbMigrate.slice(gateIndex, checkoutIndex);
+  const gateEnd = dbMigrate.indexOf("\n      - ", gateIndex);
+  assert.ok(gateEnd > gateIndex && gateEnd < checkoutIndex);
+  const gate = dbMigrate.slice(gateIndex, gateEnd);
   assert.match(gate, /Migrations require main/);
   assert.match(gate, /Unknown migration target/);
   assert.match(gate, /Production migrations are disabled/);
+  assert.match(gate, /Readback-only is production-only/);
+  assert.match(gate, /READBACK_ONLY: \$\{\{ inputs\.readback_only \}\}/);
   const shaSetting =
     "${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_APPROVED_SHA || '' }}";
   assert.ok(gate.includes(`PRODUCTION_MIGRATION_APPROVED_SHA: ${shaSetting}`));
@@ -217,8 +222,98 @@ test("db-migrate admits staging and production through one explicit gate before 
       "PRODUCTION_MIGRATION_IDENTITY_SHA256: ${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_IDENTITY_SHA256 || '' }}",
     ),
   );
-  for (const mode of ["plan", "apply", "verify"])
-    assert.ok(dbMigrate.includes(`node ci/db-migrate.mjs ${mode}`));
+  assert.ok(
+    migrationEnv.includes(
+      "PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: ${{ steps.production-scope.outputs.pending_tags }}",
+    ),
+  );
+  assert.match(dbMigrate, /readback_only:\n[^\n]+\n        type: boolean\n        default: false/);
+  for (const mode of ["plan", "apply"]) {
+    assert.ok(
+      dbMigrate.includes(
+        `if: \${{ !inputs.readback_only }}\n        run: node ci/db-migrate.mjs ${mode}\n`,
+      ),
+    );
+  }
+  for (const mode of ["apply", "verify", "verify-scope"])
+    assert.ok(dbMigrate.includes(`node ci/db-migrate.mjs ${mode}\n        env: *migration-env`));
+  for (const [target, mode] of [
+    ["staging", "verify"],
+    ["production", "verify-scope"],
+  ]) {
+    assert.ok(
+      dbMigrate.includes(
+        `if: \${{ inputs.target == '${target}' }}\n        run: node ci/db-migrate.mjs ${mode}\n`,
+      ),
+    );
+  }
+});
+
+test("production scope comes only from the protected Environment API", (t) => {
+  const scope = dbMigrate.split("      - name: Read approved production migration scope\n")[1];
+  assert.ok(scope, "dedicated production scope step");
+  const [step] = scope.split("\n      - ");
+  assert.ok(dbMigrate.indexOf(step) < dbMigrate.indexOf("actions/checkout"));
+  assert.match(step, /if: \$\{\{ inputs\.target == 'production' \}\}/);
+  const credential = "secrets.PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN";
+  assert.ok(
+    step.includes(`GH_TOKEN: \${{ inputs.target == 'production' && ${credential} || '' }}`),
+  );
+  assert.equal(dbMigrate.split(credential).length, 2, "scope credential is used only here");
+  assert.doesNotMatch(dbMigrate, /vars\.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS/);
+  const script = step.split("run: |\n")[1];
+  assert.ok(script);
+  const name = "PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS";
+  const directory = mkdtempSync(join(tmpdir(), "migration-scope-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const outputPath = join(directory, "output");
+  const fixture = (response, ghStatus = 0, token = "fixture-only") => {
+    writeFileSync(outputPath, "");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `gh() {
+          [[ "$*" == 'api --hostname github.com --method GET repos/fixture/repo/environments/production/variables/${name}' ]] || exit 99
+          printf '%s' "$FIXTURE_RESPONSE"
+          if [[ "$FIXTURE_STATUS" != 0 ]]; then printf '%s\\n' "$GH_TOKEN" >&2; fi
+          return "$FIXTURE_STATUS"
+        }
+        ${script}`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          GH_TOKEN: token,
+          GITHUB_REPOSITORY: "fixture/repo",
+          GITHUB_OUTPUT: outputPath,
+          FIXTURE_RESPONSE: JSON.stringify(response),
+          FIXTURE_STATUS: String(ghStatus),
+          [name]: "1034_broader_scope",
+        },
+      },
+    );
+    return { ...result, output: readFileSync(outputPath, "utf8") };
+  };
+  const valid = { name, value: "1034_exact,1035_exact" };
+  for (const refusal of [
+    fixture({ message: "Not Found" }, 1),
+    fixture(valid, 1),
+    fixture(valid, 0, ""),
+    fixture({ ...valid, value: "" }),
+    fixture({ ...valid, value: `${valid.value}\n` }),
+    fixture({ ...valid, name: "WRONG_VARIABLE" }),
+  ]) {
+    assert.equal(refusal.status, 1);
+    assert.equal(refusal.output, "");
+    assert.equal(refusal.stdout, "");
+    assert.match(refusal.stderr, /Production migration scope/);
+    assert.doesNotMatch(refusal.stderr, /fixture-only|1034_broader_scope/);
+  }
+  const accepted = fixture(valid);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(accepted.output, `pending_tags=${valid.value}\n`);
 });
 
 test("deploy holds the direct staging migration path before dependencies or mutations", () => {

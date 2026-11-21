@@ -32,12 +32,11 @@ const baseline = {
 const update = { topic: "voice", op: "upsert", id: guest.userId, value: occupant };
 const removeRole = (id: string) => ({ topic: "roles", op: "remove", id });
 const envelope = { v: 1, guild_id: guildId, seq: 2, occurred_at: event.startsAt, ops: [update] };
-
 const decode = (value: unknown, id = guildId) =>
   decodeLiveDelta(new Uint8Array(new TextEncoder().encode(JSON.stringify(value))).buffer, id);
 const patch = (...ops: unknown[]) => decode({ ...envelope, ops: [update, ...ops] });
 
-function completeState(raw: unknown = baseline): LiveState {
+function fixture(raw: unknown = baseline): LiveState {
   const state = snapshotTopics(raw, guildId);
   if (!state) throw new Error("Invalid live state fixture");
   return state;
@@ -46,7 +45,9 @@ function completeState(raw: unknown = baseline): LiveState {
 describe("live wire allowlist", () => {
   it("admits the whole parent-format batch and a complete snapshot", () => {
     expect(decode(envelope)).toEqual(envelope);
-    expect(completeState()).toEqual(baseline);
+    const maxOps = { ...envelope, ops: Array(128).fill(update) };
+    expect(decode(maxOps)).toEqual(maxOps);
+    expect(fixture()).toEqual(baseline);
   });
 
   it.each([
@@ -75,9 +76,8 @@ describe("live wire allowlist", () => {
 
   it("requires unique keys and complete permission dependencies in snapshot topics", () => {
     expect(snapshotTopics({ ...baseline, members: [member, member] }, guildId)).toBeNull();
-    expect(
-      snapshotTopics({ ...baseline, members: [{ ...member, roleIds: ["101"] }] }, guildId),
-    ).toBeNull();
+    const unknownRole = { ...member, roleIds: ["101"] };
+    expect(snapshotTopics({ ...baseline, members: [unknownRole] }, guildId)).toBeNull();
     expect(snapshotTopics({ ...baseline, roles: [] }, guildId)).toBeNull();
     expect(snapshotTopics({ ...baseline, channels: [] }, guildId)).toBeNull();
     const category = { ...room, id: "201", kind: "category" };
@@ -95,12 +95,8 @@ describe("live wire allowlist", () => {
 });
 
 it("recovers complete state on a gap through one exact signed snapshot pull", async () => {
-  const config = {
-    keyId: "fixture",
-    secret: "offline signing fixture",
-    origin: "https://producer.example",
-    guildId,
-  };
+  const origin = "https://producer.example";
+  const config = { keyId: "fixture", secret: "offline signing fixture", origin, guildId };
   const snapshot = {
     v: 1,
     guild_id: guildId,
@@ -110,7 +106,7 @@ it("recovers complete state on a gap through one exact signed snapshot pull", as
   };
   const fetcher = vi.fn<typeof fetch>(async () => Response.json(snapshot));
   const pull = signedLiveSnapshot(config, (topics) => snapshotTopics(topics, guildId), fetcher);
-  const before = completeState({ ...baseline, voice: [] });
+  const before = fixture({ ...baseline, voice: [] });
   const load = vi.fn().mockResolvedValueOnce({ seq: 2, state: before }).mockImplementation(pull);
   const sequence = new LiveSequence(load, reduceLiveState);
   expect(await sequence.synchronize()).toBe(true);
@@ -128,9 +124,8 @@ it("recovers complete state on a gap through one exact signed snapshot pull", as
   const digest = createHash("sha256").update(body).digest("hex");
   const canonical = `POST\n/internal/actions\n${headers.get("X-TWO-Timestamp")}\n${headers.get("X-TWO-Nonce")}\n${digest}`;
   expect(headers.get("X-TWO-Key-Id")).toBe(config.keyId);
-  expect(headers.get("X-TWO-Signature")).toBe(
-    `sha256=${createHmac("sha256", config.secret).update(canonical).digest("hex")}`,
-  );
+  const signature = createHmac("sha256", config.secret).update(canonical).digest("hex");
+  expect(headers.get("X-TWO-Signature")).toBe(`sha256=${signature}`);
 });
 
 describe("live batch reduction", () => {
@@ -138,40 +133,45 @@ describe("live batch reduction", () => {
     const newRoom = { ...room, id: "201" };
     const move = { ...update, value: { ...occupant, channelId: newRoom.id } };
     const delta = patch(move, { topic: "channels", op: "upsert", id: newRoom.id, value: newRoom });
-    const state = completeState();
+    const state = fixture();
     expect(reduceLiveState(state, delta!)?.voice).toEqual([move.value]);
     expect(state.voice).toEqual([occupant]);
   });
 
   it("withdraws voice and linked events on a channel removal", () => {
-    const state = completeState();
+    const state = fixture();
     const delta = patch({ topic: "channels", op: "remove", id: room.id });
-    expect(reduceLiveState(state, delta!)).toEqual({
-      ...baseline,
-      voice: [],
-      events: [],
-      channels: [],
-    });
+    const withdrawn = { ...baseline, voice: [], events: [], channels: [] };
+    expect(reduceLiveState(state, delta!)).toEqual(withdrawn);
   });
 
   it("clears a departed non-owner's voice without invalidating the baseline", () => {
     const delta = patch({ topic: "members", op: "remove", id: guest.userId });
-    expect(reduceLiveState(completeState(), delta!)).toEqual({
-      ...baseline,
-      members: [member],
-      voice: [],
-    });
+    const departed = { ...baseline, members: [member], voice: [] };
+    expect(reduceLiveState(fixture(), delta!)).toEqual(departed);
+  });
+
+  it("caps the serialized state in UTF-8 bytes", () => {
+    const row = { ...member, nick: "é".repeat(100) };
+    const crowd = Array.from({ length: 3895 }, (_, i) => ({ ...row, userId: `${i + 1000}` }));
+    const state = fixture({ ...baseline, members: [...baseline.members, ...crowd] });
+    const editEvent = (description: string) =>
+      patch({ topic: "events", op: "upsert", id: event.id, value: { ...event, description } });
+    expect(reduceLiveState(state, editEvent("x".repeat(200))!)).not.toBeNull();
+    expect(reduceLiveState(state, editEvent("é".repeat(200))!)).toBeNull();
   });
 
   it("drops the current baseline if a contiguous batch loses permission proof", async () => {
     const ordinaryRole = { ...role, id: "101" };
     const overwrite = { kind: "role", id: ordinaryRole.id, allow: "1024", deny: "0" };
-    const state = completeState({
+    const state = fixture({
       ...baseline,
       roles: [role, ordinaryRole],
+      members: [member, { ...guest, roleIds: [ordinaryRole.id] }],
       channels: [{ ...room, overwrites: [overwrite] }],
     });
     const delta = patch(removeRole(ordinaryRole.id));
+    expect(reduceLiveState({ ...state, channels: fixture().channels }, delta!)).toEqual(baseline);
     const sequence = new LiveSequence(async () => ({ state, seq: 1 }), reduceLiveState);
     expect(await sequence.synchronize()).toBe(true);
     expect(await sequence.ingest(2, delta!)).toBe("unavailable");
