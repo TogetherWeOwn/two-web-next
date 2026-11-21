@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { verifyPureHonoRecoveryAttestation } from "./pure-hono-recovery-attestation.mjs";
 import { validatePureHonoRecoveryEvidence } from "./pure-hono-recovery-evidence.mjs";
 import { RECOVERY_MEMBER_LIMITS } from "./pure-hono-recovery-members.mjs";
+import { packPureHonoRecovery } from "./pure-hono-recovery-packager.mjs";
 import { fetchPureHonoRecoveryRun } from "./pure-hono-recovery-run.mjs";
 import { verifyPureHonoRecoveryEvidence } from "./pure-hono-recovery-verifier.mjs";
 import {
@@ -22,6 +23,7 @@ import {
   rollbackEnvironment,
   stagingBusyRuns,
 } from "./rollback-target.mjs";
+import { decodePureHonoRecoveryZip } from "./route-evidence-artifact-zip.mjs";
 import { zip } from "./route-evidence-zip-fixture.mjs";
 
 const recoveryDigest = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -611,6 +613,151 @@ test("pure Hono run adapter sanitizes transport refusals without retry or fallba
     );
     assert.deepEqual(calls, [attemptUrl]);
   }
+});
+
+const recoveryAsset = (path, bytes = Buffer.alloc(0)) => ({ path, bytes });
+
+function packagerInput() {
+  const { expected, run } = recoveryFixture();
+  return {
+    worker: Buffer.from("export default {};\n"),
+    effectiveConfig: Buffer.from('{ "name": "synthetic" }\n'),
+    assets: [recoveryAsset("assets/version.json", Buffer.from("{}"))],
+    sourceSha: expected.sourceSha,
+    originalVersionId: expected.originalVersionId,
+    run,
+  };
+}
+
+test("pure Hono packager deterministically round-trips the exact supplied bytes", () => {
+  const input = packagerInput();
+  const binary = Buffer.from(Array.from({ length: 1024 }, (_, i) => i % 251));
+  input.assets.push(
+    recoveryAsset("assets/a.bin", binary),
+    recoveryAsset("assets/z.bin", Buffer.alloc(4096)),
+  );
+  const packed = packPureHonoRecovery(input);
+  assert.deepEqual(packPureHonoRecovery({ ...input, assets: input.assets.toReversed() }), packed);
+  const { archive, archiveSha256 } = packed;
+  assert.equal(archiveSha256, recoveryDigest(archive));
+  assert.equal(archive.readUInt16LE(8), 8, "first asset uses DEFLATE");
+  const { expected, attestation, run } = recoveryFixture();
+  assert.deepEqual(
+    validatePureHonoRecoveryEvidence({
+      archive,
+      expected: { ...expected, archiveSha256 },
+      attestation: { ...attestation, subjectSha256: archiveSha256 },
+      run,
+      decode: decodePureHonoRecoveryZip,
+    }),
+    { archiveSha256, fileCount: 5 },
+  );
+  const members = decodePureHonoRecoveryZip(archive);
+  const expectedFiles = [
+    input.assets[1],
+    input.assets[0],
+    input.assets[2],
+    { path: "effective-config.json", bytes: input.effectiveConfig },
+    { path: "worker.js", bytes: input.worker },
+  ];
+  assert.deepEqual(
+    members.slice(0, -1),
+    expectedFiles.map((file) => ({ ...file, type: "file" })),
+  );
+  const manifest = members.at(-1);
+  assert.equal(manifest.path, "manifest.json");
+  assert.deepEqual(
+    JSON.parse(manifest.bytes.toString()).files,
+    expectedFiles.map(({ path, bytes }) => ({
+      path,
+      bytes: bytes.length,
+      sha256: recoveryDigest(bytes),
+    })),
+  );
+});
+
+test("pure Hono packager refuses invalid producer identity and missing payloads", () => {
+  const input = packagerInput();
+  for (const change of [
+    { run: undefined },
+    { run: { ...input.run, conclusion: "failure" } },
+    { run: { ...input.run, status: "in_progress" } },
+    { run: { ...input.run, ref: "refs/heads/release" } },
+    { run: { ...input.run, repository: "Other/two-web-next" } },
+    { run: { ...input.run, workflow: ".github/workflows/../ci.yml" } },
+    { run: { ...input.run, runId: "0123" } },
+    { run: { ...input.run, runAttempt: "9007199254740992" } },
+    { sourceSha: "b".repeat(40) },
+    { originalVersionId: "invalid" },
+  ])
+    assert.throws(
+      () => packPureHonoRecovery({ ...input, ...change }),
+      /successful main producer identity/,
+    );
+  assert.throws(
+    () => packPureHonoRecovery({ ...input, worker: Buffer.alloc(0) }),
+    /worker or config missing/,
+  );
+  assert.throws(
+    () => packPureHonoRecovery({ ...input, effectiveConfig: undefined }),
+    /worker or config missing/,
+  );
+  assert.throws(() => packPureHonoRecovery({ ...input, assets: [] }), /assets missing/);
+  assert.throws(
+    () => packPureHonoRecovery({ ...input, assets: [{ path: "assets/a" }] }),
+    /asset bytes/,
+  );
+});
+
+test("pure Hono packager refuses unsafe, reserved, duplicate and aliased asset paths", () => {
+  const input = packagerInput();
+  const packPaths = (...paths) =>
+    packPureHonoRecovery({ ...input, assets: paths.map((path) => recoveryAsset(path)) });
+  for (const path of [
+    "manifest.json",
+    "worker.js",
+    "effective-config.json",
+    "assets/../a",
+    "assets/AUX.txt",
+    "assets/lpt0/file",
+    "assets/a.",
+    "assets/é",
+    `assets/${"x/".repeat(31)}y`,
+    `assets/${"a".repeat(506)}`,
+  ])
+    assert.throws(() => packPaths(path), /asset path/);
+  for (const pair of [
+    ["assets/a", "assets/a"],
+    ["assets/a", "assets/A"],
+    ["assets/Dir/x", "assets/dir/y"],
+    ["assets/a", "assets/a/b"],
+    ["assets/a/b", "assets/a"],
+  ])
+    assert.throws(() => packPaths(...pair), /duplicate or aliased path/);
+});
+
+test("pure Hono packager accounts for the manifest and ZIP overhead in size limits", () => {
+  const input = packagerInput();
+  const { maxEntries, maxTotalBytes, maxArchiveBytes } = RECOVERY_MEMBER_LIMITS;
+  assert.throws(
+    () => packPureHonoRecovery({ ...input, assets: Array(maxEntries - 2) }),
+    /member count/,
+  );
+  const block = Buffer.alloc(1024 * 1024);
+  const tooExpanded = Array.from({ length: maxTotalBytes / block.length }, (_, i) =>
+    recoveryAsset(`assets/${i}`, block),
+  );
+  assert.throws(() => packPureHonoRecovery({ ...input, assets: tooExpanded }), /expanded size/);
+  const tooManyLongNames = Array.from({ length: 2000 }, (_, i) =>
+    recoveryAsset(`assets/${i}-${"a".repeat(490)}`),
+  );
+  assert.throws(
+    () => packPureHonoRecovery({ ...input, assets: tooManyLongNames }),
+    /manifest size/,
+  );
+  // This asset must STORE (DEFLATE would exceed the ratio cap), leaving no header budget.
+  const tooBigToStore = recoveryAsset("assets/archive.bin", Buffer.alloc(maxArchiveBytes));
+  assert.throws(() => packPureHonoRecovery({ ...input, assets: [tooBigToStore] }), /archive size/);
 });
 
 test("pure Hono archive binds a successful main run and hashes every declared member", () => {
