@@ -223,6 +223,7 @@ const rawDetailModel = (
   showJoinPitch: true,
   joinReturnTo: `/e/${EVENT_KEY}`,
   joinResult: null,
+  viewerAuthenticated: false,
   viewerMember: false,
   viewerModerator: false,
   viewerUsername: null,
