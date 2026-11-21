@@ -11,6 +11,8 @@ export const baseCiOkNeeds = [
   "static-check",
   "coverage-merge",
   "kit-browser-fixture",
+  "kit-browser-calendar",
+  "kit-browser-lifeline",
   "node22-compat",
   "scope",
   "bot-contract-drift",
