@@ -59,12 +59,14 @@ async function serve(route, url, stopped, offline, deny) {
   if (!allowedRequest(req, url)) return deny();
   if (stopped()) return;
   const file = assetFile(req.url());
+  const document = req.isNavigationRequest();
   const res = await route.fetch({ maxRedirects: 0, timeout: 5_000 });
   try {
-    const pinned = () => readFile(`web/.svelte-kit/cloudflare${file}`).catch(() => null);
-    const valid = req.isNavigationRequest()
+    const matches = async () =>
+      (await res.body()).equals(await readFile(`web/.svelte-kit/cloudflare${file}`));
+    const valid = document
       ? kitDocument(res.status(), res.headers())
-      : res.status() === 200 && (await pinned())?.equals(await res.body());
+      : res.status() === 200 && (await matches().catch(() => false));
     if (!valid) deny();
     if (stopped()) return;
     if (valid) await route.fulfill({ response: res });
@@ -110,7 +112,7 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
   });
   let stopped = false;
   const closed = () => stopped || signal.aborted;
-  let unavailable;
+  let unavailable = false;
   let result;
   const pending = new Set();
   const settle = async () => {
@@ -119,7 +121,7 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
   const { promise, reject } = Promise.withResolvers();
   const markViolation = () => reject(new AssertionFailure("unexpected visual diagnostic"));
   const guard = (work) => Promise.race([promise, work]);
-  const offline = (error) => (unavailable ??= error);
+  const offline = (error) => (unavailable ||= error);
   try {
     await context.addCookies([await mintModerator()]);
     // Playwright stops calling route handlers during close but still emits request events.
@@ -142,11 +144,13 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
     page.setDefaultTimeout(5_000);
     page.on("pageerror", markViolation);
     if (!reportOnly) page.on("console", markViolation);
-    const [navigation] = await guard(Promise.allSettled([page.goto(url)]));
-    // The load timeout can precede a later document or asset fetch verdict.
+    // Keep the committed document even if optional Lighthouse loading times out.
+    const goto = page.goto(url, { waitUntil: reportOnly ? "commit" : "load" });
+    const [navigation] = await guard(Promise.allSettled([goto]));
+    const response = navigation.status === "fulfilled" ? navigation.value : null;
+    if (reportOnly && response) await guard(page.waitForLoadState("load").catch(offline));
     await guard(withDeadline(settle));
     if (navigation.status === "rejected" && !(reportOnly && unavailable)) throw navigation.reason;
-    const response = navigation.status === "fulfilled" ? navigation.value : null;
     const valid = response?.url() === url && kitDocument(response.status(), response.headers());
     if (!(response ? valid : unavailable)) throw new AssertionFailure("visual provenance drift");
     if (unavailable && !reportOnly) throw unavailable;

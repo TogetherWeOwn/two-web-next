@@ -149,7 +149,7 @@ describe("Kit home port: header, hero and metadata chrome", () => {
   it("renders the hero, notice slot and exact page metadata", () => {
     const page = read(pagePath);
     expect(page).toContain('id="home-heading"');
-    expect(page).toContain("The lobby is open.");
+    expect(page).toContain("The lobby is <em>open</em>.");
     expect(page).toContain("A close-knit gaming clan / mostly evenings / 18+");
     expect(page).toContain("We spent most of our life private. Now you can just turn up.");
     expect(page).toContain('data-testid="notice"');
@@ -158,7 +158,7 @@ describe("Kit home port: header, hero and metadata chrome", () => {
     expect(page).toContain('data-testid="join"');
     expect(page).toContain('data-testid="discord-join"');
     expect(page).toContain('theme="home"');
-    expect(page).toContain('activeNav="home"');
+    expect(page).toContain('href="/" aria-current="page"');
     expect(page).toContain("Together We Own — the lobby is open");
     expect(page).toContain('testid="site-jsonld"');
   });

@@ -20,12 +20,13 @@ CI runs two independent jobs in `.github/workflows/ci.yml`:
   `dist/worker.js` against `ci/worker-bundle-budget.json` with
   `node ci/check-worker-bundle.mjs`. Served-asset and Kit budgets are untouched.
 
-The required `ci-ok` job is the result gate; the standalone `check` job depends
-only on `scope` and runs alongside the audit and performance jobs. `ci-ok`
-aggregates `scope`, `check`, `docs-links` and the selected audit/performance
-results. For an in-scope, non-draft run, both `lighthouse` and `bundle-budget`
-must succeed. A failed or cancelled selected job, an unexpected skip, a failed
-`scope`/`check`/`docs-links` result, or an invalid scope verdict fails `ci-ok`.
+The required `ci-ok` job is the result gate. The standalone `check` job waits for
+`scope` and `dependency-admission`, not the accessibility or performance jobs.
+`ci-ok` aggregates those results alongside `docs-links`. For an in-scope,
+non-draft run, both `lighthouse` and `bundle-budget` must succeed. A failed or
+cancelled selected job, an unexpected skip, a non-success result from `scope`,
+`dependency-admission`, `check` or `docs-links`, or an invalid scope verdict
+fails `ci-ok`.
 A skipped audit or performance job passes only when `scope` marks it out of
 scope or the PR is a draft. `ci-ok` runs unless the workflow is cancelled; a
 cancelled run must be followed by a run with a successful `ci-ok` result before
