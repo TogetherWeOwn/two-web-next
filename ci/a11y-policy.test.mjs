@@ -201,6 +201,8 @@ test("the required ci-ok gate runs after a non-green audit and rejects every non
     "dependency-admission",
     "check",
     "kit-browser-fixture",
+    "kit-browser-calendar",
+    "kit-browser-lifeline",
     "node22-compat",
     "scope",
     "bot-contract-drift",
