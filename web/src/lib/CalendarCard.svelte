@@ -35,7 +35,6 @@ let {
   loginReturnTo,
 }: { e: CalendarListCard; isPast: boolean } & CalendarViewer = $props();
 
-const Heading = $derived(isPast ? "h3" : "h4");
 const transient = $derived(e.kind === "discord");
 const cancelled = $derived(e.kind === "event" && e.status === "cancelled");
 const draft = $derived(e.kind === "event" && e.status === "draft");
@@ -77,9 +76,9 @@ const full = $derived(
     </div>
     <div class="schedule-info">
       <!-- Cancelled and transient rows have no detail page (410 / none), so the title is plain text. -->
-      <svelte:element this={Heading}>
+      <h3>
         {#if e.kind === "event" && e.status !== "cancelled"}<a href={`/e/${e.eventKey}`}>{#if titleSegments}<span>{@render marked(titleSegments)}</span>{:else}{e.title}{/if}</a>{:else if titleSegments}<span>{@render marked(titleSegments)}</span>{:else}{e.title}{/if}
-      </svelte:element>
+      </h3>
       {#if e.kind === "event" && e.game}<p>{e.game}</p>{/if}
       {#if host !== ""}<p data-testid={EVENT_CARD_HOST_TESTID}>Hosted by {host}</p>{/if}
       {#if draft}{" "}<span class="schedule-badge" data-testid={EVENT_DRAFT_TESTID}>Draft</span>{" "}{/if}

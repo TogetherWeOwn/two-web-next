@@ -69,7 +69,7 @@ const previousPage = $derived(outOfRange ? Math.min(state.page - 1, totalPages) 
   <h2 class="sr-only">{EVENTS_LIST_HEADING_SR}</h2>
   <div class="schedule-days" data-testid={EVENTS_LIST_TESTID}>
     {#each days as [day, rows] (day)}
-      <h3 class="schedule-day" id={`schedule-day-${day}`}>{day === today ? "Today · " : ""}{cardDayLabel(rows[0]!.startsAt, zone)}</h3>
+      <p class="schedule-day" id={`schedule-day-${day}`}>{day === today ? "Today · " : ""}{cardDayLabel(rows[0]!.startsAt, zone)}</p>
       <ul aria-labelledby={`schedule-day-${day}`}>
         {#each rows as e (e.key)}
           <CalendarCard {e} isPast={false} {member} {inviteUrl} {loginReturnTo} />
