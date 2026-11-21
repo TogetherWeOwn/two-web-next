@@ -214,10 +214,10 @@ test("visual tests re-seed and verify the board state after worker restarts", ()
   const kitPoll = visuals.indexOf("api(kit).get(");
   const loadComplete = visuals.indexOf('await page.waitForLoadState("networkidle");');
   const rankedRow = visuals.indexOf("const rankedRow");
-  const emptyBoard = visuals.indexOf('page.getByRole("status").filter({');
+  const emptyBoard = visuals.indexOf('.getByRole("main")');
   assert.match(
     visuals,
-    /hasText: \/\^Nobody is ranked for this season and game[^/]+\/[\s\S]*?\.toBeVisible\(\)/,
+    /getByRole\("main"\)\s*\.getByRole\("status"\)\s*\.and\(page\.locator\("p"\)\)\s*\.filter\(\{\s*hasText: memberBoardEmptyText\("overall", allowsEndedMemberBoardCopy\(path\)\),\s*\}\),\s*\)\.toBeVisible\(\)/,
   );
   const screenshot = visuals.indexOf("toHaveScreenshot(");
   assert(honoPoll >= 0 && honoPoll < seedRsvp && seedRsvp < kitPoll);

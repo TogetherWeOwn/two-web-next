@@ -8,8 +8,9 @@ import {
 } from "@playwright/test";
 import postgres from "postgres";
 import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
-import { memberBoardStatus } from "../../ci/kit-parity-gates.mjs";
+import { memberBoardEmptyText, memberBoardStatus } from "../../ci/kit-parity-gates.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
+import { parseSeasonParam } from "../../src/hotzones/season";
 import { QA_IDENTITIES } from "../../src/qa";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
@@ -295,6 +296,11 @@ function memberGoingRsvp(): Promise<void> {
 // normalization: rank 1, the seeded going count 1. The bare name also
 // rides the member chrome, so only the table row proves ranked content.
 const RANKED_ROW = '<td>1</td><th scope="row">QA Member</th><td>1</td>';
+
+function allowsEndedMemberBoardCopy(path: string): boolean {
+  const season = parseSeasonParam(new URL(path, KIT_ORIGIN).searchParams.get("season"));
+  return season?.kind === "window" && Date.now() >= season.end.getTime();
+}
 
 function expectNoMarker(headers: Record<string, string>, label: string) {
   expect(
@@ -859,9 +865,10 @@ for (const target of targets) {
         if (ranked) {
           expect(normalized, `${target.name} ${path}: ranked viewer row`).toContain(RANKED_ROW);
         } else {
-          expect(memberBoardStatus(body), `${target.name} ${path}: empty board`).toBe(
-            "overall-empty",
-          );
+          expect(
+            memberBoardStatus(body, allowsEndedMemberBoardCopy(path)),
+            `${target.name} ${path}: empty board`,
+          ).toBe("overall-empty");
           expect(normalized, `${target.name} ${path}: no ranked row`).not.toContain(RANKED_ROW);
         }
       }
@@ -3430,9 +3437,13 @@ test.describe("kit: member-board visuals", () => {
             await expect(rankedRow.getByRole("cell")).toHaveText(["1", "1"]);
           } else {
             await expect(
-              page.getByRole("status").filter({
-                hasText: /^Nobody is ranked for this season and game(?: yet)?\.(?=\s|$)/,
-              }),
+              page
+                .getByRole("main")
+                .getByRole("status")
+                .and(page.locator("p"))
+                .filter({
+                  hasText: memberBoardEmptyText("overall", allowsEndedMemberBoardCopy(path)),
+                }),
             ).toBeVisible();
             await expect(page.getByRole("rowheader", { name: "QA Member" })).toHaveCount(0);
           }

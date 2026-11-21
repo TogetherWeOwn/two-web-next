@@ -17,6 +17,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse } from "parse5";
 import { stripEmberDelta } from "./kit-archive-delta.mjs";
 import { sectionOf } from "./kit-section-contract.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -967,15 +968,50 @@ function assertFaqContract(label, html, get, expected) {
   });
 }
 
-// Inspect the opening sentence of the status paragraph inside the board's main.
-export function memberBoardStatus(html) {
-  const main = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/)?.[1] ?? "";
-  const message = main.match(
-    /<p\b[^>]*\srole="status"[^>]*>\s*(?:(Nobody is|You are not) ranked for this season and game(?: yet)?\.)(?=\s|<)/,
-  )?.[1];
-  if (message) return message === "Nobody is" ? "overall-empty" : "relative-empty";
-  if (/<p\b[^>]*\srole="status"[^>]*>\s*Rankings are temporarily unavailable\.\s*<\/p>/.test(main))
-    return "outage";
+// The old open copy stays valid during the rollout. Only a known ended
+// window can also use the ended wording, in both HTTP and browser assertions.
+export function memberBoardEmptyText(scope, allowEnded = false) {
+  const viewer = scope === "relative" ? "You are not" : "Nobody is";
+  const ending = allowEnded
+    ? String.raw`(?: yet\.|\.\s+This season has ended\.)`
+    : String.raw` yet\.`;
+  return new RegExp(String.raw`^\s*${viewer} ranked for this season and game${ending}(?=\s|$)`);
+}
+
+/** @param {import("parse5").DefaultTreeAdapterMap["node"]} node */
+function* activeBoardNodes(node) {
+  if (
+    "tagName" in node &&
+    (["template", "script", "style", "noscript"].includes(node.tagName) ||
+      node.attrs.some(({ name }) => name === "hidden" || name === "inert"))
+  )
+    return;
+  yield node;
+  if ("childNodes" in node) {
+    for (const child of node.childNodes) yield* activeBoardNodes(child);
+  }
+}
+
+export function memberBoardStatus(html, allowEnded = false) {
+  // Walk the active tree, not the source: comments and template contents do not render.
+  const main = activeBoardNodes(parse(html)).find((node) => node.nodeName === "main");
+  if (!main) return null;
+  for (const node of activeBoardNodes(main)) {
+    if (
+      !("tagName" in node) ||
+      node.tagName !== "p" ||
+      !node.attrs.some(({ name, value }) => name === "role" && value === "status")
+    )
+      continue;
+    const text = [...activeBoardNodes(node)]
+      .map((child) => ("value" in child ? child.value : ""))
+      .join("")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (memberBoardEmptyText("overall", allowEnded).test(text)) return "overall-empty";
+    if (memberBoardEmptyText("relative", allowEnded).test(text)) return "relative-empty";
+    if (text === "Rankings are temporarily unavailable.") return "outage";
+  }
   return null;
 }
 
@@ -1023,7 +1059,7 @@ export function assertMembersContract({ label, html, headers, status, expected }
   if (!html.includes('name="season"') || !html.includes('name="activity"'))
     failures.push(`${label}: season + activity inputs present`);
   const hasTable = /<table[\s>]/.test(html);
-  if (!hasTable && !memberBoardStatus(html))
+  if (!hasTable && !memberBoardStatus(html, expected.allowEnded))
     failures.push(`${label}: board table or empty status present`);
   if (hasTable) {
     if (!html.includes('<th scope="col">Rank</th>')) failures.push(`${label}: rank column present`);

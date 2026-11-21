@@ -561,24 +561,35 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
     }).length,
     0,
   );
-  const withStatus = (text) =>
-    goodHtml.replace(/<table[\s\S]+<\/table>/, `<p role="status">${text}</p>`);
-  for (const [text, kind] of [
-    ["Nobody is ranked for this season and game yet. Browse events.", "overall-empty"],
-    ["Nobody is ranked for this season and game. This season has ended.", "overall-empty"],
+  const withBoardMarkup = (markup) => goodHtml.replace(/<table[\s\S]+<\/table>/, markup);
+  const withStatus = (text) => withBoardMarkup(`<p role="status">${text}</p>`);
+  const openCopy = "Nobody is ranked for this season and game yet.";
+  const endedCopy = "Nobody is ranked for this season and game. This season has ended.";
+  assert.equal(memberBoardStatus(withStatus(endedCopy)), null, "all time is not an ended season");
+  assert.equal(
+    memberBoardStatus(
+      withBoardMarkup(
+        "<p role='status'>Nobody is <em>ranked</em>\nfor this season and game&nbsp;yet.</p>",
+      ),
+    ),
+    "overall-empty",
+  );
+  for (const [text, kind, allowEnded = false] of [
+    [`${openCopy} Browse events.`, "overall-empty"],
+    [endedCopy, "overall-empty", true],
     ["You are not ranked for this season and game yet. Browse events.", "relative-empty"],
-    ["You are not ranked for this season and game. This season has ended.", "relative-empty"],
+    ["You are not ranked for this season and game. This season has ended.", "relative-empty", true],
     ["Rankings are temporarily unavailable.", "outage"],
   ]) {
     const html = withStatus(text);
-    assert.equal(memberBoardStatus(html), kind);
+    assert.equal(memberBoardStatus(html, allowEnded), kind);
     assert.deepEqual(
       assertMembersContract({
         label: `unit/members-${kind}`,
         html,
         headers,
         status: 200,
-        expected,
+        expected: { ...expected, allowEnded },
       }),
       [],
     );
@@ -611,17 +622,27 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
     ],
     [
       "empty-copy-without-status-role",
-      () =>
-        withStatus("Nobody is ranked for this season and game yet.").replace(' role="status"', ""),
+      () => withBoardMarkup(`<p>${openCopy}</p>`),
       "board table or empty status present",
     ],
     [
       "empty-status-outside-main",
+      () => withStatus(openCopy).replace(/(<p role="status">[^<]*<\/p>)(<\/main>)/, "$2$1"),
+      "board table or empty status present",
+    ],
+    [
+      "empty-status-inactive",
       () =>
-        withStatus("Nobody is ranked for this season and game yet.").replace(
-          /(<p role="status">[^<]*<\/p>)(<\/main>)/,
-          "$2$1",
+        withBoardMarkup(
+          `<!--<p role="status">${openCopy}</p>-->` +
+            `<template><p role="status">${openCopy}</p></template>` +
+            `<div hidden><p role="status">${openCopy}</p></div>`,
         ),
+      "board table or empty status present",
+    ],
+    [
+      "ended-copy-in-all-time-board",
+      () => withStatus(endedCopy),
       "board table or empty status present",
     ],
     [
