@@ -234,5 +234,15 @@ test("CSR-disabled Kit header supports keyboard, account variants, and a blocked
     assert.equal(response.ok(), true);
     assert.equal(await page.evaluate(() => "inert" in HTMLElement.prototype), false);
     await assertFallback("no-inert");
+
+    // Home uses the same marker on its own header, without the fragment target.
+    const markedHeader = page.locator("header[data-kit-site-header]");
+    await markedHeader.evaluate((header) => {
+      header.removeAttribute("id");
+      header.removeAttribute("class");
+    });
+    await expect(markedHeader).toHaveCSS("position", "sticky");
+    await expect(markedHeader).toHaveCSS("padding-inline-start", "0px");
+    await expect(markedHeader).toHaveCSS("z-index", "1");
   });
 });
