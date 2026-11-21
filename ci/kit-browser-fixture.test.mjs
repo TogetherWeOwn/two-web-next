@@ -5,7 +5,12 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { homeEvidencePage, homeEvidenceStates, withKitHomeEvidence } from "./kit-home-evidence.mjs";
+import {
+  homeEvidencePage,
+  homeEvidenceStates,
+  withKitHomeEvidence,
+  withKitHomeEvidenceStates,
+} from "./kit-home-evidence.mjs";
 import {
   fixedDateBanner,
   readFixtureAsset,
@@ -36,15 +41,16 @@ export async function assertHomeEvidence() {
       `export async function withKitOfflineBrowser({ source }, capture) {
   if (process.env.CAPTURE_CASE === "incomplete" && source.endsWith("after")) return;
   let focused = false;
+  let scrollY;
   const page = {
-    setViewportSize: async () => {},
+    setViewportSize: async () => { scrollY = 1; },
     locator: () => ({
       focus: async () => { focused = true; },
       evaluate: async () => process.env.CAPTURE_CASE !== "focus-hidden",
     }),
     screenshot: async (options) => {
       if (options.fullPage !== true) throw new Error("full-page capture required");
-      if (!options.path && focused) throw new Error("ordinary capture retained focus");
+      if (!options.path && (focused || scrollY !== 0)) throw new Error("ordinary capture retained focus or scroll");
       return Buffer.from("fixture image");
     },
     evaluate: async (fn) => {
@@ -61,7 +67,8 @@ export async function assertHomeEvidence() {
       try { return await fn(); } finally { delete globalThis.document; }
     },
   };
-  await capture({ page });
+  globalThis.window = { scrollTo: ({ top }) => { scrollY = top; } };
+  try { await capture({ page }); } finally { delete globalThis.window; }
 }`,
     );
     const script = new URL("./kit-home-capture.mjs", import.meta.url);
@@ -161,13 +168,16 @@ test("Kit home evidence rejects unknown fixture states", () => {
   assert.throws(() => homeEvidencePage("__proto__"), /Unknown home evidence state/);
 });
 
-for (const state of homeEvidenceStates) {
-  test(`Kit home evidence renders ${state} offline`, async () => {
-    await withKitHomeEvidence(state, async ({ page }) => {
-      assert.equal(await page.getByRole("heading", { level: 1 }).count(), 1, state);
-    });
+test("Kit home evidence renders all states offline", async (t) => {
+  await withKitHomeEvidenceStates(async (openState) => {
+    for (const state of homeEvidenceStates) {
+      await t.test(state, async () => {
+        const page = await openState(state);
+        assert.equal(await page.getByRole("heading", { level: 1 }).count(), 1, state);
+      });
+    }
   });
-}
+});
 
 test("Kit home hero presents its heading and action at desktop and mobile widths", async () => {
   await withKitHomeEvidence("guest", async ({ page }) => {

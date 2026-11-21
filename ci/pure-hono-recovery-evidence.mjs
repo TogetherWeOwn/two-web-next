@@ -1,18 +1,26 @@
 import { createHash } from "node:crypto";
+import {
+  RECOVERY_MANIFEST,
+  RECOVERY_MEMBER_LIMITS,
+  RECOVERY_REQUIRED_FILES as REQUIRED,
+  recordRecoveryPath,
+  validRecoveryMemberPath,
+} from "./pure-hono-recovery-members.mjs";
 
 const REPOSITORY = "TogetherWeOwn/two-web-next";
 const MAIN_REF = "refs/heads/main";
-const TARGET = "two-web-next-production";
-const SCHEMA = "two.pure-hono-recovery.v1";
-const MAX_ARCHIVE = 64 * 1024 * 1024;
-const MAX_EXPANDED = 128 * 1024 * 1024;
-const MAX_FILES = 4096;
-const MAX_MANIFEST = 1024 * 1024;
+export const RECOVERY_TARGET = "two-web-next-production";
+export const RECOVERY_SCHEMA = "two.pure-hono-recovery.v1";
+const {
+  maxArchiveBytes: MAX_ARCHIVE,
+  maxTotalBytes: MAX_EXPANDED,
+  maxEntries: MAX_ENTRIES,
+  maxManifestBytes: MAX_MANIFEST,
+} = RECOVERY_MEMBER_LIMITS;
 const SHA = /^[0-9a-f]{40}$/;
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const POSITIVE_ID = /^[1-9][0-9]{0,19}$/;
 const IDENTITY = ["sourceSha", "runId", "runAttempt", "originalVersionId"];
-const REQUIRED = ["worker.js", "effective-config.json"];
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const matches = (pattern, value) => typeof value === "string" && pattern.test(value);
@@ -27,68 +35,66 @@ function requireEvidence(condition, reason) {
   if (!condition) throw new Error(`pure Hono recovery evidence refused: ${reason}`);
 }
 
-function validateProvenance(expected, attestation, run, archiveSha256) {
-  requireEvidence(
+const PRODUCER_KEYS = ["repository", "ref", "workflow", "runId", "runAttempt", "sourceSha"];
+const mainProducer = (expected) => ({ ...expected, repository: REPOSITORY, ref: MAIN_REF });
+
+export function validRecoveryIdentity(expected) {
+  return (
     matches(SHA, expected?.sourceSha) &&
-      matches(POSITIVE_ID, expected?.runId) &&
-      matches(POSITIVE_ID, expected?.runAttempt) &&
-      matches(UUID, expected?.originalVersionId) &&
-      matches(/^\.github\/workflows\/[a-z0-9_-]+\.ya?ml$/, expected?.workflow),
-    "expected identity",
-  );
-  const producer = { ...expected, repository: REPOSITORY, ref: MAIN_REF };
-  const producerKeys = ["repository", "ref", "workflow", "runId", "runAttempt", "sourceSha"];
-  requireEvidence(
-    same(run, producer, producerKeys) && run.status === "completed" && run.conclusion === "success",
-    "successful main run",
-  );
-  requireEvidence(
-    same(attestation, producer, producerKeys) && attestation.subjectSha256 === archiveSha256,
-    "verified attestation identity or subject digest",
+    matches(POSITIVE_ID, expected?.runId) &&
+    matches(POSITIVE_ID, expected?.runAttempt) &&
+    matches(UUID, expected?.originalVersionId) &&
+    matches(/^\.github\/workflows\/[a-z0-9_-]+\.ya?ml$/, expected?.workflow)
   );
 }
 
-function validPath(path) {
+export function matchesSuccessfulMainRecoveryRun(run, expected) {
   return (
-    typeof path === "string" &&
-    path.length <= 512 &&
-    (REQUIRED.includes(path) || path.startsWith("assets/")) &&
-    path.split("/").every((part) => /^[a-zA-Z0-9._-]+$/.test(part) && !part.endsWith("."))
+    same(run, mainProducer(expected), PRODUCER_KEYS) &&
+    run.status === "completed" &&
+    run.conclusion === "success"
+  );
+}
+
+function validateProvenance(expected, attestation, run, archiveSha256) {
+  requireEvidence(validRecoveryIdentity(expected), "expected identity");
+  requireEvidence(matchesSuccessfulMainRecoveryRun(run, expected), "successful main run");
+  requireEvidence(
+    same(attestation, mainProducer(expected), PRODUCER_KEYS) &&
+      attestation.subjectSha256 === archiveSha256,
+    "verified attestation identity or subject digest",
+  );
+  const runUrl = `https://github.com/${REPOSITORY}/actions/runs/${run.runId}`;
+  requireEvidence(
+    attestation.invocationId === `${runUrl}/attempts/${run.runAttempt}`,
+    "verified attestation invocation",
   );
 }
 
 function inspectMembers(members) {
-  requireEvidence(Array.isArray(members) && members.length <= MAX_FILES + 1, "member count");
+  requireEvidence(Array.isArray(members) && members.length <= MAX_ENTRIES, "member count");
   const files = new Map();
   const paths = new Map();
   let expanded = 0;
   for (const { path, bytes, type } of members) {
-    requireEvidence(path === "manifest.json" || validPath(path), "member path");
+    requireEvidence(validRecoveryMemberPath(path), "member path");
     requireEvidence(
       type === "file" && Buffer.isBuffer(bytes) && !files.has(path),
       "member type or duplicate",
     );
     expanded += bytes.length;
     requireEvidence(expanded <= MAX_EXPANDED, "expanded size");
-    let prefix = "";
-    for (const part of path.split("/")) {
-      prefix += prefix ? `/${part}` : part;
-      const folded = prefix.toLowerCase();
-      const previous = paths.get(folded);
-      const kind = prefix === path ? "file" : "directory";
-      requireEvidence(!previous || (previous.prefix === prefix && previous.kind === kind), "alias");
-      paths.set(folded, { prefix, kind });
-    }
+    requireEvidence(recordRecoveryPath(paths, path), "alias");
     files.set(path, bytes);
   }
   return files;
 }
 
-// All three adapters are caller-owned trust boundaries: authenticated run lookup
-// (normalize GitHub's head_sha to run.sourceSha), Sigstore verification with
-// pinned signer policy, and bounded data-only decoding
-// of these exact archive bytes. The decoder must account for every archive entry
-// without extracting it. Never build either provenance input from members.
+// All three adapters are caller-owned trust boundaries: authenticated exact-attempt
+// run lookup (normalize head_sha to run.sourceSha), pinned Sigstore verification,
+// and bounded data-only decoding of these exact archive bytes without extraction.
+// Copy invocationId from the verified SLSA predicate's runDetails.metadata, never
+// synthesize it from the run lookup. Never build either provenance input from members.
 // This checks evidence consistency only; it cannot qualify custody or recovery.
 export function validatePureHonoRecoveryEvidence({ archive, expected, attestation, run, decode }) {
   requireEvidence(
@@ -103,7 +109,7 @@ export function validatePureHonoRecoveryEvidence({ archive, expected, attestatio
   let manifest;
   try {
     files = inspectMembers(decode(Buffer.from(archive)));
-    const raw = files.get("manifest.json");
+    const raw = files.get(RECOVERY_MANIFEST);
     requireEvidence(raw?.length > 0 && raw.length <= MAX_MANIFEST, "manifest size");
     manifest = JSON.parse(raw.toString("utf8"));
     // One exact wire encoding rejects duplicate JSON keys and lossy UTF-8 decoding.
@@ -111,11 +117,11 @@ export function validatePureHonoRecoveryEvidence({ archive, expected, attestatio
   } catch {
     throw new Error("pure Hono recovery evidence refused: archive members or manifest encoding");
   }
-  files.delete("manifest.json");
+  files.delete(RECOVERY_MANIFEST);
   requireEvidence(
     exactKeys(manifest, ["schema", "target", ...IDENTITY, "files"]) &&
-      manifest.schema === SCHEMA &&
-      manifest.target === TARGET &&
+      manifest.schema === RECOVERY_SCHEMA &&
+      manifest.target === RECOVERY_TARGET &&
       same(manifest, expected, IDENTITY),
     "manifest identity",
   );

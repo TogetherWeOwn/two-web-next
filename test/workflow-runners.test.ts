@@ -31,6 +31,7 @@ const pinnedHostedJobs = new Map([
   ["kit-activity-log-diagnostic.yml", "browser"],
   ["kit-home-evidence.yml", "capture"],
   ["kit-event-evidence.yml", "capture"],
+  ["kit-event-newline-proof.yml", "capture"],
   ["admin-stale-save-ubuntu24-proof.yml", "recovery-proof"],
   ["kit-footer-browser.yml", "footer-browser"],
   ["xfs-qualification.yml", "fixture"],
@@ -120,7 +121,7 @@ describe("workflow runner labels", () => {
     for (const [name, ids] of [
       ["release.yml", ["tag"]],
       ["rollback-production.yml", ["preflight", "rollback-production", "notify"]],
-      ["db-migrate.yml", ["migrate"]],
+      ["db-migrate.yml", ["production-scope-preflight", "migrate"]],
     ] as const) {
       const workflow = workflows.find((entry) => entry.name === name);
       expect(workflow, name).toBeDefined();
@@ -155,6 +156,9 @@ describe("workflow runner labels", () => {
       "a11y",
       "dependency-admission",
       "check",
+      "static-check",
+      "coverage-shard",
+      "coverage-merge",
       "node22-shard",
       "node22-compat",
       "bundle-budget",
