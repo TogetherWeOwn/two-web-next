@@ -19,7 +19,8 @@ version.
 - Use the [PR template](.github/pull_request_template.md), in short, active
   sentences. In the current warn mode `pr-lint` warns (does not fail) on a
   missing or thin Linked Issues or Issue Description and Verification. Always
-  fill in Attestation too; `pr-lint` does not check it yet. The other sections
+  fill in Attestation too. `pr-lint` enforces its declared risk tier from the
+  PR-number cutoff below. The other sections
   are optional. See "What fails `pr-lint` today vs what only
   warns" below for the full fail/warn split.
 - Link a public GitHub issue with `Closes #123`, or describe the problem in the PR.
@@ -269,7 +270,8 @@ Its selftests use only local proc fixtures and controlled child processes.
 `pr-lint` is a required job, so it must pass; inside the job, some findings
 fail it and some only warn. Current mode in
 `.github/workflows/pr-gates.yml`: `INTERNAL_ID_LEVEL: "warning"`,
-`PR_STANDARDS_MODE: "warn"`, `HEAD_REF_ERROR_FROM_PR: "627"`. A finding that
+`PR_STANDARDS_MODE: "warn"`, `HEAD_REF_ERROR_FROM_PR: "627"`, and
+`RISK_TIER_ERROR_FROM_PR: "2671"`. A finding that
 fails exits the checker nonzero and turns the job red; a warning is annotated
 without failing. Flipping a knob to `"error"` turns the Warns-only rows that
 name it into failures, so update this table in the same change. The strict
@@ -284,6 +286,7 @@ below-cutoff branch rows need `PR_STANDARDS_MODE`.
 | Push to main carries a bypass commit message that is not a Conventional Commits header (squash-merge bypass) | Fails `pr-lint` |
 | Net growth from the fork point in the internal-card-ID and instance-UI-link tracked-file ratchet (`.github/scripts/internal_ref_ratchet.py`); unreadable trees also fail closed | Fails `pr-lint` |
 | Branch-name internal ID on a PR numbered at or above the cutoff (`HEAD_REF_ERROR_FROM_PR: "627"`) | Fails `pr-lint` |
+| Missing, invalid or understated `risk_tier` on a PR numbered at or above `RISK_TIER_ERROR_FROM_PR` | Fails `pr-lint` |
 | Missing or thin Linked Issues or Issue Description section (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 | Missing or thin Verification section (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 | Tracker ID, instance UI link or the internal host in the PR title or body (upstream strict subset, always fails) | Fails `pr-lint` |
@@ -312,6 +315,14 @@ and reference rules follow the mode (`PR_STANDARDS_MODE: "warn"`); the flip to
 `"error"` is a separate one-line change once the repo's open PRs are clear. The
 script is unit-tested beside it: `python3 -m unittest discover -s .github/scripts -p
 'test_pr_standards.py'`.
+
+The risk-tier check uses the [PR template's path floors](.github/pull_request_template.md#attestation)
+and the complete three-dot Git diff from the fetched target tip to the checked
+PR head. Both sides of a rename count. Declare `T0`, `T1` or `T2` in Attestation
+and escalate when the behavior warrants it. The [review-tier map](.github/review-tiers.yml) governs
+native reviewer routing. PRs opened before the cutoff keep their existing
+metadata checks. For generated dependency PRs covered by the cutoff, a
+maintainer adds the declaration to the PR body.
 
 ### Secret-scan allowlists
 
