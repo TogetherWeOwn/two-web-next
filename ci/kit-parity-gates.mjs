@@ -1551,12 +1551,12 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   const eventsResponse = {
     label: "unit/events guest list",
     html: eventsShell(""),
-    headers: headerMap({
+    headers: {
       "content-type": "text/html",
       "x-two-renderer": eventsMarker,
       "cache-control": "public, max-age=60",
       vary: "Cookie, X-Two-Island",
-    }),
+    },
     status: 200,
     expected: {
       status: 200,
@@ -1576,9 +1576,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     assertRouteContract({
       ...eventsResponse,
       html: eventsResponse.html.replace(eventsChrome, signIn),
-      headers: {
-        get: (name) => (name === "x-two-renderer" ? "kit" : eventsResponse.headers.get(name)),
-      },
+      headers: { ...eventsResponse.headers, "x-two-renderer": "kit" },
       expected: { ...eventsResponse.expected, marker: "kit" },
     });
   const duplicateRejected =
