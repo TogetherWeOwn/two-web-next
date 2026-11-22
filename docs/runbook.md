@@ -498,9 +498,12 @@ before the Worker release. The selftest uses a disposable database.
 
 **Staging recovery prerequisites (operator checks):** require an approved
 schema-change window, review of the exact `main` SHA and green required CI
-for that SHA before dispatch. Coordinate migrations with the web and bot
-owners. Verify backup/PITR eligibility for the target branch and a tested
-recovery procedure before applying.
+for that SHA. Check that `main` still points to it before dispatch and confirm
+the run SHA matches before accepting the recovery result. Coordinate migrations
+with the web and bot owners. Verify backup/PITR eligibility for the target
+branch and a tested recovery procedure before applying. Use the pre-DDL
+timestamp to identify a recovery point and keep separate evidence of the
+backup, PITR and rehearsal.
 
 **Production release prerequisites (operator checks):**
 
@@ -513,10 +516,10 @@ recovery procedure before applying.
    stale, failed or rerun staging evidence.
 2. Coordinate an approved schema-change window with the web and bot owners and
    the database custodian. Confirm the production branch, database and
-   migrator from current custody evidence, verify the live ledger prefix
-   against the exact candidate journal, and resolve ownership, privilege and
-   recovery blockers. The plan records the expected prefix, ordered tags to
-   apply, expected end and any deferred tags.
+   migrator from current custody evidence, use the custodian's read-only ledger
+   evidence to verify the live prefix against the exact candidate journal, and
+   resolve ownership, privilege and recovery blockers. The plan records the
+   expected prefix, ordered tags to apply, expected end and any deferred tags.
 3. Verify a completed backup of the target branch before apply. Record its
    completion time and retention, confirm PITR eligibility, and document the
    recovery procedure and rehearsal where supported. Record a known-good
@@ -524,12 +527,13 @@ recovery procedure before applying.
    recovery with both consumers. The workflow's pre-DDL timestamp is a
    recovery reference. Use the provider's backup and PITR evidence for the
    production branch.
-4. Obtain and record explicit approval from an independent release reviewer
-   for the exact SHA, migrator identity, ordered scope, staging and recovery
-   evidence, and execution plan. Only then may the authorized operator set the
-   migration pins and dispatch the protected workflow. If the `main` tip,
-   approved plan or qualifying evidence changes before dispatch, stop and
-   obtain fresh qualification and approval.
+4. Follow the [production release gate](../CONTRIBUTING.md). Obtain and record
+   explicit approval from an independent release reviewer from a different
+   model family for the exact SHA, migrator identity, ordered scope, staging
+   and recovery evidence, and execution plan. Only then may the authorized
+   operator set the migration pins and dispatch the protected workflow. If the
+   `main` tip, approved plan or qualifying evidence changes before dispatch,
+   stop and obtain fresh qualification and approval.
 
 **Environment and migration pins:**
 
@@ -552,7 +556,9 @@ recovery procedure before applying.
      is distinct from the PostgreSQL role name checked by the runner.
   2. `PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS` is the approved operation's
      exact, non-empty list of full journal tags in order, separated by commas
-     without spaces. The approved segment can end below the journal tip.
+     without spaces. Copy the tags from the approved plan. Use ledger evidence
+     to verify the starting prefix. The approved segment can end below the
+     journal tip.
   3. Set `PRODUCTION_MIGRATION_APPROVED_SHA` last, to the approved full lowercase
      `main` SHA. The workflow checks the run SHA before checkout. This pin does
      not select a revision. `PRODUCTION_ACCEPTED_SHA` is the separate Worker
@@ -566,7 +572,8 @@ recovery procedure before applying.
   contiguous segment of the locked release journal before connecting to
   PostgreSQL. No production migration pins are needed in staging.
 - Clear the approved SHA first, then the pending tags, when the operation
-  finishes or is abandoned. If commit is uncertain, retain the original pins
+  finishes or is abandoned. The identity pin records the approved database and
+  migrator across operations. If commit is uncertain, retain the original pins
   only while pursuing the separately approved readback below, then follow the
   same cleanup order. Clearing pins does not revoke a run that already started.
 - The shell gate and runner require `main`, a valid target and
