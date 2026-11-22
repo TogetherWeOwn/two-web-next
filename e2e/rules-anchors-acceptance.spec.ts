@@ -11,6 +11,7 @@ import {
 } from "../test/helpers/rules-anchor-fixture";
 
 let fixture: Awaited<ReturnType<typeof createRulesFixture>>;
+const BEFORE_RULES_URL = `${RULE_ORIGIN}/rules?before-focus`;
 test.beforeAll(async () => {
   fixture = await createRulesFixture();
 });
@@ -45,6 +46,15 @@ async function captureRules(page: Page, state: string, width: number) {
   const path = test.info().outputPath(`${name}.png`);
   await page.screenshot({ path, animations: "disabled" });
   await test.info().attach(name, { path, contentType: "image/png" });
+}
+
+// Use the actual Tab sequence with a bounded guard against focus traps.
+async function tabReaches(page: Page, target: Locator, limit: number) {
+  for (let tabs = 0; tabs < limit; tabs++) {
+    await page.keyboard.press("Tab");
+    if (await target.evaluate((element) => element === document.activeElement)) return true;
+  }
+  return false;
 }
 
 for (const renderer of ["Hono", "Kit"] as const) {
@@ -123,12 +133,12 @@ for (const renderer of ["Hono", "Kit"] as const) {
         if (renderer === "Kit") {
           await expect(heading).toBeFocused();
           await captureRules(page, "after-copied-page-heading", viewport.width);
-          await page.goto(`${RULE_ORIGIN}/rules?before-focus`);
+          await page.goto("about:blank");
+          await page.goto(BEFORE_RULES_URL);
           await captureRules(page, "before-resting", viewport.width);
-          await page.goto(`${RULE_ORIGIN}/rules?before-focus#rules-heading`);
+          await page.goto("about:blank");
+          await page.goto(`${BEFORE_RULES_URL}#rules-heading`);
           await captureRules(page, "before-copied-page-heading", viewport.width);
-          await page.goto(`${RULE_ORIGIN}/rules?before-focus#${ids[1]}`);
-          await captureRules(page, "before-rule-target", viewport.width);
         }
       });
 
@@ -142,15 +152,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
         const href = await jump.getAttribute("href");
         expect(href).toMatch(/^#[A-Za-z][A-Za-z0-9_-]*$/);
         const resting = await appearance(jump);
-        // Programmatic focus is not keyboard reachability: use the actual
-        // document Tab sequence, with a bounded guard against focus traps.
-        let reached = false;
-        for (let tabs = 0; tabs < 50; tabs++) {
-          await page.keyboard.press("Tab");
-          reached = await jump.evaluate((element) => element === document.activeElement);
-          if (reached) break;
-        }
-        expect(reached, "Tab must reach the native jump link").toBe(true);
+        expect(await tabReaches(page, jump, 50), "Tab must reach the native jump link").toBe(true);
         await expect(jump).toBeInViewport();
         expect(await appearance(jump), "keyboard focus must be visibly distinguished").not.toEqual(
           resting,
@@ -172,13 +174,9 @@ for (const renderer of ["Hono", "Kit"] as const) {
         // Reload resets sequential navigation. Prove the permalink itself is
         // tabbable rather than relying on anchor target focus behavior.
         await page.goto(`${RULE_ORIGIN}/rules`);
-        reached = false;
-        for (let tabs = 0; tabs < 60; tabs++) {
-          await page.keyboard.press("Tab");
-          reached = await permalink.evaluate((element) => element === document.activeElement);
-          if (reached) break;
-        }
-        expect(reached, "Tab must reach the per-rule permalink").toBe(true);
+        expect(await tabReaches(page, permalink, 60), "Tab must reach the per-rule permalink").toBe(
+          true,
+        );
         await expect(permalink).toBeInViewport();
         const focus = await permalink.evaluate((element) => {
           const style = getComputedStyle(element);
@@ -192,7 +190,18 @@ for (const renderer of ["Hono", "Kit"] as const) {
         await page.keyboard.press("Enter");
         await expect(page).toHaveURL(`${RULE_ORIGIN}/rules${href}`);
         await expect(target).toBeInViewport();
-        if (renderer === "Kit") await expect(target).toBeFocused();
+        if (renderer === "Kit") {
+          await expect(target).toBeFocused();
+          await page.goto("about:blank");
+          await page.goto(BEFORE_RULES_URL);
+          expect(await tabReaches(page, jump, 50), "Tab must reach the control jump link").toBe(
+            true,
+          );
+          await page.keyboard.press("Enter");
+          await expect(page).toHaveURL(`${BEFORE_RULES_URL}${href}`);
+          await expect(target).toBeInViewport();
+          await captureRules(page, "before-rule-target", viewport.width);
+        }
       });
 
       test("RULE-B03 long shared labels wrap without horizontal overflow or clipped focus", async ({
