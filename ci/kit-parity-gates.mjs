@@ -1403,7 +1403,8 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     marker === "kit"
       ? `<a href="${href}" aria-label="Sign in with Discord">Sign in</a>`
       : "Welcome, guest";
-  const joinChrome = guestChrome(joinMarker, "/auth/discord");
+  const kitJoinChrome = guestChrome("kit", "/auth/discord");
+  const joinChrome = joinMarker === "kit" ? kitJoinChrome : "Welcome, guest";
   const joinShell = (inner) =>
     `<html><head><link rel="canonical" href="https://next.togetherweown.com/join"></head>` +
     `<body><a class="skip-link" href="#main">Skip</a>` +
@@ -1489,10 +1490,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     ["no-guest-chrome", (html) => html.replace(joinChrome, "")],
     [
       "sign-in-outside-header",
-      (html) =>
-        html
-          .replace(joinChrome, "")
-          .replace("</main>", `</main>${guestChrome("kit", "/auth/discord")}`),
+      (html) => html.replace(joinChrome, "").replace("</main>", `</main>${kitJoinChrome}`),
     ],
     ["logout-control", (html) => html.replace("</body>", '<form action="/logout"></form></body>')],
     [

@@ -43,9 +43,7 @@
 .base-theme .ember-header :where(.ember-header-join):hover {
   background: var(--two-color-accent-hover);
 }
-/* Exact complement of the sheet's compact query, without range syntax. */
 @media not all and (max-width: 820px) {
-  /* Let pages with their own sticky toolbars reserve more space. */
   :where(:root):has(.ember-header) {
     scroll-padding-top: var(--two-size-header-wide);
   }
@@ -53,12 +51,10 @@
     grid-template-columns: auto auto minmax(0, 1fr);
     gap: var(--two-space-7);
     min-height: var(--two-size-header-wide);
-    padding: 0;
-    padding-inline: max(
-      var(--two-layout-gutter-wide),
-      (100% - var(--two-layout-container)) /
-      2 +
-      var(--two-layout-gutter-wide)
+    padding-block: 0;
+    padding-inline: calc(
+      var(--two-layout-gutter-wide) +
+      max(0px, (100% - var(--two-layout-container)) / 2)
     );
   }
   .base-theme .ember-header .menu-brand img {
