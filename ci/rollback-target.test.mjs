@@ -507,6 +507,23 @@ for (const event of ["push", "workflow_dispatch"]) {
   });
 }
 
+test("pure Hono run adapter accepts GitHub's unqualified workflow path on main", async () => {
+  const { expected, run } = recoveryFixture();
+  for (const event of ["push", "workflow_dispatch"]) {
+    const metadata = { ...recoveryRunAttempt(event), path: expected.workflow };
+    const fetchAttempt = async () => Response.json(metadata);
+    assert.deepEqual(
+      await fetchPureHonoRecoveryRun({ ...expected, event }, "fixture-token", fetchAttempt),
+      run,
+    );
+    metadata.head_branch = "release";
+    await assert.rejects(
+      fetchPureHonoRecoveryRun({ ...expected, event }, "fixture-token", fetchAttempt),
+      { message: metadataRefusal },
+    );
+  }
+});
+
 test("pure Hono run adapter accepts the positive safe integer ID boundaries", async () => {
   const expected = { ...recoveryFixture().expected, event: "push" };
   for (const [id, attempt] of [
@@ -563,7 +580,7 @@ for (const [label, metadata] of [
   ["wrong source SHA", { head_sha: "b".repeat(40) }],
   ["wrong writer workflow", { path: ".github/workflows/ci.yml@main" }],
   ["wrong workflow ref", { path: ".github/workflows/archive-hono-recovery.yml@release" }],
-  ["unqualified workflow path", { path: ".github/workflows/archive-hono-recovery.yml" }],
+  ["wrong unqualified writer workflow", { path: ".github/workflows/ci.yml" }],
   ["foreign run repository", { repository: { id: 100, full_name: "Elsewhere/repo", fork: false } }],
   [
     "foreign head repository",
