@@ -50,7 +50,6 @@ test("Kit events index renders the seeded guest schedule @ desktop and mobile", 
       await gotoKitEvents(page, "/events");
       expect((await css).ok()).toBe(true);
       const header = page.locator("header.ember-header");
-      await expect(header).toHaveCSS("height", viewport.name === "desktop" ? "68px" : "60px");
       const join = header.locator(".ember-header-join:visible");
       await expect(join).toHaveCSS("background-color", "rgb(255, 156, 54)");
       await expect(page.getByRole("main")).toHaveCount(1);

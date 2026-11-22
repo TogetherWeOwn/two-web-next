@@ -1304,6 +1304,7 @@ for (const target of targets) {
           if (menu || ember) expect(logo?.width).toBeCloseTo((456.86 * height) / 126.34, 1);
           else expect(logo?.width).toBe(width <= 480 ? 50 : 180);
           const header = page.getByRole("banner");
+          if (ember) await expect(header).toHaveCSS("height", width <= 820 ? "60px" : "68px");
           await menu?.click();
           if (ember)
             await expect(header.getByRole("link", { name: "Join", exact: true })).toHaveCount(1);
