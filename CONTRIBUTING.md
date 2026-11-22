@@ -220,8 +220,11 @@ the change, record all of the following in the task:
    request a fresh review. This is a technical approval within existing
    authority. Owner-routed approvals and settings stay with the owner.
 
-Execute through the existing protected workflow and authorized identities. For
-automatic promotion, [the resolver](ci/resolve-promotion-sha.mjs) requires the
+Use authorized identities for all production changes. Run deploys and migrations
+through the existing protected workflows. For other operations, use the existing
+protected procedure, such as the [secret rotation procedure](docs/runbook.md#secret-rotation-pointer-procedure-only).
+If that operation requires a deployment, use the protected deploy workflow.
+For automatic promotion, [the resolver](ci/resolve-promotion-sha.mjs) requires the
 qualified, soaked staging SHA to equal `PRODUCTION_ACCEPTED_SHA`. An authorized
 executor sets that variable to the exact approved SHA only through the existing
 access boundary. Manual dispatch also requires exact-candidate approval and the

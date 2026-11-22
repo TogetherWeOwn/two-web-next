@@ -295,13 +295,11 @@ staging` or invent a different Worker target. Verify the approved account and
 binding isolation before any remote mutation.
 
 1. Use the [merge and production staging contract](../CONTRIBUTING.md#merge-and-production-staging-evidence)
-   for exact-head checks and promotion-path routing. When Release Manager merge
-   confirmation is required, the final native stage supplies it. The final
-   reviewer (or the author if no native stage applies) squash-merges on the
-   pinned head in the same run. After a successful merge, record the reviewed
-   head, resulting squash SHA, intended target and any required Release Manager
-   confirmation in the release log. Include both SHAs in the final native
-   verdict where a stage applies. A failed merge is not an approval.
+   for exact-head checks, promotion-path routing, tier review and the pinned
+   squash merge. The author merges ordinary PRs. When final technical release
+   acceptance is required, the reviewer makes that decision and merges in the
+   same run. After a successful merge, record the reviewed head, squash SHA,
+   intended target and any required final acceptance in the release log.
 
    Merge confirmation does not authorize production deployment or migration.
    Production holds and staging rollback-drill checks apply to production
@@ -311,13 +309,13 @@ binding isolation before any remote mutation.
    qualifying evidence: follow the linked contract's post-merge manual-dispatch
    caveat rather than claiming automatic eligibility.
 
-   For automatic promotion, the Release Manager accepts the exact release SHA
-   and asks the authorized Operator to set the repository Actions variable
-   `PRODUCTION_ACCEPTED_SHA` to that full lowercase SHA; the Release Manager can
-   ask the Operator to clear it. The resolver checks exact equality against the
-   already-selected eligible candidate, rather than searching for an older
-   accepted candidate. An absent, empty or unequal value skips cleanly. Clearing
-   the variable does not revoke a run that already started: it uses a job-time
+   For automatic promotion, follow the [production release gate](../CONTRIBUTING.md#production-release-gate)
+   to obtain independent approval for the exact release SHA. The authorized
+   executor sets the repository Actions variable `PRODUCTION_ACCEPTED_SHA` to
+   that full lowercase SHA and can clear it to hold promotion. The resolver
+   compares the value only against the already-selected eligible candidate. An
+   absent, empty or unequal value skips cleanly. Clearing the variable does not
+   revoke a run that already started: it uses a job-time
    snapshot. Manual dispatch and all existing promotion and release gates are
    unchanged. Setting this variable is not permission to enable a held workflow
    or deploy production.
@@ -854,10 +852,10 @@ mutation, covering changes after capture. A failed second ancestry lookup
 also refuses promotion; it never falls back to the first proof.
 
 Only `workflow_dispatch` with a nonblank, full SHA matching the resolved
-candidate selects the separate explicit redeploy/recovery route. That input
-is not authorization: retain current Release Manager approval, independent
-Security and QA review, exact-SHA CI, incident/rollback requirements and all
-other applicable promotion gates. `migrations_applied=true` does not bypass
+candidate selects the separate explicit redeploy/recovery route. Apply the
+[production release gate](../CONTRIBUTING.md#production-release-gate), including
+independent exact-candidate approval, tier review, exact-SHA CI and incident and
+rollback requirements. `migrations_applied=true` does not bypass
 default ancestry admission, and neither does an empty-SHA manual dispatch.
 The rollback workflow remains a separate already-served-version route.
 
@@ -2319,6 +2317,10 @@ and [wrangler.jsonc](../wrangler.jsonc). Use the official
 for the approved mechanism. `wrangler secret put` creates a new deployed version;
 it is not a harmless configuration preview. This runbook performs no rotation
 and supplies no secret values or rotation commands.
+
+For production, apply the [release gate](../CONTRIBUTING.md#production-release-gate)
+before the authorized custodian makes the change. Use the protected deploy
+workflow for any resulting deployment and retain custody approvals below.
 
 Route a suspected compromise to the Director/CISO immediately; CEO obtains the
 owner-reserved approval before creation/deletion/rotation or exporting custody.
