@@ -246,9 +246,8 @@ for (const renderer of ["hono", "kit"] as const) {
       const before = await snapshot(page);
       await navigate(page, h, TARGET);
       await h.respond(0, (html) =>
-        html.replace(
-          `<a class="btn" href="/auth/discord?${TARGET_NEXT}" data-testid="signin">Sign in with Discord</a>`,
-          "",
+        html.replace(/<header\b[^>]*>[\s\S]*?<\/header>/, (header) =>
+          header.replace(/<a\b[^>]*\sdata-testid="signin"[^>]*>[^<]*<\/a>/, ""),
         ),
       );
       await expect(page.locator("[data-cal-feedback]")).not.toHaveText("");
