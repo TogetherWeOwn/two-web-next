@@ -30,7 +30,7 @@ HELP = ("Expected a Conventional Commits header, e.g. 'fix(auth): refuse expired
         "sessions' or 'feat(events): shareable event page'. Allowed types: "
         + TYPES.replace("|", ", ") + ". Keep internal card IDs out of the title.")
 INTERNAL_ID = re.compile(r"\b(?:TOG|PAP)-\d+\b")
-EVIDENCE_LINK = (r"^\[Exact-head Actions evidence\]\((?:https://github\.com/TogetherWeOwn/two-web-next/pull/[1-9][0-9]*)?"
+EVIDENCE_LINK = (r"^[ \t]*(?:(?:[-+*]|[0-9]+[.)])[ \t]+)?\[Exact-head Actions evidence\]\((?:https://github\.com/TogetherWeOwn/two-web-next/pull/[1-9][0-9]*)?"
                  r"#issuecomment-[1-9][0-9]*\)[ \t\r]*$")
 
 

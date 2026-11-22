@@ -105,7 +105,7 @@ def strip_comments(text):
 
 def description_text(body):
     link = r"(?:https://github\.com/TogetherWeOwn/two-web-next/pull/[1-9][0-9]*)?#issuecomment-[1-9][0-9]*"
-    return re.sub(rf"^\[Exact-head Actions evidence\]\({link}\)[ \t\r]*$", "", strip_comments(body), flags=re.M)
+    return re.sub(rf"^[ \t]*(?:(?:[-+*]|[0-9]+[.)])[ \t]+)?\[Exact-head Actions evidence\]\({link}\)[ \t\r]*$", "", strip_comments(body), flags=re.M)
 
 
 def parse_sections(body):

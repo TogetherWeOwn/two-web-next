@@ -13,14 +13,14 @@ class EvidenceTest(unittest.TestCase):
     def setUp(self):
         base = {"repo": {"id": 1, "full_name": REPO}, "ref": "main"}
         self.pr = dict(number=42, state="open", draft=False, base=base, body=AUTHOR,
-                       head=dict(sha=HEAD, ref="topic", repo={"id": 1}))
+                       head=dict(sha=HEAD, ref="topic", repo={"id": 2}))
         self.comments, self.timeline, self.runs, self.jobs = [], [], [], []
         self.reads = self.move_on_read = 0
         self.publish = partial(publish, self.api, REPO, 42)
 
     def run_record(self, run_id, **changes):
         return dict(id=run_id, run_number=run_id, run_attempt=1, head_sha=HEAD, head_branch="topic",
-                    path=".github/workflows/ci.yml", event="pull_request", head_repository={"id": 1},
+                    path=".github/workflows/ci.yml", event="pull_request", head_repository=self.pr["head"]["repo"],
                     pull_requests=[self.pr], created_at="2026-11-01T00:00:00Z",
                     status="completed", conclusion="success") | changes
 
@@ -83,7 +83,7 @@ class EvidenceTest(unittest.TestCase):
                 self.assertRegex(row, expected)
                 self.assertNotIn("runs/100/", row)
                 self.assertNotIn("| success |", row)
-        self.timeline = [dict(event="ready_for_review", created_at="2026-11-02T00:00:00Z")]
+        self.timeline = [dict(event="ready_for_review", created_at=self.runs[-1]["created_at"])]
         self.assertIn("[superseded]", self.publish())
 
     def test_corrupt_pages_and_head_movement_fail_closed(self):

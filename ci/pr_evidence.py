@@ -64,7 +64,7 @@ def select_runs(api, pr, ready):
                     "Invalid Actions run identity")
             run = max(matches, key=lambda item: (item["run_number"], item["id"]))
             # Draft CI and E2E can fast-pass while their heavy jobs are skipped.
-            outcome = "superseded" if source in ("ci", "e2e") and run["created_at"] < ready else result(run)
+            outcome = "superseded" if source in ("ci", "e2e") and run["created_at"] <= ready else result(run)
             latest[source] = (run["id"], run["run_attempt"], outcome if run["pull_requests"] else "unbound")
     return latest
 
