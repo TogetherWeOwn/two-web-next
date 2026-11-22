@@ -57,6 +57,7 @@ REQUIRED_SECTIONS = [
 COMMENT = re.compile(r"<!--.*?-->", re.S)
 VERIFICATION_BULLET = re.compile(r"^ *(?:[-+*]|[0-9]{1,9}[.)])(?: +|$)")
 QUOTE_PREFIX = re.compile(r"^(?: {0,3}> ?)+")
+BLOCK_BREAK = re.compile(r"^ {0,3}(?:#{1,6}(?: +|$)|(?:(?:- *){3,}|(?:\* *){3,}|(?:_ *){3,})$)")
 FENCED_BLOCK = re.compile(r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ `~\t]*$|\Z)", re.M | re.S)
 INLINE_CODE = re.compile(r"(?<![\\`])(`+)(?!`).+?(?<!`)\1(?!`)", re.S)
 COMMAND = re.compile(r"(?:[A-Za-z_][\w.-]*(?:/[^\s]+)?|(?:\.{1,2}/|/)[^\s]+)")
@@ -73,7 +74,8 @@ RESULT = re.compile(
 )
 RESULT_PLACEHOLDER = re.compile(
     r"\b(?:(?:not|never)\s+(?:(?:yet|been)\s+)*(?:run|executed|passed|failed|reproduced|confirmed|returned)|"
-    r"(?:expected\s+(?:result|output|to)|(?:will|should|would|must)\s+\w+))\b[^.;\n]*", re.I,
+    r"(?:expected\s+(?:result|output|to)|(?:will|should|would|must)\s+\w+))\b"
+    r"(?:(?!,\s+but\b)[^.;\n])*", re.I,
 )
 # Scan complete link destinations or bare URL tokens, then validate the whole destination.
 EVIDENCE_LINK = re.compile(
@@ -189,7 +191,7 @@ def reference_label(label):
     return " ".join(label.split()).casefold()
 
 
-def is_command(text):
+def is_command(text, explicit):
     command = text.strip()
     if COMMAND_PLACEHOLDER.search(command):
         return False
@@ -197,27 +199,36 @@ def is_command(text):
         args = shlex.split(command)
     except ValueError:
         return False
-    program = next(dropwhile(ASSIGNMENT.match, args[1:] if args[:1] == ["$"] else args), "")
-    return bool(COMMAND.fullmatch(program) and program.casefold() not in RESULT_WORDS)
+    prompted = args[:1] == ["$"]
+    tokens = dropwhile(ASSIGNMENT.match, args[1:] if prompted else args)
+    program = next(tokens, "")
+    return bool(COMMAND.fullmatch(program) and program.casefold() not in RESULT_WORDS
+                and (explicit or prompted or next(tokens, None)))
 
 
 def has_verification_evidence(item, references):
     prose = INLINE_CODE.sub(" CODE ", item)
+    result_parts, start = [], 0
     for link in EVIDENCE_LINK.finditer(prose):
         destination = link["inline"] or (link["bare"] or "").rstrip(".,;:!?")
         if link["label"]:
             destination = references.get(reference_label(link["ref"] or link["label"]), "")
         if not link[0].startswith("!") and ACTIONS_URL.fullmatch(destination.strip("<>")):
             return True
-    result = RESULT_PLACEHOLDER.sub(" ", EVIDENCE_LINK.sub(" ", prose))
+        if destination:
+            result_parts.extend((prose[start:link.start()], " "))
+            start = link.end()
+    result_parts.append(prose[start:])
+    result = RESULT_PLACEHOLDER.sub(" ", "".join(result_parts))
     if not RESULT.search(result):
         return False
     for span in INLINE_CODE.finditer(item):
-        prefix = item[:span.start()]
-        if RESULT.search(prefix) and not COMMAND_INTRO.search(prefix):
+        prefix = re.sub(r"^\[[ xX]\]", "", item[:span.start()].strip()).strip(" *_\t\n")
+        explicit = not prefix or prefix.endswith(":") or COMMAND_INTRO.search(prefix)
+        if not explicit and RESULT.search(prefix):
             continue
         width = len(span[1])
-        if is_command(span[0][width:-width]):
+        if is_command(span[0][width:-width], explicit):
             return True
     return False
 
@@ -227,26 +238,40 @@ def verification_items(content):
     lines, indent = [], None
     for raw in content.expandtabs(4).splitlines():
         line = QUOTE_PREFIX.sub("", raw)
-        bullet = VERIFICATION_BULLET.match(line)
+        structural = BLOCK_BREAK.match(line)
+        bullet = None if structural else VERIFICATION_BULLET.match(line)
         separated = lines and not lines[-1] and line.strip()
-        if lines and (bullet or (separated and (indent is None or len(line) - len(line.lstrip()) < indent))):
-            yield "\n".join(lines)
+        if lines and (structural or bullet or (separated and (indent is None or len(line) - len(line.lstrip()) < indent))):
+            yield indent is not None, "\n".join(lines)
             lines, indent = [], None
         if bullet:
             indent = bullet.end()
             lines.append(line[indent:])
-        elif lines or line.strip():
+        elif not structural and (lines or line.strip()):
             lines.append(line.strip())
     if lines:
-        yield "\n".join(lines)
+        yield indent is not None, "\n".join(lines)
 
 
-def invalid_verification_items(content, body):
-    references = {}
-    for definition in LINK_DEFINITION.finditer(FENCED_BLOCK.sub("", body)):
-        references.setdefault(reference_label(definition[1]), definition[2])
-    items = list(verification_items(LINK_DEFINITION.sub("", FENCED_BLOCK.sub("", content))))
-    return [n for n, item in enumerate(items or [""], 1) if not has_verification_evidence(item, references)]
+def verification_markup(body):
+    references, lines = {}, []
+    at_block_start = True
+    for line in FENCED_BLOCK.sub("\n\n", body).splitlines():
+        definition = LINK_DEFINITION.fullmatch(line) if at_block_start else None
+        if definition:
+            references.setdefault(reference_label(definition[1]), definition[2])
+            line = ""
+        at_block_start = not line.strip() or BLOCK_BREAK.match(line)
+        lines.append(line)
+    return parse_sections("\n".join(lines)).get("verification"), references
+
+
+def invalid_verification_items(content, references):
+    items = list(verification_items(content))
+    bullets = [item for is_bullet, item in items if is_bullet]
+    if bullets:
+        return [n for n, item in enumerate(bullets, 1) if not has_verification_evidence(item, references)]
+    return [] if any(has_verification_evidence(item, references) for _, item in items) else [1]
 
 
 def internal_hits(text, prefixes, slug=False):
@@ -318,24 +343,26 @@ def check_pull_request(env):
         ptype = pr_type(title)
         light = ptype in LIGHT_TYPES
         sections = parse_sections(plain)
+        verification, references = verification_markup(plain)
         for heading, minimum, skip_light in REQUIRED_SECTIONS:
             if skip_light and light:
                 continue
-            content = sections.get(heading.lower())
-            level = verification_mode if heading == "Verification" else mode
+            is_verification = heading == "Verification"
+            content = verification if is_verification else sections.get(heading.lower())
+            level = verification_mode if is_verification else mode
             if content is None:
                 out.append(Finding(level, "PR template", f"Missing section '## {heading}'."))
                 continue
-            if real_items(content) < minimum:
-                need = f"at least {minimum} items" if minimum > 1 else "real content"
-                out.append(Finding(level, "PR template", f"'## {heading}' needs {need}."))
-            elif heading == "Verification":
-                invalid = invalid_verification_items(content, plain)
+            if is_verification:
+                invalid = invalid_verification_items(content, references)
                 if invalid:
                     numbers = ", ".join(map(str, invalid))
                     out.append(Finding(level, "PR template", f"'## Verification' needs a code-formatted command "
                                        f"with its observed result or a GitHub Actions run/job URL in each item "
                                        f"(missing in: {numbers})."))
+            elif real_items(content) < minimum:
+                need = f"at least {minimum} items" if minimum > 1 else "real content"
+                out.append(Finding(level, "PR template", f"'## {heading}' needs {need}."))
 
     if private:
         if not generated and not re.search(r"\bTOG-\d+\b", body):

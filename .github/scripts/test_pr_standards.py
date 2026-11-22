@@ -154,12 +154,17 @@ class Verification(unittest.TestCase):
             "- `git diff --check` returned no output. The full suite was not run locally.",
             "- `pytest` – 24 passed, 1 pending.",
             "- `jest` — 41 passed, 0 failed.",
+            "- Unit tests passed: `npm test`.",
+            "- The browser suite was not run, but `npm test` passed.",
+            "- `npm test` [41 passed, 0 failed].",
             "- `git rev-parse HEAD` returned `0123456789abcdef`.",
             "- `npm test`\n  passed 41 tests.",
             "- `npm test`\n\n  Passed 41 tests.",
             "- `NODE_ENV=production npm run build --prefix web` passed.",
             "- `NODE_ENV=production LABEL='test build' npm run build` passed.",
             "`npm test` passed 41 tests.",
+            f"### Local checks\n\n{self.ITEM}\n\n* * *\n\n- [CI run]({self.RUN})",
+            f"CI ran on GitHub.\n\n{self.ITEM}\n\nOther checks are pending.",
             f"- [CI run]({self.RUN})",
             f"1. [Job]({self.RUN}/job/137370266418?pr=2672#step:3:1)",
             f"> - {self.RUN}/attempts/2.",
@@ -169,6 +174,7 @@ class Verification(unittest.TestCase):
             f"- {self.WRAPPED_PERMALINK}\n{self.ITEM}",
             f"- [CI run][ci  run]\n\n[CI RUN]: {self.RUN}",
             f"- [CI][]\n\n## Links\n\n[ci]: <{self.RUN}> \"CI\"",
+            f"- [CI]\n\n[ci]: {self.RUN}",
         ):
             with self.subTest(item=item):
                 self.assertEqual([], self.findings(item))
@@ -191,6 +197,8 @@ class Verification(unittest.TestCase):
             "- `MODE=ci NODE_ENV=production` passed.",
             "- Manual smoke passed and returned `200 OK`.",
             "- Manual smoke passed and returned `no output`.",
+            "- The `web` build passed.",
+            "- `npm test` [41 passed, 0 failed](https://example.org).",
             "- `npm test` <!-- passed -->",
             "- `passed`",
             "- [placeholder result]",
@@ -222,6 +230,7 @@ class Verification(unittest.TestCase):
             f"![CI]({self.RUN})",
             f"`{self.RUN}`",
             "[CI run][missing]",
+            f"[CI][ref]\n\n## Links\n\nCI logs:\n[ref]: {self.RUN}",
             f"[CI][ref]\n\n[ref]: https://example.org\n[REF]: {self.RUN}",
         ):
             with self.subTest(link=link):
@@ -236,8 +245,7 @@ class Verification(unittest.TestCase):
                 self.assertIn("missing in: 2, 4", findings[0].message)
         repeated = self.findings(f"- CI pending\n\n## Verification\n\n{self.ITEM}")
         self.assertEqual([("error", "PR template")], levels(repeated))
-        for items in (f"{self.ITEM}\n\nCI pending.", f"CI pending.\n{self.ITEM}",
-                      "`npm test` passed.\n\nCI pending.", "- `npm test`\n\nPassed 41 tests."):
+        for items in ("- `npm test`\n\nPassed 41 tests.", "### Local checks\n\nCI pending."):
             with self.subTest(items=items):
                 self.assertEqual([("error", "PR template")], levels(self.findings(items)))
 
