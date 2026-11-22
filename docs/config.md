@@ -153,8 +153,9 @@ arguments; never paste a value.
 Rehearse rotation on staging with a staging-only replacement:
 
 1. Generate the replacement secret on the operator machine.
-2. Install it with `wrangler secret put SESSION_SECRET` on the staging
-   Worker. The command deploys that Worker immediately.
+2. From the repository root, run
+   `wrangler secret put SESSION_SECRET --config web/wrangler.staging.jsonc`.
+   The command deploys the staging Worker immediately.
    Both the old and the replacement satisfy the floor, so `/up` stays
    ready throughout the swap.
 3. Confirm `GET /up` answers 200 with no `config` key before and after.
