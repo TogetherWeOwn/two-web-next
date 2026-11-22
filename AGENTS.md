@@ -64,6 +64,19 @@ A user-visible change to a page, component, CSS, typography, navigation, form, o
 4. Run the existing gates (AI contributors use exact-head GitHub Actions, not local gate commands): `npm run a11y`, `npm run lighthouse`, `npm run lighthouse:quality`, and the visual specs in [docs/visual-regression.md](docs/visual-regression.md). These gates cover the Hono site only: for a `web/` change, the screenshots from step 3 are the visual evidence, and the PR body says the Hono gates did not exercise the Kit route. The visual specs compare reliably only in CI (`browser-smoke` on the pinned runner); accept an intentional diff only through the failure artifact and `node ci/visual-accept.mjs`. Meet each threshold by improving the UI. Loosening any threshold (lowering a score floor, raising a time or pixel budget, adding `skipAudits`), masking more of a page, or regenerating baselines wholesale needs its own PR with a justification.
 5. Put the evidence in the PR body: the contract, reference links, before/after screenshots at both widths, the commands you ran, and each intentional baseline change. Report only what you opened or ran.
 
+## Modern web platform guidance
+
+Before writing or changing browser-facing code in the SvelteKit app under `web/` (`.svelte` components, CSS and Tailwind, HTML, client-side TypeScript), consult Modern Web Guidance. It covers current HTML, CSS and DOM APIs, accessibility, forms and performance. Skip it for server-only code (`+page.server.ts` and `+server.ts` data handling, Drizzle, Workers jobs) and for the Hono site under `src/`, which the Kit app is replacing.
+
+1. If your agent harness provides the `modern-web-guidance` skill, use it. Otherwise use Node 22 or later.
+   Run `DISABLE_TELEMETRY=1 npm_config_ignore_scripts=true npx -y modern-web-guidance@latest search "<2-5 word capability>"`, then
+   `DISABLE_TELEMETRY=1 npm_config_ignore_scripts=true npx -y modern-web-guidance@latest retrieve "<id>"`.
+   Search one capability at a time (for example `"light dismiss dialog"`), without framework or app names.
+2. Apply only the retrieved guidance that fits the task. Keep existing behavior, copy, design tokens and
+   the stack the route already uses; record any guide you followed in the PR body.
+3. The guidance never overrides [CONSTRAINTS.md](CONSTRAINTS.md), this file, or a project decision. If they
+   conflict, follow the project and note the conflict in the PR.
+
 ## Definition of done
 
 - Behavior matches the request.
