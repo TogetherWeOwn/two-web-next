@@ -65,22 +65,6 @@ describe.each(Object.entries(implementations))("%s body cap contract", (_name, r
     },
   );
 
-  it("counts bytes across a split UTF-8 character and refuses one more byte", async () => {
-    const atLimit = `${"x".repeat(limits.action - 4)}😀`;
-    const encoded = new TextEncoder().encode(atLimit);
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(encoded.subarray(0, limits.action - 2));
-        controller.enqueue(encoded.subarray(limits.action - 2));
-        controller.close();
-      },
-    });
-    const accepted = await run("action", upload(stream));
-    expect(accepted.status).toBe(200);
-    expect(await accepted.text()).toBe(atLimit);
-    expect((await run("action", upload(`${atLimit}x`))).status).toBe(413);
-  });
-
   it.each(["4097", "1"])("refuses without awaiting cancellation (length %s)", async (length) => {
     const cancel = vi.fn(() => new Promise<void>(() => {}));
     const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {

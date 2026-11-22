@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { limitRequestBody } from "../src/http/body-limit";
 import {
   exceedsByteLimit,
   exceedsCodePointLimit,
@@ -39,5 +40,27 @@ describe("inclusive length limits", () => {
     expect(exceedsByteLimit(Number.NaN, 6)).toBe(false);
     expect(exceedsUtf8ByteLimit("é😀", Number.NaN)).toBe(false);
     expect(fitsUtf8ByteLimit("é😀", Number.NaN)).toBe(false);
+  });
+});
+
+it("caps a Fetch request body when a multibyte character spans two chunks", async () => {
+  const actionCap = 4096;
+  const atLimit = `${"x".repeat(actionCap - 4)}😀`;
+  const bytes = new TextEncoder().encode(atLimit);
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes.subarray(0, actionCap - 2));
+      controller.enqueue(bytes.subarray(actionCap - 2));
+      controller.close();
+    },
+  });
+  const upload = (body: RequestInit["body"]) =>
+    new Request("https://example.test/", { method: "POST", body, duplex: "half" } as RequestInit);
+  const accepted = await limitRequestBody(upload(stream), "action");
+  expect(accepted.ok).toBe(true);
+  if (accepted.ok) expect(await accepted.request.text()).toBe(atLimit);
+  expect(await limitRequestBody(upload(`${atLimit}x`), "action")).toEqual({
+    ok: false,
+    status: 413,
   });
 });
