@@ -129,7 +129,10 @@ export async function prepareDesktopAudit(page, step = () => {}) {
     const verdict = disable(false).then(audit);
     // Keep the override attached until context close, including after the audit.
     return verdict
-      .then(() => step("AUDIT_RESTORE"))
+      .then((result) => {
+        step("AUDIT_RESTORE");
+        return result;
+      })
       .finally(() => disable(true))
       .finally(() => verdict);
   };
@@ -196,9 +199,12 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
       step("LOAD");
       await guard(page.waitForLoadState("load").catch(offline));
     }
-    step("ROUTES_PENDING");
+    if (pending.size) step("ROUTES_PENDING");
     await guard(withDeadline(settle));
-    if (navigation.status === "rejected" && !(reportOnly && unavailable)) throw navigation.reason;
+    if (navigation.status === "rejected" && !(reportOnly && unavailable)) {
+      step("NAVIGATE");
+      throw navigation.reason;
+    }
     const valid = response?.url() === url && kitDocument(response.status(), response.headers());
     if (!(response ? valid : unavailable)) throw new AssertionFailure("visual provenance drift");
     if (unavailable && !reportOnly) throw unavailable;

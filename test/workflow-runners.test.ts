@@ -29,6 +29,7 @@ const hostedJson = JSON.stringify([hosted]);
 const pinnedHostedJobs = new Map([
   ["e2e.yml", "browser-smoke"],
   ["kit-activity-log-diagnostic.yml", "browser"],
+  ["kit-browser-fixture.yml", "activity-log-capture"],
   ["kit-home-evidence.yml", "capture"],
   ["kit-event-evidence.yml", "capture"],
   ["kit-event-newline-proof.yml", "capture"],

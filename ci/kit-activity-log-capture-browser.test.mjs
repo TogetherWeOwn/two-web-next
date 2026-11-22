@@ -6,9 +6,16 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { chromium, errors } from "@playwright/test";
 import { requireGithubRunner } from "../e2e/ci-only.mjs";
+import { WCAG_AA_TAGS } from "./a11y-policy.mjs";
 import { routeA11y } from "./kit-activity-log-metrics.mjs";
 import { validatePngDirectory, viewportPngs } from "./kit-activity-log-png.mjs";
-import { collectVisuals, expectedContent, origin, path } from "./kit-activity-log-visual.mjs";
+import {
+  collectVisuals,
+  expectedContent,
+  origin,
+  path,
+  withDeadline,
+} from "./kit-activity-log-visual.mjs";
 
 requireGithubRunner();
 
@@ -19,7 +26,9 @@ function captureDocument(empty) {
   <style>
     [data-testid=activity-log-table-scroll] { overflow-x: auto; }
     [data-testid=activity-log-table-scroll]:focus-visible { outline: 2px solid; }
-    table { min-inline-size: var(--table-width, 42rem); }
+    table { min-inline-size: 42rem; }
+    a { display: inline-block; }
+    a, button, input { min-block-size: 24px; min-inline-size: 24px; }
   </style>
   <header><a href="#main">Skip to content</a> <a href="/">TWO admin</a>
     <nav aria-label="Admin"><a href="/events">Events</a> · <a href="/featured">Featured</a> ·
@@ -75,12 +84,34 @@ test("guarded capture completes five synthetic views and locates a keyboard-scro
       last = step;
     },
     audit: async (page, name, step) => {
-      assert.equal(await routeA11y(page, step), "a11y: PASS violations=0 incomplete=0");
+      const result = await routeA11y(page, step);
+      const pass = "a11y: PASS violations=0 incomplete=0";
+      if (result !== pass) {
+        const ruleIds = await withDeadline(() =>
+          page.evaluate(async (tags) => {
+            const { violations, incomplete } = await globalThis.axe.run(document, {
+              runOnly: { type: "tag", values: tags },
+            });
+            return [...violations, ...incomplete].slice(0, 8).map(({ id }) => id);
+          }, WCAG_AA_TAGS),
+        );
+        assert.equal(result, pass, `${name}: ${ruleIds.join(", ")}`);
+      }
       audits.push(name);
     },
     measure: async (page) => {
+      const [width, height] = viewportPngs["keyboard-mobile.png"];
+      await page.setViewportSize({ width, height });
       // Arm the legacy predicate before the key so its first sample is known to be false.
       for (let n = 0; n < 11; n++) await page.keyboard.press("Tab");
+      const scroller = page.getByTestId("activity-log-table-scroll");
+      assert.equal(
+        await scroller.evaluate(
+          (el) =>
+            el === document.activeElement && el.scrollLeft === 0 && el.scrollWidth > el.clientWidth,
+        ),
+        true,
+      );
       const legacy = assert.rejects(
         page.waitForFunction(
           () => {
@@ -94,9 +125,7 @@ test("guarded capture completes five synthetic views and locates a keyboard-scro
       );
       await page.locator("html").waitForFunction((el) => el.dataset.sampled === "true");
       await page.keyboard.press("ArrowRight");
-      await page
-        .getByTestId("activity-log-table-scroll")
-        .waitForFunction((el) => el === document.activeElement && el.scrollLeft > 0);
+      await scroller.waitForFunction((el) => el === document.activeElement && el.scrollLeft > 0);
       await legacy;
       return "legacy wait timed out after native scrolling";
     },

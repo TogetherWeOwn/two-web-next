@@ -33,7 +33,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
   const lapse = clock(t);
   const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
   const modes =
-    "dom load asset-dom asset-body late late-method capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled audit-navigation audit-frame-navigation";
+    "dom load asset-dom asset-body late late-method capture-timeout capture-navigation capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled audit-navigation audit-frame-navigation";
   for (const mode of modes.split(" ")) {
     const hono = mode === "hono";
     const expired = mode === "capture-budget";
@@ -60,6 +60,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     const lateFulfill = t.mock.fn(noop);
     const assetBody = t.mock.fn(stall);
     const stages = [];
+    let lastOperation;
     const request = (href, nav, fetch, abort = noop, fulfill = noop, method = "GET") => {
       const req = { url: () => href, isNavigationRequest: () => nav, method: () => method };
       observe?.(req);
@@ -119,6 +120,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
           void request(href, true, stall, abortNavigation);
           return navigation.promise;
         }
+        if (mode === "capture-navigation") throw new TimeoutError();
         if (stalled) {
           void request(href, true, async () => response);
           throw navError;
@@ -177,6 +179,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     const mint = () => ({ value: consumed.size });
     const mark = (stage, _viewport, operation) => {
       stages.push(stage);
+      lastOperation = operation;
       if (operation === "CONTEXT_CLOSE" && closed === 5 && mode === "pending") lateRequest();
     };
     const drift = mode.endsWith("dom");
@@ -201,6 +204,9 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       await assert.rejects(report, TimeoutError);
       await assert.rejects(navigation.promise, (error) => error === navError);
       assert.equal(abortNavigation.mock.callCount(), 1);
+    } else if (mode === "capture-navigation") {
+      await assert.rejects(report, TimeoutError);
+      assert.equal(lastOperation, "NAVIGATE");
     } else if (early) await assert.rejects(report, (error) => error === navError);
     else assert.equal(await report, null);
     assert.deepEqual([lateFetch.mock.callCount(), lateFulfill.mock.callCount()], [0, 0], mode);
