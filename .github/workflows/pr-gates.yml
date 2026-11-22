@@ -53,6 +53,8 @@ env:
   # Set at merge time to (newest open PR number + 1). Strict title/body checks always fail;
   # the remaining title/body checks stay on PR_STANDARDS_MODE.
   HEAD_REF_ERROR_FROM_PR: "627"
+  # Keep already-open PRs on their existing metadata contract.
+  RISK_TIER_ERROR_FROM_PR: "2671"
 
 jobs:
   # Convention for every change that lands on main:
@@ -260,6 +262,23 @@ jobs:
           printf 'head_ref=%s\n' "$head_ref" >> "$GITHUB_OUTPUT"
           printf 'base_sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
           printf 'base_ref=%s\n' "$base_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Check declared risk tier
+        if: github.event_name != 'merge_group'
+        env:
+          PR_METADATA_PATH: ${{ steps.pr.outputs.metadata }}
+          FLOOR_WAIVER_BASE_SHA: ${{ steps.head-ref.outputs.base_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '0' }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" != push ] && [ "$PR_NUMBER" -lt "$RISK_TIER_ERROR_FROM_PR" ]; then
+            echo 'Risk tier is advisory for PRs opened before the enforcement cutoff.'
+            exit 0
+          fi
+          python3 -m unittest discover -s ci -p 'test_pr_risk_tier.py'
+          if [ "$GITHUB_EVENT_NAME" != push ]; then
+            python3 ci/pr_risk_tier.py
+          fi
 
       - name: Check title, body and commits
         if: github.event_name != 'merge_group'
