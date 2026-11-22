@@ -68,9 +68,9 @@ A user-visible change to a page, component, CSS, typography, navigation, form, o
 
 Before writing or changing browser-facing code in the SvelteKit app under `web/` (`.svelte` components, CSS and Tailwind, HTML, client-side TypeScript), consult Modern Web Guidance. It covers current HTML, CSS and DOM APIs, accessibility, forms and performance. Skip it for server-only code (`+page.server.ts` and `+server.ts` data handling, Drizzle, Workers jobs) and for the Hono site under `src/`, which the Kit app is replacing.
 
-1. If your agent harness provides the `modern-web-guidance` skill, use it. Otherwise run the CLI directly (Node 22+):
-   `DISABLE_TELEMETRY=1 npx -y modern-web-guidance@latest search "<2-5 word capability>"`, then
-   `DISABLE_TELEMETRY=1 npx -y modern-web-guidance@latest retrieve "<id>"`.
+1. If your agent harness provides the `modern-web-guidance` skill, use it. Otherwise use Node 22 or later.
+   Run `DISABLE_TELEMETRY=1 npm_config_ignore_scripts=true npx -y modern-web-guidance@latest search "<2-5 word capability>"`, then
+   `DISABLE_TELEMETRY=1 npm_config_ignore_scripts=true npx -y modern-web-guidance@latest retrieve "<id>"`.
    Search one capability at a time (for example `"light dismiss dialog"`), without framework or app names.
 2. Apply only the retrieved guidance that fits the task. Keep existing behavior, copy, design tokens and
    the stack the route already uses; record any guide you followed in the PR body.
