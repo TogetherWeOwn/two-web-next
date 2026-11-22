@@ -117,9 +117,8 @@ test("built Ember shell preserves its landmarks and account states without JavaS
           await assertLockup(page, compact, 38);
           await expect(header).toHaveCSS("min-height", compact ? "60px" : "68px");
           await expect(header).toHaveCSS("position", "sticky");
-          await expect(header.getByRole("link", { name: "Join", exact: true })).toHaveCount(
-            Number(state === "guest"),
-          );
+          const join = header.getByRole("link", { name: "Join", exact: true });
+          await expect(join).toHaveCount(Number(state === "guest"));
           await expect(header.getByText(/online/i)).toHaveCount(0);
           if (!compact) {
             const primary = header.getByRole("navigation", { name: "Primary" });
@@ -177,9 +176,7 @@ test("built Ember shell preserves its landmarks and account states without JavaS
             await expect(account).toHaveCount(Number(state !== "hidden"));
             await expect(link("Profile")).toHaveCount(Number(state === "member"));
             await expect(link("Sign in with Discord")).toHaveCount(Number(state === "guest"));
-            await expect(sheet.getByRole("link", { name: "Join", exact: true })).toHaveCount(
-              Number(state === "guest"),
-            );
+            await expect(join.and(sheet.locator("a"))).toHaveCount(Number(state === "guest"));
             await expect(link("Ladder")).toHaveCount(Number(state === "member"));
             await expect(page.locator("[inert]")).toHaveCount(0);
             if (state !== "hidden") await expect(account).toHaveCSS("justify-self", "stretch");
