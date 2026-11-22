@@ -65,7 +65,14 @@ test("guarded capture completes five synthetic views and locates a keyboard-scro
       "content-type": "text/html; charset=utf-8",
     });
     const body = req.url === path ? populated : empty;
-    res.end(clip ? body.replace("overflow: auto", "overflow: clip") : body);
+    res.end(
+      clip
+        ? body.replace(
+            "</style>",
+            "@media (max-width: 390px) { [data-testid=activity-log-table-scroll] { overflow: clip; } }</style>",
+          )
+        : body,
+    );
   });
   t.after(() => new Promise((resolve) => server.close(resolve)));
   await new Promise((resolve, reject) =>
