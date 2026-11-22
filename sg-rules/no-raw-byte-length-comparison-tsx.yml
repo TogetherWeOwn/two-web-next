@@ -1,0 +1,43 @@
+# Keep the TypeScript twin in sync. Tooling and generated output are outside this rule.
+id: no-raw-byte-length-comparison-tsx
+language: tsx
+severity: error
+message: Use the shared byte-limit helpers in src/http/length-limit.ts.
+files:
+  - "{src,web/src,assets}/**/*.{tsx,jsx}"
+rule:
+  any:
+    - matches: byte-length-access
+    - kind: call_expression
+      has:
+        field: function
+        matches: byte-length-access
+  inside:
+    matches: comparison
+    stopBy:
+      not:
+        any:
+          - kind: parenthesized_expression
+          - kind: non_null_expression
+          - kind: as_expression
+          - kind: satisfies_expression
+          - kind: unary_expression
+          - kind: binary_expression
+            not:
+              matches: comparison
+utils:
+  byte-length-access:
+    any:
+      - kind: member_expression
+        has:
+          field: property
+          regex: "^byteLength$"
+      - kind: subscript_expression
+        has:
+          field: index
+          regex: '^(?:"byteLength"|\x27byteLength\x27|`byteLength`)$'
+  comparison:
+    kind: binary_expression
+    has:
+      field: operator
+      regex: '^(?:<=?|>=?|===?|!==?)$'

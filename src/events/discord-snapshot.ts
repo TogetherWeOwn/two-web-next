@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { exceedsUtf8ByteLimit } from "../http/length-limit";
 import type { DiscordTransient } from "../islands/contracts";
 
 export const DISCORD_CACHE_FRESH_MS = 60_000;
@@ -74,9 +75,10 @@ export function decodeDiscordSnapshot(payload: unknown): DiscordTransient[] {
     !Array.isArray(payload) ||
     payload.length > DISCORD_SNAPSHOT_MAX_ROWS ||
     // jsonb::text adds a space after each colon/comma in these flat seven-field rows.
-    new TextEncoder().encode(JSON.stringify(payload)).byteLength +
-      Math.max(0, fields.length * 2 * payload.length - 1) >
-      DISCORD_SNAPSHOT_MAX_BYTES
+    exceedsUtf8ByteLimit(
+      JSON.stringify(payload),
+      DISCORD_SNAPSHOT_MAX_BYTES - Math.max(0, fields.length * 2 * payload.length - 1),
+    )
   )
     throw new DiscordSnapshotError();
   return payload.map((raw: unknown) => {

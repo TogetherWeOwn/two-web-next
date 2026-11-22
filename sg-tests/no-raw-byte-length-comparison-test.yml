@@ -1,0 +1,20 @@
+id: no-raw-byte-length-comparison
+valid:
+  - if (exceedsByteLimit(chunk.byteLength, remaining)) cancel();
+  - const fits = fitsUtf8ByteLimit(text, max);
+  - if (exceedsByteLimit(chunk.byteLength, max) === true) cancel();
+  - size += chunk.byteLength;
+  - const bytes = Buffer.byteLength(text, "utf8");
+  - 'const payload = bytes.byteLength ? bytes : null;'
+  - if (label === "byteLength") report();
+  - if (rows.length > MAX_ROWS) refuse();
+invalid:
+  - if (chunk.byteLength > remaining) cancel();
+  - if (max < size + chunk.byteLength) cancel();
+  - if ((chunk.byteLength + offset) <= max) accept();
+  - if (nextSize > bytes.byteLength) grow();
+  - if (Buffer.byteLength(text, "utf8") >= max) cancel();
+  - if (new TextEncoder().encode(text).byteLength <= max) accept();
+  - if (chunk?.byteLength !== expected) refuse();
+  - if ((chunk["byteLength"] as number) >= max) refuse();
+  - if (chunk.byteLength === 0) refuse();

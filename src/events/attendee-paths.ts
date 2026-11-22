@@ -9,6 +9,8 @@
 // Framework-free so the refusal core and Svelte/Kit renderers can share URL
 // builders without pulling in the reads layer or server-side input parsing.
 
+import { fitsUtf8ByteLimit } from "../http/length-limit";
+
 export function attendeePageHref(eventKey: string, page: number): string {
   return page <= 1 ? `/e/${eventKey}` : `/e/${eventKey}?attendees=${page}`;
 }
@@ -51,11 +53,10 @@ export function authReturnHref(
   attendeePage: number,
   maxBytes: number,
 ): string {
-  const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
   const withArchive = archiveEventHref(eventKey, archive, attendeePage);
-  if (fits(withArchive)) return withArchive;
+  if (fitsUtf8ByteLimit(withArchive, maxBytes)) return withArchive;
   const pageOnly = archiveEventHref(eventKey, null, attendeePage);
-  return fits(pageOnly) ? pageOnly : attendeePageHref(eventKey, 1);
+  return fitsUtf8ByteLimit(pageOnly, maxBytes) ? pageOnly : attendeePageHref(eventKey, 1);
 }
 
 export function rsvpPageReturnPath(eventKey: string, page: number): string {

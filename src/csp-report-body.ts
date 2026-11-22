@@ -1,3 +1,5 @@
+import { exceedsByteLimit } from "./http/length-limit";
+
 /** Largest report body accepted, in bytes. Bigger bodies are dropped. */
 export const MAX_CSP_REPORT_BYTES = 8192;
 
@@ -19,7 +21,8 @@ export async function readCappedBody(
   const declared = req.headers.get("content-length");
   if (declared !== null) {
     const n = Number.parseInt(declared, 10);
-    if (Number.isFinite(n) && n > cap) return { text: "", truncated: true, bytes: n };
+    if (Number.isFinite(n) && exceedsByteLimit(n, cap))
+      return { text: "", truncated: true, bytes: n };
   }
   if (!req.body) return { text: "", truncated: false, bytes: 0 };
   const reader = req.body.getReader();
@@ -39,7 +42,7 @@ export async function readCappedBody(
         break;
       }
       bytes += value.byteLength;
-      if (bytes > cap) return { text: "", truncated: true, bytes };
+      if (exceedsByteLimit(bytes, cap)) return { text: "", truncated: true, bytes };
       chunks.push(value);
     }
     const merged = new Uint8Array(bytes);

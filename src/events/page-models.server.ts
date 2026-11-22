@@ -1,5 +1,6 @@
 // Framework-neutral, server-only page models for public event pages.
 import type { Db } from "../db/index";
+import { exceedsCodePointLimit } from "../http/length-limit";
 import type { CalendarPhaseRecorder } from "../request-log";
 import {
   calendarEmptyState,
@@ -60,7 +61,7 @@ export function resolveCalendarInput(input: {
   month?: string | null;
 }): CalendarPageInput {
   const rawQuery = input.q ?? "";
-  const queryTooLong = [...rawQuery].length > MAX_QUERY_LENGTH;
+  const queryTooLong = exceedsCodePointLimit(rawQuery, MAX_QUERY_LENGTH);
   // The screen and SQL must agree that a NUL-only query is not a search.
   const q = rawQuery.replaceAll(String.fromCharCode(0), "");
   const searching = !queryTooLong && matchQuery(q) !== null;

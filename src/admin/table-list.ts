@@ -1,5 +1,7 @@
 // Query state for the smaller admin tables. Raw sort keys never reach SQL.
 
+import { exceedsCodeUnitLimit } from "../http/length-limit";
+
 export type ListParams = Record<string, string | undefined>;
 export type SortOrder = "asc" | "desc";
 export {
@@ -44,7 +46,8 @@ const withoutNul = (raw: string | undefined): string =>
 // normalized value (NULs stripped, then trimmed); overlong values fall back
 // to absent like other invalid values, never truncated to a new search term.
 const FREE_TEXT_MAX_LENGTH = 128;
-const boundFreeText = (value: string): string => (value.length > FREE_TEXT_MAX_LENGTH ? "" : value);
+const boundFreeText = (value: string): string =>
+  exceedsCodeUnitLimit(value, FREE_TEXT_MAX_LENGTH) ? "" : value;
 
 /** Sort-header accessible name that preserves the UTC designator (§4c). */
 export function sortHeaderAriaLabel(label: string, next: SortOrder): string {

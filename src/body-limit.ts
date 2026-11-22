@@ -3,6 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import type { Env } from "./env";
 import { badRequest, payloadTooLarge } from "./errors";
 import { BODY_LIMIT_BYTES, type BodyClass } from "./http/body-limit";
+import { exceedsByteLimit } from "./http/length-limit";
 
 export { BODY_LIMIT_BYTES, type BodyClass };
 
@@ -12,7 +13,7 @@ export function requestBodyLimit(kind: BodyClass): MiddlewareHandler<{ Bindings:
   const maxSize = BODY_LIMIT_BYTES[kind];
   const middleware: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
     const length = c.req.header("content-length");
-    if (length !== undefined && Number(length) > maxSize) {
+    if (length !== undefined && exceedsByteLimit(Number(length), maxSize)) {
       // Request-owned cancellation must never hold the already-decided
       // refusal. Fire-and-forget: the attached catch still swallows a late
       // rejection without waiting for it to settle.

@@ -1,5 +1,7 @@
 // One budget per Discord auth/join/role request, including response-body completion.
 // A callback can make several sequential requests; this is not a journey-wide deadline.
+import { exceedsByteLimit } from "./http/length-limit";
+
 export const DISCORD_HTTP_BUDGET_MS = 5_000;
 
 /** Maximum buffered response body for Discord HTTP calls (auth/join/roles/widget).
@@ -57,7 +59,7 @@ export async function discordFetch(
         // hostile provider bodies. Overflow is classified like an unreadable
         // body: the real status/headers are preserved and the body is empty,
         // so downstream parsing reports a provider rejection.
-        if (size > DISCORD_HTTP_MAX_RESPONSE_BYTES) {
+        if (exceedsByteLimit(size, DISCORD_HTTP_MAX_RESPONSE_BYTES)) {
           void reader.cancel().catch(() => {});
           return new Response("", {
             status: res.status,

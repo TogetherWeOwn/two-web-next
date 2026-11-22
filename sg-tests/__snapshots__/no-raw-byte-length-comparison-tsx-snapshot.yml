@@ -1,0 +1,56 @@
+id: no-raw-byte-length-comparison-tsx
+snapshots:
+  const item = <Row fits={bytes.byteLength <= max} />;:
+    labels:
+    - source: bytes.byteLength
+      style: primary
+      start: 24
+      end: 40
+    - source: byteLength
+      style: secondary
+      start: 30
+      end: 40
+    - source: <=
+      style: secondary
+      start: 41
+      end: 43
+    - source: bytes.byteLength <= max
+      style: secondary
+      start: 24
+      end: 47
+  const item = <Row fits={max >= (offset + bytes.byteLength)} />;:
+    labels:
+    - source: bytes.byteLength
+      style: primary
+      start: 41
+      end: 57
+    - source: byteLength
+      style: secondary
+      start: 47
+      end: 57
+    - source: '>='
+      style: secondary
+      start: 28
+      end: 30
+    - source: max >= (offset + bytes.byteLength)
+      style: secondary
+      start: 24
+      end: 58
+  const item = <Row fits={new TextEncoder().encode(text).byteLength <= max} />;:
+    labels:
+    - source: new TextEncoder().encode(text).byteLength
+      style: primary
+      start: 24
+      end: 65
+    - source: byteLength
+      style: secondary
+      start: 55
+      end: 65
+    - source: <=
+      style: secondary
+      start: 66
+      end: 68
+    - source: new TextEncoder().encode(text).byteLength <= max
+      style: secondary
+      start: 24
+      end: 72
