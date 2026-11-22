@@ -86,6 +86,20 @@
       "evidence": "superseded"
     },
     {
+      "name": "automatic retarget after the run",
+      "timeline": [
+        { "event": "automatic_base_change_succeeded", "created_at": "2026-11-02T00:00:00Z" }
+      ],
+      "evidence": "superseded"
+    },
+    {
+      "name": "failed automatic retarget in the same second",
+      "timeline": [
+        { "event": "automatic_base_change_failed", "created_at": "2026-11-01T00:00:00Z" }
+      ],
+      "evidence": "unproven"
+    },
+    {
       "name": "retarget in the same second",
       "timeline": [{ "event": "base_ref_changed", "created_at": "2026-11-01T00:00:00Z" }],
       "evidence": "unproven"

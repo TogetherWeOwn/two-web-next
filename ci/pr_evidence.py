@@ -51,9 +51,9 @@ def pages(api, path, key=None):
 def select_runs(api, pr):
     head, base = pr["head"], pr["base"]
     timeline = pages(api, f'/issues/{pr["number"]}/timeline')
-    ready, retarget = (max((entry["created_at"] for entry in timeline if entry["event"] == kind), default="")
-                       for kind in ("ready_for_review", "base_ref_changed"))
-    # GitHub's run associations can change after retargeting or closing another PR.
+    base_events = ("base_ref_changed", "automatic_base_change_succeeded", "automatic_base_change_failed")
+    ready, retarget = (max((entry["created_at"] for entry in timeline if entry["event"] in kinds), default="")
+                       for kinds in (("ready_for_review",), base_events))
     branch_pulls = pages(api, "/pulls?" + urlencode({"state": "all", "head": head["label"]}))
     history = [pull for pull in branch_pulls if pull["head"]["ref"] == head["ref"]
                and (pull["head"]["repo"] or {}).get("id") == head["repo"]["id"]]
