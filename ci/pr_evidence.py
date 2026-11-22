@@ -12,6 +12,7 @@ SOURCES = {
     "pr-size": ("pr-size-gate / gate",),
     "pr-standards-required": ("pr-standards",),
 }
+READY_JOBS = {"ci": "static-check", "e2e": "browser-smoke"}
 MARKER = "<!-- pr-evidence:v1 -->\n"
 BOT = {"login": "github-actions[bot]", "id": 41898282}
 SHA = re.compile("[0-9a-f]{40}")
@@ -63,9 +64,9 @@ def select_runs(api, pr, ready):
             require(all(positive(run[k]) for run in matches for k in ("id", "run_number", "run_attempt")),
                     "Invalid Actions run identity")
             run = max(matches, key=lambda item: (item["run_number"], item["id"]))
-            # Draft CI and E2E can fast-pass while their heavy jobs are skipped.
-            outcome = "superseded" if source in ("ci", "e2e") and run["created_at"] <= ready else result(run)
-            latest[source] = (run["id"], run["run_attempt"], outcome if run["pull_requests"] else "unbound")
+            outcome = "superseded" if source in READY_JOBS and run["created_at"] < ready else result(run)
+            witness = READY_JOBS.get(source) if run["created_at"] == ready else None
+            latest[source] = (run["id"], run["run_attempt"], outcome if run["pull_requests"] else "unbound", witness)
     return latest
 
 
@@ -75,7 +76,7 @@ def collect(api, pr, web):
     selected = select_runs(api, pr, ready)
     rows = ["| Gate | Run attempt | Job | Evidence |", "| --- | --- | --- | --- |"]
     for source, names in SOURCES.items():
-        run_id, attempt, outcome = selected.get(source, (None, None, "missing"))
+        run_id, attempt, outcome, witness = selected.get(source, (None, None, "missing", None))
         run_path = f"/actions/runs/{run_id}"
         attempt_path = f"{run_path}/attempts/{attempt}"
         run_link = f"[{outcome}]({web}{attempt_path})" if run_id else outcome
@@ -83,14 +84,15 @@ def collect(api, pr, web):
         require(all(positive(job["id"]) and job["head_sha"] == pr["head"]["sha"]
                     and job["run_id"] == run_id and job["run_attempt"] == attempt for job in jobs),
                 "Job differs from selected head or attempt")
+        proven = witness is None or any(job["name"] == witness and result(job) == "success" for job in jobs)
         for name in names:
             matching = [job for job in jobs if job["name"] == name]
             job = matching[0] if len(matching) == 1 else None
             status = result(job) if job else "ambiguous" if matching else "missing"
             job_link = f'[{status}]({web}{run_path}/job/{job["id"]})' if job else status
             evidence = outcome if outcome != "success" else status
-            if evidence == "success" and pr["draft"]:
-                evidence = "draft"
+            if evidence == "success" and (pr["draft"] or not proven):
+                evidence = "draft" if pr["draft"] else "unproven"
             rows.append(f"| {name} | {run_link} | {job_link} | {evidence} |")
     require(selected == select_runs(api, pr, ready), "Actions runs changed during collection")
     return "\n".join(rows)
@@ -122,7 +124,7 @@ def publish(api, repository, number):
     sha = pr["head"]["sha"]
     require(SHA.fullmatch(sha) and positive(pr["head"]["repo"]["id"]), "Invalid PR head")
     owned = [comment for comment in pages(api, comments) if comment["body"].startswith(MARKER)
-             and all(comment["user"].get(k) == v for k, v in BOT.items())]
+             and all((comment["user"] or {}).get(k) == v for k, v in BOT.items())]
     require(len(owned) <= 1 and all(positive(comment["id"]) for comment in owned), "Invalid evidence comment")
     prior = owned[0] if owned else None
 
@@ -160,8 +162,7 @@ def github_api(repository):
             args += ["--paginate", "--slurp"]
         if body is not None:
             args += ["--input", "-"]
-        data = subprocess.run(args, input=json.dumps(body), text=True, capture_output=True, timeout=20)
-        require(data.returncode == 0, "GitHub metadata request failed")
+        data = subprocess.run(args, input=json.dumps(body), text=True, capture_output=True, timeout=20, check=True)
         return json.loads(data.stdout)
 
     return request
@@ -172,9 +173,7 @@ if __name__ == "__main__":
         repo = os.environ["GITHUB_REPOSITORY"]
         api = github_api(repo)
         if os.getenv("PR_NUMBER"):
-            number = int(os.environ["PR_NUMBER"])
-            require(positive(number), "Invalid PR number")
-            publish(api, repo, number)
+            publish(api, repo, int(os.environ["PR_NUMBER"]))
         else:
             numbers = route(api, json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text()))
             Path(os.environ["GITHUB_OUTPUT"]).write_text(f"numbers={json.dumps(numbers)}\n")

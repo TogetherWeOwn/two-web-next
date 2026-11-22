@@ -2,11 +2,9 @@ name: pr-evidence-test
 on:
   pull_request:
   merge_group:
-    types: [checks_requested]
   push:
     branches: [main]
-permissions:
-  contents: read
+permissions: { contents: read }
 
 jobs:
   pr-evidence-fixtures:

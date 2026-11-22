@@ -158,7 +158,8 @@ class PrConventionsTests(unittest.TestCase):
 
     def test_evidence_link_does_not_count_as_description(self):
         link = "[Exact-head Actions evidence](https://github.com/TogetherWeOwn/two-web-next/pull/7#issuecomment-8)"
-        self.assertIn("::error title=PR body::", self.run_checker(1, BODY="- " + link))
+        for prefix in ("", "- "):
+            self.assertIn("::error title=PR body::", self.run_checker(1, BODY=prefix + link))
         self.run_checker(BODY=BODY + "\n" + link)
 
     def test_dependency_bot_exemptions(self):

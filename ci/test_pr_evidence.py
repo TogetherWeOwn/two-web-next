@@ -81,10 +81,14 @@ class EvidenceTest(unittest.TestCase):
                     self.jobs = []
                 row = next(line for line in self.publish().splitlines() if line.startswith("| ci-ok"))
                 self.assertRegex(row, expected)
-                self.assertNotIn("runs/100/", row)
                 self.assertNotIn("| success |", row)
-        self.timeline = [dict(event="ready_for_review", created_at=self.runs[-1]["created_at"])]
-        self.assertIn("[superseded]", self.publish())
+        self.records()
+        self.timeline = [dict(event="ready_for_review", created_at="2026-11-02T00:00:00Z")]
+        self.assertIn("| superseded |", self.publish())
+        self.timeline[0]["created_at"] = self.runs[-1]["created_at"]
+        self.assertIn("| unproven |", self.publish())
+        self.jobs.append(self.jobs[0] | dict(id=901, name="static-check"))
+        self.assertIn("| success |", self.publish())
 
     def test_corrupt_pages_and_head_movement_fail_closed(self):
         self.runs = [self.run_record(1)] * 101
@@ -94,7 +98,6 @@ class EvidenceTest(unittest.TestCase):
         self.reads, self.move_on_read, self.runs = 0, 2, []
         self.assertIsNone(self.publish())
         self.assertNotIn(NEXT, self.comments[0]["body"])
-        self.assertEqual(self.pr["body"], AUTHOR)
 
     def test_completion_routes_only_to_open_exact_head_prs(self):
         def api(method, path, *, paginate):

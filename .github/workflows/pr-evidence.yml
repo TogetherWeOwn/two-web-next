@@ -51,8 +51,7 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
-      - name: Publish current PR evidence
-        env:
+      - env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ matrix.number }}
         run: python3 ci/pr_evidence.py
