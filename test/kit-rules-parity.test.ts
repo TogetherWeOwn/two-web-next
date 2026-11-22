@@ -124,16 +124,15 @@ export function renderPage(data) {
   }
 }
 
-// The content section both renderers must agree on, extracted by the stable
-// aria-labelledby anchor (the section carries no testid on either side) and
-// compared through the shared framework-tolerant treatment. Svelte's empty
-// `<!---->` snippet/if anchors have no Hono counterpart, so they are excised
-// first: zero-width hydration markers, serializer-owned like the markers the
-// shared treatment already strips — never content.
+// Compare the content section at the stable aria-labelledby anchor. Ignore
+// Svelte's empty snippet markers and the Kit-only fragment heading tabindex,
+// which the semantic test checks separately.
 function contentSectionOf(html: string): string {
   const match = html.match(/<section[^>]*aria-labelledby="rules-heading"[\s\S]*?<\/section>/);
   if (!match) throw new Error("rules content section is missing");
-  return normalizeSection(match[0].replace(/<!---->/g, ""));
+  return normalizeSection(
+    match[0].replace(/<!---->/g, "").replace(/(<h[12] id="[^"]+") tabindex="-1"(>)/g, "$1$2"),
+  );
 }
 
 async function honoRules(raw: string | undefined) {
@@ -233,7 +232,8 @@ describe("Kit /rules parity with Hono", () => {
     expect(html).toContain('aria-label="Primary"');
     expect(html.match(/<link rel="canonical"/g)).toHaveLength(1);
     expect(html).toContain(`<link rel="canonical" href="${canonicalUrl(APP_URL, "/rules")}"`);
-    expect(html).toContain('<h1 id="rules-heading">House rules</h1>');
+    expect(html).toContain('<h1 id="rules-heading" tabindex="-1">House rules</h1>');
+    for (const [, , id] of RULES) expect(html).toContain(`<h2 id="${id}" tabindex="-1">`);
     for (const name of RULE_NAMES) expect(html).toContain(name);
     expect(html.match(/<li class="card">/g)).toHaveLength(5);
     expect(html).toContain('data-testid="rules-join"');
