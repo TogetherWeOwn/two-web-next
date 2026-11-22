@@ -35,5 +35,5 @@ const links = [
 
 <div class="content-layout">
   <nav class="content-nav" aria-label="Community information">{#each links as link (link.key)}<a href={link.href} aria-current={navCurrent === link.key ? "page" : undefined}>{link.label}</a>{/each}</nav>
-  <section class="content-page" aria-labelledby={headingId}><h1 id={headingId} tabindex={focusHeading ? -1 : undefined}>{heading}</h1>{@render children()}</section>
+  <section class="content-page" aria-labelledby={headingId}>{#if focusHeading}<h1 id={headingId} tabindex="-1">{heading}</h1>{:else}<h1 id={headingId}>{heading}</h1>{/if}{@render children()}</section>
 </div>
