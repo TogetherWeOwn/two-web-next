@@ -10,9 +10,9 @@ const cdpPort = 9222;
 const mod = "900000000000009301";
 const member = "900000000000009302";
 const [a, b] = ["900000000000009311", "900000000000009312"];
-function mark(next) {
+function mark(stage, viewport = "NONE", operation = "NONE") {
   const file = `${process.env.TMPDIR}/browser-stage`;
-  writeFileSync(`${file}.next`, `${next}\n`, { mode: 0o600 });
+  writeFileSync(`${file}.next`, `${stage} ${viewport} ${operation}\n`, { mode: 0o600 });
   renameSync(`${file}.next`, file);
 }
 function ok(condition, label) {
@@ -27,10 +27,10 @@ const thenCleanup = (task, close, ms) =>
   task.finally(() => withDeadline(close, ms)).finally(() => task);
 export async function runWork(exercise, progress, closeBrowser, closeDatabase) {
   const stop = new AbortController();
-  const checkTime = (stage = "") => {
+  const checkTime = (stage = "", ...detail) => {
     if (stop.signal.aborted || performance.now() >= browserWorkMs)
       throw new visual.BrowserDeadline();
-    if (stage) progress(stage);
+    if (stage) progress(stage, ...detail);
   };
   const budget = { signal: stop.signal, checkTime };
   const verdict = withDeadline(() => exercise(budget), browserWorkMs - performance.now())
@@ -182,11 +182,10 @@ async function exerciseFixture(chromium, postgres, { TimeoutError }, database) {
       signal: budget.signal,
       TimeoutError,
       mark: budget.checkTime,
-      audit: async (page, name) => {
-        const a11y = await routeA11y(page, budget.checkTime);
+      audit: async (page, name, step) => {
+        const a11y = await routeA11y(page, step);
         record(`${name} ${a11y}`);
         ok(a11y.startsWith("a11y: PASS "), "visual:a11y");
-        budget.checkTime("CAPTURE");
       },
       measure: routeLighthouse.bind(null, cdpPort),
     });

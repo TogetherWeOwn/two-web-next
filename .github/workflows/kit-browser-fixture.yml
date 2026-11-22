@@ -204,6 +204,25 @@ jobs:
           path: artifacts/a11y/
           if-no-files-found: error
           retention-days: 14
+  activity-log-capture:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - run: npx --no-install playwright install --with-deps chromium
+      - name: Verify the bounded runner verdict
+        run: node --test --test-name-pattern='runner separates watchdog' ci/kit-activity-log-visual.test.mjs
+      - name: Capture and validate synthetic viewports in Chromium
+        run: timeout --kill-after=5s 45s node --test ci/kit-activity-log-capture-browser.test.mjs
   fixture-browser:
     runs-on: ubuntu-latest
     # The browser suite step alone takes 870-945 s; 15 minutes cancelled

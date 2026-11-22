@@ -136,9 +136,9 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
         }
         throw new Error("navigation timed out first");
       },
-      waitForFunction: () => assert.equal(keys.at(-1), "ArrowRight"),
       keyboard: { press: (key) => keys.push(key) },
       getByTestId: () => ({
+        waitForFunction: () => assert.equal(keys.at(-1), "ArrowRight"),
         evaluate: () => {
           assert.equal(scriptsDisabled, true);
           const scroll = closed === 4 && keys.at(-1) === "ArrowRight";
@@ -175,9 +175,9 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       mode === "rejected" ? Promise.reject(new Error("transport")) : new Promise(noop),
     );
     const mint = () => ({ value: consumed.size });
-    const mark = (stage) => {
+    const mark = (stage, _viewport, operation) => {
       stages.push(stage);
-      if (stage === "TEARDOWN" && closed === 5 && mode === "pending") lateRequest();
+      if (operation === "CONTEXT_CLOSE" && closed === 5 && mode === "pending") lateRequest();
     };
     const drift = mode.endsWith("dom");
     const denied = mode === "disallowed" || mode === "asset-body";
@@ -304,7 +304,7 @@ test("refusal deadlines abort fetch and prevent follow-on reads", async (t) => {
 });
 test("runner separates watchdog and assertion failures and admits only a valid completion", (t) => {
   const source = readFileSync(new URL("./kit-activity-log-run.sh", import.meta.url), "utf8");
-  const [runner] = source.match(/^LC_ALL=C timeout [\s\S]+$/m);
+  const [runner] = source.match(/^browser_started=\$SECONDS\nLC_ALL=C timeout [\s\S]+$/m);
   const root = mkdtempSync(join(tmpdir(), "kit-watchdog-test-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const node = `#!/bin/bash
@@ -320,39 +320,58 @@ empty-desktop.png a11y: PASS violations=0 incomplete=0
 populated-desktop.png lighthouse: unavailable
 `;
   writeFileSync(join(root, "metrics.txt"), metrics);
+  const axe = "AXE_EVALUATE EMPTY_DESKTOP RUN\n";
+  const keyboard = "CAPTURE KEYBOARD_MOBILE KEYBOARD_SCROLL\n";
+  const fonts = "FONTS POPULATED_MOBILE WAIT\n";
+  const teardown = "TEARDOWN NONE NONE\n";
+  const complete = "COMPLETE NONE NONE\n";
+  const unknown = "UNKNOWN NONE NONE\n";
   const cases = [
-    ["AXE_EVALUATE\n", "term", "WATCHDOG stage=AXE_EVALUATE"],
-    ["AXE_EVALUATE\n", 20, "ASSERTION stage=AXE_EVALUATE"],
-    ["AXE_EVALUATE\n", 21, "DEADLINE stage=AXE_EVALUATE"],
-    ["TEARDOWN\n", "kill", "WATCHDOG stage=TEARDOWN"],
-    ["TEARDOWN\n", 137, "UNKNOWN stage=TEARDOWN"],
-    ["MODERATOR\n", 20, "ASSERTION stage=MODERATOR"],
-    ["FONTS\n", 21, "DEADLINE stage=FONTS"],
-    ["LAUNCH\n", 22, "ERROR stage=LAUNCH"],
-    [null, 22, "ERROR stage=UNKNOWN"],
-    ["CAPTURE\n", 0, "UNKNOWN stage=CAPTURE"],
-    ["COMPLETE\n", 1, "UNKNOWN stage=COMPLETE"],
-    ["COMPLETE\n", 22, "UNKNOWN stage=COMPLETE"],
-    ["COMPLETE\nprivate-status\n", 0, "UNKNOWN stage=UNKNOWN"],
-    ["COMPLETE\n\0", 0, "UNKNOWN stage=UNKNOWN"],
-    ["", 0, "UNKNOWN stage=UNKNOWN"],
-    ["COMPLETE\n".padEnd(32, "x"), 0, "UNKNOWN stage=UNKNOWN"],
-    ["COMPLETE\n".padEnd(33, "x"), 0, "UNKNOWN stage=UNKNOWN"],
-    [null, 0, "UNKNOWN stage=UNKNOWN"],
-    ["COMPLETE\n", 0, "PASS stage=COMPLETE"],
+    [axe, "term", "WATCHDOG"],
+    [axe, 20, "ASSERTION"],
+    [axe, 21, "DEADLINE"],
+    [keyboard, 21, "DEADLINE"],
+    [teardown, "kill", "WATCHDOG"],
+    [teardown, 137, "UNKNOWN"],
+    ["MODERATOR NONE NONE\n", 20, "ASSERTION"],
+    [fonts, 21, "DEADLINE"],
+    ["LAUNCH NONE NONE\n", 22, "ERROR"],
+    [null, 22, "ERROR", unknown],
+    [keyboard, 0, "UNKNOWN"],
+    [complete, 1, "UNKNOWN"],
+    [complete, 22, "UNKNOWN"],
+    [`${complete}private-status\n`, 0, "UNKNOWN", unknown],
+    [`${complete}\0`, 0, "UNKNOWN", unknown],
+    ["", 0, "UNKNOWN", unknown],
+    [complete.padEnd(64, "x"), 0, "UNKNOWN", unknown],
+    [complete.padEnd(65, "x"), 0, "UNKNOWN", unknown],
+    ["COMPLETE KEYBOARD_MOBILE KEYBOARD_SCROLL\n", 0, "UNKNOWN", unknown],
+    ["CAPTURE private KEYBOARD_SCROLL\n", 21, "UNKNOWN", unknown],
+    ["CAPTURE KEYBOARD_MOBILE private\n", 21, "UNKNOWN", unknown],
+    [null, 0, "UNKNOWN", unknown],
+    [complete, 0, "PASS"],
   ];
   const options = { env: { PATH: process.env.PATH }, encoding: "utf8", timeout: 3_000 };
   const status = join(root, "browser-stage");
-  for (const [record, exitCode, verdict] of cases) {
+  for (const [record, exitCode, verdict, published = record] of cases) {
     if (record === null) rmSync(status);
     else writeFileSync(status, record);
     const run = spawnSync("bash", ["-c", command, "fixture", root, `${exitCode}`], options);
     if (exitCode === "kill")
       assert.match(readFileSync(join(root, "watchdog.txt"), "utf8"), /sending signal KILL/);
-    const passed = verdict.startsWith("PASS");
+    const passed = verdict === "PASS";
     const tail = passed ? "PASS: Activity-log fixture, rendered states and route a11y\n" : "";
     assert.deepEqual([run.status, run.stderr], [passed ? 0 : 1, ""]);
-    assert.equal(run.stdout, `Activity-log browser: outcome=${verdict}\n${metrics}${tail}`);
+    const [stage, viewport, operation] = published.trimEnd().split(" ");
+    const [line, ...rest] = run.stdout.split("\n");
+    assert.match(
+      line,
+      new RegExp(
+        `^Activity-log browser: outcome=${verdict} stage=${stage} viewport=${viewport} operation=${operation} browser_elapsed_s=[0-9]{1,3}$`,
+      ),
+    );
+    assert.equal(rest.join("\n"), `${metrics}${tail}`);
+    if (record === keyboard && exitCode === 21) t.diagnostic(line);
     assert.equal(existsSync(join(root, "kit-activity-log-approved")), passed);
   }
 });
