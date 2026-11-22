@@ -4,14 +4,12 @@ import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // Byte-for-byte mirror of two-bot's `crates/core/tests/fixtures/bot-site-contract-v2.json`,
-// published at commit `91e1bc5dc0c68e9fe8549d7adeae1b2f5b86f5d9`.
+// published at commit `c379cf6bd95f7e5413a87b304f1e153621ba8fe1`.
 // CI also compares the mirror against the canonical fixture on bot main.
-// The site has no production parsers for these read-side payloads yet; these
-// are shape-only checks. Replace each with a real parser call when it lands.
-// The implementation flags below describe the fixture, not site parser availability.
+// These shape checks pin the Bot fixture and its implementation flags.
 
 const FIXTURE_URL = new URL("./fixtures/bot-site-contract-v2.json", import.meta.url);
-const PINNED_SHA256 = "fcdf59304987b96c08b6243e4606cd49d2fa2a64abc7819d1cd831310c207d8f";
+const PINNED_SHA256 = "193e099996aefabf2a6ca13bae2e78c4f7c66d6769b240cc9b914bb9a66bf36e";
 
 const raw = readFileSync(FIXTURE_URL);
 
@@ -59,6 +57,14 @@ const isCursor = (value: unknown): boolean =>
   value === null || (typeof value === "string" && value.length > 0);
 
 const isSnowflake = (value: unknown): boolean => typeof value === "string" && SNOWFLAKE.test(value);
+
+function isCanonicalMoveId(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    /^[1-9][0-9]{16,19}$/.test(value) &&
+    BigInt(value) <= 2n ** 64n - 1n
+  );
+}
 
 function assertZulu(value: unknown): void {
   expect(typeof value).toBe("string");
@@ -164,7 +170,7 @@ describe("bot-site contract v2 pinned mirror", () => {
     expect(raw.toString("utf8")).not.toContain("echo.frozen");
   });
 
-  it("pins idempotency requirements and unlanded verbs", () => {
+  it("pins idempotency requirements and implementation flags", () => {
     const fixture = loadFixture();
     const expected: Record<string, boolean> = {
       "voice.snapshot": false,
@@ -178,8 +184,8 @@ describe("bot-site contract v2 pinned mirror", () => {
       expect(verb(fixture, name).needs_idempotency_key).toBe(needsKey);
     }
     expect(verb(fixture, "voice.snapshot").implemented).toBe(true);
+    expect(verb(fixture, "voice.move_member").implemented).toBe(true);
     for (const name of [
-      "voice.move_member",
       "reminder.send",
       "place_offer.send",
       "event.attendance.read",
@@ -208,6 +214,50 @@ describe("bot-site contract v2 pinned mirror", () => {
       ),
     ).toBe(false);
     expect(snapshotRefusalMatches(results.refusal as JsonObject, "")).toBe(false);
+  });
+
+  it("pins the self-move request and closed domain results", () => {
+    const move = verb(loadFixture(), "voice.move_member");
+    const request = move.request as JsonObject;
+    expect(request).toStrictEqual({
+      action: "voice.move_member",
+      discord_id: expect.any(String),
+      channel_id: expect.any(String),
+    });
+    expect(isCanonicalMoveId(request.discord_id)).toBe(true);
+    expect(isCanonicalMoveId(request.channel_id)).toBe(true);
+    expect(move.gate_flag).toBe("TWO_INTERNAL_ALLOW_VOICE_MOVE");
+    expect(move).not.toHaveProperty("idempotency_key");
+
+    const results = move.results as JsonObject;
+    const moved = results.moved as JsonObject;
+    expect(results).toStrictEqual({
+      moved: { outcome: "moved", from_channel_id: expect.any(String) },
+      already_in_room: { outcome: "already_in_room" },
+      not_connected: { outcome: "not_connected" },
+      not_permitted: { outcome: "not_permitted" },
+      room_full: { outcome: "room_full" },
+      room_gone: { outcome: "room_gone" },
+      bot_not_permitted: { outcome: "bot_not_permitted" },
+    });
+    expect(isCanonicalMoveId(moved.from_channel_id)).toBe(true);
+    expect(move.outcomes).toEqual([...Object.keys(results), "discord_unavailable", "rate_limited"]);
+  });
+
+  it("pins the self-move retryable 502 and 429 refusal envelopes", () => {
+    const move = verb(loadFixture(), "voice.move_member");
+    const refusal = (status: number, code: string) => ({
+      status,
+      body: {
+        ok: false,
+        request_id: "00000000000000000000000001",
+        error: { code, message: "request refused", retryable: true },
+      },
+    });
+    expect(move.refusals).toStrictEqual({
+      discord_unavailable: refusal(502, "discord_unavailable"),
+      rate_limited: refusal(429, "rate_limited"),
+    });
   });
 
   it("accepts event.attendance.read shape-only (no site parser yet)", () => {
