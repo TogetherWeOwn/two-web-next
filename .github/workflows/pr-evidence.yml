@@ -15,25 +15,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
+      contents: read
       pull-requests: read
     outputs:
       numbers: ${{ steps.route.outputs.numbers }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
       - id: route
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == pull_request_target ]]; then
-            numbers=$(jq -ce '[.number]' "$GITHUB_EVENT_PATH")
-          else
-            sha=$(jq -er '.workflow_run.head_sha | select(test("^[0-9a-f]{40}$"))' "$GITHUB_EVENT_PATH")
-            # The event's association can be empty for fork PRs.
-            numbers=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$sha/pulls?per_page=100" |
-              jq -ce '[.[][] | select(.state == "open" and .base.ref == "main") | .number] | unique')
-          fi
-          numbers=$(jq -ce 'select(all(.[]; type == "number" and . > 0 and floor == .))' <<< "$numbers")
-          echo "numbers=$numbers" >> "$GITHUB_OUTPUT"
+        run: python3 ci/pr_evidence.py
 
   publish:
     needs: route

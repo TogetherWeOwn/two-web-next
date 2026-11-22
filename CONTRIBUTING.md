@@ -214,17 +214,11 @@ durable record behind it.
 ### Change-gated CI and `ci-ok`
 
 The [PR evidence publisher](.github/workflows/pr-evidence.yml) maintains one
-bot comment per active PR targeting `main`. The PR body links to the comment,
-which names the head SHA and links to the latest associated Actions run
-attempt and job for each tracked gate. Match the displayed SHA to the live
-head before citing the evidence. An absent PR association or missing job
-leaves evidence incomplete. Draft aggregator success is labeled as draft.
-Use the PR checks for live status and for required checks outside the table.
-Keep author observations and test mappings in Verification and Attestation.
+bot comment per PR targeting `main`. Add its permalink to Verification once as
+`[Exact-head Actions evidence](#issuecomment-ID)` and match its SHA to the live head.
 
-`pr-evidence-fixtures` runs the publication and failure fixtures in error
-mode. The owner can consider requiring it after this implementation merges
-and the check passes on `main` and on two later PRs.
+`pr-evidence-fixtures` fails on fixture regressions. The owner can consider
+requiring it after merge and green runs on `main` and two later PRs.
 
 Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
 `scope` jobs (in `ci.yml` and the workflows that mirror it) fetch the

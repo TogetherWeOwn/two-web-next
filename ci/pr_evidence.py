@@ -1,14 +1,9 @@
-#!/usr/bin/env python3
-"""Publish observed Actions evidence for an open pull request against main."""
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".github/scripts"))
-from pr_standards import strip_comments
 
 SOURCES = {
     "ci": ("ci-ok",),
@@ -19,6 +14,7 @@ SOURCES = {
 }
 MARKER = "<!-- pr-evidence:v1 -->\n"
 BOT = {"login": "github-actions[bot]", "id": 41898282}
+SHA = re.compile("[0-9a-f]{40}")
 CONCLUSIONS = set("action_required cancelled failure neutral skipped stale success timed_out startup_failure".split())
 
 
@@ -105,13 +101,17 @@ def collect(api, pr, web):
     return "\n".join(rows)
 
 
-def linked_body(body, url):
-    line = f"[Exact-head Actions evidence]({url})"
-    owned = re.escape(MARKER) + r"\[Exact-head Actions evidence\]\(https://github\.com/[^\s)]+#issuecomment-\d+\)\n\n"
-    author = re.sub(r"\A" + owned, "", body)
-    if len(re.sub(r"\s", "", strip_comments(author))) < 40 or line in author:
-        return body
-    return f"{MARKER}{line}\n\n{author}"
+def route(api, event):
+    if "workflow_run" not in event:
+        require(positive(event["number"]), "Invalid PR number")
+        return [event["number"]]
+    sha = event["workflow_run"]["head_sha"]
+    require(SHA.fullmatch(sha), "Invalid workflow run head")
+    # Fork workflow events can omit PR associations. Ask GitHub by exact commit.
+    numbers = {pr["number"] for pr in pages(api, f"/commits/{sha}/pulls")
+               if pr["state"] == "open" and pr["base"]["ref"] == "main" and pr["head"]["sha"] == sha}
+    require(len(numbers) <= 256 and all(map(positive, numbers)), "Invalid PR destinations")
+    return sorted(numbers)
 
 
 def publish(api, repository, number):
@@ -119,59 +119,42 @@ def publish(api, repository, number):
     comments = f"/issues/{number}/comments"
     web = f"https://github.com/{repository}"
 
-    def read():
-        pr = api("GET", pull)
-        require(pr["number"] == number and pr["base"]["repo"]["full_name"].lower() == repository.lower(),
-                "PR metadata does not match destination")
-        return pr
-
-    pr = read()
+    pr = api("GET", pull)
+    require(pr["number"] == number and pr["base"]["repo"]["full_name"].lower() == repository.lower(),
+            "PR metadata does not match destination")
     if pr["state"] != "open" or pr["base"]["ref"] != "main":
         return
     sha = pr["head"]["sha"]
-    require(re.fullmatch("[0-9a-f]{40}", sha) and positive(pr["head"]["repo"]["id"]), "Invalid PR head")
+    require(SHA.fullmatch(sha) and positive(pr["head"]["repo"]["id"]), "Invalid PR head")
     owned = [comment for comment in pages(api, comments) if comment["body"].startswith(MARKER)
              and all(comment["user"].get(k) == v for k, v in BOT.items())]
     require(len(owned) <= 1 and all(positive(comment["id"]) for comment in owned), "Invalid evidence comment")
     prior = owned[0] if owned else None
 
-    def current():
-        # Ignore author edits here. The body update uses the freshest text below.
-        latest = read()
-        def identity(item):
-            head, base = item["head"], item["base"]
-            return item["state"], item["draft"], head["sha"], head["ref"], (head["repo"] or {}).get("id"), base["ref"]
-
-        return latest if identity(pr) == identity(latest) else None
+    def identity(item):
+        head, base = item["head"], item["base"]
+        return (item["number"], item["state"], item["draft"], head["sha"], head["ref"],
+                (head["repo"] or {}).get("id"), base["ref"], base["repo"]["id"])
 
     def write(body):
-        if prior and prior["body"] == body:
-            return prior["id"]
-        path = f'/issues/comments/{prior["id"]}' if prior else comments
-        comment = api("PATCH" if prior else "POST", path, {"body": body})
-        require(positive(comment["id"]) and (not prior or comment["id"] == prior["id"]), "Wrong comment ID")
-        return comment["id"]
+        if not prior:
+            api("POST", comments, {"body": body})
+        elif prior["body"] != body:
+            api("PATCH", f'/issues/comments/{prior["id"]}', {"body": body})
 
     link = f"{web}/pull/{number}"
     heading = f"{MARKER}### PR #{number} Actions evidence\n\nHead [`{sha}`]({link}/commits/{sha}) · target `main`\n"
     draft = "Draft PR. Aggregators may fast-pass.\n\n" if pr["draft"] else ""
-    checks = f"See the [PR checks]({link}/checks) for other checks and live status."
+    footer = f"See the [PR checks]({link}/checks) for live status. Copy this comment’s link to Verification.\n"
     try:
-        summary = f"{heading}\n{draft}{collect(api, pr, web)}\n\n{checks}\n"
+        summary = f"{heading}\n{draft}{collect(api, pr, web)}\n\n{footer}"
     except (ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        if current():
-            write(f"{heading}\nEvidence unavailable. {checks}\n")
+        if identity(pr) == identity(api("GET", pull)):
+            write(f"{heading}\nEvidence unavailable. {footer}")
         raise
-    if not current():
-        return
-    comment_id = write(summary)
-    latest = current()
-    if latest:
-        body = latest["body"] or ""
-        updated = linked_body(body, f"{link}#issuecomment-{comment_id}")
-        if updated != body:
-            api("PATCH", pull, {"body": updated})
-    return summary
+    if identity(pr) == identity(api("GET", pull)):
+        write(summary)
+        return summary
 
 
 def github_api(repository):
@@ -192,11 +175,14 @@ def github_api(repository):
 
 if __name__ == "__main__":
     try:
-        repo, number = os.environ["GITHUB_REPOSITORY"], int(os.environ["PR_NUMBER"])
-        require(positive(number), "Invalid PR number")
-        summary = publish(github_api(repo), repo, number)
-        if summary:
-            with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
-                output.write(summary)
+        repo = os.environ["GITHUB_REPOSITORY"]
+        api = github_api(repo)
+        if os.getenv("PR_NUMBER"):
+            number = int(os.environ["PR_NUMBER"])
+            require(positive(number), "Invalid PR number")
+            publish(api, repo, number)
+        else:
+            numbers = route(api, json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text()))
+            Path(os.environ["GITHUB_OUTPUT"]).write_text(f"numbers={json.dumps(numbers)}\n")
     except (ValueError, KeyError, TypeError, subprocess.SubprocessError):
         sys.exit("PR evidence publication failed. Check the exact-head Actions and PR metadata.")

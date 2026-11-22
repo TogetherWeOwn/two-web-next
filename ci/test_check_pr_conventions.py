@@ -156,6 +156,11 @@ class PrConventionsTests(unittest.TestCase):
         output = self.run_checker(1, BODY="<!-- " + "x" * 80 + " -->")
         self.assertIn("::error title=PR body::", output)
 
+    def test_evidence_link_does_not_count_as_description(self):
+        link = "[Exact-head Actions evidence](#issuecomment-123)"
+        self.assertIn("::error title=PR body::", self.run_checker(1, BODY=link))
+        self.run_checker(BODY=BODY + "\n" + link)
+
     def test_dependency_bot_exemptions(self):
         for author in ("dependabot[bot]", "renovate[bot]"):
             with self.subTest(author=author):

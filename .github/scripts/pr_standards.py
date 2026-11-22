@@ -103,6 +103,12 @@ def strip_comments(text):
     return COMMENT.sub("", text or "")
 
 
+def description_text(body):
+    """Count author text independently of the reserved Actions evidence link."""
+    link = r"(?:https://github\.com/TogetherWeOwn/two-web-next/pull/[1-9][0-9]*)?#issuecomment-[1-9][0-9]*"
+    return re.sub(rf"^\[Exact-head Actions evidence\]\({link}\)[ \t\r]*$", "", strip_comments(body), flags=re.M)
+
+
 def parse_sections(body):
     """Map normalised `## Heading` -> content. Comments are removed first."""
     sections, current, buf = {}, None, []
@@ -193,7 +199,7 @@ def check_pull_request(env):
     if errs:
         out.append(Finding("error", "PR title", f"'{title}': {'; '.join(errs)}. {HELP}"))
 
-    plain = strip_comments(body)
+    plain = description_text(body)
     if len(re.sub(r"\s", "", plain)) < 40:
         out.append(Finding("error", "PR body", "The description is empty. Fill in the PR template: the linked card or issue and "
                            "how it was verified."))
