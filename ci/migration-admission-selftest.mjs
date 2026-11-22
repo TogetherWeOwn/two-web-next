@@ -462,3 +462,17 @@ test("production requires an exact approved SHA in both the workflow and runner"
   assert.equal(runShell(gate, missingRunSha).status, 1);
   assert.throws(() => assertMigrationAdmission(env(missingRunSha)), /Production migration SHA/);
 });
+
+test("Worker automated approval does not control production migration admission", () => {
+  const executableYaml = dbMigrate.replace(/^\s*#.*$/gm, "");
+  assert.doesNotMatch(executableYaml, /\bPRODUCTION_AUTO_APPROVE\b/);
+  const gate = shellScript(dbMigrate, "Ref and production enable gate");
+  const approved = { ...production, PRODUCTION_AUTO_APPROVE: "true" };
+  assert.equal(runShell(gate, approved).status, 0);
+  assert.equal(assertMigrationAdmission(env(approved)).target, "production");
+  const mismatched = { ...approved, GITHUB_SHA: "b".repeat(40) };
+  const refused = runShell(gate, mismatched);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /Production migration SHA/);
+  assert.throws(() => assertMigrationAdmission(env(mismatched)), /Production migration SHA/);
+});

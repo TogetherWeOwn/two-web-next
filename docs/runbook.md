@@ -491,9 +491,16 @@ dated owner exception with resource scope, cost, and expiry or review date.
 [db-migrate.yml](../.github/workflows/db-migrate.yml) is a **remote mutation**
 and not a test. It is the hand-dispatch path for staging recovery and the only
 path for production; the staging `deploy.yml` applies staging migrations on its
-own (see *Staging deploy integration* below). This workflow's addition
-does not authorize its execution. No live
-migration is performed by its selftest.
+own (see *Staging deploy integration* below). Apply only this repo's web SQL,
+including the two grandfathered bootstraps. Use backward-compatible
+expand/contract changes so the running Worker and bot tolerate the new schema
+before the Worker release. The selftest uses a disposable database.
+
+**Staging recovery prerequisites (operator checks):** require an approved
+schema-change window, review of the exact `main` SHA and green required CI
+for that SHA before dispatch. Coordinate migrations with the web and bot
+owners. Verify backup/PITR eligibility for the target branch and a tested
+recovery procedure before applying.
 
 **Production release prerequisites (operator checks):**
 
@@ -509,16 +516,14 @@ migration is performed by its selftest.
    migrator from current custody evidence, verify the live ledger prefix
    against the exact candidate journal, and resolve ownership, privilege and
    recovery blockers. The plan records the expected prefix, ordered tags to
-   apply, expected end and any deferred tags. Apply only this repo's web SQL
-   (including the two grandfathered bootstraps). Use backward-compatible
-   expand/contract changes so the running Worker and bot tolerate the schema
-   before the Worker release.
+   apply, expected end and any deferred tags.
 3. Verify a completed backup of the target branch before apply. Record its
    completion time and retention, confirm PITR eligibility, and document the
    recovery procedure and rehearsal where supported. Record a known-good
    Worker version compatible with the resulting schema and coordinate writer
    recovery with both consumers. The workflow's pre-DDL timestamp is a
-   recovery reference. See [Backups and restore drill](#backups-and-restore-drill).
+   recovery reference. Use the provider's backup and PITR evidence for the
+   production branch.
 4. Obtain and record explicit approval from an independent release reviewer
    for the exact SHA, migrator identity, ordered scope, staging and recovery
    evidence, and execution plan. Only then may the authorized operator set the
@@ -606,8 +611,6 @@ migration is performed by its selftest.
   `PLANETSCALE_STAGING_DATABASE_URL` from the `staging` Environment; that is **not** migration approval
   or provisioning. YAML cannot attest a resolved secret's scope. Missing
   Environment provisioning is a stop, even if a same-named repo secret exists.
-- Before staging apply, verify backup/PITR eligibility for the target branch
-  and a tested recovery procedure.
 
 **Operator execution after those gates:** select Actions → `db-migrate` → Run
 workflow, branch `main`, target `staging` or `production`. The job Environment
@@ -2232,12 +2235,13 @@ does not select a production connection. The `target` input selects the
 connection: `production` reads `PRODUCTION_BACKUP_DATABASE_URL`, a read-only role.
 
 The job binds the GitHub Environment named by `target` (`staging` for the
-schedule and by default). A production dump therefore waits for the
-`production` Environment's required reviewers and main-only branch policy
-before the secret is readable, and a staging run never has
-`PRODUCTION_BACKUP_DATABASE_URL` mapped into any step. Provision
-`PRODUCTION_BACKUP_DATABASE_URL` on the `production` Environment only; a repo-level
-secret is readable by any job without that gate, so delete it there.
+schedule and by default). GitHub enforces the `production` Environment's
+main-only branch policy before the secret is readable and waits for required
+reviewers if configured. Obtain operational approval before dispatching a
+production dump, including when the Environment has only the branch rule.
+A staging run never has `PRODUCTION_BACKUP_DATABASE_URL` mapped into any step.
+Provision `PRODUCTION_BACKUP_DATABASE_URL` on the `production` Environment only.
+A repo-level secret is readable by any job without that gate, so delete it there.
 `ci/check-production-secrets.test.mjs` fails any workflow job that reads a
 `PRODUCTION_*` secret without binding `production`.
 
