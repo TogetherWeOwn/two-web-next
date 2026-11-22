@@ -148,17 +148,18 @@ Before merge, require:
 
    For a promotion-path PR, record migration ledger evidence or "no migration",
    plus the known-good rollback target and post-merge qualification route
-   where applicable. A merge with an automatic production path also requires
-   independent exact-head technical release acceptance after the T0 reviews.
-   Use the final acceptance stage required by the [organization standard](https://github.com/TogetherWeOwn/.github/blob/main/STANDARD.md#2-pr-review-and-merge).
+   where applicable. An automatic production path requires independent exact-head
+   technical release acceptance after the T0 reviews. Apply that requirement
+   when automatic production routing is uncertain. Use the final acceptance
+   stage required by the [organization standard](https://github.com/TogetherWeOwn/.github/blob/main/STANDARD.md#2-pr-review-and-merge).
    Any later production deployment or migration needs its own exact-candidate
    decision under the release gate.
 3. **Pin the merge and record the result.** Just before merging, the person
    merging rereads the target ref, its live tip, the reported PR base, the
    three-dot merge base and the head SHA. If any differs from the routing
    record, reassess the diff and review routing against the current target
-   before merging. A head SHA pin
-   alone does not catch a retarget or an advancing target. If the diff or its
+   before merging. A head SHA pin alone does not catch a retarget or an
+   advancing target. If the diff or its
    review context changes, obtain fresh required verdicts even when the head
    is unchanged. Verify review coverage and required checks for the merge
    head. Resolve threads once fixed or answered with evidence. Squash-merge

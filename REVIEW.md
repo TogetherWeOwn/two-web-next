@@ -25,9 +25,10 @@ Before merge, verify required checks and the independent reviews for the
 Require exact-head Actions links and conclusions, plus fixes or evidence for
 all findings. Changed content or review context requires fresh review.
 Recheck promotion-path routing against the live target, use T0 review for
-promotion-path changes, and verify final technical acceptance for merges with
-an automatic production path. Follow the contract for who merges and records
-the result. Ordinary technical work proceeds without an owner decision.
+promotion-path changes, and verify final technical acceptance where the merge
+has or may have an automatic production path. Follow the contract for who
+merges and records the result. Ordinary technical work proceeds without an
+owner decision.
 
 Distinguish that merge evidence from production qualification: the resulting
 exact `main` SHA still has to pass full CI, staging deploy, staging e2e and soak
