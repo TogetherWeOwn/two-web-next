@@ -49,6 +49,9 @@ test("Kit events index renders the seeded guest schedule @ desktop and mobile", 
       const css = page.waitForResponse(new URL("/kit-events-schedule.css", KIT_ORIGIN).href);
       await gotoKitEvents(page, "/events");
       expect((await css).ok()).toBe(true);
+      const header = page.locator("header.ember-header");
+      const join = header.locator(".ember-header-join:visible");
+      await expect(join).toHaveCSS("background-color", "rgb(255, 156, 54)");
       await expect(page.getByRole("main")).toHaveCount(1);
       await expect(page.getByRole("heading", { level: 1 })).toHaveText("What's on. Say you're in.");
       await expect(page.getByRole("contentinfo")).toContainText("Together We Own");

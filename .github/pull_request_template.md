@@ -6,8 +6,9 @@ addresses in the title, the body, a commit message or the branch name. Name the 
 for example `fix/sudo-window`. Link only public GitHub issues (`Fixes #123`).
 Write short, plain sentences. In the current warn mode `pr-lint` warns (does not fail) on a missing or
 thin linked issue (feat/fix/perf/refactor/security) or Verification, and fails once `PR_STANDARDS_MODE`
-is `"error"`; the title and an empty body always fail. Always fill in Attestation as well; `pr-lint`
-does not check it yet. The other sections are optional context for the reviewer.
+is `"error"`; the title and an empty body always fail. Fill in Attestation. `pr-lint` enforces
+its declared risk tier for PRs covered by the cutoff in CONTRIBUTING.md.
+The other sections are optional context for the reviewer.
 Full rules: CONTRIBUTING.md, "Pull request contract".
 -->
 
@@ -36,7 +37,7 @@ Full rules: CONTRIBUTING.md, "Pull request contract".
 
 ## Attestation
 
-<!-- SHADOW / WARN only. Fill every field; retain the exact heading/field/bullet syntax.
+<!-- Fill every field and retain the exact heading, field and bullet syntax.
 T0 = critical paths, T1 = standard changes, T2 = docs-only. Declaring a higher risk is OK.
 T0 directories at any depth: migrations, sql, db, database, drizzle.
 T0 directory/module words: auth, authn, authz, authentication, authorization, oauth,
@@ -48,14 +49,14 @@ boundaries (auth.rs, gateway_backoff.rs, member-erasure.ts, SessionController.ph
 The words also match directory names/descendants. Prose filenames ending .md/.rst/.txt
 are not modules, but still inherit any critical directory floor. Substrings such as
 names in authors.py, voices/, and roleplay.ts do not match those critical words.
-Also T0: .github/workflows/deploy*, crates/cutover/**, and wrangler .toml/.json/.jsonc
-configs at any depth (including wrangler.production.toml); prose like docs/wrangler.md
-is not a config. Deploy scripts outside these paths still require a declared T0 when critical.
+Also T0: all .github/ files (including .github/workflows/deploy*), crates/cutover/**,
+and wrangler .toml/.json/.jsonc configs at any depth (including wrangler.production.toml).
+Deploy scripts outside these paths still require a declared T0 when critical.
 Renames inspect both old and new paths; deleting a T0 file is still T0.
 T2 requires only root or docs/ .md/.rst files or explicitly allowlisted text basenames:
 README.txt, LICENSE.txt, NOTICE.txt, CHANGELOG.txt, CONTRIBUTING.txt, CODE_OF_CONDUCT.txt,
 SECURITY.txt, SUPPORT.txt, AUTHORS.txt (case-insensitive). Critical directory floors win.
-Never T2: .github/ files, code, arbitrary .txt, CMakeLists.txt, or requirements/constraints
+Never T2: ci/ files, code, arbitrary .txt, CMakeLists.txt, or requirements/constraints
 manifests (including requirements.txt, requirements-dev.txt, and docs/requirements.txt).
 Path names are only a risk floor, not proof that other code is non-critical; declare T0
 for critical behavior even when its path does not match. Ingest is conservatively T0
@@ -69,7 +70,7 @@ belong in Verification, not this field. Duplicate mapping lines for multiple tes
 failed_before=yes|no|not-run describes what you actually observed. No invented red-before proof.
 proof= names the command/result/mutant or other evidence; never executes from this text.
 Only T2 may replace all test lines with: - none | reason=Documentation-only; no behavior changed.
-The validator checks shape and changed-file references, NOT test execution or truth of claims.
+Reviewers check test mapping shape, changed-file references and the evidence behind each claim.
 
 High-risk checklist: keep D1-D8. Replace each placeholder with evidence or
 not-applicable plus a concrete reason. For T0 all boxes must be checked; never blindly check them.

@@ -1095,7 +1095,11 @@ const html = ${JSON.stringify(html)};
 globalThis.fetch = async (input) => {
   const url = new URL(String(input.url ?? input));
   if (url.pathname === "/up") return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-  if (url.pathname === "/events") return new Response(html, { status: 200, headers: { "content-type": "text/html", "cache-control": "public, max-age=9999", vary: "Cookie, X-Two-Island", ...(url.host.startsWith("kit.") ? { "x-two-renderer": "kit" } : {}) } });
+  if (url.pathname === "/events") {
+    const kit = url.host.startsWith("kit.");
+    const body = kit ? html.replace("<p>Welcome, guest</p>", '<header data-kit-site-header><a href="/auth/discord?next=%2Fevents" aria-label="Sign in with Discord">Sign in</a></header>') : html;
+    return new Response(body, { status: 200, headers: { "content-type": "text/html", "cache-control": "public, max-age=9999", vary: "Cookie, X-Two-Island", ...(kit ? { "x-two-renderer": "kit" } : {}) } });
+  }
   return new Response("", { status: 404 });
 };
 `;

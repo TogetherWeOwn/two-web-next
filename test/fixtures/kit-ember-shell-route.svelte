@@ -1,6 +1,7 @@
 <script lang="ts">
 import { page } from "$app/state";
 import EmberShell from "#lib/EmberShell.svelte";
+import Shell from "#lib/Shell.svelte";
 import SiteMetadata from "#lib/SiteMetadata.svelte";
 </script>
 
@@ -9,6 +10,9 @@ import SiteMetadata from "#lib/SiteMetadata.svelte";
   <form action="/logout" method="post"><button data-testid="signout">Sign out</button></form>
 {/snippet}
 
+{#if page.url.searchParams.has("legacy")}
+  <Shell title="Welcome" theme="home" activeNav="home" menuFallbackOnly><h1>Welcome to Together We Own</h1></Shell>
+{:else}
 <SiteMetadata title="Welcome" theme="home" />
 <EmberShell
   activeNav={page.url.searchParams.get("state") === "member" ? "event" : "home"}
@@ -20,3 +24,4 @@ import SiteMetadata from "#lib/SiteMetadata.svelte";
   <h1>Welcome to Together We Own</h1>
   <p>Find your next game night with the community.</p>
 </EmberShell>
+{/if}
