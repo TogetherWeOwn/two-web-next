@@ -321,7 +321,8 @@ and the complete three-dot Git diff for the checked PR head. Both sides of a
 rename count. Declare `T0`, `T1` or `T2` in Attestation and escalate when the
 behavior warrants it. The [review-tier map](.github/review-tiers.yml) governs
 native reviewer routing. PRs opened before the cutoff keep their existing
-metadata checks.
+metadata checks. For generated dependency PRs covered by the cutoff, a
+maintainer adds the declaration to the PR body.
 
 ### Secret-scan allowlists
 

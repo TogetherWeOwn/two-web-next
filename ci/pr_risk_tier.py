@@ -24,9 +24,10 @@ DOC_SUFFIXES = (".md", ".rst")
 WORD_BOUNDARY = re.compile(r"[\W_]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 WRANGLER = re.compile(r"wrangler(?:[.-].*)?\.(?:toml|jsonc?)", re.IGNORECASE | re.DOTALL)
 HIDDEN = re.compile(
-    r"<!--.*?(?:-->|\Z)"
+    r"(?P<escaped>\\[\\`<])|<!--.*?(?:-->|\Z)"
     r"|^ {0,3}(?P<ticks>`{3,})[^`\n]*(?:\n|\Z).*?(?:^ {0,3}(?P=ticks)`*[ \t]*$|\Z)"
-    r"|^ {0,3}(?P<tildes>~{3,})[^\n]*(?:\n|\Z).*?(?:^ {0,3}(?P=tildes)~*[ \t]*$|\Z)",
+    r"|^ {0,3}(?P<tildes>~{3,})[^\n]*(?:\n|\Z).*?(?:^ {0,3}(?P=tildes)~*[ \t]*$|\Z)"
+    r"|(?<!`)(?P<span>`+)(?!`)(?:[^\n]|\n(?![ \t]*(?:\n|#{1,6}[ \t])))*?(?<!`)(?P=span)(?!`)",
     re.DOTALL | re.MULTILINE,
 )
 HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$")
@@ -60,7 +61,12 @@ def declared_tier(body):
     sections = 0
     preamble = False
     body = body.replace("\r\n", "\n").replace("\r", "\n")
-    visible = HIDDEN.sub(lambda match: " " + "\n" * match[0].count("\n"), body)
+    # Mask inline code without making it disappear from the declaration value.
+    visible = HIDDEN.sub(
+        lambda match: (match[0] if match["escaped"] else
+                       ("`" if match["span"] else " ") + "\n" * match[0].count("\n")),
+        body,
+    )
     for line in visible.split("\n"):
         if heading := HEADING.fullmatch(line):
             preamble = heading.groups() == ("##", "Attestation")

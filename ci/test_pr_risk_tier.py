@@ -57,14 +57,17 @@ class RiskTier(unittest.TestCase):
     def test_completed_template_uses_the_visible_declaration(self):
         template = (ROOT / ".github/pull_request_template.md").read_text(encoding="utf-8")
         body = template.replace("risk_tier: <T0|T1|T2>", "risk_tier: T0")
-        self.assertIn("minimum T0", validate(body, [".github/pull_request_template.md"]))
+        for command in ("`rg '<!--' output.html`", "`rg '<!--'\noutput.html`"):
+            with self.subTest(command=command):
+                verified = body.replace("## Verification\n", f"## Verification\n\n- {command} passed.\n")
+                self.assertIn("minimum T0", validate(verified, [".github/pull_request_template.md"]))
 
     def test_missing_invalid_and_hidden_declarations_fail(self):
         line = "risk_tier: T1"
         good = attestation("T1")
         for body in (
             "", line, attestation("ordinary"), attestation("t1"), attestation("<T0|T1|T2>"),
-            attestation("T1/T2"), attestation("`T1`"), good.replace(line, ""),
+            attestation("T1/T2"), attestation("`T1`"), attestation("T1 `suffix`"), good.replace(line, ""),
             good.replace(line, "<!-- " + line + " -->"), "<!--\n" + good,
             good.replace(line, "```yaml\n" + line + "\n```"), "~~~~markdown\n" + good + "~~~~\n",
             good.replace(line, "    " + line), good.replace(line, "> " + line),
@@ -83,20 +86,6 @@ class RiskTier(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, f"{tier} is below.*{minimum}"):
                     validate(attestation(tier), ["README.md", path])
 
-    def test_older_pr_keeps_its_existing_contract(self):
-        workflow = (ROOT / ".github/workflows/pr-gates.yml").read_text(encoding="utf-8")
-        cutoff = re.search(r'(?m)^  RISK_TIER_ERROR_FROM_PR: "(\d+)"$', workflow)[1]
-        step = workflow.split("      - name: Check declared risk tier\n", 1)[1]
-        run = textwrap.dedent(step.split("        run: |\n", 1)[1].split("      - name:", 1)[0])
-        # No metadata or checkout is needed to skip an already-open PR.
-        result = subprocess.run(["bash", "-c", run], capture_output=True, text=True, env={
-            "GITHUB_EVENT_NAME": "pull_request", "PR_NUMBER": str(int(cutoff) - 1),
-            "RISK_TIER_ERROR_FROM_PR": cutoff,
-        })
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("before the enforcement cutoff", result.stdout)
-
-
 class ExactChangedPaths(unittest.TestCase):
     def setUp(self):
         self.repo = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -113,12 +102,41 @@ class ExactChangedPaths(unittest.TestCase):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("fixture\n", encoding="utf-8")
 
-    def check_tier(self, base, tier):
+    def check_tier(self, base, tier, command=(sys.executable, str(SCRIPT)), **workflow_env):
         metadata = self.repo / "metadata.json"
         metadata.write_text(json.dumps({"body": attestation(tier)}), encoding="utf-8")
-        return subprocess.run([sys.executable, str(SCRIPT)], cwd=self.repo, capture_output=True,
+        return subprocess.run(command, cwd=self.repo, capture_output=True,
                               text=True, env={**os.environ, "PR_METADATA_PATH": str(metadata),
-                                              "FLOOR_WAIVER_BASE_SHA": base})
+                                              "FLOOR_WAIVER_BASE_SHA": base, **workflow_env})
+
+    def test_workflow_enforces_from_cutoff_even_for_stale_heads(self):
+        workflow = (ROOT / ".github/workflows/pr-gates.yml").read_text(encoding="utf-8")
+        cutoff = re.search(r'(?m)^  RISK_TIER_ERROR_FROM_PR: "(\d+)"$', workflow)[1]
+        step = workflow.split("      - name: Check declared risk tier\n", 1)[1]
+        run = textwrap.dedent(step.split("        run: |\n", 1)[1].split("      - name:", 1)[0])
+        self.git("commit", "--allow-empty", "-qm", "initial")
+        base = self.git("rev-parse", "HEAD")
+        self.write("src/auth.py")
+        self.git("add", "src")
+        self.git("commit", "-qm", "old topic without validator")
+        self.git("checkout", "-qb", "rollout", base)
+        (self.repo / "ci").mkdir()
+        (self.repo / "ci/pr_risk_tier.py").write_bytes(SCRIPT.read_bytes())
+        self.git("add", "ci")
+        self.git("commit", "-qm", "roll out validator on main")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.git("checkout", "-q", "-")
+        env = {"RISK_TIER_ERROR_FROM_PR": cutoff, "RUNNER_TEMP": str(self.repo)}
+        command = ("bash", "-c", run)
+        earlier = self.check_tier(base, "invalid", command, PR_NUMBER=str(int(cutoff) - 1), **env)
+        self.assertEqual(0, earlier.returncode, earlier.stderr)
+        self.assertIn("before the enforcement cutoff", earlier.stdout)
+        failing = self.check_tier(base, "T2", command, PR_NUMBER=cutoff, **env)
+        self.assertEqual(1, failing.returncode, failing.stdout + failing.stderr)
+        self.assertIn("T2 is below the changed-path minimum T0", failing.stdout)
+        passing = self.check_tier(base, "T0", command, PR_NUMBER=cutoff, **env)
+        self.assertEqual(0, passing.returncode, passing.stderr)
+        self.assertIn("T0 meets the changed-path minimum T0", passing.stdout)
 
     def test_each_side_of_a_rename_counts(self):
         self.write("src/auth.py")

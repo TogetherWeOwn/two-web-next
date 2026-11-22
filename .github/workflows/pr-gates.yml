@@ -102,6 +102,12 @@ jobs:
             echo "::warning::Ratchet tests absent at this head SHA; skipped (predates #651)."
           fi
           python3 -m unittest discover -s ci -p 'test_check_pr_conventions.py'
+          if [ -f ci/test_pr_risk_tier.py ]; then
+            python3 -m unittest discover -s ci -p 'test_pr_risk_tier.py'
+          elif [ -n "$(git log -1 --format=%H HEAD -- ci/test_pr_risk_tier.py)" ]; then
+            echo '::error::Risk-tier fixtures deleted at this head.'
+            exit 1
+          fi
           # Heads cut before this PR lack the waiver-body test; fail closed if a head
           # deletes it so a PR cannot silence the queue-visibility check.
           if [ -f ci/test_floor_waiver_body.py ]; then
@@ -264,21 +270,29 @@ jobs:
           printf 'base_ref=%s\n' "$base_ref" >> "$GITHUB_OUTPUT"
 
       - name: Check declared risk tier
-        if: github.event_name != 'merge_group'
+        if: github.event_name != 'push' && github.event_name != 'merge_group'
         env:
           PR_METADATA_PATH: ${{ steps.pr.outputs.metadata }}
           FLOOR_WAIVER_BASE_SHA: ${{ steps.head-ref.outputs.base_sha }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '0' }}
         run: |
           set -euo pipefail
-          if [ "$GITHUB_EVENT_NAME" != push ] && [ "$PR_NUMBER" -lt "$RISK_TIER_ERROR_FROM_PR" ]; then
-            echo 'Risk tier is advisory for PRs opened before the enforcement cutoff.'
+          if [ "$PR_NUMBER" -lt "$RISK_TIER_ERROR_FROM_PR" ]; then
+            echo 'Skipping risk-tier validation for a PR opened before the enforcement cutoff.'
             exit 0
           fi
-          python3 -m unittest discover -s ci -p 'test_pr_risk_tier.py'
-          if [ "$GITHUB_EVENT_NAME" != push ]; then
-            python3 ci/pr_risk_tier.py
+          validator=ci/pr_risk_tier.py
+          if [ ! -f "$validator" ]; then
+            if [ -n "$(git log -1 --format=%H HEAD -- "$validator")" ]; then
+              echo '::error::Risk-tier validator deleted at this head.'
+              exit 1
+            fi
+            # Full-history checkout fetches main. Use its validator on stale
+            # heads while keeping the PR's original checkout and diff base.
+            git show "refs/remotes/origin/main:$validator" > "$RUNNER_TEMP/pr_risk_tier.py"
+            validator="$RUNNER_TEMP/pr_risk_tier.py"
           fi
+          python3 "$validator"
 
       - name: Check title, body and commits
         if: github.event_name != 'merge_group'
