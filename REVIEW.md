@@ -20,15 +20,12 @@ gate. Do not demand a staging run for an unmerged head, or require artifact
 comparisons to prove pre-merge staging. This is not limited to docs/test-only
 changes and is not proof that staging already ran.
 
-Before merge, verify required checks and the independent reviews for the
-[PR's risk tier](CONTRIBUTING.md#review-by-risk-tier) on the exact PR head.
-Require exact-head Actions links and conclusions, plus fixes or evidence for
-all findings. Changed content or review context requires fresh review.
-Recheck promotion-path routing against the live target, use T0 review for
-promotion-path changes, and verify final technical acceptance where the merge
-has or may have an automatic production path. Follow the contract for who
-merges and records the result. Ordinary technical work proceeds without an
-owner decision.
+Before merge, verify Actions links and conclusions, independent reviews for
+the [PR's risk tier](CONTRIBUTING.md#review-by-risk-tier), and fixes or evidence
+for all findings on the exact head. Changed content or context requires fresh
+review. Recheck promotion routing against the live target. Apply T0 review to
+promotion-path changes and verify final technical acceptance where automatic
+production routing applies or is uncertain.
 
 Distinguish that merge evidence from production qualification: the resulting
 exact `main` SHA still has to pass full CI, staging deploy, staging e2e and soak
@@ -45,13 +42,10 @@ workflow protections as automatic promotion. Treat a skipped job as missing
 evidence.
 
 Apply the [production release gate](CONTRIBUTING.md#production-release-gate)
-to the exact staged candidate and operation. Verify the backup before a data
-or schema change, rehearsed rollback where supported, resolved recovery
-blockers, independent technical approval, protected execution and at least
-30 minutes of post-change health monitoring. Enforce the existing rulesets,
-deterministic checks, incident holds, freezes, and identity and capability
-safeguards. A previously rejected candidate needs a fresh decision. This
-advisory analysis role has no approval or merge authority.
+to the exact staged candidate and operation. Enforce existing incident holds,
+freezes, identity and capability safeguards, and deterministic checks. A
+previously rejected candidate needs a fresh decision. This advisory role has
+no approval or merge authority.
 
 ## What merits a finding
 

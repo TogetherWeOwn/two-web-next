@@ -70,23 +70,19 @@ The repository rulesets enforce the following on `main`:
 The `pr-size-gate` job's check, `pr-size-gate / gate`, is the required size
 gate named in the `protect-main` bullet above.
 
-Who merges depends on the review route. The author merges ordinary technical
-PRs after tier review. When a separate final technical acceptance stage applies,
-that reviewer merges in the same run as approval. Fix or answer every finding,
-verify all required checks and pin the squash merge to the reviewed head SHA.
-Technical source merges proceed without an owner decision. Every production
-change requires the separate [production release gate](#production-release-gate).
+Who merges. In this repository the author merges ordinary PRs after tier review.
+Where final technical acceptance applies, that reviewer merges in the approval
+run. Fix or answer every finding, verify required checks and pin the squash
+merge to the reviewed SHA. Ordinary merges proceed without an owner decision.
+Production changes require the [release gate](#production-release-gate).
 
 ### Review by risk tier
 
-Declare the PR's `risk_tier` in the Attestation and apply the highest tier
-required by the paths and behavior it changes. Use the
-[review-tier map](.github/review-tiers.yml) to identify sensitive paths and
-content triggers, then use the review requirements below. Sensitive changes,
-including `AGENTS.md`, `.claude/**`, `CONTRIBUTING.md`, `REVIEW.md` and
-`.github/**`, require at least T1. Honor
-higher floors in the PR template and use T0 for critical behavior even when
-the file paths alone imply a lower tier.
+Declare `risk_tier` in Attestation using the highest tier required by the PR
+template and the changed behavior. The [review-tier map](.github/review-tiers.yml)
+identifies sensitive paths and triggers. Sensitive changes, including `AGENTS.md`,
+`.claude/**`, `CONTRIBUTING.md` and `REVIEW.md`, require at least T1. Changes under
+`.github/**` and critical behavior require T0.
 
 | Tier | Examples | Review before merge |
 | --- | --- | --- |
@@ -94,15 +90,11 @@ the file paths alone imply a lower tier.
 | T1 | Standard code and sensitive contributor instructions | One independent cross-model review |
 | T0 | Auth, sessions, payments, SQL or migrations, secrets, grants, cryptography, deploy workflows, Worker config, gateway or voice, erasure, backups | Two independent cross-model reviews in parallel, one general and one security-focused |
 
-Delegate each review as a read-only task. Use a different model family from
-the author and follow the model and effort guidance in
-[AGENTS.md](AGENTS.md#models-and-effort). Reviewers independently inspect the
-pinned PR head and record the reviewed SHA, findings and verdict.
-For parallel reviews, record findings independently before reconciling them.
-Reviewers inspect existing evidence. The author integrates fixes, records how
-findings were resolved, and obtains a fresh verdict when the reviewed content
-or its review context changes. For a commit with an identical reviewed diff and
-context, record that equivalence and verify checks on the new head.
+Delegate read-only review to a different model family from the author using
+[AGENTS.md](AGENTS.md#models-and-effort). Reviewers record the pinned SHA,
+findings and verdict independently before reconciling them. The author resolves
+findings and obtains fresh verdicts when content or context changes. For an
+identical reviewed diff and context, record equivalence and check the new head.
 
 ### Merge and production staging evidence
 

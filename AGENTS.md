@@ -32,13 +32,12 @@ Guidance for human and AI contributors.
 ## Models and effort
 
 T3 Code selects the provider, model and effort through the project default,
-thread selection or delegated reviewer target. Keep model pins and overrides out
-of role frontmatter, harness settings, environment defaults and hooks. Keep
-shared instructions here. `CLAUDE.md` contains only `@AGENTS.md`.
+thread selection or delegated reviewer target. Keep model overrides out of role
+frontmatter, settings, environment defaults and hooks. `CLAUDE.md` imports this file.
 
 - Use `gpt-6.2-sol` at `high` for routine implementation. Use `xhigh` only when
   the task brief gives a reason. Use a provider that exposes the selected effort
-  and verify the model's picker label when a gateway ID is ambiguous.
+  and verify the picker label for ambiguous gateway IDs.
 - Use `claude-opus-5-5` at `medium` for design or difficult work such as auth,
   crypto, concurrency and debugging. It is also the default reviewer for a GPT
   author. Use `high` or `xhigh` only when the task warrants it and record the
@@ -46,13 +45,11 @@ shared instructions here. `CLAUDE.md` contains only `@AGENTS.md`.
   Claude author, use `gpt-6.2-sol` at `high` for independent review.
 - Never use `max`, `ultra` or `ultrathink` effort.
 
-The owner manages T3 Settings, including project defaults, providers, access,
-notifications and cleanup. Agents select models for assigned tasks within that
-configuration. The owner answers approval prompts routed to them in the thread.
-Agents handle technical decisions, staging and releases within their authority.
-Ask the owner about spending beyond existing budgets, permanent deletion of
-member data, shutdown of a member-facing service, or legal, terms or privacy
-decisions.
+The owner manages T3 Settings and answers owner-routed approval prompts in the
+thread. Agents select models for their tasks and handle technical decisions,
+staging and releases within their authority. Ask the owner about spending beyond
+existing budgets, permanent member data deletion, shutdown of a member-facing
+service, or legal, terms or privacy decisions.
 
 ## Review and release
 

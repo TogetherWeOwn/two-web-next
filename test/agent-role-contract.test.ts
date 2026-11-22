@@ -52,6 +52,7 @@ describe("repository delegation contract", () => {
       "concrete input/state/sequence and wrong outcome",
       "evidence establishing it",
       "not a security boundary",
+      "different model family from the author's through the T3 Code delegated reviewer target",
     ]) {
       expect(reviewer).toContain(requirement);
     }

@@ -490,12 +490,10 @@ matching dispatch SHA selects the existing separately authorized recovery
 route; `migrations_applied` never bypasses default ancestry admission. See the
 [ancestry contract](docs/runbook.md#default-promotion-ancestry-admission).
 
-For automatic promotion, the Release Manager accepts the exact release SHA and
-asks the authorized Operator to set the repository Actions variable
-`PRODUCTION_ACCEPTED_SHA` to that full lowercase SHA; the Release Manager can
-ask the Operator to clear it. The resolver first selects the eligible candidate,
-then requires exact equality with the variable: absent, empty or unequal values
-skip cleanly, without searching for an older accepted candidate. The variable is
+For automatic promotion, follow the [release gate](CONTRIBUTING.md#production-release-gate).
+The authorized executor sets `PRODUCTION_ACCEPTED_SHA` to the approved release
+SHA in full lowercase and can clear it to hold promotion. The resolver skips
+unless the value matches the selected candidate exactly. The variable is
 a job-time snapshot; clearing it does not revoke a run that already started.
 Manual dispatch is unchanged, and all existing promotion and release gates remain
 in force. See the [deployment procedure](docs/runbook.md#deploy-and-record-the-rollback-pointer).
@@ -766,12 +764,8 @@ Squash-merge only; PR titles follow Conventional Commits and the body follows th
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
 `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint` and the other
 [required checks](CONTRIBUTING.md#branch-protection-and-required-checks) must pass
-on the exact head. GitHub does not require an approving PR review; the native
-review policy still applies. The final-stage reviewer merges when native review
-stages apply; otherwise the author merges. Pin the squash merge to that reviewed
-head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
-for the promotion-path PR exception, post-merge staging qualification and
-per-release Release Manager acceptance, and [AGENTS.md](AGENTS.md) for agent guidance.
+on the exact head. See [CONTRIBUTING.md](CONTRIBUTING.md#pull-request-contract)
+for tier review, merge authority, and post-merge staging and release approval.
 
 ## License
 

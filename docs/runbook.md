@@ -2318,8 +2318,9 @@ for the approved mechanism. `wrangler secret put` creates a new deployed version
 it is not a harmless configuration preview. This runbook performs no rotation
 and supplies no secret values or rotation commands.
 
+Escalate suspected compromise immediately through the custody procedure below.
 For production, apply the [release gate](../CONTRIBUTING.md#production-release-gate)
-and retain the custody approvals below. Hold Worker secret rotation until a
+and retain custody approvals. Hold Worker secret rotation until a
 protected deployment path can apply the change. `wrangler secret put` deploys
 immediately. The [production deploy workflow](../.github/workflows/deploy-production.yml)
 uploads and promotes its own build and cannot deploy a prepared secret-only

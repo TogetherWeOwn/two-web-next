@@ -152,7 +152,9 @@ arguments; never paste a value.
 
 Rehearse rotation on staging with a staging-only replacement:
 
-1. Generate the replacement secret on the operator machine.
+1. Use `wrangler whoami` to verify the approved staging account and confirm the
+   [staging target](runbook.md#deploy-and-record-the-rollback-pointer). Generate
+   the replacement secret on the operator machine.
 2. From the repository root, run
    `wrangler secret put SESSION_SECRET --config web/wrangler.staging.jsonc`.
    The command deploys the staging Worker immediately.
