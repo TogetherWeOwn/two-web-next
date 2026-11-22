@@ -124,15 +124,12 @@ export function renderPage(data) {
   }
 }
 
-// Compare the content section at the stable aria-labelledby anchor. Ignore
-// Svelte's empty snippet markers and the Kit-only fragment heading tabindex,
-// which the semantic test checks separately.
+// Compare the content section at the stable aria-labelledby anchor. Svelte's
+// empty snippet markers have no Hono counterpart.
 function contentSectionOf(html: string): string {
   const match = html.match(/<section[^>]*aria-labelledby="rules-heading"[\s\S]*?<\/section>/);
   if (!match) throw new Error("rules content section is missing");
-  return normalizeSection(
-    match[0].replace(/<!---->/g, "").replace(/(<h[12] id="[^"]+") tabindex="-1"(>)/g, "$1$2"),
-  );
+  return normalizeSection(match[0].replace(/<!---->/g, ""));
 }
 
 async function honoRules(raw: string | undefined) {
@@ -218,11 +215,15 @@ describe("Kit /rules parity with Hono", () => {
     expect(forbidden).toEqual([]);
   });
 
-  it.each(FIXTURES)("renders the identical content section ($name)", async (fixture) => {
+  it.each(FIXTURES)("matches Hono apart from Kit heading focus ($name)", async (fixture) => {
     const data = rulesPageData(APP_URL, fixture.raw);
     const kitHtml = renderPage(data);
     const { html: honoHtml } = await honoRules(fixture.raw);
-    expect(contentSectionOf(kitHtml)).toBe(contentSectionOf(honoHtml));
+    const kitContent = contentSectionOf(kitHtml).replace(
+      /(<h[12] id="[^"]+") tabindex="-1"(>)/g,
+      "$1$2",
+    );
+    expect(kitContent).toBe(contentSectionOf(honoHtml));
   });
 
   it.each(FIXTURES)("keeps the semantic and a11y contract ($name)", (fixture) => {

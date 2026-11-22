@@ -61,10 +61,16 @@ for (const renderer of ["Hono", "Kit"] as const) {
           if (url.pathname === "/rules") {
             const rows = url.searchParams.has("long") ? changedRuleRows() : undefined;
             const { html, headers, status } = await fixture.render(renderer, rows);
+            // Screenshot control reproduces the prior Kit markup. Focus checks use
+            // the unmodified response at /rules.
+            const body =
+              renderer === "Kit" && url.searchParams.has("before-focus")
+                ? html.replace(/(<h[12] id="[^"]+") tabindex="-1"(>)/g, "$1$2")
+                : html;
             return route.fulfill({
               status,
               headers: { ...headers, "content-type": "text/html; charset=utf-8" },
-              body: html,
+              body,
             });
           }
           // The content leaf CSS is inline in the real document. No invented
@@ -77,7 +83,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
         page,
       }) => {
         await page.goto(`${RULE_ORIGIN}/rules`);
-        if (renderer === "Kit") await captureRules(page, "resting", viewport.width);
+        if (renderer === "Kit") await captureRules(page, "after-resting", viewport.width);
         const index = page.getByRole("navigation", { name: "Jump to a rule", exact: true });
         expect(await index.count(), "the server must render the jump navigation").toBe(1);
         const jumps = index.getByRole("link");
@@ -116,7 +122,13 @@ for (const renderer of ["Hono", "Kit"] as const) {
         await expect(heading).toBeInViewport();
         if (renderer === "Kit") {
           await expect(heading).toBeFocused();
-          await captureRules(page, "copied-page-heading", viewport.width);
+          await captureRules(page, "after-copied-page-heading", viewport.width);
+          await page.goto(`${RULE_ORIGIN}/rules?before-focus`);
+          await captureRules(page, "before-resting", viewport.width);
+          await page.goto(`${RULE_ORIGIN}/rules?before-focus#rules-heading`);
+          await captureRules(page, "before-copied-page-heading", viewport.width);
+          await page.goto(`${RULE_ORIGIN}/rules?before-focus#${ids[1]}`);
+          await captureRules(page, "before-rule-target", viewport.width);
         }
       });
 
@@ -153,7 +165,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
         await expect(permalink).toHaveAccessibleName(/Respect the room/);
         if (renderer === "Kit") {
           await expect(target).toBeFocused();
-          await captureRules(page, "keyboard-target", viewport.width);
+          await captureRules(page, "after-rule-target", viewport.width);
           await page.keyboard.press("Tab");
           await expect(permalink).toBeFocused();
         }
