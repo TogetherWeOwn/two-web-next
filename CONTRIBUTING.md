@@ -233,6 +233,10 @@ durable record behind it.
 
 ### Change-gated CI and `ci-ok`
 
+For PRs targeting `main`, add the full comment permalink once in Verification as `Exact-head Actions evidence`.
+Match its SHA to the live head and use PR checks for unbound fork runs. [Publisher](.github/workflows/pr-evidence.yml)
+The owner can require `pr-evidence-fixtures` after merge and green runs on `main` and two later PRs.
+
 Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
 `scope` jobs (in `ci.yml` and the workflows that mirror it) fetch the
 changed-file list and the base commit's scope scripts in the only step that

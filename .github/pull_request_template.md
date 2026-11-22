@@ -30,6 +30,7 @@ Full rules: CONTRIBUTING.md, "Pull request contract".
 ## Verification
 
 <!-- Commands you ran and their results, so a reviewer can repeat them. -->
+<!-- Add the bot comment’s full permalink once with the link label `Exact-head Actions evidence`. -->
 
 -
 
