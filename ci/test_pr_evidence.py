@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import unittest
 
-from pr_evidence import BOT, MARKER, publish, route
+from pr_evidence import BOT, MARKER, pages, publish, route
 
 FIXTURES = json.loads(Path(__file__).with_name("fixtures").joinpath("pr-evidence-metadata.json").read_text())
 HEAD, NEXT = FIXTURES["pull"]["head"]["sha"], "b" * 40
@@ -84,6 +84,7 @@ class EvidenceTest(unittest.TestCase):
             self.assertIn(f'| {case["evidence"]} |', self.publish(), case["name"])
 
     def test_corrupt_pages_and_head_movement_fail_closed(self):
+        self.assertRaisesRegex(ValueError, "count limit", pages, lambda *args, **kwargs: [[{}] * 100] * 10, "/pulls")
         self.runs = [self.run_record(1)] * 101
         with self.assertRaisesRegex(ValueError, "duplicate"):
             self.publish()

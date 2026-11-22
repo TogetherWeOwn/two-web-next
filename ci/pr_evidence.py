@@ -42,9 +42,8 @@ def pages(api, path, key=None):
     rows = [row for batch in batches for row in (batch[key] if key else batch)]
     require(len(rows) < 1000, "GitHub metadata count limit reached")
     if key:
-        total = len(rows)
-        valid_counts = all(type(batch["total_count"]) is int and batch["total_count"] == total for batch in batches)
-        require(valid_counts and len({row["id"] for row in rows}) == total,
+        valid_counts = all(type(batch["total_count"]) is int and batch["total_count"] == len(rows) for batch in batches)
+        require(valid_counts and len({row["id"] for row in rows}) == len(rows),
                 "Incomplete or duplicate GitHub metadata")
     return rows
 
