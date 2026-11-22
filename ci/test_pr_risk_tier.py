@@ -115,6 +115,7 @@ class ExactChangedPaths(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/pr-gates.yml").read_text(encoding="utf-8")
         cutoff = re.search(r'(?m)^  RISK_TIER_ERROR_FROM_PR: "(\d+)"$', workflow)[1]
         step = workflow.split("      - name: Check declared risk tier\n", 1)[1]
+        self.assertIn("BASE_REF: ${{ steps.head-ref.outputs.base_ref }}", step.split("run: |", 1)[0])
         run = textwrap.dedent(step.split("        run: |\n", 1)[1].split("      - name:", 1)[0])
         self.git("commit", "--allow-empty", "-qm", "initial")
         base = self.git("rev-parse", "HEAD")
@@ -142,6 +143,9 @@ class ExactChangedPaths(unittest.TestCase):
         self.assertIn("T0 meets the changed-path minimum T0", passing.stdout)
 
         self.git("checkout", "-q", "rollout")
+        self.git("update-ref", "refs/remotes/origin/release/fixture", "HEAD")
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        env["BASE_REF"] = "release/fixture"
         self.write("README.md")
         self.git("add", "README.md")
         self.git("commit", "-qm", "docs PR already based on the newer target tip")
