@@ -33,7 +33,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
   const lapse = clock(t);
   const stall = () => new Promise((_, reject) => setImmediate(reject, new TimeoutError()));
   const modes =
-    "dom load asset-dom asset-body late late-method capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled";
+    "dom load asset-dom asset-body late late-method capture-timeout capture-budget document asset disallowed pending rejected hono fonts capture-fonts capture-stalled audit-navigation audit-frame-navigation";
   for (const mode of modes.split(" ")) {
     const hono = mode === "hono";
     const expired = mode === "capture-budget";
@@ -42,13 +42,15 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     const early = hono || mode.startsWith("capture-");
     const lateDenied = mode.startsWith("late");
     const shots = [];
+    const audits = [];
     const keys = [];
+    let scriptsDisabled;
     const consumed = new Set([0]); // Functional context already rotated its cookie.
     let closed = 0;
     let closing = false;
     let cookie = 0;
     let url, intercept;
-    let observe;
+    let observe, frameNavigated;
     const navigation = Promise.withResolvers();
     const abortNavigation = t.mock.fn(() => {
       navigation.reject(navError);
@@ -92,12 +94,14 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       newPage: () => fixture,
       on: (event, handler) => {
         if (event === "request") observe = handler;
+        if (event === "framenavigated") frameNavigated = handler;
       },
       evaluate: () =>
         mode === "capture-fonts" || (mode === "fonts" && closed === 5) ? lapse(5_000) : true,
       setDefaultTimeout: noop,
       waitForLoadState: async () => (/^(asset(-dom)?|load)$/.test(mode) ? stall() : undefined),
       goto: async (href, { waitUntil } = {}) => {
+        assert.equal(scriptsDisabled, true);
         url = href;
         const status = consumed.has(cookie) ? 302 : 200;
         consumed.add(cookie);
@@ -119,6 +123,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
           void request(href, true, async () => response);
           throw navError;
         }
+        if (mode === "audit-frame-navigation") frameNavigated?.();
         if (dom || mode === "load") await request(href, true, async () => response);
         if (closed !== 5 || !/^(document|asset|disallowed)/.test(mode)) return response;
         if (mode === "document") void request(href, true, stall);
@@ -135,14 +140,37 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
       keyboard: { press: (key) => keys.push(key) },
       getByTestId: () => ({
         evaluate: () => {
+          assert.equal(scriptsDisabled, true);
           const scroll = closed === 4 && keys.at(-1) === "ArrowRight";
           if (closed === 5 && mode.endsWith("dom")) return [[], [true, scroll, scroll]];
           return [visual.expectedContent(url.includes("?")), [true, scroll, scroll]];
         },
       }),
-      screenshot: ({ path }) => (expired ? lapse(visual.browserWorkMs) : shots.push(path)),
+      screenshot: ({ path }) => {
+        assert.equal(scriptsDisabled, true);
+        return expired ? lapse(visual.browserWorkMs) : shots.push(path);
+      },
+      context: () => fixture,
+      newCDPSession: () => ({
+        send: (command, { value }) => {
+          assert.equal(command, "Emulation.setScriptExecutionDisabled");
+          scriptsDisabled = value;
+        },
+      }),
     };
-    const browser = { newContext: () => fixture };
+    const browser = {
+      newContext: ({ javaScriptEnabled }) => {
+        scriptsDisabled = !javaScriptEnabled;
+        return fixture;
+      },
+    };
+    const audit = async (_, name) => {
+      assert.equal(scriptsDisabled, false);
+      assert.equal(shots.at(-1), name);
+      audits.push(name);
+      if (mode === "audit-navigation") await request(url, true, lateFetch, noop, lateFulfill);
+      if (mode === "audit-frame-navigation") frameNavigated?.();
+    };
     const measure = t.mock.fn(() =>
       mode === "rejected" ? Promise.reject(new Error("transport")) : new Promise(noop),
     );
@@ -153,10 +181,18 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     };
     const drift = mode.endsWith("dom");
     const denied = mode === "disallowed" || mode === "asset-body";
-    const options = { audit: noop, measure, mark, ms: drift || denied ? 0 : 10, TimeoutError };
+    const options = { audit, measure, mark, ms: drift || denied ? 0 : 10, TimeoutError };
     const collect = ({ signal } = new AbortController()) =>
       visual.collectVisuals(browser, mint, ".", { ...options, signal });
     const report = hono || expired ? runWork(collect, mark, fixture.close) : collect();
+    if (mode === "audit-navigation" || mode === "audit-frame-navigation") {
+      await assert.rejects(report, /unexpected visual diagnostic/, mode);
+      assert.equal(lateFetch.mock.callCount(), 0);
+      assert.equal(lateFulfill.mock.callCount(), 0);
+      assert.deepEqual(shots, ["populated-desktop.png"]);
+      assert.deepEqual(audits, shots);
+      continue;
+    }
     if (mode === "capture-fonts" || expired) await assert.rejects(report, visual.BrowserDeadline);
     else if (drift) await assert.rejects(report, /visual content drift/, mode);
     else if (hono || lateDenied) await assert.rejects(report, visual.AssertionFailure);
@@ -175,6 +211,7 @@ test("fresh capture sessions isolate Lighthouse timeouts but not policy drift", 
     assert.equal(measure.mock.callCount(), Number(lateDenied || /^(pending|rejected)$/.test(mode)));
     if (stalled) await new Promise(setImmediate);
     assert.deepEqual(shots, early ? [] : Object.keys(viewportPngs));
+    assert.deepEqual(audits, early ? [] : ["populated-desktop.png", "empty-desktop.png"]);
     assert.deepEqual(keys, early ? [] : [...Array(11).fill("Tab"), "ArrowRight"]);
   }
 });
@@ -285,6 +322,8 @@ populated-desktop.png lighthouse: unavailable
   writeFileSync(join(root, "metrics.txt"), metrics);
   const cases = [
     ["AXE_EVALUATE\n", "term", "WATCHDOG stage=AXE_EVALUATE"],
+    ["AXE_EVALUATE\n", 20, "ASSERTION stage=AXE_EVALUATE"],
+    ["AXE_EVALUATE\n", 21, "DEADLINE stage=AXE_EVALUATE"],
     ["TEARDOWN\n", "kill", "WATCHDOG stage=TEARDOWN"],
     ["TEARDOWN\n", 137, "UNKNOWN stage=TEARDOWN"],
     ["MODERATOR\n", 20, "ASSERTION stage=MODERATOR"],
