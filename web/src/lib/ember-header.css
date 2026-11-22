@@ -4,6 +4,7 @@
   top: 0;
   z-index: 2;
   max-width: none;
+  padding-block: 0;
   background: var(--two-color-bg-canvas);
   border-bottom: 1px solid var(--two-color-hair-1);
 }
@@ -51,7 +52,6 @@
     grid-template-columns: auto auto minmax(0, 1fr);
     gap: var(--two-space-7);
     min-height: var(--two-size-header-wide);
-    padding-block: 0;
     padding-inline: calc(
       var(--two-layout-gutter-wide) +
       max(0px, (100% - var(--two-layout-container)) / 2)

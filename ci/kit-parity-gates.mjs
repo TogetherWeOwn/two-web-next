@@ -1548,7 +1548,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     `<a href="webcal://next.togetherweown.com/events.ics" data-testid="events-subscribe">Subscribe</a>` +
     `</section></main>` +
     `<script src="/islands/events-calendar.js"></script></body></html>`;
-  const eventsFailures = assertRouteContract({
+  const eventsResponse = {
     label: "unit/events guest list",
     html: eventsShell(""),
     headers: headerMap({
@@ -1564,15 +1564,26 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       contract: "events",
       cachePattern: /^public, max-age=(?:[1-9]|[1-5]\d|60)$/,
     },
-  });
+  };
+  const eventsFailures = assertRouteContract(eventsResponse);
   push(
     "unit: events guest list passes",
     eventsFailures.length === 0 ? "passed" : "failed",
     eventsFailures.join("; ") || null,
   );
   const kitSignIn = guestChrome("kit", "/auth/discord?next=%2Fevents");
-  const hasChrome = (links) => hasKitGuestChrome(`<header data-kit-site-header>${links}</header>`);
-  const duplicateRejected = hasChrome(kitSignIn) && !hasChrome(kitSignIn.repeat(2));
+  const checkKitEvents = (signIn) =>
+    assertRouteContract({
+      ...eventsResponse,
+      html: eventsResponse.html.replace(eventsChrome, signIn),
+      headers: {
+        get: (name) => (name === "x-two-renderer" ? "kit" : eventsResponse.headers.get(name)),
+      },
+      expected: { ...eventsResponse.expected, marker: "kit" },
+    });
+  const duplicateRejected =
+    checkKitEvents(kitSignIn).length === 0 &&
+    checkKitEvents(kitSignIn.repeat(2)).includes(`${eventsResponse.label}: guest account chrome`);
   push("unit: Kit events duplicate sign-in fails", duplicateRejected ? "passed" : "failed");
   // Events forced-failure proof: a missing island binder, a GET form turned
   // into a POST, a dropped archive link, a canonical pointing at the archive
