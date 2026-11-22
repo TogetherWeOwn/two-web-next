@@ -27,6 +27,9 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   The rule checks comparison expressions, including equality. It does not
   trace local variables or scan Svelte files, hidden paths, generated
   output or tooling.
+  The existing return-path cap in `authReturnHref` has a syntax-specific
+  exception so the attendee URL builders stay dependency-free. Move the cap
+  to the server callers' shared module before removing that exception.
 - **Changed-lines coverage (WARN, 80%):** `ci/patch-coverage.mjs` intersects
   the PR diff with `coverage-final.json`; added TS lines nobody executes warn.
   Missing or malformed `coverage-final.json` fails the step instead of skipping,

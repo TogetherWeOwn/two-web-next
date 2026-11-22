@@ -30,8 +30,25 @@ rule:
         - not:
             matches: operand-wrapper
   not:
-    matches: ternary-condition
+    any:
+      - matches: ternary-condition
+      - matches: attendee-return-cap
 utils:
+  # The attendee URL module is dependency-free. Remove this when its server
+  # return-link callers move the cap check to a module that can import it.
+  attendee-return-cap:
+    all:
+      - pattern: new TextEncoder().encode(href).byteLength
+      - inside:
+          pattern: "const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;"
+          stopBy:
+            kind: lexical_declaration
+      - inside:
+          kind: function_declaration
+          has:
+            field: name
+            regex: "^authReturnHref$"
+          stopBy: end
   operand-wrapper:
     any:
       - matches: expression-wrapper

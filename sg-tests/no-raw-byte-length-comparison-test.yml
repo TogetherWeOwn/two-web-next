@@ -11,6 +11,11 @@ valid:
   - 'if ((bytes.byteLength ? "a" : "b") === status) report();'
   - 'if (((bytes.byteLength + 1) ? "a" : "b") === status) report();'
   - if (rows.length > MAX_ROWS) refuse();
+  - |
+    function authReturnHref() {
+      const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+      return fits(url);
+    }
 invalid:
   - if (chunk.byteLength > remaining) cancel();
   - if (max < size + chunk.byteLength) cancel();
@@ -25,3 +30,14 @@ invalid:
   - "if ((chunk ? chunk.byteLength : 0) > max) refuse();"
   - 'const status = chunk.byteLength <= max ? "a" : "b";'
   - if (+chunk.byteLength > max) refuse();
+  - |
+    function authReturnHref() {
+      const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+      if (buffer.byteLength > maxBytes) refuse();
+      return fits(url);
+    }
+  - |
+    function returnHref() {
+      const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+      return fits(url);
+    }

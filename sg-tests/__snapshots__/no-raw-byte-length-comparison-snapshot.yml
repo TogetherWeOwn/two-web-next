@@ -18,6 +18,51 @@ snapshots:
         style: secondary
         start: 15
         end: 38
+  ? |
+    function authReturnHref() {
+      const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+      if (buffer.byteLength > maxBytes) refuse();
+      return fits(url);
+    }
+  : labels:
+      - source: buffer.byteLength
+        style: primary
+        start: 122
+        end: 139
+      - source: byteLength
+        style: secondary
+        start: 129
+        end: 139
+      - source: ">"
+        style: secondary
+        start: 140
+        end: 141
+      - source: buffer.byteLength > maxBytes
+        style: secondary
+        start: 122
+        end: 150
+  ? |
+    function returnHref() {
+      const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+      return fits(url);
+    }
+  : labels:
+      - source: new TextEncoder().encode(href).byteLength
+        style: primary
+        start: 57
+        end: 98
+      - source: byteLength
+        style: secondary
+        start: 88
+        end: 98
+      - source: <=
+        style: secondary
+        start: 99
+        end: 101
+      - source: new TextEncoder().encode(href).byteLength <= maxBytes
+        style: secondary
+        start: 57
+        end: 110
   if (((Buffer.byteLength))(text) > max) cancel();:
     labels:
       - source: ((Buffer.byteLength))(text)
