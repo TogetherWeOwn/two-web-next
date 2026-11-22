@@ -24,7 +24,7 @@ function captureDocument(empty) {
   const cells = rows.map((row) => `<tr><td>${row.split("|").join("</td><td>")}</td></tr>`);
   return `<!doctype html><html lang="en"><meta charset="utf-8"><title>Activity log — TWO admin</title>
   <style>
-    [data-testid=activity-log-table-scroll] { overflow-x: auto; }
+    [data-testid=activity-log-table-scroll] { max-block-size: 24rem; overflow: auto; }
     [data-testid=activity-log-table-scroll]:focus-visible { outline: 2px solid; }
     table { min-inline-size: 42rem; }
     a { display: inline-block; }
@@ -65,7 +65,7 @@ test("guarded capture completes five synthetic views and locates a keyboard-scro
       "content-type": "text/html; charset=utf-8",
     });
     const body = req.url === path ? populated : empty;
-    res.end(clip ? body.replace("overflow-x: auto", "overflow-x: clip") : body);
+    res.end(clip ? body.replace("overflow: auto", "overflow: clip") : body);
   });
   t.after(() => new Promise((resolve) => server.close(resolve)));
   await new Promise((resolve, reject) =>
@@ -131,10 +131,11 @@ test("guarded capture completes five synthetic views and locates a keyboard-scro
     },
   };
   const mint = () => ({ name: "fixture", value: "synthetic", url: origin });
-  assert.equal(
-    await collectVisuals(browser, mint, dir, options),
-    "legacy wait timed out after native scrolling",
-  );
+  const capture = collectVisuals(browser, mint, dir, options).catch((error) => {
+    t.diagnostic(`Synthetic capture stopped at ${last?.join(" ") ?? "UNKNOWN"}`);
+    throw error;
+  });
+  assert.equal(await capture, "legacy wait timed out after native scrolling");
   assert.deepEqual(
     validatePngDirectory(dir).map(({ name }) => name),
     Object.keys(viewportPngs),
