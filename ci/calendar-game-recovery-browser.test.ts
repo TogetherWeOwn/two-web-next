@@ -3,8 +3,9 @@
 // Builder owns registration in browser CI and before/after visual/a11y evidence.
 // Test Author owns this file: implement the behavior, never edit these assertions.
 import { readFileSync } from "node:fs";
-import { extname, resolve } from "node:path";
+import { basename, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 import { chromium, type Browser, type BrowserContext, type Page, type Route } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
@@ -17,6 +18,7 @@ import {
   gameRecoveryFixture,
   type GameTwin,
   kitCalendarStyles,
+  retainKitCalendarStyles,
 } from "../test/helpers/calendar-game-recovery";
 
 const publicDir = fileURLToPath(new URL("../public/", import.meta.url)).replace(/\/+$/, "");
@@ -281,6 +283,38 @@ async function open(
     documents,
   };
 }
+
+it("serves the CSS emitted by the Calendar fixture bundler", async () => {
+  const { outputFiles } = await build({
+    stdin: {
+      contents: 'export { default as stylesheet } from "./kit-site-header.css";',
+      resolveDir: publicDir,
+    },
+    bundle: true,
+    format: "esm",
+    write: false,
+    outdir: ".",
+    loader: { ".css": "file" },
+  });
+  const css = outputFiles.find((file) => file.path.endsWith(".css"));
+  if (!css) throw new Error("The fixture bundler did not emit a stylesheet");
+  const path = `/${basename(css.path)}`;
+  retainKitCalendarStyles(outputFiles);
+  try {
+    const { page } = await open("Kit", "shipped");
+    const asset = await page.evaluate(async (path) => {
+      const response = await fetch(path);
+      return {
+        status: response.status,
+        type: response.headers.get("content-type"),
+        body: await response.text(),
+      };
+    }, path);
+    expect(asset).toEqual({ status: 200, type: "text/css", body: css.text });
+  } finally {
+    kitCalendarStyles.delete(path);
+  }
+});
 
 for (const twin of GAME_TWINS) {
   describe(`${twin} asset proof negative controls`, () => {
