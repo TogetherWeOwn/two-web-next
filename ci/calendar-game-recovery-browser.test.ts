@@ -17,6 +17,7 @@ import {
   GAME_TWINS,
   gameRecoveryFixture,
   type GameTwin,
+  kitCalendarCss,
   kitCalendarStyles,
   retainKitCalendarStyles,
 } from "../test/helpers/calendar-game-recovery";
@@ -287,14 +288,14 @@ async function open(
 it("serves the CSS emitted by the Calendar fixture bundler", async () => {
   const { outputFiles } = await build({
     stdin: {
-      contents: 'export { default as stylesheet } from "./kit-site-header.css";',
-      resolveDir: publicDir,
+      contents: 'export { default as stylesheet } from "./calendar-bundle-probe.css";',
+      resolveDir: fileURLToPath(new URL("../test/fixtures/", import.meta.url)),
     },
     bundle: true,
     format: "esm",
     write: false,
     outdir: ".",
-    loader: { ".css": "file" },
+    plugins: [kitCalendarCss],
   });
   const css = outputFiles.find((file) => file.path.endsWith(".css"));
   if (!css) throw new Error("The fixture bundler did not emit a stylesheet");
@@ -311,6 +312,7 @@ it("serves the CSS emitted by the Calendar fixture bundler", async () => {
       };
     }, path);
     expect(asset).toEqual({ status: 200, type: "text/css", body: css.text });
+    expect(asset.body).toContain("--two-size-header-compact: 60px");
   } finally {
     kitCalendarStyles.delete(path);
   }

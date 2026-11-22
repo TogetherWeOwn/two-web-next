@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build, type OutputFile } from "esbuild";
+import { build, type OutputFile, type Plugin } from "esbuild";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { Hono } from "hono";
@@ -25,6 +25,17 @@ export function retainKitCalendarStyles(outputFiles: OutputFile[]) {
   }
 }
 
+// Like Vite's stylesheet URLs, emit one CSS asset with its imports resolved.
+export const kitCalendarCss: Plugin = {
+  name: "kit-calendar-css",
+  setup(plugin) {
+    plugin.onLoad({ filter: /\.css$/ }, async ({ path }) => {
+      const { outputFiles } = await build({ entryPoints: [path], bundle: true, write: false });
+      return { contents: outputFiles[0]!.contents, loader: "file" };
+    });
+  },
+};
+
 // Bundle the actual Kit SSR adapter once per test worker.
 export function renderKitEvents(...args: Parameters<KitRender>): ReturnType<KitRender> {
   loaded ??= (async () => {
@@ -37,9 +48,9 @@ export function renderKitEvents(...args: Parameters<KitRender>): ReturnType<KitR
       platform: "node",
       write: false,
       outdir: ".",
-      loader: { ".css": "file" },
       tsconfigRaw: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "hono/jsx" } },
       plugins: [
+        kitCalendarCss,
         {
           name: "kit-events-renderer",
           setup(plugin) {
