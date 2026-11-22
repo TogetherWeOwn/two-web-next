@@ -527,13 +527,15 @@ backup, PITR and rehearsal.
    recovery with both consumers. The workflow's pre-DDL timestamp is a
    recovery reference. Use the provider's backup and PITR evidence for the
    production branch.
-4. Follow the [production release gate](../CONTRIBUTING.md). Obtain and record
-   explicit approval from an independent release reviewer from a different
-   model family for the exact SHA, migrator identity, ordered scope, staging
-   and recovery evidence, and execution plan. Only then may the authorized
-   operator set the migration pins and dispatch the protected workflow. If the
-   `main` tip, approved plan or qualifying evidence changes before dispatch,
-   stop and obtain fresh qualification and approval.
+4. Obtain and record explicit approval from an independent release reviewer
+   for the exact SHA, migrator identity, ordered scope, staging and recovery
+   evidence, and execution plan. For an agent-led release, use a separate
+   reviewer from a different model family than the agent that prepared the plan.
+   Follow the [production release gate](https://github.com/TogetherWeOwn/two-web-next/blob/main/CONTRIBUTING.md#production-release-gate).
+   Only then may the authorized operator set the migration pins and dispatch
+   the protected workflow. If the `main` tip, approved plan or qualifying
+   evidence changes before dispatch, stop and obtain fresh qualification and
+   approval.
 
 **Environment and migration pins:**
 
