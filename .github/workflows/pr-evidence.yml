@@ -23,8 +23,7 @@ jobs:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - id: route
-        env:
-          GH_TOKEN: ${{ github.token }}
+        env: { GH_TOKEN: "${{ github.token }}" }
         run: python3 ci/pr_evidence.py
 
   publish:
@@ -49,7 +48,5 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ matrix.number }}
+      - env: { GH_TOKEN: "${{ github.token }}", PR_NUMBER: "${{ matrix.number }}" }
         run: python3 ci/pr_evidence.py

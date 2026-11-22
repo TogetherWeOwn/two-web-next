@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from urllib.parse import urlencode
 
 SOURCES = {
     "ci": ("ci-ok",),
@@ -39,16 +40,26 @@ def pages(api, path, key=None):
     batches = api("GET", path, paginate=True)
     require(isinstance(batches, list) and 0 < len(batches) <= 10, "GitHub metadata pagination limit reached")
     rows = [row for batch in batches for row in (batch[key] if key else batch)]
+    require(len(rows) < 1000, "GitHub metadata count limit reached")
     if key:
         total = len(rows)
         valid_counts = all(type(batch["total_count"]) is int and batch["total_count"] == total for batch in batches)
-        require(total < 1000 and valid_counts and len({row["id"] for row in rows}) == total,
+        require(valid_counts and len({row["id"] for row in rows}) == total,
                 "Incomplete or duplicate GitHub metadata")
     return rows
 
 
-def select_runs(api, pr, ready):
+def select_runs(api, pr):
     head, base = pr["head"], pr["base"]
+    timeline = pages(api, f'/issues/{pr["number"]}/timeline')
+    ready, retarget = (max((entry["created_at"] for entry in timeline if entry["event"] == kind), default="")
+                       for kind in ("ready_for_review", "base_ref_changed"))
+    # GitHub's run associations can change after retargeting or closing another PR.
+    branch_pulls = pages(api, "/pulls?" + urlencode({"state": "all", "head": head["label"]}))
+    history = [pull for pull in branch_pulls if pull["head"]["ref"] == head["ref"]
+               and (pull["head"]["repo"] or {}).get("id") == head["repo"]["id"]]
+    require(any(pull["number"] == pr["number"] for pull in history), "PR branch history is incomplete")
+    siblings = [(pull["created_at"], pull["closed_at"]) for pull in history if pull["number"] != pr["number"]]
     runs = pages(api, f'/actions/runs?head_sha={head["sha"]}', "workflow_runs")
     latest = {}
     for source in SOURCES:
@@ -64,17 +75,19 @@ def select_runs(api, pr, ready):
             require(all(positive(run[k]) for run in matches for k in ("id", "run_number", "run_attempt")),
                     "Invalid Actions run identity")
             run = max(matches, key=lambda item: (item["run_number"], item["id"]))
-            outcome = "superseded" if source in READY_JOBS and run["created_at"] < ready else result(run)
-            witness = READY_JOBS.get(source) if run["created_at"] == ready else None
-            verdict = {0: "unbound", 1: outcome}.get(len(run["pull_requests"]), "ambiguous")
+            created = run["created_at"]
+            cutoff = max(pr["created_at"], retarget, ready if source in READY_JOBS else "")
+            outcome = "superseded" if created < cutoff else result(run)
+            outcome = "unproven" if created == retarget else outcome
+            overlaps = any(opened <= created <= (closed or created) for opened, closed in siblings)
+            witness = READY_JOBS.get(source) if created == ready else None
+            verdict = {0: "unbound", 1: "ambiguous" if overlaps else outcome}.get(len(run["pull_requests"]), "ambiguous")
             latest[source] = (run["id"], run["run_attempt"], verdict, witness)
     return latest
 
 
 def collect(api, pr, web):
-    timeline = pages(api, f'/issues/{pr["number"]}/timeline')
-    ready = max((entry["created_at"] for entry in timeline if entry["event"] == "ready_for_review"), default="")
-    selected = select_runs(api, pr, ready)
+    selected = select_runs(api, pr)
     rows = ["| Gate | Run attempt | Job | Evidence |", "| --- | --- | --- | --- |"]
     for source, names in SOURCES.items():
         run_id, attempt, outcome, witness = selected.get(source, (None, None, "missing", None))
@@ -94,7 +107,7 @@ def collect(api, pr, web):
             if evidence == "success" and (pr["draft"] or not proven):
                 evidence = "draft" if pr["draft"] else "unproven"
             rows.append(f"| {name} | {run_link} | {job_link} | {evidence} |")
-    require(selected == select_runs(api, pr, ready), "Actions runs changed during collection")
+    require(selected == select_runs(api, pr), "Actions or PR history changed during collection")
     return "\n".join(rows)
 
 
