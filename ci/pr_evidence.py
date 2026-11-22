@@ -66,7 +66,8 @@ def select_runs(api, pr, ready):
             run = max(matches, key=lambda item: (item["run_number"], item["id"]))
             outcome = "superseded" if source in READY_JOBS and run["created_at"] < ready else result(run)
             witness = READY_JOBS.get(source) if run["created_at"] == ready else None
-            latest[source] = (run["id"], run["run_attempt"], outcome if run["pull_requests"] else "unbound", witness)
+            verdict = {0: "unbound", 1: outcome}.get(len(run["pull_requests"]), "ambiguous")
+            latest[source] = (run["id"], run["run_attempt"], verdict, witness)
     return latest
 
 
@@ -78,9 +79,8 @@ def collect(api, pr, web):
     for source, names in SOURCES.items():
         run_id, attempt, outcome, witness = selected.get(source, (None, None, "missing", None))
         run_path = f"/actions/runs/{run_id}"
-        attempt_path = f"{run_path}/attempts/{attempt}"
-        run_link = f"[{outcome}]({web}{attempt_path})" if run_id else outcome
-        jobs = pages(api, f"{attempt_path}/jobs", "jobs") if outcome in CONCLUSIONS else []
+        run_link = f"[{outcome}]({web}{run_path}/attempts/{attempt})" if run_id else outcome
+        jobs = pages(api, f"{run_path}/attempts/{attempt}/jobs", "jobs") if outcome in CONCLUSIONS else []
         require(all(positive(job["id"]) and job["head_sha"] == pr["head"]["sha"]
                     and job["run_id"] == run_id and job["run_attempt"] == attempt for job in jobs),
                 "Job differs from selected head or attempt")

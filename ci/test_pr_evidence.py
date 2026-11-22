@@ -68,16 +68,17 @@ class EvidenceTest(unittest.TestCase):
         self.assertEqual((len(self.comments), self.pr["body"], self.comments[-1]["id"]), (2, AUTHOR, 123))
 
     def test_superseded_incomplete_failed_and_skipped(self):
+        other_pr = self.pr | {"number": 43, "base": self.pr["base"] | {"ref": "feature"}}
         for changes, missing, expected in (
             (dict(status="in_progress", run_attempt=2), True, r"\[pending\].*attempts/2\) \| missing \| pending \|$"),
             (dict(pull_requests=[]), True, r"\[unbound\].*\| missing \| unbound \|$"),
+            (dict(pull_requests=[self.pr, other_pr]), False, r"\[ambiguous\].*\| missing \| ambiguous \|$"),
             (dict(conclusion="failure"), False, r"\[failure\].*\| \[failure\].*\| failure \|$"),
             (dict(run_attempt=2), True, r"attempts/2\) \| missing \| missing \|$"),
             (dict(conclusion="skipped"), False, r"\| \[skipped\].*\| skipped \|$"),
         ):
             self.records(**changes)
-            if missing:
-                self.jobs = []
+            self.jobs = [] if missing else self.jobs
             row = next(line for line in self.publish().splitlines() if line.startswith("| ci-ok"))
             self.assertRegex(row, expected)
         for source, gate, witness in (("ci", "ci-ok", "static-check"), ("e2e", "e2e-ok", "browser-smoke")):
