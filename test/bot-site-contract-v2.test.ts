@@ -244,6 +244,18 @@ describe("bot-site contract v2 pinned mirror", () => {
     expect(move.outcomes).toEqual([...Object.keys(results), "discord_unavailable", "rate_limited"]);
   });
 
+  it("accepts only canonical self-move IDs within the snowflake bounds", () => {
+    expect(isCanonicalMoveId("10000000000000000")).toBe(true);
+    expect(isCanonicalMoveId("18446744073709551615")).toBe(true);
+    expect(isCanonicalMoveId("9999999999999999")).toBe(false);
+    expect(isCanonicalMoveId("18446744073709551616")).toBe(false);
+    expect(isCanonicalMoveId("010000000000000000")).toBe(false);
+    expect(isCanonicalMoveId("1000000000000000a")).toBe(false);
+    expect(isCanonicalMoveId("10000000000000000\n")).toBe(false);
+    expect(isCanonicalMoveId(10000000000000000n)).toBe(false);
+    expect(isCanonicalMoveId("")).toBe(false);
+  });
+
   it("pins the self-move retryable 502 and 429 refusal envelopes", () => {
     const move = verb(loadFixture(), "voice.move_member");
     const refusal = (status: number, code: string) => ({
