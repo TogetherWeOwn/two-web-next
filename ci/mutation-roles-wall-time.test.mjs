@@ -33,16 +33,13 @@ const ids = [
   "W3-unknown-timezone-admitted",
 ];
 
+const gitIdentity = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com"];
 const fixtureGit = (root, ...args) =>
-  execFileSync(
-    "git",
-    ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", ...args],
-    {
-      cwd: root,
-      encoding: "utf8",
-      stdio: "pipe",
-    },
-  ).trim();
+  execFileSync("git", [...gitIdentity, ...args], {
+    cwd: root,
+    encoding: "utf8",
+    stdio: "pipe",
+  }).trim();
 
 function commit(root, ...paths) {
   if (paths.length) fixtureGit(root, "add", "--", ...paths);
@@ -152,7 +149,9 @@ test("real Vitest fixtures reject a new survivor and accept kills, existing surv
     const pr = commit(root, suite);
     fixtureGit(root, "checkout", "-q", "--detach", bad);
     fixtureGit(root, "merge", "--no-ff", "--no-edit", pr);
-    assert.equal(runGate(root, bad), 0);
+    assert.equal(runGate(root, good), 1);
+    assert.equal(report(root).results[0].baseStatus, "killed");
+    assert.equal(runGate(root, fixtureGit(root, "rev-parse", "HEAD^1")), 0);
     assert.equal(report(root).results[0].baseStatus, "survived");
 
     const kill = (_suite, label) => ({ verdict: label === "base-baseline" ? "red" : "green" });
@@ -167,6 +166,7 @@ test("real Vitest fixtures reject a new survivor and accept kills, existing surv
     commit(root, suite);
     assert.equal(runGate(root, bad), 0);
     assert.deepEqual(statuses(), ["killed", "killed", "killed"]);
+    assert.equal(report(root).baseBaseline.verdict, "not_run");
     assert.equal(fixtureGit(root, "worktree", "list", "--porcelain").split("\n\n").length, 1);
     restored(root, originals);
   });
@@ -466,10 +466,12 @@ test("workflow is fail-closed on the event diff and independent of deployment CI
   assert.ok(install, "dependency installation step must exist");
   assert.equal(install.run, "npm ci --include=dev --no-audit --no-fund");
   const signal = job.steps.find((step) => step.id === "signal");
-  assert.equal(signal.run, 'npm run mutation:roles-wall-time -- "$TARGET_SHA"');
+  assert.match(signal.run, /if \[ "\$GITHUB_EVENT_NAME" = pull_request \]; then/);
+  assert.match(signal.run, /TARGET_SHA="\$\(git rev-parse HEAD\^1\)"/);
+  assert.match(signal.run, /npm run mutation:roles-wall-time -- "\$TARGET_SHA"/);
   assert.equal(
     signal.env.TARGET_SHA,
-    "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}",
+    "${{ github.event.merge_group.base_sha || github.event.before }}",
   );
   assert.equal(signal.if, undefined);
   const harness = job.steps.find((step) => step.id === "harness");

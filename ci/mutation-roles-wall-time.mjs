@@ -164,12 +164,8 @@ function compareSurvivors(root, report, execute) {
         row.baseStatus = "absent";
         continue;
       }
-      const result = runMutant(
-        baseRoot,
-        mutant,
-        () => execute(suite, baseRoot, `base-${mutant.id}`),
-        suite,
-      );
+      const killAtTarget = () => execute(suite, baseRoot, `base-${mutant.id}`);
+      const result = runMutant(baseRoot, mutant, killAtTarget, suite);
       row.baseStatus = result.status;
       if (result.status === "error" || result.status === "ambiguous")
         throw new Error(`target ${mutant.id}: ${result.detail}`);

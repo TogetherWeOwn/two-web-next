@@ -38,8 +38,12 @@ jobs:
       - name: Require tests to kill new applicable mutants
         id: signal
         env:
-          TARGET_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-        run: npm run mutation:roles-wall-time -- "$TARGET_SHA"
+          TARGET_SHA: ${{ github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            TARGET_SHA="$(git rev-parse HEAD^1)"
+          fi
+          npm run mutation:roles-wall-time -- "$TARGET_SHA"
       - name: Preserve summary including infrastructure failures
         if: always()
         env:

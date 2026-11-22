@@ -249,7 +249,7 @@ by Vitest. The slow session/join/admin mutants remain in the existing nightly
 job; that inventory, its safeguards and all coverage floors are unchanged.
 
 In Actions, `npm run mutation:roles-wall-time -- "$TARGET_SHA"` selects source or
-paired test changes between the event base and the integrated PR revision.
+paired test changes between the PR merge commit and its first parent.
 Merge groups use their base and main pushes use the previous main SHA. The runner
 refuses dirty targets, requires a green unmutated baseline, checks unique
 anchors, and reuses the nightly targeted restore with SHA-256 verification
