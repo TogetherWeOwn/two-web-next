@@ -1,5 +1,23 @@
 id: no-raw-byte-length-comparison
 snapshots:
+  'const status = chunk.byteLength <= max ? "a" : "b";':
+    labels:
+      - source: chunk.byteLength
+        style: primary
+        start: 15
+        end: 31
+      - source: byteLength
+        style: secondary
+        start: 21
+        end: 31
+      - source: <=
+        style: secondary
+        start: 32
+        end: 34
+      - source: chunk.byteLength <= max
+        style: secondary
+        start: 15
+        end: 38
   if (((Buffer.byteLength))(text) > max) cancel();:
     labels:
       - source: ((Buffer.byteLength))(text)

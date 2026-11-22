@@ -24,18 +24,29 @@ rule:
   inside:
     matches: comparison
     stopBy:
-      not:
-        any:
-          - matches: expression-wrapper
-          - kind: ternary_expression
-          - kind: unary_expression
-            has:
-              field: operator
-              regex: "^[+~-]$"
-          - kind: binary_expression
-            not:
-              matches: comparison
+      # A ternary condition selects an operand without supplying its value.
+      any:
+        - matches: ternary-condition
+        - not:
+            matches: operand-wrapper
+  not:
+    matches: ternary-condition
 utils:
+  operand-wrapper:
+    any:
+      - matches: expression-wrapper
+      - kind: ternary_expression
+      - kind: unary_expression
+        has:
+          field: operator
+          regex: "^[+~-]$"
+      - kind: binary_expression
+        not:
+          matches: comparison
+  ternary-condition:
+    inside:
+      kind: ternary_expression
+      field: condition
   expression-wrapper:
     any:
       - kind: parenthesized_expression

@@ -4,6 +4,7 @@ valid:
   - const item = <Row fits={fitsUtf8ByteLimit(text, max)} />;
   - const item = <Row size={bytes.byteLength} />;
   - const item = <Row known={typeof bytes.byteLength === "number"} />;
+  - 'const item = <Row same={(bytes.byteLength ? "a" : "b") === status} />;'
 invalid:
   - const item = <Row fits={bytes.byteLength <= max} />;
   - const item = <Row fits={max >= (offset + bytes.byteLength)} />;

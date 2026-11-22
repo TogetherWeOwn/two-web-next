@@ -8,6 +8,8 @@ valid:
   - "const payload = bytes.byteLength ? bytes : null;"
   - if (label === "byteLength") report();
   - if (typeof bytes.byteLength === "number") report();
+  - 'if ((bytes.byteLength ? "a" : "b") === status) report();'
+  - 'if (((bytes.byteLength + 1) ? "a" : "b") === status) report();'
   - if (rows.length > MAX_ROWS) refuse();
 invalid:
   - if (chunk.byteLength > remaining) cancel();
@@ -21,4 +23,5 @@ invalid:
   - if ((chunk["byteLength"] as number) >= max) refuse();
   - if (chunk.byteLength === 0) refuse();
   - "if ((chunk ? chunk.byteLength : 0) > max) refuse();"
+  - 'const status = chunk.byteLength <= max ? "a" : "b";'
   - if (+chunk.byteLength > max) refuse();
