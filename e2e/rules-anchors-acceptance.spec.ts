@@ -138,6 +138,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
           await captureRules(page, "before-resting", viewport.width);
           await page.goto("about:blank");
           await page.goto(`${BEFORE_RULES_URL}#rules-heading`);
+          await expect(heading).not.toBeFocused();
           await captureRules(page, "before-copied-page-heading", viewport.width);
         }
       });
@@ -200,6 +201,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
           await page.keyboard.press("Enter");
           await expect(page).toHaveURL(`${BEFORE_RULES_URL}${href}`);
           await expect(target).toBeInViewport();
+          await expect(target).not.toBeFocused();
           await captureRules(page, "before-rule-target", viewport.width);
         }
       });
