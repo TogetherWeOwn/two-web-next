@@ -35,9 +35,8 @@ T3 Code selects the provider, model and effort through the project default,
 thread selection or delegated reviewer target. Keep model overrides out of role
 frontmatter, settings, environment defaults and hooks. `CLAUDE.md` imports this file.
 
-- Use `gpt-6.2-sol` at `high` for routine implementation. Use `xhigh` only when
-  the task brief gives a reason. Use a provider that exposes the selected effort
-  and verify the picker label for ambiguous gateway IDs.
+- Use `gpt-6.2-sol` at `high` for routine implementation, or `xhigh` with a reason
+  in the brief. Verify the picker's model label and available effort options.
 - Use `claude-opus-5-5` at `medium` for design or difficult work such as auth,
   crypto, concurrency and debugging. It is also the default reviewer for a GPT
   author. Use `high` or `xhigh` only when the task warrants it and record the
@@ -60,16 +59,13 @@ security. Required hosted checks apply to every tier. The author resolves
 findings and verifies promotion-path routing before the pinned squash merge.
 Technical PR work proceeds without an owner decision.
 
-Handle production changes as separate release tasks. Record required checks,
-passing staging and smoke evidence for the exact candidate, a verified backup
-before any production data or schema change, and a written rollback plan
-rehearsed where supported. Resolve recovery blockers and obtain explicit
-approval from an independent release reviewer before protected execution.
-Use `claude-opus-5-5` at `high` for a GPT author's release or `gpt-6.2-sol` at
-`high` for a Claude author's release. Watch health and errors for at least 30
-minutes after the change and roll back promptly through the protected path on a
-regression. Record the outcome with the release evidence. Follow the full
-[production release contract](CONTRIBUTING.md#production-release-gate).
+The [release gate](CONTRIBUTING.md#production-release-gate) requires a separate
+task, passing exact-candidate CI, staging checks and smoke, a verified backup
+before data or schema changes, and written rollback rehearsed where supported. Resolve
+recovery blockers and obtain explicit independent approval before protected
+execution. For release review use `claude-opus-5-5` at `high` for a GPT author
+or `gpt-6.2-sol` at `high` for a Claude author. Watch health and errors for at
+least 30 minutes, roll back through the protected path on regression, and log the outcome.
 
 ## Commands
 

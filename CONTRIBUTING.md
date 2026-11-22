@@ -139,27 +139,18 @@ Before merge, require:
    renames, to verify `no`. Use T0 review if the diff may affect the promotion
    path and the available evidence cannot establish `no`.
 
-   For a promotion-path PR, record migration ledger evidence or "no migration",
-   plus the known-good rollback target and post-merge qualification route
-   where applicable. An automatic production path requires independent exact-head
-   technical release acceptance after the T0 reviews. Apply that requirement
-   when automatic production routing is uncertain. Use the final acceptance
-   stage required by the [organization standard](https://github.com/TogetherWeOwn/.github/blob/main/STANDARD.md#2-pr-review-and-merge).
-   Any later production deployment or migration needs its own exact-candidate
-   decision under the release gate.
-3. **Pin the merge and record the result.** Just before merging, the person
-   merging rereads the target ref, its live tip, the reported PR base, the
-   three-dot merge base and the head SHA. If any differs from the routing
-   record, reassess the diff and review routing against the current target
-   before merging. A head SHA pin alone does not catch a retarget or an
-   advancing target. If the diff or its
-   review context changes, obtain fresh required verdicts even when the head
-   is unchanged. Verify review coverage and required checks for the merge
-   head. Resolve threads once fixed or answered with evidence. Squash-merge
-   pinned to that reviewed head. After GitHub confirms the merge, record the
-   reviewed head and resulting squash SHA in the release log for every merge.
-   Include the final technical acceptance when required, and record approval
-   only after a successful merge.
+   For a promotion-path PR, record migration evidence or "no migration" and,
+   where applicable, the rollback target and qualification route. A present or
+   uncertain automatic production path requires exact-head technical release
+   acceptance after T0 review under the [organization standard](https://github.com/TogetherWeOwn/.github/blob/main/STANDARD.md#2-pr-review-and-merge).
+   A later production deploy or migration requires separate release approval.
+3. **Pin the merge and record the result.** Before merging, reread the target
+   ref, live tip, reported PR base, three-dot merge base and head SHA. Reassess
+   the diff and routing if any changed, and obtain fresh verdicts if the diff
+   or review context changed. Verify review coverage and checks on the head.
+   Resolve threads once fixed or answered with evidence. Pin the squash merge
+   to that head. After GitHub confirms the merge, record the reviewed head,
+   squash SHA and any required final technical acceptance in the release log.
 
    Production holds and staging rollback-drill checks govern production
    deployment, not a merge that does not deploy to production. Keep any
@@ -202,16 +193,13 @@ the change, record all of the following in the task:
    included PR received the reviews for its tier.
 2. The exact candidate ran on staging and passed its staging checks and smoke
    test. Retain the soak and candidate verification required above.
-3. Recovery blockers are resolved. Take and verify a backup or snapshot before
-   any production data or schema change. Document the previous version and the
-   rollback or restore path, and rehearse recovery where supported. Retain
-   existing incident and staging rollback-drill guards.
-4. A new independent release reviewer from a different model family read the
-   plan and evidence and explicitly approved the exact candidate and operation.
-   Use `claude-opus-5-5` at `high` when the author is GPT and `gpt-6.2-sol` at `high`
-   when the author is Claude. If the reviewer blocks, resolve the findings and
-   request a fresh review. This is a technical approval within existing
-   authority. Owner-routed approvals and settings stay with the owner.
+3. Resolve recovery blockers and retain incident and staging rollback-drill
+   guards. Take and verify a backup or snapshot before data or schema changes.
+   Document the previous version and rollback or restore path, rehearsed where supported.
+4. A new independent release reviewer from a different model family reviewed
+   the plan and evidence and explicitly approved the exact candidate and operation. Follow
+   [AGENTS.md](AGENTS.md#review-and-release) for model selection. Resolve any
+   blockers before fresh review. Owner-routed approvals and settings stay with the owner.
 
 Use authorized identities for all production changes. Run deploys and migrations
 through the existing protected workflows. For other operations, use the existing

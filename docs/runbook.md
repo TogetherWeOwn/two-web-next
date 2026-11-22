@@ -883,12 +883,9 @@ Before the deploy job, `deploy-production` runs two more gates
   artifact (an `e2e-staging` run that predates it, or an expired artifact)
   is refused; roll back with `rollback-production` instead of redeploying it.
 
-Automatic promotion, including an explicit-SHA dispatch, also requires the
-candidate's `e2e-staging` pass to be at least 30 minutes old. In reviewer
-mode the approval stands in for the resolver but not for the soak floor:
-when a staging pass for the candidate exists, it must still have soaked 30
-minutes; a promotion with no staging evidence yet rides on the reviewer's
-approval alone.
+Both modes require the staged candidate and its 30-minute soak. Reviewer-mode
+preflight can pass without staging evidence. Regression still requires the
+candidate's ledgers before deploy.
 
 Both modes refuse a candidate with red staging evidence: any failed or
 timed-out `e2e-staging` run that names it, or any run past its first attempt.
@@ -896,9 +893,8 @@ GitHub's run list shows only a run's latest attempt, so a re-run that turned
 green hides the red attempt it replaced; the gate counts the re-run itself as
 red. The check reads every `e2e-staging` run created since the candidate was
 committed, not a fixed window, so a fresh redeploy cannot bury an older red
-run; a history too long to read in full (over 1,000 runs) is refused. A
-reviewer approval stands in for missing staging evidence, never for red
-evidence. Fix forward: land a new commit and promote it once its own staging
+run; a history too long to read in full (over 1,000 runs) is refused. Fix
+forward: land a new commit and promote it once its own staging
 run passes on the first attempt. A re-run can still diagnose a flake, but its
 green is not promotion evidence.
 
