@@ -153,6 +153,7 @@ class Verification(unittest.TestCase):
             "- `$ ./bin/smoke` exited with status 1 and the fixture reproduced the regression.",
             "- `git diff --check` returned no output. The full suite was not run locally.",
             "- `pytest` – 24 passed, 1 pending.",
+            "- `jest` — 41 passed, 0 failed.",
             "- `git rev-parse HEAD` returned `0123456789abcdef`.",
             "- `npm test`\n  passed 41 tests.",
             "- `npm test`\n\n  Passed 41 tests.",
@@ -178,6 +179,7 @@ class Verification(unittest.TestCase):
             "- `npm test`",
             "- `npm test` — not run yet.",
             "- `npm test` — expected result: pass.",
+            "- `npm test` — expected output: 41 passed, 0 failed.",
             "- `npm test` has not yet passed.",
             "- `npm test` will pass once CI runs.",
             "- `npm test` was not run; expected to report 41 tests passed.",
@@ -240,7 +242,8 @@ class Verification(unittest.TestCase):
                 self.assertEqual([("error", "PR template")], levels(self.findings(items)))
 
     def test_wrapped_publisher_permalink_does_not_supply_description(self):
-        self.assertEqual([("error", "PR body")], levels(ps.evaluate(env(BODY=self.WRAPPED_PERMALINK))))
+        findings = ps.evaluate(env(BODY=self.WRAPPED_PERMALINK, REPO_PRIVATE="false"))
+        self.assertEqual([("error", "PR body")], levels(findings))
 
 
 class CardAndInternalRefs(unittest.TestCase):

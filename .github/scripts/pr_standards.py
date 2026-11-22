@@ -60,6 +60,7 @@ QUOTE_PREFIX = re.compile(r"^(?: {0,3}> ?)+")
 FENCED_BLOCK = re.compile(r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ `~\t]*$|\Z)", re.M | re.S)
 INLINE_CODE = re.compile(r"(?<![\\`])(`+)(?!`).+?(?<!`)\1(?!`)", re.S)
 COMMAND = re.compile(r"(?:[A-Za-z_][\w.-]*(?:/[^\s]+)?|(?:\.{1,2}/|/)[^\s]+)")
+RESULT_WORDS = {"pass", "passes", "passed", "fail", "fails", "failed", "success", "failure", "pending", "ok"}
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 COMMAND_PLACEHOLDER = re.compile(r"^(?:\$\s+)?(?:cmd|command|test command|example|todo|tbd)\b|<\w[\w -]*>|(?:^|\s)\.{3}(?:$|\s)", re.I)
 COMMAND_INTRO = re.compile(r"\b(?:ran|running|executed|using|with|via|under|by|command)\s*:?\s*$", re.I)
@@ -72,12 +73,12 @@ RESULT = re.compile(
 )
 RESULT_PLACEHOLDER = re.compile(
     r"\b(?:(?:not|never)\s+(?:(?:yet|been)\s+)*(?:run|executed|passed|failed|reproduced|confirmed|returned)|"
-    r"(?:expected\s+(?:result|to)|(?:will|should|would|must)\s+\w+))\b[^.;\n]*", re.I,
+    r"(?:expected\s+(?:result|output|to)|(?:will|should|would|must)\s+\w+))\b[^.;\n]*", re.I,
 )
 # Scan complete link destinations or bare URL tokens, then validate the whole destination.
 EVIDENCE_LINK = re.compile(
-    r"!?\[[^\]\n]*\]\((?P<inline><[^\s<>]+>|[^\s<>)]+)(?:[ \t]+\"[^\"\n]*\")?\)|"
-    r"!?\[(?P<label>[^\]\n]+)\](?:\[(?P<ref>[^\]\n]*)\])?|"
+    r"!?\[[^\[\]\n]*\]\((?P<inline><[^\s<>]+>|[^\s<>)]+)(?:[ \t]+\"[^\"\n]*\")?\)|"
+    r"!?\[(?P<label>[^\[\]\n]+)\](?:\[(?P<ref>[^\[\]\n]*)\])?|"
     r"(?:^|(?<=[\s(<]))(?P<bare>https?://[^\s<>\])]+)", re.I,
 )
 LINK_DEFINITION = re.compile(
@@ -196,12 +197,8 @@ def is_command(text):
         args = shlex.split(command)
     except ValueError:
         return False
-    prompted = args[:1] == ["$"]
-    args = dropwhile(ASSIGNMENT.match, args[1:] if prompted else args)
-    program = next(args, "")
-    return bool(COMMAND.fullmatch(program) and (
-        prompted or "/" in program or program in {"make", "pytest", "tsc", "vitest"} or next(args, None)
-    ))
+    program = next(dropwhile(ASSIGNMENT.match, args[1:] if args[:1] == ["$"] else args), "")
+    return bool(COMMAND.fullmatch(program) and program.casefold() not in RESULT_WORDS)
 
 
 def has_verification_evidence(item, references):
