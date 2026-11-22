@@ -215,8 +215,8 @@ durable record behind it.
 ### Change-gated CI and `ci-ok`
 
 The [PR evidence publisher](.github/workflows/pr-evidence.yml) maintains one
-bot comment per PR targeting `main`. Add its permalink to Verification once as
-`[Exact-head Actions evidence](#issuecomment-ID)` and match its SHA to the live head.
+bot comment per PR targeting `main`. Add the full comment permalink to
+Verification once as `Exact-head Actions evidence` and match its SHA to the live head.
 
 `pr-evidence-fixtures` fails on fixture regressions. The owner can consider
 requiring it after merge and green runs on `main` and two later PRs.

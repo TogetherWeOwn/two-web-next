@@ -30,7 +30,7 @@ Full rules: CONTRIBUTING.md, "Pull request contract".
 ## Verification
 
 <!-- Commands you ran and their results, so a reviewer can repeat them. -->
-<!-- Once the bot publishes its comment, link it once as `[Exact-head Actions evidence](#issuecomment-ID)`. -->
+<!-- Add the bot comment’s full permalink once with the link label `Exact-head Actions evidence`. -->
 
 -
 

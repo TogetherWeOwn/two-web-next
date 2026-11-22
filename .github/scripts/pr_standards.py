@@ -104,7 +104,6 @@ def strip_comments(text):
 
 
 def description_text(body):
-    """Count author text independently of the reserved Actions evidence link."""
     link = r"(?:https://github\.com/TogetherWeOwn/two-web-next/pull/[1-9][0-9]*)?#issuecomment-[1-9][0-9]*"
     return re.sub(rf"^\[Exact-head Actions evidence\]\({link}\)[ \t\r]*$", "", strip_comments(body), flags=re.M)
 
@@ -206,7 +205,7 @@ def check_pull_request(env):
     elif not generated:
         ptype = pr_type(title)
         light = ptype in LIGHT_TYPES
-        sections = parse_sections(body)
+        sections = parse_sections(plain)
         for heading, minimum, skip_light in REQUIRED_SECTIONS:
             if skip_light and light:
                 continue

@@ -157,7 +157,7 @@ class PrConventionsTests(unittest.TestCase):
         self.assertIn("::error title=PR body::", output)
 
     def test_evidence_link_does_not_count_as_description(self):
-        link = "[Exact-head Actions evidence](#issuecomment-123)"
+        link = "[Exact-head Actions evidence](https://github.com/TogetherWeOwn/two-web-next/pull/7#issuecomment-8)"
         self.assertIn("::error title=PR body::", self.run_checker(1, BODY=link))
         self.run_checker(BODY=BODY + "\n" + link)
 

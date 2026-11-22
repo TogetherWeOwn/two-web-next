@@ -37,17 +37,12 @@ def pages(api, path, key=None):
     path += ("&" if "?" in path else "?") + "per_page=100"
     batches = api("GET", path, paginate=True)
     require(isinstance(batches, list) and 0 < len(batches) <= 10, "GitHub metadata pagination limit reached")
-    if not key:
-        return [row for batch in batches for row in batch]
-    total = batches[0]["total_count"]
-    require(type(total) is int and 0 <= total < 1000, "GitHub metadata count missing or capped")
-    rows = []
-    for batch in batches:
-        require(batch["total_count"] == total and len(batch[key]) == min(100, total - len(rows)),
-                "Incomplete GitHub metadata page")
-        rows.extend(batch[key])
-    require(len(rows) == total and len({row["id"] for row in rows}) == total,
-            "Incomplete or duplicate GitHub metadata")
+    rows = [row for batch in batches for row in (batch[key] if key else batch)]
+    if key:
+        total = len(rows)
+        valid_counts = all(type(batch["total_count"]) is int and batch["total_count"] == total for batch in batches)
+        require(total < 1000 and valid_counts and len({row["id"] for row in rows}) == total,
+                "Incomplete or duplicate GitHub metadata")
     return rows
 
 
@@ -61,16 +56,16 @@ def select_runs(api, pr, ready):
                         (source == "pr-size" and run["event"] == "pull_request_review"))
                    and run["head_sha"] == head["sha"] and run["head_branch"] == head["ref"]
                    and (run["head_repository"] or {}).get("id") == head["repo"]["id"]
-                   and any(assoc["number"] == pr["number"] and assoc["base"]["ref"] == base["ref"]
-                           and assoc["base"]["repo"]["id"] == base["repo"]["id"]
-                           for assoc in run["pull_requests"])]
+                   and (not run["pull_requests"] or any(
+                       assoc["number"] == pr["number"] and assoc["base"]["ref"] == base["ref"]
+                       and assoc["base"]["repo"]["id"] == base["repo"]["id"] for assoc in run["pull_requests"]))]
         if matches:
             require(all(positive(run[k]) for run in matches for k in ("id", "run_number", "run_attempt")),
                     "Invalid Actions run identity")
             run = max(matches, key=lambda item: (item["run_number"], item["id"]))
             # Draft CI and E2E can fast-pass while their heavy jobs are skipped.
             outcome = "superseded" if source in ("ci", "e2e") and run["created_at"] < ready else result(run)
-            latest[source] = (run["id"], run["run_attempt"], outcome)
+            latest[source] = (run["id"], run["run_attempt"], outcome if run["pull_requests"] else "unbound")
     return latest
 
 
@@ -144,10 +139,9 @@ def publish(api, repository, number):
 
     link = f"{web}/pull/{number}"
     heading = f"{MARKER}### PR #{number} Actions evidence\n\nHead [`{sha}`]({link}/commits/{sha}) · target `main`\n"
-    draft = "Draft PR. Aggregators may fast-pass.\n\n" if pr["draft"] else ""
     footer = f"See the [PR checks]({link}/checks) for live status. Copy this comment’s link to Verification.\n"
     try:
-        summary = f"{heading}\n{draft}{collect(api, pr, web)}\n\n{footer}"
+        summary = f"{heading}\n{collect(api, pr, web)}\n\n{footer}"
     except (ValueError, KeyError, TypeError, subprocess.SubprocessError):
         if identity(pr) == identity(api("GET", pull)):
             write(f"{heading}\nEvidence unavailable. {footer}")

@@ -70,6 +70,7 @@ class EvidenceTest(unittest.TestCase):
     def test_superseded_incomplete_failed_and_skipped(self):
         for changes, missing, expected in (
             (dict(status="in_progress", run_attempt=2), True, r"\[pending\].*attempts/2\) \| missing \| pending"),
+            (dict(pull_requests=[]), True, r"\[unbound\].*\| missing \| unbound"),
             (dict(conclusion="failure"), False, r"\[failure\].*\| \[failure\]"),
             (dict(run_attempt=2), True, r"attempts/2\) \| missing"),
             (dict(conclusion="skipped"), False, r"\| \[skipped\]"),
