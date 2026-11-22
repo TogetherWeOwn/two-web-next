@@ -65,9 +65,8 @@ RESULT_WORDS = {"pass", "passes", "passed", "fail", "fails", "failed", "success"
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 COMMAND_PLACEHOLDER = re.compile(r"^(?:\$\s+)?(?:cmd|command|test command|example|todo|tbd)\b|<\w[\w -]*>|(?:^|\s)\.{3}(?:$|\s)", re.I)
 COMMAND_INTRO = re.compile(r"\b(?:ran|running|executed|using|with|via|under|by|command)\s*:?\s*$", re.I)
-UNRUN_BEFORE = re.compile(r"\b(?:not|never|will|should|would)\s+(?:run|execute)\s*$", re.I)
-UNRUN_AFTER = re.compile(r"^[\s:–—-]*(?:(?:was|is|has been)\s+)?(?:not(?: yet)?|never)\s+(?:run|executed)\b", re.I)
-CONTRAST = re.compile(r"[,;]\s+(?:but|however|whereas)\s+", re.I)
+UNRUN_BEFORE = re.compile(r"\b(?:not|never|will|should|would|expected to)\s+(?:run|execute)[\s(]*$", re.I)
+UNRUN_AFTER = re.compile(r"^[\s):–—-]*(?:(?:was|is|has been)\s+)?(?:not(?: yet)?|never)\s+(?:run|executed)\b", re.I)
 RESULT = re.compile(
     r"\b(?:passes|passed|fails|failed|succeeded|reproduced|matched|confirmed|found|"
     r"accepted|rejected|detected|timed out|exited)\b|"
@@ -77,7 +76,8 @@ RESULT = re.compile(
 )
 RESULT_PLACEHOLDER = re.compile(
     r"\b(?:(?:not|never)\s+(?:(?:yet|been)\s+)*(?:run|executed|passed|failed|reproduced|confirmed|returned)|"
-    r"(?:expected\s+(?:result|output|to)|(?:will|should|would|must)\s+\w+))\b[^.;\n]*", re.I,
+    r"(?:expected\s+(?:result|output|to)|(?:will|should|would|must)\s+\w+))\b"
+    r"(?:(?!,\s+(?:but|however|whereas)\b)[^.;\n])*", re.I,
 )
 # Scan complete link destinations or bare URL tokens, then validate the whole destination.
 EVIDENCE_LINK = re.compile(
@@ -208,7 +208,7 @@ def is_command(text, explicit):
                 and (explicit or prompted or next(tokens, None)))
 
 
-def clause_has_evidence(item, references):
+def has_verification_evidence(item, references):
     prose = INLINE_CODE.sub(" CODE ", item)
     result_parts, start = [], 0
     for link in EVIDENCE_LINK.finditer(prose):
@@ -229,7 +229,7 @@ def clause_has_evidence(item, references):
         suffix = item[span.end():]
         if UNRUN_BEFORE.search(prefix) or UNRUN_AFTER.match(suffix):
             continue
-        parenthesized = prefix.endswith("(") and suffix.lstrip().startswith(")")
+        parenthesized = prefix.endswith("(") and suffix.lstrip().startswith(")") and RESULT.search(suffix)
         explicit = not prefix or prefix.endswith(":") or COMMAND_INTRO.search(prefix) or parenthesized
         if not explicit and RESULT.search(prefix):
             continue
@@ -237,17 +237,6 @@ def clause_has_evidence(item, references):
         if is_command(span[0][width:-width], explicit):
             return True
     return False
-
-
-def has_verification_evidence(item, references):
-    # Preserve span offsets while hiding shell syntax from the prose delimiters.
-    prose = INLINE_CODE.sub(lambda span: "\0" * len(span[0]), item)
-    start = 0
-    for contrast in CONTRAST.finditer(prose):
-        if clause_has_evidence(item[start:contrast.start()], references):
-            return True
-        start = contrast.end()
-    return clause_has_evidence(item[start:], references)
 
 
 def verification_items(content):
@@ -286,8 +275,9 @@ def verification_markup(body):
 def invalid_verification_items(content, references):
     items = list(verification_items(content))
     bullets = [item for is_bullet, item in items if is_bullet]
-    evidence = bullets or [item for _, item in items] or [""]
-    return [n for n, item in enumerate(evidence, 1) if not has_verification_evidence(item, references)]
+    if not bullets:
+        return [] if any(has_verification_evidence(item, references) for _, item in items) else [1]
+    return [n for n, item in enumerate(bullets, 1) if not has_verification_evidence(item, references)]
 
 
 def internal_hits(text, prefixes, slug=False):
@@ -374,7 +364,7 @@ def check_pull_request(env):
                 if invalid:
                     numbers = ", ".join(map(str, invalid))
                     out.append(Finding(level, "PR template", f"'## Verification' needs a code-formatted command "
-                                       f"with its observed result or a GitHub Actions run/job URL in each item "
+                                       f"with its observed result or a GitHub Actions run/job URL. Give evidence in each bullet "
                                        f"(missing in: {numbers})."))
             elif real_items(content) < minimum:
                 need = f"at least {minimum} items" if minimum > 1 else "real content"

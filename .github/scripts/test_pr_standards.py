@@ -154,6 +154,7 @@ class Verification(unittest.TestCase):
             "- `git diff --check` returned no output. The full suite was not run locally.",
             "- `pytest` – 24 passed, 1 pending.",
             "- Local tests (`pytest`) passed.",
+            "- Ran `pytest`, but it failed.",
             "- `jest` — 41 passed, 0 failed.",
             "- Unit tests passed: `npm test`.",
             "- The browser suite was not run, but `npm test` passed.",
@@ -164,6 +165,7 @@ class Verification(unittest.TestCase):
             "- `NODE_ENV=production npm run build --prefix web` passed.",
             "- `NODE_ENV=production LABEL='test build' npm run build` passed.",
             "`npm test` passed 41 tests.",
+            "Used an offline fixture.\n\n`npm test` passed 41 tests.",
             f"### Local checks\n\n{self.ITEM}\n\n* * *\n\n- [CI run]({self.RUN})",
             f"CI ran on GitHub.\n\n{self.ITEM}\n\nOther checks are pending.",
             f"- [CI run]({self.RUN})",
@@ -176,6 +178,7 @@ class Verification(unittest.TestCase):
             f"- [CI run][ci  run]\n\n[CI RUN]: {self.RUN}",
             f"- [CI][]\n\n## Links\n\n[ci]: <{self.RUN}> \"CI\"",
             f"- [CI]\n\n[ci]: {self.RUN}",
+            f"- [CI passed, but lint warned]\n\n[ci passed, but lint warned]: {self.RUN}",
             f"- [CI][run]\n\n## Notes\n\nCI logs\n=======\n[run]: {self.RUN}",
         ):
             with self.subTest(item=item):
@@ -195,6 +198,7 @@ class Verification(unittest.TestCase):
             "- `npm test` was not run; expected to report 41 tests passed.",
             "- `npm test` was not run, but CI passed.",
             "- `npm test` was not run. CI passed.",
+            "- Will run `npm test` tomorrow. CI passed.",
             "- `npm test` will return exit code 0.",
             "- `npm test` returned TBD.",
             "- `<command>` passed.",
@@ -204,6 +208,8 @@ class Verification(unittest.TestCase):
             "- Manual smoke passed and returned `200 OK`.",
             "- Manual smoke passed and returned `no output`.",
             "- The `web` build passed.",
+            "- The migration was confirmed (`migration.sql`).",
+            "- The local suite (`pytest`) was not run. CI passed.",
             "- `npm test` [41 passed, 0 failed](https://example.org).",
             "- `npm test` <!-- passed -->",
             "- `passed`",
@@ -234,6 +240,7 @@ class Verification(unittest.TestCase):
             f"https://example.org/?next={self.RUN}",
             f"[{self.RUN}](https://example.org)",
             f"![CI]({self.RUN})",
+            f"![CI passed, but lint warned]({self.RUN})",
             f"`{self.RUN}`",
             "[CI run][missing]",
             f"[CI][ref]\n\n## Links\n\nCI logs:\n[ref]: {self.RUN}",
@@ -251,8 +258,7 @@ class Verification(unittest.TestCase):
                 self.assertIn("missing in: 2, 4", findings[0].message)
         repeated = self.findings(f"- CI pending\n\n## Verification\n\n{self.ITEM}")
         self.assertEqual([("error", "PR template")], levels(repeated))
-        for items in ("- `npm test`\n\nPassed 41 tests.", "### Local checks\n\nCI pending.",
-                      "`npm test` passed.\n\nCI pending."):
+        for items in ("- `npm test`\n\nPassed 41 tests.", "### Local checks\n\nCI pending."):
             with self.subTest(items=items):
                 self.assertEqual([("error", "PR template")], levels(self.findings(items)))
 
