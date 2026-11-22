@@ -10,6 +10,7 @@ import postgres from "postgres";
 import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
 import {
   allowsEndedMemberBoardCopy,
+  hasKitGuestChrome,
   memberBoardEmptyText,
   memberBoardStatus,
 } from "../../ci/kit-parity-gates.mjs";
@@ -334,6 +335,11 @@ function headerSignOut(page: Page) {
     .and(page.getByRole("button", { name: "Sign out", exact: true }));
 }
 
+function expectGuestChrome(body: string, marker: string | null, href?: string) {
+  if (marker === "kit") expect(hasKitGuestChrome(body, href)).toBe(true);
+  else expect(body).toContain("Welcome, guest");
+}
+
 test("kit: capture synthetic non-member and account-hidden headers", async ({ browser }) => {
   test.setTimeout(120_000);
   requireGithubRunner();
@@ -400,6 +406,12 @@ test("kit: capture synthetic non-member and account-hidden headers", async ({ br
           animations: "disabled",
           caret: "hide",
         });
+        expect((await page.goto("/events"))?.headers()["x-two-renderer"]).toBe("kit");
+        await (await compactMenu(page))?.click();
+        const header = page.getByRole("banner");
+        await expect(header.locator('a[href="/join"]')).toHaveCount(0);
+        if (state === "non-member") await expect(headerSignOut(page)).toHaveCount(1);
+        else await expect(header.getByRole("link", { name: "Open Discord" })).toHaveCount(1);
       } finally {
         try {
           await context.close();
@@ -502,7 +514,7 @@ for (const target of targets) {
       expect(body).toContain('data-testid="events-past-archive-link"');
       expect(body).toContain('data-testid="events-subscribe"');
       expect(body).toContain("E2E Community Night");
-      expect(body).toContain("Welcome, guest");
+      expectGuestChrome(body, expectedMarker);
       expect(body).not.toContain("Sign out");
     });
 
@@ -537,7 +549,7 @@ for (const target of targets) {
       expect(scrubSecrets(body)).toEqual([]);
       expect(body).toContain('data-testid="join-oneclick"');
       expect(body).toContain('data-testid="join-invite"');
-      expect(body).toContain("Welcome, guest");
+      expectGuestChrome(body, expectedMarker, "/auth/discord");
       expect(body).not.toContain("Sign out");
       expect(body).not.toContain("<iframe");
       // Exactly one widget zone across the three isolate states (cold facade,
@@ -1286,13 +1298,19 @@ for (const target of targets) {
           });
           const menu = await compactMenu(page);
           const logo = await page.locator(".brand img:visible").boundingBox();
-          expect(logo?.height).toBe(menu ? 32 : 50);
-          if (menu) expect(logo?.width).toBeCloseTo((456.86 * 32) / 126.34, 1);
+          const ember = target.name === "kit" && state.path === "/events";
+          const height = menu ? 32 : ember ? 38 : 50;
+          expect(logo?.height).toBe(height);
+          if (menu || ember) expect(logo?.width).toBeCloseTo((456.86 * height) / 126.34, 1);
           else expect(logo?.width).toBe(width <= 480 ? 50 : 180);
+          const header = page.getByRole("banner");
+          if (ember) await expect(header).toHaveCSS("height", width <= 820 ? "60px" : "68px");
           await menu?.click();
+          if (ember)
+            await expect(header.getByRole("link", { name: "Join", exact: true })).toHaveCount(1);
           const chrome = (await page.evaluate(`(() => {
             const account = document.querySelector('.header-account');
-            const button = account.querySelector('.btn');
+            const button = account.querySelector('.btn, .ember-header-action');
             const who = account.querySelector('.who');
             const range = document.createRange();
             if (button) range.selectNodeContents(button);
@@ -2437,7 +2455,7 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
       });
       expect(response.status()).toBe(200);
       const body = await response.text();
-      expect(body).toContain("Welcome, guest");
+      expectGuestChrome(body, target.name === "kit" ? expectedKitMarker("/events") : null);
       expect(body).not.toContain("Sign out");
       expect(response.headers()["set-cookie"] ?? null).toBeNull();
       bodies.set(target.name, normalizeOrigin(body, target.origin));

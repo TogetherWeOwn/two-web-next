@@ -26,8 +26,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
 
 {#snippet accountChrome()}
   <div>
-    <span class="account-caption">Welcome, guest</span>
-    <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+    <a class="ember-header-action" href="/auth/discord" aria-label="Sign in with Discord" data-testid="signin">Sign in</a>
   </div>
 {/snippet}
 

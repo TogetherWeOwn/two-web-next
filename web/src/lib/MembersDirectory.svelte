@@ -96,8 +96,8 @@ function href(filter = "active", query = "", page = 1) {
   }
   /* On short viewports, leave the toolbar in flow so focused results stay visible. */
   @media (height > 360px) {
-    .directory-toolbar { position: sticky; top: 0; z-index: 1; }
-    :global(html:has(.directory-toolbar)) { scroll-padding-block-start: 100px; }
+    .directory-toolbar { position: sticky; top: var(--two-size-header-wide); z-index: 1; }
+    :global(html:has(.directory-toolbar)) { scroll-padding-block-start: calc(100px + var(--two-size-header-wide)); }
   }
   form { display: flex; align-items: center; gap: var(--space-2); flex: 1 1 280px; max-width: 420px; }
   input[type="search"] {
@@ -118,12 +118,13 @@ function href(filter = "active", query = "", page = 1) {
   .directory-columns { display: grid; grid-template-columns: minmax(0, 1fr) var(--two-layout-rail-min); gap: var(--two-space-8); padding-block: var(--space-3) var(--space-11); }
   .directory-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding-block: var(--space-3); }
   @media (max-width: 820px) and (height > 360px) {
-    /* Override the compact shell inset so focus clears the sticky toolbar. */
-    :global(html:root:has(.directory-toolbar)) { scroll-padding-block-start: 180px; }
+    /* Override the compact header's scroll inset to clear both sticky bars. */
+    :global(html:root:has(.directory-toolbar)) { scroll-padding-block-start: 240px; }
+    .directory-toolbar { top: var(--two-size-header-compact); }
+    /* The toolbar sticks to the viewport edge with the in-flow fragment menu. */
+    :global(.base-theme:has(> [data-kit-site-header]:target:not([data-menu-ready]))) .directory-toolbar { top: 0; }
   }
   @media (max-width: 820px) {
-    /* Only the directory toolbar sticks; the two-row shell header scrolls away. */
-    :global(.base-theme:has(.directory-toolbar) > [data-kit-site-header]) { position: static; }
     .directory-toolbar { flex-direction: column; align-items: stretch; }
     form { flex: auto; max-width: none; }
     .directory-toolbar :global(.segments > a) { flex: 1; padding-inline: var(--space-2); }

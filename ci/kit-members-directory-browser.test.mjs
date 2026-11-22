@@ -59,11 +59,11 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
           const header = page.getByRole("banner");
           const join = header.getByRole("link", { name: "Join", exact: true });
           const guest = name === "guest";
-          assert.equal(await join.count(), 0, `${name} header at ${viewport.width}px`);
+          assert.equal(await join.count(), Number(guest), `${name} header at ${viewport.width}px`);
           if (viewport.width !== 390) continue;
           await header.getByRole("link", { name: "Menu", exact: true }).click();
           const account = header.getByRole("navigation", { name: "Account" });
-          const actions = guest ? ["Sign in with Discord"] : ["Your profile"];
+          const actions = guest ? ["Sign in", "Join"] : ["Your profile"];
           assert.deepEqual(await account.getByRole("link").allTextContents(), actions);
           await page.screenshot({
             path: `${out}/${name}-menu-open-390.png`,
@@ -139,6 +139,8 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
       ]) {
         await page.setViewportSize({ width, height });
         await open("?state=many");
+        const header = page.getByRole("banner");
+        assert.equal(await header.evaluate((node) => getComputedStyle(node).position), "sticky");
         const form = page.getByRole("search", { name: "Search members" });
         const { inset, stickyHeight } = await form.evaluate((node) => {
           const header = document.querySelector("[data-kit-site-header]");
