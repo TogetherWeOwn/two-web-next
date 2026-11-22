@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { verifyPureHonoRecoveryAttestation } from "./pure-hono-recovery-attestation.mjs";
+import { projectPureHonoVersionedConfig } from "./pure-hono-recovery-config.mjs";
 import { validatePureHonoRecoveryEvidence } from "./pure-hono-recovery-evidence.mjs";
 import { RECOVERY_MEMBER_LIMITS } from "./pure-hono-recovery-members.mjs";
 import { packPureHonoRecovery } from "./pure-hono-recovery-packager.mjs";
@@ -628,6 +629,125 @@ function packagerInput() {
     run,
   };
 }
+
+function versionedConfigFixture() {
+  return {
+    scope: "versioned",
+    scriptName: "two-web-next-production",
+    versionId: "11111111-1111-4111-8111-111111111111",
+    compatibilityDate: "2024-02-29",
+    compatibilityFlags: ["nodejs_compat"],
+    bindings: {
+      ASSETS: { kind: "assets" },
+      CF_VERSION_METADATA: { kind: "version_metadata" },
+      DB: { kind: "hyperdrive", id: "7489f6ad630042148cdef83602f27b8a" },
+      BOT_DB: { kind: "hyperdrive", id: "14c00d84d1d446c1b117861f3b49473f" },
+      INTERNAL_ACTION_QUEUE: {
+        kind: "queue",
+        queueName: "two-web-next-production-internal-action",
+      },
+      SYNC_EVENT_QUEUE: { kind: "queue", queueName: "two-web-next-production-sync-event" },
+      APP_URL: { kind: "plain_text", text: "https://togetherweown.com" },
+      DISCORD_CLIENT_ID: { kind: "plain_text", text: "1539711683898118154" },
+      DISCORD_GUILD_ID: { kind: "plain_text", text: "326474832151838730" },
+      DISCORD_INVITE_URL: { kind: "plain_text", text: "https://discord.gg/4GwEDNRTtx" },
+      DISCORD_MODERATOR_ROLE_IDS: {
+        kind: "plain_text",
+        text: "1546777855801954408,1546777856984481792",
+      },
+      FEATURED_IMAGE_HOSTS: { kind: "plain_text", text: "" },
+      DISCORD_BOT_TOKEN: { kind: "secret_text" },
+      DISCORD_CLIENT_SECRET: { kind: "secret_text" },
+      SESSION_SECRET: { kind: "secret_text" },
+    },
+  };
+}
+
+test("pure Hono versioned config preserves reviewed fields in deterministic partial bytes", () => {
+  const { scope, ...versioned } = versionedConfigFixture();
+  const result = projectPureHonoVersionedConfig({ scope, ...versioned });
+  const expected = { schema: "two.pure-hono-versioned-config.partial.v1", ...versioned };
+  assert.deepEqual(result, {
+    partialVersionedConfig: Buffer.from(`${JSON.stringify(expected)}\n`, "utf8"),
+  });
+  const reverseFields = (value) => Object.fromEntries(Object.entries(value).reverse());
+  const shuffled = reverseFields({
+    scope,
+    ...versioned,
+    bindings: Object.fromEntries(
+      Object.entries(versioned.bindings)
+        .reverse()
+        .map(([name, value]) => [name, reverseFields(value)]),
+    ),
+  });
+  assert.deepEqual(projectPureHonoVersionedConfig(shuffled), result);
+  assert.throws(() => packPureHonoRecovery({ ...packagerInput(), effectiveConfig: result }), {
+    message: "pure Hono recovery packaging refused: worker or config missing",
+  });
+});
+
+test("pure Hono versioned config refuses unsafe observations without echoing data", () => {
+  const sentinel = "DO-NOT-SERIALIZE-fixture-credential-or-unreviewed-text";
+  const fixture = versionedConfigFixture();
+  const { bindings } = fixture;
+  const cases = [
+    [null, "versioned observation shape"],
+    [{ ...fixture, scope: "non-versioned" }, "versioned observation shape"],
+    [{ ...fixture, compatibilityDate: undefined }, "runtime compatibility"],
+    [{ ...fixture, [sentinel]: [] }, "versioned observation shape"],
+    [{ ...fixture, [Symbol(sentinel)]: [] }, "versioned observation shape"],
+    [Object.defineProperty({ ...fixture }, sentinel, { value: [] }), "versioned observation shape"],
+    [{ ...fixture, routes: [] }, "versioned observation shape"],
+    [{ ...fixture, scriptName: sentinel }, "version identity"],
+    [{ ...fixture, versionId: `${fixture.versionId}\n` }, "version identity"],
+    [{ ...fixture, versionId: "00000000-0000-0000-0000-000000000000" }, "version identity"],
+    [{ ...fixture, compatibilityDate: "2025-02-29" }, "runtime compatibility"],
+    [{ ...fixture, compatibilityFlags: ["nodejs_compat", sentinel] }, "runtime compatibility"],
+    [{ ...fixture, compatibilityFlags: Array(1) }, "runtime compatibility"],
+    [{ ...fixture, bindings: { ...bindings, [sentinel]: {} } }, "binding inventory"],
+  ];
+  for (const name of Object.keys(bindings)) {
+    const incomplete = { ...bindings };
+    delete incomplete[name];
+    cases.push([{ ...fixture, bindings: incomplete }, "binding inventory"]);
+  }
+  for (const [name, replacement, error] of [
+    ["DISCORD_BOT_TOKEN", { kind: "secret_text", value: sentinel }, "binding shape"],
+    ["SESSION_SECRET", { kind: "plain_text", text: sentinel }, "binding shape"],
+    [
+      "FEATURED_IMAGE_HOSTS",
+      { kind: "plain_text", text: "looks-public.example" },
+      "unreviewed public value",
+    ],
+    ["DISCORD_INVITE_URL", { kind: "plain_text", text: sentinel }, "unreviewed public value"],
+    ["INTERNAL_ACTION_QUEUE", { kind: "queue", queueName: sentinel }, "queue identity"],
+    ["ASSETS", { kind: "assets", headers: sentinel }, "binding shape"],
+    ["DB", { kind: "hyperdrive", id: "0".repeat(32) }, "Hyperdrive identity"],
+    ["DB", bindings.BOT_DB, "Hyperdrive identity"],
+    ["BOT_DB", { kind: "hyperdrive", id: "a".repeat(32) }, "Hyperdrive identity"],
+  ]) {
+    cases.push([{ ...fixture, bindings: { ...bindings, [name]: replacement } }, error]);
+  }
+  cases.push([
+    Object.defineProperty(versionedConfigFixture(), "versionId", {
+      get() {
+        throw new Error(sentinel);
+      },
+    }),
+    "versioned observation shape",
+  ]);
+  for (const [input, error] of cases) {
+    assert.throws(
+      () => projectPureHonoVersionedConfig(input),
+      (failure) => {
+        assert.equal(failure.message, `pure Hono versioned config refused: ${error}`);
+        assert.ok(!String(failure.stack).includes(sentinel));
+        assert.equal(failure.cause, undefined);
+        return true;
+      },
+    );
+  }
+});
 
 test("pure Hono packager deterministically round-trips the exact supplied bytes", () => {
   const input = packagerInput();

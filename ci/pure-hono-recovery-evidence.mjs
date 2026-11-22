@@ -38,12 +38,16 @@ function requireEvidence(condition, reason) {
 const PRODUCER_KEYS = ["repository", "ref", "workflow", "runId", "runAttempt", "sourceSha"];
 const mainProducer = (expected) => ({ ...expected, repository: REPOSITORY, ref: MAIN_REF });
 
+export function validRecoveryVersionId(value) {
+  return matches(UUID, value);
+}
+
 export function validRecoveryIdentity(expected) {
   return (
     matches(SHA, expected?.sourceSha) &&
     matches(POSITIVE_ID, expected?.runId) &&
     matches(POSITIVE_ID, expected?.runAttempt) &&
-    matches(UUID, expected?.originalVersionId) &&
+    validRecoveryVersionId(expected?.originalVersionId) &&
     matches(/^\.github\/workflows\/[a-z0-9_-]+\.ya?ml$/, expected?.workflow)
   );
 }
