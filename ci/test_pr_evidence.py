@@ -28,7 +28,7 @@ class EvidenceTest(unittest.TestCase):
         run = self.run_record(101, **changes)
         job = dict(id=900, name="ci-ok", head_sha=HEAD, run_id=101, run_attempt=run["run_attempt"],
                    status="completed", conclusion=run["conclusion"])
-        self.runs, self.jobs = [self.run_record(100), run], [job]
+        self.runs, self.jobs = [self.run_record(100, path=run["path"]), run], [job]
 
     def api(self, method, path, data=None, *, paginate=False):
         if method == "POST" and path == "/issues/42/comments":
@@ -69,26 +69,27 @@ class EvidenceTest(unittest.TestCase):
 
     def test_superseded_incomplete_failed_and_skipped(self):
         for changes, missing, expected in (
-            (dict(status="in_progress", run_attempt=2), True, r"\[pending\].*attempts/2\) \| missing \| pending"),
-            (dict(pull_requests=[]), True, r"\[unbound\].*\| missing \| unbound"),
-            (dict(conclusion="failure"), False, r"\[failure\].*\| \[failure\]"),
-            (dict(run_attempt=2), True, r"attempts/2\) \| missing"),
-            (dict(conclusion="skipped"), False, r"\| \[skipped\]"),
+            (dict(status="in_progress", run_attempt=2), True, r"\[pending\].*attempts/2\) \| missing \| pending \|$"),
+            (dict(pull_requests=[]), True, r"\[unbound\].*\| missing \| unbound \|$"),
+            (dict(conclusion="failure"), False, r"\[failure\].*\| \[failure\].*\| failure \|$"),
+            (dict(run_attempt=2), True, r"attempts/2\) \| missing \| missing \|$"),
+            (dict(conclusion="skipped"), False, r"\| \[skipped\].*\| skipped \|$"),
         ):
-            with self.subTest(changes=changes):
-                self.records(**changes)
-                if missing:
-                    self.jobs = []
-                row = next(line for line in self.publish().splitlines() if line.startswith("| ci-ok"))
-                self.assertRegex(row, expected)
-                self.assertNotIn("| success |", row)
-        self.records()
-        self.timeline = [dict(event="ready_for_review", created_at="2026-11-02T00:00:00Z")]
-        self.assertIn("| superseded |", self.publish())
-        self.timeline[0]["created_at"] = self.runs[-1]["created_at"]
-        self.assertIn("| unproven |", self.publish())
-        self.jobs.append(self.jobs[0] | dict(id=901, name="static-check"))
-        self.assertIn("| success |", self.publish())
+            self.records(**changes)
+            if missing:
+                self.jobs = []
+            row = next(line for line in self.publish().splitlines() if line.startswith("| ci-ok"))
+            self.assertRegex(row, expected)
+        for source, gate, witness in (("ci", "ci-ok", "static-check"), ("e2e", "e2e-ok", "browser-smoke")):
+            self.records(path=f".github/workflows/{source}.yml")
+            self.jobs[0]["name"] = gate
+            self.timeline = [dict(event="ready_for_review", created_at="2026-11-02T00:00:00Z")]
+            self.assertIn("| superseded |", self.publish())
+            self.timeline[0]["created_at"] = self.runs[-1]["created_at"]
+            self.jobs.append(self.jobs[0] | dict(id=901, name=witness, conclusion="skipped"))
+            self.assertIn("| unproven |", self.publish())
+            self.jobs[-1]["conclusion"] = "success"
+            self.assertIn("| success |", self.publish())
 
     def test_corrupt_pages_and_head_movement_fail_closed(self):
         self.runs = [self.run_record(1)] * 101
