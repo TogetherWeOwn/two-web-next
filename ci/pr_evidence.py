@@ -162,8 +162,7 @@ def github_api(repository):
             args += ["--paginate", "--slurp"]
         if body is not None:
             args += ["--input", "-"]
-        data = subprocess.run(args, input=json.dumps(body), text=True, capture_output=True, timeout=20, check=True)
-        return json.loads(data.stdout)
+        return json.loads(subprocess.check_output(args, input=json.dumps(body), text=True, stderr=subprocess.PIPE, timeout=20))
 
     return request
 

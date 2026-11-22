@@ -86,6 +86,7 @@ class EvidenceTest(unittest.TestCase):
             self.timeline = [dict(event="ready_for_review", created_at="2026-11-02T00:00:00Z")]
             self.assertIn("| superseded |", self.publish())
             self.timeline[0]["created_at"] = self.runs[-1]["created_at"]
+            self.assertIn("| unproven |", self.publish())
             self.jobs.append(self.jobs[0] | dict(id=901, name=witness, conclusion="skipped"))
             self.assertIn("| unproven |", self.publish())
             self.jobs[-1]["conclusion"] = "success"

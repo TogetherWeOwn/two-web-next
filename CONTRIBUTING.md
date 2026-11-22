@@ -217,8 +217,7 @@ durable record behind it.
 For PRs targeting `main`, add the [publisher’s](.github/workflows/pr-evidence.yml) full comment permalink
 once in Verification as `Exact-head Actions evidence`. Match its SHA to the live head.
 
-`pr-evidence-fixtures` fails on fixture regressions. The owner can consider
-requiring it after merge and green runs on `main` and two later PRs.
+The owner can require `pr-evidence-fixtures` after merge and green runs on `main` and two later PRs.
 
 Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
 `scope` jobs (in `ci.yml` and the workflows that mirror it) fetch the
