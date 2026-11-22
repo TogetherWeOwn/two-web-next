@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { ComponentProps } from "svelte";
 import type { HeaderSession } from "../../../src/env";
+import tokensCss from "../../../vendor/design-kit/tokens.css?url&no-inline";
 import CalendarScreen from "./CalendarScreen.svelte";
 import EmberShell from "./EmberShell.svelte";
 import SiteMetadata from "./SiteMetadata.svelte";
@@ -19,6 +20,7 @@ const { member, loginReturnTo } = $derived(screen);
   description="Game nights, tournaments and whatever else the community puts on." />
 <svelte:head>
   <link rel="alternate" type="text/markdown" title="Markdown version" href="/events.md" />
+  <link rel="stylesheet" href={tokensCss} />
   <link rel="stylesheet" href="/kit-site-header.css" />
 </svelte:head>
 {#snippet account()}
