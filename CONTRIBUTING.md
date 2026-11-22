@@ -56,7 +56,8 @@ The repository rulesets enforce the following on `main`:
   and so must the `Devin Review` check and the organization rulesets
   (`pr-standards`, `CodeQL`). CodeRabbit is advisory, not a required check;
   answer every finding, but its check does not gate the merge. GitHub does not
-  require an approving PR review; the native review policy below still applies.
+  require an approving PR review. The repository's independent review policy
+  applies to the exact head.
 
   The journeys count only through the aggregator in e2e.yml: it fails when the
   scope job fails or the browser journeys fail or are cancelled, and passes a
@@ -68,20 +69,39 @@ The repository rulesets enforce the following on `main`:
 The `pr-size-gate` job's check, `pr-size-gate / gate`, is the required size
 gate named in the `protect-main` bullet above.
 
-Who merges: when native review stages apply, the final-stage reviewer
-squash-merges the exact reviewed head before closing the task; without a review
-stage, the author merges. Every required check must be green on that head and
-every review finding must be fixed or answered with evidence. Pin the merge to
-that SHA; do not approve a final stage and leave an open PR for the author.
+Who merges depends on the review route. The author merges ordinary technical
+PRs after tier review. When a separate final technical acceptance stage applies,
+that reviewer merges in the same run as approval. Fix or answer every finding,
+verify all required checks and pin the squash merge to the reviewed head SHA.
+Technical source merges proceed without an owner decision. Every production
+change requires the separate [production release gate](#production-release-gate).
 
-A merge to `main` does not reach production on its own. For automatic promotion,
-[the resolver](ci/resolve-promotion-sha.mjs) skips unless the qualified, soaked
-staging SHA equals `PRODUCTION_ACCEPTED_SHA`. The Release Manager accepts the
-exact release SHA; the authorized Operator sets the variable to that SHA.
-Ordinary PRs need **no per-PR Release Manager confirmation**. For promotion-path
-PRs, the final native Release Manager review is the exact-head merge
-confirmation. Every production deploy, including manual dispatch, still needs
-separate Release Manager acceptance.
+### Review by risk tier
+
+Declare the PR's `risk_tier` in the Attestation and apply the highest tier
+required by the paths and behavior it changes. Use the
+[review-tier map](.github/review-tiers.yml) to identify sensitive paths and
+content triggers, then use the review requirements below. Sensitive changes,
+including `AGENTS.md`, `.claude/**`, `CONTRIBUTING.md`, `REVIEW.md` and
+`.github/**`, require at least T1. Honor
+higher floors in the PR template and use T0 for critical behavior even when
+the file paths alone imply a lower tier.
+
+| Tier | Examples | Review before merge |
+| --- | --- | --- |
+| T2 | Ordinary documentation only | Author self-check |
+| T1 | Standard code and sensitive contributor instructions | One independent cross-model review |
+| T0 | Auth, sessions, payments, SQL or migrations, secrets, grants, cryptography, deploy workflows, Worker config, gateway or voice, erasure, backups | Two independent cross-model reviews in parallel, one general and one security-focused |
+
+Delegate each review as a read-only task. Use a different model family from
+the author and follow the model and effort guidance in
+[AGENTS.md](AGENTS.md#models-and-effort). Reviewers independently inspect the
+pinned PR head and record the reviewed SHA, findings and verdict.
+For parallel reviews, record findings independently before reconciling them.
+Reviewers inspect existing evidence. The author integrates fixes, records how
+findings were resolved, and obtains a fresh verdict when the reviewed content
+or its review context changes. For a commit with an identical reviewed diff and
+context, record that equivalence and verify checks on the new head.
 
 ### Merge and production staging evidence
 
@@ -98,15 +118,10 @@ Before merge, require:
 1. **Exact-head checks and review.** All required checks listed above
    (`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `pr-size-gate / gate`,
    `Devin Review`, the organization `pr-standards` workflow and `CodeQL`)
-   pass on the exact PR head. CodeRabbit is advisory: answer every finding,
-   but it is not a required check. Route the Security and QA stages assigned by
-   the [review-tier map](.github/review-tiers.yml) and complete them in order.
-   If Release Manager review is required, complete Security and QA before that
-   final stage. A push invalidates all earlier native review and approval
-   verdicts; obtain fresh required verdicts for the new head. Record exact-head
-   Actions run/job links and conclusions; local output does not replace
-   required Actions evidence.
-2. **Route Release Manager review on the exact head.** The author checks the
+   pass on the exact PR head. Address every CodeRabbit finding. Complete the
+   [reviews for the PR's risk tier](#review-by-risk-tier). Record exact-head
+   Actions run/job links, conclusions and review evidence.
+2. **Check promotion-path routing on the exact head.** The author checks the
    current diff against the successful job summary from the trusted
    default-branch [`promotion-path` workflow](.github/workflows/promotion-path.yml).
    Record the PR number, target ref and its live tip SHA, GitHub's reported PR
@@ -117,51 +132,45 @@ Before merge, require:
    computed merge base or the `pull_request_target` run's header SHA. The
    workflow runs from the default branch. The summary does not identify the
    target ref; do not reuse it after a retarget unless the run is verified for
-   the new target. A PR label alone is not evidence. Add the Release Manager
-   as the final native stage for `promotion-path: yes`; omit it only for a
-   verified `no` and only if it is not independently required.
+   the new target. Use the job summary as evidence for the verdict. Route
+   `promotion-path: yes` through T0 review.
 
    Even with a classifier `no`, inspect what the diff changes in the live
-   target's context. Route to the Release Manager for new or changed tooling
+   target's context. Route to T0 review for new or changed tooling
    or inputs that qualify, select, migrate, deploy or roll back a production
    candidate, whether automatic or manual. This includes changes to what a
    staging check measures. Check workflows, deploy and binding config; the
    classifier's path list is not exhaustive. If the Actions verdict is
    missing, stale or incomplete, record a direct review of the full three-dot
    diff from the live target tip to the exact head, including both sides of
-   renames, to verify `no`. If `no` is uncertain, add the Release Manager stage.
+   renames, to verify `no`. Use T0 review if the diff may affect the promotion
+   path and the available evidence cannot establish `no`.
 
-   The final native Release Manager stage is the only merge confirmation;
-   do not open a duplicate confirmation or child card. Provide migration
-   ledger evidence or "no migration", and record the known-good rollback
-   target and post-merge qualification route where applicable. No fresh
-   production drill is required for merge-only work. Merge confirmation
-   authorizes neither production deployment nor production migration; each
-   still requires its own exact-SHA decision.
-3. **Pin the merge and record the result.** Just before merging, the final-stage
-   reviewer (or the author if there is no native stage) rereads the PR target
-   ref, its live tip, the reported PR base, the three-dot merge base and the
-   head SHA. If any differs from the routing record, reassess the diff and
-   review routing against the current target before merging. A head SHA pin
+   For a promotion-path PR, record migration ledger evidence or "no migration",
+   plus the known-good rollback target and post-merge qualification route
+   where applicable. A merge with an automatic production path also requires
+   independent exact-head technical release acceptance after the T0 reviews.
+   Use the final acceptance stage required by the [organization standard](https://github.com/TogetherWeOwn/.github/blob/main/STANDARD.md#2-pr-review-and-merge).
+   Any later production deployment or migration needs its own exact-candidate
+   decision under the release gate.
+3. **Pin the merge and record the result.** Just before merging, the person
+   merging rereads the target ref, its live tip, the reported PR base, the
+   three-dot merge base and the head SHA. If any differs from the routing
+   record, reassess the diff and review routing against the current target
+   before merging. A head SHA pin
    alone does not catch a retarget or an advancing target. If the diff or its
-   review context changes, obtain fresh required predecessor verdicts even if
-   the head and stage order stay the same. An advancing target alone does not
-   invalidate verdicts when the diff and its review context are unchanged.
-   Verify that all required predecessor verdicts cover the current diff and
-   merge head, and that required checks pass on it.
-   Resolve threads only once fixed or answered with evidence. When required,
-   the Release Manager makes the merge go/no-go decision on the verified head
-   before merging. Squash-merge in the same run, pinned to that reviewed head. After GitHub confirms the merge, record the
+   review context changes, obtain fresh required verdicts even when the head
+   is unchanged. Verify review coverage and required checks for the merge
+   head. Resolve threads once fixed or answered with evidence. Squash-merge
+   pinned to that reviewed head. After GitHub confirms the merge, record the
    reviewed head and resulting squash SHA in the release log for every merge.
-   Add the Release Manager confirmation when required, and include both SHAs
-   in the final native verdict where a stage applies. Record approval only
-   after a successful merge, using the native approval outcome, not a send-back.
+   Include the final technical acceptance when required, and record approval
+   only after a successful merge.
 
    Production holds and staging rollback-drill checks govern production
    deployment, not a merge that does not deploy to production. Keep any
    explicitly applicable merge freeze and other incident or identity/capability
-   safeguards in force. Production deploy, migration and rollback acceptance
-   and safeguards are unchanged. An otherwise mergeable PR need not be
+   safeguards in force. An otherwise mergeable PR need not be
    restacked solely because `main` moved.
 
 After merge, the resulting **exact `main` SHA** must pass the existing full CI,
@@ -185,14 +194,39 @@ If releasing a scope-skipped candidate, run `e2e-staging` by manual dispatch
 from the matching deployed `main` revision after merge to obtain the missing
 journey/passive evidence. The automatic resolver does not select manual-dispatch
 runs, so this does not itself make that SHA auto-promotable. Any explicit
-production dispatch requires its own exact-SHA Release Manager confirmation
-and all existing promotion, migration and rollback guards. If matching evidence
-cannot be obtained, hold that candidate's promotion; do not stage an unmerged
-head, infer a pass from a skip, or change a workflow in this documentation PR.
+production dispatch requires exact-SHA release approval and all existing
+promotion, migration and rollback guards. Hold promotion if matching evidence
+cannot be obtained.
 
-This policy does not change the pipeline. A previous rejection does not
-approve a later head or release candidate. This documentation does not
-authorize any particular merge or production deployment.
+### Production release gate
+
+Own each production deploy, data or schema migration, secret or grant change,
+and production configuration or flag change as a separate release task. Before
+the change, record all of the following in the task:
+
+1. Required checks passed on the exact candidate commit or artifact and every
+   included PR received the reviews for its tier.
+2. The exact candidate ran on staging and passed its staging checks and smoke
+   test. Retain the soak and candidate verification required above.
+3. Recovery blockers are resolved. Take and verify a backup or snapshot before
+   any production data or schema change. Document the previous version and the
+   rollback or restore path, and rehearse recovery where supported. Retain
+   existing incident and staging rollback-drill guards.
+4. A new independent release reviewer from a different model family read the
+   plan and evidence and explicitly approved the exact candidate and operation.
+   Use `claude-opus-5-5` at `high` when the author is GPT and `gpt-6.2-sol` at `high`
+   when the author is Claude. If the reviewer blocks, resolve the findings and
+   request a fresh review. This is a technical approval within existing
+   authority. Owner-routed approvals and settings stay with the owner.
+
+Execute through the existing protected workflow and authorized identities. For
+automatic promotion, [the resolver](ci/resolve-promotion-sha.mjs) requires the
+qualified, soaked staging SHA to equal `PRODUCTION_ACCEPTED_SHA`. An authorized
+executor sets that variable to the exact approved SHA only through the existing
+access boundary. Manual dispatch also requires exact-candidate approval and the
+existing workflow protections. Monitor health and errors for at least 30
+minutes after execution. On a regression, roll back promptly through the
+protected path. Record the outcome in the release task and product log.
 
 ### Pull-request size labels (advisory)
 
@@ -290,8 +324,8 @@ below-cutoff branch rows need `PR_STANDARDS_MODE`.
 | Internal card ID in a commit subject (first checker, `INTERNAL_ID_LEVEL: "warning"`) | Warns only |
 | Advisory references in the PR title or body, or an internal reference in the branch name below the cutoff (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 
-GitHub does not enforce an approval count here. Follow the native review
-policy above. Independent review also comes from Devin Review, a required
+GitHub does not enforce an approval count here. Follow the repository review
+policy above. Devin Review is a required
 check that runs on the head SHA and re-runs on a new push, plus CodeRabbit,
 whose check is advisory:
 its findings must each be fixed or answered with evidence, but the check never
@@ -482,10 +516,10 @@ workflow where available. Do not dispatch full CI just because the draft skips
 heavy jobs.
 
 Mark that head ready to trigger the normal PR CI and E2E runs. Before submitting
-for native review, verify the required checks passed on that same head and
+for tier review, verify the required checks passed on that same head and
 record the run/job links and conclusions in Verification. Changes to `src/`,
 `test/` or migrations still require the full gate; draft or scope-skipped jobs
-are not a full-suite pass. Every required check, database-safety rule, native
+are not a full-suite pass. Every required check, database-safety rule, tier
 review and release gate remains in force.
 
 Local agent test execution is limited to the bounded pre-push fixture checks

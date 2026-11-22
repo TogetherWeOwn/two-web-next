@@ -20,16 +20,14 @@ gate. Do not demand a staging run for an unmerged head, or require artifact
 comparisons to prove pre-merge staging. This is not limited to docs/test-only
 changes and is not proof that staging already ran.
 
-Before merge, verify required checks and all predecessor native verdicts on
-the exact PR head, plus fixes or answers for all findings. A push requires
-fresh required verdicts. Require exact-head Actions links and conclusions.
-Follow CONTRIBUTING to recheck promotion-path routing against the live target
-and obtain the final native Release Manager merge decision where required.
-The final reviewer (or author without native stages) pins the squash merge to
-that head, then records the result as described in the contract. Do not
-require a recorded final approval before merge: it records the successful
-merge. An otherwise mergeable PR does not need restacking solely because
-`main` moved.
+Before merge, verify required checks and the independent reviews for the
+[PR's risk tier](CONTRIBUTING.md#review-by-risk-tier) on the exact PR head.
+Require exact-head Actions links and conclusions, plus fixes or evidence for
+all findings. Changed content or review context requires fresh review.
+Recheck promotion-path routing against the live target, use T0 review for
+promotion-path changes, and verify final technical acceptance for merges with
+an automatic production path. Follow the contract for who merges and records
+the result. Ordinary technical work proceeds without an owner decision.
 
 Distinguish that merge evidence from production qualification: the resulting
 exact `main` SHA still has to pass full CI, staging deploy, staging e2e and soak
@@ -41,15 +39,18 @@ the current docs/test-only scope can skip staging journeys and passive ledgers;
 that is not qualification or automatic promotion eligibility. Apply CONTRIBUTING's
 post-merge manual-dispatch caveat for a scope-skipped candidate. Manual staging
 evidence is not selected by the automatic resolver, and an explicit production
-dispatch still needs its own exact-SHA Release Manager confirmation and all
-existing guards. Do not change the pipeline or infer a pass from a skip.
+dispatch requires the same independent exact-candidate release approval and
+workflow protections as automatic promotion. Treat a skipped job as missing
+evidence.
 
-Required checks, rulesets, review gates, incident/freeze/hold safeguards,
-identity/capability holds, rollback requirements and confirmation for every
-other production deploy remain. No red deterministic gate is waived; no pipeline
-skip/no-op or production action is authorized. Previous rejections remain
-historical, not retroactive approvals: resubmit for a fresh exact-head decision.
-This advisory analysis role still does not approve or merge.
+Apply the [production release gate](CONTRIBUTING.md#production-release-gate)
+to the exact staged candidate and operation. Verify the backup before a data
+or schema change, rehearsed rollback where supported, resolved recovery
+blockers, independent technical approval, protected execution and at least
+30 minutes of post-change health monitoring. Enforce the existing rulesets,
+deterministic checks, incident holds, freezes, and identity and capability
+safeguards. A previously rejected candidate needs a fresh decision. This
+advisory analysis role has no approval or merge authority.
 
 ## What merits a finding
 

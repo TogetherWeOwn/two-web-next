@@ -29,6 +29,51 @@ Guidance for human and AI contributors.
 - Read [CONSTRAINTS.md](CONSTRAINTS.md) before writing code. Do not weaken it to make a change pass.
 - Done means merged. Do not leave an orphan PR open: merge it, or close it with a note naming its replacement.
 
+## Models and effort
+
+T3 Code selects the provider, model and effort through the project default,
+thread selection or delegated reviewer target. Keep model pins and overrides out
+of role frontmatter, harness settings, environment defaults and hooks. Keep
+shared instructions here. `CLAUDE.md` contains only `@AGENTS.md`.
+
+- Use `gpt-6.2-sol` at `high` for routine implementation. Use `xhigh` only when
+  the task brief gives a reason. Use a provider that exposes the selected effort
+  and verify the model's picker label when a gateway ID is ambiguous.
+- Use `claude-opus-5-5` at `medium` for design or difficult work such as auth,
+  crypto, concurrency and debugging. It is also the default reviewer for a GPT
+  author. Use `high` or `xhigh` only when the task warrants it and record the
+  reason in the brief. Specify effort explicitly when selecting Opus. For a
+  Claude author, use `gpt-6.2-sol` at `high` for independent review.
+- Never use `max`, `ultra` or `ultrathink` effort.
+
+The owner manages T3 Settings, including project defaults, providers, access,
+notifications and cleanup. Agents select models for assigned tasks within that
+configuration. The owner answers approval prompts routed to them in the thread.
+Agents handle technical decisions, staging and releases within their authority.
+Ask the owner about spending beyond existing budgets, permanent deletion of
+member data, shutdown of a member-facing service, or legal, terms or privacy
+decisions.
+
+## Review and release
+
+Apply the PR's [risk tier](CONTRIBUTING.md#review-by-risk-tier) to its exact head.
+T2 uses a self-check, T1 requires one independent cross-model review, and T0
+requires two independent cross-model reviews in parallel, including one focused on
+security. Required hosted checks apply to every tier. The author resolves
+findings and verifies promotion-path routing before the pinned squash merge.
+Technical PR work proceeds without an owner decision.
+
+Handle production changes as separate release tasks. Record required checks,
+passing staging and smoke evidence for the exact candidate, a verified backup
+before any production data or schema change, and a written rollback plan
+rehearsed where supported. Resolve recovery blockers and obtain explicit
+approval from an independent release reviewer before protected execution.
+Use `claude-opus-5-5` at `high` for a GPT author's release or `gpt-6.2-sol` at
+`high` for a Claude author's release. Watch health and errors for at least 30
+minutes after the change and roll back promptly through the protected path on a
+regression. Record the outcome with the release evidence. Follow the full
+[production release contract](CONTRIBUTING.md#production-release-gate).
+
 ## Commands
 
 Use Node 22.23.0+ on the 22.x line, or 24+ (CI uses Node 24).
@@ -82,8 +127,8 @@ Before writing or changing browser-facing code in the SvelteKit app under `web/`
 - Behavior matches the request.
 - Tests and the `npm run check` gates pass on GitHub Actions for the exact PR head, with run/job links recorded. AI contributors do not run local full suites or CI mirrors; local focused reproduction is diagnostic only. Human local verification follows CONTRIBUTING.md.
 - A UI change carries the evidence listed under UI changes.
-- `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint` and the other [required checks](CONTRIBUTING.md#branch-protection-and-required-checks) are green on the exact head SHA that merges. GitHub does not require an approving PR review; the native review policy still applies.
+- `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint` and the other [required checks](CONTRIBUTING.md#branch-protection-and-required-checks) are green on the exact head SHA that merges. Complete the repository's independent review for the declared tier.
 - Every review finding is fixed, or answered with evidence.
-- Follow [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence) to verify the exact-head promotion-path verdict and route review. Where Release Manager merge confirmation is required, use the final native stage, not a separate interaction or child card. A push invalidates all earlier native verdicts; obtain fresh required reviews and approvals.
-- The final-stage reviewer (or the author if there is no native stage) squash-merges in the same run, pinned to the reviewed head. Record the reviewed head and squash SHA as described in CONTRIBUTING.md; never approve a failed merge. Merge confirmation does not authorize production deployment or migration. Keep the separate exact-SHA release decisions and post-merge staging qualification.
+- Follow [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence) to verify exact-head promotion-path routing. Obtain fresh review for changed content or review context.
+- Pin the squash merge to the reviewed head and record the reviewed head and resulting squash SHA. Production release requires separate exact-SHA qualification and approval.
 - The PR is squash-merged, and the docs it made stale are updated.
