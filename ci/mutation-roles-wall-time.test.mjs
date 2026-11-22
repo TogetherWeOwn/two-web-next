@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { parse } from "yaml";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +18,7 @@ import {
   FOCUSED_MUTANTS,
   FOCUSED_SUITE,
   classifyRun,
-  runFocused,
+  runFocused as runGate,
 } from "./mutation-roles-wall-time.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,32 +33,41 @@ const ids = [
   "W3-unknown-timezone-admitted",
 ];
 
+const fixtureGit = (root, ...args) =>
+  execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: "pipe" }).trim();
+
+function commit(root, ...paths) {
+  if (paths.length) fixtureGit(root, "add", "--", ...paths);
+  const config = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com"];
+  fixtureGit(root, ...config, "commit", "-qm", "fixture", "--allow-empty");
+  return fixtureGit(root, "rev-parse", "HEAD");
+}
+
 function fixture(fn) {
   const root = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "focused-mutation-"),
   );
-  const originals = Object.fromEntries(files.map((file) => [file, readFileSync(join(repo, file))]));
+  const originals = {};
+  for (const file of files) {
+    const mutants = FOCUSED_MUTANTS.filter((m) => m.file === file);
+    originals[file] = Buffer.from(mutants.map((m) => m.find).join("\n"));
+  }
   try {
     for (const file of [...files, ...FOCUSED_SUITE, "node_modules/.bin/vitest"]) {
       mkdirSync(dirname(join(root, file)), { recursive: true });
       writeFileSync(join(root, file), originals[file] || "fixture\n");
     }
-    const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
-    git("init", "-q");
-    git("add", "src", "test");
-    git(
-      "-c",
-      "user.name=Fixture",
-      "-c",
-      "user.email=fixture@example.com",
-      "commit",
-      "-qm",
-      "fixture",
-    );
+    fixtureGit(root, "init", "-q");
+    commit(root);
+    commit(root, "src", "test");
     fn(root, originals);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+function runFocused(root, options) {
+  return runGate(root, fixtureGit(root, "rev-parse", "HEAD~"), options);
 }
 
 function report(root) {
@@ -78,7 +95,7 @@ test("focused inventory is exactly two suites and seven existing nightly mutants
 test("CLI usage errors exit 2 with a usage line and write no report", () => {
   const reportPath = join(repo, "artifacts/mutation-roles-wall-time/report.json");
   const before = existsSync(reportPath) ? readFileSync(reportPath) : null;
-  for (const args of [["--bogus"], ["positional"]]) {
+  for (const args of [[], ["--bogus"], ["positional"]]) {
     const child = spawnSync(process.execPath, ["ci/mutation-roles-wall-time.mjs", ...args], {
       cwd: repo,
       encoding: "utf8",
@@ -91,6 +108,63 @@ test("CLI usage errors exit 2 with a usage line and write no report", () => {
   // afterwards (or still absent), never rewritten with an infrastructure error.
   if (before === null) assert.equal(existsSync(reportPath), false);
   else assert.deepEqual(readFileSync(reportPath), before);
+});
+
+test("real Vitest fixtures reject a new survivor and accept kills, existing survivors and unrelated changes", () => {
+  fixture((root, originals) => {
+    rmSync(join(root, "node_modules"), { recursive: true });
+    symlinkSync(join(repo, "node_modules"), join(root, "node_modules"), "dir");
+    const suite = FOCUSED_SUITE[1];
+    const data = join(repo, "ci/fixtures/focused-mutation");
+    const goodSuite = readFileSync(join(data, "wall-time.spec.txt"), "utf8");
+    originals[files[1]] = readFileSync(join(data, "wall-time.source.txt"));
+    writeFileSync(join(root, files[1]), originals[files[1]]);
+    const [controls] = goodSuite.split("// Fold assertion");
+    assert.notEqual(goodSuite, controls);
+    const writeSuite = (source) => writeFileSync(join(root, suite), source);
+    writeSuite(goodSuite);
+    const good = commit(root, suite, files[1]);
+
+    writeSuite(controls);
+    const bad = commit(root, suite);
+    assert.equal(runGate(root, good), 1);
+    let result = report(root);
+    assert.deepEqual(result.infrastructureErrors, []);
+    assert.deepEqual(result.suite, [suite]);
+    assert.deepEqual(
+      result.results.map(({ id }) => id),
+      ids.slice(4),
+    );
+    assert.deepEqual(
+      result.results.map(({ status }) => status),
+      ["survived", "killed", "killed"],
+    );
+    assert.equal(result.results[0].baseStatus, "killed");
+
+    writeFileSync(join(root, "README.md"), "Unrelated change\n");
+    commit(root, "README.md");
+    assert.equal(runGate(root, bad), 0);
+    assert.deepEqual(report(root).results, []);
+    assert.equal(report(root).baseline.verdict, "not_run");
+
+    writeSuite(controls + "\n// A test edit that preserves the existing gap.\n");
+    commit(root, suite);
+    assert.equal(runGate(root, bad), 0);
+    result = report(root);
+    assert.deepEqual(result.infrastructureErrors, []);
+    assert.equal(result.results[0].status, "survived");
+    assert.equal(result.results[0].baseStatus, "survived");
+
+    writeSuite(goodSuite);
+    commit(root, suite);
+    assert.equal(runGate(root, bad), 0);
+    result = report(root);
+    assert.equal(result.results.length, 3);
+    assert.ok(result.results.every((row) => row.status === "killed"));
+    assert.equal(result.baseBaseline.verdict, "not_run");
+    assert.equal(fixtureGit(root, "worktree", "list", "--porcelain").split("\n\n").length, 1);
+    restored(root, originals);
+  });
 });
 
 test("baseline precedes one mutant at a time, every outcome has verified restoration hashes", () => {
@@ -132,16 +206,13 @@ for (const verdict of ["green", "error", "throw"]) {
           return { verdict, output: "fixture outcome" };
         },
       });
-      assert.equal(code, verdict === "green" ? 0 : 1);
+      assert.equal(code, 1);
       const r = report(root);
       assert.ok(
         r.results.every((row) => row.status === (verdict === "green" ? "survived" : "error")),
       );
       const md = readFileSync(join(root, "artifacts/mutation-roles-wall-time/report.md"), "utf8");
-      assert.match(
-        md,
-        verdict === "green" ? /Survivors \(coverage gaps\): 7/ : /Infrastructure failures:/,
-      );
+      assert.match(md, verdict === "green" ? /Survivors: 7; new: 7/ : /Infrastructure failures:/);
       restored(root, originals);
     });
   });
@@ -331,7 +402,7 @@ fs.writeFileSync(output, ${JSON.stringify(JSON.stringify(json))});
       databaseVars.forEach((name) => {
         process.env[name] = "must-be-removed";
       });
-      assert.equal(runFocused(root), 0);
+      assert.equal(runFocused(root), 1);
       assert.equal(report(root).baseline.verdict, "green");
       assert.equal(report(root).results.filter((row) => row.status === "survived").length, 7);
       for (const label of ["baseline", ...ids]) {
@@ -366,39 +437,44 @@ test("workflow parser is a pinned direct development dependency in both package 
   assert.equal(lock.packages["node_modules/yaml"].version, pkg.devDependencies.yaml);
 });
 
-test("workflow runs on pull requests, merge groups, main pushes and manual dispatch", () => {
+test("workflow runs on pull requests, merge groups and main pushes", () => {
   assert.deepEqual(workflow.on, {
-    pull_request: { types: ["opened", "synchronize", "reopened", "ready_for_review"] },
+    pull_request: { types: ["opened", "synchronize", "reopened", "ready_for_review", "edited"] },
     merge_group: { types: ["checks_requested"] },
     push: { branches: ["main"] },
-    workflow_dispatch: null,
   });
 });
 
-test("workflow is one bounded existing-runner WARN job, with no services, secrets or required consumers", () => {
+test("workflow is fail-closed on the event diff and independent of deployment CI", () => {
   assert.deepEqual(Object.keys(workflow.jobs), ["focused-mutation"]);
   const job = workflow.jobs["focused-mutation"];
   assert.equal(job["runs-on"], "ubuntu-latest");
-  assert.equal(job["timeout-minutes"], 5);
-  assert.equal(job["continue-on-error"], true);
+  assert.equal(job["timeout-minutes"], 10);
+  assert.doesNotMatch(JSON.stringify(job), /continue-on-error/);
   assert.equal(job.services, undefined);
   assert.equal(job.needs, undefined);
   assert.deepEqual(workflow.permissions, { contents: "read" });
   assert.doesNotMatch(JSON.stringify(workflow), /secrets\./);
+  const checkout = job.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+  assert.deepEqual(checkout.with, {
+    ref: "${{ github.event.pull_request.head.sha || github.sha }}",
+    "fetch-depth": 0,
+    "persist-credentials": false,
+  });
   const install = job.steps.find((step) => step.id === "install");
   assert.ok(install, "dependency installation step must exist");
   assert.equal(install.run, "npm ci --include=dev --no-audit --no-fund");
-  assert.equal(install["continue-on-error"], true);
   const signal = job.steps.find((step) => step.id === "signal");
-  assert.equal(signal.run, "npm run mutation:roles-wall-time");
-  assert.equal(signal.if, "always()");
-  assert.equal(signal["continue-on-error"], true);
+  assert.equal(signal.run, 'npm run mutation:roles-wall-time -- "$TARGET_SHA"');
+  assert.equal(
+    signal.env.TARGET_SHA,
+    "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}",
+  );
+  assert.equal(signal.if, undefined);
   const harness = job.steps.find((step) => step.id === "harness");
   assert.equal(harness.run, "npm run mutation:roles-wall-time:selftest");
-  assert.equal(harness["continue-on-error"], true);
   const upload = job.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   assert.equal(upload.if, "always()");
-  assert.equal(upload["continue-on-error"], true);
   assert.equal(upload.with.path, "artifacts/mutation-roles-wall-time/");
   assert.equal(upload.with["retention-days"], 14);
   assert.doesNotMatch(
@@ -409,16 +485,15 @@ test("workflow is one bounded existing-runner WARN job, with no services, secret
   assert.deepEqual(deploy.on.workflow_run.workflows, ["ci"]);
 });
 
-test("always-run summary preserves a setup/runner failure report without failing the check", () => {
+test("always-run summary preserves a setup or runner failure report", () => {
   const summary = workflow.jobs["focused-mutation"].steps.find((step) => step.env?.INSTALL_OUTCOME);
   assert.equal(summary.if, "always()");
-  assert.equal(summary["continue-on-error"], true);
   for (const hasReport of [false, true])
     fixture((root) => {
       const dir = join(root, "artifacts/mutation-roles-wall-time");
       if (hasReport) {
         mkdirSync(dir, { recursive: true });
-        writeFileSync(join(dir, "report.md"), "Survivors (coverage gaps): 1\n");
+        writeFileSync(join(dir, "report.md"), "Survivors: 1; new: 1\n");
         writeFileSync(join(dir, "report.json"), JSON.stringify({ survivors: 1 }));
       }
       const child = spawnSync("bash", ["-e", "-c", summary.run], {

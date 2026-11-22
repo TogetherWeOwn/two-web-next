@@ -38,13 +38,8 @@ not fail) unless marked HARD. All of them run on the existing runners only.
 - **Mutation nightly (non-blocking):** `ci/mutation-sessions-join.mjs` weakens
   one auth check at a time and runs the hermetic kill suite; survivors are
   coverage gaps in the report artifact, never a red build.
-- **Focused mutation (WARN):** `.github/workflows/mutation-roles-wall-time.yml`
-  runs the DB-free baseline plus only `R4`–`R7` and `W1`–`W3` on the existing
-  standard GitHub-hosted runner. It is not required and is separate from `ci`
-  (including `ci-ok` and its deployment consumer). The job and signal steps
-  use `continue-on-error`: survivors and infrastructure failures cannot fail
-  the overall check. JSON, Markdown and per-run Vitest evidence are retained
-  for 14 days, including on failure. The full nightly signal stays unchanged.
+- **Focused mutation (HARD):** `.github/workflows/mutation-roles-wall-time.yml`
+  fails on new applicable survivors. See the [focused mutation gate](#focused-mutation-gate).
 - **Test inventory (HARD):** `ci/test-inventory.mjs` fails the job when a
   `*.test.ts` / `*.test.mjs` file is reachable from no CI job. The same
   step gates Playwright specs: every `e2e/**/*.spec.ts` and
@@ -243,7 +238,7 @@ reports with canaries, repeatability, and no writes/network/timers/retries.
 They do not need a full coverage run. Generating a real report still requires
 the disposable test database described in [the README](../README.md#coverage-ratchet).
 
-## Focused mutation rollout (WARN-first)
+## Focused mutation gate
 
 The fixed seven-mutant subset is `R4`–`R7` (`src/roles.ts`: blank-allowlist
 admit, fetch-failure admit, lookup-failure admit, any-role admits) and `W1`–`W3`
@@ -253,24 +248,31 @@ admitted). It runs only `test/moderator-malformed-success.test.ts` and
 by Vitest. The slow session/join/admin mutants remain in the existing nightly
 job; that inventory, its safeguards and all coverage floors are unchanged.
 
-Run `env -u DATABASE_URL npm run mutation:roles-wall-time` locally. The runner
+In Actions, `npm run mutation:roles-wall-time -- "$TARGET_SHA"` selects only the
+groups whose source or paired test file changed at the PR fork point. An empty
+selection passes without running Vitest. Merge groups compare to their base, and
+main pushes compare to the previous main SHA. The runner
 refuses dirty targets, requires a green unmutated baseline, checks unique
 anchors, and reuses the nightly targeted restore with SHA-256 verification
 before proceeding to another mutant. Each Vitest child has a 20-second cap;
-the job has a five-minute cap. No whole-tree checkout or dirty-target bypass
+the job has a ten-minute cap. No whole-tree checkout or dirty-target bypass
 is offered. A restore mismatch stops further mutation and preserves unexpected
 bytes for inspection. Abrupt runner loss or an uncatchable process kill cannot
 promise cleanup; partial reports are saved before mutation and after each result.
 
-`artifacts/mutation-roles-wall-time/report.{json,md}` distinguishes surviving
-mutants (coverage gaps, exit 0) from infrastructure failures (exit 1): baseline
+For a head survivor, the runner compares the same mutation at the fork point
+in a temporary Git worktree with the same installed dependencies. A survivor
+at both revisions passes. New survivors and infrastructure failures exit 1.
+`artifacts/mutation-roles-wall-time/report.{json,md}` records baseline
 failure, missing inputs, stale/ambiguous anchors, timeouts, signals, spawn/load
 errors and restore mismatches. Exit 1 from Vitest is not enough to count a kill:
-both suite files must produce complete, non-skipped assertion results with an
+the selected suite must produce complete, non-skipped assertion results with an
 actual failed test. Reports include per-mutant before/after hashes. The
 always-run workflow summary writes an infrastructure fallback if no runner
 report exists, and the always-run upload preserves available reports and logs.
 
-Run `npm run mutation:roles-wall-time:selftest` for hermetic harness and workflow
-wiring checks. Promotion to HARD remains a separate reviewed slice: this job
-is intentionally WARN-only and neither branch protection nor `ci-ok` reads it.
+The Actions selftest exercises the gate with Git and Vitest fixtures. Reviewers
+require a green `focused-mutation` job, which runs independently of `ci-ok` and
+deployment. The proposed required status context is `focused-mutation` from
+GitHub Actions. The owner adds it after it passes on merged main and on two later
+PRs, and records the branch protection change in the progress log.
