@@ -124,11 +124,13 @@ class DocsClassification(unittest.TestCase):
     def test_docs_state_the_current_workflow_mode(self):
         internal_level = workflow_env("INTERNAL_ID_LEVEL")
         standards_mode = workflow_env("PR_STANDARDS_MODE")
+        verification_mode = workflow_env("PR_VERIFICATION_MODE")
         cutoff = workflow_env("HEAD_REF_ERROR_FROM_PR")
         text = DOCS.read_text(encoding="utf-8")
         for token in (
             f'INTERNAL_ID_LEVEL: "{internal_level}"',
             f'PR_STANDARDS_MODE: "{standards_mode}"',
+            f'PR_VERIFICATION_MODE: "{verification_mode}"',
             f'HEAD_REF_ERROR_FROM_PR: "{cutoff}"',
         ):
             self.assertIn(token, text, f"docs must state the current mode token {token}")
@@ -141,11 +143,11 @@ class DocsClassification(unittest.TestCase):
         assert_fails(rows, "ratchet")
         assert_fails(rows, "branch-name internal ID")
         assert_fails(rows, "strict subset")
+        assert_fails(rows, "Verification")
 
     def test_warning_checks_are_documented_as_warnings(self):
         _, rows = docs_table_rows()
         assert_warns(rows, "Linked Issues or Issue Description")
-        assert_warns(rows, "Verification")
         assert_warns(rows, "commit subject")
         assert_warns(rows, "below the cutoff")
 
@@ -241,10 +243,10 @@ class CheckerBehaviorMatchesDocs(unittest.TestCase):
             )
         )
 
-    def test_missing_sections_only_warn_in_configured_mode(self):
+    def test_missing_linked_issue_only_warns_in_configured_mode(self):
         mode = workflow_env("PR_STANDARDS_MODE")
         self.assertEqual(mode, "warn", "test expectation pins the current warn mode; update docs + test on flip")
-        thin = GOOD_BODY.replace("## Verification", "## Notes")
+        thin = GOOD_BODY.replace("## Linked Issues or Issue Description", "## Notes")
         findings = ps.evaluate(
             {
                 "EVENT": "pull_request",
@@ -271,6 +273,20 @@ class CheckerBehaviorMatchesDocs(unittest.TestCase):
             }
         )
         self.assertTrue(any(f.level == "error" for f in flipped), flipped)
+
+    def test_verification_fails_in_configured_mode(self):
+        for body in (GOOD_BODY.replace("## Verification", "## Notes"), GOOD_BODY + "- CI pending\n"):
+            with self.subTest(body=body):
+                findings = ps.evaluate({
+                    "EVENT": "pull_request",
+                    "TITLE": "fix(auth): refuse expired sudo sessions",
+                    "BODY": body,
+                    "REPO_PRIVATE": "false",
+                    "PR_STANDARDS_MODE": workflow_env("PR_STANDARDS_MODE"),
+                    "PR_VERIFICATION_MODE": workflow_env("PR_VERIFICATION_MODE"),
+                })
+                self.assertEqual(["error"], [f.level for f in findings])
+                self.assertIn("Verification", findings[0].message)
 
     def test_strict_title_body_hits_fail_in_warn_mode(self):
         """The strict subset (tracker id, instance link, internal host) fails even in warn mode."""

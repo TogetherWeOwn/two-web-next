@@ -17,8 +17,8 @@ version.
   names the area of the code, such as `auth`, `events` or `sync`. Release automation
   reads these headers.
 - Use the [PR template](.github/pull_request_template.md), in short, active
-  sentences. In the current warn mode `pr-lint` warns (does not fail) on a
-  missing or thin Linked Issues or Issue Description and Verification. Always
+  sentences. `pr-lint` warns on a missing or thin Linked Issues or Issue Description
+  and fails on missing Verification evidence. Always
   fill in Attestation too. `pr-lint` enforces its declared risk tier from the
   PR-number cutoff below. The other sections
   are optional. See "What fails `pr-lint` today vs what only
@@ -37,8 +37,9 @@ version.
   numbered at or above `HEAD_REF_ERROR_FROM_PR: "627"`, and warns below it; other
   title/body references follow `PR_STANDARDS_MODE`.
 - Every PR, including docs-only and draft heads, must not increase the total count of internal card IDs and instance-UI links in tracked files versus its fork point (the merge-base with its base); `pr-lint` fails when that tracked-file ratchet grows, with named lint-fixture exclusions only.
-- Be honest about the tests. Give the exact commands you ran and their results in
-  Verification, and say what you did not run. Never claim a green run you did not see.
+- Be honest about the tests. In each Verification bullet, give a code-formatted
+  command and its observed result, or link a GitHub Actions run or job. List
+  checks you did not run in Notes for reviewers. Report only observed results.
 - Address every review finding, or reply with why it does not apply.
 - Credit the contributors whose work you build on.
 - Done means merged. Do not leave an orphan PR open: merge it, or close it with a
@@ -234,6 +235,7 @@ durable record behind it.
 ### Change-gated CI and `ci-ok`
 
 For PRs targeting `main`, add the full comment permalink once in Verification as `Exact-head Actions evidence`.
+The permalink supplements at least one authored Verification item with evidence.
 Match its SHA to the live head and use PR checks for unbound fork runs. [Publisher](.github/workflows/pr-evidence.yml)
 The owner can require `pr-evidence-fixtures` after merge and green runs on `main` and two later PRs.
 
@@ -293,13 +295,13 @@ Its selftests use only local proc fixtures and controlled child processes.
 `pr-lint` is a required job, so it must pass; inside the job, some findings
 fail it and some only warn. Current mode in
 `.github/workflows/pr-gates.yml`: `INTERNAL_ID_LEVEL: "warning"`,
-`PR_STANDARDS_MODE: "warn"`, `HEAD_REF_ERROR_FROM_PR: "627"`, and
+`PR_STANDARDS_MODE: "warn"`, `PR_VERIFICATION_MODE: "error"`, `HEAD_REF_ERROR_FROM_PR: "627"`, and
 `RISK_TIER_ERROR_FROM_PR: "2671"`. A finding that
 fails exits the checker nonzero and turns the job red; a warning is annotated
 without failing. Flipping a knob to `"error"` turns the Warns-only rows that
 name it into failures, so update this table in the same change. The strict
 title/body subset always fails regardless of either knob; a commit-subject hit
-needs `INTERNAL_ID_LEVEL`, and the Linked Issues, Verification, advisory and
+needs `INTERNAL_ID_LEVEL`, and the Linked Issues, advisory and
 below-cutoff branch rows need `PR_STANDARDS_MODE`.
 
 | Check | Result today |
@@ -311,7 +313,7 @@ below-cutoff branch rows need `PR_STANDARDS_MODE`.
 | Branch-name internal ID on a PR numbered at or above the cutoff (`HEAD_REF_ERROR_FROM_PR: "627"`) | Fails `pr-lint` |
 | Missing, invalid or understated `risk_tier` on a PR numbered at or above `RISK_TIER_ERROR_FROM_PR` | Fails `pr-lint` |
 | Missing or thin Linked Issues or Issue Description section (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
-| Missing or thin Verification section (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
+| Missing Verification evidence or a Verification bullet without a code-formatted command and observed result or a GitHub Actions run/job URL (`PR_VERIFICATION_MODE: "error"`) | Fails `pr-lint` |
 | Tracker ID, instance UI link or the internal host in the PR title or body (upstream strict subset, always fails) | Fails `pr-lint` |
 | Internal card ID in a commit subject (first checker, `INTERNAL_ID_LEVEL: "warning"`) | Warns only |
 | Advisory references in the PR title or body, or an internal reference in the branch name below the cutoff (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
@@ -333,8 +335,9 @@ ending in a period, and an empty body; its internal-ID check is a warning
 today, and `INTERNAL_ID_LEVEL` in the workflow turns it into an error), then
 `.github/scripts/pr_standards.py` for pull requests when the workflow sets
 `PR_STANDARDS_MODE`. A tracker ID, instance UI link or the internal host in a
-public title or body always fails, comments included; the remaining body, branch
-and reference rules follow the mode (`PR_STANDARDS_MODE: "warn"`); the flip to
+public title or body always fails, comments included. Verification has its own
+error mode. The remaining body, branch and reference rules follow
+`PR_STANDARDS_MODE: "warn"`. The flip to
 `"error"` is a separate one-line change once the repo's open PRs are clear. The
 script is unit-tested beside it: `python3 -m unittest discover -s .github/scripts -p
 'test_pr_standards.py'`.

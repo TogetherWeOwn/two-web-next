@@ -4,9 +4,9 @@ Types: feat fix perf refactor test docs build ci chore revert style security. Ma
 This repo is public. Do not put internal ticket ids, instance links, localhost or private-network
 addresses in the title, the body, a commit message or the branch name. Name the branch after the change,
 for example `fix/sudo-window`. Link only public GitHub issues (`Fixes #123`).
-Write short, plain sentences. In the current warn mode `pr-lint` warns (does not fail) on a missing or
-thin linked issue (feat/fix/perf/refactor/security) or Verification, and fails once `PR_STANDARDS_MODE`
-is `"error"`; the title and an empty body always fail. Fill in Attestation. `pr-lint` enforces
+Write short, plain sentences. `pr-lint` warns on a missing or thin linked issue
+(feat/fix/perf/refactor/security) and fails once `PR_STANDARDS_MODE` is `"error"`.
+The title, an empty body and missing Verification evidence fail. Fill in Attestation. `pr-lint` enforces
 its declared risk tier for PRs covered by the cutoff in CONTRIBUTING.md.
 The other sections are optional context for the reviewer.
 Full rules: CONTRIBUTING.md, "Pull request contract".
@@ -29,7 +29,8 @@ Full rules: CONTRIBUTING.md, "Pull request contract".
 
 ## Verification
 
-<!-- Commands you ran and their results, so a reviewer can repeat them. -->
+<!-- Include a code-formatted command and its observed result, or a GitHub Actions run/job URL, in every bullet. -->
+<!-- Put any checks you did not run in Notes for reviewers. -->
 <!-- Add the bot comment’s full permalink once with the link label `Exact-head Actions evidence`. -->
 
 -

@@ -15,6 +15,7 @@ Environment contract (every value is a plain string):
   REPO_PRIVATE           "true" | "false"; decides whether internal ticket references are allowed
   REQUIRE_CARD_REF       "true" | "false"; private repos only: demand `Refs: TOG-1234` in the body
   PR_STANDARDS_MODE      "warn" | "error"; level for the upstream body/branch/reference rules (default warn)
+  PR_VERIFICATION_MODE  "warn" | "error"; optional override for the Verification section
   INTERNAL_ID_PREFIXES   regex alternation of internal ticket prefixes (default TOG|PAP|PAPA)
 
 Title format, an empty body and a missing required card reference are always errors: they are the
@@ -22,8 +23,7 @@ standard the org already enforces. On a public repo the strict title/body subset
 instance UI links, the internal host) also always fails, comments included. Tracker ids and
 instance UI links match case-sensitively in prose; the internal host matches
 case-insensitively (hostnames are case-insensitive). Everything else new
-is `PR_STANDARDS_MODE` so a repo can land the gate in warn mode, clear its open PRs, then flip
-one line to `error`.
+follows `PR_STANDARDS_MODE`, with a separate override for Verification.
 """
 import json
 import os
@@ -53,6 +53,32 @@ REQUIRED_SECTIONS = [
 ]
 
 COMMENT = re.compile(r"<!--.*?-->", re.S)
+VERIFICATION_BULLET = re.compile(r"^[ \t]*(?:>[ \t]*)*(?:[-+*]|[0-9]{1,9}[.)])(?:[ \t]+|$)", re.M)
+FENCED_BLOCK = re.compile(r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ `~\t]*$|\Z)", re.M | re.S)
+INLINE_CODE = re.compile(r"(?<![\\`])(`+)(?!`).+?(?<!`)\1(?!`)", re.S)
+COMMAND = re.compile(r"(?:\$[ \t]+)?(?:[\w./-]+[ \t]+\S.*|(?:\./|/)[^\s]+|make|pytest|tsc|vitest)", re.S)
+COMMAND_PLACEHOLDER = re.compile(r"^(?:\$\s+)?(?:cmd|command|test command|example|todo|tbd)\b|<\w[\w -]*>|(?:^|\s)\.{3}(?:$|\s)", re.I)
+RESULT = re.compile(
+    r"\b(?:passes|passed|fails|failed|succeeded|reproduced|matched|confirmed|found|"
+    r"accepted|rejected|detected|timed out|exited)\b|"
+    r"\b(?:returned|reported|produced)\b\s+(?!(?:pending|todo|tbd)\b)\w|"
+    r"\bexit(?: code| status)?\s*[:=]?\s*\d+\b|"
+    r"(?:[:–—-]\s*|^)(?:pass|fail|success|failure)\b", re.I,
+)
+RESULT_PLACEHOLDER = re.compile(
+    r"\b(?:(?:not|never)\s+(?:yet\s+|been\s+)*(?:passed|failed|reproduced|confirmed|returned)|"
+    r"expected\s+(?:result\s*[:=]\s*|to\s+)?(?:pass(?:es|ed)?|fail(?:s|ed)?|success|failure))\b", re.I,
+)
+# Scan complete link destinations or bare URL tokens, then validate the whole destination.
+EVIDENCE_LINK = re.compile(
+    r"!?\[[^\]\n]*\]\(<?([^\s)>]+)>?(?:[ \t]+\"[^\"\n]*\")?\)|"
+    r"(?:^|(?<=[\s(<]))(https?://[^\s<>\])]+)", re.I,
+)
+ACTIONS_URL = re.compile(
+    r"(?i:https://github\.com)/[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*/(?!\.{1,2}/)[a-zA-Z0-9_.-]+"
+    r"/actions/runs/[1-9][0-9]*"
+    r"(?:/(?:job|attempts)/[1-9][0-9]*)?/?(?:[?#][^\s<>]*)?"
+)
 
 # Instance-local references a public contributor cannot open (upstream "No Internal Issue References").
 # The ticket-id pattern is built per call from INTERNAL_ID_PREFIXES; these are the fixed ones.
@@ -111,16 +137,23 @@ def description_text(body):
 def parse_sections(body):
     """Map normalised `## Heading` -> content. Comments are removed first."""
     sections, current, buf = {}, None, []
+
+    def record():
+        content = "\n".join(buf).strip()
+        if current == "verification" and current in sections:
+            content = sections[current] + "\n\n" + content
+        sections[current] = content
+
     for line in strip_comments(body).splitlines():
         m = re.match(r"^##\s+(.+?)\s*#*\s*$", line)
         if m:
             if current is not None:
-                sections[current] = "\n".join(buf).strip()
+                record()
             current, buf = m.group(1).strip().lower(), []
         elif current is not None:
             buf.append(line)
     if current is not None:
-        sections[current] = "\n".join(buf).strip()
+        record()
     return sections
 
 
@@ -138,6 +171,31 @@ def real_items(content):
             continue
         n += 1
     return n
+
+
+def has_verification_evidence(item):
+    prose = INLINE_CODE.sub(" CODE ", item)
+    for link in EVIDENCE_LINK.finditer(prose):
+        if not link.group().startswith("!") and ACTIONS_URL.fullmatch(
+            link[1] if link[1] else link[2].rstrip(".,;:!?")
+        ):
+            return True
+    result = RESULT_PLACEHOLDER.sub(" ", EVIDENCE_LINK.sub(" ", prose))
+    if not RESULT.search(result):
+        return False
+    return any(
+        COMMAND.fullmatch(command) and not COMMAND_PLACEHOLDER.search(command)
+        for span in INLINE_CODE.finditer(item)
+        if (command := span[0][len(span[1]):-len(span[1])].strip())
+    )
+
+
+def invalid_verification_items(content):
+    paragraphs = re.split(r"\n[ \t]*\n", FENCED_BLOCK.sub("", content))
+    bullets = [item for paragraph in paragraphs for item in VERIFICATION_BULLET.split(paragraph)[1:]]
+    if not bullets:
+        return [] if any(map(has_verification_evidence, paragraphs)) else [1]
+    return [n for n, item in enumerate(bullets, 1) if not has_verification_evidence(item)]
 
 
 def internal_hits(text, prefixes, slug=False):
@@ -179,6 +237,9 @@ def other_hits(text):
 
 def check_pull_request(env):
     mode = "error" if env.get("PR_STANDARDS_MODE", "warn").strip().lower() == "error" else "warning"
+    verification_mode = {"error": "error", "warn": "warning"}.get(
+        env.get("PR_VERIFICATION_MODE", "").strip().lower(), mode
+    )
     prefixes = env.get("INTERNAL_ID_PREFIXES") or DEFAULT_PREFIXES
     private = env.get("REPO_PRIVATE", "true").strip().lower() == "true"
     title = (env.get("TITLE") or "").strip()
@@ -210,12 +271,20 @@ def check_pull_request(env):
             if skip_light and light:
                 continue
             content = sections.get(heading.lower())
+            level = verification_mode if heading == "Verification" else mode
             if content is None:
-                out.append(Finding(mode, "PR template", f"Missing section '## {heading}'."))
+                out.append(Finding(level, "PR template", f"Missing section '## {heading}'."))
                 continue
             if real_items(content) < minimum:
                 need = f"at least {minimum} items" if minimum > 1 else "real content"
-                out.append(Finding(mode, "PR template", f"'## {heading}' needs {need}."))
+                out.append(Finding(level, "PR template", f"'## {heading}' needs {need}."))
+            elif heading == "Verification":
+                invalid = invalid_verification_items(content)
+                if invalid:
+                    numbers = ", ".join(map(str, invalid))
+                    out.append(Finding(level, "PR template", f"'## Verification' needs a code-formatted command "
+                                       f"with its observed result or a GitHub Actions run/job URL in each item "
+                                       f"(missing in: {numbers})."))
 
     if private:
         if not generated and not re.search(r"\bTOG-\d+\b", body):

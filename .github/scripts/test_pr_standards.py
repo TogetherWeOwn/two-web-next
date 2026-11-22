@@ -137,6 +137,89 @@ class Body(unittest.TestCase):
         self.assertEqual([], f)
 
 
+class Verification(unittest.TestCase):
+    RUN = "https://github.com/TogetherWeOwn/two-web-next/actions/runs/45073079066"
+    PERMALINK = "[Exact-head Actions evidence](https://github.com/TogetherWeOwn/two-web-next/pull/7#issuecomment-8)"
+    ITEM = "- `npm test` passes: 41 passed, 0 failed"
+
+    def findings(self, items, **settings):
+        return ps.evaluate(env(BODY=GOOD_BODY.replace(self.ITEM, items), **settings))
+
+    def test_accepts_commands_and_actions_links(self):
+        for item in (
+            "- `python3 -m unittest ci.test_pr_lint_docs` passed 9 tests.",
+            "- `npm run check` failed with one type error.",
+            "- `$ ./bin/smoke` exited with status 1 and the fixture reproduced the regression.",
+            "- `git diff --check` returned no output. The full suite was not run locally.",
+            "- `pytest` – 24 passed, 1 pending.",
+            "- `git rev-parse HEAD` returned `0123456789abcdef`.",
+            "- `npm test`\n  passed 41 tests.",
+            "`npm test` passed 41 tests.",
+            f"- [CI run]({self.RUN})",
+            f"1. [Job]({self.RUN}/job/137370266418?pr=2672#step:3:1)",
+            f"> - {self.RUN}/attempts/2.",
+            f"+ <{self.RUN}>",
+            f"- [CI]({self.RUN} \"CI run\")\n- {self.PERMALINK}",
+            f"- {self.PERMALINK}\n{self.ITEM}",
+        ):
+            with self.subTest(item=item):
+                self.assertEqual([], self.findings(item))
+
+    def test_rejects_incomplete_and_placeholder_evidence(self):
+        for item in (
+            "- Unit tests passed.",
+            "- `npm test`",
+            "- `npm test` — not run yet.",
+            "- `npm test` — expected result: pass.",
+            "- `npm test` has not yet passed.",
+            "- `npm test` will pass once CI runs.",
+            "- `npm test` returned TBD.",
+            "- `<command>` passed.",
+            "- `command to run` passed.",
+            "- `npm test <file>` passed.",
+            "- `npm test` <!-- passed -->",
+            "- `passed`",
+            "- [placeholder result]",
+            "- ...",
+            f"- {self.PERMALINK}",
+        ):
+            with self.subTest(item=item):
+                self.assertEqual([("error", "PR template")], levels(self.findings(item)))
+
+    def test_rejects_malformed_and_lookalike_actions_links(self):
+        for link in (
+            self.RUN.replace("https:", "http:"),
+            self.RUN.replace("github.com", "github.com.example.org"),
+            self.RUN.replace("github.com", "github.com@example.org"),
+            self.RUN.replace("github.com", "example.org@github.com"),
+            self.RUN.replace("github.com", "github.com:443"),
+            self.RUN.replace("two-web-next", ".."),
+            self.RUN.replace("45073079066", "<run-id>"),
+            self.RUN.replace("45073079066", "０１２"),
+            self.RUN.replace("45073079066", "0"),
+            self.RUN.replace("actions/runs", "actions/workflows"),
+            self.RUN + "abc",
+            self.RUN + "/job/pending",
+            self.RUN + "/artifact/123",
+            f"https://example.org/?next={self.RUN}",
+            f"[{self.RUN}](https://example.org)",
+            f"![CI]({self.RUN})",
+            f"`{self.RUN}`",
+        ):
+            with self.subTest(link=link):
+                self.assertEqual([("error", "PR template")], levels(self.findings(f"- {link}")))
+
+    def test_each_bullet_needs_evidence_at_the_verification_level(self):
+        items = f"{self.ITEM}\n+ CI pending\n  1. [CI job]({self.RUN}/job/137370266418)\n* `npm run lint`"
+        for mode, level in (("warn", "warning"), ("error", "error")):
+            with self.subTest(mode=mode):
+                findings = self.findings(items, PR_STANDARDS_MODE="warn", PR_VERIFICATION_MODE=mode)
+                self.assertEqual([(level, "PR template")], levels(findings))
+                self.assertIn("missing in: 2, 4", findings[0].message)
+        repeated = self.findings(f"- CI pending\n\n## Verification\n\n{self.ITEM}")
+        self.assertEqual([("error", "PR template")], levels(repeated))
+
+
 class CardAndInternalRefs(unittest.TestCase):
     def test_private_repo_requires_card_ref_only_when_asked(self):
         body = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
