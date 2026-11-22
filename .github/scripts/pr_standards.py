@@ -28,8 +28,10 @@ follows `PR_STANDARDS_MODE`, with a separate override for Verification.
 import json
 import os
 import re
+import shlex
 import sys
 from dataclasses import dataclass
+from itertools import dropwhile
 
 from internal_references import DEFAULT_PREFIXES, INSTANCE_UI, ticket_id_pattern
 
@@ -53,11 +55,14 @@ REQUIRED_SECTIONS = [
 ]
 
 COMMENT = re.compile(r"<!--.*?-->", re.S)
-VERIFICATION_BULLET = re.compile(r"^[ \t]*(?:>[ \t]*)*(?:[-+*]|[0-9]{1,9}[.)])(?:[ \t]+|$)", re.M)
+VERIFICATION_BULLET = re.compile(r"^ *(?:[-+*]|[0-9]{1,9}[.)])(?: +|$)")
+QUOTE_PREFIX = re.compile(r"^(?: {0,3}> ?)+")
 FENCED_BLOCK = re.compile(r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ `~\t]*$|\Z)", re.M | re.S)
 INLINE_CODE = re.compile(r"(?<![\\`])(`+)(?!`).+?(?<!`)\1(?!`)", re.S)
-COMMAND = re.compile(r"(?:\$[ \t]+)?(?:[\w./-]+[ \t]+\S.*|(?:\./|/)[^\s]+|make|pytest|tsc|vitest)", re.S)
+COMMAND = re.compile(r"(?:[A-Za-z_][\w.-]*(?:/[^\s]+)?|(?:\.{1,2}/|/)[^\s]+)")
+ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 COMMAND_PLACEHOLDER = re.compile(r"^(?:\$\s+)?(?:cmd|command|test command|example|todo|tbd)\b|<\w[\w -]*>|(?:^|\s)\.{3}(?:$|\s)", re.I)
+COMMAND_INTRO = re.compile(r"\b(?:ran|running|executed|using|with|via|under|by|command)\s*:?\s*$", re.I)
 RESULT = re.compile(
     r"\b(?:passes|passed|fails|failed|succeeded|reproduced|matched|confirmed|found|"
     r"accepted|rejected|detected|timed out|exited)\b|"
@@ -66,13 +71,17 @@ RESULT = re.compile(
     r"(?:[:–—-]\s*|^)(?:pass|fail|success|failure)\b", re.I,
 )
 RESULT_PLACEHOLDER = re.compile(
-    r"\b(?:(?:not|never)\s+(?:yet\s+|been\s+)*(?:passed|failed|reproduced|confirmed|returned)|"
-    r"expected\s+(?:result\s*[:=]\s*|to\s+)?(?:pass(?:es|ed)?|fail(?:s|ed)?|success|failure))\b", re.I,
+    r"\b(?:(?:not|never)\s+(?:(?:yet|been)\s+)*(?:run|executed|passed|failed|reproduced|confirmed|returned)|"
+    r"(?:expected\s+(?:result|to)|(?:will|should|would|must)\s+\w+))\b[^.;\n]*", re.I,
 )
 # Scan complete link destinations or bare URL tokens, then validate the whole destination.
 EVIDENCE_LINK = re.compile(
-    r"!?\[[^\]\n]*\]\(<?([^\s)>]+)>?(?:[ \t]+\"[^\"\n]*\")?\)|"
-    r"(?:^|(?<=[\s(<]))(https?://[^\s<>\])]+)", re.I,
+    r"!?\[[^\]\n]*\]\((?P<inline><[^\s<>]+>|[^\s<>)]+)(?:[ \t]+\"[^\"\n]*\")?\)|"
+    r"!?\[(?P<label>[^\]\n]+)\](?:\[(?P<ref>[^\]\n]*)\])?|"
+    r"(?:^|(?<=[\s(<]))(?P<bare>https?://[^\s<>\])]+)", re.I,
+)
+LINK_DEFINITION = re.compile(
+    r"^ {0,3}\[([^\]\n]+)\]:[ \t]*(<[^\s<>]+>|[^\s<>]+)(?:[ \t]+\"[^\"\n]*\")?[ \t]*$", re.M,
 )
 ACTIONS_URL = re.compile(
     r"(?i:https://github\.com)/[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*/(?!\.{1,2}/)[a-zA-Z0-9_.-]+"
@@ -131,7 +140,9 @@ def strip_comments(text):
 
 def description_text(body):
     link = r"(?:https://github\.com/TogetherWeOwn/two-web-next/pull/[1-9][0-9]*)?#issuecomment-[1-9][0-9]*"
-    return re.sub(rf"^[ \t]*(?:(?:[-+*]|[0-9]+[.)])[ \t]+)?\[Exact-head Actions evidence\]\({link}\)[ \t\r]*$", "", strip_comments(body), flags=re.M)
+    space = r"(?:[ \t]+|[ \t]*\r?\n[ \t]*)"
+    label = rf"\[Exact-head{space}Actions{space}evidence\]"
+    return re.sub(rf"^[ \t]*(?:(?:[-+*]|[0-9]+[.)])[ \t]+)?{label}\({link}\)[ \t\r]*$", "", strip_comments(body), flags=re.M)
 
 
 def parse_sections(body):
@@ -139,10 +150,10 @@ def parse_sections(body):
     sections, current, buf = {}, None, []
 
     def record():
-        content = "\n".join(buf).strip()
+        content = "\n".join(buf)
         if current == "verification" and current in sections:
             content = sections[current] + "\n\n" + content
-        sections[current] = content
+        sections[current] = content.strip("\n") if current == "verification" else content.strip()
 
     for line in strip_comments(body).splitlines():
         m = re.match(r"^##\s+(.+?)\s*#*\s*$", line)
@@ -173,29 +184,72 @@ def real_items(content):
     return n
 
 
-def has_verification_evidence(item):
+def reference_label(label):
+    return " ".join(label.split()).casefold()
+
+
+def is_command(text):
+    command = text.strip()
+    if COMMAND_PLACEHOLDER.search(command):
+        return False
+    try:
+        args = shlex.split(command)
+    except ValueError:
+        return False
+    prompted = args[:1] == ["$"]
+    args = dropwhile(ASSIGNMENT.match, args[1:] if prompted else args)
+    program = next(args, "")
+    return bool(COMMAND.fullmatch(program) and (
+        prompted or "/" in program or program in {"make", "pytest", "tsc", "vitest"} or next(args, None)
+    ))
+
+
+def has_verification_evidence(item, references):
     prose = INLINE_CODE.sub(" CODE ", item)
     for link in EVIDENCE_LINK.finditer(prose):
-        if not link.group().startswith("!") and ACTIONS_URL.fullmatch(
-            link[1] if link[1] else link[2].rstrip(".,;:!?")
-        ):
+        destination = link["inline"] or (link["bare"] or "").rstrip(".,;:!?")
+        if link["label"]:
+            destination = references.get(reference_label(link["ref"] or link["label"]), "")
+        if not link[0].startswith("!") and ACTIONS_URL.fullmatch(destination.strip("<>")):
             return True
     result = RESULT_PLACEHOLDER.sub(" ", EVIDENCE_LINK.sub(" ", prose))
     if not RESULT.search(result):
         return False
-    return any(
-        COMMAND.fullmatch(command) and not COMMAND_PLACEHOLDER.search(command)
-        for span in INLINE_CODE.finditer(item)
-        if (command := span[0][len(span[1]):-len(span[1])].strip())
-    )
+    for span in INLINE_CODE.finditer(item):
+        prefix = item[:span.start()]
+        if RESULT.search(prefix) and not COMMAND_INTRO.search(prefix):
+            continue
+        width = len(span[1])
+        if is_command(span[0][width:-width]):
+            return True
+    return False
 
 
-def invalid_verification_items(content):
-    paragraphs = re.split(r"\n[ \t]*\n", FENCED_BLOCK.sub("", content))
-    bullets = [item for paragraph in paragraphs for item in VERIFICATION_BULLET.split(paragraph)[1:]]
-    if not bullets:
-        return [] if any(map(has_verification_evidence, paragraphs)) else [1]
-    return [n for n, item in enumerate(bullets, 1) if not has_verification_evidence(item)]
+def verification_items(content):
+    """Keep wrapped text and indented paragraphs with their own list item."""
+    lines, indent = [], None
+    for raw in content.expandtabs(4).splitlines():
+        line = QUOTE_PREFIX.sub("", raw)
+        bullet = VERIFICATION_BULLET.match(line)
+        separated = lines and not lines[-1] and line.strip()
+        if lines and (bullet or (separated and (indent is None or len(line) - len(line.lstrip()) < indent))):
+            yield "\n".join(lines)
+            lines, indent = [], None
+        if bullet:
+            indent = bullet.end()
+            lines.append(line[indent:])
+        elif lines or line.strip():
+            lines.append(line.strip())
+    if lines:
+        yield "\n".join(lines)
+
+
+def invalid_verification_items(content, body):
+    references = {}
+    for definition in LINK_DEFINITION.finditer(FENCED_BLOCK.sub("", body)):
+        references.setdefault(reference_label(definition[1]), definition[2])
+    items = list(verification_items(LINK_DEFINITION.sub("", FENCED_BLOCK.sub("", content))))
+    return [n for n, item in enumerate(items or [""], 1) if not has_verification_evidence(item, references)]
 
 
 def internal_hits(text, prefixes, slug=False):
@@ -279,7 +333,7 @@ def check_pull_request(env):
                 need = f"at least {minimum} items" if minimum > 1 else "real content"
                 out.append(Finding(level, "PR template", f"'## {heading}' needs {need}."))
             elif heading == "Verification":
-                invalid = invalid_verification_items(content)
+                invalid = invalid_verification_items(content, plain)
                 if invalid:
                     numbers = ", ".join(map(str, invalid))
                     out.append(Finding(level, "PR template", f"'## Verification' needs a code-formatted command "

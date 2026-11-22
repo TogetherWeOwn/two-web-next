@@ -140,6 +140,7 @@ class Body(unittest.TestCase):
 class Verification(unittest.TestCase):
     RUN = "https://github.com/TogetherWeOwn/two-web-next/actions/runs/45073079066"
     PERMALINK = "[Exact-head Actions evidence](https://github.com/TogetherWeOwn/two-web-next/pull/7#issuecomment-8)"
+    WRAPPED_PERMALINK = PERMALINK.replace("Actions evidence", "Actions\n  evidence")
     ITEM = "- `npm test` passes: 41 passed, 0 failed"
 
     def findings(self, items, **settings):
@@ -154,6 +155,9 @@ class Verification(unittest.TestCase):
             "- `pytest` – 24 passed, 1 pending.",
             "- `git rev-parse HEAD` returned `0123456789abcdef`.",
             "- `npm test`\n  passed 41 tests.",
+            "- `npm test`\n\n  Passed 41 tests.",
+            "- `NODE_ENV=production npm run build --prefix web` passed.",
+            "- `NODE_ENV=production LABEL='test build' npm run build` passed.",
             "`npm test` passed 41 tests.",
             f"- [CI run]({self.RUN})",
             f"1. [Job]({self.RUN}/job/137370266418?pr=2672#step:3:1)",
@@ -161,6 +165,9 @@ class Verification(unittest.TestCase):
             f"+ <{self.RUN}>",
             f"- [CI]({self.RUN} \"CI run\")\n- {self.PERMALINK}",
             f"- {self.PERMALINK}\n{self.ITEM}",
+            f"- {self.WRAPPED_PERMALINK}\n{self.ITEM}",
+            f"- [CI run][ci  run]\n\n[CI RUN]: {self.RUN}",
+            f"- [CI][]\n\n## Links\n\n[ci]: <{self.RUN}> \"CI\"",
         ):
             with self.subTest(item=item):
                 self.assertEqual([], self.findings(item))
@@ -173,15 +180,22 @@ class Verification(unittest.TestCase):
             "- `npm test` — expected result: pass.",
             "- `npm test` has not yet passed.",
             "- `npm test` will pass once CI runs.",
+            "- `npm test` was not run; expected to report 41 tests passed.",
+            "- `npm test` will return exit code 0.",
             "- `npm test` returned TBD.",
             "- `<command>` passed.",
             "- `command to run` passed.",
             "- `npm test <file>` passed.",
+            "- `MODE=ci NODE_ENV=production` passed.",
+            "- Manual smoke passed and returned `200 OK`.",
+            "- Manual smoke passed and returned `no output`.",
             "- `npm test` <!-- passed -->",
             "- `passed`",
             "- [placeholder result]",
             "- ...",
             f"- {self.PERMALINK}",
+            f"- {self.WRAPPED_PERMALINK}",
+            f"```text\n{self.RUN}\n```",
         ):
             with self.subTest(item=item):
                 self.assertEqual([("error", "PR template")], levels(self.findings(item)))
@@ -205,6 +219,8 @@ class Verification(unittest.TestCase):
             f"[{self.RUN}](https://example.org)",
             f"![CI]({self.RUN})",
             f"`{self.RUN}`",
+            "[CI run][missing]",
+            f"[CI][ref]\n\n[ref]: https://example.org\n[REF]: {self.RUN}",
         ):
             with self.subTest(link=link):
                 self.assertEqual([("error", "PR template")], levels(self.findings(f"- {link}")))
@@ -218,6 +234,13 @@ class Verification(unittest.TestCase):
                 self.assertIn("missing in: 2, 4", findings[0].message)
         repeated = self.findings(f"- CI pending\n\n## Verification\n\n{self.ITEM}")
         self.assertEqual([("error", "PR template")], levels(repeated))
+        for items in (f"{self.ITEM}\n\nCI pending.", f"CI pending.\n{self.ITEM}",
+                      "`npm test` passed.\n\nCI pending.", "- `npm test`\n\nPassed 41 tests."):
+            with self.subTest(items=items):
+                self.assertEqual([("error", "PR template")], levels(self.findings(items)))
+
+    def test_wrapped_publisher_permalink_does_not_supply_description(self):
+        self.assertEqual([("error", "PR body")], levels(ps.evaluate(env(BODY=self.WRAPPED_PERMALINK))))
 
 
 class CardAndInternalRefs(unittest.TestCase):

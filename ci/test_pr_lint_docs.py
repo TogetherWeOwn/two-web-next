@@ -7,6 +7,7 @@ Also wired into the `Unit-test the lint` step in .github/workflows/pr-gates.yml.
 import os
 import contextlib
 import io
+import json
 import re
 import subprocess
 import sys
@@ -276,17 +277,22 @@ class CheckerBehaviorMatchesDocs(unittest.TestCase):
 
     def test_verification_fails_in_configured_mode(self):
         for body in (GOOD_BODY.replace("## Verification", "## Notes"), GOOD_BODY + "- CI pending\n"):
-            with self.subTest(body=body):
-                findings = ps.evaluate({
-                    "EVENT": "pull_request",
-                    "TITLE": "fix(auth): refuse expired sudo sessions",
-                    "BODY": body,
-                    "REPO_PRIVATE": "false",
-                    "PR_STANDARDS_MODE": workflow_env("PR_STANDARDS_MODE"),
-                    "PR_VERIFICATION_MODE": workflow_env("PR_VERIFICATION_MODE"),
-                })
-                self.assertEqual(["error"], [f.level for f in findings])
-                self.assertIn("Verification", findings[0].message)
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as directory:
+                metadata = Path(directory) / "metadata.json"
+                metadata.write_text(json.dumps({
+                    "event": "pull_request", "title": "fix(auth): refuse expired sudo sessions",
+                    "body": body, "author": "alice",
+                }), encoding="utf-8")
+                result = subprocess.run(
+                    [sys.executable, str(REPO_ROOT / "ci" / "pr-lint-output.py"), "check"],
+                    cwd=REPO_ROOT, capture_output=True, text=True, timeout=10,
+                    env={**os.environ, "PR_METADATA_PATH": str(metadata), "FLOOR_WAIVER_BASE_SHA": "HEAD",
+                         "COMMIT_SUBJECTS_PATH": "", "HEAD_REF": "fix/sudo-session", "REPO_PRIVATE": "false",
+                         "PR_STANDARDS_MODE": workflow_env("PR_STANDARDS_MODE"),
+                         "PR_VERIFICATION_MODE": workflow_env("PR_VERIFICATION_MODE")},
+                )
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertRegex(result.stdout, r"::error title=PR template::[^\n]*Verification")
 
     def test_strict_title_body_hits_fail_in_warn_mode(self):
         """The strict subset (tracker id, instance link, internal host) fails even in warn mode."""
