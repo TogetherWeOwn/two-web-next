@@ -16,6 +16,7 @@ import {
   GAME_TWINS,
   gameRecoveryFixture,
   type GameTwin,
+  kitCalendarStyles,
 } from "../test/helpers/calendar-game-recovery";
 
 const publicDir = fileURLToPath(new URL("../public/", import.meta.url)).replace(/\/+$/, "");
@@ -111,7 +112,8 @@ async function open(
           } as Record<string, string>
         )[extname(path)] ?? "application/octet-stream";
       publicFulfilled.push(url.pathname);
-      return route.fulfill({ body: readFileSync(path), contentType });
+      const style = twin === "Kit" ? kitCalendarStyles.get(url.pathname) : undefined;
+      return route.fulfill({ body: style ?? readFileSync(path), contentType });
     } catch {
       publicAborted.push(url.pathname);
       return route.abort();

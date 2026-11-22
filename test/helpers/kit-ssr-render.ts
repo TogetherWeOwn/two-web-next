@@ -40,6 +40,7 @@ export function renderPage(data, props) {
       platform: "node",
       format: "esm",
       outfile,
+      loader: { ".css": "file" },
       logLevel: "warning",
       absWorkingDir: root,
       nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],

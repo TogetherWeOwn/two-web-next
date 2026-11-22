@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { getTableColumns } from "drizzle-orm";
@@ -17,6 +17,7 @@ type KitRender = typeof import("../../web/src/lib/server/render-events-html").re
 const root = fileURLToPath(new URL("../../", import.meta.url).href);
 const webRequire = createRequire(new URL("../../web/package.json", import.meta.url).href);
 let loaded: Promise<KitRender> | undefined;
+export const kitCalendarStyles = new Map<string, string>();
 
 // Bundle the actual Kit SSR adapter once per test worker.
 export function renderKitEvents(...args: Parameters<KitRender>): ReturnType<KitRender> {
@@ -29,6 +30,8 @@ export function renderKitEvents(...args: Parameters<KitRender>): ReturnType<KitR
       format: "esm",
       platform: "node",
       write: false,
+      outdir: ".",
+      loader: { ".css": "file" },
       tsconfigRaw: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "hono/jsx" } },
       plugins: [
         {
@@ -44,7 +47,10 @@ export function renderKitEvents(...args: Parameters<KitRender>): ReturnType<KitR
         },
       ],
     });
-    const bundleUrl = `data:text/javascript;base64,${Buffer.from(outputFiles[0]!.text).toString("base64")}`;
+    for (const file of outputFiles) {
+      if (file.path.endsWith(".css")) kitCalendarStyles.set(`/${basename(file.path)}`, file.text);
+    }
+    const bundleUrl = `data:text/javascript;base64,${Buffer.from(outputFiles.find((file) => file.path.endsWith(".js"))!.text).toString("base64")}`;
     return ((await import(bundleUrl)) as { renderEventsHtml: KitRender }).renderEventsHtml;
   })();
   return loaded.then((render) => render(...args));
