@@ -1,5 +1,5 @@
 // DB-free PR gate for R4–R7 and W1–W3. Only changes to their source or test
-// files select mutants, and survivors already present at the fork point pass.
+// files select mutants, and survivors already present on the target pass.
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
@@ -109,17 +109,16 @@ function save(reportDir, report) {
   const markdown = [
     "# Focused mutation gate",
     "",
-    `- Head: ${report.head}`,
-    `- Fork point: ${report.base ?? "unavailable"}`,
+    `- Tested revision: ${report.head}`,
+    `- Target: ${report.base ?? "unavailable"}`,
     `- Started: ${report.startedAt}`,
-    `- Selected: ${report.mutants.join(", ") || "none"}`,
     `- Baseline: ${report.baseline.verdict}`,
     `- Suite: ${report.suite.join(", ") || "none"}`,
     `- Killed: ${killed}/${report.mutants.length}; completed: ${report.results.length}/${report.mutants.length}`,
     `- Survivors: ${survivors.length}; new: ${newSurvivors(report).length}`,
     `- Infrastructure failures: ${infra.length}`,
     "",
-    "| Mutant | Head verdict | Fork point verdict | Before SHA-256 | After SHA-256 |",
+    "| Mutant | Head verdict | Target verdict | Before SHA-256 | After SHA-256 |",
     "| --- | --- | --- | --- | --- |",
     ...report.results.map(
       (r) =>
@@ -140,11 +139,11 @@ function save(reportDir, report) {
 }
 
 function newSurvivors(report) {
-  return report.results.filter((r) => r.status === "survived" && r.baseStatus !== "survived");
+  return report.results.filter((r) => ["killed", "stale", "absent"].includes(r.baseStatus));
 }
 
 function compareSurvivors(root, report, execute) {
-  const survivors = newSurvivors(report);
+  const survivors = report.results.filter((r) => r.status === "survived");
   if (!survivors.length) return;
   const scratch = mkdtempSync(join(tmpdir(), "focused-mutation-base-"));
   const baseRoot = join(scratch, "worktree");
@@ -153,22 +152,27 @@ function compareSurvivors(root, report, execute) {
     // Hold the installed dependencies constant while comparing tracked inputs.
     symlinkSync(join(root, "node_modules"), join(baseRoot, "node_modules"), "dir");
     const suite = report.suite.filter((path) => existsSync(join(baseRoot, path)));
-    if (!suite.length) return;
-    report.baseBaseline = execute(baseRoot, "base-baseline", suite);
-    if (report.baseBaseline.verdict !== "green")
-      throw new Error(`unmutated fork point is ${report.baseBaseline.verdict}`);
+    if (suite.length) report.baseBaseline = execute(suite, baseRoot, "base-baseline");
+    if (suite.length && report.baseBaseline.verdict !== "green")
+      throw new Error(`unmutated target is ${report.baseBaseline.verdict}`);
     for (const row of survivors) {
       const mutant = FOCUSED_MUTANTS.find((m) => m.id === row.id);
-      if (!suite.includes(TEST_FOR_TARGET[mutant.file]) || !existsSync(join(baseRoot, mutant.file)))
+      if (
+        !suite.includes(TEST_FOR_TARGET[mutant.file]) ||
+        !existsSync(join(baseRoot, mutant.file))
+      ) {
+        row.baseStatus = "absent";
         continue;
+      }
       const result = runMutant(
         baseRoot,
         mutant,
-        () => execute(baseRoot, `base-${mutant.id}`, suite),
+        () => execute(suite, baseRoot, `base-${mutant.id}`),
         suite,
       );
       row.baseStatus = result.status;
-      if (result.status === "error") throw new Error(`fork point ${mutant.id}: ${result.detail}`);
+      if (result.status === "error" || result.status === "ambiguous")
+        throw new Error(`target ${mutant.id}: ${result.detail}`);
     }
   } finally {
     if (existsSync(join(baseRoot, ".git"))) git(root, "worktree", "remove", "--force", baseRoot);
@@ -192,15 +196,17 @@ export function runFocused(root, target, { kill } = {}) {
     infrastructureErrors: [],
   };
   save(reportDir, report);
-  const execute = (checkout, label, suite) =>
-    kill ? kill(suite, label) : killSuite(checkout, reportDir, label, suite);
+  let label = "baseline";
+  const execute = (suite, checkout = root, runLabel = label) =>
+    kill ? kill(suite, runLabel) : killSuite(checkout, reportDir, runLabel, suite);
   try {
     if (!isSha(target)) throw new Error("expected a full target commit SHA");
     if (!FOCUSED_MUTANTS.every((m) => m && TARGETS.includes(m.file)))
       throw new Error("focused mutant inventory drifted");
     report.head = git(root, "rev-parse", "HEAD").trim();
-    report.base = git(root, "merge-base", target, report.head).trim();
-    const range = `${report.base}..${report.head}`;
+    git(root, "merge-base", "--is-ancestor", target, report.head);
+    report.base = target;
+    const range = `${target}..${report.head}`;
     const diff = git(root, "diff", "--name-only", "--no-renames", "-z", range, "--", ...SCOPE);
     const changed = new Set(diff.split("\0"));
     const selected = FOCUSED_MUTANTS.filter(
@@ -216,22 +222,18 @@ export function runFocused(root, target, { kill } = {}) {
       if (missing.length) throw new Error(`missing runner inputs: ${missing.join(", ")}`);
       const dirty = git(root, "status", "--porcelain", "--", ...inputs).trim();
       if (dirty) throw new Error(`refusing dirty mutation inputs: ${dirty}`);
-      report.baseline = execute(root, "baseline", report.suite);
+      report.baseline = execute(report.suite);
       if (report.baseline.verdict !== "green")
         throw new Error(`unmutated baseline is ${report.baseline.verdict}`);
     }
     save(reportDir, report);
     for (const mutant of selected) {
+      label = mutant.id;
       const path = join(root, mutant.file);
       const beforeHash = hash(path);
       let result;
       try {
-        result = runMutant(
-          root,
-          mutant,
-          () => execute(root, mutant.id, report.suite),
-          report.suite,
-        );
+        result = runMutant(root, mutant, execute, report.suite);
       } catch (error) {
         result = { id: mutant.id, status: "error", detail: errorText(error) };
       }

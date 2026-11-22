@@ -248,10 +248,9 @@ admitted). It runs only `test/moderator-malformed-success.test.ts` and
 by Vitest. The slow session/join/admin mutants remain in the existing nightly
 job; that inventory, its safeguards and all coverage floors are unchanged.
 
-In Actions, `npm run mutation:roles-wall-time -- "$TARGET_SHA"` selects only the
-groups whose source or paired test file changed at the PR fork point. An empty
-selection passes without running Vitest. Merge groups compare to their base, and
-main pushes compare to the previous main SHA. The runner
+In Actions, `npm run mutation:roles-wall-time -- "$TARGET_SHA"` selects source or
+paired test changes between the event base and the integrated PR revision.
+Merge groups use their base and main pushes use the previous main SHA. The runner
 refuses dirty targets, requires a green unmutated baseline, checks unique
 anchors, and reuses the nightly targeted restore with SHA-256 verification
 before proceeding to another mutant. Each Vitest child has a 20-second cap;
@@ -260,7 +259,7 @@ is offered. A restore mismatch stops further mutation and preserves unexpected
 bytes for inspection. Abrupt runner loss or an uncatchable process kill cannot
 promise cleanup; partial reports are saved before mutation and after each result.
 
-For a head survivor, the runner compares the same mutation at the fork point
+For a head survivor, the runner compares the same mutation on the target
 in a temporary Git worktree with the same installed dependencies. A survivor
 at both revisions passes. New survivors and infrastructure failures exit 1.
 `artifacts/mutation-roles-wall-time/report.{json,md}` records baseline

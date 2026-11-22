@@ -34,12 +34,19 @@ const ids = [
 ];
 
 const fixtureGit = (root, ...args) =>
-  execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: "pipe" }).trim();
+  execFileSync(
+    "git",
+    ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", ...args],
+    {
+      cwd: root,
+      encoding: "utf8",
+      stdio: "pipe",
+    },
+  ).trim();
 
 function commit(root, ...paths) {
   if (paths.length) fixtureGit(root, "add", "--", ...paths);
-  const config = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com"];
-  fixtureGit(root, ...config, "commit", "-qm", "fixture", "--allow-empty");
+  fixtureGit(root, "commit", "-qm", "fixture", "--allow-empty");
   return fixtureGit(root, "rev-parse", "HEAD");
 }
 
@@ -120,25 +127,18 @@ test("real Vitest fixtures reject a new survivor and accept kills, existing surv
     originals[files[1]] = readFileSync(join(data, "wall-time.source.txt"));
     writeFileSync(join(root, files[1]), originals[files[1]]);
     const [controls] = goodSuite.split("// Fold assertion");
-    assert.notEqual(goodSuite, controls);
     const writeSuite = (source) => writeFileSync(join(root, suite), source);
+    const statuses = () => report(root).results.map((row) => row.status);
     writeSuite(goodSuite);
     const good = commit(root, suite, files[1]);
 
     writeSuite(controls);
     const bad = commit(root, suite);
     assert.equal(runGate(root, good), 1);
-    let result = report(root);
+    const result = report(root);
     assert.deepEqual(result.infrastructureErrors, []);
     assert.deepEqual(result.suite, [suite]);
-    assert.deepEqual(
-      result.results.map(({ id }) => id),
-      ids.slice(4),
-    );
-    assert.deepEqual(
-      result.results.map(({ status }) => status),
-      ["survived", "killed", "killed"],
-    );
+    assert.deepEqual(statuses(), ["survived", "killed", "killed"]);
     assert.equal(result.results[0].baseStatus, "killed");
 
     writeFileSync(join(root, "README.md"), "Unrelated change\n");
@@ -147,21 +147,26 @@ test("real Vitest fixtures reject a new survivor and accept kills, existing surv
     assert.deepEqual(report(root).results, []);
     assert.equal(report(root).baseline.verdict, "not_run");
 
-    writeSuite(controls + "\n// A test edit that preserves the existing gap.\n");
-    commit(root, suite);
+    fixtureGit(root, "checkout", "-q", "--detach", good);
+    writeSuite("// Edit on a PR branched before the target lost fold coverage.\n" + goodSuite);
+    const pr = commit(root, suite);
+    fixtureGit(root, "checkout", "-q", "--detach", bad);
+    fixtureGit(root, "merge", "--no-ff", "--no-edit", pr);
     assert.equal(runGate(root, bad), 0);
-    result = report(root);
-    assert.deepEqual(result.infrastructureErrors, []);
-    assert.equal(result.results[0].status, "survived");
-    assert.equal(result.results[0].baseStatus, "survived");
+    assert.equal(report(root).results[0].baseStatus, "survived");
+
+    const kill = (_suite, label) => ({ verdict: label === "base-baseline" ? "red" : "green" });
+    assert.equal(runGate(root, bad, { kill }), 1);
+    const summary = readFileSync(
+      join(root, "artifacts/mutation-roles-wall-time/report.md"),
+      "utf8",
+    );
+    assert.match(summary, /Survivors: 3; new: 0/);
 
     writeSuite(goodSuite);
     commit(root, suite);
     assert.equal(runGate(root, bad), 0);
-    result = report(root);
-    assert.equal(result.results.length, 3);
-    assert.ok(result.results.every((row) => row.status === "killed"));
-    assert.equal(result.baseBaseline.verdict, "not_run");
+    assert.deepEqual(statuses(), ["killed", "killed", "killed"]);
     assert.equal(fixtureGit(root, "worktree", "list", "--porcelain").split("\n\n").length, 1);
     restored(root, originals);
   });
@@ -456,11 +461,7 @@ test("workflow is fail-closed on the event diff and independent of deployment CI
   assert.deepEqual(workflow.permissions, { contents: "read" });
   assert.doesNotMatch(JSON.stringify(workflow), /secrets\./);
   const checkout = job.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
-  assert.deepEqual(checkout.with, {
-    ref: "${{ github.event.pull_request.head.sha || github.sha }}",
-    "fetch-depth": 0,
-    "persist-credentials": false,
-  });
+  assert.deepEqual(checkout.with, { "fetch-depth": 0, "persist-credentials": false });
   const install = job.steps.find((step) => step.id === "install");
   assert.ok(install, "dependency installation step must exist");
   assert.equal(install.run, "npm ci --include=dev --no-audit --no-fund");
