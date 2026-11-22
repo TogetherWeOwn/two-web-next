@@ -3,7 +3,10 @@ valid:
   - const item = <Row fits={!exceedsByteLimit(bytes.byteLength, max)} />;
   - const item = <Row fits={fitsUtf8ByteLimit(text, max)} />;
   - const item = <Row size={bytes.byteLength} />;
+  - const item = <Row known={typeof bytes.byteLength === "number"} />;
 invalid:
   - const item = <Row fits={bytes.byteLength <= max} />;
   - const item = <Row fits={max >= (offset + bytes.byteLength)} />;
   - const item = <Row fits={new TextEncoder().encode(text).byteLength <= max} />;
+  - const item = <Row fits={(Buffer.byteLength)(text) <= max} />;
+  - "const item = <Row fits={(bytes ? bytes.byteLength : 0) <= max} />;"

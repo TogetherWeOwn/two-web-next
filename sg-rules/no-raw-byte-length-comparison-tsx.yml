@@ -11,21 +11,35 @@ rule:
     - kind: call_expression
       has:
         field: function
-        matches: byte-length-access
+        any:
+          - matches: byte-length-access
+          - matches: expression-wrapper
+            has:
+              matches: byte-length-access
+              stopBy:
+                not:
+                  matches: expression-wrapper
   inside:
     matches: comparison
     stopBy:
       not:
         any:
-          - kind: parenthesized_expression
-          - kind: non_null_expression
-          - kind: as_expression
-          - kind: satisfies_expression
+          - matches: expression-wrapper
+          - kind: ternary_expression
           - kind: unary_expression
+            has:
+              field: operator
+              regex: "^[+~-]$"
           - kind: binary_expression
             not:
               matches: comparison
 utils:
+  expression-wrapper:
+    any:
+      - kind: parenthesized_expression
+      - kind: non_null_expression
+      - kind: as_expression
+      - kind: satisfies_expression
   byte-length-access:
     any:
       - kind: member_expression
@@ -40,4 +54,4 @@ utils:
     kind: binary_expression
     has:
       field: operator
-      regex: '^(?:<=?|>=?|===?|!==?)$'
+      regex: "^(?:<=?|>=?|===?|!==?)$"
