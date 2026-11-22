@@ -1572,6 +1572,10 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     eventsFailures.length === 0 ? "passed" : "failed",
     eventsFailures.join("; ") || null,
   );
+  const kitSignIn = guestChrome("kit", "/auth/discord?next=%2Fevents");
+  const hasChrome = (links) => hasKitGuestChrome(`<header data-kit-site-header>${links}</header>`);
+  const duplicateRejected = hasChrome(kitSignIn) && !hasChrome(kitSignIn.repeat(2));
+  push("unit: Kit events duplicate sign-in fails", duplicateRejected ? "passed" : "failed");
   // Events forced-failure proof: a missing island binder, a GET form turned
   // into a POST, a dropped archive link, a canonical pointing at the archive
   // or the site root, a Vary missing either token and a flashed view served
@@ -1579,11 +1583,6 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // break proves nothing.
   const eventsMutants = [
     ["no-guest-chrome", (html) => html.replace(eventsChrome, "")],
-    [
-      "duplicate-sign-in",
-      (html) =>
-        html.replace(eventsChrome, guestChrome("kit", "/auth/discord?next=%2Fevents").repeat(2)),
-    ],
     [
       "no-island-binder",
       (html) =>
