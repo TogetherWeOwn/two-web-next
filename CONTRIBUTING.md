@@ -223,7 +223,8 @@ the change, record all of the following in the task:
 Use authorized identities for all production changes. Run deploys and migrations
 through the existing protected workflows. For other operations, use the existing
 protected procedure, such as the [secret rotation procedure](docs/runbook.md#secret-rotation-pointer-procedure-only).
-If that operation requires a deployment, use the protected deploy workflow.
+If an operation requires a deployment, hold it until the protected deploy
+workflow can execute it.
 For automatic promotion, [the resolver](ci/resolve-promotion-sha.mjs) requires the
 qualified, soaked staging SHA to equal `PRODUCTION_ACCEPTED_SHA`. An authorized
 executor sets that variable to the exact approved SHA only through the existing

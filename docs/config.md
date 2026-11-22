@@ -150,11 +150,11 @@ Length is the floor for randomly generated secrets; no entropy estimator
 runs. Only secret **names** appear in this file, PRs, logs and command
 arguments; never paste a value.
 
-Rotate without downtime:
+Rehearse rotation on staging with a staging-only replacement:
 
 1. Generate the replacement secret on the operator machine.
-2. Install it with `wrangler secret put SESSION_SECRET` on the target
-   Worker (staging first, production only under its own authorization).
+2. Install it with `wrangler secret put SESSION_SECRET` on the staging
+   Worker. The command deploys that Worker immediately.
    Both the old and the replacement satisfy the floor, so `/up` stays
    ready throughout the swap.
 3. Confirm `GET /up` answers 200 with no `config` key before and after.
@@ -164,6 +164,8 @@ Rotate without downtime:
    out of scope), so prefer low-traffic windows. No data migration runs.
 5. Confirm no log line carries a value: readiness diagnostics name the
    secret and the requirement, never the value.
+
+For production, follow the [secret rotation runbook](runbook.md#secret-rotation-pointer-procedure-only).
 
 ## Tail Worker inventory
 

@@ -2319,8 +2319,11 @@ it is not a harmless configuration preview. This runbook performs no rotation
 and supplies no secret values or rotation commands.
 
 For production, apply the [release gate](../CONTRIBUTING.md#production-release-gate)
-before the authorized custodian makes the change. Use the protected deploy
-workflow for any resulting deployment and retain custody approvals below.
+and retain the custody approvals below. Hold Worker secret rotation until a
+protected deployment path can apply the change. `wrangler secret put` deploys
+immediately. The [production deploy workflow](../.github/workflows/deploy-production.yml)
+uploads and promotes its own build and cannot deploy a prepared secret-only
+version. The staging rehearsal is documented in [Configuration](config.md#session_secret-strength-and-rotation).
 
 Route a suspected compromise to the Director/CISO immediately; CEO obtains the
 owner-reserved approval before creation/deletion/rotation or exporting custody.
