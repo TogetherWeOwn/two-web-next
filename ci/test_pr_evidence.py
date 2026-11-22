@@ -51,8 +51,8 @@ class EvidenceTest(unittest.TestCase):
         runs = path.startswith(f'/actions/runs?head_sha={self.pr["head"]["sha"]}&')
         if not runs:
             self.assertRegex(path, r"^/actions/runs/101/attempts/[12]/jobs\?")
-        key, items = ("workflow_runs", self.runs) if runs else ("jobs", self.jobs)
-        return [{"total_count": len(items), key: items[i:i + 100]} for i in range(0, len(items) or 1, 100)]
+        key, items, size = ("workflow_runs", self.runs, 73) if runs else ("jobs", self.jobs, 100)
+        return [{"total_count": len(items), key: items[i:i + size]} for i in range(0, len(items) or 1, size)]
 
     def test_pagination_stable_link_and_new_head(self):
         self.records()
