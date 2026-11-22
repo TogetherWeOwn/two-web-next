@@ -19,6 +19,7 @@ export async function withDeadline(work, ms = 5_000) {
   return result;
 }
 const subject = "zz-no-activity";
+const scrollRegion = "activity-log-table-scroll";
 const urlFor = (empty) => `${origin}${path}${empty ? `?subject=${subject}` : ""}`;
 const shell = "Skip to content TWO admin Events · Featured · Join attempts · Activity log · Site";
 const intro =
@@ -78,7 +79,7 @@ async function serve(route, allowed, stopped, offline, deny) {
 }
 
 async function inspect(page, empty, keyboard) {
-  const [content, state] = await page.getByTestId("activity-log-table-scroll").evaluate((el) => {
+  const [content, state] = await page.getByTestId(scrollRegion).evaluate((el) => {
     const text = (node) => node.innerText.replace(/\s+/g, " ").trim();
     const all = (selector, mapper) => Array.from(document.querySelectorAll(selector), mapper);
     const cell = (node) => (node.checkVisibility({ checkOpacity: true }) ? text(node) : "[hidden]");
@@ -103,16 +104,19 @@ async function inspect(page, empty, keyboard) {
   validateView(content, state, empty, keyboard);
 }
 
-export async function prepareDesktopAudit(page) {
+export async function prepareDesktopAudit(page, step = () => {}) {
   // Call on the blank page. Use the same CDP session for both transitions:
   // a second session cannot clear Playwright's context-wide scripting override.
+  step("SCRIPT_SESSION");
   const session = await withDeadline(() => page.context().newCDPSession(page));
   const disable = (value) =>
     withDeadline(() => session.send("Emulation.setScriptExecutionDisabled", { value }));
+  step("SCRIPT_DISABLE");
   await disable(true);
   return async (audit) => {
     // The page was loaded and captured with scripting disabled. Add a policy
     // without replacing the original CSP before enabling axe's timers.
+    step("AUDIT_POLICY");
     await withDeadline(() =>
       page.evaluate(() => {
         const policy = document.createElement("meta");
@@ -121,14 +125,22 @@ export async function prepareDesktopAudit(page) {
         document.head.prepend(policy);
       }),
     );
+    step("AUDIT_ENABLE");
     const verdict = disable(false).then(audit);
     // Keep the override attached until context close, including after the audit.
-    return verdict.finally(() => disable(true)).finally(() => verdict);
+    return verdict
+      .then((result) => {
+        step("AUDIT_RESTORE");
+        return result;
+      })
+      .finally(() => disable(true))
+      .finally(() => verdict);
   };
 }
 
 async function guardedPage(browser, mintModerator, [width, height], url, render, options) {
-  const { mark, signal, TimeoutError, reportOnly, desktopAudit } = options;
+  const { step, signal, TimeoutError, reportOnly, desktopAudit } = options;
+  step("CONTEXT_NEW");
   const context = await browser.newContext({
     viewport: { width, height },
     serviceWorkers: "block",
@@ -150,11 +162,13 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
   const guard = (work) => Promise.race([promise, work]);
   const offline = (error) => (unavailable ||= error);
   try {
+    step("COOKIE");
     await context.addCookies([await mintModerator()]);
     // Playwright stops calling route handlers during close but still emits request events.
     context.on("request", (req) => {
       if (closed() && !allowed(req)) markViolation();
     });
+    step("ROUTE");
     await context.route("**/*", async (route) => {
       const check = serve(route, allowed, closed, offline, markViolation).catch((error) => {
         // Record a required document timeout before abort makes goto fail generically.
@@ -167,6 +181,7 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
       pending.delete(check);
       if (!verified) await route.abort().catch(() => undefined);
     });
+    step("PAGE");
     const page = await guard(context.newPage());
     page.setDefaultTimeout(5_000);
     page.on("pageerror", markViolation);
@@ -174,14 +189,22 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
       if (auditedDocument) markViolation();
     });
     if (!reportOnly) page.on("console", markViolation);
-    const runAudit = desktopAudit ? await guard(prepareDesktopAudit(page)) : null;
+    const runAudit = desktopAudit ? await guard(prepareDesktopAudit(page, step)) : null;
     // Keep the committed document even if optional Lighthouse loading times out.
+    step("NAVIGATE");
     const goto = page.goto(url, { waitUntil: reportOnly ? "commit" : "load" });
     const [navigation] = await guard(Promise.allSettled([goto]));
     const response = navigation.status === "fulfilled" ? navigation.value : null;
-    if (reportOnly && response) await guard(page.waitForLoadState("load").catch(offline));
+    if (reportOnly && response) {
+      step("LOAD");
+      await guard(page.waitForLoadState("load").catch(offline));
+    }
+    if (pending.size) step("ROUTES_PENDING");
     await guard(withDeadline(settle));
-    if (navigation.status === "rejected" && !(reportOnly && unavailable)) throw navigation.reason;
+    if (navigation.status === "rejected" && !(reportOnly && unavailable)) {
+      step("NAVIGATE");
+      throw navigation.reason;
+    }
     const valid = response?.url() === url && kitDocument(response.status(), response.headers());
     if (!(response ? valid : unavailable)) throw new AssertionFailure("visual provenance drift");
     if (unavailable && !reportOnly) throw unavailable;
@@ -195,8 +218,9 @@ async function guardedPage(browser, mintModerator, [width, height], url, render,
   } finally {
     stopped = true;
   }
+  step("ROUTES_PENDING", "TEARDOWN");
   await guard(withDeadline(settle));
-  mark("TEARDOWN");
+  step("CONTEXT_CLOSE", "TEARDOWN");
   await guard(withDeadline(() => context.close()));
   if (unavailable && !reportOnly) throw unavailable;
   return unavailable ? null : result;
@@ -221,32 +245,47 @@ export async function collectVisuals(browser, mint, dir, options) {
     const keyboard = name === "keyboard-mobile.png";
     const url = urlFor(empty);
     const stage = reportOnly ? "LIGHTHOUSE" : "CAPTURE";
-    mark(stage);
+    const viewport = reportOnly
+      ? "POPULATED_DESKTOP"
+      : name.slice(0, -4).replace("-", "_").toUpperCase();
+    const step = (operation, current = stage) => mark(current, viewport, operation);
     const desktopAudit = name.endsWith("desktop.png");
     const render = async (page, unavailable, runAudit) => {
-      mark("FONTS");
+      step("WAIT", "FONTS");
       const fonts = () => page.evaluate(() => document.fonts.ready.then(() => true));
       const ready = await withDeadline(fonts).catch((error) => {
         if (!reportOnly || !(error instanceof BrowserDeadline)) throw error;
       });
-      mark(stage);
+      step("INSPECT");
       await inspect(page, empty, false);
-      if (reportOnly)
+      if (reportOnly) {
+        step("MEASURE");
         return ready && !unavailable ? boundedMeasurement(() => measure(page, url), ms) : null;
+      }
       if (keyboard) {
+        step("KEYBOARD_TAB");
         for (let n = 0; n < 11; n++) await page.keyboard.press("Tab");
+        step("KEYBOARD_ARROW");
         await page.keyboard.press("ArrowRight");
-        await page.waitForFunction(() => document.activeElement.scrollLeft > 0);
+        step("KEYBOARD_SCROLL");
+        // The locator retries from the driver. Page waitForFunction needs page animation frames.
+        await page
+          .getByTestId(scrollRegion)
+          .waitForFunction((el) => document.activeElement === el && el.scrollLeft > 0);
+        step("KEYBOARD_INSPECT");
         await inspect(page, empty, true);
       }
+      step("SCREENSHOT");
       await page.screenshot({ path: join(dir, name), animations: "disabled" });
-      if (desktopAudit) await runAudit(() => audit(page, name));
+      if (desktopAudit) await runAudit(() => audit(page, name, (stage) => step("RUN", stage)));
+      step("VERIFY");
       await inspect(page, empty, keyboard);
     };
     const result = await guardedPage(browser, mint, size, url, render, {
       ...options,
       reportOnly,
       desktopAudit,
+      step,
     });
     if (reportOnly) return result;
   }

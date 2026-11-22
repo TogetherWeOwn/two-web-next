@@ -61,18 +61,25 @@ until [[ $(curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:
 done
 printf 'Kit Worker ready on the fixture origin\n'
 # Only GNU timeout's own diagnostics reach this file, never the child streams.
+browser_started=$SECONDS
 LC_ALL=C timeout --verbose -k 5s 150s bash -c 'exec node ci/kit-activity-log-assert.mjs >/dev/null 2>&1' \
   </dev/null >/dev/null 2>"$scratch/watchdog.txt" &
 browser=$!
 result=0
 wait "$browser" 2>/dev/null || result=$?
 browser=
-stage=UNKNOWN outcome=UNKNOWN raw=
-# A successful read would mean a NUL or the size cap; require one exact code and newline at EOF.
-allowed='^(FIXTURE|LAUNCH|MODERATOR|REFUSALS|PAGINATION_FILTERS|CAPTURE|FONTS|AXE_INJECT|AXE_EVALUATE|LIGHTHOUSE|TEARDOWN|COMPLETE)'$'\n$'
+stage=UNKNOWN viewport=NONE operation=NONE outcome=UNKNOWN raw=
+elapsed=$((SECONDS - browser_started))
+(( elapsed >= 0 && elapsed <= 999 )) || elapsed=unknown
+# A successful read would mean a NUL or the size cap. Admit fixed tokens and one final newline.
+general='(FIXTURE|LAUNCH|MODERATOR|REFUSALS|PAGINATION_FILTERS|TEARDOWN|COMPLETE) NONE NONE'
+capture='(CAPTURE|FONTS|AXE_INJECT|AXE_EVALUATE|LIGHTHOUSE|TEARDOWN)'
+views='(POPULATED_DESKTOP|EMPTY_DESKTOP|POPULATED_MOBILE|EMPTY_MOBILE|KEYBOARD_MOBILE)'
+ops='(CONTEXT_NEW|COOKIE|ROUTE|PAGE|SCRIPT_SESSION|SCRIPT_DISABLE|NAVIGATE|LOAD|ROUTES_PENDING|WAIT|INSPECT|MEASURE|KEYBOARD_TAB|KEYBOARD_ARROW|KEYBOARD_SCROLL|KEYBOARD_INSPECT|SCREENSHOT|AUDIT_POLICY|AUDIT_ENABLE|RUN|AUDIT_RESTORE|VERIFY|CONTEXT_CLOSE)'
+allowed="^($general|$capture $views $ops)"$'\n$'
 if [[ -f "$scratch/browser-stage" && ! -L "$scratch/browser-stage" ]] &&
-  ! IFS= read -r -d '' -n 32 raw < "$scratch/browser-stage" && [[ $raw =~ $allowed ]]; then
-  stage=${raw%$'\n'}
+  ! IFS= read -r -d '' -n 64 raw < "$scratch/browser-stage" && [[ $raw =~ $allowed ]]; then
+  IFS=' ' read -r stage viewport operation <<< "${raw%$'\n'}"
 fi
 # 137 by itself is ambiguous: the watchdog's TERM marker also survives KILL escalation.
 case "$stage:$result" in
@@ -86,7 +93,8 @@ case "$stage:$result" in
   *:20) outcome=ASSERTION ;;
   *:21) outcome=DEADLINE ;;
 esac
-printf 'Activity-log browser: outcome=%s stage=%s\n' "$outcome" "$stage"
+printf 'Activity-log browser: outcome=%s stage=%s viewport=%s operation=%s browser_elapsed_s=%s\n' \
+  "$outcome" "$stage" "$viewport" "$operation" "$elapsed"
 if [[ -f "$scratch/metrics.txt" ]]; then
   pattern='((populated|empty)-desktop\.png a11y: (PASS|FAIL) violations=[0-9]+ incomplete=[0-9]+|populated-desktop\.png lighthouse: (unavailable|report-only total_bytes=[0-9]+ fcp_ms=[0-9]+))'
   ! grep -qEvx "$pattern" "$scratch/metrics.txt" || exit 1
