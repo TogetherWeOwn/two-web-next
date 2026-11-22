@@ -70,6 +70,7 @@ class RiskTier(unittest.TestCase):
             attestation("T1/T2"), attestation("`T1`"), attestation("T1 `suffix`"), good.replace(line, ""),
             good.replace(line, "<!-- " + line + " -->"), "<!--\n" + good,
             good.replace(line, "```yaml\n" + line + "\n```"), "~~~~markdown\n" + good + "~~~~\n",
+            good.replace(line, "`output\nends here`" + line),
             good.replace(line, "    " + line), good.replace(line, "> " + line),
             good.replace(line, line + "\nrisk_tier: T0"), good + good,
             good.replace(line, "") + line,
@@ -85,6 +86,7 @@ class RiskTier(unittest.TestCase):
             with self.subTest(path=path):
                 with self.assertRaisesRegex(ValueError, f"{tier} is below.*{minimum}"):
                     validate(attestation(tier), ["README.md", path])
+
 
 class ExactChangedPaths(unittest.TestCase):
     def setUp(self):
@@ -107,7 +109,7 @@ class ExactChangedPaths(unittest.TestCase):
         metadata.write_text(json.dumps({"body": attestation(tier)}), encoding="utf-8")
         return subprocess.run(command, cwd=self.repo, capture_output=True,
                               text=True, env={**os.environ, "PR_METADATA_PATH": str(metadata),
-                                              "FLOOR_WAIVER_BASE_SHA": base, **workflow_env})
+                                              "RISK_TIER_BASE_SHA": base, **workflow_env})
 
     def test_workflow_enforces_from_cutoff_even_for_stale_heads(self):
         workflow = (ROOT / ".github/workflows/pr-gates.yml").read_text(encoding="utf-8")
@@ -122,11 +124,12 @@ class ExactChangedPaths(unittest.TestCase):
         self.git("checkout", "-qb", "rollout", base)
         (self.repo / "ci").mkdir()
         (self.repo / "ci/pr_risk_tier.py").write_bytes(SCRIPT.read_bytes())
+        self.write("ci/test_pr_risk_tier.py")
         self.git("add", "ci")
         self.git("commit", "-qm", "roll out validator on main")
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.git("checkout", "-q", "-")
-        env = {"RISK_TIER_ERROR_FROM_PR": cutoff, "RUNNER_TEMP": str(self.repo)}
+        env = {"RISK_TIER_ERROR_FROM_PR": cutoff, "RUNNER_TEMP": str(self.repo), "BASE_REF": "main"}
         command = ("bash", "-c", run)
         earlier = self.check_tier(base, "invalid", command, PR_NUMBER=str(int(cutoff) - 1), **env)
         self.assertEqual(0, earlier.returncode, earlier.stderr)
@@ -137,6 +140,26 @@ class ExactChangedPaths(unittest.TestCase):
         passing = self.check_tier(base, "T0", command, PR_NUMBER=cutoff, **env)
         self.assertEqual(0, passing.returncode, passing.stderr)
         self.assertIn("T0 meets the changed-path minimum T0", passing.stdout)
+
+        self.git("checkout", "-q", "rollout")
+        self.write("README.md")
+        self.git("add", "README.md")
+        self.git("commit", "-qm", "docs PR already based on the newer target tip")
+        docs = self.check_tier(base, "T2", command, PR_NUMBER=cutoff, **env)
+        self.assertEqual(0, docs.returncode, docs.stdout + docs.stderr)
+        self.assertIn("T2 meets the changed-path minimum T2", docs.stdout)
+
+        self.git("rm", "ci/pr_risk_tier.py", "ci/test_pr_risk_tier.py")
+        self.git("commit", "-qm", "delete validator and fixtures")
+        deleted = self.check_tier(base, "T1", command, PR_NUMBER=cutoff, **env)
+        self.assertEqual(1, deleted.returncode, deleted.stdout + deleted.stderr)
+        self.assertIn("Risk-tier validator deleted", deleted.stdout)
+        unit_guard = re.search(r"(?ms)^          if \[ -f ci/test_pr_risk_tier.py \]; then\n"
+                               r".*?^          fi$", workflow)[0]
+        fixtures = subprocess.run(["bash", "-ec", textwrap.dedent(unit_guard)], cwd=self.repo,
+                                  capture_output=True, text=True)
+        self.assertEqual(1, fixtures.returncode, fixtures.stdout + fixtures.stderr)
+        self.assertIn("Risk-tier fixtures deleted", fixtures.stdout)
 
     def test_each_side_of_a_rename_counts(self):
         self.write("src/auth.py")

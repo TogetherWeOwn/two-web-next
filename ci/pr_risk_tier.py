@@ -61,12 +61,13 @@ def declared_tier(body):
     sections = 0
     preamble = False
     body = body.replace("\r\n", "\n").replace("\r", "\n")
-    # Mask inline code without making it disappear from the declaration value.
-    visible = HIDDEN.sub(
-        lambda match: (match[0] if match["escaped"] else
-                       ("`" if match["span"] else " ") + "\n" * match[0].count("\n")),
-        body,
-    )
+    def mask(match):
+        if match["escaped"]:
+            return match[0]
+        marker = "`" if match["span"] else " "
+        return marker + ("\n" + marker) * match[0].count("\n")
+
+    visible = HIDDEN.sub(mask, body)
     for line in visible.split("\n"):
         if heading := HEADING.fullmatch(line):
             preamble = heading.groups() == ("##", "Attestation")
@@ -103,7 +104,7 @@ def validate(body, paths):
 def main():
     try:
         metadata = json.loads(Path(os.environ["PR_METADATA_PATH"]).read_text(encoding="utf-8"))
-        print(validate(metadata["body"], changed_paths(os.environ.get("FLOOR_WAIVER_BASE_SHA", ""))))
+        print(validate(metadata["body"], changed_paths(os.environ.get("RISK_TIER_BASE_SHA", ""))))
     except (subprocess.CalledProcessError, OSError, KeyError):
         print("::error::Could not read bound PR metadata or the exact changed paths.")
         return 1

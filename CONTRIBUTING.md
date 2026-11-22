@@ -317,9 +317,9 @@ script is unit-tested beside it: `python3 -m unittest discover -s .github/script
 'test_pr_standards.py'`.
 
 The risk-tier check uses the [PR template's path floors](.github/pull_request_template.md#attestation)
-and the complete three-dot Git diff for the checked PR head. Both sides of a
-rename count. Declare `T0`, `T1` or `T2` in Attestation and escalate when the
-behavior warrants it. The [review-tier map](.github/review-tiers.yml) governs
+and the complete three-dot Git diff from the fetched target tip to the checked
+PR head. Both sides of a rename count. Declare `T0`, `T1` or `T2` in Attestation
+and escalate when the behavior warrants it. The [review-tier map](.github/review-tiers.yml) governs
 native reviewer routing. PRs opened before the cutoff keep their existing
 metadata checks. For generated dependency PRs covered by the cutoff, a
 maintainer adds the declaration to the PR body.

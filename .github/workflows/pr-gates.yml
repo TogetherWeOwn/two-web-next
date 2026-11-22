@@ -273,7 +273,7 @@ jobs:
         if: github.event_name != 'push' && github.event_name != 'merge_group'
         env:
           PR_METADATA_PATH: ${{ steps.pr.outputs.metadata }}
-          FLOOR_WAIVER_BASE_SHA: ${{ steps.head-ref.outputs.base_sha }}
+          BASE_REF: ${{ steps.head-ref.outputs.base_ref }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '0' }}
         run: |
           set -euo pipefail
@@ -287,11 +287,13 @@ jobs:
               echo '::error::Risk-tier validator deleted at this head.'
               exit 1
             fi
-            # Full-history checkout fetches main. Use its validator on stale
-            # heads while keeping the PR's original checkout and diff base.
+            # Use the fetched main validator on heads cut before rollout.
             git show "refs/remotes/origin/main:$validator" > "$RUNNER_TEMP/pr_risk_tier.py"
             validator="$RUNNER_TEMP/pr_risk_tier.py"
           fi
+          # Pin the fetched target tip so merged base changes stay out of the diff.
+          RISK_TIER_BASE_SHA=$(git rev-parse --verify "refs/remotes/origin/$BASE_REF^{commit}")
+          export RISK_TIER_BASE_SHA
           python3 "$validator"
 
       - name: Check title, body and commits
