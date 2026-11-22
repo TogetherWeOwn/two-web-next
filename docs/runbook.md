@@ -489,57 +489,96 @@ dated owner exception with resource scope, cost, and expiry or review date.
 [db-migrate.yml](../.github/workflows/db-migrate.yml) is a **remote mutation**
 and not a test. It is the hand-dispatch path for staging recovery and the only
 path for production; the staging `deploy.yml` applies staging migrations on its
-own (see *Staging deploy integration* below). This workflow's addition
-does not authorize its execution. No live
-migration is performed by its selftest.
+own (see *Staging deploy integration* below). Apply only this repo's web SQL,
+including the two grandfathered bootstraps. Use backward-compatible
+expand/contract changes so the running Worker and bot tolerate the new schema
+before the Worker release. The selftest uses a disposable database.
 
-**Before enabling or dispatching:**
+**Staging recovery prerequisites (operator checks):** require an approved
+schema-change window, review of the exact `main` SHA and green required CI
+for that SHA. Check that `main` still points to it before dispatch and confirm
+the run SHA matches before accepting the recovery result. Coordinate migrations
+with the web and bot owners. Verify backup/PITR eligibility for the target
+branch and a tested recovery procedure before applying. Use the pre-DDL
+timestamp to identify a recovery point and keep separate evidence of the
+backup, PITR and rehearsal.
 
-- Require an approved schema-change window, exact-SHA review and green required
-  CI on the release merged to `main`. Coordinate the shared database with bot
-  and web owners; only web SQL in this repo (including the two grandfathered
-  bootstraps) is applied. Use backward-compatible expand/contract changes so the
-  running Worker and bot tolerate the new schema before the Worker release.
+**Production release prerequisites (operator checks):**
+
+1. Record the exact release SHA on `main`, completed source reviews and green
+   required CI for that SHA. Verify the staging deploy, deployed revision,
+   migration result and passing staging smoke and `e2e-staging` evidence for
+   the same candidate. Require a first-attempt staging pass, at least 30 minutes
+   of staging soak with a passing health and error assessment, and fresh
+   evidence that staging still serves the approved revision. Hold for missing,
+   stale, failed or rerun staging evidence.
+2. Coordinate an approved schema-change window with the web and bot owners and
+   the database custodian. Confirm the production branch, database and
+   migrator from current custody evidence, use the custodian's read-only ledger
+   evidence to verify the live prefix against the exact candidate journal, and
+   resolve ownership, privilege and recovery blockers. The plan records the
+   expected prefix, ordered tags to apply, expected end and any deferred tags.
+3. Verify a completed backup of the target branch before apply. Record its
+   completion time and retention, confirm PITR eligibility, and document the
+   recovery procedure and rehearsal where supported. Record a known-good
+   Worker version compatible with the resulting schema and coordinate writer
+   recovery with both consumers. The workflow's pre-DDL timestamp is a
+   recovery reference. Use the provider's backup and PITR evidence for the
+   production branch.
+4. Obtain and record explicit approval from an independent release reviewer
+   for the exact SHA, migrator identity, ordered scope, staging and recovery
+   evidence, and execution plan. For an agent-led release, use a separate
+   reviewer from a different model family than the agent that prepared the plan.
+   Follow the [production release gate](https://github.com/TogetherWeOwn/two-web-next/blob/main/CONTRIBUTING.md#production-release-gate).
+   Only then may the authorized operator set the migration pins and dispatch
+   the protected workflow. If the `main` tip, approved plan or qualifying
+   evidence changes before dispatch, stop and obtain fresh qualification and
+   approval.
+
+**Environment and migration pins:**
+
 - Pre-create the matching GitHub Environments, `staging` and `production`.
-  `production` must have required reviewers (recommend prevent-self-review and
-  main-only deployment branches). Do not enable production if that protection
-  is absent. Required reviewers live in repository settings, **not YAML**.
-  Both the shell gate and runner reject non-`main` refs, invalid targets and
-  production unless `PRODUCTION_DEPLOY_ENABLED` is exactly `true` (the same
-  flag used for production Worker deploys). Leave it unset/false until approved.
-- Only on the protected `production` GitHub Environment, the authorized Operator
-  sets `PRODUCTION_MIGRATION_APPROVED_SHA` to the full lowercase `main` SHA
-  separately approved for the migration. A missing, malformed or different SHA
-  refuses before checkout. If `main` advances before dispatch, stop and obtain
-  fresh approval for the new tip before the Operator updates the pin. The pin
-  checks the run SHA; it does not select a previous revision. Do not set
-  `PRODUCTION_ACCEPTED_SHA` for a migration: that is a separate Worker promotion
-  control. With the matching approved SHA, set
-  `PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS` on that same Environment to the
-  operation's exact, non-empty list of full journal tags in order, separated by
-  commas without spaces. Use the approved scope, not tags inferred from the
-  live ledger. Set the pending tags before setting the approved SHA. Clear the
-  SHA first, then the pending tags, after the operation finishes or is abandoned.
-  If commit is uncertain, keep the original pins only while pursuing the
-  separately approved readback below. Clear them when readback finishes or is
-  abandoned. This does not authorize another apply. Clearing the pins does not
-  revoke a run that already started. Do not retry with a different scope without
-  approval.
-- Keep all three migration pins off the repository and organization. The
-  production preflight has no Environment and refuses any non-empty value for
-  those pins before the protected job starts. Only the protected job reads the
-  approved tags from `vars`; it requires the preflight to pass on the same run
-  attempt, so a partial rerun cannot reuse that check. No scope-reader token or
-  REST call is needed. Missing or malformed tags stop the job before checkout.
-  After checkout the runner rejects anything other than an exact contiguous
-  segment of the locked release journal before connecting to PostgreSQL. The
-  approved segment can end below the journal tip.
-- On that same Environment, set `PRODUCTION_MIGRATION_IDENTITY_SHA256` to the
-  lowercase SHA-256 hex digest of the exact approved database name in UTF-8,
-  one NUL byte, then the exact existing Postgres migrator role name in UTF-8
-  (no trailing newline). Use approved operator records, not a live probe or
-  the URL login string. None of the production migration pins is needed in
-  staging.
+  Keep production's deployment branch policy restricted to `main`. GitHub
+  enforces the Environment's configured rules, including required reviewers
+  if enabled in repository settings. In the main-only configuration used
+  with automated Worker deploy and rollback approval, there is no GitHub
+  human reviewer checkpoint. The independent migration approval above still
+  applies. `PRODUCTION_AUTO_APPROVE` selects Worker deploy and rollback
+  behavior only, including their reviewer mode when it is anything other than
+  `true`. The migration workflow does not inspect that variable, query the
+  Environment's protection settings, or validate the release evidence above.
+- Set these pins only on the protected `production` Environment, with the
+  approved SHA unset while preparing the identity and scope:
+  1. `PRODUCTION_MIGRATION_IDENTITY_SHA256` is the lowercase SHA-256 hex digest
+     of the exact approved database name in UTF-8, one NUL byte, then the
+     exact existing Postgres migrator role name in UTF-8 with no trailing
+     newline. Derive it from approved custody records. The URL login string
+     is distinct from the PostgreSQL role name checked by the runner.
+  2. `PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS` is the approved operation's
+     exact, non-empty list of full journal tags in order, separated by commas
+     without spaces. Copy the tags from the approved plan. Use ledger evidence
+     to verify the starting prefix. The approved segment can end below the
+     journal tip.
+  3. Set `PRODUCTION_MIGRATION_APPROVED_SHA` last, to the approved full lowercase
+     `main` SHA. The workflow checks the run SHA before checkout. This pin does
+     not select a revision. `PRODUCTION_ACCEPTED_SHA` is the separate Worker
+     promotion control.
+- The preflight runs without an Environment and refuses any non-empty
+  repository or organization value for any of the three pins. The protected
+  job requires a successful preflight on the same run attempt, so a partial
+  rerun cannot reuse it. A full rerun still uses the original run SHA. Use a
+  fresh, approved dispatch for any subsequent apply. Missing or malformed tags
+  stop the job before checkout. After checkout the runner requires a
+  contiguous segment of the locked release journal before connecting to
+  PostgreSQL. No production migration pins are needed in staging.
+- Clear the approved SHA first, then the pending tags, when the operation
+  finishes or is abandoned. The identity pin records the approved database and
+  migrator across operations. If commit is uncertain, retain the original pins
+  only while pursuing the separately approved readback below, then follow the
+  same cleanup order. Clearing pins does not revoke a run that already started.
+- The shell gate and runner require `main`, a valid target and
+  `PRODUCTION_DEPLOY_ENABLED` exactly `true` for production. Leave the enable
+  flag unset or false until approved.
 - Staging admission hold: `STAGING_MIGRATION_HOLD` must be exactly `false` to
   release any staging migration or staging deploy. Absent, empty, `true` and
   malformed values all hold. Set it as a repository variable
@@ -579,13 +618,14 @@ migration is performed by its selftest.
   `PLANETSCALE_STAGING_DATABASE_URL` from the `staging` Environment; that is **not** migration approval
   or provisioning. YAML cannot attest a resolved secret's scope. Missing
   Environment provisioning is a stop, even if a same-named repo secret exists.
-- Verify backup/PITR eligibility for the target branch (PlanetScale backups) and a tested recovery procedure before apply. The summary's timestamp is a recovery
-  reference, **not** a snapshot, a restore drill, or proof PITR is available.
 
 **Operator execution after those gates:** select Actions → `db-migrate` → Run
 workflow, branch `main`, target `staging` or `production`. The job Environment
-matches the target and must clear its configured reviewers before secrets are
-available. The workflow validates migration numbers, then:
+matches the target. GitHub applies its configured protection rules before the
+job can access Environment secrets. For a normal apply leave `readback_only`
+off. The protected job proceeds from the read-only plan to apply without a
+second approval checkpoint. The workflow validates migration numbers and the
+snapshot chain, then:
 
 1. `plan` reads the canonical SQL/journal and `drizzle.__drizzle_migrations`,
    lists pending tags and counts in logs/job summary, and performs **no DDL**.
@@ -618,6 +658,9 @@ available. The workflow validates migration numbers, then:
    pending against the full journal. Save the workflow URL, release SHA, PITR
    timestamp and ledger result with the operation evidence. Bot schema readiness,
    exact-revision staging E2E and the existing promotion gates still apply.
+
+After production apply, watch web and bot health and errors for at least 30
+minutes. Record the outcome and follow the approved recovery plan on regression.
 
 SQL hashes/timestamps must be an exact prefix of the release journal. Edited,
 gapped, foreign/bot or newer history fails closed; never delete/forge the ledger,
@@ -2195,12 +2238,13 @@ does not select a production connection. The `target` input selects the
 connection: `production` reads `PRODUCTION_BACKUP_DATABASE_URL`, a read-only role.
 
 The job binds the GitHub Environment named by `target` (`staging` for the
-schedule and by default). A production dump therefore waits for the
-`production` Environment's required reviewers and main-only branch policy
-before the secret is readable, and a staging run never has
-`PRODUCTION_BACKUP_DATABASE_URL` mapped into any step. Provision
-`PRODUCTION_BACKUP_DATABASE_URL` on the `production` Environment only; a repo-level
-secret is readable by any job without that gate, so delete it there.
+schedule and by default). GitHub enforces the `production` Environment's
+main-only branch policy before the secret is readable and waits for required
+reviewers if configured. Obtain operational approval before dispatching a
+production dump, including when the Environment has only the branch rule.
+A staging run never has `PRODUCTION_BACKUP_DATABASE_URL` mapped into any step.
+Provision `PRODUCTION_BACKUP_DATABASE_URL` on the `production` Environment only.
+A repo-level secret is readable by any job without that gate, so delete it there.
 `ci/check-production-secrets.test.mjs` fails any workflow job that reads a
 `PRODUCTION_*` secret without binding `production`.
 

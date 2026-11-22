@@ -67,8 +67,9 @@ jobs:
     if: ${{ !cancelled() && (inputs.target != 'production' || needs.production-scope-preflight.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Required reviewers, prevent-self-review and main-only branch policy must
-    # be configured in Settings > Environments before enabling this workflow.
+    # GitHub applies the target Environment's configured protection rules.
+    # Production uses a main-only branch policy. Independent approval of the
+    # exact migration plan precedes pinning and dispatch (docs/runbook.md).
     environment: ${{ inputs.target }}
     steps:
       - name: Ref and production enable gate (before checkout or DB access)

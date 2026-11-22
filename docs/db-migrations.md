@@ -317,7 +317,9 @@ with `target: production`, behind the `production` Environment:
   binds `environment: ${{ inputs.target || 'staging' }}`, so scheduled runs
   (which carry no inputs) always dump staging. A production dump is a manual
   `workflow_dispatch` with `target: production`, which binds the `production`
-  Environment and waits on its required reviewers and main-only branch policy.
+  Environment. Its main-only branch policy applies, and GitHub waits for
+  required reviewers if configured. Obtain operational approval before dispatch.
+  See [Backups and restore drill](runbook.md#backups-and-restore-drill).
   Staging reads the staging-Environment secret `PLANETSCALE_STAGING_DATABASE_URL` (operator-provisioned, same secret the migrate/deploy paths use);
   the production target reads `PRODUCTION_BACKUP_DATABASE_URL` (a read-only role
   that inherits `pg_read_all_data` and no write, DDL or admin role, on the
