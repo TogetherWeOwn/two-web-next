@@ -264,9 +264,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # On pull_request, the checked-out merge commit's first parent is
-          # the exact base used to build the candidate tree.
-          fetch-depth: 2
+          # A PR needs its merge commit's first parent. A merge group may
+          # contain several candidate commits after the event's base SHA.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -284,8 +284,10 @@ jobs:
       - name: Workflow job citation fixtures
         run: node --test ci/check-workflow-job-citations.test.mjs
       - name: Check added workflow job citations
-        if: github.event_name == 'pull_request'
-        run: node ci/check-workflow-job-citations.mjs HEAD^1
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          CITATION_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}
+        run: node ci/check-workflow-job-citations.mjs "$CITATION_BASE"
       # Run on draft heads too: these isolated fixtures prove fresh-source
       # resolution and explicit selection without an app build or database.
       - name: Fresh-worktree check bootstrap

@@ -9,6 +9,7 @@ const workflowDir = ".github/workflows/";
 const filename = String.raw`[A-Za-z0-9_.-]+\.ya?ml`;
 const workflow = "`(?<workflow>(?:\\.github/workflows/)?" + filename + ")`";
 const job = "`(?<job>[A-Za-z0-9_][A-Za-z0-9_ .()/&+:-]{0,99})`";
+const softSpace = String.raw`(?:[ \t]+|[ \t]*\n[ \t]*)`;
 const actionsUrl = new RegExp(
   `^https://github\\.com/TogetherWeOwn/two-web-next/actions/workflows/(${filename})$`,
   "i",
@@ -17,55 +18,98 @@ const actionsUrl = new RegExp(
 // Check only explicit workflow/job pairs, in the forms used by the runbooks
 // and CI guides. A bare YAML filename must identify a checked-in workflow.
 const prosePatterns = [
-  new RegExp(`${job} job in ${workflow}`, "g"),
+  new RegExp(`${job}${softSpace}job${softSpace}in${softSpace}${workflow}`, "g"),
   new RegExp(`${workflow}, job ${job}`, "g"),
   new RegExp(`\\(${workflow} ${job} job\\)`, "g"),
-  new RegExp(`(?<![\\w-])(?<job>[A-Za-z_][\\w-]*) job \\(${workflow}\\)`, "g"),
-  new RegExp(`^\\| *${job} job *\\|[^|]*\\| *${workflow}(?=[ ,|])`, "g"),
+  new RegExp(`${job} job \\(${workflow}\\)`, "g"),
+  new RegExp(`(?<![\\w\x60-])(?<job>[A-Za-z_]\\w*(?:-\\w+)+) job \\(${workflow}\\)`, "g"),
+  new RegExp(`^\\| *${job} job *\\|[^|\\n]*\\| *${workflow}(?=[ ,|])`, "gm"),
 ];
 const labelJob = new RegExp(`${job} job`, "g");
 const workflowPath = new RegExp(`^\\.github/workflows/${filename}$`);
 const relativeWorkflow = new RegExp(`^(?:\\.\\.?/)*\\.github/workflows/${filename}$`);
 
+function maskCommentsAndExamples(text) {
+  const tokens = [...text.matchAll(/<!--|-->|`+|\n[ \t]*\n/g)];
+  const closingTicks = new Map();
+  const ends = [];
+  let commentEnd = text.length;
+  // Match equal backtick runs in one pass, without searching the rest of the
+  // document separately for each opener. Blank lines separate code spans.
+  for (let index = tokens.length - 1; index >= 0; index--) {
+    const [token] = tokens[index];
+    const position = tokens[index].index;
+    if (token === "-->") commentEnd = position + token.length;
+    else if (token === "<!--") ends[index] = commentEnd;
+    else if (token.startsWith("\n")) closingTicks.clear();
+    else {
+      ends[index] = closingTicks.get(token.length);
+      closingTicks.set(token.length, position + token.length);
+    }
+  }
+  let visible = "";
+  let end = 0;
+  for (const [index, token] of tokens.entries()) {
+    const close = ends[index];
+    if (close === undefined || token.index < end) continue;
+    const raw = text.slice(token.index, close);
+    const replacement = token[0] === "`" ? raw : raw.replace(/[^\n]+/g, "\u0000");
+    visible += text.slice(end, token.index) + replacement;
+    end = close;
+  }
+  return visible + text.slice(end);
+}
+
+function linkedWorkflow(destination, path) {
+  const file = destination.split(/[?#]/, 1)[0];
+  const url = actionsUrl.exec(file);
+  if (url) return workflowDir + url[1];
+  if (!relativeWorkflow.test(file)) return null;
+  const target = posix.normalize(posix.join(posix.dirname(path), file));
+  return workflowPath.test(target) ? target : null;
+}
+
 function collectCitations(markdown, path, workflows) {
   const lines = markdown.split(/\r\n?|\n/);
   const fenced = fenceMask(lines);
-  const visible = lines
-    .map((line, index) => (fenced[index] ? "" : line))
-    .join("\n")
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, (comment) => comment.replace(/[^\n]+/g, " "));
+  const visible = maskCommentsAndExamples(
+    lines.map((line, index) => (fenced[index] ? "" : line)).join("\n"),
+  );
   const citations = [];
-  for (const [index, line] of visible.split("\n").entries()) {
-    if (!line.includes(".yml") && !line.includes(".yaml")) continue;
-    // The link destination is authoritative, even if the label names another
-    // workflow. Remove links before looking for the standalone prose forms.
-    let prose = "";
-    let end = 0;
-    for (const link of scanInlineLinks(line)) {
-      prose += line.slice(end, link.index) + " ";
-      end = link.end;
-      if (line[link.index] === "!") continue;
-      const url = actionsUrl.exec(link.target);
-      if (!url && !relativeWorkflow.test(link.target)) continue;
-      const target = url
-        ? workflowDir + url[1]
-        : posix.normalize(posix.join(posix.dirname(path), link.target));
-      if (!workflowPath.test(target)) continue;
-      for (const match of link.text.matchAll(labelJob)) {
-        citations.push({ line: index + 1, workflow: target, job: match.groups.job });
+  const prose = visible
+    .split("\n")
+    .map((line, index) => {
+      if (!line.includes("](")) return line;
+      // The destination identifies the workflow, even when the label differs.
+      // In prose, give a local workflow link the same form as its code citation.
+      let text = "";
+      let end = 0;
+      for (const link of scanInlineLinks(line)) {
+        text += line.slice(end, link.index);
+        end = link.end;
+        const target = line[link.index] === "!" ? null : linkedWorkflow(link.target, path);
+        const labels = target ? [...link.text.matchAll(labelJob)] : [];
+        for (const match of labels) {
+          citations.push({ line: index + 1, workflow: target, job: match.groups.job });
+        }
+        text += target && labels.length === 0 ? "`" + target + "`" : "\u0000";
       }
-    }
-    prose += line.slice(end);
-    for (const pattern of prosePatterns) {
-      for (const match of prose.matchAll(pattern)) {
-        const { workflow: cited, job } = match.groups;
-        const target = cited.startsWith(workflowDir) ? cited : workflowDir + cited;
-        if (!cited.startsWith(workflowDir) && !workflows.has(target)) continue;
-        citations.push({ line: index + 1, workflow: target, job });
-      }
+      return text + line.slice(end);
+    })
+    .join("\n");
+  for (const pattern of prosePatterns) {
+    let line = 1;
+    let offset = 0;
+    for (const match of prose.matchAll(pattern)) {
+      line += prose.slice(offset, match.index).split("\n").length - 1;
+      offset = match.index;
+      const { workflow: cited, job } = match.groups;
+      const target = cited.startsWith(workflowDir) ? cited : workflowDir + cited;
+      if (!cited.startsWith(workflowDir) && !workflows.has(target)) continue;
+      citations.push({ line, workflow: target, job });
     }
   }
-  return citations;
+  return citations.sort((left, right) => left.line - right.line);
 }
 
 function jobNames(source, path) {
@@ -98,6 +142,7 @@ export function checkWorkflowJobCitations(root, baseline, output = console) {
       "--name-status",
       "-z",
       "--no-ext-diff",
+      "--no-textconv",
       "--find-renames",
       "--diff-filter=AMRT",
       base,
