@@ -21,6 +21,7 @@ IMAGE = "postgres:18@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162
 ISOLATION = "com.docker.network.bridge.gateway_mode_ipv4=isolated"
 LABEL = "two-web.synthetic-rehearsal"
 MARKER = "synthetic-service-diagnostic"
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 EMPTY = """SELECT NOT EXISTS (
     SELECT FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','pg_toast','information_schema','public')
     UNION ALL SELECT FROM pg_class WHERE relnamespace = 'public'::regnamespace
@@ -61,11 +62,15 @@ class Job:
                 for id_ in docker(kind, "ls", flags, "--filter", f"label={self.label}").stdout.split()]
 
     def clean(self):
-        for kind, id_ in self.resources():
-            docker(kind, "rm", *(["-f", "-v"] if kind == "container" else []), id_)
-        if self.scratch.exists():
-            shutil.rmtree(self.scratch)
-        require(not self.resources() and not self.scratch.exists())
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+        try:
+            for kind, id_ in self.resources():
+                docker(kind, "rm", *(["-f", "-v"] if kind == "container" else []), id_)
+            if self.scratch.exists():
+                shutil.rmtree(self.scratch)
+            require(not self.resources() and not self.scratch.exists())
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
     @contextmanager
     def service(self):
@@ -81,6 +86,7 @@ class Job:
                 "--mount", "type=tmpfs,destination=/var/lib/postgresql,tmpfs-size=134217728",
                 "--env", "POSTGRES_PASSWORD", "--env", "POSTGRES_USER=agent_test",
                 "--env", "POSTGRES_DB=agent_test", "--env", "POSTGRES_HOST_AUTH_METHOD=scram-sha-256",
+                "--env", "POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256",
                 IMAGE, "-c", "log_statement=none", "-c", "log_min_error_statement=panic",
                 env={"POSTGRES_PASSWORD": password},
             ).stdout.strip()
@@ -111,8 +117,11 @@ class Job:
                 except ProofError:
                     require(time.monotonic() < deadline)
                     time.sleep(0.5)
-            rejected = client_sql({**env, "PGPASSWORD": secrets.token_hex(32)}, "SELECT 1")
-            require(rejected.returncode != 0 and "password authentication failed" in rejected.stderr)
+            for host in ("postgres", "127.0.0.1"):
+                rejected = subprocess.run(["psql", "-XqwAt", "-c", "SELECT 1"], capture_output=True,
+                                          env={**env, "PGDATABASE": "agent_test", "PGHOST": host,
+                                               "PGPASSWORD": secrets.token_hex(32)}, timeout=10, text=True)
+                require(rejected.returncode != 0 and "password authentication failed" in rejected.stderr)
             db.sql("agent_test", f"DO $$ BEGIN RAISE LOG '{MARKER}'; END $$")
             logs = docker("logs", container, check=False)
             require(logs.returncode != 0 and not logs.stdout and MARKER not in logs.stderr)
@@ -123,11 +132,6 @@ class Job:
             verdict("executor teardown PASS")
 
 
-def client_sql(env, sql):
-    return subprocess.run(["psql", "-XqwAt", "-v", "ON_ERROR_STOP=1", "-c", sql],
-                          env={**env, "PGDATABASE": "agent_test"}, capture_output=True, text=True, timeout=10)
-
-
 class Refused(ProofError):
     pass
 
@@ -136,10 +140,10 @@ class ExpectedRestoreFailure(ProofError):
     pass
 
 
-def expect_refusal(operation):
+def expect_refusal(operation, refusal=Refused):
     try:
         operation()
-    except Refused:
+    except refusal:
         return
     raise ProofError("negative control accepted")
 
@@ -187,14 +191,18 @@ def proof(db, password, scratch, mode):
             *(hashlib.sha256(read(path)).digest() for path in inputs[1:]))
 
     def admit_bundle():
-        if tuple(hashlib.sha256(read(path)).digest() for path in inputs) != pins:
+        data = tuple(read(path) for path in inputs)
+        if tuple(hashlib.sha256(item).digest() for item in data) != pins:
             raise Refused("bundle pin mismatch")
         verify_receipt(archive, plan["archiveKey"], sidecar)
+        return data[1]
 
     for path in inputs:
         original = read(path)
         path.write_bytes(original + b" ")
         expect_refusal(admit_bundle)
+        if path == archive:
+            expect_refusal(lambda: verify_receipt(archive, plan["archiveKey"], sidecar), ValueError)
         path.write_bytes(original)
     verdict("archive, receipts and plan pin controls PASS")
 
@@ -206,16 +214,15 @@ def proof(db, password, scratch, mode):
     verdict("wrong and nonempty target controls PASS")
 
     def restore(env):
-        admit_bundle()
-        with archive.open("rb") as data:
-            return subprocess.run(["pg_restore", "--exit-on-error", "--single-transaction", "--no-owner",
-                                   "--no-privileges", "--dbname=" + env["PGDATABASE"]],
-                                  env=env, stdin=data, capture_output=True, timeout=30)
+        return subprocess.run(["pg_restore", "--exit-on-error", "--single-transaction", "--no-owner",
+                               "--no-privileges", "--dbname=" + env["PGDATABASE"]],
+                              env=env, input=admit_bundle(), capture_output=True, timeout=30)
 
     env = target_env(db, target, target)
     require(restore(env).returncode == 0)
     compare = snapshot["compare"]
     require(compare(plan, key, archive, baseline, env) == "MATCH")
+    require(compare(plan, bytes(32), archive, baseline, env) == "REFUSED")
     verdict("restore and private comparison PASS")
     db.sql(target, "UPDATE public.events SET sync_revision = sync_revision - 1")
     require(compare(plan, key, archive, baseline, env) == "MISMATCH")
@@ -241,7 +248,7 @@ def main():
     def interrupt(_signal, _frame):
         raise KeyboardInterrupt
 
-    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    for sig in STOP_SIGNALS:
         signal.signal(sig, interrupt)
     try:
         mode, = sys.argv[1:]
@@ -258,7 +265,7 @@ def main():
                     proof(db, password, job.scratch, mode)
             except ExpectedRestoreFailure:
                 require(mode == "proof")
-                verdict("real restore error, empty rollback and teardown PASS")
+                verdict("real restore error, empty target and teardown PASS")
             else:
                 raise ProofError("restore failure control did not execute")
             verdict("synthetic rehearsal PASS")
