@@ -31,7 +31,7 @@ WITH objects AS (
            a.privilege_type, a.is_grantable
       FROM objects o JOIN pg_attribute p ON p.attrelid = o.oid
       CROSS JOIN LATERAL aclexplode(p.attacl) a
-     WHERE p.attnum > 0 AND NOT p.attisdropped
+     WHERE NOT p.attisdropped
   ), checks AS (
     SELECT ARRAY['SELECT','UPDATE','USAGE'] AS seq,
            ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN'] AS tab,

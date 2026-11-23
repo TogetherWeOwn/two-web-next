@@ -156,8 +156,8 @@ async function executeRepair(tx, config, plan, direction) {
   const [{ acquired }] =
     await tx`select pg_try_advisory_xact_lock(${webMigrationLockKey}) as acquired`;
   assert.equal(acquired, true);
-  // Serving still has ledger access. Keep the checked prefix stable until commit.
-  await tx`lock table drizzle.__drizzle_migrations in share row exclusive mode nowait`;
+  // Keep the ledger stable and block concurrent GRANTs, which lock catalogs directly.
+  await tx`lock table drizzle.__drizzle_migrations, pg_catalog.pg_class, pg_catalog.pg_attribute in share row exclusive mode nowait`;
   const forward = direction === "forward";
   const initial = await readState(tx);
   assert.equal(initial.digest, forward ? plan.before : plan.after);
