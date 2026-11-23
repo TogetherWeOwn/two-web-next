@@ -79,11 +79,10 @@ test("fails changed and added citations against the cited workflow's jobs mappin
       "`step-only` job in `e2e.yml`.",
       `[\`Deploy stage\` job](${actions}/deploy.yml)`,
       "<!--\n```\n--!>\n`example-smoke` job in `e2e.yml`\n-->",
-      "~~~md\n<!--\n~~~",
-      "`wrapped-smoke` job in",
-      "  `.github/workflows/e2e.yml`.",
+      "~~~md\n~~~not-a-close\n`example-smoke` job in `e2e.yml`\n<!--\n~~~",
+      "`wrapped-smoke` job in\n  [`e2e.yml`](../.github/workflows/e2e.yml).",
       "[`anchored-smoke` job](../.github/workflows/e2e.yml#L9 (Pinned job))",
-      "`linked-smoke` job ([`e2e.yml`](../.github/workflows/e2e.yml))",
+      "`linked-smoke` job\n  ([`e2e.yml`](../.github/workflows/e2e.yml))",
       "`` `example-smoke` job in `.github/workflows/e2e.yml` ``",
     ].join("\n"),
   });
@@ -94,9 +93,9 @@ test("fails changed and added citations against the cited workflow's jobs mappin
   assert.ok(run.stderr.includes(`"docs/runbook.md":1: missing job "deploy-staging" in ${e2e}`));
   assert.ok(run.stderr.includes(`"docs/runbook.md":2: missing job "step-only" in ${e2e}`));
   assert.ok(run.stderr.includes(`"docs/runbook.md":3: missing job "Deploy stage" in ${deploy}`));
-  assert.ok(run.stderr.includes(`"docs/runbook.md":12: missing job "wrapped-smoke" in ${e2e}`));
-  assert.ok(run.stderr.includes(`"docs/runbook.md":14: missing job "anchored-smoke" in ${e2e}`));
-  assert.ok(run.stderr.includes(`"docs/runbook.md":15: missing job "linked-smoke" in ${e2e}`));
+  assert.ok(run.stderr.includes(`"docs/runbook.md":14: missing job "wrapped-smoke" in ${e2e}`));
+  assert.ok(run.stderr.includes(`"docs/runbook.md":16: missing job "anchored-smoke" in ${e2e}`));
+  assert.ok(run.stderr.includes(`"docs/runbook.md":17: missing job "linked-smoke" in ${e2e}`));
 });
 
 test("leaves unrelated prose, external links, examples and existing citations to review", (t) => {

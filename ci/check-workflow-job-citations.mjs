@@ -7,6 +7,8 @@ const filename = String.raw`[A-Za-z0-9_.-]+\.ya?ml`;
 const workflow = "`(?<workflow>(?:\\.github/workflows/)?" + filename + ")`";
 const job = "`(?<job>[A-Za-z0-9_][A-Za-z0-9_ .()/&+:-]{0,99})`";
 const softSpace = String.raw`(?:[ \t]+|[ \t]*\n[ \t]*)`;
+const hyphenJob = String.raw`(?<![\w\x60-])(?<job>[A-Za-z_]\w*(?:-\w+)+)`;
+const workflowNote = `job${softSpace}\\(${softSpace}?${workflow}${softSpace}?\\)`;
 const actionsPath = "^https://github\\.com/TogetherWeOwn/two-web-next/actions/workflows/";
 const actionsUrl = new RegExp(`${actionsPath}(${filename})$`, "i");
 
@@ -14,10 +16,10 @@ const actionsUrl = new RegExp(`${actionsPath}(${filename})$`, "i");
 // and CI guides. A bare YAML filename must identify a checked-in workflow.
 const prosePatterns = [
   new RegExp(`${job}${softSpace}job${softSpace}in${softSpace}${workflow}`, "g"),
-  new RegExp(`${workflow}, job ${job}`, "g"),
-  new RegExp(`\\(${workflow} ${job} job\\)`, "g"),
-  new RegExp(`${job} job \\(${workflow}\\)`, "g"),
-  new RegExp(`(?<![\\w\x60-])(?<job>[A-Za-z_]\\w*(?:-\\w+)+) job \\(${workflow}\\)`, "g"),
+  new RegExp(`${workflow},${softSpace}job${softSpace}${job}`, "g"),
+  new RegExp(`\\(${softSpace}?${workflow}${softSpace}${job}${softSpace}job${softSpace}?\\)`, "g"),
+  new RegExp(`${job}${softSpace}${workflowNote}`, "g"),
+  new RegExp(`${hyphenJob}${softSpace}${workflowNote}`, "g"),
   new RegExp(`^\\| *${job} job *\\|[^|\\n]*\\| *${workflow}(?=[ ,|])`, "gm"),
 ];
 const labelJob = new RegExp(`${job} job`, "g");
