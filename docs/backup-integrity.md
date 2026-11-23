@@ -45,6 +45,32 @@ be a valid daily or weekly archive key (or its `.digest.json` receipt) for the
 selected branch prefix; malformed, duplicate or foreign-branch lines refuse the
 whole inventory before an upload, promotion PUT or rotation DELETE.
 
+## Optional snapshot receipt for a private restore comparison
+
+`python3 bin/backup/snapshot_capture.py EXPECTED KEY NEW_DIRECTORY` uses `DATABASE_URL` and
+PostgreSQL 18 clients in a private executor. The output parent and inputs are owner-only.
+`EXPECTED` is JSON with `source` (independently qualified opaque source ID),
+`host`, `port` (string), `database`, `role`, `databaseOid` (integer), `archiveKey` (daily archive
+key), and `ranges` (`events` and `rsvps`, each an inclusive positive integer PK range spanning at
+most 128 positions). Freeze the inputs and retain `KEY` (32 random bytes) separately. Admission checks the endpoint, login, database and
+OID and requires `verify-full` with system CAs outside the restricted disposable loopback fixture.
+
+One read-only repeatable-read transaction exports the snapshot for `pg_dump -Fc --snapshot` and
+reads both projections before closing. Each indexed probe has a 2 s statement timeout,
+250 ms lock timeout, 10 s client deadline and 1 MiB projection limit. The dump has a 300 s deadline.
+Nonempty cohorts cover event ID, instants, status, RSVP-open, capacity and both sync revisions, and
+RSVP ID, event/member association, status, creation time, legacy ordering ID and mirror time.
+HMAC-SHA-256 frames the manifest, ordered typed fields and count. Integers use decimal strings, time uses UTC epoch microseconds, and NULL has its own token.
+
+Success publishes `archive.dump`, the existing `archive.digest.json` format, and private
+`baseline.json` together. The receipt seals the expected plan, archive key, size and digest, private
+counts and HMACs, an opaque snapshot reference and its UTC observation time. A qualified, fenced
+restore executor uses `load_plan` and `compare` to verify the bundle and return `MATCH`, `MISMATCH`
+or `REFUSED` for this projection. Publish verdicts only. Keep inputs, bundle and any scratch left
+by a hard kill in approved custody. Existing workflows use the byte-only path. Before live use,
+qualify the direct TLS target and role, full read coverage, indexed plans, approval controls,
+private process and database diagnostics, and archive retention and disposition.
+
 ## Check outcomes and legacy compatibility
 
 ```sh
