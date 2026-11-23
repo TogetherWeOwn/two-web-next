@@ -23,6 +23,7 @@ import {
   safeMigrationError,
 } from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
+import { runExecutorAuthority } from "./db-repair-executor.mjs";
 import { OwnershipRefusal, assertMigratorOwnership } from "./migration-ownership.mjs";
 import {
   DefaultAclRefusal,
@@ -74,9 +75,16 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       "utf8",
     );
     const createdApp = await ensureRuntimeRole(client);
-    const roles = ["two_web_migrate", "two_web_backup", "repair_legacy", "repair_other"];
+    const roles = [
+      "two_web_migrate",
+      "two_web_backup",
+      "repair_legacy",
+      "repair_other",
+      "repair_provisioner",
+    ];
     const createdRoles = [];
     const executor = postgres(url.href, { username: "repair_legacy", max: 1 });
+    const provisioner = postgres(url.href, { username: "repair_provisioner", max: 1 });
     try {
       for (const role of roles) {
         await client.unsafe(`create role "${role}" nologin`);
@@ -85,7 +93,9 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       await client
         .unsafe(`
         alter role repair_legacy login password 'ci';
-        grant repair_other, two_web_migrate, pg_maintain, pg_read_all_stats to repair_legacy;
+        alter role repair_provisioner login password 'ci';
+        grant two_web_migrate to repair_provisioner with admin true, inherit false, set false;
+        grant repair_other, pg_maintain, pg_read_all_stats to repair_legacy;
         create schema drizzle authorization repair_legacy;
         grant create on database "${url.pathname.slice(1)}" to two_web_migrate;
         grant usage, create on schema public to repair_legacy, repair_other, two_web_migrate;
@@ -135,6 +145,34 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
           await tx`set local search_path = pg_catalog`;
           return observe(tx);
         });
+      const dsn = `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture-password@${PLANETSCALE_PRODUCTION_HOST}:5432/postgres?sslmode=verify-full`;
+      const authority = (operation, member = "repair_legacy") => {
+        const raw = JSON.stringify({
+          operation,
+          executor: member,
+          identity: identityHash(url.pathname.slice(1), "repair_provisioner"),
+        });
+        return runExecutorAuthority(
+          operation,
+          {
+            PRODUCTION_DB_EXECUTOR_PLAN: raw,
+            PRODUCTION_DB_EXECUTOR_PLAN_SHA256: createHash("sha256").update(raw).digest("hex"),
+            PRODUCTION_DB_EXECUTOR_DATABASE_URL: dsn,
+          },
+          (config) => {
+            config.url.pathname = url.pathname;
+            return { begin: provisioner.begin, end: async () => {} };
+          },
+        );
+      };
+      const unprovisioned = await readState();
+      await assert.rejects(authority("provision", "repair_other"), /approved scope/);
+      await client`grant two_web_migrate to repair_legacy with admin false, inherit true, set true`;
+      await assert.rejects(authority("revoke"), /Expected values to be strictly deep-equal/);
+      await client`revoke two_web_migrate from repair_legacy`;
+      assert.equal(await readState(), unprovisioned);
+      await authority("provision");
+      await authority("provision");
       const before = await readState();
       // Derive the independent expected post-state in a transaction that aborts.
       const rollback = new Error("discard fixture setup");
@@ -176,7 +214,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
             PRODUCTION_DB_REPAIR_PLAN: raw,
             PRODUCTION_DB_REPAIR_PLAN_SHA256:
               planDigest ?? createHash("sha256").update(raw).digest("hex"),
-            PRODUCTION_DB_REPAIR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture-password@${PLANETSCALE_PRODUCTION_HOST}:5432/postgres?sslmode=verify-full`,
+            PRODUCTION_DB_REPAIR_DATABASE_URL: dsn,
           },
           (config) => {
             assert.equal(planDigest, undefined, "unexpected connection");
@@ -193,6 +231,10 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       await assert.rejects(run("forward"));
       assert.equal(await run("undo"), "committed");
       assert.equal(await run("readback"), "before");
+      await authority("revoke");
+      await authority("revoke");
+      assert.equal(await readState(), unprovisioned);
+      await authority("provision");
       for (const privilege of ["select", "update (id)", "select (ctid)"]) {
         await client.unsafe(`grant ${privilege} on public.users to two_web_migrate`);
         await assert.rejects(
@@ -218,8 +260,10 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       } finally {
         await writer.end({ timeout: 5 });
       }
+      await authority("revoke");
     } finally {
       await executor.end({ timeout: 5 });
+      await provisioner.end({ timeout: 5 });
       for (const role of createdRoles.reverse()) {
         await client.unsafe(`drop owned by "${role}"; drop role "${role}"`).simple();
       }

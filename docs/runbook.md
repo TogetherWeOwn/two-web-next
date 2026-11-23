@@ -690,6 +690,22 @@ A refusal requires custodian investigation before another approved attempt.
 
 ### Repair production migrator permissions at the 1033 prefix
 
+Use the [executor membership workflow](../.github/workflows/db-repair-executor.yml)
+with a separate provisioner that holds direct `ADMIN` on the migrator role.
+It grants only `SET` and `INHERIT` to the approved `drizzle` schema owner and
+revokes only that provisioner's edge. Membership affects the shared role catalog.
+
+- `PRODUCTION_DB_EXECUTOR_APPROVED_SHA` pins the reviewed commit on protected `main`.
+- `PRODUCTION_DB_EXECUTOR_DATABASE_URL` supplies the provisioner's direct credential.
+- `PRODUCTION_DB_EXECUTOR_PLAN` holds the provisioner `identity` fingerprint,
+  the schema owner's `executor` name and the approved `operation`.
+- `PRODUCTION_DB_EXECUTOR_PLAN_SHA256` pins the exact plan bytes.
+
+Rehearse provision, forward, undo and revoke together on the isolated restore.
+Keep the repair credential separate. If a membership run is uncertain, use its
+same approved operation to confirm the state. An unexpected edge refuses without
+writes. Approve and dispatch `revoke` after recovery is no longer needed.
+
 Rehearse both directions of the [permissions repair](../.github/workflows/db-permissions-repair.yml) under the production release gate with catalog `MAINTAIN`.
 Use the approved executor login for every snapshot. Run `ci/db-permissions-repair-state.sql` read-only with `search_path = pg_catalog`. Use production Environment secrets.
 
