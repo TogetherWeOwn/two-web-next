@@ -47,12 +47,13 @@ function fixture(hubEnv: LiveSocketEnv = config) {
   const storage = new Map();
   const kv = { get: storage.get.bind(storage), put: vi.fn(storage.set.bind(storage)) };
   const setAlarm = vi.fn<(until: number | Date) => Promise<void>>().mockResolvedValue(undefined);
+  const waitUntil = vi.fn();
   const txn = { getAlarm: async () => null, setAlarm };
   const transaction = (run: (storage: typeof txn) => Promise<void>) => run(txn);
   const ctx = {
     storage: { kv, transaction },
     getWebSockets: () => [],
-    waitUntil: vi.fn(),
+    waitUntil,
   } as unknown as DurableObjectState;
   let hub = new LiveGuildHub(ctx, hubEnv);
   const getByName = vi.fn(() => ({
@@ -64,6 +65,7 @@ function fixture(hubEnv: LiveSocketEnv = config) {
     storage,
     put: kv.put,
     setAlarm,
+    waitUntil,
     getByName,
     evict: () => {
       hub = new LiveGuildHub(ctx, hubEnv);
@@ -138,10 +140,10 @@ it.each([1, 2])("returns 503 if publishing cursor %i cannot be checkpointed", as
   expect([...storage.values()]).toEqual([{ applied: seq - 1, minimum: 1 }]);
 });
 
-it("retries a failed source alarm at the original observation deadline", async () => {
+it.each([1, 2])("retries a failed source alarm and publishes after cursor %i", async (seq) => {
   const pull = vi.fn(async () => snapshot(1));
   vi.stubGlobal("fetch", pull);
-  const { env, setAlarm } = fixture({
+  const { env, setAlarm, waitUntil } = fixture({
     ...config,
     DISCORD_LIVE_SOCKET_ENABLED: "true",
     DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "200",
@@ -149,7 +151,9 @@ it("retries a failed source alarm at the original observation deadline", async (
   setAlarm.mockRejectedValueOnce(new Error("alarm write unavailable"));
   const send = async (cursor: number) => (await handleLiveIngress(signed(cursor), env))?.status;
   expect(await send(1)).toBe(503);
-  expect(await send(2)).toBe(204);
+  expect(waitUntil).not.toHaveBeenCalled();
+  expect(await send(seq)).toBe(204);
+  expect(waitUntil).toHaveBeenCalledOnce();
   expect(pull).toHaveBeenCalledOnce();
   expect(setAlarm).toHaveBeenCalledTimes(2);
   expect(setAlarm.mock.calls[1]).toEqual(setAlarm.mock.calls[0]);

@@ -90,8 +90,8 @@ export class LiveGuildHub {
     }
     const armed = this.#leaseCurrent();
     const outcome = await ingested;
-    await armed;
-    if (outcome === "applied" || outcome === "resynced") await this.#publish();
+    const newlyArmed = await armed;
+    if (newlyArmed || outcome === "applied" || outcome === "resynced") await this.#publish();
     return new Response(null, {
       status: outcome === "unavailable" ? 409 : outcome === "invalid" ? 400 : 204,
     });
@@ -105,16 +105,19 @@ export class LiveGuildHub {
     this.#sockets.invalidate();
   }
 
-  async #leaseCurrent(): Promise<void> {
+  async #leaseCurrent(): Promise<boolean> {
     const current = this.#sequence?.current;
-    if (!this.#publicRooms || current?.validUntil === undefined || current === this.#leased) return;
-    if (current.validUntil !== this.#sourceUntil) {
+    if (!this.#publicRooms || current?.validUntil === undefined || current === this.#leased)
+      return false;
+    const newlyArmed = current.validUntil !== this.#sourceUntil;
+    if (newlyArmed) {
       await this.#sockets.scheduleExpiry(current.validUntil);
       // The source may expire or be replaced while storage is pending.
-      if (current !== this.#sequence?.current) return;
+      if (current !== this.#sequence?.current || current === this.#leased) return false;
       this.#sourceUntil = current.validUntil;
     }
     this.#leased = current;
+    return newlyArmed;
   }
 
   async #publish(): Promise<void> {
