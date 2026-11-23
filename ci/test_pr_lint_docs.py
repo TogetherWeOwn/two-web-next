@@ -142,7 +142,7 @@ class DocsClassification(unittest.TestCase):
         assert_fails(rows, "ratchet")
         assert_fails(rows, "branch-name internal ID")
         assert_fails(rows, "strict subset")
-        assert_fails(rows, "Verification")
+        assert_fails(rows, f'PR_VERIFICATION_MODE: "{workflow_env("PR_VERIFICATION_MODE")}"')
 
     def test_warning_checks_are_documented_as_warnings(self):
         _, rows = docs_table_rows()

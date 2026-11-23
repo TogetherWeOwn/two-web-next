@@ -68,11 +68,12 @@ COMMAND_PLACEHOLDER = re.compile(r"^(?:\$\s+)?(?:cmd|command|test command|exampl
 COMMAND_INTRO = re.compile(r"\b(?:ran|running|executed|using|with|via|under|by|command)\s*(?::\s*)?$", re.I)
 UNRUN_BEFORE = re.compile(r"\b(?:not|never|will|should|would|expected to)\s+(?:run|execute|verify|test)[\s(]*$", re.I)
 UNRUN_AFTER = re.compile(r"^[\s):–—-]*(?:(?:was|is|has been)\s+)?(?:not(?: yet)?|never)\s+(?:run|executed)\b", re.I)
+EXIT_STATUS = r"[+-]?(?:0x[0-9a-f]+|[0-9]+)"
 RESULT = re.compile(
     r"\b(?:passes|passed|fails|failed|succeeded|reproduced|matched|confirmed|found|"
     r"accepted|rejected|detected|timed out|exited)\b|"
     r"\b(?:returned|reported|produced)\b\s+(?!(?:pending|todo|tbd)\b)\w|"
-    r"\bexit(?: code| status)?\s*[:=]?\s*\d+\b|"
+    rf"\bexit(?: code| status)?\s*[:=]?\s*{EXIT_STATUS}\b|"
     r"(?:[:–—-]\s*|^)(?:pass|fail|success|failure)\b", re.I,
 )
 RESULT_PLACEHOLDER = re.compile(
@@ -212,7 +213,7 @@ def is_command(text, explicit):
 def has_verification_evidence(item, references):
     def mask_code(span):
         value = span[0].strip("` \t\n").casefold()
-        output = "000" if value.isdecimal() else "OUT"
+        output = "000" if re.fullmatch(EXIT_STATUS, value) else "OUT"
         return ("TBD" if value in {"", "tbd", "todo", "pending", "n/a", "...", "…"} else output).ljust(len(span[0]))
 
     prose = INLINE_CODE.sub(mask_code, item)
