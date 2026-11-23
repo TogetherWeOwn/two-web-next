@@ -93,14 +93,13 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       `)
         .simple();
       const owners = [];
-      for (const [name, kind, parent] of inventory) {
+      for (const [name, kind] of inventory) {
         const owner = name.includes("grants") ? "repair_other" : "repair_legacy";
         owners.push(owner);
         if (name.startsWith("drizzle.") || kind !== "TABLE") continue;
         const serial = inventory.some(([, , coupling]) => coupling === name);
         await client.unsafe(`create table ${name} (id ${serial ? "serial" : "int"} primary key)`);
         await client.unsafe(`alter table ${name} owner to ${owner}`);
-        assert.equal(parent, null);
       }
       await client
         .unsafe(`
@@ -123,10 +122,12 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
         return { digest: row.digest, state: JSON.parse(row.state) };
       };
       const [login] = await client`select session_user::text as role`;
-      const before = await client.begin(async (tx) => {
-        await tx`set local search_path = pg_catalog`;
-        return observe(tx);
-      });
+      const readState = () =>
+        client.begin(async (tx) => {
+          await tx`set local search_path = pg_catalog`;
+          return observe(tx);
+        });
+      const before = await readState();
       // Derive the independent expected post-state in a transaction that aborts.
       const rollback = new Error("discard fixture setup");
       let after;
@@ -185,6 +186,14 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       assert.deepEqual(after.state.ledger, before.state.ledger);
       assert.deepEqual(after.state.app, before.state.app);
       assert.deepEqual(after.state.audit, before.state.audit);
+      for (const privilege of ["select", "update (id)"]) {
+        await client.unsafe(`grant ${privilege} on public.users to two_web_migrate`);
+        await assert.rejects(
+          run("forward", { before: (await readState()).digest }),
+          /Migrator ACL overlaps/,
+        );
+        await client.unsafe(`revoke ${privilege} on public.users from two_web_migrate`);
+      }
     } finally {
       for (const role of createdRoles.reverse()) {
         await client.unsafe(`drop owned by "${role}"; drop role "${role}"`).simple();

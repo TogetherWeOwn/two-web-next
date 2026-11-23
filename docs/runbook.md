@@ -690,11 +690,9 @@ A refusal requires custodian investigation before another approved attempt.
 
 ### Repair production migrator permissions at the 1033 prefix
 
-Use the manual [permissions repair workflow](../.github/workflows/db-permissions-repair.yml)
-for the reviewed ledger and Web relation ownership changes, scoped `drizzle`
-schema grants and migrator default privileges. The repair leaves the canonical
-34-row ledger through 1033 in place. The staging and production migration
-workflows retain their own admission and migration scopes.
+The manual [permissions repair workflow](../.github/workflows/db-permissions-repair.yml)
+changes reviewed Web owners, `drizzle` grants and migrator defaults while
+preserving the 34-row ledger through 1033.
 
 Follow the production release gate before dispatching a write. Qualify a
 direct executor with authority in both directions and verify the recorded
@@ -703,8 +701,7 @@ with `search_path = pg_catalog` to pin the exact catalog and ledger state.
 Rehearse the forward and inverse with the same authority model and compare
 affected serving-role reads and audit definitions on the isolated restore.
 
-Keep the following pins in the production Environment. The workflow refuses
-broader-scope copies of the same secrets.
+Keep the following pins solely in the production Environment.
 
 - `PRODUCTION_DB_REPAIR_APPROVED_SHA` is the exact reviewed commit on protected
   `main`.
