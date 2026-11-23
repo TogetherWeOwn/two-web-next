@@ -18,6 +18,18 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   rejects `ast-grep-ignore` comments in JavaScript and TypeScript under
   `src/http/`, including hidden directories. The guard runs before ast-grep
   and does not depend on any HTTP import rules.
+- **Byte-limit comparisons (HARD):** The same scan rejects direct
+  `byteLength` comparisons in authored JavaScript and TypeScript under
+  `src/`, `web/src/` and `assets/`. Use [the shared length helpers](../src/http/length-limit.ts)
+  for measured bytes and UTF-8 text. Stream readers can still accumulate
+  `chunk.byteLength` and pass the total to the helper. Use the explicit
+  code-unit or code-point helper for text caps measured in those units.
+  The rule checks comparison expressions, including equality. It does not
+  trace local variables or scan Svelte files, hidden paths, generated
+  output or tooling.
+  The existing return-path cap in `authReturnHref` has a syntax-specific
+  exception so the attendee URL builders stay dependency-free. Move the cap
+  to the server callers' shared module before removing that exception.
 - **Changed-lines coverage (WARN, 80%):** `ci/patch-coverage.mjs` intersects
   the PR diff with `coverage-final.json`; added TS lines nobody executes warn.
   Missing or malformed `coverage-final.json` fails the step instead of skipping,

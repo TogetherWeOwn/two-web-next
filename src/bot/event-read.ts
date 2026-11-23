@@ -1,5 +1,6 @@
 // Independent observation of the bot's mapped event, never a local receipt
 // disguised as Discord evidence (legacy AgentEventService::observe).
+import { exceedsByteLimit, exceedsUtf8ByteLimit } from "../http/length-limit";
 import { encodeCanonicalJson, INTERNAL_ACTIONS_PATH, newNonce, signInternalAction } from "./signer";
 
 export type ObservationEvent = { event_key: string; discord_event_id: string | null };
@@ -167,8 +168,7 @@ export function signedEventReader(
             return unreachable;
           }
           if (controller.signal.aborted) throw new EventReadTimeoutError();
-          if (new TextEncoder().encode(text).byteLength > EVENT_READ_MAX_RESPONSE_BYTES)
-            return unreachable;
+          if (exceedsUtf8ByteLimit(text, EVENT_READ_MAX_RESPONSE_BYTES)) return unreachable;
           let doc: unknown;
           try {
             doc = JSON.parse(text);
@@ -189,7 +189,7 @@ export function signedEventReader(
             size += value.byteLength;
             // Cap buffered bytes before parsing: overflow fails closed without
             // waiting for close or the deadline.
-            if (size > EVENT_READ_MAX_RESPONSE_BYTES) {
+            if (exceedsByteLimit(size, EVENT_READ_MAX_RESPONSE_BYTES)) {
               cancelBody(reader);
               return unreachable;
             }

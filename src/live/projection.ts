@@ -1,3 +1,4 @@
+import { fitsUtf8ByteLimit } from "../http/length-limit";
 import type { LiveState } from "./wire";
 
 const ADMINISTRATOR = 1n << 3n;
@@ -174,5 +175,5 @@ export function encodeLiveProjection(input: Projection, topic: LiveTopic): strin
   const value = projectedValue(input, topic);
   if (value === null) return null;
   const json = JSON.stringify(value);
-  return new TextEncoder().encode(json).byteLength <= MAX_VALUE_BYTES ? json : null;
+  return fitsUtf8ByteLimit(json, MAX_VALUE_BYTES) ? json : null;
 }

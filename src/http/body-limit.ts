@@ -1,5 +1,7 @@
 // Wire-size budgets (including encoding overhead); field validation still runs
 // independently. See docs/body-limits.md for the legacy-maxima derivation.
+import { exceedsByteLimit } from "./length-limit";
+
 export const BODY_LIMIT_BYTES = {
   form: 64 * 1024,
   json: 32 * 1024,
@@ -27,7 +29,8 @@ export async function limitRequestBody(
   kind: BodyClass,
 ): Promise<BodyLimitResult> {
   const max = BODY_LIMIT_BYTES[kind];
-  if (Number(request.headers.get("content-length")) > max) return overflow(request.body);
+  if (exceedsByteLimit(Number(request.headers.get("content-length")), max))
+    return overflow(request.body);
   if (!request.body) return { ok: true, request };
 
   const reader = request.body.getReader();
@@ -43,8 +46,8 @@ export async function limitRequestBody(
       }
       if (chunk.done) break;
       const nextSize = size + chunk.value.byteLength;
-      if (nextSize > max) return overflow(reader);
-      if (nextSize > bytes.byteLength) {
+      if (exceedsByteLimit(nextSize, max)) return overflow(reader);
+      if (exceedsByteLimit(nextSize, bytes.byteLength)) {
         const buffer = new Uint8Array(
           Math.min(max, Math.max(4096, nextSize, bytes.byteLength * 2)),
         );

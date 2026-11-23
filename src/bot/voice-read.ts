@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { exceedsByteLimit } from "../http/length-limit";
 import { hasUrlUserinfo } from "../image-policy";
 import type { EventReadConfig } from "./event-read";
 import { INTERNAL_ACTIONS_PATH, newNonce, signInternalAction } from "./signer";
@@ -93,7 +94,7 @@ export function signedVoiceReader(cfg: EventReadConfig, send = fetch): VoiceRead
         const { done, value } = await stream.read();
         if (signal.aborted) return null;
         if (done) break;
-        if (size + value.byteLength > MAX_BYTES) return null;
+        if (exceedsByteLimit(size + value.byteLength, MAX_BYTES)) return null;
         bytes.set(value, size);
         size += value.byteLength;
       }
