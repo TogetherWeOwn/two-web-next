@@ -179,8 +179,13 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
       WebSocket.OPEN,
       "source expiry keeps the guest socket open",
     );
+    assert.equal(await source(snapshot(47, 5)), generation);
+    guest.socket.send(JSON.stringify({ v: 1, type: "resync", topics: ["voice"] }));
+    await guest.frame(unavailable("voice"));
+    await guest.frame(projected("snapshot", 6, 5));
+    assert.equal(await source(), generation, "the socket resynced on the same hub without ingress");
     console.log(
-      "PASS installed Kit public scope, wire shape, exact-row fan-out revocation, gap recovery, and source lease expiry",
+      "PASS installed Kit public scope, wire shape, exact-row fan-out revocation, gap recovery, lease expiry, and socket resync",
     );
   } finally {
     guest.socket.close();

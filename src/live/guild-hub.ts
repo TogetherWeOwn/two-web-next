@@ -12,7 +12,7 @@ const SOURCE_LEASE_MS = 30_000;
 const SOCKET_RECOVERY_INTERVAL_MS = 5_000;
 const PUBLIC_VOICE_PAGE = "public-voice";
 
-function publicVoiceRooms(raw = ""): ReadonlySet<string> | null {
+export function publicVoiceRooms(raw = ""): ReadonlySet<string> | null {
   if (!raw || raw.length > 2_099) return null;
   const rooms = raw.split(",");
   const unique = new Set(rooms);

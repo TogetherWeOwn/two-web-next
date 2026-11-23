@@ -1,8 +1,9 @@
 import { createHash, createHmac } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
-import { LiveGuildHub } from "../src/live/guild-hub";
+import { LiveGuildHub, publicVoiceRooms } from "../src/live/guild-hub";
 import { handleLiveIngress, type LiveIngressEnv } from "../src/live/ingress";
 import { LIVE_INGEST_PATH } from "../src/live/transport";
+import { roomAllowlistCases } from "./fixtures/live-room-allowlists";
 
 const origin = "https://site.example";
 const guildId = "100";
@@ -44,7 +45,7 @@ function signed(
 function fixture() {
   const storage = new Map();
   const kv = { get: storage.get.bind(storage), put: vi.fn(storage.set.bind(storage)) };
-  const ctx = { storage: { kv } } as unknown as DurableObjectState;
+  const ctx = { storage: { kv }, getWebSockets: () => [] } as unknown as DurableObjectState;
   let hub = new LiveGuildHub(ctx, config);
   const getByName = vi.fn(() => ({
     fetch: (url: string, init: RequestInit) => hub.fetch(new Request(url, init)),
@@ -79,6 +80,10 @@ function snapshot(seq: number) {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+it.each(roomAllowlistCases)("validates public room allowlists (%s)", (_name, input, size) => {
+  expect(publicVoiceRooms(input)?.size ?? null).toBe(size);
+});
 
 it("does not touch a guild object before flag, host, signature, size and schema checks", async () => {
   const { env, getByName } = fixture();
