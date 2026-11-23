@@ -1028,6 +1028,12 @@ test("Home smoke accepts only the guest headings on Kit responses", async (t) =>
     { name: "Kit empty", kit: true, body: heading("The lobby is <em>open</em>."), ok: true },
     { name: "Kit scheduled", kit: true, body: heading(scheduled), ok: true },
     {
+      name: "Kit hydration markers and inactive duplicate headings",
+      kit: true,
+      body: `<template>${heading(scheduled)}</template><!--${heading(scheduled)}--><div inert>${heading(scheduled)}</div>${heading("The lobby is <!--[--><em>open</em><!--]--><span hidden> again</span>.")}`,
+      ok: true,
+    },
+    {
       name: "Kit wrong copy",
       kit: true,
       body: heading("The lobby is open. Not really."),
@@ -1049,6 +1055,18 @@ test("Home smoke accepts only the guest headings on Kit responses", async (t) =>
       name: "Kit hidden heading",
       kit: true,
       body: `<div hidden>${heading(scheduled)}</div>`,
+      ok: false,
+    },
+    {
+      name: "Kit inline-hidden heading and a visible heading with a different ID",
+      kit: true,
+      body: `<div style="display: none /* until ready */">${heading(scheduled)}</div><h1 id="other-heading">${scheduled}</h1>`,
+      ok: false,
+    },
+    {
+      name: "Kit duplicate active home headings",
+      kit: true,
+      body: heading(scheduled) + heading("The lobby is open."),
       ok: false,
     },
   ];
@@ -1074,6 +1092,12 @@ test("CLI enforces the selected staging Join renderer and its public action", as
   const cases = [
     { name: "Hono selected", expected: "hono", body: hono },
     { name: "Kit selected", expected: "kit", body: kit, marker: "kit" },
+    {
+      name: "Kit heading split by hydration markers",
+      expected: "kit",
+      body: `<h2 id='join-card-heading'>Join <!--[--><span>with</span><!--]--> one sign-in</h2>${action}`,
+      marker: "kit",
+    },
     {
       name: "Hono fallback even with Kit markup",
       expected: "kit",
@@ -1116,6 +1140,13 @@ test("CLI enforces the selected staging Join renderer and its public action", as
       failure: /expected join-oneclick link/,
     },
     {
+      name: "action under an inline-hidden ancestor",
+      expected: "kit",
+      body: `${heading}<div style="color: red; display: none !important">${action}</div>`,
+      marker: "kit",
+      failure: /expected join-oneclick link/,
+    },
+    {
       name: "test ID and href belong to different elements",
       expected: "kit",
       body: `${heading}<a href="/join/discord">Join</a><span data-testid="join-oneclick">Join</span>`,
@@ -1126,6 +1157,13 @@ test("CLI enforces the selected staging Join renderer and its public action", as
       name: "action without the Kit heading",
       expected: "kit",
       body: action,
+      marker: "kit",
+      failure: /expected Kit Join card heading/,
+    },
+    {
+      name: "Kit heading with its text in an inactive child",
+      expected: "kit",
+      body: `<h2 id="join-card-heading"><span hidden>Join with one sign-in</span></h2>${action}`,
       marker: "kit",
       failure: /expected Kit Join card heading/,
     },

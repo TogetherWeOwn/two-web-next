@@ -17,11 +17,11 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse } from "parse5";
 import { parseSeasonParam } from "../src/hotzones/season.ts";
 import { stripEmberDelta } from "./kit-archive-delta.mjs";
 import { sectionOf } from "./kit-section-contract.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
+import { parseRenderedPage, renderedElements, renderedText } from "./rendered-page.mjs";
 
 export const PARITY_ROUTES = [
   // Compare guest structure, not live viewer-specific content.
@@ -1015,52 +1015,11 @@ export function memberBoardEmptyText(scope, allowEnded = false) {
   return new RegExp(String.raw`^\s*${prefix}${ending}(?=\s|$)`);
 }
 
-// Static HTML check only; Playwright checks visibility with the full CSS cascade.
-const INLINE_DISPLAY_NONE = /(?:^|;)\s*display\s*:\s*none\s*(?:!\s*important\s*)?(?:;|$)/i;
-const CSS_COMMENT_OR_STRING = /\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'/g;
-
-function hasInlineDisplayNone(style) {
-  // Drop comments without joining tokens; quoted strings cannot contain declarations.
-  return INLINE_DISPLAY_NONE.test(
-    style.replace(CSS_COMMENT_OR_STRING, (part) => (part.startsWith("/*") ? " " : '""')),
-  );
-}
-
-/** @param {import("parse5").DefaultTreeAdapterMap["node"]} node */
-function* activeBoardNodes(node) {
-  if (
-    "tagName" in node &&
-    (["template", "script", "style", "noscript"].includes(node.tagName) ||
-      node.attrs.some(
-        ({ name, value }) =>
-          name === "hidden" ||
-          name === "inert" ||
-          (name === "style" && hasInlineDisplayNone(value)),
-      ))
-  )
-    return;
-  yield node;
-  if ("childNodes" in node) {
-    for (const child of node.childNodes) yield* activeBoardNodes(child);
-  }
-}
-
 export function memberBoardStatus(html, allowEnded = false) {
-  // Walk the active tree, not the source: comments and template contents do not render.
-  const main = activeBoardNodes(parse(html)).find((node) => node.nodeName === "main");
+  const main = renderedElements(parseRenderedPage(html), { tag: "main" }).next().value;
   if (!main) return null;
-  for (const node of activeBoardNodes(main)) {
-    if (
-      !("tagName" in node) ||
-      node.tagName !== "p" ||
-      !node.attrs.some(({ name, value }) => name === "role" && value === "status")
-    )
-      continue;
-    const text = [...activeBoardNodes(node)]
-      .map((child) => ("value" in child ? child.value : ""))
-      .join("")
-      .replace(/\s+/g, " ")
-      .trim();
+  for (const node of renderedElements(main, { tag: "p", role: "status" })) {
+    const text = renderedText(node).replace(/\s+/g, " ").trim();
     if (memberBoardEmptyText("overall", allowEnded).test(text)) return "overall-empty";
     if (memberBoardEmptyText("relative", allowEnded).test(text)) return "relative-empty";
     if (text === "Rankings are temporarily unavailable.") return "outage";

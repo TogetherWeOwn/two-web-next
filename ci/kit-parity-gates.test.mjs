@@ -651,6 +651,19 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
       [],
     );
   }
+  assert.deepEqual(
+    assertMembersContract({
+      label: "unit/members-hydrated-status",
+      html: withBoardMarkup(
+        `<p class="notice" role='status'><span hidden>Stale copy. </span>` +
+          `Nobody is <!--[--><em>ranked</em><!--]--> for this season and game yet.</p>`,
+      ),
+      headers,
+      status: 200,
+      expected,
+    }),
+    [],
+  );
   const nearMatch = withStatus(
     "Nobody is ranked for this season and game because the rankings feed is unavailable.",
   );
@@ -683,6 +696,11 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
       "board table or empty status present",
     ],
     [
+      "empty-copy-on-wrong-element-with-status-role",
+      () => withBoardMarkup(`<div role="status">${openCopy}</div>`),
+      "board table or empty status present",
+    ],
+    [
       "empty-status-outside-main",
       () => withStatus(openCopy).replace(/(<p role="status">[^<]*<\/p>)(<\/main>)/, "$2$1"),
       "board table or empty status present",
@@ -693,7 +711,9 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
         withBoardMarkup(
           `<!--<p role="status">${openCopy}</p>-->` +
             `<template><p role="status">${openCopy}</p></template>` +
-            `<div hidden><p role="status">${openCopy}</p></div>`,
+            `<div hidden><p role="status">${openCopy}</p></div>` +
+            `<div inert><p role="status">${openCopy}</p></div>` +
+            `<p role="status"><span hidden>${openCopy}</span></p>`,
         ),
       "board table or empty status present",
     ],
