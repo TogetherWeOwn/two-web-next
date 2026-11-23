@@ -215,7 +215,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
     });
 
     it("replays in-progress requests with the original snapshot and caps sends across carriers", async () => {
-      const { id, eventKey } = await seedEvent({ tag: "in-progress" });
+      const { id, eventKey } = await seedEvent({
+        tag: "in-progress",
+        endsAt: new Date("2026-10-02T14:00:00Z"),
+      });
       const events = pgEventStore(sql);
       const idempotencyKey = crypto.randomUUID();
       const upsertEvent = vi.fn<BotClient["upsertEvent"]>().mockResolvedValue({
@@ -233,6 +236,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const replay = () =>
         reconcileFailedJob({ ...events, hasFailedSync: events.hasFailedSync! }, failed, deps.now);
       const queue = { send: vi.fn(async (_body: unknown) => {}) };
+      // Model recovery after the previous carrier released its lease.
       const reconcile = () => reconcileEvents({ ...deps, queue, lock: memLock() });
 
       expect(await handleSyncEvent({ eventKey, idempotencyKey }, 1, deps)).toEqual({
@@ -259,7 +263,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(await reconcile()).toMatchObject({ resynced: 0 });
       expect(queue.send).toHaveBeenCalledTimes(5);
       expect(await replay()).toMatchObject({ action: "keep", eventKey });
-      await handleSyncEvent({ eventKey, idempotencyKey }, 1, deps);
+      const postCap = await handleSyncEvent({ eventKey, idempotencyKey }, 1, deps);
+      expect(postCap).not.toHaveProperty("retryInSeconds");
+      expect(postCap).not.toHaveProperty("definitive");
       expect(await events.pendingSync(eventKey)).toMatchObject({
         idempotencyKey,
         state: "pending",
@@ -278,6 +284,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           tag: "uncertain",
           status: verb === "event.cancel" ? "cancelled" : "published",
           discordEventId: "discord-original",
+          endsAt: new Date("2026-10-02T14:00:00Z"),
         });
         const idempotencyKey = crypto.randomUUID();
         const otherKey = crypto.randomUUID();
@@ -318,7 +325,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
             failed,
             () => later,
           ),
-        ).toMatchObject({ action: "keep", eventKey });
+        ).toMatchObject({
+          action: "keep",
+          eventKey,
+          reason: expect.stringContaining("claim unsettled"),
+        });
         expect(await events.prepareSync(eventKey, otherKey, later)).toBeNull();
         expect(
           await sql`select idempotency_key, state, request_attempts, next_attempt_at, terminal_reason
@@ -346,9 +357,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
           },
         ]);
         expect(
-          await sql`select discord_event_id, synced_revision = 0 as unacknowledged
+          await sql`select discord_event_id, synced_revision = 0 as unacknowledged,
+            sync_revision > ${attempt.revision} as revision_advanced
           from events where id = ${id}`,
-        ).toEqual([{ discord_event_id: "discord-original", unacknowledged: true }]);
+        ).toEqual([
+          { discord_event_id: "discord-original", unacknowledged: true, revision_advanced: true },
+        ]);
       },
     );
   },
