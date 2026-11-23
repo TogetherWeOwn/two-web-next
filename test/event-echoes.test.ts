@@ -55,7 +55,14 @@ describe("buildFrozenEcho", () => {
     expect(buildFrozenEcho(EVENT, success({ threshold_minutes: 11 }))?.echo.attendedCount).toBe(1);
   });
 
-  it("records zero attendance for a final empty payload on a past event", () => {
+  it("accepts a past event even when every member is below the threshold", () => {
+    expect(
+      buildFrozenEcho({ ...EVENT, status: "past" }, success({ threshold_minutes: 96 })),
+    ).toMatchObject({ echo: { thresholdMinutes: 96, attendedCount: 0 } });
+  });
+
+  it("records zero attendance for a synthetic final empty payload", () => {
+    // Exercise the pure transform outside the reader, which rejects final empty member lists.
     expect(
       buildFrozenEcho(
         { ...EVENT, status: "past" },
