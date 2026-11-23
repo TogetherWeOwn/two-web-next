@@ -17,6 +17,7 @@ import {
   isCoveredByExecutedRun,
   isInJourneyScope,
   isManifestEnabled,
+  kitHomeHeadingText,
   memberBoardEmptyText,
   memberBoardStatus,
   parseManifestEntries,
@@ -550,6 +551,17 @@ test("preview join-attempts journeys skip loud without a QA token", () => {
   void status;
 });
 
+test("Kit Home parity reads one active heading with the pinned ID", () => {
+  const heading = '<h1 id="home-heading">The lobby is <!--[--><em>open</em><!--]-->.</h1>';
+  assert.equal(
+    kitHomeHeadingText(heading + '<div hidden id="home-heading"></div>'),
+    "The lobby is open.",
+  );
+  assert.equal(kitHomeHeadingText(heading + '<div id="home-heading"></div>'), "");
+  assert.equal(kitHomeHeadingText(heading + '<svg id="home-heading"></svg>'), "");
+  assert.equal(kitHomeHeadingText(heading.replace("home-heading", "other-heading")), "");
+});
+
 test("member-board empty text matches raw browser text across whitespace", () => {
   for (const [scope, subject] of [
     ["overall", "Nobody is"],
@@ -651,6 +663,19 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
       [],
     );
   }
+  assert.deepEqual(
+    assertMembersContract({
+      label: "unit/members-hydrated-status",
+      html: withBoardMarkup(
+        `<p class="notice" role='status'><span hidden>Stale copy. </span>` +
+          `Nobody is <!--[--><em>ranked</em><!--]--> for this season and game yet.</p>`,
+      ),
+      headers,
+      status: 200,
+      expected,
+    }),
+    [],
+  );
   const nearMatch = withStatus(
     "Nobody is ranked for this season and game because the rankings feed is unavailable.",
   );
@@ -683,6 +708,11 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
       "board table or empty status present",
     ],
     [
+      "empty-copy-on-wrong-element-with-status-role",
+      () => withBoardMarkup(`<div role="status">${openCopy}</div>`),
+      "board table or empty status present",
+    ],
+    [
       "empty-status-outside-main",
       () => withStatus(openCopy).replace(/(<p role="status">[^<]*<\/p>)(<\/main>)/, "$2$1"),
       "board table or empty status present",
@@ -693,7 +723,9 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
         withBoardMarkup(
           `<!--<p role="status">${openCopy}</p>-->` +
             `<template><p role="status">${openCopy}</p></template>` +
-            `<div hidden><p role="status">${openCopy}</p></div>`,
+            `<div hidden><p role="status">${openCopy}</p></div>` +
+            `<div inert><p role="status">${openCopy}</p></div>` +
+            `<p role="status"><span hidden>${openCopy}</span></p>`,
         ),
       "board table or empty status present",
     ],

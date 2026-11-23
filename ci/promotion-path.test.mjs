@@ -79,7 +79,7 @@ test("only promotion surfaces match, including directly called tooling", () => {
     ci/migration-runtime-rights.mjs src/up-database.ts bin/version-check.mjs e2e/staging/join.spec.ts
     e2e/watch/guest-journeys.spec.ts playwright.watch.config.ts e2e/watch-guard.mjs e2e/ci-only.mjs
     e2e/watch/events/calendar.spec.ts e2e/staging/events/lists/calendar.spec.ts
-    playwright.staging.config.ts e2e/staging-guard.mjs e2e/join-oneclick.ts src/qa.ts
+    playwright.staging.config.ts e2e/staging-guard.mjs e2e/join-oneclick.ts src/qa.ts ci/rendered-page.mjs
     web/package.json web/scripts/copy-public.mjs ci/kit-route-evidence.mjs bin/ts-hook.mjs bin/ts-hooks.mjs`;
   const excluded = `docs/runbook.md docs/wrangler.md test/fixtures/legacy/verify.sql
     src/routes/events.ts web/src/routes/+page.svelte ci/staging-provenance.test.mjs
