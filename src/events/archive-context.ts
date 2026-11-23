@@ -1,4 +1,5 @@
 // Browse context is navigation only: no redirect, auth grant or persistent state.
+import { exceedsCodePointLimit } from "../http/length-limit";
 import type { ArchiveContext } from "./attendee-paths";
 import { normalizePastPage } from "./past-page";
 import { MAX_QUERY_LENGTH, matchQuery } from "./search-log";
@@ -21,6 +22,6 @@ export function archiveContext(search: string): ArchiveContext | null {
   const page = Number(rawPage);
   if (normalizePastPage(page) !== page) return null;
   const rawQuery = queries[0] ?? "";
-  if ([...rawQuery].length > MAX_QUERY_LENGTH) return null;
+  if (exceedsCodePointLimit(rawQuery, MAX_QUERY_LENGTH)) return null;
   return { page, q: matchQuery(rawQuery) ?? "" };
 }

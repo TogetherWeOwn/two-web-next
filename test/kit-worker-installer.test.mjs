@@ -15,6 +15,8 @@ import {
   installWorkerFacade,
 } from "../web/scripts/install-worker-facade.mjs";
 
+vi.mock("cloudflare:sockets", () => ({ connect: () => expect.unreachable("Unexpected socket") }));
+
 // Exercise the real lock state machine with fixture admission, not XFS admission.
 // Filesystem admission is independently qualified on real XFS in CI.
 vi.mock("../web/scripts/kit-lock.mjs", async (importOriginal) => {

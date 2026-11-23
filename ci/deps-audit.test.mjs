@@ -75,6 +75,16 @@ test("clean fixture passes", () => {
   assert.deepEqual(evaluate(fixture("clean")), { blocked: [], allowed: [], nonBlocking: [] });
 });
 
+test("checked-in allowlist omits the withdrawn picomatch advisory", () => {
+  const allowlist = JSON.parse(
+    readFileSync(new URL("./deps-audit-allowlist.json", import.meta.url), "utf8"),
+  );
+  assert.equal(
+    allowlist.exceptions.some(({ advisoryIds }) => advisoryIds?.includes(1247710)),
+    false,
+  );
+});
+
 test("high fixture blocks", () => {
   assert.equal(evaluate(fixture("high")).blocked[0].severity, "high");
 });

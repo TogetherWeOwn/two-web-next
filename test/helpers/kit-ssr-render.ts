@@ -12,7 +12,7 @@ const { compile } = webRequire("svelte/compiler") as {
   compile: (source: string, options: Record<string, unknown>) => { js: { code: string } };
 };
 
-export type RenderPage = (data: Record<string, unknown>) => string;
+export type RenderPage = (data: Record<string, unknown>, props?: Record<string, unknown>) => string;
 
 export async function createKitSsrRenderer(componentPath: string): Promise<{
   renderPage: RenderPage;
@@ -27,8 +27,8 @@ export async function createKitSsrRenderer(componentPath: string): Promise<{
       `
 import { render } from "svelte/server";
 import Page from ${JSON.stringify(resolve(root, componentPath))};
-export function renderPage(data) {
-  const { head, body } = render(Page, { props: { data } });
+export function renderPage(data, props) {
+  const { head, body } = render(Page, { props: { ...props, data } });
   return "<head>" + head + "</head><body>" + body + "</body>";
 }
 `,
@@ -40,6 +40,7 @@ export function renderPage(data) {
       platform: "node",
       format: "esm",
       outfile,
+      loader: { ".css": "file" },
       logLevel: "warning",
       absWorkingDir: root,
       nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],

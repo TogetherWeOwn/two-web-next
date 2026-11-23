@@ -1,14 +1,17 @@
 import { z } from "zod";
 import { INTERNAL_ACTIONS_PATH, newNonce, sha256Hex, signInternalAction } from "../bot/signer";
+import { exceedsByteLimit } from "../http/length-limit";
 import type { LiveSnapshot } from "./sequence";
 
 export const LIVE_INGEST_PATH = "/internal/discord-live/v1/ingest";
 const SKEW_SECONDS = 60;
 const DEADLINE_MS = 2_500;
+const SOURCE_LEASE_MS = 30_000;
+const OBSERVATION_SKEW_MS = 2_000;
 const DELTA_BYTES = 64 * 1024;
 export const SNAPSHOT_BYTES = 1024 * 1024;
 const HMAC = { name: "HMAC", hash: "SHA-256" };
-const utcTimestamp = z.iso.datetime();
+export const utcTimestamp = z.iso.datetime().max(30);
 type LiveKey = { keyId: string; secret: string };
 class TooLarge extends Error {}
 
@@ -41,7 +44,7 @@ async function readBytes(body: ReadableStream<Uint8Array>, limit: number, signal
       const { done, value } = await reader.read();
       signal.throwIfAborted();
       if (done) return bytes.buffer.slice(0, size);
-      if (value!.byteLength > limit - size) throw new TooLarge();
+      if (exceedsByteLimit(value!.byteLength, limit - size)) throw new TooLarge();
       bytes.set(value!, size);
       size += value!.byteLength;
     }
@@ -111,7 +114,7 @@ export function signedLiveSnapshot<State>(
   config: LiveKey & { origin: string; guildId: string },
   decodeTopics: (value: Record<string, unknown>) => State | null,
   fetcher: typeof fetch = fetch,
-): () => Promise<LiveSnapshot<State> | null> {
+): () => Promise<(LiveSnapshot<State> & { validUntil: number }) | null> {
   return async () => {
     try {
       const origin = new URL(config.origin);
@@ -156,12 +159,20 @@ export function signedLiveSnapshot<State>(
           typeof doc.seq !== "number" ||
           !Number.isSafeInteger(doc.seq) ||
           doc.seq < 0 ||
+          typeof doc.observed_at !== "string" ||
           !utcTimestamp.safeParse(doc.observed_at).success ||
           !record(doc.topics)
         )
           return null;
         const state = decodeTopics(doc.topics);
-        return state === null ? null : { seq: doc.seq, state };
+        const now = Date.now();
+        const observedAt = Date.parse(doc.observed_at);
+        // Allow bounded clock skew and cap the lease at 30 seconds from this read.
+        const validUntil = Math.min(observedAt, now) + SOURCE_LEASE_MS;
+        if (state === null || observedAt > now + OBSERVATION_SKEW_MS || !(validUntil > now)) {
+          return null;
+        }
+        return { seq: doc.seq, state, validUntil };
       });
     } catch {
       return null;

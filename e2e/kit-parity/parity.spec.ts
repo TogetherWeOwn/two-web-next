@@ -10,11 +10,18 @@ import postgres from "postgres";
 import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
 import {
   allowsEndedMemberBoardCopy,
+  hasKitGuestChrome,
   memberBoardEmptyText,
   memberBoardStatus,
 } from "../../ci/kit-parity-gates.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { QA_IDENTITIES } from "../../src/qa";
+import {
+  memberBoardDocument,
+  prepareMemberBoardFixtures,
+  prepareSeasonBoardFixtures,
+  VIEWER,
+} from "../../test/fixtures/member-board-viewer";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
   expectedKitMarker,
@@ -334,6 +341,11 @@ function headerSignOut(page: Page) {
     .and(page.getByRole("button", { name: "Sign out", exact: true }));
 }
 
+function expectGuestChrome(body: string, marker: string | null, href?: string) {
+  if (marker === "kit") expect(hasKitGuestChrome(body, href)).toBe(true);
+  else expect(body).toContain("Welcome, guest");
+}
+
 test("kit: capture synthetic non-member and account-hidden headers", async ({ browser }) => {
   test.setTimeout(120_000);
   requireGithubRunner();
@@ -400,6 +412,12 @@ test("kit: capture synthetic non-member and account-hidden headers", async ({ br
           animations: "disabled",
           caret: "hide",
         });
+        expect((await page.goto("/events"))?.headers()["x-two-renderer"]).toBe("kit");
+        await (await compactMenu(page))?.click();
+        const header = page.getByRole("banner");
+        await expect(header.locator('a[href="/join"]')).toHaveCount(0);
+        if (state === "non-member") await expect(headerSignOut(page)).toHaveCount(1);
+        else await expect(header.getByRole("link", { name: "Open Discord" })).toHaveCount(1);
       } finally {
         try {
           await context.close();
@@ -502,7 +520,7 @@ for (const target of targets) {
       expect(body).toContain('data-testid="events-past-archive-link"');
       expect(body).toContain('data-testid="events-subscribe"');
       expect(body).toContain("E2E Community Night");
-      expect(body).toContain("Welcome, guest");
+      expectGuestChrome(body, expectedMarker);
       expect(body).not.toContain("Sign out");
     });
 
@@ -537,7 +555,7 @@ for (const target of targets) {
       expect(scrubSecrets(body)).toEqual([]);
       expect(body).toContain('data-testid="join-oneclick"');
       expect(body).toContain('data-testid="join-invite"');
-      expect(body).toContain("Welcome, guest");
+      expectGuestChrome(body, expectedMarker, "/auth/discord");
       expect(body).not.toContain("Sign out");
       expect(body).not.toContain("<iframe");
       // Exactly one widget zone across the three isolate states (cold facade,
@@ -1286,13 +1304,19 @@ for (const target of targets) {
           });
           const menu = await compactMenu(page);
           const logo = await page.locator(".brand img:visible").boundingBox();
-          expect(logo?.height).toBe(menu ? 32 : 50);
-          if (menu) expect(logo?.width).toBeCloseTo((456.86 * 32) / 126.34, 1);
+          const ember = target.name === "kit" && state.path === "/events";
+          const height = menu ? 32 : ember ? 38 : 50;
+          expect(logo?.height).toBe(height);
+          if (menu || ember) expect(logo?.width).toBeCloseTo((456.86 * height) / 126.34, 1);
           else expect(logo?.width).toBe(width <= 480 ? 50 : 180);
+          const header = page.getByRole("banner");
+          if (ember) await expect(header).toHaveCSS("height", width <= 820 ? "60px" : "68px");
           await menu?.click();
+          if (ember)
+            await expect(header.getByRole("link", { name: "Join", exact: true })).toHaveCount(1);
           const chrome = (await page.evaluate(`(() => {
             const account = document.querySelector('.header-account');
-            const button = account.querySelector('.btn');
+            const button = account.querySelector('.btn, .ember-header-action');
             const who = account.querySelector('.who');
             const range = document.createRange();
             if (button) range.selectNodeContents(button);
@@ -2154,7 +2178,42 @@ test("cross-target: normalized archive sections match", async () => {
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
+test("Kit Events groups schedule dates but plots the grid on host-local dates", async ({
+  page,
+}) => {
+  const key = "01J00000000000000000000EM8E";
+  await withSessionDb(async (sql) => {
+    await sql`insert into events (event_key, title, starts_at, ends_at, timezone, location, status)
+      values (${key}, 'E2E May LA', '2099-05-15T01:00:00Z', '2099-05-15T02:00:00Z',
+        'America/Los_Angeles', 'Community voice', 'published')`;
+  });
+  try {
+    await page.setViewportSize({ width: 744, height: 844 });
+    await page.context().addCookies([{ name: "e2e-parity-bypass", value: "1", url: KIT_ORIGIN }]);
+    await page.goto(`${KIT_ORIGIN}/events`);
+    const schedule = page.getByTestId("events-list");
+    await expect(schedule.getByRole("heading", { level: 3, name: /15 May/ })).toBeVisible();
+    const group = schedule.getByRole("list", { name: /15 May/ });
+    await expect(group).toHaveAttribute("role", "list"); // WebKit drops implicit roles on unmarked lists.
+    await expect(group.getByRole("listitem")).toHaveCount(2);
+    const row = group.getByTestId("event-card").first();
+    const title = row.getByRole("heading", { level: 4, name: /^E2E May LA$/ });
+    await expect(title.and(row.locator("h4"))).toBeVisible();
+    await expect(row.locator(".schedule-location")).toHaveText("Community voice");
+    await expect(row.locator(".schedule-actions")).toHaveCSS("grid-column", "3");
+    await page.goto(`${KIT_ORIGIN}/events?view=calendar&month=2099-05&past=1`);
+    await expect(page.locator(".schedule-clock")).toContainText(/local dates.*UTC/);
+    await expect(page.locator('[data-date="2099-05-14"]')).toContainText("E2E May LA");
+    await expect(page.locator('[data-date="2099-05-15"]')).not.toContainText("E2E May LA");
+  } finally {
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key = ${key}`;
+    });
+  }
+});
+
 test("Kit calendar styles survive a swap into the old document", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   // Serve the old Hono shell without the new aliases; the island fetches from Kit.
   const old = await page.request.get(`${HONO_ORIGIN}/events`, { maxRedirects: 0 });
   expect(old.status()).toBe(200);
@@ -2174,6 +2233,12 @@ test("Kit calendar styles survive a swap into the old document", async ({ page }
   await expect(selected).toHaveAttribute("aria-current", "page");
   await expect(selected).toHaveCSS("gap", "8px");
   await expect(selected).toHaveCSS("background-color", "rgb(46, 36, 32)");
+  await page.getByTestId("events-view-list").click();
+  const row = page.getByTestId("event-card").first();
+  await expect(row.locator(".schedule-when")).toBeVisible();
+  await expect(row).toHaveCSS("grid-template-columns", /^\d+(?:\.\d+)?px$/);
+  await row.getByTestId("signin").focus();
+  await expect(row.getByTestId("signin")).toBeFocused();
   await expect(html).toHaveAttribute("data-rollout-shell", "old");
 });
 
@@ -2396,7 +2461,7 @@ test("cross-target: Events schedule behavior matches", async ({ playwright, page
       });
       expect(response.status()).toBe(200);
       const body = await response.text();
-      expect(body).toContain("Welcome, guest");
+      expectGuestChrome(body, target.name === "kit" ? expectedKitMarker("/events") : null);
       expect(body).not.toContain("Sign out");
       expect(response.headers()["set-cookie"] ?? null).toBeNull();
       bodies.set(target.name, normalizeOrigin(body, target.origin));
@@ -3674,6 +3739,89 @@ test.describe("kit: member-board visuals", () => {
         await context.close();
       }
     });
+  }
+});
+
+test("isolated Kit season board shows the named viewer at both widths", async ({ page }) => {
+  await Promise.all([prepareMemberBoardFixtures(), prepareSeasonBoardFixtures()]);
+  await page.route("**/*", (route) => route.abort("blockedbyclient"));
+  const views = [
+    { name: "overall", scope: "overall", viewer: ["9", "92"] },
+    { name: "relative", scope: "relative", viewer: ["41", "95"] },
+    {
+      name: "filtered-empty",
+      scope: "overall",
+      data: { activity: "valheim", rows: [] },
+      status: "Nobody is ranked",
+    },
+    {
+      name: "ended-unranked",
+      scope: "relative",
+      data: { season: "2000-02", rows: [] },
+      status: "This season has ended.",
+    },
+    {
+      name: "unavailable",
+      scope: "overall",
+      data: { available: false },
+      status: "Rankings are temporarily unavailable.",
+    },
+    {
+      name: "tied",
+      scope: "overall",
+      data: {
+        rows: [
+          { username: VIEWER, rank: 1, count: 5, isViewer: true },
+          { username: "Fixture member", rank: 2, count: 5, isViewer: false },
+        ],
+      },
+    },
+  ] as const;
+  for (const { name, size } of PARITY_VIEWPORTS) {
+    await page.setViewportSize(size);
+    for (const view of views) {
+      for (const twin of "viewer" in view ? (["kit", "season"] as const) : (["season"] as const)) {
+        await page.setContent(
+          memberBoardDocument(twin, view.scope, "data" in view ? view.data : {}),
+        );
+        if ("viewer" in view) {
+          const table = page.getByRole("table");
+          const label = twin === "season" ? `${VIEWER} (you)` : VIEWER;
+          const viewer = table.getByRole("row").filter({
+            has: page.getByRole("rowheader", { name: label, exact: true }),
+          });
+          await expect(viewer).toHaveAttribute("aria-current", "true");
+          await expect(viewer.getByRole("cell")).toHaveText([...view.viewer]);
+          await expect(table.getByRole("rowheader", { name: /\(you\)$/ })).toHaveCount(
+            twin === "season" ? 1 : 0,
+          );
+          await viewer.scrollIntoViewIfNeeded();
+          await expect(viewer).toBeInViewport({ ratio: 1 });
+          if (name === "mobile") {
+            const menu = await page.locator("#kit-menu").boundingBox();
+            const heading = await table.getByRole("columnheader", { name: "Member" }).boundingBox();
+            expect(heading!.y).toBeGreaterThanOrEqual(menu!.y + menu!.height);
+          }
+        } else if ("status" in view) {
+          await expect(page.getByRole("table")).toHaveCount(0);
+          await expect(page.getByRole("status")).toContainText(view.status);
+          if (view.name === "ended-unranked") {
+            const progress = page.getByRole("progressbar", { name: "Season elapsed" });
+            await expect(progress).toHaveAttribute("max", "29");
+            await expect(progress).toHaveAttribute("value", "29");
+            await expect(page.getByText("Ended 1 March 2000 (UTC)", { exact: true })).toBeVisible();
+          }
+        } else {
+          const tied = page.getByRole("table").getByRole("cell", { name: "5 · Tied", exact: true });
+          await expect(tied).toHaveCount(2);
+          await tied.first().scrollIntoViewIfNeeded();
+        }
+        const capture = `kit-review-season-board-${twin}-${view.name}-${name}`;
+        const path = test.info().outputPath(`${capture}.png`);
+        await page.screenshot({ path, animations: "disabled", caret: "hide" });
+        await test.info().attach(capture, { path, contentType: "image/png" });
+      }
+    }
   }
 });
 

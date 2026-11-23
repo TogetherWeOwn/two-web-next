@@ -9,8 +9,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import { parseFragment } from "parse5";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { MemberView } from "../src/profiles/store";
+import { attr, elements } from "./helpers/kit-edit-controls";
 
 const APP_URL = "https://next.example.test";
 
@@ -165,11 +167,11 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
     );
     // The draft lands in the controls; the read-only section above still
     // shows the stored record until the save succeeds (same as the Hono page).
-    expect(html).toContain(
-      '<textarea id="profile-bio" name="bio" rows="4" aria-describedby="profile-bio-hint profile-bio-count">draft bio</textarea>',
+    expect(html).toMatch(
+      /<textarea id="profile-bio" name="bio" rows="4" aria-describedby="profile-bio-hint profile-bio-count"(?: class="svelte-[\w-]+")?>draft bio<\/textarea>/,
     );
-    expect(html).toContain(
-      '<textarea id="profile-games-text" name="games_text" rows="4" aria-describedby="profile-games-text-hint profile-games-text-count">draft game</textarea>',
+    expect(html).toMatch(
+      /<textarea id="profile-games-text" name="games_text" rows="4" aria-describedby="profile-games-text-hint profile-games-text-count"(?: class="svelte-[\w-]+")?>draft game<\/textarea>/,
     );
     expect(html).toContain('value="Mars/Olympus"');
   });
@@ -189,6 +191,43 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
     expect(unchecked).toContain('name="leaderboard_opt_out"');
     expect(unchecked).not.toMatch(/type="checkbox"[^>]*checked|checked[^>]*type="checkbox"/);
   });
+
+  it("groups privacy within the native edit form and binds the consequence alongside errors", () => {
+    const html = renderView(baseProps({ errors: { leaderboard_opt_out: "Choose hide or show." } }));
+    const privacy = html.match(
+      /<section[^>]*aria-labelledby="profile-privacy-heading"[^>]*>.*?<\/section>/s,
+    )?.[0];
+    const identityActions = elements(parseFragment(html)).find(
+      (el) => attr(el, "data-testid") === "profile-identity-actions",
+    );
+    expect(
+      identityActions?.childNodes.some(
+        (node) =>
+          "tagName" in node && node.tagName === "a" && attr(node, "href") === "#edit-heading",
+      ),
+    ).toBe(true);
+    expect(html.match(/<form[^>]*data-testid="profile-form"[^>]*>.*?<\/form>/s)?.[0]).toContain(
+      privacy,
+    );
+    expect(privacy).toMatch(/<h3 id="profile-privacy-heading"[^>]*>Privacy<\/h3>/);
+    expect(privacy).toContain(
+      'aria-describedby="profile-leaderboard-privacy-help profile-leaderboard-opt-out-error"',
+    );
+    expect(privacy).toContain('id="profile-leaderboard-privacy-help"');
+    expect(privacy).toContain(
+      "After you save, hiding removes you from every member leaderboard and its counts.",
+    );
+  });
+
+  it.each([false, true])(
+    "keeps edit and privacy off another member’s profile (moderator: %s)",
+    (isModerator) => {
+      const html = renderView(baseProps({ isOwner: false, isModerator }));
+      expect(html).not.toContain('href="#edit-heading"');
+      expect(html).not.toContain('id="profile-privacy-heading"');
+      expect(html).not.toContain('name="leaderboard_opt_out"');
+    },
+  );
 
   it("carries the island binding contract so the binder owns pending/cancel/focus", () => {
     const html = renderView(baseProps());

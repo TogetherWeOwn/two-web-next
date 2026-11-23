@@ -148,6 +148,7 @@ let kit: KitRenders;
 let kitScratch = "";
 
 const baseHomeData = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  nowMs: Date.UTC(2030, 6, 19, 12),
   session: null,
   sessionUnavailable: false,
   notice: null,
