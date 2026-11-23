@@ -125,7 +125,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
         return { digest: row.digest, state: JSON.parse(row.state) };
       };
       const readState = () =>
-        client.begin(async (tx) => {
+        executor.begin(async (tx) => {
           await tx`set local search_path = pg_catalog`;
           return observe(tx);
         });
@@ -134,7 +134,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       const rollback = new Error("discard fixture setup");
       let after;
       await assert.rejects(
-        client.begin(async (tx) => {
+        executor.begin(async (tx) => {
           await tx`set local search_path = pg_catalog`;
           await tx
             .unsafe(`
