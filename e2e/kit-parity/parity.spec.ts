@@ -3788,7 +3788,7 @@ test("isolated Kit season board shows the named viewer at both widths", async ({
           const table = page.getByRole("table");
           const label = twin === "season" ? `${VIEWER} (you)` : VIEWER;
           const viewer = table.getByRole("row").filter({
-            has: table.getByRole("rowheader", { name: label, exact: true }),
+            has: page.getByRole("rowheader", { name: label, exact: true }),
           });
           await expect(viewer).toHaveAttribute("aria-current", "true");
           await expect(viewer.getByRole("cell")).toHaveText([...view.viewer]);
@@ -3805,6 +3805,12 @@ test("isolated Kit season board shows the named viewer at both widths", async ({
         } else if ("status" in view) {
           await expect(page.getByRole("table")).toHaveCount(0);
           await expect(page.getByRole("status")).toContainText(view.status);
+          if (view.name === "ended-unranked") {
+            const progress = page.getByRole("progressbar", { name: "Season elapsed" });
+            await expect(progress).toHaveAttribute("max", "29");
+            await expect(progress).toHaveAttribute("value", "29");
+            await expect(page.getByText("Ended 1 March 2000 (UTC)", { exact: true })).toBeVisible();
+          }
         } else {
           const tied = page.getByRole("table").getByRole("cell", { name: "5 · Tied", exact: true });
           await expect(tied).toHaveCount(2);
