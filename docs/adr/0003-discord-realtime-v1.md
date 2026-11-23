@@ -26,20 +26,32 @@ requirements below continue to govern the broader design.
   subscription with `{v:1,type:"resync",topics:["voice"]}`. Commands are closed
   JSON text objects capped at 512 UTF-8 bytes. Serialize commands and respect the
   server's two-second per-socket cooldown, armed when it accepts subscribe or
-  resync. Commands that overlap, arrive before the cooldown ends or resync
-  outside the original subscription can close the socket with `1008`. Wait for
-  command completion and pace recovery conservatively. An unavailable control
-  can precede a snapshot from the same command, so it alone does not establish
-  completion. The server's separate per-guild pull budget can defer recovery.
+  resync. A second subscribe, an overlapping command, an early resync or a
+  resync outside the original subscription can close the socket with `1008`.
+- After a withdrawal or gap with no command pending, the browser requests a
+  covering snapshot on the current socket. Wait at least two seconds after the
+  last command's baseline was received and pace recovery with backoff and
+  jitter. The qualified hub requires a browser command to restore a withdrawn
+  lease and can defer a pull under its separate five-second per-guild budget.
+  Routine recovery sends resync only while the live value is unusable.
+- A usable snapshot ends the browser's command wait. An unavailable control
+  can precede that snapshot, or it can be the only response. Keep the socket
+  and accept a covering snapshot during the wait. If no usable snapshot arrives
+  within 15 seconds of sending the command, retire the socket before closing it
+  and retry with a fresh subscription and reconnect backoff. This avoids sending
+  a second command on a socket whose prior command may still be running. A
+  close or failed upgrade also starts fallback and a fresh connection attempt.
+  Reset reconnect backoff after a usable baseline.
 - A baseline or full replacement is exactly
   `{v:1,type:"snapshot"|"patch",topic:"voice",seq,value:{count}}`. `count` is
   a safe integer of at least five for eligible humans in explicitly allowlisted
   public rooms, or `null` for suppression below five. `seq` is a positive
   socket-local voice revision (currently capped at 1,024). The first snapshot on
   a new socket starts at one. Apply only the next patch to a known baseline.
-  Ignore duplicates and older revisions. On a forward gap, stop using the live
-  value and require a same-socket snapshot covering the observed gap before
-  applying patches again. Discard revision state when retiring the socket.
+  Ignore ordinary duplicates and older revisions. On a forward gap, stop using
+  the live value and require a snapshot with `seq` at least as high as the
+  highest revision observed in that gap and higher than the last accepted
+  revision. Discard revision state when retiring the socket.
 - `{v:1,type:"unavailable",topic:"voice"}` withdraws the live value and has
   no cursor or value. Keep the subscription, retaining its revision watermark
   and any observed gap, and accept a covering higher-revision snapshot on that
@@ -48,22 +60,24 @@ requirements below continue to govern the broader design.
   backoff and jitter, and establish a new baseline after fresh admission. The
   broader protocol's `reset` and fresh stream at sequence zero apply on its own
   endpoint.
-- Once the hub changes below are qualified, an unchanged live count may return
-  a same-revision snapshot in response to an outstanding explicit resync on the
-  current socket. Accept it only when it matches the last accepted value, the
-  baseline has not been withdrawn, and no higher revision needs coverage. The
-  server must perform a fresh covering pull and reauthorize before sending it.
-  An unsolicited duplicate, an old socket response, or an equal revision after
-  withdrawal or across a gap cannot establish a baseline.
+- The installed hub can return a same-revision snapshot on explicit resync of
+  an unchanged live count using its current source. The adapter may rely on
+  this response only after the fresh covering pull and send-boundary
+  reauthorization are qualified. Accept it only for an outstanding explicit
+  resync on the current socket, with the last accepted value, an unwithdrawn
+  baseline and no higher revision to cover. An unsolicited equal revision, or
+  any equal revision after withdrawal, cannot establish a baseline.
 - Source freshness and socket expiry are server-authoritative. This wire sends
   neither heartbeats nor deadlines to the browser. An open socket can be quiet
   through a source lease withdrawal and subsequent recovery. Act on controls and
   close events, and allow bounded waits for connection or recovery attempts.
   Do not expire an established baseline just because it has been quiet for 30
   seconds. The hub enforces source expiry separately from the five-minute socket
-  cap and the earlier, shorten-only session deadline. Session expiry or
-  revocation can close with `1008`. The hub can also close a session-bearing
-  socket on source loss instead of sending a withdrawal.
+  cap and the earlier, shorten-only session deadline. Handle `1008` (policy,
+  expiry or revocation), `1011` (server error) and `1012` (session-bearing
+  source loss or revision cap) as closed subscriptions. Reconnect with fresh
+  admission and backoff. Admission failure, including capacity exhaustion,
+  leaves the view on fallback.
 - An independently authorized and projected same-origin read, where available,
   is the 10-second fallback. Validate its origin, audience and closed public
   count before publishing. Label fallback data as potentially old and retain the
@@ -79,10 +93,14 @@ Share the synthetic wire cases between the installed Worker fixture, the browser
 adapter tests and the Chromium fixture. Exercise closed frame and count shapes
 (including four/five/four and restricted-room silence), initial snapshot and
 duplicates, gap and cooldown with behind and covering baselines, and equal
-revisions only in the resync case above. Check same-socket recovery immediately
-after withdrawal and after hibernation, separately from policy Close and fresh
-admission. Check quiet socket behavior past 30 seconds through actual server
-events. Deliver late frame, close, retry and poll callbacks after replacement.
+revisions only in the resync case above. Check browser-initiated resync after
+withdrawal and same-socket recovery immediately after a control and after
+hibernation. Exercise competing sockets, a deferred pull that yields only
+`unavailable`, and a delayed pull while the browser holds its command slot.
+On an exhausted command wait, prove fallback and fresh admission without a
+second command on the old socket. Separately check quiet socket behavior past
+30 seconds and reconnect after an actual policy Close. Deliver late frame,
+close, retry and poll callbacks after replacement.
 Exercise the 10-second fallback, origin and projection rejection, and teardown.
 
 The [installed #2617 job](https://github.com/TogetherWeOwn/two-web-next/actions/runs/45143824702/job/137588087672)
