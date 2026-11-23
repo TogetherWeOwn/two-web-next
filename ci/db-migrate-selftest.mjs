@@ -175,7 +175,6 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
           },
         );
       };
-      assert.equal(await run("readback"), "before");
       await assert.rejects(run("forward", { after: "0".repeat(64) }));
       assert.equal(await run("readback"), "before");
       assert.equal(await run("forward"), "committed");
@@ -186,13 +185,26 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       assert.deepEqual(after.state.ledger, before.state.ledger);
       assert.deepEqual(after.state.app, before.state.app);
       assert.deepEqual(after.state.audit, before.state.audit);
-      for (const privilege of ["select", "update (id)"]) {
+      for (const privilege of ["select", "update (id)", "select (ctid)"]) {
         await client.unsafe(`grant ${privilege} on public.users to two_web_migrate`);
         await assert.rejects(
           run("forward", { before: (await readState()).digest }),
           /Migrator ACL overlaps/,
         );
         await client.unsafe(`revoke ${privilege} on public.users from two_web_migrate`);
+      }
+      const writer = postgres(url.href, { max: 1, connect_timeout: 5 });
+      try {
+        await assert.rejects(
+          writer.begin(async (tx) => {
+            await tx`grant select (ctid) on public.users to two_web_migrate`;
+            await assert.rejects(run("forward"), { code: "55P03" });
+            throw rollback;
+          }),
+          (error) => error === rollback,
+        );
+      } finally {
+        await writer.end({ timeout: 5 });
       }
     } finally {
       for (const role of createdRoles.reverse()) {

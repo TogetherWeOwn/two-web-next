@@ -690,36 +690,25 @@ A refusal requires custodian investigation before another approved attempt.
 
 ### Repair production migrator permissions at the 1033 prefix
 
-The manual [permissions repair workflow](../.github/workflows/db-permissions-repair.yml)
-changes reviewed Web owners, `drizzle` grants and migrator defaults while
-preserving the 34-row ledger through 1033.
+The [permissions repair workflow](../.github/workflows/db-permissions-repair.yml)
+changes reviewed Web owners and grants while preserving the 34-row ledger.
+Follow the production release gate. Rehearse both directions with the same
+executor authority and compare serving-role reads, audit definitions and grantors.
+Pin the catalog with `ci/db-permissions-repair-state.sql` in a read-only
+transaction with `search_path = pg_catalog`. Keep the pins solely in the
+production Environment.
 
-Follow the production release gate before dispatching a write. Qualify a
-direct executor with authority in both directions and verify the recorded
-grantors. Use `ci/db-permissions-repair-state.sql` in a read-only transaction
-with `search_path = pg_catalog` to pin the exact catalog and ledger state.
-Rehearse the forward and inverse with the same authority model and compare
-affected serving-role reads and audit definitions on the isolated restore.
+- `PRODUCTION_DB_REPAIR_APPROVED_SHA` pins the reviewed commit on protected `main`.
+- `PRODUCTION_DB_REPAIR_DATABASE_URL` supplies the direct scoped credential.
+- `PRODUCTION_DB_REPAIR_PLAN` holds `before` and `after` digests, the `identity`
+  fingerprint in the format above and `owners` in inventory file order
+  (`ci/db-permissions-repair-inventory.json`).
+- `PRODUCTION_DB_REPAIR_PLAN_SHA256` pins the exact plan bytes.
 
-Keep the following pins solely in the production Environment.
-
-- `PRODUCTION_DB_REPAIR_APPROVED_SHA` is the exact reviewed commit on protected
-  `main`.
-- `PRODUCTION_DB_REPAIR_DATABASE_URL` is the direct scoped executor credential.
-- `PRODUCTION_DB_REPAIR_PLAN` is JSON with catalog digests `before` and `after`,
-  the executor fingerprint `identity` in the format above, and original
-  relation owner names in `owners`, in the order of
-  `ci/db-permissions-repair-inventory.json`.
-- `PRODUCTION_DB_REPAIR_PLAN_SHA256` is the separately approved SHA-256 of the
-  exact plan bytes.
-
-Dispatch `forward` or `undo` from `main` with the approved pins. Both operations
-take the migration lock, verify the initial state and require the expected
-post-state before commit. On uncertainty, use `readback` with the same pins
-to classify the state. A refusal or an unclassified state requires read-only
-investigation before another write. Retain the pins for the 30-minute health
-watch and the approved recovery window, then remove the repair credential and
-pins from the Environment and verify their removal.
+Dispatch `forward` or `undo` with the approved pins. If execution is uncertain,
+use `readback` and investigate any unknown state before another write.
+After the 30-minute health watch and recovery window, remove the executor
+credential and pins from the Environment and verify removal.
 
 ### Migration rollback and recovery
 
