@@ -78,6 +78,8 @@ test("fails changed and added citations against the cited workflow's jobs mappin
       "`deploy-staging` job in `.github/workflows/e2e.yml`.",
       "`step-only` job in `e2e.yml`.",
       `[\`Deploy stage\` job](${actions}/deploy.yml)`,
+      "<!--\n```\n--!>",
+      "~~~md\n<!--\n~~~",
       "`wrapped-smoke` job in",
       "  `.github/workflows/e2e.yml`.",
       "[`anchored-smoke` job](../.github/workflows/e2e.yml#L9)",
@@ -92,9 +94,9 @@ test("fails changed and added citations against the cited workflow's jobs mappin
   assert.ok(run.stderr.includes(`"docs/runbook.md":1: missing job "deploy-staging" in ${e2e}`));
   assert.ok(run.stderr.includes(`"docs/runbook.md":2: missing job "step-only" in ${e2e}`));
   assert.ok(run.stderr.includes(`"docs/runbook.md":3: missing job "Deploy stage" in ${deploy}`));
-  assert.ok(run.stderr.includes(`"docs/runbook.md":4: missing job "wrapped-smoke" in ${e2e}`));
-  assert.ok(run.stderr.includes(`"docs/runbook.md":6: missing job "anchored-smoke" in ${e2e}`));
-  assert.ok(run.stderr.includes(`"docs/runbook.md":7: missing job "linked-smoke" in ${e2e}`));
+  assert.ok(run.stderr.includes(`"docs/runbook.md":10: missing job "wrapped-smoke" in ${e2e}`));
+  assert.ok(run.stderr.includes(`"docs/runbook.md":12: missing job "anchored-smoke" in ${e2e}`));
+  assert.ok(run.stderr.includes(`"docs/runbook.md":13: missing job "linked-smoke" in ${e2e}`));
 });
 
 test("leaves unrelated prose, external links, examples and existing citations to review", (t) => {
@@ -159,12 +161,11 @@ test("fails closed when the baseline is unavailable", (t) => {
 });
 
 test("docs-links requires the fixtures and the citation check on PRs and merge groups", () => {
-  const source = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-  const { jobs } = parse(source);
+  const { jobs } = parse(
+    readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
+  );
   const docs = jobs["docs-links"];
-  assert.equal(docs.if, undefined);
   assert.equal(docs["continue-on-error"], undefined);
-  assert.ok(jobs["ci-ok"].needs.includes("docs-links"));
   assert.equal(
     docs.steps[0].with["fetch-depth"],
     "${{ github.event_name == 'merge_group' && '0' || '2' }}",

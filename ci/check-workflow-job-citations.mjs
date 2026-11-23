@@ -1,18 +1,14 @@
-#!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { posix } from "node:path";
 import { isMap, isScalar, parseDocument } from "yaml";
-import { fenceMask } from "./check-doc-links.mjs";
 
 const workflowDir = ".github/workflows/";
 const filename = String.raw`[A-Za-z0-9_.-]+\.ya?ml`;
 const workflow = "`(?<workflow>(?:\\.github/workflows/)?" + filename + ")`";
 const job = "`(?<job>[A-Za-z0-9_][A-Za-z0-9_ .()/&+:-]{0,99})`";
 const softSpace = String.raw`(?:[ \t]+|[ \t]*\n[ \t]*)`;
-const actionsUrl = new RegExp(
-  `^https://github\\.com/TogetherWeOwn/two-web-next/actions/workflows/(${filename})$`,
-  "i",
-);
+const actionsPath = "^https://github\\.com/TogetherWeOwn/two-web-next/actions/workflows/";
+const actionsUrl = new RegExp(`${actionsPath}(${filename})$`, "i");
 
 // Check only explicit workflow/job pairs, in the forms used by the runbooks
 // and CI guides. A bare YAML filename must identify a checked-in workflow.
@@ -20,7 +16,6 @@ const prosePatterns = [
   new RegExp(`${job}${softSpace}job${softSpace}in${softSpace}${workflow}`, "g"),
   new RegExp(`${workflow}, job ${job}`, "g"),
   new RegExp(`\\(${workflow} ${job} job\\)`, "g"),
-  new RegExp(`${job} job \\(${workflow}\\)`, "g"),
   new RegExp(`(?<![\\w\x60-])(?<job>[A-Za-z_]\\w*(?:-\\w+)+) job \\(${workflow}\\)`, "g"),
   new RegExp(`^\\| *${job} job *\\|[^|\\n]*\\| *${workflow}(?=[ ,|])`, "gm"),
 ];
@@ -30,35 +25,48 @@ const relativeWorkflow = new RegExp(`^(?:\\.\\.?/)*\\.github/workflows/${filenam
 const inlineLink =
   /(!?)\[([^\][\n]*)\]\([ \t]*(<[^<>\s]+>|[^\s()[\]<>]+)(?:[ \t]+(?:"[^"\][\n]*"|'[^'\][\n]*'))?[ \t]*\)/g;
 
-function maskCommentsAndExamples(text) {
-  const tokens = [...text.matchAll(/<!--|-->|`+|\n[ \t]*\n/g)];
+function visibleMarkdown(text) {
+  const tokens = [
+    ...text.matchAll(/^[ \t]*(?:(`{3,})[^`\n]*|(~{3,})[^\n]*)$|<!--|--!?>|`+|\n[ \t]*\n/gm),
+  ];
   const closingTicks = new Map();
   const ends = [];
   let commentEnd = text.length;
-  // Match equal backtick runs in one pass, without searching the rest of the
-  // document separately for each opener. Blank lines separate code spans.
+  // Match equal backtick runs within a block before walking the delimiters.
   for (let index = tokens.length - 1; index >= 0; index--) {
-    const [token] = tokens[index];
-    const position = tokens[index].index;
-    if (token === "-->") commentEnd = position + token.length;
+    const [token, ticks, tildes] = tokens[index];
+    if (token.startsWith("--")) commentEnd = tokens[index].index + token.length;
     else if (token === "<!--") ends[index] = commentEnd;
-    else if (token.startsWith("\n")) closingTicks.clear();
+    else if (ticks || tildes || token.startsWith("\n")) closingTicks.clear();
     else {
       ends[index] = closingTicks.get(token.length);
-      closingTicks.set(token.length, position + token.length);
+      closingTicks.set(token.length, tokens[index].index + token.length);
     }
   }
   let visible = "";
   let end = 0;
+  let fence;
   for (const [index, token] of tokens.entries()) {
-    const close = ends[index];
-    if (close === undefined || token.index < end) continue;
-    const raw = text.slice(token.index, close);
+    if (token.index < end) continue;
+    const run = token[1] ?? token[2];
+    const start = fence?.start ?? token.index;
+    let close = ends[index];
+    if (fence) {
+      if (run?.[0] !== fence.run[0] || run.length < fence.run.length || token[0].trim() !== run)
+        continue;
+      close = token.index + token[0].length;
+      fence = undefined;
+    } else if (run) {
+      fence = { start, run };
+      continue;
+    }
+    if (close === undefined) continue;
+    const raw = text.slice(start, close);
     const replacement = token[0] === "`" ? raw : raw.replace(/[^\n]+/g, "\u0000");
-    visible += text.slice(end, token.index) + replacement;
+    visible += text.slice(end, start) + replacement;
     end = close;
   }
-  return visible + text.slice(end);
+  return visible + text.slice(end, fence?.start);
 }
 
 function linkedWorkflow(destination, path) {
@@ -71,13 +79,8 @@ function linkedWorkflow(destination, path) {
 }
 
 function collectCitations(markdown, path, workflows) {
-  const lines = markdown.split(/\r\n?|\n/);
-  const fenced = fenceMask(lines);
-  const visible = maskCommentsAndExamples(
-    lines.map((line, index) => (fenced[index] ? "" : line)).join("\n"),
-  );
   const citations = [];
-  const prose = visible
+  const prose = visibleMarkdown(markdown.replace(/\r\n?/g, "\n"))
     .split("\n")
     .map((line, index) =>
       line.replaceAll(inlineLink, (_, image, label, destination) => {

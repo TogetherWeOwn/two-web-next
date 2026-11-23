@@ -284,7 +284,7 @@ function scanReferenceLinks(line, definitions) {
   return links;
 }
 
-export function fenceMask(lines) {
+function fenceMask(lines) {
   const inCode = new Array(lines.length).fill(false);
   let fenceChar = null;
   let fenceLength = 0;
