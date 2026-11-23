@@ -9,6 +9,11 @@ const NON_RENDERING_TAGS = new Set(["template", "script", "style", "noscript", "
 
 const CSS_COMMENT_OR_STRING = /\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'/g;
 const CSS_BOUNDARY = /\\[\s\S]|[()[\]{};]/g;
+const CSS_BLOCK_END = new Map([
+  ["(", ")"],
+  ["[", "]"],
+  ["{", "}"],
+]);
 const DISPLAY_DECLARATION = /^\s*display\s*:\s*([a-z-]+(?:\s+[a-z-]+)*)\s*(!\s*important)?\s*$/i;
 const DISPLAY_KEYWORDS = new Set(
   (
@@ -29,14 +34,15 @@ function hasInlineDisplayNone(style) {
     part.startsWith("/*") ? " " : '""',
   );
   let start = 0;
-  let depth = 0;
+  const blockEnds = [];
   let important = false;
   let hidden = false;
   for (const boundary of (source + ";").matchAll(CSS_BOUNDARY)) {
     const [token] = boundary;
-    if ("([{".includes(token)) depth++;
-    if (")]}".includes(token)) depth--;
-    if (token !== ";" || depth !== 0) continue;
+    const end = CSS_BLOCK_END.get(token);
+    if (end) blockEnds.push(end);
+    else if (token === blockEnds.at(-1)) blockEnds.pop();
+    if (token !== ";" || blockEnds.length > 0) continue;
     const [, value, priority] = DISPLAY_DECLARATION.exec(source.slice(start, boundary.index)) ?? [];
     start = boundary.index + 1;
     if (!value || (important && !priority)) continue;

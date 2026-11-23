@@ -558,6 +558,7 @@ test("Kit Home parity reads one active heading with the pinned ID", () => {
     "The lobby is open.",
   );
   assert.equal(kitHomeHeadingText(heading + '<div id="home-heading"></div>'), "");
+  assert.equal(kitHomeHeadingText(heading + '<svg id="home-heading"></svg>'), "");
   assert.equal(kitHomeHeadingText(heading.replace("home-heading", "other-heading")), "");
 });
 
