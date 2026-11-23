@@ -1,7 +1,7 @@
 import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "../db/connection";
 import type { Env } from "../env";
 import { isTrustedHost } from "../http/trust-hosts";
-import { createPostgresSessionStore, type SessionStore, type Sql } from "../sessions";
+import { createPostgresSessionStore, type Sql } from "../sessions";
 import { handleLiveIngress, type LiveIngressEnv, liveIngressConfig } from "./ingress";
 import { resolveLiveSocketSession } from "./socket-session";
 
@@ -14,10 +14,7 @@ export type LiveSocketEnv = LiveIngressEnv &
     DISCORD_LIVE_SOCKET_ENABLED?: string;
   };
 
-export async function readLiveSocketSession(
-  env: LiveSocketEnv,
-  ref: string,
-): ReturnType<SessionStore["getLive"]> {
+export async function readLiveSocketSession(env: LiveSocketEnv, ref: string) {
   const url = databaseUrl(env);
   if (!url) throw new Error("Live session store unavailable");
   // Initialize the bundled Worker driver only for a session-bearing request.

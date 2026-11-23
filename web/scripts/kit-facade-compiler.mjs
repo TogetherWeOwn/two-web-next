@@ -63,7 +63,7 @@ export default createKitWorkerFacade(adapter, undefined, handleLiveRequest);
     platform: "neutral",
     target: "es2022",
     conditions: ["workerd"],
-    alias: Object.fromEntries(builtinModules.map((name) => [name, `node:${name}`])),
+    alias: Object.fromEntries(builtinModules.map((id) => [id, id.replace(/^(node:)?/, "node:")])),
     external: ["./kit-adapter.js", "cloudflare:sockets", "node:*"],
     write: false,
     logLevel: "silent",
