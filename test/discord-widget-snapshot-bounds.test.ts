@@ -57,8 +57,8 @@ describe("snapshot() servable bound (default TTL)", () => {
     expect(snapshot?.stale).toBe(true);
   });
 
-  it("age 3xTTL drops to null", async () => {
-    await expect(agedSnapshot(3 * TTL)).resolves.toBeNull();
+  it.each([3 * TTL, 3 * TTL + 1])("drops the snapshot at age %i ms", async (ageMs) => {
+    await expect(agedSnapshot(ageMs)).resolves.toBeNull();
   });
 });
 

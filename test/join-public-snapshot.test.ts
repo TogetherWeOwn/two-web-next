@@ -317,6 +317,10 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
     expect(expiredHtml).not.toContain("stage-night");
     expect(expiredHtml).toContain('data-testid="join-widget-load"');
     await Promise.all(shared().pending);
+    vi.setSystemTime(fetchedAt + 180_001);
+    const stillExpired = await load(args());
+    expect(stillExpired.widgetSnapshot).toBeNull();
+    expect(renderPage(stillExpired)).not.toContain('data-testid="join-widget-presence"');
 
     // A refreshed empty-channel snapshot is still presence and must never
     // become cacheable when it ages into qualified copy.
