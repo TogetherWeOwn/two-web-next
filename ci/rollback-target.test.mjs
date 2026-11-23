@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { inventoryPureHonoSourceAssets } from "./pure-hono-recovery-assets.mjs";
 import { verifyPureHonoRecoveryAttestation } from "./pure-hono-recovery-attestation.mjs";
 import { projectPureHonoVersionedConfig } from "./pure-hono-recovery-config.mjs";
 import { validatePureHonoRecoveryEvidence } from "./pure-hono-recovery-evidence.mjs";
@@ -88,6 +98,170 @@ function recoveryFixture({
       })),
   };
 }
+
+const assetConfig = `{
+  // Wrangler inherits the whole asset field from the root.
+  "main": "src/worker.ts",
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true, },
+  "env": { "production": {} },
+}`;
+const assetLock = JSON.stringify({
+  packages: {
+    "node_modules/wrangler": {
+      version: "4.156.1",
+      integrity:
+        "sha512-aZngeNRosSVly6wgxpaJAtFPtEoyM3hD8mLMMcHNXTnofMq4ZN+RMXOdHETyttNP+//+mfiD1hb5E8YFtiMMRQ==",
+    },
+  },
+});
+
+function sourceAssetFixture(t) {
+  const repo = mkdtempSync(join(tmpdir(), "hono-source-assets-"));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  const run = (args, input) =>
+    execFileSync("git", args, {
+      cwd: repo,
+      encoding: "utf8",
+      stdio: "pipe",
+      input,
+      env: { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+    }).trim();
+  const git = (...args) => run(args);
+  git("init", "-q");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.com");
+  const write = (path, value) => {
+    mkdirSync(dirname(join(repo, path)), { recursive: true });
+    writeFileSync(join(repo, path), value);
+  };
+  write("wrangler.jsonc", assetConfig);
+  write("package-lock.json", assetLock);
+  write("public/ok.js", "source");
+  const commit = (stage = true) => {
+    if (stage) git("add", "-Af");
+    git("commit", "-qm", "fixture");
+    return git("rev-parse", "HEAD");
+  };
+  return {
+    git,
+    write,
+    commit,
+    repo,
+    read: (sourceSha) => inventoryPureHonoSourceAssets({ repo, sourceSha }),
+    index: (rows) => run(["update-index", "--index-info"], `${rows.join("\n")}\n`),
+  };
+}
+
+test("Hono source assets pin selected bytes and controls to a commit", (t) => {
+  const { git, write, commit, read } = sourceAssetFixture(t);
+  const headers = Buffer.from("/ok.js\r\n  X-Fixture: one\r\n");
+  const empty = Buffer.alloc(0);
+  write("public/_headers", headers);
+  write("public/_redirects", empty);
+  write("public/dir/_headers", "nested");
+  write("public/dir/.assetsignore", "*");
+  write("public/.hidden", empty);
+  const sourceSha = commit();
+  const first = read(sourceSha);
+  write("public/ok.js", "different commit");
+  commit();
+  write("public/_headers", "dirty");
+  write("public/untracked.js", "untracked");
+  git(
+    "replace",
+    git("rev-parse", `${sourceSha}:public/ok.js`),
+    git("rev-parse", "HEAD:public/ok.js"),
+  );
+  assert.deepEqual(read(sourceSha), first);
+
+  const assets = [
+    { path: "assets/.hidden", bytes: empty },
+    { path: "assets/dir/.assetsignore", bytes: Buffer.from("*") },
+    { path: "assets/dir/_headers", bytes: Buffer.from("nested") },
+    { path: "assets/ok.js", bytes: Buffer.from("source") },
+  ];
+  const receipt = JSON.parse(first.receipt);
+  const row = (path, bytes) => ({ path, bytes: bytes.length, sha256: recoveryDigest(bytes) });
+  assert.deepEqual(first.assets, assets);
+  assert.deepEqual(first.controls, { _headers: headers, _redirects: empty });
+  assert.deepEqual(
+    receipt.files,
+    assets.map(({ path, bytes }) => row(path, bytes)),
+  );
+  assert.deepEqual(receipt.controlFiles, {
+    _headers: row("public/_headers", headers),
+    _redirects: row("public/_redirects", empty),
+  });
+  assert.deepEqual([receipt.sourceSha, receipt.assetCount, receipt.assetBytes], [sourceSha, 4, 13]);
+  assert.equal(receipt.wrangler.configSha256, recoveryDigest(assetConfig));
+  assert.equal(receipt.wrangler.lockSha256, recoveryDigest(assetLock));
+  assert.equal(first.receiptSha256, recoveryDigest(first.receipt));
+
+  const { expected, run } = recoveryFixture();
+  const { archive } = packPureHonoRecovery({
+    worker: Buffer.from("fixture worker"),
+    effectiveConfig: Buffer.from("{}"),
+    assets: first.assets,
+    sourceSha,
+    originalVersionId: expected.originalVersionId,
+    run: { ...run, sourceSha },
+  });
+  const manifest = decodePureHonoRecoveryZip(archive).find(({ path }) => path === "manifest.json");
+  const packedAssets = JSON.parse(manifest.bytes).files.filter(({ path }) =>
+    path.startsWith("assets/"),
+  );
+  assert.deepEqual(packedAssets, receipt.files);
+});
+
+test("Hono source assets refuse unsafe selection inputs", (t) => {
+  const cases = [
+    ["ignore overrides", ".assetsignore", "!/_headers\n", "unsupported asset selection input"],
+    ["header directory", "_headers/fixture", "value", "unsupported asset selection input"],
+    ["legacy Worker", "_worker.js-extra", "value", "unsupported asset selection input"],
+    ["DOS path", "aux.txt", "value", "asset path"],
+    ["Unicode path", "café.js", "value", "asset path"],
+    ["trailing newline", "internal-canary.js\n", "value", "asset path"],
+    ["case alias", "OK.js", "value", "aliased asset path"],
+    ["invalid header encoding", "_headers", Buffer.from([0xff]), "selection input encoding"],
+    ["large header", "_headers", Buffer.alloc(64 * 1024 + 1), "file size"],
+    ["large asset", "large.bin", Buffer.alloc(25 * 1024 * 1024 + 1), "file size"],
+  ];
+  for (const [description, path, bytes, reason] of cases) {
+    const { write, commit, read } = sourceAssetFixture(t);
+    write(`public/${path}`, bytes);
+    const source = commit();
+    const message = `pure Hono recovery assets refused: ${reason}`;
+    assert.throws(() => read(source), { message }, description);
+  }
+  const { repo, git, write, commit, read } = sourceAssetFixture(t);
+  const source = commit();
+  assert.deepEqual(read(source).controls, { _headers: null, _redirects: null });
+  for (const invalid of ["HEAD", `${source}\n`, git("rev-parse", "HEAD:public/ok.js")])
+    assert.throws(() => read(invalid), /source SHA|not a commit/);
+  write("package-lock.json", assetLock.replace("4.156.1", "4.161.0"));
+  assert.throws(() => read(commit()), /Wrangler pin/);
+  write("package-lock.json", assetLock);
+  for (const override of ['{ "assets": {} }', '{ // override\r "assets": {}\n }', "{,}"]) {
+    write("wrangler.jsonc", assetConfig.replace('"production": {}', `"production": ${override}`));
+    assert.throws(() => read(commit()), /Wrangler asset config|source selection parsing/);
+  }
+  write("wrangler.jsonc", assetConfig);
+  symlinkSync("../package-lock.json", join(repo, "public", "link"));
+  assert.throws(() => read(commit()), /non-regular source member/);
+});
+
+test("Hono source assets enforce aggregate bounds", (t) => {
+  const { git, write, commit, index, read } = sourceAssetFixture(t);
+  const source = commit();
+  const blob = git("rev-parse", "HEAD:public/ok.js");
+  const rows = (oid, length) => Array.from({ length }, (_, i) => `100644 ${oid}\tpublic/${i}`);
+  index(rows(blob, RECOVERY_MEMBER_LIMITS.maxEntries));
+  assert.throws(() => read(commit(false)), /file count/);
+  git("read-tree", source);
+  write("fixture.bin", Buffer.alloc(25 * 1024 * 1024));
+  index(rows(git("hash-object", "-w", "fixture.bin"), 6));
+  assert.throws(() => read(commit(false)), /asset bytes/);
+});
 
 const signerWorkflow = "TrustedOrg/build/.github/workflows/sign.yml";
 const signerDigest = "b".repeat(40);

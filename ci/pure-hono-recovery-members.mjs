@@ -22,7 +22,7 @@ export function validRecoveryMemberPath(path) {
     (typeof path === "string" &&
       path.length <= 512 &&
       (RECOVERY_REQUIRED_FILES.includes(path) || path.startsWith("assets/")) &&
-      path.split("/").every((part) => /^[a-zA-Z0-9._-]+$/.test(part) && !part.endsWith(".")))
+      path.split("/").every((part) => part && !/[^a-zA-Z0-9._-]/.test(part) && !part.endsWith(".")))
   );
 }
 
