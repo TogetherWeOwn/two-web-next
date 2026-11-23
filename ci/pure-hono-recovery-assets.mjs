@@ -8,7 +8,6 @@ import {
   recordRecoveryPath,
   validRecoveryZipPath,
 } from "./pure-hono-recovery-members.mjs";
-import { readWranglerConfig } from "./wrangler-config.mjs";
 
 const WRANGLER = "4.156.1";
 const INTEGRITY =
@@ -129,7 +128,12 @@ function sourceSelection(configBytes, lockBytes) {
   let config;
   let lock;
   try {
-    config = readWranglerConfig(readText(configBytes));
+    const stringsOrComments = /"(?:\\.|[^"\\])*"|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g;
+    const stringsOrTrailingCommas = /"(?:\\.|[^"\\])*"|(?<=[\d"e\]}l]\s*),(?=\s*[}\]])/g;
+    const json = readText(configBytes)
+      .replace(stringsOrComments, (token) => (token.startsWith('"') ? token : " "))
+      .replace(stringsOrTrailingCommas, (token) => (token === "," ? "" : token));
+    config = JSON.parse(json);
     lock = JSON.parse(readText(lockBytes));
   } catch {
     throw refusal("source selection parsing");
