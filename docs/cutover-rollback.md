@@ -39,13 +39,16 @@ steps against `togetherweown.com`, `www`, or
    often code-identical after workflow-only merges.
 3. Baseline: run the staging smoke (24 routes)
    (`node bin/smoke.mjs https://next.togetherweown.com`) and record
-   the result. The rehearsal compares against this baseline.
+   the result. The rehearsal compares against this baseline. Prepare N's smoke
+   archive and locked dev dependencies with lifecycle scripts disabled, as in
+   [runbook step 3](runbook.md#staging-rehearsal-worker-rollback-and-dns-flip-back).
+   Do not roll back until that preparation succeeds.
 4. Roll back with `wrangler rollback <N_VERSION> --name two-web-next
    -m "<reason>" -y`; record command time, first request served by N,
    settle time, and non-200 probe count.
 5. Prove N serves (telemetry `$workers.scriptVersion.id` plus a
    public-path status discriminator when versions differ on one),
-   then run N's own smoke from `git archive <N_SHA> bin ci`.
+   then run N's own smoke from the archive prepared in step 3.
 6. Re-confirm the hold and unchanged live schema/bindings before rolling
    forward to N+1; on an intervening release/schema change, use the collision
    response below instead. Repeat the baseline smoke and save the final

@@ -27,6 +27,8 @@ await mkdir(output, { recursive: true });
 const gitSha = (dir) =>
   execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const manifest = { state, tooling: gitSha(tooling), captures: [], errors: [] };
+const memberMarkup = {};
+const compareMember = state === "member" && process.env.COMPARE_HOME_INTRO === "true";
 const viewports = [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 390, height: 844 },
@@ -45,7 +47,16 @@ for (const tree of ["before", "after"]) {
           : homeEvidencePage(state),
         now: Date.UTC(2026, 9, 20, 12),
       },
-      async ({ page }) => {
+      async ({ page, html }) => {
+        if (compareMember) {
+          // Compare the authored Home markup, not Kit's build-dependent asset URLs.
+          const start = html.indexOf('<div class="base-theme homepage-theme ember-home"');
+          const end = html.indexOf("</footer>", start);
+          assert.ok(start >= 0 && end > start, "member Home wrapper or footer missing");
+          memberMarkup[tree] = createHash("sha256")
+            .update(html.slice(start, end + "</footer>".length))
+            .digest("hex");
+        }
         for (const viewport of viewports) {
           await page.setViewportSize({ width: viewport.width, height: viewport.height });
           const fontLoaded = await page.evaluate(async () => {
@@ -59,6 +70,7 @@ for (const tree of ["before", "after"]) {
             );
           });
           if (eventState) await page.locator(".event-band").scrollIntoViewIfNeeded();
+          else await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: "instant" }));
           const name = `${tree}-${state}-${viewport.name}.png`;
           const bytes = await page.screenshot({
             animations: "disabled",
@@ -86,6 +98,31 @@ for (const tree of ["before", "after"]) {
             assert.ok(metrics.scrollWidth <= metrics.width, `${state}: horizontal overflow`);
             assert.equal(metrics.font.split(",")[0].replaceAll('"', "").trim(), "Mona Sans");
             assert.ok(fontLoaded && metrics.fontAvailable, `${state}: heading font did not load`);
+            if (state.endsWith("Agenda")) {
+              const row = page.getByTestId("home-event-discord");
+              await row.focus();
+              await page.keyboard.press("Tab");
+              await page.keyboard.press("Shift+Tab");
+              assert.ok(
+                await row.evaluate(
+                  (element) =>
+                    element.matches(":focus-visible") &&
+                    getComputedStyle(element).outlineStyle === "solid",
+                ),
+              );
+              if (viewport.name === "mobile") {
+                assert.ok(
+                  await row.locator("h4").evaluate((title) => {
+                    const range = document.createRange();
+                    range.selectNodeContents(title);
+                    return range.getClientRects().length > 1;
+                  }),
+                  `${state}: event title did not wrap`,
+                );
+              }
+              await page.screenshot({ path: join(output, `focus-${state}-${viewport.name}.png`) });
+              await row.evaluate((element) => element.blur());
+            }
           }
         }
         if (tree === "after" && state === "guest") {
@@ -109,6 +146,11 @@ for (const tree of ["before", "after"]) {
   } catch (error) {
     manifest.errors.push(`${tree}: ${error.message}`);
   }
+}
+if (compareMember) {
+  manifest.memberMarkup = memberMarkup;
+  if (!memberMarkup.before || memberMarkup.before !== memberMarkup.after)
+    manifest.errors.push("member Home markup differs between the base and head");
 }
 await writeFile(join(output, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 if (manifest.errors.length || manifest.captures.length !== 4) {

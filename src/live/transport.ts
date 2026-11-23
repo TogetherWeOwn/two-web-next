@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { INTERNAL_ACTIONS_PATH, newNonce, sha256Hex, signInternalAction } from "../bot/signer";
+import { exceedsByteLimit } from "../http/length-limit";
 import type { LiveSnapshot } from "./sequence";
 
 export const LIVE_INGEST_PATH = "/internal/discord-live/v1/ingest";
@@ -8,7 +9,7 @@ const DEADLINE_MS = 2_500;
 const DELTA_BYTES = 64 * 1024;
 export const SNAPSHOT_BYTES = 1024 * 1024;
 const HMAC = { name: "HMAC", hash: "SHA-256" };
-const utcTimestamp = z.iso.datetime();
+export const utcTimestamp = z.iso.datetime().max(30);
 type LiveKey = { keyId: string; secret: string };
 class TooLarge extends Error {}
 
@@ -41,7 +42,7 @@ async function readBytes(body: ReadableStream<Uint8Array>, limit: number, signal
       const { done, value } = await reader.read();
       signal.throwIfAborted();
       if (done) return bytes.buffer.slice(0, size);
-      if (value!.byteLength > limit - size) throw new TooLarge();
+      if (exceedsByteLimit(value!.byteLength, limit - size)) throw new TooLarge();
       bytes.set(value!, size);
       size += value!.byteLength;
     }

@@ -268,7 +268,7 @@ describe("Kit events endpoint flash-consumption controls", () => {
     expect(deleteCookie).not.toHaveBeenCalled();
   });
 
-  it("renders an unreadable list page in the same full-document swap zones", async () => {
+  it("renders an unreadable list fragment with the same swap zones", async () => {
     const { event, deleteCookie } = requestEvent({
       flash: true,
       island: true,
@@ -280,7 +280,7 @@ describe("Kit events endpoint flash-consumption controls", () => {
     expect(body).toContain('data-testid="events-search-status">Events on page 2 can');
     expect(body).toContain('href="/events?q=Paged" data-testid="events-pager-first"');
     expect(body).not.toContain('data-testid="events-empty-search"');
-    expect(body).toMatch(/^<!doctype html>/i);
+    expect(body).not.toMatch(/<!doctype|<(?:html|body|main|script)\b/i);
     expect(body).toContain('data-island="events-calendar"');
     const zones = Array.from(body.matchAll(/data-cal-zone="([^"]+)"/g), (match) => match[1]);
     expect(zones).toEqual(["head", "subscribe", "actions", "miss", "content"]);

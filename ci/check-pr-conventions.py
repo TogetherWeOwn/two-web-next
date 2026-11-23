@@ -30,6 +30,8 @@ HELP = ("Expected a Conventional Commits header, e.g. 'fix(auth): refuse expired
         "sessions' or 'feat(events): shareable event page'. Allowed types: "
         + TYPES.replace("|", ", ") + ". Keep internal card IDs out of the title.")
 INTERNAL_ID = re.compile(r"\b(?:TOG|PAP)-\d+\b")
+EVIDENCE_LINK = (r"^[ \t]*(?:(?:[-+*]|[0-9]+[.)])[ \t]+)?\[Exact-head Actions evidence\]\((?:https://github\.com/TogetherWeOwn/two-web-next/pull/[1-9][0-9]*)?"
+                 r"#issuecomment-[1-9][0-9]*\)[ \t\r]*$")
 
 
 def header_errors(text):
@@ -79,7 +81,7 @@ def check_pr(title, body, author, subjects=(), level="warning"):
     if errs:
         failed = True
         print(f"::error title=PR title::'{title}': {'; '.join(errs)}. {HELP}")
-    text = re.sub(r"<!--.*?-->", "", body, flags=re.S)
+    text = re.sub(EVIDENCE_LINK, "", re.sub(r"<!--.*?-->", "", body, flags=re.S), flags=re.M)
     if len(re.sub(r"\s", "", text)) < 40:
         failed = True
         print("::error title=PR body::The description is empty. Say what changed, why, "

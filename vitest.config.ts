@@ -1,5 +1,7 @@
 import { configDefaults, defineConfig } from "vitest/config";
 
+const coverageShard = process.env.VITEST_COVERAGE_SHARD === "1";
+
 export default defineConfig({
   test: {
     include: ["test/**/*.test.ts", "test/**/*.test.mjs", "ci/audit-lifecycle.test.mjs"],
@@ -72,6 +74,7 @@ export default defineConfig({
         "src/counts.ts": { statements: 99, branches: 99, functions: 99, lines: 99 },
         "src/seo.ts": { statements: 99, branches: 99, functions: 99, lines: 99 },
       },
+      ...(coverageShard ? { reporter: [], thresholds: undefined } : {}),
     },
   },
 });

@@ -2,6 +2,7 @@ import type { Context, Next } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import type { StatusCode } from "hono/utils/http-status";
 import { canonicalEventKey, eventKeyAllowed } from "./events/keys";
+import { exceedsUtf8ByteLimit } from "./http/length-limit";
 import { MAX_RETURN_DESTINATION_BYTES, safeNext } from "./join/service";
 import { acceptsJson, isJsonMediaType } from "./media-type";
 import { jsonRefusal } from "./json-refusal";
@@ -109,8 +110,7 @@ export async function recoveryLanding(c: Ctx): Promise<Response> {
   // parity): the fallback still renders, but no budget is charged and — like
   // every landing visit — no pending notice is minted.
   const oversized =
-    typeof raw === "string" &&
-    new TextEncoder().encode(raw).byteLength > MAX_RETURN_DESTINATION_BYTES;
+    typeof raw === "string" && exceedsUtf8ByteLimit(raw, MAX_RETURN_DESTINATION_BYTES);
   if (!oversized) {
     const limited = await throttleGuard(c, "login-recover", AUTH_THROTTLE_PER_MINUTE);
     if (limited) return limited;

@@ -82,7 +82,9 @@ is the sanctioned live web apply path, not `npm run db:migrate` from an agent
 workspace. Follow the [operator procedure and recovery gates](runbook.md#neon-web-schema-migrations-separate-operator-action).
 It loads the selected GitHub Environment secret, rejects disabled production,
 plans from the SQL journal/Drizzle ledger, records a pre-apply PITR timestamp,
-applies transactionally and verifies zero pending migrations. The staging
+and applies transactionally. Staging and full-release verification require zero
+pending migrations. Production scoped readback verifies only the approved end,
+reports deferred migrations, and does not qualify a release. The staging
 `deploy.yml` runs the same script for `staging` after CI and before the Worker
 deploy; live production execution always requires separate authorization and is
 never part of a Worker deploy.
@@ -315,7 +317,9 @@ with `target: production`, behind the `production` Environment:
   binds `environment: ${{ inputs.target || 'staging' }}`, so scheduled runs
   (which carry no inputs) always dump staging. A production dump is a manual
   `workflow_dispatch` with `target: production`, which binds the `production`
-  Environment and waits on its required reviewers and main-only branch policy.
+  Environment. Its main-only branch policy applies, and GitHub waits for
+  required reviewers if configured. Obtain operational approval before dispatch.
+  See [Backups and restore drill](runbook.md#backups-and-restore-drill).
   Staging reads the staging-Environment secret `PLANETSCALE_STAGING_DATABASE_URL` (operator-provisioned, same secret the migrate/deploy paths use);
   the production target reads `PRODUCTION_BACKUP_DATABASE_URL` (a read-only role
   that inherits `pg_read_all_data` and no write, DDL or admin role, on the

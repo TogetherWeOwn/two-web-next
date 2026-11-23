@@ -126,12 +126,18 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `SYNC_EVENT_QUEUE` | Required Queue producer binding (`JobsEnv`) | dev: local Queue; staging/prod: provisioned Queue | Main Wrangler: `two-sync-event`; local config: `two-sync-event-local` | Admin/JSON event and RSVP writes plus reconciliation use tracked sends with a unique lock and 10-second debounce; no in-memory production fallback. Missing/failing queue prevents sends; committed dirty revisions remain recoverable. The jobs worker consumes these sends through the live bot HTTP client (`botClientFor` in `src/jobs/worker.ts`). |
 | `INTERNAL_ACTION_QUEUE` | Required Queue producer binding (`JobsEnv`) | dev: local Queue; staging/prod: provisioned Queue | Main Wrangler: `two-internal-action`; local config: `two-internal-action-local` | Declared/configured but no consumer reads this producer property in current source; both configured queue consumers share the Worker dispatch path. No application-side default. |
 | `HYPERDRIVE` | Optional Hyperdrive legacy alias (`JobsEnv`) | dev/staging/prod | Unbound in Wrangler | Jobs use this only when nonempty `DATABASE_URL` and `DB.connectionString` are both absent/empty. With no usable database source, job DB selection throws. No retry fallback after a connection error. |
-| `KIT_ROUTE_ARCHIVE` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | Only exact `true` enables the Kit archive page at `/events/past`. The `archive` and `archive-static` families set this flag on automatic or manual deploys. |
-| `KIT_ROUTE_STATIC` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | On the exact staging origin, only exact `true` together with `KIT_ROUTE_ARCHIVE=true` enables the static Kit family: `/about`, `/faq`, and exact document GETs for `/privacy` and `/rules`. Static cannot precede archive. The `archive-static` family sets both flags on automatic or manual deploys. |
+| `KIT_ROUTE_ARCHIVE` | Optional Kit route-rollout var | staging; production selector is default-off | Kit staging and production configs: `false`; missing or malformed keeps Hono | Only exact `true` and an enabled manifest entry allow Kit at `/events/past`. Staging's `archive` and `archive-static` families set this flag. Production additionally requires the exact canonical `APP_URL` and request origin and admits only the document GET. This does not activate production routing. |
+| `KIT_ROUTE_STATIC` | Optional Kit route-rollout var | staging; production selector is default-off | Kit staging and production configs: `false`; missing or malformed keeps the static leaves on Hono | Requires exact `true` and `KIT_ROUTE_ARCHIVE=true`. On the exact staging origin, the `archive-static` family sets both flags for `/about`, `/faq`, and exact document GETs for `/privacy` and `/rules` (each gated by its staging readiness switch). The production selector admits only document GETs for `/about` and `/faq`, with the same origin and manifest checks as the archive. |
 | `KIT_ROUTE_EVENTS` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | Only exact `true` on the exact staging origin enables the Kit events list at `/events` through its GET manifest entry. The `events`, `events-join`, `events-home`, and `ember-pages` dispatch choices set this flag. `events` selects only the list; `events-join` selects the list and `/join` only; `events-home` selects the list and `/` only. None enables the archive, static pages, or `/e/:key`. |
 | `KIT_ROUTE_HOME` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | Only exact `true` with the exact staging `APP_URL` and an enabled `GET /` manifest entry selects Kit. The `home`, `events-home`, and `ember-pages` dispatch choices set this flag. |
 | `KIT_ROUTE_JOIN` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | Only exact `true` with the exact staging `APP_URL` and an enabled `GET /join` manifest entry selects Kit. The `join`, `events-join`, and `ember-pages` dispatch choices set this flag; OAuth and recovery stay on Hono. |
 <!-- config-docs:end -->
+
+While production opt-ins are active, responses for the selected paths use
+`Cache-Control: private, no-store` so a cached Kit document cannot outlast a
+flag rollback. A Hono response cached before opt-in can still be served until
+its existing freshness lifetime ends. With the opt-ins off, Hono retains its
+normal cache policy.
 
 ### `SESSION_SECRET` strength and rotation
 
@@ -144,11 +150,14 @@ Length is the floor for randomly generated secrets; no entropy estimator
 runs. Only secret **names** appear in this file, PRs, logs and command
 arguments; never paste a value.
 
-Rotate without downtime:
+Rehearse rotation on staging with a staging-only replacement:
 
-1. Generate the replacement secret on the operator machine.
-2. Install it with `wrangler secret put SESSION_SECRET` on the target
-   Worker (staging first, production only under its own authorization).
+1. Use `wrangler whoami` to verify the approved staging account and confirm the
+   [staging target](runbook.md#deploy-and-record-the-rollback-pointer). Generate
+   the replacement secret on the operator machine.
+2. From the repository root, run
+   `wrangler secret put SESSION_SECRET --config web/wrangler.staging.jsonc`.
+   The command deploys the staging Worker immediately.
    Both the old and the replacement satisfy the floor, so `/up` stays
    ready throughout the swap.
 3. Confirm `GET /up` answers 200 with no `config` key before and after.
@@ -158,6 +167,8 @@ Rotate without downtime:
    out of scope), so prefer low-traffic windows. No data migration runs.
 5. Confirm no log line carries a value: readiness diagnostics name the
    secret and the requirement, never the value.
+
+For production, follow the [secret rotation runbook](runbook.md#secret-rotation-pointer-procedure-only).
 
 ## Tail Worker inventory
 
@@ -267,10 +278,8 @@ These names are deliberately **not** extra rows in the marked inventory:
   is local-only, must not be remotely developed/deployed, and is **not** proof
   of real Hyperdrive pooling. It is not part of the main Worker configuration.
 - **Live Discord ingress fixture:** `POST /internal/discord-live/v1/ingest` returns 503 unless
-  `DISCORD_LIVE_INGEST_ENABLED=true` and `DISCORD_LIVE_HUB`, `APP_URL`, `BOT_ENDPOINT_URL`,
-  `DISCORD_GUILD_ID`, `DISCORD_LIVE_INGEST_KEY_ID`, `DISCORD_LIVE_INGEST_SECRET`,
-  `DISCORD_LIVE_SNAPSHOT_KEY_ID` and `DISCORD_LIVE_SNAPSHOT_SECRET` are valid. Use separate signing
-  material for ingress and recovery. Only the installed CI fixture binds `LiveGuildHub`, with the flag off.
+  `DISCORD_LIVE_INGEST_ENABLED=true` and the [ingress bindings](../src/live/ingress.ts) are valid.
+  Only the installed CI fixture binds `LiveGuildHub`. Keep the flag off: recovery lacks producer epochs.
 - **Injected test seams:** `SESSION_STORE`, `ROSTER_STORE`, `QUEUE_DEPTH_STORE`,
   `ADMIN_DB`, `AGENT_EVENT_SQL`, `THROTTLE_STORE`, `JOIN_DEPS`, `DISCORD_EVENTS` are in-process
   dependency/store objects, not Wrangler string vars or secrets. They are

@@ -89,6 +89,13 @@ class Body(unittest.TestCase):
         self.assertIn(("warning", "PR template"), levels(ps.evaluate(env(BODY=body, PR_STANDARDS_MODE="warn"))))
         self.assertNotIn("PR template", [t for _, t in levels(ps.evaluate(env(BODY=GOOD_BODY)))])
 
+    def test_evidence_link_does_not_supply_author_text(self):
+        link = "[Exact-head Actions evidence](https://github.com/TogetherWeOwn/two-web-next/pull/7#issuecomment-8)"
+        self.assertIn(("error", "PR body"), levels(ps.evaluate(env(BODY=link))))
+        body = GOOD_BODY.replace("- `npm test` passes: 41 passed, 0 failed", "  1. " + link)
+        self.assertIn(("warning", "PR template"), levels(ps.evaluate(env(BODY=body, PR_STANDARDS_MODE="warn"))))
+        self.assertEqual([], ps.evaluate(env(BODY=GOOD_BODY + "\n" + link)))
+
     def test_optional_prose_sections_are_not_required(self):
         # Pipeline review 2026-10-10: only the linked card/issue and the test evidence are required.
         body = ("## Linked Issues or Issue Description\n\nRefs: TOG-1234\n\n"

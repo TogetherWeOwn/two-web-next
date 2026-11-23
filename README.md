@@ -257,8 +257,7 @@ area floors (`src/admin`, `src/events`, `src/join` together with
 `src/write-recovery.tsx`, `src/kit-*`, `src/counts.ts`, `src/seo.ts`) live in
 `vitest.config.ts`. The baseline uses the full suite with the test database;
 without it, skipped live suites may put coverage below the floors. CI's
-`check` job runs the configuration drift check, Biome lint/format gate,
-typecheck and the coverage gate against its Postgres service, writes a job summary
+`coverage-merge` job verifies each shard's files and coverage map before enforcing the floors, writes a job summary
 with the ten least-covered files, and uploads the JSON coverage summary for 14 days,
 including on failure.
 
@@ -491,12 +490,10 @@ matching dispatch SHA selects the existing separately authorized recovery
 route; `migrations_applied` never bypasses default ancestry admission. See the
 [ancestry contract](docs/runbook.md#default-promotion-ancestry-admission).
 
-For automatic promotion, the Release Manager accepts the exact release SHA and
-asks the authorized Operator to set the repository Actions variable
-`PRODUCTION_ACCEPTED_SHA` to that full lowercase SHA; the Release Manager can
-ask the Operator to clear it. The resolver first selects the eligible candidate,
-then requires exact equality with the variable: absent, empty or unequal values
-skip cleanly, without searching for an older accepted candidate. The variable is
+For automatic promotion, follow the [release gate](CONTRIBUTING.md#production-release-gate).
+The authorized executor sets `PRODUCTION_ACCEPTED_SHA` to the approved release
+SHA in full lowercase and can clear it to hold promotion. The resolver skips
+unless the value matches the selected candidate exactly. The variable is
 a job-time snapshot; clearing it does not revoke a run that already started.
 Manual dispatch is unchanged, and all existing promotion and release gates remain
 in force. See the [deployment procedure](docs/runbook.md#deploy-and-record-the-rollback-pointer).
@@ -517,7 +514,8 @@ recovery also stops at the migration gate after three `/up` reads. An explicit
 manual re-dispatch with `migrations_applied: true` records an audited continuation
 past these migration stops once `db-migrate.yml` (target production) has applied the
 target's migrations; automatic runs ignore that input and halt on those stops
-unless the ledger already proves the target applied. The first promotion
+unless the ledger already proves the target applied. A scoped production migration
+that leaves any target migration deferred does not qualify the target. The first promotion
 after the ledger signal ships needs one manual dispatch because the live
 Worker predates it. Repo
 variable `PRODUCTION_HOLD_UNTIL` (ISO-8601 UTC, at most 24h ahead) pauses all
@@ -764,12 +762,10 @@ These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
 
 Squash-merge only; PR titles follow Conventional Commits and the body follows the
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
-`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review` are required
-on the exact head, with no approving review. The final-stage reviewer merges when
-native review stages apply; otherwise the author merges. Pin the squash merge to
-that reviewed head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
-for the promotion-path PR exception, post-merge staging qualification and
-per-release Release Manager acceptance, and [AGENTS.md](AGENTS.md) for agent guidance.
+`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint` and the other
+[required checks](CONTRIBUTING.md#branch-protection-and-required-checks) must pass
+on the exact head. See [CONTRIBUTING.md](CONTRIBUTING.md#pull-request-contract)
+for tier review, merge authority, and post-merge staging and release approval.
 
 ## License
 
