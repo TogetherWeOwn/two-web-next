@@ -12,6 +12,7 @@ import {
 
 const readSource = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
 const inventory = JSON.parse(readSource("db-permissions-repair-inventory.json"));
+const transferred = new Set(inventory.map(([name]) => name));
 const snapshotSql = readSource("db-permissions-repair-state.sql");
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const isDigest = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -161,6 +162,16 @@ async function executeRepair(tx, config, plan, direction) {
   const initial = await readState(tx);
   assert.equal(initial.digest, forward ? plan.before : plan.after);
   checkInventory(initial, plan, !forward);
+  if (forward) {
+    // PostgreSQL can merge an explicit ACL edge with the rewritten owner edge.
+    assert.ok(
+      !initial.object_acl.some(
+        ({ name, grantee, grantor }) =>
+          transferred.has(name) && (grantee === migrator || grantor === migrator),
+      ),
+      "Migrator ACL overlaps ownership transfer",
+    );
+  }
   await checkAuthority(tx, plan);
 
   for (const statement of statements(plan, forward)) {
@@ -187,8 +198,9 @@ export async function runRepair(direction, env, connect = migrationClient) {
   const readOnly = direction === "readback";
   const client = connect(config, { readOnly });
   try {
-    return await client.begin(readOnly ? "repeatable read read only" : "read committed", (tx) =>
-      executeRepair(tx, config, plan, direction),
+    return await client.begin(
+      readOnly ? "isolation level repeatable read read only" : "isolation level read committed",
+      (tx) => executeRepair(tx, config, plan, direction),
     );
   } finally {
     await client.end({ timeout: 5 });
