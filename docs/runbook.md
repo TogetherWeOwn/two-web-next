@@ -688,6 +688,19 @@ and the lowercase 40-character dispatch SHA. Keep the credential and pins
 stable during the run and clear the approval SHA when it ends or is abandoned.
 A refusal requires custodian investigation before another approved attempt.
 
+### Repair production migrator permissions at the 1033 prefix
+
+Rehearse both directions of the [permissions repair](../.github/workflows/db-permissions-repair.yml) under the production release gate with catalog `MAINTAIN`.
+Use the approved executor login for every snapshot. Run `ci/db-permissions-repair-state.sql` read-only with `search_path = pg_catalog`. Use production Environment secrets.
+
+- `PRODUCTION_DB_REPAIR_APPROVED_SHA` pins the reviewed commit on protected `main`.
+- `PRODUCTION_DB_REPAIR_DATABASE_URL` supplies the direct scoped credential.
+- `PRODUCTION_DB_REPAIR_PLAN` holds the `before` and `after` digests, `identity` fingerprint and `owners` in inventory order.
+- `PRODUCTION_DB_REPAIR_PLAN_SHA256` pins the exact plan bytes.
+
+Run `readback` after an uncertain write. If it cannot classify the state, stop writes and compare a read-only catalog snapshot against both pins before approving recovery.
+Keep the executor authority and pins through the 30-minute watch and recovery window, then verify their removal.
+
 ### Migration rollback and recovery
 
 **Rollback:** a Worker rollback does not undo schema/data. SQL failure rolls back

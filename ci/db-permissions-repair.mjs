@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   assertProductionIdentity,
   migrationClient,
@@ -156,11 +158,11 @@ async function executeRepair(tx, config, plan, direction) {
   assert.equal(acquired, true);
   // Keep the ledger stable and block concurrent GRANTs, which lock catalogs directly.
   await tx`lock table drizzle.__drizzle_migrations, pg_catalog.pg_class, pg_catalog.pg_attribute in share row exclusive mode nowait`;
-  // GRANT can release catalog locks before committing. Allow only known other-database writers.
-  const [{ clear }] =
-    await tx`select not exists (select from pg_snapshot_xip(pg_current_snapshot()) x(id)
-    where not exists (select from pg_stat_activity a where a.backend_xid = x.id::xid
-      and a.datname <> current_database())) as clear`;
+  // GRANT can release catalog locks before committing, but keeps its transaction lock.
+  const [{ clear }] = await tx`select not exists (
+    select from pg_locks l left join pg_stat_activity a on a.pid = l.pid
+    where l.locktype = 'transactionid' and l.mode = 'ExclusiveLock' and l.granted
+      and (a.datname is null or a.datname = current_database())) as clear`;
   assert.ok(clear, "A database writer is active");
   const forward = direction === "forward";
   const initial = await readState(tx);
@@ -208,5 +210,15 @@ export async function runRepair(direction, env, connect = migrationClient) {
     );
   } finally {
     await client.end({ timeout: 5 });
+  }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    // Exit codes convey only fixed states. The workflow suppresses both streams.
+    const result = await runRepair(process.argv[2], process.env);
+    process.exitCode = { committed: 0, before: 10, after: 11 }[result] ?? 1;
+  } catch {
+    process.exitCode = 1;
   }
 }
