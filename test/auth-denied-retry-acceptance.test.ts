@@ -38,6 +38,7 @@ import {
   FALLBACK_RANKS,
   HOME_JOIN_RESULT_COPY,
   HOME_NOTICES,
+  JOIN_INTRO,
   applyHomeResponsePolicy,
 } from "../src/home-copy";
 import { Home, type Notice } from "../src/pages";
@@ -131,6 +132,7 @@ let scratch = "";
 
 function baseData(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    nowMs: Date.UTC(2030, 6, 19, 12),
     session: null,
     sessionUnavailable: false,
     notice: null,
@@ -142,7 +144,7 @@ function baseData(overrides: Record<string, unknown> = {}): Record<string, unkno
     eventsUnavailable: false,
     featured: [],
     imageHosts: "",
-    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
+    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO },
     ...overrides,
   };
 }

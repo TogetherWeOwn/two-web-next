@@ -14,7 +14,12 @@ ruleDirs:
 testConfigs:
   - testDir: sg-tests
 languageGlobs:
+  # ast-grep's language globs match basenames, not paths.
+  tsx:
+    - "*.jsx"
   TypeScript:
+    - "**/*.mts"
+    - "**/*.cts"
     - "**/*.cjs"
     - "**/*.mjs"
     - "**/*.js"

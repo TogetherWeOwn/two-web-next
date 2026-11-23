@@ -23,13 +23,19 @@
 // lives here so shipped bytes stay minimal, and the gradient stops live baked
 // in the logo, icon and favicon artwork. A component that needs the gradient
 // re-adds the token with its own budget.
-import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { packCss } from "./css-dictionary.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const SOURCES = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"];
+const SOURCES = [
+  "public/styles.css",
+  "public/theme-tokens.css",
+  "public/theme.css",
+  "web/src/lib/site-header.css",
+];
 const OUT = "src/leaf-critical-css.ts";
 
 export function build() {
@@ -38,17 +44,30 @@ export function build() {
     throw new Error("refusing to inline CSS containing a closing style tag");
   }
   const sha256 = createHash("sha256").update(css, "utf8").digest("base64");
-  const packed = !css.includes("~");
-  const literal = JSON.stringify(packed ? css.replaceAll(".base-theme", "~") : css);
-  const initializer = packed ? `${literal}.split("~").join(".base-theme")` : literal;
+  const encoded = css.length <= 100_000 && !/[\u0080-Ï]/u.test(css) ? packCss(css) : null;
+  const initializer = encoded
+    ? `decodeCssDictionary(${JSON.stringify(encoded.packed)}, ${JSON.stringify(encoded.dictionary)})`
+    : JSON.stringify(css);
   const text =
     `// GENERATED from ${SOURCES.join(", ")} — do not hand-edit.\n` +
     `// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-drift.test.ts).\n` +
+    (encoded ? `import { decodeCssDictionary } from "./css-dictionary";\n` : "") +
     `export const LEAF_CRITICAL_CSS: string =\n  ${initializer};\n` +
     `export const LEAF_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n`;
   return { text, sha256 };
 }
 
 const { text, sha256 } = build();
-writeFileSync(join(repoRoot, OUT), text);
+const output = join(repoRoot, OUT);
+const temporary = `${output}.${randomUUID()}.tmp`;
+let fd = openSync(temporary, "wx");
+try {
+  writeFileSync(fd, text);
+  closeSync(fd);
+  fd = undefined;
+  renameSync(temporary, output);
+} finally {
+  if (fd !== undefined) closeSync(fd);
+  rmSync(temporary, { force: true });
+}
 console.log(`${OUT}: ${text.length} chars, sha256 ${sha256}`);

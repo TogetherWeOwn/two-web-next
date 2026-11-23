@@ -128,7 +128,8 @@ function runLhci(env) {
 async function clearOriginAttemptEvidence(dir) {
   const names = await readdir(dir).catch(() => []);
   for (const name of names) {
-    if (!/^lhr-\d+\.(json|html)$/.test(name) && name !== "assertion-results.json") continue;
+    if (!/^lhr-\d+(?:-\d+)?\.(json|html)$/.test(name) && name !== "assertion-results.json")
+      continue;
     try {
       await rm(join(dir, name), { force: true });
     } catch {
@@ -268,7 +269,8 @@ async function archiveMarginalAttempt(
   );
   const names = await readdir(dir).catch(() => []);
   for (const name of names) {
-    if (!/^lhr-\d+\.(json|html)$/.test(name) && name !== "assertion-results.json") continue;
+    if (!/^lhr-\d+(?:-\d+)?\.(json|html)$/.test(name) && name !== "assertion-results.json")
+      continue;
     try {
       await copyFile(join(dir, name), join(attemptDir, name));
     } catch {
@@ -287,7 +289,7 @@ async function archiveMobileAttempt(dir, { n, exitCode }) {
   const attemptDir = join(parent, `attempt-${n}`);
   await mkdir(attemptDir);
   const names = (await readdir(dir))
-    .filter((name) => /^lhr-\d+\.json$/.test(name) || name === "assertion-results.json")
+    .filter((name) => /^lhr-\d+(?:-\d+)?\.json$/.test(name) || name === "assertion-results.json")
     .sort();
   for (const name of names) await copyFile(join(dir, name), join(attemptDir, name));
   await writeFile(
@@ -634,7 +636,7 @@ async function selftest() {
       mkdirSync(lhciDir, { recursive: true });
       step.urls.forEach((url, i) => {
         writeFileSync(
-          join(lhciDir, `lhr-${calls * 100000 + i}.json`),
+          join(lhciDir, `lhr-${calls * 100000 + i}-${i}.json`),
           JSON.stringify(stubLhr(url, step.lcps?.[i])),
         );
       });

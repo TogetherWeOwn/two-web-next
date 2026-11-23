@@ -260,12 +260,15 @@ test("parity beforeAll raises its hook timeout by the one-login retry budget", (
     source.includes('from "../qa-login-retry.mjs"'),
     "parity.spec.ts must import the retry budget helper",
   );
-  const hook = source.indexOf("test.beforeAll(");
-  const login = source.indexOf("await memberGoingRsvp()");
-  assert.ok(hook >= 0 && login > hook, "beforeAll must spend the shared login via memberGoingRsvp");
+  const hook = source.match(
+    /test\.beforeAll\(async \(\{ playwright \}\) => \{([\s\S]*?)\n\}\);/,
+  )?.[1];
+  assert.ok(hook, "parity beforeAll must exist");
+  const login = hook.indexOf("await memberCookie(hono);");
+  const timeout = hook.indexOf("test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));");
+  assert.ok(login >= 0, "beforeAll must spend the shared login via memberCookie");
   assert.ok(
-    source.lastIndexOf("qaLoginRetryBudgetMs(1)", login) > hook &&
-      source.lastIndexOf("test.setTimeout(", login) > hook,
+    timeout >= 0 && timeout < login,
     "beforeAll must raise its own timeout first with " +
       "test.setTimeout(30_000 + qaLoginRetryBudgetMs(1)): one capped 65s wait dies " +
       "on the bare 30s hook timeout instead of completing the bounded retry.",

@@ -16,21 +16,16 @@ When evaluating release evidence, apply the
 [merge and production staging contract](CONTRIBUTING.md#merge-and-production-staging-evidence).
 For `TogetherWeOwn/two-web-next` and `TogetherWeOwn/two-bot-next`, the staging
 item is met by the automatic **post-merge, pre-production** staging/e2e/soak
-gate. Do not demand a staging run for an unmerged head, or make artifact equality,
-paired hashes or a comparison to current `main` a merge prerequisite. This is
-not limited to docs/test-only changes and is not proof that staging already ran.
+gate. Do not demand a staging run for an unmerged head, or require artifact
+comparisons to prove pre-merge staging. This is not limited to docs/test-only
+changes and is not proof that staging already ran.
 
-Before merge, verify all required checks listed in CONTRIBUTING, including the
-required review-app checks, pass on the exact PR head, with findings fixed or
-answered with evidence, applicable security reviews and
-native stages complete, and fresh per-PR exact-head Release Manager confirmation
-on a child card assigned and addressed to the Release Manager. Require exact-head
-Actions run/job links and conclusions, migration ledger evidence or "no
-migration", a known-good rollback target and the automatic staging path on the
-confirmation card. A new push needs new confirmation. The final-stage reviewer,
-or author without native stages, must pin the squash merge to the reviewed and
-confirmed head and record the confirmation and squash SHA in the release log.
-An otherwise mergeable PR does not need restacking solely because `main` moved.
+Before merge, verify Actions links and conclusions, independent reviews for
+the [PR's risk tier](CONTRIBUTING.md#review-by-risk-tier), and fixes or evidence
+for all findings on the exact head. Changed content or context requires fresh
+review. Recheck promotion routing against the live target. Apply T0 review to
+promotion-path changes and verify final technical acceptance where automatic
+production routing applies or is uncertain.
 
 Distinguish that merge evidence from production qualification: the resulting
 exact `main` SHA still has to pass full CI, staging deploy, staging e2e and soak
@@ -42,15 +37,15 @@ the current docs/test-only scope can skip staging journeys and passive ledgers;
 that is not qualification or automatic promotion eligibility. Apply CONTRIBUTING's
 post-merge manual-dispatch caveat for a scope-skipped candidate. Manual staging
 evidence is not selected by the automatic resolver, and an explicit production
-dispatch still needs its own exact-SHA Release Manager confirmation and all
-existing guards. Do not change the pipeline or infer a pass from a skip.
+dispatch requires the same independent exact-candidate release approval and
+workflow protections as automatic promotion. Treat a skipped job as missing
+evidence.
 
-Required checks, rulesets, review gates, incident/freeze/hold safeguards,
-identity/capability holds, rollback requirements and confirmation for every
-other production deploy remain. No red deterministic gate is waived; no pipeline
-skip/no-op or production action is authorized. Previous rejections remain
-historical, not retroactive approvals: resubmit for a fresh exact-head decision.
-This advisory analysis role still does not approve or merge.
+Apply the [production release gate](CONTRIBUTING.md#production-release-gate)
+to the exact staged candidate and operation. Enforce existing incident holds,
+freezes, identity and capability safeguards, and deterministic checks. A
+previously rejected candidate needs a fresh decision. This advisory role has
+no approval or merge authority.
 
 ## What merits a finding
 
@@ -146,7 +141,12 @@ Try to prove your own candidate wrong first:
 3. Check whether the behavior is documented as intentional in README/docs
    (for example, throttle failure handling varies by call site; see
    `docs/throttling.md` for missing stores, unclassified errors, outages,
-   and lock contention). Intentional, documented behavior is not a defect.
+   and lock contention). Before reporting a defect, check the PR's Claims in
+   Attestation and linked docs. For documented intent (e.g. fail-closed until a
+   binding exists, an advisory-only CSS budget, or a removed live region), report
+   only if evidence shows a violation of an existing requirement, a contradiction
+   of the stated contract, or user harm beyond what the PR describes. The private
+   security-reporting exception above still applies.
 4. Pre-existing issues are out of scope unless this PR makes them newly
    reachable or worse; if so, explain the new reachability.
 
@@ -155,6 +155,11 @@ Try to prove your own candidate wrong first:
 For dependency version-bump PRs (including Dependabot-style updates):
 
 - Evaluate the bump against the dependency's own changelog and this repository's actual usage.
+- For Dependabot/Renovate PRs, generated-body omissions alone are not code defects. Cite the applicable repository or adoption requirement when reporting missing Verification/Attestation evidence; do not assume a bot-wide exemption.
+- The adopting agent must supply real Verification, truthful Attestation with the applicable repository `risk_tier` (T0/T1/T2), and Model Used, preserving bot authorship and provenance. Route dependency changes for sensitive review; missing required adoption evidence remains a review/gate finding even if the checker returns early. Never attest to unperformed work.
+- The current PR-standards checker returns early for Dependabot/Renovate; this describes checker behavior, not a waiver of adopter evidence or review requirements.
+- For a version bump, compare the changelog with actual repository call sites. Request a new behavior-regression test only for a named affected call site and a concrete adverse behavior change; existing mandatory testing, security and regression-evidence obligations remain unchanged.
+- Read the repository’s actual `.github/dependabot.yml`: a deliberately excluded lockfile is not a missed update. Do not infer exclusions from another repository or assume all standalone lockfiles are excluded.
 - Do not flag lockfile or transitive-dependency churn by itself. A dependency-induced correctness, compatibility, installation, build, output, or reliability regression remains reportable under this repository's existing finding rules, whether or not it involves a changed API this repository calls. Identify the affected repository call site or path, concrete trigger and wrong outcome, and supporting evidence at the reviewed commit.
 - Report a known security advisory introduced or left unfixed with its concrete impact. Existing security-review rules take precedence over this churn guidance: do not suppress a plausible security issue merely because it has no published advisory; apply the existing exploit-path and evidence requirements and state any unverified step.
 - Follow this repository's existing dependency policy for pins versus ranges; do not substitute reviewer preference.
@@ -208,6 +213,10 @@ A missing test alone is not a runtime bug. These are blocking findings:
   Preserve gates intentionally defined against the fork point or base-branch policy.
   For publish or artifact jobs, confirm keys, tokens, and secrets cannot reach uploaded
   artifacts or public output. Report a violation as Severe only with the exact job/line and failing path.
+  With `actions/upload-artifact` v4+, artifact names only need to be unique
+  within one run attempt; reruns may reuse them. For upload collisions, flag
+  same-attempt name conflicts, not a missing `run_attempt` suffix by itself.
+  Check that consumers requiring the current attempt select that attempt's artifact.
 - **Generated assets:** `build:assets` generates budgeted outputs from
   `assets/`; see `ci/minify-assets.mjs` for the mapping and the authored CSS
   exceptions. Check generated output for drift or hand-edits, accounting for

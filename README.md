@@ -119,36 +119,35 @@ npm ci --include=dev
 cp .dev.vars.example .dev.vars   # local settings only; never commit this file
 ```
 
-Root installs generate the ignored critical-CSS module through `postinstall`
-when install scripts are enabled. The `web/.npmrc` disables lifecycle hooks,
-including the project's own `postinstall` and `prebuild`, to avoid running
-dependency install scripts. Kit's explicit `build` and `check` commands regenerate
-the module directly, so missing or stale CSS does not depend on those hooks.
-After a web-only install, or a root install with scripts disabled
-(`npm ci --ignore-scripts`), run the generator explicitly **from the repository
-root before root typecheck, tests or bundling**:
+The root and `web/` npm configurations disable lifecycle scripts by default.
+After a frozen install, check the tracked token adapters and generate the ignored
+critical-CSS module explicitly **from the repository root before tests or bundling**:
 
 ```sh
-node ci/build-leaf-css.mjs
-# Or, from the root: npm run build:leaf-css
+npm run generate:first-party
 ```
 
-Under `--ignore-scripts`, `npm run typecheck` and `npm run test:unit` bootstrap
-the generator themselves (see "Verify a change before opening a PR" in
-[CONTRIBUTING.md](CONTRIBUTING.md)). Raw `tsc`, direct `vitest` and bundlers do
-not: run the generator explicitly first.
+`npm run dev`, `npm test`, `npm run test:coverage` and the Kit `npm run build`
+invoke this preparation explicitly. `npm run typecheck` and `npm run test:unit`
+bootstrap critical CSS themselves (see "Verify a change before opening a PR" in
+[CONTRIBUTING.md](CONTRIBUTING.md)). Raw `tsc`, direct `vitest`, Wrangler and
+bundlers do not: run the named preparation command explicitly first.
 
-`ci/build-leaf-css.mjs` uses only Node builtins and concatenates the three
-checked sheets, so it runs in dependency-free scratch snapshots. The separate
+`ci/build-leaf-css.mjs` and `ci/build-events-css.mjs` use only Node builtins.
+They concatenate checked sheets in cascade order and run in dependency-free scratch
+snapshots. The events module is preparatory and is not used by any served page. The separate
 `ci/build-ember-tokens.mjs` adapter builds the Hono and Kit token sheets from
 the pinned vendored design-kit CSS and needs the locked esbuild installed to
 compact served sheets. It composes scoped roles with `assets/styles.css` and
-`assets/theme.css`; all three existing Hono sheets keep their original raw and
-gzip ceilings, without extra requests or changes to unthemed legacy pages.
-Root postinstall and predev, plus Kit postinstall and
-prebuild, **check** the tracked adapters before generating ignored critical CSS.
-They fail without repairing stale committed output, so install cannot mask drift
-before CI checks it. After editing the kit pin or theme source, explicitly run
+`assets/theme.css`; the separate bundle budgets retain their raw and gzip
+ceilings, without extra requests or changes to unthemed legacy pages. The
+homepage theme test reports its 13,000-byte shared-theme ceiling as advisory;
+source/generated integrity and other budget and correctness gates remain hard.
+The explicit preparation command **checks** the tracked adapters before
+generating ignored critical CSS. It fails without repairing stale committed
+output, so preparation cannot mask drift before CI checks it. The redundant
+postinstall, predev and prebuild hooks do not run under the project defaults.
+After editing the kit pin or theme source, explicitly run
 `npm run build:assets` or `npm run build:leaf-css` and commit the regenerated
 adapters with their sources. Never hand-edit generated outputs. See [security-pin contracts](docs/security-pin-contracts.md)
 for the offline static gate and generated-hash review evidence.
@@ -252,14 +251,13 @@ node ci/coverage-summary.mjs
 
 Coverage includes every
 `src/**/*.{ts,tsx}` file, even if no test imports it. Global and aggregate
-area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`, `src/jobs`,
-`src/bot`, `src/agent-events`, `src/profiles`, `src/auth`, `src/invite.ts`,
-`src/return-journey.ts`, `src/write-recovery.tsx`, `src/kit-*`, `src/counts.ts`,
-`src/seo.ts`) live in `vitest.config.ts`. The
-baseline uses the full suite with the test database; without it, skipped live
-suites may put coverage below the floors. CI's
-`check` job runs the configuration drift check, Biome lint/format gate,
-typecheck and the coverage gate against its Postgres service, writes a job summary
+area floors (`src/admin`, `src/events`, `src/join` together with
+`src/http/throttle.ts`, `src/sessions.ts`, `src/jobs`, `src/bot`, `src/agent-events`,
+`src/profiles`, `src/auth`, `src/invite.ts`, `src/return-journey.ts`,
+`src/write-recovery.tsx`, `src/kit-*`, `src/counts.ts`, `src/seo.ts`) live in
+`vitest.config.ts`. The baseline uses the full suite with the test database;
+without it, skipped live suites may put coverage below the floors. CI's
+`coverage-merge` job verifies each shard's files and coverage map before enforcing the floors, writes a job summary
 with the ten least-covered files, and uploads the JSON coverage summary for 14 days,
 including on failure.
 
@@ -376,7 +374,7 @@ to execute the same Chromium proof.
 | `test/admin-editor-expiry-departure.test.ts` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS=true npx vitest run test/admin-editor-expiry-departure.test.ts` |
 | `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
-| `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
+| `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles; 11 event, featured and dashboard admin states, including create/edit validation errors and a text-limit error, at both widths plus a Hono color check, at least 23 executed cases; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
 | `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (20 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; includes restored-write screenshots in CI; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
 | `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (44 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
 | `ci/schedule-search-context-browser.test.ts` | None—always runs | `npx vitest run --config ci/schedule-search-context-browser.vitest.ts ci/schedule-search-context-browser.test.ts` (5 Hono and 5 Kit real Chromium cases; requires Kit dependencies and Chromium; JSON-verified in `a11y` via `ci/a11y-require-executed.mjs`) |
@@ -467,6 +465,12 @@ See the [Worker bundle inventory contract](docs/worker-bundle-inventory.md) for
 artifact names, schemas, conservative package findings and consumer validation.
 CI dry-run inventories alone are not deployment evidence.
 
+[`web/wrangler.production.jsonc`](web/wrangler.production.jsonc) is a source-only
+Kit contract. Do not invoke it for deployment. Only a CI dry-run selects it;
+production still uploads the Hono bundle using the root config. Its entry path
+names the generated adapter output and does not prove facade installation or
+qualify Kit for production.
+
 Cutover decision state is recorded in `docs/cutover-gates.md` and the release
 contract in `docs/releases.md`; this section describes the deployment contract,
 not the currently serving version. Worker code reaches production only through
@@ -486,6 +490,14 @@ matching dispatch SHA selects the existing separately authorized recovery
 route; `migrations_applied` never bypasses default ancestry admission. See the
 [ancestry contract](docs/runbook.md#default-promotion-ancestry-admission).
 
+For automatic promotion, follow the [release gate](CONTRIBUTING.md#production-release-gate).
+The authorized executor sets `PRODUCTION_ACCEPTED_SHA` to the approved release
+SHA in full lowercase and can clear it to hold promotion. The resolver skips
+unless the value matches the selected candidate exactly. The variable is
+a job-time snapshot; clearing it does not revoke a run that already started.
+Manual dispatch is unchanged, and all existing promotion and release gates remain
+in force. See the [deployment procedure](docs/runbook.md#deploy-and-record-the-rollback-pointer).
+
 Automatic runs promote only a first-attempt staging green that soaked 30
 minutes, with no red or re-run staging run on that commit or a newer one
 (a red staging gate is fixed forward on a new commit, never re-run until
@@ -502,7 +514,8 @@ recovery also stops at the migration gate after three `/up` reads. An explicit
 manual re-dispatch with `migrations_applied: true` records an audited continuation
 past these migration stops once `db-migrate.yml` (target production) has applied the
 target's migrations; automatic runs ignore that input and halt on those stops
-unless the ledger already proves the target applied. The first promotion
+unless the ledger already proves the target applied. A scoped production migration
+that leaves any target migration deferred does not qualify the target. The first promotion
 after the ledger signal ships needs one manual dispatch because the live
 Worker predates it. Repo
 variable `PRODUCTION_HOLD_UNTIL` (ISO-8601 UTC, at most 24h ahead) pauses all
@@ -513,8 +526,11 @@ Environment `production` protection and rejects the placeholder Hyperdrive id.
 By default, protection requires nonempty reviewers with self-review prevented;
 with `PRODUCTION_AUTO_APPROVE=true`, it instead requires a main-only deployment
 policy and successful staging deploy and `e2e-staging` runs on the exact SHA,
-whose `staging-quality` job (Lighthouse budgets and quality scores) must also
-have executed and passed.
+whose `staging-quality` job must also pass with origin web standards executed.
+Deployed-origin Lighthouse budgets and scores are report-only until the Ember
+and SvelteKit migration is complete (owner decision 2026-11-14). PR Lighthouse
+performance budget misses are also report-only; collection, desktop accessibility,
+best practices, SEO and web standards still block PR CI.
 Both modes require successful exact-SHA CI. Admin bypass explicitly remains
 enabled by the owner's provisioning exception; neither the workflow nor
 the preflight claims to prevent an authorized administrator from bypassing review.
@@ -607,9 +623,11 @@ rollback, or production migration is authorized, including applicable
 organization and Environment values.
 The deploy, rollback, and db-migrate workflows each require the flag to be
 exactly `true`; `ci/production-deploy-gate.mjs` runs in the deploy and rollback
-workflows, while db-migrate relies on the flag, the main-only ref check, and
-production Environment protection. The
-workflow's `vars` expression resolves configuration across scopes:
+workflows. The migration workflow requires the flag, the main-only ref,
+production Environment protection, a separate exact approved migration SHA,
+and a match for the approved database and migrator before DDL. See the
+[migration runbook](docs/runbook.md#neon-web-schema-migrations-separate-operator-action).
+The workflow's `vars` expression resolves configuration across scopes:
 repository/Environment absence alone does not prove the effective flag is
 disabled. Verify the organization's value and repo visibility before
 authorizing a deployment, rollback, or production migration; keep the repository value unset/false otherwise.
@@ -698,7 +716,7 @@ Owner+Moderator pair (staging guild `1545644954272137297`:
 `1546211363578191873,1545648550329851946`; production guild
 `326474832151838730`: `1546777855801954408,1546777856984481792`) before deployment.
 The staging workflow deploys `web/wrangler.staging.jsonc` and supplies only the
-validated `KIT_ROUTE_ARCHIVE` and `KIT_ROUTE_STATIC` route flags with `--var`;
+validated [staging route flags](docs/config.md) with `--var`;
 it does not override either moderator var. A separate GitHub moderator secret
 cannot make the gate pass. `keep_vars` retains unrelated remote plaintext vars,
 and Wrangler retains remote secrets. No binding values are read back or copied.
@@ -709,8 +727,7 @@ that belongs to the other guild — role IDs are guild-scoped, so a production
 pair in the staging config matches nobody while looking configured.
 
 The live smoke runs manually via the `staging-smoke` workflow in a job container
-(`[self-hosted, two-selfhosted]` while the repo is private, GitHub-hosted while
-public; TOG-12326). It posts a real announcement to a throwaway channel and
+on a GitHub-hosted runner in either repository visibility. It posts a real announcement to a throwaway channel and
 creates a real staging event. Dispatch only after
 the existing staging isolation/HMAC prerequisites and independent review clear.
 Pass `--announcement-only` (workflow input `announcement_only`) to run only
@@ -745,13 +762,10 @@ These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
 
 Squash-merge only; PR titles follow Conventional Commits and the body follows the
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
-`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review` are required
-on the exact head, with no approving review. The final-stage reviewer merges when
-native review stages apply; otherwise the author merges. A merge to `main` reaches
-production, so it needs fresh per-PR exact-head Release Manager confirmation on a
-child card assigned and addressed to the Release Manager. Pin the squash merge to
-that confirmed head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
-for post-merge staging qualification and retained safeguards, and [AGENTS.md](AGENTS.md).
+`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint` and the other
+[required checks](CONTRIBUTING.md#branch-protection-and-required-checks) must pass
+on the exact head. See [CONTRIBUTING.md](CONTRIBUTING.md#pull-request-contract)
+for tier review, merge authority, and post-merge staging and release approval.
 
 ## License
 

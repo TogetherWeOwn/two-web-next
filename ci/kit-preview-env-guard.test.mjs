@@ -63,12 +63,19 @@ for (const [name, env] of [
 }
 
 test("both preview URLs against divergent origins exit 1 on the section mismatch", () => {
-  const page = (key) =>
-    `<html><head><meta name="robots" content="noindex, follow"></head>` +
-    `<body class="theme-schedule">` +
-    `<section data-testid="past-events"><div data-testid="past-events-list">` +
-    `<article data-event-key="${key}"></article></div></section>` +
-    `<script src="/islands/past-events.js"></script></body></html>`;
+  const page = (key, kit) => {
+    const heading = `<h2>${key}</h2>`;
+    const title = kit
+      ? `<div class="event-title"><svg class="state-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="8" fill="currentColor"></circle></svg>${heading}<span class="event-state">Sign-up record</span></div>`
+      : heading;
+    return (
+      `<html><head><meta name="robots" content="noindex, follow"></head>` +
+      `<body class="theme-schedule">` +
+      `<section data-testid="past-events"><div data-testid="past-events-list">` +
+      `<li data-testid="event-card" data-event-key="${key}"><div class="schedule-info">${title}</div></li></div></section>` +
+      `<script src="/islands/past-events.js"></script></body></html>`
+    );
+  };
   const stub = `
 const page = ${page.toString()};
 globalThis.fetch = async (input) => {
@@ -79,7 +86,8 @@ globalThis.fetch = async (input) => {
       headers: { "content-type": "application/json" },
     });
   }
-  const html = url.host === "kit.invalid" ? page("kit-only-key") : page("hono-only-key");
+  const kit = url.host === "kit.invalid";
+  const html = kit ? page("kit-only-key", true) : page("hono-only-key", false);
   return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
 };
 `;

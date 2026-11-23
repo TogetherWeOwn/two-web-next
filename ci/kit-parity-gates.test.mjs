@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { summarizeJourneys } from "../e2e/staging/journey-ledger.mjs";
 import {
   LOGIN_JOURNEYS,
   PARITY_ROUTES,
@@ -16,6 +17,9 @@ import {
   isCoveredByExecutedRun,
   isInJourneyScope,
   isManifestEnabled,
+  kitHomeHeadingText,
+  memberBoardEmptyText,
+  memberBoardStatus,
   parseManifestEntries,
   pathsMatchStructurally,
   runGate,
@@ -117,6 +121,47 @@ globalThis.fetch = async (input) => {
   });
   assert.equal(status, 1, `expected exit 1, got ${status}\n${output}`);
   assert.match(output, /sections match/);
+});
+
+test("preview archive compares validated Kit chrome and rejects mutations", () => {
+  const heading = '<h2><a href="/events/example">Example</a></h2>';
+  const glyph =
+    '<svg class="state-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
+    '<circle cx="8" cy="8" r="8" fill="currentColor"></circle></svg>';
+  const chrome = `<div class="event-title">${glyph}${heading}<span class="event-state">Sign-up record</span></div>`;
+  const page = (title) =>
+    `<section data-testid="past-events"><ul><li data-testid="event-card">` +
+    `<div class="schedule-info">${title}<p>Details</p></div></li></ul></section>`;
+  const hono = page(heading);
+  for (const [name, kit, expected] of [
+    ["equivalent", page(chrome), "passed"],
+    ["malformed chrome", page(chrome.replace('r="8"', 'r="7"')), "failed"],
+    ["residual divergence", page(chrome).replace("Details", "Different"), "failed"],
+  ]) {
+    const stub = `
+const kit = ${JSON.stringify(kit)};
+const hono = ${JSON.stringify(hono)};
+globalThis.fetch = async (input) => {
+  const url = new URL(String(input.url ?? input));
+  return new Response(url.host === "kit.invalid.workers.dev" ? kit : hono, { status: 200 });
+};
+`;
+    const { status, output } = runScript({
+      env: {
+        KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+        HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+      },
+      stub,
+    });
+    for (const path of ["/events/past", "/events/past?page=2"]) {
+      assert.ok(
+        output.includes(` - [${expected}] preview ${path}: sections match`),
+        `${name}: ${path}\n${output}`,
+      );
+    }
+    // Other routes deliberately receive minimal fixtures; failures still propagate.
+    assert.equal(status, 1, `${name}: expected nonzero ledger exit\n${output}`);
+  }
 });
 
 test("allowlist admits staging and preview hosts only", () => {
@@ -319,7 +364,9 @@ test("an enabled nested-reads member board is covered by the executed parity run
   );
 });
 
-const membersPreviewStub = `
+const membersPreviewStub = (now = null) => `
+const now = ${JSON.stringify(now)};
+if (now) Date.now = () => Date.parse(now);
 const archivePage =
   \`<html><head><link rel="canonical" href="https://x.invalid/"></head>\` +
   \`<body><a class="skip-link" href="#main">Skip</a>\` +
@@ -360,7 +407,10 @@ globalThis.fetch = async (input, init = {}) => {
     if (url.search.includes("season=bogus") || url.search.includes("scope=") && !url.search.includes("scope=relative") || url.search.includes("activity=chess")) {
       return new Response("Unknown", { status: 400, headers: { "content-type": "text/plain", "cache-control": "private, no-store" } });
     }
-    return new Response(membersPage, { status: 200, headers: { "content-type": "text/html", "cache-control": "private, no-store", ...(url.hostname.startsWith("kit.") ? { "x-two-renderer": "kit" } : {}) } });
+    const page = now && url.searchParams.get("season") === "2026"
+      ? membersPage.replace(/<table>[\\s\\S]+<\\/table>/, '<p role="status">Nobody is ranked for this season and game. This season has ended.</p>')
+      : membersPage;
+    return new Response(page, { status: 200, headers: { "content-type": "text/html", "cache-control": "private, no-store", ...(url.hostname.startsWith("kit.") ? { "x-two-renderer": "kit" } : {}) } });
   }
   return new Response(archivePage, { status: 200, headers: { "content-type": "text/html" } });
 };
@@ -373,7 +423,7 @@ test("preview member-board journeys execute with a QA session and pass", () => {
       HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
       KIT_PARITY_QA_TOKEN: "test-token",
     },
-    stub: membersPreviewStub,
+    stub: membersPreviewStub(),
   });
   // The stub serves only the archive + member-board contracts, so other
   // routes fail in this run; the member journeys themselves must all pass.
@@ -383,6 +433,29 @@ test("preview member-board journeys execute with a QA session and pass", () => {
   void status;
 });
 
+test("preview member-board accepts ended copy only from the UTC season close", () => {
+  for (const [now, verdict] of [
+    ["2026-12-31T23:59:59.999Z", "failed"],
+    ["2027-01-01T00:00:00.000Z", "passed"],
+  ]) {
+    const { output } = runScript({
+      env: {
+        KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+        HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+        KIT_PARITY_QA_TOKEN: "test-token",
+      },
+      stub: membersPreviewStub(now),
+    });
+    for (const [renderer, check] of [
+      ["Kit", "contract"],
+      ["Hono", "no Kit marker"],
+    ]) {
+      const expected = `[${verdict}] preview ${renderer} /leaderboards/members?season=2026: ${check}`;
+      assert.ok(output.includes(expected), `${now}: expected ${expected}`);
+    }
+  }
+});
+
 test("preview member-board journeys skip loud without a QA token", () => {
   const { status, output } = runScript({
     env: {
@@ -390,7 +463,7 @@ test("preview member-board journeys skip loud without a QA token", () => {
       HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
       KIT_PARITY_QA_TOKEN: "",
     },
-    stub: membersPreviewStub,
+    stub: membersPreviewStub(),
   });
   assert.match(output, /\[skipped\] preview [^\n]*leaderboards\/members[^\n]*KIT_PARITY_QA_TOKEN/);
   // The guest bounce needs no session and still executes; only the
@@ -478,6 +551,37 @@ test("preview join-attempts journeys skip loud without a QA token", () => {
   void status;
 });
 
+test("Kit Home parity reads one active heading with the pinned ID", () => {
+  const heading = '<h1 id="home-heading">The lobby is <!--[--><em>open</em><!--]-->.</h1>';
+  assert.equal(
+    kitHomeHeadingText(heading + '<div hidden id="home-heading"></div>'),
+    "The lobby is open.",
+  );
+  assert.equal(kitHomeHeadingText(heading + '<div id="home-heading"></div>'), "");
+  assert.equal(kitHomeHeadingText(heading + '<svg id="home-heading"></svg>'), "");
+  assert.equal(kitHomeHeadingText(heading.replace("home-heading", "other-heading")), "");
+});
+
+test("member-board empty text matches raw browser text across whitespace", () => {
+  for (const [scope, subject] of [
+    ["overall", "Nobody is"],
+    ["relative", "You are not"],
+  ]) {
+    const allTime = memberBoardEmptyText(scope);
+    const endedWindow = memberBoardEmptyText(scope, true);
+    const base = `${subject} ranked for this season and game`;
+    const ended = "This season\nhas ended.";
+    assert.equal(allTime.test(`${base} yet. ${ended}`), false);
+    assert.equal(endedWindow.test(`${base} yet. ${ended}`), false);
+    assert.equal(allTime.test(`${base}. ${ended}`), false);
+    assert.equal(endedWindow.test(`${base}. ${ended}`), true);
+    assert.equal(
+      allTime.test(`${base.replace("this season", "this\nseason")} yet. Browse events.`),
+      true,
+    );
+  }
+});
+
 test("member-board contract passes a good fixture and fails planted mutants", () => {
   const goodHtml =
     `<html><head><link rel="canonical" href="https://next.togetherweown.com/leaderboards/members">` +
@@ -518,6 +622,74 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
     }).length,
     0,
   );
+  const withBoardMarkup = (markup) => goodHtml.replace(/<table[\s\S]+<\/table>/, markup);
+  const withStatus = (text) => withBoardMarkup(`<p role="status">${text}</p>`);
+  const openCopy = "Nobody is ranked for this season and game yet.";
+  const endedCopy = "Nobody is ranked for this season and game. This season has ended.";
+  assert.equal(memberBoardStatus(withStatus(endedCopy)), null, "all time is not an ended season");
+  assert.equal(
+    memberBoardStatus(
+      withBoardMarkup(
+        "<p role='status'>Nobody is <em>ranked</em>\nfor this season and game&nbsp;yet.</p>",
+      ),
+    ),
+    "overall-empty",
+  );
+  assert.equal(
+    memberBoardStatus(
+      withBoardMarkup(
+        `<p role="status" style="/* display: none; */ --note: ';display:none;'">${openCopy}</p>`,
+      ),
+    ),
+    "overall-empty",
+  );
+  for (const [text, kind, allowEnded = false] of [
+    [`${openCopy} Browse events.`, "overall-empty"],
+    [endedCopy, "overall-empty", true],
+    ["You are not ranked for this season and game yet. Browse events.", "relative-empty"],
+    ["You are not ranked for this season and game. This season has ended.", "relative-empty", true],
+    ["Rankings are temporarily unavailable.", "outage"],
+  ]) {
+    const html = withStatus(text);
+    assert.equal(memberBoardStatus(html, allowEnded), kind);
+    assert.deepEqual(
+      assertMembersContract({
+        label: `unit/members-${kind}`,
+        html,
+        headers,
+        status: 200,
+        expected: { ...expected, allowEnded },
+      }),
+      [],
+    );
+  }
+  assert.deepEqual(
+    assertMembersContract({
+      label: "unit/members-hydrated-status",
+      html: withBoardMarkup(
+        `<p class="notice" role='status'><span hidden>Stale copy. </span>` +
+          `Nobody is <!--[--><em>ranked</em><!--]--> for this season and game yet.</p>`,
+      ),
+      headers,
+      status: 200,
+      expected,
+    }),
+    [],
+  );
+  const nearMatch = withStatus(
+    "Nobody is ranked for this season and game because the rankings feed is unavailable.",
+  );
+  assert.equal(memberBoardStatus(nearMatch), null);
+  assert.deepEqual(
+    assertMembersContract({
+      label: "unit/members-near-match",
+      html: nearMatch,
+      headers,
+      status: 200,
+      expected,
+    }),
+    ["unit/members-near-match: board table or empty status present"],
+  );
   const mutants = [
     [
       "guest-chrome",
@@ -528,6 +700,64 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
     [
       "no-table-no-status",
       (html) => html.replace(/<table[^>]*>[\s\S]*<\/table>/, ""),
+      "board table or empty status present",
+    ],
+    [
+      "empty-copy-without-status-role",
+      () => withBoardMarkup(`<p>${openCopy}</p>`),
+      "board table or empty status present",
+    ],
+    [
+      "empty-copy-on-wrong-element-with-status-role",
+      () => withBoardMarkup(`<div role="status">${openCopy}</div>`),
+      "board table or empty status present",
+    ],
+    [
+      "empty-status-outside-main",
+      () => withStatus(openCopy).replace(/(<p role="status">[^<]*<\/p>)(<\/main>)/, "$2$1"),
+      "board table or empty status present",
+    ],
+    [
+      "empty-status-inactive",
+      () =>
+        withBoardMarkup(
+          `<!--<p role="status">${openCopy}</p>-->` +
+            `<template><p role="status">${openCopy}</p></template>` +
+            `<div hidden><p role="status">${openCopy}</p></div>` +
+            `<div inert><p role="status">${openCopy}</p></div>` +
+            `<p role="status"><span hidden>${openCopy}</span></p>`,
+        ),
+      "board table or empty status present",
+    ],
+    [
+      "empty-status-inline-hidden",
+      () => withBoardMarkup(`<p role="status" style="display:none">${openCopy}</p>`),
+      "board table or empty status present",
+    ],
+    [
+      "empty-status-with-inline-hidden-parent",
+      () =>
+        withBoardMarkup(
+          `<div style="color:red; DISPLAY: none !important"><p role="status">${openCopy}</p></div>`,
+        ),
+      "board table or empty status present",
+    ],
+    [
+      "empty-status-inline-hidden-with-css-comment",
+      () =>
+        withBoardMarkup(
+          `<p role="status" style="display: none /* hide until ready */">${openCopy}</p>`,
+        ),
+      "board table or empty status present",
+    ],
+    [
+      "ended-copy-in-all-time-board",
+      () => withStatus(endedCopy),
+      "board table or empty status present",
+    ],
+    [
+      "combined-copy-in-all-time-board",
+      () => withStatus(`${openCopy} This season has ended.`),
       "board table or empty status present",
     ],
     [
@@ -897,7 +1127,11 @@ const html = ${JSON.stringify(html)};
 globalThis.fetch = async (input) => {
   const url = new URL(String(input.url ?? input));
   if (url.pathname === "/up") return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-  if (url.pathname === "/events") return new Response(html, { status: 200, headers: { "content-type": "text/html", "cache-control": "public, max-age=9999", vary: "Cookie, X-Two-Island", ...(url.host.startsWith("kit.") ? { "x-two-renderer": "kit" } : {}) } });
+  if (url.pathname === "/events") {
+    const kit = url.host.startsWith("kit.");
+    const body = kit ? html.replace("<p>Welcome, guest</p>", '<header data-kit-site-header><a href="/auth/discord?next=%2Fevents" aria-label="Sign in with Discord">Sign in</a></header>') : html;
+    return new Response(body, { status: 200, headers: { "content-type": "text/html", "cache-control": "public, max-age=9999", vary: "Cookie, X-Two-Island", ...(kit ? { "x-two-renderer": "kit" } : {}) } });
+  }
   return new Response("", { status: 404 });
 };
 `;
@@ -1021,7 +1255,7 @@ test("enabled routes outside every journey scope fail via the catch-all", () => 
     `{ method: "GET", path: "/admin/queue/failed/:id/preview", enabled: true }`,
     `{ method: "GET", path: "/events/:key", enabled: true }`,
     `{ method: "GET", path: "/join/discord", enabled: true }`,
-    `{ method: "GET", path: "/", enabled: true }`,
+    `{ method: "GET", path: "/home", enabled: true }`,
     `{ method: "POST", path: "/events/past", enabled: true }`,
   ]) {
     const journeys = runUnitMode({
@@ -1074,6 +1308,67 @@ test("executed-run coverage is GET/HEAD /events/past, GET/HEAD /events, GET/HEAD
     isCoveredByExecutedRun({ method: "POST", path: "/auth/recover", enabled: true }),
     false,
   );
+});
+
+test("the Kit report accounts for 101 journeys without raising the staging cap", () => {
+  const report = (length) => ({
+    suites: [{ specs: [{ tests: Array.from({ length }, () => ({ status: "expected" })) }] }],
+  });
+  const kind = { reportKind: "kit-parity" };
+  const kit = summarizeJourneys(report(101), kind);
+  assert.equal(kit.verdict, "pass");
+  assert.equal(kit.counts.passed, 101);
+  for (const ledger of [summarizeJourneys(report(101)), summarizeJourneys(report(201), kind)]) {
+    assert.equal(ledger.verdict, "fail");
+    assert.equal(ledger.diagnostics[0]?.code, "report_too_large");
+  }
+});
+
+test("preview home fetch checks guest responses from both renderers", () => {
+  const stub = `
+globalThis.fetch = async (input) => {
+  const url = new URL(String(input.url ?? input));
+  if (url.pathname === "/up") return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  const kit = url.hostname.startsWith("kit.");
+  const join = kit
+    ? '<a href="/discord" data-testid="discord-join">Join with an invite link</a>'
+    : '<a data-testid="join" href="/auth/discord">Join with Discord</a>';
+  const html = '<link rel="canonical" href="https://next.togetherweown.com/">' +
+    '<a class="skip-link" href="#main">Skip</a><nav aria-label="Primary"></nav>' +
+    '<main id="main">' + (kit ? '<h1 id="home-heading">Next game night: <em>Fixture</em>. <span>Come play with us.</span></h1>' : '<h1>The lobby is open.</h1>') + join +
+    '<h2>Sign out of Discord before switching accounts</h2></main><p>Welcome, guest</p>';
+  return new Response(html, { status: 200, headers: { "content-type": "text/html", "cache-control": "private, no-store", ...(kit ? { "x-two-renderer": "kit" } : {}) } });
+};
+`;
+  const { output } = runScript({
+    env: {
+      KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+      HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+    },
+    stub,
+  });
+  assert.match(output, /\[passed\] preview Kit \/: contract/);
+  assert.match(output, /\[passed\] preview Hono \/: no Kit marker/);
+});
+
+test("home parity exercises the guest contract and keeps write siblings uncovered", () => {
+  const manifestSource = `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }, { method: "GET", path: "/", enabled: true }`;
+  const journeys = runUnitMode({ stdout: { write: () => {} }, manifestSource });
+  for (const name of [
+    "good fixture passes",
+    "invite fallback passes",
+    "mutant heading fails",
+    "mutant join fails",
+    "mutant invite fallback fails",
+    "mutant own RSVP fails",
+    "mutant shared-cache fails",
+  ]) {
+    const status = journeys.find((journey) => journey.name === `unit: home ${name}`)?.status;
+    assert.equal(status, "passed", name);
+  }
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/" }), true);
+  assert.equal(isCoveredByExecutedRun({ method: "HEAD", path: "/" }), true);
+  assert.equal(isCoveredByExecutedRun({ method: "POST", path: "/" }), false);
 });
 
 test("executed-run coverage includes the moderator join-attempts pair via its numeric detail instance", () => {

@@ -11,7 +11,8 @@ import { dbFor } from "../admin/db";
 import { alertRequestError } from "../alerts";
 import { canonicalEventKey, eventKeyAllowed } from "../events/keys";
 import { getPublicEvent, listFeed } from "../events/reads";
-import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
+import { publicReadGuard } from "../events/routes-shared";
+import { etagFor, matchesIfNoneMatch } from "../http/conditional";
 import { isDatabaseUnavailable } from "../db/errors";
 import { stagingRobots } from "../headers";
 import { inviteDestination } from "../invite";
@@ -49,7 +50,7 @@ async function mdOk(c: Ctx, body: string, cache: string, robots?: string): Promi
   const tag = robots ?? stagingRobots(c);
   if (tag) c.header("x-robots-tag", tag);
   c.header("cache-control", cache);
-  const etag = await etagFor(body);
+  const etag = await etagFor(body, "SHA-1");
   c.header("etag", etag);
   if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) return c.body(null, 304);
   return c.body(body, 200, { "content-type": MARKDOWN_MIME });

@@ -27,7 +27,7 @@ describe("local capture request integration", () => {
   it("registers the extra capture middleware only in the opted-in build", () => {
     expect(
       app.routes.filter((route) => route.method === "ALL" && route.path === "/*"),
-    ).toHaveLength(8);
+    ).toHaveLength(9);
   });
 
   it("certifies real Hono static HTML and refuses uncovered document rows", async () => {
@@ -99,7 +99,7 @@ describe("local capture request integration", () => {
     vi.useFakeTimers().setSystemTime(new Date("2030-01-01T00:00:00Z"));
     const archiveEnv = { ...env, DATABASE_URL: "postgres://agent_test@agent-testdb/two_web_next" };
     const source = cache.anonCacheSource(archiveEnv);
-    const key = cache.anonPastKey("GET", 1);
+    const key = cache.anonPastKey("GET", 1, "kit");
     cache.writeAnonCache(
       key,
       source,

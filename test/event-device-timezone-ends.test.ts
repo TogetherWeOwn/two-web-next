@@ -24,6 +24,7 @@ import type { Env } from "../src/env";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
 import { createMemorySessionStore } from "../src/sessions";
 import app from "./app";
+import { collectImportedCss } from "./helpers/kit-imported-css";
 
 // Browser callbacks run in Chromium; keep their DOM surface local to this module.
 interface BrowserElement {
@@ -191,12 +192,13 @@ const { compile } = webRequire("svelte/compiler") as {
   compile(
     source: string,
     options: { generate: string; dev: boolean; filename: string },
-  ): { js: { code: string } };
+  ): { js: { code: string }; css: { code: string } | null };
 };
 let kitPromise:
   | Promise<{
       renderDetail(model: unknown): { head: string; body: string };
       client: string;
+      css: string;
     }>
   | undefined;
 function kitBundle() {
@@ -214,12 +216,13 @@ function kitBundle() {
       const outfile = join(scratch, "server-bundle.mjs");
       writeFileSync(
         serverEntry,
-        `import {render} from 'svelte/server'; import Detail from ${component}; export const renderDetail = model => render(Detail, {props:{model}});`,
+        `import {render} from 'svelte/server'; import ${JSON.stringify(join(WORKTREE, "web/src/lib/site-header.css"))}; import Detail from ${component}; export const renderDetail = model => render(Detail, {props:{model}});`,
       );
       writeFileSync(
         clientEntry,
         `import {hydrate} from 'svelte'; import Detail from ${component}; hydrate(Detail, {target:document.getElementById('detail-root'),props:{model:window.__detailModel}});`,
       );
+      const styles = { server: [] as string[], client: [] as string[] };
       const options = (generate: "server" | "client") => ({
         bundle: true,
         logLevel: "warning" as const,
@@ -231,15 +234,16 @@ function kitBundle() {
           {
             name: `device-timezone-ends-${generate}`,
             setup(plugin: import("esbuild").PluginBuild) {
-              plugin.onLoad({ filter: /\.svelte$/ }, (args) => ({
-                contents: compile(readFileSync(args.path, "utf8"), {
+              collectImportedCss(plugin, styles[generate]);
+              plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
+                const { js, css } = compile(readFileSync(args.path, "utf8"), {
                   generate,
                   dev: false,
                   filename: args.path,
-                }).js.code,
-                loader: "js",
-                resolveDir: dirname(args.path),
-              }));
+                });
+                if (css?.code) styles[generate].push(css.code);
+                return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
+              });
             },
           },
         ],
@@ -251,6 +255,9 @@ function kitBundle() {
         format: "esm",
         outfile,
       });
+      expect(styles.server.join("\n")).toContain(
+        readFileSync(join(WORKTREE, "web/src/lib/site-header.css"), "utf8"),
+      );
       const server = await import(pathToFileURL(outfile).href);
       const client = await build({
         ...options("client"),
@@ -263,6 +270,7 @@ function kitBundle() {
       return {
         renderDetail: server.renderDetail as (model: unknown) => { head: string; body: string },
         client: client.outputFiles[0]!.text,
+        css: styles.server.join("\n"),
       };
     } finally {
       rmSync(scratch, { recursive: true, force: true });
@@ -315,16 +323,18 @@ async function renderFixture(view: View, clock: ClockCase) {
     joinResult: null,
     setHeaders: () => {},
     store,
+    now: new Date(row.startsAt.getTime() - 60_000),
   });
   expect(outcome.kind, "Kit fixture must resolve the real detail model").toBe("ok");
   if (outcome.kind !== "ok") throw new Error(`Unexpected detail outcome: ${outcome.kind}`);
   const bundle = await kitBundle();
   const { head, body } = bundle.renderDetail(outcome.model);
   const model = JSON.stringify(outcome.model).replace(/</g, "\\u003c");
-  return {
-    html: `<!doctype html><html lang="en"><head>${head}</head><body><div id="detail-root">${body}</div><script>window.__detailModel=${model}</script></body></html>`,
-    client: bundle.client,
-  };
+  const html = `<!doctype html><html lang="en"><head>${head}<style data-kit-imported-css>${bundle.css}</style></head><body><div id="detail-root">${body}</div><script>window.__detailModel=${model}</script></body></html>`;
+  expect(html, "imported Kit CSS must reach the rendered fixture").toContain(
+    readFileSync(join(WORKTREE, "web/src/lib/site-header.css"), "utf8"),
+  );
+  return { html, client: bundle.client };
 }
 
 type ParsedNode = DefaultTreeAdapterMap["node"];
@@ -702,8 +712,8 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       await browserStructure(page, clock);
       return page.evaluate(
         ({ start, end }: { start: string; end: string }) => {
-          const hostStarts = document.querySelector(`time[datetime="${start}"]`);
-          const hostEnds = document.querySelector(`time[datetime="${end}"]`);
+          const hostStarts = document.querySelector(`.event-meta time[datetime="${start}"]`);
+          const hostEnds = document.querySelector(`.event-meta time[datetime="${end}"]`);
           return {
             hostStarts: hostStarts?.outerHTML,
             hostEnds: hostEnds?.outerHTML,
@@ -808,14 +818,11 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
     for (const view of VIEWS) {
       it(`${view}: positive control, real no-JS browser keeps both host instants and hidden actions`, async () => {
         const { page, errors } = await open(view, CASES[0], undefined, false);
-        expect(await page.locator(`time[datetime="${CASES[0].instant}"]`).first().innerText()).toBe(
-          CASES[0].hostText,
-        );
         expect(
-          await page
-            .locator(`time[datetime="${startIso(CASES[0])}"]`)
-            .first()
-            .count(),
+          await page.locator(`.event-meta time[datetime="${CASES[0].instant}"]`).innerText(),
+        ).toBe(CASES[0].hostText);
+        expect(
+          await page.locator(`.event-meta time[datetime="${startIso(CASES[0])}"]`).count(),
         ).toBe(1);
         expect(await page.locator("dd[data-event-device-timezone] button[hidden]").count()).toBe(2);
         expect(await page.locator('[data-testid="event-ics"]').count()).toBe(1);
@@ -824,9 +831,9 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       });
       it(`${view}: page load does not convert, steal focus, or change the machine instant`, async () => {
         const { page, errors } = await open(view, CASES[0]);
-        expect(await page.locator(`time[datetime="${CASES[0].instant}"]`).first().innerText()).toBe(
-          CASES[0].hostText,
-        );
+        expect(
+          await page.locator(`.event-meta time[datetime="${CASES[0].instant}"]`).innerText(),
+        ).toBe(CASES[0].hostText);
         expect(await page.locator("body").innerText()).not.toContain(CASES[0].device);
         expect(await page.getByTestId(STARTS_STATUS_TESTID).innerText()).toBe("");
         expect(await page.getByTestId(ENDS_STATUS_TESTID).innerText()).toBe("");

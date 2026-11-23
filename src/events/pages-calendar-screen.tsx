@@ -13,7 +13,6 @@ import {
   EVENTS_LOADING_COPY,
   EVENTS_LOADING_ROWS,
   EVENTS_LOADING_TESTID,
-  EVENTS_PAST_DRAWER_LIMIT,
   EVENTS_READ_CLEAR_COPY,
   EVENTS_READ_CLEAR_TESTID,
   EVENTS_READ_RETRY_COPY,
@@ -21,15 +20,8 @@ import {
   EVENTS_READ_STATUS_TESTID,
   EVENTS_SEARCH_MAX_LENGTH,
   EVENTS_SEARCH_TOO_LONG_COPY,
-  calendarGridRange,
   calendarMonthEmptyCopy,
-  calendarSearching,
-  calendarShowingPast,
   calendarUrl,
-  canonicalIntervalDays,
-  monthGrid,
-  wallDateIso,
-  wallMonth,
   type CalendarEmptyState,
   type CalendarState,
 } from "../islands/contracts";
@@ -47,7 +39,8 @@ import {
 } from "./pages-calendar-empty";
 import { MonthGrid } from "./pages-calendar-grid";
 import { CalendarList, PastDrawer } from "./pages-calendar-list";
-import { type CalRow, isTransient, rowZone } from "./pages-calendar-row";
+import type { CalRow } from "./pages-calendar-row";
+import { calendarDiscordReadMarker, deriveCalendarScreenState } from "./calendar-screen-state";
 
 /**
  * The events calendar island (legacy Livewire EventsCalendar): one rowset
@@ -63,12 +56,14 @@ export const EventsCalendarPage: FC<{
   upcoming: CalRow[];
   past: PublicEvent[];
   pastMayBeTruncated?: boolean;
+  monthReadMayBeIncomplete?: boolean;
   zone: string;
   now: Date;
   /** Upcoming-list pages; the month grid is month-scoped and ignores it. */
   totalPages: number;
   emptyState: CalendarEmptyState;
   discordFailed: boolean;
+  discordSnapshotAt?: number | null;
   /** Distinct published games backing the facet select. */
   games: string[];
   /** Effective facet: the canonical stored game, or null when unfiltered. */
@@ -92,12 +87,14 @@ export const EventsCalendarPage: FC<{
   state,
   upcoming,
   past,
-  pastMayBeTruncated: pastMayBeTruncatedProp = past.length >= EVENTS_PAST_DRAWER_LIMIT,
+  pastMayBeTruncated,
+  monthReadMayBeIncomplete,
   zone,
   now,
   totalPages,
   emptyState,
   discordFailed,
+  discordSnapshotAt,
   games,
   gameFilter,
   member,
@@ -109,77 +106,30 @@ export const EventsCalendarPage: FC<{
   joinResult = null,
   markdownAlternate = null,
 }) => {
-  const searching = calendarSearching(state);
-  const showPast = calendarShowingPast(state);
-  const hasVisibleResults = upcoming.length > 0 || (showPast && past.length > 0);
-  // A page past the end renders an out-of-range note with turns back into the
-  // schedule — like the past archive — never a "never scheduled" state and
-  // never a search miss for matches sitting on another page.
-  const outOfRange = state.view === "list" && upcoming.length === 0 && totalPages > 0;
-  // An error state suppresses the miss block: a failed read must never read
-  // as "no matches" (contract: error beats everything, including a search).
-  const searchMiss =
-    emptyState === null &&
-    !discordFailed &&
-    !outOfRange &&
-    ((searching && !hasVisibleResults) ||
-      (!searching && gameFilter !== null && upcoming.length === 0 && totalPages === 0));
+  const {
+    searching,
+    showPast,
+    hasVisibleResults,
+    outOfRange,
+    pageUnreadable,
+    searchMiss,
+    weeks,
+    monthEmpty,
+  } = deriveCalendarScreenState({
+    state,
+    upcoming,
+    past,
+    pastMayBeTruncated,
+    monthReadMayBeIncomplete,
+    zone,
+    now,
+    totalPages,
+    emptyState,
+    discordFailed,
+    gameFilter,
+  });
+  const hasResultsOrPageNotice = hasVisibleResults || outOfRange || pageUnreadable;
   const url = calendarUrl(state);
-  const byDay = new Map<string, CalRow[]>();
-  const pushDay = (day: string, e: CalRow) => {
-    const list = byDay.get(day) ?? [];
-    list.push(e);
-    byDay.set(day, list);
-  };
-  // Canonical upcoming rows occupy every host-zone day their finite interval
-  // touches, clipped to the grid before iteration; transients and past rows
-  // keep start-day-only plotting.
-  const gridRange = calendarGridRange(state.month);
-  for (const e of upcoming) {
-    if (!isTransient(e) && gridRange) {
-      for (const day of canonicalIntervalDays(
-        e.startsAt,
-        e.endsAt,
-        e.timezone,
-        gridRange.first,
-        gridRange.last,
-      )) {
-        pushDay(day, e);
-      }
-    } else {
-      pushDay(wallDateIso(e.startsAt, rowZone(e, zone)), e);
-    }
-  }
-  if (showPast) {
-    for (const e of past) {
-      pushDay(wallDateIso(e.startsAt, rowZone(e, zone)), e);
-    }
-  }
-  const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
-  // Month-local emptiness follows occupied in-month cells, including canonical
-  // continuations, but never spillover cells. Count past start-days even with
-  // the drawer closed: the claim names the month, not just the visible rows.
-  // A truncated past drawer (at the cap) leaves months at or before the wall month
-  // incomplete — older in-month past rows may exist unread — so the claim is
-  // suppressed there; future months cannot hold past rows. A failed source
-  // suppresses the claim — October may only look empty — while the
-  // error/never/gap states keep their own precedence. A game-scoped miss
-  // already names the effective scope with its own broadening link, so it
-  // suppresses the unscoped month sentence: with game-filtered grid rows the
-  // sentence is false when another game occupies the month, and its
-  // Upcoming-events link would land back on the same filtered zero.
-  const monthHasInMonthRows =
-    weeks.some((week) => week.some((day) => day.inMonth && day.events.length > 0)) ||
-    past.some((e) => wallDateIso(e.startsAt, rowZone(e, zone)).startsWith(`${state.month}-`));
-  const pastMayBeTruncated = pastMayBeTruncatedProp;
-  const monthCouldHoldPast = state.month <= wallMonth(now, zone);
-  const monthEmpty =
-    emptyState === null &&
-    state.view === "calendar" &&
-    !discordFailed &&
-    !monthHasInMonthRows &&
-    !(pastMayBeTruncated && monthCouldHoldPast) &&
-    !searchMiss;
   return (
     <ScheduleShell
       title="Events"
@@ -194,6 +144,7 @@ export const EventsCalendarPage: FC<{
       <section
         data-island={EVENTS_CALENDAR_ISLAND}
         data-testid={EVENTS_CALENDAR_TESTID}
+        data-discord-read={calendarDiscordReadMarker(discordSnapshotAt, discordFailed)}
         data-view={state.view}
         data-month={state.month}
         data-past={state.past ? "1" : ""}
@@ -227,9 +178,11 @@ export const EventsCalendarPage: FC<{
           pastCount={past.length}
           searching={searching}
           emptyState={emptyState}
-          hasVisibleResults={hasVisibleResults}
-          outOfRange={outOfRange}
+          hasSearchResults={hasResultsOrPageNotice}
+          pageUnreadable={pageUnreadable}
+          searchMiss={searchMiss}
           gameFilter={gameFilter}
+          discordFailed={discordFailed}
         />
 
         <CalendarHead state={state} appUrl={appUrl} gameFilter={gameFilter} />
@@ -273,14 +226,14 @@ export const EventsCalendarPage: FC<{
         <div data-cal-zone="content" data-testid={EVENTS_CONTENT_TESTID}>
           {/* Partial source: healthy rows stay useful beside the notice. An
               empty state (including the failed-empty error) takes precedence,
-              and an out-of-range page keeps its turns back into the schedule.
+              and a page notice keeps its turns back into the schedule.
               The month grid renders whenever there is no empty state, so an
               empty month of a non-empty schedule carries the notice too —
               without it the month would read as definitively empty. Inside
               the swapped zone so fragment turns add/remove the notice. */}
           {discordFailed &&
           emptyState === null &&
-          (hasVisibleResults || outOfRange || state.view === "calendar") ? (
+          (hasResultsOrPageNotice || state.view === "calendar") ? (
             <PartialSourceNotice url={url} inviteUrl={inviteUrl} />
           ) : null}
 
@@ -292,7 +245,7 @@ export const EventsCalendarPage: FC<{
             <EmptyGap past={past} zone={zone} />
           ) : null}
 
-          {emptyState === null && (hasVisibleResults || outOfRange) && state.view === "list" ? (
+          {emptyState === null && hasResultsOrPageNotice && state.view === "list" ? (
             <CalendarList
               state={state}
               upcoming={upcoming}
@@ -301,6 +254,7 @@ export const EventsCalendarPage: FC<{
               now={now}
               totalPages={totalPages}
               outOfRange={outOfRange}
+              pageUnreadable={pageUnreadable}
               showPast={showPast}
               member={member}
               inviteUrl={inviteUrl}
@@ -336,7 +290,7 @@ export const EventsCalendarPage: FC<{
 
           {monthEmpty ? (
             <div data-testid={CALENDAR_MONTH_EMPTY_TESTID}>
-              <p>{calendarMonthEmptyCopy(state.month)}</p>
+              <p>{calendarMonthEmptyCopy(state.month, gameFilter)}</p>
               <p>
                 <a href={calendarUrl({ ...state, view: "list" })}>
                   {CALENDAR_MONTH_EMPTY_RECOVERY_COPY}

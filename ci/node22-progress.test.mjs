@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,15 +8,16 @@ import { test } from "node:test";
 import { sampleProcesses, startProgress } from "./node22-progress.mjs";
 
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-const job = workflow.split("\n  node22-compat:\n")[1]?.split("\n  bundle-budget:\n")[0];
-const step =
-  job?.match(
-    /      - name: Lint \+ typecheck \+ unit tests on Node 22\.23\.0\n([\s\S]*?)(?=\n  \w)/,
-  )?.[1] ?? job?.slice(job.indexOf("      - name: Lint + typecheck + unit tests"));
+const job = workflow.split("\n  node22-shard:\n")[1]?.split("\n  node22-compat:\n")[0];
+const merge = workflow.split("\n  node22-compat:\n")[1]?.split("\n  bundle-budget:\n")[0];
+const step = job
+  ?.split("\n      - name: Run Node 22.23.0 Vitest shard\n")[1]
+  ?.split("\n      - ")[0];
 const command = step
   ?.match(/        run: \|\n([\s\S]*?)(?=        env:)/)?.[1]
   .replace(/^          /gm, "");
-const original = "npm run lint && npm run typecheck && npm test";
+const shardCommand = (shard) =>
+  `npm test -- --shard=${shard}/3 --reporter=dot --reporter=blob --outputFile.blob=vitest-${shard}.json`;
 const sentinel = "fixture-private-value-not-for-telemetry";
 // Test-only readiness wrapper, installed in the fixture at the
 // `ci/node22-progress.mjs` path the pinned workflow shell invokes. The shell
@@ -177,34 +178,136 @@ test("PID reuse stops observation instead of reporting an unrelated root", async
 });
 
 test("workflow retains the exact suite, scope gate, hosted runner, timeout and required dependency", () => {
-  assert.ok(command, "workflow must start the sidecar around the original command");
+  assert.ok(command, "workflow must start the sidecar around the shard command");
   assert.match(command, /^node ci\/node22-progress\.mjs "\$\$" &\n/);
-  assert.ok(command.trimEnd().endsWith(original));
   assert.match(
     command,
     /trap 'kill "\$diagnostics_pid" 2>\/dev\/null \|\| :; wait "\$diagnostics_pid" 2>\/dev\/null \|\| :' EXIT/,
   );
   assert.match(
-    step,
-    /if: \(needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'\)/,
+    job,
+    /if: \$\{\{ !cancelled\(\) && needs\.scope\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true' \}\}/,
   );
   assert.doesNotMatch(step, /continue-on-error|timeout-minutes/);
   assert.match(job, /timeout-minutes: 45\n/);
-  assert.match(job, /!github.event.repository.private && '\["ubuntu-latest"\]'/);
+  assert.match(job, /^    runs-on: ubuntu-latest$/m);
   assert.match(job, /image: node:22\.23\.0-bookworm/);
   assert.match(job, /run: node --test ci\/node22-progress\.test\.mjs/);
+  assert.match(job, /shard: \[1, 2, 3\]/);
+  assert.match(step, /SHARDS: \$\{\{ strategy\.job-total \}\}/);
+  assert.match(merge, /needs: \[scope, node22-shard\]/);
+  assert.match(
+    merge,
+    /SHARD_RESULT: \$\{\{ needs\.node22-shard\.result \}\}\n        run: test "\$SHARD_RESULT" = success/,
+  );
   assert.match(workflow, /NODE22_COMPAT_RESULT: \$\{\{ needs\.node22-compat\.result }}/);
   assert.match(workflow, /run: test "\$NODE22_COMPAT_RESULT" = success/);
 });
 
-for (const [failAt, expected] of [
+test("the report merge rejects partial or empty input before calling Vitest", async (t) => {
+  const dir = await scratch(t);
+  const blobs = join(dir, "vitest-blob");
+  const cli = join(dir, "node_modules/vitest/vitest.mjs");
+  await mkdir(blobs);
+  await mkdir(join(dir, "ci"));
+  await mkdir(join(dir, "node_modules/vitest"), { recursive: true });
+  await writeFile(
+    join(dir, "ci/verify-vitest-shards.mjs"),
+    await readFile(new URL("./verify-vitest-shards.mjs", import.meta.url)),
+  );
+  await writeFile(
+    join(dir, "node_modules/vitest/package.json"),
+    JSON.stringify({ exports: { "./node": "./node.mjs" } }),
+  );
+  await writeFile(
+    join(dir, "node_modules/vitest/node.mjs"),
+    `import { resolve } from "node:path";
+export async function createVitest({ shard }) {
+  const [index, count] = shard.split("/");
+  if (count !== "3") throw new Error("Wrong shard count");
+  return {
+    config: { sequence: { sequencer: class {
+      async shard(specifications) {
+        return specifications.filter((specification) => specification.shard === index);
+      }
+    } } },
+    getRelevantTestSpecifications: async () => [
+      ...["1", "2", "3"].map((shard) => ({ shard, moduleId: resolve("shard-" + shard + ".test.ts") })),
+      { shard: "2", moduleId: resolve("extra.test.ts") },
+    ],
+    close: async () => {},
+  };
+}`,
+  );
+  await writeFile(cli, 'console.log("merged"); process.exitCode = Number(process.env.MERGE_EXIT);');
+  // A Flatted Vitest tuple with one entry per file task and its filepath.
+  const blob = (paths) =>
+    JSON.stringify([
+      ["1", "2", "3", null, 0, "4"],
+      "5.1.0",
+      paths.map((_, index) => String(5 + 2 * index)),
+      [],
+      {},
+      ...paths.flatMap((filepath, index) => [{ filepath: String(6 + 2 * index) }, filepath]),
+    ]);
+  const step = merge.split("      - name: Merge Node 22 Vitest reports\n")[1];
+  const script = step.split("        run: |\n")[1];
+  const run = (exit = 0) =>
+    spawnSync("sh", ["-e", "-c", script], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, MERGE_EXIT: String(exit) },
+    });
+  for (const shard of [1, 2, 3]) {
+    assert.notEqual(run().status, 0);
+    const paths = [join(dir, `shard-${shard}.test.ts`)];
+    if (shard === 2) paths.push(join(dir, "extra.test.ts"));
+    await writeFile(join(blobs, `vitest-${shard}.json`), blob(paths));
+  }
+  const complete = run();
+  assert.equal(complete.status, 0, complete.stderr);
+  assert.equal(complete.stdout.trim(), "merged");
+  assert.equal(run(9).status, 9);
+  const shard2 = join(blobs, "vitest-2.json");
+  for (const [paths, error] of [
+    [["shard-2.test.ts"], /missing: extra\.test\.ts/],
+    [["shard-2.test.ts", "shard-1.test.ts"], /unexpected or duplicate: shard-1\.test\.ts/],
+    [
+      ["shard-2.test.ts", "extra.test.ts", "extra.test.ts"],
+      /unexpected or duplicate: extra\.test\.ts/,
+    ],
+  ]) {
+    await writeFile(shard2, blob(paths.map((path) => join(dir, path))));
+    const invalid = run();
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stderr, /vitest-2\.json: Vitest inventory mismatch/);
+    assert.match(invalid.stderr, error);
+    assert.doesNotMatch(invalid.stdout, /merged/);
+  }
+  for (const [contents, error] of [
+    ["{", /SyntaxError/],
+    ["{}", /vitest-2\.json: invalid Vitest blob tuple/],
+    ['[["1","99"]]', /vitest-2\.json: invalid Vitest blob reference/],
+  ]) {
+    await writeFile(shard2, contents);
+    const malformed = run();
+    assert.notEqual(malformed.status, 0);
+    assert.match(malformed.stderr, error);
+    assert.doesNotMatch(malformed.stdout, /merged/);
+  }
+  await writeFile(shard2, "");
+  assert.notEqual(run().status, 0);
+});
+
+for (const [failAt, expected, shard = 1] of [
   ["none", 0],
   ["lint", 7],
   ["typecheck", 8],
   ["test", 9],
   ["signal", 143],
+  ["none", 0, 2],
 ]) {
-  test(`actual workflow shell preserves output, environment, order, exit and cleanup: ${failAt}`, {
+  test(`shard shell preserves output, environment, order, exit and cleanup: ${shard}/${failAt}`, {
     timeout: 15000,
   }, async (t) => {
     assert.ok(command);
@@ -231,8 +334,12 @@ if (readyFile) {
   }
 }
 const args = process.argv.slice(2);
-assert.ok(JSON.stringify([["run", "lint"], ["run", "typecheck"], ["test"]]).includes(JSON.stringify(args)));
-const stage = args.at(-1);
+const stage = args[0] === "test" ? "test" : args[1];
+if (stage === "test") assert.deepEqual(args, ${JSON.stringify(shardCommand(shard).split(" ").slice(1))});
+else {
+  assert.ok(["lint", "typecheck"].includes(stage));
+  assert.deepEqual(args, ["run", stage]);
+}
 console.log("out:" + stage);
 console.error("err:" + stage);
 setTimeout(() => {
@@ -253,6 +360,8 @@ setTimeout(() => {
           PATH: `${join(dir, "bin")}:${process.env.PATH}`,
           DIAGNOSTIC_CANARY: sentinel,
           FAIL_AT: failAt,
+          SHARD: String(shard),
+          SHARDS: "3",
           ...extraEnv,
         },
         stdio: ["ignore", "pipe", "pipe"],
@@ -268,7 +377,9 @@ setTimeout(() => {
       const [code, signal] = await once(child, "close");
       return { code, signal, stdout, stderr };
     }
-    const baseline = await run(original);
+    const baseline = await run(
+      `${shard === 1 ? "npm run lint && npm run typecheck && " : ""}${shardCommand(shard)}`,
+    );
     const monitored = await run(command, { DIAGNOSTIC_READY_FILE: join(dir, "sidecar-ready") });
     assert.equal(monitored.code, expected, monitored.stderr);
     assert.equal(monitored.code, baseline.code);

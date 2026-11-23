@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, copyFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,7 @@ import {
   PLANETSCALE_PRODUCTION_HOST,
   PLANETSCALE_STAGING_BRANCH_ID,
   PLANETSCALE_STAGING_HOST,
+  assertProductionIdentity,
   captureDriverRaceCrashes,
   isDriverConnectionRaceCrash,
   migrationClient,
@@ -27,8 +28,10 @@ import {
   SEQUENCE_RIGHTS,
   TABLE_RIGHTS,
   assertRuntimeDefaultAcl,
+  assertServingLedgerIsolation,
   validateMigrationSql,
 } from "./migration-runtime-rights.mjs";
+import { rehearseWebReadiness } from "./web-readiness-rehearsal.mjs";
 
 const mainEnv = {
   GITHUB_REF: "refs/heads/main",
@@ -38,6 +41,17 @@ const mainEnv = {
 const script = fileURLToPath(new URL("./db-migrate.mjs", import.meta.url));
 const source = fileURLToPath(new URL("../drizzle", import.meta.url));
 const journal = JSON.parse(readFileSync(join(source, "meta/_journal.json"), "utf8"));
+const tags = journal.entries.map((entry) => entry.tag);
+const productionEnv = {
+  MIGRATION_TARGET: "production",
+  PRODUCTION_DEPLOY_ENABLED: "true",
+  GITHUB_SHA: "a".repeat(40),
+  PRODUCTION_MIGRATION_APPROVED_SHA: "a".repeat(40),
+  PRODUCTION_MIGRATION_IDENTITY_SHA256: "b".repeat(64),
+  PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: tags.join(","),
+};
+const identityHash = (database, role) =>
+  createHash("sha256").update(database).update(Buffer.of(0)).update(role).digest("hex");
 
 function testAdminUrl() {
   const raw =
@@ -100,7 +114,7 @@ async function fixture(callback) {
         { ...env, ...overrides },
         { testDatabase: true, report: (line) => output.push(line) },
       );
-    await callback({ client, run, env, output });
+    await callback({ client, run, env, output, url });
   } finally {
     try {
       if (client) await client.end();
@@ -162,8 +176,14 @@ test("the workflow's actual shell gate denies disabled production and non-main r
     new URL("../.github/workflows/db-migrate.yml", import.meta.url),
     "utf8",
   );
-  const gate = workflow.match(/        run: \|\n([\s\S]*?)\n      - uses:/)?.[1];
-  assert.ok(gate, "workflow gate must be present before checkout");
+  const gateAt = workflow.indexOf("      - name: Ref and production enable gate");
+  const nextStepAt = workflow.indexOf("\n      - ", gateAt + 1);
+  assert.ok(
+    gateAt >= 0 && nextStepAt > gateAt && nextStepAt < workflow.indexOf("actions/checkout"),
+    "workflow gate must be a distinct step before checkout",
+  );
+  const gate = workflow.slice(gateAt, nextStepAt).split("        run: |\n")[1];
+  assert.ok(gate, "workflow gate must have a Bash script before checkout");
   const script = gate
     .split("\n")
     .map((line) => line.slice(10))
@@ -186,8 +206,7 @@ test("the workflow's actual shell gate denies disabled production and non-main r
       env: {
         ...process.env,
         ...mainEnv,
-        MIGRATION_TARGET: "production",
-        PRODUCTION_DEPLOY_ENABLED: "true",
+        ...productionEnv,
       },
     }).status,
     0,
@@ -198,11 +217,18 @@ test("the workflow's actual shell gate denies disabled production and non-main r
     }).status,
     1,
   );
-  assert.ok(
-    workflow.includes(
-      `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`,
-    ),
-  );
+  const stagingReadback = spawnSync("bash", ["-c", script], {
+    env: { ...process.env, ...mainEnv, READBACK_ONLY: "true" },
+    encoding: "utf8",
+  });
+  assert.equal(stagingReadback.status, 1);
+  assert.match(stagingReadback.stderr, /Readback-only is production-only/);
+  const productionReadback = spawnSync("bash", ["-c", script], {
+    env: { ...process.env, ...mainEnv, ...productionEnv, READBACK_ONLY: "true" },
+    encoding: "utf8",
+  });
+  assert.equal(productionReadback.status, 0, productionReadback.stderr);
+  assert.ok(workflow.includes("    runs-on: ubuntu-latest\n"));
   assert.match(workflow, /environment: \$\{\{ inputs.target \}\}/);
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(workflow, /bash ci\/check-migration-numbers.sh/);
@@ -241,8 +267,7 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
     () =>
       migrationConfig({
         ...mainEnv,
-        MIGRATION_TARGET: "production",
-        PRODUCTION_DEPLOY_ENABLED: "true",
+        ...productionEnv,
         PLANETSCALE_STAGING_DATABASE_URL: "unused",
       }),
     /Missing PRODUCTION_DATABASE_URL/,
@@ -268,28 +293,27 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
     () => migrationConfig({ ...mainEnv, PLANETSCALE_STAGING_DATABASE_URL: retiredNeon }),
     /pinned staging endpoint/,
   );
-  // Production is PlanetScale: a retired Neon URL must be refused, and a
-  // direct PlanetScale URL (5432, pooled 6432 never) must be accepted.
-  const production = "postgres://user:stub@stub-1.pg.psdb.cloud/db?sslmode=require";
+  // Only the pinned direct production host and branch are accepted.
+  const production = `postgres://role-stub.${PLANETSCALE_PRODUCTION_BRANCH_ID}:stub@${PLANETSCALE_PRODUCTION_HOST}/db?sslmode=require`;
   assert.equal(
     migrationConfig({
       ...mainEnv,
-      MIGRATION_TARGET: "production",
-      PRODUCTION_DEPLOY_ENABLED: "true",
+      ...productionEnv,
       PRODUCTION_DATABASE_URL: production,
     }).target,
     "production",
   );
-  assert.throws(
-    () =>
-      migrationConfig({
-        ...mainEnv,
-        MIGRATION_TARGET: "production",
-        PRODUCTION_DEPLOY_ENABLED: "true",
-        PRODUCTION_DATABASE_URL: retiredNeon,
-      }),
-    /PlanetScale/,
-  );
+  for (const wrong of [
+    retiredNeon,
+    production.replace(PLANETSCALE_PRODUCTION_HOST, PLANETSCALE_STAGING_HOST),
+    production.replace(PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_STAGING_BRANCH_ID),
+    production.replace(".pg.psdb.cloud", "-pooler.pg.psdb.cloud"),
+  ]) {
+    assert.throws(
+      () => migrationConfig({ ...mainEnv, ...productionEnv, PRODUCTION_DATABASE_URL: wrong }),
+      /pinned direct production PlanetScale endpoint/,
+    );
+  }
   // Only the pinned PlanetScale staging branch is accepted for staging: the
   // username suffix carries the branch id, so a production URL in the staging
   // secret fails closed even though staging migrations run automatically on
@@ -440,27 +464,350 @@ test("fresh database: plan is read-only, apply includes bootstraps, zero-pending
   });
 });
 
-test("partial journal prefix: remaining web SQL applies through the enabled production path on the test fixture", async () => {
+async function withJournalPrefix(callback) {
   const scratch = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "web-migrate-selftest-"),
   );
   try {
     mkdirSync(join(scratch, "meta"));
-    const prefix = { ...journal, entries: journal.entries.slice(0, 3) };
-    writeFileSync(join(scratch, "meta/_journal.json"), JSON.stringify(prefix));
-    for (const entry of prefix.entries)
+    for (const entry of journal.entries)
       copyFileSync(join(source, `${entry.tag}.sql`), join(scratch, `${entry.tag}.sql`));
-    await fixture(async ({ client, run }) => {
+    await callback(async (client, length) => {
+      const prefix = { ...journal, entries: journal.entries.slice(0, length) };
+      writeFileSync(join(scratch, "meta/_journal.json"), JSON.stringify(prefix));
       await migrate(drizzle(client), { migrationsFolder: scratch });
-      assert.equal((await run("plan")).length, journal.entries.length - 3);
-      await run("apply", { MIGRATION_TARGET: "production", PRODUCTION_DEPLOY_ENABLED: "true" });
-      assert.equal((await run("verify")).length, 0);
-      await client`update drizzle.__drizzle_migrations set hash = 'edited' where id = 1`;
-      await assert.rejects(run("apply"), /exact prefix/);
     });
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+const approvedTags = tags.slice(-4);
+const approvedPrefixLength = tags.length - approvedTags.length;
+const scopeRefusal = /pending tags do not match the approved scope/;
+
+async function approvedScopeEnv(client, scope = approvedTags) {
+  const [{ db, role }] = await client`select current_database() as db, session_user as role`;
+  return {
+    ...productionEnv,
+    PRODUCTION_MIGRATION_IDENTITY_SHA256: identityHash(db, role),
+    PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: scope.join(","),
+  };
+}
+
+test("production refuses an invalid scope pin and applies only the approved ordered suffix", async () => {
+  await withJournalPrefix(async (seedPrefix) => {
+    await fixture(async ({ client, run }) => {
+      await seedPrefix(client, approvedPrefixLength);
+      assert.equal((await run("plan")).length, approvedTags.length);
+      const approved = await approvedScopeEnv(client);
+      const before = await migrationState(client);
+      for (const pin of [
+        undefined,
+        "",
+        approvedTags.join(", "),
+        [...approvedTags].reverse().join(","),
+        [approvedTags[0], approvedTags[2]].join(","),
+        [...approvedTags, approvedTags.at(-1)].join(","),
+        [...approvedTags.slice(0, -1), "9999_unknown"].join(","),
+      ]) {
+        await assert.rejects(
+          run("apply", { ...approved, PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: pin }),
+          /scope must pin an exact contiguous segment/,
+        );
+      }
+      assert.deepEqual(await migrationState(client), before);
+      assert.deepEqual(
+        (await run("plan", approved)).map((entry) => entry.tag),
+        approvedTags,
+      );
+      await assert.rejects(run("verify", approved), /remain pending/);
+      await run("apply", approved);
+      assert.equal((await run("verify-scope", approved)).length, 0);
+      assert.equal((await run("verify", approved)).length, 0);
+      await assert.rejects(run("apply", approved), scopeRefusal);
+      await client`update drizzle.__drizzle_migrations set hash = 'edited' where id = 1`;
+      await assert.rejects(run("apply"), /exact prefix/);
+    });
+  });
+});
+
+async function migrationState(client) {
+  return {
+    columns: [
+      ...(await client`
+      select c.relname, a.attname from pg_attribute a
+      join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname in ('public', 'drizzle') and a.attnum > 0 and not a.attisdropped
+      order by n.nspname, c.relname, a.attnum`),
+    ],
+    ledger: [...(await client`select * from drizzle.__drizzle_migrations order by id`)],
+    sequence: [
+      ...(await client`select last_value, is_called from drizzle.__drizzle_migrations_id_seq`),
+    ],
+  };
+}
+
+test("production applies and reads back a bounded range without applying the deferred tail", async () => {
+  const start = tags.indexOf("1034_event-echoes");
+  const end = tags.indexOf("1038_announcement-send-claims");
+  assert.ok(start > 0 && end - start === 4);
+  const scope = tags.slice(start, end);
+  const deferred = tags.slice(end);
+  await withJournalPrefix(async (seedPrefix) => {
+    await fixture(async ({ client, run, output }) => {
+      const approved = await approvedScopeEnv(client, scope);
+      await seedPrefix(client, start - 1);
+      const earlier = await migrationState(client);
+      await assert.rejects(run("apply", approved), scopeRefusal);
+      assert.deepEqual(await migrationState(client), earlier);
+
+      await seedPrefix(client, start);
+      const before = await migrationState(client);
+      const overlap = await approvedScopeEnv(client, tags.slice(start - 1, end));
+      await assert.rejects(run("apply", overlap), scopeRefusal);
+      await assert.rejects(
+        run("verify-scope", approved),
+        /ledger has not reached the approved end/,
+      );
+      assert.deepEqual(
+        (await run("plan", approved)).map((entry) => entry.tag),
+        scope,
+      );
+      assert.deepEqual(await migrationState(client), before);
+
+      const [first] = before.ledger;
+      const refusesEditedHash = async (mode) => {
+        await client`update drizzle.__drizzle_migrations set hash = 'edited' where id = ${first.id}`;
+        const edited = await migrationState(client);
+        output.length = 0;
+        await assert.rejects(run(mode, approved), /not an exact prefix/);
+        assert.ok(!output.some((line) => line.startsWith("Pre-migration PITR timestamp")));
+        assert.deepEqual(await migrationState(client), edited);
+        await client`update drizzle.__drizzle_migrations set hash = ${first.hash} where id = ${first.id}`;
+      };
+      await refusesEditedHash("apply");
+
+      // The SQL succeeds, but the final ledger insert is silently skipped.
+      // Only the in-transaction end check can catch that before committing DDL.
+      await client.unsafe(`create function drizzle.skip_approved_end() returns trigger
+        language plpgsql as $$ begin
+          if new.created_at = ${journal.entries[end - 1].when} then return null; end if;
+          return new;
+        end; $$`);
+      await client`create trigger skip_approved_end before insert on drizzle.__drizzle_migrations
+        for each row execute function drizzle.skip_approved_end()`;
+      output.length = 0;
+      await assert.rejects(run("apply", approved), /ledger has not reached the approved end/);
+      assert.ok(!output.some((line) => line.startsWith("Scoped apply:")));
+      const rolledBack = await migrationState(client);
+      assert.deepEqual(rolledBack.ledger, before.ledger);
+      assert.deepEqual(rolledBack.columns, before.columns);
+      await client`drop trigger skip_approved_end on drizzle.__drizzle_migrations`;
+      await client`drop function drizzle.skip_approved_end()`;
+
+      for (const mode of ["apply", "verify-scope"]) {
+        output.length = 0;
+        assert.deepEqual(
+          (await run(mode, approved)).map((entry) => entry.tag),
+          deferred,
+        );
+        assert.ok(output.includes(`Deferred web migrations: ${deferred.join(", ")}.`));
+        assert.ok(!output.some((line) => line.includes("zero pending web migrations")));
+      }
+      const after = await migrationState(client);
+      assert.deepEqual(after.ledger.slice(0, start), before.ledger);
+      assert.deepEqual(
+        after.ledger.slice(start).map((row) => Number(row.created_at)),
+        journal.entries.slice(start, end).map((entry) => entry.when),
+      );
+      const [{ tailTable }] =
+        await client`select to_regclass('public.announcement_send_claims') as "tailTable"`;
+      assert.equal(tailTable, null);
+      await refusesEditedHash("verify-scope");
+      await assert.rejects(run("verify", approved), /remain pending/);
+      await assert.rejects(run("apply", approved), scopeRefusal);
+      assert.deepEqual(await migrationState(client), after);
+
+      await seedPrefix(client, end + 1);
+      const later = await migrationState(client);
+      await assert.rejects(
+        run("verify-scope", approved),
+        /ledger has advanced past the approved end/,
+      );
+      assert.deepEqual(await migrationState(client), later);
+    });
+  });
+});
+
+test("production refuses earlier and later exact prefixes, including drift after plan, without writes", async () => {
+  await withJournalPrefix(async (seedPrefix) => {
+    await fixture(async ({ client, run, output }) => {
+      const approved = await approvedScopeEnv(client);
+      const assertRefused = async (...modes) => {
+        const before = await migrationState(client);
+        output.length = 0;
+        for (const mode of modes) await assert.rejects(run(mode, approved), scopeRefusal);
+        assert.ok(!output.some((line) => line.startsWith("Pre-migration PITR timestamp")));
+        assert.deepEqual(await migrationState(client), before);
+      };
+
+      await seedPrefix(client, approvedPrefixLength - 1);
+      await assertRefused("plan", "apply");
+      await seedPrefix(client, approvedPrefixLength);
+      assert.deepEqual(
+        (await run("plan", approved)).map((entry) => entry.tag),
+        approvedTags,
+      );
+      await seedPrefix(client, approvedPrefixLength + 1);
+      // The changed prefix must not be checked until apply holds the lock.
+      await client.begin(async (transaction) => {
+        await transaction`select pg_advisory_xact_lock(11161001)`;
+        await assert.rejects(
+          run("apply", approved),
+          /Another web migration holds the database lock/,
+        );
+      });
+      await assertRefused("apply", "plan");
+      await assert.rejects(run("verify", approved), /remain pending/);
+    });
+  });
+});
+
+test("production apply sees a prefix committed between identity and lock despite a repeatable-read default", async () => {
+  await withJournalPrefix(async (seedPrefix) => {
+    await fixture(async ({ client, run, env, output }) => {
+      await seedPrefix(client, approvedPrefixLength);
+      const approved = await approvedScopeEnv(client);
+      const [{ db }] = await client`select current_database() as db`;
+      await client`alter database ${client(db)} set default_transaction_isolation to 'repeatable read'`;
+      assert.deepEqual(
+        (await run("plan", approved)).map((entry) => entry.tag),
+        approvedTags,
+      );
+      output.length = 0;
+      let committedState;
+      await assert.rejects(
+        runMigration(
+          "apply",
+          { ...env, ...approved },
+          {
+            testDatabase: true,
+            report: async (line) => {
+              output.push(line);
+              if (line !== "Production migration database and role identity matched.") return;
+              // The runner awaits this report before attempting its lock. Hold
+              // the same advisory lock around the other writer's Drizzle commit.
+              const [{ acquired }] =
+                await client`select pg_try_advisory_lock(11161001) as acquired`;
+              assert.equal(acquired, true);
+              try {
+                await seedPrefix(client, approvedPrefixLength + 1);
+                committedState = await migrationState(client);
+              } finally {
+                await client`select pg_advisory_unlock(11161001)`;
+              }
+            },
+          },
+        ),
+        scopeRefusal,
+      );
+      assert.equal(committedState?.ledger.length, approvedPrefixLength + 1);
+      assert.ok(!output.some((line) => line.startsWith("Pre-migration PITR timestamp")));
+      assert.deepEqual(await migrationState(client), committedState);
+    });
+  });
+});
+
+test("production refuses a missing pin before access and a changed identity before DDL", async () => {
+  for (const pin of [undefined, "", "DO_NOT_ECHO"]) {
+    await assert.rejects(
+      runMigration("apply", {
+        ...mainEnv,
+        ...productionEnv,
+        PRODUCTION_MIGRATION_IDENTITY_SHA256: pin,
+      }),
+      { message: "Production migration identity setting is missing or malformed." },
+    );
+  }
+  await fixture(async ({ client, run, output, url }) => {
+    const [{ db, role }] = await client`select current_database() as db, session_user as role`;
+    const approved = {
+      ...productionEnv,
+      PRODUCTION_MIGRATION_IDENTITY_SHA256: identityHash(db, role),
+    };
+    assert.equal((await run("plan", approved)).length, journal.entries.length);
+    assert.equal(output[0], "Production migration database and role identity matched.");
+    output.length = 0;
+    const refusal = {
+      message: "Production migration database or role identity did not match; values withheld.",
+    };
+    // The live database matches the digest but not the URL pin. Exercise that
+    // comparison independently without pointing a connection at another database.
+    const wrongUrl = new URL("/wrong_database", url);
+    await assert.rejects(
+      assertProductionIdentity(
+        client,
+        { target: "production", url: wrongUrl, identity: identityHash(db, role) },
+        (line) => output.push(line),
+      ),
+      refusal,
+    );
+    for (const pin of [identityHash(db, "wrong_role"), identityHash("wrong_database", role)]) {
+      await assert.rejects(
+        run("apply", { ...approved, PRODUCTION_MIGRATION_IDENTITY_SHA256: pin }),
+        refusal,
+      );
+    }
+    // New connections start with a different effective role, even though the
+    // authenticated role and database still match the successful plan.
+    await client`alter database ${client(db)} set role to pg_read_all_data`;
+    try {
+      await assert.rejects(run("apply", approved), refusal);
+      // Even an approved effective role cannot stand in for the login role.
+      await assert.rejects(
+        run("apply", {
+          ...approved,
+          PRODUCTION_MIGRATION_IDENTITY_SHA256: identityHash(db, "pg_read_all_data"),
+        }),
+        refusal,
+      );
+    } finally {
+      await client`alter database ${client(db)} reset role`;
+    }
+    assert.deepEqual(output, []);
+    const [state] =
+      await client`select to_regnamespace('drizzle') as schema, to_regclass('public.users') as users`;
+    assert.deepEqual({ ...state }, { schema: null, users: null });
+  });
+});
+
+test("production plan and both verification modes check identity inside the journal transaction", async () => {
+  await fixture(async ({ client, env }) => {
+    const [{ db, role }] = await client`select current_database() as db, session_user as role`;
+    const approved = {
+      ...env,
+      ...productionEnv,
+      PRODUCTION_MIGRATION_IDENTITY_SHA256: identityHash(db, role),
+    };
+    const checked = [];
+    const run = (mode) =>
+      runMigration(mode, approved, {
+        testDatabase: true,
+        report: async (line) => {
+          if (line !== "Production migration database and role identity matched.") return;
+          const [runner] = await client`
+            select state from pg_catalog.pg_stat_activity
+            where datname = current_database() and pid <> pg_backend_pid()`;
+          assert.equal(runner?.state, "idle in transaction");
+          checked.push(mode);
+        },
+      });
+    assert.equal((await run("plan")).length, journal.entries.length);
+    await assert.rejects(run("verify"), /remain pending/);
+    await assert.rejects(run("verify-scope"), /ledger has not reached the approved end/);
+    assert.deepEqual(checked, ["plan", "verify", "verify-scope"]);
+  });
 });
 
 test("canonical Drizzle migrator applies a pending migration after the runner", async () => {
@@ -549,12 +896,7 @@ test("another role's default ACL does not block this migration", async () => {
 
 test("runtime-role connection is refused while the reviewed sequence default passes", async () => {
   await fixture(async ({ client, run }) => {
-    const [existing] = await client`select 1 from pg_roles where rolname = 'two_web_app'`;
-    if (existing) {
-      console.log("SKIP: two_web_app already exists (another suite owns it); refusing to collide.");
-      return;
-    }
-    await client.unsafe("CREATE ROLE two_web_app NOLOGIN");
+    const created = await ensureRuntimeRole(client);
     try {
       await client.unsafe(
         "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO two_web_app",
@@ -582,7 +924,7 @@ test("runtime-role connection is refused while the reviewed sequence default pas
           "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM two_web_app",
         )
         .catch(() => {});
-      await client.unsafe("DROP ROLE two_web_app");
+      await dropRuntimeRoleIfCreated(client, created);
     }
   });
 });
@@ -734,6 +1076,127 @@ async function assertLedgerRefused(client, run, reason) {
   );
   assert.equal((await client`select to_regclass('public.users') as name`)[0].name, null);
 }
+
+test("web readiness bridge rehearsal: locked expansion and scoped runtime cutover", async () => {
+  await fixture(async ({ client, url }) => {
+    const created = await ensureRuntimeRole(client);
+    try {
+      await rehearseWebReadiness(client, url);
+    } finally {
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+test("implicit ledger rights refuse; object grants preserve runtime and audit operations", async () => {
+  await fixture(async ({ client }) => {
+    const created = await ensureRuntimeRole(client);
+    const login = `serving_${randomUUID().replaceAll("-", "")}`;
+    await client.unsafe(`CREATE ROLE "${login}" LOGIN`);
+    try {
+      assert.equal((await client`select to_regnamespace('drizzle') as schema`)[0].schema, null);
+      await assert.rejects(
+        assertServingLedgerIsolation(client, login),
+        /ledger identity.*not found/,
+      );
+      await client.begin(async (tx) => {
+        await assertRuntimeDefaultAcl(tx);
+        for (const role of ["pg_read_all_data", "pg_write_all_data", "pg_maintain"]) {
+          await tx.unsafe(`GRANT ${role} TO two_web_app`);
+          await assert.rejects(assertRuntimeDefaultAcl(tx), new RegExp(`/${role}/implicit`));
+          await tx.unsafe(`REVOKE ${role} FROM two_web_app`);
+        }
+      });
+      await createFixtureLedger(client);
+      await client.begin(async (tx) => {
+        await tx`ALTER SEQUENCE drizzle.__drizzle_migrations_id_seq OWNED BY NONE`;
+        await assert.rejects(assertServingLedgerIsolation(tx, login), /ledger identity.*not found/);
+        await tx`ALTER SEQUENCE drizzle.__drizzle_migrations_id_seq OWNED BY drizzle.__drizzle_migrations.id`;
+        await assertServingLedgerIsolation(tx, login);
+      });
+
+      await client.unsafe(`GRANT pg_read_all_data, pg_write_all_data TO "${login}"`);
+      const effective = () => client`
+        select has_schema_privilege(${login}::name, 'drizzle', 'USAGE, CREATE') as schema_access,
+          has_table_privilege(${login}::name, 'drizzle.__drizzle_migrations',
+            'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN') as table_access,
+          has_any_column_privilege(${login}::name, 'drizzle.__drizzle_migrations',
+            'SELECT, INSERT, UPDATE, REFERENCES') as column_access,
+          has_sequence_privilege(${login}::name, 'drizzle.__drizzle_migrations_id_seq',
+            'SELECT, UPDATE, USAGE') as sequence_access`;
+      assert.deepEqual(await runtimeAcl(client, "drizzle.__drizzle_migrations"), []);
+      assert.deepEqual(Object.values((await effective())[0]), [true, true, true, true]);
+      await assertRuntimeDefaultAcl(client);
+      await assert.rejects(assertServingLedgerIsolation(client, login), /implicit USAGE/);
+      await assert.rejects(assertServingLedgerIsolation(client, `${login}_missing`), /not found/);
+
+      await client.unsafe(`
+        CREATE TABLE public.events (id serial PRIMARY KEY, title text NOT NULL);
+        CREATE TABLE public.agent_event_audits (id serial PRIMARY KEY, created_at timestamptz DEFAULT now());
+        CREATE TABLE public.member_data_access_logs (id serial PRIMARY KEY, occurred_at timestamptz DEFAULT now());
+        CREATE TABLE public.activity_log (id serial PRIMARY KEY, created_at timestamptz DEFAULT now());
+        ${readFileSync(join(source, "1018_audit-immutability.sql"), "utf8")}
+        GRANT USAGE ON SCHEMA public TO "${login}";
+        GRANT SELECT, INSERT, UPDATE ON public.events TO "${login}";
+        GRANT USAGE ON SEQUENCE public.events_id_seq TO "${login}";
+        GRANT SELECT, INSERT, DELETE ON public.agent_event_audits, public.member_data_access_logs TO "${login}";
+        GRANT SELECT, INSERT ON public.activity_log TO "${login}";
+        GRANT USAGE ON SEQUENCE public.agent_event_audits_id_seq,
+          public.member_data_access_logs_id_seq, public.activity_log_id_seq TO "${login}";
+        REVOKE pg_read_all_data, pg_write_all_data FROM "${login}";
+      `);
+      assert.deepEqual(Object.values((await effective())[0]), [false, false, false, false]);
+      await assertServingLedgerIsolation(client, login);
+      await client.unsafe("GRANT SELECT (hash) ON drizzle.__drizzle_migrations TO PUBLIC");
+      await assert.rejects(assertServingLedgerIsolation(client, login), /hash\/PUBLIC\/SELECT/);
+      await client.unsafe("REVOKE SELECT (hash) ON drizzle.__drizzle_migrations FROM PUBLIC");
+      await assertServingLedgerIsolation(client, login);
+
+      await client.begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL ROLE "${login}"`);
+        const [{ id }] = await tx`INSERT INTO events (title) VALUES ('Fixture') RETURNING id`;
+        await tx`UPDATE events SET title = 'Changed' WHERE id = ${id}`;
+        assert.equal((await tx`SELECT title FROM events WHERE id = ${id}`)[0].title, "Changed");
+        for (const [table, age] of [
+          ["agent_event_audits", "created_at"],
+          ["member_data_access_logs", "occurred_at"],
+          ["activity_log", "created_at"],
+        ]) {
+          const [sequence] = await tx`
+            select has_sequence_privilege(${`public.${table}_id_seq`}, 'USAGE') as usage,
+                   has_sequence_privilege(${`public.${table}_id_seq`}, 'SELECT, UPDATE') as excess`;
+          assert.deepEqual({ ...sequence }, { usage: true, excess: false });
+          const [{ id }] = await tx`INSERT INTO ${tx(table)} DEFAULT VALUES RETURNING id`;
+          assert.equal((await tx`SELECT id FROM ${tx(table)} WHERE id = ${id}`).length, 1);
+          await assert.rejects(
+            tx.savepoint((sp) => sp.unsafe(`UPDATE ${table} SET ${age} = now()`)),
+            { code: "42501" },
+          );
+          await assert.rejects(
+            tx.savepoint((sp) => sp.unsafe(`TRUNCATE ${table}`)),
+            { code: "42501" },
+          );
+          await assert.rejects(
+            tx.savepoint((sp) => sp.unsafe(`DELETE FROM ${table}`)),
+            { code: "42501" },
+          );
+          if (table !== "activity_log") {
+            await tx.unsafe(`INSERT INTO ${table} (${age}) VALUES (now() - interval '91 days')`);
+            assert.equal(
+              (await tx.unsafe(`DELETE FROM ${table} WHERE ${age} < now() - interval '90 days'`))
+                .count,
+              1,
+            );
+          }
+        }
+      });
+    } finally {
+      await client.unsafe(`DROP OWNED BY "${login}"`);
+      await client.unsafe(`DROP ROLE "${login}"`);
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
 
 test("runtime ownership refuses even when ledger relation ACLs are NULL", async () => {
   await fixture(async ({ client, run }) => {
@@ -1626,7 +2089,10 @@ assert.deepEqual(state.statements, [
    ORDER BY 1, 2, 3, 4, 5, 6
 `)},
   ${JSON.stringify(`
-  WITH targets(oid) AS (
+  WITH runtimes AS (
+    SELECT oid FROM pg_roles
+     WHERE rolname = 'two_web_app' OR (rolcanlogin AND rolname::text = $1::text)
+  ), targets(oid) AS (
     SELECT to_regclass('drizzle.__drizzle_migrations')
     UNION ALL
     SELECT CASE WHEN to_regclass('drizzle.__drizzle_migrations') IS NULL THEN NULL
@@ -1652,17 +2118,32 @@ assert.deepEqual(state.statements, [
       FROM pg_namespace AS n
       CROSS JOIN LATERAL aclexplode(n.nspacl) AS acl
      WHERE n.nspname = 'drizzle'
+    UNION ALL
+    -- Predefined roles confer rights without any object ACL entry. Check
+    -- reachability even before bootstrap creates the ledger and schema.
+    SELECT 'schema drizzle', oid, 'implicit USAGE', false FROM pg_roles
+     WHERE rolname IN ('pg_read_all_data', 'pg_write_all_data')
+    UNION ALL
+    SELECT '__drizzle_migrations', oid, 'implicit MAINTAIN', false FROM pg_roles
+     WHERE rolname = 'pg_maintain'
   )
   SELECT object_name,
-         CASE WHEN grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(grantee) END AS grantee,
+         CASE WHEN grantee = 0 THEN 'PUBLIC'
+              WHEN $1::text IS NOT NULL THEN 'runtime-reachable role'
+              ELSE pg_get_userbyid(grantee) END AS grantee,
          privilege_type,
          is_grantable,
          CASE WHEN grantee = 0 THEN true ELSE EXISTS (
-           SELECT 1 FROM pg_roles AS runtime
-            WHERE runtime.rolname = 'two_web_app'
-              AND pg_has_role(runtime.oid, rights.grantee, 'MEMBER')
+           SELECT 1 FROM runtimes AS runtime WHERE pg_has_role(runtime.oid, rights.grantee, 'MEMBER')
          ) END AS runtime_access
     FROM rights
+  UNION ALL
+  SELECT 'serving login or ledger identity', 'configured runtime', 'not found', false, true
+   WHERE $1::text IS NOT NULL AND (
+     NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolcanlogin AND rolname::text = $1::text)
+     OR NOT EXISTS (SELECT 1 FROM objects WHERE relkind = 'r' AND relname = '__drizzle_migrations')
+     OR NOT EXISTS (SELECT 1 FROM objects WHERE relkind = 'S')
+   )
    ORDER BY 1, 2, 3, 4
 `)},
   "select coalesce((select rolsuper from pg_roles where rolname = current_user), false) as is_superuser",

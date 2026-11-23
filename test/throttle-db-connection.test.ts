@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { PER_REQUEST_STATEMENT_TIMEOUT_LOCAL } from "../src/db/connection";
 import type { Env } from "../src/env";
+import { chargeWebThrottle, checkWebThrottle } from "../src/http/throttle";
 import { checkJoinThrottle } from "../src/join/service";
 import type { Sql } from "../src/sessions";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -14,10 +15,12 @@ const { makeSql } = vi.hoisted(() => ({ makeSql: vi.fn() }));
 vi.mock("postgres", () => ({ default: makeSql }));
 
 const hits = new Map<string, number>();
+const prune = vi.fn();
 const sql = Object.assign(
   async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join("?");
     if (query.includes("pg_advisory_xact_lock")) return [];
+    if (query.includes("DELETE FROM web_throttle_hits")) prune();
     const bucket = String(values[0]);
     if (query.includes("SELECT count(*)")) return [{ n: hits.get(bucket) ?? 0, wait: 30 }];
     if (query.includes("INSERT INTO web_throttle_hits"))
@@ -25,7 +28,7 @@ const sql = Object.assign(
     return [];
   },
   {
-    unsafe: vi.fn(async () => []),
+    unsafe: vi.fn(async (_statement: string) => []),
     // Transaction seam for atomic admission: single-threaded double, run inline.
     begin: (run: (tx: unknown) => Promise<unknown>) => run(sql),
   },
@@ -65,6 +68,88 @@ describe("throttle runtime connection wiring", () => {
     expect(sql.unsafe).toHaveBeenNthCalledWith(1, "SET LOCAL lock_timeout = '2000ms'");
     expect(sql.unsafe).toHaveBeenNthCalledWith(2, PER_REQUEST_STATEMENT_TIMEOUT_LOCAL);
   });
+
+  it("matches shared admission at the budget boundary without running prune itself", async () => {
+    const store = sql as unknown as Sql;
+    const direct = "probe:direct";
+    const join = "probe:join";
+    expect(await chargeWebThrottle(store, direct, 1)).toEqual({ limited: false });
+    expect(prune).not.toHaveBeenCalled();
+    expect(await checkJoinThrottle(store, join, 1)).toEqual({ limited: false });
+    expect(prune).toHaveBeenCalledTimes(1);
+    expect(await chargeWebThrottle(store, direct, 1)).toEqual({ limited: true, retryAfter: 30 });
+    expect(prune).toHaveBeenCalledTimes(1);
+    expect(await checkJoinThrottle(store, join, 1)).toEqual({ limited: true, retryAfter: 30 });
+    expect(prune).toHaveBeenCalledTimes(2);
+    expect([...hits]).toEqual([
+      [direct, 1],
+      [join, 1],
+    ]);
+    expect(sql.unsafe.mock.calls.map(([statement]) => statement)).toEqual([
+      "SET LOCAL lock_timeout = '2000ms'",
+      PER_REQUEST_STATEMENT_TIMEOUT_LOCAL,
+      "SET LOCAL lock_timeout = '2000ms'",
+      PER_REQUEST_STATEMENT_TIMEOUT_LOCAL,
+      "SET LOCAL statement_timeout = '2000ms'",
+      "SET LOCAL lock_timeout = '2000ms'",
+      PER_REQUEST_STATEMENT_TIMEOUT_LOCAL,
+      "SET LOCAL lock_timeout = '2000ms'",
+      PER_REQUEST_STATEMENT_TIMEOUT_LOCAL,
+      "SET LOCAL statement_timeout = '2000ms'",
+    ]);
+  });
+
+  it("allows a missing store but leaves the redacted warning to the join adapter", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const onPruneFailure = vi.fn();
+      const direct = await checkWebThrottle(null, "probe:fixture-client", 10, onPruneFailure);
+      expect(direct).toEqual({ limited: false });
+      expect(onPruneFailure).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(await checkJoinThrottle(null, "probe:fixture-client", 10)).toEqual(direct);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "Throttle store unavailable; allowing the request.",
+        { throttle: "probe" },
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each(["55P03", "57014"])("matches the join verdict or rejection for %s", async (code) => {
+    const error = Object.assign(new Error("fixture admission failure"), { code });
+    for (const check of [checkWebThrottle, checkJoinThrottle]) {
+      const begin = vi
+        .fn((run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql))
+        .mockRejectedValueOnce(error);
+      prune.mockClear();
+      const verdict = check({ begin } as unknown as Sql, "probe:fixture", 10);
+      if (code === "55P03") {
+        expect(await verdict).toEqual({ limited: true, retryAfter: 1 });
+        expect(begin).toHaveBeenCalledTimes(2);
+        expect(prune).toHaveBeenCalledTimes(1);
+      } else {
+        await expect(verdict).rejects.toBe(error);
+        expect(begin).toHaveBeenCalledTimes(1);
+        expect(prune).not.toHaveBeenCalled();
+      }
+      expect(hits.size).toBe(0);
+    }
+  });
+
+  it.each([null, undefined])(
+    "propagates a %s admission rejection without pruning",
+    async (reason) => {
+      const begin = vi.fn().mockRejectedValue(reason);
+      await expect(checkWebThrottle({ begin } as unknown as Sql, "probe:fixture", 10)).rejects.toBe(
+        reason,
+      );
+      expect(begin).toHaveBeenCalledTimes(1);
+      expect(prune).not.toHaveBeenCalled();
+      expect(hits.size).toBe(0);
+    },
+  );
 
   it("keeps the injected store ahead of either runtime URL", async () => {
     expect(

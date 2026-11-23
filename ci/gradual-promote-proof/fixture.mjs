@@ -26,7 +26,7 @@ const HTML_PAGES = {
   "/events": '<h1 id="events-heading">Events</h1><p>Synthetic proof fixture page.</p>',
   "/events/past":
     '<h1 id="past-events-heading">Past events</h1><p>Synthetic proof fixture page.</p>',
-  "/join": "<h1>Join Together We Own</h1><p>One click with Discord</p>",
+  "/join": '<h1 id="join-heading">Join Together We Own</h1><p>One click with Discord</p>',
 };
 
 function proofHeaders(env, extra = {}) {

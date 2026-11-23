@@ -12,10 +12,20 @@
 //
 // Live database round-trips stay in test/member-erasure.test.ts; this file
 // never connects.
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  cpSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { schemaFiles } from "../ci/schema-files.mjs";
 import { ERASURE_TABLES } from "../src/member-erasure";
 
 const root = fileURLToPath(new URL("..", import.meta.url).href);
@@ -156,7 +166,7 @@ function columnsFromDrizzleTables(text: string, source: string): LocatedColumn[]
   return found;
 }
 
-function collectMigrationColumns(): LocatedColumn[] {
+function collectMigrationColumns(dbDir = join(srcDir, "db")): LocatedColumn[] {
   const found: LocatedColumn[] = [];
   for (const file of readdirSync(drizzleDir).filter((f) => f.endsWith(".sql"))) {
     const text = readFileSync(join(drizzleDir, file), "utf8");
@@ -166,8 +176,9 @@ function collectMigrationColumns(): LocatedColumn[] {
   for (const rel of ["src/sessions.ts", "src/join/service.ts"]) {
     found.push(...columnsFromSqlText(readFileSync(join(root, rel), "utf8"), rel));
   }
-  for (const rel of ["src/db/schema.ts", "src/db/admin-schema.ts"]) {
-    found.push(...columnsFromDrizzleTables(readFileSync(join(root, rel), "utf8"), rel));
+  for (const file of schemaFiles(dbDir)) {
+    const rel = `src/db/${file}`;
+    found.push(...columnsFromDrizzleTables(readFileSync(join(dbDir, file), "utf8"), rel));
   }
   const seen = new Set<string>();
   return found.filter((c) => {
@@ -213,7 +224,7 @@ const MEMBER_BUCKETS = [
   {
     prefix: "profile-write",
     constructedIn: "src/profiles/routes-admission.ts",
-    prunedIn: "src/join/service.ts",
+    prunedIn: "src/http/throttle.ts",
   },
 ] as const;
 
@@ -223,11 +234,32 @@ const hasThrottlePrune = (rel: string): boolean => {
   if (/5\s*minutes/.test(text)) return true;
   // Shared retention constant: the prune bound must resolve to 5 minutes.
   if (!/THROTTLE_COUNTER_RETENTION_MINUTES/.test(text)) return false;
-  const service = readFileSync(join(root, "src/join/service.ts"), "utf8");
-  return /THROTTLE_COUNTER_RETENTION_MINUTES\s*=\s*5\b/.test(service);
+  const throttle = readFileSync(join(root, "src/http/throttle.ts"), "utf8");
+  return /THROTTLE_COUNTER_RETENTION_MINUTES\s*=\s*5\b/.test(throttle);
 };
 
 describe("member-erasure coverage (DB-free migration introspection)", () => {
+  it("discovers member keys in a new canonical schema module", () => {
+    const dir = mkdtempSync(
+      join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "schema-census-"),
+    );
+    try {
+      for (const file of schemaFiles(join(srcDir, "db")))
+        cpSync(join(srcDir, "db", file), join(dir, file));
+      writeFileSync(
+        join(dir, "dormant-schema.ts"),
+        'pgTable("synthetic_members", { userId: text("user_id") });',
+      );
+      expect(collectMigrationColumns(dir)).toContainEqual({
+        table: "synthetic_members",
+        column: "user_id",
+        source: "src/db/dormant-schema.ts",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("erases or documents every member-keyed column in the migrated schema", () => {
     const deleteKeys = erasureDeleteKeys();
     for (const table of ERASURE_TABLES) {

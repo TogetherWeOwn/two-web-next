@@ -24,7 +24,7 @@
 // Seam the Builder changes (names are the contract; the export and dep names
 // do not change):
 // - src/kit-session.ts: kitAdminRenewalFor(env) -> (event) => Promise<string | null>
-//   (same shape as kitEventDetailRotationFor: re-verify the bearer, gate on a
+//   (same shape as kitDocumentRotationFor: re-verify the bearer, gate on a
 //   current bearer via statusHash so grace reads never attempt a rotation,
 //   mint a fresh token, rotate() the row, sign the REPLACEMENT token with
 //   inline `maxAge: SESSION_TTL_SECONDS` so the pinned-lifetime guard keeps

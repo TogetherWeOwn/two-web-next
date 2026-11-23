@@ -11,29 +11,31 @@ CI runs two independent jobs in `.github/workflows/ci.yml`:
   `npm run check` also runs these checks.
 - `lighthouse`: pinned `@lhci/cli`, actual `wrangler dev --local`, three samples per
   page, mobile performance assertions, desktop Lighthouse category scores, and a
-  web-standards check. These checks fail the CI job when they fail. Reports and
-  assertion results (also on failure) are uploaded as the `lighthouse-<sha>` GitHub
+  web-standards check. Incomplete collection, desktop accessibility, best
+  practices and SEO misses, and web-standards failures still fail the CI job.
+  Reports and assertion results (also on failure) are uploaded as the `lighthouse-<sha>` GitHub
   artifact for 14 days in the repository artifact store, not a public LHCI server.
 - main Worker bundle: the `check` job dry-runs the Hono Worker
   (`npx wrangler deploy --dry-run --outdir dist`, no deploy) and gates
   `dist/worker.js` against `ci/worker-bundle-budget.json` with
   `node ci/check-worker-bundle.mjs`. Served-asset and Kit budgets are untouched.
 
-The required `ci-ok` job is the result gate; the standalone `check` job depends
-only on `scope` and runs alongside the audit and performance jobs. `ci-ok`
-aggregates `scope`, `check`, `docs-links` and the selected audit/performance
-results. For an in-scope, non-draft run, both `lighthouse` and `bundle-budget`
-must succeed. A failed or cancelled selected job, an unexpected skip, a failed
-`scope`/`check`/`docs-links` result, or an invalid scope verdict fails `ci-ok`.
+The required `ci-ok` job is the result gate. The standalone `check` job waits for
+`scope` and `dependency-admission`, not the accessibility or performance jobs.
+`ci-ok` aggregates those results alongside `docs-links`. For an in-scope,
+non-draft run, both `lighthouse` and `bundle-budget` must succeed. A failed or
+cancelled selected job, an unexpected skip, a non-success result from `scope`,
+`dependency-admission`, `check` or `docs-links`, or an invalid scope verdict
+fails `ci-ok`.
 A skipped audit or performance job passes only when `scope` marks it out of
 scope or the PR is a draft. `ci-ok` runs unless the workflow is cancelled; a
 cancelled run must be followed by a run with a successful `ci-ok` result before
 merge. Since GitHub can treat a skipped required check as mergeable, `ci-ok`
 validates the selected job results and scope verdict instead of relying on check
 skips to enforce the gate.
-`test/performance-ci.test.ts` sends synthetic over-budget LCP/CLS reports through
-the real LHCI assertion command, proves its nonzero exit fails this gate, and pins
-the workflow wiring. `npm run gate:selftest` covers result-state handling offline.
+`test/performance-ci.test.ts` sends synthetic over-budget LCP, CLS and TTFB reports
+through the real LHCI assertion command, verifies the warnings and zero exit, and
+pins the workflow wiring. `npm run gate:selftest` covers result-state handling offline.
 
 ## Main Worker bundle
 
@@ -119,7 +121,7 @@ CHROME_PATH=/path/to/chrome WRANGLER_SEND_METRICS=false npm run lighthouse
 ```
 
 Use [`package.json`](../package.json) for the LHCI pin and security overrides
-(`tmp`, `@puppeteer/browsers`, global `basic-ftp` and Lighthouse's
+(`tmp`, `@puppeteer/browsers`, `get-uri`-scoped `basic-ftp` and Lighthouse's
 `puppeteer-core`), and [`package-lock.json`](../package-lock.json) for the
 resolved dependency versions. Override declarations and hoisted resolutions
 are not interchangeable. The browser helper's own Node minimum is not the
@@ -127,7 +129,8 @@ repository floor above. The performance regression suite
 ([`test/performance-ci.test.ts`](../test/performance-ci.test.ts)) checks LHCI's
 temporary-file cleanup and both CommonJS/ESM Puppeteer entry points.
 These import checks do not replace actual Chromium collection: the Lighthouse
-job must still collect all twenty-four samples (eight routes, three runs each) and pass the unchanged assertions.
+job must still collect all twenty-four samples (eight routes, three runs each)
+and pass the blocking assertions.
 
 Mobile collection survives one transient the same way desktop does:
 `npm run lighthouse` runs `ci/lighthouse-perf-run.mjs`, which uses the desktop
@@ -136,9 +139,13 @@ when any planned URL is short of its three samples, and never when full
 evidence failed an assertion. Every run writes `.lighthouseci/perf-collect.log`
 and, on failure, `.lighthouseci/perf-collect-diagnosis.md` (COLLECT FAILURE,
 BUDGET BREACH or an unclassified step failure). Both ship in the
-`lighthouse-<sha>` artifact. Its selftest evaluates the real mobile assertions
-over synthetic reports: a short collect retries, and an LCP over budget fails
-without a retry.
+`lighthouse-<sha>` artifact. In that artifact, `mobile-fixture/` holds the raw
+`lhr-*.json` reports and available `assertion-results.json` from the final mobile
+attempt, copied before desktop collection. The top-level LHRs are desktop; the
+mobile `reports/` manifest points to representative reports, not independent
+samples. The snapshot is evidence only and does not change either gate's verdict.
+The mobile runner's selftest evaluates the real assertions over synthetic
+reports: a short collect retries, and an LCP over budget records a warning without a retry.
 
 LHCI starts/stops the fixture worker itself, listening only on `127.0.0.1:8787`.
 Do not run another service on that port. The dedicated Wrangler config has no
@@ -198,8 +205,8 @@ executed gates. For screenshot/spec discovery, see the
 | `kit.worker`, `kit.server.js`, `kit.client.js`, `kit.client.css` | `node ci/check-kit-perf.mjs --dry-run --format json` | Existing `web/.svelte-kit/` build outputs plus the `ci/budgets/kit/` fragments; the same versioned budget-report shape |
 | Web standards route/check IDs | `node ci/web-standards.mjs --dry-run --format json` | Planned routes and stable check IDs only, not an execution verdict; real local Hono Lighthouse reports use `lighthouse-<sha>` from `ci.yml` |
 
-The bundle checkers exit 0 for a measured fit, 1 for a breach, 2 when enforcement
-is impossible. `--dry-run` reads the same existing bytes as normal measurement;
+The Hono Worker checker exits 0 for a fit and 1 for a breach. Kit exits 0 for a fit or
+advisory byte/count overages with measurements and ceilings; both exit 2 if unable to enforce. `--dry-run` reads the same existing bytes as normal measurement;
 it does not create missing evidence or prove that a build belongs to HEAD. If
 outputs are missing or stale, build the checked-out revision using the existing
 [Hono bundle command](#local-verification) or
@@ -219,15 +226,17 @@ run score. The mobile performance category floor is read from
 
 | Assertion | Threshold | Severity |
 |---|---:|---|
-| Performance category score (mobile) | 0.9 (90%) minimum | error |
-| Largest contentful paint | 2000 ms | error |
-| Cumulative layout shift | 0.1 | error |
-| Server response time (observed TTFB) | 600 ms | error |
-| Total blocking time | 200 ms | error |
+| Performance category score (mobile) | 0.9 (90%) minimum | warning |
+| Largest contentful paint | 2000 ms | warning |
+| Cumulative layout shift | 0.1 | warning |
+| Server response time (observed TTFB) | 600 ms | warning |
+| Total blocking time | 200 ms | warning |
 | First contentful paint | 1800 ms | warning |
 
 The separate desktop category check uses the same category floors from
-`ci/quality-budget.json`:
+`ci/quality-budget.json`. Mobile and desktop performance budget misses report
+but do not block until the Ember + SvelteKit migration is done (owner decision,
+2026-11-14). Desktop accessibility, best-practices and SEO remain blocking in PR CI.
 
 | Category | Minimum score |
 |---|---:|
@@ -390,15 +399,15 @@ The staging checks run after deployment and serve different purposes:
 | Check | What it verifies | Gate behavior |
 |---|---|---|
 | `staging-journeys` | Authenticated critical journeys against the deployed Worker; a journey ledger fails the job if every journey skips. | Post-deploy evidence, not a PR merge check. Docs-only and test-only deploys may skip it. Automatic production candidate resolution requires a successful `staging-journeys` result. |
-| `staging-quality` | Mobile Lighthouse performance assertions plus desktop Lighthouse category scores on the deployed origin. | Runs after every qualifying staging deploy, even when journeys are skipped. A Lighthouse assertion failure fails the check; automatic production candidate resolution also requires this job to pass. |
-| Web standards (`npm run standards -- --origin`) | Security headers, HTML basics and internal links. Anchors are parsed as HTML (quoted/unquoted attributes and character references, not comment/script text), resolve with browser URL semantics (including same-origin network-path references), and only count as served when a registered route or an admitted regular public file backs them. Analysis is bounded: a response body over 1 MiB, or a document over 10,000 elements, 256 levels deep or 1,000 attribute tokens on one tag (counted by the pinned parser tokenizer before duplicate-name lookup, including duplicates and end tags), becomes a route-named `HTML_TOO_LARGE`/`HTML_TOO_COMPLEX` failure (never a truncated success), and link parsing shares the route's 15 s settlement budget (`LINKS_TIMEOUT`). | Runs inside `staging-quality` and blocks it: a Web standards failure fails the job, like the Lighthouse budgets. For local debugging, `node ci/web-standards.mjs --dry-run` inventories the audited routes without starting the fixture worker, and `--format json` prints a versioned report with stable check IDs. |
+| `staging-quality` | Mobile Lighthouse performance assertions plus desktop Lighthouse category scores on the deployed origin. | Runs after every qualifying staging deploy, even when journeys are skipped. Lighthouse results are report-only under the 2026-11-14 owner decision until the Ember and SvelteKit migration is complete. Automatic production candidate resolution still requires this job to pass. |
+| Web standards (`npm run standards -- --origin`) | Security headers, HTML basics and internal links. Anchors are parsed as HTML (quoted/unquoted attributes and character references, not comment/script text), resolve with browser URL semantics (including same-origin network-path references), and only count as served when a registered route or an admitted regular public file backs them. Analysis is bounded: a response body over 1 MiB, or a document over 10,000 elements, 256 levels deep or 1,000 attribute tokens on one tag (counted by the pinned parser tokenizer before duplicate-name lookup, including duplicates and end tags), becomes a route-named `HTML_TOO_LARGE`/`HTML_TOO_COMPLEX` failure (never a truncated success), and link parsing shares the route's 15 s settlement budget (`LINKS_TIMEOUT`). | Runs inside `staging-quality` and blocks it: a Web standards failure fails the job and blocks promotion. For local debugging, `node ci/web-standards.mjs --dry-run` inventories the audited routes without starting the fixture worker, and `--format json` prints a versioned report with stable check IDs. |
 
 The staging origin runs use GET-only requests with no sign-in or writes, but
 they are not database-free: both Lighthouse runs measure `/events`, and the
 mobile run also measures the discovered `/e/<key>`. Those routes read the
-staging database, so a staging DB outage fails `staging-quality` and blocks
-promotion. Every check listed above blocks: a failure in any of them fails
-`staging-quality` and blocks promotion.
+staging database; a database outage can prevent Lighthouse collection. Lighthouse
+failures are reported rather than blocking promotion, while web standards,
+staging identity and the other required promotion gates remain blocking.
 
 Desktop collection survives one transient: `npm run lighthouse:quality` runs
 `ci/lighthouse-quality-run.mjs`, which reruns the whole `lhci autorun` a single
@@ -420,8 +429,9 @@ routes x 3 runs = 24 with a discovered event, 7 x 3 = 21 when the event route
 is skipped), counted from collect's per-run `.lighthouseci/lhr-*.json` files.
 The retry also fires on the truncation signature of exit 0 with tail routes
 unmeasured, which the old single-shot runner failed closed on with no
-diagnosis, and on a marginal `/` LCP breach: complete evidence where the only
-error-level assertion is the homepage `largest-contentful-paint` strictly
+diagnosis. The marginal `/` LCP retry is dormant while LCP is advisory; it
+requires complete evidence where the only error-level assertion is the homepage
+`largest-contentful-paint` strictly
 inside (budget, budget * 1.1) with every other route pass or warn-only. The
 retry gates; the first attempt's table (`watch-summary.attempt1.md`) and
 per-run files (`marginal-attempt1/`) stay in the artifact next to the gating
@@ -486,8 +496,9 @@ Browser server wait includes network/edge time and is **not** Worker duration.
 No accessible matching telemetry means unknown, not evidence of network noise.
 Inspect the next naturally executed staging artifact after merge; do not dispatch
 a workflow, deploy, or add telemetry authority to obtain it. Preservation is not
-a latency repair: the 600ms server-response median gate stays unchanged and red
-for a 754.261ms median. Rollback removes only the archive call, informative audit
+a latency repair: a 754.261ms median still exceeds the unchanged 600ms
+server-response threshold and is recorded as a warning. Rollback of the evidence change
+removes only the archive call, informative audit
 and its config argument, never a budget or failure check.
 
 Hermetic verification: `npm run lighthouse:evidence:selftest` exercises mobile

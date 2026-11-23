@@ -1,19 +1,17 @@
 // route-inventory: GET /auth/recover
-// SvelteKit migration card 20/43: GET /auth/recover and the HTML outcomes from
-// /join/callback + auth recovery render through the injected Svelte outcome
-// renderer (RecoveryModel via renderHtmlOutcome), preserving the Hono
-// controllers and the one-use OAuth state/journey logic. The Hono bytes,
-// statuses, redirects and cookie clearing stay identical; the Kit route stays
-// Hono-owned (enabled: false) until the enablement review.
+// The recovery outcome tests exercise the existing Hono renderer and callback
+// contracts. The Kit source checks below do not render Kit or connect its
+// component to the callback; route ownership remains disabled pending review.
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { Hono } from "hono";
+import { getSignedCookie } from "hono/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
 import { renderHtmlOutcome } from "../src/html-outcome";
 import { honoRecoveryRenderer } from "../src/recovery-hono";
-import { recoveryOutcome, type RecoveryModel } from "../src/recovery-outcome";
+import { RECOVERY_RENDER, recoveryOutcome, type RecoveryModel } from "../src/recovery-outcome";
 import { createMemorySessionStore, type Sql } from "../src/sessions";
 import { recoveryLanding } from "../src/write-recovery";
 
@@ -79,7 +77,7 @@ function fakeSql() {
   (sql as unknown as { begin: (run: (tx: Sql) => Promise<unknown>) => Promise<unknown> }).begin = (
     run,
   ) => run(sql);
-  return { sql, attempts };
+  return { sql, attempts, throttle };
 }
 
 function isolated() {
@@ -256,6 +254,81 @@ describe("recovery outcomes through the injected renderer", () => {
     expect(set.some((c) => c.startsWith("__Host-two_expired_write="))).toBe(false);
   });
 
+  it.each(["GET", "HEAD"])(
+    "%s lets Hono admit and sign recovery before Kit renders",
+    async (method) => {
+      const fake = fakeSql();
+      const bindings = {
+        ...env,
+        THROTTLE_STORE: async () => fake.sql,
+        E2E_PUBLIC_READ_BUDGET: "1",
+      };
+      const render = vi.fn(
+        async (_model: RecoveryModel, _requestId: string) =>
+          new Response("Kit document", {
+            headers: { "content-type": "text/html", etag: '"private"' },
+          }),
+      );
+      const ctx = {
+        props: {},
+        waitUntil() {},
+        passThroughOnException() {},
+        [RECOVERY_RENDER]: render,
+      };
+      const url = "/auth/recover?next=%2Fprofile%3Fedit%3D1";
+      const res = await app.request(url, { method }, bindings, ctx);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("cache-control")).toBe("no-store, private");
+      expect(res.headers.get("vary")).toBe("Cookie");
+      expect(res.headers.get("etag")).toBeNull();
+      expect(render).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ retryUrl: "/auth/discord?next=%2Fprofile%3Fedit%3D1" }),
+        res.headers.get("x-request-id"),
+      );
+      expect(await res.text()).toBe(method === "HEAD" ? "" : "Kit document");
+      expect(fake.throttle.map(({ bucket }) => bucket)).toEqual([
+        "events-read:anon",
+        "login-recover:anon",
+      ]);
+      const probe = new Hono();
+      probe.get("/", async (c) =>
+        c.json(await getSignedCookie(c, SECRET, "__Host-two_login_intended")),
+      );
+      const cookie = await probe.request("/", { headers: { cookie: cookiesFrom(res) } });
+      expect(await cookie.json()).toBe("/profile?edit=1");
+      expect(cookiesFrom(res)).not.toContain("__Host-two_expired_write=");
+
+      const refused = await app.request(url, { method }, bindings, ctx);
+      expect(refused.status).toBe(429);
+      expect(refused.headers.has("set-cookie")).toBe(false);
+      expect(render).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("recovery throttle refuses before setting a cookie or rendering", async () => {
+    const fake = fakeSql();
+    for (let hit = 0; hit < 10; hit++) {
+      fake.throttle.push({ bucket: "login-recover:anon", at: Date.now() });
+    }
+    const render = vi.fn(async () => new Response("not admitted"));
+    const ctx = {
+      props: {},
+      waitUntil() {},
+      passThroughOnException() {},
+      [RECOVERY_RENDER]: render,
+    };
+    const res = await app.request(
+      "/auth/recover",
+      {},
+      { ...env, THROTTLE_STORE: async () => fake.sql },
+      ctx,
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.has("set-cookie")).toBe(false);
+    expect(res.headers.has("retry-after")).toBe(true);
+    expect(render).not.toHaveBeenCalled();
+  });
+
   it("join denial renders the shared shell at 200 with no echo, no exchange and cleared journey cookies", async () => {
     const { fake, env: e } = isolated();
     const calls = mockDiscord();
@@ -287,6 +360,80 @@ describe("recovery outcomes through the injected renderer", () => {
       expect(line).toMatch(/HttpOnly/i);
       expect(line).toMatch(/SameSite=Lax/i);
     }
+  });
+
+  it("a stale denial leaves a newer join journey intact without exchanging or recording it", async () => {
+    const { fake, env: e } = isolated();
+    const calls = mockDiscord();
+    const start = await startJoin(e, "?source=web-homepage&next=/events");
+    const res = await app.request(
+      `/join/callback?error=access_denied&error_description=${TOKEN}&state=stale`,
+      { headers: { cookie: start.cookie } },
+      e,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store, private");
+    const html = await res.text();
+    expectRecoveryShell(html);
+    expect(html).toContain("Join cancelled");
+    expect(html).not.toContain(TOKEN);
+    expect(calls).toHaveLength(0);
+    expect(fake.attempts).toHaveLength(0);
+    const cookies = res.headers.getSetCookie().join("\n");
+    expect(cookies).not.toContain("__Host-two_join_state=");
+    expect(cookies).not.toContain("__Host-two_join_source=");
+    expect(cookies).not.toContain("__Host-two_join_next=");
+    expect(cookies).not.toContain("__Host-two_session=");
+  });
+
+  it("a refused bot add preserves retry and invite recovery without issuing a session", async () => {
+    const { fake, env: e } = isolated();
+    mockDiscord({ joinStatus: 403 });
+    const { state, cookie } = await startJoin(e, "?source=web-homepage&next=/events");
+    const res = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      { headers: { cookie } },
+      e,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store, private");
+    const html = await res.text();
+    expectRecoveryShell(html);
+    expect(html).toContain("We couldn&#39;t add you automatically");
+    expect(html).toContain('href="/join/discord?next=%2Fevents&amp;source=web-homepage"');
+    expect(html).toContain('href="https://discord.gg/invite"');
+    expect(html).not.toContain(TOKEN);
+    expect(fake.attempts).toHaveLength(1);
+    expect(fake.attempts[0]).toMatchObject({ outcome: "degraded", source: "web-homepage" });
+    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+  });
+
+  it.each([
+    [201, "added"],
+    [204, "already_member"],
+  ])("returns to the requested page after Discord add status %i", async (joinStatus, outcome) => {
+    const { fake, env: e } = isolated();
+    mockDiscord({ joinStatus });
+    const { state, cookie } = await startJoin(
+      e,
+      "?source=web-homepage&next=%2Fevents%3Fview%3Dlist",
+    );
+    const res = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      { headers: { cookie } },
+      e,
+    );
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/events?view=list");
+    expect(res.headers.get("location")).not.toContain(TOKEN);
+    expect(fake.attempts).toHaveLength(1);
+    expect(fake.attempts[0]).toMatchObject({ outcome, source: "web-homepage", discordId: "42" });
+    const cookies = res.headers.getSetCookie().join("\n");
+    expect(cookies).toContain("__Host-two_session=");
+    expect(cookies).not.toContain(TOKEN);
   });
 
   it("a replayed callback renders expired at 200 with no second exchange, attempt or session", async () => {
@@ -372,16 +519,25 @@ describe("Kit GET /auth/recover markup contract (Recovery shell parity)", () => 
       expect(lib, `missing ${needle}`).toContain(needle);
     }
     // The tab-title site suffix rides SiteMetadata's derivation: a bare model
-    // title through Shell, suffixed once like the Hono RecoveryShell — never
+    // title through SiteMetadata, suffixed once like the Hono RecoveryShell — never
     // a pre-suffixed title prop (which double-suffixed).
     expect(lib).toContain("title={title}");
-    expect(lib).toContain("Shell");
+    expect(lib).toContain('import EmberShell from "#lib/EmberShell.svelte"');
+    expect(lib).toContain("<EmberShell accountChrome={guestChrome} menuFallbackOnly>");
+    expect(lib).toContain('<SiteMetadata title={title} theme="home" />');
     expect(lib).not.toContain("{@html");
     expect(lib).not.toContain("<script src");
     expect(lib).not.toContain("<iframe");
     // The shell renders display copy only: no session, database or network
     // reads merely to offer recovery (same posture as the Hono RecoveryShell).
     expect(lib).not.toMatch(/getSignedCookie|readSession|dbFor|ADMIN_DB|SESSION_STORE|fetch\(/);
+  });
+
+  it("pins the optional support reference markup", () => {
+    expect(lib).toContain('import type { RecoveryModel } from "../../../src/recovery-outcome"');
+    expect(lib).toContain("{#if supportReference}");
+    expect(lib).toContain('data-testid="error-support-reference">{supportReference}</code>');
+    expect(lib).not.toContain("{@html supportReference}");
   });
 
   it("the page binds the whole RecoveryModel, no canonical divergence", () => {
@@ -407,27 +563,18 @@ describe("Kit GET /auth/recover markup contract (Recovery shell parity)", () => 
     expect(page).not.toContain("<iframe");
   });
 
-  it("the load stays server-rendered with safe next, private no-store and no journey writes", () => {
+  it("the load stays server-rendered and only accepts the admitted Hono display model", () => {
     expect(load).toContain("csr = false");
-    expect(load).toContain("safeNext");
-    expect(load).toContain("no-store, private");
-    expect(load).toContain("Your session expired");
-    expect(load).toContain("Your earlier changes were not saved");
-    expect(load).toContain("Log in with Discord");
-    expect(load).toContain("/auth/discord?next=");
-    expect(load).toContain('inviteUrl: "/discord"');
-    // The one-use journey writes stay Hono-owned: the Kit load never mints,
-    // consumes or signs journey state, reads sessions or touches the database.
+    expect(load).toContain("if (!locals.recovery) error(404)");
+    expect(load).toContain("return locals.recovery");
     expect(load).not.toMatch(
       /setSignedCookie|cookies\.set|SESSION_STORE|ADMIN_DB|kitSessionBridge|memberRead|journeys/,
     );
   });
 
-  it("registers a public, Hono-owned manifest entry", () => {
+  it("registers a public, Kit-owned recovery document", () => {
     expect(manifest).toMatch(/path:\s*"\/auth\/recover"/);
     expect(manifest).toMatch(/\/auth\/recover"[^}]*reads:\s*"public"/);
-    // Stays on Hono until the enablement review: flipping enabled flips
-    // ownership, and the parity ledger fails any enabled route with no run.
-    expect(manifest).toMatch(/\/auth\/recover"[^}]*enabled:\s*false/);
+    expect(manifest).toMatch(/\/auth\/recover"[^}]*enabled:\s*true/);
   });
 });

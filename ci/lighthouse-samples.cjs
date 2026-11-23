@@ -323,7 +323,7 @@ function assertionsByUrl(matrix, assertions) {
 function checkFixtureDirectory(dir, collect, profile) {
   const { readdirSync, readFileSync } = require("node:fs");
   const { join } = require("node:path");
-  const LHR_FILE_REGEX = /^lhr-\d+\.json$/;
+  const LHR_FILE_REGEX = /^lhr-\d+(?:-\d+)?\.json$/;
   let names;
   try {
     names = readdirSync(dir);

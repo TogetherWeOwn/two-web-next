@@ -461,6 +461,7 @@ function sharedKitBundle(): Promise<KitBundle> {
 
 function kitHomeData(): Record<string, unknown> {
   return {
+    nowMs: Date.UTC(2030, 6, 19, 12),
     appUrl: APP_URL,
     session: null,
     sessionUnavailable: false,
@@ -472,7 +473,7 @@ function kitHomeData(): Record<string, unknown> {
     eventsUnavailable: false,
     featured: [],
     imageHosts: "",
-    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
+    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO },
   };
 }
 

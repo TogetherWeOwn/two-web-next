@@ -2,6 +2,7 @@ import worker from "../src/worker";
 import { discordFixtureResponse } from "./discord-stub";
 import type { JobsEnv } from "../src/env";
 import { STAGING_APP_URL } from "../src/qa";
+import { rewriteFixtureHtml } from "./rewrite-fixture-html";
 
 const localOrigin = "https://localhost:8787";
 const outbound: string[] = [];
@@ -20,14 +21,63 @@ globalThis.fetch = async (input, init) => {
   throw new Error(`E2E blocked unmocked outbound fetch: ${call}`);
 };
 
+// Same-origin fixtures for e2e/proxy-policy.spec.ts, served by the real local
+// Worker so the browser measures the configured https://localhost:8787 policy.
+// The permissive CSP keeps a CSP block from standing in for a proxy refusal.
+// Redirects are limited to loopback or reserved .invalid targets.
+const NEGATIVE_CSP = "default-src * data: blob: 'unsafe-inline'; worker-src * blob:";
+const WORKER_SCRIPT = `postMessage({ phase: "started" });
+self.onmessage = async (event) => {
+  try {
+    await fetch(event.data, { mode: "no-cors" });
+    postMessage({ phase: "result", ok: true });
+  } catch (error) {
+    postMessage({ phase: "result", ok: false, name: error.name });
+  }
+};`;
+
+function proxyPolicyFixture(url: URL): Response | null {
+  const headers = { "content-security-policy": NEGATIVE_CSP, "cache-control": "no-store" };
+  if (url.pathname === "/__e2e/neg/page") {
+    return new Response("<!doctype html><title>neg</title><body></body>", {
+      headers: { ...headers, "content-type": "text/html" },
+    });
+  }
+  if (url.pathname === "/__e2e/neg/worker.js") {
+    return new Response(WORKER_SCRIPT, {
+      headers: { ...headers, "content-type": "text/javascript" },
+    });
+  }
+  if (url.pathname !== "/__e2e/neg/redirect") return null;
+  let target: URL;
+  try {
+    target = new URL(url.searchParams.get("to") ?? "");
+  } catch {
+    return new Response("Bad target", { status: 400 });
+  }
+  const host = target.hostname;
+  const allowed =
+    host === "127.0.0.1" || host === "[::1]" || host === "localhost" || host.endsWith(".invalid");
+  if (!allowed) return new Response("Target refused", { status: 400 });
+  return new Response(null, { status: 302, headers: { ...headers, location: target.href } });
+}
+
 export default {
-  async fetch(request: Request, env: JobsEnv, ctx: ExecutionContext) {
+  async fetch(request: Request, env: JobsEnv & { ASSETS: Fetcher }, ctx: ExecutionContext) {
     const url = new URL(request.url);
     if (url.origin !== localOrigin) return new Response("Local CI only", { status: 403 });
+    if (url.pathname === "/fonts/fragment-mono-latin-400.woff2") {
+      const asset = await env.ASSETS.fetch(request);
+      const response = new Response(asset.body, asset);
+      if (asset.ok) response.headers.set("Cache-Control", "public, max-age=31536000, immutable");
+      return response;
+    }
     if (url.pathname === "/__e2e/network") return Response.json({ outbound, forbidden });
     if (url.pathname === "/__e2e/redirect-canary") {
       return Response.redirect("https://discord.com/__e2e/egress-canary", 302);
     }
+    const negative = proxyPolicyFixture(url);
+    if (negative) return negative;
     const db = new URL(env.DATABASE_URL ?? "");
     if (
       db.hostname !== "127.0.0.1" ||
@@ -61,7 +111,10 @@ export default {
       mapped,
       {
         ...env,
-        DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
+        DISCORD_EVENTS: {
+          upcoming: async () => [],
+          lastReadFailed: () => request.headers.get("x-e2e-discord-read") === "failed",
+        },
       } as JobsEnv,
       ctx,
     );
@@ -81,15 +134,6 @@ export default {
     if (url.pathname !== "/events/past" && url.pathname !== "/events") return response;
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.includes("text/html")) return response;
-    const body = (await response.text()).replaceAll(STAGING_APP_URL, localOrigin);
-    const responseHeaders = new Headers(response.headers);
-    responseHeaders.delete("content-encoding");
-    responseHeaders.delete("content-length");
-    responseHeaders.delete("etag");
-    return new Response(body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders,
-    });
+    return rewriteFixtureHtml(response, STAGING_APP_URL, localOrigin);
   },
 };

@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { schemaFiles } from "./schema-files.mjs";
 
 const root = new URL("../", import.meta.url);
 const entry = new URL("./staging-rights-inventory.mjs", import.meta.url);
@@ -517,6 +528,15 @@ test("fixed PG18 reads expose only declared columns, catalogs and builtins", asy
   assert.doesNotMatch(sql, /inet_server_addr\(\)\s*(?:AS|,)/i);
 });
 
+function declaredTables(dbDir) {
+  const declared = [];
+  for (const file of schemaFiles(dbDir)) {
+    const text = readFileSync(join(dbDir, file), "utf8");
+    for (const [, name] of text.matchAll(/pgTable\(\s*"([A-Za-z0-9_]+)"/g)) declared.push(name);
+  }
+  return declared;
+}
+
 test("policy scope pins exact proposal names against schema declarations", async () => {
   const { POLICY_TABLES } = await modules();
   assert.deepEqual(POLICY_TABLES, [
@@ -543,23 +563,68 @@ test("policy scope pins exact proposal names against schema declarations", async
     "web_sessions",
     "web_oauth_journeys",
   ]);
-  const declared = [];
-  for (const rel of ["src/db/schema.ts", "src/db/admin-schema.ts"]) {
-    const text = readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
-    for (const [, name] of text.matchAll(/pgTable\(\s*"([A-Za-z0-9_]+)"/g)) declared.push(name);
-  }
-  // web_session_grace postdates the frozen proposal scope: the census still
-  // surfaces it as an extra-table finding, but the candidate policies read
+  const declared = declaredTables(fileURLToPath(new URL("../src/db/", import.meta.url)));
+  // These tables postdate the frozen proposal scope: the census still
+  // surfaces them as extra-table findings, but the candidate policies read
   // covers only the exact proposal tables plus the separate ledger. Any other
   // drift in either direction fails loudly here.
   assert.deepEqual(
     declared.filter((name) => !POLICY_TABLES.includes(name)),
-    ["web_session_grace"],
+    [
+      "web_session_grace",
+      "waitlist_offers",
+      "event_echoes",
+      "announcement_send_claims",
+      "bot_reconciliation_intents",
+      "event_echo_members",
+    ],
   );
   assert.deepEqual(
     POLICY_TABLES.filter((name) => !declared.includes(name)),
     [],
   );
+});
+
+test("schema discovery requires canonical direct files and excludes other entries", () => {
+  const dir = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "schema-discovery-"),
+  );
+  try {
+    const missing = (name) => ({ name: "Error", message: `Missing canonical schema: ${name}` });
+    assert.throws(() => schemaFiles(dir), missing("schema.ts"));
+    writeFileSync(join(dir, "admin-schema.ts"), "");
+    assert.throws(() => schemaFiles(dir), missing("schema.ts"));
+    rmSync(join(dir, "admin-schema.ts"));
+    writeFileSync(join(dir, "schema.ts"), "");
+    assert.throws(() => schemaFiles(dir), missing("admin-schema.ts"));
+    writeFileSync(join(dir, "admin-schema.ts"), "");
+    writeFileSync(join(dir, "dormant-schema.ts"), "");
+    writeFileSync(join(dir, "schema.test.ts"), "");
+    writeFileSync(join(dir, "notes.ts"), "");
+    mkdirSync(join(dir, "nested-schema.ts"));
+    writeFileSync(join(dir, "nested-schema.ts", "hidden-schema.ts"), "");
+    assert.deepEqual(schemaFiles(dir), ["schema.ts", "admin-schema.ts", "dormant-schema.ts"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("schema census surfaces a third canonical module as policy drift", async () => {
+  const { POLICY_TABLES } = await modules();
+  const dir = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "schema-rights-"),
+  );
+  const original = fileURLToPath(new URL("../src/db/", import.meta.url));
+  try {
+    for (const file of schemaFiles(original)) cpSync(join(original, file), join(dir, file));
+    writeFileSync(join(dir, "dormant-schema.ts"), 'pgTable("synthetic_members", {});');
+    assert.deepEqual(
+      declaredTables(dir).filter((name) => !POLICY_TABLES.includes(name)),
+      ["web_session_grace", "synthetic_members"],
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("every failed read, setup, rollback, close or delivery is a fixed-label STOP", async () => {

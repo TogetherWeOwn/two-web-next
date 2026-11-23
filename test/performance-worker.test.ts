@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
 import { build } from "esbuild";
+import { workerNodeBuiltins } from "../ci/worker-node-builtins.mjs";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { convertV4MiniflareOptions, Miniflare, type Request as WorkerRequest } from "miniflare";
 import { fixtureEnvForRequest } from "../ci/lighthouse-worker";
@@ -131,6 +132,7 @@ describe("Lighthouse fixture in Miniflare", () => {
       target: "es2022",
       conditions: ["workerd", "worker", "browser"],
       external: ["node:*", "cloudflare:*"],
+      plugins: [workerNodeBuiltins],
     });
     mf = new Miniflare(
       convertV4MiniflareOptions({

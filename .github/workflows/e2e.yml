@@ -37,11 +37,14 @@ on:
         description: "Optional 40-character base SHA for featured before/after evidence"
         required: false
         type: string
+      authored_breaks_capture_base:
+        description: "Optional 40-character base SHA for schedule and archive evidence"
+        required: false
+        type: string
 
 permissions:
   contents: read
-  # The scope job lists the PR's changed files via the API.
-  pull-requests: read
+  pull-requests: read # The scope job lists changed PR files via the API.
 
 # Schedule and dispatch runs get their own groups (as in ci.yml): with the
 # default queue a newly queued run cancels any pending run in its group, so a
@@ -169,7 +172,7 @@ jobs:
     timeout-minutes: 25
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_USER: agent_test
           POSTGRES_DB: two_web_next
@@ -191,8 +194,12 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --include=dev --no-audit --no-fund
+      - name: Prepare first-party generated inputs
+        run: npm run generate:first-party
       - name: Verify CI isolation
         run: node e2e/prepare.mjs
+      - name: Prepare disposable runtime role
+        run: psql -h 127.0.0.1 -U agent_test -d two_web_next -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Apply migrations to disposable Postgres
         run: npm run db:migrate
       - name: Seed journey fixtures
@@ -247,6 +254,38 @@ jobs:
         run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Build Kit worker
         run: npm run build --prefix web
+      - name: Schedule and archive before/after evidence
+        if: github.event_name == 'workflow_dispatch' && inputs.authored_breaks_capture_base != ''
+        env:
+          CAPTURE_BASE: ${{ inputs.authored_breaks_capture_base }}
+          CAPTURE_ROOT: ${{ runner.temp }}/authored-breaks-evidence
+        run: |
+          set -euo pipefail
+          [[ "$CAPTURE_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git fetch --no-tags --depth=1 origin "$CAPTURE_BASE"
+          files=(public/schedule-theme.css src/events/pages-calendar-card.tsx src/events/pages-past.tsx web/src/lib/EventCard.svelte)
+          trap 'git restore --source=HEAD -- "${files[@]}"' EXIT
+          for phase in before after; do
+            if [ "$phase" = before ]; then
+              for file in "${files[@]}"; do git show "$CAPTURE_BASE:$file" > "$file"; done
+            else
+              git restore --source=HEAD -- "${files[@]}"
+            fi
+            mkdir -p "$CAPTURE_ROOT/$phase"
+            sha256sum "${files[@]}" > "$CAPTURE_ROOT/$phase/runtime-sha256.txt"
+            npm run build --prefix web
+            AUTHORED_BREAKS_PHASE="$phase" AUTHORED_BREAKS_DIR="$CAPTURE_ROOT/$phase" \
+              npx playwright test --config playwright.authored-breaks-capture.config.ts
+
+          done
+      - name: Upload schedule and archive evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.authored_breaks_capture_base != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: authored-breaks-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/authored-breaks-evidence/
+          if-no-files-found: error
+          retention-days: 7
       - name: Ember token viewport evidence
         id: ember-evidence
         run: >-
@@ -291,6 +330,14 @@ jobs:
         id: visual
         if: ${{ !cancelled() }}
         run: npx playwright test --config playwright.visual.config.ts
+      - name: Retain visual report
+        if: ${{ always() && steps.visual.outcome != 'skipped' && !(github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'test/rsvp-pending-control-')) }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: visual-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: playwright-report-visual/
+          if-no-files-found: error
+          retention-days: 7
       - name: Critical browser journeys
         if: ${{ !cancelled() }}
         run: npm run e2e
@@ -325,6 +372,7 @@ jobs:
         run: >-
           npx playwright test --config playwright.kit-parity.config.ts
           e2e/kit-parity/parity.spec.ts e2e/kit-parity/auth-boundaries.spec.ts
+          e2e/kit-parity/moderator-dashboard.spec.ts
       - name: Kit parity ledger (no quiet green)
         if: ${{ !cancelled() }}
         run: node ci/check-kit-parity.mjs
@@ -377,7 +425,10 @@ jobs:
           name: saved-review-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             test-results/**/attachments/hono-review-*.png
+            test-results/**/attachments/kit-review-*.png
             test-results-kit-parity/**/attachments/kit-review-*.png
+            test-results-kit-parity/**/attachments/hono-review-moderator-*.png
+            test-results-kit-visual/**/attachments/kit-review-calendar-*.png
           if-no-files-found: error
           retention-days: 7
       - name: Waitlist roster screenshot evidence

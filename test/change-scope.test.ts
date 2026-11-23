@@ -608,13 +608,15 @@ describe("check job", () => {
   it("guards every heavy step behind the scope verdict", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
-    const steps = check.split("\n    steps:\n")[1]?.split(/\n      - /) ?? [];
+    const stepList = check.split("\n    steps:")[1] ?? "";
+    const steps = stepList.split(/\n      - /).slice(1);
     expect(steps.length).toBeGreaterThan(10);
     const unguarded = steps.filter(
       (step) =>
         !step.includes("Docs-only fast pass") &&
-        // The scope guard is deliberately unconditional: pinned below.
-        !step.includes("Require successful scope") &&
+        // Both prerequisite guards are deliberately unconditional.
+        !step.startsWith("name: Require successful scope\n") &&
+        !step.startsWith("name: Require successful dependency admission\n") &&
         !step.includes("needs.scope.outputs.docs_only != 'true'"),
     );
     expect(unguarded.map((step) => step.split("\n")[0])).toEqual([]);
@@ -642,9 +644,9 @@ describe("ci heavy-job scope gates", () => {
     expect(block).toContain("needs.scope.outputs.app == 'true'");
   });
 
-  it("check still runs on every verdict, from scope alone so it starts with the heavy jobs", () => {
+  it("check still runs on every verdict and waits only for scope and dependency admission", () => {
     const block = jobBlock("check");
-    expect(block).toMatch(/\n    needs: \[scope\]\n/);
+    expect(block).toMatch(/\n    needs: \[scope, dependency-admission\]\n/);
     expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   });
 
@@ -760,7 +762,12 @@ describe("ci heavy-job scope gates", () => {
       WORKER: "false",
       DB: "false",
       DRAFT: "false",
+      DOCS_ONLY: "false",
       CHECK_RESULT: "success",
+      KIT_BROWSER_RESULT: "skipped",
+      KIT_CALENDAR_RESULT: "skipped",
+      KIT_LIFELINE_RESULT: "skipped",
+      KIT_LIFELINE_ARTIFACT_ID: "",
       A11Y_RESULT: "skipped",
       LIGHTHOUSE_RESULT: "skipped",
       BUDGET_RESULT: "skipped",
@@ -768,7 +775,7 @@ describe("ci heavy-job scope gates", () => {
     const status = (env: Record<string, string>) =>
       spawnSync("bash", ["-c", script], { env, encoding: "utf8" }).status;
     expect(status(ok)).toBe(0);
-    for (const key of ["FULL", "APP", "WORKER", "DB", "DRAFT"]) {
+    for (const key of ["FULL", "APP", "WORKER", "DB", "DRAFT", "DOCS_ONLY"]) {
       expect(status({ ...ok, [key]: "" }), `${key} empty`).toBe(1);
       expect(status({ ...ok, [key]: "maybe" }), `${key} not a boolean`).toBe(1);
     }
@@ -784,6 +791,8 @@ describe("ci heavy-job scope gates", () => {
     const draftSafeSteps = [
       "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
       "name: Incident issue lifecycle fixtures",
+      "name: State glyph assembler fixtures",
+      "name: Tag capture guard fixtures",
     ];
     for (const name of draftSafeSteps) {
       const matches = steps.filter((step) => step.split("\n")[0] === name);

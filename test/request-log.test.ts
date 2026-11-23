@@ -6,6 +6,8 @@ import type { Env } from "../src/env";
 import { memberReadBoundary } from "../src/member-reads";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
 import { newRequestId, requestLog, safeRequestId } from "../src/request-log";
+import { selectRequestId } from "../src/http/request-log";
+import { fetchApp } from "./helpers/fetch-app";
 
 // Lets one test make the real app's outer post-processing throw.
 const post = vi.hoisted(() => ({ fail: false }));
@@ -263,6 +265,9 @@ describe("structured request logs (local fixtures only)", () => {
       const res = await fixture().request("/denied", { headers: { "cf-ray": ray } }, env);
       expect(res.headers.get("x-request-id")).not.toBe(ray);
       expect(res.headers.get("x-request-id")).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+      expect(logs(log)).toEqual([
+        expect.objectContaining({ request_id: res.headers.get("x-request-id"), status: 403 }),
+      ]);
       expect(JSON.stringify(log.mock.calls)).not.toContain(ray);
     },
   );
@@ -284,6 +289,20 @@ describe("structured request logs (local fixtures only)", () => {
     expect(JSON.stringify(log.mock.calls)).not.toContain("198.51.100.42");
   });
 
+  it.each([RAY, "0123456789abcdef", "01ARYZ6S41TSV4RRFFQ69G5FAV"])(
+    "preserves a valid correlation ID %s",
+    (value) => {
+      expect(selectRequestId(value)).toBe(value);
+    },
+  );
+
+  it.each([undefined, null, "", "cookie-secret", "invalid-ray"])(
+    "generates a ULID for an invalid or missing cf-ray %s",
+    (value) => {
+      expect(selectRequestId(value)).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+    },
+  );
+
   it("generates unique ULIDs with the timestamp encoded in the first ten characters", () => {
     vi.spyOn(Date, "now").mockReturnValue(1469918176385);
     const ids = Array.from({ length: 100 }, () => newRequestId());
@@ -297,20 +316,31 @@ describe("structured request logs (local fixtures only)", () => {
 
   it("is mounted on the real app including errors, redirects and guarded sub-apps", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    for (const [path, status, route] of [
-      ["/up", 503, "/up"],
-      ["/discord", 302, "/discord"],
-      ["/members/123456789012345678", 302, "/members/:user"],
-      ["/admin/events/123456789012345678", 302, "/admin/events/:key"],
-      ["/admin/events/new", 302, "/admin/events/new"],
-      ["/no-such-path/123456789012345678", 404, "unmatched"],
+    for (const [method, path, status, route] of [
+      ["GET", "/up", 503, "/up"],
+      ["GET", "/discord", 302, "/discord"],
+      ["GET", "/members/123456789012345678", 302, "/members/:user"],
+      ["GET", "/admin/events/123456789012345678", 302, "/admin/events/:key"],
+      ["GET", "/admin/events/new", 302, "/admin/events/new"],
+      ["GET", "/no-such-path/123456789012345678", 404, "unmatched"],
+      // An invalid event key and a disabled probe both refuse without touching external services.
+      ["GET", "/e/123456789012345678.md?token=query-secret", 404, "/e/:file{.+\\.md}"],
+      ["POST", "/__probe/alert?token=query-secret", 404, "/__probe/alert"],
     ] as const) {
       log.mockClear();
-      const res = await app.request(path, { headers: { "cf-ray": RAY } }, env as never);
+      const res = await fetchApp(
+        new Request(new URL(path, env.APP_URL), {
+          method,
+          headers: { "cf-ray": RAY, origin: env.APP_URL },
+        }),
+        env,
+        {} as ExecutionContext,
+      );
       expect(res.status).toBe(status);
       expect(res.headers.get("x-request-id")).toBe(RAY);
       expect(logs(log)).toEqual([expect.objectContaining({ route, status, request_id: RAY })]);
       expect(JSON.stringify(log.mock.calls)).not.toContain("123456789012345678");
+      expect(JSON.stringify(log.mock.calls)).not.toContain("query-secret");
     }
   });
 });
