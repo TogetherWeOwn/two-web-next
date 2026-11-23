@@ -67,6 +67,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
     const createdApp = await ensureRuntimeRole(client);
     const roles = ["two_web_migrate", "two_web_backup", "repair_legacy", "repair_other"];
     const createdRoles = [];
+    const executor = postgres(url.href, { username: "repair_legacy", max: 1 });
     try {
       for (const role of roles) {
         await client.unsafe(`create role "${role}" nologin`);
@@ -74,6 +75,8 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       }
       await client
         .unsafe(`
+        alter role repair_legacy login password 'ci';
+        grant repair_other, two_web_migrate, pg_maintain, pg_read_all_stats to repair_legacy;
         create schema drizzle authorization repair_legacy;
         grant create on database "${url.pathname.slice(1)}" to two_web_migrate;
         grant usage, create on schema public to repair_legacy, repair_other, two_web_migrate;
@@ -121,7 +124,6 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
         const [row] = await tx.unsafe(snapshot);
         return { digest: row.digest, state: JSON.parse(row.state) };
       };
-      const [login] = await client`select session_user::text as role`;
       const readState = () =>
         client.begin(async (tx) => {
           await tx`set local search_path = pg_catalog`;
@@ -157,7 +159,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       const plan = {
         before: before.digest,
         after: after.digest,
-        identity: identityHash(url.pathname.slice(1), login.role),
+        identity: identityHash(url.pathname.slice(1), "repair_legacy"),
         owners,
       };
       const run = (direction, overrides = {}) => {
@@ -171,7 +173,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
           },
           (config) => {
             config.url.pathname = url.pathname;
-            return { begin: client.begin, end: async () => {} };
+            return { begin: executor.begin, end: async () => {} };
           },
         );
       };
@@ -198,7 +200,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
         await assert.rejects(
           writer.begin(async (tx) => {
             await tx`grant select (ctid) on public.users to two_web_migrate`;
-            await assert.rejects(run("forward"), { code: "55P03" });
+            await assert.rejects(run("forward"), /A database writer is active/);
             throw rollback;
           }),
           (error) => error === rollback,
@@ -207,6 +209,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
         await writer.end({ timeout: 5 });
       }
     } finally {
+      await executor.end({ timeout: 5 });
       for (const role of createdRoles.reverse()) {
         await client.unsafe(`drop owned by "${role}"; drop role "${role}"`).simple();
       }

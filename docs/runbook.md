@@ -692,17 +692,14 @@ A refusal requires custodian investigation before another approved attempt.
 
 The [permissions repair workflow](../.github/workflows/db-permissions-repair.yml)
 changes reviewed Web owners and grants while preserving the 34-row ledger.
-Follow the production release gate. Rehearse both directions with the same
-executor authority and compare serving-role reads, audit definitions and grantors.
-Pin the catalog with `ci/db-permissions-repair-state.sql` in a read-only
-transaction with `search_path = pg_catalog`. Keep the pins solely in the
-production Environment.
+Rehearse both directions under the production release gate with catalog `MAINTAIN`.
+Pin state with `ci/db-permissions-repair-state.sql` and `search_path = pg_catalog`
+in a read-only transaction. Set these production Environment secrets.
 
 - `PRODUCTION_DB_REPAIR_APPROVED_SHA` pins the reviewed commit on protected `main`.
 - `PRODUCTION_DB_REPAIR_DATABASE_URL` supplies the direct scoped credential.
 - `PRODUCTION_DB_REPAIR_PLAN` holds `before` and `after` digests, the `identity`
-  fingerprint in the format above and `owners` in inventory file order
-  (`ci/db-permissions-repair-inventory.json`).
+  fingerprint in the format above and `owners` in inventory file order.
 - `PRODUCTION_DB_REPAIR_PLAN_SHA256` pins the exact plan bytes.
 
 Dispatch `forward` or `undo` with the approved pins. If execution is uncertain,
