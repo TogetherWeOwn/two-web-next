@@ -56,8 +56,9 @@ requirements below continue to govern the broader design.
   no cursor or value. Keep the subscription, retaining its revision watermark
   and any observed gap, and accept a covering higher-revision snapshot on that
   socket, including one arriving immediately after withdrawal. Start fallback
-  while the value is unavailable. A close ends the subscription. Reconnect with
-  backoff and jitter, and establish a new baseline after fresh admission. The
+  while the value is unavailable. On close, retire the socket and clear its live
+  value before starting fallback. Reconnect with backoff and jitter, and
+  establish a new baseline after fresh admission. The
   broader protocol's `reset` and fresh stream at sequence zero apply on its own
   endpoint.
 - The installed hub can return a same-revision snapshot on explicit resync of
@@ -85,6 +86,8 @@ requirements below continue to govern the broader design.
   snapshot, widget presence or a member-detail response for this count. A
   baseline stops polling. Withdrawal, baseline installation, socket retirement,
   view or session replacement, and teardown invalidate pending poll results.
+  Within one fallback generation, discard a result if a poll started later has
+  already applied its result.
   This decision adds no polling URL or route wiring.
 
 ### Public count conformance
@@ -99,9 +102,11 @@ hibernation. Exercise competing sockets, a deferred pull that yields only
 `unavailable`, and a delayed pull while the browser holds its command slot.
 On an exhausted command wait, prove fallback and fresh admission without a
 second command on the old socket. Separately check quiet socket behavior past
-30 seconds and reconnect after an actual policy Close. Deliver late frame,
-close, retry and poll callbacks after replacement.
-Exercise the 10-second fallback, origin and projection rejection, and teardown.
+30 seconds, live value removal on Close and reconnect after a policy Close.
+Deliver late frame, close, retry and poll callbacks after replacement. Complete
+two polls in reverse order within one fallback generation and keep the newer
+result. Exercise the 10-second fallback, origin and projection rejection, and
+teardown.
 
 The [installed #2617 job](https://github.com/TogetherWeOwn/two-web-next/actions/runs/45143824702/job/137588087672)
 at `f0c2fc4c6be4a26dfe36afc367820c3dd51a64f1` demonstrates the landed
