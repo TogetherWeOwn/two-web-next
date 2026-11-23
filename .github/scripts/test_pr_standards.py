@@ -151,7 +151,7 @@ class Verification(unittest.TestCase):
         for item in (
             "- `python3 -m unittest ci.test_pr_lint_docs` passed 9 tests.",
             "- `npm run check` failed with one type error.",
-            *(f"- `$ ./bin/smoke` — exit status {status}." for status in ("`1`", "`-9`", "`0xC0000005`", "-9", "0xC0000005")),
+            *(f"- `$ ./bin/smoke` — exit status {status}." for status in ("`1`", "`-9`", "`0xC0000005`", "-9", "0xC0000005", "１", "`１`")),
             "- `git diff --check` returned no output. The full suite was not run locally.",
             "- `pytest` – 24 passed, 1 pending.",
             "- Local tests (`pytest`) in `web` passed.",
