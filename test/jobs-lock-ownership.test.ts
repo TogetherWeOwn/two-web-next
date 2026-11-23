@@ -331,6 +331,13 @@ describe("queue carrier lease ownership", () => {
             ? ["admitted", "announcement", "role", "paused"]
             : ["admitted", "announcement", "role"],
         );
+        if (cutoff === "claim-only") {
+          expect(paused.ack).toHaveBeenCalledOnce();
+          expect(paused.retry).not.toHaveBeenCalled();
+        } else {
+          expect(paused.ack).not.toHaveBeenCalled();
+          expect(paused.retry).toHaveBeenCalledOnce();
+        }
         expect(admitted.ack).not.toHaveBeenCalled();
         finishSend.resolve();
         await admittedRun;
