@@ -25,6 +25,9 @@ and non-goals. It describes intentions, not delivery commitments; implemented
 capabilities are listed below and shipped history is in
 [releases](https://github.com/TogetherWeOwn/two-web-next/releases).
 
+Start with the [website handoff](docs/handoff.md) for the dated renderer
+status, cutover evidence and next steps.
+
 ## What works today
 
 - Homepage member/online counts and rank reads come from bot-owned `web_v1` views, are cached for 60 seconds, and hide missing or stale counts; the page degrades when reads fail. House rules, the versioned privacy page, branded error pages, manifest/icons, canonical metadata, sitemap, robots, and security/cache headers are also implemented ([`src/counts.ts`](src/counts.ts), [`src/pages.tsx`](src/pages.tsx), [`src/index.tsx`](src/index.tsx), [`src/seo.ts`](src/seo.ts), [`test/home-counts.test.ts`](test/home-counts.test.ts), [`test/seo.test.ts`](test/seo.test.ts), [`test/n2-manifest-errors.test.ts`](test/n2-manifest-errors.test.ts)). `/.well-known/security.txt` serves the RFC 9116 disclosure file ([`src/security-txt.ts`](src/security-txt.ts), [`src/index.tsx`](src/index.tsx), [`test/security-txt.test.ts`](test/security-txt.test.ts)).
@@ -490,12 +493,10 @@ matching dispatch SHA selects the existing separately authorized recovery
 route; `migrations_applied` never bypasses default ancestry admission. See the
 [ancestry contract](docs/runbook.md#default-promotion-ancestry-admission).
 
-For automatic promotion, the Release Manager accepts the exact release SHA and
-asks the authorized Operator to set the repository Actions variable
-`PRODUCTION_ACCEPTED_SHA` to that full lowercase SHA; the Release Manager can
-ask the Operator to clear it. The resolver first selects the eligible candidate,
-then requires exact equality with the variable: absent, empty or unequal values
-skip cleanly, without searching for an older accepted candidate. The variable is
+For automatic promotion, follow the [release gate](CONTRIBUTING.md#production-release-gate).
+The authorized executor sets `PRODUCTION_ACCEPTED_SHA` to the approved release
+SHA in full lowercase and can clear it to hold promotion. The resolver skips
+unless the value matches the selected candidate exactly. The variable is
 a job-time snapshot; clearing it does not revoke a run that already started.
 Manual dispatch is unchanged, and all existing promotion and release gates remain
 in force. See the [deployment procedure](docs/runbook.md#deploy-and-record-the-rollback-pointer).
@@ -766,12 +767,8 @@ Squash-merge only; PR titles follow Conventional Commits and the body follows th
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
 `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint` and the other
 [required checks](CONTRIBUTING.md#branch-protection-and-required-checks) must pass
-on the exact head. GitHub does not require an approving PR review; the native
-review policy still applies. The final-stage reviewer merges when native review
-stages apply; otherwise the author merges. Pin the squash merge to that reviewed
-head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
-for the promotion-path PR exception, post-merge staging qualification and
-per-release Release Manager acceptance, and [AGENTS.md](AGENTS.md) for agent guidance.
+on the exact head. See [CONTRIBUTING.md](CONTRIBUTING.md#pull-request-contract)
+for tier review, merge authority, and post-merge staging and release approval.
 
 ## License
 

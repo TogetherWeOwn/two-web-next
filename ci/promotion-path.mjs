@@ -15,7 +15,7 @@ const directPaths = new Set(
    ci/check-migration-numbers.sh ci/check-snapshot-chain.mjs ci/check-snapshot-chain-selftest.mjs ci/check-migration-history.mjs
    drizzle.config.ts migrations.lock
    bin/smoke.mjs bin/version-check.mjs bin/revision-check.mjs bin/json-smoke.mjs
-   ci/robots-directives.mjs lib/loopback-hosts.mjs
+   ci/robots-directives.mjs ci/rendered-page.mjs lib/loopback-hosts.mjs
    bin/check-moderators.mjs bin/operator-probe-errors.mjs bin/ts-hook.mjs bin/ts-hooks.mjs src/probes/check-moderators.ts src/roles.ts
    src/worker.ts src/index.tsx src/version.ts src/release-tag.ts src/headers.ts src/route-ownership.ts web/src/hooks.server.ts web/src/lib/server/hono.ts
    src/up.ts src/up-body.ts src/up-config.ts src/up-database.ts src/up-migrations.ts

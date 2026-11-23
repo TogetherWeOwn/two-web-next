@@ -1,7 +1,6 @@
 <script lang="ts">
 import { page } from "$app/state";
-import AdminShell from "#lib/AdminShell.svelte";
-import { adminReadRetryHref } from "#lib/admin-read-retry.ts";
+import AdminShell, { adminReadRetryHref } from "#lib/AdminShell.svelte";
 
 // Admin group error boundary for GET /admin, /admin/events[/:key],
 // /admin/featured[/:id] and /admin/activity-log: those loads throw the branded

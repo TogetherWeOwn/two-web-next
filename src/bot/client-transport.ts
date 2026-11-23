@@ -7,6 +7,7 @@
 // Nothing here logs the secret, the signature, or a request body: the
 // announcement body in particular is never logged (legacy §4 rule).
 
+import { exceedsByteLimit, exceedsUtf8ByteLimit } from "../http/length-limit";
 import { encodeCanonicalJson, INTERNAL_ACTIONS_PATH, newNonce, signInternalAction } from "./signer";
 import { BotTerminalError, BotTransportError } from "../jobs/types";
 import type { BotClientOptions } from "./client-types";
@@ -88,7 +89,7 @@ async function readCappedJson(res: Response): Promise<unknown> {
       void error;
       throw new BotTransportError("bot answered with a body that is not JSON");
     }
-    if (new TextEncoder().encode(text).byteLength > MUTATION_MAX_RESPONSE_BYTES)
+    if (exceedsUtf8ByteLimit(text, MUTATION_MAX_RESPONSE_BYTES))
       throw new BotTransportError("bot answered with a body that is too large");
     try {
       return JSON.parse(text);
@@ -117,7 +118,7 @@ async function readCappedJson(res: Response): Promise<unknown> {
       size += value!.byteLength;
       // Cap buffered bytes before parsing: overflow fails closed without
       // waiting for close.
-      if (size > MUTATION_MAX_RESPONSE_BYTES) {
+      if (exceedsByteLimit(size, MUTATION_MAX_RESPONSE_BYTES)) {
         cancelBodyWithoutWaiting(reader);
         throw new BotTransportError("bot answered with a body that is too large");
       }

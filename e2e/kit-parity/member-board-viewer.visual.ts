@@ -72,7 +72,13 @@ const scrollProbe = `(async () => {
   const shell = document.querySelector("[data-kit-site-header]");
   const shellBottom = shell && getComputedStyle(shell).position === "sticky" ? shell.getBoundingClientRect().bottom : 0;
   const top = Math.max(shellBottom, inner?.getBoundingClientRect().top ?? 0);
+  const menu = shell?.querySelector("#kit-menu");
+  const menuBox = menu?.getBoundingClientRect();
   const result = {
+    shellBottom,
+    menuHit: menuBox && menu.contains(document.elementFromPoint(
+      menuBox.x + menuBox.width / 2, menuBox.y + menuBox.height / 2,
+    )),
     moved: before - firstRow.getBoundingClientRect().top,
     headers: headers.map(header => ({ top: header.getBoundingClientRect().top,
       bottom: header.getBoundingClientRect().bottom, text: header.textContent.trim() })),
@@ -128,7 +134,17 @@ for (const twin of ["hono", "kit"] as const) {
               headers: Array<{ top: number; bottom: number; text: string }>;
               top: number;
               tableBottom: number;
+              shellBottom: number;
+              menuHit?: boolean;
             }>(scrollProbe);
+            if (twin === "kit" && viewport.name === "mobile") {
+              expect.soft(scrolled.menuHit, "Menu remains reachable while scrolling").toBe(true);
+              for (const header of scrolled.headers) {
+                expect
+                  .soft(header.top, "Board headings clear the compact site header")
+                  .toBeGreaterThanOrEqual(Math.max(60, scrolled.shellBottom));
+              }
+            }
             expect(
               scrolled.moved,
               `${label}: fixture must actually scroll body rows`,

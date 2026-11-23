@@ -127,6 +127,12 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
     compatibility_date: "2026-09-29",
     compatibility_flags: ["nodejs_compat"],
     assets: { directory: assetsDirectory, binding: "ASSETS", run_worker_first: true },
+    ...(args.length && (name === "kit" || name === "kit-live")
+      ? {
+          durable_objects: { bindings: [{ name: "DISCORD_LIVE_HUB", class_name: "LiveGuildHub" }] },
+          migrations: [{ tag: "live-v1", new_sqlite_classes: ["LiveGuildHub"] }],
+        }
+      : {}),
     vars: {
       APP_URL: origin,
       DATABASE_URL: databaseUrl,
@@ -203,6 +209,52 @@ try {
     listen(kit.child, kit.origin, () => kit.log),
     listen(hono.child, hono.origin, () => hono.log),
   ]);
+
+  if (args.length) {
+    const disabled = await fetch(`${origin}/internal/discord-live/v1/ingest`, {
+      method: "POST",
+      redirect: "manual",
+    });
+    assert.equal(disabled.status, 503, "the installed live route defaults off");
+    assert.equal(disabled.headers.get("cache-control"), "no-store");
+    assert.equal(await disabled.text(), "");
+    const disabledSocket = await fetch(`${origin}/api/discord-live/v1`);
+    assert.equal(disabledSocket.status, 503, "the installed socket route defaults off");
+    await disabledSocket.body?.cancel();
+
+    const entry = join(scratch, "kit-live.mjs");
+    await writeFile(
+      entry,
+      `import worker, { LiveGuildHub as InstalledHub } from ${JSON.stringify(worker)};
+import { fixtureHub, controlledFetch } from ${JSON.stringify(fileURLToPath(new URL("./fixtures/kit-live-source.mjs", import.meta.url)))};
+export const LiveGuildHub = fixtureHub(InstalledHub);
+export default { fetch: controlledFetch(fetch) };
+function fetch(request, env, context) {
+  const incoming = new URL(request.url);
+  const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
+  const secure = new Request(url, request);
+  secure.headers.set("host", url.host);
+  return worker.fetch(secure, env, context);
+}\n`,
+    );
+    const secret = FIXTURE_SECRETS.SESSION_SECRET;
+    const live = await startWorker("kit-live", entry, assets, secret, {
+      APP_URL: "https://kit-live.invalid",
+      BOT_ENDPOINT_URL: "https://bot-live.invalid",
+      DISCORD_LIVE_INGEST_ENABLED: "true",
+      DISCORD_LIVE_SOCKET_ENABLED: "true",
+      DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "10,11",
+      DISCORD_LIVE_INGEST_KEY_ID: "fixture-ingest",
+      DISCORD_LIVE_INGEST_SECRET: "fixture-ingest-value",
+      DISCORD_LIVE_SNAPSHOT_KEY_ID: "fixture-snapshot",
+      DISCORD_LIVE_SNAPSHOT_SECRET: "fixture-snapshot-value",
+    });
+    await listen(live.child, live.origin, () => live.log);
+    const { verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
+    await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
+    const { verifyPublicFanout } = await import("./fixtures/kit-live-fanout.mjs");
+    await verifyPublicFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
+  }
 
   const archive = await fetch(`${origin}/events/past`);
   const archiveHtml = await archive.text();

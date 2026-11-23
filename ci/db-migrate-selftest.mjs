@@ -31,6 +31,7 @@ import {
   assertServingLedgerIsolation,
   validateMigrationSql,
 } from "./migration-runtime-rights.mjs";
+import { checkProductionIdentity } from "./production-db-identity.mjs";
 import { rehearseWebReadiness } from "./web-readiness-rehearsal.mjs";
 
 const mainEnv = {
@@ -433,6 +434,32 @@ test("driver configuration strips channel binding and pins the port despite PGPO
     if (priorPort === undefined) delete process.env.PGPORT;
     else process.env.PGPORT = priorPort;
   }
+});
+
+test("identity probe uses the real driver in a read-only transaction on disposable Postgres", async () => {
+  await fixture(async ({ client, env, url }) => {
+    const database = url.pathname.slice(1);
+    const [{ login }] = await client`select session_user::text as login`;
+    const matched = await checkProductionIdentity(
+      {
+        PRODUCTION_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture@${PLANETSCALE_PRODUCTION_HOST}/${database}?sslmode=verify-full`,
+        PRODUCTION_DB_IDENTITY_SHA256: identityHash(database, login),
+      },
+      (_, options) => {
+        const sql = migrationClient(migrationConfig(env, { testDatabase: true }), options);
+        return {
+          begin: (mode, compare) =>
+            sql.begin(mode, async (transaction) => {
+              const [{ transaction_read_only }] = await transaction`show transaction_read_only`;
+              assert.equal(transaction_read_only, "on");
+              return compare(transaction);
+            }),
+          end: (options) => sql.end(options),
+        };
+      },
+    );
+    assert.equal(matched, true);
+  });
 });
 
 test("fresh database: plan is read-only, apply includes bootstraps, zero-pending and idempotent", async () => {

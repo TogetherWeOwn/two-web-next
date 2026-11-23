@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -40,6 +40,7 @@ const NOW = new Date("2030-07-04T18:00:00Z");
 
 function baseData(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    nowMs: NOW.getTime(),
     session: null,
     sessionUnavailable: false,
     notice: null,
@@ -162,15 +163,6 @@ afterAll(() => {
   if (scratch) rmSync(scratch, { recursive: true, force: true });
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
-
-function freezeNow(at: Date = NOW): void {
-  vi.useFakeTimers();
-  vi.setSystemTime(at);
-}
-
 type TeaserGroupKey = "tonight" | "this-week" | "later";
 
 const GROUP_TESTIDS: Record<TeaserGroupKey, string> = {
@@ -225,7 +217,6 @@ function groupTeaserRow(html: string, key: TeaserGroupKey, eventKey: string): st
 
 describe("Kit teaser grouping acceptance: grouped render", () => {
   it("groups three upcoming rows into Tonight / This week / Later in start order", () => {
-    freezeNow();
     const html = renderPage(
       baseData({
         upcomingEvents: [
@@ -266,7 +257,6 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
   });
 
   it("renders a lone later row under its own heading with list and link intact", () => {
-    freezeNow();
     const html = renderPage(
       baseData({
         upcomingEvents: [canonicalEvent("later-1", "Later game night", "2030-07-13T10:00:00Z")],
@@ -281,7 +271,6 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
   });
 
   it("omits empty groups when every row lands tonight", () => {
-    freezeNow();
     const html = renderPage(
       baseData({
         upcomingEvents: [
@@ -297,9 +286,9 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
   });
 
   it("splits a midnight boundary: 23:59 tonight, 00:01 this week", () => {
-    freezeNow(new Date("2030-07-04T23:30:00Z"));
     const html = renderPage(
       baseData({
+        nowMs: Date.parse("2030-07-04T23:30:00Z"),
         upcomingEvents: [
           canonicalEvent("late-1", "Late game night", "2030-07-04T23:59:00Z", {
             timezone: "UTC",
@@ -316,9 +305,9 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
   });
 
   it("buckets the same instant per event zone: UTC tomorrow, Auckland tonight", () => {
-    freezeNow(new Date("2030-06-01T23:30:00Z"));
     const html = renderPage(
       baseData({
+        nowMs: Date.parse("2030-06-01T23:30:00Z"),
         upcomingEvents: [
           canonicalEvent("utc-1", "UTC tomorrow game", "2030-06-02T00:30:00Z", {
             timezone: "UTC",
@@ -334,7 +323,6 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
   });
 
   it("reads an invalid zone as UTC for both bucket and label", () => {
-    freezeNow();
     const html = renderPage(
       baseData({
         upcomingEvents: [
@@ -355,7 +343,6 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
   });
 
   it("keeps going counts, the Full marker and Discord rows scoped to their groups", () => {
-    freezeNow();
     const html = renderPage(
       baseData({
         upcomingEvents: [
@@ -387,7 +374,6 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
   });
 
   it("renders grouped with no client script: group blocks carry no island", () => {
-    freezeNow();
     const html = renderPage(
       baseData({
         upcomingEvents: [

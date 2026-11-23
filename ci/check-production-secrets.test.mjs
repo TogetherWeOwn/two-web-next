@@ -662,6 +662,20 @@ function delegatesToRollback(lines, environment) {
   );
 }
 
+// Permit a Boolean scope check in the identity preflight only. Inspect the
+// exact YAML value and keep scanning the rest of the job for secret references.
+function checksIdentitySecretScope(lines) {
+  const source = lines.join("\n");
+  const document = parseDocument(source);
+  const presence = document.getIn(["steps", 0, "env", "BROADER_SCOPE_SECRETS"], true);
+  const expected =
+    "${{ secrets.PRODUCTION_DB_IDENTITY_APPROVED_SHA != '' || " +
+    "secrets.PRODUCTION_DB_IDENTITY_SHA256 != '' || secrets.PRODUCTION_DATABASE_URL != '' }}";
+  if (document.errors.length || !isScalar(presence) || presence.value !== expected) return false;
+  const [start, end] = presence.range;
+  return !PRODUCTION_SECRET.test(source.slice(0, start) + source.slice(end));
+}
+
 export function productionSecretEnvironmentViolations(text, file) {
   const { outside, jobs } = splitWorkflow(text);
   const violations = [];
@@ -676,6 +690,12 @@ export function productionSecretEnvironmentViolations(text, file) {
     const environment = jobEnvironment(lines);
     if (environment === undefined) {
       if (delegatesToRollback(lines, "production")) continue;
+      if (
+        file === "db-production-identity.yml" &&
+        id === "preflight" &&
+        checksIdentitySecretScope(lines)
+      )
+        continue;
       violations.push(`${file}: job ${id} reads a PRODUCTION_* secret without an environment`);
     } else if (/^production$/i.test(environment)) {
       // Bound to the protected Environment on every run.
@@ -729,10 +749,29 @@ test("every job that reads a PRODUCTION_* secret binds the production environmen
     "rollback-production.yml",
     "db-migrate.yml",
     "db-backup.yml",
+    "db-production-identity.yml",
   ]) {
     assert.ok(referencing.includes(expected), `expected ${expected} to reference PRODUCTION_*`);
   }
   assert.deepEqual(violations, []);
+});
+
+test("identity preflight never exempts direct production secret mappings", () => {
+  const file = "db-production-identity.yml";
+  const source = readFileSync(new URL(file, WORKFLOWS), "utf8");
+  assert.deepEqual(productionSecretEnvironmentViolations(source, file), []);
+  const direct = "${{ secrets.PRODUCTION_DATABASE_URL }}";
+  for (const widened of [
+    source.replace(
+      "          BROADER_SCOPE_SECRETS:",
+      `          RAW_URL: ${direct}\n          BROADER_SCOPE_SECRETS:`,
+    ),
+    source.replace(/\$\{\{ secrets.PRODUCTION_DB_IDENTITY_APPROVED_SHA[\s\S]*?\}\}/, direct),
+  ]) {
+    assert.deepEqual(productionSecretEnvironmentViolations(widened, file), [
+      `${file}: job preflight reads a PRODUCTION_* secret without an environment`,
+    ]);
+  }
 });
 
 test("db-backup selects its environment from the dispatch target, staging by default", () => {
