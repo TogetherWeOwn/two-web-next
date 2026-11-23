@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   assertProductionIdentity,
   migrationClient,
@@ -190,5 +192,15 @@ export async function runRepair(direction, env, connect = migrationClient) {
     );
   } finally {
     await client.end({ timeout: 5 });
+  }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    // Exit codes convey only fixed states. The workflow suppresses both streams.
+    const result = await runRepair(process.argv[2], process.env);
+    process.exitCode = { committed: 0, before: 10, after: 11 }[result] ?? 1;
+  } catch {
+    process.exitCode = 1;
   }
 }

@@ -55,13 +55,143 @@ const productionEnv = {
 const identityHash = (database, role) =>
   createHash("sha256").update(database).update(Buffer.of(0)).update(role).digest("hex");
 
-test("permissions repair rejects an unpinned plan before opening a client", async () => {
-  await assert.rejects(
-    runRepair("forward", { PRODUCTION_DB_REPAIR_PLAN: "{}" }, () => {
-      assert.fail("unexpected connection");
-    }),
-    /raw && raw.length/,
-  );
+test("permissions repair pins the catalog, preserves the ledger and reverses the exact changes", async () => {
+  await fixture(async ({ client, url }) => {
+    const inventory = JSON.parse(
+      readFileSync(new URL("db-permissions-repair-inventory.json", import.meta.url), "utf8"),
+    );
+    const snapshot = readFileSync(
+      new URL("db-permissions-repair-state.sql", import.meta.url),
+      "utf8",
+    );
+    const createdApp = await ensureRuntimeRole(client);
+    const roles = ["two_web_migrate", "two_web_backup", "repair_legacy", "repair_other"];
+    const createdRoles = [];
+    try {
+      for (const role of roles) {
+        await client.unsafe(`create role "${role}" nologin`);
+        createdRoles.push(role);
+      }
+      await client
+        .unsafe(`
+        create schema drizzle authorization repair_legacy;
+        grant create on database "${url.pathname.slice(1)}" to two_web_migrate;
+        grant usage, create on schema public to repair_legacy, repair_other, two_web_migrate;
+        grant usage on schema drizzle to two_web_app;
+        create table public.web_session_grace (id int);
+        create table drizzle.__drizzle_migrations (id serial primary key, hash text, created_at bigint);
+        alter table drizzle.__drizzle_migrations owner to repair_legacy;
+        grant select on drizzle.__drizzle_migrations to two_web_app;
+        alter default privileges for role two_web_migrate in schema public
+          grant select, insert, update, delete on tables to two_web_app;
+        alter default privileges for role two_web_migrate in schema public
+          grant select, usage on sequences to two_web_app;
+        alter default privileges for role two_web_migrate in schema public
+          grant select on tables to two_web_backup;
+        alter default privileges for role two_web_migrate in schema public
+          grant select, usage on sequences to two_web_backup;
+      `)
+        .simple();
+      const owners = [];
+      for (const [name, kind, parent] of inventory) {
+        const owner = name.includes("grants") ? "repair_other" : "repair_legacy";
+        owners.push(owner);
+        if (name.startsWith("drizzle.") || kind !== "TABLE") continue;
+        const serial = inventory.some(([, , coupling]) => coupling === name);
+        await client.unsafe(`create table ${name} (id ${serial ? "serial" : "int"} primary key)`);
+        await client.unsafe(`alter table ${name} owner to ${owner}`);
+        assert.equal(parent, null);
+      }
+      await client
+        .unsafe(`
+        create function public.repair_audit() returns trigger language plpgsql
+          as $$begin return new; end$$;
+        create trigger repair_audit before update on public.activity_log
+          for each row execute function public.repair_audit();
+      `)
+        .simple();
+      const ledger = journal.slice(0, 34).map(({ tag, when }) => ({
+        created_at: when,
+        hash: createHash("sha256")
+          .update(readFileSync(join(source, `${tag}.sql`)))
+          .digest("hex"),
+      }));
+      await client`insert into drizzle.__drizzle_migrations ${client(ledger, "hash", "created_at")}`;
+
+      const observe = async (tx) => {
+        const [row] = await tx.unsafe(snapshot);
+        return { digest: row.digest, state: JSON.parse(row.state) };
+      };
+      const [login] = await client`select session_user::text as role`;
+      const before = await client.begin(async (tx) => {
+        await tx`set local search_path = pg_catalog`;
+        return observe(tx);
+      });
+      // Derive the independent expected post-state in a transaction that aborts.
+      const rollback = new Error("discard fixture setup");
+      let after;
+      await assert.rejects(
+        client.begin(async (tx) => {
+          await tx`set local search_path = pg_catalog`;
+          await tx
+            .unsafe(`
+          grant usage, create on schema drizzle to two_web_migrate;
+          alter default privileges for role two_web_migrate in schema public
+            revoke select, insert, update, delete on tables from two_web_app;
+          alter default privileges for role two_web_migrate in schema public
+            revoke select on tables from two_web_backup;
+          alter default privileges for role two_web_migrate in schema public
+            revoke select, usage on sequences from two_web_backup;
+        `)
+            .simple();
+          for (const [name, kind, parent] of inventory) {
+            if (!parent) await tx.unsafe(`alter ${kind} ${name} owner to two_web_migrate`);
+          }
+          after = await observe(tx);
+          throw rollback;
+        }),
+        (error) => error === rollback,
+      );
+
+      const plan = {
+        before: before.digest,
+        after: after.digest,
+        identity: identityHash(url.pathname.slice(1), login.role),
+        owners,
+      };
+      const run = (direction, overrides = {}) => {
+        const raw = JSON.stringify({ ...plan, ...overrides });
+        return runRepair(
+          direction,
+          {
+            PRODUCTION_DB_REPAIR_PLAN: raw,
+            PRODUCTION_DB_REPAIR_PLAN_SHA256: createHash("sha256").update(raw).digest("hex"),
+            PRODUCTION_DB_REPAIR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture-password@${PLANETSCALE_PRODUCTION_HOST}:5432/postgres?sslmode=verify-full`,
+          },
+          (config) => {
+            config.url.pathname = url.pathname;
+            return { begin: client.begin, end: async () => {} };
+          },
+        );
+      };
+      assert.equal(await run("readback"), "before");
+      await assert.rejects(run("forward", { after: "0".repeat(64) }));
+      assert.equal(await run("readback"), "before");
+      assert.equal(await run("forward"), "committed");
+      assert.equal(await run("readback"), "after");
+      await assert.rejects(run("forward"));
+      assert.equal(await run("undo"), "committed");
+      assert.equal(await run("readback"), "before");
+      assert.deepEqual(after.state.ledger, before.state.ledger);
+      assert.deepEqual(after.state.app, before.state.app);
+      assert.deepEqual(after.state.audit, before.state.audit);
+    } finally {
+      for (const role of createdRoles.reverse()) {
+        await client.unsafe(`drop owned by "${role}"; drop role "${role}"`).simple();
+      }
+      await dropRuntimeRoleIfCreated(client, createdApp);
+    }
+  });
 });
 
 function testAdminUrl() {

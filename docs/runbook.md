@@ -688,6 +688,42 @@ and the lowercase 40-character dispatch SHA. Keep the credential and pins
 stable during the run and clear the approval SHA when it ends or is abandoned.
 A refusal requires custodian investigation before another approved attempt.
 
+### Repair production migrator permissions at the 1033 prefix
+
+Use the manual [permissions repair workflow](../.github/workflows/db-permissions-repair.yml)
+for the reviewed ledger and Web relation ownership changes, scoped `drizzle`
+schema grants and migrator default privileges. The repair leaves the canonical
+34-row ledger through 1033 in place. The staging and production migration
+workflows retain their own admission and migration scopes.
+
+Follow the production release gate before dispatching a write. Qualify a
+direct executor with authority in both directions and verify the recorded
+grantors. Use `ci/db-permissions-repair-state.sql` in a read-only transaction
+with `search_path = pg_catalog` to pin the exact catalog and ledger state.
+Rehearse the forward and inverse with the same authority model and compare
+affected serving-role reads and audit definitions on the isolated restore.
+
+Keep the following pins in the production Environment. The workflow refuses
+broader-scope copies of the same secrets.
+
+- `PRODUCTION_DB_REPAIR_APPROVED_SHA` is the exact reviewed commit on protected
+  `main`.
+- `PRODUCTION_DB_REPAIR_DATABASE_URL` is the direct scoped executor credential.
+- `PRODUCTION_DB_REPAIR_PLAN` is JSON with catalog digests `before` and `after`,
+  the executor fingerprint `identity` in the format above, and original
+  relation owner names in `owners`, in the order of
+  `ci/db-permissions-repair-inventory.json`.
+- `PRODUCTION_DB_REPAIR_PLAN_SHA256` is the separately approved SHA-256 of the
+  exact plan bytes.
+
+Dispatch `forward` or `undo` from `main` with the approved pins. Both operations
+take the migration lock, verify the initial state and require the expected
+post-state before commit. On uncertainty, use `readback` with the same pins
+to classify the state. A refusal or an unclassified state requires read-only
+investigation before another write. Retain the pins for the 30-minute health
+watch and the approved recovery window, then remove the repair credential and
+pins from the Environment and verify their removal.
+
 ### Migration rollback and recovery
 
 **Rollback:** a Worker rollback does not undo schema/data. SQL failure rolls back

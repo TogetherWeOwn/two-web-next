@@ -298,6 +298,8 @@ jobs:
         run: |
           node --test ci/production-db-identity.test.mjs
           node --test --test-name-pattern 'reads a PRODUCTION_\* secret binds|identity preflight never' ci/check-production-secrets.test.mjs
+      - name: Production permissions repair admission selftests
+        run: node --test ci/db-permissions-repair.test.mjs
       - name: Timeout ledger ratchet (HARD)
         run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
