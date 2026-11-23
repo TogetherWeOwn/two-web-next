@@ -25,6 +25,9 @@ and non-goals. It describes intentions, not delivery commitments; implemented
 capabilities are listed below and shipped history is in
 [releases](https://github.com/TogetherWeOwn/two-web-next/releases).
 
+Start with the [website handoff](docs/handoff.md) for the dated renderer
+status, cutover evidence and next steps.
+
 ## What works today
 
 - Homepage member/online counts and rank reads come from bot-owned `web_v1` views, are cached for 60 seconds, and hide missing or stale counts; the page degrades when reads fail. House rules, the versioned privacy page, branded error pages, manifest/icons, canonical metadata, sitemap, robots, and security/cache headers are also implemented ([`src/counts.ts`](src/counts.ts), [`src/pages.tsx`](src/pages.tsx), [`src/index.tsx`](src/index.tsx), [`src/seo.ts`](src/seo.ts), [`test/home-counts.test.ts`](test/home-counts.test.ts), [`test/seo.test.ts`](test/seo.test.ts), [`test/n2-manifest-errors.test.ts`](test/n2-manifest-errors.test.ts)). `/.well-known/security.txt` serves the RFC 9116 disclosure file ([`src/security-txt.ts`](src/security-txt.ts), [`src/index.tsx`](src/index.tsx), [`test/security-txt.test.ts`](test/security-txt.test.ts)).

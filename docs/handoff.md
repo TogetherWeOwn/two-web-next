@@ -1,111 +1,79 @@
-# Handoff — current source state
+# Website handoff
 
-Last reviewed: 2026-11-10 (UTC). This is a dated snapshot, not a live work queue.
-For live status, assignments and dependencies, the internal planning system
-remains canonical; this file records where the repository stood at the review
-date so a fresh reader can resume from the repository alone.
+Source reviewed on 2026-11-23 at `2efc496b4620f2de8c6ab27a29db16e96191e157`
+on `main`. Use this snapshot to pick up the work and check for newer source
+and release receipts before acting. The links below lead to the current
+contracts and the dated evidence.
 
-## Source state at review time
+## Approved direction and milestone boundaries
 
-- Repository: `TogetherWeOwn/two-web-next`, default branch `main`.
-  HEAD on `main` at review: `1fe09ab8` ("fix(ci): accept bounded startup
-  profile timestamp reversals").
-- **Production is frozen at release `v2026.1107.2`, built from commit
-  `943f0b40` (2026-11-07 19:06Z).** No production deploy has shipped since.
-  The current `main` HEAD is ahead of the deployed release. See
-  [GitHub releases](https://github.com/TogetherWeOwn/two-web-next/releases)
-  for the shipped history.
-- Stack: Hono on Cloudflare Workers, TypeScript, Drizzle + Postgres,
-  server-rendered HTML with plain JavaScript islands. SvelteKit with Svelte 5
-  under [`web/`](../web/) is the accepted single page renderer; Hono keeps the
-  non-page APIs for now. See [architecture.md](architecture.md), the
-  [renderer decision](adr/0001-sveltekit-page-renderer.md) and the
-  [website roadmap](../ROADMAP.md).
-- Direction entry point: the public [website roadmap](../ROADMAP.md) (landing
-  via its pull request, see "Open pull requests" below) summarises approved
-  community/event direction and the **approved** Ember Hours core scope (the
-  shared visual system across the site's home, events, join and sign-in,
-  member discovery, profiles and moderator screens, with the seat and
-  reserve-offer journeys, Event Echoes, profile history and privacy controls,
-  honestly labelled season rankings, live voice context, event action
-  timelines and a privacy-filtered bot activity feed). Only later expansion
-  beyond that accepted scope is proposed and unapproved. The roadmap's
-  non-goals apply.
-- "M0" appears in two distinct senses: ADR 0001's page-renderer milestone
-  (every page family Kit-served in production, plus the Kit Worker cut's
-  48-hour acceptance) and the canonical product roadmap's Ember Hours
-  milestone in production. No source in this repository defines how the two
-  relate; whether they are the same, overlapping, or separate milestones is
-  unresolved. See the reconciliation in [specs/README.md](specs/README.md).
-- Accepted milestone contracts live in [specs/](specs/README.md); approved
-  approaches and their implemented-vs-remaining status in
-  [plans/](plans/README.md); material decisions with provenance in
-  [decisions/](decisions/README.md); deploy, rollback and recovery procedures
-  in [runbooks/](runbooks/README.md) (index over the operations runbook).
+[ROADMAP.md](../ROADMAP.md) records approved Ember Hours core scope across
+the website and bot. Completion requires the accepted surfaces serving
+together in production. Later expansion needs its own approval. The
+[post-cutover milestone proposal](post-cutover-milestone.md) remains historical.
 
-## Open pull requests and branches at review time
+[ADR 0001](adr/0001-sveltekit-page-renderer.md) chooses SvelteKit with Svelte 5
+as the single page renderer under `web/`. **Renderer M0** requires all page
+families in the retirement register to serve their GET pages from Kit in
+production, then completion of the Kit Worker's 48-hour production acceptance.
+Ember Hours is a distinct product milestone, also called M0 in planning. The
+repository establishes no equivalence or ordering between the two milestones.
 
-(Reviewed 2026-11-10 at HEAD `1c2b50c9`, the head of the roadmap entry PR.)
+Through renderer M0, Hono retains non-page contracts, including the HTML
+response to a rejected native POST. Preserve methods, URLs, security behavior
+and no-JavaScript journeys during the page move.
+[ADR 0002](adr/0002-api-migration-amendment.md) permits source preparation before
+renderer M0. Refresh and revalidate the post-Ember inventory, route map and
+pure-Hono goldens before shared-dispatch integration or any production API
+family flip. Production API flips follow renderer M0 and require family-specific
+built-Worker proof, review, release approval and receipts for the cited live
+page sources. Use the ADR 0001 retirement register for the rollback windows and
+removal order.
 
-- **Website roadmap entry** — head `1c2b50c9`, branch `docs/public-roadmap-entry`.
-  Publishes the public roadmap and records the post-cutover milestone proposal
-  as history. This handoff stacks on that head for composition; at integration
-  it consumes the merged roadmap content. Its recorded exact-head Actions runs
-  (PR standards, CI, docs-links, e2e, PR lint, gitleaks, CodeQL) passed. A
-  merged PR is not proof of production activation: verify on the deployed
-  artefact per the runbook before treating it as live.
-- **Release-hold remedy and promotion fixes bearing on the next step:**
-  [#2092](https://github.com/TogetherWeOwn/two-web-next/pull/2092) (production
-  Kit Worker cutover), [#2088](https://github.com/TogetherWeOwn/two-web-next/pull/2088),
-  [#2093](https://github.com/TogetherWeOwn/two-web-next/pull/2093),
-  [#2097](https://github.com/TogetherWeOwn/two-web-next/pull/2097),
-  [#2098](https://github.com/TogetherWeOwn/two-web-next/pull/2098),
-  [#2099](https://github.com/TogetherWeOwn/two-web-next/pull/2099),
-  [#2100](https://github.com/TogetherWeOwn/two-web-next/pull/2100),
-  [#2101](https://github.com/TogetherWeOwn/two-web-next/pull/2101)
-  (promotion, CI, watch-scheduling and staging-qualification fixes).
+## What the source and receipts establish
 
-## Concrete blockers
+| Surface | Evidence |
+| --- | --- |
+| Production upload | The [production workflow](../.github/workflows/deploy-production.yml) verifies and uploads Hono's `dist-production/worker.js` using the root [Wrangler config](../wrangler.jsonc). The Kit build uses [its own production config](../web/wrangler.production.jsonc) for dry-run inventory only. All five Kit family flags in that config default to `false`. The [bundle evidence contract](worker-bundle-inventory.md) distinguishes build, upload and promotion. |
+| Production release | The latest published release found on 2026-11-23 was [v2026.1115.0](https://github.com/TogetherWeOwn/two-web-next/releases/tag/v2026.1115.0), SHA `57f1abbc25d0b39a77d83b46eb8b803b0249bb66`. Its [November 15 promotion and public-route smoke](https://github.com/TogetherWeOwn/two-web-next/actions/runs/43671079084/job/132681549568) passed. On November 21 a later [production migration dry run](https://github.com/TogetherWeOwn/two-web-next/actions/runs/44914620292/job/136877479458) failed before apply. The current serving SHA and renderer state are unknown here. |
+| Staging selectors | The [staging workflow](../.github/workflows/deploy.yml) uses the Kit Worker and selects page families explicitly. `hono` is the default. `archive` selects `/events/past` and `archive-static` adds `/about`, `/faq`, `/privacy` and `/rules`. `events`, `home` and `join` select `/events`, `/` and `/join` respectively. `events-join` and `events-home` combine the named pages, and `ember-pages` selects all three. Automatic runs use the staging environment setting and manual runs use the workflow input. See the [runbook](runbook.md#deploy-and-record-the-rollback-pointer) for admission and fallback. |
+| Staging receipt | The [November 23 staging deploy](https://github.com/TogetherWeOwn/two-web-next/actions/runs/45098718821/job/137444322621) for `41136414f25b453fe3f8fee653f2bb53918a041f` passed revision verification, the Kit renderer checks for Events, Home and Join, and public-route smoke. Treat this as evidence for those routes at that revision. The current deployed revision, persistent selector and next family order are unknown here. |
 
-- **Production release hold.** Every production deploy is refused while
-  exact-`main` staging fails the mobile `/events` largest-contentful-paint
-  budget, so production stays at `v2026.1107.2` (`943f0b40`). Merges still
-  land on `main`, but nothing new reaches production until the hold clears.
-- The roadmap composition depends on the roadmap entry PR landing first (see
-  above). If it does not land, this handoff's link to the roadmap remains to be
-  reconciled; the remaining documents stand alone.
+The method-aware [route ownership manifest](../src/route-ownership.ts) and
+[Kit parity inventory](kit-parity-gates.md#route-inventory) show source
+coverage. Staging Privacy and House Rules use a separate
+[document-only opt-in](../src/kit-staging-static.ts). Their HEAD and Markdown
+requests stay with Hono. Source eligibility, a staging pass and a production
+promotion each establish different facts.
 
-## Last verification
+## Next pickup
 
-Documentation-only change. Verification was a focused content inspection:
-relative links resolve to existing files, no internal tracker references or
-credentials appear in the new prose, and no application, instruction or
-workflow behaviour changes. No local test suite, CI mirror, build or
-deployment ran. GitHub Actions is the CI of record; exact-head Actions results
-are recorded in the pull request body. A merged pull request was not treated
-as live evidence.
+Assemble the evidence for a specific Kit page-family cutover. First reconcile
+the current revision, renderer and remaining families against the latest
+release and staging receipts and the ADR 0001 retirement register. Identify
+the next eligible family and record its scope, candidate SHA and rollback
+pointer. Keep the family order open until that evidence establishes it.
 
-- Candidate head SHA: `689d6a27` (the link-only commit after it changes
-  only these lines).
-- CI run for the candidate head: [Actions run 42886309702](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42886309702)
-  — all required checks green on `689d6a27` (`ci-ok`, `gitleaks`, `e2e-ok`,
-  `pr-lint`, `check`, `docs-links`, `node22-compat`, `pr-standards`).
+1. On the exact candidate, prove the built Kit Worker against the Hono
+   contract using the [parity gates](kit-parity-gates.md), including journey,
+   visual, accessibility and performance evidence for the routes in scope.
+   Use the all-off replay and check retained routes and methods. Hono-only
+   checks cover the Hono baseline. Follow the
+   [performance policy](performance-budgets.md#staging-quality-and-journey-gates)
+   for the current Lighthouse reporting and blocking origin checks.
+2. For an authorized staging run, record the selected family, exact SHA,
+   deployed version, renderer checks, smoke and staging e2e evidence.
+   Confirm the selected pages and their Hono fallback behave as expected.
+   Use the [deployment and rollback procedure](runbook.md#deploy-and-record-the-rollback-pointer)
+   for the scope and evidence fields.
+3. For the first production Kit cut, qualify a reviewed path that actually
+   uploads the Kit artifact. Capture the exact artifact, promoted Worker
+   version, renderer results, smoke and rollback evidence through the
+   [release gate](../CONTRIBUTING.md#production-release-gate). Record each
+   production family acceptance and the
+   [48-hour watch](48h-watch-spec.md) before claiming renderer M0.
 
-## Next unfinished step
-
-In the order the canonical product roadmap tracks them (weekly-review header
-2026-11-09):
-
-1. **Clear the release hold** — run the schedule-only removal investigation
-   (see [Decision 0004](decisions/0004-critical-css-lcp-remedy.md)), the promotion
-   resolver fix, and the production Kit Worker cutover
-   ([#2092](https://github.com/TogetherWeOwn/two-web-next/pull/2092)).
-2. The Release Manager **re-qualifies exact-`main` staging**.
-3. The **queued finished PRs merge** once the hold clears.
-4. The **M0 slices continue** (both senses: the Ember Hours milestone slices
-   and the page-renderer family migrations; their relationship is unresolved
-   in this repository — see above).
-
-Ember Hours **core** scope is approved; only later expansion beyond the
-accepted scope stays a proposal until accepted through normal product
-planning. The roadmap's non-goals apply.
+See the [decision index](decisions/README.md) for provenance, the
+[runbook index](runbooks/README.md) for operational procedures and the
+[merge policy](../CONTRIBUTING.md#merge-and-production-staging-evidence) for
+exact-head review and promotion-path routing.
