@@ -71,6 +71,7 @@ export const homeEvidenceStates = Object.freeze(Object.keys(states));
 export function fixtureData(state) {
   if (!Object.hasOwn(states, state)) throw new Error(`Unknown home evidence state: ${state}`);
   return {
+    nowMs: HOME_EVIDENCE_NOW,
     session: null,
     sessionUnavailable: false,
     notice: null,
@@ -282,7 +283,6 @@ export async function withKitHomeEvidenceStates(callback) {
     {
       page: homeEvidencePage(first, variants),
       searches: homeEvidenceStates.map((state) => `?state=${encodeURIComponent(state)}`),
-      now: HOME_EVIDENCE_NOW,
     },
     async ({ page, open }) => {
       await callback(async (state) => {
@@ -298,12 +298,9 @@ export async function withKitHomeEvidenceStates(callback) {
 }
 
 export async function withKitHomeEvidence(state, callback) {
-  return withKitOfflineBrowser(
-    { page: homeEvidencePage(state), now: HOME_EVIDENCE_NOW },
-    async (fixture) => {
-      if (state === "guest") await fixture.page.setViewportSize({ width: 390, height: 844 });
-      await assertHomeEvidence(fixture.page, state);
-      return callback(fixture);
-    },
-  );
+  return withKitOfflineBrowser({ page: homeEvidencePage(state) }, async (fixture) => {
+    if (state === "guest") await fixture.page.setViewportSize({ width: 390, height: 844 });
+    await assertHomeEvidence(fixture.page, state);
+    return callback(fixture);
+  });
 }

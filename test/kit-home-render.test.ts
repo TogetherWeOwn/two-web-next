@@ -4,7 +4,7 @@
 // source cannot catch a wrong branch — these renders fail the three mutants
 // the source-grep suite missed: a hardcoded sessionUnavailable, a skipped
 // flash precedence, and `{:else if session}` in the hero.
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
 import {
   allowedRoom,
@@ -21,11 +21,13 @@ let cleanup: (() => void) | undefined;
 
 const INVITE_URL = "https://discord.gg/invite";
 const APP_URL = "https://example.test";
+const NOW_MS = Date.UTC(2030, 6, 19, 12);
 const JSON_LD_BLOCK =
   /<script type="application\/ld\+json" data-testid="([^"]+)">([\s\S]*?)<\/script>/g;
 
 function baseData(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    nowMs: NOW_MS,
     session: null,
     sessionUnavailable: false,
     notice: null,
@@ -72,8 +74,6 @@ afterAll(() => {
 });
 
 describe("Kit home SSR render: offline voice composition", () => {
-  beforeEach(() => void vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime("2030-07-19T12:00Z"));
-  afterEach(() => void vi.useRealTimers());
   it("keeps the shipped hero for missing, suppressed, or wrongly scoped voice data", async () => {
     const data = baseData({ upcomingEvents: [fullnessEvent({ title: "Friday Raid" })] });
     const baseline = renderPage(data);
@@ -278,12 +278,6 @@ describe("Kit home SSR render: guest intro", () => {
 });
 
 describe("Kit home SSR render: Week and Upcoming Events", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(new Date("2030-07-19T12:00:00Z"));
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
   it.each([null, nonMemberSession, memberSession])("orders the bands for %j", (session) => {
     const html = renderPage(baseData({ session }));
     const headings =
@@ -297,9 +291,12 @@ describe("Kit home SSR render: Week and Upcoming Events", () => {
   });
 
   it("links to the full schedule when ongoing games fill the preview", () => {
-    const now = Date.now();
     const upcomingEvents = ["one", "two", "three"].map((eventKey) =>
-      fullnessEvent({ eventKey, startsAt: new Date(now - 3600e3), endsAt: new Date(now + 3600e3) }),
+      fullnessEvent({
+        eventKey,
+        startsAt: new Date(NOW_MS - 3600e3),
+        endsAt: new Date(NOW_MS + 3600e3),
+      }),
     );
     const html = renderPage(baseData({ upcomingEvents }));
     expect(html).toContain(
@@ -323,6 +320,40 @@ describe("Kit home SSR render: Week and Upcoming Events", () => {
       expect(week).not.toMatch(/Already started|Later game/);
       expect(week.includes("You're on the waitlist.")).toBe(session?.member === true);
     }
+  });
+
+  it("uses page time at the exact start and end boundaries", () => {
+    const data = baseData({
+      session: memberSession,
+      upcomingEvents: [
+        fullnessEvent({
+          eventKey: "closing",
+          startsAt: new Date(NOW_MS - 3600e3),
+          endsAt: new Date(NOW_MS),
+        }),
+        fullnessEvent({
+          eventKey: "opening",
+          title: "Opening game",
+          startsAt: new Date(NOW_MS),
+        }),
+      ],
+      memberRsvps: [{ eventKey: "opening", status: "going" }],
+    });
+    const before = renderPage({ ...data, nowMs: NOW_MS - 1 });
+    expect(before).toContain("Next game night: <em>Opening game</em>");
+    expect(before).toContain('id="home-panel-heading">Your RSVP</h2>');
+    expect(fullnessRow(before, "closing")).toContain("3 seats left");
+
+    const at = renderPage(data);
+    expect(at).toContain("The lobby is <em>open</em>.");
+    expect(at).toContain("No upcoming game nights");
+    expect(at).toContain("No upcoming RSVP in this preview.");
+    expect(fullnessRow(at, "closing")).toContain("Ended");
+    const week = (html: string) => html.split('id="home-week-heading"')[1]?.split("</section>")[0];
+    expect(week(at)).toContain("Opening game");
+    expect(week(renderPage({ ...data, nowMs: NOW_MS + 1 }))).toContain(
+      "No new starts in this preview.",
+    );
   });
 });
 
@@ -447,7 +478,7 @@ describe("Kit home SSR render: independently degraded panels", () => {
             source: "canonical",
             eventKey: "game-night-1",
             title: "Game night",
-            startsAt: new Date(Date.UTC(2026, 9, 20, 19, 0, 0)),
+            startsAt: new Date(Date.UTC(2030, 6, 20, 19, 0, 0)),
             timezone: "Europe/London",
             location: null,
             goingCount: 3,
@@ -539,13 +570,6 @@ function fullnessRow(html: string, key: string): string {
 }
 
 describe("Kit home SSR render: member standing", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(new Date("2030-07-19T12:00:00Z"));
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   const standingPanel = (html: string) =>
     html.split('data-testid="home-standing"')[1]?.split("</section>")[0];
 

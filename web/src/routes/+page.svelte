@@ -53,7 +53,7 @@ const siteGraph = $derived(siteJsonLd(appUrl));
 // Same shared buckets as the Hono screen: group the capped rows at render.
 // The explicit row type recovers what $derived destructuring widens (see
 // noticeText above): without it the groups widen to the helper's input.
-const renderTime = new Date();
+const renderTime = $derived(new Date(data.nowMs));
 const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, renderTime));
 const weekEvents = $derived(
   upcomingEvents.filter(

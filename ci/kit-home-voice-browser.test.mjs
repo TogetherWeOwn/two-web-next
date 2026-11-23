@@ -52,7 +52,6 @@ test("Kit home places and captures each offline voice state at both widths", {
       page: await fixturePage(),
       search: searchFor(states[0]),
       searches: states.slice(1).map(searchFor),
-      now: Date.UTC(2026, 9, 20, 12),
       javaScriptEnabled: true,
       csr: false,
     },
