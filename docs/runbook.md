@@ -698,8 +698,8 @@ Pin catalog state in a read-only transaction using `ci/db-permissions-repair-sta
 - `PRODUCTION_DB_REPAIR_PLAN` holds the `before` and `after` digests, `identity` fingerprint and `owners` in inventory order.
 - `PRODUCTION_DB_REPAIR_PLAN_SHA256` pins the exact plan bytes.
 
-Dispatch `forward` or `undo` with approved pins. Use `readback` before retrying an uncertain write.
-After the 30-minute watch and recovery window, remove the credential and pins and verify removal.
+Run `readback` after an uncertain write. If it cannot classify the state, stop writes and compare a read-only catalog snapshot against both pins before approving recovery.
+Keep the executor authority and pins through the 30-minute watch and recovery window, then verify their removal.
 
 ### Migration rollback and recovery
 
