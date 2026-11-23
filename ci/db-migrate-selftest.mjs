@@ -22,6 +22,7 @@ import {
   runMigration,
   safeMigrationError,
 } from "./db-migrate.mjs";
+import { runRepair } from "./db-permissions-repair.mjs";
 import { OwnershipRefusal, assertMigratorOwnership } from "./migration-ownership.mjs";
 import {
   DefaultAclRefusal,
@@ -53,6 +54,15 @@ const productionEnv = {
 };
 const identityHash = (database, role) =>
   createHash("sha256").update(database).update(Buffer.of(0)).update(role).digest("hex");
+
+test("permissions repair rejects an unpinned plan before opening a client", async () => {
+  await assert.rejects(
+    runRepair("forward", { PRODUCTION_DB_REPAIR_PLAN: "{}" }, () => {
+      assert.fail("unexpected connection");
+    }),
+    /raw && raw.length/,
+  );
+});
 
 function testAdminUrl() {
   const raw =

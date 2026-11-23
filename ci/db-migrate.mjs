@@ -14,7 +14,7 @@ import {
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const ledger = "drizzle.__drizzle_migrations";
-const lockKey = 11161001;
+export const webMigrationLockKey = 11161001;
 
 // PlanetScale Postgres identity pins (infrastructure identifiers, not secrets).
 // Usernames carry the branch as <role-credential>.<branch_id>, so the username
@@ -411,7 +411,8 @@ export async function runMigration(mode, env = process.env, options = {}) {
       await transaction.unsafe("SET LOCAL search_path = public");
       await transaction.unsafe("SET LOCAL datestyle = 'ISO, YMD'");
       await transaction.unsafe("SET LOCAL standard_conforming_strings = on");
-      const [lock] = await transaction`select pg_try_advisory_xact_lock(${lockKey}) as acquired`;
+      const [lock] =
+        await transaction`select pg_try_advisory_xact_lock(${webMigrationLockKey}) as acquired`;
       if (!lock.acquired)
         refuse("Another web migration holds the database lock; retry only after it finishes.");
       const pending = await plan(transaction);
