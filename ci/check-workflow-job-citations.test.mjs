@@ -59,7 +59,7 @@ test("accepts job IDs and static names in explicit prose, table and workflow lin
       "An independent check (`e2e.yml` `Browser smoke` job).",
       "The browser-smoke job (`.github/workflows/e2e.yml`).",
       "| `browser-smoke` job | 60 min | `.github/workflows/e2e.yml` |",
-      '[`Browser smoke` job](<../.github/workflows/e2e.yml> "CI [browser]")',
+      '\\\\[`Browser smoke` job](<../.github/workflows/e2e.yml> "CI [browser]")',
       `[GitHub Actions → deploy.yml (\`deploy-staging\` job)](${actions}/deploy.yml)`,
     ].join("\n"),
   });
@@ -111,6 +111,7 @@ test("leaves unrelated prose, external links, examples and existing citations to
       "`old-name` job in `upstream.yml`.",
       "[`old-name` job in `e2e.yml`](https://github.com/sveltejs/kit/actions/workflows/e2e.yml)",
       "`outside` job in [`e2e.yml`](https://github.com/sveltejs/kit/actions/workflows/e2e.yml)",
+      "\\[`literal-smoke` job\\](.github/workflows/e2e.yml (Old link))",
       "<!-- `old-name` job in `.github/workflows/e2e.yml`. -->",
       "`separate-paragraph` job in",
       "",

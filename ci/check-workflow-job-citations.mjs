@@ -89,8 +89,11 @@ function collectCitations(markdown, path, workflows) {
   const prose = visibleMarkdown(markdown.replace(/\r\n?/g, "\n"))
     .split("\n")
     .map((line, index) =>
-      line.replaceAll(inlineLink, (_, image, label, destination) => {
-        const target = image ? null : linkedWorkflow(destination, path);
+      line.replaceAll(inlineLink, (_, image, label, destination, offset) => {
+        let start = offset;
+        while (line[start - 1] === "\\") start--;
+        if (image || (offset - start) % 2 !== 0) return "\u0000";
+        const target = linkedWorkflow(destination, path);
         if (!target) return "\u0000";
         const jobs = [...label.matchAll(labelJob)];
         for (const match of jobs)
