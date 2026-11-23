@@ -206,20 +206,23 @@ def proof(db, password, scratch, mode):
         path.write_bytes(original)
     verdict("archive, receipts and plan pin controls PASS")
 
-    wrong = db.create("wrong")
-    expect_refusal(lambda: target_env(db, target, wrong))
-    db.sql(target, "CREATE VIEW public.rehearsal_nonempty AS SELECT 1")
-    expect_refusal(lambda: target_env(db, target, target))
-    db.sql(target, "DROP VIEW public.rehearsal_nonempty")
-    verdict("wrong and nonempty target controls PASS")
-
-    def restore(env):
+    def restore(expected, connected, read_only=False):
+        env = target_env(db, expected, connected)
+        if read_only:
+            env["PGOPTIONS"] = "-c default_transaction_read_only=on"
         return subprocess.run(["pg_restore", "--exit-on-error", "--single-transaction", "--no-owner",
                                "--no-privileges", "--dbname=" + env["PGDATABASE"]],
                               env=env, input=admit_bundle(), capture_output=True, timeout=30)
 
-    env = target_env(db, target, target)
-    require(restore(env).returncode == 0)
+    wrong = db.create("wrong")
+    expect_refusal(lambda: restore(target, wrong))
+    db.sql(target, "CREATE VIEW public.rehearsal_nonempty AS SELECT 1")
+    expect_refusal(lambda: restore(target, target))
+    db.sql(target, "DROP VIEW public.rehearsal_nonempty")
+    verdict("wrong and nonempty target controls PASS")
+
+    require(restore(target, target).returncode == 0)
+    env = {**db.env, "PGDATABASE": target}
     compare = snapshot["compare"]
     require(compare(plan, key, archive, baseline, env) == "MATCH")
     require(compare(plan, bytes(32), archive, baseline, env) == "REFUSED")
@@ -235,10 +238,9 @@ def proof(db, password, scratch, mode):
     require(all(db.identity(name) is None for name in (source, target, wrong)))
     verdict("database identity teardown PASS")
     failed_target = db.create("failure")
-    env = target_env(db, failed_target, failed_target)
-    failed = restore({**env, "PGOPTIONS": "-c default_transaction_read_only=on"})
+    failed = restore(failed_target, failed_target, read_only=True)
     require(failed.returncode != 0 and b"read-only transaction" in failed.stderr)
-    require(target_env(db, failed_target, failed_target) == env)
+    target_env(db, failed_target, failed_target)
     raise ExpectedRestoreFailure
 
 
