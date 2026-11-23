@@ -47,29 +47,22 @@ whole inventory before an upload, promotion PUT or rotation DELETE.
 
 ## Optional snapshot receipt for a private restore comparison
 
-`python3 bin/backup/snapshot_capture.py EXPECTED KEY NEW_DIRECTORY` uses `DATABASE_URL` and
-PostgreSQL 18 clients in a private executor. The output parent and inputs are owner-only.
-`EXPECTED` is JSON with `source` (independently qualified opaque source ID),
-`host`, `port` (string), `database`, `role`, `databaseOid` (integer), `archiveKey` (daily archive
-key), and `ranges` (`events` and `rsvps`, each an inclusive positive integer PK range spanning at
-most 128 positions). Freeze the inputs and retain `KEY` (32 random bytes) separately. Admission checks the endpoint, login, database and
-OID and requires `verify-full` with system CAs outside the restricted disposable loopback fixture.
+`python3 bin/backup/snapshot_capture.py EXPECTED KEY NEW_DIRECTORY` uses `DATABASE_URL` and PG18 clients.
+Freeze owner-only `EXPECTED` JSON with `source` (qualified opaque source ID), `host`, `port` (string),
+`database`, `role`, `databaseOid` (integer), branch `archivePrefix`, full daily `archiveKey`, and `ranges`.
+Use inclusive positive PK ranges of at most 128 positions for `events` and `rsvps`. Keep a separate owner-only 32-byte random `KEY`. Admission requires `verify-full` with system CAs outside the loopback fixture.
 
-One read-only repeatable-read transaction exports the snapshot for `pg_dump -Fc --snapshot` and
-reads both projections before closing. Each indexed probe has a 2 s statement timeout,
-250 ms lock timeout, 10 s client deadline and 1 MiB projection limit. The dump has a 300 s deadline.
-Nonempty cohorts cover event ID, instants, status, RSVP-open, capacity and both sync revisions, and
-RSVP ID, event/member association, status, creation time, legacy ordering ID and mirror time.
-HMAC-SHA-256 frames the manifest, ordered typed fields and count. Integers use decimal strings, time uses UTC epoch microseconds, and NULL has its own token.
+Both probes read the exported read-only repeatable-read snapshot imported by the dump. Limits are
+2 s per statement, 250 ms per lock, 10 s for client reads, 1 MiB per probe and 300 s for the dump.
+Nonempty projections cover event ID, instants, status, RSVP-open, capacity and sync revisions, and
+RSVP ID, event/member, status, creation time, legacy ordering ID and mirror time. HMAC-SHA-256 frames
+the plan, typed ordered fields and count, using decimal integers, UTC epoch microseconds and tagged NULL.
 
-Success publishes `archive.dump`, the existing `archive.digest.json` format, and private
-`baseline.json` together. The receipt seals the expected plan, archive key, size and digest, private
-counts and HMACs, an opaque snapshot reference and its UTC observation time. A qualified, fenced
-restore executor uses `load_plan` and `compare` for `MATCH`, `MISMATCH` or `REFUSED`. Full counts,
-schema, ACLs and sequence state need separate checks. Publish verdicts only. Keep inputs and scratch in
-approved custody. On interruption, reconcile the output and scratch even without a verdict. Before live use,
-qualify the direct TLS target and role, full read coverage, indexed plans, approval controls,
-private process and database diagnostics, and archive retention and disposition.
+Success publishes `archive.dump`, `archive.digest.json` and private `baseline.json` under an owner-only parent.
+The seal covers the plan, archive identity and digest, baseline and opaque snapshot reference with UTC observation time.
+A fenced restore uses `load_plan` and `compare`. Publish only verdicts. Empty cohorts and infinite instants refuse.
+Reconcile output and scratch after interruption. Before live use, qualify direct TLS, role and full
+counts/read coverage, indexed plans, approval controls, private diagnostics, retention and disposition.
 
 ## Check outcomes and legacy compatibility
 

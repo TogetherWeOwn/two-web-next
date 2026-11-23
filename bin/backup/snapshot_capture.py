@@ -71,11 +71,11 @@ def unique_object(items):
 def load_plan(path, key_path):
     plan = json.loads(private_read(path, 4096), object_pairs_hook=unique_object)
     require(isinstance(plan, dict))
-    require(set(plan) == {"source", "host", "port", "database", "role", "databaseOid", "archiveKey", "ranges"})
+    require(set(plan) == {"source", "host", "port", "database", "role", "databaseOid", "archivePrefix", "archiveKey", "ranges"})
     require(re.fullmatch(r"[A-Za-z0-9_-]{1,128}", plan["source"]))
-    daily = re.fullmatch(r"(.+)-[0-9]{8}T[0-9]{6}Z\.dump", plan["archiveKey"])
-    require(daily)
-    admit_manifest(daily[1], [plan["archiveKey"]])
+    prefix, archive = plan["archivePrefix"], plan["archiveKey"]
+    require("/" in prefix and re.fullmatch(re.escape(prefix) + r"-[0-9]{8}T[0-9]{6}Z\.dump", archive))
+    admit_manifest(prefix, [archive])
     require(type(plan["databaseOid"]) is int and 0 < plan["databaseOid"] < 2**32)
     require(isinstance(plan["ranges"], dict) and set(plan["ranges"]) == set(FIELDS))
     for bounds in plan["ranges"].values():
@@ -187,9 +187,7 @@ def exporter(plan, env):
                                  "WHERE datname = current_database();\n").encode())
             process.stdin.flush()
             require(select.select([process.stdout], [], [], 10)[0])
-            line = os.read(process.stdout.fileno(), 1024)
-            require(line.endswith(b"\n"))
-            database, login, role, oid, encoding, snapshot = json.loads(line)
+            database, login, role, oid, encoding, snapshot = json.loads(os.read(process.stdout.fileno(), 1024))
             require((database, login, role, oid) == (plan["database"], plan["role"], plan["role"], plan["databaseOid"]))
             require(encoding == "UTF8")
             require(re.fullmatch(r"[0-9A-F]{8}-[0-9A-F]{8}-[0-9]+", snapshot))
