@@ -6,6 +6,7 @@ import os
 import re
 import unittest
 from contextlib import redirect_stdout
+from unittest.mock import patch
 
 import pr_standards as ps
 
@@ -153,7 +154,7 @@ class Verification(unittest.TestCase):
             "- `$ ./bin/smoke` exited with status 1 and the fixture reproduced the regression.",
             "- `git diff --check` returned no output. The full suite was not run locally.",
             "- `pytest` – 24 passed, 1 pending.",
-            "- Local tests (`pytest`) passed.",
+            "- Local tests (`pytest`) in `web` passed.",
             "- Ran `pytest`, but it failed.",
             "- `jest` — 41 passed, 0 failed.",
             "- Unit tests passed: `npm test`.",
@@ -201,7 +202,6 @@ class Verification(unittest.TestCase):
             "- Will run `npm test` tomorrow. CI passed.",
             "- Will verify `npm test` later. The design passed review.",
             "- `npm test` will return exit code 0.",
-            "- `npm test` returned TBD.",
             "- `<command>` passed.",
             "- `command to run` passed.",
             "- `npm test <file>` passed.",
@@ -211,6 +211,7 @@ class Verification(unittest.TestCase):
             "- The `web` build passed.",
             "- The migration was confirmed (`migration.sql`).",
             "- The local suite (`pytest`) was not run. CI passed.",
+            "- Local tests (`pytest`) returned `TBD`.",
             "- `npm test` [41 passed, 0 failed](https://example.org).",
             "- `npm test` <!-- passed -->",
             "- `passed`",
@@ -260,7 +261,8 @@ class Verification(unittest.TestCase):
                 self.assertIn("missing in: 2, 4", findings[0].message)
         repeated = self.findings(f"- CI pending\n\n## Verification\n\n{self.ITEM}")
         self.assertEqual([("error", "PR template")], levels(repeated))
-        for items in ("- `npm test`\n\nPassed 41 tests.", "### Local checks\n\nCI pending."):
+        for items in ("- `npm test`\n\nPassed 41 tests.", "### Local checks\n\nCI pending.",
+                      f"- Unit tests\n  ========\n[Build run]({self.RUN})"):
             with self.subTest(items=items):
                 self.assertEqual([("error", "PR template")], levels(self.findings(items)))
 
@@ -276,7 +278,9 @@ class Verification(unittest.TestCase):
 
     def test_many_spans_after_long_whitespace(self):
         item = "- Results passed. Ran" + " " * 32_000 + " unverified." + " `status`" * 200
-        self.assertEqual([("error", "PR template")], levels(self.findings(item)))
+        with patch.object(ps, "COMMAND_INTRO", wraps=ps.COMMAND_INTRO) as intro:
+            self.assertEqual([("error", "PR template")], levels(self.findings(item)))
+        self.assertLessEqual(sum(len(call.args[0]) for call in intro.search.call_args_list), len(item))
 
 
 class CardAndInternalRefs(unittest.TestCase):

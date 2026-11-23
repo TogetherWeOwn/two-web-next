@@ -125,13 +125,12 @@ class DocsClassification(unittest.TestCase):
     def test_docs_state_the_current_workflow_mode(self):
         internal_level = workflow_env("INTERNAL_ID_LEVEL")
         standards_mode = workflow_env("PR_STANDARDS_MODE")
-        verification_mode = workflow_env("PR_VERIFICATION_MODE")
         cutoff = workflow_env("HEAD_REF_ERROR_FROM_PR")
         text = DOCS.read_text(encoding="utf-8")
         for token in (
             f'INTERNAL_ID_LEVEL: "{internal_level}"',
             f'PR_STANDARDS_MODE: "{standards_mode}"',
-            f'PR_VERIFICATION_MODE: "{verification_mode}"',
+            f'PR_VERIFICATION_MODE: "{workflow_env("PR_VERIFICATION_MODE")}"',
             f'HEAD_REF_ERROR_FROM_PR: "{cutoff}"',
         ):
             self.assertIn(token, text, f"docs must state the current mode token {token}")

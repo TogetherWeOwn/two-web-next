@@ -210,8 +210,12 @@ def is_command(text, explicit):
 
 
 def has_verification_evidence(item, references):
-    prose = INLINE_CODE.sub(" CODE ", item)
-    result_parts, start = [], 0
+    def mask_code(span):
+        value = span[0].strip("` \t\n").casefold()
+        return ("TBD" if value in {"", "tbd", "todo", "pending", "...", "…"} else "000").ljust(len(span[0]))
+
+    prose = INLINE_CODE.sub(mask_code, item)
+    visible = list(prose)
     for link in EVIDENCE_LINK.finditer(prose):
         destination = link["inline"] or (link["bare"] or "").rstrip(".,;:!?")
         if link["label"]:
@@ -219,26 +223,24 @@ def has_verification_evidence(item, references):
         if not link[0].startswith("!") and ACTIONS_URL.fullmatch(destination.strip("<>")):
             return True
         if destination:
-            result_parts.extend((prose[start:link.start()], " "))
-            start = link.end()
-    result_parts.append(prose[start:])
-    result = RESULT_PLACEHOLDER.sub(" ", "".join(result_parts))
-    if not RESULT.search(result):
+            visible[link.start():link.end()] = " " * len(link[0])
+    result = RESULT_PLACEHOLDER.sub(lambda match: " " * len(match[0]), "".join(visible))
+    results = list(RESULT.finditer(result))
+    if not results:
         return False
     spans = list(INLINE_CODE.finditer(item))
     first_text = previous_end = re.match(r"[\s*_]*(?:\[[ xX]\][\s*_]*)?", item).end()
-    first_result = RESULT.search(item)
     for index, span in enumerate(spans):
         # Each prose gap is scanned at most twice, even with many inline spans.
         prefix = item[previous_end:span.start()].strip(" *_\t\n")
-        following = spans[index + 1] if index + 1 < len(spans) else None
-        suffix = item[span.end():following.start()] + " CODE " if following else item[span.end():]
+        next_start = spans[index + 1].start() if index + 1 < len(spans) else len(item)
+        suffix = item[span.end():next_start]
         previous_end = span.end()
         if UNRUN_BEFORE.search(prefix) or UNRUN_AFTER.match(suffix):
             continue
-        parenthesized = prefix.endswith("(") and suffix.lstrip().startswith(")") and RESULT.search(suffix)
+        parenthesized = prefix.endswith("(") and suffix.lstrip().startswith(")") and results[-1].start() >= span.end()
         explicit = span.start() == first_text or prefix.endswith(":") or COMMAND_INTRO.search(prefix) or parenthesized
-        if not explicit and first_result and first_result.end() <= span.start():
+        if not explicit and results[0].end() <= span.start():
             continue
         width = len(span[1])
         if is_command(span[0][width:-width], explicit):
@@ -253,7 +255,8 @@ def verification_items(content):
         line = QUOTE_PREFIX.sub("", raw)
         structural = BLOCK_BREAK.match(line)
         bullet = None if structural else VERIFICATION_BULLET.match(line)
-        separated = lines and not lines[-1] and line.strip()
+        heading = len(lines) > 1 and lines[-2] and SETEXT_UNDERLINE.match(lines[-1])
+        separated = lines and (not lines[-1] or heading) and line.strip()
         if lines and (structural or bullet or (separated and (indent is None or len(line) - len(line.lstrip()) < indent))):
             yield indent is not None, "\n".join(lines)
             lines, indent = [], None

@@ -30,7 +30,6 @@ Full rules: CONTRIBUTING.md, "Pull request contract".
 ## Verification
 
 <!-- Include a code-formatted command and its observed result, or a GitHub Actions run/job URL, in every bullet. -->
-<!-- Put any checks you did not run in Notes for reviewers. -->
 <!-- Add the bot comment’s full permalink once with the link label `Exact-head Actions evidence`. -->
 
 -

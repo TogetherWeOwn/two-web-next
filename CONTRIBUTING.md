@@ -295,7 +295,7 @@ Its selftests use only local proc fixtures and controlled child processes.
 `pr-lint` is a required job, so it must pass; inside the job, some findings
 fail it and some only warn. Current mode in
 `.github/workflows/pr-gates.yml`: `INTERNAL_ID_LEVEL: "warning"`,
-`PR_STANDARDS_MODE: "warn"`, `PR_VERIFICATION_MODE: "error"`, `HEAD_REF_ERROR_FROM_PR: "627"`, and
+`PR_STANDARDS_MODE: "warn"`, `HEAD_REF_ERROR_FROM_PR: "627"`, and
 `RISK_TIER_ERROR_FROM_PR: "2671"`. A finding that
 fails exits the checker nonzero and turns the job red; a warning is annotated
 without failing. Flipping a knob to `"error"` turns the Warns-only rows that
@@ -335,9 +335,8 @@ ending in a period, and an empty body; its internal-ID check is a warning
 today, and `INTERNAL_ID_LEVEL` in the workflow turns it into an error), then
 `.github/scripts/pr_standards.py` for pull requests when the workflow sets
 `PR_STANDARDS_MODE`. A tracker ID, instance UI link or the internal host in a
-public title or body always fails, comments included. Verification has its own
-error mode. The remaining body, branch and reference rules follow
-`PR_STANDARDS_MODE: "warn"`. The flip to
+public title or body always fails, comments included. The advisory body, branch
+and reference rules follow the mode (`PR_STANDARDS_MODE: "warn"`); the flip to
 `"error"` is a separate one-line change once the repo's open PRs are clear. The
 script is unit-tested beside it: `python3 -m unittest discover -s .github/scripts -p
 'test_pr_standards.py'`.
