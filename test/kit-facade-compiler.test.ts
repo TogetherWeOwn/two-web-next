@@ -49,15 +49,22 @@ describe("inactive Kit facade compiler", () => {
       scheduled() { return this.name; }
     };`;
     const { output } = await compileKitFacade(source);
+    expect(output).toContain('from "cloudflare:sockets"');
+    expect(output).not.toContain('import("postgres")');
     const bundled = await build({
       stdin: { contents: output, loader: "js", resolveDir: process.cwd() },
       bundle: true,
       format: "esm",
+      platform: "node",
       write: false,
       plugins: [
         {
           name: "adapter-fixture",
           setup(plugin) {
+            plugin.onResolve({ filter: /^cloudflare:sockets$/ }, () => ({
+              path: "data:text/javascript,export function connect(){throw new Error('unexpected connect')}",
+              external: true,
+            }));
             plugin.onResolve({ filter: /^\.\/kit-adapter\.js$/ }, () => ({
               path: "adapter",
               namespace: "fixture",

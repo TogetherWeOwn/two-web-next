@@ -1,17 +1,24 @@
-import { HUB_INGEST_URL, type LiveIngressEnv, liveIngressConfig } from "./ingress";
+import { HUB_INGEST_URL, liveIngressConfig } from "./ingress";
 import { LiveSequence, type LiveWatermarks } from "./sequence";
+import { HUB_SOCKET_URL, type LiveSocketEnv } from "./socket-route";
+import { LiveSockets } from "./sockets";
 import { reduceLiveState } from "./state";
 import { signedLiveSnapshot } from "./transport";
 import { decodeLiveDelta, type LiveDelta, type LiveState, snapshotTopics } from "./wire";
 
 const WATERMARKS = "live-watermarks-v1";
 
-/** Binding-only Durable Object; it never serves the browser or stores payloads. */
+/** Binding-only Durable Object; durable storage never holds guild payloads. */
 export class LiveGuildHub {
   readonly #guildId?: string;
   readonly #sequence?: LiveSequence<LiveState, LiveDelta>;
+  readonly #sockets: LiveSockets;
 
-  constructor(ctx: DurableObjectState, env: LiveIngressEnv) {
+  constructor(
+    ctx: DurableObjectState,
+    private readonly env: LiveSocketEnv,
+  ) {
+    this.#sockets = new LiveSockets(ctx, env);
     const config = liveIngressConfig(env);
     if (!config) return;
     this.#guildId = config.guildId;
@@ -34,6 +41,11 @@ export class LiveGuildHub {
   }
 
   async fetch(request: Request): Promise<Response> {
+    if (request.url === HUB_SOCKET_URL) {
+      return this.#sequence && this.env.DISCORD_LIVE_SOCKET_ENABLED === "true"
+        ? this.#sockets.accept(request)
+        : new Response(null, { status: 503 });
+    }
     if (request.method !== "POST" || request.url !== HUB_INGEST_URL) {
       return new Response(null, { status: 404 });
     }
@@ -45,5 +57,22 @@ export class LiveGuildHub {
     return new Response(null, {
       status: outcome === "unavailable" ? 409 : outcome === "invalid" ? 400 : 204,
     });
+  }
+
+  webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> | void {
+    if (!this.#sequence) return socket.close(1008);
+    return this.#sockets.message(socket, message);
+  }
+
+  webSocketClose(socket: WebSocket): void {
+    if (socket.readyState === WebSocket.CLOSING) socket.close(1000);
+  }
+
+  webSocketError(socket: WebSocket): void {
+    if (socket.readyState === WebSocket.OPEN) socket.close(1011);
+  }
+
+  alarm(): Promise<void> {
+    return this.#sockets.expire();
   }
 }

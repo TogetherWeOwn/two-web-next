@@ -2,6 +2,7 @@
 // Design credit: Rick7C2, draft #2092, eb1ba5d47e6d5a35a0a6deb2b7532b4c045865f3.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { builtinModules } from "node:module";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
@@ -49,9 +50,9 @@ export async function compileKitFacade(adapterSource) {
     stdin: {
       contents: `import adapter from "./kit-adapter.js";
 import { createKitWorkerFacade } from ${sourcePath("kit-worker-facade.ts")};
-import { handleLiveIngress } from ${sourcePath("live/ingress.ts")};
+import { handleLiveRequest } from ${sourcePath("live/socket-route.ts")};
 export { LiveGuildHub } from ${sourcePath("live/guild-hub.ts")};
-export default createKitWorkerFacade(adapter, undefined, handleLiveIngress);
+export default createKitWorkerFacade(adapter, undefined, handleLiveRequest);
 `,
       resolveDir: fileURLToPath(new URL(".", import.meta.url)),
       loader: "js",
@@ -61,7 +62,9 @@ export default createKitWorkerFacade(adapter, undefined, handleLiveIngress);
     format: "esm",
     platform: "neutral",
     target: "es2022",
-    external: ["./kit-adapter.js"],
+    conditions: ["workerd"],
+    alias: Object.fromEntries(builtinModules.map((id) => [id, id.replace(/^(node:)?/, "node:")])),
+    external: ["./kit-adapter.js", "cloudflare:sockets", "node:*"],
     write: false,
     logLevel: "silent",
   });
