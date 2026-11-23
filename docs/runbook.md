@@ -672,6 +672,24 @@ credential/permission errors, **stop; never try another credential**. Driver
 errors are deliberately redacted; the authorized database operator investigates
 using controlled provider-side evidence. Do not cancel in-flight DDL casually.
 
+### Read back the configured production database identity
+
+[db-production-identity.yml](../.github/workflows/db-production-identity.yml)
+checks the database and login behind `PRODUCTION_DATABASE_URL` on protected
+`main`, in one read-only transaction on the pinned PlanetScale target with
+verified TLS. The ledger, grants and readiness require separate evidence.
+
+Before a live readback, verify the production Environment's main-only branch
+rule, independent approval for the exact SHA and identity, and exclusive
+credential custody. Hold the readback when any control is missing.
+Set `PRODUCTION_DB_IDENTITY_SHA256` and `PRODUCTION_DB_IDENTITY_APPROVED_SHA`
+only as production Environment secrets. Use the fingerprint format above
+and the lowercase 40-character dispatch SHA. Keep the credential and pins
+stable during the run and clear the approval SHA when it ends or is abandoned.
+A refusal requires custodian investigation before another approved attempt.
+
+### Migration rollback and recovery
+
 **Rollback:** a Worker rollback does not undo schema/data. SQL failure rolls back
 the pending transaction, including ledger initialization on a fresh DB. Existing
 history stays intact. On connection loss, do not infer commit success. For
