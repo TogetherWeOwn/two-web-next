@@ -219,8 +219,8 @@ export function citationTarget(span) {
 
 // Inline links `[text](target)` and images `![alt](target)` on one line,
 // with balanced-paren destinations (titles after a space are dropped).
-// Returns [{ text, target, index, end }].
-export function scanInlineLinks(line) {
+// Returns [{ text, target, index }].
+function scanInlineLinks(line) {
   const links = [];
   const pattern = /!?\[([^\]\n]*)\]\(/g;
   let match;
@@ -244,7 +244,7 @@ export function scanInlineLinks(line) {
       target = inside.split(/\s+/)[0];
     }
     if (!target) continue;
-    links.push({ text: match[1], target, index: match.index, end: cursor });
+    links.push({ text: match[1], target, index: match.index });
     pattern.lastIndex = cursor;
   }
   return links;

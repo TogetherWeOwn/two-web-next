@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { posix, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { posix } from "node:path";
 import { isMap, isScalar, parseDocument } from "yaml";
-import { fenceMask, scanInlineLinks } from "./check-doc-links.mjs";
+import { fenceMask } from "./check-doc-links.mjs";
 
 const workflowDir = ".github/workflows/";
 const filename = String.raw`[A-Za-z0-9_.-]+\.ya?ml`;
@@ -28,6 +27,8 @@ const prosePatterns = [
 const labelJob = new RegExp(`${job} job`, "g");
 const workflowPath = new RegExp(`^\\.github/workflows/${filename}$`);
 const relativeWorkflow = new RegExp(`^(?:\\.\\.?/)*\\.github/workflows/${filename}$`);
+const inlineLink =
+  /(!?)\[([^\][\n]*)\]\([ \t]*(<[^<>\s]+>|[^\s()[\]<>]+)(?:[ \t]+(?:"[^"\][\n]*"|'[^'\][\n]*'))?[ \t]*\)/g;
 
 function maskCommentsAndExamples(text) {
   const tokens = [...text.matchAll(/<!--|-->|`+|\n[ \t]*\n/g)];
@@ -61,7 +62,7 @@ function maskCommentsAndExamples(text) {
 }
 
 function linkedWorkflow(destination, path) {
-  const file = destination.split(/[?#]/, 1)[0];
+  const file = destination.replace(/^<|>$/g, "").split(/[?#]/, 1)[0];
   const url = actionsUrl.exec(file);
   if (url) return workflowDir + url[1];
   if (!relativeWorkflow.test(file)) return null;
@@ -78,24 +79,17 @@ function collectCitations(markdown, path, workflows) {
   const citations = [];
   const prose = visible
     .split("\n")
-    .map((line, index) => {
-      if (!line.includes("](")) return line;
-      // The destination identifies the workflow, even when the label differs.
-      // In prose, give a local workflow link the same form as its code citation.
-      let text = "";
-      let end = 0;
-      for (const link of scanInlineLinks(line)) {
-        text += line.slice(end, link.index);
-        end = link.end;
-        const target = line[link.index] === "!" ? null : linkedWorkflow(link.target, path);
-        const labels = target ? [...link.text.matchAll(labelJob)] : [];
-        for (const match of labels) {
+    .map((line, index) =>
+      line.replaceAll(inlineLink, (_, image, label, destination) => {
+        const target = image ? null : linkedWorkflow(destination, path);
+        if (!target) return "\u0000";
+        const jobs = [...label.matchAll(labelJob)];
+        for (const match of jobs)
           citations.push({ line: index + 1, workflow: target, job: match.groups.job });
-        }
-        text += target && labels.length === 0 ? "`" + target + "`" : "\u0000";
-      }
-      return text + line.slice(end);
-    })
+        // Let a workflow link without a job label complete an explicit prose citation.
+        return jobs.length ? "\u0000" : "`" + target + "`";
+      }),
+    )
     .join("\n");
   for (const pattern of prosePatterns) {
     let line = 1;
@@ -126,10 +120,9 @@ function jobNames(source, path) {
   return names;
 }
 
-export function checkWorkflowJobCitations(root, baseline, output = console) {
+function checkWorkflowJobCitations(baseline) {
   const git = (...args) =>
     execFileSync("git", args, {
-      cwd: root,
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
@@ -150,13 +143,9 @@ export function checkWorkflowJobCitations(root, baseline, output = console) {
       "--",
       ":(icase,glob)**/*.md",
     );
-    const fields = diff ? diff.slice(0, -1).split("\0") : [];
+    const fields = diff.slice(0, -1).split("\0").filter(Boolean);
     const workflowsAt = (revision) =>
-      new Set(
-        git("ls-tree", "--name-only", "-z", revision, "--", workflowDir)
-          .split("\0")
-          .filter((path) => workflowPath.test(path)),
-      );
+      new Set(git("ls-tree", "--name-only", "-z", revision, "--", workflowDir).split("\0"));
     const baseWorkflows = fields.length ? workflowsAt(base) : new Set();
     const workflows = fields.length ? workflowsAt("HEAD") : new Set();
     const namesByWorkflow = new Map();
@@ -182,32 +171,28 @@ export function checkWorkflowJobCitations(root, baseline, output = console) {
           continue;
         }
         checked += 1;
-        if (!namesByWorkflow.has(citation.workflow)) {
-          const names = workflows.has(citation.workflow)
-            ? jobNames(readBlob("HEAD", citation.workflow), citation.workflow)
-            : new Set();
-          namesByWorkflow.set(citation.workflow, names);
+        const target = citation.workflow;
+        if (workflows.has(target) && !namesByWorkflow.has(target)) {
+          namesByWorkflow.set(target, jobNames(readBlob("HEAD", target), target));
         }
-        if (namesByWorkflow.get(citation.workflow).has(citation.job)) continue;
-        output.error(
-          `${JSON.stringify(path)}:${citation.line}: missing job ${JSON.stringify(citation.job)} in ${citation.workflow}`,
+        if (namesByWorkflow.get(target)?.has(citation.job)) continue;
+        console.error(
+          `${JSON.stringify(path)}:${citation.line}: missing job ${JSON.stringify(citation.job)} in ${target}`,
         );
         broken += 1;
       }
     }
-    output.log(`Workflow job citations checked: ${checked}, broken: ${broken}.`);
+    console.log(`Workflow job citations checked: ${checked}, broken: ${broken}.`);
     return broken ? 1 : 0;
   } catch (error) {
-    output.error(`Workflow job citation check failed: ${JSON.stringify(error.message)}`);
+    console.error(`Workflow job citation check failed: ${JSON.stringify(error.message)}`);
     return 2;
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv.length !== 3) {
-    console.error("Usage: node ci/check-workflow-job-citations.mjs <baseline commit>");
-    process.exitCode = 2;
-  } else {
-    process.exitCode = checkWorkflowJobCitations(process.cwd(), process.argv[2]);
-  }
+if (process.argv.length === 3) {
+  process.exitCode = checkWorkflowJobCitations(process.argv[2]);
+} else {
+  console.error("Usage: node ci/check-workflow-job-citations.mjs <baseline commit>");
+  process.exitCode = 2;
 }

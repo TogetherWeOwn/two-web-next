@@ -15,23 +15,12 @@ const actions = "https://github.com/TogetherWeOwn/two-web-next/actions/workflows
 function fixture(t, baseline = {}) {
   const root = mkdtempSync(join(tmpdir(), "workflow-job-citations-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const git = (...args) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.com",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "core.hooksPath=/dev/null",
-        ...args,
-      ],
-      { cwd: root, stdio: "pipe" },
-    );
+  const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
   git("init", "--quiet");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.com");
+  git("config", "commit.gpgsign", "false");
+  git("config", "core.hooksPath", "/dev/null");
   const commit = (files) => {
     for (const [path, content] of Object.entries(files)) {
       const target = join(root, path);
@@ -42,18 +31,14 @@ function fixture(t, baseline = {}) {
     git("commit", "--quiet", "-m", "fixture");
   };
   commit({
-    [e2e]: [
-      "name: e2e",
-      "jobs:",
-      "  'browser-smoke':",
-      "    name: Browser smoke",
-      "    steps:",
-      "      - name: Browser step",
-      "        run: |",
-      "          step-only:",
-      "            name: not a job",
-      "",
-    ].join("\n"),
+    [e2e]: `jobs:
+  'browser-smoke':
+    name: Browser smoke
+    steps:
+      - run: |
+          step-only:
+            name: not a job
+`,
     [deploy]: "jobs: { deploy-staging: { name: Deploy staging } }\n",
     ...baseline,
   });
@@ -76,7 +61,6 @@ test("accepts job IDs and static names in explicit prose, table and workflow lin
       "| `browser-smoke` job | 60 min | `.github/workflows/e2e.yml` |",
       "[`Browser smoke` job](../.github/workflows/e2e.yml)",
       `[GitHub Actions → deploy.yml (\`deploy-staging\` job)](${actions}/deploy.yml)`,
-      "",
     ].join("\n"),
   });
 
@@ -99,7 +83,6 @@ test("fails changed and added citations against the cited workflow's jobs mappin
       "[`anchored-smoke` job](../.github/workflows/e2e.yml#L9)",
       "`linked-smoke` job in [`e2e.yml`](../.github/workflows/e2e.yml)",
       "`` `example-smoke` job in `.github/workflows/e2e.yml` ``",
-      "",
     ].join("\n"),
   });
 
@@ -133,7 +116,6 @@ test("leaves unrelated prose, external links, examples and existing citations to
       "```md",
       stale.trimEnd(),
       "```",
-      "",
     ].join("\n"),
   });
 
@@ -187,23 +169,20 @@ test("docs-links requires the fixtures and the citation check on PRs and merge g
     docs.steps[0].with["fetch-depth"],
     "${{ github.event_name == 'merge_group' && '0' || '2' }}",
   );
-  const fixtures = docs.steps.find(
-    (step) => step.run === "node --test ci/check-workflow-job-citations.test.mjs",
-  );
-  assert.ok(fixtures);
-  assert.equal(fixtures.if, undefined);
-  assert.equal(fixtures["continue-on-error"], undefined);
-  const gate = docs.steps.find(
-    (step) => step.run === 'node ci/check-workflow-job-citations.mjs "$CITATION_BASE"',
-  );
-  assert.ok(gate);
-  assert.equal(
-    gate.if,
-    "github.event_name == 'pull_request' || github.event_name == 'merge_group'",
-  );
-  assert.equal(
-    gate.env.CITATION_BASE,
-    "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}",
-  );
-  assert.equal(gate["continue-on-error"], undefined);
+  const steps = docs.steps.filter((step) => step.run?.includes("check-workflow-job-citations"));
+  assert.deepEqual(steps, [
+    {
+      name: "Workflow job citation fixtures",
+      run: "node --test ci/check-workflow-job-citations.test.mjs",
+    },
+    {
+      name: "Check added workflow job citations",
+      if: "github.event_name == 'pull_request' || github.event_name == 'merge_group'",
+      env: {
+        CITATION_BASE:
+          "${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}",
+      },
+      run: 'node ci/check-workflow-job-citations.mjs "$CITATION_BASE"',
+    },
+  ]);
 });
