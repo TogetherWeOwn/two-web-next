@@ -47,6 +47,7 @@ env:
   # instance UI links and the internal host in a public title or body always fail; the rest
   # start as warnings; flip to "error" once the repo's open PRs are clear (target 2026-10-10).
   PR_STANDARDS_MODE: "warn"
+  PR_VERIFICATION_MODE: "error"
   # Dedicated cutoff (PR number) for branch-name internal-ID *errors* on public repos.
   # PRs numbered at/above this value get an error for internal IDs in the head ref;
   # older open PRs keep the warning (a head ref cannot be renamed after the PR is open).

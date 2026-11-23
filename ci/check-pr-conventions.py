@@ -30,8 +30,11 @@ HELP = ("Expected a Conventional Commits header, e.g. 'fix(auth): refuse expired
         "sessions' or 'feat(events): shareable event page'. Allowed types: "
         + TYPES.replace("|", ", ") + ". Keep internal card IDs out of the title.")
 INTERNAL_ID = re.compile(r"\b(?:TOG|PAP)-\d+\b")
-EVIDENCE_LINK = (r"^[ \t]*(?:(?:[-+*]|[0-9]+[.)])[ \t]+)?\[Exact-head Actions evidence\]\((?:https://github\.com/TogetherWeOwn/two-web-next/pull/[1-9][0-9]*)?"
-                 r"#issuecomment-[1-9][0-9]*\)[ \t\r]*$")
+LABEL_SPACE = r"(?:[ \t]+|[ \t]*\r?\n[ \t]*)"
+EVIDENCE_LINK = (
+    rf"^[ \t]*(?:(?:[-+*]|[0-9]+[.)])[ \t]+)?\[Exact-head{LABEL_SPACE}Actions{LABEL_SPACE}evidence\]\("
+    r"(?:https://github\.com/TogetherWeOwn/two-web-next/pull/[1-9][0-9]*)?#issuecomment-[1-9][0-9]*\)[ \t\r]*$"
+)
 
 
 def header_errors(text):

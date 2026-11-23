@@ -6,6 +6,7 @@ import os
 import re
 import unittest
 from contextlib import redirect_stdout
+from unittest.mock import patch
 
 import pr_standards as ps
 
@@ -135,6 +136,152 @@ class Body(unittest.TestCase):
         f = ps.evaluate(env(TITLE="chore(main): release 1.2.0", HEAD_REF="release-please--branches--main",
                             BODY="Automated release PR with the changelog for this version."))
         self.assertEqual([], f)
+
+
+class Verification(unittest.TestCase):
+    RUN = "https://github.com/TogetherWeOwn/two-web-next/actions/runs/45073079066"
+    PERMALINK = "[Exact-head Actions evidence](https://github.com/TogetherWeOwn/two-web-next/pull/7#issuecomment-8)"
+    WRAPPED_PERMALINK = PERMALINK.replace("Actions evidence", "Actions\n  evidence")
+    ITEM = "- `npm test` passes: 41 passed, 0 failed"
+
+    def findings(self, items, **settings):
+        return ps.evaluate(env(BODY=GOOD_BODY.replace(self.ITEM, items), **settings))
+
+    def test_accepts_commands_and_actions_links(self):
+        for item in (
+            "- `python3 -m unittest ci.test_pr_lint_docs` passed 9 tests.",
+            "- `npm run check` failed with one type error.",
+            *(f"- `$ ./bin/smoke` — exit status {status}." for status in ("`1`", "`-9`", "`0xC0000005`", "-9", "0xC0000005", "１", "`１`")),
+            "- `git diff --check` returned no output. The full suite was not run locally.",
+            "- `pytest` – 24 passed, 1 pending.",
+            "- Local tests (`pytest`) in `web` passed.",
+            "- Ran `pytest`, but it failed.",
+            "- `jest` — 41 passed, 0 failed.",
+            "- Unit tests passed: `npm test`.",
+            "- The browser suite was not run, but `npm test` passed.",
+            "- `npm test` [41 passed, 0 failed].",
+            "- `git rev-parse HEAD` returned `0123456789abcdef`.",
+            "- Local checks\n====\n`npm test` passed 41 tests.",
+            "- `npm test`\n\n  Passed 41 tests.",
+            "- `NODE_ENV=production npm run build --prefix web` passed.",
+            "- `NODE_ENV=production LABEL='test build' npm run build` passed.",
+            "`npm test` passed 41 tests.",
+            "Used an offline fixture.\n\n`npm test` passed 41 tests.",
+            f"### Local checks\n\n{self.ITEM}\n\n* * *\n\n- [CI run]({self.RUN})",
+            f"CI ran on GitHub.\n\n{self.ITEM}\n\nOther checks are pending.",
+            f"- [CI run]({self.RUN})",
+            f"1. [Job]({self.RUN}/job/137370266418?pr=2672#step:3:1)",
+            f"> - {self.RUN}/attempts/2.",
+            f"+ <{self.RUN}>",
+            f"- [CI]({self.RUN} \"CI run\")\n- {self.PERMALINK}",
+            f"- {self.PERMALINK}\n{self.ITEM}",
+            f"- {self.WRAPPED_PERMALINK}\n{self.ITEM}",
+            f"- [CI run][ci  run]\n\n[CI RUN]: {self.RUN}",
+            f"- [CI][]\n\n## Links\n\n[ci]: <{self.RUN}> \"CI\"",
+            f"- [CI]\n\n[ci]: {self.RUN}",
+            f"- [CI passed, but lint warned]\n\n[ci passed, but lint warned]: {self.RUN}",
+            f"- [CI][run]\n\n## Notes\n\nCI logs\n=======\n[run]: {self.RUN}",
+        ):
+            with self.subTest(item=item):
+                self.assertEqual([], self.findings(item))
+        body = GOOD_BODY.replace("## Verification", "```text\nexample\n```\n\n## Verification")
+        self.assertEqual([], ps.evaluate(env(BODY=body.replace("\n", "\r\n"))))
+
+    def test_rejects_incomplete_and_placeholder_evidence(self):
+        for item in (
+            "- Unit tests passed.",
+            "- `npm test`",
+            "- `npm test` — not run yet.",
+            "- `npm test` — expected result: pass.",
+            "- `npm test` — expected output: 41 passed, 0 failed.",
+            "- `npm test` has not yet passed.",
+            "- `npm test` will pass once CI runs.",
+            "- `npm test` was not run; expected to report 41 tests passed.",
+            "- `npm test` was not run, but CI passed.",
+            "- `npm test` was not run. CI passed.",
+            "- Will run `npm test` tomorrow. CI passed.",
+            "- Will verify `npm test` later. The design passed review.",
+            "- `npm test` will return exit code 0.",
+            "- `<command>` passed.",
+            "- `command to run` passed.",
+            "- `npm test <file>` passed.",
+            "- `MODE=ci NODE_ENV=production` passed.",
+            "- Manual smoke passed and returned `200 OK`.",
+            "- Manual smoke passed and returned `no output`.",
+            "- The `web` build passed.",
+            "- The migration was confirmed (`migration.sql`).",
+            "- The local suite (`pytest`) was not run. CI passed.",
+            *(f"- Local tests (`pytest`) returned {value}." for value in ("TBD", "`TBD`")),
+            "- `npm test` — exit status `N/A`.",
+            "- `npm test` [41 passed, 0 failed](https://example.org).",
+            "- `npm test` <!-- passed -->",
+            "- `passed`",
+            "- [placeholder result]",
+            "- ...",
+            f"- {self.PERMALINK}",
+            f"- {self.WRAPPED_PERMALINK}",
+            f"```text\n{self.RUN}\n```",
+        ):
+            with self.subTest(item=item):
+                self.assertEqual([("error", "PR template")], levels(self.findings(item)))
+
+    def test_rejects_malformed_and_lookalike_actions_links(self):
+        for link in (
+            self.RUN.replace("https:", "http:"),
+            self.RUN.replace("github.com", "github.com.example.org"),
+            self.RUN.replace("github.com", "github.com@example.org"),
+            self.RUN.replace("github.com", "example.org@github.com"),
+            self.RUN.replace("github.com", "github.com:443"),
+            self.RUN.replace("two-web-next", ".."),
+            self.RUN.replace("45073079066", "<run-id>"),
+            self.RUN.replace("45073079066", "０１２"),
+            self.RUN.replace("45073079066", "0"),
+            self.RUN.replace("actions/runs", "actions/workflows"),
+            self.RUN + "abc",
+            self.RUN + "/job/pending",
+            self.RUN + "/artifact/123",
+            f"https://example.org/?next={self.RUN}",
+            f"[{self.RUN}](https://example.org)",
+            f"![CI]({self.RUN})",
+            f"![CI passed, but lint warned]({self.RUN})",
+            f"`{self.RUN}`",
+            "[CI run][missing]",
+            f"[CI][ref]\n\n## Links\n\nCI logs:\n[ref]: {self.RUN}",
+            f"[CI][ref]\n\n## Links\n\n=======\n[ref]: {self.RUN}",
+            f"[CI][ref]\n\n[ref]: https://example.org\n[REF]: {self.RUN}",
+        ):
+            with self.subTest(link=link):
+                self.assertEqual([("error", "PR template")], levels(self.findings(f"- {link}")))
+
+    def test_each_bullet_needs_evidence_at_the_verification_level(self):
+        items = f"{self.ITEM}\n+ CI pending\n  1. [CI job]({self.RUN}/job/137370266418)\n* `npm run lint`"
+        for mode, level in (("warn", "warning"), ("error", "error")):
+            with self.subTest(mode=mode):
+                findings = self.findings(items, PR_STANDARDS_MODE="warn", PR_VERIFICATION_MODE=mode)
+                self.assertEqual([(level, "PR template")], levels(findings))
+                self.assertIn("missing in: 2, 4", findings[0].message)
+        repeated = self.findings(f"- CI pending\n\n## Verification\n\n{self.ITEM}")
+        self.assertEqual([("error", "PR template")], levels(repeated))
+        for items in ("- `npm test`\n\nPassed 41 tests.", "### Local checks\n\nCI pending.",
+                      f"- Unit tests\n  ========\n[Build run]({self.RUN})"):
+            with self.subTest(items=items):
+                self.assertEqual([("error", "PR template")], levels(self.findings(items)))
+
+    def test_wrapped_publisher_permalink_does_not_supply_description(self):
+        findings = ps.evaluate(env(BODY=self.WRAPPED_PERMALINK, REPO_PRIVATE="false"))
+        self.assertEqual([("error", "PR body")], levels(findings))
+
+    def test_markdown_line_boundaries(self):
+        fake_heading = GOOD_BODY.replace("## Verification\n\n", "text\u2028## Verification\u2028")
+        fenced = GOOD_BODY.replace(self.ITEM, f"```text\n{self.ITEM}\n```").replace("\n", "\r")
+        for body in (fake_heading, fenced):
+            self.assertEqual([("error", "PR template")], levels(ps.evaluate(env(BODY=body))))
+
+    def test_many_spans_after_long_whitespace(self):
+        item = "- Results passed. Ran" + " " * 32_000 + " unverified." + " `status`" * 200
+        with patch.object(ps, "COMMAND_INTRO", wraps=ps.COMMAND_INTRO) as intro:
+            self.assertEqual([("error", "PR template")], levels(self.findings(item)))
+        self.assertLessEqual(sum(len(call.args[0]) for call in intro.search.call_args_list), len(item))
 
 
 class CardAndInternalRefs(unittest.TestCase):

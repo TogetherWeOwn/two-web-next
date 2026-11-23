@@ -15,6 +15,7 @@ Environment contract (every value is a plain string):
   REPO_PRIVATE           "true" | "false"; decides whether internal ticket references are allowed
   REQUIRE_CARD_REF       "true" | "false"; private repos only: demand `Refs: TOG-1234` in the body
   PR_STANDARDS_MODE      "warn" | "error"; level for the upstream body/branch/reference rules (default warn)
+  PR_VERIFICATION_MODE  "warn" | "error"; optional override for the Verification section
   INTERNAL_ID_PREFIXES   regex alternation of internal ticket prefixes (default TOG|PAP|PAPA)
 
 Title format, an empty body and a missing required card reference are always errors: they are the
@@ -22,14 +23,15 @@ standard the org already enforces. On a public repo the strict title/body subset
 instance UI links, the internal host) also always fails, comments included. Tracker ids and
 instance UI links match case-sensitively in prose; the internal host matches
 case-insensitively (hostnames are case-insensitive). Everything else new
-is `PR_STANDARDS_MODE` so a repo can land the gate in warn mode, clear its open PRs, then flip
-one line to `error`.
+follows `PR_STANDARDS_MODE`, with a separate override for Verification.
 """
 import json
 import os
 import re
+import shlex
 import sys
 from dataclasses import dataclass
+from itertools import dropwhile
 
 from internal_references import DEFAULT_PREFIXES, INSTANCE_UI, ticket_id_pattern
 
@@ -53,6 +55,46 @@ REQUIRED_SECTIONS = [
 ]
 
 COMMENT = re.compile(r"<!--.*?-->", re.S)
+VERIFICATION_BULLET = re.compile(r"^ *(?:[-+*]|[0-9]{1,9}[.)])(?: +|$)")
+QUOTE_PREFIX = re.compile(r"^(?: {0,3}> ?)+")
+BLOCK_BREAK = re.compile(r"^ {0,3}(?:#{1,6}(?: +|$)|(?:(?:- *){3,}|(?:\* *){3,}|(?:_ *){3,})$)")
+SETEXT_UNDERLINE = re.compile(r"^ {0,3}=+[ \t]*$")
+FENCED_BLOCK = re.compile(r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ `~\t]*$|\Z)", re.M | re.S)
+INLINE_CODE = re.compile(r"(?<![\\`])(`+)(?!`).+?(?<!`)\1(?!`)", re.S)
+COMMAND = re.compile(r"(?:[A-Za-z_][\w.-]*(?:/[^\s]+)?|(?:\.{1,2}/|/)[^\s]+)")
+RESULT_WORDS = {"pass", "passes", "passed", "fail", "fails", "failed", "success", "failure", "pending", "ok"}
+ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+COMMAND_PLACEHOLDER = re.compile(r"^(?:\$\s+)?(?:cmd|command|test command|example|todo|tbd)\b|<\w[\w -]*>|(?:^|\s)\.{3}(?:$|\s)", re.I)
+COMMAND_INTRO = re.compile(r"\b(?:ran|running|executed|using|with|via|under|by|command)\s*(?::\s*)?$", re.I)
+UNRUN_BEFORE = re.compile(r"\b(?:not|never|will|should|would|expected to)\s+(?:run|execute|verify|test)[\s(]*$", re.I)
+UNRUN_AFTER = re.compile(r"^[\s):–—-]*(?:(?:was|is|has been)\s+)?(?:not(?: yet)?|never)\s+(?:run|executed)\b", re.I)
+EXIT_STATUS = r"[+-]?(?:0x[0-9a-f]+|\d+)"
+RESULT = re.compile(
+    r"\b(?:passes|passed|fails|failed|succeeded|reproduced|matched|confirmed|found|"
+    r"accepted|rejected|detected|timed out|exited)\b|"
+    r"\b(?:returned|reported|produced)\b\s+(?!(?:pending|todo|tbd)\b)\w|"
+    rf"\bexit(?: code| status)?\s*[:=]?\s*{EXIT_STATUS}\b|"
+    r"(?:[:–—-]\s*|^)(?:pass|fail|success|failure)\b", re.I,
+)
+RESULT_PLACEHOLDER = re.compile(
+    r"\b(?:(?:not|never)\s+(?:(?:yet|been)\s+)*(?:run|executed|passed|failed|reproduced|confirmed|returned)|"
+    r"(?:expected\s+(?:result|output|to)|(?:will|should|would|must)\s+\w+))\b"
+    r"(?:(?!,\s+(?:but|however|whereas)\b)[^.;\n])*", re.I,
+)
+# Scan complete link destinations or bare URL tokens, then validate the whole destination.
+EVIDENCE_LINK = re.compile(
+    r"!?\[[^\[\]\n]*\]\((?P<inline><[^\s<>]+>|[^\s<>)]+)(?:[ \t]+\"[^\"\n]*\")?\)|"
+    r"!?\[(?P<label>[^\[\]\n]+)\](?:\[(?P<ref>[^\[\]\n]*)\])?|"
+    r"(?:^|(?<=[\s(<]))(?P<bare>https?://[^\s<>\])]+)", re.I,
+)
+LINK_DEFINITION = re.compile(
+    r"^ {0,3}\[([^\]\n]+)\]:[ \t]*(<[^\s<>]+>|[^\s<>]+)(?:[ \t]+\"[^\"\n]*\")?[ \t]*$", re.M,
+)
+ACTIONS_URL = re.compile(
+    r"(?i:https://github\.com)/[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*/(?!\.{1,2}/)[a-zA-Z0-9_.-]+"
+    r"/actions/runs/[1-9][0-9]*"
+    r"(?:/(?:job|attempts)/[1-9][0-9]*)?/?(?:[?#][^\s<>]*)?"
+)
 
 # Instance-local references a public contributor cannot open (upstream "No Internal Issue References").
 # The ticket-id pattern is built per call from INTERNAL_ID_PREFIXES; these are the fixed ones.
@@ -105,22 +147,31 @@ def strip_comments(text):
 
 def description_text(body):
     link = r"(?:https://github\.com/TogetherWeOwn/two-web-next/pull/[1-9][0-9]*)?#issuecomment-[1-9][0-9]*"
-    return re.sub(rf"^[ \t]*(?:(?:[-+*]|[0-9]+[.)])[ \t]+)?\[Exact-head Actions evidence\]\({link}\)[ \t\r]*$", "", strip_comments(body), flags=re.M)
+    space = r"(?:[ \t]+|[ \t]*\r?\n[ \t]*)"
+    label = rf"\[Exact-head{space}Actions{space}evidence\]"
+    return re.sub(rf"^[ \t]*(?:(?:[-+*]|[0-9]+[.)])[ \t]+)?{label}\({link}\)[ \t\r]*$", "", strip_comments(body), flags=re.M)
 
 
 def parse_sections(body):
     """Map normalised `## Heading` -> content. Comments are removed first."""
     sections, current, buf = {}, None, []
-    for line in strip_comments(body).splitlines():
-        m = re.match(r"^##\s+(.+?)\s*#*\s*$", line)
+
+    def record():
+        content = "\n".join(buf)
+        if current == "verification" and current in sections:
+            content = sections[current] + "\n\n" + content
+        sections[current] = content.strip("\n") if current == "verification" else content.strip()
+
+    for line in strip_comments(body).split("\n"):
+        m = re.match(r"^##[ \t]+(.+?)\s*#*\s*$", line)
         if m:
             if current is not None:
-                sections[current] = "\n".join(buf).strip()
+                record()
             current, buf = m.group(1).strip().lower(), []
         elif current is not None:
             buf.append(line)
     if current is not None:
-        sections[current] = "\n".join(buf).strip()
+        record()
     return sections
 
 
@@ -138,6 +189,107 @@ def real_items(content):
             continue
         n += 1
     return n
+
+
+def reference_label(label):
+    return " ".join(label.split()).casefold()
+
+
+def is_command(text, explicit):
+    command = text.strip()
+    if COMMAND_PLACEHOLDER.search(command):
+        return False
+    try:
+        args = shlex.split(command)
+    except ValueError:
+        return False
+    prompted = args[:1] == ["$"]
+    tokens = dropwhile(ASSIGNMENT.match, args[1:] if prompted else args)
+    program = next(tokens, "")
+    return bool(COMMAND.fullmatch(program) and program.casefold() not in RESULT_WORDS
+                and (explicit or prompted or next(tokens, None)))
+
+
+def has_verification_evidence(item, references):
+    def mask_code(span):
+        value = span[0].strip("` \t\n").casefold()
+        output = "000" if re.fullmatch(EXIT_STATUS, value) else "OUT"
+        return ("TBD" if value in {"", "tbd", "todo", "pending", "n/a", "...", "…"} else output).ljust(len(span[0]))
+
+    prose = INLINE_CODE.sub(mask_code, item)
+    visible = list(prose)
+    for link in EVIDENCE_LINK.finditer(prose):
+        destination = link["inline"] or (link["bare"] or "").rstrip(".,;:!?")
+        if link["label"]:
+            destination = references.get(reference_label(link["ref"] or link["label"]), "")
+        if not link[0].startswith("!") and ACTIONS_URL.fullmatch(destination.strip("<>")):
+            return True
+        if destination:
+            visible[link.start():link.end()] = " " * len(link[0])
+    result = RESULT_PLACEHOLDER.sub(lambda match: " " * len(match[0]), "".join(visible))
+    results = list(RESULT.finditer(result))
+    if not results:
+        return False
+    spans = list(INLINE_CODE.finditer(item))
+    first_text = previous_end = re.match(r"[\s*_]*(?:\[[ xX]\][\s*_]*)?", item).end()
+    for index, span in enumerate(spans):
+        # Each prose gap is scanned at most twice, even with many inline spans.
+        prefix = item[previous_end:span.start()].strip(" *_\t\n")
+        next_start = spans[index + 1].start() if index + 1 < len(spans) else len(item)
+        suffix = item[span.end():next_start]
+        previous_end = span.end()
+        if UNRUN_BEFORE.search(prefix) or UNRUN_AFTER.match(suffix):
+            continue
+        parenthesized = prefix.endswith("(") and suffix.lstrip().startswith(")") and results[-1].start() >= span.end()
+        explicit = span.start() == first_text or prefix.endswith(":") or COMMAND_INTRO.search(prefix) or parenthesized
+        if not explicit and results[0].end() <= span.start():
+            continue
+        width = len(span[1])
+        if is_command(span[0][width:-width], explicit):
+            return True
+    return False
+
+
+def verification_items(content):
+    """Keep wrapped text and indented paragraphs with their own list item."""
+    lines, indent = [], None
+    for raw in content.expandtabs(4).split("\n"):
+        line = QUOTE_PREFIX.sub("", raw)
+        structural = BLOCK_BREAK.match(line)
+        bullet = None if structural else VERIFICATION_BULLET.match(line)
+        heading = indent and len(lines) > 1 and lines[-2] and lines[-1].startswith(" " * indent)
+        separated = lines and (not lines[-1] or (heading and SETEXT_UNDERLINE.match(lines[-1][indent:]))) and line.strip()
+        if lines and (structural or bullet or (separated and (indent is None or len(line) - len(line.lstrip()) < indent))):
+            yield indent is not None, "\n".join(lines)
+            lines, indent = [], None
+        if bullet:
+            indent = bullet.end()
+            lines.append(line[indent:])
+        elif not structural and (lines or line.strip()):
+            lines.append(line.rstrip())
+    if lines:
+        yield indent is not None, "\n".join(lines)
+
+
+def verification_markup(body):
+    references, lines = {}, []
+    at_block_start = True
+    for line in FENCED_BLOCK.sub("\n\n", body).split("\n"):
+        definition = LINK_DEFINITION.fullmatch(line) if at_block_start else None
+        if definition:
+            references.setdefault(reference_label(definition[1]), definition[2])
+            line = ""
+        at_block_start = not line.strip() or BLOCK_BREAK.match(line) or (not at_block_start and SETEXT_UNDERLINE.match(line))
+        lines.append(line)
+    return parse_sections("\n".join(lines)).get("verification"), references
+
+
+def invalid_verification_items(content, references):
+    items = list(verification_items(content))
+    bullets = [item for is_bullet, item in items if is_bullet]
+    if not bullets:
+        return [] if any(has_verification_evidence(item, references) for _, item in items) else [1]
+    return [n for n, item in enumerate(bullets, 1) if not has_verification_evidence(item, references)]
 
 
 def internal_hits(text, prefixes, slug=False):
@@ -179,6 +331,9 @@ def other_hits(text):
 
 def check_pull_request(env):
     mode = "error" if env.get("PR_STANDARDS_MODE", "warn").strip().lower() == "error" else "warning"
+    verification_mode = {"error": "error", "warn": "warning"}.get(
+        env.get("PR_VERIFICATION_MODE", "").strip().lower(), mode
+    )
     prefixes = env.get("INTERNAL_ID_PREFIXES") or DEFAULT_PREFIXES
     private = env.get("REPO_PRIVATE", "true").strip().lower() == "true"
     title = (env.get("TITLE") or "").strip()
@@ -198,7 +353,7 @@ def check_pull_request(env):
     if errs:
         out.append(Finding("error", "PR title", f"'{title}': {'; '.join(errs)}. {HELP}"))
 
-    plain = description_text(body)
+    plain = description_text(body.replace("\r\n", "\n").replace("\r", "\n"))
     if len(re.sub(r"\s", "", plain)) < 40:
         out.append(Finding("error", "PR body", "The description is empty. Fill in the PR template: the linked card or issue and "
                            "how it was verified."))
@@ -206,16 +361,26 @@ def check_pull_request(env):
         ptype = pr_type(title)
         light = ptype in LIGHT_TYPES
         sections = parse_sections(plain)
+        verification, references = verification_markup(plain)
         for heading, minimum, skip_light in REQUIRED_SECTIONS:
             if skip_light and light:
                 continue
-            content = sections.get(heading.lower())
+            is_verification = heading == "Verification"
+            content = verification if is_verification else sections.get(heading.lower())
+            level = verification_mode if is_verification else mode
             if content is None:
-                out.append(Finding(mode, "PR template", f"Missing section '## {heading}'."))
+                out.append(Finding(level, "PR template", f"Missing section '## {heading}'."))
                 continue
-            if real_items(content) < minimum:
+            if is_verification:
+                invalid = invalid_verification_items(content, references)
+                if invalid:
+                    numbers = ", ".join(map(str, invalid))
+                    out.append(Finding(level, "PR template", f"'## Verification' needs a code-formatted command "
+                                       f"with its observed result or a GitHub Actions run/job URL. Give evidence in each bullet "
+                                       f"(missing in: {numbers})."))
+            elif real_items(content) < minimum:
                 need = f"at least {minimum} items" if minimum > 1 else "real content"
-                out.append(Finding(mode, "PR template", f"'## {heading}' needs {need}."))
+                out.append(Finding(level, "PR template", f"'## {heading}' needs {need}."))
 
     if private:
         if not generated and not re.search(r"\bTOG-\d+\b", body):
