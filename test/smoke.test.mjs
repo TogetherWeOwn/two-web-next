@@ -1094,6 +1094,12 @@ test("Home smoke accepts only the guest headings on Kit responses", async (t) =>
       ok: true,
     },
     {
+      name: "Kit heading with a mismatched closer inside a custom property",
+      kit: true,
+      body: '<h1 id="home-heading" style="--sample: (red]; display: none);">The lobby is open.</h1>',
+      ok: true,
+    },
+    {
       name: "Kit duplicate active home headings",
       kit: true,
       body: heading(scheduled) + heading("The lobby is open."),
