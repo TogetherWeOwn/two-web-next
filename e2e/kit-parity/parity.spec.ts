@@ -16,6 +16,12 @@ import {
 } from "../../ci/kit-parity-gates.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { QA_IDENTITIES } from "../../src/qa";
+import {
+  memberBoardDocument,
+  prepareMemberBoardFixtures,
+  prepareSeasonBoardFixtures,
+  VIEWER,
+} from "../../test/fixtures/member-board-viewer";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
   expectedKitMarker,
@@ -3733,6 +3739,89 @@ test.describe("kit: member-board visuals", () => {
         await context.close();
       }
     });
+  }
+});
+
+test("isolated Kit season board shows the named viewer at both widths", async ({ page }) => {
+  await Promise.all([prepareMemberBoardFixtures(), prepareSeasonBoardFixtures()]);
+  await page.route("**/*", (route) => route.abort("blockedbyclient"));
+  const views = [
+    { name: "overall", scope: "overall", viewer: ["9", "92"] },
+    { name: "relative", scope: "relative", viewer: ["41", "95"] },
+    {
+      name: "filtered-empty",
+      scope: "overall",
+      data: { activity: "valheim", rows: [] },
+      status: "Nobody is ranked",
+    },
+    {
+      name: "ended-unranked",
+      scope: "relative",
+      data: { season: "2000-02", rows: [] },
+      status: "This season has ended.",
+    },
+    {
+      name: "unavailable",
+      scope: "overall",
+      data: { available: false },
+      status: "Rankings are temporarily unavailable.",
+    },
+    {
+      name: "tied",
+      scope: "overall",
+      data: {
+        rows: [
+          { username: VIEWER, rank: 1, count: 5, isViewer: true },
+          { username: "Fixture member", rank: 2, count: 5, isViewer: false },
+        ],
+      },
+    },
+  ] as const;
+  for (const { name, size } of PARITY_VIEWPORTS) {
+    await page.setViewportSize(size);
+    for (const view of views) {
+      for (const twin of "viewer" in view ? (["kit", "season"] as const) : (["season"] as const)) {
+        await page.setContent(
+          memberBoardDocument(twin, view.scope, "data" in view ? view.data : {}),
+        );
+        if ("viewer" in view) {
+          const table = page.getByRole("table");
+          const label = twin === "season" ? `${VIEWER} (you)` : VIEWER;
+          const viewer = table.getByRole("row").filter({
+            has: page.getByRole("rowheader", { name: label, exact: true }),
+          });
+          await expect(viewer).toHaveAttribute("aria-current", "true");
+          await expect(viewer.getByRole("cell")).toHaveText([...view.viewer]);
+          await expect(table.getByRole("rowheader", { name: /\(you\)$/ })).toHaveCount(
+            twin === "season" ? 1 : 0,
+          );
+          await viewer.scrollIntoViewIfNeeded();
+          await expect(viewer).toBeInViewport({ ratio: 1 });
+          if (name === "mobile") {
+            const menu = await page.locator("#kit-menu").boundingBox();
+            const heading = await table.getByRole("columnheader", { name: "Member" }).boundingBox();
+            expect(heading!.y).toBeGreaterThanOrEqual(menu!.y + menu!.height);
+          }
+        } else if ("status" in view) {
+          await expect(page.getByRole("table")).toHaveCount(0);
+          await expect(page.getByRole("status")).toContainText(view.status);
+          if (view.name === "ended-unranked") {
+            const progress = page.getByRole("progressbar", { name: "Season elapsed" });
+            await expect(progress).toHaveAttribute("max", "29");
+            await expect(progress).toHaveAttribute("value", "29");
+            await expect(page.getByText("Ended 1 March 2000 (UTC)", { exact: true })).toBeVisible();
+          }
+        } else {
+          const tied = page.getByRole("table").getByRole("cell", { name: "5 · Tied", exact: true });
+          await expect(tied).toHaveCount(2);
+          await tied.first().scrollIntoViewIfNeeded();
+        }
+        const capture = `kit-review-season-board-${twin}-${view.name}-${name}`;
+        const path = test.info().outputPath(`${capture}.png`);
+        await page.screenshot({ path, animations: "disabled", caret: "hide" });
+        await test.info().attach(capture, { path, contentType: "image/png" });
+      }
+    }
   }
 });
 
