@@ -17,6 +17,7 @@ import {
   isCoveredByExecutedRun,
   isInJourneyScope,
   isManifestEnabled,
+  kitHomeHeadingText,
   memberBoardEmptyText,
   memberBoardStatus,
   parseManifestEntries,
@@ -550,6 +551,17 @@ test("preview join-attempts journeys skip loud without a QA token", () => {
   void status;
 });
 
+test("Kit Home parity reads one active heading with the pinned ID", () => {
+  const heading = '<h1 id="home-heading">The lobby is <!--[--><em>open</em><!--]-->.</h1>';
+  assert.equal(
+    kitHomeHeadingText(heading + '<div hidden id="home-heading"></div>'),
+    "The lobby is open.",
+  );
+  assert.equal(kitHomeHeadingText(heading + '<div id="home-heading"></div>'), "");
+  assert.equal(kitHomeHeadingText(heading + '<svg id="home-heading"></svg>'), "");
+  assert.equal(kitHomeHeadingText(heading.replace("home-heading", "other-heading")), "");
+});
+
 test("member-board empty text matches raw browser text across whitespace", () => {
   for (const [scope, subject] of [
     ["overall", "Nobody is"],
@@ -651,6 +663,19 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
       [],
     );
   }
+  assert.deepEqual(
+    assertMembersContract({
+      label: "unit/members-hydrated-status",
+      html: withBoardMarkup(
+        `<p class="notice" role='status'><span hidden>Stale copy. </span>` +
+          `Nobody is <!--[--><em>ranked</em><!--]--> for this season and game yet.</p>`,
+      ),
+      headers,
+      status: 200,
+      expected,
+    }),
+    [],
+  );
   const nearMatch = withStatus(
     "Nobody is ranked for this season and game because the rankings feed is unavailable.",
   );
@@ -683,6 +708,11 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
       "board table or empty status present",
     ],
     [
+      "empty-copy-on-wrong-element-with-status-role",
+      () => withBoardMarkup(`<div role="status">${openCopy}</div>`),
+      "board table or empty status present",
+    ],
+    [
       "empty-status-outside-main",
       () => withStatus(openCopy).replace(/(<p role="status">[^<]*<\/p>)(<\/main>)/, "$2$1"),
       "board table or empty status present",
@@ -693,7 +723,9 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
         withBoardMarkup(
           `<!--<p role="status">${openCopy}</p>-->` +
             `<template><p role="status">${openCopy}</p></template>` +
-            `<div hidden><p role="status">${openCopy}</p></div>`,
+            `<div hidden><p role="status">${openCopy}</p></div>` +
+            `<div inert><p role="status">${openCopy}</p></div>` +
+            `<p role="status"><span hidden>${openCopy}</span></p>`,
         ),
       "board table or empty status present",
     ],
@@ -1095,7 +1127,11 @@ const html = ${JSON.stringify(html)};
 globalThis.fetch = async (input) => {
   const url = new URL(String(input.url ?? input));
   if (url.pathname === "/up") return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-  if (url.pathname === "/events") return new Response(html, { status: 200, headers: { "content-type": "text/html", "cache-control": "public, max-age=9999", vary: "Cookie, X-Two-Island", ...(url.host.startsWith("kit.") ? { "x-two-renderer": "kit" } : {}) } });
+  if (url.pathname === "/events") {
+    const kit = url.host.startsWith("kit.");
+    const body = kit ? html.replace("<p>Welcome, guest</p>", '<header data-kit-site-header><a href="/auth/discord?next=%2Fevents" aria-label="Sign in with Discord">Sign in</a></header>') : html;
+    return new Response(body, { status: 200, headers: { "content-type": "text/html", "cache-control": "public, max-age=9999", vary: "Cookie, X-Two-Island", ...(kit ? { "x-two-renderer": "kit" } : {}) } });
+  }
   return new Response("", { status: 404 });
 };
 `;
@@ -1299,7 +1335,7 @@ globalThis.fetch = async (input) => {
     : '<a data-testid="join" href="/auth/discord">Join with Discord</a>';
   const html = '<link rel="canonical" href="https://next.togetherweown.com/">' +
     '<a class="skip-link" href="#main">Skip</a><nav aria-label="Primary"></nav>' +
-    '<main id="main"><h1>The lobby is open.</h1>' + join +
+    '<main id="main">' + (kit ? '<h1 id="home-heading">Next game night: <em>Fixture</em>. <span>Come play with us.</span></h1>' : '<h1>The lobby is open.</h1>') + join +
     '<h2>Sign out of Discord before switching accounts</h2></main><p>Welcome, guest</p>';
   return new Response(html, { status: 200, headers: { "content-type": "text/html", "cache-control": "private, no-store", ...(kit ? { "x-two-renderer": "kit" } : {}) } });
 };

@@ -4,6 +4,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+    inputs:
+      comparison:
+        description: Fixture comparison to capture
+        type: choice
+        options: [ember-shell, ember-bands]
+        default: ember-shell
 
 permissions:
   contents: read
@@ -14,29 +20,29 @@ concurrency:
 
 jobs:
   capture:
-    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.number == 2294 && github.event.pull_request.head.repo.full_name == github.repository)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.number == 2294 || github.head_ref == 'feat/ember-home-guest-intro' ||
+      github.head_ref == 'feat/ember-home-standing'))
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
       max-parallel: 3
       matrix:
-        state:
-          [
-            guest,
-            member,
-            guestEvents,
-            memberEvents,
-            staleCounts,
-            quietOnline,
-            nonmember,
-            sessionOutage,
-            eventsOutage,
-            missingCounts,
-            joinFailed,
-            joinAdded,
-            alreadyMember,
-          ]
+        state: >-
+          ${{ fromJSON(github.head_ref == 'feat/ember-home-guest-intro' && '["guestEvents","nonmember","member","guest","eventsOutage"]' ||
+          github.head_ref == 'feat/ember-home-standing' &&
+          '["memberEvents","memberAgenda","member","memberEventsOutage","guestEvents","nonmember","sessionOutage"]' ||
+          inputs.comparison == 'ember-bands' && '["guestAgenda","memberAgenda","guestEvents","guest","eventsOutage"]' ||
+          '["guest","member","guestEvents","memberEvents","staleCounts","quietOnline","nonmember","sessionOutage","eventsOutage","missingCounts","joinFailed","joinAdded","alreadyMember"]') }}
+    env:
+      COMPARE_HOME_INTRO: ${{ github.head_ref == 'feat/ember-home-guest-intro' }}
+      BASELINE_SHA: >-
+        ${{ (github.head_ref == 'feat/ember-home-guest-intro' || github.head_ref == 'feat/ember-home-standing') &&
+        github.event.pull_request.base.sha ||
+        inputs.comparison == 'ember-bands' && '96af1900ade28ec2cc61904579de338054214add' || '9d09c1adcc528020b4e8a74575a6848e99b95271' }}
     steps:
       - name: Check out pinned fixture tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,7 +59,7 @@ jobs:
       - name: Check out original app
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 9d09c1adcc528020b4e8a74575a6848e99b95271
+          ref: ${{ env.BASELINE_SHA }}
           path: before
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -66,7 +72,7 @@ jobs:
         run: |
           test "$(git -C tooling rev-parse HEAD)" = 5ab8dbbef925d03f19809963c06e7edd04032bee
           test "$(git -C after rev-parse HEAD)" = "$FINAL_SHA"
-          test "$(git -C before rev-parse HEAD)" = 9d09c1adcc528020b4e8a74575a6848e99b95271
+          test "$(git -C before rev-parse HEAD)" = "$BASELINE_SHA"
       - name: Install locked dependencies
         run: |
           for app in tooling before after; do

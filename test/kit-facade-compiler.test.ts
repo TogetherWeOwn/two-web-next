@@ -49,15 +49,22 @@ describe("inactive Kit facade compiler", () => {
       scheduled() { return this.name; }
     };`;
     const { output } = await compileKitFacade(source);
+    expect(output).toContain('from "cloudflare:sockets"');
+    expect(output).not.toContain('import("postgres")');
     const bundled = await build({
       stdin: { contents: output, loader: "js", resolveDir: process.cwd() },
       bundle: true,
       format: "esm",
+      platform: "node",
       write: false,
       plugins: [
         {
           name: "adapter-fixture",
           setup(plugin) {
+            plugin.onResolve({ filter: /^cloudflare:sockets$/ }, () => ({
+              path: "data:text/javascript,export function connect(){throw new Error('unexpected connect')}",
+              external: true,
+            }));
             plugin.onResolve({ filter: /^\.\/kit-adapter\.js$/ }, () => ({
               path: "adapter",
               namespace: "fixture",
@@ -71,7 +78,13 @@ describe("inactive Kit facade compiler", () => {
       ],
     });
     const url = `data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0]!.text).toString("base64")}`;
-    const worker = (await import(/* @vite-ignore */ url)).default;
+    const { default: worker, LiveGuildHub } = await import(/* @vite-ignore */ url);
+    expect(typeof LiveGuildHub).toBe("function");
+    const disabled = await worker.fetch(
+      new Request("https://togetherweown.com/internal/discord-live/v1/ingest", { method: "POST" }),
+      { APP_URL: "https://togetherweown.com" },
+    );
+    expect(disabled.status).toBe(503);
     const response = await worker.fetch(new Request("https://togetherweown.com/"), {
       APP_URL: "https://togetherweown.com",
     });

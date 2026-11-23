@@ -64,13 +64,14 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
   // so the page renders the shared bytes without importing the Hono screen.
   // Projected before returning: Kit serializes load data into __data.json
   // for anonymous clients even with csr=false, so member usernames and
-  // statuses never ride the snapshot (privacy policy v2). The page only
-  // reads the four aggregate fields, so the view is unchanged.
+  // statuses never ride the snapshot (privacy policy v2). Freshness travels
+  // separately to keep the four-field projection intact.
   return {
     inviteUrl: inviteDestination(env.DISCORD_INVITE_URL),
     joinCopy: { HOME_JOIN_RESULT_COPY, JOIN_INTRO },
     widgetUrl,
     widgetSnapshot: toPublicWidgetSnapshot(widgetSnapshot),
+    widgetStale: widgetSnapshot?.stale ?? false,
     oneClickHref:
       next && source
         ? `/join/discord?next=${encodeURIComponent(next)}&source=${encodeURIComponent(source)}`

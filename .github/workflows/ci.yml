@@ -264,6 +264,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # A PR needs its merge commit's first parent. A merge group may
+          # contain several candidate commits after the event's base SHA.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -278,12 +281,25 @@ jobs:
       # Parse the Vitest sources on every change, including ledger-only edits.
       # No install hooks or browser/database fixtures are needed by this gate.
       - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Workflow job citation fixtures
+        run: node --test ci/check-workflow-job-citations.test.mjs
+      - name: Check added workflow job citations
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          CITATION_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}
+        run: node ci/check-workflow-job-citations.mjs "$CITATION_BASE"
       # Run on draft heads too: these isolated fixtures prove fresh-source
       # resolution and explicit selection without an app build or database.
       - name: Fresh-worktree check bootstrap
         run: env -u DATABASE_URL -u BOT_DATABASE_URL npm --ignore-scripts run test:unit -- test/check-bootstrap.test.ts test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
       - name: Incident staging observation selftests (fixtures, no network)
         run: node --test ci/incident-staging-observation.test.mjs
+      - name: Production database identity selftests (fixtures, no network)
+        run: |
+          node --test ci/production-db-identity.test.mjs
+          node --test --test-name-pattern 'reads a PRODUCTION_\* secret binds|identity preflight never' ci/check-production-secrets.test.mjs
+      - name: Production permissions repair admission selftests
+        run: node --test ci/db-permissions-repair.test.mjs
       - name: Timeout ledger ratchet (HARD)
         run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
@@ -1584,6 +1600,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # The pinned actionlint checker does not support YAML aliases. Keep the
+  # three Kit browser job setups explicit; coverage-command.test.mjs checks parity.
   kit-browser-fixture:
     name: kit-browser-fixture
     needs: [scope]
@@ -1595,6 +1613,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -1608,8 +1627,84 @@ jobs:
       - run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Install Kit parity Chromium
         run: npx playwright install --with-deps chromium
-      - name: Kit disposable browser fixture
-        run: node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
+      # Skip the calendar cases explicitly: a negative name pattern also
+      # matches the file ancestor and can run all of its descendants.
+      - name: Kit disposable browser fixture (non-calendar)
+        run: node --test --test-timeout=300000 --test-skip-pattern='^calendar ' ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
+
+  kit-browser-calendar:
+    name: kit-browser-calendar
+    needs: [scope]
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Install Kit parity Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Kit disposable browser fixture (calendar)
+        run: node --test --test-timeout=300000 --test-name-pattern='^calendar ' ci/kit-browser-fixture.test.mjs
+
+  kit-browser-lifeline:
+    name: kit-browser-lifeline
+    needs: [scope]
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
+    outputs:
+      artifact-id: ${{ steps.lifeline-upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Install Kit parity Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Kit Lifeline browser fixture
+        run: node --test ci/kit-lifeline-browser.test.mjs
+      - name: Verify Lifeline screenshots
+        run: |
+          for state in upcoming frozen cancelled ended; do
+            for width in 1280 390; do
+              test -s "artifacts/kit-lifeline/$state-$width.png" || {
+                echo "::error::Missing or empty Lifeline screenshot: $state-$width.png"
+                exit 1
+              }
+            done
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: lifeline-upload
+        with:
+          name: kit-lifeline-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/kit-lifeline/
+          if-no-files-found: error
 
   # Change-gated aggregator (TOG-14880, TOG-14877 CI standard): the single
   # merge-gate check. Reports success when the scope verdict is clean and every
@@ -1639,6 +1734,8 @@ jobs:
         static-check,
         coverage-merge,
         kit-browser-fixture,
+        kit-browser-calendar,
+        kit-browser-lifeline,
         node22-compat,
         scope,
         bot-contract-drift,
@@ -1719,6 +1816,9 @@ jobs:
           DB: ${{ needs.scope.outputs.db }}
           CHECK_RESULT: ${{ needs.check.result }}
           KIT_BROWSER_RESULT: ${{ needs.kit-browser-fixture.result }}
+          KIT_CALENDAR_RESULT: ${{ needs.kit-browser-calendar.result }}
+          KIT_LIFELINE_RESULT: ${{ needs.kit-browser-lifeline.result }}
+          KIT_LIFELINE_ARTIFACT_ID: ${{ needs.kit-browser-lifeline.outputs.artifact-id }}
           A11Y_RESULT: ${{ needs.a11y.result }}
           LIGHTHOUSE_RESULT: ${{ needs.lighthouse.result }}
           BUDGET_RESULT: ${{ needs.bundle-budget.result }}
@@ -1753,6 +1853,11 @@ jobs:
           if selected_app; then PERF_SEL=true; else PERF_SEL=false; fi
           if [ "$DOCS_ONLY" != true ] && { selected_app || [ "$WORKER" = true ]; }; then KIT_BROWSER_SEL=true; else KIT_BROWSER_SEL=false; fi
           check_job "$KIT_BROWSER_RESULT" "$KIT_BROWSER_SEL" kit-browser-fixture
+          check_job "$KIT_CALENDAR_RESULT" "$KIT_BROWSER_SEL" kit-browser-calendar
+          check_job "$KIT_LIFELINE_RESULT" "$KIT_BROWSER_SEL" kit-browser-lifeline
+          if [ "$KIT_LIFELINE_RESULT" = success ]; then
+            [[ "$KIT_LIFELINE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || fail "kit-browser-lifeline: missing or invalid screenshot artifact ID."
+          fi
           check_job "$A11Y_RESULT" "$A11Y_SEL" a11y
           check_job "$LIGHTHOUSE_RESULT" "$PERF_SEL" lighthouse
           check_job "$BUDGET_RESULT" "$PERF_SEL" bundle-budget

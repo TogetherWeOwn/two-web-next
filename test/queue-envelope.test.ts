@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import { consume } from "../src/jobs/consumer";
 import { uniqueKey, type Outcome } from "../src/jobs/sync-event";
 import { SyncRetryPersistenceError } from "../src/jobs/types";
@@ -17,7 +18,7 @@ const leaseToken = "11111111-1111-4111-8111-111111111111";
 const sync = { kind: "sync-event", eventKey: "event-1", idempotencyKey: "sync-key", leaseToken };
 const announcement = {
   kind: "announcement",
-  idempotencyKey: "announcement-key",
+  idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
   action: { channelKey: "general", body: "hello" },
 };
 const role = {
@@ -27,7 +28,7 @@ const role = {
 };
 
 function message(body: unknown, attempts = 1) {
-  return { body, attempts, ack: vi.fn(), retry: vi.fn() };
+  return { body, attempts, timestamp: new Date(), ack: vi.fn(), retry: vi.fn() };
 }
 
 function dependencies() {
@@ -44,7 +45,13 @@ function dependencies() {
   };
   // These tests isolate the envelope boundary; no bot or event implementation
   // should be reached before validation. The real handlers remain covered in jobs.test.ts.
-  return { bot: {} as BotClient, events: {} as EventStore, ledger, lock };
+  return {
+    bot: {} as BotClient,
+    events: {} as EventStore,
+    ledger,
+    lock,
+    announcementReconciliation: announcementStore(),
+  };
 }
 
 const malformed: [string, unknown][] = [

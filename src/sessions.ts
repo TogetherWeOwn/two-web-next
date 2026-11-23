@@ -68,6 +68,11 @@ export type SessionStore = {
     replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
   ) => Promise<void>;
   get: (tokenHash: string) => Promise<DbSessionRow | null>;
+  /** Read the exact live token row without writes or grace. remainingMs is measured
+   * on the store clock at read time, before transport; it is not an epoch deadline. */
+  getLive: (
+    tokenHash: string,
+  ) => Promise<{ userId: string; member: boolean; remainingMs: number } | null>;
   /** Mid-session role recheck (SESSION_ROLE_RECHECK_SECONDS): true when the
    * live row carries privilege (member or moderator) and its bits were last
    * derived — login or last recheck attempt — at least the cadence ago, on
@@ -259,6 +264,20 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
           )`;
       const g = grace[0];
       return g ? toRow(g) : null;
+    },
+    async getLive(tokenHash) {
+      const [row] = await sql<{ user_id: string; member: boolean; remaining_ms: number }[]>`
+        with db_clock as (select clock_timestamp() as observed_at)
+        select user_id, member,
+          floor(extract(epoch from (least(expires_at,
+            created_at + make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})) - observed_at))
+            * 1000)::double precision as remaining_ms
+        from web_sessions cross join db_clock
+        where token_hash = ${tokenHash} and revoked_at is null and expires_at > observed_at
+          and created_at > observed_at - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})`;
+      return row
+        ? { userId: row.user_id, member: row.member === true, remainingMs: row.remaining_ms }
+        : null;
     },
     async roleRecheckDue(tokenHash) {
       // Store-clock staleness: the DB clock judges its own stamps. A null
@@ -590,6 +609,13 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
         member: g.member,
         moderator: g.moderator,
       };
+    },
+    async getLive(hash) {
+      const r = rows.get(hash);
+      if (!r) return null;
+      const remainingMs =
+        Math.min(r.expiresAt, r.createdAt + SESSION_ABSOLUTE_MAX_AGE_SECONDS * 1000) - clock();
+      return remainingMs > 0 ? { userId: r.userId, member: r.member, remainingMs } : null;
     },
     async roleRecheckDue(hash) {
       const r = live(hash);

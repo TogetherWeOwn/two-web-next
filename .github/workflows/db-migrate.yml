@@ -9,6 +9,10 @@ on:
         options: [staging, production]
         default: staging
         required: true
+      readback_only:
+        description: Verify the approved production ledger end without applying migrations
+        type: boolean
+        default: false
   # deploy.yml does not call this workflow: it applies the staging web
   # migrations itself, in the exact-SHA deploy job, with the same
   # ci/db-migrate.mjs. This stays the hand-dispatch path (staging recovery)
@@ -32,24 +36,57 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  production-scope-preflight:
+    if: ${{ inputs.target == 'production' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      checked_attempt: ${{ steps.check.outputs.checked_attempt }}
+    # Deliberately no environment: this job sees only repo/org vars.
+    steps:
+      - name: Reject broader-scope production migration pins
+        id: check
+        shell: bash
+        env:
+          PRODUCTION_MIGRATION_APPROVED_SHA: ${{ vars.PRODUCTION_MIGRATION_APPROVED_SHA }}
+          PRODUCTION_MIGRATION_IDENTITY_SHA256: ${{ vars.PRODUCTION_MIGRATION_IDENTITY_SHA256 }}
+          PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS: ${{ vars.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS }}
+        run: |
+          set -euo pipefail
+          for name in PRODUCTION_MIGRATION_APPROVED_SHA PRODUCTION_MIGRATION_IDENTITY_SHA256 PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS; do
+            if [[ -n "${!name:-}" ]]; then
+              printf '%s\n' 'Production migration scope pins must not have repository or organization values.' >&2
+              exit 1
+            fi
+          done
+          printf 'checked_attempt=%s\n' "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
   migrate:
     name: migrate
+    needs: production-scope-preflight
+    if: ${{ !cancelled() && (inputs.target != 'production' || needs.production-scope-preflight.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Required reviewers, prevent-self-review and main-only branch policy must
-    # be configured in Settings > Environments before enabling this workflow.
+    # GitHub applies the target Environment's configured protection rules.
+    # Production uses a main-only branch policy. Independent approval of the
+    # exact migration plan precedes pinning and dispatch (docs/runbook.md).
     environment: ${{ inputs.target }}
     steps:
       - name: Ref and production enable gate (before checkout or DB access)
         shell: bash
         env:
           MIGRATION_TARGET: ${{ inputs.target }}
+          READBACK_ONLY: ${{ inputs.readback_only }}
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           PRODUCTION_MIGRATION_APPROVED_SHA: ${{ inputs.target == 'production' && vars.PRODUCTION_MIGRATION_APPROVED_SHA || '' }}
           STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_REF" == refs/heads/main ]] || { printf '%s\n' 'Migrations require main.' >&2; exit 1; }
+          if [[ "${READBACK_ONLY:-}" == true && "$MIGRATION_TARGET" != production ]]; then
+            printf '%s\n' 'Readback-only is production-only.' >&2
+            exit 1
+          fi
           case "$MIGRATION_TARGET" in
             staging) [[ "${STAGING_MIGRATION_HOLD:-}" == false ]] || { printf '%s\n' 'Staging migrations are held (STAGING_MIGRATION_HOLD is not exactly "false").' >&2; exit 1; } ;;
             production)
@@ -65,24 +102,20 @@ jobs:
         if: ${{ inputs.target == 'production' }}
         shell: bash
         env:
-          # github.token cannot be granted Environments: read.
-          GH_TOKEN: ${{ inputs.target == 'production' && secrets.PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN || '' }}
+          CHECKED_ATTEMPT: ${{ needs.production-scope-preflight.outputs.checked_attempt }}
+          APPROVED_TAGS: ${{ vars.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS }}
         run: |
           set -euo pipefail
-          name=PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS
-          if [[ -z "${GH_TOKEN:-}" ]] || ! tags="$(
-            exec 2>/dev/null
-            gh api --hostname github.com --method GET \
-              "repos/$GITHUB_REPOSITORY/environments/production/variables/$name" |
-              jq -ers --arg name "$name" '
-                select(length == 1) | .[0] | select(.name == $name) | .value | strings |
-                select(test("\\A[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*\\z"))
-              '
-          )"; then
-            printf '%s\n' 'Production migration scope must be readable as a valid production Environment variable.' >&2
+          # A partial rerun must not reuse the broader-scope check from an older attempt.
+          if [[ -z "${CHECKED_ATTEMPT:-}" || "$CHECKED_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]]; then
+            printf '%s\n' 'Production migration scope preflight must pass on this run attempt.' >&2
             exit 1
           fi
-          printf 'pending_tags=%s\n' "$tags" >> "$GITHUB_OUTPUT"
+          if ! [[ "${APPROVED_TAGS:-}" =~ ^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$ ]]; then
+            printf '%s\n' 'Production migration scope must be a valid production Environment variable.' >&2
+            exit 1
+          fi
+          printf 'pending_tags=%s\n' "$APPROVED_TAGS" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -117,6 +150,7 @@ jobs:
           node ci/check-snapshot-chain.mjs
           node --test ci/check-snapshot-chain-selftest.mjs
       - name: Dry-run listing (read-only journal diff, no DDL)
+        if: ${{ !inputs.readback_only }}
         run: node ci/db-migrate.mjs plan
         env: &migration-env
           MIGRATION_TARGET: ${{ inputs.target }}
@@ -131,8 +165,14 @@ jobs:
           PLANETSCALE_STAGING_DATABASE_URL: ${{ inputs.target == 'staging' && secrets.PLANETSCALE_STAGING_DATABASE_URL || '' }}
           PRODUCTION_DATABASE_URL: ${{ inputs.target == 'production' && secrets.PRODUCTION_DATABASE_URL || '' }}
       - name: Record PITR timestamp, apply and verify under database lock
+        if: ${{ !inputs.readback_only }}
         run: node ci/db-migrate.mjs apply
         env: *migration-env
       - name: Post-check zero pending web migrations
+        if: ${{ inputs.target == 'staging' }}
         run: node ci/db-migrate.mjs verify
+        env: *migration-env
+      - name: Read back the approved production range (not a release gate)
+        if: ${{ inputs.target == 'production' }}
+        run: node ci/db-migrate.mjs verify-scope
         env: *migration-env

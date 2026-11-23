@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { exceedsCodeUnitLimit, exceedsUtf8ByteLimit } from "../http/length-limit";
 import type { DiscordTransient } from "../islands/contracts";
 
 export const DISCORD_CACHE_FRESH_MS = 60_000;
@@ -49,11 +50,11 @@ export function discordSnapshotKey(env: Pick<Env, "APP_URL" | "DISCORD_GUILD_ID"
     origin.hash ||
     origin.pathname !== "/" ||
     !env.DISCORD_GUILD_ID ||
-    env.DISCORD_GUILD_ID.length > 64
+    exceedsCodeUnitLimit(env.DISCORD_GUILD_ID, 64)
   )
     throw new DiscordSnapshotError();
   const key = JSON.stringify(["discord-display-v1", origin.origin, env.DISCORD_GUILD_ID]);
-  if (key.length > 512) throw new DiscordSnapshotError();
+  if (exceedsCodeUnitLimit(key, 512)) throw new DiscordSnapshotError();
   return key;
 }
 
@@ -73,10 +74,11 @@ export function decodeDiscordSnapshot(payload: unknown): DiscordTransient[] {
   if (
     !Array.isArray(payload) ||
     payload.length > DISCORD_SNAPSHOT_MAX_ROWS ||
-    // jsonb::text adds a space after each colon/comma in these flat seven-field rows.
-    new TextEncoder().encode(JSON.stringify(payload)).byteLength +
-      Math.max(0, fields.length * 2 * payload.length - 1) >
-      DISCORD_SNAPSHOT_MAX_BYTES
+    // Reserve room in the byte cap for jsonb::text spacing after colons and commas.
+    exceedsUtf8ByteLimit(
+      JSON.stringify(payload),
+      DISCORD_SNAPSHOT_MAX_BYTES - Math.max(0, fields.length * 2 * payload.length - 1),
+    )
   )
     throw new DiscordSnapshotError();
   return payload.map((raw: unknown) => {

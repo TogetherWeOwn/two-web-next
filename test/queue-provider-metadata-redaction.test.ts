@@ -1,5 +1,6 @@
 // Real signed client -> queue handler -> console, alert and ledger, with fake I/O only.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import { createBotClient } from "../src/bot/client";
 import { consume } from "../src/jobs/consumer";
 import { CALL_INTERNAL_ACTION } from "../src/jobs/constants";
@@ -37,7 +38,7 @@ const sync: QueueMessage = {
   jobId: "j1",
 };
 
-function dependencies(action: "event.upsert" | "event.cancel" = "event.upsert") {
+function dependencies(action: "event.upsert" | "event.cancel" = "event.upsert", attempts = 1) {
   const attempt: SyncAttempt = {
     idempotencyKey: UUID,
     eventKey: "e1",
@@ -86,7 +87,13 @@ function dependencies(action: "event.upsert" | "event.cancel" = "event.upsert") 
     acquire: vi.fn().mockResolvedValue(LEASE),
     release: vi.fn().mockResolvedValue(undefined),
   };
-  return { events, ledger, lock, now: () => NOW };
+  return {
+    events,
+    ledger,
+    lock,
+    announcementReconciliation: announcementStore(attempts, () => NOW),
+    now: () => NOW,
+  };
 }
 
 function provider(pick: (init: RequestInit) => string, retryable: boolean, status = 422) {
@@ -188,10 +195,16 @@ describe.each(SCENARIOS)("provider metadata at queue sinks: $label", (scenario) 
     "never exposes %s to the failure reason, logs, alert or ledger",
     async (_label, pick) => {
       const records = captureDiagnosticStream();
-      const d = dependencies(scenario.action);
+      const d = dependencies(scenario.action, scenario.attempts);
       const p = provider(pick, scenario.retryable);
       const call = vi.spyOn(p.bot, scenario.method);
-      const m = { body: scenario.body, attempts: scenario.attempts, ack: vi.fn(), retry: vi.fn() };
+      const m = {
+        timestamp: NOW,
+        body: scenario.body,
+        attempts: scenario.attempts,
+        ack: vi.fn(),
+        retry: vi.fn(),
+      };
       await consume({ messages: [m] }, { ...d, bot: p.bot });
 
       expect(p.fetchFn).toHaveBeenCalledOnce();
@@ -250,7 +263,7 @@ it.each([SECRET, "rate_limited"])(
     const records = captureDiagnosticStream();
     const d = dependencies();
     const p = provider(() => code, true, 429);
-    const m = { body: announcement, attempts: 1, ack: vi.fn(), retry: vi.fn() };
+    const m = { timestamp: NOW, body: announcement, attempts: 1, ack: vi.fn(), retry: vi.fn() };
     await consume({ messages: [m] }, { ...d, bot: p.bot });
     expect(p.fetchFn).toHaveBeenCalledOnce();
     expect(m.retry).toHaveBeenCalledExactlyOnceWith({

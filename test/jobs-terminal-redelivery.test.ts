@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { LEDGER_DB_LOCK_TIMEOUT_MS, LEDGER_DB_TIMEOUT_MS } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
+import { pgReconciliationStore } from "../src/jobs/reconciliation";
 import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
 import {
   BotTerminalError,
@@ -219,6 +220,7 @@ describe.skipIf(!process.env.DATABASE_URL).each([
 
   it("acknowledges a terminal consumer delivery with one durable failure across redelivery", async () => {
     const id = randomUUID();
+    const idempotencyKey = randomUUID();
     const ledger = pgQueueLedger(sql);
     await ledger.enqueued({
       jobId: id,
@@ -231,19 +233,27 @@ describe.skipIf(!process.env.DATABASE_URL).each([
         throw new BotTerminalError("synthetic terminal failure");
       },
     } as unknown as BotClient;
-    const deps = { bot, events: {} as EventStore, lock: {} as UniqueLock, ledger };
+    const deps = {
+      bot,
+      events: {} as EventStore,
+      lock: {} as UniqueLock,
+      ledger,
+      announcementReconciliation: pgReconciliationStore(sql),
+    };
     const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const timestamp = new Date();
     try {
       let original;
       for (let delivery = 0; delivery < 2; delivery++) {
         const message = {
           body: {
             kind: "announcement",
-            idempotencyKey: "fixture",
+            idempotencyKey,
             jobId: id,
             action: { channelKey: "fixture", body: "synthetic" },
           },
+          timestamp,
           attempts: 1,
           ack: vi.fn(),
           retry: vi.fn(),

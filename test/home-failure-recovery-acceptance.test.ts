@@ -131,6 +131,7 @@ let scratch = "";
 
 function baseData(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    nowMs: Date.UTC(2030, 6, 19, 12),
     session: null,
     sessionUnavailable: false,
     notice: null,

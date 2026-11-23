@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import { SYNC_EVENT } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
@@ -98,6 +99,7 @@ function store(over: Partial<EventStore> = {}): EventStore & { mirrored: (string
 function msg(body: unknown, attempts = 1) {
   const r = { body, attempts, acked: false, retried: undefined as number | undefined | "now" };
   return Object.assign(r, {
+    timestamp: new Date(),
     ack() {
       r.acked = true;
     },
@@ -328,21 +330,28 @@ describe("queue ledger timeout guards (released / failed / dequeued)", () => {
           return base.failed(id, kind, key, reason);
         },
       };
-      const ann = (jobId: string) => ({
+      const ann = (jobId: string, idempotencyKey: string) => ({
         kind: "announcement",
-        idempotencyKey: `k-${jobId}`,
+        idempotencyKey,
         action: { channelKey: "c", body: "b" },
         jobId,
       });
-      const m1 = msg(ann("j1"), 1);
-      const m2 = msg(ann("j2"), 1);
+      const m1 = msg(ann("j1", "94e5ec13-81e8-4d24-8841-19489bda1b15"), 1);
+      const m2 = msg(ann("j2", "94e5ec13-81e8-4d24-8841-19489bda1b16"), 1);
       let m1Acks = 0;
       const origAck = m1.ack.bind(m1);
       m1.ack = () => {
         m1Acks += 1;
         return origAck();
       };
-      const p = consume({ messages: [m1, m2] }, { bot, events: store(), lock: memLock(), ledger });
+      const deps = {
+        bot,
+        events: store(),
+        lock: memLock(),
+        ledger,
+        announcementReconciliation: announcementStore(),
+      };
+      const p = consume({ messages: [m1, m2] }, deps);
       await vi.advanceTimersByTimeAsync(5000);
       await p;
       expect(m1.acked).toBe(true);

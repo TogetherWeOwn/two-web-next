@@ -295,13 +295,11 @@ staging` or invent a different Worker target. Verify the approved account and
 binding isolation before any remote mutation.
 
 1. Use the [merge and production staging contract](../CONTRIBUTING.md#merge-and-production-staging-evidence)
-   for exact-head checks and promotion-path routing. When Release Manager merge
-   confirmation is required, the final native stage supplies it. The final
-   reviewer (or the author if no native stage applies) squash-merges on the
-   pinned head in the same run. After a successful merge, record the reviewed
-   head, resulting squash SHA, intended target and any required Release Manager
-   confirmation in the release log. Include both SHAs in the final native
-   verdict where a stage applies. A failed merge is not an approval.
+   for exact-head checks, promotion-path routing, tier review and the pinned
+   squash merge. The author merges ordinary PRs. When final technical release
+   acceptance is required, the reviewer makes that decision and merges in the
+   same run. After a successful merge, record the reviewed head, squash SHA,
+   intended target and any required final acceptance in the release log.
 
    Merge confirmation does not authorize production deployment or migration.
    Production holds and staging rollback-drill checks apply to production
@@ -311,13 +309,13 @@ binding isolation before any remote mutation.
    qualifying evidence: follow the linked contract's post-merge manual-dispatch
    caveat rather than claiming automatic eligibility.
 
-   For automatic promotion, the Release Manager accepts the exact release SHA
-   and asks the authorized Operator to set the repository Actions variable
-   `PRODUCTION_ACCEPTED_SHA` to that full lowercase SHA; the Release Manager can
-   ask the Operator to clear it. The resolver checks exact equality against the
-   already-selected eligible candidate, rather than searching for an older
-   accepted candidate. An absent, empty or unequal value skips cleanly. Clearing
-   the variable does not revoke a run that already started: it uses a job-time
+   For automatic promotion, follow the [production release gate](../CONTRIBUTING.md#production-release-gate)
+   to obtain independent approval for the exact release SHA. The authorized
+   executor sets the repository Actions variable `PRODUCTION_ACCEPTED_SHA` to
+   that full lowercase SHA and can clear it to hold promotion. The resolver
+   compares the value only against the already-selected eligible candidate. An
+   absent, empty or unequal value skips cleanly. Clearing the variable does not
+   revoke a run that already started: it uses a job-time
    snapshot. Manual dispatch and all existing promotion and release gates are
    unchanged. Setting this variable is not permission to enable a held workflow
    or deploy production.
@@ -491,57 +489,96 @@ dated owner exception with resource scope, cost, and expiry or review date.
 [db-migrate.yml](../.github/workflows/db-migrate.yml) is a **remote mutation**
 and not a test. It is the hand-dispatch path for staging recovery and the only
 path for production; the staging `deploy.yml` applies staging migrations on its
-own (see *Staging deploy integration* below). This workflow's addition
-does not authorize its execution. No live
-migration is performed by its selftest.
+own (see *Staging deploy integration* below). Apply only this repo's web SQL,
+including the two grandfathered bootstraps. Use backward-compatible
+expand/contract changes so the running Worker and bot tolerate the new schema
+before the Worker release. The selftest uses a disposable database.
 
-**Before enabling or dispatching:**
+**Staging recovery prerequisites (operator checks):** require an approved
+schema-change window, review of the exact `main` SHA and green required CI
+for that SHA. Check that `main` still points to it before dispatch and confirm
+the run SHA matches before accepting the recovery result. Coordinate migrations
+with the web and bot owners. Verify backup/PITR eligibility for the target
+branch and a tested recovery procedure before applying. Use the pre-DDL
+timestamp to identify a recovery point and keep separate evidence of the
+backup, PITR and rehearsal.
 
-- Require an approved schema-change window, exact-SHA review and green required
-  CI on the release merged to `main`. Coordinate the shared database with bot
-  and web owners; only web SQL in this repo (including the two grandfathered
-  bootstraps) is applied. Use backward-compatible expand/contract changes so the
-  running Worker and bot tolerate the new schema before the Worker release.
+**Production release prerequisites (operator checks):**
+
+1. Record the exact release SHA on `main`, completed source reviews and green
+   required CI for that SHA. Verify the staging deploy, deployed revision,
+   migration result and passing staging smoke and `e2e-staging` evidence for
+   the same candidate. Require a first-attempt staging pass, at least 30 minutes
+   of staging soak with a passing health and error assessment, and fresh
+   evidence that staging still serves the approved revision. Hold for missing,
+   stale, failed or rerun staging evidence.
+2. Coordinate an approved schema-change window with the web and bot owners and
+   the database custodian. Confirm the production branch, database and
+   migrator from current custody evidence, use the custodian's read-only ledger
+   evidence to verify the live prefix against the exact candidate journal, and
+   resolve ownership, privilege and recovery blockers. The plan records the
+   expected prefix, ordered tags to apply, expected end and any deferred tags.
+3. Verify a completed backup of the target branch before apply. Record its
+   completion time and retention, confirm PITR eligibility, and document the
+   recovery procedure and rehearsal where supported. Record a known-good
+   Worker version compatible with the resulting schema and coordinate writer
+   recovery with both consumers. The workflow's pre-DDL timestamp is a
+   recovery reference. Use the provider's backup and PITR evidence for the
+   production branch.
+4. Obtain and record explicit approval from an independent release reviewer
+   for the exact SHA, migrator identity, ordered scope, staging and recovery
+   evidence, and execution plan. For an agent-led release, use a separate
+   reviewer from a different model family than the agent that prepared the plan.
+   Follow the [production release gate](https://github.com/TogetherWeOwn/two-web-next/blob/main/CONTRIBUTING.md#production-release-gate).
+   Only then may the authorized operator set the migration pins and dispatch
+   the protected workflow. If the `main` tip, approved plan or qualifying
+   evidence changes before dispatch, stop and obtain fresh qualification and
+   approval.
+
+**Environment and migration pins:**
+
 - Pre-create the matching GitHub Environments, `staging` and `production`.
-  `production` must have required reviewers (recommend prevent-self-review and
-  main-only deployment branches). Do not enable production if that protection
-  is absent. Required reviewers live in repository settings, **not YAML**.
-  Both the shell gate and runner reject non-`main` refs, invalid targets and
-  production unless `PRODUCTION_DEPLOY_ENABLED` is exactly `true` (the same
-  flag used for production Worker deploys). Leave it unset/false until approved.
-- Only on the protected `production` GitHub Environment, the authorized Operator
-  sets `PRODUCTION_MIGRATION_APPROVED_SHA` to the full lowercase `main` SHA
-  separately approved for the migration. A missing, malformed or different SHA
-  refuses before checkout. If `main` advances before dispatch, stop and obtain
-  fresh approval for the new tip before the Operator updates the pin. The pin
-  checks the run SHA; it does not select a previous revision. Do not set
-  `PRODUCTION_ACCEPTED_SHA` for a migration: that is a separate Worker promotion
-  control. With the matching approved SHA, set
-  `PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS` on that same Environment to the
-  operation's exact, non-empty list of full journal tags in order, separated by
-  commas without spaces. Use the approved scope, not tags inferred from the
-  live ledger. Set the pending tags before setting the approved SHA. Clear the
-  SHA first, then the pending tags, after the run finishes or the operation is
-  abandoned. Clearing them does not revoke a run that already started. Do not
-  retry with a different scope without approval.
-- The workflow reads the non-secret pending tags from the GitHub REST endpoint
-  for the `production` Environment variable, not the merged `vars` context.
-  A same-named repository or organization variable cannot substitute. A future
-  approved operation needs an authorized GitHub credential limited to this
-  repository and **Environments: read**, available only as the production
-  Environment secret `PRODUCTION_MIGRATION_ENVIRONMENT_READ_TOKEN`. The default
-  Actions token cannot be granted that permission. The workflow stops before
-  checkout if the credential or scoped setting is missing, unreadable or
-  syntactically invalid. After checkout, the runner rejects a well-formed list
-  that is not an exact suffix of the locked release journal before connecting
-  to PostgreSQL. Do not provision or authorize credentials as part of a code merge.
-- On that same Environment, set `PRODUCTION_MIGRATION_IDENTITY_SHA256` to the
-  lowercase SHA-256 hex digest of the exact approved database name in UTF-8,
-  one NUL byte, then the exact existing Postgres migrator role name in UTF-8
-  (no trailing newline). Use approved operator records, not a live probe or
-  the URL login string. Keep the SHA and identity pins absent at repository and
-  organization scope, since their Actions `vars` context does not attest scope.
-  None of the production migration pins is needed in staging.
+  Keep production's deployment branch policy restricted to `main`. GitHub
+  enforces the Environment's configured rules, including required reviewers
+  if enabled in repository settings. In the main-only configuration used
+  with automated Worker deploy and rollback approval, there is no GitHub
+  human reviewer checkpoint. The independent migration approval above still
+  applies. `PRODUCTION_AUTO_APPROVE` selects Worker deploy and rollback
+  behavior only, including their reviewer mode when it is anything other than
+  `true`. The migration workflow does not inspect that variable, query the
+  Environment's protection settings, or validate the release evidence above.
+- Set these pins only on the protected `production` Environment, with the
+  approved SHA unset while preparing the identity and scope:
+  1. `PRODUCTION_MIGRATION_IDENTITY_SHA256` is the lowercase SHA-256 hex digest
+     of the exact approved database name in UTF-8, one NUL byte, then the
+     exact existing Postgres migrator role name in UTF-8 with no trailing
+     newline. Derive it from approved custody records. The URL login string
+     is distinct from the PostgreSQL role name checked by the runner.
+  2. `PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS` is the approved operation's
+     exact, non-empty list of full journal tags in order, separated by commas
+     without spaces. Copy the tags from the approved plan. Use ledger evidence
+     to verify the starting prefix. The approved segment can end below the
+     journal tip.
+  3. Set `PRODUCTION_MIGRATION_APPROVED_SHA` last, to the approved full lowercase
+     `main` SHA. The workflow checks the run SHA before checkout. This pin does
+     not select a revision. `PRODUCTION_ACCEPTED_SHA` is the separate Worker
+     promotion control.
+- The preflight runs without an Environment and refuses any non-empty
+  repository or organization value for any of the three pins. The protected
+  job requires a successful preflight on the same run attempt, so a partial
+  rerun cannot reuse it. A full rerun still uses the original run SHA. Use a
+  fresh, approved dispatch for any subsequent apply. Missing or malformed tags
+  stop the job before checkout. After checkout the runner requires a
+  contiguous segment of the locked release journal before connecting to
+  PostgreSQL. No production migration pins are needed in staging.
+- Clear the approved SHA first, then the pending tags, when the operation
+  finishes or is abandoned. The identity pin records the approved database and
+  migrator across operations. If commit is uncertain, retain the original pins
+  only while pursuing the separately approved readback below, then follow the
+  same cleanup order. Clearing pins does not revoke a run that already started.
+- The shell gate and runner require `main`, a valid target and
+  `PRODUCTION_DEPLOY_ENABLED` exactly `true` for production. Leave the enable
+  flag unset or false until approved.
 - Staging admission hold: `STAGING_MIGRATION_HOLD` must be exactly `false` to
   release any staging migration or staging deploy. Absent, empty, `true` and
   malformed values all hold. Set it as a repository variable
@@ -581,40 +618,49 @@ migration is performed by its selftest.
   `PLANETSCALE_STAGING_DATABASE_URL` from the `staging` Environment; that is **not** migration approval
   or provisioning. YAML cannot attest a resolved secret's scope. Missing
   Environment provisioning is a stop, even if a same-named repo secret exists.
-- Verify backup/PITR eligibility for the target branch (PlanetScale backups) and a tested recovery procedure before apply. The summary's timestamp is a recovery
-  reference, **not** a snapshot, a restore drill, or proof PITR is available.
 
 **Operator execution after those gates:** select Actions → `db-migrate` → Run
 workflow, branch `main`, target `staging` or `production`. The job Environment
-matches the target and must clear its configured reviewers before secrets are
-available. The workflow validates migration numbers, then:
+matches the target. GitHub applies its configured protection rules before the
+job can access Environment secrets. For a normal apply leave `readback_only`
+off. The protected job proceeds from the read-only plan to apply without a
+second approval checkpoint. The workflow validates migration numbers and the
+snapshot chain, then:
 
 1. `plan` reads the canonical SQL/journal and `drizzle.__drizzle_migrations`,
    lists pending tags and counts in logs/job summary, and performs **no DDL**.
    This is a journal diff, not a SQL execution rehearsal.
-   Production requires the pin to be an ordered suffix of the locked release
-   journal and the pending tags to match it exactly.
+   Production lists only the approved segment and requires its first tag to
+   be the first pending tag after the exact live ledger prefix.
 2. `apply` starts one connection-bound transaction, acquires the web transaction
-   advisory lock, rechecks history and (on production) the exact pending tags,
-   and records the database clock's UTC
-   **pre-migration PITR timestamp** and release SHA in the job summary
-   **before DDL**. Production `apply` uses `READ COMMITTED` so the locked history
-   check sees commits made after the identity check. Ledger initialization,
-   canonical Drizzle journal SQL and hash/timestamp inserts, and the zero-pending
-   check all run in that transaction.
-   On production, `plan` and `verify` check `current_database()`, `session_user`
-   and `current_user`; `apply` repeats the check on its own transaction before
-   any DDL. The database must match the URL path and approved fingerprint, and
-   both roles must equal the same approved principal. The check reports only
-   match or refusal, not the database or role names.
+   advisory lock, rechecks the full ledger and (on production) the approved start,
+   and records the database clock's UTC **pre-migration PITR timestamp** and
+   release SHA in the job summary **before DDL**. Production `apply` uses
+   `READ COMMITTED` so the locked history check sees commits made after the
+   identity check. It executes only the approved canonical SQL and ledger
+   inserts, then requires the exact canonical prefix through the approved end
+   before committing. Staging still applies the full pending suffix and requires
+   zero pending in the same transaction.
+   Production checks `current_database()`, `session_user` and `current_user`
+   within the same transaction as each command's journal access. The database
+   must match the URL path and approved fingerprint, and both roles must equal
+   the same approved principal. The check reports only match or refusal, not
+   the database or role names.
    Connection loss fails closed, never reconnects mid-apply; the success receipt
    is printed only after commit. URLs and raw database/SQL errors are never printed.
-3. Both `apply` and the final `verify` require **zero pending web migrations**
-   against the full release journal, not just the approved scope.
-   Save the workflow URL, release SHA, timestamp and count with release evidence
-   before the Worker deployment. A successful journal check does not establish
-   bot schema readiness or run staging E2E. Staging E2E at the tested revision
-   remains required before any production deployment.
+3. The workflow follows staging apply with full-release `verify` (**zero pending
+   web migrations**). It follows production apply with read-only `verify-scope`,
+   which checks the full ledger again and requires exactly the approved end,
+   neither earlier nor later. Both scoped receipts list deferred journal tags.
+   A scoped success is not a full-release verdict, cannot qualify a release with
+   deferred migrations, and does not justify setting `migrations_applied: true`
+   for a Worker that requires them. Standalone `verify` still requires zero
+   pending against the full journal. Save the workflow URL, release SHA, PITR
+   timestamp and ledger result with the operation evidence. Bot schema readiness,
+   exact-revision staging E2E and the existing promotion gates still apply.
+
+After production apply, watch web and bot health and errors for at least 30
+minutes. Record the outcome and follow the approved recovery plan on regression.
 
 SQL hashes/timestamps must be an exact prefix of the release journal. Edited,
 gapped, foreign/bot or newer history fails closed; never delete/forge the ledger,
@@ -626,18 +672,52 @@ credential/permission errors, **stop; never try another credential**. Driver
 errors are deliberately redacted; the authorized database operator investigates
 using controlled provider-side evidence. Do not cancel in-flight DDL casually.
 
+### Read back the configured production database identity
+
+[db-production-identity.yml](../.github/workflows/db-production-identity.yml)
+checks the database and login behind `PRODUCTION_DATABASE_URL` on protected
+`main`, in one read-only transaction on the pinned PlanetScale target with
+verified TLS. The ledger, grants and readiness require separate evidence.
+
+Before a live readback, verify the production Environment's main-only branch
+rule, independent approval for the exact SHA and identity, and exclusive
+credential custody. Hold the readback when any control is missing.
+Set `PRODUCTION_DB_IDENTITY_SHA256` and `PRODUCTION_DB_IDENTITY_APPROVED_SHA`
+only as production Environment secrets. Use the fingerprint format above
+and the lowercase 40-character dispatch SHA. Keep the credential and pins
+stable during the run and clear the approval SHA when it ends or is abandoned.
+A refusal requires custodian investigation before another approved attempt.
+
+### Repair production migrator permissions at the 1033 prefix
+
+Rehearse both directions of the [permissions repair](../.github/workflows/db-permissions-repair.yml) under the production release gate with catalog `MAINTAIN`.
+Use the approved executor login for every snapshot. Run `ci/db-permissions-repair-state.sql` read-only with `search_path = pg_catalog`. Use production Environment secrets.
+
+- `PRODUCTION_DB_REPAIR_APPROVED_SHA` pins the reviewed commit on protected `main`.
+- `PRODUCTION_DB_REPAIR_DATABASE_URL` supplies the direct scoped credential.
+- `PRODUCTION_DB_REPAIR_PLAN` holds the `before` and `after` digests, `identity` fingerprint and `owners` in inventory order.
+- `PRODUCTION_DB_REPAIR_PLAN_SHA256` pins the exact plan bytes.
+
+Run `readback` after an uncertain write. If it cannot classify the state, stop writes and compare a read-only catalog snapshot against both pins before approving recovery.
+Keep the executor authority and pins through the 30-minute watch and recovery window, then verify their removal.
+
+### Migration rollback and recovery
+
 **Rollback:** a Worker rollback does not undo schema/data. SQL failure rolls back
 the pending transaction, including ledger initialization on a fresh DB. Existing
 history stays intact. On connection loss, do not infer commit success. For
-production, a new apply dispatch is not a recovery check: if the transaction
-committed, its `plan` step refuses zero pending. Under a separately approved
-recovery procedure, the authorized database operator checks the full journal
-read-only against the same release before any retry. The runner's standalone
-`verify` mode is read-only, still requires the same SHA, identity and valid scope
-pins, and succeeds only with a complete journal. Do not change the pins to make a
-retry pass. For staging, re-plan and verify under the approved recovery procedure
-before retrying. After a successful but harmful migration, prefer a reviewed
-forward repair.
+production, do not replay apply to resolve an uncertain commit. Under separate
+recovery approval, dispatch `db-migrate.yml` on `main` with `target=production`
+and `readback_only=true`. This skips plan and apply, and runs only `verify-scope`
+for database access under the same protected Environment. The original approved
+SHA must still match the run, and the original migrator identity and scope pins
+must remain in place. Success means only that the ledger matches the exact
+approved end and the reported tail is still pending. If `main` moved, the pins
+no longer match, or the ledger is earlier, later or non-canonical, stop and
+reconcile with the original preflight/PITR evidence through the authorized
+operator. Do not change the pins, widen the scope or replay to force a result.
+For staging, re-plan and verify under the approved recovery procedure before retrying.
+After a successful but harmful migration, prefer a reviewed forward repair.
 If authorized PITR is required, pause writers and coordinate **both** consumers,
 verify the recorded timestamp is eligible, and use the provider's documented
 restore procedure (Neon branch restore or PlanetScale backup/restore). Restore can overwrite all databases on the branch and lose later
@@ -846,10 +926,10 @@ mutation, covering changes after capture. A failed second ancestry lookup
 also refuses promotion; it never falls back to the first proof.
 
 Only `workflow_dispatch` with a nonblank, full SHA matching the resolved
-candidate selects the separate explicit redeploy/recovery route. That input
-is not authorization: retain current Release Manager approval, independent
-Security and QA review, exact-SHA CI, incident/rollback requirements and all
-other applicable promotion gates. `migrations_applied=true` does not bypass
+candidate selects the separate explicit redeploy/recovery route. Apply the
+[production release gate](../CONTRIBUTING.md#production-release-gate), including
+independent exact-candidate approval, tier review, exact-SHA CI and incident and
+rollback requirements. `migrations_applied=true` does not bypass
 default ancestry admission, and neither does an empty-SHA manual dispatch.
 The rollback workflow remains a separate already-served-version route.
 
@@ -877,12 +957,9 @@ Before the deploy job, `deploy-production` runs two more gates
   artifact (an `e2e-staging` run that predates it, or an expired artifact)
   is refused; roll back with `rollback-production` instead of redeploying it.
 
-Automatic promotion, including an explicit-SHA dispatch, also requires the
-candidate's `e2e-staging` pass to be at least 30 minutes old. In reviewer
-mode the approval stands in for the resolver but not for the soak floor:
-when a staging pass for the candidate exists, it must still have soaked 30
-minutes; a promotion with no staging evidence yet rides on the reviewer's
-approval alone.
+Both modes require the staged candidate and its 30-minute soak. Reviewer-mode
+preflight can pass without staging evidence. Regression still requires the
+candidate's ledgers before deploy.
 
 Both modes refuse a candidate with red staging evidence: any failed or
 timed-out `e2e-staging` run that names it, or any run past its first attempt.
@@ -890,9 +967,8 @@ GitHub's run list shows only a run's latest attempt, so a re-run that turned
 green hides the red attempt it replaced; the gate counts the re-run itself as
 red. The check reads every `e2e-staging` run created since the candidate was
 committed, not a fixed window, so a fresh redeploy cannot bury an older red
-run; a history too long to read in full (over 1,000 runs) is refused. A
-reviewer approval stands in for missing staging evidence, never for red
-evidence. Fix forward: land a new commit and promote it once its own staging
+run; a history too long to read in full (over 1,000 runs) is refused. Fix
+forward: land a new commit and promote it once its own staging
 run passes on the first attempt. A re-run can still diagnose a flake, but its
 green is not promotion evidence.
 
@@ -2193,12 +2269,13 @@ does not select a production connection. The `target` input selects the
 connection: `production` reads `PRODUCTION_BACKUP_DATABASE_URL`, a read-only role.
 
 The job binds the GitHub Environment named by `target` (`staging` for the
-schedule and by default). A production dump therefore waits for the
-`production` Environment's required reviewers and main-only branch policy
-before the secret is readable, and a staging run never has
-`PRODUCTION_BACKUP_DATABASE_URL` mapped into any step. Provision
-`PRODUCTION_BACKUP_DATABASE_URL` on the `production` Environment only; a repo-level
-secret is readable by any job without that gate, so delete it there.
+schedule and by default). GitHub enforces the `production` Environment's
+main-only branch policy before the secret is readable and waits for required
+reviewers if configured. Obtain operational approval before dispatching a
+production dump, including when the Environment has only the branch rule.
+A staging run never has `PRODUCTION_BACKUP_DATABASE_URL` mapped into any step.
+Provision `PRODUCTION_BACKUP_DATABASE_URL` on the `production` Environment only.
+A repo-level secret is readable by any job without that gate, so delete it there.
 `ci/check-production-secrets.test.mjs` fails any workflow job that reads a
 `PRODUCTION_*` secret without binding `production`.
 
@@ -2311,6 +2388,14 @@ and [wrangler.jsonc](../wrangler.jsonc). Use the official
 for the approved mechanism. `wrangler secret put` creates a new deployed version;
 it is not a harmless configuration preview. This runbook performs no rotation
 and supplies no secret values or rotation commands.
+
+Escalate suspected compromise immediately through the custody procedure below.
+For production, apply the [release gate](../CONTRIBUTING.md#production-release-gate)
+and retain custody approvals. Hold Worker secret rotation until a
+protected deployment path can apply the change. `wrangler secret put` deploys
+immediately. The [production deploy workflow](../.github/workflows/deploy-production.yml)
+uploads and promotes its own build and cannot deploy a prepared secret-only
+version. The staging rehearsal is documented in [Configuration](config.md#session_secret-strength-and-rotation).
 
 Route a suspected compromise to the Director/CISO immediately; CEO obtains the
 owner-reserved approval before creation/deletion/rotation or exporting custody.

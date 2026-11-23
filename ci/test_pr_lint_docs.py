@@ -7,6 +7,7 @@ Also wired into the `Unit-test the lint` step in .github/workflows/pr-gates.yml.
 import os
 import contextlib
 import io
+import json
 import re
 import subprocess
 import sys
@@ -141,11 +142,11 @@ class DocsClassification(unittest.TestCase):
         assert_fails(rows, "ratchet")
         assert_fails(rows, "branch-name internal ID")
         assert_fails(rows, "strict subset")
+        assert_fails(rows, f'PR_VERIFICATION_MODE: "{workflow_env("PR_VERIFICATION_MODE")}"')
 
     def test_warning_checks_are_documented_as_warnings(self):
         _, rows = docs_table_rows()
         assert_warns(rows, "Linked Issues or Issue Description")
-        assert_warns(rows, "Verification")
         assert_warns(rows, "commit subject")
         assert_warns(rows, "below the cutoff")
 
@@ -241,10 +242,10 @@ class CheckerBehaviorMatchesDocs(unittest.TestCase):
             )
         )
 
-    def test_missing_sections_only_warn_in_configured_mode(self):
+    def test_missing_linked_issue_only_warns_in_configured_mode(self):
         mode = workflow_env("PR_STANDARDS_MODE")
         self.assertEqual(mode, "warn", "test expectation pins the current warn mode; update docs + test on flip")
-        thin = GOOD_BODY.replace("## Verification", "## Notes")
+        thin = GOOD_BODY.replace("## Linked Issues or Issue Description", "## Notes")
         findings = ps.evaluate(
             {
                 "EVENT": "pull_request",
@@ -271,6 +272,25 @@ class CheckerBehaviorMatchesDocs(unittest.TestCase):
             }
         )
         self.assertTrue(any(f.level == "error" for f in flipped), flipped)
+
+    def test_verification_fails_in_configured_mode(self):
+        for body in (GOOD_BODY.replace("## Verification", "## Notes"), GOOD_BODY + "- CI pending\n"):
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as directory:
+                metadata = Path(directory) / "metadata.json"
+                metadata.write_text(json.dumps({
+                    "event": "pull_request", "title": "fix(auth): refuse expired sudo sessions",
+                    "body": body, "author": "alice",
+                }), encoding="utf-8")
+                result = subprocess.run(
+                    [sys.executable, str(REPO_ROOT / "ci" / "pr-lint-output.py"), "check"],
+                    cwd=REPO_ROOT, capture_output=True, text=True, timeout=10,
+                    env={**os.environ, "PR_METADATA_PATH": str(metadata), "FLOOR_WAIVER_BASE_SHA": "HEAD",
+                         "COMMIT_SUBJECTS_PATH": "", "HEAD_REF": "fix/sudo-session", "REPO_PRIVATE": "false",
+                         "PR_STANDARDS_MODE": workflow_env("PR_STANDARDS_MODE"),
+                         "PR_VERIFICATION_MODE": workflow_env("PR_VERIFICATION_MODE")},
+                )
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertRegex(result.stdout, r"::error title=PR template::[^\n]*Verification")
 
     def test_strict_title_body_hits_fail_in_warn_mode(self):
         """The strict subset (tracker id, instance link, internal host) fails even in warn mode."""

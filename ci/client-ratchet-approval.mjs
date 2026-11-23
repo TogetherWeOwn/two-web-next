@@ -14,6 +14,7 @@ export const INITIAL_CLIENT_BUDGET = {
 };
 export const INITIAL_ROUTE_DECISION =
   "ci/budgets/decisions/kit-perf/2026-11-04-route-client-closure-and-ratchet.md";
+export const RECONCILIATION_ROUTE_DECISION = "2026-11-23-reconciliation-routes.json";
 const plan = (files) => ({
   client: {
     js: files[CLIENT_FILES[0]].client.js,
@@ -44,12 +45,13 @@ export function initialRouteBudget(root) {
 }
 
 export function approvedClientPlan(root) {
-  const dir = join(root, "ci/budgets/decisions/kit-perf");
-  const pending = readdirSync(dir)
+  const dir = "ci/budgets/decisions/kit-perf";
+  const decisions = readdirSync(join(root, dir));
+  const pending = decisions
     .filter((name) => /^auto-client-ratchet-[a-f0-9]{12}\.md$/.test(name))
     .sort()
     .map((name) => {
-      const text = readDecision(root, `ci/budgets/decisions/kit-perf/${name}`);
+      const text = readDecision(root, `${dir}/${name}`);
       const evidence = parseDecision(text);
       const { base } = evidence;
       const result = replayDecision(evidence);
@@ -59,11 +61,31 @@ export function approvedClientPlan(root) {
     client: structuredClone(INITIAL_CLIENT_BUDGET),
     routeBudget: initialRouteBudget(root),
   };
-  while (pending.length) {
+  let admitReconciliation = decisions.includes(RECONCILIATION_ROUTE_DECISION);
+  while (pending.length || admitReconciliation) {
     const index = pending.findIndex((record) => isDeepStrictEqual(record.before, approved));
-    assert.ok(index >= 0, "measured client decisions do not extend the approved ceiling chain");
-    const [record] = pending.splice(index, 1);
-    approved = record.after;
+    if (index >= 0) {
+      const [record] = pending.splice(index, 1);
+      approved = record.after;
+      continue;
+    }
+    assert.ok(
+      admitReconciliation,
+      "measured client decisions do not extend the approved ceiling chain",
+    );
+    // Replay prior lowerings first. The reviewed admission only adds rows, then
+    // later lowerings must match the expanded plan in full.
+    const admission = validateRouteBudget(
+      JSON.parse(readDecision(root, `${dir}/${RECONCILIATION_ROUTE_DECISION}`)),
+    );
+    for (const [id, route] of Object.entries(admission.routes)) {
+      assert.ok(!Object.hasOwn(approved.routeBudget.routes, id), "route already approved");
+      for (const kind of ["js", "css"])
+        for (const [metric, limit] of Object.entries(route[kind]))
+          assert.ok(limit <= approved.client[kind][metric], "route ceiling exceeds aggregate");
+      approved.routeBudget.routes[id] = route;
+    }
+    admitReconciliation = false;
   }
   return approved;
 }

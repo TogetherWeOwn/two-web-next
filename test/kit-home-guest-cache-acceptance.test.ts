@@ -54,6 +54,7 @@ type KitHomeLoadArgs = {
 };
 
 type KitHomeLoadData = {
+  nowMs: number;
   upcomingEvents: Array<
     { title: string; startsAt: Date; source: string } & Record<string, unknown>
   >;
@@ -679,6 +680,7 @@ describe("Kit home guest cache: correlation and DTOs", () => {
       "joinResult",
       "memberRsvps",
       "notice",
+      "nowMs",
       "session",
       "sessionUnavailable",
       "upcomingEvents",
@@ -707,12 +709,14 @@ describe("Kit home guest cache: TTL", () => {
     const f = fixture();
     f.use();
     const first = await load(loadArgs().args);
+    expect(first.nowMs).toBe(NOW.getTime());
     expect(first.upcomingEvents.map((row) => row.title)).toEqual(["Game night 1"]);
     const afterFirst = f.counts();
 
     // An intervening hit never extends the entry: still a hit at TTL-1ms.
     vi.setSystemTime(new Date(NOW.getTime() + cacheTtlMs - 1));
     const hit = await load(loadArgs().args);
+    expect(hit.nowMs).toBe(NOW.getTime() + cacheTtlMs - 1);
     expect(hit.upcomingEvents.map((row) => row.title)).toEqual(["Game night 1"]);
     expect(hit.featured.map((row) => row.title)).toEqual(["Featured slot 1"]);
     expect(f.counts()).toEqual(afterFirst);
