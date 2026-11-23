@@ -720,10 +720,10 @@ const past: CalendarPersistedCard = { kind: 'event', key: 'past', eventKey: 'pas
 <div class="base-theme schedule-theme"><main class="events-page"><CalendarPastDrawer {state} past={${scenario === "empty" ? "[]" : "[past]"}} showPast={${scenario !== "closed"}} member={false} inviteUrl="https://discord.test/invite" loginReturnTo="/events?page=2" /></main></div>`,
       },
       async ({ page }) => {
-        assert.equal(
-          await page.getByTestId("events-past-list").count(),
-          scenario === "closed" || scenario === "empty" ? 0 : 1,
-        );
+        const list = page.getByRole("list", { name: "Past events", exact: true });
+        const listCount = scenario === "closed" || scenario === "empty" ? 0 : 1;
+        assert.equal(await list.count(), listCount);
+        assert.equal(await page.getByTestId("events-past-list").count(), listCount);
         assert.equal(
           await page.getByTestId("events-past-toggle").count(),
           scenario === "search" || scenario === "empty" ? 0 : 1,
@@ -735,6 +735,8 @@ const past: CalendarPersistedCard = { kind: 'event', key: 'past', eventKey: 'pas
           );
         }
         if (scenario !== "closed" && scenario !== "empty") {
+          assert.equal(await list.getAttribute("role"), "list");
+          assert.equal(await list.getByRole("listitem").count(), 1);
           assert.match(await page.getByTestId("events-past-list").innerText(), /Past game night/i);
           assert.equal(await page.getByTestId("signin").count(), 0);
         }
