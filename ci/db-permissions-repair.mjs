@@ -156,6 +156,11 @@ async function executeRepair(tx, config, plan, direction) {
   assert.equal(acquired, true);
   // Keep the ledger stable and block concurrent GRANTs, which lock catalogs directly.
   await tx`lock table drizzle.__drizzle_migrations, pg_catalog.pg_class, pg_catalog.pg_attribute in share row exclusive mode nowait`;
+  // GRANT can release its catalog table locks before its tuple updates commit.
+  await tx`with locked as (select oid from pg_class where oid in (
+    select name::regclass from jsonb_array_elements_text(${JSON.stringify([...transferred])}::text::jsonb) n(name)
+  ) for update nowait)
+  select a.attnum from pg_attribute a join locked on locked.oid = a.attrelid for update of a nowait`;
   const forward = direction === "forward";
   const initial = await readState(tx);
   assert.equal(initial.digest, forward ? plan.before : plan.after);
