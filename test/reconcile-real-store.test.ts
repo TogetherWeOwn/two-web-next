@@ -230,8 +230,17 @@ describe.skipIf(!process.env.DATABASE_URL)(
         retryable: true,
         retryAfterSeconds: null,
       });
+      const unexpectedBotCall = async () => {
+        throw new Error("Unexpected bot action in the upsert replay fixture");
+      };
+      const bot: BotClient = {
+        upsertEvent,
+        cancelEvent: unexpectedBotCall,
+        postAnnouncement: unexpectedBotCall,
+        assignRole: unexpectedBotCall,
+      };
       let now = NOW;
-      const deps = { events, now: () => now, bot: { upsertEvent } as BotClient };
+      const deps = { events, now: () => now, bot };
       const failed = { kind: "sync-event", key: `sync-event:${eventKey}` };
       const replay = () =>
         reconcileFailedJob({ ...events, hasFailedSync: events.hasFailedSync! }, failed, deps.now);
