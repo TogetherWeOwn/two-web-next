@@ -124,12 +124,8 @@ export function renderPage(data) {
   }
 }
 
-// The content section both renderers must agree on, extracted by the stable
-// aria-labelledby anchor (the section carries no testid on either side) and
-// compared through the shared framework-tolerant treatment. Svelte's empty
-// `<!---->` snippet/if anchors have no Hono counterpart, so they are excised
-// first: zero-width hydration markers, serializer-owned like the markers the
-// shared treatment already strips — never content.
+// Compare the content section at the stable aria-labelledby anchor. Svelte's
+// empty snippet markers have no Hono counterpart.
 function contentSectionOf(html: string): string {
   const match = html.match(/<section[^>]*aria-labelledby="rules-heading"[\s\S]*?<\/section>/);
   if (!match) throw new Error("rules content section is missing");
@@ -219,11 +215,15 @@ describe("Kit /rules parity with Hono", () => {
     expect(forbidden).toEqual([]);
   });
 
-  it.each(FIXTURES)("renders the identical content section ($name)", async (fixture) => {
+  it.each(FIXTURES)("matches Hono apart from Kit heading focus ($name)", async (fixture) => {
     const data = rulesPageData(APP_URL, fixture.raw);
     const kitHtml = renderPage(data);
     const { html: honoHtml } = await honoRules(fixture.raw);
-    expect(contentSectionOf(kitHtml)).toBe(contentSectionOf(honoHtml));
+    const kitContent = contentSectionOf(kitHtml).replace(
+      /(<h[12] id="[^"]+") tabindex="-1"(>)/g,
+      "$1$2",
+    );
+    expect(kitContent).toBe(contentSectionOf(honoHtml));
   });
 
   it.each(FIXTURES)("keeps the semantic and a11y contract ($name)", (fixture) => {
@@ -233,7 +233,8 @@ describe("Kit /rules parity with Hono", () => {
     expect(html).toContain('aria-label="Primary"');
     expect(html.match(/<link rel="canonical"/g)).toHaveLength(1);
     expect(html).toContain(`<link rel="canonical" href="${canonicalUrl(APP_URL, "/rules")}"`);
-    expect(html).toContain('<h1 id="rules-heading">House rules</h1>');
+    expect(html).toContain('<h1 id="rules-heading" tabindex="-1">House rules</h1>');
+    for (const [, , id] of RULES) expect(html).toContain(`<h2 id="${id}" tabindex="-1">`);
     for (const name of RULE_NAMES) expect(html).toContain(name);
     expect(html.match(/<li class="card">/g)).toHaveLength(5);
     expect(html).toContain('data-testid="rules-join"');
