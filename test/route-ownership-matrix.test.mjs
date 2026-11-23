@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { explicitMethodRefusal } from "../src/http/method";
-import { resolveRouteOwner } from "../src/route-ownership";
+import { resolveRouteOwner, ROUTE_MANIFEST } from "../src/route-ownership";
 import { coverage } from "./fixtures/parity/hono-9822a6e60c6b2229c8b823bb481c87fb29fa85c9/index.json";
 import inventory from "./fixtures/route-inventory.json";
 import { rows } from "./fixtures/route-kit-map.json";
@@ -101,18 +101,21 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
     ["event-writes", "/events", "kit"],
     ["admin", "/admin/events", "hono"],
   ])(
-    "selects the %s POST without changing the all-off GET or HEAD owner",
+    "selects the %s POST while preserving the current GET and HEAD owners",
     (family, path, reader) => {
       const selection = familyEndpointKeys(rows, family);
       const off = new Set();
       const write = { method: "POST", path };
+      const manifest = [{ ...write, enabled: true }, ...ROUTE_MANIFEST];
       expect(projectFixtureOwner(write, off, resolveRouteOwner)).toBe("hono");
       expect(projectFixtureOwner(write, selection, resolveRouteOwner)).toBe("kit");
+      expect(resolveRouteOwner(write, manifest)).toBe("kit");
       for (const method of ["GET", "HEAD"]) {
         const read = { method, path };
         expect(selection.has(routeKey(read))).toBe(false);
         expect(projectFixtureOwner(read, off, resolveRouteOwner)).toBe(reader);
         expect(projectFixtureOwner(read, selection, resolveRouteOwner)).toBe(reader);
+        expect(resolveRouteOwner(read, manifest)).toBe(reader);
       }
     },
   );
@@ -127,6 +130,12 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
       methods.map((method) => ({ method, path: candidate })),
     );
     expect(probes.every((pair) => resolveRouteOwner(pair) === "hono")).toBe(true);
+    // The current resolver reserves these paths even with an enabled manifest entry.
+    // Keep the release expectation as a fixture for the dispatcher that can opt in.
+    const manifest = [{ method: registered, path, enabled: true }];
+    for (const pair of probes) {
+      expect(resolveRouteOwner(pair, manifest), routeKey(pair)).toBe("hono");
+    }
     const projected = probes.filter(
       (pair) => projectFixtureOwner(pair, selection, resolveRouteOwner) === "kit",
     );
@@ -141,6 +150,12 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
     });
     const enabled = new Set(families.flatMap(([family]) => [...familyEndpointKeys(rows, family)]));
     expect(enabled.has(routeKey(fallback))).toBe(false);
+    const manifest = [
+      ...rows
+        .filter((row) => enabled.has(routeKey(row)))
+        .map(({ method, path }) => ({ method, path, enabled: true })),
+      ...ROUTE_MANIFEST,
+    ];
     const refusal = explicitMethodRefusal({ allow: "PUT, DELETE", accept: null, vary: null });
     for (const [file, method, path, status] of [
       ["events_key_rsvp", "PATCH", fallback.path, refusal.status],
@@ -151,6 +166,12 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
       const { request, response } = recording.get(`routes/${file}.json`)[method];
       expect(response.status, routeKey(request)).toBe(status);
       expect(resolveRouteOwner(request), routeKey(request)).toBe("hono");
+      expect(resolveRouteOwner(request, manifest), routeKey(request)).toBe("hono");
+    }
+    const rsvp = recording.get("routes/events_key_rsvp.json");
+    for (const method of ["PUT", "DELETE"]) {
+      const { request } = rsvp[method];
+      expect(resolveRouteOwner(request, manifest), routeKey(request)).toBe("kit");
     }
   });
 });
