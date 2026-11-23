@@ -702,6 +702,9 @@ revokes only that provisioner's edge. Membership affects the shared role catalog
 - `PRODUCTION_DB_EXECUTOR_PLAN_SHA256` pins the exact plan bytes.
 
 Rehearse provision, forward, undo and revoke together on the isolated restore.
+Derive each target's repair pins after provisioning under its approved executor.
+The snapshot hashes the membership row OID. Recreating the edge changes the
+digest, so retain the same edge through the recovery window.
 Keep the repair credential separate. If a membership run is uncertain, use its
 same approved operation to confirm the state. An unexpected edge refuses without
 writes. Approve and dispatch `revoke` after recovery is no longer needed.

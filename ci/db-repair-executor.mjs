@@ -15,14 +15,17 @@ const reservedRoles = ["postgres", "two_web_app", "two_web_backup", "two_web_mig
 function approvedPlan(operation, env) {
   assert.ok(["provision", "revoke"].includes(operation));
   const raw = env.PRODUCTION_DB_EXECUTOR_PLAN;
-  assert.ok(raw && raw.length <= 1024);
+  assert.ok(
+    raw && Buffer.byteLength(raw) <= 1024,
+    "Executor plan exceeds the allowed size or is missing",
+  );
   assert.equal(
     createHash("sha256").update(raw).digest("hex"),
     env.PRODUCTION_DB_EXECUTOR_PLAN_SHA256,
   );
   const plan = JSON.parse(raw);
   assert.deepEqual(Object.keys(plan).sort(), ["executor", "identity", "operation"]);
-  assert.equal(plan.operation, operation);
+  assert.equal(plan.operation, operation, "Executor plan operation does not match the dispatch");
   assert.match(plan.identity, digest);
   assert.match(plan.executor, /^[a-z][a-z_0-9-]{0,62}$/);
   assert.ok(!reservedRoles.includes(plan.executor));
@@ -31,7 +34,7 @@ function approvedPlan(operation, env) {
 
 async function membership(tx, executor) {
   const [row] = await tx`
-    select current_user::text as provisioner,
+    select p.oid::text as provisioner,
       e.rolcanlogin and not e.rolsuper and not p.rolsuper
       and not pg_has_role(p.oid, e.oid, 'MEMBER')
       and not pg_has_role(e.oid, p.oid, 'MEMBER')
@@ -44,7 +47,7 @@ async function membership(tx, executor) {
       pg_has_role(e.oid, m.oid, 'USAGE') as inherits,
       pg_has_role(e.oid, m.oid, 'SET') as can_set,
       (select coalesce(jsonb_agg(jsonb_build_array(
-          grantor::regrole::text, admin_option, inherit_option, set_option)), '[]'::jsonb)
+          grantor::text, admin_option, inherit_option, set_option)), '[]'::jsonb)
         from pg_auth_members where roleid = m.oid and member = e.oid) as edges
     from pg_namespace n
     join pg_roles e on e.oid = n.nspowner

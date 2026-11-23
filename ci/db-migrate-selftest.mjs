@@ -65,6 +65,28 @@ test("permissions repair rejects an unpinned plan before opening a client", asyn
   );
 });
 
+test("executor authority rejects malformed, oversized and mismatched plans before connecting", async () => {
+  const plan = { operation: "revoke", identity: "a".repeat(64), executor: "repair_legacy" };
+  for (const [raw, expected] of [
+    ["{", SyntaxError],
+    [JSON.stringify(plan).padEnd(1025), /Executor plan exceeds/],
+    [JSON.stringify(plan), /Executor plan operation does not match/],
+  ]) {
+    await assert.rejects(
+      runExecutorAuthority(
+        "provision",
+        {
+          PRODUCTION_DB_EXECUTOR_PLAN: raw,
+          PRODUCTION_DB_EXECUTOR_PLAN_SHA256: createHash("sha256").update(raw).digest("hex"),
+          PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture-password@${PLANETSCALE_PRODUCTION_HOST}:5432/postgres?sslmode=verify-full`,
+        },
+        () => assert.fail("unexpected connection"),
+      ),
+      expected,
+    );
+  }
+});
+
 test("permissions repair pins the catalog, preserves the ledger and reverses the exact changes", async () => {
   await fixture(async ({ client, url }) => {
     const inventory = JSON.parse(
@@ -80,11 +102,11 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       "two_web_backup",
       "repair_legacy",
       "repair_other",
-      "repair_provisioner",
+      "repair-provisioner",
     ];
     const createdRoles = [];
     const executor = postgres(url.href, { username: "repair_legacy", max: 1 });
-    const provisioner = postgres(url.href, { username: "repair_provisioner", max: 1 });
+    const provisioner = postgres(url.href, { username: "repair-provisioner", max: 1 });
     try {
       for (const role of roles) {
         await client.unsafe(`create role "${role}" nologin`);
@@ -93,8 +115,8 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       await client
         .unsafe(`
         alter role repair_legacy login password 'ci';
-        alter role repair_provisioner login password 'ci';
-        grant two_web_migrate to repair_provisioner with admin true, inherit false, set false;
+        alter role "repair-provisioner" login password 'ci';
+        grant two_web_migrate to "repair-provisioner" with admin true, inherit false, set false;
         grant repair_other, pg_maintain, pg_read_all_stats to repair_legacy;
         create schema drizzle authorization repair_legacy;
         grant create on database "${url.pathname.slice(1)}" to two_web_migrate;
@@ -150,7 +172,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
         const raw = JSON.stringify({
           operation,
           executor: member,
-          identity: identityHash(url.pathname.slice(1), "repair_provisioner"),
+          identity: identityHash(url.pathname.slice(1), "repair-provisioner"),
         });
         return runExecutorAuthority(
           operation,
