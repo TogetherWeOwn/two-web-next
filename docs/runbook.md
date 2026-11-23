@@ -691,7 +691,7 @@ A refusal requires custodian investigation before another approved attempt.
 ### Repair production migrator permissions at the 1033 prefix
 
 Rehearse both directions of the [permissions repair](../.github/workflows/db-permissions-repair.yml) under the production release gate with catalog `MAINTAIN`.
-Pin catalog state in a read-only transaction using `ci/db-permissions-repair-state.sql` and `search_path = pg_catalog`. Use production Environment secrets.
+Use the approved executor login for every snapshot. Run `ci/db-permissions-repair-state.sql` read-only with `search_path = pg_catalog`. Use production Environment secrets.
 
 - `PRODUCTION_DB_REPAIR_APPROVED_SHA` pins the reviewed commit on protected `main`.
 - `PRODUCTION_DB_REPAIR_DATABASE_URL` supplies the direct scoped credential.
