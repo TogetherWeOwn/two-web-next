@@ -67,7 +67,7 @@ function snapshot(seq: number) {
     v: 1,
     guild_id: guildId,
     seq,
-    observed_at: occurredAt,
+    observed_at: new Date().toISOString(),
     topics: {
       guild,
       roles: [{ id: guildId, permissions: "0" }],
