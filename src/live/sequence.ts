@@ -1,4 +1,9 @@
-export type LiveSnapshot<State> = Readonly<{ seq: number; state: State }>;
+export type LiveSnapshot<State> = Readonly<{ seq: number; state: State; validUntil?: number }>;
+
+function fresh({ validUntil }: LiveSnapshot<unknown>): boolean {
+  return validUntil === undefined || (Number.isFinite(validUntil) && validUntil > Date.now());
+}
+
 type IngestResult = "applied" | "duplicate" | "invalid" | "resynced" | "unavailable";
 export type LiveWatermarks = Readonly<{ applied: number; minimum: number }>;
 type Checkpoint = { initial: LiveWatermarks; write: (watermarks: LiveWatermarks) => void };
@@ -35,7 +40,7 @@ export class LiveSequence<State, Delta> {
   }
 
   get current(): LiveSnapshot<State> | null {
-    return this.#current;
+    return this.#current && fresh(this.#current) ? this.#current : null;
   }
 
   expire(): void {
@@ -43,7 +48,7 @@ export class LiveSequence<State, Delta> {
   }
 
   async synchronize(): Promise<boolean> {
-    if (this.#current) return true;
+    if (this.current) return true;
     // Commit the latest observed gap before external I/O can yield or fail.
     this.#save(this.#saved.applied, this.#minimum);
     return this.#recovering ?? this.#recover();
@@ -52,7 +57,7 @@ export class LiveSequence<State, Delta> {
   async ingest(seq: number, delta: Delta): Promise<IngestResult> {
     if (!Number.isSafeInteger(seq) || seq < 1) return "invalid";
     if (seq <= this.#saved.applied) return "duplicate";
-    const current = this.#current;
+    const current = this.current;
     // A missed delta might revoke access. Invalidate before reducing or checkpointing.
     this.#current = null;
     this.#minimum = Math.max(this.#minimum, seq);
@@ -63,8 +68,8 @@ export class LiveSequence<State, Delta> {
       } catch {
         next = null;
       }
-      if (next !== null) {
-        this.#publish({ seq, state: next });
+      if (next !== null && fresh(current)) {
+        this.#publish({ ...current, seq, state: next });
         return "applied";
       }
     }
@@ -79,7 +84,12 @@ export class LiveSequence<State, Delta> {
     this.#recovering = load.then((snapshot) => {
       try {
         // Check against the latest observed gap, not the gap at request time.
-        if (!snapshot || !Number.isSafeInteger(snapshot.seq) || snapshot.seq < this.#minimum) {
+        if (
+          !snapshot ||
+          !Number.isSafeInteger(snapshot.seq) ||
+          snapshot.seq < this.#minimum ||
+          !fresh(snapshot)
+        ) {
           return false;
         }
         this.#publish(snapshot);

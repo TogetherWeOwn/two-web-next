@@ -2,6 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import { LiveGuildHub, publicVoiceRooms } from "../src/live/guild-hub";
 import { handleLiveIngress, type LiveIngressEnv } from "../src/live/ingress";
+import type { LiveSocketEnv } from "../src/live/socket-route";
 import { LIVE_INGEST_PATH } from "../src/live/transport";
 import { roomAllowlistCases } from "./fixtures/live-room-allowlists";
 
@@ -42,22 +43,32 @@ function signed(
   return new Request(url, { method: "POST", body, headers });
 }
 
-function fixture() {
+function fixture(hubEnv: LiveSocketEnv = config) {
   const storage = new Map();
   const kv = { get: storage.get.bind(storage), put: vi.fn(storage.set.bind(storage)) };
-  const ctx = { storage: { kv }, getWebSockets: () => [] } as unknown as DurableObjectState;
-  let hub = new LiveGuildHub(ctx, config);
+  const setAlarm = vi.fn<(until: number | Date) => Promise<void>>().mockResolvedValue(undefined);
+  const waitUntil = vi.fn();
+  const txn = { getAlarm: async () => null, setAlarm };
+  const transaction = (run: (storage: typeof txn) => Promise<void>) => run(txn);
+  const ctx = {
+    storage: { kv, transaction },
+    getWebSockets: () => [],
+    waitUntil,
+  } as unknown as DurableObjectState;
+  let hub = new LiveGuildHub(ctx, hubEnv);
   const getByName = vi.fn(() => ({
     fetch: (url: string, init: RequestInit) => hub.fetch(new Request(url, init)),
   }));
-  const env = { ...config, DISCORD_LIVE_HUB: { getByName } as unknown as DurableObjectNamespace };
+  const env = { ...hubEnv, DISCORD_LIVE_HUB: { getByName } as unknown as DurableObjectNamespace };
   return {
     env,
     storage,
     put: kv.put,
+    setAlarm,
+    waitUntil,
     getByName,
     evict: () => {
-      hub = new LiveGuildHub(ctx, config);
+      hub = new LiveGuildHub(ctx, hubEnv);
     },
   };
 }
@@ -67,7 +78,7 @@ function snapshot(seq: number) {
     v: 1,
     guild_id: guildId,
     seq,
-    observed_at: occurredAt,
+    observed_at: new Date().toISOString(),
     topics: {
       guild,
       roles: [{ id: guildId, permissions: "0" }],
@@ -127,6 +138,25 @@ it.each([1, 2])("returns 503 if publishing cursor %i cannot be checkpointed", as
   });
   expect(await send(seq)).toBe(503);
   expect([...storage.values()]).toEqual([{ applied: seq - 1, minimum: 1 }]);
+});
+
+it.each([1, 2])("retries a failed source alarm and publishes after cursor %i", async (seq) => {
+  const pull = vi.fn(async () => snapshot(1));
+  vi.stubGlobal("fetch", pull);
+  const { env, setAlarm, waitUntil } = fixture({
+    ...config,
+    DISCORD_LIVE_SOCKET_ENABLED: "true",
+    DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "200",
+  });
+  setAlarm.mockRejectedValueOnce(new Error("alarm write unavailable"));
+  const send = async (cursor: number) => (await handleLiveIngress(signed(cursor), env))?.status;
+  expect(await send(1)).toBe(503);
+  expect(waitUntil).not.toHaveBeenCalled();
+  expect(await send(seq)).toBe(204);
+  expect(waitUntil).toHaveBeenCalledOnce();
+  expect(pull).toHaveBeenCalledOnce();
+  expect(setAlarm).toHaveBeenCalledTimes(2);
+  expect(setAlarm.mock.calls[1]).toEqual(setAlarm.mock.calls[0]);
 });
 
 it("carries both watermarks across eviction without persisting any guild payload", async () => {
