@@ -27,13 +27,12 @@ const workflowPath = new RegExp(`^\\.github/workflows/${filename}$`);
 const relativeWorkflow = new RegExp(`^(?:\\.\\.?/)*\\.github/workflows/${filename}$`);
 const inlineLink =
   /(!?)\[([^\][\n]*)\]\([ \t]*(<[^<>\s]+>|[^\s()[\]<>]+)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?[ \t]*\)/g;
+const delimiters =
+  /^[ \t]*(?:(`{3,})[^`\n]*|(~{3,})[^\n]*)$|(^[ \t]*<!--)|<!--|--!?>|`+|\n[ \t]*\n/gm;
+const indentedCode = /(?:^|\n[ \t]*\n)(?: {4}| {0,3}\t)[^\n]*(?:\n(?: {4}| {0,3}\t)[^\n]*)*/g;
 
 function visibleMarkdown(text) {
-  const tokens = [
-    ...text.matchAll(
-      /^[ \t]*(?:(`{3,})[^`\n]*|(~{3,})[^\n]*)$|(^[ \t]*<!--)|<!--|--!?>|`+|\n[ \t]*\n/gm,
-    ),
-  ];
+  const tokens = [...text.matchAll(delimiters)];
   const closingTicks = new Map();
   const ends = [];
   let blockEnd = text.length;
@@ -89,6 +88,7 @@ function linkedWorkflow(destination, path) {
 function collectCitations(markdown, path, workflows) {
   const citations = [];
   const prose = visibleMarkdown(markdown.replace(/\r\n?/g, "\n"))
+    .replaceAll(indentedCode, (block) => block.replace(/\S[^\n]*/g, "\u0000"))
     .split("\n")
     .map((line, index) =>
       line.replaceAll(inlineLink, (_, image, label, destination, offset) => {

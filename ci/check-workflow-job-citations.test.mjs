@@ -55,9 +55,9 @@ test("accepts job IDs and static names in explicit prose, table and workflow lin
   repo.commit({
     "docs/runbook.md": [
       "`browser-smoke` job in `.github/workflows/e2e.yml`.",
-      "`.github/workflows/deploy.yml`, job `deploy-staging`.",
-      "An independent check (`e2e.yml` `Browser smoke` job).",
-      "The browser-smoke job (`.github/workflows/e2e.yml`).",
+      "`.github/workflows/deploy.yml`,\n  job `deploy-staging`.",
+      "An independent check (`e2e.yml`\n  `Browser smoke` job).",
+      "The browser-smoke job\n  (`.github/workflows/e2e.yml`).",
       "| `browser-smoke` job | 60 min | `.github/workflows/e2e.yml` |",
       '\\\\[`Browser smoke` job](<../.github/workflows/e2e.yml> "CI [browser]")',
       `[GitHub Actions → deploy.yml (\`deploy-staging\` job)](${actions}/deploy.yml)`,
@@ -80,7 +80,7 @@ test("fails changed and added citations against the cited workflow's jobs mappin
       `[\`Deploy stage\` job](${actions}/deploy.yml)`,
       "<!--\n```\n--!>\n`example-smoke` job in `e2e.yml`\n-->",
       "~~~md\n~~~not-a-close\n`example-smoke` job in `e2e.yml`\n<!--\n~~~",
-      "`wrapped-smoke` job in\n  [`e2e.yml`](../.github/workflows/e2e.yml).",
+      "`wrapped-smoke` job in\n    [`e2e.yml`](../.github/workflows/e2e.yml).",
       "[`anchored-smoke` job](../.github/workflows/e2e.yml#L9 (Pinned job))",
       "`linked-smoke` job\n  ([`e2e.yml`](../.github/workflows/e2e.yml))",
       "`` `example-smoke` job in `.github/workflows/e2e.yml` ``",
@@ -118,6 +118,7 @@ test("leaves unrelated prose, external links, examples and existing citations to
       "```md",
       stale.trimEnd(),
       "```",
+      "\n    `indented-smoke` job\n    (`e2e.yml`)",
     ].join("\n"),
   });
 
