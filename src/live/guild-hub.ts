@@ -105,13 +105,16 @@ export class LiveGuildHub {
     this.#sockets.invalidate();
   }
 
-  #leaseCurrent(): Promise<void> | undefined {
+  async #leaseCurrent(): Promise<void> {
     const current = this.#sequence?.current;
     if (!this.#publicRooms || current?.validUntil === undefined || current === this.#leased) return;
+    if (current.validUntil !== this.#sourceUntil) {
+      await this.#sockets.scheduleExpiry(current.validUntil);
+      // The source may expire or be replaced while storage is pending.
+      if (current !== this.#sequence?.current) return;
+      this.#sourceUntil = current.validUntil;
+    }
     this.#leased = current;
-    if (current.validUntil === this.#sourceUntil) return;
-    this.#sourceUntil = current.validUntil;
-    return this.#sockets.scheduleExpiry(this.#sourceUntil);
   }
 
   async #publish(): Promise<void> {
