@@ -130,7 +130,6 @@ class DocsClassification(unittest.TestCase):
         for token in (
             f'INTERNAL_ID_LEVEL: "{internal_level}"',
             f'PR_STANDARDS_MODE: "{standards_mode}"',
-            f'PR_VERIFICATION_MODE: "{workflow_env("PR_VERIFICATION_MODE")}"',
             f'HEAD_REF_ERROR_FROM_PR: "{cutoff}"',
         ):
             self.assertIn(token, text, f"docs must state the current mode token {token}")

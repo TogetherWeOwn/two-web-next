@@ -212,7 +212,8 @@ def is_command(text, explicit):
 def has_verification_evidence(item, references):
     def mask_code(span):
         value = span[0].strip("` \t\n").casefold()
-        return ("TBD" if value in {"", "tbd", "todo", "pending", "...", "…"} else "000").ljust(len(span[0]))
+        output = "000" if value.isdecimal() else "OUT"
+        return ("TBD" if value in {"", "tbd", "todo", "pending", "n/a", "...", "…"} else output).ljust(len(span[0]))
 
     prose = INLINE_CODE.sub(mask_code, item)
     visible = list(prose)
@@ -255,8 +256,8 @@ def verification_items(content):
         line = QUOTE_PREFIX.sub("", raw)
         structural = BLOCK_BREAK.match(line)
         bullet = None if structural else VERIFICATION_BULLET.match(line)
-        heading = len(lines) > 1 and lines[-2] and SETEXT_UNDERLINE.match(lines[-1])
-        separated = lines and (not lines[-1] or heading) and line.strip()
+        heading = indent and len(lines) > 1 and lines[-2] and lines[-1].startswith(" " * indent)
+        separated = lines and (not lines[-1] or (heading and SETEXT_UNDERLINE.match(lines[-1][indent:]))) and line.strip()
         if lines and (structural or bullet or (separated and (indent is None or len(line) - len(line.lstrip()) < indent))):
             yield indent is not None, "\n".join(lines)
             lines, indent = [], None
@@ -264,7 +265,7 @@ def verification_items(content):
             indent = bullet.end()
             lines.append(line[indent:])
         elif not structural and (lines or line.strip()):
-            lines.append(line.strip())
+            lines.append(line.rstrip())
     if lines:
         yield indent is not None, "\n".join(lines)
 

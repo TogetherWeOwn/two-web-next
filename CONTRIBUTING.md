@@ -37,9 +37,8 @@ version.
   numbered at or above `HEAD_REF_ERROR_FROM_PR: "627"`, and warns below it; other
   title/body references follow `PR_STANDARDS_MODE`.
 - Every PR, including docs-only and draft heads, must not increase the total count of internal card IDs and instance-UI links in tracked files versus its fork point (the merge-base with its base); `pr-lint` fails when that tracked-file ratchet grows, with named lint-fixture exclusions only.
-- Be honest about the tests. In each Verification bullet, give a code-formatted
-  command and its observed result, or link a GitHub Actions run or job. List
-  checks you did not run in Notes for reviewers. Report only observed results.
+- Each Verification bullet needs a code-formatted command and its observed
+  result, or a GitHub Actions run/job URL. List unrun checks in Notes for reviewers.
 - Address every review finding, or reply with why it does not apply.
 - Credit the contributors whose work you build on.
 - Done means merged. Do not leave an orphan PR open: merge it, or close it with a
