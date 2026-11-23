@@ -93,7 +93,7 @@ jobs:
     # staging` pin below fixes the callee on its staging leg, whose own job
     # binds `environment: ${{ inputs.environment }}`; the secrets preflight
     # accepts this pinned-caller shape (ci/check-production-secrets.test.mjs).
-    uses: TogetherWeOwn/two-web-next/.github/workflows/rollback-production.yml@38581ef492f5c972969f5dfada396a9f0e2ee989
+    uses: TogetherWeOwn/two-web-next/.github/workflows/rollback-production.yml@ed443a1f13edb16337192734b1950347fb1ed2f1
     with:
       environment: staging
       version_id: ${{ needs.plan.outputs.previous }}
@@ -113,7 +113,7 @@ jobs:
     # Same pinned-caller shape as the rollback leg above: no job-level
     # `environment:` (forbidden on caller jobs), the `with:` pin fixes the
     # staging leg.
-    uses: TogetherWeOwn/two-web-next/.github/workflows/rollback-production.yml@38581ef492f5c972969f5dfada396a9f0e2ee989
+    uses: TogetherWeOwn/two-web-next/.github/workflows/rollback-production.yml@ed443a1f13edb16337192734b1950347fb1ed2f1
     with:
       environment: staging
       version_id: ${{ needs.plan.outputs.live }}

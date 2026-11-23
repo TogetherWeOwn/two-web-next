@@ -689,7 +689,7 @@ jobs:
       !cancelled() && needs.deploy-production.outputs.promoted_version_id != '' &&
       (needs.deploy-production.outputs.verify_outcome == 'failure' ||
        needs.post-deploy-watch.outputs.breach == 'true')
-    uses: TogetherWeOwn/two-web-next/.github/workflows/rollback-production.yml@38581ef492f5c972969f5dfada396a9f0e2ee989
+    uses: TogetherWeOwn/two-web-next/.github/workflows/rollback-production.yml@ed443a1f13edb16337192734b1950347fb1ed2f1
     with:
       environment: production
       version_id: ${{ needs.preflight.outputs.rollback_version_id }}
