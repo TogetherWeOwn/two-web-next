@@ -17,7 +17,7 @@ const PII = "***synthetic-member-mail-6k1p***";
 // diagnostic line or forge alert fields.
 const SPLIT = "e1\ninjected-field";
 
-function deps(ledger?: QueueLedger): {
+function deps(announcementAttempts = 1): {
   bot: BotClient;
   events: EventStore;
   lock: UniqueLock;
@@ -61,7 +61,7 @@ function deps(ledger?: QueueLedger): {
     bot: {} as BotClient,
     events: store,
     lock,
-    ledger: ledger ?? {
+    ledger: {
       enqueued: async () => {},
       reserved: async () => {},
       released: async () => {},
@@ -69,7 +69,7 @@ function deps(ledger?: QueueLedger): {
       failed: async (_id, _kind, _key, reason) => void failedReasons.push(reason),
     },
     failedReasons,
-    announcementReconciliation: announcementStore(),
+    announcementReconciliation: announcementStore(announcementAttempts),
   };
 }
 
@@ -142,7 +142,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
 
   it("a thrown BotTerminalError alerts as its class, never its message", async () => {
     const lines = capture();
-    const d = deps();
+    const d = deps(2);
     const bot = {
       postAnnouncement: async () => {
         throw new BotTerminalError(`missing secret ${TOK} ${PII}`);
@@ -165,7 +165,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
 
   it("an exhausted unexpected throw alerts as its class across sync-event and internal-action", async () => {
     const lines = capture();
-    const d = deps();
+    const d = deps(CALL_INTERNAL_ACTION.tries);
     const bot = {
       postAnnouncement: async () => {
         throw new TypeError(`boom ${SQL} ${TOK}\nforged-line`);
@@ -316,7 +316,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     expect(attempt.ack).not.toHaveBeenCalled();
 
     // Without a jobId there is no ledger row, so capture the alert reason instead.
-    const d2 = deps();
+    const d2 = deps(CALL_INTERNAL_ACTION.tries);
     const terminal = {
       postAnnouncement: async () => ({
         ok: false,

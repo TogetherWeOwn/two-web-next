@@ -78,16 +78,14 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     } as unknown as BotClient;
     const first = msg({ ...ann }, 1);
     const second = msg({ ...role }, 1);
-    const p = consume(
-      { messages: [first, second] },
-      {
-        bot,
-        events: store(),
-        lock: memLock(),
-        ledger: memLedger().ledger,
-        ...{ announcementReconciliation: announcementStore() },
-      },
-    );
+    const deps = {
+      bot,
+      events: store(),
+      lock: memLock(),
+      ledger: memLedger().ledger,
+      announcementReconciliation: announcementStore(),
+    };
+    const p = consume({ messages: [first, second] }, deps);
     await vi.advanceTimersByTimeAsync(INTERNAL_ACTION_DEADLINE_MS + 1000);
     await p;
     // Bounded wait (first backoff is 5 s), same carrier key, no terminal ack …

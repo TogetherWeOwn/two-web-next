@@ -152,16 +152,14 @@ describe("handleCallInternalAction retry admission", () => {
     const { ledger, rows } = memLedger();
     const m = msg(ann, 1, "j1");
     const before = Date.now();
-    await consume(
-      { messages: [m] },
-      {
-        bot: botWith(NaN),
-        events: store(),
-        lock: memLock(),
-        ledger,
-        ...{ announcementReconciliation: announcementStore() },
-      },
-    );
+    const deps = {
+      bot: botWith(NaN),
+      events: store(),
+      lock: memLock(),
+      ledger,
+      announcementReconciliation: announcementStore(),
+    };
+    await consume({ messages: [m] }, deps);
     // Same admitted fallback in both sinks: consumer retries with it and the
     // ledger availability Date is built from it.
     expect(m.retried).toBe(FALLBACK);

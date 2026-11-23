@@ -220,6 +220,7 @@ describe.skipIf(!process.env.DATABASE_URL).each([
 
   it("acknowledges a terminal consumer delivery with one durable failure across redelivery", async () => {
     const id = randomUUID();
+    const idempotencyKey = randomUUID();
     const ledger = pgQueueLedger(sql);
     await ledger.enqueued({
       jobId: id,
@@ -248,7 +249,7 @@ describe.skipIf(!process.env.DATABASE_URL).each([
         const message = {
           body: {
             kind: "announcement",
-            idempotencyKey: id,
+            idempotencyKey,
             jobId: id,
             action: { channelKey: "fixture", body: "synthetic" },
           },

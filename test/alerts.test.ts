@@ -189,10 +189,10 @@ describe("queue.failing", () => {
     dequeued: async () => {},
     failed: async () => {},
   } as unknown as QueueLedger;
-  const msg = (body: unknown, attempts: number) => ({
+  const msg = (body: unknown, attempts: number, timestamp = new Date()) => ({
     body,
     attempts,
-    timestamp: new Date(),
+    timestamp,
     ack() {},
     retry() {},
   });
@@ -216,10 +216,8 @@ describe("queue.failing", () => {
         throw new BotTerminalError("missing secret");
       },
     } as unknown as BotClient;
-    await consume(
-      { messages: [msg(ann, 2)] },
-      { bot, events, lock, ledger, ...{ announcementReconciliation: announcementStore() } },
-    );
+    const deps = { bot, events, lock, ledger, announcementReconciliation: announcementStore(2) };
+    await consume({ messages: [msg(ann, 2)] }, deps);
     expect(failingLines(spy)).toEqual([
       {
         level: "critical",
@@ -243,14 +241,21 @@ describe("queue.failing", () => {
         throw new TypeError("boom");
       },
     } as unknown as BotClient;
-    await consume(
-      { messages: [msg(ann, CALL_INTERNAL_ACTION.tries - 1)] },
-      { bot, events, lock, ledger, ...{ announcementReconciliation: announcementStore() } },
-    );
+    const timestamp = new Date();
+    const penultimate = CALL_INTERNAL_ACTION.tries - 1;
+    const last = CALL_INTERNAL_ACTION.tries;
+    const deps = {
+      bot,
+      events,
+      lock,
+      ledger,
+      announcementReconciliation: announcementStore(penultimate),
+    };
+    await consume({ messages: [msg(ann, penultimate, timestamp)] }, deps);
     expect(failingLines(spy)).toHaveLength(0);
     await consume(
-      { messages: [msg(ann, CALL_INTERNAL_ACTION.tries)] },
-      { bot, events, lock, ledger, ...{ announcementReconciliation: announcementStore() } },
+      { messages: [msg(ann, last, timestamp)] },
+      { ...deps, announcementReconciliation: announcementStore(last) },
     );
     expect(failingLines(spy)).toMatchObject([
       { attempts: CALL_INTERNAL_ACTION.tries, exception: "TypeError" },

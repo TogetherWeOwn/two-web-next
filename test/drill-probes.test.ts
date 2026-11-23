@@ -243,12 +243,16 @@ describe("queue:poison-probe drill", () => {
     const poison = track(poisonAnn, CALL_INTERNAL_ACTION.tries);
     const ordinary = track(ordinaryAnn);
 
+    const announcementReconciliation = announcementStore();
+    announcementReconciliation.claimAnnouncement.mockImplementationOnce(
+      announcementStore(CALL_INTERNAL_ACTION.tries).claimAnnouncement,
+    );
     const deps = {
       bot,
       events: memStore(),
       lock,
       ledger,
-      announcementReconciliation: announcementStore(),
+      announcementReconciliation,
     };
     await consume({ messages: [poison, ordinary] }, deps);
 

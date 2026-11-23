@@ -11,6 +11,7 @@ import { dispatchSyncEvent } from "../src/jobs/sync-event";
 import { dispatchAnnouncement, dispatchRoleAssign } from "../src/jobs/call-internal-action";
 import { trackingQueue } from "../src/jobs/ledger";
 import { consume } from "../src/jobs/consumer";
+import { CALL_INTERNAL_ACTION } from "../src/jobs/constants";
 import { BotTerminalError } from "../src/jobs/types";
 import type {
   BotClient,
@@ -237,16 +238,13 @@ describe("request correlation through queue envelopes (local fixtures)", () => {
       const ack = vi.fn(),
         retry = vi.fn();
       const timestamp = new Date();
-      const deps = {
-        bot,
-        lock,
-        ledger,
-        events: {} as EventStore,
-        announcementReconciliation: announcementStore(),
-      };
+      const deps = { bot, lock, ledger, events: {} as EventStore };
       if (failure === "exhausted throw") {
         const message = { body, timestamp, attempts: 1, ack, retry };
-        await consume({ messages: [message] }, deps);
+        await consume(
+          { messages: [message] },
+          { ...deps, announcementReconciliation: announcementStore() },
+        );
         expect(retry).toHaveBeenCalledTimes(1);
         expect(ack).not.toHaveBeenCalled();
         expect(body.requestId).toBe(ID);
@@ -255,14 +253,22 @@ describe("request correlation through queue envelopes (local fixtures)", () => {
           false,
         );
       }
-      const messages = [ID, OTHER_ID, "cookie-secret", undefined].map((requestId) => ({
-        body: { ...body, requestId },
+      const attempts = CALL_INTERNAL_ACTION.tries;
+      const messages = [ID, OTHER_ID, "cookie-secret", undefined].map((requestId, index) => ({
+        body: {
+          ...body,
+          requestId,
+          idempotencyKey: index === 0 ? body.idempotencyKey : crypto.randomUUID(),
+        },
         timestamp,
-        attempts: 5,
+        attempts,
         ack,
         retry,
       }));
-      await consume({ messages }, deps);
+      await consume(
+        { messages },
+        { ...deps, announcementReconciliation: announcementStore(attempts) },
+      );
       const alerts = error.mock.calls
         .map(([line]) => String(line))
         .filter((line) => line.includes('"queue.failing"'))

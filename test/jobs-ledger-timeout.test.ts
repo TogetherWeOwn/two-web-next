@@ -330,14 +330,14 @@ describe("queue ledger timeout guards (released / failed / dequeued)", () => {
           return base.failed(id, kind, key, reason);
         },
       };
-      const ann = (jobId: string) => ({
+      const ann = (jobId: string, idempotencyKey: string) => ({
         kind: "announcement",
-        idempotencyKey: `k-${jobId}`,
+        idempotencyKey,
         action: { channelKey: "c", body: "b" },
         jobId,
       });
-      const m1 = msg(ann("j1"), 1);
-      const m2 = msg(ann("j2"), 1);
+      const m1 = msg(ann("j1", "94e5ec13-81e8-4d24-8841-19489bda1b15"), 1);
+      const m2 = msg(ann("j2", "94e5ec13-81e8-4d24-8841-19489bda1b16"), 1);
       let m1Acks = 0;
       const origAck = m1.ack.bind(m1);
       m1.ack = () => {
