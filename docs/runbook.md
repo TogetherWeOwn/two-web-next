@@ -675,27 +675,18 @@ using controlled provider-side evidence. Do not cancel in-flight DDL casually.
 ### Read back the configured production database identity
 
 [db-production-identity.yml](../.github/workflows/db-production-identity.yml)
-checks the database and login behind the production Environment's
-`PRODUCTION_DATABASE_URL` on protected `main`. Its only SQL read compares
-the database name, session login and effective login in one read-only
-transaction on the pinned direct PlanetScale target, with verified TLS. The
-verdict covers identity only. The migration ledger, grants and readiness
-require separate evidence.
+checks the database and login behind `PRODUCTION_DATABASE_URL` on protected
+`main`, in one read-only transaction on the pinned PlanetScale target with
+verified TLS. The ledger, grants and readiness require separate evidence.
 
-Obtain independent approval for the exact source SHA and expected identity
-before dispatch. Verify that the production Environment is restricted to
-`main` and that an independent approval and exclusive credential custody
-control covers the live run. A branch rule alone does not supply those
-controls. Hold the readback if they are missing. Keep the credential and
-approval pins stable throughout the run.
-
+Before a live readback, verify the production Environment's main-only branch
+rule, independent approval for the exact SHA and identity, and exclusive
+credential custody. Hold the readback when any control is missing.
 Set `PRODUCTION_DB_IDENTITY_SHA256` and `PRODUCTION_DB_IDENTITY_APPROVED_SHA`
-as secrets only on the production Environment. Use the same database and
-login fingerprint format described above and pin the lowercase 40-character
-approved SHA of the dispatch. The preflight checks for broader-scope settings
-without passing their values to the runner. Clear the approval SHA after the
-run or if the readback is abandoned. A refusal or connection failure requires
-custodian investigation before another approved attempt.
+only as production Environment secrets. Use the fingerprint format above
+and the lowercase 40-character dispatch SHA. Keep the credential and pins
+stable during the run and clear the approval SHA when it ends or is abandoned.
+A refusal requires custodian investigation before another approved attempt.
 
 ### Migration rollback and recovery
 
