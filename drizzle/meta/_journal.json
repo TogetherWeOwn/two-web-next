@@ -267,6 +267,13 @@
       "when": 1794854262119,
       "tag": "1037_waitlist-offers",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1795221620929,
+      "tag": "1038_announcement-send-claims",
+      "breakpoints": true
     }
   ]
 }

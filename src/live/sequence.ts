@@ -69,11 +69,11 @@ export class LiveSequence<State, Delta> {
   }
 
   #recover(): Promise<boolean> {
-    this.#recovering = Promise.resolve().then(async () => {
+    const load = Promise.resolve()
+      .then(() => this.load())
+      .catch(() => null);
+    this.#recovering = load.then((snapshot) => {
       try {
-        const snapshot = await Promise.resolve()
-          .then(() => this.load())
-          .catch(() => null);
         // Check against the latest observed gap, not the gap at request time.
         if (!snapshot || !Number.isSafeInteger(snapshot.seq) || snapshot.seq < this.#minimum) {
           return false;

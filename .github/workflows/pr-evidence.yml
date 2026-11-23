@@ -1,0 +1,52 @@
+name: pr-evidence
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, edited]
+  workflow_run:
+    workflows: [ci, e2e, pr-gates, pr-size, "PR standards (required entry point)"]
+    types: [requested, in_progress, completed]
+permissions: {}
+
+jobs:
+  route:
+    if: >-
+      github.event_name == 'pull_request_target' && github.base_ref == 'main' ||
+      contains(fromJSON('["pull_request","pull_request_review"]'), github.event.workflow_run.event)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: { contents: read, pull-requests: read }
+    outputs:
+      numbers: ${{ steps.route.outputs.numbers }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - id: route
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: python3 ci/pr_evidence.py
+
+  publish:
+    needs: route
+    if: needs.route.outputs.numbers != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        number: ${{ fromJSON(needs.route.outputs.numbers) }}
+    concurrency:
+      group: pr-evidence-${{ matrix.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      # The updater executes only the trusted workflow revision, even for fork PRs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - env: { GH_TOKEN: "${{ github.token }}", PR_NUMBER: "${{ matrix.number }}" }
+        run: python3 ci/pr_evidence.py
