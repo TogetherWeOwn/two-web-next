@@ -199,6 +199,7 @@ class Verification(unittest.TestCase):
             "- `npm test` was not run, but CI passed.",
             "- `npm test` was not run. CI passed.",
             "- Will run `npm test` tomorrow. CI passed.",
+            "- Will verify `npm test` later. The design passed review.",
             "- `npm test` will return exit code 0.",
             "- `npm test` returned TBD.",
             "- `<command>` passed.",
@@ -244,6 +245,7 @@ class Verification(unittest.TestCase):
             f"`{self.RUN}`",
             "[CI run][missing]",
             f"[CI][ref]\n\n## Links\n\nCI logs:\n[ref]: {self.RUN}",
+            f"[CI][ref]\n\n## Links\n\n=======\n[ref]: {self.RUN}",
             f"[CI][ref]\n\n[ref]: https://example.org\n[REF]: {self.RUN}",
         ):
             with self.subTest(link=link):
@@ -265,6 +267,16 @@ class Verification(unittest.TestCase):
     def test_wrapped_publisher_permalink_does_not_supply_description(self):
         findings = ps.evaluate(env(BODY=self.WRAPPED_PERMALINK, REPO_PRIVATE="false"))
         self.assertEqual([("error", "PR body")], levels(findings))
+
+    def test_markdown_line_boundaries(self):
+        fake_heading = GOOD_BODY.replace("## Verification\n\n", "text\u2028## Verification\u2028")
+        fenced = GOOD_BODY.replace(self.ITEM, f"```text\n{self.ITEM}\n```").replace("\n", "\r")
+        for body in (fake_heading, fenced):
+            self.assertEqual([("error", "PR template")], levels(ps.evaluate(env(BODY=body))))
+
+    def test_many_spans_after_long_whitespace(self):
+        item = "- Results passed. Ran" + " " * 32_000 + " unverified." + " `status`" * 200
+        self.assertEqual([("error", "PR template")], levels(self.findings(item)))
 
 
 class CardAndInternalRefs(unittest.TestCase):

@@ -57,15 +57,16 @@ REQUIRED_SECTIONS = [
 COMMENT = re.compile(r"<!--.*?-->", re.S)
 VERIFICATION_BULLET = re.compile(r"^ *(?:[-+*]|[0-9]{1,9}[.)])(?: +|$)")
 QUOTE_PREFIX = re.compile(r"^(?: {0,3}> ?)+")
-BLOCK_BREAK = re.compile(r"^ {0,3}(?:#{1,6}(?: +|$)|(?:=+ *|(?:- *){3,}|(?:\* *){3,}|(?:_ *){3,})$)")
+BLOCK_BREAK = re.compile(r"^ {0,3}(?:#{1,6}(?: +|$)|(?:(?:- *){3,}|(?:\* *){3,}|(?:_ *){3,})$)")
+SETEXT_UNDERLINE = re.compile(r"^ {0,3}=+[ \t]*$")
 FENCED_BLOCK = re.compile(r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ `~\t]*$|\Z)", re.M | re.S)
 INLINE_CODE = re.compile(r"(?<![\\`])(`+)(?!`).+?(?<!`)\1(?!`)", re.S)
 COMMAND = re.compile(r"(?:[A-Za-z_][\w.-]*(?:/[^\s]+)?|(?:\.{1,2}/|/)[^\s]+)")
 RESULT_WORDS = {"pass", "passes", "passed", "fail", "fails", "failed", "success", "failure", "pending", "ok"}
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 COMMAND_PLACEHOLDER = re.compile(r"^(?:\$\s+)?(?:cmd|command|test command|example|todo|tbd)\b|<\w[\w -]*>|(?:^|\s)\.{3}(?:$|\s)", re.I)
-COMMAND_INTRO = re.compile(r"\b(?:ran|running|executed|using|with|via|under|by|command)\s*:?\s*$", re.I)
-UNRUN_BEFORE = re.compile(r"\b(?:not|never|will|should|would|expected to)\s+(?:run|execute)[\s(]*$", re.I)
+COMMAND_INTRO = re.compile(r"\b(?:ran|running|executed|using|with|via|under|by|command)\s*(?::\s*)?$", re.I)
+UNRUN_BEFORE = re.compile(r"\b(?:not|never|will|should|would|expected to)\s+(?:run|execute|verify|test)[\s(]*$", re.I)
 UNRUN_AFTER = re.compile(r"^[\s):–—-]*(?:(?:was|is|has been)\s+)?(?:not(?: yet)?|never)\s+(?:run|executed)\b", re.I)
 RESULT = re.compile(
     r"\b(?:passes|passed|fails|failed|succeeded|reproduced|matched|confirmed|found|"
@@ -160,8 +161,8 @@ def parse_sections(body):
             content = sections[current] + "\n\n" + content
         sections[current] = content.strip("\n") if current == "verification" else content.strip()
 
-    for line in strip_comments(body).splitlines():
-        m = re.match(r"^##\s+(.+?)\s*#*\s*$", line)
+    for line in strip_comments(body).split("\n"):
+        m = re.match(r"^##[ \t]+(.+?)\s*#*\s*$", line)
         if m:
             if current is not None:
                 record()
@@ -224,14 +225,20 @@ def has_verification_evidence(item, references):
     result = RESULT_PLACEHOLDER.sub(" ", "".join(result_parts))
     if not RESULT.search(result):
         return False
-    for span in INLINE_CODE.finditer(item):
-        prefix = re.sub(r"^\[[ xX]\]", "", item[:span.start()].strip()).strip(" *_\t\n")
-        suffix = item[span.end():]
+    spans = list(INLINE_CODE.finditer(item))
+    first_text = previous_end = re.match(r"[\s*_]*(?:\[[ xX]\][\s*_]*)?", item).end()
+    first_result = RESULT.search(item)
+    for index, span in enumerate(spans):
+        # Each prose gap is scanned at most twice, even with many inline spans.
+        prefix = item[previous_end:span.start()].strip(" *_\t\n")
+        following = spans[index + 1] if index + 1 < len(spans) else None
+        suffix = item[span.end():following.start()] + " CODE " if following else item[span.end():]
+        previous_end = span.end()
         if UNRUN_BEFORE.search(prefix) or UNRUN_AFTER.match(suffix):
             continue
         parenthesized = prefix.endswith("(") and suffix.lstrip().startswith(")") and RESULT.search(suffix)
-        explicit = not prefix or prefix.endswith(":") or COMMAND_INTRO.search(prefix) or parenthesized
-        if not explicit and RESULT.search(prefix):
+        explicit = span.start() == first_text or prefix.endswith(":") or COMMAND_INTRO.search(prefix) or parenthesized
+        if not explicit and first_result and first_result.end() <= span.start():
             continue
         width = len(span[1])
         if is_command(span[0][width:-width], explicit):
@@ -242,7 +249,7 @@ def has_verification_evidence(item, references):
 def verification_items(content):
     """Keep wrapped text and indented paragraphs with their own list item."""
     lines, indent = [], None
-    for raw in content.expandtabs(4).splitlines():
+    for raw in content.expandtabs(4).split("\n"):
         line = QUOTE_PREFIX.sub("", raw)
         structural = BLOCK_BREAK.match(line)
         bullet = None if structural else VERIFICATION_BULLET.match(line)
@@ -262,12 +269,12 @@ def verification_items(content):
 def verification_markup(body):
     references, lines = {}, []
     at_block_start = True
-    for line in FENCED_BLOCK.sub("\n\n", body.replace("\r\n", "\n")).splitlines():
+    for line in FENCED_BLOCK.sub("\n\n", body).split("\n"):
         definition = LINK_DEFINITION.fullmatch(line) if at_block_start else None
         if definition:
             references.setdefault(reference_label(definition[1]), definition[2])
             line = ""
-        at_block_start = not line.strip() or BLOCK_BREAK.match(line)
+        at_block_start = not line.strip() or BLOCK_BREAK.match(line) or (not at_block_start and SETEXT_UNDERLINE.match(line))
         lines.append(line)
     return parse_sections("\n".join(lines)).get("verification"), references
 
@@ -341,7 +348,7 @@ def check_pull_request(env):
     if errs:
         out.append(Finding("error", "PR title", f"'{title}': {'; '.join(errs)}. {HELP}"))
 
-    plain = description_text(body)
+    plain = description_text(body.replace("\r\n", "\n").replace("\r", "\n"))
     if len(re.sub(r"\s", "", plain)) < 40:
         out.append(Finding("error", "PR body", "The description is empty. Fill in the PR template: the linked card or issue and "
                            "how it was verified."))
