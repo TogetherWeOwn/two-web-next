@@ -7,6 +7,105 @@
 
 The bot sends signed, normalized state changes to one Cloudflare Durable Object per configured guild and environment. The hub maintains current state, not an event log. It projects state for each viewer before sending it over same-origin WebSockets using the Hibernation API. Svelte stores start from server-rendered data and update without a page reload. Target: bot forwarding within about 100 ms and Discord-to-screen p95 below one second for eligible changes. Ship default-off, qualify on staging first, and do not add another source of authentication or mutation authority.
 
+## Public voice count compatibility
+
+Use `/api/discord-live/v1` for the default-off Kit public voice count slice.
+The path selects this contract. The separate `/api/realtime/v1/ws` design below
+defines the broader topic and stream protocol, including member detail. A client
+binds to one path and its wire format. Moving this slice to the broader endpoint
+requires a separately qualified migration. The signing and private projection
+requirements below continue to govern the broader design.
+
+- Connect with a same-origin WebSocket upgrade and no query or subprotocol. The
+  server checks `Origin` and selects the configured guild and session. A
+  presented invalid session fails admission. Use the same public count for
+  guests and session-bearing viewers. The public slice exposes only `voice`.
+  The installed hub recognizes `channels`, `members` and `events` commands and
+  returns unavailable controls for them. Keep them out of the public adapter.
+- Subscribe once with `{v:1,type:"subscribe",topics:["voice"]}`. Resync that
+  subscription with `{v:1,type:"resync",topics:["voice"]}`. Commands are closed
+  JSON text objects capped at 512 UTF-8 bytes. Serialize commands and respect the
+  server's two-second per-socket cooldown, armed when it accepts subscribe or
+  resync. Commands that overlap, arrive before the cooldown ends or resync
+  outside the original subscription can close the socket with `1008`. Wait for
+  command completion and pace recovery conservatively. An unavailable control
+  can precede a snapshot from the same command, so it alone does not establish
+  completion. The server's separate per-guild pull budget can defer recovery.
+- A baseline or full replacement is exactly
+  `{v:1,type:"snapshot"|"patch",topic:"voice",seq,value:{count}}`. `count` is
+  a safe integer of at least five for eligible humans in explicitly allowlisted
+  public rooms, or `null` for suppression below five. `seq` is a positive
+  socket-local voice revision (currently capped at 1,024). The first snapshot on
+  a new socket starts at one. Apply only the next patch to a known baseline.
+  Ignore duplicates and older revisions. On a forward gap, stop using the live
+  value and require a same-socket snapshot covering the observed gap before
+  applying patches again. Discard revision state when retiring the socket.
+- `{v:1,type:"unavailable",topic:"voice"}` withdraws the live value and has
+  no cursor or value. Keep the subscription, retaining its revision watermark
+  and any observed gap, and accept a covering higher-revision snapshot on that
+  socket, including one arriving immediately after withdrawal. Start fallback
+  while the value is unavailable. A close ends the subscription. Reconnect with
+  backoff and jitter, and establish a new baseline after fresh admission. The
+  broader protocol's `reset` and fresh stream at sequence zero apply on its own
+  endpoint.
+- Once the hub changes below are qualified, an unchanged live count may return
+  a same-revision snapshot in response to an outstanding explicit resync on the
+  current socket. Accept it only when it matches the last accepted value, the
+  baseline has not been withdrawn, and no higher revision needs coverage. The
+  server must perform a fresh covering pull and reauthorize before sending it.
+  An unsolicited duplicate, an old socket response, or an equal revision after
+  withdrawal or across a gap cannot establish a baseline.
+- Source freshness and socket expiry are server-authoritative. This wire sends
+  neither heartbeats nor deadlines to the browser. An open socket can be quiet
+  through a source lease withdrawal and subsequent recovery. Act on controls and
+  close events, and allow bounded waits for connection or recovery attempts.
+  Do not expire an established baseline just because it has been quiet for 30
+  seconds. The hub enforces source expiry separately from the five-minute socket
+  cap and the earlier, shorten-only session deadline. Session expiry or
+  revocation can close with `1008`. The hub can also close a session-bearing
+  socket on source loss instead of sending a withdrawal.
+- An independently authorized and projected same-origin read, where available,
+  is the 10-second fallback. Validate its origin, audience and closed public
+  count before publishing. Label fallback data as potentially old and retain the
+  distinction between suppression and unavailable. Never use a raw bot
+  snapshot, widget presence or a member-detail response for this count. A
+  baseline stops polling. Withdrawal, baseline installation, socket retirement,
+  view or session replacement, and teardown invalidate pending poll results.
+  This decision adds no polling URL or route wiring.
+
+### Public count conformance
+
+Share the synthetic wire cases between the installed Worker fixture, the browser
+adapter tests and the Chromium fixture. Exercise closed frame and count shapes
+(including four/five/four and restricted-room silence), initial snapshot and
+duplicates, gap and cooldown with behind and covering baselines, and equal
+revisions only in the resync case above. Check same-socket recovery immediately
+after withdrawal and after hibernation, separately from policy Close and fresh
+admission. Check quiet socket behavior past 30 seconds through actual server
+events. Deliver late frame, close, retry and poll callbacks after replacement.
+Exercise the 10-second fallback, origin and projection rejection, and teardown.
+
+The [installed #2617 job](https://github.com/TogetherWeOwn/two-web-next/actions/runs/45143824702/job/137588087672)
+at `f0c2fc4c6be4a26dfe36afc367820c3dd51a64f1` demonstrates the landed
+[#2616](https://github.com/TogetherWeOwn/two-web-next/pull/2616) and
+[#2617](https://github.com/TogetherWeOwn/two-web-next/pull/2617) slice, including
+warm same-socket recovery, public scope and default-off parity. It predates the
+compatibility qualification below. Historical draft runs are diagnostic evidence.
+
+Before implementing the adapter or integrating it into a route, land the
+fixture qualification in #2618 and the behavior in #2628–#2631, or reviewed
+equivalents. Pin the accepted hub SHA and its passing ready-head installed
+Worker job. That job must prove restored room access, cold same-socket wake and
+staggered idle `1008` closes, rejection of stale covering observations without
+lease extension from deltas (#2628), and no withdrawal or lease activation on a
+producer-only cold wake before the original deadline (#2629). Also require a
+fresh covering pull for resync, same-revision proof for an unchanged live value,
+and no extension of another socket's lease (#2630), plus a fresh session and
+attachment check at the send boundary and voice delivery during unrelated-topic
+resync (#2631). Record the hub SHA and job with the unwired adapter evidence,
+including the Workers typecheck. Route integration also requires the Chromium
+cases against that same contract. Keep activation under the separate release gate.
+
 ## Bot → hub: allowlist and wire shapes
 
 All messages are UTF-8 JSON. `Id` means a nonzero Discord snowflake encoded as a decimal string, never a JSON number. Times are UTC RFC 3339 strings. Each entry is `{op, data}`, with the exact `op` and `data` fields named below. A `put` replaces the entire keyed record, including explicit `null`s and empty lists; a `remove` contains only its key. The bot hydrates partial gateway dispatches from its coherent cache. Exclude bot and AFK sessions from browser output, but preserve internal dependency updates so a membership, role or AFK-channel change can recompute the projection without a fresh voice dispatch. If it cannot prove the complete record, it stops that guild's live feed and rebuilds; it does not substitute empty data. Envelopes and records are closed schemas. Unsupported dispatches never consume a sequence number.
@@ -39,7 +138,7 @@ Permission bitsets (`allow`, `deny`, `permissions`) are unsigned decimal strings
 - Heartbeats every 10 s report readiness and last acknowledged producer watermark; they do not advance it. Unready, a heartbeat ahead of the hub, an epoch mismatch, or 30 s without a valid ready heartbeat ends live status and initiates recovery. Serialize heartbeats with ingest so a heartbeat cannot overtake a delta. Prefer fresh baselines over persisted state after eviction. Keep no history; retain only bounded current state and protocol metadata.
 - Stop reading at 1 MiB on ingest and 1 KiB on resync, regardless of `Content-Length`. After verification enforce the narrower ingress limits: 64 KiB and at most 128 operations for deltas, 1 KiB for heartbeats. Reject malformed bodies (`400`), unauthorized requests (`401`), oversized bodies (`413`) and rate limits (`429`) before mutation. Do not truncate snapshots to fit; oversized guilds stay on the safe fallback until they can be supported within explicit limits.
 
-## Browser topics and cursor
+## Browser topics and cursor for `/api/realtime/v1/ws`
 
 Clients connect to `/api/realtime/v1/ws`. Require exact same-origin `Origin`; reject missing or foreign origins. Resolve the existing site session server-side. Requests without a session cookie may subscribe only as guests; reject a presented session that cannot be verified. The server chooses the configured guild and principal, never query/body inputs. Client messages are `{v:1, type:"subscribe", topics:[...]}` (a nonempty set of unique names from the table) and `{v:1, type:"resync", topic}`. Reject unknown inputs and bound socket counts, frame size, rates and pending sends. A slow client reconnects with backoff and jitter; it does not grow a replay queue.
 
