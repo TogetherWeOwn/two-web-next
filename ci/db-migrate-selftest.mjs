@@ -55,6 +55,15 @@ const productionEnv = {
 const identityHash = (database, role) =>
   createHash("sha256").update(database).update(Buffer.of(0)).update(role).digest("hex");
 
+test("permissions repair rejects an unpinned plan before opening a client", async () => {
+  await assert.rejects(
+    runRepair("forward", { PRODUCTION_DB_REPAIR_PLAN: "{}" }, () => {
+      assert.fail("unexpected connection");
+    }),
+    /raw && raw.length/,
+  );
+});
+
 test("permissions repair pins the catalog, preserves the ledger and reverses the exact changes", async () => {
   await fixture(async ({ client, url }) => {
     const inventory = JSON.parse(
