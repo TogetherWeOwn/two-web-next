@@ -110,7 +110,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
           for each row execute function public.repair_audit();
       `)
         .simple();
-      const ledger = journal.slice(0, 34).map(({ tag, when }) => ({
+      const ledger = journal.entries.slice(0, 34).map(({ tag, when }) => ({
         created_at: when,
         hash: createHash("sha256")
           .update(readFileSync(join(source, `${tag}.sql`)))
