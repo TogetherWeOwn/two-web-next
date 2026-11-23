@@ -171,21 +171,24 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
         identity: identityHash(url.pathname.slice(1), "repair_legacy"),
         owners,
       };
-      const run = (direction, overrides = {}) => {
+      const run = (direction, overrides = {}, planDigest) => {
         const raw = JSON.stringify({ ...plan, ...overrides });
         return runRepair(
           direction,
           {
             PRODUCTION_DB_REPAIR_PLAN: raw,
-            PRODUCTION_DB_REPAIR_PLAN_SHA256: createHash("sha256").update(raw).digest("hex"),
+            PRODUCTION_DB_REPAIR_PLAN_SHA256:
+              planDigest ?? createHash("sha256").update(raw).digest("hex"),
             PRODUCTION_DB_REPAIR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture-password@${PLANETSCALE_PRODUCTION_HOST}:5432/postgres?sslmode=verify-full`,
           },
           (config) => {
+            assert.equal(planDigest, undefined, "unexpected connection");
             config.url.pathname = url.pathname;
             return { begin: executor.begin, end: async () => {} };
           },
         );
       };
+      await assert.rejects(run("forward", {}, "0".repeat(64)), /raw && raw.length/);
       await assert.rejects(run("forward", { after: "0".repeat(64) }));
       assert.equal(await run("readback"), "before");
       assert.equal(await run("forward"), "committed");
