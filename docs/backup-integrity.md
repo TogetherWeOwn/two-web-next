@@ -65,9 +65,9 @@ HMAC-SHA-256 frames the manifest, ordered typed fields and count. Integers use d
 Success publishes `archive.dump`, the existing `archive.digest.json` format, and private
 `baseline.json` together. The receipt seals the expected plan, archive key, size and digest, private
 counts and HMACs, an opaque snapshot reference and its UTC observation time. A qualified, fenced
-restore executor uses `load_plan` and `compare` to verify the bundle and return `MATCH`, `MISMATCH`
-or `REFUSED` for this projection. Publish verdicts only. Keep inputs, bundle and any scratch left
-by a hard kill in approved custody. Existing workflows use the byte-only path. Before live use,
+restore executor uses `load_plan` and `compare` for `MATCH`, `MISMATCH` or `REFUSED`. Full counts,
+schema, ACLs and sequence state need separate checks. Publish verdicts only. Keep inputs and scratch in
+approved custody. On interruption, reconcile the output and scratch even without a verdict. Before live use,
 qualify the direct TLS target and role, full read coverage, indexed plans, approval controls,
 private process and database diagnostics, and archive retention and disposition.
 

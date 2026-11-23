@@ -21,6 +21,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 connection_env = runpy.run_path(str(HERE / "connection-helper"))["connection_env"]
 archive_receipt = runpy.run_path(str(HERE / "integrity-helper"))["expected_receipt"]
+admit_manifest = runpy.run_path(str(HERE / "manifest-helper"))["admit"]
 BEGIN = ("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL search_path = pg_catalog; "
          "SET LOCAL row_security = off;\n")
 PSQL = ["psql", "-XqwAt", "-v", "ON_ERROR_STOP=1"]
@@ -72,7 +73,9 @@ def load_plan(path, key_path):
     require(isinstance(plan, dict))
     require(set(plan) == {"source", "host", "port", "database", "role", "databaseOid", "archiveKey", "ranges"})
     require(re.fullmatch(r"[A-Za-z0-9_-]{1,128}", plan["source"]))
-    require(re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_-]+-\d{8}T\d{6}Z\.dump", plan["archiveKey"]))
+    daily = re.fullmatch(r"(.+)-[0-9]{8}T[0-9]{6}Z\.dump", plan["archiveKey"])
+    require(daily)
+    admit_manifest(daily[1], [plan["archiveKey"]])
     require(type(plan["databaseOid"]) is int and 0 < plan["databaseOid"] < 2**32)
     require(isinstance(plan["ranges"], dict) and set(plan["ranges"]) == set(FIELDS))
     for bounds in plan["ranges"].values():
@@ -94,7 +97,7 @@ def source_env(plan, url):
         require(re.fullmatch(r"two_web_backup_proof_[0-9a-f]{32}_snapshot", plan["database"]))
     else:
         require(settings.get("PGSSLMODE") == "verify-full")
-        settings["PGSSLROOTCERT"] = "system"
+        settings.update(PGSSLROOTCERT="system", PGSSLCERTMODE="disable")
     return {"PATH": os.environ.get("PATH", os.defpath), **settings, "PGGSSENCMODE": "disable",
             "PGCONNECT_TIMEOUT": "5", "PGCLIENTENCODING": "UTF8"}
 
@@ -169,7 +172,7 @@ def baseline(plan, key, output):
 
 
 def transaction_env(env):
-    return {**env, "PGOPTIONS": "-c statement_timeout=2000 -c lock_timeout=250 "
+    return {**env, "PGCLIENTENCODING": "UTF8", "PGOPTIONS": "-c statement_timeout=2000 -c lock_timeout=250 "
             f"-c idle_in_transaction_session_timeout={(DUMP_TIMEOUT + 20) * 1000}"}
 
 
@@ -244,7 +247,7 @@ def compare(plan, key, archive, receipt_path, target_env):
                                 input=(BEGIN + baseline_sql(plan) + "COMMIT;\n").encode(),
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10, check=True)
         same = hmac.compare_digest(packed(receipt["baseline"]), packed(baseline(plan, key, result.stdout)))
-    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, subprocess.SubprocessError):
         return "REFUSED"
     return "MATCH" if same else "MISMATCH"
 
@@ -252,11 +255,12 @@ def compare(plan, key, archive, receipt_path, target_env):
 def main():
     os.umask(0o077)
     signal.signal(signal.SIGTERM, signal.default_int_handler)
+    signal.signal(signal.SIGHUP, signal.default_int_handler)
     try:
         expected, key_file, output = map(Path, sys.argv[1:])
         plan, key = load_plan(expected, key_file)
         capture(plan, key, os.environ.get("DATABASE_URL", ""), output)
-    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError, KeyboardInterrupt):
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, subprocess.SubprocessError, KeyboardInterrupt):
         print("snapshot capture: REFUSED", file=sys.stderr)
         return 1
     print("snapshot capture: PASS")

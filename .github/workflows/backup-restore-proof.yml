@@ -242,7 +242,7 @@ jobs:
           grep -q "^PASS round-trip: tables=4 rows=10 inventory/counts/contents equal$" backup-restore-proof.log
           grep -q "^synthetic restore proof: PASS (no live archives or remote R2)$" backup-restore-proof.log
       - name: Snapshot-bound backup comparison (verdict only)
-        run: python3 ci/backup-restore-proof/snapshot-selftest.py
+        run: python3 ci/backup-restore-proof/run.py --host postgres --snapshot
       - name: Negative control (refused host must fail closed)
         run: |
           set -euo pipefail

@@ -11,4 +11,4 @@ CREATE TABLE public.rsvps (
 INSERT INTO public.events VALUES
   (5, '2026-01-01 00:00:00.000001+00', '2026-01-01 02:00+00', 'published', true, NULL, 9007199254740993, 0);
 INSERT INTO public.rsvps VALUES
-  (9, 5, 'synthetic-private-member', 'going', '2026-01-01 00:00+00', NULL, NULL);
+  (9, 5, 'synthetic-private-mémber', 'going', '2026-01-01 00:00+00', NULL, NULL);
