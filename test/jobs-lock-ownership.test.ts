@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SYNC_EVENT } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
+import { pgEventStore } from "../src/jobs/events";
 import { trackingQueue } from "../src/jobs/ledger";
 import { pgUniqueLock } from "../src/jobs/postgres";
 import { dispatchSyncEvent, uniqueKey } from "../src/jobs/sync-event";
@@ -100,8 +101,15 @@ function ledger(): QueueLedger {
     failed: vi.fn(async () => {}),
   };
 }
-function carrier(body: SyncMessage, attempts = 1) {
+function carrier(body: QueueMessage, attempts = 1) {
   return { body, attempts, ack: vi.fn(), retry: vi.fn() };
+}
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 function memoryLock() {
   const rows = new Map<string, { token: string; expiresAt: number }>();
@@ -213,6 +221,125 @@ describe("queue carrier lease ownership", () => {
       expect(current.ack).toHaveBeenCalledOnce();
       expect(rows.has(key)).toBe(false);
       expect(await p.dispatch()).toBe(true);
+    },
+  );
+
+  it.each(["claim-only", "claim and send"] as const)(
+    "distinguishes new claims from admitted sends with a %s cutoff",
+    async (cutoff) => {
+      const fixture = memoryEvents();
+      const fresh = carrier({ kind: "sync-event", eventKey: "fresh", idempotencyKey: "fresh" });
+      const due = carrier({ kind: "sync-event", eventKey: "due", idempotencyKey: "due" });
+      const now = new Date();
+      const prepared = await fixture.prepareSync("due", "due", now);
+      if (!prepared || "waiting" in prepared) throw new Error("Missing due fixture snapshot");
+      const released = await fixture.claimSync(prepared, now);
+      if (!released) throw new Error("Missing due fixture claim");
+      await fixture.deferSync(released, now);
+
+      // This models a receiver cutoff at the final effect boundary. The Web
+      // queue's existing claim and transport seams have no such policy today.
+      let closed = false;
+      const events: EventStore = {
+        ...fixture,
+        claimSync: (attempt, at) =>
+          closed ? Promise.resolve(null) : fixture.claimSync(attempt, at),
+      };
+      const beforeSend = deferred();
+      const resumeBeforeSend = deferred();
+      const atSend = deferred();
+      const finishSend = deferred();
+      const effects: string[] = [];
+      const bot: BotClient = {
+        async upsertEvent({ eventKey }) {
+          if (eventKey === "paused") {
+            beforeSend.resolve();
+            await resumeBeforeSend.promise;
+          }
+          if (closed && cutoff === "claim and send") {
+            throw new BotTransportError("fixture event send denied");
+          }
+          effects.push(eventKey);
+          if (eventKey === "admitted") {
+            atSend.resolve();
+            await finishSend.promise;
+          }
+          return success;
+        },
+        async cancelEvent() {
+          throw new Error("Unexpected cancellation in upsert fixture");
+        },
+        async postAnnouncement() {
+          effects.push("announcement");
+          return { ok: true, requestId: null, messageId: "fixture-message", replayed: false };
+        },
+        async assignRole() {
+          effects.push("role");
+          return { ok: true, requestId: null, outcome: "assigned" };
+        },
+      };
+      const deps = { bot, events, lock: memoryLock().lock, ledger: ledger() };
+      const paused = carrier({ kind: "sync-event", eventKey: "paused", idempotencyKey: "paused" });
+      const admitted = carrier({
+        kind: "sync-event",
+        eventKey: "admitted",
+        idempotencyKey: "admitted",
+      });
+      const announcement = carrier({
+        kind: "announcement",
+        idempotencyKey: "announcement",
+        action: { channelKey: "fixture", body: "Fixture announcement" },
+      });
+      const role = carrier({
+        kind: "role-assign",
+        idempotencyKey: null,
+        action: { userId: "123", roleKey: "fixture" },
+      });
+      const pausedRun = consume({ messages: [paused] }, deps);
+      const admittedRun = consume({ messages: [admitted] }, deps);
+      try {
+        // If a run exits without reaching its barrier, fail at the assertion
+        // rather than waiting for the test timeout.
+        await Promise.all([
+          Promise.race([beforeSend.promise, pausedRun]),
+          Promise.race([atSend.promise, admittedRun]),
+        ]);
+        expect(await fixture.pendingSync("paused")).toMatchObject({
+          requestAttempts: 1,
+          nextAttemptAt: null,
+        });
+        expect(effects).toEqual(["admitted"]);
+        expect(admitted.ack).not.toHaveBeenCalled();
+
+        closed = true;
+        await consume({ messages: [fresh, due, announcement, role] }, deps);
+        expect(await fixture.pendingSync("fresh")).toMatchObject({ requestAttempts: 0 });
+        expect(await fixture.pendingSync("due")).toMatchObject({
+          requestAttempts: 1,
+          nextAttemptAt: now,
+        });
+        expect(fresh.retry).toHaveBeenCalledOnce();
+        expect(due.retry).toHaveBeenCalledOnce();
+        expect(announcement.ack).toHaveBeenCalledOnce();
+        expect(role.ack).toHaveBeenCalledOnce();
+        expect(effects).toEqual(["admitted", "announcement", "role"]);
+
+        resumeBeforeSend.resolve();
+        await pausedRun;
+        expect(effects).toEqual(
+          cutoff === "claim-only"
+            ? ["admitted", "announcement", "role", "paused"]
+            : ["admitted", "announcement", "role"],
+        );
+        expect(admitted.ack).not.toHaveBeenCalled();
+        finishSend.resolve();
+        await admittedRun;
+        expect(admitted.ack).toHaveBeenCalledOnce();
+      } finally {
+        resumeBeforeSend.resolve();
+        finishSend.resolve();
+        await Promise.allSettled([pausedRun, admittedRun]);
+      }
     },
   );
 
@@ -429,6 +556,42 @@ describe.skipIf(!process.env.DATABASE_URL)("Postgres atomic lease ownership", ()
   });
   afterAll(async () => {
     await fixture?.dispose();
+  });
+
+  it("rejects duplicate event claims and stale defers across the due-time cutoff", async () => {
+    const sql = fixture!.client;
+    const events = pgEventStore(sql);
+    const eventKey = "claim-cutoff";
+    const idempotencyKey = crypto.randomUUID();
+    const start = new Date("2099-01-01T00:00:00Z");
+    await sql`insert into events (event_key, title, starts_at, ends_at, status)
+      values (${eventKey}, 'Claim fixture', '2099-02-01T00:00:00Z', '2099-02-01T02:00:00Z', 'published')`;
+    const snapshot = await events.prepareSync(eventKey, idempotencyKey, start);
+    if (!snapshot || "waiting" in snapshot) throw new Error("Missing fixture snapshot");
+    const first = await events.claimSync(snapshot, start);
+    if (!first) throw new Error("Missing first fixture claim");
+    expect(first).toMatchObject({ state: "pending", requestAttempts: 1, nextAttemptAt: null });
+    expect(await events.claimSync(snapshot, start)).toBeNull();
+
+    const due = new Date(start.getTime() + 1000);
+    await events.deferSync(first, due);
+    expect(await events.claimSync(first, new Date(due.getTime() - 1))).toBeNull();
+    const contenders = await Promise.all([
+      events.claimSync(first, due),
+      events.claimSync(first, due),
+    ]);
+    expect(contenders.filter((claim) => claim === null)).toHaveLength(1);
+    expect(contenders.filter((claim) => claim !== null)).toEqual([
+      expect.objectContaining({ state: "pending", requestAttempts: 2, nextAttemptAt: null }),
+    ]);
+
+    await events.deferSync(first, due);
+    expect(await events.pendingSync(eventKey)).toMatchObject({
+      idempotencyKey,
+      requestAttempts: 2,
+      nextAttemptAt: null,
+    });
+    expect(await events.claimSync(snapshot, due)).toBeNull();
   });
 
   it("one concurrent winner owns the row; unknown/rejected contenders cannot release it", async () => {
