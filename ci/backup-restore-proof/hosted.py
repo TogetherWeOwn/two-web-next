@@ -61,8 +61,7 @@ class Job:
                 for id_ in docker(kind, "ls", flags, "--filter", f"label={self.label}").stdout.split()]
 
     def clean(self):
-        resources = self.resources()
-        for kind, id_ in resources:
+        for kind, id_ in self.resources():
             docker(kind, "rm", *(["-f", "-v"] if kind == "container" else []), id_)
         if self.scratch.exists():
             shutil.rmtree(self.scratch)
