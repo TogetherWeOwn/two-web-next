@@ -16,6 +16,7 @@ const prosePatterns = [
   new RegExp(`${job}${softSpace}job${softSpace}in${softSpace}${workflow}`, "g"),
   new RegExp(`${workflow}, job ${job}`, "g"),
   new RegExp(`\\(${workflow} ${job} job\\)`, "g"),
+  new RegExp(`${job} job \\(${workflow}\\)`, "g"),
   new RegExp(`(?<![\\w\x60-])(?<job>[A-Za-z_]\\w*(?:-\\w+)+) job \\(${workflow}\\)`, "g"),
   new RegExp(`^\\| *${job} job *\\|[^|\\n]*\\| *${workflow}(?=[ ,|])`, "gm"),
 ];
@@ -27,17 +28,22 @@ const inlineLink =
 
 function visibleMarkdown(text) {
   const tokens = [
-    ...text.matchAll(/^[ \t]*(?:(`{3,})[^`\n]*|(~{3,})[^\n]*)$|<!--|--!?>|`+|\n[ \t]*\n/gm),
+    ...text.matchAll(
+      /^[ \t]*(?:(`{3,})[^`\n]*|(~{3,})[^\n]*)$|(^[ \t]*<!--)|<!--|--!?>|`+|\n[ \t]*\n/gm,
+    ),
   ];
   const closingTicks = new Map();
   const ends = [];
-  let commentEnd = text.length;
+  let blockEnd = text.length;
+  let inlineEnd = text.length;
   // Match equal backtick runs within a block before walking the delimiters.
   for (let index = tokens.length - 1; index >= 0; index--) {
-    const [token, ticks, tildes] = tokens[index];
-    if (token.startsWith("--")) commentEnd = tokens[index].index + token.length;
-    else if (token === "<!--") ends[index] = commentEnd;
-    else if (ticks || tildes || token.startsWith("\n")) closingTicks.clear();
+    const [token, ticks, tildes, block] = tokens[index];
+    if (token.startsWith("--")) {
+      inlineEnd = tokens[index].index + token.length;
+      if (token === "-->") blockEnd = inlineEnd;
+    } else if (ticks || tildes || token.startsWith("\n")) closingTicks.clear();
+    else if (token.endsWith("<!--")) ends[index] = block === undefined ? inlineEnd : blockEnd;
     else {
       ends[index] = closingTicks.get(token.length);
       closingTicks.set(token.length, tokens[index].index + token.length);
@@ -133,19 +139,9 @@ function checkWorkflowJobCitations(baseline) {
   const readBlob = (revision, path) => git("show", "--no-textconv", `${revision}:${path}`);
   try {
     const base = git("rev-parse", "--verify", "--end-of-options", `${baseline}^{commit}`).trim();
-    const diff = git(
-      "diff",
-      "--name-status",
-      "-z",
-      "--no-ext-diff",
-      "--no-textconv",
-      "--find-renames",
-      "--diff-filter=AMRT",
-      base,
-      "HEAD",
-      "--",
-      ":(icase,glob)**/*.md",
-    );
+    const markdown = ":(icase,glob)**/*.md";
+    const statusFlags = ["--name-status", "-z", "--no-ext-diff", "--no-textconv", "--find-renames"];
+    const diff = git("diff", ...statusFlags, "--diff-filter=AMRT", base, "HEAD", "--", markdown);
     const fields = diff.slice(0, -1).split("\0").filter(Boolean);
     const workflowsAt = (revision) =>
       new Set(git("ls-tree", "--name-only", "-z", revision, "--", workflowDir).split("\0"));
@@ -179,9 +175,8 @@ function checkWorkflowJobCitations(baseline) {
           namesByWorkflow.set(target, jobNames(readBlob("HEAD", target), target));
         }
         if (namesByWorkflow.get(target)?.has(citation.job)) continue;
-        console.error(
-          `${JSON.stringify(path)}:${citation.line}: missing job ${JSON.stringify(citation.job)} in ${target}`,
-        );
+        const location = `${JSON.stringify(path)}:${citation.line}`;
+        console.error(`${location}: missing job ${JSON.stringify(citation.job)} in ${target}`);
         broken += 1;
       }
     }

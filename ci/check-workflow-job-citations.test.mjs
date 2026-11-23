@@ -78,25 +78,25 @@ test("fails changed and added citations against the cited workflow's jobs mappin
       "`deploy-staging` job in `.github/workflows/e2e.yml`.",
       "`step-only` job in `e2e.yml`.",
       `[\`Deploy stage\` job](${actions}/deploy.yml)`,
-      "<!--\n```\n--!>",
+      "<!--\n```\n--!>\n`example-smoke` job in `e2e.yml`\n-->",
       "~~~md\n<!--\n~~~",
       "`wrapped-smoke` job in",
       "  `.github/workflows/e2e.yml`.",
       "[`anchored-smoke` job](../.github/workflows/e2e.yml#L9 (Pinned job))",
-      "`linked-smoke` job in [`e2e.yml`](../.github/workflows/e2e.yml)",
+      "`linked-smoke` job ([`e2e.yml`](../.github/workflows/e2e.yml))",
       "`` `example-smoke` job in `.github/workflows/e2e.yml` ``",
     ].join("\n"),
   });
 
   const run = repo.run();
   assert.equal(run.status, 1, run.stderr);
-  assert.match(run.stdout, /checked: 6, broken: 6/);
+  assert.match(run.stdout, /checked: 6, broken: 6/, run.stderr);
   assert.ok(run.stderr.includes(`"docs/runbook.md":1: missing job "deploy-staging" in ${e2e}`));
   assert.ok(run.stderr.includes(`"docs/runbook.md":2: missing job "step-only" in ${e2e}`));
   assert.ok(run.stderr.includes(`"docs/runbook.md":3: missing job "Deploy stage" in ${deploy}`));
-  assert.ok(run.stderr.includes(`"docs/runbook.md":10: missing job "wrapped-smoke" in ${e2e}`));
-  assert.ok(run.stderr.includes(`"docs/runbook.md":12: missing job "anchored-smoke" in ${e2e}`));
-  assert.ok(run.stderr.includes(`"docs/runbook.md":13: missing job "linked-smoke" in ${e2e}`));
+  assert.ok(run.stderr.includes(`"docs/runbook.md":12: missing job "wrapped-smoke" in ${e2e}`));
+  assert.ok(run.stderr.includes(`"docs/runbook.md":14: missing job "anchored-smoke" in ${e2e}`));
+  assert.ok(run.stderr.includes(`"docs/runbook.md":15: missing job "linked-smoke" in ${e2e}`));
 });
 
 test("leaves unrelated prose, external links, examples and existing citations to review", (t) => {
@@ -165,11 +165,10 @@ test("docs-links requires the fixtures and the citation check on PRs and merge g
     readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
   );
   const docs = jobs["docs-links"];
-  assert.equal(docs["continue-on-error"], undefined);
-  assert.equal(
-    docs.steps[0].with["fetch-depth"],
-    "${{ github.event_name == 'merge_group' && '0' || '2' }}",
-  );
+  assert.deepEqual([docs.if, docs["continue-on-error"]], [undefined, undefined]);
+  assert.ok(jobs["ci-ok"].needs.includes("docs-links"));
+  const depth = "${{ github.event_name == 'merge_group' && '0' || '2' }}";
+  assert.equal(docs.steps[0].with["fetch-depth"], depth);
   const steps = docs.steps.filter((step) => step.run?.includes("check-workflow-job-citations"));
   assert.deepEqual(steps, [
     {
