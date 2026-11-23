@@ -1,0 +1,57 @@
+name: hosted-restore-rehearsal
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - .github/workflows/hosted-restore-rehearsal.yml
+      - ci/backup-restore-proof/**
+      - bin/backup/**
+      - test/fixtures/backup-restore/**
+  workflow_dispatch:
+    inputs:
+      case:
+        description: Synthetic proof or hold for hosted cancellation
+        type: choice
+        options: [proof, cancellation]
+        default: proof
+
+permissions:
+  contents: read
+
+jobs:
+  rehearsal:
+    if: >-
+      github.repository == 'TogetherWeOwn/two-web-next' &&
+      (github.event_name == 'pull_request' ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+        github.ref_protected && github.workflow_sha == github.sha))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Synthetic restore
+        env:
+          REHEARSAL_CASE: ${{ inputs.case || 'proof' }}
+        run: exec python3 -B ci/backup-restore-proof/hosted.py "$REHEARSAL_CASE" 2>/dev/null
+      - name: Verify teardown
+        if: always()
+        run: python3 -B ci/backup-restore-proof/hosted.py audit 2>/dev/null
+      - name: Protected main dispatch receipt
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "protected main synthetic rehearsal PASS"
+
+  refuse-dispatch:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (github.repository != 'TogetherWeOwn/two-web-next' || github.ref != 'refs/heads/main' ||
+       !github.ref_protected || github.workflow_sha != github.sha)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - run: |
+          echo "protected main dispatch REFUSED"
+          exit 1
