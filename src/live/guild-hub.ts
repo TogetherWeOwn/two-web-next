@@ -8,7 +8,6 @@ import { signedLiveSnapshot } from "./transport";
 import { decodeLiveDelta, type LiveDelta, liveId, type LiveState, snapshotTopics } from "./wire";
 
 const WATERMARKS = "live-watermarks-v1";
-const SOURCE_LEASE_MS = 30_000;
 const SOCKET_RECOVERY_INTERVAL_MS = 5_000;
 const PUBLIC_VOICE_PAGE = "public-voice";
 
@@ -86,12 +85,13 @@ export class LiveGuildHub {
     // ingest() clears a gap synchronously, before its signed pull can resolve.
     if (this.#leased && !this.#sequence.current) {
       this.#leased = null;
+      this.#sourceUntil = 0;
       this.#sockets.invalidate();
     }
     const armed = this.#leaseCurrent();
     const outcome = await ingested;
-    await armed;
-    if (outcome === "applied" || outcome === "resynced") await this.#publish();
+    const newlyArmed = await armed;
+    if (newlyArmed || outcome === "applied" || outcome === "resynced") await this.#publish();
     return new Response(null, {
       status: outcome === "unavailable" ? 409 : outcome === "invalid" ? 400 : 204,
     });
@@ -105,12 +105,19 @@ export class LiveGuildHub {
     this.#sockets.invalidate();
   }
 
-  #leaseCurrent(): Promise<void> | undefined {
+  async #leaseCurrent(): Promise<boolean> {
     const current = this.#sequence?.current;
-    if (!this.#publicRooms || !current || current === this.#leased) return;
+    if (!this.#publicRooms || current?.validUntil === undefined || current === this.#leased)
+      return false;
+    const newlyArmed = current.validUntil !== this.#sourceUntil;
+    if (newlyArmed) {
+      await this.#sockets.scheduleExpiry(current.validUntil);
+      // The source may expire or be replaced while storage is pending.
+      if (current !== this.#sequence?.current || current === this.#leased) return false;
+      this.#sourceUntil = current.validUntil;
+    }
     this.#leased = current;
-    this.#sourceUntil = Date.now() + SOURCE_LEASE_MS;
-    return this.#sockets.scheduleExpiry(this.#sourceUntil);
+    return newlyArmed;
   }
 
   async #publish(): Promise<void> {

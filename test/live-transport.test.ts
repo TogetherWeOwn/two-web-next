@@ -91,35 +91,57 @@ it("times out during HMAC verification after reading the body", async () => {
 });
 
 const config = { ...key, origin: "https://producer.example", guildId: "1234" };
-const snapshot = {
+const snapshot = (observedAt = new Date().toISOString()) => ({
   v: 1,
   guild_id: config.guildId,
   seq: 11,
-  observed_at: "2024-02-29T02:10:00.123456Z",
+  observed_at: observedAt,
   topics: { voice: 5 },
-};
+});
 const decode = (topics: Record<string, unknown>) =>
   typeof topics.voice === "number" ? topics.voice : null;
 
 it.each([
-  () => Response.json({ ...snapshot, guild_id: "4321" }),
-  () => Response.json({ ...snapshot, topics: {} }),
-  () => Response.json({ ...snapshot, seq: -1 }),
+  () => Response.json({ ...snapshot(), guild_id: "4321" }),
+  () => Response.json({ ...snapshot(), topics: {} }),
+  () => Response.json({ ...snapshot(), seq: -1 }),
   () => Response.redirect("https://other.example/"),
-  () => Response.json({ ...snapshot, observed_at: "2026-02-30T02:10:00Z" }),
-  () => Response.json({ ...snapshot, observed_at: "2024-02-29T02:10:00.1234567890Z" }),
+  () => Response.json(snapshot("2026-02-30T02:10:00Z")),
+  () => Response.json(snapshot(new Date().toISOString().replace("Z", "4567890Z"))),
 ])("does not supply a watermark for a rejected snapshot", async (response) => {
   expect(await signedLiveSnapshot(config, decode, async () => response())()).toBeNull();
 });
 
+it("bounds leases by observation age and accepts at most two seconds of forward skew", async () => {
+  const now = Date.parse("2026-11-21T04:00:00Z");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    const loadAt = (offset: number) =>
+      signedLiveSnapshot(config, decode, async () =>
+        Response.json(snapshot(new Date(now + offset).toISOString())),
+      )();
+    expect(await loadAt(-30_000)).toBeNull();
+    expect(await loadAt(-29_999)).toEqual({ seq: 11, state: 5, validUntil: now + 1 });
+    expect(await loadAt(2_000)).toEqual({ seq: 11, state: 5, validUntil: now + 30_000 });
+    expect(await loadAt(2_001)).toBeNull();
+  } finally {
+    clock.mockRestore();
+  }
+});
+
 it("signs the actual pull bytes and only admits valid JSON within the snapshot limit", async () => {
-  const json = JSON.stringify(snapshot);
+  const doc = snapshot();
+  const json = JSON.stringify(doc);
   const fetcher = vi
     .fn<typeof fetch>()
     .mockImplementationOnce(async () => new Response(json.padEnd(1_048_576)))
     .mockImplementationOnce(async () => new Response(json.padEnd(1_048_577)));
   const load = signedLiveSnapshot(config, decode, fetcher);
-  expect(await load()).toEqual({ seq: 11, state: 5 });
+  expect(await load()).toEqual({
+    seq: 11,
+    state: 5,
+    validUntil: Date.parse(doc.observed_at) + 30_000,
+  });
   const [url, init] = fetcher.mock.calls[0]!;
   const headers = new Headers(init?.headers);
   const body = '{"action":"live.snapshot","guild_id":"1234"}';
