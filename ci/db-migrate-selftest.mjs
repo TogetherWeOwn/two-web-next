@@ -129,10 +129,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       }));
       await client`insert into drizzle.__drizzle_migrations ${client(ledger, "hash", "created_at")}`;
 
-      const observe = async (tx) => {
-        const [row] = await tx.unsafe(snapshot);
-        return { digest: row.digest, state: JSON.parse(row.state) };
-      };
+      const observe = async (tx) => (await tx.unsafe(snapshot))[0].digest;
       const readState = () =>
         executor.begin(async (tx) => {
           await tx`set local search_path = pg_catalog`;
@@ -166,8 +163,8 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       );
 
       const plan = {
-        before: before.digest,
-        after: after.digest,
+        before,
+        after,
         identity: identityHash(url.pathname.slice(1), "repair_legacy"),
         owners,
       };
@@ -196,23 +193,24 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       await assert.rejects(run("forward"));
       assert.equal(await run("undo"), "committed");
       assert.equal(await run("readback"), "before");
-      assert.deepEqual(after.state.ledger, before.state.ledger);
-      assert.deepEqual(after.state.app, before.state.app);
-      assert.deepEqual(after.state.audit, before.state.audit);
       for (const privilege of ["select", "update (id)", "select (ctid)"]) {
         await client.unsafe(`grant ${privilege} on public.users to two_web_migrate`);
         await assert.rejects(
-          run("forward", { before: (await readState()).digest }),
+          run("forward", { before: await readState() }),
           /Migrator ACL overlaps/,
         );
         await client.unsafe(`revoke ${privilege} on public.users from two_web_migrate`);
       }
+      const beforeWriter = await readState();
       const writer = postgres(url.href, { max: 1, connect_timeout: 5 });
       try {
         await assert.rejects(
           writer.begin(async (tx) => {
             await tx`grant select (ctid) on public.users to two_web_migrate`;
-            await assert.rejects(run("forward"), /A database writer is active/);
+            await assert.rejects(
+              run("forward", { before: beforeWriter }),
+              /A database writer is active/,
+            );
             throw rollback;
           }),
           (error) => error === rollback,

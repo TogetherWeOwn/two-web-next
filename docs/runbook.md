@@ -690,22 +690,16 @@ A refusal requires custodian investigation before another approved attempt.
 
 ### Repair production migrator permissions at the 1033 prefix
 
-The [permissions repair workflow](../.github/workflows/db-permissions-repair.yml)
-changes reviewed Web owners and grants while preserving the 34-row ledger.
-Rehearse both directions under the production release gate with catalog `MAINTAIN`.
-Pin state with `ci/db-permissions-repair-state.sql` and `search_path = pg_catalog`
-in a read-only transaction. Set these production Environment secrets.
+Rehearse both directions of the [permissions repair](../.github/workflows/db-permissions-repair.yml) under the production release gate with catalog `MAINTAIN`.
+Pin catalog state in a read-only transaction using `ci/db-permissions-repair-state.sql` and `search_path = pg_catalog`. Use production Environment secrets.
 
 - `PRODUCTION_DB_REPAIR_APPROVED_SHA` pins the reviewed commit on protected `main`.
 - `PRODUCTION_DB_REPAIR_DATABASE_URL` supplies the direct scoped credential.
-- `PRODUCTION_DB_REPAIR_PLAN` holds `before` and `after` digests, the `identity`
-  fingerprint in the format above and `owners` in inventory file order.
+- `PRODUCTION_DB_REPAIR_PLAN` holds the `before` and `after` digests, `identity` fingerprint and `owners` in inventory order.
 - `PRODUCTION_DB_REPAIR_PLAN_SHA256` pins the exact plan bytes.
 
-Dispatch `forward` or `undo` with the approved pins. If execution is uncertain,
-use `readback` and investigate any unknown state before another write.
-After the 30-minute health watch and recovery window, remove the executor
-credential and pins from the Environment and verify removal.
+Dispatch `forward` or `undo` with approved pins. Use `readback` before retrying an uncertain write.
+After the 30-minute watch and recovery window, remove the credential and pins and verify removal.
 
 ### Migration rollback and recovery
 
