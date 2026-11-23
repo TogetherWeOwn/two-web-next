@@ -148,12 +148,26 @@ it("debits time in flight from store lifetime even with a skewed Worker wall clo
     );
   expect(await resolveAfter(4, 4)).toEqual({ kind: "session", ref, validUntil: 1010 });
   storeTime = storeStart;
-  expect(await resolveAfter(11, -5)).toEqual(denied);
+  expect(await resolveAfter(4, -5)).toEqual({ kind: "session", ref, validUntil: 1005 });
+  storeTime = storeStart;
+  expect(await resolveAfter(4, 10)).toEqual(denied);
+  storeTime = storeStart;
+  expect(await resolveAfter(10, -5)).toEqual(denied);
   expect(await store.getLive(ref)).toBeNull();
 });
 
 it("fails closed when the store cannot prove liveness", async () => {
   const cookie = await signed(newSessionToken());
+  const invalidWallClock = vi.fn(() => 1000).mockReturnValueOnce(Infinity);
+  expect(
+    await resolveLiveSocketSession(
+      cookie,
+      signingKey,
+      async () => ({ userId: "2", member: true, remainingMs: 5000 }),
+      invalidWallClock,
+      () => 0,
+    ),
+  ).toEqual(unavailable);
   expect(
     await resolveLiveSocketSession(cookie, signingKey, async () => ({
       userId: "2",

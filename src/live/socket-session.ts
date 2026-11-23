@@ -25,11 +25,12 @@ export async function readTimedSocketSession(
   if (!live) return null;
   const elapsed = elapsedNow() - started;
   const wallNow = now();
+  const wallElapsed = wallNow - wallStarted;
   // The store sampled between request and response. Debit the entire round
   // trip; wall-clock rollback must not erase monotonic elapsed time.
-  const debit = Math.ceil(Math.max(elapsed, wallNow - wallStarted));
+  const debit = Math.ceil(Math.max(elapsed, wallElapsed));
   const validUntil = Math.floor(wallNow + (live.remainingMs - debit));
-  if (elapsed < 0 || !Number.isFinite(debit) || !Number.isFinite(validUntil)) {
+  if (elapsed < 0 || !Number.isFinite(wallElapsed) || !Number.isFinite(validUntil)) {
     throw new Error("Invalid live session clock or lifetime");
   }
   return validUntil > wallNow ? { userId: live.userId, member: live.member, validUntil } : null;
