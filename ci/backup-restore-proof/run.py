@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import signal
 import subprocess
@@ -164,6 +165,10 @@ def expect_mismatch(expected, actual, reason):
 
 def run(args):
     validate_target(args.host, args.port, args.user, os.environ)
+    if args.snapshot:
+        if args.host != "postgres":
+            raise ProofError("snapshot proof requires the disposable CI service")
+        os.umask(0o077)
     tools = {}
     for tool in ("psql", "pg_dump", "pg_restore", "bash", "python3"):
         tools[tool] = shutil.which(tool)
@@ -187,6 +192,15 @@ def run(args):
         if "LD_LIBRARY_PATH" in os.environ:
             env["LD_LIBRARY_PATH"] = os.environ["LD_LIBRARY_PATH"]
         db = Databases(tools, env)
+        if args.snapshot:
+            try:
+                runpy.run_path(str(Path(__file__).with_name("snapshot-selftest.py")))["proof"](db, scratch)
+            except Exception:
+                raise ProofError("snapshot comparison refused") from None
+            finally:
+                db.cleanup()
+            print("synthetic snapshot proof: PASS")
+            return
         try:
             source = db.create("source")
             db.sql(source, FIXTURE.read_text())
@@ -260,6 +274,7 @@ def main():
     parser.add_argument("--host", default="agent-testdb")
     parser.add_argument("--port", default="5432")
     parser.add_argument("--user", default="agent_test")
+    parser.add_argument("--snapshot", action="store_true")
     args = parser.parse_args()
     def interrupted(signum, frame):
         raise ProofError("interrupted")

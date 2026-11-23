@@ -45,6 +45,25 @@ be a valid daily or weekly archive key (or its `.digest.json` receipt) for the
 selected branch prefix; malformed, duplicate or foreign-branch lines refuse the
 whole inventory before an upload, promotion PUT or rotation DELETE.
 
+## Optional snapshot receipt for a private restore comparison
+
+`python3 bin/backup/snapshot_capture.py EXPECTED KEY NEW_DIRECTORY` uses `DATABASE_URL` and PG18 clients.
+Freeze owner-only `EXPECTED` JSON with `source` (qualified opaque source ID), `host`, `port` (string),
+`database`, `role`, `databaseOid` (integer), branch `archivePrefix`, full daily `archiveKey`, and `ranges`.
+Use inclusive positive PK ranges of at most 128 positions for `events` and `rsvps`. Keep a separate owner-only 32-byte random `KEY`. Admission requires `verify-full` with system CAs outside the loopback fixture.
+
+Both probes read the exported read-only repeatable-read snapshot imported by the dump. Limits are
+2 s per statement, 250 ms per lock, 10 s for client reads, 1 MiB per probe and 300 s for the dump.
+Nonempty projections cover event ID, instants, status, RSVP-open, capacity and sync revisions, and
+RSVP ID, event/member, status, creation time, legacy ordering ID and mirror time. HMAC-SHA-256 frames
+the plan, typed ordered fields and count, using decimal integers, UTC epoch microseconds and tagged NULL.
+
+Success publishes `archive.dump`, `archive.digest.json` and private `baseline.json` under an owner-only parent.
+The seal covers the plan, archive identity and digest, baseline and opaque snapshot reference with UTC observation time.
+A fenced restore uses `load_plan` and `compare`. Publish only verdicts. Empty cohorts and infinite instants refuse.
+Reconcile output and scratch after interruption. Before live use, qualify direct TLS, role and full
+counts/read coverage, indexed plans, approval controls, private diagnostics, retention and disposition.
+
 ## Check outcomes and legacy compatibility
 
 ```sh
