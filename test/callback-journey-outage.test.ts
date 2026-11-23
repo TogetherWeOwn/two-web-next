@@ -6,6 +6,7 @@ import app from "./app";
 import type { Env } from "../src/env";
 import { signedCookieHeader, verifySignedCookie } from "../src/http/signed-cookie";
 import { createMemorySessionStore, hashToken } from "../src/sessions";
+import { EXPIRED_WRITE_COOKIE } from "../src/write-recovery";
 
 const flows = ["join", "auth"] as const;
 type Flow = (typeof flows)[number];
@@ -206,9 +207,16 @@ it("hands Hono OAuth state through the shared cookie helper to the callback", as
   if (!state) throw new Error("The shared reader did not verify the Hono state cookie");
   expect(state).toBe(f.state);
   const query = new URLSearchParams({ state, error: "access_denied" });
+  const recoveryHeader = await signedCookieHeader(
+    EXPIRED_WRITE_COOKIE,
+    "pending|/profile",
+    env.SESSION_SECRET,
+    600,
+  );
+  const recoveryCookie = recoveryHeader.split(";", 1)[0];
   const denyWithCookie = async (secret: string) => {
     const header = await signedCookieHeader(name, state, secret, 600);
-    const cookie = header.slice(0, header.indexOf(";"));
+    const cookie = `${header.split(";", 1)[0]}; ${recoveryCookie}`;
     return app.request(
       `${callbackPath("auth")}?${query}`,
       { headers: { cookie, accept: "text/html" } },
@@ -220,7 +228,7 @@ it("hands Hono OAuth state through the shared cookie helper to the callback", as
   expect(refused.status).toBe(302);
   expect(refused.headers.get("location")).toBe("/?n=signin_failed");
   expect(f.consume).not.toHaveBeenCalled();
-  assertCookies("auth", refused);
+  expect(refused.headers.getSetCookie()).toEqual([]);
   assertNoSessionWork(f, refused);
 
   // The redirect alone would also pass for a replayed denial.
