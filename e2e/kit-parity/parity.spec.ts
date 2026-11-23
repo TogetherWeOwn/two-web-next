@@ -3816,10 +3816,10 @@ test("isolated Kit season board shows the named viewer at both widths", async ({
           await expect(tied).toHaveCount(2);
           await tied.first().scrollIntoViewIfNeeded();
         }
-        await test.info().attach(`kit-review-season-board-${twin}-${view.name}-${name}`, {
-          body: await page.screenshot({ animations: "disabled", caret: "hide" }),
-          contentType: "image/png",
-        });
+        const capture = `kit-review-season-board-${twin}-${view.name}-${name}`;
+        const path = test.info().outputPath(`${capture}.png`);
+        await page.screenshot({ path, animations: "disabled", caret: "hide" });
+        await test.info().attach(capture, { path, contentType: "image/png" });
       }
     }
   }
