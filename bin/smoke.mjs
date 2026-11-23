@@ -241,7 +241,9 @@ async function hasGuestKitHomeHeading(body) {
   const { parseRenderedPage, renderedElements, renderedText } = await import(
     "../ci/rendered-page.mjs"
   );
-  const headings = [...renderedElements(parseRenderedPage(body), { tag: "h1", id: "home-heading" })];
+  const headings = [
+    ...renderedElements(parseRenderedPage(body), { tag: "h1", id: "home-heading" }),
+  ];
   return (
     headings.length === 1 &&
     /^(?:The lobby is open\.|Next game night: \S(?:.*\S)?\. Come play with us\.)$/.test(

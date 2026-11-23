@@ -17,6 +17,7 @@ import {
   isCoveredByExecutedRun,
   isInJourneyScope,
   isManifestEnabled,
+  kitHomeHeadingText,
   memberBoardEmptyText,
   memberBoardStatus,
   parseManifestEntries,
@@ -548,6 +549,16 @@ test("preview join-attempts journeys skip loud without a QA token", () => {
   });
   assert.match(output, /\[skipped\] preview [^\n]*join-attempts[^\n]*KIT_PARITY_QA_TOKEN/);
   void status;
+});
+
+test("Kit Home parity reads one active heading with the pinned ID", () => {
+  const heading = '<h1 id="home-heading">The lobby is <!--[--><em>open</em><!--]-->.</h1>';
+  assert.equal(
+    kitHomeHeadingText(heading + '<div hidden id="home-heading"></div>'),
+    "The lobby is open.",
+  );
+  assert.equal(kitHomeHeadingText(heading + '<div id="home-heading"></div>'), "");
+  assert.equal(kitHomeHeadingText(heading.replace("home-heading", "other-heading")), "");
 });
 
 test("member-board empty text matches raw browser text across whitespace", () => {

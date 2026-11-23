@@ -552,12 +552,9 @@ function countMatches(html, pattern) {
 }
 
 export function kitHomeHeadingText(html) {
-  const [heading, duplicate] = activeBoardNodes(parse(html)).filter(
-    (n) => "attrs" in n && n.attrs.some((a) => a.name === "id" && a.value === "home-heading"),
-  );
-  if (heading?.nodeName !== "h1" || duplicate) return "";
-  const text = Array.from(activeBoardNodes(heading), (n) => ("value" in n ? n.value : ""));
-  return text.join("").replace(/\s+/g, " ").trim();
+  const [heading, duplicate] = renderedElements(parseRenderedPage(html), { id: "home-heading" });
+  if (heading?.tagName !== "h1" || duplicate) return "";
+  return renderedText(heading).replace(/\s+/g, " ").trim();
 }
 
 const kitHeader = /<header\b[^>]*\sdata-kit-site-header(?=[\s=>])[^>]*>[\s\S]*?<\/header>/;

@@ -1064,6 +1064,24 @@ test("Home smoke accepts only the guest headings on Kit responses", async (t) =>
       ok: false,
     },
     {
+      name: "Kit heading with an inline display override",
+      kit: true,
+      body: '<h1 id="home-heading" style="display: none; display: block">The lobby is open.</h1>',
+      ok: true,
+    },
+    {
+      name: "Kit heading with an important inline display override",
+      kit: true,
+      body: '<h1 id="home-heading" style="display: none !important; display: block">The lobby is open.</h1>',
+      ok: false,
+    },
+    {
+      name: "Kit heading with an invalid inline display override",
+      kit: true,
+      body: '<h1 id="home-heading" style="display: none; display: none block">The lobby is open.</h1>',
+      ok: false,
+    },
+    {
       name: "Kit duplicate active home headings",
       kit: true,
       body: heading(scheduled) + heading("The lobby is open."),
@@ -1164,6 +1182,14 @@ test("CLI enforces the selected staging Join renderer and its public action", as
       name: "Kit heading with its text in an inactive child",
       expected: "kit",
       body: `<h2 id="join-card-heading"><span hidden>Join with one sign-in</span></h2>${action}`,
+      marker: "kit",
+      failure: /expected Kit Join card heading/,
+    },
+    {
+      name: "Kit heading with its text only in SVG metadata",
+      expected: "kit",
+      body:
+        '<h2 id="join-card-heading"><svg><title>Join with one sign-in</title></svg></h2>' + action,
       marker: "kit",
       failure: /expected Kit Join card heading/,
     },
