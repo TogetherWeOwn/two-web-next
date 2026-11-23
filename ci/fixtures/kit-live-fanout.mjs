@@ -98,6 +98,9 @@ function connect(url, headers) {
     subscribe(topics) {
       socket.send(JSON.stringify({ v: 1, type: "subscribe", topics }));
     },
+    resyncVoice() {
+      socket.send(JSON.stringify({ v: 1, type: "resync", topics: ["voice"] }));
+    },
   };
 }
 
@@ -154,16 +157,16 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     const generation = await source(snapshot(46, 5));
     assert.equal(await ingest(origin, 46, leave("106")), 204, "recover from a covering snapshot");
     await guest.frame(projected("snapshot", 4, 5));
-    assert.equal(
-      await ingest(origin, 47, {
-        topic: "channels",
-        op: "upsert",
-        id: "10",
-        value: room("10", true),
-      }),
-      204,
-    );
+    const roomPolicy = (restricted) => ({
+      topic: "channels",
+      op: "upsert",
+      id: "10",
+      value: room("10", restricted),
+    });
+    assert.equal(await ingest(origin, 47, roomPolicy(true)), 204);
     await guest.frame(projected("patch", 5, null));
+    assert.equal(await ingest(origin, 48, roomPolicy(false)), 204);
+    await guest.frame(projected("patch", 6, 5));
 
     // Keep the same instance warm without sending any event that could renew its lease.
     const keepWarm = async () => {
@@ -179,14 +182,30 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
       WebSocket.OPEN,
       "source expiry keeps the guest socket open",
     );
-    assert.equal(await source(snapshot(47, 5)), generation);
-    guest.socket.send(JSON.stringify({ v: 1, type: "resync", topics: ["voice"] }));
+    assert.equal(await source(snapshot(48, 5)), generation);
+    const warmResyncAt = performance.now();
+    guest.resyncVoice();
     await guest.frame(unavailable("voice"));
-    await guest.frame(projected("snapshot", 6, 5));
+    await guest.frame(projected("snapshot", 7, 5));
     assert.equal(await source(), generation, "the socket resynced on the same hub without ingress");
     console.log(
       "PASS installed Kit public scope, wire shape, exact-row fan-out revocation, gap recovery, lease expiry, and socket resync",
     );
+
+    // Change the fixture response to the next signed pull. The warm hub still has five.
+    assert.equal(await source(snapshot(49, 6)), generation);
+    // Workerd can hibernate after about 10 seconds idle. Leave all callers quiet
+    // until the same guest sends resync, before the renewed 30-second source alarm.
+    await delay(15_000);
+    assert.equal(guest.socket.readyState, WebSocket.OPEN);
+    assert.deepEqual(guest.frames, [], "the warm baseline stayed quiet before resync");
+    guest.resyncVoice();
+    await guest.frame(unavailable("voice")); // Reconstructed hub clears the previous baseline.
+    await guest.frame(unavailable("voice")); // The resync starts without an in-memory snapshot.
+    await guest.frame(projected("snapshot", 8, 6));
+    assert.ok(performance.now() - warmResyncAt < 25_000, "the source alarm was not due yet");
+    assert.equal(await source(), generation + 1, "resync woke a new hub on the original socket");
+    console.log("PASS installed Kit same-socket hibernation wake and snapshot recovery");
   } finally {
     guest.socket.close();
     member?.socket.close();
