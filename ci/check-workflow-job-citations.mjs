@@ -23,7 +23,7 @@ const labelJob = new RegExp(`${job} job`, "g");
 const workflowPath = new RegExp(`^\\.github/workflows/${filename}$`);
 const relativeWorkflow = new RegExp(`^(?:\\.\\.?/)*\\.github/workflows/${filename}$`);
 const inlineLink =
-  /(!?)\[([^\][\n]*)\]\([ \t]*(<[^<>\s]+>|[^\s()[\]<>]+)(?:[ \t]+(?:"[^"\][\n]*"|'[^'\][\n]*'))?[ \t]*\)/g;
+  /(!?)\[([^\][\n]*)\]\([ \t]*(<[^<>\s]+>|[^\s()[\]<>]+)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?[ \t]*\)/g;
 
 function visibleMarkdown(text) {
   const tokens = [

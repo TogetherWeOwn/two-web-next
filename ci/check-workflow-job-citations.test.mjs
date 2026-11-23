@@ -59,7 +59,7 @@ test("accepts job IDs and static names in explicit prose, table and workflow lin
       "An independent check (`e2e.yml` `Browser smoke` job).",
       "The browser-smoke job (`.github/workflows/e2e.yml`).",
       "| `browser-smoke` job | 60 min | `.github/workflows/e2e.yml` |",
-      "[`Browser smoke` job](../.github/workflows/e2e.yml)",
+      '[`Browser smoke` job](<../.github/workflows/e2e.yml> "CI [browser]")',
       `[GitHub Actions → deploy.yml (\`deploy-staging\` job)](${actions}/deploy.yml)`,
     ].join("\n"),
   });
@@ -82,7 +82,7 @@ test("fails changed and added citations against the cited workflow's jobs mappin
       "~~~md\n<!--\n~~~",
       "`wrapped-smoke` job in",
       "  `.github/workflows/e2e.yml`.",
-      "[`anchored-smoke` job](../.github/workflows/e2e.yml#L9)",
+      "[`anchored-smoke` job](../.github/workflows/e2e.yml#L9 (Pinned job))",
       "`linked-smoke` job in [`e2e.yml`](../.github/workflows/e2e.yml)",
       "`` `example-smoke` job in `.github/workflows/e2e.yml` ``",
     ].join("\n"),
