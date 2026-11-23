@@ -9,8 +9,6 @@ export const LIVE_SOCKET_PATH = "/api/discord-live/v1";
 export const HUB_SOCKET_URL = "https://live-hub.invalid/socket";
 export const SESSION_REF = "X-Live-Session-Ref";
 export const SESSION_UNTIL = "X-Live-Session-Until";
-export const SESSION_REF_PATTERN = /^[0-9a-f]{64}$/;
-
 export type LiveSocketEnv = LiveIngressEnv &
   Partial<Pick<Env, "SESSION_SECRET" | "DATABASE_URL" | "DB">> & {
     DISCORD_LIVE_SOCKET_ENABLED?: string;
@@ -22,8 +20,7 @@ export async function readLiveSocketSession(
 ): ReturnType<SessionStore["getLive"]> {
   const url = databaseUrl(env);
   if (!url) throw new Error("Live session store unavailable");
-  // Load the driver only on a session-bearing request. The final Worker bundler
-  // resolves postgres's workerd export; the facade installer does not run it.
+  // Initialize the bundled Worker driver only for a session-bearing request.
   const { default: postgres } = await import("postgres");
   const sql = postgres(url, databaseOptions);
   const store = createPostgresSessionStore(withPerRequestStatementBound(sql as unknown as Sql));
@@ -77,8 +74,7 @@ export async function handleLiveRequest(
   try {
     const response = await hub.getByName(config.guildId).fetch(HUB_SOCKET_URL, { headers });
     // The response owns the upgraded socket. It must bypass Kit and all cloning.
-    if (response.status === 101) return response;
-    return refuse(response.status === 429 ? 429 : 503);
+    return response.status === 101 ? response : refuse(response.status === 429 ? 429 : 503);
   } catch {
     return refuse(503);
   }

@@ -227,15 +227,14 @@ try {
       entry,
       `import worker, { LiveGuildHub } from ${JSON.stringify(worker)};
 export { LiveGuildHub };
-export default {
-  fetch(request, env, context) {
-    const incoming = new URL(request.url);
-    const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
-    const secure = new Request(url, request);
-    secure.headers.set("host", url.host);
-    return worker.fetch(secure, env, context);
-  },
-};\n`,
+export default { fetch };
+function fetch(request, env, context) {
+  const incoming = new URL(request.url);
+  const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
+  const secure = new Request(url, request);
+  secure.headers.set("host", url.host);
+  return worker.fetch(secure, env, context);
+}\n`,
     );
     const secret = FIXTURE_SECRETS.SESSION_SECRET;
     const live = await startWorker("kit-live", entry, assets, secret, {

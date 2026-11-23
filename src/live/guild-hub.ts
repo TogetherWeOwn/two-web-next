@@ -42,10 +42,9 @@ export class LiveGuildHub {
 
   async fetch(request: Request): Promise<Response> {
     if (request.url === HUB_SOCKET_URL) {
-      if (!this.#sequence || this.env.DISCORD_LIVE_SOCKET_ENABLED !== "true") {
-        return new Response(null, { status: 503 });
-      }
-      return this.#sockets.accept(request);
+      return this.#sequence && this.env.DISCORD_LIVE_SOCKET_ENABLED === "true"
+        ? this.#sockets.accept(request)
+        : new Response(null, { status: 503 });
     }
     if (request.method !== "POST" || request.url !== HUB_INGEST_URL) {
       return new Response(null, { status: 404 });

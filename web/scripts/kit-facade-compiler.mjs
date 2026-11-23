@@ -2,6 +2,7 @@
 // Design credit: Rick7C2, draft #2092, eb1ba5d47e6d5a35a0a6deb2b7532b4c045865f3.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { builtinModules } from "node:module";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
@@ -61,7 +62,9 @@ export default createKitWorkerFacade(adapter, undefined, handleLiveRequest);
     format: "esm",
     platform: "neutral",
     target: "es2022",
-    external: ["./kit-adapter.js", "postgres"],
+    conditions: ["workerd"],
+    alias: Object.fromEntries(builtinModules.map((name) => [name, `node:${name}`])),
+    external: ["./kit-adapter.js", "cloudflare:sockets", "node:*"],
     write: false,
     logLevel: "silent",
   });
