@@ -12,6 +12,7 @@ export const SESSION_UNTIL = "X-Live-Session-Until";
 export type LiveSocketEnv = LiveIngressEnv &
   Partial<Pick<Env, "SESSION_SECRET" | "DATABASE_URL" | "DB">> & {
     DISCORD_LIVE_SOCKET_ENABLED?: string;
+    DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS?: string;
   };
 
 export async function readLiveSocketSession(env: LiveSocketEnv, ref: string) {

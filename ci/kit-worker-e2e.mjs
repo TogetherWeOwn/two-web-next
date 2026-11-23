@@ -225,9 +225,10 @@ try {
     const entry = join(scratch, "kit-live.mjs");
     await writeFile(
       entry,
-      `import worker, { LiveGuildHub } from ${JSON.stringify(worker)};
-export { LiveGuildHub };
-export default { fetch };
+      `import worker, { LiveGuildHub as InstalledHub } from ${JSON.stringify(worker)};
+import { fixtureHub, controlledFetch } from ${JSON.stringify(fileURLToPath(new URL("./fixtures/kit-live-source.mjs", import.meta.url)))};
+export const LiveGuildHub = fixtureHub(InstalledHub);
+export default { fetch: controlledFetch(fetch) };
 function fetch(request, env, context) {
   const incoming = new URL(request.url);
   const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
@@ -242,6 +243,7 @@ function fetch(request, env, context) {
       BOT_ENDPOINT_URL: "https://bot-live.invalid",
       DISCORD_LIVE_INGEST_ENABLED: "true",
       DISCORD_LIVE_SOCKET_ENABLED: "true",
+      DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "10,11",
       DISCORD_LIVE_INGEST_KEY_ID: "fixture-ingest",
       DISCORD_LIVE_INGEST_SECRET: "fixture-ingest-value",
       DISCORD_LIVE_SNAPSHOT_KEY_ID: "fixture-snapshot",
@@ -250,6 +252,8 @@ function fetch(request, env, context) {
     await listen(live.child, live.origin, () => live.log);
     const { verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
     await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
+    const { verifyPublicFanout } = await import("./fixtures/kit-live-fanout.mjs");
+    await verifyPublicFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
   }
 
   const archive = await fetch(`${origin}/events/past`);

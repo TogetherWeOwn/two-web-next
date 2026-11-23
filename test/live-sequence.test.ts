@@ -26,6 +26,23 @@ describe("live guild sequence", () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
+  it("expires payload state without rewinding the replay and recovery watermark", async () => {
+    const load = loadFixture()
+      .mockResolvedValueOnce({ seq: 5, state: "first" })
+      .mockResolvedValueOnce({ seq: 5, state: "behind" })
+      .mockResolvedValueOnce({ seq: 6, state: "fresh" });
+    const sequence = new LiveSequence(load, append);
+    expect(await sequence.ingest(5, "not applied twice")).toBe("resynced");
+    sequence.expire();
+    expect(sequence.current).toBeNull();
+    expect(await sequence.ingest(5, "replay after expiry")).toBe("duplicate");
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(await sequence.ingest(6, "no baseline to reduce")).toBe("unavailable");
+    expect(sequence.current).toBeNull();
+    expect(await sequence.synchronize()).toBe(true);
+    expect(sequence.current).toEqual({ seq: 6, state: "fresh" });
+  });
+
   it("rejects invalid sequence numbers before touching state or pulling a snapshot", async () => {
     const load = loadFixture();
     const sequence = new LiveSequence(load, append);
