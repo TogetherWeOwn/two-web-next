@@ -26,4 +26,4 @@ jobs:
   # Keep id and name byte-identical: a future org ruleset requires `test-guard`.
   test-guard:
     name: test-guard
-    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@2ef8ad6447e11d019ac3098bcfd011193b75266a
+    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@8059ac2b121b63443db656b1e10e927b8af8133c
