@@ -217,7 +217,9 @@ describe("/join widget.json presence (server-side cache only)", () => {
 
     // Rate-limited at the next verdict window: the presence block stays.
     status = 429;
-    h.advance(60_000);
+    h.advance(59_999);
+    expect((await h.join()).html).toContain("In Together We Own now");
+    h.advance(1);
     await Promise.all((await h.join()).pending);
     const limited = await h.join();
     expect(limited.status).toBe(200);
@@ -234,13 +236,17 @@ describe("/join widget.json presence (server-side cache only)", () => {
     expect(repeated.cacheControl).toBe("no-store");
     expect(repeated.html).toContain("In Together We Own as of the last update");
     await Promise.all(repeated.pending);
-    h.advance(60_000);
+    h.advance(59_999);
+    expect((await h.join()).html).toContain("In Together We Own as of the last update");
+    h.advance(1);
     await Promise.all((await h.join()).pending);
     const expired = await h.join();
     expect(expired.cacheControl).toBe("public, max-age=3600");
     expect(expired.html).not.toContain('data-testid="join-widget-presence"');
     expect(expired.html).not.toContain("stage-night");
     expect(expired.html).not.toContain('data-testid="join-widget-online"');
+    expect(expired.html).toContain('data-testid="join-widget-load"');
+    expect(h.calls).toHaveLength(4);
   });
 
   it("qualifies an empty channel list once its snapshot is stale", async () => {

@@ -16,6 +16,7 @@ import {
   type DiscordWidgetSnapshot,
 } from "../src/discord-widget";
 import type { Env } from "../src/env";
+import { createKitSsrRenderer, type RenderPage } from "./helpers/kit-ssr-render";
 
 const GUILD = "326474832151838730";
 const AGGREGATE_KEYS = ["channels", "inviteUrl", "name", "presenceCount"];
@@ -99,6 +100,8 @@ type KitJoinLoadData = {
 type KitJoinLoad = (args: KitJoinLoadArgs) => Promise<KitJoinLoadData>;
 
 let load: KitJoinLoad;
+let renderPage: RenderPage;
+let cleanupRender: (() => void) | undefined;
 let scratch = "";
 
 type SharedStub = {
@@ -177,10 +180,14 @@ beforeAll(async () => {
     load: KitJoinLoad;
   };
   load = mod.load;
+  ({ renderPage, cleanup: cleanupRender } = await createKitSsrRenderer(
+    "web/src/routes/join/+page.svelte",
+  ));
 }, 60000);
 
 afterAll(() => {
   vi.useRealTimers();
+  cleanupRender?.();
   if (scratch) rmSync(scratch, { recursive: true, force: true });
   delete (globalThis as Record<string, unknown>)[ENV_KEY];
 });
@@ -191,7 +198,7 @@ afterEach(() => {
 });
 
 describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
-  it("serves aggregates only: no members, usernames or statuses", async () => {
+  it("serves and renders only bounded aggregate presence through repeated 429s", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -225,6 +232,7 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
     expect(headers.at(-1)?.["cache-control"]).toBe("public, max-age=3600");
     expect(cold.widgetSnapshot).toBeNull();
     expect(cold.widgetStale).toBe(false);
+    expect(renderPage(cold)).not.toContain('data-testid="join-widget-presence"');
     expect(shared().pending).toHaveLength(1);
     await Promise.all(shared().pending);
 
@@ -234,6 +242,11 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
     expect(headers.at(-1)?.["cache-control"]).toBe("no-store");
     expect(data.widgetSnapshot).not.toBeNull();
     expect(data.widgetStale).toBe(false);
+    const freshHtml = renderPage(data);
+    expect(freshHtml).toContain("In Together We Own now");
+    expect(freshHtml).toContain("stage-night");
+    expect(freshHtml).not.toContain("as of the last update");
+    expect(freshHtml).not.toContain("leak-probe");
     expect(Object.keys(data.widgetSnapshot!).sort()).toEqual(AGGREGATE_KEYS);
     expect(data.widgetSnapshot).toEqual({
       name: "Together We Own",
@@ -258,9 +271,10 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
       expect(bytes, `anonymous payload leaked ${needle}`).not.toContain(needle);
     }
 
-    // Past one verdict TTL but within the three-TTL servable bound, the real
-    // load must carry freshness separately from the four-field projection.
-    vi.setSystemTime(Date.now() + DISCORD_WIDGET_VERDICT_TTL_MS + 1);
+    const fetchedAt = Date.now();
+    vi.setSystemTime(fetchedAt + 59_999);
+    expect(renderPage(await load(args()))).toContain("In Together We Own now");
+    vi.setSystemTime(fetchedAt + 60_000);
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(null, { status: 429 })),
@@ -269,6 +283,10 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
     expect(headers.at(-1)?.["cache-control"]).toBe("no-store");
     expect(aged.widgetSnapshot).toEqual(data.widgetSnapshot);
     expect(aged.widgetStale).toBe(true);
+    const staleHtml = renderPage(aged);
+    expect(staleHtml).toContain("In Together We Own as of the last update");
+    expect(staleHtml).not.toContain("In Together We Own now");
+    expect(staleHtml).toContain("stage-night");
     expect(shared().pending).toHaveLength(2);
     await Promise.all(shared().pending);
 
@@ -284,13 +302,20 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
     expect(headers.at(-1)?.["cache-control"]).toBe("no-store");
     expect(repeated.widgetSnapshot).toEqual(data.widgetSnapshot);
     expect(repeated.widgetStale).toBe(true);
+    expect(shared().pending).toHaveLength(3);
     await Promise.all(shared().pending);
 
-    vi.setSystemTime(Date.now() + DISCORD_WIDGET_VERDICT_TTL_MS);
+    vi.setSystemTime(fetchedAt + 179_999);
+    expect(renderPage(await load(args()))).toContain("In Together We Own as of the last update");
+    vi.setSystemTime(fetchedAt + 180_000);
     const expired = await load(args());
     expect(headers.at(-1)?.["cache-control"]).toBe("public, max-age=3600");
     expect(expired.widgetSnapshot).toBeNull();
     expect(expired.widgetStale).toBe(false);
+    const expiredHtml = renderPage(expired);
+    expect(expiredHtml).not.toContain('data-testid="join-widget-presence"');
+    expect(expiredHtml).not.toContain("stage-night");
+    expect(expiredHtml).toContain('data-testid="join-widget-load"');
     await Promise.all(shared().pending);
 
     // A refreshed empty-channel snapshot is still presence and must never
@@ -314,12 +339,16 @@ describe("Kit GET /join anonymous payload (SvelteKit __data.json)", () => {
     expect(headers.at(-1)?.["cache-control"]).toBe("no-store");
     expect(empty.widgetSnapshot?.channels).toEqual([]);
     expect(empty.widgetStale).toBe(false);
+    expect(renderPage(empty)).toContain("No voice channels open right now.");
 
     vi.setSystemTime(Date.now() + DISCORD_WIDGET_VERDICT_TTL_MS);
     const staleEmpty = await load(args());
     expect(headers.at(-1)?.["cache-control"]).toBe("no-store");
     expect(staleEmpty.widgetSnapshot?.channels).toEqual([]);
     expect(staleEmpty.widgetStale).toBe(true);
+    const staleEmptyHtml = renderPage(staleEmpty);
+    expect(staleEmptyHtml).toContain("No voice channels open as of the last update.");
+    expect(staleEmptyHtml).not.toContain("right now");
     await Promise.all(shared().pending);
   });
 });
