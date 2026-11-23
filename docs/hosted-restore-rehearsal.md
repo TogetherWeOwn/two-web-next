@@ -3,19 +3,16 @@
 **hosted-restore-rehearsal** runs on standard GitHub-hosted Ubuntu at the PR head or by manual dispatch
 on protected `main` at the workflow SHA. The dispatch receipt follows an independent teardown audit.
 
-One digest-pinned PostgreSQL 18 container owns an isolated internal bridge with zero published ports,
-tmpfs and disabled service logging. Clients run inside that container. The job checks password rejection
-on the capture and restore routes and injects a diagnostic to test suppression. Public output is fixed
-verdicts plus routine Actions metadata. The job registers no Actions service, artifacts or caches.
+One pinned PostgreSQL 18 container uses an isolated bridge, tmpfs, zero published ports and disabled logs.
+Its clients test both password routes and diagnostic suppression. Output consists of fixed verdicts
+and routine Actions metadata. The job registers no Actions service, artifacts or caches.
 
-The [V1 receipt](backup-integrity.md#optional-snapshot-receipt-for-a-private-restore-comparison) rehearsal
-pins the plan before capture and freezes the archive and receipts. It tests tampering, checks target
-identity and emptiness, restores in one transaction with exit-on-error, and detects a same-count edit.
-The failure case checks teardown after PostgreSQL refuses a write and the target remains empty.
+The [V1 receipt](backup-integrity.md#optional-snapshot-receipt-for-a-private-restore-comparison) proof pins
+the plan before capture and rejects archive and receipt tampering. It authenticates an empty target,
+restores with exit-on-error, detects a same-count edit and checks teardown after a refused write.
 
-Dispatch `case=cancellation` on `main` and cancel at the 120-second populated checkpoint. Confirm the
-cancelled conclusion, teardown verdict, audit result and zero artifacts. Forced termination before a
-verdict, provider VM destruction and physical disk or swap erasure remain outside observable teardown.
+Cancel `case=cancellation` on `main` during the 120-second populated checkpoint. Check conclusion, teardown,
+audit and artifacts. Forced kills before a verdict, provider VM destruction and media erasure remain unobserved.
 
 ## Before any live rehearsal
 
@@ -26,9 +23,8 @@ Resolve terms and transfer approval for a runner without an EU location guarante
 Keep one durable bundle in the designated EU bucket. The custodian holds a dedicated bucket-scoped Object
 Read only parent and issues a short-lived child for `GetObject` on three exact keys at the EU S3 endpoint.
 Verify denial for other objects, buckets, listing and writes. Hold the seal key and trusted pins separately.
-Staging keeps seven dailies and four weeklies. Manual production capture skips rotation and the V1 baseline
-is outside manifest rotation. The custodian checks lifecycle and holds, records expiration and deletion
-ownership, and verifies deletion of all three keys. [Backup policy](db-migrations.md#backups) · [R2 token permissions](https://developers.cloudflare.com/r2/api/tokens/) · [Temporary credentials](https://developers.cloudflare.com/r2/api/s3/temporary-credentials/)
+Staging keeps seven dailies and four weeklies. Manual production capture skips rotation, which excludes V1 baselines.
+Verify lifecycle and holds, assign a deletion owner and deadline, and verify all three keys are gone. [Backup policy](db-migrations.md#backups) · [R2 token permissions](https://developers.cloudflare.com/r2/api/tokens/) · [Temporary credentials](https://developers.cloudflare.com/r2/api/s3/temporary-credentials/)
 
 The public standard runner and its temporary storage add zero billed synthetic cost. A live Standard
 bundle adds three GETs per attempt ($0.36/million) and zero R2 retrieval or egress charge. New custody adds
