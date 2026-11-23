@@ -54,13 +54,13 @@ requirements below continue to govern the broader design.
   revision. Discard revision state when retiring the socket.
 - `{v:1,type:"unavailable",topic:"voice"}` withdraws the live value and has
   no cursor or value. Keep the subscription, retaining its revision watermark
-  and any observed gap, and accept a covering higher-revision snapshot on that
-  socket, including one arriving immediately after withdrawal. Start fallback
-  while the value is unavailable. On close, retire the socket and clear its live
-  value before starting fallback. Reconnect with backoff and jitter, and
-  establish a new baseline after fresh admission. The
-  broader protocol's `reset` and fresh stream at sequence zero apply on its own
-  endpoint.
+  and any observed gap. Require a covering higher-revision snapshot to restore
+  that socket's baseline, including one arriving immediately after withdrawal.
+  Discard patches while the baseline is withdrawn. Start fallback while the value
+  is unavailable. On close, retire the socket and clear its live value before
+  starting fallback. Reconnect with backoff and jitter, and establish a new
+  baseline after fresh admission. The broader protocol's `reset` and fresh
+  stream at sequence zero apply on its own endpoint.
 - The installed hub can return a same-revision snapshot on explicit resync of
   an unchanged live count using its current source. The adapter may rely on
   this response only after the fresh covering pull and send-boundary
@@ -123,10 +123,11 @@ staggered idle `1008` closes, rejection of stale covering observations without
 lease extension from deltas (#2628), and no withdrawal or lease activation on a
 producer-only cold wake before the original deadline (#2629). Also require a
 fresh covering pull for resync, same-revision proof for an unchanged live value,
-and no extension of another socket's lease (#2630), plus a fresh session and
-attachment check at the send boundary and voice delivery during unrelated-topic
-resync (#2631). Record the hub SHA and job with the unwired adapter evidence,
-including the Workers typecheck. Route integration also requires the Chromium
+fresh session and attachment checks at send, and no extension of another
+socket's lease (#2630). Verify that voice delivery continues during an
+unrelated-topic resync (#2631) and that successful subscribe and resync fit the
+15-second command wait. Record the hub SHA and job with the unwired adapter
+evidence, including the Workers typecheck. Route integration also requires the Chromium
 cases against that same contract. Keep activation under the separate release gate.
 
 ## Bot → hub: allowlist and wire shapes
