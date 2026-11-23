@@ -238,13 +238,16 @@ describe("request correlation through queue envelopes (local fixtures)", () => {
       const ack = vi.fn(),
         retry = vi.fn();
       const timestamp = new Date();
-      const deps = { bot, lock, ledger, events: {} as EventStore };
+      const deps = {
+        bot,
+        lock,
+        ledger,
+        events: {} as EventStore,
+        announcementReconciliation: announcementStore(),
+      };
       if (failure === "exhausted throw") {
         const message = { body, timestamp, attempts: 1, ack, retry };
-        await consume(
-          { messages: [message] },
-          { ...deps, announcementReconciliation: announcementStore() },
-        );
+        await consume({ messages: [message] }, deps);
         expect(retry).toHaveBeenCalledTimes(1);
         expect(ack).not.toHaveBeenCalled();
         expect(body.requestId).toBe(ID);
@@ -265,10 +268,8 @@ describe("request correlation through queue envelopes (local fixtures)", () => {
         ack,
         retry,
       }));
-      await consume(
-        { messages },
-        { ...deps, announcementReconciliation: announcementStore(attempts) },
-      );
+      const finalDeps = { ...deps, announcementReconciliation: announcementStore(attempts) };
+      await consume({ messages }, finalDeps);
       const alerts = error.mock.calls
         .map(([line]) => String(line))
         .filter((line) => line.includes('"queue.failing"'))

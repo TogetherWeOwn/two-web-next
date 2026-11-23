@@ -326,7 +326,16 @@ describe("CallInternalAction", () => {
   };
   it("walks 5/15/60/180 then fails on attempt 5", async () => {
     const bot = { postAnnouncement: async () => fail({}) } as unknown as BotClient;
-    const deps = { bot, events: store(), lock: memLock(), ledger: memLedger() };
+    const events = store();
+    const lock = memLock();
+    const ledger = memLedger();
+    const depsFor = (attempt: number) => ({
+      bot,
+      events,
+      lock,
+      ledger,
+      announcementReconciliation: announcementStore(attempt),
+    });
     const timestamp = new Date();
     for (const [attempt, delay] of [
       [1, 5],
@@ -335,17 +344,11 @@ describe("CallInternalAction", () => {
       [4, 180],
     ] as const) {
       const m = msg(ann, attempt, timestamp);
-      await consume(
-        { messages: [m] },
-        { ...deps, announcementReconciliation: announcementStore(attempt) },
-      );
+      await consume({ messages: [m] }, depsFor(attempt));
       expect(m.retried).toBe(delay);
     }
     const last = msg(ann, 5, timestamp);
-    await consume(
-      { messages: [last] },
-      { ...deps, announcementReconciliation: announcementStore(5) },
-    );
+    await consume({ messages: [last] }, depsFor(5));
     expect(last.acked).toBe(true);
     expect(last.retried).toBeUndefined();
   });

@@ -253,10 +253,8 @@ describe("queue.failing", () => {
     };
     await consume({ messages: [msg(ann, penultimate, timestamp)] }, deps);
     expect(failingLines(spy)).toHaveLength(0);
-    await consume(
-      { messages: [msg(ann, last, timestamp)] },
-      { ...deps, announcementReconciliation: announcementStore(last) },
-    );
+    const finalDeps = { ...deps, announcementReconciliation: announcementStore(last) };
+    await consume({ messages: [msg(ann, last, timestamp)] }, finalDeps);
     expect(failingLines(spy)).toMatchObject([
       { attempts: CALL_INTERNAL_ACTION.tries, exception: "TypeError" },
     ]);
