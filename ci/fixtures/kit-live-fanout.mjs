@@ -192,6 +192,8 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
       "PASS installed Kit public scope, wire shape, exact-row fan-out revocation, gap recovery, lease expiry, and socket resync",
     );
 
+    // Change the fixture response to the next signed pull. The warm hub still has five.
+    assert.equal(await source(snapshot(49, 6)), generation);
     // Workerd can hibernate after about 10 seconds idle. Leave all callers quiet
     // until the same guest sends resync, before the renewed 30-second source alarm.
     await delay(15_000);
@@ -200,7 +202,7 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     guest.resyncVoice();
     await guest.frame(unavailable("voice")); // Reconstructed hub clears the previous baseline.
     await guest.frame(unavailable("voice")); // The resync starts without an in-memory snapshot.
-    await guest.frame(projected("snapshot", 8, 5));
+    await guest.frame(projected("snapshot", 8, 6));
     assert.ok(performance.now() - warmResyncAt < 25_000, "the source alarm was not due yet");
     assert.equal(await source(), generation + 1, "resync woke a new hub on the original socket");
     console.log("PASS installed Kit same-socket hibernation wake and snapshot recovery");

@@ -84,9 +84,13 @@ it("preserves earlier alarms and concurrent attachment changes without extending
   expect(socket.deserializeAttachment().until).toBe(start + 50);
 });
 
-it.each([512, 513])("enforces the text byte cap at %i bytes", async (bytes) => {
+it.each([512, 513])("enforces the UTF-8 cap at %i bytes", async (bytes) => {
   const { socket, send } = connectedSocket(start + 300_000, false);
-  await send(subscribe.padEnd(bytes));
+  // JSON.parse keeps the final type, so the multibyte wire text still decodes to a valid command.
+  const message = `{"type":"é",${subscribe.slice(1)}`.padEnd(bytes - 1);
+  expect(Buffer.byteLength(message)).toBe(bytes);
+  expect(message.length).toBeLessThanOrEqual(512);
+  await send(message);
   expect(socket.send.mock.calls).toEqual(bytes === 512 ? [[unavailable]] : []);
   expect(socket.close.mock.calls).toEqual(bytes === 512 ? [] : [[1008]]);
 });
