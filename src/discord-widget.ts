@@ -16,10 +16,15 @@ export type DiscordWidgetSnapshot = {
   channels: DiscordWidgetChannel[];
   members: DiscordWidgetMember[];
   fetchedAt: number;
+  /** `snapshot()` sets this at read time once the data reaches one verdict TTL. */
+  stale?: boolean;
 };
 
 // How long one widget verdict stands before a request schedules a re-probe.
 export const DISCORD_WIDGET_VERDICT_TTL_MS = 60_000;
+
+const SNAPSHOT_MAX_TTLS = 3;
+export const DISCORD_WIDGET_SNAPSHOT_MAX_AGE_MS = SNAPSHOT_MAX_TTLS * DISCORD_WIDGET_VERDICT_TTL_MS;
 
 // widget.json caps the member list at 100; enforce the same bound after
 // dropping invalid rows so one hostile payload cannot grow the HTML.
@@ -143,9 +148,11 @@ export type DiscordWidgetHealth = {
   url(guildId: string | undefined, background?: (probe: Promise<void>) => void): string | null;
   /**
    * The last parsed widget.json presence snapshot, or null when no probe has
-   * succeeded yet, the guild mismatches, or the widget is down/disabled.
+   * succeeded yet, the guild mismatches, the widget is down/disabled, or the
+   * data reaches the servable age limit.
    * Synchronous like `url`: the single probe scheduled through `url` refreshes
-   * both, so this never fetches on its own.
+   * both, so this never fetches on its own. The returned copy carries the
+   * read-time `stale` flag; the stored verdict is never mutated.
    */
   snapshot(guildId: string | undefined): DiscordWidgetSnapshot | null;
 };
@@ -164,6 +171,7 @@ export type DiscordWidgetHealthDeps = { fetch?: typeof fetch; now?: () => number
 export function createDiscordWidgetHealth(deps: DiscordWidgetHealthDeps = {}): DiscordWidgetHealth {
   const now = deps.now ?? Date.now;
   const ttlMs = deps.ttlMs ?? DISCORD_WIDGET_VERDICT_TTL_MS;
+  const maxAgeMs = SNAPSHOT_MAX_TTLS * ttlMs;
   let verdict: {
     guildId: string;
     available: boolean;
@@ -236,7 +244,12 @@ export function createDiscordWidgetHealth(deps: DiscordWidgetHealthDeps = {}): D
     snapshot(guildId) {
       const current = currentFor(guildId);
       if (!current || current.available === false) return null;
-      return current.snapshot;
+      const snapshot = current.snapshot;
+      if (!snapshot) return null;
+      // A 429 updates checkedAt while leaving fetchedAt unchanged.
+      const age = now() - snapshot.fetchedAt;
+      if (age >= maxAgeMs) return null;
+      return { ...snapshot, stale: age >= ttlMs };
     },
   };
 }
