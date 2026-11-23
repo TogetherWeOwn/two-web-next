@@ -159,7 +159,8 @@ async function executeRepair(tx, config, plan, direction) {
   // Keep the ledger stable and block concurrent GRANTs, which lock catalogs directly.
   await tx`lock table drizzle.__drizzle_migrations, pg_catalog.pg_class, pg_catalog.pg_attribute in share row exclusive mode nowait`;
   // GRANT can release catalog locks before committing. Allow only known other-database writers.
-  const [{ clear }] = await tx`select not exists (select from pg_snapshot_xip(pg_current_snapshot()) x(id)
+  const [{ clear }] =
+    await tx`select not exists (select from pg_snapshot_xip(pg_current_snapshot()) x(id)
     where not exists (select from pg_stat_activity a where a.backend_xid = x.id::xid
       and a.datname <> current_database())) as clear`;
   assert.ok(clear, "A database writer is active");
