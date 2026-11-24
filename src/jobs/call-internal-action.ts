@@ -1,6 +1,8 @@
 import { CALL_INTERNAL_ACTION as C, backoffFor } from "./constants";
 import { botRefusalReason, botRetryExhaustedReason, terminalFailureReason } from "./queue-error";
 import { withInternalActionDeadline } from "./internal-action-deadline";
+import { diagnosticCode } from "../bot/diagnostic-code";
+import type { ReconciliationIntent } from "./reconciliation";
 import { admitRetryDelay } from "./retry-delay";
 import { BotTerminalError, BotTransportError } from "./types";
 import type {
@@ -47,12 +49,39 @@ export async function dispatchRoleAssign(
   await queue.send(msg);
 }
 
+export const ANNOUNCEMENT_RECONCILIATION_REASON = "announcement.post requires reconciliation";
+
+type ReconciliationOutcome = {
+  failed: string;
+  announcementEvidence: Pick<ReconciliationIntent, "lastCode" | "lastStatus">;
+};
+
+const DEFINITIVE_ANNOUNCEMENT_REFUSALS = new Set([
+  "malformed",
+  "unauthorized",
+  "stale_request",
+  "action_not_allowed",
+  "discord_rejected",
+]);
+
+function reconcileAnnouncement(answer?: BotFailure): ReconciliationOutcome {
+  return {
+    failed: ANNOUNCEMENT_RECONCILIATION_REASON,
+    announcementEvidence: {
+      lastCode: answer ? diagnosticCode(answer.code) : null,
+      lastStatus: answer?.status ?? null,
+    },
+  };
+}
+
 /** Ports CallInternalAction::handle. `attempts` is 1-based. */
 export async function handleCallInternalAction(
   msg: Extract<QueueMessage, { kind: "announcement" | "role-assign" }>,
   attempts: number,
   bot: BotClient,
-): Promise<Outcome> {
+  claimBacked = false,
+): Promise<Outcome | ReconciliationOutcome> {
+  const claimedAnnouncement = claimBacked && msg.kind === "announcement";
   let answer: InternalActionAnswer;
   try {
     // Bounded: a never-settling bot round-trip must not stall the serial
@@ -68,6 +97,7 @@ export async function handleCallInternalAction(
     // Transport: a wait. Laravel release()s here with no tries check of its own; the worker's
     // max-attempts rule then fails it, which is the same cap.
     if (e instanceof BotTransportError) {
+      if (claimedAnnouncement) return reconcileAnnouncement();
       return attempts >= C.tries
         ? { failed: `gave up after ${attempts} attempts` }
         : { retryInSeconds: backoffFor(C.backoffSeconds, attempts) };
@@ -78,6 +108,19 @@ export async function handleCallInternalAction(
   }
   if (answer.ok) return { done: true };
   const name = msg.kind === "announcement" ? "announcement.post" : "role.assign";
+  if (claimedAnnouncement) {
+    // Only the bot's explicit throttling result allows another same-key send.
+    // A transport timeout, duplicate in flight, or hard stop proves no such thing.
+    if (!answer.retryable && DEFINITIVE_ANNOUNCEMENT_REFUSALS.has(answer.code))
+      return { failed: botRefusalReason(name, answer.code) };
+    if (
+      answer.code !== "rate_limited" ||
+      answer.status !== 429 ||
+      !answer.retryable ||
+      attempts >= C.tries
+    )
+      return reconcileAnnouncement(answer);
+  }
   // Class-only: keep the stable failure code, never the provider message.
   if (!answer.retryable) return { failed: botRefusalReason(name, answer.code) };
   if (attempts >= C.tries) {

@@ -374,6 +374,102 @@ describe("CallInternalAction", () => {
     expect(seen.get(ann.idempotencyKey)).toBe(2);
   });
 
+  it.each([
+    { code: "needs_reconciliation", status: 409, retryable: true },
+    { code: "in_progress", status: 409, retryable: true },
+    { code: "upstream_timeout", status: 504, retryable: false },
+    { code: "unknown", status: 502, retryable: false },
+  ])("reconciles claimed announcements after $code without resending", async (failure) => {
+    const announcementClaims = announcementStore();
+    const postAnnouncement = vi.fn(async () => fail(failure));
+    const deps = {
+      bot: { postAnnouncement } as unknown as BotClient,
+      events: store(),
+      lock: memLock(),
+      ledger: memLedger(),
+      announcementClaims,
+    };
+    const first = msg(ann);
+    await consume({ messages: [first] }, deps);
+    expect(first.acked).toBe(true);
+    expect(first.retried).toBeUndefined();
+    expect(announcementClaims.recordAnnouncement).toHaveBeenCalledExactlyOnceWith(
+      ann.idempotencyKey,
+      1,
+      { lastCode: failure.code, lastStatus: failure.status },
+    );
+    expect(announcementClaims.finishAnnouncement).not.toHaveBeenCalled();
+    announcementClaims.claimAnnouncement.mockResolvedValueOnce({
+      kind: "closed",
+      attempts: 1,
+      claimUntil: new Date(),
+    });
+    const duplicate = msg(ann, 2, first.timestamp);
+    await consume({ messages: [duplicate] }, deps);
+    expect(duplicate.acked).toBe(true);
+    expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
+  });
+
+  it("uses the claim count for throttled announcements after storage failures", async () => {
+    const announcementClaims = announcementStore(1);
+    const postAnnouncement = vi.fn(async () => fail({ code: "rate_limited", status: 429 }));
+    const deps = {
+      bot: { postAnnouncement } as unknown as BotClient,
+      events: store(),
+      lock: memLock(),
+      ledger: memLedger(),
+      announcementClaims,
+    };
+    const timestamp = new Date();
+    announcementClaims.claimAnnouncement.mockRejectedValueOnce(new Error("storage unavailable"));
+    const first = msg(ann, 5, timestamp);
+    await consume({ messages: [first] }, deps);
+    expect(first.retried).toBe(180);
+    expect(first.acked).toBe(false);
+    expect(postAnnouncement).not.toHaveBeenCalled();
+
+    const redelivery = msg(ann, 6, timestamp);
+    await consume({ messages: [redelivery] }, deps);
+    expect(redelivery.retried).toBe(5);
+    expect(redelivery.acked).toBe(false);
+    expect(announcementClaims.finishAnnouncement).toHaveBeenCalledExactlyOnceWith(
+      ann.idempotencyKey,
+      1,
+      "retryable",
+    );
+    expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
+  });
+
+  it("recovers an expired claim after a hard-stop write error without another send", async () => {
+    const announcementClaims = announcementStore();
+    const postAnnouncement = vi.fn(async () => fail({ code: "needs_reconciliation", status: 409 }));
+    const deps = {
+      bot: { postAnnouncement } as unknown as BotClient,
+      events: store(),
+      lock: memLock(),
+      ledger: memLedger(),
+      announcementClaims,
+    };
+    announcementClaims.recordAnnouncement.mockRejectedValueOnce(new Error("storage unavailable"));
+    const first = msg(ann);
+    await consume({ messages: [first] }, deps);
+    expect(first.acked).toBe(false);
+    expect(first.retried).toBe(5);
+    announcementClaims.claimAnnouncement.mockResolvedValueOnce({
+      kind: "abandoned",
+      attempts: 1,
+      claimUntil: first.timestamp,
+    });
+    const redelivery = msg(ann, 2, first.timestamp);
+    await consume({ messages: [redelivery] }, deps);
+    expect(redelivery.acked).toBe(true);
+    expect(announcementClaims.recordAnnouncement.mock.calls).toEqual([
+      [ann.idempotencyKey, 1, { lastCode: "needs_reconciliation", lastStatus: 409 }],
+      [ann.idempotencyKey, 1, null],
+    ]);
+    expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
+  });
+
   it("role.assign sends no key", async () => {
     let called = 0;
     const bot = {
