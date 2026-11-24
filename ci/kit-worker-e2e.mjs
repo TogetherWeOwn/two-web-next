@@ -12,6 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
+import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
@@ -107,6 +108,8 @@ async function unusedPort() {
 
 requireDisposableDatabase(databaseUrl);
 const args = process.argv.slice(2);
+const publicVoiceBrowser = args[0] === "--installed-output" && args[1] === "--public-voice-browser";
+if (publicVoiceBrowser) args.splice(1, 1);
 const { worker, assets } = await workerOutput(args);
 const scratch = await mkdtemp(
   join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-worker-e2e-"),
@@ -117,7 +120,7 @@ const workers = [];
 // Start one loopback Worker. The generated Kit Worker and the direct Hono
 // Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
 // fixture database and vars within each pair.
-async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
+async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub = false) {
   const port = await unusedPort();
   const origin = `http://127.0.0.1:${port}`;
   const config = join(scratch, `${name}.wrangler.jsonc`);
@@ -127,7 +130,7 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
     compatibility_date: "2026-09-29",
     compatibility_flags: ["nodejs_compat"],
     assets: { directory: assetsDirectory, binding: "ASSETS", run_worker_first: true },
-    ...(args.length && (name === "kit" || name === "kit-live")
+    ...(liveHub
       ? {
           durable_objects: { bindings: [{ name: "DISCORD_LIVE_HUB", class_name: "LiveGuildHub" }] },
           migrations: [{ tag: "live-v1", new_sqlite_classes: ["LiveGuildHub"] }],
@@ -202,7 +205,7 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
 // success quiet while a red check still shows the cause.
 let failed = false;
 try {
-  const kit = await startWorker("kit", worker, assets);
+  const kit = await startWorker("kit", worker, assets, undefined, undefined, args.length > 0);
   const hono = await startWorker("hono", join(repo, "src/worker.ts"), join(repo, "public"));
   const origin = kit.origin;
   await Promise.all([
@@ -234,6 +237,8 @@ function fetch(request, env, context) {
   const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
   const secure = new Request(url, request);
   secure.headers.set("host", url.host);
+  // Map the browser's loopback origin to the synthetic HTTPS origin only.
+  if (secure.headers.get("origin") === incoming.origin) secure.headers.set("origin", url.origin);
   return worker.fetch(secure, env, context);
 }\n`,
     );
@@ -241,7 +246,7 @@ function fetch(request, env, context) {
       "./fixtures/kit-live-fanout.mjs"
     );
     const secret = FIXTURE_SECRETS.SESSION_SECRET;
-    const live = await startWorker("kit-live", entry, assets, secret, {
+    const liveVars = {
       APP_URL: "https://kit-live.invalid",
       BOT_ENDPOINT_URL: "https://bot-live.invalid",
       DISCORD_GUILD_ID: LIVE_FIXTURE_GUILD,
@@ -252,7 +257,25 @@ function fetch(request, env, context) {
       DISCORD_LIVE_INGEST_SECRET: "fixture-ingest-value",
       DISCORD_LIVE_SNAPSHOT_KEY_ID: "fixture-snapshot",
       DISCORD_LIVE_SNAPSHOT_SECRET: "fixture-snapshot-value",
-    });
+    };
+    if (publicVoiceBrowser) {
+      // Run the homepage against separate persisted Workers so the hub starts
+      // cold and the disabled fixture has a working session bridge.
+      const off = await startWorker(
+        "kit-voice-off",
+        entry,
+        assets,
+        secret,
+        { ...liveVars, DISCORD_LIVE_SOCKET_ENABLED: undefined },
+        true,
+      );
+      await listen(off.child, off.origin, () => off.log);
+      const enabled = await startWorker("kit-voice", entry, assets, secret, liveVars, true);
+      await listen(enabled.child, enabled.origin, () => enabled.log);
+      const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
+      await verifyKitPublicVoice(off.origin, enabled.origin, databaseUrl, secret);
+    }
+    const live = await startWorker("kit-live", entry, assets, secret, liveVars, true);
     await listen(live.child, live.origin, () => live.log);
     const { verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
     await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
@@ -817,8 +840,8 @@ export default {
   }
   console.log("PASS generated Worker canonical/API boundary parity");
 
-  // The composed hook has no API family bindings. The reserved version read
-  // and its method, slash and data variants still reach the direct Hono owner.
+  // With the feed binding absent, the reserved version read and its method,
+  // slash and data variants still reach the direct Hono owner.
   for (const [method, path, expected] of [
     ["GET", "/version?probe=admission", 200],
     ["HEAD", "/version", 200],
@@ -832,6 +855,23 @@ export default {
     assert.equal(result.headers["x-two-renderer"], undefined, `${label}: Hono owns the response`);
   }
   console.log("PASS generated Worker reserved method/path parity with API families off");
+
+  await assertStaticFeedParity({
+    hono,
+    kit,
+    databaseUrl,
+    startKit: async (name, vars) => {
+      const instance = await startWorker(
+        name,
+        worker,
+        assets,
+        FIXTURE_SECRETS.SESSION_SECRET,
+        vars,
+      );
+      await listen(instance.child, instance.origin, () => instance.log);
+      return instance;
+    },
+  });
 
   if (args.length) {
     const probePath = "/__fixture/machine-parity";

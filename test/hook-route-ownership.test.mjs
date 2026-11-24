@@ -22,7 +22,9 @@ import {
   KIT_RENDERER_VALUE,
   ROUTE_MANIFEST,
   dispatchHookRequest,
+  resolveRouteOwner,
 } from "../src/route-ownership";
+import { KIT_STATIC_FEED_ROUTES } from "../src/events/kit-static-feed-routes";
 
 const APP_URL = "https://example.com";
 // Explicit Kit-owned view of the archive page for tests: the shipped manifest
@@ -621,7 +623,9 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("homeRenewalFor: kitDocumentRotationFor(env)");
     expect(source.match(/dispatchHookRequest\(event,/g)?.length).toBe(1);
     expect(source).toContain("sequence(admitCapture, dispatchWithSecurity)");
-    expect(source).not.toContain("apiFamilies");
+    expect(source).toContain(
+      "apiFamilies: [{ flag: env.KIT_ROUTE_FEEDS, routes: KIT_STATIC_FEED_ROUTES }]",
+    );
     // Production session composition lives in kitSessionBridge
     // (src/kit-session.ts), pinned by test/kit-session.test.ts: the hook must
     // not carry any session logic to mutate. Each of these mutants stays green
@@ -749,6 +753,65 @@ describe("dormant API family admission", () => {
       expect(await owner(apiEvent(excluded), { flag: "true", routes })).toBe("hono");
     }
   });
+
+  it("does not let a family release a disabled Kit route or parameter overlap", async () => {
+    for (const [pathname, overlap] of [
+      ["/admin", { ...read, path: "/admin", enabled: false }],
+      ["/api/fixture", { ...read, path: "/api/:key", enabled: false }],
+    ]) {
+      const event = apiEvent(pathname);
+      const d = deps({
+        // The active rollout may omit /admin, but the shipped manifest still reserves it.
+        manifest: pathname === "/admin" ? [] : [overlap],
+        apiFamilies: [{ flag: "true", routes: [{ ...read, path: pathname }] }],
+      });
+      await dispatchHookRequest(event, d);
+      expect(d.honoFetch).toHaveBeenCalledExactlyOnceWith(event.request);
+      expect(d.resolve).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(KIT_STATIC_FEED_ROUTES)(
+    "serves and logs $path without document or session work",
+    async (route) => {
+      const event = apiEvent(`${route.path}?game=fixture`);
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const version = "a".repeat(40);
+      const sessionFor = vi.fn();
+      const authStatusCookieFor = vi.fn();
+      const d = deps({
+        apiFamilies: [{ flag: "true", routes: KIT_STATIC_FEED_ROUTES }],
+        versionMetadata: { tag: version },
+        sessionFor,
+        authStatusCookieFor,
+        resolve: vi.fn(async (resolved) => {
+          expect(resolved.request).toBe(event.request);
+          expect(resolved.locals).not.toHaveProperty("restoredWrite");
+          return new Response(null, { status: 304 });
+        }),
+      });
+
+      // This slice does not need a release of any Hono-reserved path.
+      expect(resolveRouteOwner(route, [route])).toBe("kit");
+      const response = await dispatchHookRequest(event, d);
+      expect(response.status).toBe(304);
+      expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+      expect(response.headers.get("content-security-policy")).toBeTruthy();
+      expect(d.resolve).toHaveBeenCalledExactlyOnceWith(event);
+      expect(d.honoFetch).not.toHaveBeenCalled();
+      expect(sessionFor).not.toHaveBeenCalled();
+      expect(authStatusCookieFor).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
+        event: "http.request",
+        method: "GET",
+        route: route.path,
+        status: 304,
+        request_id: response.headers.get("x-request-id"),
+        build_sha: version,
+      });
+    },
+  );
 
   it("applies existing Kit security before a selected write can read a body", async () => {
     const sessionFor = vi.fn(async () => ({ status: "guest", session: null }));

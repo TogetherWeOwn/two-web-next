@@ -861,9 +861,14 @@ describe("workflow evidence wiring", () => {
     );
     assert.equal(
       steps[deployed].if,
-      undefined,
-      "receipt must require prior success, never always()",
+      "env.CUTOVER_MODE == 'ordinary'",
+      "only ordinary promotion has bundle evidence",
     );
+    assert.equal(
+      steps[smoke].env.CUTOVER_UPLOADED_VERSION,
+      "${{ steps.cutover-upload.outputs.version_id }}",
+    );
+    assert.equal(steps[proof].if, "env.CUTOVER_MODE != 'hono'");
     assert.match(steps[deployed].run, /worker-bundle-evidence.mjs deployed dist-production/);
     assert.equal(
       steps[deployed].env.PROMOTED_VERSION_ID,
@@ -876,7 +881,7 @@ describe("workflow evidence wiring", () => {
     assert.equal(steps[archive].with["retention-days"], 30);
   });
 
-  test("production builds the inert Kit candidate beside, never instead of, the Hono upload", () => {
+  test("ordinary production builds the inert Kit candidate beside the Hono upload", () => {
     const steps = workflow("deploy-production").jobs["deploy-production"].steps;
     const find = (text) => steps.findIndex((step) => step.name?.includes(text));
     const honoInventory = find("Inventory the exact");
@@ -890,7 +895,8 @@ describe("workflow evidence wiring", () => {
       order.every((index, n) => index > (order[n - 1] ?? -1)),
       String(order),
     );
-    const guard = "hashFiles('web/wrangler.production.jsonc') != ''";
+    const guard =
+      "env.CUTOVER_MODE == 'ordinary' && hashFiles('web/wrangler.production.jsonc') != ''";
     for (const index of [check, build, inventory]) assert.equal(steps[index].if, guard);
     assert.equal(
       steps[check].run,
@@ -909,9 +915,11 @@ describe("workflow evidence wiring", () => {
     assert.equal(steps[archive].with.path, "web/dist-production-kit/");
     const kitSteps = JSON.stringify([check, build, inventory, archive].map((i) => steps[i]));
     assert.doesNotMatch(kitSteps, /secrets\.|versions upload|--env production/);
-    for (const step of steps.filter((s) => /versions (?:upload|deploy)/.test(s.run ?? ""))) {
-      assert.doesNotMatch(step.run, /kit/i);
-    }
+    const upload = steps.find((step) => step.id === "cutover-upload")?.run;
+    assert.match(
+      upload,
+      /if \[ "\$CUTOVER_MODE" != ordinary \]; then\n +node [^\n]+ upload [^\n]+\n +exit 0\nfi/,
+    );
   });
 
   test("CI creates build-only evidence and checks pinned no-bundle equivalence", () => {

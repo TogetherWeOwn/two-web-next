@@ -19,3 +19,8 @@ the staging Environment for a dedicated synthetic Neon project with the
 It runs public smoke and exact-version undo on both ledger states, then
 removes the run-owned Worker, database, and expiring login.
 To retry, select **Re-run all jobs** so staging uses a packet from that attempt.
+
+## Protected release and recovery
+
+Follow the [separate release gate](../CONTRIBUTING.md#production-release-gate) and pause automatic promotion. Prepare Hono with `deploy-production` and `cutover_mode: hono`, then record its serving UUID.
+Select `kit` with that UUID as `cutover_undo_version` and the same `sha` and `cutover_pin`. Undo with `rollback-production`, specifying Hono as `version_id` and Kit as `expected_current_version_id`. Ordinary promotion requires the full target ledger.

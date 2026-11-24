@@ -165,9 +165,12 @@ export function ledgerPrefixes(journal) {
   };
 }
 
-export function verifyReady(status, body, prefixes, { version, commit, state } = {}) {
+export function verifyReady(status, body, prefixes, expectedIdentity = {}) {
+  const { version, commit, state, allowDeferred } = expectedIdentity;
+  const pending = body?.pending_migrations;
+  const deferred = allowDeferred && status === 503 && Number.isInteger(pending) && pending > 0;
   assert.ok(
-    status === 200 && body?.db === "ok" && body.pending_migrations === 0,
+    body?.db === "ok" && ((status === 200 && pending === 0) || deferred),
     "Worker readiness did not report HTTP 200, db ok and zero pending",
   );
   if (version || commit) {
@@ -183,6 +186,8 @@ export function verifyReady(status, body, prefixes, { version, commit, state } =
     const expected = prefixes[candidate];
     if (rows.length === expected.length && rows.every((when, i) => when === expected[i])) {
       assert.ok(!state || state === candidate, "Worker readiness ledger state mismatch");
+      const deferredLimit = prefixes["1037"].length - expected.length + 1;
+      assert.ok(pending <= deferredLimit, "unexpected deferred migration count");
       return candidate;
     }
   }
