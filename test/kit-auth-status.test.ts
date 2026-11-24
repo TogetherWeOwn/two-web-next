@@ -69,6 +69,31 @@ describe("detached Kit auth status parity", () => {
     expect(get).not.toHaveBeenCalled();
   });
 
+  it("treats a signature verification error as an invalid cookie and keeps bearer fallback", async () => {
+    const f = recoveryFixture();
+    const live = await f.login();
+    const key = (await f.sessions.statusHash(live.tokenHash))!;
+    const probe = await signed(AUTH_STATUS_COOKIE, key);
+    const verify = crypto.subtle.verify.bind(crypto.subtle);
+    vi.spyOn(crypto.subtle, "verify").mockImplementation(
+      (algorithm, cryptoKey, signature, data) => {
+        if (new TextDecoder().decode(data) === key) {
+          return Promise.reject(new Error("synthetic verifier failure"));
+        }
+        return verify(algorithm, cryptoKey, signature, data);
+      },
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const isActive = vi.spyOn(f.sessions, "isActive");
+
+    await expectParity(f, probe, false);
+    await expectParity(f, `${probe}; ${live.cookie}`, true);
+    expect(isActive).not.toHaveBeenCalled();
+    expect(warn.mock.calls.filter(([line]) => line === "auth status store unavailable")).toEqual(
+      [],
+    );
+  });
+
   it("reads the hashed bearer without renewal and honors first wire-valid cookie precedence", async () => {
     const f = recoveryFixture();
     const live = await f.login();

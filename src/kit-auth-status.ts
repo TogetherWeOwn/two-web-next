@@ -15,12 +15,8 @@ export async function kitAuthStatusResponse(
   const header = request.headers.get("cookie");
   const cookies = signedCookiePairs(header, STATUS_COOKIE_NAMES);
   const { authenticated, status } = await readAuthStatus(
-    async (name) => {
-      // Match the serving verifier's outage boundary when a Cookie header is presented.
-      if (header && !env.SESSION_SECRET) throw new Error("Missing session secret");
-      const value = cookies.get(name);
-      return value === undefined ? null : verifySignedCookie(value, env.SESSION_SECRET);
-    },
+    async (name) =>
+      header ? verifySignedCookie(cookies.get(name), env.SESSION_SECRET, "hono") : null,
     () => storeForEnv(env),
     requestId,
   );
