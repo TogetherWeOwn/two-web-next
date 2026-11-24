@@ -255,6 +255,36 @@
       "reason": "Transient SSR-only page: Hono admits the landing and supplies a display model; the dispatcher does not serve a Kit data response."
     },
     {
+      "route": "GET /auth/discord",
+      "binding": "web/src/routes/auth/discord/+server.ts",
+      "reason": "OAuth authorization redirect issues signed journey cookies. The installed Worker auth fixture covers this endpoint without a Kit data response."
+    },
+    {
+      "route": "GET /auth/discord/callback",
+      "binding": "web/src/routes/auth/discord/callback/+server.ts",
+      "reason": "OAuth callback issues session cookies on success. The installed Worker auth fixture covers this endpoint without a Kit data response."
+    },
+    {
+      "route": "GET /auth/discord/redirect",
+      "binding": "web/src/routes/auth/discord/redirect/+server.ts",
+      "reason": "Legacy location-only OAuth entry. The installed Worker auth fixture covers this endpoint without a Kit data response."
+    },
+    {
+      "route": "GET /auth/status",
+      "binding": "web/src/routes/auth/status/+server.ts",
+      "reason": "Session liveness protocol returns one boolean. The installed Worker auth fixture covers this endpoint without a Kit data response."
+    },
+    {
+      "route": "POST /logout",
+      "binding": "web/src/routes/logout/+server.ts",
+      "reason": "Native POST redirects and clears session cookies. The installed Worker auth fixture covers this endpoint without a Kit data response."
+    },
+    {
+      "route": "POST /logout/everywhere",
+      "binding": "web/src/routes/logout/everywhere/+server.ts",
+      "reason": "Native POST revokes member sessions and clears session cookies. The installed Worker auth fixture covers this endpoint without a Kit data response."
+    },
+    {
       "route": "*",
       "binding": "web/src/routes/[...path]/+server.ts",
       "reason": "Strangler catch-all: unrouted paths go to the Hono app unchanged (Hono surface)."

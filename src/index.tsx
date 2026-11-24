@@ -4,7 +4,7 @@ import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
-import { registerAuthRoutes, SESSION_COOKIE } from "./auth/routes";
+import { type AuthHooks, registerAuthRoutes, SESSION_COOKIE } from "./auth/routes";
 import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
 import { registerAlertProbe } from "./alert-probe";
 import { requestBodyLimit } from "./body-limit";
@@ -190,11 +190,9 @@ app.use("*", expiredWriteBanner);
 app.use("*", freezeBanner);
 app.use("*", webmcpPilot);
 
-// OAuth and login routes live in ./auth/routes; the app module only wires them.
-registerAuthRoutes(app, {
-  storeFor: (c) => storeFor(c),
-  issueSession: (c, store, row) => issueSession(c, store, row),
-});
+// Both auth entry points use the same store and session issuer.
+export const authHooks: AuthHooks = { storeFor, issueSession };
+registerAuthRoutes(app, authHooks);
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).

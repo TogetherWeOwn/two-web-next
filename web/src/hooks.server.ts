@@ -23,6 +23,7 @@ import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes"
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
+import { authOriginRefusal, KIT_AUTH_ROUTES } from "#lib/server/auth.ts";
 import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
 
 // Pure env binding: trust, ownership, decoration, the read-only session
@@ -37,9 +38,9 @@ import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
 // dispatch's shared-cache eligibility. Renewal stays route-specific: the
 // bridge never issues, rotates, revokes, or sets cookies, and the event
 // detail, home and admin reads renew only through the post-release bindings below,
-// after the member-read boundary releases a successful GET. Logout and OAuth stay
-// Hono-owned, and a missing secret (the preview Worker sets none) resolves
-// to "unknown" rather than a false logout.
+// after the member-read boundary releases a successful GET. Auth endpoints
+// own their session effects behind a default-off family binding. A missing
+// secret in the preview Worker resolves to "unknown".
 const admitCapture: Handle = ({ event, resolve }) => {
   if (typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true) {
     const refusal = captureRefusal(event.request, env);
@@ -62,6 +63,11 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     // dispatcher returns the controller's native HTTP response in its place.
     admin: { env, completeForm: () => redirect(303, "/admin") },
     apiFamilies: [
+      {
+        flag: env.KIT_ROUTE_AUTH,
+        routes: KIT_AUTH_ROUTES,
+        crossOriginRefusal: authOriginRefusal,
+      },
       { flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] },
       { flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES },
       { flag: env.KIT_ROUTE_SECURITY_TXT, routes: [KIT_SECURITY_TXT_ROUTE] },

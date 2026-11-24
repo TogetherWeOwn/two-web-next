@@ -139,6 +139,27 @@ require a pathname predicate and leave reserved paths to Hono. HEAD follows
 GET. Conflicting claims and overlaps with disabled page ownership entries
 fall back to Hono.
 
+### Browser authentication endpoints
+
+`KIT_ROUTE_AUTH=true` selects Kit for the literal Discord sign-in, callback,
+legacy redirect and status GET/HEAD pairs, and the two logout POST paths.
+Other values leave these paths with Hono. Encoded aliases, trailing slashes,
+Kit data URLs and other methods keep Hono's answer. Join OAuth, staging QA
+and the recovery page follow their existing ownership rules.
+
+Both entry points register the same callback, use the same signed state and
+session cookies, and consume the same one-time `auth` journey before provider
+exchange. An in-flight sign-in can complete across a flag change. Kit checks
+host and origin before the shared handlers run. The logout body cap runs
+before the shared logout throttle and session revocation. The legacy
+redirects, status probe and native HTML form submissions retain their
+existing response contracts.
+
+The hosted installed-Worker fixture exercises both owners with synthetic
+sessions and mocked provider responses, including a no-JavaScript sign-out.
+Keep the binding unset in deployed configurations until the exact candidate
+qualifies through the [production release gate](../CONTRIBUTING.md#production-release-gate).
+
 ### Admin serving
 
 `KIT_ROUTE_ADMIN=true` enables moderator pages, native admin form POSTs, and
