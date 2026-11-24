@@ -198,11 +198,11 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
     if (target !== kit) assert.equal(actual.headers.get("etag"), direct.headers.get("etag"), path);
   }
 
-  async function compareFallback(method, path, status, origin = hono.origin) {
+  async function compareFallback(target, method, path, status, origin = hono.origin) {
     const options = { method, status, headers: { origin } };
     const direct = await request(hono, path, options);
-    const actual = await request(feedOn, path, options);
-    compare(actual, direct, feedOn, path);
+    const actual = await request(target, path, options);
+    compare(actual, direct, target, path);
   }
 
   async function assertSeoParity() {
@@ -263,21 +263,6 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
       }
     }
 
-    for (const [method, path, status, origin = hono.origin] of [
-      ["GET", "/%72obots.txt", 200],
-      ["GET", "/sitemap%5Findex.xml", 200],
-      ["HEAD", "/robots.txt/", 404],
-      ["GET", `${sitemap}/`, 404],
-      ["GET", "/robots.txt/__data.json", 404],
-      ["GET", "/sitemap.xml", 404],
-      ["POST", "/robots.txt", 404],
-      ["OPTIONS", sitemap, 404],
-      ["POST", sitemap, 403, "https://example.invalid"],
-    ]) {
-      const options = { method, status, headers: { origin } };
-      const direct = await request(hono, path, options);
-      compare(await request(seoOn, path, options), direct, seoOn, path);
-    }
     console.log(
       "PASS Worker robots and sitemap absent/off/on: ownership, wire parity, visibility and read budget",
     );
@@ -309,7 +294,20 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
       ["GET", `/api/public/events/${eventKeys[0]}.ics`, 422],
       ["GET", "/version", 200],
     ]) {
-      await compareFallback(method, path, status, origin);
+      await compareFallback(feedOn, method, path, status, origin);
+    }
+    for (const [method, path, status, origin] of [
+      ["GET", "/%72obots.txt", 200],
+      ["GET", "/sitemap%5Findex.xml", 200],
+      ["HEAD", "/robots.txt/", 404],
+      ["GET", `${sitemap}/`, 404],
+      ["GET", "/robots.txt/__data.json", 404],
+      ["GET", "/sitemap.xml", 404],
+      ["POST", "/robots.txt", 404],
+      ["OPTIONS", sitemap, 404],
+      ["POST", sitemap, 403, "https://example.invalid"],
+    ]) {
+      await compareFallback(seoOn, method, path, status, origin);
     }
     await request(feedOn, "/about", { status: 200, renderer: "kit" });
     await request(feedOn, "/events/past", { status: 200, renderer: "kit" });
@@ -387,9 +385,9 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
       compare(actual, invalid, target, invalidPath);
     }
 
-    await compareFallback("GET", "/events%2Erss", 200);
-    await compareFallback("GET", `/events/${eventKeys[0]}%2Eics`, 200);
-    await compareFallback("GET", `/%65vents/${eventKeys[0]}.ics`, 200);
+    await compareFallback(feedOn, "GET", "/events%2Erss", 200);
+    await compareFallback(feedOn, "GET", `/events/${eventKeys[0]}%2Eics`, 200);
+    await compareFallback(feedOn, "GET", `/%65vents/${eventKeys[0]}.ics`, 200);
 
     const detailBaseline = new Map();
     for (const [index, target] of modes.entries()) {
