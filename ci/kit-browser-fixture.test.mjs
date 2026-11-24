@@ -240,10 +240,13 @@ test("Kit admin Events exposes the current sort and follows sort links by keyboa
   const start = `?${filters}&sort=starts_at&order=desc&page=2`;
   const titleAscending = `?${filters}&sort=title&order=asc`;
   const titleDescending = `?${filters}&sort=title&order=desc`;
+  const startsAt = "2030-01-02T00:15:00.125Z";
+  const startLabel = "2030-01-02 00:15:00.125 UTC";
   await withKitOfflineBrowser(
     {
       search: start,
       searches: [titleAscending, titleDescending],
+      timezoneId: "America/Los_Angeles",
       page: `<script lang="ts">
 import { page } from '$app/state';
 import AdminEvents from '../admin/events/+page.svelte';
@@ -252,7 +255,7 @@ import { eventEmptyText, parseEventListQuery } from '../../../../src/admin/event
 const query = parseEventListQuery(Object.fromEntries(page.url.searchParams));
 const rows = ['Alpha', 'Zulu'].map((name) => ({
   eventKey: name.toLowerCase(), title: 'Fixture night ' + name, game: null, status: 'cancelled',
-  startsAt: '2030-01-02T18:00:00.000Z', endsAt: '2030-01-02T20:00:00.000Z',
+  startsAt: name === 'Alpha' ? '${startsAt}' : '', endsAt: '2030-01-02T20:00:00.000Z',
   capacity: null, rsvpOpen: false, goingCount: 0,
 }));
 if (query.order === 'desc') rows.reverse();
@@ -295,6 +298,7 @@ if (query.order === 'desc') rows.reverse();
       const startsAsc = sortLink("Sort by starts (UTC) ascending");
       const rowTitles = () => table.locator("tbody tr td:first-child a").allTextContents();
       const thead = table.locator("thead");
+      const startTime = table.locator("tbody time");
 
       async function capture(state) {
         const fixtureEvidence = process.env.KIT_CALENDAR_EVIDENCE_DIR;
@@ -322,6 +326,33 @@ if (query.order === 'desc') rows.reverse();
           await writeFile(join(directory, `${state}-${width}-before.png`), before);
           await writeFile(join(directory, `${state}-${width}-after.png`), after);
           assert.ok(before.equals(after), `${state} at ${width}px renders identically`);
+        }
+      }
+
+      async function captureStartTime() {
+        const fixtureEvidence = process.env.KIT_CALENDAR_EVIDENCE_DIR;
+        if (!fixtureEvidence) return;
+        const directory = join(fixtureEvidence, "admin-events-utc");
+        await mkdir(directory, { recursive: true });
+        for (const [width, height] of [
+          [1280, 800],
+          [390, 844],
+        ]) {
+          await page.setViewportSize({ width, height });
+          // Reveal the start column inside the table's existing scroll region.
+          const revealTime = () =>
+            startTime.evaluate((element) =>
+              element.scrollIntoView({ block: "center", inline: "center" }),
+            );
+          await revealTime();
+          await page.screenshot({ path: join(directory, `${width}-after.png`) });
+          // Restore the original ISO text as a visual control on the same SSR page.
+          await startTime.evaluate((element) => {
+            element.textContent = element.getAttribute("datetime");
+          });
+          await revealTime();
+          await page.screenshot({ path: join(directory, `${width}-before.png`) });
+          await page.reload();
         }
       }
 
@@ -358,8 +389,19 @@ if (query.order === 'desc') rows.reverse();
       await assertSort("Title", "ascending");
       assert.deepEqual(await rowTitles(), ["Fixture night Alpha", "Fixture night Zulu"]);
       assert.equal(await titleDesc.getAttribute("href"), `/admin/events${titleDescending}`);
+      assert.equal(await startTime.getAttribute("datetime"), startsAt);
+      assert.equal(await startTime.textContent(), startLabel);
+      const timeSnapshot = await startTime.ariaSnapshot();
+      assert.match(timeSnapshot, /- time\b/);
+      assert.ok(timeSnapshot.includes(startLabel), timeSnapshot);
+      assert.equal(
+        await page.getByTestId("event-unrenderable-time-zulu").textContent(),
+        "Unrenderable time",
+      );
       t.diagnostic(await thead.ariaSnapshot());
+      t.diagnostic(timeSnapshot);
       await capture("title-ascending");
+      await captureStartTime();
 
       await page.getByTestId("events-table-scroll").focus();
       await page.keyboard.press("Tab");

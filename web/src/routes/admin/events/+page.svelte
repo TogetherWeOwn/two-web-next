@@ -16,8 +16,8 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // Markup contract of EventsPage (src/admin/pages/events-list.tsx): the
 // search form, sort headers, fill badges, row actions, paging nav, empty
 // states and testids are shared, so the existing admin E2E selectors still
-// apply when this route owns traffic. Timestamps arrive pre-rendered as ISO
-// strings from the load, exactly as the Hono page emits them. No island and
+// apply when this route owns traffic. Timestamps arrive as ISO strings from
+// the load and the start cell displays the date, clock time and UTC. No island and
 // no event handlers: every control is a plain GET form, sort/paging link or
 // POST form to the Hono-owned mutation endpoints, so the page works with
 // JavaScript disabled, exactly like the Hono panel. The pause review below
@@ -154,7 +154,13 @@ const now = new Date();
               <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
               <td>
                 {#if r.startsAt}
-                  <time datetime={r.startsAt}>{r.startsAt}</time>
+                  {@const label = r.startsAt.replace("T", " ").replace("Z", " UTC")}
+                  <!-- HTML dates require an unsigned, nonzero year. Keep earlier instants readable. -->
+                  {#if r.startsAt.startsWith("-") || r.startsAt.startsWith("0000-")}
+                    {label}
+                  {:else}
+                    <time datetime={r.startsAt.replace(/^\+/, "")}>{label}</time>
+                  {/if}
                 {:else}
                   <span data-testid={`event-unrenderable-time-${r.eventKey}`}>Unrenderable time</span>
                 {/if}
