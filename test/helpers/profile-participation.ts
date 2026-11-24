@@ -145,7 +145,7 @@ export async function runLoad(event, seam) { configure(seam); return load(event)
               plugin.onLoad({ filter: /.*/, namespace: "participation" }, (args) => ({
                 contents:
                   args.path === "@sveltejs/kit"
-                    ? `export function error(status,message){throw new Response(message,{status})}; export function redirect(status,location){throw new Response(null,{status,headers:{location}})};`
+                    ? `export const fail = (status, data) => ({status, data}); export function error(status,message){throw new Response(message,{status})}; export function redirect(status,location){throw new Response(null,{status,headers:{location}})};`
                     : args.path === "cloudflare:workers"
                       ? `export const env={APP_URL:${JSON.stringify(ORIGIN)}};`
                       : `let seam; export function configure(value){seam=value}; export function kitProfileDeps(){return seam}; export function resolveKitProfile(...args){return seam.resolveKitProfile(...args)};`,

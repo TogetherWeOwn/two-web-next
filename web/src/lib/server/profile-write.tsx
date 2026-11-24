@@ -31,7 +31,6 @@ function renderProfileWriteDraft(request: Request, env: Env, draft: KitProfileWr
   );
 }
 
-// Programmatic requests can still negotiate the legacy HTML draft envelope.
 export async function writeKitProfileEndpoint(
   request: Request,
   env: Env,
@@ -49,8 +48,7 @@ export async function resolveProfileWrite(
   if (event.request.method !== "POST" || event.route.id !== KIT_PROFILE_WRITE_ROUTE_ID) {
     return render();
   }
-  // Keep the public POST contract for non-form bodies and named-action keys,
-  // which Kit handles before invoking the default action.
+  // Kit handles non-form bodies and named-action keys before the default action.
   if (
     !isProfileForm(event.request) ||
     Array.from(event.url.searchParams.keys()).some((key) => key.startsWith("/"))
