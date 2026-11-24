@@ -31,7 +31,7 @@ export class LiveGuildHub {
   readonly #publicRooms: ReadonlySet<string> | null;
   // Producer recovery can restore the raw cursor. Only a browser pull arms delivery.
   #publicUntil = 0;
-  #pullingPublic = false;
+  #publicPull: Promise<boolean> | null = null;
 
   constructor(
     private readonly ctx: DurableObjectState,
@@ -120,26 +120,32 @@ export class LiveGuildHub {
     return value === null ? null : { value, until };
   }
 
-  async #refreshPublic(): Promise<boolean> {
-    if (!this.#sequence || !this.#publicRooms || this.#pullingPublic) return false;
+  #refreshPublic(): Promise<boolean> {
+    if (!this.#sequence || !this.#publicRooms) return Promise.resolve(false);
+    // Concurrent commands share a covering observation. Each command resumes
+    // its own authorization before it can install a new socket lease.
+    return (this.#publicPull ??= this.#pullPublic(this.#sequence).finally(() => {
+      this.#publicPull = null;
+    }));
+  }
+
+  async #pullPublic(sequence: LiveSequence<LiveState, LiveDelta>): Promise<boolean> {
     const kv = this.ctx.storage.kv;
+    const after = kv.get<number>(SOCKET_PULL_AFTER) ?? 0;
+    const wait = Math.min(SOCKET_RECOVERY_INTERVAL_MS, after - Date.now());
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
     const now = Date.now();
-    if (now < (kv.get<number>(SOCKET_PULL_AFTER) ?? 0)) return false;
+    if (now < after) return false;
     // A reconstruction shares the same browser pull budget.
     kv.put(SOCKET_PULL_AFTER, now + SOCKET_RECOVERY_INTERVAL_MS);
-    this.#pullingPublic = true;
-    try {
-      const proof = await this.#sequence.refresh();
-      if (proof?.validUntil === undefined) return false;
-      await this.#sockets.scheduleExpiry(proof.validUntil);
-      // Only continuous state from the browser's observation can use this alarm.
-      if (!this.#sequence.stillCovers(proof)) return false;
-      this.#publicUntil = proof.validUntil;
-      this.ctx.waitUntil(this.#sockets.publish());
-      return true;
-    } finally {
-      this.#pullingPublic = false;
-    }
+    const proof = await sequence.refresh();
+    if (proof?.validUntil === undefined) return false;
+    await this.#sockets.scheduleExpiry(proof.validUntil);
+    // Only continuous state from the browser's observation can use this alarm.
+    if (!sequence.stillCovers(proof)) return false;
+    this.#publicUntil = proof.validUntil;
+    this.ctx.waitUntil(this.#sockets.publish());
+    return true;
   }
 
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {

@@ -249,7 +249,6 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     );
     const renewedAt = await guest.frame(frames.withdrawal);
     assert.ok(renewedAt >= renewedUntil && renewedAt < renewedUntil + 4_000);
-    observer.socket.close();
     assert.equal(await source(), generation, "lease alarm ran without a hibernation wake");
     assert.equal(
       guest.socket.readyState,
@@ -258,10 +257,18 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     );
     const renewed = snapshot(49, 5);
     assert.equal(await source(renewed), generation);
+    const firstCommandAt = Date.now();
     guest.resyncVoice();
     await guest.frame(frames.withdrawal);
     await guest.frame(frames.warm);
     assert.equal(await source(), generation, "the socket resynced on the same hub without ingress");
+    observer.resyncVoice();
+    await observer.frame(frames.withdrawal);
+    const secondReply = await observer.frame(projected("snapshot", 2, 5), 8_000);
+    assert.ok(
+      secondReply >= firstCommandAt + 5_000,
+      "the second resync waited for the guild budget",
+    );
     console.log(
       "PASS installed Kit public scope, wire shape, exact-row fan-out revocation, gap recovery, lease expiry, and socket resync",
     );
@@ -284,6 +291,9 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     const coldWithdrawnAt = await guest.frame(frames.withdrawal, 20_000);
     assert.ok(coldWithdrawnAt >= coldUntil, "cold ingress must not withdraw early");
     assert.ok(coldWithdrawnAt < coldUntil + 4_000, "cold ingress must not postpone expiry");
+    const coldObserverAt = await observer.frame(frames.withdrawal);
+    assert.ok(coldObserverAt >= coldUntil && coldObserverAt < coldUntil + 4_000);
+    observer.socket.close();
     assert.equal(guest.socket.readyState, WebSocket.OPEN, "cold expiry keeps the guest connected");
 
     const recovery = snapshot(51, 6);

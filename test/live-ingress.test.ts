@@ -211,6 +211,7 @@ it.each([2, 3])("checks continuity through alarm I/O when ingress advances to %i
 });
 
 it("shares the browser pull cooldown across sockets and hub reconstruction", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const now = Date.now();
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
   const pull = vi.fn(async () => snapshot(1, new Date(now).toISOString()));
@@ -224,18 +225,22 @@ it("shares the browser pull cooldown across sockets and hub reconstruction", asy
     expect(pull).toHaveBeenCalledOnce();
     evict();
     clock.mockReturnValue(now + 4_999);
-    await message(second, "subscribe");
+    const waiting = [message(second, "subscribe"), message(first, "resync")];
+    await Promise.resolve(); // Both guest commands have reached the shared pull.
     expect(pull).toHaveBeenCalledOnce();
     expect(second.send).toHaveBeenCalledExactlyOnceWith(unavailable);
 
     clock.mockReturnValue(now + 5_000);
-    await message(first, "resync");
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.all(waiting);
     expect(pull).toHaveBeenCalledTimes(2);
-    expect(first.send).toHaveBeenLastCalledWith(
-      '{"v":1,"type":"snapshot","topic":"voice","seq":1,"value":{"count":null}}',
-    );
+    const snapshotFrame =
+      '{"v":1,"type":"snapshot","topic":"voice","seq":1,"value":{"count":null}}';
+    expect(first.send).toHaveBeenLastCalledWith(snapshotFrame);
+    expect(second.send).toHaveBeenLastCalledWith(snapshotFrame);
   } finally {
     clock.mockRestore();
+    vi.useRealTimers();
   }
 });
 
