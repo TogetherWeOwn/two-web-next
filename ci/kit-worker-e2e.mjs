@@ -12,6 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
+import { assertKitAdminServing, prepareAdminFixture } from "./fixtures/kit-admin-serving.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -737,6 +738,17 @@ export default {
   );
 
   if (args.length) {
+    const entry = join(scratch, "kit-admin.mjs");
+    const vars = await prepareAdminFixture(worker, entry);
+    const admin = await startWorker("kit-admin", entry, assets, secret, vars);
+    await listen(admin.child, admin.origin, () => admin.log);
+    await assertKitAdminServing({
+      kit: admin,
+      off: kitWithSession,
+      hono: honoWithSession,
+      databaseUrl,
+    });
+
     async function observeDataRedirect(worker, path) {
       const response = await fetch(`${worker.origin}${path}`, { redirect: "manual" });
       assert.equal(response.status, 302, `${path}: Hono guest redirect`);

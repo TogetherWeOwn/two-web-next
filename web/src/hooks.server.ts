@@ -1,4 +1,5 @@
 import { captureRefusal, captureResponse } from "../../src/render-clock";
+import { redirect } from "@sveltejs/kit";
 import { type Handle, sequence } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
@@ -59,6 +60,9 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     kitRouteEvents: env.KIT_ROUTE_EVENTS,
     kitRouteHome: env.KIT_ROUTE_HOME,
     kitRouteJoin: env.KIT_ROUTE_JOIN,
+    // End Kit's action before it starts another layout or page load. The
+    // dispatcher returns the controller's native HTTP response in its place.
+    admin: { env, completeForm: () => redirect(303, "/admin") },
     apiFamilies: [
       {
         flag: env.KIT_ROUTE_AUTH,

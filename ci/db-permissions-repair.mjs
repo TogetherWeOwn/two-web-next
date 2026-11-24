@@ -140,6 +140,21 @@ async function checkAuthority(tx, plan) {
   assert.equal(row.authorized, true);
 }
 
+async function awaitWriterGuard(tx) {
+  // A short unrelated writer may finish while the snapshot drain is held.
+  // Sustained writers still refuse the repair before any mutation.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) await tx`select pg_sleep(0.25)`;
+    // GRANT can release catalog locks before committing, but keeps its transaction lock.
+    const [{ clear }] = await tx`select not exists (
+      select from pg_locks l left join pg_stat_activity a on a.pid = l.pid
+      where l.locktype = 'transactionid' and l.mode = 'ExclusiveLock' and l.granted
+        and (a.datname is null or a.datname = current_database())) as clear`;
+    if (clear) return;
+  }
+  assert.fail("A database writer is active");
+}
+
 async function executeRepair(tx, config, plan, direction) {
   await tx`set local search_path = pg_catalog`;
   await tx`set local lock_timeout = '2s'`;
@@ -156,14 +171,13 @@ async function executeRepair(tx, config, plan, direction) {
   const [{ acquired }] =
     await tx`select pg_try_advisory_xact_lock(${webMigrationLockKey}) as acquired`;
   assert.equal(acquired, true);
+  // Drain snapshot mutations before the guard in both directions. EXCLUSIVE
+  // conflicts with row writes and SELECT FOR UPDATE, while admitting plain
+  // reads. The transaction releases the drain on both commit and rollback.
+  await tx`lock table public.discord_event_snapshots in exclusive mode`;
   // Keep the ledger stable and block concurrent GRANTs, which lock catalogs directly.
   await tx`lock table drizzle.__drizzle_migrations, pg_catalog.pg_class, pg_catalog.pg_attribute in share row exclusive mode nowait`;
-  // GRANT can release catalog locks before committing, but keeps its transaction lock.
-  const [{ clear }] = await tx`select not exists (
-    select from pg_locks l left join pg_stat_activity a on a.pid = l.pid
-    where l.locktype = 'transactionid' and l.mode = 'ExclusiveLock' and l.granted
-      and (a.datname is null or a.datname = current_database())) as clear`;
-  assert.ok(clear, "A database writer is active");
+  await awaitWriterGuard(tx);
   const forward = direction === "forward";
   const initial = await readState(tx);
   assert.equal(initial.digest, forward ? plan.before : plan.after);

@@ -115,6 +115,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_SEO?: string;
   // RFC 9116 disclosure file. Only the literal string "true" opts in.
   KIT_ROUTE_SECURITY_TXT?: string;
+  // Admin serving integration is accepted only on canonical staging or loopback.
+  KIT_ROUTE_ADMIN?: string;
   // Health, version, CSP sink and alert probe. Only "true" opts in.
   KIT_ROUTE_OPS?: string;
   // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
