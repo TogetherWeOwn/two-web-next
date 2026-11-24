@@ -52,8 +52,8 @@ const verifiedLocalRefs = new Map([
 // These pins were checked for defaults and runner inputs. A repin needs
 // another source review; a full SHA alone doesn't establish runner selection.
 const verifiedHostedOrgReusables = new Map([
-  ["review-rules.yml@2ef8ad6447e11d019ac3098bcfd011193b75266a", "runs-on-json"],
-  ["test-guard.yml@2ef8ad6447e11d019ac3098bcfd011193b75266a", "runs-on-json"],
+  ["review-rules.yml@8059ac2b121b63443db656b1e10e927b8af8133c", "runs-on-json"],
+  ["test-guard.yml@8059ac2b121b63443db656b1e10e927b8af8133c", "runs-on-json"],
   ["pr-size.yml@ac9ce8d63e0cebd19ede904ac79137190c329964", "runs-on"],
   ["pr-size-gate.yml@ac9ce8d63e0cebd19ede904ac79137190c329964", "runs-on"],
   ["pr-size-weekly.yml@ac9ce8d63e0cebd19ede904ac79137190c329964", "runs-on"],
@@ -336,7 +336,7 @@ describe("workflow runner labels", () => {
 
   it("rejects unassessed reusable pins and non-hosted runner overrides", () => {
     const uses =
-      "TogetherWeOwn/.github/.github/workflows/test-guard.yml@2ef8ad6447e11d019ac3098bcfd011193b75266a";
+      "TogetherWeOwn/.github/.github/workflows/test-guard.yml@8059ac2b121b63443db656b1e10e927b8af8133c";
     const reviewRules = uses.replace("test-guard.yml", "review-rules.yml");
     expect(() => expectHostedJob("fixture.yml", "call", { uses })).not.toThrow();
     expect(() => expectHostedJob("fixture.yml", "call", { uses: reviewRules })).toThrow(
