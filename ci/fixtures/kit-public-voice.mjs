@@ -76,13 +76,16 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     const offHtml = await openHome(guest, offOrigin);
     assert.ok(!offHtml.includes(scriptPath));
     await expect(guest.locator("#home-public-voice")).toHaveCount(0);
+    await expect(guest.getByTestId("join")).toBeVisible();
+    const disabled = await guest.request.get(offOrigin + socketPath);
+    assert.equal(disabled.status(), 503);
+    assert.equal(disabled.headers()["cache-control"], "no-store");
     await capture(guest, "off");
     assert.deepEqual(offSockets, []);
     await guest.close();
 
     const page = await browser.newPage();
     const sockets = observe(page);
-    // Use a cursor beyond the unchanged fan-out fixture on this installed guild.
     await source(100, 4);
     const html = await openHome(page, liveOrigin);
     assert.ok(html.includes(scriptPath));
@@ -107,7 +110,9 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
       {
         name: SESSION_COOKIE,
         value: cookie.slice(SESSION_COOKIE.length + 1),
-        url: liveOrigin,
+        domain: new URL(liveOrigin).hostname,
+        path: "/",
+        secure: true,
       },
     ]);
     await source(101, 5);
@@ -152,10 +157,26 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     assert.equal(sockets.length, 1);
     assert.deepEqual(sockets[0].sent, [subscribe, resync]);
     assert.deepEqual(sockets[0].received.at(-1), frames.covering);
+
+    // Deliver the events of a persisted traversal explicitly so browser cache
+    // eligibility does not determine whether these handlers are exercised.
+    await page.evaluate(() =>
+      window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })),
+    );
+    await expect(count).toHaveText(unavailable);
+    await expect.poll(() => sockets[0].closed).toBe(true);
+    await page.evaluate(() =>
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })),
+    );
+    await expect(count).toHaveText(voice(5), { timeout: 12_000 });
+    assert.equal(sockets.length, 2);
+    assert.deepEqual(sockets[1].sent, [subscribe]);
+    assert.deepEqual(sockets[1].received.at(-1), publicBaseline);
+
     const socketUrl = new URL(socketPath, liveOrigin.replace(/^http:/, "ws:")).href;
     assert.ok([...sockets, ...memberSockets].every(({ url }) => url === socketUrl));
     console.log(
-      "PASS installed Kit home: default off, public-only updates, revoked admission, reconnect and gap withdrawal/resync",
+      "PASS installed Kit home: default off, public-only updates, revoked admission, reconnect, gap withdrawal/resync and page lifecycle",
     );
   } finally {
     await browser.close();

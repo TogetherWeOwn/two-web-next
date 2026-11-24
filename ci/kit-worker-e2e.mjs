@@ -119,7 +119,7 @@ const workers = [];
 // Start one loopback Worker. The generated Kit Worker and the direct Hono
 // Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
 // fixture database and vars within each pair.
-async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
+async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub = false) {
   const port = await unusedPort();
   const origin = `http://127.0.0.1:${port}`;
   const config = join(scratch, `${name}.wrangler.jsonc`);
@@ -129,7 +129,7 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
     compatibility_date: "2026-09-29",
     compatibility_flags: ["nodejs_compat"],
     assets: { directory: assetsDirectory, binding: "ASSETS", run_worker_first: true },
-    ...(args.length && (name === "kit" || name === "kit-live")
+    ...(liveHub
       ? {
           durable_objects: { bindings: [{ name: "DISCORD_LIVE_HUB", class_name: "LiveGuildHub" }] },
           migrations: [{ tag: "live-v1", new_sqlite_classes: ["LiveGuildHub"] }],
@@ -204,7 +204,7 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
 // success quiet while a red check still shows the cause.
 let failed = false;
 try {
-  const kit = await startWorker("kit", worker, assets);
+  const kit = await startWorker("kit", worker, assets, undefined, undefined, args.length > 0);
   const hono = await startWorker("hono", join(repo, "src/worker.ts"), join(repo, "public"));
   const origin = kit.origin;
   await Promise.all([
@@ -236,6 +236,7 @@ function fetch(request, env, context) {
   const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
   const secure = new Request(url, request);
   secure.headers.set("host", url.host);
+  // Map the browser's loopback origin to the synthetic HTTPS origin only.
   if (secure.headers.get("origin") === incoming.origin) secure.headers.set("origin", url.origin);
   return worker.fetch(secure, env, context);
 }\n`,
@@ -244,7 +245,7 @@ function fetch(request, env, context) {
       "./fixtures/kit-live-fanout.mjs"
     );
     const secret = FIXTURE_SECRETS.SESSION_SECRET;
-    const live = await startWorker("kit-live", entry, assets, secret, {
+    const liveVars = {
       APP_URL: "https://kit-live.invalid",
       BOT_ENDPOINT_URL: "https://bot-live.invalid",
       DISCORD_GUILD_ID: LIVE_FIXTURE_GUILD,
@@ -255,15 +256,29 @@ function fetch(request, env, context) {
       DISCORD_LIVE_INGEST_SECRET: "fixture-ingest-value",
       DISCORD_LIVE_SNAPSHOT_KEY_ID: "fixture-snapshot",
       DISCORD_LIVE_SNAPSHOT_SECRET: "fixture-snapshot-value",
-    });
+    };
+    if (publicVoiceBrowser) {
+      // Run the homepage against separate persisted Workers so the hub starts
+      // cold and the disabled fixture has a working session bridge.
+      const off = await startWorker(
+        "kit-voice-off",
+        entry,
+        assets,
+        secret,
+        { ...liveVars, DISCORD_LIVE_SOCKET_ENABLED: undefined },
+        true,
+      );
+      await listen(off.child, off.origin, () => off.log);
+      const enabled = await startWorker("kit-voice", entry, assets, secret, liveVars, true);
+      await listen(enabled.child, enabled.origin, () => enabled.log);
+      const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
+      await verifyKitPublicVoice(off.origin, enabled.origin, databaseUrl, secret);
+    }
+    const live = await startWorker("kit-live", entry, assets, secret, liveVars, true);
     await listen(live.child, live.origin, () => live.log);
     const { verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
     await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
     await verifyPublicFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
-    if (publicVoiceBrowser) {
-      const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
-      await verifyKitPublicVoice(origin, live.origin, databaseUrl, secret);
-    }
   }
 
   const archive = await fetch(`${origin}/events/past`);
