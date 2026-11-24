@@ -59,7 +59,8 @@ function decode(message: string | ArrayBuffer) {
 }
 
 export class LiveSockets {
-  readonly #sending = new WeakSet<WebSocket>();
+  // The entry serializes commands. Its value says whether the command owns the voice baseline.
+  readonly #sending = new WeakMap<WebSocket, boolean>();
   readonly #publishing = new WeakSet<WebSocket>();
 
   constructor(
@@ -113,7 +114,8 @@ export class LiveSockets {
         : now >= meta.nextResync && incoming.topics.every((item) => meta.topics?.includes(item));
     if (!allowed) return this.#close(socket, 1008);
 
-    this.#sending.add(socket);
+    const sendsVoice = incoming.topics.includes("voice");
+    this.#sending.set(socket, sendsVoice);
     try {
       if (!(await this.#authorize(socket, meta))) return false;
       // A producer event can clear the previous baseline while the row read is pending.
@@ -132,7 +134,7 @@ export class LiveSockets {
           this.#unavailable(socket, item);
         }
       }
-      if (handledVoice || !incoming.topics.includes("voice")) return handledVoice;
+      if (handledVoice || !sendsVoice) return handledVoice;
 
       // An explicit resync requires independent proof even while the hub is warm.
       const refreshed = await refreshVoice();
@@ -249,7 +251,7 @@ export class LiveSockets {
       sockets.map(async (socket) => {
         if (
           socket.readyState !== WebSocket.OPEN ||
-          this.#sending.has(socket) ||
+          this.#sending.get(socket) ||
           this.#publishing.has(socket)
         )
           return;
@@ -258,7 +260,7 @@ export class LiveSockets {
         if (meta.voiceUntil <= Date.now() || preview.value === meta.voicePrevious) return;
         this.#publishing.add(socket);
         try {
-          if (!(await this.#authorize(socket, meta)) || this.#sending.has(socket)) return;
+          if (!(await this.#authorize(socket, meta)) || this.#sending.get(socket)) return;
           const current = this.#active(socket);
           if (current) this.#voice(socket, current, false);
         } catch {
