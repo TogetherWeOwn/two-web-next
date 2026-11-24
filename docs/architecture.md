@@ -341,6 +341,7 @@ exactly once.
 | `src/kit-restored-write.ts` | entry |
 | `src/kit-seo-fetch.ts` | entry |
 | `src/kit-session.ts` | auth |
+| `src/kit-sign-out.ts` | auth |
 | `src/kit-staging-static.ts` | entry |
 | `src/kit-worker-facade.ts` | http-guard |
 | `src/kit-worker-response.ts` | http-guard |
