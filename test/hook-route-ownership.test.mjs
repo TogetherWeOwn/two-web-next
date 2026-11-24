@@ -712,6 +712,40 @@ describe("dormant API family admission", () => {
     expect(await owner(event, { flag: "true", routes: [read] })).toBe("hono");
   });
 
+  it("uses the existing owner policy when an enabled family claims the same pair", async () => {
+    const event = apiEvent("/events/past");
+    const pastArchive = vi.fn(async (_request, render) => render());
+    const sessionFor = vi.fn();
+    const d = deps({
+      manifest: KIT_MANIFEST,
+      apiFamilies: [
+        {
+          flag: "true",
+          routes: [
+            {
+              ...read,
+              path: event.url.pathname,
+              reads: { resource: "events", action: "list", route: "fixture" },
+            },
+          ],
+        },
+      ],
+      pastArchive,
+      sessionFor,
+    });
+
+    const response = await dispatchHookRequest(event, d);
+    expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(pastArchive).toHaveBeenCalledExactlyOnceWith(
+      event.request,
+      expect.any(Function),
+      expect.any(String),
+    );
+    expect(sessionFor).not.toHaveBeenCalled();
+    expect(d.resolve).toHaveBeenCalledExactlyOnceWith(event);
+    expect(d.honoFetch).not.toHaveBeenCalled();
+  });
+
   it("keeps absent, disabled, conflicting and adapter asset entries with Hono", async () => {
     expect(await owner(apiEvent(path))).toBe("hono");
     expect(

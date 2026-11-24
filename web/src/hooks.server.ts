@@ -35,10 +35,8 @@ import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
 // after the member-read boundary releases a successful GET. Logout and OAuth stay
 // Hono-owned, and a missing secret (the preview Worker sets none) resolves
 // to "unknown" rather than a false logout.
-const localCapture = typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true;
-
 const admitCapture: Handle = ({ event, resolve }) => {
-  if (localCapture) {
+  if (typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true) {
     const refusal = captureRefusal(event.request, env);
     if (refusal) return refusal;
   }
@@ -102,7 +100,10 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     afterMemberRead: (event, response) =>
       recordQueuedBoardView(event.locals, response.status, recordBoardView),
   });
-  const result = localCapture ? captureResponse(event.request, env, response) : response;
+  const result =
+    typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true
+      ? captureResponse(event.request, env, response)
+      : response;
   return honoOwned && event.isDataRequest
     ? preserveHonoDataResponse(event.request, result)
     : result;

@@ -142,8 +142,10 @@ families fall back to Hono.
 In the first family integration PR, mount the ready `+server.ts` handlers and
 pass that family's reviewed catalog and binding to `dispatchHookRequest`.
 Validate every configured pair against the mounted inventory and reject
-duplicate claims. Keep request-specific auth, body caps and throttles on
-their existing shared helpers in the handler's established order. Extend the
+duplicate claims. Check that each `+server.ts` exports the configured method.
+A static Kit route ID can also refer to a page. Keep request-specific auth,
+body caps and throttles on their existing shared helpers in the handler's
+established order. Extend the
 built Worker fixture to turn that one family on and back off and check method
 refusals, slash variants and `/<route>/__data.json`. Production activation
 follows its own release gate.

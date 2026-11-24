@@ -37,6 +37,29 @@ function captureTransform(flag: string | undefined): { define?: Record<string, s
 
 const guard = 'typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true';
 
+// Exercise the real capture admission and hook composition with a stand-in
+// terminal dispatcher. The rest of the Worker needs Cloudflare bindings.
+function captureHookSource(): string {
+  const text = readFileSync("web/src/hooks.server.ts", "utf8");
+  const statements = parse(text, { sourceType: "module", plugins: ["typescript"] }).program.body;
+  return ["admitCapture", "handle"]
+    .map((name) => {
+      for (const statement of statements) {
+        const declaration =
+          statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
+        if (declaration?.type !== "VariableDeclaration") continue;
+        const variable = declaration.declarations.find(
+          ({ id }) => id.type === "Identifier" && id.name === name,
+        );
+        if (!variable) continue;
+        assert.ok(typeof variable.start === "number" && typeof variable.end === "number");
+        return `const ${text.slice(variable.start, variable.end)};`;
+      }
+      throw new Error(`capture fixture could not find ${name} in hooks.server.ts`);
+    })
+    .join("\n");
+}
+
 describe("capture build isolation", () => {
   for (const flag of [undefined, "false", "TRUE", "true"]) {
     it(`removes capture code unless the Kit build explicitly opts in (${flag})`, async () => {
@@ -44,28 +67,40 @@ describe("capture build isolation", () => {
       const { rolldown } = requireWeb("rolldown");
       const options = captureTransform(flag);
       expect(options.define?.__TWO_LOCAL_CAPTURE__).toBe(flag === "true" ? undefined : "false");
+      // Give the virtual input the Kit workspace's package resolution context.
+      const fixtureEntry = resolve("web/.capture-test-entry.ts");
       const bundle = await rolldown({
-        input: "capture-test-entry",
+        input: fixtureEntry,
         platform: "node",
         transform: options,
+        tsconfig: false,
         plugins: [
           {
             name: "capture-test-entry",
             resolveId(id: string) {
-              if (id === "capture-test-entry") return "\0capture-test-entry";
+              if (id === fixtureEntry) return id;
             },
             load(id: string) {
-              if (id !== "\0capture-test-entry") return;
-              return `import { renderDate, captureRefusal, captureResponse } from ${JSON.stringify(resolve("src/render-clock.ts"))};
+              if (id !== fixtureEntry) return;
+              return {
+                moduleType: "ts",
+                code: `
+import { sequence } from "@sveltejs/kit/hooks";
+import { with_request_store } from "@sveltejs/kit/internal/server";
+import { renderDate, captureRefusal, captureResponse } from ${JSON.stringify(resolve("src/render-clock.ts"))};
 export const stamp = (request, env) => ${guard} ? renderDate(request, env).toISOString() : "live";
-export const respond = async (request, env, resolve) => {
-  if (${guard}) {
-    const refusal = captureRefusal(request, env);
-    if (refusal) return refusal;
-    return captureResponse(request, env, await resolve());
-  }
-  return resolve();
-};`;
+let env;
+const dispatchWithSecurity = async ({ event, resolve }) => {
+  const response = await resolve(event);
+  return ${guard} ? captureResponse(event.request, env, response) : response;
+};
+${captureHookSource()}
+export const respond = (request, bindings, resolve) => {
+  env = bindings;
+  const event = { request };
+  return with_request_store({ event, state: {} }, () => handle({ event, resolve }));
+};`,
+              };
             },
           },
         ],
@@ -119,6 +154,18 @@ export const respond = async (request, env, resolve) => {
         expect(response.headers.get("x-two-ssr-clock")).toBe(
           flag === "true" ? "2098-12-31T20:00:00Z" : null,
         );
+        let dispatched = false;
+        const unqualified = await compiled.respond(
+          new Request(env.APP_URL + "/version"),
+          env,
+          () => {
+            dispatched = true;
+            return new Response("fixture");
+          },
+        );
+        expect(unqualified.status).toBe(flag === "true" ? 412 : 200);
+        expect(dispatched).toBe(flag !== "true");
+        expect(unqualified.headers.get("x-two-ssr-clock")).toBeNull();
       } finally {
         await bundle.close();
       }
