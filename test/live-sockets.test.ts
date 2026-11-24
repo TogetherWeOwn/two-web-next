@@ -22,7 +22,7 @@ function connectedSocket(alarm: number, signedIn = true) {
     topics: signedIn ? ["voice"] : null,
     nextResync: 0,
     voiceSeq: signedIn ? 1 : 0,
-    voiceLive: signedIn,
+    voiceUntil: signedIn ? start + 30_000 : 0,
   };
   const socket = {
     readyState: WebSocket.OPEN,
@@ -41,7 +41,7 @@ function connectedSocket(alarm: number, signedIn = true) {
     blockConcurrencyWhile: <T>(fn: () => Promise<T>) => fn(),
     storage: { transaction: <T>(fn: (txn: typeof storage) => Promise<T>) => fn(storage) },
   } as unknown as DurableObjectState;
-  const projectVoice = () => (signedIn ? '{"count":2}' : null);
+  const projectVoice = () => (signedIn ? { value: '{"count":5}', until: start + 30_000 } : null);
   const wake = () => new LiveSockets(ctx, { DISCORD_LIVE_SOCKET_ENABLED: "true" }, projectVoice);
   const sockets = wake();
   const send = (text: string) => sockets.message(socket as unknown as WebSocket, text);
@@ -82,6 +82,26 @@ it("preserves earlier alarms and concurrent attachment changes without extending
   readSession.mockResolvedValueOnce({ ...row, remainingMs: 300_000 });
   await wake().publish();
   expect(socket.deserializeAttachment().until).toBe(start + 50);
+  expect(socket.send.mock.calls.map(([frame]) => JSON.parse(frame).type)).toEqual([
+    "unavailable",
+    "snapshot",
+    "unavailable",
+    "snapshot",
+  ]);
+});
+
+it("rearms a hibernated guest withdrawal after an earlier alarm", async () => {
+  const { socket, wake, setAlarm } = connectedSocket(Infinity, false);
+  socket.serializeAttachment({ ...socket.deserializeAttachment(), voiceUntil: start + 30_000 });
+  await wake().expire(0);
+  expect(setAlarm).toHaveBeenLastCalledWith(start + 30_000);
+  expect(socket.send).not.toHaveBeenCalled();
+
+  vi.setSystemTime(start + 30_000);
+  await wake().expire(0);
+  expect(socket.send.mock.calls).toEqual([[unavailable]]);
+  expect(socket.deserializeAttachment().voiceUntil).toBe(0);
+  expect(setAlarm).toHaveBeenLastCalledWith(start + 300_000);
 });
 
 it.each([512, 513])("enforces the UTF-8 cap at %i bytes", async (bytes) => {

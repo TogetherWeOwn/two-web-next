@@ -135,8 +135,9 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
   try {
     await guest.ready;
     guest.subscribe(["voice", "channels", "members", "events"]);
-    await guest.frame(frames.initial);
+    await guest.frame(frames.withdrawal);
     for (const topic of ["channels", "members", "events"]) await guest.frame(unavailable(topic));
+    await guest.frame(frames.initial);
 
     await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
       values (${ref}, '900000000000001377', 'Synthetic fan-out member', true, now() + interval '10 minutes')`;
@@ -164,9 +165,19 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     await guest.frame(frames.withdrawal);
     await source(snapshot(46, 5, new Date(Date.now() - 60_000).toISOString()));
     assert.equal(await ingest(origin, 46, leave("106")), 409, "reject a stale covering snapshot");
-    const covering = snapshot(46, 5);
-    const generation = await source(covering);
+    const generation = await source(snapshot(46, 5));
     assert.equal(await ingest(origin, 46, leave("106")), 204, "recover with a fresh observation");
+    await delay(5_100); // Leave time for the independent browser pull throttle.
+    assert.deepEqual(guest.frames, [], "raw recovery must not publish a baseline");
+    await source(snapshot(45, 5));
+    guest.resyncVoice();
+    await guest.frame(frames.withdrawal);
+    await delay(5_100);
+    assert.deepEqual(guest.frames, [], "a fresh raw state cannot replace a covering browser pull");
+    const covering = snapshot(46, 5);
+    assert.equal(await source(covering), generation);
+    guest.resyncVoice();
+    await guest.frame(frames.withdrawal);
     await guest.frame(frames.covering);
     const roomPolicy = (restricted) => ({
       topic: "channels",
@@ -200,8 +211,8 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
       WebSocket.OPEN,
       "source expiry keeps the guest socket open",
     );
-    assert.equal(await source(snapshot(49, 5)), generation);
-    const warmResyncAt = performance.now();
+    const renewed = snapshot(49, 5);
+    assert.equal(await source(renewed), generation);
     guest.resyncVoice();
     await guest.frame(frames.withdrawal);
     await guest.frame(frames.warm);
@@ -210,20 +221,47 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
       "PASS installed Kit public scope, wire shape, exact-row fan-out revocation, gap recovery, lease expiry, and socket resync",
     );
 
-    // Change the fixture response to the next signed pull. The warm hub still has five.
-    assert.equal(await source(snapshot(50, 6)), generation);
+    const coldUntil = Date.parse(renewed.observed_at) + 30_000;
+    const restricted = snapshot(50, 5);
+    restricted.topics.voice.push(voice("106", "11"));
+    assert.equal(await source(restricted), generation);
     // Workerd can hibernate after about 10 seconds idle. Leave all callers quiet
-    // until the same guest sends resync, before the renewed 30-second source alarm.
+    // before waking the hub with producer ingress alone.
     await delay(15_000);
     assert.equal(guest.socket.readyState, WebSocket.OPEN);
-    assert.deepEqual(guest.frames, [], "the warm baseline stayed quiet before resync");
+    assert.ok(Date.now() < coldUntil, "restricted ingress must precede cold expiry");
+    assert.equal(await ingest(origin, 50, join("106", "11")), 204);
+    const woken = generation + 1;
+    assert.equal(await source(), woken, "restricted ingress woke a new hub instance");
+    assert.deepEqual(guest.frames, [], "cold restricted ingress preserves the quiet baseline");
+    const coldWithdrawnAt = await guest.frame(frames.withdrawal, 20_000);
+    assert.ok(coldWithdrawnAt >= coldUntil, "cold ingress must not withdraw early");
+    assert.ok(coldWithdrawnAt < coldUntil + 4_000, "cold ingress must not postpone expiry");
+    assert.equal(guest.socket.readyState, WebSocket.OPEN, "cold expiry keeps the guest connected");
+
+    const recovered = snapshot(51, 6);
+    const recoveryGeneration = await source(recovered);
+    assert.deepEqual(guest.frames, [], "cold expiry sends one withdrawal");
     guest.resyncVoice();
-    await guest.frame(frames.withdrawal); // Reconstructed hub clears the previous baseline.
-    await guest.frame(frames.withdrawal); // The resync starts without an in-memory snapshot.
+    await guest.frame(frames.withdrawal);
     await guest.frame(frames.cold);
-    assert.ok(performance.now() - warmResyncAt < 25_000, "the source alarm was not due yet");
-    assert.equal(await source(), generation + 1, "resync woke a new hub on the original socket");
-    console.log("PASS installed Kit same-socket hibernation wake and snapshot recovery");
+    assert.equal(await source(), recoveryGeneration, "independent proof restores the same socket");
+    console.log(
+      "PASS installed Kit warm and hibernated restricted ingress preserves public expiry",
+    );
+
+    // Also wake a hibernated hub with the browser before the current lease ends.
+    await source(snapshot(52, 7));
+    await delay(15_000);
+    assert.deepEqual(guest.frames, [], "the baseline stayed quiet before cold resync");
+    guest.resyncVoice();
+    await guest.frame(frames.withdrawal);
+    await guest.frame(projected("snapshot", 9, 7));
+    assert.ok(Date.now() < Date.parse(recovered.observed_at) + 30_000, "source alarm was not due");
+    assert.equal(await source(), recoveryGeneration + 1, "resync woke the hub on the same socket");
+    console.log(
+      "PASS installed Kit same-socket hibernation wake and independent snapshot recovery",
+    );
   } finally {
     guest.socket.close();
     member?.socket.close();
