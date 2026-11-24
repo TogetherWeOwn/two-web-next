@@ -331,7 +331,6 @@ exactly once.
 | `src/jobs-worker.ts` | jobs |
 | `src/join/` | join |
 | `src/kit-access-sink.ts` | profiles |
-| `src/kit-auth-routes.ts` | auth |
 | `src/kit-auth-status.ts` | auth |
 | `src/kit-content-chunk.ts` | entry |
 | `src/kit-csp-reports-fetch.ts` | http-guard |
