@@ -32,12 +32,12 @@ describe("Kit defensive patch pins", () => {
 
   it.each([
     ["@sveltejs/adapter-cloudflare", "8.0.2"],
-    ["@sveltejs/kit", "3.1.1"],
+    ["@sveltejs/kit", "3.4.0"],
     ["@sveltejs/vite-plugin-svelte", "7.3.1"],
-    ["svelte", "5.57.2"],
-    ["svelte-check", "4.7.7"],
+    ["svelte", "5.58.0"],
+    ["svelte-check", "4.7.8"],
     ["typescript", "6.0.3"],
-    ["vite", "8.3.5"],
+    ["vite", "8.3.8"],
     ["wrangler", "4.156.1"],
   ])("retains the held %s toolchain pin", (name, version) => {
     expect(manifest.devDependencies[name]).toBe(version);
