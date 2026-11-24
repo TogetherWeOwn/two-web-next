@@ -154,7 +154,8 @@ function aclId({ kind, name, column, right, grantor }) {
   return JSON.stringify([kind, name, column, right, grantor]);
 }
 
-async function assertPublicRights(tx, login, end = originalEnd) {
+async function assertIsolated(tx, login, end = originalEnd) {
+  await assertServingLedgerIsolation(tx, login);
   // Verify required rights independently of direct ACL rows and membership.
   const [row] = await tx`select bool_and(case
     when kind = 'sequence' then has_sequence_privilege(${login}::text, 'public.' || name, "right")
@@ -278,8 +279,7 @@ export async function runServingIsolation(operation, end, env, options = {}) {
         if (readOnly) {
           if (initialHash === plan.before) return "before";
           assert.equal(initialHash, plan.after);
-          await assertServingLedgerIsolation(tx, login);
-          await assertPublicRights(tx, login, end);
+          await assertIsolated(tx, login, end);
           return "after";
         }
 
@@ -310,8 +310,7 @@ export async function runServingIsolation(operation, end, env, options = {}) {
         await changeEdges(tx, login, forward ? plan.remove : plan.add, false, aclChange);
         const final = await catalog(tx, login);
         assert.equal(digest(JSON.stringify(final)), forward ? plan.after : plan.before);
-        await assertPublicRights(tx, login);
-        if (forward) await assertServingLedgerIsolation(tx, login);
+        if (forward) await assertIsolated(tx, login);
         return "committed";
       },
     );

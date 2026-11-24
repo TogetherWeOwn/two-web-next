@@ -70,6 +70,10 @@ export async function rehearseServingIsolation({
   await owner`GRANT USAGE ON SCHEMA drizzle TO ${owner(login)}`;
   await owner`GRANT SELECT (created_at) ON drizzle.__drizzle_migrations TO ${owner(login)}`;
   await owner`GRANT two_web_app TO ${owner(login)}`;
+  const [originalSequence] = await owner`SELECT
+    has_sequence_privilege(${login}::text, 'public.activity_log_id_seq', 'USAGE') AS usage,
+    has_sequence_privilege(${login}::text, 'public.activity_log_id_seq', 'UPDATE') AS "update"`;
+  assert.deepEqual(originalSequence, { usage: false, update: true });
   const version = randomUUID();
   const artifact = { sourceSha: "b".repeat(40), digest: "c".repeat(64) };
   const sha = (data) => createHash("sha256").update(data).digest("hex");
