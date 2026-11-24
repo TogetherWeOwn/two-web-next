@@ -28,10 +28,8 @@ test("cutover requires explicit protected selection and the paired Hono UUID", (
   };
   assert.deepEqual(selection({}), { mode: "ordinary" });
   assert.deepEqual(selection(active), { mode: "kit", undo: hono, ...identity });
-  assert.equal(
-    selection({ ...active, CUTOVER_MODE: "hono", CUTOVER_UNDO_VERSION: "" }).mode,
-    "hono",
-  );
+  const prepare = selection({ ...active, CUTOVER_MODE: "hono", CUTOVER_UNDO_VERSION: "" });
+  assert.deepEqual(prepare, { ...identity, mode: "hono", undo: "" });
   for (const change of [
     { CUTOVER_MODE: "" },
     { CUTOVER_MODE: "hono" },
