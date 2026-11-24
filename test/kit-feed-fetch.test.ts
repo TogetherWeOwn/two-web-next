@@ -252,25 +252,32 @@ it("preserves a classified read outage and declines an unowned method", async ()
 });
 
 it.each([
-  ["/events.ics", calendar],
-  ["/events.rss", rss],
-] as const)("correlates a detached %s alert without logging request data", async (path, feed) => {
-  const alert = vi.spyOn(console, "error").mockImplementation(() => {});
-  const { env } = fixture().sides[1]!;
-  vi.mocked(listFeed).mockRejectedValue(new TypeError("fixture private error message"));
-  const request = new Request(new URL(`${path}?game=fixture`, env.APP_URL));
-  const response = await fetchKitFeed(request, env, feed, REQUEST_ID);
+  ["/events.ics", calendar, "/events.ics"],
+  ["/events.rss", rss, "/events.rss"],
+  [detailPath, detail, "/events/:file{.+\\.ics}"],
+] as const)(
+  "correlates a detached %s alert without logging request data",
+  async (path, feed, route) => {
+    const alert = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { env } = fixture().sides[1]!;
+    vi.mocked(feed.kind === "event-calendar" ? getEventRow : listFeed).mockRejectedValue(
+      new TypeError("fixture private error message"),
+    );
+    const request = new Request(new URL(`${path}?game=fixture`, env.APP_URL));
+    const response = await fetchKitFeed(request, env, feed, REQUEST_ID);
 
-  expect(response?.status).toBe(500);
-  expect(await response?.text()).toContain(REQUEST_ID);
-  expect(alert).toHaveBeenCalledTimes(1);
-  const line = String(alert.mock.calls[0]?.[0]);
-  expect(JSON.parse(line)).toMatchObject({
-    event: "error.alert",
-    method: "GET",
-    route: path,
-    request_id: REQUEST_ID,
-  });
-  expect(line).not.toContain("game=");
-  expect(line).not.toContain("fixture private error message");
-});
+    expect(response?.status).toBe(500);
+    expect(await response?.text()).toContain(REQUEST_ID);
+    expect(alert).toHaveBeenCalledTimes(1);
+    const line = String(alert.mock.calls[0]?.[0]);
+    expect(JSON.parse(line)).toMatchObject({
+      event: "error.alert",
+      method: "GET",
+      route,
+      request_id: REQUEST_ID,
+    });
+    expect(line).not.toContain("game=");
+    expect(line).not.toContain(KEY);
+    expect(line).not.toContain("fixture private error message");
+  },
+);

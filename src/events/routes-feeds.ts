@@ -14,6 +14,7 @@ import {
   parseFeedGameScope,
 } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
+import { EVENT_CALENDAR_ROUTE } from "./kit-event-calendar-route";
 import { getEventRow, listFeed } from "./reads";
 import {
   eventsUnavailable,
@@ -158,7 +159,7 @@ export const feedHandlers = {
 export function registerFeedRoutes(app: App, readSession: SessionReader): void {
   app.get("/events.rss", feedHandlers.rss);
   app.get("/events.ics", feedHandlers.calendar);
-  app.get("/events/:file{.+\\.ics}", (c) =>
+  app.get(EVENT_CALENDAR_ROUTE, (c) =>
     feedHandlers.eventCalendar(c, () => c.req.param("file").slice(0, -4), readSession),
   );
 }

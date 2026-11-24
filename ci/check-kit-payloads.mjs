@@ -41,13 +41,18 @@ const CHECK_MATCHERS = [
   },
   {
     id: "kit-payload-static-ics",
-    describe: "Kit static feed anonymous payloads",
+    describe: "Kit feed anonymous payloads",
     testContains: "GET /events.ics",
   },
   {
     id: "kit-payload-static-rss",
-    describe: "Kit static feed anonymous payloads",
+    describe: "Kit feed anonymous payloads",
     testContains: "GET /events.rss",
+  },
+  {
+    id: "kit-payload-event-ics",
+    describe: "Kit feed anonymous payloads",
+    testContains: "GET /events/",
   },
   {
     id: "kit-payload-events-past",

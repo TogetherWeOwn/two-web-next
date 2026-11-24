@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";
+import { KIT_EVENT_CALENDAR_ROUTE } from "../../src/events/kit-event-calendar-route.ts";
 import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes.ts";
+import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
 
 const eventKeys = [
   "01J00000000000000000001001",
@@ -10,13 +13,14 @@ const eventKeys = [
   "01J00000000000000000001003",
 ];
 const cachePolicy = "max-age=300, public";
+const detailCachePolicy = "max-age=300, private";
+const eventCalendar = (key) => `/events/${key}.ics`;
 const fixtureIp = "192.0.2.110";
 const wireHeaders = [
   "content-type",
   "content-disposition",
   "cache-control",
   "vary",
-  "set-cookie",
   "location",
   "allow",
   "x-robots-tag",
@@ -64,6 +68,22 @@ async function assertMountedFeeds() {
       [method],
     );
   }
+  const detailRoutes = manifest.routes.filter(
+    ({ id, pattern }) => id !== "/[...path]" && pattern.test(eventCalendar(eventKeys[0])),
+  );
+  assert.deepEqual(
+    detailRoutes.map(({ id }) => id),
+    [KIT_EVENT_CALENDAR_ROUTE.dynamic.id],
+  );
+  assert.equal(detailRoutes[0].page, null, "per-event ICS is endpoint only");
+  assert.equal(typeof detailRoutes[0].endpoint, "function", "per-event ICS is mounted");
+  assert.deepEqual(
+    inventory
+      .filter(({ path }) => path === KIT_EVENT_CALENDAR_ROUTE.path)
+      .map(({ method }) => method),
+    ["GET"],
+    "mounted Hono per-event ICS registration",
+  );
 }
 
 async function request(worker, path, { method = "GET", headers, status, renderer = null }) {
@@ -90,6 +110,25 @@ async function request(worker, path, { method = "GET", headers, status, renderer
   return { body, headers: response.headers, id, status: response.status };
 }
 
+function cookieShape(headers) {
+  return headers.getSetCookie().map((cookie) => cookie.replace(/=[^;]+/, "=<opaque>"));
+}
+
+function sessionRenewal(headers) {
+  const cookies = headers.getSetCookie();
+  assert.deepEqual(
+    cookies.map((cookie) => cookie.split("=", 1)[0]),
+    ["__Host-two_session_status", SESSION_COOKIE],
+  );
+  for (const cookie of cookies) {
+    assert.ok(
+      /; Secure\b/.test(cookie) && /; HttpOnly\b/.test(cookie) && /; SameSite=Lax\b/.test(cookie),
+      "synthetic renewal retains cookie security attributes",
+    );
+  }
+  return cookies[1].split(";", 1)[0];
+}
+
 export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl }) {
   await assertMountedFeeds();
   const [off, on] = await Promise.all([
@@ -99,7 +138,23 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
   const modes = [hono, kit, off, on];
   const sql = postgres(databaseUrl, { max: 1 });
   const buckets = [`events-read:${fixtureIp}`];
+  const sessionLineages = [];
   let seeded = false;
+
+  async function mintSession(moderator) {
+    const token = `two_${randomBytes(32).toString("base64url")}`;
+    const hash = createHash("sha256").update(token).digest("hex");
+    sessionLineages.push(hash);
+    await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+      values (${hash}, ${hash}, '900000000000009106', 'Synthetic Feed Viewer', true, ${moderator}, now() + interval '15 minutes')`;
+    const signed = await generateSignedCookie(
+      SESSION_COOKIE,
+      token,
+      FIXTURE_SECRETS.SESSION_SECRET,
+      { path: "/", secure: true },
+    );
+    return signed.split(";", 1)[0];
+  }
 
   function compare(actual, direct, target, path) {
     const normalize = (result, origin) =>
@@ -120,6 +175,7 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
         `${target.name}: ${path} ${name}`,
       );
     }
+    assert.deepEqual(cookieShape(actual.headers), cookieShape(direct.headers), `${path}: cookies`);
     if (target !== kit) assert.equal(actual.headers.get("etag"), direct.headers.get("etag"), path);
   }
 
@@ -131,6 +187,8 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
   }
 
   try {
+    const publicPath = eventCalendar(eventKeys[0]);
+    const draftPath = eventCalendar(eventKeys[2]);
     // Run 404 parity before seeding events. The baseline Worker may already
     // have a cached empty suggestion list from earlier checks.
     for (const [method, path, status, origin] of [
@@ -140,11 +198,24 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
       ["GET", "/events.ics/", 404],
       ["HEAD", "/events.rss/", 404],
       ["GET", "/events.ics/__data.json", 404],
+      ["GET", `${publicPath}/`, 404],
+      ["HEAD", `${publicPath}/`, 404],
+      ["POST", publicPath, 404],
+      ["OPTIONS", publicPath, 404],
+      ["POST", publicPath, 403, "https://example.invalid"],
+      ["GET", `${publicPath}/__data.json`, 404],
+      ["GET", "/events/outer/inner.ics", 404],
+      ["GET", "/events/.ics", 401],
+      ["GET", "/events/line%0Abreak.ics", 401],
+      ["GET", "/events/malformed%FF.ics", 404],
+      ["GET", `/events/${eventKeys[0]}`, 401],
+      ["GET", `/api/public/events/${eventKeys[0]}.ics`, 422],
       ["GET", "/version", 200],
     ]) {
       await compareFallback(method, path, status, origin);
     }
     await request(on, "/about", { status: 200, renderer: "kit" });
+    await request(on, "/events/past", { status: 200, renderer: "kit" });
 
     await sql`insert into events (event_key, title, game, status, starts_at, ends_at, updated_at)
       values (${eventKeys[0]}, 'Fixture Racing Night', 'Fixture Racing', 'published',
@@ -184,6 +255,7 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
         const head = await run(target, { method: "HEAD", status: 200 });
         for (const name of [...wireHeaders, "etag"])
           assert.equal(head.headers.get(name), get.headers.get(name), name);
+        assert.deepEqual(cookieShape(head.headers), cookieShape(get.headers), "HEAD cookies");
         for (const [method, validator] of [
           ["GET", etag],
           ["HEAD", `"stale", W/${etag}`],
@@ -216,7 +288,135 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
     }
 
     await compareFallback("GET", "/events%2Erss", 200);
-    await compareFallback("GET", `/events/${eventKeys[0]}.ics`, 200);
+    await compareFallback("GET", `/events/${eventKeys[0]}%2Eics`, 200);
+    await compareFallback("GET", `/%65vents/${eventKeys[0]}.ics`, 200);
+
+    const detailBaseline = new Map();
+    for (const [index, target] of modes.entries()) {
+      const ip = `192.0.2.${120 + index}`;
+      const bucket = `events-read:${ip}`;
+      buckets.push(bucket);
+      const run = async (label, path, { headers, ...options }) => {
+        const result = await request(target, path, {
+          ...options,
+          renderer: target === on ? "kit" : null,
+          headers: { "cf-connecting-ip": ip, "x-forwarded-for": ip, ...headers },
+        });
+        if (target === hono) detailBaseline.set(label, result);
+        else compare(result, detailBaseline.get(label), target, `${label}: ${path}`);
+        return result;
+      };
+
+      const moderator = await mintSession(true);
+      const publicHeaders = { cookie: moderator };
+      const get = await run("public GET", publicPath, { status: 200, headers: publicHeaders });
+      assert.equal(get.headers.get("cache-control"), detailCachePolicy);
+      assert.equal(get.headers.get("content-type"), "text/calendar; charset=utf-8");
+      assert.equal(
+        get.headers.get("content-disposition"),
+        `attachment; filename="${eventKeys[0]}.ics"`,
+      );
+      assert.match(get.body, /SUMMARY:Fixture Racing Night\r\n/);
+      assert.doesNotMatch(get.body, /Fixture Draft Night|Synthetic Feed Viewer|900000000000009106/);
+      assert.equal(get.headers.get("set-cookie"), null, "public GET leaves the session alone");
+      const publicTag = `"${createHash("sha256").update(get.body).digest("hex")}"`;
+      assert.equal(get.headers.get("etag"), publicTag);
+      const head = await run("public HEAD", publicPath, {
+        method: "HEAD",
+        status: 200,
+        headers: publicHeaders,
+      });
+      for (const name of [...wireHeaders, "etag"])
+        assert.equal(head.headers.get(name), get.headers.get(name), name);
+      const [{ count }] =
+        await sql`select count(*)::int from web_throttle_hits where bucket = ${bucket}`;
+      assert.equal(count, 2, `${target.name}: each GET and HEAD charges the shared bucket once`);
+
+      await run("public conditional", publicPath, {
+        status: 304,
+        headers: { "if-none-match": publicTag },
+      });
+      const encoded = await run("encoded key", eventCalendar(`%30${eventKeys[0].slice(1)}`), {
+        status: 200,
+      });
+      assert.equal(encoded.body, get.body);
+      const lowerPath = `${eventCalendar(eventKeys[0].toLowerCase())}?game=one%20two`;
+      const redirect = await run("canonical redirect", lowerPath, {
+        status: 301,
+        headers: publicHeaders,
+      });
+      assert.equal(redirect.headers.get("location"), `${publicPath}?game=one%20two`);
+      assert.equal(redirect.headers.get("set-cookie"), null);
+      const cancelled = await run("cancelled GET", eventCalendar(eventKeys[1]), { status: 200 });
+      assert.match(cancelled.body, /STATUS:CANCELLED\r\n/);
+
+      for (const [label, key] of [
+        ["missing event", "01J00000000000000000001009"],
+        ["escaped separator", `${eventKeys[0]}%2Fpart`],
+        ["escaped percent", `%2530${eventKeys[0].slice(1)}`],
+        ["Unicode key", "%E2%98%83"],
+      ]) {
+        for (const method of ["GET", "HEAD"]) {
+          const missing = await run(`${label} ${method}`, eventCalendar(key), {
+            method,
+            status: 404,
+            headers: publicHeaders,
+          });
+          assert.equal(missing.headers.get("x-robots-tag"), "noindex, nofollow");
+          assert.equal(missing.headers.get("set-cookie"), null);
+        }
+      }
+
+      const draft = await run("authorized draft GET", draftPath, {
+        status: 200,
+        headers: { cookie: moderator },
+      });
+      assert.match(draft.body, /SUMMARY:Fixture Draft Night\r\n/);
+      assert.equal(draft.headers.get("cache-control"), detailCachePolicy);
+      const validator = draft.headers.get("etag");
+      assert.ok(validator, "draft GET supplies a validator");
+      const cached = await run("authorized draft HEAD", draftPath, {
+        method: "HEAD",
+        status: 304,
+        headers: { cookie: sessionRenewal(draft.headers), "if-none-match": validator },
+      });
+      assert.equal(cached.headers.get("cache-control"), detailCachePolicy);
+      assert.equal(cached.headers.get("etag"), validator);
+      await run("renewed draft HEAD", draftPath, {
+        method: "HEAD",
+        status: 200,
+        headers: { cookie: sessionRenewal(cached.headers) },
+      });
+
+      for (const method of ["GET", "HEAD"]) {
+        const denied = await run(`guest draft ${method}`, draftPath, {
+          method,
+          status: 403,
+          headers: { "if-none-match": validator },
+        });
+        if (method === "GET") assert.equal(denied.body, "Forbidden");
+        assert.equal(denied.headers.get("etag"), null);
+        assert.equal(denied.headers.get("set-cookie"), null);
+      }
+      const member = await mintSession(false);
+      const denied = await run("member draft GET", draftPath, {
+        status: 403,
+        headers: { cookie: member, "if-none-match": validator },
+      });
+      assert.equal(denied.body, "Forbidden");
+      assert.equal(denied.headers.get("etag"), null);
+      // A valid non-moderator session renews before either refusal.
+      const memberHead = await run("member draft HEAD", draftPath, {
+        method: "HEAD",
+        status: 403,
+        headers: { cookie: sessionRenewal(denied.headers), "if-none-match": validator },
+      });
+      assert.equal(memberHead.headers.get("etag"), null);
+      sessionRenewal(memberHead.headers);
+    }
+    console.log(
+      "PASS built Worker per-event ICS absent/off/on: path and method ownership, one budget charge, public, draft renewal and refusal parity",
+    );
 
     let directLimit;
     for (const [index, target] of modes.entries()) {
@@ -247,6 +447,10 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
   } finally {
     try {
       if (seeded) await sql`delete from events where event_key in ${sql(eventKeys)}`;
+      if (sessionLineages.length) {
+        await sql`delete from web_session_grace where status_hash in ${sql(sessionLineages)}`;
+        await sql`delete from web_sessions where status_hash in ${sql(sessionLineages)}`;
+      }
       await sql`delete from web_throttle_hits where bucket in ${sql(buckets)}`;
     } finally {
       await sql.end();

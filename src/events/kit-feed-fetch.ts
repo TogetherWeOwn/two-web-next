@@ -4,6 +4,7 @@ import type { Env } from "../env";
 import { internalErrorHandler } from "../errors";
 import { safeRequestId } from "../http/request-log";
 import { readContextSession } from "../session-hono";
+import { EVENT_CALENDAR_ROUTE } from "./kit-event-calendar-route";
 import { KIT_STATIC_FEED_PATHS } from "./kit-static-feed-routes";
 import { feedHandlers } from "./routes-feeds";
 
@@ -38,7 +39,7 @@ export async function fetchKitFeed(
   const response = await read.catch((error: unknown) => {
     if (!(error instanceof Error)) throw error;
     const routeLabel =
-      feed.kind === "event-calendar" ? undefined : KIT_STATIC_FEED_PATHS[feed.kind];
+      feed.kind === "event-calendar" ? EVENT_CALENDAR_ROUTE : KIT_STATIC_FEED_PATHS[feed.kind];
     return internalErrorHandler(error, c, routeLabel);
   });
   return request.method === "HEAD" ? new Response(null, response) : response;

@@ -257,12 +257,15 @@ export async function compileArchiveKit() {
         import { GET } from ${JSON.stringify(join(root, "web/src/routes/events/+server.ts"))};
         import { GET as calendar } from ${JSON.stringify(join(root, "web/src/routes/events.ics/+server.ts"))};
         import { GET as rss } from ${JSON.stringify(join(root, "web/src/routes/events.rss/+server.ts"))};
+        import { GET as eventCalendar } from ${JSON.stringify(join(root, "web/src/routes/events/[key].ics/+server.ts"))};
+        import { KIT_EVENT_CALENDAR_ROUTE } from ${JSON.stringify(join(root, "src/events/kit-event-calendar-route.ts"))};
         import { bind } from "acceptance:bindings";
         const feeds = new Map([["/events.ics", calendar], ["/events.rss", rss]]);
         export async function request(request, env, deps) {
           bind(env, deps);
           const pathname = new URL(request.url).pathname;
-          const feed = feeds.get(pathname);
+          const feed = feeds.get(pathname) ??
+            (KIT_EVENT_CALENDAR_ROUTE.dynamic.matches(pathname, pathname) ? eventCalendar : undefined);
           if (feed) return feed({request, locals: {}});
           const headers = new Headers({"content-type": "text/html; charset=utf-8"});
           try {
