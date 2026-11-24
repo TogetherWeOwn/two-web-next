@@ -48,7 +48,7 @@ function signed(
   return new Request(url, { method: "POST", body, headers });
 }
 
-function fixture(hubEnv: LiveSocketEnv = config) {
+function fixture(hubEnv: LiveSocketEnv = config, sockets: WebSocket[] = []) {
   const storage = new Map();
   const kv = { get: storage.get.bind(storage), put: vi.fn(storage.set.bind(storage)) };
   const setAlarm = vi.fn<(until: number | Date) => Promise<void>>().mockResolvedValue(undefined);
@@ -57,7 +57,8 @@ function fixture(hubEnv: LiveSocketEnv = config) {
   const transaction = (run: (storage: typeof txn) => Promise<void>) => run(txn);
   const ctx = {
     storage: { kv, transaction },
-    getWebSockets: () => [],
+    getWebSockets: () => sockets,
+    blockConcurrencyWhile: <T>(run: () => Promise<T>) => run(),
     waitUntil,
   } as unknown as DurableObjectState;
   let hub = new LiveGuildHub(ctx, hubEnv);
@@ -74,6 +75,7 @@ function fixture(hubEnv: LiveSocketEnv = config) {
     getByName,
     message: (socket: WebSocket, type: "subscribe" | "resync") =>
       hub.webSocketMessage(socket, JSON.stringify({ v: 1, type, topics: ["voice"] })),
+    alarm: () => hub.alarm(),
     evict: () => {
       hub = new LiveGuildHub(ctx, hubEnv);
     },
@@ -241,6 +243,36 @@ it("shares the browser pull cooldown across sockets and hub reconstruction", asy
   } finally {
     clock.mockRestore();
     vi.useRealTimers();
+  }
+});
+
+it("withdraws a passive viewer on a warm gap after a shorter resync lease expires", async () => {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const pull = vi.fn(async () => snapshot(1, new Date(now).toISOString()));
+  vi.stubGlobal("fetch", pull);
+  const active = guestSocket(now + 60_000);
+  const passive = guestSocket(now + 60_000);
+  const { env, message, alarm } = fixture(publicConfig, [active, passive]);
+  const unavailable = '{"v":1,"type":"unavailable","topic":"voice"}';
+  try {
+    await message(active, "subscribe");
+    await message(passive, "subscribe");
+    vi.mocked(passive.send).mockClear();
+    clock.mockReturnValue(now + 6_000);
+    pull.mockResolvedValueOnce(snapshot(1, new Date(now - 15_000).toISOString()));
+    await message(active, "resync");
+
+    clock.mockReturnValue(now + 15_001);
+    await alarm();
+    expect(active.send).toHaveBeenLastCalledWith(unavailable);
+    expect(await handleLiveIngress(signed(1), env)).toHaveProperty("status", 204);
+    expect(passive.send).not.toHaveBeenCalled();
+
+    expect(await handleLiveIngress(signed(3), env)).toHaveProperty("status", 409);
+    expect(passive.send).toHaveBeenCalledExactlyOnceWith(unavailable);
+  } finally {
+    clock.mockRestore();
   }
 });
 

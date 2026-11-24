@@ -130,7 +130,7 @@ it.each(["revoked", "expired", "closed"])(
     });
     await send(resync, refresh);
     expect(refresh).toHaveBeenCalledOnce();
-    expect(readSession.mock.calls).toEqual([["a".repeat(64)], ["a".repeat(64)]]);
+    expect(readSession.mock.calls.map(([, ref]) => ref)).toEqual(["a".repeat(64), "a".repeat(64)]);
     if (state !== "closed") expect(socket.close).toHaveBeenCalledWith(1008);
     expect(socket.send).not.toHaveBeenCalled();
   },

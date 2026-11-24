@@ -79,15 +79,14 @@ export class LiveGuildHub {
     // Only the Worker binding makes this request, from capped and verified bytes.
     const delta = decodeLiveDelta(await request.arrayBuffer(), this.#guildId);
     if (!delta) return new Response(null, { status: 400 });
-    const active = this.#publicUntil > Date.now();
-    const ingested = this.#sequence.ingest(delta.seq, delta);
-    // A warm gap can hide a revocation. Cold recovery has no local public proof.
-    if (active && !this.#sequence.current) {
+    const outcome = await this.#sequence.ingest(delta.seq, delta, () => {
+      // A warm gap can hide a revocation even after the newest lease expires.
+      if (!this.#publicUntil) return;
       this.#publicUntil = 0;
       this.#sockets.invalidate();
-    }
-    const outcome = await ingested;
-    if (active && outcome === "applied") this.ctx.waitUntil(this.#sockets.publish());
+    });
+    if (outcome === "applied" && this.#publicUntil > Date.now())
+      this.ctx.waitUntil(this.#sockets.publish());
     return new Response(null, {
       status: outcome === "unavailable" ? 409 : outcome === "invalid" ? 400 : 204,
     });
@@ -162,7 +161,8 @@ export class LiveGuildHub {
   }
 
   alarm(): Promise<void> {
-    if (this.#publicUntil <= Date.now()) this.#publicUntil = 0;
+    // Passive sockets can outlive the most recent proof. Keep the local marker
+    // until a gap or reconstruction so a later gap still withdraws them.
     return this.#sockets.expire(this.#publicUntil);
   }
 }

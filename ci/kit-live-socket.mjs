@@ -154,7 +154,11 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     await delay(2_100);
     const [resynced] = await send(guest, resync.padEnd(512), "message");
     assert.deepEqual(JSON.parse(resynced.data), unavailable);
-    assert.equal((await send(guest, subscribe, "close"))[0].code, 1008);
+    const duplicate = await open(headers);
+    const channels = JSON.stringify({ v: 1, type: "subscribe", topics: ["channels"] });
+    const [subscribed] = await send(duplicate, channels, "message");
+    assert.deepEqual(JSON.parse(subscribed.data), { ...unavailable, topic: "channels" });
+    assert.equal((await send(duplicate, channels, "close"))[0].code, 1008);
     for (const invalid of ["{", subscribe.padEnd(513)]) {
       const socket = await open(headers);
       assert.equal((await send(socket, invalid, "close"))[0].code, 1008);

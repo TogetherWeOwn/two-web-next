@@ -352,17 +352,29 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
       await delay(idle);
       if (producerWake) {
         assert.equal(await ingest(origin, cursor + 1, join("106", "11")), 204);
+        assert.deepEqual(guest.frames, [], "producer wake leaves the live baseline alone");
+        await source(snapshot(cursor, 5));
+        guest.resyncVoice();
+        await guest.frame(frames.withdrawal);
+        await delay(5_100);
         await source(replacement);
       }
       assert.deepEqual(guest.frames, [], "the baseline stays quiet before explicit resync");
       guest.resyncVoice();
+      if (producerWake) await guest.frame(frames.withdrawal);
       const at = await guest.frame(projected("snapshot", ++revision, 6));
-      assert.ok(at < Date.parse(initial.observed_at) + 30_000, "resync beats the original alarm");
+      const originalUntil = Date.parse(initial.observed_at) + 30_000;
+      assert.ok(at < originalUntil, "resync beats the original alarm");
       const after = await control();
       assert.equal(after.generation, generation + 1, `woke via ${after.firstEvent}`);
       assert.equal(after.firstEvent, producerWake ? "ingress" : "message");
       assert.deepEqual(guest.frames, [], "one replacement snapshot");
-      await guest.frame(frames.withdrawal, 12_000);
+      const withdrawnAt = await guest.frame(frames.withdrawal, 12_000);
+      const replacementUntil = Date.parse(replacement.observed_at) + 30_000;
+      assert.ok(
+        withdrawnAt >= replacementUntil && withdrawnAt < originalUntil,
+        "withdrawal follows the earlier replacement deadline",
+      );
       cursor += 2;
     }
     console.log(
