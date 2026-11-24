@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page } from "@playwright/test";
-import { PARITY_VIEWPORTS, parityTargets } from "../kit-parity";
+import { KIT_ORIGIN, PARITY_VIEWPORTS, parityTargets } from "../kit-parity";
 import { moderatorTest as test, withModeratorFixture } from "./moderator-fixture";
 
 const list = "/admin/reconciliation";
@@ -9,11 +9,68 @@ const resolvedKey = "e2e00000-0000-4000-8000-00000000b001";
 const open = `${list}/${openKey}`;
 const resolved = `${list}/${resolvedKey}`;
 const focusOutline = "rgb(255, 156, 54) solid 3px";
+const attendance = "/admin/attendance";
 
 async function expectReadOnlyLayout(page: Page) {
   await expect(page.locator("main form, main a[href$='/resolve']")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 }
+
+for (const { size } of PARITY_VIEWPORTS) {
+  test(`moderator attendance states at ${size.width}×${size.height}`, async ({ browser }) => {
+    test.setTimeout(60_000);
+    await withModeratorFixture(browser, "kit", size, async ({ page, navigate, capture }) => {
+      await navigate(attendance, 200, "Event attendance");
+      await expectReadOnlyLayout(page);
+      await expect(page.getByText("Read-only preview with synthetic data.")).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Sample raid night" })).toBeVisible();
+      await expect(page.locator("main time")).toHaveText([
+        "2026-11-07 18:45:00 UTC",
+        "2026-11-07 21:15:00 UTC",
+      ]);
+      await expect(
+        page.getByText("2 participants reached the 10-minute attendance threshold."),
+      ).toBeVisible();
+      const table = page.getByRole("table", { name: "Recorded participation" });
+      await expect(table.getByRole("rowheader")).toHaveText([
+        "Sample participant 1",
+        "Sample participant 2",
+        "Sample participant 3",
+      ]);
+      await expect(table.getByRole("cell")).toHaveText(["42", "2", "11", "1", "9", "1"]);
+      expect(await page.content()).not.toMatch(/10000000000000000[1-3]|test-raid-night-1/);
+      expect((await new AxeBuilder({ page }).include("main").analyze()).violations).toEqual([]);
+      await capture("attendance-authorized");
+    });
+    await withModeratorFixture(
+      browser,
+      "kit",
+      size,
+      async ({ page, navigate, capture }) => {
+        await navigate(attendance, 403, "You do not have access to this");
+        await expect(page.getByRole("table", { name: "Recorded participation" })).toHaveCount(0);
+        expect(await page.content()).not.toContain("Sample participant");
+        await capture("attendance-unauthorized");
+      },
+      { moderator: false },
+    );
+    await withModeratorFixture(browser, "hono", size, async ({ page, navigate, capture }) => {
+      await navigate(attendance, 404, "We cannot find that page");
+      expect(await page.content()).not.toContain("Sample participant");
+      await capture("attendance-disabled");
+    });
+  });
+}
+
+test("moderator attendance sends signed-out visitors to sign-in before showing data", async ({
+  request,
+}) => {
+  const response = await request.get(new URL(attendance, KIT_ORIGIN).href, { maxRedirects: 0 });
+  expect(response.status()).toBe(302);
+  expect(response.headers().location).toBe("/auth/discord?next=%2Fadmin%2Fattendance");
+  expect(response.headers()["cache-control"]).toMatch(/\bno-store\b/);
+  expect(await response.text()).not.toContain("Sample participant");
+});
 
 // Comparison captures, not visual baselines or replacements for existing axe gates.
 for (const { name } of parityTargets()) {

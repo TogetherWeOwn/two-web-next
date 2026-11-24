@@ -38,7 +38,7 @@ export async function withModeratorFixture(
   renderer: ParityTarget["name"],
   viewport: Viewport,
   run: (fixture: ModeratorFixture) => Promise<void>,
-  options: { javaScriptEnabled?: boolean; fullPage?: boolean } = {},
+  options: { javaScriptEnabled?: boolean; fullPage?: boolean; moderator?: boolean } = {},
 ): Promise<void> {
   requireGithubRunner();
   const target = parityTargets().find(({ name }) => name === renderer);
@@ -77,8 +77,9 @@ export async function withModeratorFixture(
   });
   try {
     try {
+      const moderator = options.moderator ?? true;
       await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
-        values (${hash}, ${hash}, ${MODERATOR_FIXTURE_ACTOR}, 'Synthetic Moderator', true, true, now() + interval '2 hours')`;
+        values (${hash}, ${hash}, ${MODERATOR_FIXTURE_ACTOR}, 'Synthetic Moderator', true, ${moderator}, now() + interval '2 hours')`;
       await context.addCookies([
         {
           name: SESSION_COOKIE,
