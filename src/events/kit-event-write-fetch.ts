@@ -33,7 +33,6 @@ export function refuseKitEventWriteOrigin(request: Request, env: Env, requestId:
   return crossOriginRefusal(eventWriteContext(request, env, requestId));
 }
 
-/** The hook selects ownership and enforces origin before this route-level admission. */
 export async function fetchKitEventWrite(
   request: Request,
   env: Env,
@@ -49,8 +48,7 @@ export async function fetchKitEventWrite(
       ("dynamic" in route ? route.dynamic.matches(rawPath, c.req.path) : route.path === rawPath),
   );
   if (!route) return new Response(null, { status: 404 });
-  // Hono routes on getPath and decodes the parameter separately. Kit has
-  // already decoded its own params, so use the original request here.
+  // Decode the key as Hono does using the original request path.
   const [, mount, segment = "", action] = c.req.path.split("/");
   const key = tryDecodeURIComponent(segment);
   try {

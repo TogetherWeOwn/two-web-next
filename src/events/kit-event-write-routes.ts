@@ -1,7 +1,5 @@
 import { EVENT_TRANSITIONS } from "./routes-writes";
-
 const eventActions = [...EVENT_TRANSITIONS, "duplicate"] as const;
-
 function dynamicWrite(method: string, path: string, id: string, pattern: RegExp) {
   return {
     method,
