@@ -13,17 +13,19 @@ import { type Ctx, type ProfileDeps, SNOWFLAKE, type Verdict } from "./routes-sh
 
 export const PROFILE_WRITE_THROTTLE_PER_MINUTE = 30;
 
+export async function profileWriteThrottleFor(env: Env, bucket: string): Promise<Verdict> {
+  const url = databaseUrl(env);
+  if (!url) return { limited: false };
+  // web_throttle_hits comes from drizzle/1000. The runtime role stays read/write-only.
+  const sql = postgres(url, databaseOptions) as unknown as Sql;
+  return checkJoinThrottle(sql, bucket, PROFILE_WRITE_THROTTLE_PER_MINUTE);
+}
+
 export function admitWrite(deps: ProfileDeps) {
   const throttle = async (c: { env: Env }, bucket: string): Promise<Verdict> => {
     if (deps.throttle) return deps.throttle(bucket);
-    const url = databaseUrl(c.env);
-    if (!url) return { limited: false };
-    // No DDL here (TOG-19721): web_throttle_hits comes from the migrate
-    // workflow (drizzle/1000); the runtime role stays read/write-only.
-    const sql = postgres(url, databaseOptions) as unknown as Sql;
-    return checkJoinThrottle(sql, bucket, PROFILE_WRITE_THROTTLE_PER_MINUTE);
+    return profileWriteThrottleFor(c.env, bucket);
   };
-
   return async (c: Ctx, next: Next) => {
     const viewer = c.get("viewer");
     const verdict = await throttle(c, `profile-write:${viewer.id}`).catch((err: unknown) => {
