@@ -16,16 +16,16 @@ export const profileDraftHeaders = (status: 422 | 503): Record<string, string> =
 
 function renderProfileWriteDraft(request: Request, env: Env, draft: KitProfileWriteDraft) {
   return new Context(request).html(
-    <ProfilePage
-      member={draft.member}
-      stats={draft.stats}
-      isOwner
-      isModerator={draft.isModerator}
-      appUrl={env.APP_URL}
-      statsDraftWarning
-      errors={draft.errors}
-      values={draft.values}
-    />,
+    ProfilePage({
+      member: draft.member,
+      stats: draft.stats,
+      isOwner: true,
+      isModerator: draft.isModerator,
+      appUrl: env.APP_URL,
+      statsDraftWarning: true,
+      errors: draft.errors,
+      values: draft.values,
+    }),
     draft.status,
     profileDraftHeaders(draft.status),
   );

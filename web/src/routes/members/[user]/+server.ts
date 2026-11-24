@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { writeKitProfileEndpoint } from "#lib/server/profile-write.tsx";
+import { writeKitProfileEndpoint } from "#lib/server/profile-write.ts";
 import type { RequestHandler } from "./$types";
 
 export const PATCH: RequestHandler = ({ request, locals }) =>

@@ -5,7 +5,7 @@ import { JOURNEY_TTL_SECONDS, LOGIN_INTENDED_COOKIE } from "../../../../../src/r
 import type { Actions, PageServerLoad } from "./$types";
 import { kitProfileDeps, resolveKitProfile } from "../../../../../src/profiles/kit";
 import { writeKitProfile } from "../../../../../src/profiles/kit-write";
-import { profileDraftHeaders } from "#lib/server/profile-write.tsx";
+import { profileDraftHeaders } from "#lib/server/profile-write.ts";
 
 // Server-rendered only: the Hono page ships no Svelte hydration bundle (its
 // interactivity is the existing /islands/*.js), so the Kit page carries none

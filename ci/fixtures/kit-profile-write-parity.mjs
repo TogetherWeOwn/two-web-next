@@ -42,9 +42,17 @@ async function envelope(response) {
   return {
     status: response.status,
     body,
-    headers: ["allow", "vary", "cache-control", "retry-after", "location"].map((name) =>
-      response.headers.get(name),
-    ),
+    headers: ["allow", "vary", "cache-control", "retry-after", "location"].map((name) => {
+      const value = response.headers.get(name);
+      // Cache-Control directive order has no wire meaning. Match Allow and Vary exactly.
+      return name === "cache-control" && value
+        ? value
+            .split(",")
+            .map((directive) => directive.trim())
+            .sort()
+            .join(", ")
+        : value;
+    }),
   };
 }
 

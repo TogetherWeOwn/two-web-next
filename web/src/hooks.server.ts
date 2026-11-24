@@ -26,7 +26,7 @@ import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
 import { KIT_PROFILE_WRITE_ROUTES } from "../../src/profiles/kit-write-route";
 import { authOriginRefusal, KIT_AUTH_ROUTES } from "#lib/server/auth.ts";
 import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
-import { resolveProfileWrite } from "#lib/server/profile-write.tsx";
+import { resolveProfileWrite } from "#lib/server/profile-write.ts";
 
 // Pure env binding: trust, ownership, decoration, the read-only session
 // bridge and the archive/list/detail/hot-zone guard branches live in the tested core
