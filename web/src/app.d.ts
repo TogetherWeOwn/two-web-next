@@ -14,7 +14,7 @@ declare global {
     // Populated by the read-only session bridge on Kit-owned requests only
     // Hono-owned requests skip the bridge, so every field stays
     // optional. Loaders never rotate a session; only the hook can renew a
-    // released document. Logout and OAuth stay Hono-owned.
+    // released document. Auth endpoints own their session effects separately.
     interface Locals {
       session?: KitLocals["session"];
       status?: KitLocals["status"];

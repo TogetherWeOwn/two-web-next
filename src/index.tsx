@@ -1,19 +1,18 @@
 import { captureRefusal, captureResponse } from "./render-clock";
 import { type Context, Hono } from "hono";
-import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
-import { registerAuthRoutes, SESSION_COOKIE } from "./auth/routes";
+import { registerAuthRoutes } from "./auth/routes";
+import { issueSession } from "./auth/issue-session";
 import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
 import { registerAlertProbe } from "./alert-probe";
 import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
-import { hashToken, SESSION_TTL_SECONDS, type SessionStore, type Sql } from "./sessions";
-import { databaseOptions, databaseUrl } from "./db/connection";
+import type { SessionStore } from "./sessions";
+import { databaseUrl } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
-import { upsertRosterUser } from "./db/roster";
-import { issueSession as persistSession, storeForEnv } from "./http/session";
+import { storeForEnv } from "./http/session";
 import { readContextSession as readSession } from "./session-hono";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
@@ -50,7 +49,7 @@ import { versionBody } from "./version";
 import { requestLog, safeRequestId } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
-import { authStatusScript, enableAuthStatus } from "./auth-status";
+import { authStatusScript } from "./auth-status";
 import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
 import { withStreamedBody } from "./html-stream";
@@ -193,16 +192,12 @@ app.use("*", webmcpPilot);
 // OAuth and login routes live in ./auth/routes; the app module only wires them.
 registerAuthRoutes(app, {
   storeFor: (c) => storeFor(c),
-  issueSession: (c, store, row) => issueSession(c, store, row),
+  issueSession,
 });
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).
 export { FALLBACK_INVITE, inviteDestination } from "./invite";
-
-// Test seam for the roster write: tests inject a Sql double (`{...env, ROSTER_STORE: sql}`).
-// Production bindings never set it.
-type EnvWithRoster = Env & { ROSTER_STORE?: Sql };
 
 // The cookie never carries identity claims. It carries a random token; the row
 // in Postgres is the session. A stolen DB dump yields hashes, not logins, and
@@ -219,87 +214,6 @@ export { FRESH_LOGIN_LOCK_WAIT_MS, withFreshLoginUserLock } from "./http/session
 
 // Keep the existing Kit import until its separate session cutover.
 export { storeForEnv };
-
-// Roster persistence shares storeFor's DB selection so signed-in profiles
-// read the same users sign-in writes. Tests may inject ROSTER_STORE; no DB
-// configuration means a no-op upsert so DB-free sign-in tests still work.
-// No DDL here either (TOG-19721): the users table is drizzle/0000, owned by
-// the migrate workflow.
-function rosterSqlFor(c: Context<{ Bindings: Env }>): {
-  sql: Sql | null;
-  close?: () => Promise<void>;
-} {
-  const injected = (c.env as EnvWithRoster).ROSTER_STORE;
-  if (injected) return { sql: injected };
-  const url = databaseUrl(c.env);
-  if (!url) return { sql: null };
-  // Bare options: this client feeds upsertRosterUser only, whose
-  // transaction already installs a tighter 500 ms SET LOCAL bound.
-  const client = postgres(url, databaseOptions);
-  return {
-    sql: client as unknown as Sql,
-    close: () => client.end({ timeout: 0 }),
-  };
-}
-
-async function issueSession(
-  c: Context<{ Bindings: Env }>,
-  store: SessionStore,
-  row: {
-    userId: string;
-    username: string;
-    avatar: string | null;
-    member: boolean;
-    moderator: boolean;
-  },
-): Promise<void> {
-  // N6 (TOG-9898): refresh the durable roster row on every sign-in — the
-  // legacy updateOrCreate on the Discord id. The /join/callback reaches here
-  // through the JoinSessionHooks mount below, and the staging QA seam calls
-  // this directly, so all three sign-in paths share this one write (QA writes
-  // the roster deliberately: W7 profile reads depend on it). Never blocks
-  // sign-in: a roster failure warns and the session still issues. This payload
-  // carries no moderator field — `users` has no such column, and the flag is
-  // recomputed from Discord role IDs into the session row only.
-  try {
-    const roster = rosterSqlFor(c);
-    try {
-      await upsertRosterUser(roster.sql, {
-        id: row.userId,
-        username: row.username,
-        avatar: row.avatar,
-        member: row.member,
-      });
-    } finally {
-      // Dedicated optional client only: never close injected/shared or session
-      // storage. SQL limits cancel backend work; end also settles pending I/O.
-      await roster.close?.();
-    }
-  } catch (err) {
-    // Driver messages can carry DSN fragments; the class name is the whole story here.
-    console.warn("roster upsert failed", {
-      request_id: c.get("requestId"),
-      exception: (err as Error)?.constructor?.name ?? "unknown",
-    });
-  }
-  const token = await persistSession(store, row, {
-    readPriorToken: () => getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE),
-    warnSweepFailure: (err) => {
-      console.warn("prior session sweep failed", {
-        request_id: c.get("requestId"),
-        exception: (err as Error)?.constructor?.name ?? "unknown",
-      });
-    },
-  });
-  await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
-    path: "/",
-    secure: true,
-    httpOnly: true,
-    sameSite: "Lax",
-    maxAge: SESSION_TTL_SECONDS,
-  });
-  await enableAuthStatus(c, store, await hashToken(token));
-}
 
 // One banner sentence per ordinary-login failure meaning (TOG-10355): denied
 // (they cancelled) is distinct from unavailable (Discord did not answer) and
