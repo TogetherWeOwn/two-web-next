@@ -1,12 +1,10 @@
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Db } from "../src/db/index";
 import { checkJoinThrottle } from "../src/join/service";
 import { fetchKitSeo } from "../src/kit-seo-fetch";
 import {
   dispatchHookRequest,
-  type HookEventLike,
   KIT_RENDERER_HEADER,
   KIT_RENDERER_VALUE,
   resolveRouteOwner,
@@ -24,10 +22,6 @@ const ROBOTS = "/robots.txt";
 const SITEMAP = "/sitemap_index.xml";
 const REQUEST_ID = "0123456789abcdef-IAD";
 const IP = "192.0.2.44";
-const CONTEXT = {
-  waitUntil() {},
-  passThroughOnException() {},
-} as unknown as ExecutionContext;
 
 beforeEach(() => {
   vi.mocked(checkJoinThrottle).mockReset().mockResolvedValue({ limited: false });
@@ -39,25 +33,38 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// Hosted Vitest exercises the serving dispatcher's exact-family admission
-// with a fixture catalog and a resolve callback standing in for the mount.
-function dispatch(
-  request: Request,
-  env: EnvWithAdminDb,
-  { flag = "true", routeId = new URL(request.url).pathname, isDataRequest = false } = {},
+async function compare(
+  path: string,
+  env: typeof baseEnv & { ADMIN_DB?: Db },
+  options: {
+    init?: RequestInit;
+    fallback?: boolean;
+    flag?: string;
+    dataRoute?: string;
+  } = {},
 ) {
-  const resolve = vi.fn(async (event: HookEventLike) => {
+  const { init, fallback = false, flag = "true", dataRoute } = options;
+  const url = new URL(path, env.APP_URL);
+  const headers = new Headers(init?.headers);
+  headers.set("cf-ray", REQUEST_ID);
+  headers.set("cf-connecting-ip", IP);
+  headers.set("if-none-match", "*");
+  headers.set("if-modified-since", "Fri, 01 Jan 2100 00:00:00 GMT");
+  headers.set("user-agent", "SyntheticCrawler/1.0");
+  headers.set("x-forwarded-host", "forwarded.example.test");
+  const request = new Request(url, { ...init, headers });
+  const baseline = await fetchApp(new Request(request), env);
+  const resolve = vi.fn<Parameters<typeof dispatchHookRequest>[1]["resolve"]>(async (event) => {
     const locals = event.locals as { requestId?: string };
-    const response = await fetchKitSeo(event.request, env, locals.requestId);
-    if (!response) throw new Error("The SEO adapter declined an admitted route");
-    return response;
+    const candidate = await fetchKitSeo(event.request, env, locals.requestId);
+    if (!candidate) throw new Error("The SEO adapter declined an admitted route");
+    return candidate;
   });
-  const honoFetch = vi.fn((req: Request) => fetchApp(req, env, CONTEXT));
-  const sessionFor = vi.fn(() => {
-    throw new Error("SEO dispatch read a session");
-  });
-  const response = dispatchHookRequest(
-    { request, url: new URL(request.url), route: { id: routeId }, isDataRequest },
+  const honoFetch = vi.fn((req: Request) => fetchApp(req, env));
+  const sessionFor = vi.fn().mockRejectedValue(new Error("SEO dispatch read a session"));
+  // The fixture catalog and resolve callback stand in for the mounted endpoints.
+  const response = await dispatchHookRequest(
+    { request, url, route: { id: dataRoute ?? url.pathname }, isDataRequest: !!dataRoute },
     {
       appUrl: env.APP_URL,
       honoFetch,
@@ -76,63 +83,17 @@ function dispatch(
       ],
     },
   );
-  return { response, resolve, honoFetch, sessionFor };
-}
-
-async function compare(
-  path: string,
-  env: EnvWithAdminDb,
-  {
-    init,
-    options,
-    candidate = true,
-  }: { init?: RequestInit; options?: Parameters<typeof dispatch>[2]; candidate?: boolean } = {},
-) {
-  const url = new URL(path, env.APP_URL);
-  const headers = new Headers(init?.headers);
-  headers.set("cf-ray", REQUEST_ID);
-  headers.set("cf-connecting-ip", IP);
-  const request = () => new Request(url, { ...init, headers });
-  const baseline = await fetchApp(request(), env, CONTEXT);
-  const run = dispatch(request(), env, options);
-  const response = await run.response;
-  expect(run.resolve).toHaveBeenCalledTimes(candidate ? 1 : 0);
-  expect(run.honoFetch).toHaveBeenCalledTimes(candidate ? 0 : 1);
-  expect(run.sessionFor).not.toHaveBeenCalled();
-  expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(candidate ? KIT_RENDERER_VALUE : null);
+  expect(resolve).toHaveBeenCalledTimes(fallback ? 0 : 1);
+  expect(honoFetch).toHaveBeenCalledTimes(fallback ? 1 : 0);
+  expect(sessionFor).not.toHaveBeenCalled();
+  expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(fallback ? null : KIT_RENDERER_VALUE);
   expect(response.status).toBe(baseline.status);
-  for (const name of [
-    "content-type",
-    "cache-control",
-    "location",
-    "etag",
-    "last-modified",
-    "vary",
-    "retry-after",
-    "x-robots-tag",
-    "x-content-type-options",
-    "content-security-policy",
-    "x-request-id",
-  ]) {
-    expect(response.headers.get(name), name).toBe(baseline.headers.get(name));
-  }
-  expect(response.headers.getSetCookie()).toEqual(baseline.headers.getSetCookie());
+  const actualHeaders = new Headers(response.headers);
+  actualHeaders.delete(KIT_RENDERER_HEADER);
+  expect([...actualHeaders]).toEqual([...baseline.headers]);
   const bytes = Buffer.from(await response.arrayBuffer());
   expect(bytes).toEqual(Buffer.from(await baseline.arrayBuffer()));
   return { response, body: bytes.toString("utf8") };
-}
-
-function requestInit(method: string, accept: string): RequestInit {
-  return {
-    method,
-    headers: {
-      accept,
-      "if-none-match": "*",
-      "if-modified-since": "Fri, 01 Jan 2100 00:00:00 GMT",
-      "user-agent": "SyntheticCrawler/1.0",
-      "x-forwarded-host": "forwarded.example.test",
-    },
-  };
 }
 
 function expectPublicResponse(response: Response, contentType: string) {
@@ -147,9 +108,7 @@ function expectPublicResponse(response: Response, contentType: string) {
 it.each(["https://togetherweown.com", "https://staging.example.test/"])(
   "advertises the configured sitemap to crawlers on %s without a DB or a validator",
   async (APP_URL) => {
-    const acquire = vi.fn(() => {
-      throw new Error("robots must not acquire the DB");
-    });
+    const acquire = vi.fn<() => Db | undefined>();
     const env = {
       ...baseEnv,
       APP_URL,
@@ -157,9 +116,9 @@ it.each(["https://togetherweown.com", "https://staging.example.test/"])(
         return acquire();
       },
     };
-    const get = await compare(ROBOTS, env, { init: requestInit("GET", "text/plain") });
+    const get = await compare(ROBOTS, env);
     expect(get.body).toBe(`User-agent: *\nDisallow:\nSitemap: ${new URL(SITEMAP, APP_URL).href}\n`);
-    const head = await compare(ROBOTS, env, { init: requestInit("HEAD", "text/plain") });
+    const head = await compare(ROBOTS, env, { init: { method: "HEAD" } });
     expect(head.body).toBe("");
     for (const { response } of [get, head])
       expectPublicResponse(response, "text/plain; charset=UTF-8");
@@ -202,29 +161,18 @@ it("serves only bounded published event URLs in the existing sitemap URL set", a
     APP_URL: "https://staging.example.test",
     ADMIN_DB: drizzle(query) as unknown as Db,
   };
-  const get = await compare(`${SITEMAP}?crawler=1`, env, {
-    init: requestInit("GET", "application/xml"),
-  });
-  const head = await compare(SITEMAP, env, { init: requestInit("HEAD", "application/xml") });
+  const get = await compare(`${SITEMAP}?crawler=1`, env);
+  const head = await compare(SITEMAP, env, { init: { method: "HEAD" } });
   expect(head.body).toBe("");
   for (const { response } of [get, head])
     expectPublicResponse(response, "application/xml; charset=UTF-8");
   expect(get.body).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
-  expect(get.body).toContain(`<loc>${env.APP_URL}/e/public&amp;key</loc>`);
   expect(get.body).toContain(`<lastmod>${updated}</lastmod>`);
   const locations = [...get.body.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]);
+  const staticPaths = ["/", "/join", "/events", "/about", "/faq", "/rules", "/privacy"];
+  const boundedPaths = Array.from({ length: 997 }, (_, index) => `/e/bounded-${index}`);
   expect(locations).toEqual(
-    [
-      "/",
-      "/join",
-      "/events",
-      "/about",
-      "/faq",
-      "/rules",
-      "/privacy",
-      "/e/public&amp;key",
-      ...Array.from({ length: 997 }, (_, index) => `/e/bounded-${index}`),
-    ].map((path) => `${env.APP_URL}${path}`),
+    [...staticPaths, "/e/public&amp;key", ...boundedPaths].map((path) => `${env.APP_URL}${path}`),
   );
   expect(get.body).not.toContain("synthetic-private-column");
   expect(query).toHaveBeenCalledTimes(4);
@@ -254,9 +202,7 @@ it("degrades to the static sitemap when the query fails", async () => {
 
 it("refuses a throttled sitemap before DB acquisition on GET and HEAD", async () => {
   vi.mocked(checkJoinThrottle).mockResolvedValue({ limited: true, retryAfter: 42 });
-  const acquire = vi.fn(() => {
-    throw new Error("throttled request must not acquire the DB");
-  });
+  const acquire = vi.fn<() => Db | undefined>();
   const env = {
     ...baseEnv,
     get ADMIN_DB() {
@@ -265,7 +211,7 @@ it("refuses a throttled sitemap before DB acquisition on GET and HEAD", async ()
   };
   for (const method of ["GET", "HEAD"]) {
     const { response, body } = await compare(SITEMAP, env, {
-      init: requestInit(method, "application/json"),
+      init: { method, headers: { accept: "application/json" } },
     });
     expect(response.status).toBe(429);
     expect(response.headers.get("retry-after")).toBe("42");
@@ -281,10 +227,7 @@ it("refuses a throttled sitemap before DB acquisition on GET and HEAD", async ()
 it("preserves Hono ownership with the flag off and for aliases, foreign hosts and other methods", async () => {
   for (const path of [ROBOTS, SITEMAP]) {
     expect(resolveRouteOwner({ method: "GET", path })).toBe("hono");
-    const { response } = await compare(path, baseEnv, {
-      options: { flag: "false" },
-      candidate: false,
-    });
+    const { response } = await compare(path, baseEnv, { flag: "false", fallback: true });
     expect(response.status).toBe(200);
   }
   for (const [path, status] of [
@@ -297,8 +240,8 @@ it("preserves Hono ownership with the flag off and for aliases, foreign hosts an
     ["https://foreign.example.test/sitemap_index.xml", 404],
   ] as const) {
     const result = await compare(path, baseEnv, {
-      options: path.endsWith("__data.json") ? { routeId: ROBOTS, isDataRequest: true } : undefined,
-      candidate: false,
+      dataRoute: path.endsWith("__data.json") ? ROBOTS : undefined,
+      fallback: true,
     });
     expect(result.response.status, path).toBe(status);
   }
@@ -307,7 +250,7 @@ it("preserves Hono ownership with the flag off and for aliases, foreign hosts an
     { method: "POST", headers: { origin: baseEnv.APP_URL } },
   ];
   for (const init of refusals) {
-    const { response } = await compare(ROBOTS, baseEnv, { init, candidate: false });
+    const { response } = await compare(ROBOTS, baseEnv, { init, fallback: true });
     expect(response.status).toBe(404);
     expect(response.headers.get("cache-control")).toBe("no-store, private");
   }
