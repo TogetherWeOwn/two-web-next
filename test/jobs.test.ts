@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { announcementStore } from "./helpers/announcement-store";
 import { handleCallInternalAction } from "../src/jobs/call-internal-action";
 import {
+  type AnnouncementSettlement,
+  toAnnouncementSettlement,
+} from "../src/jobs/announcement-settlement";
+import {
   CALL_INTERNAL_ACTION,
   PRUNE_CRON,
   RECONCILE_CRON,
@@ -577,6 +581,92 @@ describe("CallInternalAction", () => {
       [ann.idempotencyKey, 1, null, null],
     ]);
     expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
+  });
+
+  it.each([false, true])(
+    "keeps the original retryable, recovery enqueue fails=%s",
+    async (enqueueFails) => {
+      const announcementClaims = announcementStore();
+      announcementClaims.recordAnnouncement.mockRejectedValueOnce(new Error("write unavailable"));
+      announcementClaims.recoverAnnouncement.mockRejectedValueOnce(new Error("still unavailable"));
+      const enqueueAnnouncementSettlement = vi.fn(async (_body: AnnouncementSettlement) => {});
+      if (enqueueFails)
+        enqueueAnnouncementSettlement.mockRejectedValueOnce(new Error("queue unavailable"));
+      const postAnnouncement = vi.fn(async () =>
+        fail({ code: "needs_reconciliation", status: 409, message: "private provider detail" }),
+      );
+      const deps = {
+        bot: { postAnnouncement } as unknown as BotClient,
+        events: store(),
+        lock: memLock(),
+        ledger: memLedger(),
+        announcementClaims,
+        enqueueAnnouncementSettlement,
+      };
+      const original = msg(ann);
+      await consume({ messages: [original] }, deps);
+      expect(original.acked).toBe(false);
+      expect(original.retried).toBe(5);
+      const settlement = enqueueAnnouncementSettlement.mock.calls[0]?.[0];
+      expect(settlement).toEqual({
+        kind: "announcement-settlement",
+        idempotencyKey: ann.idempotencyKey,
+        sendAttempts: 1,
+        lastCode: "needs_reconciliation",
+        lastStatus: 409,
+      });
+      if (enqueueFails) {
+        expect(announcementClaims.recoverAnnouncement).not.toHaveBeenCalled();
+        expect(postAnnouncement).toHaveBeenCalledOnce();
+        return;
+      }
+
+      const dormant = msg(settlement);
+      await consume({ messages: [dormant] }, { ...deps, enqueueAnnouncementSettlement: undefined });
+      expect(dormant.acked).toBe(true);
+      expect(announcementClaims.recoverAnnouncement).not.toHaveBeenCalled();
+      const retry = msg(settlement);
+      const recovered = msg(settlement, 2, retry.timestamp);
+      await consume({ messages: [retry, recovered] }, deps);
+      expect(retry.acked).toBe(false);
+      expect(retry.retried).toBe(5);
+      expect(recovered.acked).toBe(true);
+      expect(announcementClaims.recoverAnnouncement).toHaveBeenCalledTimes(2);
+      expect(announcementClaims.recoverAnnouncement).toHaveBeenLastCalledWith(
+        ann.idempotencyKey,
+        1,
+        expect.objectContaining(settlement!),
+        null,
+      );
+      expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
+    },
+  );
+
+  it("admits only bounded scalar settlement evidence", () => {
+    const settlement = {
+      kind: "announcement-settlement",
+      idempotencyKey: ann.idempotencyKey,
+      sendAttempts: CALL_INTERNAL_ACTION.tries,
+      lastCode: null,
+      lastStatus: 599,
+    };
+    expect(toAnnouncementSettlement(settlement)).toEqual(settlement);
+    for (const extra of [
+      { sendAttempts: 0 },
+      { sendAttempts: 1.5 },
+      { sendAttempts: CALL_INTERNAL_ACTION.tries + 1 },
+      { lastStatus: 99 },
+      { lastStatus: 600 },
+      { lastStatus: null },
+      { lastCode: "private provider detail" },
+      { idempotencyKey: "not a UUID" },
+      { jobId: "not a UUID" },
+    ]) {
+      expect(toAnnouncementSettlement({ ...settlement, ...extra })).toBeNull();
+    }
+    expect(toAnnouncementSettlement({ ...settlement, lastStatus: 100 })).toMatchObject({
+      lastStatus: 100,
+    });
   });
 
   it("role.assign sends no key", async () => {

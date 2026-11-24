@@ -1,6 +1,7 @@
 import { alertQueueFailing } from "../alerts";
 import { AlertProbeError } from "../alert-probe-error";
 import { safeRequestId } from "../request-log";
+import { type AnnouncementSettlement, toAnnouncementSettlement } from "./announcement-settlement";
 import { handleCallInternalAction } from "./call-internal-action";
 import {
   ANNOUNCEMENT_RECONCILIATION_REASON,
@@ -10,7 +11,11 @@ import {
 } from "./constants";
 import { toQueueMessage } from "./envelope";
 import { INTERNAL_ACTION_DEADLINE_MS } from "./internal-action-deadline";
-import { type pgReconciliationStore, validAnnouncementIdentity } from "./reconciliation";
+import {
+  type pgReconciliationStore,
+  validAnnouncementIdentity,
+  validAnnouncementKey,
+} from "./reconciliation";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
 import { SYNC_RETRY_PERSISTENCE_REASON, SyncRetryPersistenceError } from "./types";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./sync-retry-diagnostic";
@@ -78,7 +83,7 @@ function alertFailing(
 
 type AnnouncementStore = Pick<
   ReturnType<typeof pgReconciliationStore>,
-  "claimAnnouncement" | "finishAnnouncement" | "recordAnnouncement"
+  "claimAnnouncement" | "finishAnnouncement" | "recordAnnouncement" | "recoverAnnouncement"
 >;
 async function requireAnnouncementStore<T>(op: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -90,6 +95,17 @@ async function requireAnnouncementStore<T>(op: Promise<T>): Promise<T> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function announcementPersistenceBackoff(error: unknown, attempts: number, requestId?: string) {
+  console.error("announcement reconciliation persistence failed", {
+    exception: queueExceptionClass(error),
+  });
+  if (attempts >= CALL_INTERNAL_ACTION.tries)
+    alertFailing("announcement", attempts, "announcement reconciliation persistence failed", {
+      requestId,
+    });
+  return backoffFor(CALL_INTERNAL_ACTION.backoffSeconds, attempts);
 }
 
 /** Queue consumer for both queues. Terminal outcomes ack (max_retries is only a backstop). */
@@ -105,9 +121,39 @@ export async function consume(
     dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown>;
     probeEnabled?: boolean;
     announcementClaims?: AnnouncementStore;
+    enqueueAnnouncementSettlement?: (body: AnnouncementSettlement) => Promise<unknown>;
   },
 ): Promise<void> {
   for (const m of batch.messages) {
+    if (deps.announcementClaims && deps.enqueueAnnouncementSettlement) {
+      const settlement = toAnnouncementSettlement(m.body);
+      if (settlement) {
+        try {
+          const closed = await requireAnnouncementStore(
+            deps.announcementClaims.recoverAnnouncement(
+              settlement.idempotencyKey,
+              settlement.sendAttempts,
+              settlement,
+              settlement.jobId ?? null,
+            ),
+          );
+          if (closed)
+            alertFailing(
+              "announcement",
+              settlement.sendAttempts,
+              ANNOUNCEMENT_RECONCILIATION_REASON,
+              { requestId: settlement.requestId },
+            );
+        } catch (error) {
+          m.retry({
+            delaySeconds: announcementPersistenceBackoff(error, m.attempts, settlement.requestId),
+          });
+          continue;
+        }
+        m.ack();
+        continue;
+      }
+    }
     const body = toQueueMessage(m.body);
     if (!body) {
       // Bad carriers cannot recover on retry. Do not trust their ledger/lock
@@ -301,9 +347,35 @@ export async function consume(
           } else {
             const result = await handleCallInternalAction(body, claim.attempts, deps.bot, true);
             if ("announcementEvidence" in result) {
-              await requireAnnouncementStore(
-                store.recordAnnouncement(id, claim.attempts, result.announcementEvidence, jobId),
-              );
+              const evidence = result.announcementEvidence;
+              try {
+                await requireAnnouncementStore(
+                  store.recordAnnouncement(id, claim.attempts, evidence, jobId),
+                );
+              } catch (error) {
+                if (
+                  deps.enqueueAnnouncementSettlement &&
+                  (evidence.lastCode !== null || evidence.lastStatus !== null)
+                ) {
+                  try {
+                    await requireAnnouncementStore(
+                      deps.enqueueAnnouncementSettlement({
+                        kind: "announcement-settlement",
+                        idempotencyKey: id,
+                        sendAttempts: claim.attempts,
+                        ...(validAnnouncementKey(jobId) ? { jobId } : {}),
+                        ...(requestId ? { requestId } : {}),
+                        ...evidence,
+                      }),
+                    );
+                  } catch (enqueueError) {
+                    console.error("announcement settlement enqueue failed", {
+                      exception: queueExceptionClass(enqueueError),
+                    });
+                  }
+                }
+                throw error;
+              }
             } else {
               const settlement = "retryInSeconds" in result ? result : { ...result, jobId };
               if (
@@ -330,16 +402,9 @@ export async function consume(
       }
     } catch (e) {
       if (body.kind === "announcement" && deps.announcementClaims) {
-        console.error("announcement reconciliation persistence failed", {
-          exception: queueExceptionClass(e),
-        });
         // Ledger failure and ack both require durable evidence. Keep retrying
         // storage even after the bot budget; signal before the transport cap.
-        if (m.attempts >= CALL_INTERNAL_ACTION.tries)
-          alertFailing(body.kind, m.attempts, "announcement reconciliation persistence failed", {
-            requestId,
-          });
-        outcome = { retryInSeconds: backoffFor(CALL_INTERNAL_ACTION.backoffSeconds, m.attempts) };
+        outcome = { retryInSeconds: announcementPersistenceBackoff(e, m.attempts, requestId) };
       } else if (body.kind === "sync-event" && e instanceof SyncRetryPersistenceError) {
         // Carry the known wait on this delivery, but only a committed result can
         // reopen the durable claim. Recovery must not substitute a short lease.
