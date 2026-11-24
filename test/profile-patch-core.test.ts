@@ -94,8 +94,15 @@ function fixture(role: Role, limited = false) {
 }
 
 describe("dormant profile JSON PATCH core", () => {
-  it("saves only the owner, with Hono's JSON success body and no member-read audit", async () => {
-    const body = editorBody(Date.now() - PROFILE_MIN_FILL_MS);
+  it("saves only the owner, with Hono's JSON success body and no member-read audit", async ({
+    onTestFinished,
+  }) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    onTestFinished(() => {
+      clock.mockRestore();
+    });
+    const body = editorBody(now - PROFILE_MIN_FILL_MS);
     for (const implementation of ["core", "hono"]) {
       const f = fixture("owner");
       if (implementation === "core") {
