@@ -1,7 +1,7 @@
 // route-inventory: GET /api/public/events
 // route-inventory: GET /api/public/events/:key
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import type { Env } from "../src/env";
 import { __resetApiPublicCacheForTests } from "../src/public-data/cache";
 import type { EnvWithThrottle } from "../src/throttle";
@@ -84,7 +84,7 @@ describe("public API unknown paths return JSON (offline)", () => {
   });
 
   const get = (path: string, env: Env & EnvWithThrottle = baseEnv, ip = "192.0.2.91") =>
-    app.request(path, { headers: { "cf-connecting-ip": ip } }, env);
+    fetchAppPath(path, { headers: { "cf-connecting-ip": ip } }, env);
 
   it.each([...UNKNOWN_PATHS])("GET %s answers the JSON not_found envelope", async (path) => {
     const body = await expectUnknownJson(await get(path), path);
@@ -136,19 +136,19 @@ describe("public API unknown paths return JSON (offline)", () => {
     "%s respects same-origin protection",
     async (method) => {
       const path = "/api/public/cache";
-      const denied = await app.request(
+      const denied = await fetchAppPath(
         path,
         { method, headers: { origin: "https://evil.example" } },
         baseEnv,
       );
       expect(denied.status).toBe(403);
-      const admitted = await app.request(path, { method, headers: { origin: APP_URL } }, baseEnv);
+      const admitted = await fetchAppPath(path, { method, headers: { origin: APP_URL } }, baseEnv);
       await expectUnknownJson(admitted, path);
     },
   );
 
   it.each([...UNKNOWN_PATHS])("HEAD %s keeps status/headers with no body", async (path) => {
-    const res = await app.request(
+    const res = await fetchAppPath(
       path,
       { method: "HEAD", headers: { "cf-connecting-ip": "192.0.2.92" } },
       baseEnv,
@@ -165,7 +165,7 @@ describe("public API unknown paths return JSON (offline)", () => {
     "HEAD %s with ASSETS keeps headers, no body, no lookup",
     async (path) => {
       const fetch = vi.fn(async () => new Response(ASSET_CANARY, { status: 200 }));
-      const res = await app.request(
+      const res = await fetchAppPath(
         path,
         { method: "HEAD", headers: { "cf-connecting-ip": "192.0.2.93" } },
         assetEnv(ASSET_CANARY, { status: 200 }, fetch),
@@ -189,7 +189,7 @@ describe("public API unknown paths return JSON (offline)", () => {
         return adminDb();
       },
     } as unknown as Env & EnvWithThrottle;
-    const res = await app.request(
+    const res = await fetchAppPath(
       "/api/public/unknown",
       { headers: { "cf-connecting-ip": "192.0.2.98" } },
       offline,

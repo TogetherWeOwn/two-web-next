@@ -2,8 +2,8 @@
 // hook uses while Hono retains OAuth/session authority.
 //
 // Read-only by construction. It verifies the signed __Host session cookie with
-// the same hono primitive Hono's own readers use (parseSigned), hashes the
-// bearer, and makes exactly one store.get per request — one decision per
+// the shared Hono-compatible codec, hashes the bearer, and makes one
+// store.get per verified bearer — one decision per
 // request, shared with Kit loads through locals (createRequestSessionCache
 // shares one decision across concurrent readers of the same Request where
 // several readers are wired). The bridge never rotates, revokes, or issues
@@ -30,12 +30,11 @@
 // never reported as a logout, so Kit renders "unknown" instead of flipping a
 // member to logged-out). The auth-status probe cookie is deliberately never
 // accepted here: it proves liveness only and is not a login token.
-import { generateSignedCookie } from "hono/cookie";
-import { parseSigned } from "hono/utils/cookie";
 import { exceptionClass } from "./alerts";
-import { AUTH_STATUS_COOKIE } from "./auth-status";
 import type { Env } from "./env";
-import { storeForEnv } from "./index";
+import { AUTH_STATUS_COOKIE } from "./http/auth-status";
+import { storeForEnv } from "./http/session";
+import { signedCookieHeader, signedCookiePairs, verifySignedCookie } from "./http/signed-cookie";
 import type { KitEventsSession } from "./kit-events";
 import { safeNext } from "./join/service";
 import {
@@ -98,16 +97,30 @@ const GUEST: KitRequestSession = { status: "guest", session: null };
 const UNKNOWN: KitRequestSession = { status: "unknown", session: null };
 const NO_JOURNEY: KitReturnJourney = { returnTo: null, joinResult: null, expiredWrite: null };
 
+const KIT_COOKIE_NAMES: ReadonlySet<string> = new Set([
+  SESSION_COOKIE,
+  LOGIN_NEXT_COOKIE,
+  LOGIN_INTENDED_COOKIE,
+  JOIN_RESULT_COOKIE,
+  EXPIRED_WRITE_COOKIE,
+]);
+
 async function verifiedCookies(
   request: Request,
   sessionSecret: string,
-): Promise<Record<string, string | false> | null> {
+): Promise<Record<string, string | null> | null> {
   if (!sessionSecret) return null;
+  const encoded = signedCookiePairs(request.headers.get("cookie"), KIT_COOKIE_NAMES);
   try {
-    return await parseSigned(request.headers.get("cookie") ?? "", sessionSecret);
+    return Object.fromEntries(
+      await Promise.all(
+        [...encoded].map(
+          async ([name, value]) => [name, await verifySignedCookie(value, sessionSecret)] as const,
+        ),
+      ),
+    );
   } catch {
-    // A malformed Cookie header must not 500 a Kit render; without verified
-    // cookies there is simply no session and no journey to report.
+    // A crypto failure is indeterminate, not a logout or a failed render.
     return null;
   }
 }
@@ -180,13 +193,13 @@ export function createRequestSessionCache(): (
   };
 }
 
-function joinResultOf(value: string | false | undefined): JoinResult | null {
+function joinResultOf(value: string | null | undefined): JoinResult | null {
   return value === "added" || value === "already_member" ? value : null;
 }
 
 // Mirrors consumeExpiredWrite: only a pending notice resolves; a restored one
 // belongs to Hono's banner render, never to a Kit destination.
-function expiredWriteOf(value: string | false | undefined): string | null {
+function expiredWriteOf(value: string | null | undefined): string | null {
   if (typeof value !== "string" || !value.startsWith("pending|")) return null;
   return safeNext(value.slice("pending|".length));
 }
@@ -344,15 +357,7 @@ export function kitDocumentRotationFor(env: Env): (event: HookEventLike) => Prom
       expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
     });
     if (!rotated) return null;
-    // Inline options, like Hono's setSignedCookie calls: the pinned-lifetime
-    // guard (test/privacy-policy-numbers.test.ts) reads maxAge from the call.
-    return generateSignedCookie(SESSION_COOKIE, replacement, env.SESSION_SECRET, {
-      path: "/",
-      secure: true,
-      httpOnly: true,
-      sameSite: "Lax",
-      maxAge: SESSION_TTL_SECONDS,
-    });
+    return signedCookieHeader(SESSION_COOKIE, replacement, env.SESSION_SECRET, SESSION_TTL_SECONDS);
   };
 }
 
@@ -413,25 +418,9 @@ export function kitAdminRenewalFor(env: Env): (event: HookEventLike) => Promise<
       expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
     });
     if (!rotated) return null;
-    // Inline options, like Hono's setSignedCookie calls: the pinned-lifetime
-    // guard (test/privacy-policy-numbers.test.ts) reads maxAge from the call.
-    return generateSignedCookie(SESSION_COOKIE, replacement, env.SESSION_SECRET, {
-      path: "/",
-      secure: true,
-      httpOnly: true,
-      sameSite: "Lax",
-      maxAge: SESSION_TTL_SECONDS,
-    });
+    return signedCookieHeader(SESSION_COOKIE, replacement, env.SESSION_SECRET, SESSION_TTL_SECONDS);
   };
 }
-
-const AUTH_STATUS_OPTIONS = {
-  path: "/",
-  secure: true,
-  httpOnly: true,
-  sameSite: "Lax" as const,
-  maxAge: SESSION_TTL_SECONDS,
-};
 
 /** The hook alone supplies the proof of a full account document released by the audit boundary. */
 export function kitAuthStatusCookieFor(
@@ -462,7 +451,12 @@ export function kitAuthStatusCookieFor(
       // boundary): a value outside the shape the read path accepts
       // (src/auth-status.ts) must never be signed into a probe cookie.
       if (!key || !/^[a-f0-9]{64}$/.test(key)) return null;
-      return generateSignedCookie(AUTH_STATUS_COOKIE, key, env.SESSION_SECRET, AUTH_STATUS_OPTIONS);
+      return await signedCookieHeader(
+        AUTH_STATUS_COOKIE,
+        key,
+        env.SESSION_SECRET,
+        SESSION_TTL_SECONDS,
+      );
     } catch {
       // A probe-store outage must not fail the already-authorized page render.
       return null;

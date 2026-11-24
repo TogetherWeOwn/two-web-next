@@ -12,7 +12,7 @@ const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
 // The companion name is fixed so the generated entry and adapter can be placed
 // together without rewriting either output. Adapter source is parsed, not run.
-export async function compileKitFacade(adapterSource) {
+export async function compileKitFacade(adapterSource, { productionCutover = false } = {}) {
   // esbuild does not fully validate regular-expression grammar. Node's syntax
   // check parses the original module without evaluating it or loading imports.
   await new Promise((resolve, reject) => {
@@ -46,13 +46,20 @@ export async function compileKitFacade(adapterSource) {
     throw new Error("kit facade compiler: adapter must export default");
   }
 
+  // The cutover retains the Hono route surface and exports its jobs handlers.
+  // The other facade profile intercepts live socket and ingress requests.
+  const entry = productionCutover
+    ? `import { handleQueue, handleScheduled } from ${sourcePath("jobs/worker.ts")};
+const worker = createKitWorkerFacade(adapter);
+export default Object.assign(worker, { queue: handleQueue, scheduled: handleScheduled });`
+    : `import { handleLiveRequest } from ${sourcePath("live/socket-route.ts")};
+export { LiveGuildHub } from ${sourcePath("live/guild-hub.ts")};
+export default createKitWorkerFacade(adapter, undefined, handleLiveRequest);`;
   const result = await build({
     stdin: {
       contents: `import adapter from "./kit-adapter.js";
 import { createKitWorkerFacade } from ${sourcePath("kit-worker-facade.ts")};
-import { handleLiveRequest } from ${sourcePath("live/socket-route.ts")};
-export { LiveGuildHub } from ${sourcePath("live/guild-hub.ts")};
-export default createKitWorkerFacade(adapter, undefined, handleLiveRequest);
+${entry}
 `,
       resolveDir: fileURLToPath(new URL(".", import.meta.url)),
       loader: "js",

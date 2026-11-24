@@ -27,9 +27,11 @@ import {
   type Sql,
 } from "../src/sessions";
 import type { EnvWithThrottle } from "../src/throttle";
+import { mcpListEventsArgs, mcpToolCall } from "./helpers/machine-requests";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { parseJsonLines } from "./helpers/parse-json-lines";
 import { validatePublicSchema } from "./helpers/public-api-schema";
+import { fetchAppPath } from "./helpers/fetch-app";
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -119,7 +121,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     init: RequestInit = {},
     ip = "192.0.2.71",
   ): Promise<RpcResponse> => {
-    const res = await app.request(
+    const res = await fetchAppPath(
       "/mcp",
       {
         method: "POST",
@@ -196,12 +198,13 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
   const notifyInitialized = () => post({ jsonrpc: "2.0", method: "notifications/initialized" });
 
   const callTool = (name: string, args: Record<string, unknown>, id: number | string = 3) =>
-    post({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
+    post(mcpToolCall(name, args, id));
 
   it("completes the legacy-stateless handshake", async () => {
     const hello = await initialize();
     expect(hello.status).toBe(200);
     expect(hello.messages).toHaveLength(1);
+    expect(hello.messages[0]).toMatchObject({ jsonrpc: "2.0", id: 1 });
     const result = hello.messages[0]!["result"] as Record<string, unknown>;
     expect(result["protocolVersion"]).toBe("2025-06-18");
     const serverInfo = result["serverInfo"] as Record<string, unknown>;
@@ -249,7 +252,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     await seed(45, { status: "draft", title: "Hidden draft" });
     await initialize();
     await notifyInitialized();
-    const called = await callTool("list_events", { per_page: 20, page: 1 });
+    const called = await callTool("list_events", mcpListEventsArgs);
     expect(called.status).toBe(200);
     const result = called.messages[0]!["result"] as Record<string, unknown>;
     expect(result["isError"]).toBeUndefined();
@@ -344,7 +347,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
   });
 
   it("refuses a foreign Host before routing", async () => {
-    const res = await app.request(
+    const res = await fetchAppPath(
       "https://evil.test/mcp",
       {
         method: "POST",
@@ -366,28 +369,28 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     // Origin-less POSTs never reach routing: the global guard refuses first,
     // and the /mcp exemption covers the exact path only.
     for (const path of ["/mcp/extra", "/mcp/"]) {
-      const res = await app.request(path, { method: "POST", headers: plain, body: "{}" }, env);
+      const res = await fetchAppPath(path, { method: "POST", headers: plain, body: "{}" }, env);
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: "cross_origin", request_id: expect.any(String) });
     }
     // Past the guard (same-origin callers), routing still 404s non-exact paths.
     for (const path of ["/mcp/extra", "/mcp/"]) {
-      const res = await app.request(
+      const res = await fetchAppPath(
         path,
         { method: "POST", headers: { ...plain, origin: APP_URL }, body: "{}" },
         env,
       );
       expect(res.status).toBe(404);
     }
-    const get = await app.request("/mcp", { method: "GET", headers: plain }, env);
+    const get = await fetchAppPath("/mcp", { method: "GET", headers: plain }, env);
     expect(get.status).toBe(404);
     // PUT/PATCH/DELETE stay under the global guard: no exemption, no handler.
     for (const method of ["PUT", "PATCH", "DELETE"]) {
-      const res = await app.request("/mcp", { method, headers: plain }, env);
+      const res = await fetchAppPath("/mcp", { method, headers: plain }, env);
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: "cross_origin", request_id: expect.any(String) });
     }
-    const preflight = await app.request(
+    const preflight = await fetchAppPath(
       "/mcp",
       {
         method: "OPTIONS",
@@ -468,7 +471,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
             return boomDb;
           },
         } as unknown as Env & EnvWithThrottle;
-        const res = await app.request(
+        const res = await fetchAppPath(
           "/mcp",
           {
             method: "POST",
@@ -532,7 +535,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
           throw new McpFactoryBoomError("factory boom");
         },
       } as unknown as Env & EnvWithThrottle;
-      const res = await app.request(
+      const res = await fetchAppPath(
         "/mcp",
         {
           method: "POST",
@@ -583,7 +586,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     __resetAlertRateLimitForTests();
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const res = await app.request(
+      const res = await fetchAppPath(
         "/mcp",
         {
           method: "POST",

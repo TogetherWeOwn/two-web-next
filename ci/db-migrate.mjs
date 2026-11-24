@@ -14,7 +14,7 @@ import {
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const ledger = "drizzle.__drizzle_migrations";
-const lockKey = 11161001;
+export const webMigrationLockKey = 11161001;
 
 // PlanetScale Postgres identity pins (infrastructure identifiers, not secrets).
 // Usernames carry the branch as <role-credential>.<branch_id>, so the username
@@ -60,6 +60,10 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
   }
   const target = env.MIGRATION_TARGET;
   const identity = target === "production" ? env.PRODUCTION_MIGRATION_IDENTITY_SHA256 : undefined;
+  return migrationConnectionConfig(env, target, identity, { testDatabase });
+}
+
+export function migrationConnectionConfig(env, target, identity, { testDatabase = false } = {}) {
   if (target === "production" && !/^[a-f0-9]{64}$/.test(identity ?? ""))
     refuse("Production migration identity setting is missing or malformed.");
   const secret =
@@ -126,7 +130,7 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
   return { target, url, testDatabase, identity };
 }
 
-export async function assertProductionIdentity(connection, config, summary) {
+export async function assertProductionIdentity(connection, config, summary = () => {}) {
   if (config.target !== "production") return;
   const [actual] = await connection`select pg_catalog.current_database()::text as database,
     session_user::text as authenticated, current_user::text as effective`;
@@ -177,6 +181,10 @@ async function pendingMigrations(client, migrations) {
   const applied = exists.ledger
     ? await client`select hash, created_at from drizzle.__drizzle_migrations order by created_at, id`
     : [];
+  return pendingAfterPrefix(applied, migrations);
+}
+
+function pendingAfterPrefix(applied, migrations) {
   // Drizzle uses a timestamp high-water mark. Require an exact checksum prefix so
   // edited SQL, missing history, bot entries, or a newer release cannot hide work.
   for (const [index, row] of applied.entries()) {
@@ -192,6 +200,17 @@ async function pendingMigrations(client, migrations) {
     }
   }
   return migrations.slice(applied.length);
+}
+
+// The readiness installer calls this under the web migration and ledger locks.
+export async function assertMigrationPrefix(client, tag) {
+  const migrations = journal();
+  const rows = await client`select hash, created_at from drizzle.__drizzle_migrations
+    order by created_at, id limit ${migrations.length + 1}`;
+  const pending = pendingAfterPrefix(rows, migrations);
+  const applied = migrations.slice(0, migrations.length - pending.length);
+  if (applied.at(-1)?.tag !== tag) refuse("Unexpected web migration ledger end.");
+  return applied.map(({ folderMillis }) => folderMillis);
 }
 
 export function safeMigrationError(error) {
@@ -250,7 +269,7 @@ export function captureDriverRaceCrashes() {
   return { crashes, release: restore };
 }
 
-export function migrationClient(config, hooks = {}) {
+export function migrationClient(config, { onclose, readOnly = false } = {}) {
   return postgres(config.url.href, {
     port: 5432,
     max: 1,
@@ -259,6 +278,7 @@ export function migrationClient(config, hooks = {}) {
     connect_timeout: 10,
     password: () => decodeURIComponent(config.url.password),
     ssl: config.testDatabase ? false : { rejectUnauthorized: true },
+    ...(readOnly && { fetch_types: false }),
     // Canonical migration SQL uses unqualified identifiers intending `public`.
     // postgres.js merges `connection` into the startup packet (see StartupMessage
     // in node_modules/postgres/src/connection.js), so pin per-connection GUCs
@@ -267,14 +287,15 @@ export function migrationClient(config, hooks = {}) {
     // must stay on because the runtime-rights guard lexes plain strings
     // without backslash escapes. Never ALTER ROLE/DATABASE defaults.
     connection: {
-      statement_timeout: 120000,
+      statement_timeout: readOnly ? 10000 : 120000,
       lock_timeout: 10000,
       search_path: "public",
       datestyle: "ISO, YMD",
       standard_conforming_strings: "on",
+      ...(readOnly && { default_transaction_read_only: "on" }),
     },
     onnotice: () => {},
-    onclose: () => hooks.onclose?.(),
+    onclose: () => onclose?.(),
   });
 }
 
@@ -405,7 +426,8 @@ export async function runMigration(mode, env = process.env, options = {}) {
       await transaction.unsafe("SET LOCAL search_path = public");
       await transaction.unsafe("SET LOCAL datestyle = 'ISO, YMD'");
       await transaction.unsafe("SET LOCAL standard_conforming_strings = on");
-      const [lock] = await transaction`select pg_try_advisory_xact_lock(${lockKey}) as acquired`;
+      const [lock] =
+        await transaction`select pg_try_advisory_xact_lock(${webMigrationLockKey}) as acquired`;
       if (!lock.acquired)
         refuse("Another web migration holds the database lock; retry only after it finishes.");
       const pending = await plan(transaction);

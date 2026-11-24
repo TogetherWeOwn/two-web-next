@@ -13,7 +13,7 @@ import { exceptionClass } from "../alerts";
 import { requestBodyLimit } from "../body-limit";
 import { isDatabaseUnavailable } from "../db/errors";
 import { hasOversizedOAuthParams } from "../oauth-code-state-length";
-import { AUTH_STATUS_COOKIE, authStatus, clearAuthStatus } from "../auth-status";
+import { AUTH_STATUS_COOKIE, authStatus } from "../auth-status";
 import {
   addGuildMemberDetailed,
   authorizeUrl,
@@ -24,12 +24,6 @@ import {
 } from "../discord";
 import type { Env } from "../env";
 import { STATE_TTL_SECONDS } from "../index";
-import {
-  databaseUnavailable,
-  outageRepresentation,
-  prefersHtmlError,
-  varyAccept,
-} from "../error-responses";
 import { safeNext } from "../join/service";
 import { safeRequestId } from "../request-log";
 import {
@@ -48,7 +42,7 @@ import {
   rememberLoginNext,
 } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
-import { hashToken, isValidSessionToken, REVOKE_ALL_EXCEPT, type SessionStore } from "../sessions";
+import { hashToken, type SessionStore } from "../sessions";
 import {
   AUTH_THROTTLE_PER_MINUTE,
   WRITE_THROTTLE_PER_MINUTE,
@@ -64,6 +58,7 @@ import {
   recoveryLanding,
 } from "../write-recovery";
 import { SESSION_COOKIE } from "../session-cookie";
+import { signOut, signOutEverywhere } from "./sign-out";
 
 export { SESSION_COOKIE };
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -345,132 +340,17 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     // `logout`-bucket spend, even on a spent budget.
     requestBodyLimit("action"),
     throttle("logout", WRITE_THROTTLE_PER_MINUTE),
-    async (c) => {
-      // The app-wide same-origin guard runs before throttling or session storage.
-      const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-      // No bearer, or a correctly-signed but malformed bearer: nothing to
-      // revoke — clear cookies and leave without touching session storage
-      // (stays 303 when the store is down; main #239 pins the authoritative
-      // 503 only for a well-formed presented token whose revocation fails).
-      // A malformed hash could never match a live row, so revoking it is
-      // useless work that would 503 a sign-out that must always clear.
-      if (isValidSessionToken(token)) {
-        try {
-          const store = await hooks.storeFor(c);
-          await store.revoke(await hashToken(token));
-          const statusHash = await getSignedCookie(c, c.env.SESSION_SECRET, AUTH_STATUS_COOKIE);
-          if (typeof statusHash === "string" && /^[a-f0-9]{64}$/.test(statusHash)) {
-            await store.revokeLineage(statusHash);
-          }
-        } catch (err) {
-          // Authoritative, not best-effort: a failed revocation must not clear
-          // this browser's cookie as if the server row were gone. The failure
-          // logs bounded facts only — the class, never the message, which can
-          // quote connection details. Explicit JSON callers get the correlated
-          // envelope; absent/wildcard callers keep the legacy text bytes and
-          // browsers the branded page (explicit-HTML opt-in).
-          console.error("logout revocation failed", {
-            exception: exceptionClass(err),
-            request_id: safeRequestId(c.get("requestId")),
-          });
-          c.header("cache-control", "no-store, private");
-          varyAccept(c);
-          if (prefersHtmlError(c)) return databaseUnavailable(c);
-          if (outageRepresentation(c) === "application/json") {
-            return databaseUnavailable(c, true);
-          }
-          return c.text("Sign-out temporarily unavailable", 503);
-        }
-      }
-      deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
-      clearAuthStatus(c);
-      await consumeExpiredWrite(c);
-      return c.redirect("/", 303);
-    },
+    (c) => signOut(c, () => hooks.storeFor(c)),
   );
 
-  // Sign out everywhere: revokes every live session for the acting member,
-  // including the presented one, through the existing hash-only
-  // SessionStore.revokeUserSessions sweep. Same admission as POST /logout
-  // (global same-origin guard, action cap before the throttle, shared
-  // `logout` 30/min bucket so switching paths cannot multiply the budget),
-  // same 303-to-/ landing with both __Host- cookies cleared. The shared
-  // bucket is deliberate: one budget for the logout class, so a flood on
-  // one path cannot buy headroom on the other; the trade-off is that a
-  // spent budget 429s this emergency control too until the window rolls.
+  // Share POST /logout's budget so switching paths buys no extra attempts.
   app.post(
     "/logout/everywhere",
     // Body cap before the throttle: oversized probes 413 with zero
     // `logout`-bucket spend, even on a spent budget.
     requestBodyLimit("action"),
     throttle("logout", WRITE_THROTTLE_PER_MINUTE),
-    async (c) => {
-      // Sign-out responses are per-visitor: never cacheable, whatever sits
-      // at the edge.
-      c.header("cache-control", "no-store, private");
-      // The app-wide same-origin guard runs before throttling or session storage.
-      const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-      // No bearer, or a correctly-signed but malformed bearer: nothing to
-      // resolve — clear cookies and leave without touching session storage
-      // (stays 303 when the store is down, like POST /logout).
-      if (!isValidSessionToken(token)) {
-        deleteCookie(c, SESSION_COOKIE, {
-          path: "/",
-          secure: true,
-          httpOnly: true,
-          sameSite: "Lax",
-        });
-        clearAuthStatus(c);
-        await consumeExpiredWrite(c);
-        return c.redirect("/", 303);
-      }
-      try {
-        const store = await hooks.storeFor(c);
-        const hash = await hashToken(token);
-        const session = await store.get(hash);
-        // Dead bearer (expired, unknown, revoked, past the absolute cap):
-        // the acting member cannot be resolved from it, so no sweep runs —
-        // clear cookies and land signed-out (idempotent 303, never 503).
-        // This intentionally differs from POST /logout, which still kills
-        // the presented status lineage on a dead bearer: a partial lineage
-        // kill behind a 303 would misreport "everywhere" while leaving
-        // other lineages live, so the dead-bearer path revokes nothing.
-        if (session) {
-          // REVOKE_ALL_EXCEPT matches no SHA-256 hex row, so the sweep
-          // takes the presented session with the siblings (see the
-          // revokeUserSessions contract in src/sessions.ts). One atomic
-          // sweep: a throwing store leaves everything intact for the
-          // retry, which could not re-resolve the member after a partial
-          // presented-first revoke. Sweep-time semantics: sessions that
-          // commit between the resolve above and the sweep below survive;
-          // the window is one handler, and the next sign-in sweep (or a
-          // retry) takes them. Other members are untouched (user_id scope).
-          await store.revokeUserSessions(session.userId, REVOKE_ALL_EXCEPT);
-        }
-      } catch (err) {
-        // Authoritative, not best-effort: like POST /logout, a failed
-        // revocation must not clear this browser's cookies as if the
-        // server rows were gone. Bounded facts only — the class, never
-        // the message. Explicit JSON callers get the correlated envelope;
-        // absent/wildcard callers keep the legacy text bytes and browsers
-        // the branded page (explicit-HTML opt-in).
-        console.error("logout everywhere revocation failed", {
-          exception: exceptionClass(err),
-          request_id: safeRequestId(c.get("requestId")),
-        });
-        c.header("cache-control", "no-store, private");
-        varyAccept(c);
-        if (prefersHtmlError(c)) return databaseUnavailable(c);
-        if (outageRepresentation(c) === "application/json") {
-          return databaseUnavailable(c, true);
-        }
-        return c.text("Sign-out temporarily unavailable", 503);
-      }
-      deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
-      clearAuthStatus(c);
-      await consumeExpiredWrite(c);
-      return c.redirect("/", 303);
-    },
+    (c) => signOutEverywhere(c, () => hooks.storeFor(c)),
   );
 
   // Staging-only QA seam. 404 everywhere that is not the staging host with

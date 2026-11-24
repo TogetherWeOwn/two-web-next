@@ -32,10 +32,17 @@ export default defineConfig({
         rolldownOptions: {
           // Normal artifacts omit capture-only code. Local builds retain the
           // identifier for the generated loopback Wrangler config to define.
-          transform:
-            process.env.SSR_CAPTURE_FIXTURE === "true"
-              ? {}
-              : { define: { __TWO_LOCAL_CAPTURE__: "false" } },
+          transform: {
+            define: {
+              ...(process.env.SSR_CAPTURE_FIXTURE === "true"
+                ? {}
+                : { __TWO_LOCAL_CAPTURE__: "false" }),
+              // Only the explicitly selected cutover build admits the 1033 ledger.
+              ...(process.env.TWO_WEB_1033_COMPAT === "true"
+                ? { __TWO_WEB_1033_COMPAT__: "true" }
+                : {}),
+            },
+          },
           output: {
             // Compact server output without rewrites or name mangling; error
             // diagnostics depend on constructor names. Keep licenses and maps.

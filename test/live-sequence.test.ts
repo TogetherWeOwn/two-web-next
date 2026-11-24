@@ -13,6 +13,57 @@ function deferSnapshot() {
 }
 
 describe("live guild sequence", () => {
+  it("requires observation freshness at recovery and keeps the deadline through a delta", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      const load = loadFixture()
+        .mockResolvedValueOnce({ seq: 5, state: "expired", validUntil: 10_000 })
+        .mockResolvedValueOnce({ seq: 5, state: "fresh", validUntil: 10_050 })
+        .mockResolvedValueOnce(null);
+      const write = vi.fn();
+      const sequence = new LiveSequence(load, append, {
+        initial: { applied: 0, minimum: 0 },
+        write,
+      });
+      expect(await sequence.ingest(5, "first")).toBe("unavailable");
+      expect(sequence.current).toBeNull();
+      expect(write.mock.calls).toEqual([[{ applied: 0, minimum: 5 }]]);
+      expect(await sequence.ingest(5, "same cursor")).toBe("resynced");
+      clock.mockReturnValue(10_049);
+      expect(await sequence.ingest(6, " delta")).toBe("applied");
+      expect(sequence.current).toEqual({ seq: 6, state: "fresh delta", validUntil: 10_050 });
+      clock.mockReturnValue(10_050);
+      expect(sequence.current).toBeNull();
+      expect(await sequence.ingest(7, "too late to reduce")).toBe("unavailable");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("does not checkpoint a delta if its source expires during reduction", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(10_049);
+    try {
+      const load = loadFixture()
+        .mockResolvedValueOnce({ seq: 5, state: "fresh", validUntil: 10_050 })
+        .mockResolvedValueOnce(null);
+      const write = vi.fn();
+      const sequence = new LiveSequence(
+        load,
+        (state, delta: string) => {
+          clock.mockReturnValue(10_050);
+          return append(state, delta);
+        },
+        { initial: { applied: 5, minimum: 5 }, write },
+      );
+      expect(await sequence.synchronize()).toBe(true);
+      expect(await sequence.ingest(6, " delta")).toBe("unavailable");
+      expect(sequence.current).toBeNull();
+      expect(write.mock.calls).toEqual([[{ applied: 5, minimum: 6 }]]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("hydrates a cold object, applies the next delta, and ignores replays", async () => {
     const load = loadFixture().mockResolvedValue({ seq: 4, state: "snapshot" });
     const sequence = new LiveSequence(load, append);
@@ -24,6 +75,23 @@ describe("live guild sequence", () => {
     expect(await sequence.ingest(3, "older replay")).toBe("duplicate");
     expect(sequence.current).toEqual({ seq: 5, state: "snapshot + next" });
     expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("expires payload state without rewinding the replay and recovery watermark", async () => {
+    const load = loadFixture()
+      .mockResolvedValueOnce({ seq: 5, state: "first" })
+      .mockResolvedValueOnce({ seq: 5, state: "behind" })
+      .mockResolvedValueOnce({ seq: 6, state: "fresh" });
+    const sequence = new LiveSequence(load, append);
+    expect(await sequence.ingest(5, "not applied twice")).toBe("resynced");
+    sequence.expire();
+    expect(sequence.current).toBeNull();
+    expect(await sequence.ingest(5, "replay after expiry")).toBe("duplicate");
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(await sequence.ingest(6, "no baseline to reduce")).toBe("unavailable");
+    expect(sequence.current).toBeNull();
+    expect(await sequence.synchronize()).toBe(true);
+    expect(sequence.current).toEqual({ seq: 6, state: "fresh" });
   });
 
   it("rejects invalid sequence numbers before touching state or pulling a snapshot", async () => {

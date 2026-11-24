@@ -71,7 +71,7 @@ let { model }: { model: EventGoneModel } = $props();
       {#if model.related.length > 0}
         <section aria-labelledby="event-cancelled-alternatives-heading">
           <h2 id="event-cancelled-alternatives-heading">Other upcoming events</h2>
-          <ul class="facts" data-testid="event-cancelled-alternatives">
+          <ul class="facts" role="list" aria-labelledby="event-cancelled-alternatives-heading" data-testid="event-cancelled-alternatives">
             {#each model.related as alternative (alternative.key)}
               <li class="card">
                 <a href="/e/{alternative.key}" data-testid="event-cancelled-alternative">{alternative.title}</a>

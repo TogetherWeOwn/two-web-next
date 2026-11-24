@@ -20,4 +20,4 @@ expect_refusal() {
 
 expect_refusal 'requires the hosted XFS fixture' env -u XFS_FIXTURE_ROOT
 expect_refusal 'root is not on XFS' env XFS_FIXTURE_ROOT="${XFS_FIXTURE_NON_XFS:?}"
-node ci/kit-worker-e2e.mjs --installed-output
+node ci/kit-worker-e2e.mjs --installed-output "$@"

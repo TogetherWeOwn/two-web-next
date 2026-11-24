@@ -2,9 +2,9 @@
 // The live deploy commit and upload time, read from the version_metadata
 // binding. Local fixtures only; no deployed Worker is contacted.
 import { describe, expect, it } from "vitest";
-import app from "./app";
 import type { Env } from "../src/env";
 import { versionBody } from "../src/version";
+import { requestApp } from "./helpers/fetch-app";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const VERSION_ID = "81da0f67-1e2c-4b6e-9a53-0c7c1d2e3f40";
@@ -22,7 +22,7 @@ const env: Env = {
 
 describe("GET /version", () => {
   it("returns the staging-tagged commit and upload time as uncached JSON", async () => {
-    const res = await app.request(
+    const res = await requestApp(
       "/version",
       {},
       {
@@ -37,7 +37,7 @@ describe("GET /version", () => {
   });
 
   it("parses the production tag shape to the bare commit", async () => {
-    const res = await app.request(
+    const res = await requestApp(
       "/version",
       {},
       {
@@ -49,7 +49,7 @@ describe("GET /version", () => {
   });
 
   it("answers nulls, not an error, when the Worker has no binding (local dev)", async () => {
-    const res = await app.request("/version", {}, env);
+    const res = await requestApp("/version", {}, env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ sha: null, deployedAt: null });
   });
