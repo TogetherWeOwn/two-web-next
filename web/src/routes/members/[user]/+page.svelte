@@ -4,7 +4,7 @@ import type { PageProps } from "./$types";
 
 // One Svelte profile view for both reads: /profile passes the viewer's own
 // record, /members/:user passes the retrieved member. No markup lives here.
-let { data }: PageProps = $props();
+let { data, form }: PageProps = $props();
 </script>
 
 <ProfileView
@@ -16,4 +16,7 @@ let { data }: PageProps = $props();
   joinResult={data.joinResult}
   sharedGames={data.sharedGames}
   restoredWrite={data.restoredWrite}
+  errors={form?.errors}
+  values={form?.values}
+  statsDraftWarning={form?.values !== undefined}
 />

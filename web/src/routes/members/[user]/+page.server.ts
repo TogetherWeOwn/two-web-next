@@ -1,9 +1,11 @@
-import { error, redirect } from "@sveltejs/kit";
+import { error, fail, redirect } from "@sveltejs/kit";
 import { env } from "cloudflare:workers";
 import { parse } from "hono/utils/cookie";
 import { JOURNEY_TTL_SECONDS, LOGIN_INTENDED_COOKIE } from "../../../../../src/return-journey";
-import type { PageServerLoad } from "./$types";
+import type { Actions, PageServerLoad } from "./$types";
 import { kitProfileDeps, resolveKitProfile } from "../../../../../src/profiles/kit";
+import { writeKitProfile } from "../../../../../src/profiles/kit-write";
+import { profileDraftHeaders } from "#lib/server/profile-write.tsx";
 
 // Server-rendered only: the Hono page ships no Svelte hydration bundle (its
 // interactivity is the existing /islands/*.js), so the Kit page carries none
@@ -14,6 +16,19 @@ export const csr = false;
 // (src/profiles/routes-reads.tsx): the retrieved member record, member-gated,
 // audited by the hook's member-read boundary before any bytes leave.
 export const load: PageServerLoad = async ({ locals, params, url, cookies, setHeaders }) => {
+  const draft = locals.profileWriteDraft;
+  if (draft) {
+    setHeaders(profileDraftHeaders(draft.status));
+    return {
+      member: draft.member,
+      stats: draft.stats,
+      isOwner: true,
+      isModerator: draft.isModerator,
+      appUrl: env.APP_URL,
+      joinResult: null,
+      sharedGames: [],
+    };
+  }
   const { storeFor, statsFor, sessionSecret } = kitProfileDeps(env);
   const outcome = await resolveKitProfile(
     {
@@ -54,3 +69,17 @@ export const load: PageServerLoad = async ({ locals, params, url, cookies, setHe
     sharedGames: outcome.sharedGames,
   };
 };
+
+export const actions = {
+  default: async ({ request, locals }) => {
+    const result = await writeKitProfile(request, env, locals.requestId);
+    if (result instanceof Response) {
+      // Actions cannot return a raw response. The hook sends this exact wire
+      // response after Kit skips the GET loads, including on auth refusals.
+      locals.profileWriteResponse = result;
+      redirect(303, result.headers.get("location") ?? "/profile");
+    }
+    locals.profileWriteDraft = result;
+    return fail(result.status, { errors: result.errors, values: result.values });
+  },
+} satisfies Actions;
