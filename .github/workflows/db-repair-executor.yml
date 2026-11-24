@@ -57,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$CHECKED_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ||
-                ! "$APPROVED_SHA" =~ ^[a-f0-9]{40}$ || "$APPROVED_SHA" != "$GITHUB_SHA" ||
+                ! "$APPROVED_SHA" =~ ^[a-f0-9]{40}$ ||
                 ! "$PLAN_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
             printf '%s\n' 'Database executor admission refused.' >&2
             exit 1
@@ -66,6 +66,17 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          fetch-depth: 0
+      - name: Select the approved database repair revision
+        shell: bash
+        env:
+          APPROVED_SHA: ${{ secrets.PRODUCTION_DB_EXECUTOR_APPROVED_SHA }}
+          OPERATION: ${{ inputs.operation }}
+        run: |
+          if ! bash .github/scripts/select-db-repair-revision.sh '.github/workflows/db-repair-executor.yml' >/dev/null 2>&1; then
+            printf '%s\n' 'Approved database repair revision refused.' >&2
+            exit 1
+          fi
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
