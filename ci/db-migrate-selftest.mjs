@@ -248,6 +248,13 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
           },
         );
       };
+      const waitFor = async (observe, message) => {
+        for (let attempt = 0; attempt < 60; attempt++) {
+          if ((await observe())[0].seen) return;
+          await delay(10);
+        }
+        assert.fail(message);
+      };
       const runDuringSnapshotWrite = async (direction) => {
         const writer = postgres(url.href, {
           max: 1,
@@ -293,19 +300,25 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
               },
             );
           const drain = async (pid) => {
-            for (let attempt = 0; attempt < 40; attempt++) {
-              const [{ held }] = await client`select exists (
+            await waitFor(
+              () => client`select exists (
                 select from pg_stat_activity a join pg_locks l using (pid)
                 where a.pid = ${pid} and a.state = 'active' and a.wait_event = 'ClientRead'
                   and l.relation = 'public.discord_event_snapshots'::regclass
-                  and l.mode = 'RowExclusiveLock' and l.granted) as held`;
-              if (held) {
-                assert.equal(await run(direction), "committed");
-                return;
-              }
-              await delay(10);
-            }
-            assert.fail("Snapshot writer never reached active ClientRead with its table lock");
+                  and l.mode = 'RowExclusiveLock' and l.granted) as seen`,
+              "Snapshot writer never reached active ClientRead with its table lock",
+            );
+            await Promise.all([
+              run(direction).then((result) => assert.equal(result, "committed")),
+              waitFor(
+                () => client`select exists (
+                  select from pg_locks l
+                  where l.relation = 'public.discord_event_snapshots'::regclass
+                    and l.mode = 'ExclusiveLock' and not l.granted
+                    and ${pid} = any(pg_blocking_pids(l.pid))) as seen`,
+                "Repair never waited for the snapshot writer's table lock",
+              ),
+            ]);
           };
           await Promise.all([aborted, started.promise.then(drain)]);
           const [{ count }] =
@@ -323,6 +336,38 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       await assert.rejects(run("forward"));
       await runDuringSnapshotWrite("undo");
       assert.equal(await run("readback"), "before");
+      const shortWriter = postgres(url.href, { max: 1, connect_timeout: 5 });
+      const writing = Promise.withResolvers();
+      const releaseWriter = Promise.withResolvers();
+      try {
+        await Promise.all([
+          assert.rejects(
+            shortWriter.begin(async (tx) => {
+              await tx`insert into public.events values (-1)`;
+              writing.resolve();
+              await releaseWriter.promise;
+              throw rollback;
+            }),
+            (error) => error === rollback,
+          ),
+          writing.promise.then(() =>
+            Promise.all([
+              run("forward").then((result) => assert.equal(result, "committed")),
+              waitFor(
+                () => client`select exists (
+                  select from pg_stat_activity
+                  where datname = current_database() and usename = 'repair_legacy'
+                    and state = 'active' and wait_event = 'PgSleep') as seen`,
+                "Repair never rechecked the guard for an unrelated writer",
+              ).finally(() => releaseWriter.resolve()),
+            ]),
+          ),
+        ]);
+      } finally {
+        releaseWriter.resolve();
+        await shortWriter.end({ timeout: 5 });
+      }
+      assert.equal(await run("undo"), "committed");
       await authority("revoke");
       await authority("revoke");
       assert.equal(await readState(), unprovisioned);

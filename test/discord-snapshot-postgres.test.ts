@@ -616,6 +616,10 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
       const source = request();
       expect(await source.upcoming()).toEqual(seed);
       expect(source.lastReadFailed()).toBe(false);
+      expect(await pgDiscordSnapshotStore(connect).claim(`${key}-cold`)).toMatchObject({
+        token: null,
+        payload: null,
+      });
       expect(http).not.toHaveBeenCalled();
     });
     await Promise.all([request().upcoming(), request().upcoming()]);
