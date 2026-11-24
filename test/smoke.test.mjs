@@ -145,6 +145,8 @@ async function stub(t, change = () => {}, extraFixtures = {}) {
       cookie: request.headers.cookie,
       host: request.headers.host,
       override: request.headers["cloudflare-workers-version-overrides"],
+      fetchMode: request.headers["sec-fetch-mode"],
+      fetchDest: request.headers["sec-fetch-dest"],
     });
     const fixture = extraFixtures[request.url] ?? fixtures[request.url];
     if (!fixture) {
@@ -1135,8 +1137,16 @@ test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) =
     }
   };
   const good = await stub(t, render, fragments);
-  const options = { expectedCutoverRenderer: "kit" };
+  const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
+  const options = { expectedCutoverRenderer: "kit", versionOverride: override };
   assert.equal((await run(good.url, options)).ok, true);
+  const documents = good.requests.filter(({ path }) => ["/", "/events", "/join"].includes(path));
+  assert.equal(documents.length, 3);
+  for (const request of documents) {
+    assert.equal(request.fetchMode, "navigate");
+    assert.equal(request.fetchDest, "document");
+    assert.equal(request.override, override);
+  }
   const mixed = await stub(
     t,
     (path, response) => {

@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { writeFileSync } from "node:fs";
+import { get as httpGet } from "node:http";
+import { get as httpsGet } from "node:https";
+import { text } from "node:stream/consumers";
 import { pathToFileURL } from "node:url";
 import { headerIndexingRules } from "../ci/robots-directives.mjs";
 
@@ -260,6 +263,22 @@ async function hasGuestKitHomeHeading(body) {
   );
 }
 
+function probeNavigation(url, headers, signal) {
+  // Node fetch always supplies its own Sec-Fetch-Mode. The native GET keeps
+  // navigation metadata and never follows redirects.
+  const get = url.protocol === "https:" ? httpsGet : httpGet;
+  const requestHeaders = { ...headers, "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document" };
+  return new Promise((resolve, reject) => {
+    get(url, { headers: requestHeaders, signal }, (response) => {
+      const headers = new Headers();
+      for (const [name, values] of Object.entries(response.headersDistinct)) {
+        for (const value of values) headers.append(name, value);
+      }
+      resolve({ status: response.statusCode, headers, text: () => text(response) });
+    }).once("error", reject);
+  });
+}
+
 // Optional per-route hook for machine verdicts (--json/--ledger): called once
 // per route with (path, failedAssertionCount) after its PASS/FAIL lines.
 // Omitting it leaves the human output byte-identical to previous versions.
@@ -322,11 +341,13 @@ export async function smoke(
     try {
       // Manual redirects keep guest checks unauthenticated and never visit Discord.
       // Node timeout also bounds reading the body: https://nodejs.org/docs/latest-v24.x/api/globals.html#static-method-abortsignaltimeoutdelay
-      const response = await fetch(new URL(route.path, base), {
-        redirect: "manual",
-        signal: AbortSignal.timeout(timeoutMs),
-        headers: { ...overrideHeaders, ...route.headers },
-      });
+      const url = new URL(route.path, base);
+      const signal = AbortSignal.timeout(timeoutMs);
+      const requestHeaders = { ...overrideHeaders, ...route.headers };
+      const response =
+        expectedCutoverRenderer !== undefined && emberPages.has(route.path)
+          ? await probeNavigation(url, requestHeaders, signal)
+          : await fetch(url, { redirect: "manual", signal, headers: requestHeaders });
       check(
         route.statuses.includes(response.status),
         `HTTP ${route.statuses.join(" or ")}`,

@@ -450,7 +450,9 @@ export function productionManifestFor(
 ): OwnedRoute[] | undefined {
   const requestUrl = new URL(event.request.url);
   const onApex = requestUrl.hostname === PRODUCTION_APEX || event.url.hostname === PRODUCTION_APEX;
-  const cutoverProof = ISOLATED_CUTOVER_ORIGIN.test(deps.appUrl ?? "");
+  const cutoverProof = [requestUrl.origin, event.url.origin, deps.appUrl ?? ""].some((origin) =>
+    ISOLATED_CUTOVER_ORIGIN.test(origin),
+  );
   if (!onApex && !cutoverProof) {
     return undefined;
   }
