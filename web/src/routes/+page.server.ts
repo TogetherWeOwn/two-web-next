@@ -58,7 +58,10 @@ export const load: PageServerLoad = async ({ url, request, locals, cookies, setH
     appUrl: env.APP_URL,
     counts,
     countsSnapshot,
-    publicVoiceEnabled: !sessionUnavailable && env.DISCORD_LIVE_SOCKET_ENABLED === "true",
+    // Preserve the existing page data shape while the voice island is dormant.
+    ...(!sessionUnavailable && env.DISCORD_LIVE_SOCKET_ENABLED === "true"
+      ? { publicVoiceEnabled: true }
+      : {}),
     // The shared cache is viewer-invariant. Redact names only in the response
     // projection, so a guest request cannot alter the later member view.
     upcomingEvents: session?.member
