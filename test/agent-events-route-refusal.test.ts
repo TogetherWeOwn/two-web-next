@@ -25,9 +25,11 @@ import { requestApp } from "./helpers/fetch-app";
 import type { Env } from "../src/env";
 import { DEFAULT_CONFIG } from "../src/agent-events/service";
 import { makeFakeAgentDb } from "./helpers/fake-agent-ingress-db";
-
-const CALLER = "agent-under-test";
-const CRED = "cred-route-kill-001";
+import {
+  agentCaller as CALLER,
+  agentCreate,
+  agentCredential as CRED,
+} from "./helpers/machine-requests";
 
 const baseEnv = {
   APP_URL: "https://next.example.test",
@@ -38,17 +40,6 @@ const enabledEnv = {
   AGENT_EVENTS_ENABLED: "true",
   AGENT_EVENTS_CALLER_AGENT_ID: CALLER,
 } as unknown as Env;
-
-const FIELDS = {
-  title: "Agent proof event",
-  game: "Helldivers 2",
-  description: "One uniquely labelled route proof.",
-  starts_at: "2026-10-01 20:00",
-  ends_at: "2026-10-01 22:00",
-  timezone: "Europe/London",
-  location: "Voice: General",
-  capacity: 4,
-};
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -150,11 +141,7 @@ describe("agent-events route refusal (DB-free kill)", () => {
           authorization: `Bearer ${CRED}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          op: "create",
-          idempotency_key: "route-ok-001",
-          fields: FIELDS,
-        }),
+        body: JSON.stringify(agentCreate),
       },
       env,
       executionCtx,

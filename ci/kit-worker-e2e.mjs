@@ -812,6 +812,41 @@ export default {
     assert.notEqual(viaKit.headers.get("x-two-renderer"), "kit", `${path} is never Kit-rendered`);
   }
   console.log("PASS generated Worker canonical/API boundary parity");
+
+  if (args.length) {
+    const probePath = "/__fixture/machine-parity";
+    const fixture = fileURLToPath(new URL("./fixtures/kit-machine-parity.mjs", import.meta.url));
+    for (const { name, main, assetsDirectory } of [
+      {
+        name: "hono-machine",
+        main: join(repo, "src/worker.ts"),
+        assetsDirectory: join(repo, "public"),
+      },
+      { name: "kit-machine", main: worker, assetsDirectory: assets },
+    ]) {
+      const entry = join(scratch, `${name}.mjs`);
+      await writeFile(
+        entry,
+        `import inner from ${JSON.stringify(main)};
+import { machineParityWorker } from ${JSON.stringify(fixture)};
+export default machineParityWorker(inner, ${JSON.stringify(probePath)});\n`,
+      );
+      const instance = await startWorker(name, entry, assetsDirectory, undefined, {
+        DATABASE_URL: undefined,
+      });
+      await listen(instance.child, instance.origin, () => instance.log);
+      const response = await fetch(`${instance.origin}${probePath}`, {
+        signal: AbortSignal.timeout(20_000),
+      });
+      assert.equal(response.status, 200, `${name}: machine parity probes passed`);
+      assert.deepEqual(await response.json(), {
+        agentCreate: 201,
+        mcpComplete: "eof",
+        mcpDisconnect: "cancelled",
+      });
+      console.log(`PASS ${name} agent JSON success and MCP SSE completion and cancellation`);
+    }
+  }
 } catch (error) {
   failed = true;
   throw error;
