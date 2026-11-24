@@ -73,7 +73,15 @@ async function nativeForm(origin, cookie) {
     );
     const [name, value] = cookie.split(/=(.*)/s);
     await context.addCookies([
-      { name, value, url: origin, secure: true, httpOnly: true, sameSite: "Lax" },
+      {
+        name,
+        value,
+        domain: new URL(origin).hostname,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
     ]);
     const page = await context.newPage();
     page.setDefaultTimeout(10_000);
