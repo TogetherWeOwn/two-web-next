@@ -685,11 +685,13 @@ function checksDatabaseSecretScope(file, lines) {
     "secrets.PRODUCTION_DB_READINESS_PLAN_SHA256 != '' || secrets.PRODUCTION_DB_READINESS_PLAN != '' || " +
     "secrets.PRODUCTION_DB_READINESS_DATABASE_URL != '' || " +
     "secrets.PRODUCTION_DB_READINESS_CF_ACCOUNT_ID != '' || secrets.PRODUCTION_DB_READINESS_CF_READ_TOKEN != '' }}";
+  const isolation = readiness.replaceAll("DB_READINESS_", "DB_ISOLATION_");
   const expectedScope = new Map([
     ["db-production-identity.yml", expected],
     ["db-permissions-repair.yml", repair],
     ["db-repair-executor.yml", executor],
     ["db-readiness-projection.yml", readiness],
+    ["db-serving-ledger-isolation.yml", isolation],
   ]).get(file);
   if (!expectedScope) return false;
   if (document.errors.length || !isScalar(presence) || presence.value !== expectedScope)
@@ -770,6 +772,7 @@ test("every job that reads a PRODUCTION_* secret binds the production environmen
     "db-permissions-repair.yml",
     "db-repair-executor.yml",
     "db-readiness-projection.yml",
+    "db-serving-ledger-isolation.yml",
   ]) {
     assert.ok(referencing.includes(expected), `expected ${expected} to reference PRODUCTION_*`);
   }
@@ -831,6 +834,27 @@ test("readiness identity preflight scopes credentials and requires protected dis
   assert.equal(run.env.PRODUCTION_DB_READINESS_DATABASE_URL, dsn);
   assert.equal(source.split(dsn).length, 2);
   probeProjectionDispatch(jobs);
+});
+
+test("serving isolation is manual, protected and serialized with schema and Worker changes", () => {
+  const file = "db-serving-ledger-isolation.yml";
+  const source = readFileSync(new URL(file, WORKFLOWS), "utf8");
+  assert.deepEqual(productionSecretEnvironmentViolations(source, file), []);
+  const { on, jobs, concurrency } = parseDocument(source).toJS();
+  assert.deepEqual(Object.keys(on), ["workflow_dispatch"]);
+  assert.deepEqual(on.workflow_dispatch.inputs.ledger.options, [
+    "1033_session-roles-checked-at",
+    "1037_waitlist-offers",
+  ]);
+  assert.equal(concurrency.group, "web-migrate-production");
+  assert.equal(concurrency["cancel-in-progress"], false);
+  assert.equal(jobs.isolation.environment, "production");
+  assert.equal(jobs.isolation.needs, "preflight");
+  assert.equal(jobs.isolation.concurrency.group, "production-worker-mutation");
+  assert.equal(jobs.isolation.concurrency["cancel-in-progress"], false);
+  const dsn = "${{ secrets.PRODUCTION_DB_ISOLATION_DATABASE_URL }}";
+  assert.equal(jobs.isolation.steps.at(-1).env.PRODUCTION_DB_ISOLATION_DATABASE_URL, dsn);
+  assert.equal(source.split(dsn).length, 2);
 });
 
 test("db-backup selects its environment from the dispatch target, staging by default", () => {

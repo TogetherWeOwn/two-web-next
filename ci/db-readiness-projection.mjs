@@ -16,7 +16,7 @@ const source = new URL("../docs/web-readiness-projection.sql", import.meta.url);
 const reviewedSqlHash = "d202ac7d38a6c932276e8e90d3fee049e4cf700b261952106f722deb7c9615ec";
 const marker = "two-web readiness projection installation v1";
 const definition = "SELECT created_at FROM drizzle.__drizzle_migrations OFFSET 0;";
-const approvedEnds = new Set(["1033_session-roles-checked-at", "1037_waitlist-offers"]);
+export const approvedEnds = new Set(["1033_session-roles-checked-at", "1037_waitlist-offers"]);
 
 function parsePlan(operation, raw, digest) {
   assert.ok(
@@ -65,7 +65,7 @@ async function readJson(url, options, fetchImpl, maxBytes) {
   }
 }
 
-async function assertUndoTraffic(plan, timestamps, account, token, fetchImpl) {
+export async function assertReadinessTraffic(version, timestamps, account, token, fetchImpl) {
   assert.match(account ?? "", /^[0-9a-f]{32}$/);
   assert.ok(token, "Missing Workers read credential");
   const { origin, worker } = rollbackEnvironment("production");
@@ -76,8 +76,8 @@ async function assertUndoTraffic(plan, timestamps, account, token, fetchImpl) {
     1024 * 1024,
   );
   assert.ok(
-    success === true && liveVersion(result?.deployments) === plan.webVersion,
-    "Approved fallback must serve all Web traffic",
+    success === true && liveVersion(result?.deployments) === version,
+    "Approved Worker must serve all Web traffic",
   );
   const health = await readJson(
     new URL("/up", origin),
@@ -85,7 +85,7 @@ async function assertUndoTraffic(plan, timestamps, account, token, fetchImpl) {
     fetchImpl,
     16 * 1024,
   );
-  assert.equal(health.revision?.version_id, plan.webVersion, "Readiness version mismatch");
+  assert.equal(health.revision?.version_id, version, "Readiness version mismatch");
   assert.equal(health.db, "ok");
   assert.equal(health.pending_migrations, 0, "Fallback Worker reports pending migrations");
   assert.deepEqual(health.migration_ledger, timestamps);
@@ -106,9 +106,10 @@ async function assertLedgerAndRole(tx, servingRole) {
   assert.ok(state.fallback, "Serving role must already have direct ledger timestamp access");
 }
 
-async function assertProjection(tx, servingRole, timestamps) {
+export async function assertProjection(tx, servingRole, timestamps, owner = null) {
   const [state] = await tx`select pg_get_viewdef(c.oid, true) as definition,
-    c.relkind = 'v' and n.nspowner = c.relowner and c.relowner = (current_user::regrole)::oid
+    c.relkind = 'v' and n.nspowner = c.relowner
+      and c.relowner = (coalesce(${owner}, current_user)::regrole)::oid
       and obj_description(c.oid, 'pg_class') = ${marker}
       and c.reloptions = array['security_invoker=false']
       and pg_relation_is_updatable(c.oid, true) = 0 and not c.relhastriggers
@@ -187,8 +188,8 @@ export async function runReadinessProjection(operation, env, options = {}) {
         await tx`grant select on web_readiness.migration_timestamps to ${tx(plan.servingRole)}`;
         await assertProjection(tx, plan.servingRole, timestamps);
       } else {
-        await assertUndoTraffic(
-          plan,
+        await assertReadinessTraffic(
+          plan.webVersion,
           timestamps,
           env.PRODUCTION_DB_READINESS_CF_ACCOUNT_ID,
           env.PRODUCTION_DB_READINESS_CF_READ_TOKEN,

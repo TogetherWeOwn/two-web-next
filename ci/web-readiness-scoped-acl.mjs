@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
-// Disposable census, not the migration lint allowlist: includes the historical
-// grace table, audit exceptions and the four tables added through 1037.
+// Reviewed serving rights for the historical schema and the four tables added
+// through 1037. The latter receive their grants from the migrations.
 const tables = {
   "SELECT, INSERT, UPDATE, DELETE":
     "users profiles discord_event_snapshots job_unique_locks queue_jobs featured_contents rsvps join_attempts web_throttle_hits web_sessions web_oauth_journeys web_session_grace",
@@ -17,6 +17,27 @@ const sequences = {
   "USAGE, SELECT":
     "events featured_contents rsvps event_search_logs board_view_logs agent_event_idempotency_keys agent_event_hits queue_failed_jobs join_attempts web_throttle_hits event_echoes event_echo_members",
 };
+
+export const addedAfter1033 = new Set([
+  "event_echoes",
+  "event_echo_members",
+  "bot_reconciliation_intents",
+  "waitlist_offers",
+  "event_echoes_id_seq",
+  "event_echo_members_id_seq",
+]);
+
+export const publicServingRights = [
+  { kind: "table", name: "agent_event_grants", column: "updated_at", right: "UPDATE" },
+  ...Object.entries({ table: tables, sequence: sequences }).flatMap(([kind, groups]) =>
+    Object.entries(groups).flatMap(([rights, names]) =>
+      names.split(" ").flatMap((leaf) => {
+        const name = kind === "sequence" ? `${leaf}_id_seq` : leaf;
+        return rights.split(", ").map((right) => ({ kind, name, column: "", right }));
+      }),
+    ),
+  ),
+];
 
 export async function grantScopedAcl(sql, login) {
   for (const [kind, groups] of [
