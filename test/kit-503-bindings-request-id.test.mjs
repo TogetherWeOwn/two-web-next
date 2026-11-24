@@ -101,6 +101,7 @@ const virtualModules = new Map([
   ["searchlog", `export const MAX_QUERY_LENGTH = 255;`],
   ["contracts", `export const EVENTS_SEARCH_TOO_LONG_COPY = "search too long (stub)";`],
   ["journey", `export const JOIN_RESULT_COOKIE = "__Host-two_join_result";`],
+  ["write", 'export const serveEventWrite = () => { throw new Error("unexpected write"); };'],
   [
     "detail",
     `export function kitEventDetailStore() { return {}; }
@@ -167,6 +168,7 @@ beforeAll(async () => {
     [/\/events\/page-models\.server$/, "model"],
     [/lib\/server\/render-events-html$/, "renderer"],
     [/src\/return-journey$/, "journey"],
+    [/lib\/server\/event-write\.ts$/, "write"],
   ]));
   ({ load: pastLoad } = await bundleRoute("events/past/+page.server.ts", [
     ...frameworkReplacements,
