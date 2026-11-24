@@ -53,110 +53,112 @@ async function calendarFeedResponse(
   }
 }
 
-export async function readRssFeed(c: Ctx): Promise<Response> {
-  const limited = await publicReadGuard(c);
-  if (limited) return limited;
-  const db = await dbFor(c);
-  if (!db) return eventsUnavailable(c);
-  // Same status scope as the ICS collection: cancelled rows ship marked
-  // (`Cancelled: ` title prefix plus the one-line description note), so RSS
-  // subscribers never keep a stale "it's on" entry.
-  const rows = await listFeed(db, ["published", "cancelled"]);
-  const skippedUpdatedAt = rows.filter((r) => !isWireInstant(r.updatedAt)).length;
-  if (skippedUpdatedAt > 0) {
-    console.warn("eventsRss excluded non-wire updatedAt from lastBuildDate.", {
-      skipped: skippedUpdatedAt,
-    });
-  }
-  const built = latestWireUpdatedAt(rows);
-  return feedResponse(c, eventsRss(rows, c.env.APP_URL, built), {
-    "content-type": "application/rss+xml; charset=utf-8",
-    "cache-control": "max-age=300, public",
-  });
-}
-
-export async function readCalendarFeed(c: Ctx): Promise<Response> {
-  const limited = await publicReadGuard(c);
-  if (limited) return limited;
-  // Scope validation precedes any read and any conditional success: a
-  // malformed scope refuses instead of 304ing, with no reflected input.
-  const scope = parseFeedGameScope(c.req.query("game"));
-  if (scope === undefined) {
-    return c.text("Invalid game filter.", 400, { "cache-control": "no-store" });
-  }
-  const db = await dbFor(c);
-  if (!db) return eventsUnavailable(c);
-  const rows = await listFeed(db, ["published", "cancelled"], new Date(), scope);
-  return feedResponse(c, eventsIcsCollection(rows, c.env.APP_URL, scope), {
-    "content-type": "text/calendar; charset=utf-8",
-    "content-disposition": 'inline; filename="events.ics"',
-    "cache-control": "max-age=300, public",
-  });
-}
-
-// Same view policy as /e/:key: drafts are moderator-only; cancelled/past download fine.
-// Missing keys use the branded 404 (suggestions + noindex), never bare plaintext.
-export async function readEventCalendar(
-  c: Ctx,
-  readKey: () => string,
-  readSession: SessionReader,
-): Promise<Response> {
-  const limited = await publicReadGuard(c);
-  if (limited) return limited;
-  const key = readKey();
-  // One canonical key form per event, mirroring /e/:key: a valid key in
-  // another letter case 301s to the canonical URL before any read.
-  // Seed/demo keys and unparsable keys keep their current path (forged
-  // keys still refuse, unknown keys still 404).
-  const canonical = canonicalEventKey(key);
-  if (canonical && canonical !== key) {
-    const search = new URL(c.req.url).search;
-    return c.redirect(`/events/${encodeURIComponent(canonical)}.ics${search}`, 301);
-  }
-  if (!eventKeyAllowed(key, c.env.APP_URL)) {
-    c.header("x-robots-tag", "noindex, nofollow");
-    return notFoundHandler(c);
-  }
-  const db = await dbFor(c);
-  if (!db) return eventsUnavailable(c);
-  const e = await getEventRow(db, key);
-  if (!e) {
-    c.header("x-robots-tag", "noindex, nofollow");
-    return notFoundHandler(c);
-  }
-  if (e.status === "draft") {
-    let session;
-    try {
-      session = await readSession(c);
-    } catch (err) {
-      // Rotation errors arrive already normalized (classified outage or
-      // plain Error) and answer 503, never a silent guest; rotate resolving
-      // false (row ineligible) already returned null and stays the 403
-      // guest refusal below. Named non-outage exceptions are genuine
-      // programming errors, not outages, so they rethrow to 500 like home.
-      // Class-only log: driver messages can carry DSN fragments.
-      if (err instanceof Error && err.name !== "Error" && !isDatabaseUnavailable(err)) throw err;
-      console.error("draft ICS could not resolve the session; refusing.", {
-        exception: err instanceof Error ? err.constructor.name : "unknown",
+export const feedHandlers = {
+  async rss(c: Ctx): Promise<Response> {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
+    const db = await dbFor(c);
+    if (!db) return eventsUnavailable(c);
+    // Same status scope as the ICS collection: cancelled rows ship marked
+    // (`Cancelled: ` title prefix plus the one-line description note), so RSS
+    // subscribers never keep a stale "it's on" entry.
+    const rows = await listFeed(db, ["published", "cancelled"]);
+    const skippedUpdatedAt = rows.filter((r) => !isWireInstant(r.updatedAt)).length;
+    if (skippedUpdatedAt > 0) {
+      console.warn("eventsRss excluded non-wire updatedAt from lastBuildDate.", {
+        skipped: skippedUpdatedAt,
       });
-      return databaseUnavailable(c);
     }
-    if (!session?.moderator) return c.text("Forbidden", 403);
-  }
-  // A single-event download has no other rows to protect: a
-  // sequence- or timestamp-poison row answers the honest 503 with no-store
-  // (no ETag, no attachment) instead of an event-less 200 calendar.
-  return calendarFeedResponse(c, () => eventIcs(e, c.env.APP_URL), {
-    "content-type": "text/calendar; charset=utf-8",
-    "content-disposition": `attachment; filename="${e.eventKey}.ics"`,
-    "cache-control": "max-age=300, private",
-  });
-}
+    const built = latestWireUpdatedAt(rows);
+    return feedResponse(c, eventsRss(rows, c.env.APP_URL, built), {
+      "content-type": "application/rss+xml; charset=utf-8",
+      "cache-control": "max-age=300, public",
+    });
+  },
+
+  async calendar(c: Ctx): Promise<Response> {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
+    // Scope validation precedes any read and any conditional success: a
+    // malformed scope refuses instead of 304ing, with no reflected input.
+    const scope = parseFeedGameScope(c.req.query("game"));
+    if (scope === undefined) {
+      return c.text("Invalid game filter.", 400, { "cache-control": "no-store" });
+    }
+    const db = await dbFor(c);
+    if (!db) return eventsUnavailable(c);
+    const rows = await listFeed(db, ["published", "cancelled"], new Date(), scope);
+    return feedResponse(c, eventsIcsCollection(rows, c.env.APP_URL, scope), {
+      "content-type": "text/calendar; charset=utf-8",
+      "content-disposition": 'inline; filename="events.ics"',
+      "cache-control": "max-age=300, public",
+    });
+  },
+
+  // Same view policy as /e/:key: drafts are moderator-only; cancelled/past download fine.
+  // Missing keys use the branded 404 (suggestions + noindex), never bare plaintext.
+  async eventCalendar(
+    c: Ctx,
+    readKey: () => string,
+    readSession: SessionReader,
+  ): Promise<Response> {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
+    const key = readKey();
+    // One canonical key form per event, mirroring /e/:key: a valid key in
+    // another letter case 301s to the canonical URL before any read.
+    // Seed/demo keys and unparsable keys keep their current path (forged
+    // keys still refuse, unknown keys still 404).
+    const canonical = canonicalEventKey(key);
+    if (canonical && canonical !== key) {
+      const search = new URL(c.req.url).search;
+      return c.redirect(`/events/${encodeURIComponent(canonical)}.ics${search}`, 301);
+    }
+    if (!eventKeyAllowed(key, c.env.APP_URL)) {
+      c.header("x-robots-tag", "noindex, nofollow");
+      return notFoundHandler(c);
+    }
+    const db = await dbFor(c);
+    if (!db) return eventsUnavailable(c);
+    const e = await getEventRow(db, key);
+    if (!e) {
+      c.header("x-robots-tag", "noindex, nofollow");
+      return notFoundHandler(c);
+    }
+    if (e.status === "draft") {
+      let session;
+      try {
+        session = await readSession(c);
+      } catch (err) {
+        // Rotation errors arrive already normalized (classified outage or
+        // plain Error) and answer 503, never a silent guest; rotate resolving
+        // false (row ineligible) already returned null and stays the 403
+        // guest refusal below. Named non-outage exceptions are genuine
+        // programming errors, not outages, so they rethrow to 500 like home.
+        // Class-only log: driver messages can carry DSN fragments.
+        if (err instanceof Error && err.name !== "Error" && !isDatabaseUnavailable(err)) throw err;
+        console.error("draft ICS could not resolve the session; refusing.", {
+          exception: err instanceof Error ? err.constructor.name : "unknown",
+        });
+        return databaseUnavailable(c);
+      }
+      if (!session?.moderator) return c.text("Forbidden", 403);
+    }
+    // A single-event download has no other rows to protect: a
+    // sequence- or timestamp-poison row answers the honest 503 with no-store
+    // (no ETag, no attachment) instead of an event-less 200 calendar.
+    return calendarFeedResponse(c, () => eventIcs(e, c.env.APP_URL), {
+      "content-type": "text/calendar; charset=utf-8",
+      "content-disposition": `attachment; filename="${e.eventKey}.ics"`,
+      "cache-control": "max-age=300, private",
+    });
+  },
+};
 
 export function registerFeedRoutes(app: App, readSession: SessionReader): void {
-  app.get("/events.rss", readRssFeed);
-  app.get("/events.ics", readCalendarFeed);
+  app.get("/events.rss", feedHandlers.rss);
+  app.get("/events.ics", feedHandlers.calendar);
   app.get("/events/:file{.+\\.ics}", (c) =>
-    readEventCalendar(c, () => c.req.param("file").slice(0, -4), readSession),
+    feedHandlers.eventCalendar(c, () => c.req.param("file").slice(0, -4), readSession),
   );
 }

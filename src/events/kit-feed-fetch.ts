@@ -4,7 +4,7 @@ import type { Env } from "../env";
 import { internalErrorHandler } from "../errors";
 import { safeRequestId } from "../http/request-log";
 import { readContextSession } from "../http/session-context";
-import { readCalendarFeed, readEventCalendar, readRssFeed } from "./routes-feeds";
+import { feedHandlers } from "./routes-feeds";
 
 export type FeedRead =
   | { kind: "rss" }
@@ -30,22 +30,13 @@ export async function fetchKitFeed(
   const id = safeRequestId(requestId);
   if (id !== undefined) c.set("requestId", id);
 
-  let response: Response;
-  try {
-    switch (feed.kind) {
-      case "rss":
-        response = await readRssFeed(c);
-        break;
-      case "calendar":
-        response = await readCalendarFeed(c);
-        break;
-      case "event-calendar":
-        response = await readEventCalendar(c, () => feed.key, readContextSession);
-        break;
-    }
-  } catch (error) {
+  const read =
+    feed.kind === "event-calendar"
+      ? feedHandlers.eventCalendar(c, () => feed.key, readContextSession)
+      : feedHandlers[feed.kind](c);
+  const response = await read.catch((error: unknown) => {
     if (!(error instanceof Error)) throw error;
-    response = await internalErrorHandler(error, c);
-  }
+    return internalErrorHandler(error, c);
+  });
   return request.method === "HEAD" ? new Response(null, response) : response;
 }
