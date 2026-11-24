@@ -246,13 +246,40 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
           },
         );
       };
+      const runDuringSnapshotWrite = async (direction) => {
+        const writer = postgres(url.href, { max: 1, connect_timeout: 5 });
+        try {
+          const held = Promise.withResolvers();
+          const aborted = writer
+            .begin(async (tx) => {
+              await tx`set local transaction_timeout = '1s'`;
+              await tx`insert into public.discord_event_snapshots values (1)`;
+              held.resolve();
+              await tx`select pg_sleep(10)`;
+            })
+            .then(
+              () => assert.fail("Snapshot writer unexpectedly committed"),
+              (error) => {
+                held.reject(error);
+                assert.equal(error.code, "25P04");
+              },
+            );
+          await Promise.all([
+            aborted,
+            held.promise.then(async () => assert.equal(await run(direction), "committed")),
+          ]);
+          assert.deepEqual(await client`select id from public.discord_event_snapshots`, []);
+        } finally {
+          await writer.end({ timeout: 5 });
+        }
+      };
       await assert.rejects(run("forward", {}, "0".repeat(64)), /raw && raw.length/);
       await assert.rejects(run("forward", { after: "0".repeat(64) }));
       assert.equal(await run("readback"), "before");
-      assert.equal(await run("forward"), "committed");
+      await runDuringSnapshotWrite("forward");
       assert.equal(await run("readback"), "after");
       await assert.rejects(run("forward"));
-      assert.equal(await run("undo"), "committed");
+      await runDuringSnapshotWrite("undo");
       assert.equal(await run("readback"), "before");
       await authority("revoke");
       await authority("revoke");
