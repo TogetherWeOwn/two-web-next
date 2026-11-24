@@ -301,6 +301,8 @@ after the [production release gate](../CONTRIBUTING.md#production-release-gate).
 It uses the [shared definition](web-readiness-projection.sql) outside the Drizzle
 journal, and accepts only `1033_session-roles-checked-at` or `1037_waitlist-offers`
 as the exact ledger end. Keep `1038` deferred.
+The readiness workflow uses `queue: max` in both shared lanes. Other workflows
+can still use GitHub's default policy and replace a pending entry when they queue.
 
 Set these pins in the `production` Environment:
 

@@ -13,6 +13,10 @@ import { runReadinessProjection } from "../db-readiness-projection.mjs";
 
 const source = fileURLToPath(new URL("../../drizzle", import.meta.url));
 const journal = JSON.parse(readFileSync(join(source, "meta/_journal.json"), "utf8"));
+const alteredProjection = Buffer.concat([
+  readFileSync(new URL("../../docs/web-readiness-projection.sql", import.meta.url)),
+  Buffer.from("\nCREATE TABLE web_readiness.unreviewed_projection_change (id int);\n"),
+]);
 
 async function createLedger(sql) {
   await sql`CREATE SCHEMA drizzle`;
@@ -86,6 +90,7 @@ export async function rehearseProjection({ client, url }) {
           trafficVersion = version,
           percentage = 100,
           pending = 0,
+          projectionSql,
           healthResponse = (health) => Response.json(health),
         } = {},
       ) => {
@@ -109,6 +114,7 @@ export async function rehearseProjection({ client, url }) {
             PRODUCTION_DB_READINESS_CF_READ_TOKEN: "fixture",
           },
           {
+            projectionSql,
             connect(config) {
               assert.ok(!invalidDigest);
               config.url.pathname = url.pathname;
@@ -144,6 +150,11 @@ export async function rehearseProjection({ client, url }) {
         );
       };
       await assert.rejects(run("forward", { invalidDigest: true }), /plan digest/);
+      await assert.rejects(
+        run("forward", { projectionSql: alteredProjection }),
+        /Readiness projection SQL differs from the reviewed definition/,
+      );
+      assert.deepEqual(await snapshot(), before);
       await assert.rejects(
         run("forward", { override: { operation: "undo" } }),
         /Invalid readiness plan/,

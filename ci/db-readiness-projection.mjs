@@ -175,8 +175,12 @@ export async function runReadinessProjection(operation, env, options = {}) {
       const timestamps = await assertMigrationPrefix(tx, plan.ledger);
 
       if (operation === "forward") {
-        const sql = readFileSync(source);
-        assert.equal(createHash("sha256").update(sql).digest("hex"), reviewedSqlHash);
+        const sql = options.projectionSql ?? readFileSync(source);
+        assert.equal(
+          createHash("sha256").update(sql).digest("hex"),
+          reviewedSqlHash,
+          "Readiness projection SQL differs from the reviewed definition",
+        );
         await tx.unsafe(sql.toString("utf8")).simple();
         await tx`comment on view web_readiness.migration_timestamps is 'two-web readiness projection installation v1'`;
         await tx`grant usage on schema web_readiness to ${tx(plan.servingRole)}`;
