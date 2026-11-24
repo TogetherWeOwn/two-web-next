@@ -78,9 +78,13 @@ export const load: PageServerLoad = async ({
 
   // The detail read supplies a schedule. The RSVP sync timestamp describes
   // Discord mirroring. Keep seat state in the RSVP controls and let the
-  // composer handle planned and waiting steps for facts this read omits.
+  // sign-up record handle Echo until there is an Echo reader.
   return {
     model,
-    lifeline: composeLifeline({ eventKey: model.eventKey, startsAt, endsAt }, {}, now.getTime()),
+    lifeline: composeLifeline(
+      { eventKey: model.eventKey, startsAt, endsAt },
+      {},
+      now.getTime(),
+    ).filter((step) => step.id !== "echo"),
   };
 };

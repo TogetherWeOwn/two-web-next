@@ -1920,7 +1920,6 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
           "Reminder ping",
           "Bot counts who’s in",
           "Room opens",
-          "Echo freezes",
         ]);
         await expect(lifeline.locator('[data-state="recorded"], a, button, form')).toHaveCount(0);
         await expect(
@@ -2109,18 +2108,35 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
 
     // The enhanced navigations rotated the shared fixture session.
     await context.addCookies(await enhanced.cookies());
-    const post = page.waitForResponse(
-      (response) =>
-        response.request().method() === "POST" &&
-        new URL(response.url()).pathname === `/e/${openKey}/rsvp`,
-    );
-    await bar.getByRole("button", { name: "I'm in" }).press("Enter");
-    const submitted = await post;
-    expect(submitted.request().postData()).toBe("status=going");
-    expect(submitted.status()).toBe(303);
-    expect(submitted.headers().location).toBe(`/e/${openKey}`);
-    expect(submitted.headers()["x-two-renderer"]).toBeUndefined();
-    await expect(page.getByTestId("kit-seat-card").getByTestId("rsvp-confirmed")).toBeVisible();
+    for (const compact of [false, true]) {
+      await page.setViewportSize(
+        compact ? { width: 390, height: 844 } : { width: 1280, height: 800 },
+      );
+      await page.goto(`/e/${openKey}`);
+      const card = page.getByTestId("kit-seat-card");
+      const post = page.waitForResponse(
+        (response) =>
+          response.request().method() === "POST" &&
+          new URL(response.url()).pathname === `/e/${openKey}/rsvp`,
+      );
+      if (compact) {
+        await bar.getByRole("button", { name: "I'm in" }).click();
+      } else {
+        await card.getByTestId("rsvp-going").press("Enter");
+      }
+      const submitted = await post;
+      expect(submitted.request().postData()).toBe("status=going");
+      expect(submitted.status()).toBe(303);
+      expect(submitted.headers().location).toBe(`/e/${openKey}`);
+      expect(submitted.headers()["x-two-renderer"]).toBeUndefined();
+      await expect(card.getByTestId("rsvp-confirmed")).toBeVisible();
+      if (!compact) {
+        await withSessionDb(async (sql) => {
+          await sql`delete from rsvps where user_id = ${openUserId}
+            and event_id = (select id from events where event_key = ${openKey})`;
+        });
+      }
+    }
     await expect(bar).toContainText("You're in");
     await expect(bar.getByRole("button")).toHaveCount(0);
 
@@ -2135,10 +2151,14 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
 
     // Probe absence against actual server snapshots, without redoing the sibling renderer captures.
     await context.addCookies(await enhanced.cookies());
-    for (const state of ["live", "ended", "cancelled"]) {
+    for (const state of ["live", "ended", "invalid", "cancelled"]) {
       await withSessionDb(async (sql) => {
-        const endsAt = new Date(Date.now() + (state === "live" ? 3_600_000 : -3_600_000));
-        await sql`update events set starts_at = now() - interval '2 hours', ends_at = ${endsAt},
+        const startsAt = new Date(Date.now() - 7_200_000);
+        const endsAt =
+          state === "invalid"
+            ? startsAt
+            : new Date(Date.now() + (state === "live" ? 3_600_000 : -3_600_000));
+        await sql`update events set starts_at = ${startsAt}, ends_at = ${endsAt},
           status = ${state === "cancelled" ? "cancelled" : "published"} where event_key = ${openKey}`;
       });
       const response = await page.goto(`/e/${openKey}`);
@@ -2146,7 +2166,7 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
       expect(response?.headers()["x-two-renderer"]).toBe("kit");
       await expect(page.locator('aside[aria-label="Your seat"]')).toHaveCount(0);
       await expect(page.getByRole("region", { name: "Lifeline" })).toHaveCount(
-        state === "cancelled" ? 0 : 1,
+        state === "invalid" || state === "cancelled" ? 0 : 1,
       );
     }
   } finally {
@@ -2811,13 +2831,11 @@ test("Kit member event detail captures the ended record at both widths", async (
         expect((await row.boundingBox())?.height).toBeLessThan(160);
       }
       await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
-      await expect(record).toContainText("1 listed sign-up.");
-      await expect(record).not.toContainText("No Echo for this one.");
+      await expect(record).toContainText("No Echo for this one. 1 listed sign-up.");
       const lifeline = page.getByRole("region", { name: "Lifeline" });
       await expect(lifeline.locator('[data-state="waiting"] .title')).toHaveText([
         "Reminder ping",
         "Room opens",
-        "Echo freezes",
       ]);
       await expect(lifeline.locator('[data-state="recorded"] .title')).toHaveText(
         "Counting window closed",
