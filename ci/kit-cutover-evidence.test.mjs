@@ -138,6 +138,8 @@ test("isolated cutover proof requires both exact versions and six healthy transi
     bindingCheck: "isolated-and-all-off",
   };
   verifyStagingProof(proof, identity);
+  assert.throws(() => verifyStagingProof({ ...proof, kitReadinessSamples: 5 }, identity));
+  assert.throws(() => verifyStagingProof({ ...proof, bindingCheck: "unobserved" }, identity));
   for (const change of [{ status: 503 }, { pending: 1 }, { version: kit }, { smoke: "failed" }]) {
     assert.throws(
       () =>
