@@ -22,6 +22,11 @@ const config = {
   DISCORD_LIVE_SNAPSHOT_KEY_ID: "snapshot-fixture",
   DISCORD_LIVE_SNAPSHOT_SECRET: "synthetic snapshot material",
 } satisfies LiveIngressEnv;
+const publicConfig = {
+  ...config,
+  DISCORD_LIVE_SOCKET_ENABLED: "true",
+  DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "200",
+};
 
 function signed(
   seq: number,
@@ -92,6 +97,18 @@ function snapshot(seq: number, observedAt = new Date().toISOString()) {
   });
 }
 
+function guestSocket(until: number): WebSocket {
+  let meta: unknown = { v: 1, ref: null, until, topics: null, nextResync: 0 };
+  return {
+    readyState: WebSocket.OPEN,
+    deserializeAttachment: () => structuredClone(meta),
+    serializeAttachment: (value: unknown) => {
+      meta = structuredClone(value);
+    },
+    send: vi.fn(),
+  } as unknown as WebSocket;
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 it.each(roomAllowlistCases)("validates public room allowlists (%s)", (_name, input, size) => {
@@ -150,20 +167,8 @@ it.each([1, 2])(
     const observedAt = new Date(now).toISOString();
     const pull = vi.fn(async () => snapshot(1, observedAt));
     vi.stubGlobal("fetch", pull);
-    const { env, message, setAlarm, waitUntil } = fixture({
-      ...config,
-      DISCORD_LIVE_SOCKET_ENABLED: "true",
-      DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "200",
-    });
-    let meta: unknown = { v: 1, ref: null, until: now + 60_000, topics: null, nextResync: 0 };
-    const socket = {
-      readyState: WebSocket.OPEN,
-      deserializeAttachment: () => structuredClone(meta),
-      serializeAttachment: (value: unknown) => {
-        meta = structuredClone(value);
-      },
-      send: vi.fn(),
-    } as unknown as WebSocket;
+    const { env, message, setAlarm, waitUntil } = fixture(publicConfig);
+    const socket = guestSocket(now + 60_000);
     try {
       setAlarm.mockRejectedValueOnce(new Error("alarm write unavailable"));
       const send = async (cursor: number) => (await handleLiveIngress(signed(cursor), env))?.status;
@@ -187,6 +192,21 @@ it.each([1, 2])(
     }
   },
 );
+
+it.each([2, 3])("checks continuity through alarm I/O when ingress advances to %i", async (seq) => {
+  const pull = vi.fn(async () => snapshot(seq)).mockResolvedValueOnce(snapshot(1));
+  vi.stubGlobal("fetch", pull);
+  const { env, message, setAlarm, waitUntil } = fixture(publicConfig);
+  setAlarm.mockImplementationOnce(async () => {
+    expect((await handleLiveIngress(signed(seq), env))?.status).toBe(204);
+    expect(waitUntil).not.toHaveBeenCalled();
+  });
+  await message(guestSocket(Date.now() + 60_000), "subscribe");
+  const continuous = seq === 2;
+  expect(pull).toHaveBeenCalledTimes(continuous ? 1 : 2);
+  expect(setAlarm).toHaveBeenCalledOnce();
+  expect(waitUntil).toHaveBeenCalledTimes(continuous ? 1 : 0);
+});
 
 it("carries both watermarks across eviction without persisting any guild payload", async () => {
   let cursor = 1;

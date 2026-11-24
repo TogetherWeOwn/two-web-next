@@ -7,12 +7,14 @@ function fresh({ validUntil }: LiveSnapshot<unknown>): boolean {
 type IngestResult = "applied" | "duplicate" | "invalid" | "resynced" | "unavailable";
 export type LiveWatermarks = Readonly<{ applied: number; minimum: number }>;
 type Checkpoint = { initial: LiveWatermarks; write: (watermarks: LiveWatermarks) => void };
+type SourceProof = Readonly<{ validUntil: number | undefined }>;
 
 /** One guild's in-memory cursor. The caller validates and authenticates both
  * inputs. The reducer returns a new state or null when continuity cannot be
  * proven; the loader must be bounded. */
 export class LiveSequence<State, Delta> {
   #current: LiveSnapshot<State> | null = null;
+  #proof: SourceProof | null = null;
   #saved: LiveWatermarks;
   #minimum: number;
   #recovering: Promise<boolean> | null = null;
@@ -48,8 +50,12 @@ export class LiveSequence<State, Delta> {
   }
 
   /** A browser pull obtains independent proof even when the raw cursor is warm. */
-  async refresh(): Promise<LiveSnapshot<State> | null> {
+  async refresh(): Promise<SourceProof | null> {
     return this.#install(await this.#load());
+  }
+
+  stillCovers(proof: SourceProof): boolean {
+    return this.#proof === proof && this.current !== null;
   }
 
   async synchronize(): Promise<boolean> {
@@ -100,7 +106,7 @@ export class LiveSequence<State, Delta> {
       .catch(() => null);
   }
 
-  #install(snapshot: LiveSnapshot<State> | null): LiveSnapshot<State> | null {
+  #install(snapshot: LiveSnapshot<State> | null): SourceProof | null {
     if (
       !snapshot ||
       !Number.isSafeInteger(snapshot.seq) ||
@@ -109,6 +115,8 @@ export class LiveSequence<State, Delta> {
     )
       return null;
     this.#publish(snapshot);
-    return snapshot;
+    // Contiguous deltas carry the observation; a new snapshot requires new proof.
+    this.#proof = { validUntil: snapshot.validUntil };
+    return this.#proof;
   }
 }

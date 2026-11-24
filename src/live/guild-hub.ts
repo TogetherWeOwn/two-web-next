@@ -134,12 +134,12 @@ export class LiveGuildHub {
     this.#nextSocketPull = now + SOCKET_RECOVERY_INTERVAL_MS;
     this.#pullingPublic = true;
     try {
-      const snapshot = await this.#sequence.refresh();
-      if (snapshot?.validUntil === undefined) return;
-      await this.#sockets.scheduleExpiry(snapshot.validUntil);
-      // A gap, expiry or concurrent delta can replace the proof during alarm I/O.
-      if (snapshot !== this.#sequence.current) return;
-      this.#publicUntil = snapshot.validUntil;
+      const proof = await this.#sequence.refresh();
+      if (proof?.validUntil === undefined) return;
+      await this.#sockets.scheduleExpiry(proof.validUntil);
+      // Only continuous state from the browser's observation can use this alarm.
+      if (!this.#sequence.stillCovers(proof)) return;
+      this.#publicUntil = proof.validUntil;
       this.ctx.waitUntil(this.#sockets.publish());
     } finally {
       this.#pullingPublic = false;
