@@ -5,6 +5,7 @@ import { generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { KIT_EVENT_CALENDAR_ROUTE } from "../../src/events/kit-event-calendar-route.ts";
 import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes.ts";
+import { KIT_SECURITY_TXT_ROUTE } from "../../src/kit-security-txt-route.ts";
 import { KIT_SEO_ROUTES } from "../../src/kit-seo-routes.ts";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
 
@@ -18,6 +19,7 @@ const detailCachePolicy = "max-age=300, private";
 const eventCalendar = (key) => `/events/${key}.ics`;
 const pastEventKey = "01J00000000000000000001004";
 const sitemap = "/sitemap_index.xml";
+const securityTxt = "/.well-known/security.txt";
 const fixtureIp = "192.0.2.110";
 const wireHeaders = [
   "content-type",
@@ -62,7 +64,15 @@ async function assertMountedEndpoints() {
       ["GET", sitemap],
     ],
   );
-  for (const { path, method } of [...KIT_STATIC_FEED_ROUTES, ...KIT_SEO_ROUTES]) {
+  assert.deepEqual(
+    [KIT_SECURITY_TXT_ROUTE.method, KIT_SECURITY_TXT_ROUTE.path],
+    ["GET", securityTxt],
+  );
+  for (const { path, method } of [
+    ...KIT_STATIC_FEED_ROUTES,
+    ...KIT_SEO_ROUTES,
+    KIT_SECURITY_TXT_ROUTE,
+  ]) {
     const routes = manifest.routes.filter(
       ({ id, pattern }) => id !== "/[...path]" && pattern.test(path),
     );
@@ -139,7 +149,13 @@ function sessionRenewal(headers) {
   return cookies[1].split(";", 1)[0];
 }
 
-export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl }) {
+export async function assertStaticFeedParity({
+  hono,
+  kit,
+  startKit,
+  startSecurityTxtPair,
+  databaseUrl,
+}) {
   await assertMountedEndpoints();
   // Opposite flag values exercise both families independently on the same Workers.
   const [seoOn, feedOn] = await Promise.all([
@@ -147,6 +163,7 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
       APP_URL: `${hono.origin}/`,
       KIT_ROUTE_FEEDS: "false",
       KIT_ROUTE_SEO: "true",
+      KIT_ROUTE_SECURITY_TXT: "false",
     }),
     startKit("kit-feed-on", {
       APP_URL: hono.origin,
@@ -203,6 +220,81 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
     const direct = await request(hono, path, options);
     const actual = await request(target, path, options);
     compare(actual, direct, target, path);
+  }
+
+  async function assertSecurityTxtParity() {
+    const { appUrl, direct, enabled } = await startSecurityTxtPair();
+    const headers = {
+      origin: "https://foreign.example.test",
+      "x-forwarded-host": "foreign.example.test",
+      forwarded: "host=foreign.example.test;proto=http",
+      "if-none-match": "*",
+      "if-modified-since": "Fri, 01 Jan 2100 00:00:00 GMT",
+      cookie: "__Host-two_session=fixture",
+    };
+    for (const method of ["GET", "HEAD"]) {
+      const path = `${securityTxt}?crawler=1`;
+      const options = { method, status: 200, headers };
+      const httpBaseline = await request(hono, path, options);
+      const httpsBaseline = await request(direct, path, options);
+      for (const [target, baseline] of [
+        [kit, httpBaseline],
+        [seoOn, httpBaseline],
+        [enabled, httpsBaseline],
+      ]) {
+        const actual = await request(target, path, {
+          ...options,
+          renderer: target === enabled ? "kit" : null,
+        });
+        compare(actual, baseline, target, path);
+        assert.equal(actual.headers.get("content-type"), "text/plain; charset=utf-8");
+        assert.equal(actual.headers.get("cache-control"), "public, max-age=3600");
+        for (const name of [
+          "etag",
+          "last-modified",
+          "location",
+          "vary",
+          "x-robots-tag",
+          "set-cookie",
+        ])
+          assert.equal(actual.headers.get(name), null, `${target.name}: ${name}`);
+        if (method === "GET") {
+          assert.match(actual.body, /^Contact: https:\/\//);
+          assert.deepEqual(
+            actual.body.split("\n").filter((line) => line.startsWith("Canonical:")),
+            target === enabled ? [`Canonical: ${appUrl}${securityTxt}`] : [],
+          );
+        }
+      }
+    }
+
+    for (const [method, path, status, extra] of [
+      ["GET", "/.well-known/%73ecurity.txt", 200],
+      ["GET", "/security.txt", 404],
+      ["HEAD", `${securityTxt}/`, 404],
+      ["GET", `${securityTxt}/__data.json`, 404],
+      ["OPTIONS", securityTxt, 404],
+      ["POST", securityTxt, 404],
+      ["POST", securityTxt, 403, { origin: "https://foreign.example.test" }],
+      ["GET", securityTxt, 404, { "x-fixture-url-host": "foreign.example.test" }],
+      ["GET", securityTxt, 404, { "x-fixture-host": "foreign.example.test" }],
+      [
+        "HEAD",
+        securityTxt,
+        404,
+        { "x-fixture-host": `${new URL(appUrl).host}, foreign.example.test` },
+      ],
+    ]) {
+      const options = { method, status, headers: { origin: appUrl, ...extra } };
+      const baseline = await request(direct, path, options);
+      const actual = await request(enabled, path, options);
+      compare(actual, baseline, enabled, path);
+      assert.equal(actual.headers.get("location"), null, `${method} ${path}: no redirect`);
+      if (status !== 200) assert.equal(actual.headers.get("cache-control"), "no-store, private");
+    }
+    console.log(
+      "PASS built Worker security.txt absent/off/on: host policy, exact ownership and wire parity",
+    );
   }
 
   async function assertSeoParity() {
@@ -269,6 +361,7 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
   }
 
   try {
+    await assertSecurityTxtParity();
     const publicPath = eventCalendar(eventKeys[0]);
     const draftPath = eventCalendar(eventKeys[2]);
     // Run 404 parity before seeding events. The baseline Worker may already

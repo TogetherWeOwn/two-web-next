@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { fetchKitSecurityTxt } from "../src/kit-security-txt-fetch";
+import { KIT_SECURITY_TXT_ROUTE } from "../src/kit-security-txt-route";
 import {
   dispatchHookRequest,
   KIT_RENDERER_HEADER,
@@ -71,7 +72,7 @@ async function compare(
     return response;
   });
   const sessionFor = vi.fn().mockRejectedValue(new Error("Security.txt dispatch read a session"));
-  // Stand in for a mounted Kit endpoint without registering it in the shared catalog.
+  // Exercise the mounted route's admission without starting a Worker.
   const response = await dispatchHookRequest(
     {
       request,
@@ -84,9 +85,7 @@ async function compare(
       honoFetch,
       resolve,
       sessionFor,
-      apiFamilies: [
-        { flag, routes: [{ method: "GET", path: PATH, enabled: true, reads: "public" }] },
-      ],
+      apiFamilies: [{ flag, routes: [KIT_SECURITY_TXT_ROUTE] }],
     },
   );
 
@@ -142,6 +141,7 @@ it.each([
 it("leaves disabled, unmounted and encoded requests with Hono", async () => {
   for (const { response, body } of [
     await compare(PATH, { candidate: false, flag: "false" }),
+    await compare(PATH, { candidate: false, flag: "TRUE" }),
     await compare(PATH, { candidate: false, mounted: false }),
     await compare("/.well-known/%73ecurity.txt", { candidate: false }),
   ]) {

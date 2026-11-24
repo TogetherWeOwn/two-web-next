@@ -344,6 +344,7 @@ exactly once.
 | `src/kit-past-events.ts` | events |
 | `src/kit-restored-write.ts` | entry |
 | `src/kit-security-txt-fetch.ts` | entry |
+| `src/kit-security-txt-route.ts` | entry |
 | `src/kit-seo-fetch.ts` | entry |
 | `src/kit-seo-routes.ts` | entry |
 | `src/kit-session.ts` | auth |

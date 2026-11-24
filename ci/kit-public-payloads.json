@@ -73,6 +73,12 @@
       "tests": ["Kit search indexing anonymous payloads"]
     },
     {
+      "id": "kit-payload-security-txt",
+      "route": "GET /.well-known/security.txt",
+      "binding": "web/src/routes/.well-known/security.txt/+server.ts",
+      "tests": ["Kit security.txt anonymous payload"]
+    },
+    {
       "id": "kit-payload-events-past",
       "route": "GET /events/past",
       "binding": "web/src/routes/events/past/+page.server.ts",

@@ -139,6 +139,15 @@ require a pathname predicate and leave reserved paths to Hono. HEAD follows
 GET. Conflicting claims and overlaps with disabled page ownership entries
 fall back to Hono.
 
+### Security disclosure endpoint
+
+`KIT_ROUTE_SECURITY_TXT=true` admits trusted GET and HEAD on the literal
+`/.well-known/security.txt`. Hono owns it by default and handles other methods,
+host refusals, encoded paths, trailing slashes, and Kit data URLs. The response
+uses the shared disclosure text, including a `Canonical` field from HTTPS
+`APP_URL`, and keeps its one-hour public cache policy. It requires no database
+or session access.
+
 ### Search indexing endpoints
 
 `KIT_ROUTE_SEO=true` selects GET and HEAD on `/robots.txt` and
