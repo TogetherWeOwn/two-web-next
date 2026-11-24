@@ -57,6 +57,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     kitRouteEvents: env.KIT_ROUTE_EVENTS,
     kitRouteHome: env.KIT_ROUTE_HOME,
     kitRouteJoin: env.KIT_ROUTE_JOIN,
+    adminEnv: env,
     apiFamilies: [
       { flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] },
       { flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES },

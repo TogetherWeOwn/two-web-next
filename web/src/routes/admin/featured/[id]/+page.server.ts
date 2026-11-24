@@ -1,3 +1,4 @@
+import { adminFormActions } from "#lib/server/admin-form";
 import { error } from "@sveltejs/kit";
 import { env } from "cloudflare:workers";
 import { dbFor } from "../../../../../../src/admin/db";
@@ -41,3 +42,5 @@ export const load: PageServerLoad = async ({ parent, params, setHeaders }) => {
   setHeaders({ "cache-control": "private, no-store" });
   return { view: outcome.view };
 };
+
+export const actions = adminFormActions;
