@@ -42,6 +42,7 @@
     "KIT_ROUTE_STATIC": "false",
     "KIT_ROUTE_EVENTS": "false",
     "KIT_ROUTE_HOME": "false",
-    "KIT_ROUTE_JOIN": "false"
+    "KIT_ROUTE_JOIN": "false",
+    "KIT_ROUTE_EMBER_PAGES": "false"
   }
 }

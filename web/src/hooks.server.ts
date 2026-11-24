@@ -61,6 +61,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     kitRouteEvents: env.KIT_ROUTE_EVENTS,
     kitRouteHome: env.KIT_ROUTE_HOME,
     kitRouteJoin: env.KIT_ROUTE_JOIN,
+    kitRouteEmberPages: env.KIT_ROUTE_EMBER_PAGES,
     // End Kit's action before it starts another layout or page load. The
     // dispatcher returns the controller's native HTTP response in its place.
     admin: { env, completeForm: () => redirect(303, "/admin") },

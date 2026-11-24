@@ -106,6 +106,7 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_EVENTS?: string;
   KIT_ROUTE_HOME?: string;
   KIT_ROUTE_JOIN?: string;
+  KIT_ROUTE_EMBER_PAGES?: string;
   DISCORD_LIVE_SOCKET_ENABLED?: string;
   // Browser auth endpoints. Only the literal string "true" opts in.
   KIT_ROUTE_AUTH?: string;

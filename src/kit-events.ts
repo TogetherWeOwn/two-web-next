@@ -153,7 +153,7 @@ export async function dispatchEventsRequest(
     } catch {
       pathAndSearch = "/events";
     }
-    key = anonEventsKey(request.method, pathAndSearch, island);
+    key = `${anonEventsKey(request.method, pathAndSearch, island)} renderer=kit`;
     const hit = readAnonCache(key, source, now);
     if (hit) {
       const headers = new Headers({ "cache-control": hit.cacheControl });

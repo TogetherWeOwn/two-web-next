@@ -15,6 +15,7 @@ import {
 import { smoke } from "../bin/smoke.mjs";
 import { REQUIRED_PRODUCTION_SECRETS } from "./check-production-secrets.mjs";
 import {
+  EMBER_CUTOVER_VARS,
   LEDGER_STATES,
   STAGING_WORKER,
   WranglerOperationError,
@@ -29,6 +30,9 @@ import {
 import { KIT_ROUTE_FLAGS } from "./production-deploy-gate.mjs";
 import { liveVersion, rollbackAction } from "./rollback-target.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
+
+const cutoverProfile = process.env.CUTOVER_PROFILE || "all-off";
+const ember = cutoverProfile === "ember";
 
 function cloudflare() {
   const account = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -55,7 +59,7 @@ function cloudflare() {
   };
 }
 
-async function verifyServed(origin, prefixes, identity, version, state) {
+async function verifyServed(origin, prefixes, identity, version, state, ember) {
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
       await readReady(origin, prefixes, { version, commit: identity.sourceSha, state });
@@ -69,7 +73,7 @@ async function verifyServed(origin, prefixes, identity, version, state) {
   assert.ok(
     await smoke(origin, {
       expectedVersionId: version,
-      expectedJoinRenderer: "hono",
+      expectedCutoverRenderer: ember ? "kit" : "hono",
       onRoute: () => {
         routes += 1;
       },
@@ -93,11 +97,10 @@ function verifyStagedBindings(version, id, config) {
     assert.equal(bindings.get(name)?.type, "secret_text", "missing synthetic secret binding");
   }
   assert.ok(bindings.has("CF_VERSION_METADATA"), "staged version metadata binding missing");
-  for (const flag of KIT_ROUTE_FLAGS) {
-    assert.ok(
-      config.vars[flag] === undefined ? !bindings.has(flag) : bindings.get(flag)?.text === "false",
-      "staged Kit flag is not off",
-    );
+  for (const flag of [...KIT_ROUTE_FLAGS, ...Object.keys(EMBER_CUTOVER_VARS)]) {
+    const expected = config.vars[flag];
+    assert.equal(bindings.get(flag)?.text, expected, "staged rollout flag differs");
+    if (expected === undefined) assert.ok(!bindings.has(flag), "unexpected staged rollout flag");
   }
 }
 
@@ -111,6 +114,7 @@ function context() {
   );
   const runId = process.env.GITHUB_RUN_ID;
   const runAttempt = process.env.GITHUB_RUN_ATTEMPT;
+  assert.ok(cutoverProfile === "all-off" || ember, "invalid isolated cutover profile");
   const names = fixtureNames(runId, runAttempt);
   return {
     identity: {
@@ -168,7 +172,7 @@ async function deployPacket(dir, scratch, proof, origin, inputs, api, runtimeUrl
   delete process.env.KIT_CUTOVER_TEST_DATABASE_URL;
   for (const profile of ["hono", "kit"]) {
     const directory = join(dir, profile);
-    const config = stagingConfig(profile, inputs, worker, origin);
+    const config = stagingConfig(profile, inputs, worker, origin, ember && profile === "kit");
     const configPath = join(directory, "wrangler.json");
     const configText = JSON.stringify(config);
     configs[profile] = sha256(configText);
@@ -210,7 +214,8 @@ async function exercise(proof, prefixes, owner, names, origin, config) {
   const deployments = () => JSON.parse(run("deployments", "list", "--json"));
   const capture = async (state, step, version) => {
     assert.equal(liveVersion(deployments()), version);
-    const routes = await verifyServed(origin, prefixes, identity, version, state);
+    const emberKit = ember && step === "kit";
+    const routes = await verifyServed(origin, prefixes, identity, version, state, emberKit);
     proof.routeCount ??= routes;
     assert.equal(routes, proof.routeCount, "staged smoke route coverage changed");
     checks.push({ state, step, version, status: 200, pending: 0, smoke: "passed" });
@@ -255,7 +260,7 @@ async function qualify(dir, proofPath, ctx) {
     configs: {},
     checks: [],
     kitReadinessSamples: 0,
-    bindingCheck: "isolated-and-all-off",
+    bindingCheck: ember ? "isolated-and-ember" : "isolated-and-all-off",
   };
   let owner;
   let phase = "synthetic database setup";
@@ -277,7 +282,7 @@ async function qualify(dir, proofPath, ctx) {
     await owner?.end({ timeout: 0 });
     await rm(scratch, { recursive: true, force: true });
   }
-  verifyStagingProof(proof, identity);
+  verifyStagingProof(proof, { ...identity, mode: ember ? "ember" : "kit" });
   await writeFile(proofPath, JSON.stringify(proof), { flag: "wx" });
   console.info(
     `Isolated pin ${identity.runId}:${identity.runAttempt}:${identity.digest}, Hono ${proof.hono}, Kit ${proof.kit}`,
