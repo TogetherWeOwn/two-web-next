@@ -23,7 +23,8 @@ import {
   withKitFallbackStyleCsp,
 } from "./headers";
 import { STAGING_APP_URL } from "./qa";
-import { newRequestId, safeRequestId } from "./request-log";
+import { newRequestId, safeRequestId, writeHttpRequestLog } from "./request-log";
+import { setReleaseMetadata } from "./release-tag";
 import { withStreamedBody } from "./html-stream";
 import { applySingleValidator } from "./http/conditional";
 import { PRODUCTION_APEX } from "./http/robots";
@@ -573,7 +574,6 @@ function enabledRouteFor(
 
 // A future family can supply concrete releases with its enabled manifest.
 // List uppercase methods and literal pathnames. GET includes HEAD as usual.
-// The serving hook supplies no family catalog and releases no reservations.
 export function resolveRouteOwner(
   decision: RouteDecision,
   manifest: OwnedRoute[] = ROUTE_MANIFEST,
@@ -750,6 +750,7 @@ export interface HookDispatchDeps {
     requestId?: string,
   ) => Promise<Response>;
   apiFamilies?: readonly KitApiFamily[];
+  versionMetadata?: { tag?: unknown };
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -1049,44 +1050,62 @@ async function dispatchOwnedRequest(
   // its method/path/query/decode coverage guards the dispatch too. Inlining
   // resolveRouteOwner here once left mutants (hard-coded GET, hard-coded
   // path, path+search) green against 32 dispatch tests.
-  const route = decideRoute(
-    event.request,
+  const manifest =
     deps.manifest ??
-      productionManifestFor(event, deps) ??
-      fixtureManifestFor({
-        APP_URL: deps.appUrl,
-        KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
-        KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
-        KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
-        includeReconciliation: deps.fixtureAdminDashboard,
-        // Use the original URL: Kit strips the data suffix from event.url.
-        KIT_PARITY_FIXTURE_ADMIN_DASHBOARD:
-          deps.fixtureAdminDashboard &&
-          event.request.method === "GET" &&
-          new URL(event.request.url).pathname === "/admin"
-            ? "true"
-            : undefined,
-      }) ??
-      stagingManifestFor({
-        APP_URL: deps.appUrl,
-        KIT_ROUTE_ARCHIVE: deps.kitRouteArchive,
-        KIT_ROUTE_STATIC: deps.kitRouteStatic,
-        KIT_ROUTE_EVENTS: deps.kitRouteEvents,
-        KIT_ROUTE_HOME: deps.kitRouteHome,
-        KIT_ROUTE_JOIN: deps.kitRouteJoin,
-      }) ??
-      ROUTE_MANIFEST,
-    event.url,
-  );
-  const selected = route ?? exactFamilyRouteFor(event, deps.apiFamilies);
-  if (!selected) return deps.honoFetch(event.request);
-  return dispatchKitRequest(event, deps, selected);
+    productionManifestFor(event, deps) ??
+    fixtureManifestFor({
+      APP_URL: deps.appUrl,
+      KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
+      KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
+      KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
+      includeReconciliation: deps.fixtureAdminDashboard,
+      // Use the original URL: Kit strips the data suffix from event.url.
+      KIT_PARITY_FIXTURE_ADMIN_DASHBOARD:
+        deps.fixtureAdminDashboard &&
+        event.request.method === "GET" &&
+        new URL(event.request.url).pathname === "/admin"
+          ? "true"
+          : undefined,
+    }) ??
+    stagingManifestFor({
+      APP_URL: deps.appUrl,
+      KIT_ROUTE_ARCHIVE: deps.kitRouteArchive,
+      KIT_ROUTE_STATIC: deps.kitRouteStatic,
+      KIT_ROUTE_EVENTS: deps.kitRouteEvents,
+      KIT_ROUTE_HOME: deps.kitRouteHome,
+      KIT_ROUTE_JOIN: deps.kitRouteJoin,
+    }) ??
+    ROUTE_MANIFEST;
+  const route = decideRoute(event.request, manifest, event.url);
+  if (route) return dispatchKitRequest(event, deps, route);
+  const apiRoute = exactFamilyRouteFor(event, manifest, deps.apiFamilies);
+  if (!apiRoute) return deps.honoFetch(event.request);
+  const started = performance.now();
+  setReleaseMetadata(deps.versionMetadata);
+  const response = await dispatchKitRequest(event, deps, apiRoute, true);
+  const requestId = kitRequestId(event.locals);
+  if (requestId)
+    writeHttpRequestLog(event.request, requestId, apiRoute.path, response.status, started);
+  return response;
+}
+
+async function finishKitResponse(
+  response: Response,
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+  requestId: string,
+): Promise<Response> {
+  response.headers.set("x-request-id", requestId);
+  const decorated = decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
+  await allowlistKitFallbackStyle(decorated);
+  return decorated;
 }
 
 async function dispatchKitRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
   route: OwnedRoute,
+  api = false,
 ): Promise<Response> {
   if (route.path === "/auth/recover") {
     // The no-JS recovery page has no Kit data representation. Never mint
@@ -1120,6 +1139,11 @@ async function dispatchKitRequest(
     const refused = sameOriginRefusal(event, deps.appUrl, deps.featuredImageHosts);
     refused.headers.set("x-request-id", requestId);
     return refused;
+  }
+  // Public API handlers own their route-level admission. They need correlation
+  // and global headers, but no document notice or session work.
+  if (api && route.reads === "public") {
+    return finishKitResponse(await deps.resolve(event), event, deps, requestId);
   }
   // The notice has no session authority: public renders must not wait for a
   // session store just to verify it. Keep the verified bit outside mutable
@@ -1382,14 +1406,9 @@ async function dispatchKitRequest(
   // id the boundaries render and the error.alert lines log. Guard-built
   // refusals never reach a boundary, so the wrappers above received this same
   // id and their 429 pages render it as the Hono support reference.
-  response.headers.set("x-request-id", requestId);
-  response = decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
-  await allowlistKitFallbackStyle(response);
-  return response;
+  return finishKitResponse(response, event, deps, requestId);
 }
 
-// The serving hook supplies no families. A future caller must pair each
-// catalog with its own server binding and mount the corresponding endpoint.
 interface KitApiFamily {
   flag: string | undefined;
   routes: readonly (OwnedRoute & { reads: RouteReads })[];
@@ -1397,6 +1416,7 @@ interface KitApiFamily {
 
 function exactFamilyRouteFor(
   event: HookEventLike,
+  manifest: OwnedRoute[],
   families: readonly KitApiFamily[] | undefined,
 ): OwnedRoute | undefined {
   if (!families?.length || event.isDataRequest) return undefined;
@@ -1414,6 +1434,11 @@ function exactFamilyRouteFor(
   }
 
   const method = event.request.method === "HEAD" ? "GET" : event.request.method;
+  // A disabled page entry still reserves its pair for rollback. Check the
+  // shipped entries too, since a rollout manifest can omit them entirely.
+  const overlaps = (entry: OwnedRoute) =>
+    entry.method.toUpperCase() === method && matchPattern(entry.path, pathname);
+  if (manifest.some(overlaps) || ROUTE_MANIFEST.some(overlaps)) return undefined;
   let selected: OwnedRoute | undefined;
   for (const family of families) {
     if (family.flag !== "true") continue;

@@ -12,6 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
+import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
@@ -839,8 +840,8 @@ export default {
   }
   console.log("PASS generated Worker canonical/API boundary parity");
 
-  // The composed hook has no API family bindings. The reserved version read
-  // and its method, slash and data variants still reach the direct Hono owner.
+  // With the feed binding absent, the reserved version read and its method,
+  // slash and data variants still reach the direct Hono owner.
   for (const [method, path, expected] of [
     ["GET", "/version?probe=admission", 200],
     ["HEAD", "/version", 200],
@@ -854,6 +855,23 @@ export default {
     assert.equal(result.headers["x-two-renderer"], undefined, `${label}: Hono owns the response`);
   }
   console.log("PASS generated Worker reserved method/path parity with API families off");
+
+  await assertStaticFeedParity({
+    hono,
+    kit,
+    databaseUrl,
+    startKit: async (name, vars) => {
+      const instance = await startWorker(
+        name,
+        worker,
+        assets,
+        FIXTURE_SECRETS.SESSION_SECRET,
+        vars,
+      );
+      await listen(instance.child, instance.origin, () => instance.log);
+      return instance;
+    },
+  });
 
   if (args.length) {
     const probePath = "/__fixture/machine-parity";

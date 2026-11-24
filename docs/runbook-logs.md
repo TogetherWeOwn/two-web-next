@@ -3,7 +3,9 @@
 The HTTP middleware emits one single-line JSON `http.request` record for each
 request dispatched to Hono. It runs outside the security-header middleware and
 mounted routers, so redirects, denials, 404s, handled 500s and downstream response
-replacements have the same log/header contract.
+replacements have the same log/header contract. When the Kit feed flag is on,
+the Kit dispatcher emits the same record for the two static feed endpoints,
+using the literal route and the request ID sent in the response.
 
 ```json
 {"event":"http.request","request_id":"0123456789abcdef-LHR","method":"GET","route":"/e/:key","status":200,"duration_ms":12.34,"colo":"LHR","error_class":null,"build_sha":"0123456789abcdef0123456789abcdef01234567","release":"0123456789abcdef0123456789abcdef01234567"}
