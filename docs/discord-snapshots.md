@@ -73,11 +73,20 @@ The protected permissions repair drains snapshot writes before checking the
 database-wide writer guard in both forward and undo. Its table lock waits up to
 two seconds for in-flight snapshot transactions, admits plain reads, and releases
 automatically on commit or rollback. The guard rechecks for up to one second so
-short unrelated writes can finish before it refuses. A contended refresh claim
-uses its last usable snapshot without calling Discord. No queue deliveries or cron triggers
-need to be paused for this drain. Confirm the bounded writer build is serving and
-that transactions from the previous build have cleared before provisioning the
-repair executor. A writer-guard refusal still requires exact-state classification.
+short unrelated writes can finish before it refuses. During the drain, a contended
+claim uses its last usable snapshot without calling Discord. A publisher already
+holding a lease can serve its valid live response if the completion times out.
+Its database lease expires normally. The subsequent ownership transfers take
+exclusive locks that can briefly block reads and writes on the affected tables
+until the repair transaction ends. A snapshot read that times out in this phase
+reports the Discord list unavailable and leaves the canonical calendar available.
+Observe Web readiness and queue delivery during classification and recovery.
+
+Confirm the bounded writer build is serving everywhere before provisioning the
+repair executor. Use a read-only lock/activity check to identify snapshot writers
+and their transaction age. Let any transactions from the previous build clear
+through the normal connection lifecycle before proceeding. A writer-guard
+refusal still requires exact-state classification.
 
 The unchanged gated staging workflow applies and verifies web migrations **before**
 deploying the Worker. A binding/migration credential does not prove runtime

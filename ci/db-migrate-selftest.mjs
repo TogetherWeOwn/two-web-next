@@ -3,6 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, copyFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createConnection } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
@@ -247,28 +249,68 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
         );
       };
       const runDuringSnapshotWrite = async (direction) => {
-        const writer = postgres(url.href, { max: 1, connect_timeout: 5 });
+        const writer = postgres(url.href, {
+          max: 1,
+          connect_timeout: 5,
+          socket: ({ host: [host], port: [port] }) =>
+            new Promise((resolve, reject) => {
+              const socket = createConnection({ host, port }, () => resolve(socket));
+              socket.once("error", reject);
+              const write = socket.write.bind(socket);
+              let stalled = false;
+              socket.write = (packet, ...options) => {
+                if (stalled) return true;
+                if (!packet.includes("repair_snapshot_writer")) return write(packet, ...options);
+                // Flush the completed INSERT but leave the extended exchange
+                // waiting for Sync, just as with a client that stops mid-query.
+                assert.equal(packet.subarray(-5).toString("hex"), "5300000004");
+                const flush = Buffer.from(packet);
+                flush[flush.length - 5] = 0x48;
+                stalled = true;
+                return write(flush, ...options);
+              };
+            }),
+        });
         try {
-          const held = Promise.withResolvers();
+          const started = Promise.withResolvers();
           const aborted = writer
             .begin(async (tx) => {
-              await tx`set local transaction_timeout = '1s'`;
-              await tx`insert into public.discord_event_snapshots values (1)`;
-              held.resolve();
-              await tx`select pg_sleep(10)`;
+              const [{ pid }] = await tx`select pg_backend_pid() as pid`;
+              await tx`select set_config('lock_timeout', '350ms', true),
+                set_config('statement_timeout', '400ms', true),
+                set_config('idle_in_transaction_session_timeout', '1000ms', true),
+                set_config('transaction_timeout', '1500ms', true)`;
+              const write = tx`insert /* repair_snapshot_writer */
+                into public.discord_event_snapshots values (${1})`.execute();
+              started.resolve(pid);
+              await write;
             })
             .then(
               () => assert.fail("Snapshot writer unexpectedly committed"),
               (error) => {
-                held.reject(error);
+                started.reject(error);
                 assert.equal(error.code, "25P04");
               },
             );
-          await Promise.all([
-            aborted,
-            held.promise.then(async () => assert.equal(await run(direction), "committed")),
-          ]);
-          assert.deepEqual(await client`select id from public.discord_event_snapshots`, []);
+          const drain = async (pid) => {
+            for (let attempt = 0; attempt < 40; attempt++) {
+              const [{ held }] = await client`select exists (
+                select from pg_stat_activity a join pg_locks l using (pid)
+                where a.pid = ${pid} and a.state = 'active' and a.wait_event = 'ClientRead'
+                  and l.relation = 'public.discord_event_snapshots'::regclass
+                  and l.mode = 'RowExclusiveLock' and l.granted) as held`;
+              if (held) {
+                assert.equal(await run(direction), "committed");
+                return;
+              }
+              await delay(10);
+            }
+            assert.fail("Snapshot writer never reached active ClientRead with its table lock");
+          };
+          await Promise.all([aborted, started.promise.then(drain)]);
+          const [{ count }] =
+            await client`select count(*)::int as count from public.discord_event_snapshots`;
+          assert.equal(count, 0);
         } finally {
           await writer.end({ timeout: 5 });
         }
