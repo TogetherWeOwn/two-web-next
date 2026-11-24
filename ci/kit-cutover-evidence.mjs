@@ -8,6 +8,8 @@ import {
 import { sha256 } from "./worker-bundle-evidence.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 
+export const STAGING_WORKER = "two-web-kit-cutover-proof";
+export const LEDGER_STATES = ["1033", "1037"];
 export const PROFILES = ["hono", "kit"];
 const maxFileBytes = 32 * 1024 * 1024;
 const maxPacketBytes = 128 * 1024 * 1024;
@@ -133,4 +135,113 @@ export async function verifyPackage(dir, pin, inputs) {
     assert.deepEqual(files, manifest.files[profile], `cutover ${profile} bytes mismatch`);
   }
   return manifest;
+}
+
+export function ledgerPrefixes(journal) {
+  const expectedTail = [
+    "1033_session-roles-checked-at",
+    "1034_event-echoes",
+    "1035_bot-reconciliation-intents",
+    "1036_event-sync-claim-started",
+    "1037_waitlist-offers",
+    "1038_announcement-send-claims",
+  ];
+  const start = journal.findIndex(({ tag }) => tag.startsWith("1033_"));
+  assert.ok(start > 0, "cutover prefix missing");
+  assert.deepEqual(
+    journal.slice(start).map(({ tag }) => tag),
+    expectedTail,
+    "unexpected migration beyond the approved cutover window",
+  );
+  const timestamps = journal.map(({ when }) => when);
+  assert.ok(
+    timestamps.every((when, i) => Number.isSafeInteger(when) && when > (timestamps[i - 1] ?? 0)),
+    "invalid canonical ledger timestamps",
+  );
+  return {
+    1033: timestamps.slice(0, start + 1),
+    1037: timestamps.slice(0, -1),
+  };
+}
+
+export function verifyReady(status, body, prefixes, { version, commit, state } = {}) {
+  assert.ok(
+    status === 200 && body?.db === "ok" && body.pending_migrations === 0,
+    "Worker readiness did not report HTTP 200, db ok and zero pending",
+  );
+  if (version || commit) {
+    assert.ok(
+      (!version || body.revision?.version_id === version) &&
+        (!commit || body.revision?.commit === commit),
+      "Worker readiness version or commit mismatch",
+    );
+  }
+  const rows = body.migration_ledger;
+  assert.ok(Array.isArray(rows), "missing canonical migration ledger");
+  for (const candidate of LEDGER_STATES) {
+    const expected = prefixes[candidate];
+    if (rows.length === expected.length && rows.every((when, i) => when === expected[i])) {
+      assert.ok(!state || state === candidate, "Worker readiness ledger state mismatch");
+      return candidate;
+    }
+  }
+  throw new Error("Worker ledger is neither the canonical 1033 nor 1037 prefix");
+}
+
+export async function readReady(origin, prefixes, expected, fetchImpl = fetch) {
+  const response = await fetchImpl(new URL("/up", origin), {
+    headers: { "cache-control": "no-cache" },
+    redirect: "error",
+    signal: AbortSignal.timeout(10_000),
+  });
+  const body = await response.json();
+  return verifyReady(response.status, body, prefixes, expected);
+}
+
+export function verifyStagingProof(proof, pin) {
+  const { sourceSha, runId, runAttempt, digest } = pin;
+  assert.deepEqual(
+    proof.identity,
+    { sourceSha, runId, runAttempt, digest },
+    "staging proof identity mismatch",
+  );
+  assert.equal(proof.schema, 1);
+  assert.equal(proof.worker, `${STAGING_WORKER}-${runId}-${runAttempt}`);
+  assertRollbackVersionId(proof.hono);
+  assertRollbackVersionId(proof.kit);
+  assert.notEqual(proof.hono, proof.kit, "staging requires distinct versions on one Worker");
+  assert.ok(
+    hex.test(proof.configs?.hono) && hex.test(proof.configs?.kit),
+    "invalid staged config digests",
+  );
+  assert.ok(
+    Number.isSafeInteger(proof.routeCount) && proof.routeCount > 0,
+    "empty staged route smoke",
+  );
+  assert.equal(proof.bindingCheck, "isolated-and-all-off");
+  assert.equal(proof.kitReadinessSamples, 6);
+  assert.deepEqual(
+    proof.checks,
+    LEDGER_STATES.flatMap((state) => [
+      { state, step: "hono", version: proof.hono, status: 200, pending: 0, smoke: "passed" },
+      { state, step: "kit", version: proof.kit, status: 200, pending: 0, smoke: "passed" },
+      { state, step: "undo", version: proof.hono, status: 200, pending: 0, smoke: "passed" },
+    ]),
+    "staging must prove both ledger states and both exact Hono undos",
+  );
+}
+
+export function productionUploadConfig(profile, { root, kit }) {
+  assert.ok(PROFILES.includes(profile));
+  const { $schema, env, routes, triggers, ...hono } = { ...root, ...root.env.production };
+  const config = profile === "hono" ? hono : { ...kit };
+  delete config.$schema;
+  delete config.triggers;
+  return {
+    ...config,
+    main: profile === "kit" ? "modules/_worker.js" : "modules/worker.js",
+    base_dir: "modules",
+    ...(profile === "kit" ? { rules: [{ type: "ESModule", globs: ["kit-adapter.js"] }] } : {}),
+    assets: { ...config.assets, directory: "assets" },
+  };
 }

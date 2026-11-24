@@ -3,11 +3,32 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { sourceInputs, verifyPackage, writeManifest } from "./kit-cutover-evidence.mjs";
+import {
+  LEDGER_STATES,
+  STAGING_WORKER,
+  ledgerPrefixes,
+  sourceInputs,
+  verifyPackage,
+  verifyReady,
+  verifyStagingProof,
+  writeManifest,
+} from "./kit-cutover-evidence.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = "b".repeat(64);
-const identity = { runId: "21", runAttempt: "3" };
+const hono = "11111111-1111-1111-1111-111111111111";
+const kit = "22222222-2222-2222-2222-222222222222";
+const identity = { sourceSha, runId: "21", runAttempt: "3", digest };
+const ledgerJournal = [
+  "1032_event-public-join-details",
+  "1033_session-roles-checked-at",
+  "1034_event-echoes",
+  "1035_bot-reconciliation-intents",
+  "1036_event-sync-claim-started",
+  "1037_waitlist-offers",
+  "1038_announcement-send-claims",
+].map((tag, i) => ({ tag, when: 1700000000000 + i }));
+
 const inputs = await sourceInputs();
 
 test("cutover packet refuses wrong bytes, package identity, or source config", async (t) => {
@@ -53,4 +74,102 @@ test("cutover packet refuses wrong bytes, package identity, or source config", a
   await writeFile(join(scratch, "kit/modules/kit-adapter.js"), "Kit adapter");
   await writeFile(join(scratch, "hono/assets/.assetsignore"), "changed Hono asset control file");
   await assert.rejects(verifyPackage(scratch, pin, inputs), /hono bytes mismatch/);
+});
+
+test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", () => {
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  assert.throws(
+    () => ledgerPrefixes([...ledgerJournal, { tag: "1039_later", when: 1700000000007 }]),
+    /approved cutover window/,
+  );
+  const body = {
+    db: "ok",
+    pending_migrations: 0,
+    migration_ledger: prefixes["1033"],
+    revision: { version_id: hono, commit: sourceSha },
+  };
+  const expected = { version: hono, commit: sourceSha };
+  for (const [state, rows] of Object.entries(prefixes)) {
+    assert.equal(verifyReady(200, { ...body, migration_ledger: rows }, prefixes, expected), state);
+  }
+  assert.throws(() => verifyReady(503, body, prefixes, expected), /readiness/);
+  assert.throws(() => verifyReady(200, { ...body, pending_migrations: 1 }, prefixes), /readiness/);
+  assert.throws(() => verifyReady(200, body, prefixes, { version: kit }), /version or commit/);
+  assert.throws(
+    () => verifyReady(200, body, prefixes, { ...expected, commit: "c".repeat(40) }),
+    /version or commit/,
+  );
+  assert.throws(() => verifyReady(200, body, prefixes, { ...expected, state: "1037" }), /state/);
+  for (const rows of [
+    prefixes["1037"].slice(0, -1),
+    [...prefixes["1033"], prefixes["1037"].at(-1)],
+    [...prefixes["1037"], ledgerJournal.at(-1).when],
+    [...prefixes["1033"], prefixes["1033"].at(-1)],
+    prefixes["1033"].map(String),
+  ]) {
+    assert.throws(
+      () => verifyReady(200, { ...body, migration_ledger: rows }, prefixes),
+      /canonical/,
+    );
+  }
+});
+
+test("isolated cutover proof requires both exact versions and six healthy transitions", () => {
+  const checks = LEDGER_STATES.flatMap((state) =>
+    ["hono", "kit", "undo"].map((step) => ({
+      state,
+      step,
+      version: step === "kit" ? kit : hono,
+      status: 200,
+      pending: 0,
+      smoke: "passed",
+    })),
+  );
+  const proof = {
+    schema: 1,
+    identity,
+    worker: `${STAGING_WORKER}-21-3`,
+    hono,
+    kit,
+    checks,
+    configs: { kit: digest, hono: digest },
+    routeCount: 24,
+    kitReadinessSamples: 6,
+    bindingCheck: "isolated-and-all-off",
+  };
+  verifyStagingProof(proof, identity);
+  for (const change of [{ status: 503 }, { pending: 1 }, { version: kit }, { smoke: "failed" }]) {
+    assert.throws(
+      () =>
+        verifyStagingProof(
+          {
+            ...proof,
+            checks: checks.map((row, i) => (i === 2 ? { ...row, ...change } : row)),
+          },
+          identity,
+        ),
+      /must prove/,
+    );
+  }
+  assert.throws(() => verifyStagingProof(proof, { ...identity, runAttempt: "2" }), /identity/);
+  assert.throws(
+    () => verifyStagingProof({ ...proof, checks: checks.slice(0, 3) }, identity),
+    /must prove/,
+  );
+});
+
+test("isolated database admission fixes the host, database, owner, and run scope", async () => {
+  const { fixtureDatabase, fixtureNames } = await import("./kit-cutover-database.mjs");
+  const host = "ep-fixture.us-east-2.aws.neon.tech";
+  const fixture = `postgresql://two_web_cutover_owner:synthetic@${host}/two_web_cutover`;
+  assert.equal(fixtureDatabase(fixture, host).searchParams.get("sslmode"), "verify-full");
+  assert.throws(() => fixtureDatabase(fixture, "ep-different.us-east-2.aws.neon.tech"));
+  assert.throws(() => fixtureDatabase(fixture.replace("/two_web_cutover", "/main"), host));
+  assert.throws(() => fixtureDatabase(`${fixture}?options=override`, host));
+  assert.deepEqual(fixtureNames("21", "3"), {
+    suffix: "21-3",
+    db: "two_web_cutover_21_3",
+    login: "two_web_cutover_21_3_runtime",
+  });
+  assert.throws(() => fixtureNames("21", "03"));
 });
