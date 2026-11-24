@@ -64,6 +64,11 @@ function replaceParam(template, value) {
     .join("/");
 }
 
+export function multiSegmentPath(template) {
+  const last = template.split("/").findLast((segment) => segment.startsWith(":"));
+  return last && MULTI_SEGMENT[last] ? replaceParam(template, MULTI_SEGMENT[last]) : null;
+}
+
 /**
  * Stable, collision-checked file stem for a route template or static path.
  * Never starts with a dot: actions/upload-artifact drops hidden files, so a
@@ -129,11 +134,11 @@ function pathVariants(file, template, path) {
       { id: "GET path:encoded-slash", path: replaceParam(template, "a%2Fb") },
       { id: "GET path:encoded-percent", path: replaceParam(template, "a%25b") },
     );
-    const last = template.split("/").findLast((s) => s.startsWith(":"));
-    if (last && MULTI_SEGMENT[last]) {
+    const multiSegment = multiSegmentPath(template);
+    if (multiSegment) {
       variants.push({
         id: "GET path:multi-segment",
-        path: replaceParam(template, MULTI_SEGMENT[last]),
+        path: multiSegment,
       });
     }
   } else {
