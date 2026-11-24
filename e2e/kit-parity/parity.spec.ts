@@ -396,6 +396,7 @@ test("kit: capture synthetic non-member and account-hidden headers", async ({ br
         expect(response?.status()).toBe(state === "non-member" ? 200 : 400);
         expect(response?.headers()["x-two-renderer"]).toBe("kit");
         if (state === "non-member") {
+          await expect(page.getByRole("region", { name: "Lifeline" })).toHaveCount(0);
           await (await compactMenu(page))?.click();
           await expect(page.locator(".header-account .who")).toHaveText("Synthetic Viewer");
           await expect(headerSignOut(page)).toBeVisible();
@@ -1876,6 +1877,7 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
         const response = await guestPage.goto(`/e/${key}`);
         expect(response?.status()).toBe(200);
         expect(response?.headers()["x-two-renderer"]).toBe("kit");
+        await expect(guestPage.getByRole("region", { name: "Lifeline" })).toHaveCount(0);
         await expectFacts(guestPage, "guest", viewport.width);
         // A full event keeps the guest card's login link but does not surface B4.
         await expect(guestPage.locator('aside[aria-label="Your seat"]')).toHaveCount(0);
@@ -1913,6 +1915,28 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
         expect(response?.headers()["x-two-renderer"]).toBe("kit");
         const card = page.getByTestId("kit-seat-card");
         const bar = page.getByRole("complementary", { name: "Your seat" });
+        const lifeline = page.getByRole("region", { name: "Lifeline" });
+        await expect(lifeline.locator(".title")).toHaveText([
+          "Reminder ping",
+          "Bot counts who’s in",
+          "Room opens",
+          "Echo freezes",
+        ]);
+        await expect(lifeline.locator('[data-state="recorded"], a, button, form')).toHaveCount(0);
+        await expect(
+          page
+            .locator(".event-layout-head + .event-layout-rail + .event-layout-body")
+            .getByRole("region", { name: "Lifeline" }),
+        ).toHaveCount(1);
+        const rail = card.locator("..");
+        const timelineBox = (await lifeline.boundingBox())!;
+        const railBox = (await rail.boundingBox())!;
+        if (viewport.width === 390) {
+          expect(timelineBox.y).toBeGreaterThanOrEqual(railBox.y + railBox.height);
+        } else {
+          expect(timelineBox.x + timelineBox.width).toBeLessThanOrEqual(railBox.x);
+          await expect(rail).toHaveCSS("position", "sticky");
+        }
         if (state.name === "open") {
           await expect(card.getByRole("heading", { name: "0 of 2 in" })).toBeVisible();
           await expect(card.getByText("Sign-ups open")).toBeVisible();
@@ -1949,7 +1973,7 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
           }
           const name = `kit-review-seat-card-open-${viewport.width}`;
           const path = test.info().outputPath(`${name}.png`);
-          await page.screenshot({ path, animations: "disabled", caret: "hide" });
+          await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
           await test.info().attach(name, { path, contentType: "image/png" });
           continue;
         }
@@ -2090,7 +2114,7 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
         response.request().method() === "POST" &&
         new URL(response.url()).pathname === `/e/${openKey}/rsvp`,
     );
-    await bar.getByRole("button", { name: "I'm in" }).click();
+    await bar.getByRole("button", { name: "I'm in" }).press("Enter");
     const submitted = await post;
     expect(submitted.request().postData()).toBe("status=going");
     expect(submitted.status()).toBe(303);
@@ -2121,6 +2145,9 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
       expect(response?.status()).toBe(state === "cancelled" ? 410 : 200);
       expect(response?.headers()["x-two-renderer"]).toBe("kit");
       await expect(page.locator('aside[aria-label="Your seat"]')).toHaveCount(0);
+      await expect(page.getByRole("region", { name: "Lifeline" })).toHaveCount(
+        state === "cancelled" ? 0 : 1,
+      );
     }
   } finally {
     await Promise.all([context.close(), enhanced.close()]);
@@ -2784,7 +2811,17 @@ test("Kit member event detail captures the ended record at both widths", async (
         expect((await row.boundingBox())?.height).toBeLessThan(160);
       }
       await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
-      await expect(record).toContainText("No Echo for this one. 1 listed sign-up.");
+      await expect(record).toContainText("1 listed sign-up.");
+      await expect(record).not.toContainText("No Echo for this one.");
+      const lifeline = page.getByRole("region", { name: "Lifeline" });
+      await expect(lifeline.locator('[data-state="waiting"] .title')).toHaveText([
+        "Reminder ping",
+        "Room opens",
+        "Echo freezes",
+      ]);
+      await expect(lifeline.locator('[data-state="recorded"] .title')).toHaveText(
+        "Counting window closed",
+      );
       await expect(nextDates).toHaveCount(1);
       await expect(record.locator(`a[href="/e/${nextKey}"]`).and(nextDates)).toBeVisible();
       await expect(page.locator(`a[href="/e/${nextKey}"]`)).toHaveCount(1);
@@ -3228,6 +3265,7 @@ test("Kit saved review states at desktop and mobile widths", async ({ browser })
         await expect(page.getByTestId("event-review")).toHaveCount(0);
       } else {
         await expect(page.getByTestId("event-review")).toBeVisible();
+        await expect(page.getByRole("region", { name: "Lifeline" })).toHaveCount(0);
         await expect(page.getByRole("button", { name: "RSVP", exact: true })).toBeDisabled();
         if (state === "published" || state === "cancelled")
           await expect(page.getByTestId("publish-reviewed-event")).toHaveCount(0);

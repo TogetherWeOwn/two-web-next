@@ -31,7 +31,7 @@ let {
 }: {
   model: KitEventDetailModel;
   restoredWrite?: boolean;
-  /** Composed presentation only; the isolated fixture is the sole caller. */
+  /** Composed server presentation. */
   lifeline?: readonly LifelineStep[];
 } = $props();
 const facts = $derived(kitEventFacts(model));
