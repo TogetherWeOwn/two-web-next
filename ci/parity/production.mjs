@@ -8,6 +8,7 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COMPANION_NAME, ENTRY_NAME } from "../../web/scripts/kit-facade-transaction.mjs";
+import { packageCutover } from "../kit-cutover-package.mjs";
 import { prepareInstalledKitWorker } from "../kit-worker-installed-output.mjs";
 import { assertKitProductionCandidate } from "../production-deploy-gate.mjs";
 import { readWranglerConfig } from "../wrangler-config.mjs";
@@ -19,6 +20,7 @@ import {
   report,
 } from "./compare.mjs";
 import { productionConfig, rehearsalContext, rehearseUpload } from "./upload-rehearsal.mjs";
+import { verifyUploadRehearsal } from "./verify-upload-rehearsal.mjs";
 import { listPublicFiles, slug } from "./vectors.mjs";
 
 const repo = resolve(import.meta.dirname, "../..");
@@ -273,7 +275,7 @@ async function main() {
     const exceptions = parseExceptions(readFileSync(join(repo, EXCEPTIONS_DOC), "utf8"));
     const diff = compareRecordings(shared(baseline.recording), shared(built.recording), exceptions);
     const assets = comparePreHookAssets(baseline.recording, built.recording, paths, names, csp);
-    await save("comparison.json", {
+    const comparison = {
       ...context,
       kitConfigSha256: identity.kitConfigSha256,
       installedOutputSha256: identity.installedOutputSha256,
@@ -282,7 +284,8 @@ async function main() {
       ...diff,
       assets,
       cutoverReadiness,
-    });
+    };
+    await save("comparison.json", comparison);
     console.log(report(diff, "Hono vs installed Kit (production origin, all families off)"));
     console.log(report({ ...assets, approved: [], unused: [] }, "pre-hook asset security headers"));
     if (diff.failures.length || assets.failures.length) {
@@ -297,6 +300,10 @@ async function main() {
       outputIdentity,
     });
     await save("upload-rehearsal.json", rehearsal);
+    if (process.env.CUTOVER_PACKET_DIR) {
+      verifyUploadRehearsal(rehearsal, comparison, identity, context, kitBytes);
+      await packageCutover(process.env.CUTOVER_PACKET_DIR, repo, installed, identity, context);
+    }
     // The hosted verifier fails on a refusal after XFS cleanup.
     if (rehearsal.outcome === "matched") console.log("Dry-run module bytes match parity inputs");
     else

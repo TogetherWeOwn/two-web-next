@@ -1,4 +1,6 @@
 <script module lang="ts">
+export const adminRouteIdContext = Symbol("admin route ID");
+
 // Both admin error boundaries render this shell. Keep their retry-link
 // helper here so they ship in the same chunk. Only GET pages owned by these
 // boundaries are valid destinations. Unusable state falls back to fixed links.
@@ -31,7 +33,7 @@ export function adminReadRetryHref(
 </script>
 
 <script lang="ts">
-import type { Snippet } from "svelte";
+import { getContext, type Snippet } from "svelte";
 
 // Moderator chrome: the Kit twin of the Hono admin Shell
 // (src/admin/pages/shell.tsx). Same brand, same labelled nav, same skip
@@ -46,6 +48,8 @@ let {
   restoredWrite = false,
   children,
 }: { title: string; restoredWrite?: boolean; children: Snippet } = $props();
+
+const routeId = getContext<string | null | undefined>(adminRouteIdContext);
 </script>
 
 <svelte:head>
@@ -61,13 +65,13 @@ let {
 <header class="bar">
   <a class="brand" href="/admin">TWO admin</a>
   <nav aria-label="Administration">
-    <a href="/admin/events">Events</a>
+    <a href="/admin/events" aria-current={routeId === "/admin/events" ? "page" : undefined}>Events</a>
     {" · "}
-    <a href="/admin/featured">Featured</a>
+    <a href="/admin/featured" aria-current={routeId === "/admin/featured" ? "page" : undefined}>Featured</a>
     {" · "}
-    <a href="/admin/join-attempts">Join attempts</a>
+    <a href="/admin/join-attempts" aria-current={routeId === "/admin/join-attempts" ? "page" : undefined}>Join attempts</a>
     {" · "}
-    <a href="/admin/activity-log">Activity log</a>
+    <a href="/admin/activity-log" aria-current={routeId === "/admin/activity-log" ? "page" : undefined}>Activity log</a>
     {" · "}
     <a href="/">Site</a>
   </nav>

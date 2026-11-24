@@ -2,10 +2,10 @@
 // No opt-in skips; runs in browser-enabled CI with an executed-case verifier.
 // The Hono a11y/Lighthouse gates do not cover Kit.
 import assert from "node:assert/strict";
-import { readFile, readdir, mkdir } from "node:fs/promises";
+import { readFile, readdir, mkdir, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { after, before, describe, test } from "node:test";
-import { chromium, expect } from "@playwright/test";
+import { chromium, expect, webkit } from "@playwright/test";
 import {
   nativeShareFixture,
   PRIVATE_ID,
@@ -22,11 +22,15 @@ import {
 let browser;
 let kitCss;
 const evidence = process.env.EVENT_NATIVE_SHARE_EVIDENCE_DIR;
+const listEvidence =
+  process.env.KIT_EVENT_LIST_EVIDENCE_DIR ??
+  (evidence ? resolve(evidence, "kit-event-lists") : undefined);
 const ROOT = resolve("public");
 const SHARE_NAME = /^share(?: this)?(?: event)?$/i;
 const expectedPayload = { title: SHARE_TITLE, url: SHARE_CANONICAL };
 before(async () => {
-  browser = await chromium.launch({ headless: true });
+  const engine = process.env.KIT_EVENT_LIST_BROWSER === "webkit" ? webkit : chromium;
+  browser = await engine.launch({ headless: engine === chromium || !process.env.DISPLAY });
   if (evidence) {
     await mkdir(evidence, { recursive: true });
     // Match kit-preview-e2e: component SSR omits +layout's compiled app.css.
@@ -117,6 +121,7 @@ async function open(t, view, options = {}) {
     javaScriptEnabled = true,
     insecure = false,
     clipboard = "ok",
+    viewport = { width: 390, height: 844 },
   } = options;
   const fixture = await nativeShareFixture(view, options);
   assert.equal(fixture.status, options.missing ? 404 : options.status === "cancelled" ? 410 : 200);
@@ -124,7 +129,7 @@ async function open(t, view, options = {}) {
   const context = await browser.newContext({
     javaScriptEnabled,
     serviceWorkers: "block",
-    viewport: { width: 390, height: 844 },
+    viewport,
   });
   t.after(() => context.close());
   await context.addInitScript(stubDevice, { mode, clipboard });
@@ -194,7 +199,7 @@ async function open(t, view, options = {}) {
     assert.match(await page.locator("body").innerText(), new RegExp(PRIVATE_NAME));
   const effects = [];
   page.on("request", (request) => effects.push(`${request.method()} ${request.url()}`));
-  return { page, context, errors, dialogs, blocked, effects };
+  return { page, context, html: fixture.html, errors, dialogs, blocked, effects };
 }
 const nativeButton = (page) => page.getByRole("button", { name: SHARE_NAME });
 async function readyButton(page) {
@@ -556,5 +561,139 @@ describe("Native event sharing", () => {
           }
         }
       });
+  }
+});
+
+describe("Kit event suggestions expose named markerless lists and keep native link order", () => {
+  const related = [
+    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA", title: "Chess finals" },
+    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAB", title: "Chess open" },
+  ].map((event, index) => ({
+    ...event,
+    id: index + 2,
+    startsAt: new Date(`2035-01-1${index + 1}T20:00:00Z`),
+    endsAt: new Date(`2035-01-1${index + 1}T22:00:00Z`),
+    timezone: "UTC",
+    location: "The lobby",
+    game: "Chess",
+    rsvpOpen: true,
+  }));
+  before(async () => {
+    if (listEvidence) await mkdir(listEvidence, { recursive: true });
+  });
+
+  for (const { status, name, headingId, listSelector, linkTestId } of [
+    {
+      status: "published",
+      name: "More events you might like",
+      headingId: "event-related-heading",
+      listSelector: "[data-testid=event-related] > ul",
+      linkTestId: "event-related-link",
+    },
+    {
+      status: "cancelled",
+      name: "Other upcoming events",
+      headingId: "event-cancelled-alternatives-heading",
+      listSelector: "[data-testid=event-cancelled-alternatives]",
+      linkTestId: "event-cancelled-alternative",
+    },
+  ]) {
+    for (const viewport of [
+      { width: 1280, height: 800 },
+      { width: 390, height: 844 },
+    ]) {
+      const label = `${status}-${viewport.width}`;
+      test(label, async (t) => {
+        const options = { status, viewport, javaScriptEnabled: false };
+        const { page, html, blocked, errors } = await open(t, "Kit", {
+          ...options,
+          kitRelated: related,
+        });
+        const listOpening = new RegExp(`<ul\\b[^>]*aria-labelledby="${headingId}"[^>]*>`);
+        const ssrList = html.match(new RegExp(`${listOpening.source}[\\s\\S]*?</ul>`))?.[0];
+        assert.ok(ssrList, "SSR associates the list with its heading");
+        assert.match(ssrList, /^<ul\b[^>]* role="list"/);
+        assert.equal([...ssrList.matchAll(/<li\b/g)].length, related.length);
+
+        const list = page.getByRole("list", { name, exact: true });
+        await expect(list.and(page.locator(listSelector))).toBeVisible();
+        assert.equal(await list.evaluate((node) => getComputedStyle(node).listStyleType), "none");
+        const items = list.getByRole("listitem");
+        const links = items.getByTestId(linkTestId);
+        await expect(items).toHaveCount(related.length);
+        await expect(links).toHaveCount(related.length);
+        for (const [index, event] of related.entries()) {
+          const link = links.nth(index);
+          await expect(link).toHaveText(new RegExp(`^${event.title}`));
+          await expect(link).toHaveAttribute("href", `/e/${event.eventKey}`);
+        }
+        const snapshot = await list.ariaSnapshot();
+        assert.match(snapshot, new RegExp(`^- list "${name}":`, "m"));
+        assert.equal([...snapshot.matchAll(/^  - listitem:/gm)].length, related.length);
+
+        if (status === "cancelled") {
+          const calendar = page.getByTestId("event-cancelled-ics");
+          await expect(calendar).toHaveAttribute("href", `/events/${SHARE_KEY}.ics`);
+          await calendar.focus();
+          await page.keyboard.press("Tab");
+          await expect(links.first()).toBeFocused();
+        } else {
+          await tabTo(page, links.first());
+        }
+        await page.keyboard.press("Tab");
+        await expect(links.last()).toBeFocused();
+        if (status === "published") {
+          await page.keyboard.press("Tab");
+          await expect(page.getByTestId("event-related-join")).toBeFocused();
+        }
+        await page.keyboard.press("Shift+Tab");
+        await expect(status === "published" ? links.last() : links.first()).toBeFocused();
+
+        if (listEvidence) {
+          const listNode = page.locator(listSelector);
+          await listNode.scrollIntoViewIfNeeded();
+          await page.evaluate(() => document.fonts.ready);
+          await writeFile(resolve(listEvidence, `${label}.yml`), snapshot);
+          const after = await page.screenshot({
+            path: resolve(listEvidence, `${label}-after.png`),
+          });
+          // Compare the same rendered fixture with the original list attributes.
+          await listNode.evaluate((node, published) => {
+            const heading = document.getElementById(node.getAttribute("aria-labelledby"));
+            if (published) heading.removeAttribute("id");
+            node.removeAttribute("role");
+            node.removeAttribute("aria-labelledby");
+          }, status === "published");
+          const before = await page.screenshot({
+            path: resolve(listEvidence, `${label}-before.png`),
+          });
+          assert.ok(before.equals(after), "list semantics leave the rendered pixels unchanged");
+        }
+        assert.deepEqual(blocked, []);
+        assert.deepEqual(errors, []);
+
+        const empty = await open(t, "Kit", options);
+        assert.doesNotMatch(empty.html, listOpening);
+        await expect(empty.page.locator(listSelector)).toHaveCount(0);
+        await expect(empty.page.getByRole("heading", { name, exact: true })).toHaveCount(0);
+        if (status === "cancelled") {
+          await expect(
+            empty.page.getByRole("link", { name: "See upcoming events" }),
+          ).toHaveAttribute("href", "/events");
+          await expect(empty.page.getByTestId("event-cancelled-ics")).toHaveAttribute(
+            "href",
+            `/events/${SHARE_KEY}.ics`,
+          );
+        }
+        if (listEvidence) {
+          await empty.page.evaluate(() => document.fonts.ready);
+          const section = status === "published" ? ".event-discovery" : ".event-recovery";
+          await empty.page.locator(section).evaluate((node) => node.scrollIntoView());
+          await empty.page.screenshot({ path: resolve(listEvidence, `${label}-empty.png`) });
+        }
+        assert.deepEqual(empty.blocked, []);
+        assert.deepEqual(empty.errors, []);
+      });
+    }
   }
 });

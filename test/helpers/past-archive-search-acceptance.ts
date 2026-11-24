@@ -13,6 +13,7 @@ import { events } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
 import type { Env } from "../../src/env";
 import { discordEventsSource } from "../../src/events/discord-transients";
+import { fetchKitFeed } from "../../src/events/kit-feed-fetch";
 import { eventLinkAvailability, listPast, type PublicEvent } from "../../src/events/reads";
 import { dispatchEventsRequest, loadEventsPage } from "../../src/kit-events";
 import { renderEventsHtml } from "../../src/kit-events-html";
@@ -218,6 +219,7 @@ const kitDependencies = {
   kitEventsSessionFor,
   kitEventsJourneyFor,
   discordEventsSource,
+  fetchKitFeed,
 };
 type KitBinding = {
   request: (request: Request, env: Env, deps: typeof kitDependencies) => Promise<Response>;
@@ -243,6 +245,7 @@ export async function compileArchiveKit() {
     [join(root, "src/kit-events-html.ts"), ["renderEventsHtml"]],
     [join(root, "src/kit-session.ts"), ["kitEventsSessionFor", "kitEventsJourneyFor"]],
     [join(root, "src/events/discord-transients.ts"), ["discordEventsSource"]],
+    [join(root, "src/events/kit-feed-fetch.ts"), ["fetchKitFeed"]],
   ]);
   const result = await build({
     metafile: true,
@@ -252,12 +255,21 @@ export async function compileArchiveKit() {
         import Page from ${JSON.stringify(join(root, "web/src/routes/events/past/+page.svelte"))};
         import { load } from ${JSON.stringify(join(root, "web/src/routes/events/past/+page.server.ts"))};
         import { GET } from ${JSON.stringify(join(root, "web/src/routes/events/+server.ts"))};
+        import { GET as calendar } from ${JSON.stringify(join(root, "web/src/routes/events.ics/+server.ts"))};
+        import { GET as rss } from ${JSON.stringify(join(root, "web/src/routes/events.rss/+server.ts"))};
+        import { GET as eventCalendar } from ${JSON.stringify(join(root, "web/src/routes/events/[key].ics/+server.ts"))};
+        import { KIT_EVENT_CALENDAR_ROUTE } from ${JSON.stringify(join(root, "src/events/kit-event-calendar-route.ts"))};
         import { bind } from "acceptance:bindings";
+        const feeds = new Map([["/events.ics", calendar], ["/events.rss", rss]]);
         export async function request(request, env, deps) {
           bind(env, deps);
+          const pathname = new URL(request.url).pathname;
+          const feed = feeds.get(pathname) ??
+            (KIT_EVENT_CALENDAR_ROUTE.dynamic.matches(pathname, pathname) ? eventCalendar : undefined);
+          if (feed) return feed({request, locals: {}});
           const headers = new Headers({"content-type": "text/html; charset=utf-8"});
           try {
-            if (new URL(request.url).pathname === "/events") {
+            if (pathname === "/events") {
               return await GET({request, url: new URL(request.url), locals: {}, cookies: {delete() {
                 throw new Error("Anonymous calendar fixture unexpectedly consumed a cookie");
               }}, setHeaders: next => {

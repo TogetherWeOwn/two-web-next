@@ -13,9 +13,8 @@ import {
 import { inviteDestination } from "../../../src/invite";
 import { JOIN_RESULT_COOKIE } from "../../../src/return-journey";
 
-// Server-rendered only: the Hono homepage ships no page JavaScript (its
-// islands are absent here), so the Kit page carries no hydration bundle that
-// the CSP (script-src 'self') would block.
+// Keep the home document SSR-only. Optional enhancements use same-origin
+// external islands under the site's script-src policy.
 export const csr = false;
 
 // Same reads and cache policy as the Hono handler (src/index.tsx GET /):
@@ -59,6 +58,10 @@ export const load: PageServerLoad = async ({ url, request, locals, cookies, setH
     appUrl: env.APP_URL,
     counts,
     countsSnapshot,
+    // Preserve the existing page data shape while the voice island is dormant.
+    ...(!sessionUnavailable && env.DISCORD_LIVE_SOCKET_ENABLED === "true"
+      ? { publicVoiceEnabled: true }
+      : {}),
     // The shared cache is viewer-invariant. Redact names only in the response
     // projection, so a guest request cannot alter the later member view.
     upcomingEvents: session?.member

@@ -1,5 +1,5 @@
 import { captureRefusal, captureResponse } from "../../src/render-clock";
-import type { Handle } from "@sveltejs/kit/hooks";
+import { type Handle, sequence } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
 import { prepareKitHomePanels } from "../../src/kit-home-panels";
@@ -15,6 +15,8 @@ import {
 } from "../../src/kit-session";
 import { dispatchHookRequest } from "../../src/route-ownership";
 import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
+import { KIT_EVENT_CALENDAR_ROUTE } from "../../src/events/kit-event-calendar-route";
+import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes";
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
@@ -35,14 +37,15 @@ import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
 // after the member-read boundary releases a successful GET. Logout and OAuth stay
 // Hono-owned, and a missing secret (the preview Worker sets none) resolves
 // to "unknown" rather than a false logout.
-const localCapture = typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true;
-
-export const handle: Handle = async ({ event, resolve }) => {
-  if (localCapture) {
+const admitCapture: Handle = ({ event, resolve }) => {
+  if (typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true) {
     const refusal = captureRefusal(event.request, env);
     if (refusal) return refusal;
   }
+  return resolve(event);
+};
 
+const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
   let honoOwned = false;
   const response = await dispatchHookRequest(event, {
     appUrl: env.APP_URL,
@@ -52,6 +55,10 @@ export const handle: Handle = async ({ event, resolve }) => {
     kitRouteEvents: env.KIT_ROUTE_EVENTS,
     kitRouteHome: env.KIT_ROUTE_HOME,
     kitRouteJoin: env.KIT_ROUTE_JOIN,
+    apiFamilies: [
+      { flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] },
+    ],
+    versionMetadata: env.CF_VERSION_METADATA,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,
     honoFetch: (request) => {
       honoOwned = true;
@@ -99,8 +106,13 @@ export const handle: Handle = async ({ event, resolve }) => {
     afterMemberRead: (event, response) =>
       recordQueuedBoardView(event.locals, response.status, recordBoardView),
   });
-  const result = localCapture ? captureResponse(event.request, env, response) : response;
+  const result =
+    typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true
+      ? captureResponse(event.request, env, response)
+      : response;
   return honoOwned && event.isDataRequest
     ? preserveHonoDataResponse(event.request, result)
     : result;
 };
+
+export const handle: Handle = sequence(admitCapture, dispatchWithSecurity);

@@ -1,11 +1,9 @@
 import type { Context, Next } from "hono";
 import { deleteCookie, generateSignedCookie, getSignedCookie } from "hono/cookie";
-import { exceptionClass } from "./alerts";
-import { safeRequestId } from "./request-log";
-import { hashToken, isValidSessionToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
-import { SESSION_COOKIE } from "./session-cookie";
+import { AUTH_STATUS_COOKIE, AUTH_STATUS_HEADERS, readAuthStatus } from "./http/auth-status";
+import { SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
 
-export const AUTH_STATUS_COOKIE = "__Host-two_session_status";
+export { AUTH_STATUS_COOKIE };
 const OPTIONS = {
   path: "/",
   secure: true,
@@ -56,28 +54,13 @@ export function clearAuthStatus(c: Ctx): void {
 }
 
 export async function authStatus(c: Ctx, storeFor: () => Promise<SessionStore>): Promise<Response> {
-  c.header("cache-control", "no-store, private");
-  c.header("vary", "Cookie");
-  try {
-    const key = await getSignedCookie(c, c.env.SESSION_SECRET, AUTH_STATUS_COOKIE);
-    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-    if (typeof key === "string" && /^[a-f0-9]{64}$/.test(key)) {
-      return c.json({ authenticated: await (await storeFor()).isActive(key) });
-    }
-    // Pre-rollout clients without a probe cookie remain read-only too.
-    const valid = isValidSessionToken(token);
-    return c.json({
-      authenticated: valid ? !!(await (await storeFor()).get(await hashToken(token))) : false,
-    });
-  } catch (err) {
-    // An outage is not a logout. Clients must ignore non-success responses.
-    // One class-only warn joins the 503 for triage.
-    console.warn("auth status store unavailable", {
-      exception: exceptionClass(err),
-      request_id: safeRequestId(c.get("requestId")),
-    });
-    return c.json({ authenticated: false }, 503);
-  }
+  for (const [name, value] of Object.entries(AUTH_STATUS_HEADERS)) c.header(name, value);
+  const { authenticated, status } = await readAuthStatus(
+    (name) => getSignedCookie(c, c.env.SESSION_SECRET, name),
+    storeFor,
+    c.get("requestId"),
+  );
+  return c.json({ authenticated }, status);
 }
 
 // Hono post-processing runs after inner guards/audit refusal:

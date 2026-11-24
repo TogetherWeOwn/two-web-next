@@ -1,13 +1,14 @@
 import { HUB_INGEST_URL, liveIngressConfig } from "./ingress";
 import { encodeLiveProjection } from "./projection";
-import { LiveSequence, type LiveSnapshot, type LiveWatermarks } from "./sequence";
-import { HUB_SOCKET_URL, type LiveSocketEnv } from "./socket-route";
+import { LiveSequence, type LiveWatermarks } from "./sequence";
+import { HUB_SOCKET_URL, type LiveSocketEnv, readLiveSocketSession } from "./socket-route";
 import { LiveSockets } from "./sockets";
 import { reduceLiveState } from "./state";
 import { signedLiveSnapshot } from "./transport";
 import { decodeLiveDelta, type LiveDelta, liveId, type LiveState, snapshotTopics } from "./wire";
 
 const WATERMARKS = "live-watermarks-v1";
+const SOCKET_PULL_AFTER = "live-socket-pull-after-v1";
 const SOCKET_RECOVERY_INTERVAL_MS = 5_000;
 const PUBLIC_VOICE_PAGE = "public-voice";
 
@@ -28,9 +29,9 @@ export class LiveGuildHub {
   readonly #sequence?: LiveSequence<LiveState, LiveDelta>;
   readonly #sockets: LiveSockets;
   readonly #publicRooms: ReadonlySet<string> | null;
-  #leased: LiveSnapshot<LiveState> | null = null;
-  #sourceUntil = 0;
-  #nextSocketPull = 0;
+  // Producer recovery can restore the raw cursor. Only a browser pull arms delivery.
+  #publicUntil = 0;
+  #publicPull: Promise<boolean> | null = null;
 
   constructor(
     private readonly ctx: DurableObjectState,
@@ -41,9 +42,12 @@ export class LiveGuildHub {
       env.DISCORD_LIVE_SOCKET_ENABLED === "true"
         ? publicVoiceRooms(env.DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS)
         : null;
-    this.#sockets = new LiveSockets(ctx, env, () => this.#publicVoice());
-    // Guild state and the last emitted value are both in memory only.
-    this.#sockets.invalidate();
+    this.#sockets = new LiveSockets(
+      ctx,
+      env,
+      () => this.#publicVoice(),
+      (ref) => this.readSocketSession(ref),
+    );
     const config = liveIngressConfig(env);
     if (!config) return;
     this.#guildId = config.guildId;
@@ -61,10 +65,16 @@ export class LiveGuildHub {
       (topics) => snapshotTopics(topics, config.guildId),
       fetchSnapshot,
     );
-    this.#sequence = new LiveSequence(load, reduceLiveState, {
-      initial,
-      write: (watermarks) => kv.put(WATERMARKS, watermarks),
-    });
+    this.#sequence = new LiveSequence(
+      load,
+      reduceLiveState,
+      { initial, write: (watermarks) => kv.put(WATERMARKS, watermarks) },
+      { requireObservationDeadline: true },
+    );
+  }
+
+  protected readSocketSession(ref: string) {
+    return readLiveSocketSession(this.env, ref);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -80,83 +90,77 @@ export class LiveGuildHub {
     // Only the Worker binding makes this request, from capped and verified bytes.
     const delta = decodeLiveDelta(await request.arrayBuffer(), this.#guildId);
     if (!delta) return new Response(null, { status: 400 });
-    this.#expireSource();
-    const ingested = this.#sequence.ingest(delta.seq, delta);
-    // ingest() clears a gap synchronously, before its signed pull can resolve.
-    if (this.#leased && !this.#sequence.current) {
-      this.#leased = null;
-      this.#sourceUntil = 0;
+    const outcome = await this.#sequence.ingest(delta.seq, delta, () => {
+      // A warm gap can hide a revocation even after the newest lease expires.
+      if (!this.#publicUntil) return;
+      this.#publicUntil = 0;
       this.#sockets.invalidate();
-    }
-    const armed = this.#leaseCurrent();
-    const outcome = await ingested;
-    const newlyArmed = await armed;
-    if (newlyArmed || outcome === "applied" || outcome === "resynced") await this.#publish();
+    });
+    if (outcome === "applied" && this.#publicUntil > Date.now())
+      this.ctx.waitUntil(this.#sockets.publish());
     return new Response(null, {
       status: outcome === "unavailable" ? 409 : outcome === "invalid" ? 400 : 204,
     });
   }
 
-  #expireSource(): void {
-    if (!this.#leased || this.#sourceUntil > Date.now()) return;
-    this.#sequence?.expire();
-    this.#leased = null;
-    this.#sourceUntil = 0;
-    this.#sockets.invalidate();
-  }
-
-  async #leaseCurrent(): Promise<boolean> {
-    const current = this.#sequence?.current;
-    if (!this.#publicRooms || current?.validUntil === undefined || current === this.#leased)
-      return false;
-    const newlyArmed = current.validUntil !== this.#sourceUntil;
-    if (newlyArmed) {
-      await this.#sockets.scheduleExpiry(current.validUntil);
-      // The source may expire or be replaced while storage is pending.
-      if (current !== this.#sequence?.current || current === this.#leased) return false;
-      this.#sourceUntil = current.validUntil;
-    }
-    this.#leased = current;
-    return newlyArmed;
-  }
-
-  async #publish(): Promise<void> {
-    await this.#leaseCurrent();
-    if (this.#publicRooms) this.ctx.waitUntil(this.#sockets.publish());
-  }
-
-  #publicVoice(): string | null {
+  #publicVoice(): { value: string; until: number } | null {
     const current = this.#sequence?.current;
     const guildId = this.#guildId;
-    if (!guildId || !current || current !== this.#leased || !this.#publicRooms) return null;
-    return encodeLiveProjection(
+    const until = this.#publicUntil;
+    const now = Date.now();
+    if (!guildId || !current || until <= now || !this.#publicRooms) return null;
+    const value = encodeLiveProjection(
       {
         state: current.state,
         guildId,
         pageId: PUBLIC_VOICE_PAGE,
-        sourceUntil: this.#sourceUntil,
+        sourceUntil: until,
         viewer: { kind: "public" },
         page: {
           guildId,
           pageId: PUBLIC_VOICE_PAGE,
           viewerId: null,
-          validUntil: this.#sourceUntil,
+          validUntil: until,
           publicRoomIds: this.#publicRooms,
         },
-        now: Date.now(),
+        now,
       },
       "voice",
     );
+    return value === null ? null : { value, until };
+  }
+
+  #refreshPublic(): Promise<boolean> {
+    if (!this.#sequence || !this.#publicRooms) return Promise.resolve(false);
+    // Concurrent commands share a covering observation. Each command resumes
+    // its own authorization before it can install a new socket lease.
+    return (this.#publicPull ??= this.#pullPublic(this.#sequence).finally(() => {
+      this.#publicPull = null;
+    }));
+  }
+
+  async #pullPublic(sequence: LiveSequence<LiveState, LiveDelta>): Promise<boolean> {
+    const kv = this.ctx.storage.kv;
+    const after = kv.get<number>(SOCKET_PULL_AFTER) ?? 0;
+    const wait = Math.min(SOCKET_RECOVERY_INTERVAL_MS, after - Date.now());
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    const now = Date.now();
+    if (now < after) return false;
+    // A reconstruction shares the same browser pull budget.
+    kv.put(SOCKET_PULL_AFTER, now + SOCKET_RECOVERY_INTERVAL_MS);
+    const proof = await sequence.refresh();
+    if (proof?.validUntil === undefined) return false;
+    await this.#sockets.scheduleExpiry(proof.validUntil);
+    // Only continuous state from the browser's observation can use this alarm.
+    if (!sequence.stillCovers(proof)) return false;
+    this.#publicUntil = proof.validUntil;
+    this.ctx.waitUntil(this.#sockets.publish());
+    return true;
   }
 
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (!this.#sequence) return socket.close(1008);
-    this.#expireSource();
-    if (!(await this.#sockets.message(socket, message))) return;
-    const now = Date.now();
-    if (!this.#publicRooms || this.#sequence.current || now < this.#nextSocketPull) return;
-    this.#nextSocketPull = now + SOCKET_RECOVERY_INTERVAL_MS;
-    if (await this.#sequence.synchronize()) await this.#publish();
+    await this.#sockets.message(socket, message, () => this.#refreshPublic());
   }
 
   webSocketClose(socket: WebSocket): void {
@@ -168,7 +172,8 @@ export class LiveGuildHub {
   }
 
   alarm(): Promise<void> {
-    this.#expireSource();
-    return this.#sockets.expire(this.#leased ? this.#sourceUntil : Infinity);
+    // Passive sockets can outlive the most recent proof. Keep the local marker
+    // until a gap or reconstruction so a later gap still withdraws them.
+    return this.#sockets.expire(this.#publicUntil);
   }
 }

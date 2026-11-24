@@ -7,12 +7,14 @@ function fresh({ validUntil }: LiveSnapshot<unknown>): boolean {
 type IngestResult = "applied" | "duplicate" | "invalid" | "resynced" | "unavailable";
 export type LiveWatermarks = Readonly<{ applied: number; minimum: number }>;
 type Checkpoint = { initial: LiveWatermarks; write: (watermarks: LiveWatermarks) => void };
+type SourceProof = Readonly<{ validUntil: number | undefined }>;
 
 /** One guild's in-memory cursor. The caller validates and authenticates both
  * inputs. The reducer returns a new state or null when continuity cannot be
  * proven; the loader must be bounded. */
 export class LiveSequence<State, Delta> {
   #current: LiveSnapshot<State> | null = null;
+  #proof: SourceProof | null = null;
   #saved: LiveWatermarks;
   #minimum: number;
   #recovering: Promise<boolean> | null = null;
@@ -21,6 +23,7 @@ export class LiveSequence<State, Delta> {
     private readonly load: () => Promise<LiveSnapshot<State> | null>,
     private readonly reduce: (state: State, delta: Delta) => State | null,
     private readonly checkpoint?: Checkpoint,
+    private readonly options?: { requireObservationDeadline: boolean },
   ) {
     this.#saved = checkpoint?.initial ?? { applied: 0, minimum: 0 };
     this.#minimum = this.#saved.minimum;
@@ -47,6 +50,15 @@ export class LiveSequence<State, Delta> {
     this.#current = null;
   }
 
+  /** A browser pull obtains independent proof even when the raw cursor is warm. */
+  async refresh(): Promise<SourceProof | null> {
+    return this.#install(await this.#load());
+  }
+
+  stillCovers(proof: SourceProof): boolean {
+    return this.#proof === proof && this.current !== null;
+  }
+
   async synchronize(): Promise<boolean> {
     if (this.current) return true;
     // Commit the latest observed gap before external I/O can yield or fail.
@@ -54,7 +66,7 @@ export class LiveSequence<State, Delta> {
     return this.#recovering ?? this.#recover();
   }
 
-  async ingest(seq: number, delta: Delta): Promise<IngestResult> {
+  async ingest(seq: number, delta: Delta, onGap?: () => void): Promise<IngestResult> {
     if (!Number.isSafeInteger(seq) || seq < 1) return "invalid";
     if (seq <= this.#saved.applied) return "duplicate";
     const current = this.current;
@@ -74,30 +86,40 @@ export class LiveSequence<State, Delta> {
       }
     }
 
+    onGap?.();
     return (await this.synchronize()) ? "resynced" : "unavailable";
   }
 
   #recover(): Promise<boolean> {
-    const load = Promise.resolve()
-      .then(() => this.load())
-      .catch(() => null);
-    this.#recovering = load.then((snapshot) => {
+    this.#recovering = this.#load().then((snapshot) => {
       try {
-        // Check against the latest observed gap, not the gap at request time.
-        if (
-          !snapshot ||
-          !Number.isSafeInteger(snapshot.seq) ||
-          snapshot.seq < this.#minimum ||
-          !fresh(snapshot)
-        ) {
-          return false;
-        }
-        this.#publish(snapshot);
-        return true;
+        // A separate browser pull may already have covered the gap.
+        return this.current !== null || this.#install(snapshot) !== null;
       } finally {
         this.#recovering = null;
       }
     });
     return this.#recovering;
+  }
+
+  #load(): Promise<LiveSnapshot<State> | null> {
+    return Promise.resolve()
+      .then(() => this.load())
+      .catch(() => null);
+  }
+
+  #install(snapshot: LiveSnapshot<State> | null): SourceProof | null {
+    if (
+      !snapshot ||
+      !Number.isSafeInteger(snapshot.seq) ||
+      snapshot.seq < this.#minimum ||
+      (this.options?.requireObservationDeadline && snapshot.validUntil === undefined) ||
+      !fresh(snapshot)
+    )
+      return null;
+    this.#publish(snapshot);
+    // Contiguous deltas carry the observation; a new snapshot requires new proof.
+    this.#proof = { validUntil: snapshot.validUntil };
+    return this.#proof;
   }
 }

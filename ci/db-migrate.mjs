@@ -181,6 +181,10 @@ async function pendingMigrations(client, migrations) {
   const applied = exists.ledger
     ? await client`select hash, created_at from drizzle.__drizzle_migrations order by created_at, id`
     : [];
+  return pendingAfterPrefix(applied, migrations);
+}
+
+function pendingAfterPrefix(applied, migrations) {
   // Drizzle uses a timestamp high-water mark. Require an exact checksum prefix so
   // edited SQL, missing history, bot entries, or a newer release cannot hide work.
   for (const [index, row] of applied.entries()) {
@@ -196,6 +200,17 @@ async function pendingMigrations(client, migrations) {
     }
   }
   return migrations.slice(applied.length);
+}
+
+// The readiness installer calls this under the web migration and ledger locks.
+export async function assertMigrationPrefix(client, tag) {
+  const migrations = journal();
+  const rows = await client`select hash, created_at from drizzle.__drizzle_migrations
+    order by created_at, id limit ${migrations.length + 1}`;
+  const pending = pendingAfterPrefix(rows, migrations);
+  const applied = migrations.slice(0, migrations.length - pending.length);
+  if (applied.at(-1)?.tag !== tag) refuse("Unexpected web migration ledger end.");
+  return applied.map(({ folderMillis }) => folderMillis);
 }
 
 export function safeMigrationError(error) {

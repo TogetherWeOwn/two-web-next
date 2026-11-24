@@ -5,12 +5,14 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
+import { KEY } from "./helpers/ics-wire-fixture";
 import {
   ARCHIVE_ORIGIN,
   archiveEnv,
   archiveRow,
   compileArchiveKit,
 } from "./helpers/past-archive-search-acceptance";
+import { encodeEventRow } from "./helpers/pg-proxy-event-projection";
 
 const MEMBER_ID = "987654321098765432";
 const USERS = [
@@ -22,10 +24,10 @@ const SESSION_BEARER = `two_${"z".repeat(43)}`;
 
 function assertNoMemberBytes(bytes: string) {
   for (const user of USERS) {
-    expect(bytes, "GET /events binding leaked a member id").not.toContain(user.id);
-    expect(bytes, "GET /events binding leaked a username/email").not.toContain(user.username);
+    expect(bytes, "Kit public endpoint leaked a member id").not.toContain(user.id);
+    expect(bytes, "Kit public endpoint leaked a username/email").not.toContain(user.username);
   }
-  expect(bytes, "GET /events binding leaked a session bearer").not.toMatch(/two_[A-Za-z0-9_-]{43}/);
+  expect(bytes, "Kit public endpoint leaked a session bearer").not.toMatch(/two_[A-Za-z0-9_-]{43}/);
 }
 
 let kit: Awaited<ReturnType<typeof compileArchiveKit>>;
@@ -85,4 +87,44 @@ describe("Kit GET /events binding anonymous payload", () => {
       assertNoMemberBytes(bytes);
     });
   }
+});
+
+describe("Kit feed anonymous payloads", () => {
+  it.each([
+    ["/events.ics", "text/calendar"],
+    ["/events.rss", "application/rss+xml"],
+    [`/events/${KEY}.ics`, "text/calendar"],
+  ])("GET %s excludes private fields from serialized feed items", async (path, mediaType) => {
+    const row = archiveRow(7, {
+      eventKey: KEY,
+      status: "published",
+      title: "Public feed fixture title",
+      startsAt: new Date("2099-01-02T18:00:00Z"),
+      endsAt: new Date("2099-01-02T19:00:00Z"),
+      createdBy: MEMBER_ID,
+      join_instructions: USERS[1]!.username,
+    });
+    const db = drizzle(async (sql, params) => {
+      expect(sql).toContain('from "events"');
+      return {
+        rows: [
+          encodeEventRow(sql, params, row, (value) =>
+            value instanceof Date ? value.toISOString() : value,
+          ),
+        ],
+      };
+    }) as unknown as Db;
+    const request = new Request(`${ARCHIVE_ORIGIN}${path}`, {
+      headers: { cookie: `__Host-two_session=${SESSION_BEARER}` },
+    });
+    const response = await kit.request(request, archiveEnv(db));
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain(mediaType);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(body).toContain(row.title);
+    expect(body).toContain(row.eventKey);
+    assertNoMemberBytes(body.replaceAll(/\r\n[ \t]/g, ""));
+  });
 });

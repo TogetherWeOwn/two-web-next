@@ -328,7 +328,9 @@ exactly once.
 | `src/jobs-worker.ts` | jobs |
 | `src/join/` | join |
 | `src/kit-access-sink.ts` | profiles |
+| `src/kit-auth-status.ts` | auth |
 | `src/kit-content-chunk.ts` | entry |
+| `src/kit-csp-reports-fetch.ts` | http-guard |
 | `src/kit-errors.ts` | entry |
 | `src/kit-event-states.ts` | events |
 | `src/kit-events-html.tsx` | events |
@@ -338,7 +340,10 @@ exactly once.
 | `src/kit-members.ts` | profiles |
 | `src/kit-past-events.ts` | events |
 | `src/kit-restored-write.ts` | entry |
+| `src/kit-security-txt-fetch.ts` | entry |
+| `src/kit-seo-fetch.ts` | entry |
 | `src/kit-session.ts` | auth |
+| `src/kit-sign-out.ts` | auth |
 | `src/kit-staging-static.ts` | entry |
 | `src/kit-worker-facade.ts` | http-guard |
 | `src/kit-worker-response.ts` | http-guard |
@@ -381,7 +386,9 @@ exactly once.
 | `src/seo-json-ld.ts` | content |
 | `src/seo-slots.ts` | content |
 | `src/seo-leaves.tsx` | entry |
+| `src/seo-responses.ts` | entry |
 | `src/session-cookie.ts` | auth |
+| `src/session-hono.ts` | auth |
 | `src/session-revocation.ts` | auth |
 | `src/session-role-refresh.ts` | auth |
 | `src/sessions.ts` | auth |

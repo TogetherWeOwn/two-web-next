@@ -12,6 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
+import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
@@ -107,6 +108,8 @@ async function unusedPort() {
 
 requireDisposableDatabase(databaseUrl);
 const args = process.argv.slice(2);
+const publicVoiceBrowser = args[0] === "--installed-output" && args[1] === "--public-voice-browser";
+if (publicVoiceBrowser) args.splice(1, 1);
 const { worker, assets } = await workerOutput(args);
 const scratch = await mkdtemp(
   join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-worker-e2e-"),
@@ -117,7 +120,7 @@ const workers = [];
 // Start one loopback Worker. The generated Kit Worker and the direct Hono
 // Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
 // fixture database and vars within each pair.
-async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
+async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub = false) {
   const port = await unusedPort();
   const origin = `http://127.0.0.1:${port}`;
   const config = join(scratch, `${name}.wrangler.jsonc`);
@@ -127,7 +130,7 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
     compatibility_date: "2026-09-29",
     compatibility_flags: ["nodejs_compat"],
     assets: { directory: assetsDirectory, binding: "ASSETS", run_worker_first: true },
-    ...(args.length && (name === "kit" || name === "kit-live")
+    ...(liveHub
       ? {
           durable_objects: { bindings: [{ name: "DISCORD_LIVE_HUB", class_name: "LiveGuildHub" }] },
           migrations: [{ tag: "live-v1", new_sqlite_classes: ["LiveGuildHub"] }],
@@ -202,7 +205,7 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars) {
 // success quiet while a red check still shows the cause.
 let failed = false;
 try {
-  const kit = await startWorker("kit", worker, assets);
+  const kit = await startWorker("kit", worker, assets, undefined, undefined, args.length > 0);
   const hono = await startWorker("hono", join(repo, "src/worker.ts"), join(repo, "public"));
   const origin = kit.origin;
   await Promise.all([
@@ -234,13 +237,19 @@ function fetch(request, env, context) {
   const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
   const secure = new Request(url, request);
   secure.headers.set("host", url.host);
+  // Map the browser's loopback origin to the synthetic HTTPS origin only.
+  if (secure.headers.get("origin") === incoming.origin) secure.headers.set("origin", url.origin);
   return worker.fetch(secure, env, context);
 }\n`,
     );
+    const { LIVE_FIXTURE_GUILD, verifyPublicFanout } = await import(
+      "./fixtures/kit-live-fanout.mjs"
+    );
     const secret = FIXTURE_SECRETS.SESSION_SECRET;
-    const live = await startWorker("kit-live", entry, assets, secret, {
+    const liveVars = {
       APP_URL: "https://kit-live.invalid",
       BOT_ENDPOINT_URL: "https://bot-live.invalid",
+      DISCORD_GUILD_ID: LIVE_FIXTURE_GUILD,
       DISCORD_LIVE_INGEST_ENABLED: "true",
       DISCORD_LIVE_SOCKET_ENABLED: "true",
       DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "10,11",
@@ -248,11 +257,28 @@ function fetch(request, env, context) {
       DISCORD_LIVE_INGEST_SECRET: "fixture-ingest-value",
       DISCORD_LIVE_SNAPSHOT_KEY_ID: "fixture-snapshot",
       DISCORD_LIVE_SNAPSHOT_SECRET: "fixture-snapshot-value",
-    });
+    };
+    if (publicVoiceBrowser) {
+      // Run the homepage against separate persisted Workers so the hub starts
+      // cold and the disabled fixture has a working session bridge.
+      const off = await startWorker(
+        "kit-voice-off",
+        entry,
+        assets,
+        secret,
+        { ...liveVars, DISCORD_LIVE_SOCKET_ENABLED: undefined },
+        true,
+      );
+      await listen(off.child, off.origin, () => off.log);
+      const enabled = await startWorker("kit-voice", entry, assets, secret, liveVars, true);
+      await listen(enabled.child, enabled.origin, () => enabled.log);
+      const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
+      await verifyKitPublicVoice(off.origin, enabled.origin, databaseUrl, secret);
+    }
+    const live = await startWorker("kit-live", entry, assets, secret, liveVars, true);
     await listen(live.child, live.origin, () => live.log);
     const { verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
     await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
-    const { verifyPublicFanout } = await import("./fixtures/kit-live-fanout.mjs");
     await verifyPublicFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
   }
 
@@ -582,6 +608,7 @@ export default {
     "cross-origin-opener-policy",
     "cross-origin-resource-policy",
     "x-two-origin",
+    "x-two-renderer",
   ];
   const normalize = (value, worker, requestId) => {
     let out = value.split(worker.origin).join("ORIGIN");
@@ -649,23 +676,21 @@ export default {
     return fromHono;
   }
 
-  if (args.length) {
-    // Only the data-redirect proof needs signed cookies. Leave the existing
-    // method-parity pair in its original, no-session configuration.
-    const secret = FIXTURE_SECRETS.SESSION_SECRET;
-    const kitWithSession = await startWorker("kit-session", worker, assets, secret);
-    const honoWithSession = await startWorker(
-      "hono-session",
-      join(repo, "src/worker.ts"),
-      join(repo, "public"),
-      secret,
-    );
-    await Promise.all(
-      [kitWithSession, honoWithSession].map((instance) =>
-        listen(instance.child, instance.origin, () => instance.log),
-      ),
-    );
+  const secret = FIXTURE_SECRETS.SESSION_SECRET;
+  const honoWithSession = await startWorker(
+    "hono-session",
+    join(repo, "src/worker.ts"),
+    join(repo, "public"),
+    secret,
+  );
+  const kitWithSession = await startWorker("kit-session", worker, assets, secret);
+  await Promise.all(
+    [honoWithSession, kitWithSession].map((instance) =>
+      listen(instance.child, instance.origin, () => instance.log),
+    ),
+  );
 
+  if (args.length) {
     async function observeDataRedirect(worker, path) {
       const response = await fetch(`${worker.origin}${path}`, { redirect: "manual" });
       assert.equal(response.status, 302, `${path}: Hono guest redirect`);
@@ -812,6 +837,76 @@ export default {
     assert.notEqual(viaKit.headers.get("x-two-renderer"), "kit", `${path} is never Kit-rendered`);
   }
   console.log("PASS generated Worker canonical/API boundary parity");
+
+  // With the feed binding absent, the reserved version read and its method,
+  // slash and data variants still reach the direct Hono owner.
+  for (const [method, path, expected] of [
+    ["GET", "/version?probe=admission", 200],
+    ["HEAD", "/version", 200],
+    ["POST", "/version", 404],
+    ["GET", "/version/", 404],
+    ["GET", "/version/__data.json", 404],
+  ]) {
+    const label = `API families off: ${method} ${path}`;
+    const result = await assertParity(label, path, { method });
+    assert.equal(result.status, expected, label);
+    assert.equal(result.headers["x-two-renderer"], undefined, `${label}: Hono owns the response`);
+  }
+  console.log("PASS generated Worker reserved method/path parity with API families off");
+
+  await assertStaticFeedParity({
+    hono: honoWithSession,
+    kit: kitWithSession,
+    databaseUrl,
+    startKit: async (name, vars) => {
+      const instance = await startWorker(
+        name,
+        worker,
+        assets,
+        FIXTURE_SECRETS.SESSION_SECRET,
+        vars,
+      );
+      await listen(instance.child, instance.origin, () => instance.log);
+      return instance;
+    },
+  });
+
+  if (args.length) {
+    const probePath = "/__fixture/machine-parity";
+    const fixture = fileURLToPath(new URL("./fixtures/kit-machine-parity.mjs", import.meta.url));
+    for (const { name, main, assetsDirectory } of [
+      {
+        name: "hono-machine",
+        main: join(repo, "src/worker.ts"),
+        assetsDirectory: join(repo, "public"),
+      },
+      { name: "kit-machine", main: worker, assetsDirectory: assets },
+    ]) {
+      const entry = join(scratch, `${name}.mjs`);
+      await writeFile(
+        entry,
+        `import inner from ${JSON.stringify(main)};
+import { machineParityWorker } from ${JSON.stringify(fixture)};
+export default machineParityWorker(inner, ${JSON.stringify(probePath)});\n`,
+      );
+      const instance = await startWorker(name, entry, assetsDirectory, undefined, {
+        DATABASE_URL: undefined,
+      });
+      await listen(instance.child, instance.origin, () => instance.log);
+      const response = await fetch(`${instance.origin}${probePath}`, {
+        signal: AbortSignal.timeout(20_000),
+      });
+      assert.equal(response.status, 200, `${name}: machine parity probes passed`);
+      assert.deepEqual(await response.json(), {
+        agentCreate: 201,
+        mcpComplete: "eof",
+        mcpReaderCancel: "cancelled",
+      });
+      console.log(`PASS ${name} agent JSON success, MCP SSE EOF and in-Worker reader cancellation`);
+    }
+    const { verifyKitMachineDisconnect } = await import("./fixtures/kit-machine-disconnect.mjs");
+    await verifyKitMachineDisconnect(worker, scratch);
+  }
 } catch (error) {
   failed = true;
   throw error;

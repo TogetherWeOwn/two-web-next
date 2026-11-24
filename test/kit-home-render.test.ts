@@ -74,6 +74,17 @@ afterAll(() => {
 });
 
 describe("Kit home SSR render: offline voice composition", () => {
+  it("emits the public count island and static fallback only when enabled", () => {
+    const disabled = renderPage(baseData({ publicVoiceEnabled: false }));
+    const enabled = renderPage(baseData({ publicVoiceEnabled: true }));
+    const source = '<script src="/islands/kit-public-voice.js" defer></script>';
+    const fallback = '<p class="counts" id="home-public-voice">';
+    expect(disabled).not.toContain(source);
+    expect(disabled).not.toContain(fallback);
+    expect(enabled).toContain(source);
+    expect(enabled).toContain(`${fallback}Voice numbers are not available right now.</p>`);
+  });
+
   it("keeps the shipped hero for missing, suppressed, or wrongly scoped voice data", async () => {
     const data = baseData({ upcomingEvents: [fullnessEvent({ title: "Friday Raid" })] });
     const baseline = renderPage(data);
