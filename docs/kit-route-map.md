@@ -119,7 +119,19 @@ separately registered `POST /events` has no matching POST ownership entry and
 remains Hono-owned. The staging manifest may differ. This distinction matters
 when the read and write families are migrated independently.
 
+The standalone resolver accepts a dormant reservation release list for future
+families. Each release requires an enabled manifest entry for the same method
+and literal pathname. HEAD follows GET. Encoded aliases and Kit data URLs
+remain reserved, as do adapter assets that reach the resolver. The request
+dispatcher supplies no releases.
+
 After Ember changes land, re-take and validate the mounted inventory, route map
 and pure-Hono golden evidence against the then-current main revision. This
 refresh is mandatory before shared dispatch integration or any production
 family flip; this earlier snapshot does not satisfy that release checkpoint.
+At integration, compose the ordered shared security hook in
+[`hooks.server.ts`](../web/src/hooks.server.ts). Select each family's exact
+entries and releases together from server-controlled, default-off flags. Use
+the original request pathname for release checks, before Kit strips data
+suffixes. Prove all-off Hono parity, one-family-at-a-time ownership, and the
+existing method refusals on the built Worker before considering activation.
