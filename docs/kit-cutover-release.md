@@ -11,3 +11,11 @@ On `main`, dispatch XFS qualification with `qualify_cutover: true` to keep
 the packet from that exact attempt for 30 days. Parity replays the packaged
 Kit bytes. Isolated staging must exercise the separately compiled Hono undo
 bytes before protected deployment selection.
+
+The `isolated-cutover` job runs on the same main dispatch. It needs
+`KIT_CUTOVER_TEST_DATABASE_HOST` and `KIT_CUTOVER_TEST_DATABASE_URL` in
+the staging Environment for a dedicated synthetic Neon project with the
+`two_web_cutover` control database and `two_web_cutover_owner` login.
+It runs public smoke and exact-version undo on both ledger states, then
+removes the run-owned Worker, database, and expiring login.
+To retry, select **Re-run all jobs** so staging uses a packet from that attempt.

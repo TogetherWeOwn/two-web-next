@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { lstat, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   assertKitProductionCandidate,
   assertRollbackVersionId,
 } from "./production-deploy-gate.mjs";
-import { sha256 } from "./worker-bundle-evidence.mjs";
+import { readWranglerOutput, sha256 } from "./worker-bundle-evidence.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 
 export const STAGING_WORKER = "two-web-kit-cutover-proof";
@@ -244,4 +245,49 @@ export function productionUploadConfig(profile, { root, kit }) {
     ...(profile === "kit" ? { rules: [{ type: "ESModule", globs: ["kit-adapter.js"] }] } : {}),
     assets: { ...config.assets, directory: "assets" },
   };
+}
+
+// Keep Wrangler's argv fixed and never interpret bindings or script content
+// from process output. The native JSONL receipt supplies the version identity.
+export function uploadVersion(profile, directory, config, tag, options = {}) {
+  const output = options.output;
+  const args = [
+    "versions",
+    "upload",
+    "--config",
+    join(directory, "wrangler.json"),
+    "--no-bundle",
+    "--upload-source-maps=false",
+    "--tag",
+    tag,
+  ];
+  if (options.message) args.push("--message", options.message);
+  if (options.secretsFile) args.push("--secrets-file", options.secretsFile);
+  wrangler(profile, args, { ...process.env, WRANGLER_OUTPUT_FILE_PATH: output });
+  const uploads = readWranglerOutput(output).filter(({ type }) => type === "version-upload");
+  assert.equal(uploads.length, 1, "expected one native version upload record");
+  const row = uploads[0];
+  assert.ok(
+    row.version === 1 && row.worker_name === config.name,
+    "version upload has wrong target",
+  );
+  assertRollbackVersionId(row.version_id);
+  return row.version_id;
+}
+
+export function wrangler(profile, args, env = process.env) {
+  assert.ok(PROFILES.includes(profile));
+  const tool = profile === "kit" ? "web/node_modules/.bin/wrangler" : "node_modules/.bin/wrangler";
+  try {
+    return execFileSync(tool, args, {
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 1024 * 1024,
+      timeout: 180_000,
+    });
+  } catch (error) {
+    const detail = Number.isSafeInteger(error.status) ? ` (exit ${error.status})` : "";
+    throw new Error(`Wrangler ${args[0]} ${args[1]} failed${detail}`);
+  }
 }
