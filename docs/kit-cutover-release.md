@@ -31,5 +31,7 @@ pause automatic promotion. Use the same full `sha` and
 2. Dispatch with `cutover_mode: kit` and `cutover_undo_version` set to that UUID.
    Admission verifies the staged packet, approved live ledger, and Hono source,
    UUID, annotation and required secrets before uploading the exact Kit bytes.
-3. For manual undo, set `version_id` to Hono and `expected_current_version_id` to
+3. For manual or same-SHA undo, set `version_id` to Hono and `expected_current_version_id` to
    Kit in `rollback-production`. Automatic rollback uses the same pair.
+
+Ordinary promotion from a cutover version requires the complete target ledger.

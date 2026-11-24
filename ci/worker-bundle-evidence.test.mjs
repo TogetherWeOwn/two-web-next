@@ -861,8 +861,12 @@ describe("workflow evidence wiring", () => {
     );
     assert.equal(
       steps[deployed].if,
-      undefined,
-      "receipt must require prior success, never always()",
+      "env.CUTOVER_MODE == 'ordinary'",
+      "only ordinary promotion has bundle evidence",
+    );
+    assert.equal(
+      steps[smoke].env.CUTOVER_UPLOADED_VERSION,
+      "${{ steps.cutover-upload.outputs.version_id }}",
     );
     assert.match(steps[deployed].run, /worker-bundle-evidence.mjs deployed dist-production/);
     assert.equal(

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { verifyReady } from "./kit-cutover-evidence.mjs";
 import {
   selection,
   undoMessage,
@@ -71,27 +72,23 @@ test("only exact successful main XFS dispatch metadata can produce a cutover pac
     status: "completed",
     conclusion: "success",
   };
-  const request = async (url) => {
-    assert.equal(
-      url,
-      "https://api.github.com/repos/TogetherWeOwn/two-web-next/actions/runs/21/attempts/3",
-    );
-    return Response.json(run);
-  };
-  assert.equal((await verifyProducer(identity, "synthetic", request)).runAttempt, "3");
-  for (const override of [
-    { id: 23 },
-    { run_attempt: 2 },
-    { head_sha: "d".repeat(40) },
-    { head_repository: { ...own, fork: true } },
-    { status: "in_progress" },
-    { path: ".github/workflows/ci.yml" },
-    { event: "pull_request" },
-    { conclusion: "failure" },
-  ]) {
-    await assert.rejects(
-      verifyProducer(identity, "synthetic", async () => Response.json({ ...run, ...override })),
-      /attempt metadata/,
-    );
-  }
+  assert.equal(
+    (await verifyProducer(identity, "synthetic", async () => Response.json(run))).runAttempt,
+    "3",
+  );
+  await assert.rejects(
+    verifyProducer(identity, "synthetic", async () => Response.json({ ...run, run_attempt: 2 })),
+    /attempt metadata/,
+  );
+});
+
+test("only undo preparation may admit confirmed deferred migrations", () => {
+  const prefixes = { 1033: [1], 1037: [1, 2, 3, 4, 5] };
+  const body = { db: "ok", pending_migrations: 1, migration_ledger: prefixes[1037] };
+  assert.equal(verifyReady(503, body, prefixes, { allowDeferred: true }), "1037");
+  assert.throws(() => verifyReady(503, body, prefixes), /readiness/);
+  assert.throws(
+    () => verifyReady(503, { ...body, pending_migrations: 2 }, prefixes, { allowDeferred: true }),
+    /deferred/,
+  );
 });

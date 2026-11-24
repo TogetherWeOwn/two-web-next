@@ -86,15 +86,10 @@ async function main() {
   if (command === "live") {
     const version = process.env.PROMOTED_VERSION_ID;
     assertRollbackVersionId(version);
-    assert.equal(
-      version,
-      process.env.CUTOVER_UPLOADED_VERSION,
-      "promoted cutover version mismatch",
-    );
-    assert.equal(
-      process.env.PREV_VERSION,
-      process.env.CUTOVER_UNDO_TARGET,
-      "cutover rollback target changed",
+    assert.ok(
+      version === process.env.CUTOVER_UPLOADED_VERSION &&
+        process.env.PREV_VERSION === process.env.CUTOVER_UNDO_TARGET,
+      "cutover version pair changed",
     );
     await readReady(PRODUCTION_ORIGIN, prefixes, { version, commit: pin.sourceSha });
     return;
@@ -103,7 +98,8 @@ async function main() {
   assertRollbackVersionId(version);
   if (pin.mode === "kit")
     assert.equal(version, pin.undo, "recorded rollback target is not the expected Hono UUID");
-  const expected = { version, ...(pin.mode === "kit" ? { commit: pin.sourceSha } : {}) };
+  const expected =
+    pin.mode === "kit" ? { version, commit: pin.sourceSha } : { version, allowDeferred: true };
   assert.equal(
     execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     pin.sourceSha,

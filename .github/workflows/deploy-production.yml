@@ -359,6 +359,7 @@ jobs:
     timeout-minutes: 30
     env:
       CUTOVER_MODE: ${{ needs.preflight.outputs.cutover_mode }}
+      CUTOVER_ATTEMPT: ${{ needs.preflight.outputs.cutover_attempt }}
       CUTOVER_PIN: ${{ inputs.cutover_pin }}
       CUTOVER_UNDO_VERSION: ${{ inputs.cutover_undo_version }}
       INPUT_SHA: ${{ inputs.sha }}
@@ -505,25 +506,17 @@ jobs:
           ROLLBACK_COMMIT: ${{ needs.preflight.outputs.rollback_commit }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
-      - name: Download the exact version packet from isolated staging
+      - name: Download the attempt-specific staged packet and undo proof
         if: env.CUTOVER_MODE != 'ordinary'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: kit-cutover-packet-${{ needs.preflight.outputs.cutover_attempt }}
+          pattern: kit-cutover-*-${{ needs.preflight.outputs.cutover_attempt }}
           run-id: ${{ needs.preflight.outputs.cutover_run }}
           github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/kit-cutover-packet
-      - name: Download the successful isolated undo proof
-        if: env.CUTOVER_MODE != 'ordinary'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: kit-cutover-proof-${{ needs.preflight.outputs.cutover_attempt }}
-          run-id: ${{ needs.preflight.outputs.cutover_run }}
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/kit-cutover-proof
+          path: ${{ runner.temp }}/kit-cutover
       - name: Verify cutover packet, ledger, and compatible undo under the production lock
         if: env.CUTOVER_MODE != 'ordinary'
-        run: node workflow-tip/ci/kit-cutover-deploy.mjs prepare "$RUNNER_TEMP/kit-cutover-packet" "$RUNNER_TEMP/kit-cutover-proof/proof.json"
+        run: node workflow-tip/ci/kit-cutover-deploy.mjs prepare "$RUNNER_TEMP/kit-cutover/kit-cutover-packet-$CUTOVER_ATTEMPT" "$RUNNER_TEMP/kit-cutover/kit-cutover-proof-$CUTOVER_ATTEMPT/proof.json"
         env:
           ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
@@ -563,9 +556,7 @@ jobs:
       - name: Upload exact staged version without rebuilding or changing triggers
         id: cutover-upload
         if: env.CUTOVER_MODE != 'ordinary'
-        run: |
-          set -euo pipefail
-          node workflow-tip/ci/kit-cutover-deploy.mjs upload "$RUNNER_TEMP/kit-cutover-packet"
+        run: node workflow-tip/ci/kit-cutover-deploy.mjs upload "$RUNNER_TEMP/kit-cutover/kit-cutover-packet-$CUTOVER_ATTEMPT"
         env:
           ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
@@ -673,13 +664,6 @@ jobs:
             run_id: process.env.GITHUB_RUN_ID,
             run_attempt: process.env.GITHUB_RUN_ATTEMPT,
           };
-          if (process.env.CUTOVER_MODE !== "ordinary") {
-            receipt.cutover = {
-              mode: process.env.CUTOVER_MODE,
-              pin: process.env.CUTOVER_PIN,
-              rollback_version_id: process.env.ROLLBACK_VERSION_ID,
-            };
-          }
           if (!/^[0-9a-f]{40}$/.test(receipt.sha ?? '') ||
               !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(receipt.promoted_version_id ?? '') ||
               !/^[1-9][0-9]*$/.test(receipt.run_id ?? '') ||
@@ -691,11 +675,10 @@ jobs:
         env:
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
           PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
-          ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
       - name: Upload production promotion proof
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: production-promotion-${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ env.CUTOVER_MODE == 'hono' && 'production-undo' || 'production-promotion' }}-${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/promotion.json
           if-no-files-found: error
           retention-days: 30

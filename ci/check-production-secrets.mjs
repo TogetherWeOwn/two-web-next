@@ -37,7 +37,9 @@
 // If any of them is ever made required, add it here in the same change.
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { pendingLedgerTags, readLiveProductionLedger } from "./production-deploy-gate.mjs";
 
 export const REQUIRED_PRODUCTION_SECRETS = [
   "SESSION_SECRET",
@@ -226,7 +228,18 @@ function listRollbackVersionJson() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     if (process.argv[2] === "--rollback-version") {
-      const present = checkRollbackVersionSecrets(listRollbackVersionJson());
+      const versionJson = listRollbackVersionJson();
+      const present = checkRollbackVersionSecrets(versionJson);
+      const message = JSON.parse(versionJson).annotations?.["workers/message"];
+      if (
+        process.env.CUTOVER_MODE === "ordinary" &&
+        /^two-web-cutover-(?:kit|undo):/.test(message)
+      ) {
+        const { entries } = JSON.parse(readFileSync("drizzle/meta/_journal.json", "utf8"));
+        const applied = await readLiveProductionLedger();
+        if (pendingLedgerTags(entries, applied).length)
+          throw new Error("Ordinary promotion requires the full ledger when cutover is live");
+      }
       console.log(`Rollback target version secrets present: ${present.join(", ")}`);
     } else {
       const present = checkProductionSecrets(listProductionSecretJson());
