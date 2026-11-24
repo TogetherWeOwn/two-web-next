@@ -12,14 +12,21 @@ const probeId = "12345678-1234-4234-8234-123456789abc";
 const token = "ops-fixture-only-".repeat(2);
 const report = JSON.stringify({ "csp-report": { "script-sample": "synthetic" } });
 const wireHeaders = [
+  "allow",
   "cache-control",
   "content-type",
   "content-security-policy",
+  "cross-origin-embedder-policy",
+  "cross-origin-opener-policy",
+  "cross-origin-resource-policy",
   "location",
+  "permissions-policy",
+  "referrer-policy",
   "reporting-endpoints",
   "retry-after",
   "vary",
   "x-content-type-options",
+  "x-frame-options",
   "x-robots-tag",
   "x-two-origin",
 ];
