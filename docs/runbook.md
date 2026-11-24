@@ -723,6 +723,8 @@ Dispatch `forward` and `provision` at the approved protected `main` tip. If
 `main` advances during recovery, keep the same approval SHA for `undo`,
 `readback`, and `revoke`. Those operations use the approved ancestor only
 when its workflow and revision selector match the dispatch revision.
+Before rolling out changes to either file, close any open recovery window.
+Start new repairs from an approved revision that includes the selector.
 
 ### Migration rollback and recovery
 

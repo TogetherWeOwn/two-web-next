@@ -101,6 +101,8 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   git("init", "-q");
   git("config", "user.name", "Fixture");
   git("config", "user.email", "fixture@example.invalid");
+  git("commit", "-qm", "before recovery rollout", "--allow-empty");
+  const beforeRollout = git("rev-parse", "HEAD");
   for (const path of [repair, executor, selector]) write(path, read(`../${path}`));
   git("add", ".");
   git("commit", "-qm", "approved source");
@@ -140,6 +142,7 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
     assert.deepEqual(select(path, operation, tip, approved), [0, approved]);
     assert.deepEqual(select(path, operation, tip, unrelated), [1, tip]);
     assert.deepEqual(select(path, operation, tip, approved, unrelated), [1, tip]);
+    assert.deepEqual(select(path, operation, tip, beforeRollout), [1, tip]);
   }
   assert.deepEqual(select(repair, "forward", tip, approved), [1, tip]);
   assert.deepEqual(select(executor, "provision", tip, approved), [1, tip]);
@@ -164,6 +167,11 @@ test("executor dispatch scopes its credential and suppresses subprocess output",
   assert.deepEqual(workflow.concurrency, {
     group: "web-migrate-production",
     "cancel-in-progress": false,
+  });
+  assert.deepEqual(authority.steps[1].with, {
+    ref: "${{ github.sha }}",
+    "persist-credentials": false,
+    "fetch-depth": 0,
   });
   const gate = authority.steps[0];
   const sha = "a".repeat(40);
