@@ -12,6 +12,7 @@ describe("default-off Kit profile ownership", () => {
     ["false", "POST", PATH, "hono", 200],
     ["TRUE", "PATCH", PATH, "hono", 200],
     ["true", "PATCH", PATH, "kit", 200],
+    ["true", "PATCH", "/mem%62ers/111111111111111111", "hono", 200],
     ["true", "POST", PATH, "kit", 200],
     ["true", "PATCH", "/members", "hono", 200],
     ["true", "POST", "/members/", "hono", 200],
