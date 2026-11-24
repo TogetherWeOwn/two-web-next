@@ -329,13 +329,11 @@ describe("throttle bucket inventory", () => {
   });
 
   it("fails loudly on non-literal throttle registrations", () => {
-    // src/profiles/routes-admission.ts holds the only two: the local admitWrite
-    // helper call throttle(c, `profile-write:${viewer.id}`) and the
-    // deps.throttle(bucket) seam delegation. Neither is the src/throttle.ts
-    // middleware; the profile-write bucket itself is pinned by the dedicated
-    // assertion below. Any new entry here is a bucket escaping the literal
-    // inventory: hand-pin it and cover it, or make it literal.
+    // Hono admission and the dormant JSON core use the same per-viewer
+    // bucket. Pin every dynamic call here and verify the bucket below so a
+    // new registration cannot escape the literal inventory.
     expect(Object.fromEntries(nonLiteralThrottleSites())).toEqual({
+      "src/profiles/patch-core.ts": 1,
       "src/profiles/routes-admission.ts": 2,
     });
     expect(Object.fromEntries(nonLiteralGuardSites())).toEqual({});
@@ -352,6 +350,10 @@ describe("throttle bucket inventory", () => {
       readFileSync(resolve(root, "src/profiles/routes-admission.ts"), "utf8"),
     );
     expect(admission).toContain("profile-write:${viewer.id}");
+    const profilePatch = stripComments(
+      readFileSync(resolve(root, "src/profiles/patch-core.ts"), "utf8"),
+    );
+    expect(profilePatch).toContain("deps.throttle(`profile-write:${viewer.id}`)");
     const rsvp = stripComments(readFileSync(resolve(root, "src/events/rsvp.ts"), "utf8"));
     expect(rsvp.match(/rsvp-write:/g)?.length).toBe(3);
   });
