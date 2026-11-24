@@ -54,7 +54,10 @@ async function session(sql, userId, moderator) {
     values (${hash}, ${hash}, ${userId}, 'Fixture admin serving', true, ${moderator},
       now() + interval '1 hour', now())
   `;
-  const cookie = await generateSignedCookie(SESSION_COOKIE, token, FIXTURE_SECRETS.SESSION_SECRET);
+  const cookie = await generateSignedCookie(SESSION_COOKIE, token, FIXTURE_SECRETS.SESSION_SECRET, {
+    path: "/",
+    secure: true,
+  });
   return cookie.split(";", 1)[0];
 }
 
