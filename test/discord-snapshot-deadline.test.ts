@@ -60,6 +60,12 @@ describe("request-owned snapshot I/O deadlines", () => {
     release();
     await vi.advanceTimersByTimeAsync(0);
     expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.stringContaining("set_config('transaction_timeout', ")]),
+      "350ms",
+      "400ms",
+      `${DISCORD_STORE_DEADLINE_MS}ms`,
+    );
     expect(vi.getTimerCount()).toBe(0);
   });
   it("cancels a stalled HTTP body, installs a hold, and never publishes its buffered success", async () => {

@@ -14,7 +14,7 @@
 // The shared section contract (testids, copy, pager, island script) is what
 // the existing E2E and island binders already pin; this script proves the Kit
 // page carries it, not that the two HTML documents are identical files.
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   readFileSync,
@@ -29,6 +29,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { chromium } from "playwright";
+import { requireKitRetirementReport } from "../web/scripts/kit-retirement-build.mjs";
 import { assertEmberArchive, stripEmberDelta } from "./kit-archive-delta.mjs";
 
 const root = new URL("../", import.meta.url);
@@ -255,7 +256,15 @@ function expectShell(document) {
 // miss the Tailwind pipeline (Preflight, @theme emission, utilities), which
 // is how the Preflight underline regression went undetected.
 function kitCompiledCss() {
-  execFileSync("npm", ["run", "build", "--prefix", "web"], { stdio: "inherit" });
+  const mode = process.env.KIT_RETIREMENT_GUARD;
+  const result = spawnSync("npm", ["run", "build", "--prefix", "web"], {
+    encoding: "utf8",
+    stdio: mode === undefined ? "inherit" : ["inherit", "pipe", "inherit"],
+  });
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`Kit build failed (${result.signal ?? result.status})`);
+  if (mode !== undefined) requireKitRetirementReport(result.stdout, mode);
   const assets = new URL(
     "../web/.svelte-kit/output/client/_app/immutable/assets/",
     import.meta.url,

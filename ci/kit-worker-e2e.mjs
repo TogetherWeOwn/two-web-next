@@ -12,6 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
+import { assertKitAdminServing, prepareAdminFixture } from "./fixtures/kit-admin-serving.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -228,12 +229,19 @@ try {
     const entry = join(scratch, "kit-live.mjs");
     await writeFile(
       entry,
-      `import worker, { LiveGuildHub as InstalledHub } from ${JSON.stringify(worker)};
+      `import { withEnv } from "cloudflare:workers";
+import worker, { LiveGuildHub as InstalledHub } from ${JSON.stringify(worker)};
 import { fixtureHub, controlledFetch } from ${JSON.stringify(fileURLToPath(new URL("./fixtures/kit-live-source.mjs", import.meta.url)))};
 export const LiveGuildHub = fixtureHub(InstalledHub);
 export default { fetch: controlledFetch(fetch) };
 function fetch(request, env, context) {
   const incoming = new URL(request.url);
+  if (env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true" && incoming.pathname.startsWith("/e/")) {
+    // Event document ownership requires loopback. Socket and ingest requests
+    // still use the separate HTTPS origin required by the installed live hub.
+    const bindings = { ...env, APP_URL: incoming.origin };
+    return withEnv(bindings, () => worker.fetch(request, bindings, context));
+  }
   const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
   const secure = new Request(url, request);
   secure.headers.set("host", url.host);
@@ -259,18 +267,19 @@ function fetch(request, env, context) {
       DISCORD_LIVE_SNAPSHOT_SECRET: "fixture-snapshot-value",
     };
     if (publicVoiceBrowser) {
-      // Run the homepage against separate persisted Workers so the hub starts
+      // Run the documents against separate persisted Workers so the hub starts
       // cold and the disabled fixture has a working session bridge.
+      const browserVars = { ...liveVars, KIT_PARITY_FIXTURE_EVENT_DETAIL: "true" };
       const off = await startWorker(
         "kit-voice-off",
         entry,
         assets,
         secret,
-        { ...liveVars, DISCORD_LIVE_SOCKET_ENABLED: undefined },
+        { ...browserVars, DISCORD_LIVE_SOCKET_ENABLED: undefined },
         true,
       );
       await listen(off.child, off.origin, () => off.log);
-      const enabled = await startWorker("kit-voice", entry, assets, secret, liveVars, true);
+      const enabled = await startWorker("kit-voice", entry, assets, secret, browserVars, true);
       await listen(enabled.child, enabled.origin, () => enabled.log);
       const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
       await verifyKitPublicVoice(off.origin, enabled.origin, databaseUrl, secret);
@@ -699,6 +708,17 @@ export default {
   );
 
   if (args.length) {
+    const entry = join(scratch, "kit-admin.mjs");
+    const vars = await prepareAdminFixture(worker, entry);
+    const admin = await startWorker("kit-admin", entry, assets, secret, vars);
+    await listen(admin.child, admin.origin, () => admin.log);
+    await assertKitAdminServing({
+      kit: admin,
+      off: kitWithSession,
+      hono: honoWithSession,
+      databaseUrl,
+    });
+
     async function observeDataRedirect(worker, path) {
       const response = await fetch(`${worker.origin}${path}`, { redirect: "manual" });
       assert.equal(response.status, 302, `${path}: Hono guest redirect`);

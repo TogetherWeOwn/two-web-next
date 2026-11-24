@@ -329,10 +329,11 @@ describe("throttle bucket inventory", () => {
   });
 
   it("fails loudly on non-literal throttle registrations", () => {
-    // Hono admission and the dormant JSON core use the same per-viewer
+    // Hono admission and the shared Kit write core use the same per-viewer
     // bucket. Pin every dynamic call here and verify the bucket below so a
     // new registration cannot escape the literal inventory.
     expect(Object.fromEntries(nonLiteralThrottleSites())).toEqual({
+      "src/profiles/kit-write.tsx": 1,
       "src/profiles/patch-core.ts": 1,
       "src/profiles/routes-admission.ts": 2,
     });
@@ -354,6 +355,10 @@ describe("throttle bucket inventory", () => {
       readFileSync(resolve(root, "src/profiles/patch-core.ts"), "utf8"),
     );
     expect(profilePatch).toContain("deps.throttle(`profile-write:${viewer.id}`)");
+    const kitWrite = stripComments(
+      readFileSync(resolve(root, "src/profiles/kit-write.tsx"), "utf8"),
+    );
+    expect(kitWrite).toContain("profileWriteThrottleFor(env, bucket)");
     const rsvp = stripComments(readFileSync(resolve(root, "src/events/rsvp.ts"), "utf8"));
     expect(rsvp.match(/rsvp-write:/g)?.length).toBe(3);
   });

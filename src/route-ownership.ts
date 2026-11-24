@@ -37,9 +37,19 @@ import { isKitNoticeDocument, readKitRestoredWrite } from "./kit-restored-write"
 import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 import { type MemberRead, memberReadResponse } from "./member-reads";
 import { JOIN_RESULT_COOKIE, deleteOpts } from "./return-journey";
-import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
+import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS, sameOrigin } from "./same-origin";
 import { STAGING_STATIC_DOCUMENT_READY } from "./kit-staging-static";
 import { isTrustedHost } from "./trust-hosts";
+import {
+  adminFormPath,
+  admitsKitAdmin,
+  kitAdminAdmission,
+  KIT_ADMIN_OPS_ROUTES,
+  privateAdminResponse,
+  usesKitDefaultAction,
+} from "./admin/kit-serving";
+import { fetchKitAdminForm } from "./admin/kit-form-fetch";
+import type { Env } from "./env";
 
 export type RouteOwner = "kit" | "hono";
 
@@ -688,6 +698,7 @@ export interface KitResolveOptions {
 
 export interface HookDispatchDeps {
   appUrl: string;
+  admin?: { env: Env; completeForm: () => never };
   // Signature-only notice peek, independent of the public route's session store.
   sessionSecret?: string;
   // Archive and static opt-ins are shared by the separate staging and
@@ -1091,6 +1102,20 @@ async function dispatchOwnedRequest(
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }
+  const admin = deps.admin;
+  if (
+    admin &&
+    admitsKitAdmin(
+      event.request,
+      event.url,
+      event.isDataRequest,
+      deps.appUrl,
+      admin.env.KIT_ROUTE_ADMIN,
+    )
+  ) {
+    const response = await dispatchKitAdminRequest(event, deps, admin);
+    if (response) return response;
+  }
   return dispatchFromManifest(
     event,
     deps,
@@ -1120,6 +1145,82 @@ async function dispatchOwnedRequest(
       }) ??
       ROUTE_MANIFEST,
   );
+}
+
+// Open the existing admin GET entries that declare an audited read. Static
+// aliases carry no read declaration and still win over parameter matches.
+const KIT_ADMIN_READS = ROUTE_MANIFEST.filter(({ path }) => isInNamespace(path, "/admin")).map(
+  (entry) => ({ ...entry, enabled: entry.method === "GET" && typeof entry.reads === "object" }),
+);
+
+async function dispatchKitAdminRequest(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+  { env, completeForm }: NonNullable<HookDispatchDeps["admin"]>,
+): Promise<Response | null> {
+  const { request, url } = event;
+  const operator = familyRouteFor(event, ROUTE_MANIFEST, [
+    { flag: env.KIT_ROUTE_ADMIN, routes: KIT_ADMIN_OPS_ROUTES },
+  ]);
+  const formPath =
+    request.method === "POST" && adminFormPath(url.pathname, event.route?.id ?? null);
+  const page = decideRoute(request, KIT_ADMIN_READS, url);
+  const read = page && event.route?.id === page.path.replace(/:(\w+)/g, "[$1]") ? page : undefined;
+  const route = operator?.route.path ?? (formPath || read?.path);
+  // Keep fixture-only reconciliation in its manifest and pass the other
+  // unowned routes to their existing Hono guards.
+  if (!route) return null;
+
+  const started = performance.now();
+  const requestId = safeRequestId(request.headers.get("cf-ray")) ?? newRequestId();
+  setReleaseMetadata(deps.versionMetadata);
+  const context = new Context<{ Bindings: Env }>(request, { env, path: url.pathname });
+  context.set("requestId", requestId);
+  const finish = async (response: Response) => {
+    const referrerPolicy = response.headers.get("referrer-policy");
+    const result = await finishKitResponse(
+      privateAdminResponse(request, response),
+      event,
+      deps,
+      requestId,
+    );
+    if (referrerPolicy) result.headers.set("referrer-policy", referrerPolicy);
+    writeHttpRequestLog(request, requestId, route, result.status, started);
+    return result;
+  };
+  const originRefused = await sameOrigin(context, async () => {});
+  if (originRefused) return finish(originRefused);
+  if (operator) return finish(await deps.resolve(event));
+
+  const admission = await kitAdminAdmission(context, () => deps.sessionFor?.(event));
+  if (admission.kind === "refused") return finish(admission.response);
+  event.locals = { ...(event.locals as object), ...admission.locals, requestId };
+  if (read) {
+    const result = await dispatchKitRequest(
+      event,
+      { ...deps, sessionFor: undefined },
+      read,
+      undefined,
+      requestId,
+    );
+    writeHttpRequestLog(request, requestId, route, result.status, started);
+    return privateAdminResponse(request, result);
+  }
+
+  const submit = () => fetchKitAdminForm(request, env, admission.actor, requestId);
+  if (!usesKitDefaultAction(request)) return finish(await submit());
+  let outcome: Promise<Response> | undefined;
+  Object.assign(event.locals as object, {
+    runAdminForm: async () => {
+      outcome ??= submit();
+      await outcome;
+      return completeForm();
+    },
+  });
+  const kit = await deps.resolve(event);
+  if (!outcome) return finish(kit);
+  await kit.body?.cancel();
+  return finish(await outcome);
 }
 
 async function dispatchFromManifest(
@@ -1159,6 +1260,7 @@ async function dispatchKitRequest(
   deps: HookDispatchDeps,
   route: OwnedRoute,
   api?: KitApiFamily,
+  assignedRequestId?: string,
 ): Promise<Response> {
   if (route.path === "/auth/recover") {
     // The no-JS recovery page has no Kit data representation. Never mint
@@ -1181,7 +1283,8 @@ async function dispatchKitRequest(
   // boundaries read the same id the response header carries; every
   // Kit-branch return below sets it, while Hono-owned responses stay
   // untouched (their middleware sets the header in production).
-  const requestId = safeRequestId(event.request.headers.get("cf-ray")) ?? newRequestId();
+  const requestId =
+    assignedRequestId ?? safeRequestId(event.request.headers.get("cf-ray")) ?? newRequestId();
   const priorLocals = (event.locals as Record<string, unknown> | undefined) ?? {};
   event.locals = { ...priorLocals, requestId };
   // Kit same-origin gate (Hono sameOrigin parity): unsafe methods need an
