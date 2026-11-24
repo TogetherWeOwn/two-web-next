@@ -10,15 +10,33 @@ import { voiceViews } from "./kit-voice-views";
 const { state }: { state: string | null } = $props();
 const event = voiceViews.member.liveEvent;
 const path = `/e/${event.key}`;
+const { view: memberView } = voiceViews.member;
+const otherEventRoom = {
+  name: "Friday Raid lobby",
+  count: 2,
+  occupants: [{ name: "Cedar" }],
+  eventKey: "friday-raid",
+};
 type Fixture = { member: boolean; enabled?: boolean; view?: VoiceView };
 const beforeGuest: Fixture = { member: false, enabled: true };
 const cases: Record<string, Fixture> = {
   beforeGuest,
   beforeMember: { member: true, view: voiceViews.member.view },
   guest: { member: false, enabled: true, view: voiceViews.guest.view },
-  member: { member: true, enabled: true, view: voiceViews.member.view },
+  member: {
+    member: true,
+    enabled: true,
+    view: {
+      ...memberView,
+      snapshot: { ...memberView.snapshot, rooms: [...memberView.snapshot.rooms, otherEventRoom] },
+    },
+  },
   suppressed: { member: false, enabled: true, view: voiceViews.absent.view },
-  unrelated: { member: true, enabled: true, view: voiceViews.quiet.view },
+  unrelated: {
+    member: true,
+    enabled: true,
+    view: { ...memberView, snapshot: { ...memberView.snapshot, rooms: [otherEventRoom] } },
+  },
   frozen: { member: true, enabled: true, view: voiceViews.frozen.view },
 };
 const fixture = $derived(state && Object.hasOwn(cases, state) ? cases[state] ?? beforeGuest : beforeGuest);

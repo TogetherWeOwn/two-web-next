@@ -77,7 +77,10 @@ test("Kit event detail keeps RSVP first and renders only the applicable voice pr
         await expect(page.getByRole("heading", { level: 1 })).toHaveText("Thursday Co-op");
         const withVoice = ["guest", "member", "frozen"].includes(state);
         await expect(voice).toHaveCount(Number(withVoice));
-        assert.doesNotMatch(html, /Squad 2|\bAri\b|Pull me in/i);
+        assert.doesNotMatch(
+          html,
+          /Squad 2|\bAri\b|Friday Raid lobby|\bCedar\b|friday-raid|Pull me in/i,
+        );
         await expect(voice.locator("a, button, [tabindex], [aria-live]")).toHaveCount(0);
         if (state === "guest") {
           await expect(voice.getByRole("heading", { level: 2 })).toHaveText("Community voice");
