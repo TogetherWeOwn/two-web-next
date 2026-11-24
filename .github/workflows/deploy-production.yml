@@ -11,6 +11,19 @@ on:
         required: false
         type: string
         default: ""
+      cutover_mode:
+        description: "Explicit staged artifact selection. hono prepares the compatible undo, kit selects the all-off candidate"
+        type: choice
+        options: [ordinary, hono, kit]
+        default: ordinary
+      cutover_pin:
+        description: "Successful isolated staging run:attempt:manifest SHA-256 from its proof"
+        type: string
+        required: false
+      cutover_undo_version:
+        description: "For kit only, the exact compatible Hono UUID already serving production"
+        type: string
+        required: false
       migrations_applied:
         description: "Set to true only after db-migrate.yml (target production) applied the target's migrations out of band. Audited manual continuation past a ledger-unproven stop (ledger lacks target entries, ledger read failed, unusable target timestamp, or unknown live commit after 3 /up reads); automatic runs ignore it and halt on those stops unless the live ledger already proves every target web migration applied. The first promotion after the ledger signal ships needs one manual dispatch because the live Worker predates it"
         required: false
@@ -52,6 +65,16 @@ jobs:
       rollback_version_id: ${{ steps.rollback-target.outputs.version_id }}
       rollback_commit: ${{ steps.rollback-target.outputs.commit }}
       started_at: ${{ steps.start.outputs.started_at }}
+      cutover_mode: ${{ steps.cutover.outputs.mode }}
+      cutover_run: ${{ steps.cutover.outputs.run_id }}
+      cutover_attempt: ${{ steps.cutover.outputs.run_attempt }}
+    env:
+      CUTOVER_MODE: ${{ inputs.cutover_mode }}
+      CUTOVER_PIN: ${{ inputs.cutover_pin }}
+      CUTOVER_UNDO_VERSION: ${{ inputs.cutover_undo_version }}
+      INPUT_SHA: ${{ inputs.sha }}
+      PRODUCTION_AUTO_PROMOTE_DISABLED: ${{ vars.PRODUCTION_AUTO_PROMOTE_DISABLED }}
+      MIGRATIONS_APPLIED: ${{ inputs.migrations_applied }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -70,6 +93,9 @@ jobs:
             /bin/version-check.mjs
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
       - name: Resolve the commit to promote
         id: target
         run: node ci/resolve-promotion-sha.mjs
@@ -79,12 +105,18 @@ jobs:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           PRODUCTION_AUTO_PROMOTE_DISABLED: ${{ vars.PRODUCTION_AUTO_PROMOTE_DISABLED }}
           PRODUCTION_ACCEPTED_SHA: ${{ vars.PRODUCTION_ACCEPTED_SHA }}
+      - name: Admit only explicit and exact cutover selection
+        id: cutover
+        run: node ci/kit-cutover-deploy.mjs select
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
       # Clean skip when automatic promotion has nothing soaked and green to
       # promote: the resolver exits 0 with an empty sha, and every step below
       # stands down so the run stays green without deploying.
       - name: Check if production already serves the target
         id: live
-        if: steps.target.outputs.sha != ''
+        if: steps.target.outputs.sha != '' && steps.cutover.outputs.mode == 'ordinary'
         run: node ci/production-deploy-gate.mjs --already-live
         env:
           DEPLOY_SHA: ${{ steps.target.outputs.sha }}
@@ -119,7 +151,7 @@ jobs:
         # re-checkout below, an older target's script could lack this flag and
         # fall through to the full gate without its enable vars, blocking
         # rescue redeploys of prior good commits.
-        if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
+        if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true' && steps.cutover.outputs.mode == 'ordinary'
         run: node ci/production-deploy-gate.mjs --check-migrations
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -171,10 +203,6 @@ jobs:
             /bin/version-check.mjs
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
-        with:
-          node-version: 24
       - name: Refuse disabled, held, non-main, unprotected, untested or placeholder deployment
         if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
         run: node ci/production-deploy-gate.mjs
@@ -329,6 +357,14 @@ jobs:
     # 30 minutes: the gradual stages now also soak and judge the new
     # version's live error rate (worst case about 4 extra minutes a stage).
     timeout-minutes: 30
+    env:
+      CUTOVER_MODE: ${{ needs.preflight.outputs.cutover_mode }}
+      CUTOVER_PIN: ${{ inputs.cutover_pin }}
+      CUTOVER_UNDO_VERSION: ${{ inputs.cutover_undo_version }}
+      INPUT_SHA: ${{ inputs.sha }}
+      DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+      PRODUCTION_AUTO_PROMOTE_DISABLED: ${{ vars.PRODUCTION_AUTO_PROMOTE_DISABLED }}
+      MIGRATIONS_APPLIED: ${{ inputs.migrations_applied }}
     # Shared production Worker mutation lock with the manual rollback job:
     # one static non-cancelling group serializes promotion and rollback
     # mutations to the same Worker. Workflow-level groups stay distinct so
@@ -385,6 +421,7 @@ jobs:
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
       - run: npm ci --include=dev
       - name: Prepare first-party generated inputs
+        if: env.CUTOVER_MODE == 'ordinary'
         # Rescue targets can predate the explicit preparation command.
         run: |
           if node -e 'process.exit(typeof require("./package.json").scripts?.["generate:first-party"] === "string" ? 0 : 1)'; then
@@ -395,18 +432,20 @@ jobs:
       # No migrations, queue creation or SQL tests here: provisioning and W16
       # rehearsal are separate operator work. CI uses disposable SQL services.
       - name: Build production target without deploying
+        if: env.CUTOVER_MODE == 'ordinary'
         run: npx wrangler deploy --dry-run --env production --outdir dist-production --metafile dist-production/bundle-meta.json
       - name: Inventory the exact production bundle
+        if: env.CUTOVER_MODE == 'ordinary'
         id: inventory
         run: node workflow-tip/ci/worker-bundle-evidence.mjs create dist-production
         env:
           BUILD_SHA: ${{ needs.preflight.outputs.sha }}
       # Inert Kit candidate: build-only, never uploaded (upload stays dist-production/worker.js).
       - name: Check the inert Kit production candidate config
-        if: hashFiles('web/wrangler.production.jsonc') != ''
+        if: env.CUTOVER_MODE == 'ordinary' && hashFiles('web/wrangler.production.jsonc') != ''
         run: node workflow-tip/ci/production-deploy-gate.mjs --kit-candidate
       - name: Build the inert Kit production candidate without deploying
-        if: hashFiles('web/wrangler.production.jsonc') != ''
+        if: env.CUTOVER_MODE == 'ordinary' && hashFiles('web/wrangler.production.jsonc') != ''
         run: |
           set -euo pipefail
           npm ci --prefix web --include=dev --no-audit --no-fund
@@ -415,7 +454,7 @@ jobs:
           npx wrangler deploy --dry-run --config wrangler.production.jsonc --outdir dist-production-kit --metafile dist-production-kit/bundle-meta.json
       - name: Inventory the inert Kit production candidate
         id: kit-inventory
-        if: hashFiles('web/wrangler.production.jsonc') != ''
+        if: env.CUTOVER_MODE == 'ordinary' && hashFiles('web/wrangler.production.jsonc') != ''
         run: node workflow-tip/ci/worker-bundle-evidence.mjs create web/dist-production-kit kit
         env:
           BUILD_SHA: ${{ needs.preflight.outputs.sha }}
@@ -466,6 +505,32 @@ jobs:
           ROLLBACK_COMMIT: ${{ needs.preflight.outputs.rollback_commit }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+      - name: Download the exact version packet from isolated staging
+        if: env.CUTOVER_MODE != 'ordinary'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: kit-cutover-packet-${{ needs.preflight.outputs.cutover_attempt }}
+          run-id: ${{ needs.preflight.outputs.cutover_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/kit-cutover-packet
+      - name: Download the successful isolated undo proof
+        if: env.CUTOVER_MODE != 'ordinary'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: kit-cutover-proof-${{ needs.preflight.outputs.cutover_attempt }}
+          run-id: ${{ needs.preflight.outputs.cutover_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/kit-cutover-proof
+      - name: Verify cutover packet, ledger, and compatible undo under the production lock
+        if: env.CUTOVER_MODE != 'ordinary'
+        run: node workflow-tip/ci/kit-cutover-deploy.mjs prepare "$RUNNER_TEMP/kit-cutover-packet" "$RUNNER_TEMP/kit-cutover-proof/proof.json"
+        env:
+          ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+      - name: Install the locked Kit Wrangler upload tool
+        if: env.CUTOVER_MODE == 'kit'
+        run: npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
       - name: Deploy production alert Tail Worker first
         # The app's env.production.tail_consumers binding needs the consumer to exist first.
         run: npx wrangler deploy --config tail/wrangler.jsonc --env production
@@ -480,6 +545,7 @@ jobs:
       # test/probe-workflows.test.ts and reconciled per docs/runbook.md
       # ("Production trigger reconciliation"), never by this workflow.
       - name: Upload reviewed production version without changing triggers
+        if: env.CUTOVER_MODE == 'ordinary'
         # No second build: the verified entry is the one uploaded. Wrangler's
         # native JSONL output binds this upload to a version UUID, not a log guess.
         run: |
@@ -494,6 +560,17 @@ jobs:
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
           BUILD_SHA: ${{ needs.preflight.outputs.sha }}
           WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/worker-version-upload.jsonl
+      - name: Upload exact staged version without rebuilding or changing triggers
+        id: cutover-upload
+        if: env.CUTOVER_MODE != 'ordinary'
+        run: |
+          set -euo pipefail
+          node workflow-tip/ci/kit-cutover-deploy.mjs upload "$RUNNER_TEMP/kit-cutover-packet"
+        env:
+          ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/cutover-upload.jsonl
       - name: Capture pre-promote dead-letter baseline
         id: dead-letter-baseline
         # Read-only GET before promotion. Only the gradual action and the
@@ -559,7 +636,9 @@ jobs:
             exit 1
           fi
           for i in 1 2 3 4 5 6; do
-            if node bin/smoke.mjs https://togetherweown.com --allow-indexable --expected-version-id "$PROMOTED_VERSION_ID"; then
+            if node bin/smoke.mjs https://togetherweown.com --allow-indexable --expected-version-id "$PROMOTED_VERSION_ID" &&
+               ( [ "$CUTOVER_MODE" = ordinary ] ||
+                 node workflow-tip/ci/kit-cutover-deploy.mjs live ); then
               echo "post-promotion production smoke ok (attempt $i)"
               exit 0
             fi
@@ -575,6 +654,8 @@ jobs:
           SMOKE_ALLOW_MISSING_BASELINE: "1"
           PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
           PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}
+          CUTOVER_UPLOADED_VERSION: ${{ steps.cutover-upload.outputs.version_id }}
+          CUTOVER_UNDO_TARGET: ${{ needs.preflight.outputs.rollback_version_id }}
       - name: Record successful production promotion
         # Success-only and after identity-aware smoke. Write inline because the
         # selected deployment checkout can predate this receipt protocol.
@@ -592,6 +673,13 @@ jobs:
             run_id: process.env.GITHUB_RUN_ID,
             run_attempt: process.env.GITHUB_RUN_ATTEMPT,
           };
+          if (process.env.CUTOVER_MODE !== "ordinary") {
+            receipt.cutover = {
+              mode: process.env.CUTOVER_MODE,
+              pin: process.env.CUTOVER_PIN,
+              rollback_version_id: process.env.ROLLBACK_VERSION_ID,
+            };
+          }
           if (!/^[0-9a-f]{40}$/.test(receipt.sha ?? '') ||
               !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(receipt.promoted_version_id ?? '') ||
               !/^[1-9][0-9]*$/.test(receipt.run_id ?? '') ||
@@ -603,6 +691,7 @@ jobs:
         env:
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
           PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
+          ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
       - name: Upload production promotion proof
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -611,6 +700,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Bind bundle evidence to the smoke-verified promoted version
+        if: env.CUTOVER_MODE == 'ordinary'
         # Evidence failures must not suppress the successful promotion record.
         run: node workflow-tip/ci/worker-bundle-evidence.mjs deployed dist-production
         env:
@@ -720,7 +810,7 @@ jobs:
     # an explicit pass: a displaced commit is never tagged.
     # preflight.outputs.sha is the promoted commit (DEPLOY_SHA), never main's tip.
     needs: [preflight, deploy-production, post-deploy-watch]
-    if: ${{ needs.post-deploy-watch.outputs.verdict == 'pass' }}
+    if: ${{ needs.post-deploy-watch.outputs.verdict == 'pass' && needs.preflight.outputs.cutover_mode != 'hono' }}
     permissions:
       actions: read # Read only this repository's promotion evidence.
       contents: write # Create the tag and its GitHub Release.
