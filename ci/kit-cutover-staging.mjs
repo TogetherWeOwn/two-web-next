@@ -17,6 +17,7 @@ import { REQUIRED_PRODUCTION_SECRETS } from "./check-production-secrets.mjs";
 import {
   LEDGER_STATES,
   STAGING_WORKER,
+  WranglerOperationError,
   ledgerPrefixes,
   readReady,
   sourceInputs,
@@ -172,6 +173,7 @@ async function deployPacket(dir, scratch, proof, origin, inputs, api, runtimeUrl
     const configText = JSON.stringify(config);
     configs[profile] = sha256(configText);
     await writeFile(configPath, configText, { flag: "wx" });
+    console.info(`Uploading isolated ${profile} version`);
     if (profile === "hono") {
       wrangler(profile, [
         "deploy",
@@ -193,6 +195,7 @@ async function deployPacket(dir, scratch, proof, origin, inputs, api, runtimeUrl
         output: join(scratch, "kit.jsonl"),
       });
     }
+    console.info(`Checking isolated ${profile} bindings for version ${proof[profile]}`);
     verifyStagedBindings(
       await api(`scripts/${worker}/versions/${proof[profile]}`),
       proof[profile],
@@ -266,9 +269,10 @@ async function qualify(dir, proofPath, ctx) {
     await deployPacket(dir, scratch, proof, origin, inputs, api, fixture.runtimeUrl);
     phase = "exact readiness, public smoke and guarded Hono undo";
     await exercise(proof, prefixes, owner, names, origin, join(dir, "hono/wrangler.json"));
-  } catch {
-    // Provider and driver errors can include credentials and binding values.
-    throw new Error(`Cutover staging failed during ${phase}`);
+  } catch (error) {
+    // Report only the operation and numeric provider code from Wrangler.
+    const detail = error instanceof WranglerOperationError ? ` (${error.message})` : "";
+    throw new Error(`Cutover staging failed during ${phase}${detail}`);
   } finally {
     await owner?.end({ timeout: 0 });
     await rm(scratch, { recursive: true, force: true });

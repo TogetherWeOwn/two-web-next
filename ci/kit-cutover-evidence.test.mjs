@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   LEDGER_STATES,
   STAGING_WORKER,
+  WranglerOperationError,
   ledgerPrefixes,
   sourceInputs,
   verifyPackage,
@@ -174,4 +175,27 @@ test("isolated database admission fixes the host, database, owner, and run scope
     login: "two_web_cutover_21_3_runtime",
   });
   assert.throws(() => fixtureNames("21", "03"));
+});
+
+test("isolated upload diagnostics keep only the operation, exit status and provider code", () => {
+  const error = new WranglerOperationError(["versions", "upload", "configured-entry"], {
+    status: 1,
+    stderr: "untrusted binding details [code: 10007]",
+  });
+  assert.equal(error.message, "Wrangler versions upload failed (exit 1), provider code 10007");
+  for (const stderr of [
+    undefined,
+    "[code: 123]",
+    Buffer.from("[code: 123456789]"),
+    "[code: TOKEN]",
+  ]) {
+    const refusal = new WranglerOperationError(
+      ["rollback", "11111111-1111-1111-1111-111111111111"],
+      {
+        status: null,
+        stderr,
+      },
+    );
+    assert.equal(refusal.message, "Wrangler rollback failed");
+  }
 });
