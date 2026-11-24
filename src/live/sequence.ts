@@ -23,6 +23,7 @@ export class LiveSequence<State, Delta> {
     private readonly load: () => Promise<LiveSnapshot<State> | null>,
     private readonly reduce: (state: State, delta: Delta) => State | null,
     private readonly checkpoint?: Checkpoint,
+    private readonly options?: { requireObservationDeadline: boolean },
   ) {
     this.#saved = checkpoint?.initial ?? { applied: 0, minimum: 0 };
     this.#minimum = this.#saved.minimum;
@@ -112,6 +113,7 @@ export class LiveSequence<State, Delta> {
       !snapshot ||
       !Number.isSafeInteger(snapshot.seq) ||
       snapshot.seq < this.#minimum ||
+      (this.options?.requireObservationDeadline && snapshot.validUntil === undefined) ||
       !fresh(snapshot)
     )
       return null;

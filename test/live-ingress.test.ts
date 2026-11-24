@@ -3,9 +3,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { LiveGuildHub, publicVoiceRooms } from "../src/live/guild-hub";
 import { handleLiveIngress, type LiveIngressEnv } from "../src/live/ingress";
 import type { LiveSocketEnv } from "../src/live/socket-route";
-import { LIVE_INGEST_PATH } from "../src/live/transport";
+import * as transport from "../src/live/transport";
 import { roomAllowlistCases } from "./fixtures/live-room-allowlists";
 
+const { LIVE_INGEST_PATH } = transport;
 const origin = "https://site.example";
 const guildId = "100";
 const occurredAt = "2026-11-20T06:00:00Z";
@@ -167,6 +168,39 @@ it.each([1, 2])("returns 503 if publishing cursor %i cannot be checkpointed", as
   expect([...storage.values()]).toEqual([{ applied: seq - 1, minimum: 1 }]);
 });
 
+it("rejects a signed loader result without an observation deadline at the guild sequence", async () => {
+  const { signedLiveSnapshot } = transport;
+  const omittedDeadlines: number[] = [];
+  const loader = vi.spyOn(transport, "signedLiveSnapshot").mockImplementationOnce((...args) => {
+    const load = signedLiveSnapshot(...args);
+    return async () => {
+      const snapshot = await load();
+      if (snapshot) {
+        omittedDeadlines.push(snapshot.validUntil);
+        Reflect.deleteProperty(snapshot, "validUntil");
+      }
+      return snapshot;
+    };
+  });
+  const pull = vi.fn(async () => snapshot(2)).mockResolvedValueOnce(snapshot(1));
+  vi.stubGlobal("fetch", pull);
+  const guest = guestSocket(Date.now() + 60_000);
+  try {
+    const { env, message, setAlarm, waitUntil, storage } = fixture(publicConfig, [guest]);
+    expect(await handleLiveIngress(signed(1), env)).toHaveProperty("status", 409);
+    await message(guest, "subscribe");
+    expect(omittedDeadlines).toEqual([expect.any(Number), expect.any(Number)]);
+    expect(storage.get("live-watermarks-v1")).toEqual({ applied: 0, minimum: 1 });
+    expect(setAlarm).not.toHaveBeenCalled();
+    expect(waitUntil).not.toHaveBeenCalled();
+    expect(guest.send).toHaveBeenCalledExactlyOnceWith(
+      '{"v":1,"type":"unavailable","topic":"voice"}',
+    );
+  } finally {
+    loader.mockRestore();
+  }
+});
+
 it.each([1, 2])(
   "recovers a guest subscription after a failed public alarm at ingress cursor %i",
   async (seq) => {
@@ -225,6 +259,9 @@ it.each([1, 2])(
       await alarm();
       expect(vi.mocked(guest.send).mock.calls).toEqual([...recovered, [unavailable]]);
       expect(guest.close).not.toHaveBeenCalled();
+      expect(await send(seq + 1)).toBe(409);
+      expect(pull).toHaveBeenCalledTimes(5);
+      expect(storage.get("live-watermarks-v1")).toEqual({ applied: seq, minimum: seq + 1 });
     } finally {
       clock.mockRestore();
     }
