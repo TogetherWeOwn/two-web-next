@@ -41,15 +41,13 @@ const localCall = /^\.\/\.github\/workflows\/([\w.-]+\.ya?ml)$/;
 const frozenLocalCall =
   /^TogetherWeOwn\/two-web-next\/\.github\/workflows\/([\w.-]+\.ya?ml)@([0-9a-f]{40})$/;
 
-// These same-repository callees were checked at this immutable revision; their
-// job definitions matched the corresponding local workflows when pinned.
-const verifiedLocalRef = "38581ef492f5c972969f5dfada396a9f0e2ee989";
-const verifiedLocalWorkflows = [
-  "release.yml",
-  "rollback-production.yml",
-  "web-quality-origin.yml",
-  "zap-staging.yml",
-];
+// Each same-repository callee's job definitions were checked at its pinned revision.
+const verifiedLocalRefs = new Map([
+  ["release.yml", "38581ef492f5c972969f5dfada396a9f0e2ee989"],
+  ["rollback-production.yml", "38581ef492f5c972969f5dfada396a9f0e2ee989"],
+  ["web-quality-origin.yml", "38581ef492f5c972969f5dfada396a9f0e2ee989"],
+  ["zap-staging.yml", "57f1abbc25d0b39a77d83b46eb8b803b0249bb66"],
+]);
 
 // These pins were checked for defaults and runner inputs. A repin needs
 // another source review; a full SHA alone doesn't establish runner selection.
@@ -63,9 +61,7 @@ const verifiedHostedOrgReusables = new Map([
 
 function isVerifiedFrozenLocal(uses: string) {
   const match = uses.match(frozenLocalCall);
-  return (
-    match !== null && verifiedLocalWorkflows.includes(match[1]!) && match[2] === verifiedLocalRef
-  );
+  return match !== null && verifiedLocalRefs.get(match[1]!) === match[2];
 }
 
 function expectHostedJob(name: string, id: string, job: Job) {
@@ -277,12 +273,16 @@ describe("workflow runner labels", () => {
   it("recognizes only verified pinned same-repository calls", () => {
     const caller = (target: string, ref: string) =>
       `TogetherWeOwn/two-web-next/.github/workflows/${target}@${ref}`;
-    for (const target of verifiedLocalWorkflows) {
-      expect(isVerifiedFrozenLocal(caller(target, verifiedLocalRef))).toBe(true);
+    const releaseRef = verifiedLocalRefs.get("release.yml")!;
+    const zapRef = verifiedLocalRefs.get("zap-staging.yml")!;
+    for (const [target, ref] of verifiedLocalRefs) {
+      expect(isVerifiedFrozenLocal(caller(target, ref))).toBe(true);
     }
     expect(isVerifiedFrozenLocal(caller("release.yml", "0".repeat(40)))).toBe(false);
-    expect(isVerifiedFrozenLocal(caller("unknown.yml", verifiedLocalRef))).toBe(false);
+    expect(isVerifiedFrozenLocal(caller("unknown.yml", releaseRef))).toBe(false);
     expect(isVerifiedFrozenLocal(caller("release.yml", "main"))).toBe(false);
+    expect(isVerifiedFrozenLocal(caller("release.yml", zapRef))).toBe(false);
+    expect(isVerifiedFrozenLocal(caller("zap-staging.yml", releaseRef))).toBe(false);
   });
 
   it("finds every workflow job", () => {

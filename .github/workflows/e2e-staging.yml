@@ -106,7 +106,7 @@ jobs:
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    uses: TogetherWeOwn/two-web-next/.github/workflows/zap-staging.yml@ed443a1f13edb16337192734b1950347fb1ed2f1
+    uses: TogetherWeOwn/two-web-next/.github/workflows/zap-staging.yml@57f1abbc25d0b39a77d83b46eb8b803b0249bb66 # v2026.1115.0
     with:
       candidate_sha: ${{ needs.scope.outputs.sha }}
 
