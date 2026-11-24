@@ -72,6 +72,12 @@ async function setSession(page, origin, cookie) {
   ]);
 }
 
+async function pauseRetryClock(page) {
+  const time = new Date();
+  await page.clock.install({ time });
+  await page.clock.pauseAt(time.getTime() + 60_000);
+}
+
 async function verifyRefusedRetries(sql, sockets, first, checkUncached, count, reason) {
   async function assertRefusal(index) {
     await expect.poll(() => sockets[index]?.closed, { timeout: 12_000 }).toBe(true);
@@ -85,6 +91,15 @@ async function verifyRefusedRetries(sql, sockets, first, checkUncached, count, r
     assert.deepEqual(trace.received, []);
   }
 
+  const { clock } = count.page();
+  const nextDelay = first === 0 ? 1000 : 2000;
+  async function retryUnderLock() {
+    for (const [index, delay] of [nextDelay, nextDelay * 2].entries()) {
+      await clock.runFor(delay);
+      await assertRefusal(first + index + 1);
+    }
+  }
+
   await assertRefusal(first);
   // With the disposable session table locked, a fresh read times out with
   // 503. The same browser bearer must still receive 401 on each retry.
@@ -93,9 +108,10 @@ async function verifyRefusedRetries(sql, sockets, first, checkUncached, count, r
     await tx`set local idle_in_transaction_session_timeout = '20s'`;
     await tx`lock table web_sessions in access exclusive mode`;
     assert.equal(sockets.length, first + 1, `${reason} fixture must lock before the next retry`);
-    await Promise.all([assertRefusal(first + 1), assertRefusal(first + 2), checkUncached()]);
+    await Promise.all([retryUnderLock(), checkUncached()]);
   });
   await expect(count).toHaveText(unavailable);
+  return nextDelay * 4;
 }
 
 export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, secret) {
@@ -158,6 +174,7 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
 
     const member = await browser.newPage();
     const memberSockets = observe(member);
+    await pauseRetryClock(member);
     await setSession(member, liveOrigin, await mintSession("10 minutes"));
     await source(101, 5);
     const memberHtml = await openHome(member, liveOrigin);
@@ -176,8 +193,17 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     await expect(count).toHaveText(voice(6));
     await expect(memberCount).toHaveText(unavailable);
     assert.deepEqual(memberSockets[0].received.at(-1), publicBaseline);
-    await verifyRefusedRetries(sql, memberSockets, 1, checkUncached, memberCount, "revoked");
+    await member.clock.runFor(1000);
+    const memberRetry = await verifyRefusedRetries(
+      sql,
+      memberSockets,
+      1,
+      checkUncached,
+      memberCount,
+      "revoked",
+    );
     await setSession(member, liveOrigin, await mintSession("10 minutes"));
+    await member.clock.runFor(memberRetry);
     await expect(memberCount).toHaveText(voice(6), { timeout: 20_000 });
     assert.deepEqual(memberSockets.at(-1).received.at(-1), {
       ...publicBaseline,
@@ -216,11 +242,20 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
 
     const expired = await browser.newPage();
     const expiredSockets = observe(expired);
+    await pauseRetryClock(expired);
     await setSession(expired, liveOrigin, await mintSession("-1 minute"));
     await openHome(expired, liveOrigin);
     const expiredCount = expired.locator("#home-public-voice");
-    await verifyRefusedRetries(sql, expiredSockets, 0, checkUncached, expiredCount, "expired");
+    const expiredRetry = await verifyRefusedRetries(
+      sql,
+      expiredSockets,
+      0,
+      checkUncached,
+      expiredCount,
+      "expired",
+    );
     await expired.context().clearCookies();
+    await expired.clock.runFor(expiredRetry);
     await expect(expiredCount).toHaveText(voice(5), { timeout: 20_000 });
     assert.deepEqual(expiredSockets.at(-1).received.at(-1), publicBaseline);
 
