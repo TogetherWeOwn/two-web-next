@@ -181,7 +181,7 @@ async function checkCutoverReadiness(sql, readUp) {
     for (const [name, ledger, expectedStatus, expectedPending] of cases) {
       await sql.begin(async (tx) => {
         await tx`TRUNCATE web_readiness.parity_ledger`;
-        await tx`INSERT INTO web_readiness.parity_ledger SELECT unnest(${tx.array(ledger)}::text[])`;
+        await tx`INSERT INTO web_readiness.parity_ledger SELECT unnest(${ledger}::text[])`;
       });
       const { status, body } = await readUp();
       assert.equal(status, expectedStatus, `${name} /up status`);

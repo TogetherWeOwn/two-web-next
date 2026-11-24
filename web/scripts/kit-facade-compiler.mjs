@@ -46,8 +46,8 @@ export async function compileKitFacade(adapterSource, { productionCutover = fals
     throw new Error("kit facade compiler: adapter must export default");
   }
 
-  // Production retains the Hono route surface and receives jobs on this script.
-  // The live socket and ingress intercept belongs to the other facade profile.
+  // The cutover retains the Hono route surface and exports its jobs handlers.
+  // The other facade profile intercepts live socket and ingress requests.
   const entry = productionCutover
     ? `import { handleQueue, handleScheduled } from ${sourcePath("jobs/worker.ts")};
 const worker = createKitWorkerFacade(adapter);

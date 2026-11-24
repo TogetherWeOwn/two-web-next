@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { securityHeadersFor } from "../src/headers";
+import { RECONCILE_CRON } from "../src/jobs/constants";
 import {
   COMPANION_NAME,
   ENTRY_NAME,
@@ -122,8 +123,21 @@ describe("installWorkerFacade", () => {
     expect(await response.text()).toBe("POST");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     const missingDatabase = /no database configured/;
-    await expect(worker.queue({ messages: [] }, env, {})).rejects.toThrow(missingDatabase);
-    await expect(worker.scheduled({ cron: "fixture" }, env, {})).rejects.toThrow(missingDatabase);
+    const alerts = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(worker.queue({ messages: [] }, env, {})).rejects.toThrow(missingDatabase);
+      expect(alerts).not.toHaveBeenCalled();
+      await expect(worker.scheduled({ cron: RECONCILE_CRON }, env, {})).rejects.toThrow(
+        missingDatabase,
+      );
+      expect(alerts).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(alerts.mock.calls[0][0])).toMatchObject({
+        event: "scheduled.failing",
+        job: "events:reconcile",
+      });
+    } finally {
+      alerts.mockRestore();
+    }
   });
 
   it("refuses a production cutover adapter that already owns a jobs handler", async () => {
