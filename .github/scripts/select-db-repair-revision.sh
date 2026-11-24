@@ -13,8 +13,6 @@ if [[ "$APPROVED_SHA" != "$GITHUB_SHA" ]]; then
   case "$workflow_path:$OPERATION" in
     .github/workflows/db-permissions-repair.yml:undo | \
     .github/workflows/db-permissions-repair.yml:readback | \
-    .github/workflows/db-serving-ledger-isolation.yml:undo | \
-    .github/workflows/db-serving-ledger-isolation.yml:readback | \
     .github/workflows/db-repair-executor.yml:revoke) ;;
     *) exit 1 ;;
   esac

@@ -26,9 +26,7 @@ const broadRoles = ["pg_read_all_data", "pg_write_all_data"];
 const digest = (s) => createHash("sha256").update(s).digest("hex");
 const fingerprint = /^[a-f0-9]{64}$/;
 const identifier = /^[a-z_][a-z_0-9-]{0,62}$/;
-const baseRights = publicServingRights.filter(
-  ({ name, kind }) => kind !== "schema" && !addedAfter1033.has(name),
-);
+const baseRights = publicServingRights.filter(({ name }) => !addedAfter1033.has(name));
 const edgeKey = (edge) => [edge.kind, edge.name, edge.column, edge.right].join("/");
 const publicKeys = new Set(baseRights.map(edgeKey));
 const order = (edges) =>
