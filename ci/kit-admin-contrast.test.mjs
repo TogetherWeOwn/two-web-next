@@ -67,6 +67,31 @@ let browser;
 let server;
 let fixtures;
 
+async function assertAdminNavigation(page, currentHref) {
+  const nav = page.getByRole("navigation", { name: "Administration", exact: true });
+  const destinations = [
+    ["Events", "/admin/events"],
+    ["Featured", "/admin/featured"],
+    ["Join attempts", "/admin/join-attempts"],
+    ["Activity log", "/admin/activity-log"],
+    ["Site", "/"],
+  ];
+  assert.deepEqual(
+    await nav
+      .getByRole("link")
+      .evaluateAll((links) =>
+        links.map((link) => [
+          link.textContent.trim(),
+          link.getAttribute("href"),
+          link.getAttribute("aria-current"),
+        ]),
+      ),
+    destinations.map(([name, href]) => [name, href, href === currentHref ? "page" : null]),
+    page.url(),
+  );
+  return nav;
+}
+
 async function focusOutlineColor(locator) {
   const outline = await locator.evaluate((el) => {
     const style = getComputedStyle(el);
@@ -202,6 +227,16 @@ before(async () => {
         retentionDays: 30,
       },
     },
+    {
+      name: "activity-log",
+      path: "/admin/activity-log",
+      data: { rows: [], query: { subject: "", causer: "", page: 1 }, hasNext: false },
+    },
+    {
+      name: "activity-log-filtered",
+      path: "/admin/activity-log?subject=event&page=2",
+      data: { rows: [], query: { subject: "event", causer: "", page: 2 }, hasNext: false },
+    },
   ];
   const entry = join(scratch, "server.mjs");
   await build({
@@ -253,6 +288,9 @@ before(async () => {
     f.html = await response.text();
     assert.match(f.html, /_app\/immutable\/assets\/0\.[^\"]+\.css/, "real root stylesheet linked");
     assert.doesNotMatch(f.html, /type="module"[^>]*>\s*import/, "admin stays server rendered");
+    if (f.name.startsWith("activity-log")) {
+      assert.match(f.html, /<a href="\/admin\/activity-log" aria-current="page">Activity log<\/a>/);
+    }
   }
   browser = await chromium.launch({ headless: true });
   if (evidence) await mkdir(evidence, { recursive: true });
@@ -284,6 +322,9 @@ describe("Kit admin contrast", () => {
         const f = fixtures.find((fixture) => fixture.name === (isTextLimit ? "event-new" : name));
         const isDashboard = name === "dashboard";
         const isInvalid = name.endsWith("-invalid");
+        const activityPages = isDashboard
+          ? fixtures.filter(({ name }) => name.startsWith("activity-log"))
+          : [];
         const context = await browser.newContext({
           viewport: { width, height: width === 390 ? 844 : 800 },
         });
@@ -296,8 +337,10 @@ describe("Kit admin contrast", () => {
               unexpected.push(url.pathname);
               return route.abort();
             }
-            if (url.pathname === f.path)
-              return route.fulfill({ contentType: "text/html", body: f.html });
+            const document = [f, ...activityPages].find(
+              ({ path }) => path === url.pathname + url.search,
+            );
+            if (document) return route.fulfill({ contentType: "text/html", body: document.html });
             const directory = url.pathname.startsWith("/_app/")
               ? join(output, "client")
               : resolve("public");
@@ -318,6 +361,7 @@ describe("Kit admin contrast", () => {
           const page = await context.newPage();
           page.on("pageerror", (error) => errors.push(error.message));
           await page.goto(origin + f.path);
+          await assertAdminNavigation(page, null);
           if (isDashboard) {
             await page.locator('[data-testid="admin-actor"]').first().waitFor();
           } else {
@@ -587,6 +631,26 @@ describe("Kit admin contrast", () => {
             assert.equal(await summary.isVisible(), true);
             await save.click();
             assert.equal(await form.getAttribute("data-submitted-title"), "Corrected game night");
+          }
+          for (const activity of activityPages) {
+            await page.goto(origin + activity.path);
+            const nav = await assertAdminNavigation(page, "/admin/activity-log");
+            if (evidence) {
+              const after = await page.screenshot({
+                path: join(evidence, `${activity.name}-${width}-after.png`),
+              });
+              // Removing the sole markup change recreates the previous pixels.
+              await nav.locator('[aria-current="page"]').evaluate((link) => {
+                link.removeAttribute("aria-current");
+              });
+              const before = await page.screenshot({
+                path: join(evidence, `${activity.name}-${width}-before.png`),
+              });
+              assert.ok(
+                before.equals(after),
+                `${activity.path} at ${width}px keeps its appearance`,
+              );
+            }
           }
           assert.deepEqual(unexpected, [], "no live or mutating requests");
           assert.deepEqual(errors, [], "shipped islands execute without errors");
