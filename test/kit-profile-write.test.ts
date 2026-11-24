@@ -1,10 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PROFILE_COPY, PROFILE_MIN_FILL_MS } from "../src/islands/contracts-member-profile";
-import { baseline, fixture, OWNER, REQUEST_ID, response } from "./fixtures/kit-profile-write";
+import {
+  baseline,
+  fixture,
+  httpCases,
+  OWNER,
+  REQUEST_ID,
+  response,
+} from "./fixtures/kit-profile-write";
 
 const saved = { saved: true, message: PROFILE_COPY.saved };
 
 describe("Kit profile write HTTP adapter", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("accepts the editor payload at the timing boundary and swallows a fast valid draft", async ({
     onTestFinished,
   }) => {
@@ -78,5 +87,35 @@ describe("Kit profile write HTTP adapter", () => {
       request_id: REQUEST_ID,
     });
     expect(save).not.toHaveBeenCalled();
+  });
+
+  it.each(httpCases)("$name", async (sample) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const f = await fixture("owner", sample.options);
+    sample.setup?.(f);
+    const result = await f.write(...(sample.request ?? ['{"games":[]}']));
+    if (sample.draft) {
+      expect(result).toMatchObject({
+        status: sample.status,
+        member: baseline,
+        values: { bio: "Synthetic draft" },
+        ...sample.draft,
+      });
+      expect(f.store.rows.get(OWNER)).toEqual(baseline);
+    } else {
+      const res = response(result);
+      expect(res.status).toBe(sample.status);
+      expect(res.headers.get("vary")).toBe(sample.vary ?? null);
+      expect(res.headers.get("allow")).toBe(sample.allow ?? null);
+      expect(res.headers.get("retry-after")).toBe(sample.retry ?? null);
+      if (res.status === 303) expect(res.headers.get("location")).toBe(`/members/${OWNER}`);
+      if (sample.body) expect(await res.text()).toContain(sample.body);
+    }
+    expect(f.save).toHaveBeenCalledTimes(sample.save ? 1 : 0);
+    if (sample.beforeSession) {
+      expect(f.sessionGet).not.toHaveBeenCalled();
+      expect(f.throttle).not.toHaveBeenCalled();
+    }
   });
 });

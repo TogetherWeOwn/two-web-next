@@ -3,7 +3,7 @@ import { getPath, tryDecodeURIComponent } from "hono/utils/url";
 import { admissionExceptionClass, warnAdmissionStoreFailure } from "../admission-diagnostics";
 import { alertRequestError } from "../alerts";
 import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors";
-import type { Env, Session } from "../env";
+import type { Env } from "../env";
 import {
   BadRequestPage,
   InternalErrorPage,
@@ -27,7 +27,6 @@ import { safeRequestId } from "../request-log";
 import { readContextSession } from "../session-hono";
 import { expiredWriteBounce } from "../write-recovery";
 import { KIT_PROFILE_WRITE_PATH } from "./kit-write-route";
-import { ProfilePage } from "./pages";
 import {
   admitProfilePatch,
   type ProfileMemberAdmission,
@@ -68,22 +67,22 @@ function newContext(request: Request, env: Env, requestId?: string): WriteContex
   return c;
 }
 
-function logFailure(c: WriteContext, err: unknown, event: string): void {
+function failureFields(c: WriteContext, err: unknown) {
   // Match the fixed built-in class only. Driver names, causes and messages
   // may contain query text or profile fields.
-  console.error(event, {
+  return {
     exception: admissionExceptionClass(err),
     request_id: safeRequestId(c.get("requestId")),
-  });
+  };
 }
 
-function logWriteError(c: WriteContext, err: unknown): void {
+function alertWriteError(c: WriteContext): void {
+  // Keep the alert fingerprint independent of driver error content.
   alertRequestError(new Error("Profile write failed"), {
     method: c.req.method,
     route: KIT_PROFILE_WRITE_PATH,
     requestId: c.get("requestId"),
   });
-  logFailure(c, err, "profile write failed");
 }
 
 function malformedBody(c: WriteContext, exception: string) {
@@ -112,14 +111,6 @@ async function readFormOverride(c: WriteContext): Promise<Input | null> {
   return input;
 }
 
-export function profileDraftHeaders(
-  status: KitProfileWriteDraft["status"],
-): Record<string, string> {
-  return status === 503
-    ? { "cache-control": "no-store, private", vary: "Accept" }
-    : { "cache-control": "private, no-store" };
-}
-
 /** Owned route only. The Kit hook checks trusted host and same origin before
  * either entry point reaches the body cap, signed session and owner gate. */
 export async function writeKitProfile(
@@ -134,16 +125,18 @@ export async function writeKitProfile(
   c.req.raw = limited.request;
   c.header("cache-control", "private, no-store");
 
-  let viewer: Session | null = null;
+  let isModerator = false;
   const admitMember = async (): Promise<ProfileMemberAdmission> => {
     try {
-      viewer = await readContextSession(c, false);
+      const viewer = await readContextSession(c, false);
+      if (!viewer) return { kind: "guest" };
+      if (!viewer.member) return { kind: "forbidden" };
+      isModerator = viewer.moderator;
+      return { kind: "member", id: viewer.id };
     } catch (err) {
-      logFailure(c, err, "profiles could not resolve the session; refusing.");
+      console.error("profiles could not resolve the session; refusing.", failureFields(c, err));
       return { kind: "unavailable" };
     }
-    if (!viewer) return { kind: "guest" };
-    return viewer.member ? { kind: "member", id: viewer.id } : { kind: "forbidden" };
   };
   const throttle = async (bucket: string) => {
     try {
@@ -196,7 +189,7 @@ export async function writeKitProfile(
     } catch (err) {
       return malformedBody(c, admissionExceptionClass(err));
     }
-    if (!isJson && input != null) {
+    if (!isJson) {
       const fields = input as Input;
       if (fields.games === undefined && fields.games_text === undefined) fields.games = [];
     }
@@ -208,7 +201,7 @@ export async function writeKitProfile(
       status,
       member,
       stats: await statsFor(c, member.id),
-      isModerator: viewer?.moderator === true,
+      isModerator,
       errors,
       values: profileDraftValues(input as Input, member),
     });
@@ -216,7 +209,8 @@ export async function writeKitProfile(
     const outcome = await saveProfilePatch(admission.id, input, store);
     if (outcome.kind === "saveFailed") {
       const { error } = outcome;
-      logWriteError(c, error);
+      alertWriteError(c);
+      console.error("profile save failed", failureFields(c, error));
       if (isDatabaseUnavailable(error)) {
         const uncertain = isDatabaseQueryCancellation(error);
         if (!json)
@@ -259,38 +253,9 @@ export async function writeKitProfile(
         return json ? c.json(outcome.body) : c.redirect(`/members/${admission.id}`, 303);
     }
   } catch (err) {
-    logWriteError(c, err);
+    alertWriteError(c);
+    console.error("Profile request failed; refusing contents.", failureFields(c, err));
     if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
     return c.text("Member data is temporarily unavailable.", 503);
   }
-}
-
-// Direct PATCH can negotiate HTML too. The browser's native POST action uses
-// the Svelte page for the same draft model.
-export async function writeKitProfileEndpoint(
-  request: Request,
-  env: Env,
-  requestId?: string,
-): Promise<Response> {
-  const result = await writeKitProfile(request, env, requestId);
-  if (result instanceof Response) return result;
-  return renderProfileWriteDraft(request, env, result);
-}
-
-export function renderProfileWriteDraft(request: Request, env: Env, draft: KitProfileWriteDraft) {
-  const c = newContext(request, env);
-  return c.html(
-    <ProfilePage
-      member={draft.member}
-      stats={draft.stats}
-      isOwner
-      isModerator={draft.isModerator}
-      appUrl={env.APP_URL}
-      statsDraftWarning
-      errors={draft.errors}
-      values={draft.values}
-    />,
-    draft.status,
-    profileDraftHeaders(draft.status),
-  );
 }
