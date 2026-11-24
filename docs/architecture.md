@@ -330,6 +330,7 @@ exactly once.
 | `src/kit-access-sink.ts` | profiles |
 | `src/kit-auth-status.ts` | auth |
 | `src/kit-content-chunk.ts` | entry |
+| `src/kit-csp-reports-fetch.ts` | http-guard |
 | `src/kit-errors.ts` | entry |
 | `src/kit-event-states.ts` | events |
 | `src/kit-events-html.tsx` | events |
