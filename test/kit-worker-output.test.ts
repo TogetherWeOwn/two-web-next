@@ -24,6 +24,7 @@ it("keeps the adapter Worker private and publishes the reviewed asset and entry 
     const stockConfig = {
       main: "index.js",
       no_bundle: true,
+      rules: [{ type: "ESModule", globs: ["**/*.js", "**/*.mjs"] }],
       assets: { directory: "../client", binding: "ASSETS", run_worker_first: true },
     };
     for (const dir of ["client", "worker"]) mkdirSync(join(output, dir), { recursive: true });
@@ -53,7 +54,8 @@ it("keeps the adapter Worker private and publishes the reviewed asset and entry 
     const preview = resolve(dirname(deploy), JSON.parse(readFileSync(deploy, "utf8")).configPath);
     const previewConfig = JSON.parse(readFileSync(preview, "utf8"));
     expect(previewConfig).toEqual({
-      ...stockConfig,
+      main: "index.js",
+      no_bundle: false,
       assets: { ...stockConfig.assets, directory: "../../cloudflare" },
     });
     expect(resolve(dirname(preview), previewConfig.assets.directory)).toBe(output);

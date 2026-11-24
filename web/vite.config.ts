@@ -29,6 +29,19 @@ export default defineConfig({
       csrf: { trustedOrigins: ["*"] },
       experimental: { remoteFunctions: false },
     }),
+    {
+      name: "kit-postgres-node-analysis",
+      enforce: "post",
+      configEnvironment: {
+        order: "post",
+        handler(name, config) {
+          // Kit analyzes routes in Node, where postgres's Workerd export cannot
+          // load cloudflare:sockets. Keep every other dependency eligible for
+          // Vite bundling and let Wrangler choose the Worker transport later.
+          if (name === "ssr") (config.resolve ??= {}).noExternal = [/^(?!postgres$)/];
+        },
+      },
+    },
   ],
   environments: {
     ssr: {

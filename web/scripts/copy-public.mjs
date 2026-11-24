@@ -37,6 +37,8 @@ assert.equal(config.main, "index.js");
 assert.equal(config.assets.directory, "../client");
 assert.equal(config.assets.binding, "ASSETS");
 assert.equal(config.assets.run_worker_first, true);
+assert.equal(config.no_bundle, true);
+assert.deepEqual(config.rules, [{ type: "ESModule", globs: ["**/*.js", "**/*.mjs"] }]);
 const ignored = readFileSync(join(client, ".assetsignore"), "utf8").split(/\r?\n/);
 assert.ok(ignored.includes("_worker.js"), "asset inventory must exclude the Worker entry");
 
@@ -45,8 +47,8 @@ const clashes = files.filter((name) => name === "_worker.js" || existsSync(join(
 if (clashes.length > 0)
   throw new Error(`public/ entries clash with Kit output: ${clashes.join(", ")}`);
 
-// Preserve the staging entry, budget inputs and cutover packet layout. Keep the
-// native Worker intact for Wrangler's generated preview config, outside assets.
+// Preserve the staging entry, budget inputs and cutover packet layout. Keep
+// Wrangler's generated preview entry and module graph outside assets.
 const runtime = join(build, "cloudflare-tmp");
 const scratch = mkdtempSync(join(build, "cloudflare-layout-"));
 try {
@@ -69,6 +71,10 @@ try {
   renameSync(dest, runtime);
   renameSync(join(scratch, "assets"), dest);
   config.assets.directory = "../../cloudflare";
+  // Bundle preview as before so Wrangler resolves the external Postgres import
+  // to its Worker implementation, just as it does for the staging entry.
+  config.no_bundle = false;
+  delete config.rules;
   writeFileSync(join(runtime, "worker/wrangler.json"), JSON.stringify(config));
   deploy.configPath = "../../.svelte-kit/cloudflare-tmp/worker/wrangler.json";
   const redirect = join(scratch, "config.json");
