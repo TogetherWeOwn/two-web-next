@@ -2,7 +2,7 @@
 // the binding appends after rendering. The acceptance-owned suite stays intact.
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import { KEY } from "./helpers/ics-wire-fixture";
@@ -126,5 +126,39 @@ describe("Kit feed anonymous payloads", () => {
     expect(body).toContain(row.title);
     expect(body).toContain(row.eventKey);
     assertNoMemberBytes(body.replaceAll(/\r\n[ \t]/g, ""));
+  });
+});
+
+describe("Kit search indexing anonymous payloads", () => {
+  it.each([
+    ["/robots.txt", `Sitemap: ${ARCHIVE_ORIGIN}/sitemap_index.xml`, 0],
+    ["/sitemap_index.xml", `<loc>${ARCHIVE_ORIGIN}/e/${KEY}</loc>`, 1],
+  ])("GET %s excludes private fields and session artifacts", async (path, expected, queryCount) => {
+    const row = archiveRow(7, {
+      eventKey: KEY,
+      status: "published",
+      createdBy: MEMBER_ID,
+      organizer_name: USERS[0]!.username,
+      join_instructions: USERS[1]!.username,
+      description: USERS[2]!.username,
+    });
+    const query = vi.fn(async (sql: string, params: unknown[]) => ({
+      rows: [
+        encodeEventRow(sql, params, row, (value) =>
+          value instanceof Date ? value.toISOString() : value,
+        ),
+      ],
+    }));
+    const request = new Request(`${ARCHIVE_ORIGIN}${path}`, {
+      headers: { cookie: `__Host-two_session=${SESSION_BEARER}` },
+    });
+    const response = await kit.request(request, archiveEnv(drizzle(query) as unknown as Db));
+    const bytes = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(query).toHaveBeenCalledTimes(queryCount);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(bytes).toContain(expected);
+    assertNoMemberBytes(bytes);
   });
 });

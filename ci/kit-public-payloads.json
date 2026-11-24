@@ -61,6 +61,18 @@
       "note": "Published downloads exclude private fields. The hosted Worker parity fixture separately covers draft authorization and renewal."
     },
     {
+      "id": "kit-payload-robots",
+      "route": "GET /robots.txt",
+      "binding": "web/src/routes/robots.txt/+server.ts",
+      "tests": ["Kit search indexing anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-sitemap",
+      "route": "GET /sitemap_index.xml",
+      "binding": "web/src/routes/sitemap_index.xml/+server.ts",
+      "tests": ["Kit search indexing anonymous payloads"]
+    },
+    {
       "id": "kit-payload-events-past",
       "route": "GET /events/past",
       "binding": "web/src/routes/events/past/+page.server.ts",
