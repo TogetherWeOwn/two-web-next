@@ -159,7 +159,7 @@ describe("CallInternalAction is never web-dispatched (TOG-12678)", () => {
 
   it("only the staging probe references the transport and the dedicated session-bound action", () => {
     const hits = scanFiles(webFiles(), DISPATCH_TOKENS);
-    expect(hits.map(({ file, text }) => `${file}: ${text}`)).toEqual([
+    expect(hits.map(({ file, line }) => `${file}: ${line}`)).toEqual([
       `${VOICE_PROBE_FILE}: import { send } from "./bot/client-transport";`,
       `${VOICE_PROBE_FILE}: { action: "voice.move_member", discord_id: session.id, channel_id: body.channel_id },`,
     ]);
