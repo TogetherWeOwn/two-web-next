@@ -1,4 +1,5 @@
 <script lang="ts">
+import EventVoicePlacement from "#lib/EventVoicePlacement.svelte";
 import JsonLd from "#lib/JsonLd.svelte";
 import Lifeline from "#lib/Lifeline.svelte";
 import Shell from "#lib/Shell.svelte";
@@ -28,11 +29,13 @@ let {
   model,
   restoredWrite = false,
   lifeline,
+  publicVoiceEnabled = false,
 }: {
   model: KitEventDetailModel;
   restoredWrite?: boolean;
   /** Composed server presentation. */
   lifeline?: readonly LifelineStep[];
+  publicVoiceEnabled?: boolean;
 } = $props();
 const facts = $derived(kitEventFacts(model));
 const lifecycle = $derived(model.lifecycle);
@@ -56,6 +59,7 @@ const detailIslands = $derived([
   "event-share",
   "going-count",
   "attendees-live",
+  ...(publicVoiceEnabled ? ["kit-public-voice"] : []),
 ]);
 </script>
 
@@ -240,6 +244,7 @@ const detailIslands = $derived([
         </dl>
       </section>
     {/if}
+    <EventVoicePlacement enabled={publicVoiceEnabled} eventKey={model.eventKey} publicLive />
     {@html model.detailHtml.share}
   </div>
   <div class="event-layout-body" class:ended={Boolean(lifecycle)}>

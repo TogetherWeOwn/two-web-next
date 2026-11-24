@@ -11,6 +11,8 @@ import frames from "./kit-live-frames.json" with { type: "json" };
 const socketPath = "/api/discord-live/v1";
 const scriptPath = "/islands/kit-public-voice.js";
 const memberId = "900000000000001391";
+const eventKey = "01J00000000000000000000666";
+const eventTitle = "Synthetic Voice Night";
 const withheld = "Voice count withheld.";
 const unavailable = "Voice numbers are not available right now.";
 const voice = (count) => `${count} in voice right now.`;
@@ -32,7 +34,13 @@ async function capture(page, state) {
     [390, 844],
   ]) {
     await page.setViewportSize({ width, height });
-    await page.screenshot({ path: join(directory, `${state}-${width}x${height}.png`) });
+    if (state.startsWith("event-")) {
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    }
+    await page.screenshot({
+      path: join(directory, `${state}-${width}x${height}.png`),
+      fullPage: state.startsWith("event-"),
+    });
   }
 }
 
@@ -51,12 +59,89 @@ function observe(page) {
   return sockets;
 }
 
-async function openHome(page, origin) {
-  const response = await page.goto(origin);
+async function openDocument(page, url) {
+  const response = await page.goto(url);
   assert.equal(response.status(), 200);
   assert.equal(response.headers()["x-two-renderer"], "kit");
   assert.equal(response.headers()["cache-control"], "private, no-store");
   return response.text();
+}
+
+async function verifyEventVoice(browser, offOrigin, liveOrigin, source, mintSession) {
+  const path = `/e/${eventKey}`;
+  const panelSelector = "[data-public-voice-panel]";
+  const guest = await browser.newPage();
+  const sockets = observe(guest);
+  const panel = guest.locator(panelSelector);
+  const count = panel.locator("[data-public-voice-count]");
+  const seat = guest.getByTestId("kit-seat-card");
+  const rsvp = seat.getByRole("link", { name: "Log in with Discord" });
+
+  const offHtml = await openDocument(guest, offOrigin + path);
+  assert.ok(!offHtml.includes(scriptPath));
+  await expect(panel).toHaveCount(0);
+  await expect(rsvp).toBeVisible();
+  await capture(guest, "event-off");
+  assert.deepEqual(sockets, []);
+
+  await source(104, 5);
+  const html = await openDocument(guest, liveOrigin + path);
+  assert.ok(html.includes(scriptPath));
+  assert.doesNotMatch(html, /Synthetic room|Synthetic occupant|Pull me in/);
+  await expect(guest.getByRole("heading", { level: 1 })).toHaveText(eventTitle);
+  await expect(count).toHaveText(voice(5), { timeout: 12_000 });
+  await expect(panel).toHaveAccessibleName("Community voice");
+  await expect(panel.locator("a, button, [tabindex]")).toHaveCount(0);
+  assert.ok(
+    await guest.getByTestId("kit-event-facts").evaluate((facts) => {
+      const panel = document.querySelector("[data-public-voice-panel]");
+      return Boolean(facts.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING);
+    }),
+  );
+  assert.deepEqual(sockets[0].sent, [subscribe]);
+  await capture(guest, "event-live");
+
+  assert.equal(await ingest(liveOrigin, 105, { topic: "voice", op: "remove", id: "105" }), 204);
+  await expect(panel).toBeHidden();
+  await expect(count).toBeEmpty();
+  await capture(guest, "event-suppressed");
+  assert.equal(await ingest(liveOrigin, 106, upsert("105")), 204);
+  await expect(count).toHaveText(voice(5));
+
+  await source(108, 6, true);
+  assert.equal(await ingest(liveOrigin, 108, upsert("106")), 409);
+  await expect(panel).toBeHidden();
+  await expect(rsvp).toBeVisible();
+  await capture(guest, "event-recovering");
+  await source(108, 6);
+  await expect(count).toHaveText(voice(6), { timeout: 12_000 });
+  assert.deepEqual(sockets[0].sent, [subscribe, resync]);
+  assert.ok(
+    sockets[0].received.every(
+      (frame) => !frame.value || Object.keys(frame.value).join() === "count",
+    ),
+  );
+  await guest.close();
+
+  const member = await browser.newPage();
+  const memberSockets = observe(member);
+  await setSession(member, liveOrigin, await mintSession("10 minutes"));
+  const memberHtml = await openDocument(member, liveOrigin + path);
+  assert.match(memberHtml, /Synthetic voice viewer/);
+  assert.ok(!memberHtml.includes(scriptPath));
+  assert.doesNotMatch(memberHtml, /Synthetic room|Synthetic occupant|Pull me in/);
+  await expect(member.locator(panelSelector)).toHaveCount(0);
+  await capture(member, "event-member-without-proof");
+  assert.deepEqual(memberSockets, []);
+  await member.close();
+
+  const signedIn = await browser.newPage();
+  await setSession(signedIn, liveOrigin, await mintSession("10 minutes", false));
+  assert.match(await openDocument(signedIn, liveOrigin + path), /Synthetic voice viewer/);
+  await expect(signedIn.locator("[data-public-voice-count]")).toHaveText(voice(6), {
+    timeout: 12_000,
+  });
+  await signedIn.close();
 }
 
 async function setSession(page, origin, cookie) {
@@ -115,8 +200,8 @@ async function verifyRefusedRetries(sql, sockets, first, checkUncached, count, r
 }
 
 export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, secret) {
-  const source = async (seq, count) => {
-    const response = await fetch(`${liveOrigin}/__fixture/live-source`, {
+  const source = async (seq, count, hold = false) => {
+    const response = await fetch(`${liveOrigin}/__fixture/live-source${hold ? "?hold" : ""}`, {
       method: "POST",
       body: JSON.stringify(liveFixtureSnapshot(seq, count)),
       signal: AbortSignal.timeout(5_000),
@@ -126,10 +211,10 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
   };
   const browser = await chromium.launch();
   const sql = postgres(databaseUrl, { max: 1 });
-  async function mintSession(lifetime) {
+  async function mintSession(lifetime, member = true) {
     const { ref, cookie } = await fixtureSession(secret);
     await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
-      values (${ref}, ${memberId}, 'Synthetic homepage member', true,
+      values (${ref}, ${memberId}, 'Synthetic voice viewer', ${member},
         clock_timestamp() + ${lifetime}::interval)`;
     return cookie;
   }
@@ -144,7 +229,7 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     };
     const guest = await browser.newPage();
     const offSockets = observe(guest);
-    const offHtml = await openHome(guest, offOrigin);
+    const offHtml = await openDocument(guest, offOrigin);
     assert.ok(!offHtml.includes(scriptPath));
     await expect(guest.locator("#home-public-voice")).toHaveCount(0);
     await expect(guest.getByTestId("join")).toBeVisible();
@@ -158,7 +243,7 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     const page = await browser.newPage();
     const sockets = observe(page);
     await source(100, 4);
-    const html = await openHome(page, liveOrigin);
+    const html = await openDocument(page, liveOrigin);
     assert.ok(html.includes(scriptPath));
     assert.match(html, /Voice numbers are not available right now/);
     const count = page.locator("#home-public-voice");
@@ -177,7 +262,7 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     await pauseRetryClock(member);
     await setSession(member, liveOrigin, await mintSession("10 minutes"));
     await source(101, 5);
-    const memberHtml = await openHome(member, liveOrigin);
+    const memberHtml = await openDocument(member, liveOrigin);
     await expect(member.locator("#discord-heading")).toBeVisible();
     assert.doesNotMatch(memberHtml, /Synthetic room|Synthetic occupant/);
     const memberCount = member.locator("#home-public-voice");
@@ -213,6 +298,7 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
 
     // A producer gap withdraws the old value before the covering source is available.
     const heading = await page.locator("#home-heading").textContent();
+    await source(104, 5, true);
     assert.equal(await ingest(liveOrigin, 104, upsert("106")), 409);
     await expect(count).toHaveText(unavailable);
     assert.deepEqual(sockets[0].received.at(-1), frames.withdrawal);
@@ -244,7 +330,7 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     const expiredSockets = observe(expired);
     await pauseRetryClock(expired);
     await setSession(expired, liveOrigin, await mintSession("-1 minute"));
-    await openHome(expired, liveOrigin);
+    await openDocument(expired, liveOrigin);
     const expiredCount = expired.locator("#home-public-voice");
     const expiredRetry = await verifyRefusedRetries(
       sql,
@@ -263,8 +349,17 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     assert.ok(
       [...sockets, ...memberSockets, ...expiredSockets].every(({ url }) => url === socketUrl),
     );
+    await page.close();
+    await sql`insert into events (event_key, title, game, starts_at, ends_at, timezone, status, capacity, rsvp_open)
+      values (${eventKey}, ${eventTitle}, 'Valheim', '2099-01-01T18:00:00Z',
+        '2099-01-01T20:00:00Z', 'UTC', 'published', 10, true)`;
+    try {
+      await verifyEventVoice(browser, offOrigin, liveOrigin, source, mintSession);
+    } finally {
+      await sql`delete from events where event_key = ${eventKey}`;
+    }
     console.log(
-      "PASS installed Kit home: default off, public-only updates, bounded revoked and expired admission reads, reconnect, gap withdrawal/resync and page lifecycle",
+      "PASS installed Kit home and event detail: default off, public-only updates, member isolation, bounded refused retries, gap recovery and page lifecycle",
     );
   } finally {
     await browser.close();

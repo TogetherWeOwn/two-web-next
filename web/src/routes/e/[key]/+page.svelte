@@ -8,4 +8,4 @@ import type { PageProps } from "./$types";
 let { data }: PageProps = $props();
 </script>
 
-<EventDetail model={data.model} restoredWrite={data.restoredWrite} lifeline={data.lifeline} />
+<EventDetail model={data.model} restoredWrite={data.restoredWrite} lifeline={data.lifeline} publicVoiceEnabled={data.publicVoiceEnabled} />
