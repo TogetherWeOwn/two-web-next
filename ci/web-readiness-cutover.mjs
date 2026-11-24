@@ -1,0 +1,97 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { build } from "esbuild";
+
+// Load the actual Kit hook and Hono Worker entry with only the Cloudflare
+// bindings and the framework event replaced. A Kit render fails the fixture.
+export async function buildCutoverApps(root) {
+  const outfile = join(root, "cutover.mjs");
+  await build({
+    stdin: {
+      contents: `
+        export { default as worker } from "./src/worker";
+        export { pgEventStore } from "./src/jobs/events";
+        export { handle } from "./web/src/hooks.server.ts";
+        export { setEnv } from "cloudflare:workers";
+      `,
+      resolveDir: process.cwd(),
+    },
+    outfile,
+    bundle: true,
+    packages: "external",
+    platform: "node",
+    format: "esm",
+    target: "node24",
+    define: { __TWO_WEB_1033_COMPAT__: "true" },
+    plugins: [
+      {
+        name: "cutover-fixture-bindings",
+        setup(bundle) {
+          bundle.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
+            path: "workers",
+            namespace: "cutover-fixture",
+          }));
+          bundle.onResolve({ filter: /^#lib\/server\/hono\.ts$/ }, () => ({
+            path: join(process.cwd(), "web/src/lib/server/hono.ts"),
+          }));
+          bundle.onLoad({ filter: /^workers$/, namespace: "cutover-fixture" }, () => ({
+            contents: `
+              export let env;
+              export function setEnv(bindings) { env = bindings; }
+              export function waitUntil(promise) { void promise; }
+            `,
+          }));
+        },
+      },
+    ],
+  });
+  const { worker, handle, setEnv, pgEventStore } = await import(pathToFileURL(outfile).href);
+  return {
+    pgEventStore,
+    apps: [
+      {
+        sha: "cutover Hono rollback",
+        app: { request: (url, init, env) => worker.fetch(new Request(url, init), env) },
+      },
+      {
+        sha: "cutover Kit fallback",
+        app: {
+          request(url, init, bindings) {
+            setEnv({
+              ...bindings,
+              KIT_ROUTE_ARCHIVE: "false",
+              KIT_ROUTE_STATIC: "false",
+              KIT_ROUTE_EVENTS: "false",
+              KIT_ROUTE_HOME: "false",
+              KIT_ROUTE_JOIN: "false",
+            });
+            return handle({
+              event: { request: new Request(url, init), url: new URL(url), isDataRequest: false },
+              resolve: () => assert.fail("cutover readiness reached the Kit renderer"),
+            });
+          },
+        },
+      },
+    ],
+  };
+}
+
+// Exercise the live event sync storage state machine under the same serving
+// login without running a queue, cron or remote Discord call.
+export async function probeCutoverEventSync(pgEventStore, runtime) {
+  const eventKey = randomUUID();
+  await runtime`INSERT INTO events (event_key, title, starts_at, ends_at, status)
+    VALUES (${eventKey}, 'Cutover fixture', now(), now() + interval '1 hour', 'published')`;
+  const store = pgEventStore(runtime);
+  const key = randomUUID();
+  const now = new Date();
+  const prepared = await store.prepareSync(eventKey, key, now);
+  assert.equal(prepared?.idempotencyKey, key);
+  const claimed = await store.claimSync(prepared, now);
+  assert.equal(claimed?.requestAttempts, 1);
+  const discordEventId = "1000000000000000001";
+  await store.completeSync(claimed, discordEventId);
+  assert.equal(await store.needsSync(eventKey), false);
+}

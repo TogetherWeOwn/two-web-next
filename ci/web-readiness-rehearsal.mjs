@@ -10,6 +10,7 @@ import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { build } from "esbuild";
 import postgres from "postgres";
 import { assertServingLedgerIsolation } from "./migration-runtime-rights.mjs";
+import { buildCutoverApps, probeCutoverEventSync } from "./web-readiness-cutover.mjs";
 import { assertScopedAcl, grantScopedAcl, probeWorkloads } from "./web-readiness-scoped-acl.mjs";
 
 const legacy = "57f1abbc25d0b39a77d83b46eb8b803b0249bb66";
@@ -72,9 +73,17 @@ async function pinnedApp(root, sha) {
   return { sha, app, history, migrationsFolder: join(dir, "drizzle") };
 }
 
-async function checkUp(build, reader, expected, status, pending, queries, relation) {
+async function checkUp(
+  build,
+  reader,
+  expected,
+  status,
+  pending,
+  queries,
+  relation,
+  appUrl = "https://next.example.test",
+) {
   queries.length = 0;
-  const appUrl = "https://next.example.test";
   const env = {
     APP_URL: appUrl,
     SESSION_SECRET: randomUUID(),
@@ -84,6 +93,8 @@ async function checkUp(build, reader, expected, status, pending, queries, relati
   };
   const response = await build.app.request(`${appUrl}/up`, {}, env);
   assert.equal(response.status, status, `${build.sha} /up status`);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.has("set-cookie"), false);
   const { db, pending_migrations, migration_ledger, queue } = await response.json();
   const timestamps = expected?.map(({ created_at }) => Number(created_at)) ?? null;
   assert.equal(db, "ok");
@@ -112,10 +123,25 @@ export async function rehearseWebReadiness(owner, url) {
     const old = await pinnedApp(root, legacy);
     const candidates = [];
     for (const sha of bridges) candidates.push(await pinnedApp(root, sha));
+    const cutover = await buildCutoverApps(root);
     const [first] = candidates;
     const bridgeUp = async (expected, status, pending) => {
       for (const candidate of candidates) {
         await checkUp(candidate, reader, expected, status, pending, queries, projection);
+      }
+    };
+    const cutoverUp = async (expected, status, pending, relation) => {
+      for (const app of cutover.apps) {
+        await checkUp(
+          app,
+          reader,
+          expected,
+          status,
+          pending,
+          queries,
+          relation,
+          "https://togetherweown.com",
+        );
       }
     };
     assert.equal(old.history.length, 34);
@@ -159,18 +185,25 @@ export async function rehearseWebReadiness(owner, url) {
     const pairs = (history) => history.map(({ created_at, hash }) => ({ created_at, hash }));
     await migrate(drizzle(owner), old);
     assert.deepEqual(await readLedger(), pairs(old.history));
+    await cutoverUp(old.history, 200, 0, ledger);
+    await probeCutoverEventSync(cutover.pgEventStore, reader);
     await owner.unsafe(fixture("../docs/web-readiness-projection.sql"));
     await owner`GRANT USAGE ON SCHEMA public, web_readiness TO ${owner(login)}`;
     await owner`GRANT SELECT ON web_readiness.migration_timestamps TO ${owner(login)}`;
     await bridgeUp(old.history, 503, 4);
+    await cutoverUp(old.history, 200, 0, projection);
 
     await migrate(drizzle(owner), first);
     const expanded = await readLedger();
     assert.deepEqual(expanded, pairs(first.history));
+    const [deferred] =
+      await owner`SELECT to_regclass('public.announcement_send_claims') AS relation`;
+    assert.equal(deferred.relation, null);
     await assert.rejects(assertServingLedgerIsolation(owner, login), /implicit USAGE/);
     await assert.rejects(reader.unsafe(`INSERT INTO ${projection} VALUES (1)`), { code: "55000" });
     await checkUp(old, reader, first.history, 200, 0, queries, ledger);
     await bridgeUp(first.history, 200, 0);
+    await cutoverUp(first.history, 200, 0, projection);
 
     await owner.begin(async (tx) => {
       await grantScopedAcl(tx, login);
@@ -181,9 +214,12 @@ export async function rehearseWebReadiness(owner, url) {
     assert.deepEqual(await identity(reader), { ...catalog, role: login, login });
     await assert.rejects(reader.unsafe(`SELECT created_at FROM ${ledger}`), { code: "42501" });
     await bridgeUp(first.history, 200, 0);
+    await cutoverUp(first.history, 200, 0, projection);
+    await probeCutoverEventSync(cutover.pgEventStore, reader);
     await checkUp(old, reader, null, 503, null, queries, ledger);
     await owner`REVOKE SELECT ON web_readiness.migration_timestamps FROM ${owner(login)}`;
     await bridgeUp(null, 503, null);
+    await cutoverUp(null, 503, null, projection);
     await owner`GRANT SELECT ON web_readiness.migration_timestamps TO ${owner(login)}`;
     await probeWorkloads(owner, reader);
     assert.deepEqual(await readLedger(), expanded);
