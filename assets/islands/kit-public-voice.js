@@ -1,13 +1,18 @@
 import { createBrowserLiveTopic } from "../../src/live/browser-topic";
 
-const count = document.getElementById("home-public-voice");
+const count = document.querySelector("#home-public-voice, [data-public-voice-count]");
 if (count) {
-  // The homepage's independent schedule and Discord links are the fallback.
-  // There is no independently projected HTTP count read to poll.
+  // Event detail leaves the rail alone while a public count is unavailable.
+  // Neither page has an independently projected HTTP count to poll.
+  const panel = count.closest("[data-public-voice-panel]");
   const unavailable = count.textContent;
   const topic = createBrowserLiveTopic(null);
   topic.subscribe(({ value }) => {
-    if (value === null) count.textContent = unavailable;
+    if (panel) {
+      const total = value?.count;
+      count.textContent = total == null ? "" : `${total} in voice right now.`;
+      panel.hidden = total == null;
+    } else if (value === null) count.textContent = unavailable;
     else if (value.count === null) count.textContent = "Voice count withheld.";
     else count.textContent = `${value.count} in voice right now.`;
   });

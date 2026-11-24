@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { signInternalAction } from "../src/bot/signer";
 import { signedVoiceReader, type VoiceSnapshot } from "../src/bot/voice-read";
 import { createVoiceSnapshotCache } from "../src/bot/voice-snapshot";
+import contract from "./fixtures/bot-site-contract-v2.json";
 const observed_at = "2026-11-03T19:04:11Z";
 const epoch = Date.parse(observed_at);
 const room = (channel_id: string, member_ids: string[], extra = {}) => ({
@@ -127,6 +128,33 @@ function fixture(skew = 0) {
   const clock = { now: epoch + skew };
   return { ctx, jobs, clock, get: createVoiceSnapshotCache(() => clock.now) };
 }
+
+it("projects a Bot self-move destination only with current room proof", async () => {
+  const { ctx, jobs, get } = fixture();
+  const { discord_id, channel_id } = contract.verbs["voice.move_member"].request;
+  const read = () => respond(wire(contract.verbs["voice.snapshot"].results.full));
+  const viewOnly = {
+    session,
+    roomAccess: new Map([[channel_id, { ...access("member"), canJoin: false }]]),
+  };
+
+  expect(get(read, ctx, viewOnly)).toBeNull();
+  await Promise.all(jobs);
+  expect(get(read, ctx, guest)).toBeNull();
+  expect(get(read, ctx, { session })).toMatchObject({ audience: "member", rooms: [] });
+  const projection = get(read, ctx, viewOnly);
+  expect(projection).toMatchObject({
+    audience: "member",
+    rooms: [
+      { channelId: channel_id, eventKey: "test-raid-night-1", occupants: [], canMove: false },
+    ],
+  });
+  expect(projection?.audience === "member" && projection.rooms).toHaveLength(1);
+  expect(JSON.stringify(projection)).not.toContain(discord_id);
+  expect(
+    get(read, ctx, { session, roomAccess: new Map([[channel_id, access("member")]]) }),
+  ).toMatchObject({ rooms: [{ channelId: channel_id, canMove: true }] });
+});
 
 it("returns immediately, coalesces, throttles failures and freezes the last good value", async () => {
   const { ctx, jobs, clock, get } = fixture();

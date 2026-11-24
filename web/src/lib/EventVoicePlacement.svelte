@@ -5,11 +5,14 @@ import type { VoiceView } from "./voice-view";
 let {
   enabled = false,
   eventKey,
+  publicLive = false,
   view,
 }: {
   enabled?: boolean;
   eventKey: string;
-  /** A trusted audience projection. The placement has no runtime reader. */
+  /** The caller has admitted the public socket for this document. */
+  publicLive?: boolean;
+  /** A trusted audience projection. */
   view?: VoiceView;
 } = $props();
 
@@ -22,6 +25,8 @@ let eventView = $derived.by((): VoiceView | undefined => {
 });
 </script>
 
-{#if eventView}
+{#if enabled && publicLive && !view}
+  <VoicePanel eventDetail publicLive />
+{:else if eventView}
   <VoicePanel view={eventView} eventDetail />
 {/if}

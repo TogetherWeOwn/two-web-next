@@ -1,4 +1,5 @@
 <script lang="ts">
+import EventVoicePlacement from "#lib/EventVoicePlacement.svelte";
 import JsonLd from "#lib/JsonLd.svelte";
 import Lifeline from "#lib/Lifeline.svelte";
 import Shell from "#lib/Shell.svelte";
@@ -28,11 +29,13 @@ let {
   model,
   restoredWrite = false,
   lifeline,
+  publicVoiceEnabled = false,
 }: {
   model: KitEventDetailModel;
   restoredWrite?: boolean;
   /** Composed server presentation. */
   lifeline?: readonly LifelineStep[];
+  publicVoiceEnabled?: boolean;
 } = $props();
 const facts = $derived(kitEventFacts(model));
 const lifecycle = $derived(model.lifecycle);
@@ -56,6 +59,7 @@ const detailIslands = $derived([
   "event-share",
   "going-count",
   "attendees-live",
+  ...(publicVoiceEnabled ? ["kit-public-voice"] : []),
 ]);
 </script>
 
@@ -240,6 +244,7 @@ const detailIslands = $derived([
         </dl>
       </section>
     {/if}
+    <EventVoicePlacement enabled={publicVoiceEnabled} eventKey={model.eventKey} publicLive />
     {@html model.detailHtml.share}
   </div>
   <div class="event-layout-body" class:ended={Boolean(lifecycle)}>
@@ -376,6 +381,21 @@ const detailIslands = $derived([
   .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
   .event-layout-rail :global(> section) { border: 0; }
   .event-layout-rail :global(> .event-share) { padding: 0; margin-top: var(--space-2); }
+  .event-layout-rail > :global([data-public-voice-panel]) {
+    --two-radius-s: var(--radius-s);
+    --two-radius-l: var(--radius-l);
+    --two-color-line-hairline: var(--color-hair1);
+    --two-color-bg-surface: var(--color-g1);
+    --two-color-text-primary: var(--color-t1);
+    --two-color-text-secondary: var(--color-t2);
+    --two-space-2: var(--space-2);
+    --two-space-inset-room: var(--space-inset-room);
+    --two-font-size-ui: var(--text-ui);
+    --two-font-size-label: var(--text-label);
+    --two-font-weight-semibold: var(--font-weight-semibold);
+    --two-line-height-label: var(--leading-label);
+    --two-font-data: var(--font-data);
+  }
   .event-layout-body { grid-area: body; min-width: 0; }
   :global(.event-theme) .event-layout-body.ended :global(.event-meta > div) { padding: var(--space-2); }
   /* Hidden comparison controls still reserve space on the live Hono page. */

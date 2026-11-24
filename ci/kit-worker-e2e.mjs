@@ -228,12 +228,19 @@ try {
     const entry = join(scratch, "kit-live.mjs");
     await writeFile(
       entry,
-      `import worker, { LiveGuildHub as InstalledHub } from ${JSON.stringify(worker)};
+      `import { withEnv } from "cloudflare:workers";
+import worker, { LiveGuildHub as InstalledHub } from ${JSON.stringify(worker)};
 import { fixtureHub, controlledFetch } from ${JSON.stringify(fileURLToPath(new URL("./fixtures/kit-live-source.mjs", import.meta.url)))};
 export const LiveGuildHub = fixtureHub(InstalledHub);
 export default { fetch: controlledFetch(fetch) };
 function fetch(request, env, context) {
   const incoming = new URL(request.url);
+  if (env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true" && incoming.pathname.startsWith("/e/")) {
+    // Event document ownership requires loopback. Socket and ingest requests
+    // still use the separate HTTPS origin required by the installed live hub.
+    const bindings = { ...env, APP_URL: incoming.origin };
+    return withEnv(bindings, () => worker.fetch(request, bindings, context));
+  }
   const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
   const secure = new Request(url, request);
   secure.headers.set("host", url.host);
@@ -259,18 +266,19 @@ function fetch(request, env, context) {
       DISCORD_LIVE_SNAPSHOT_SECRET: "fixture-snapshot-value",
     };
     if (publicVoiceBrowser) {
-      // Run the homepage against separate persisted Workers so the hub starts
+      // Run the documents against separate persisted Workers so the hub starts
       // cold and the disabled fixture has a working session bridge.
+      const browserVars = { ...liveVars, KIT_PARITY_FIXTURE_EVENT_DETAIL: "true" };
       const off = await startWorker(
         "kit-voice-off",
         entry,
         assets,
         secret,
-        { ...liveVars, DISCORD_LIVE_SOCKET_ENABLED: undefined },
+        { ...browserVars, DISCORD_LIVE_SOCKET_ENABLED: undefined },
         true,
       );
       await listen(off.child, off.origin, () => off.log);
-      const enabled = await startWorker("kit-voice", entry, assets, secret, liveVars, true);
+      const enabled = await startWorker("kit-voice", entry, assets, secret, browserVars, true);
       await listen(enabled.child, enabled.origin, () => enabled.log);
       const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
       await verifyKitPublicVoice(off.origin, enabled.origin, databaseUrl, secret);
