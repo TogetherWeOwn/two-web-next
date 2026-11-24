@@ -876,7 +876,7 @@ describe("workflow evidence wiring", () => {
     assert.equal(steps[archive].with["retention-days"], 30);
   });
 
-  test("ordinary production builds the inert Kit candidate beside the Hono upload", () => {
+  test("production builds the inert Kit candidate beside, never instead of, the Hono upload", () => {
     const steps = workflow("deploy-production").jobs["deploy-production"].steps;
     const find = (text) => steps.findIndex((step) => step.name?.includes(text));
     const honoInventory = find("Inventory the exact");
@@ -890,8 +890,7 @@ describe("workflow evidence wiring", () => {
       order.every((index, n) => index > (order[n - 1] ?? -1)),
       String(order),
     );
-    const guard =
-      "env.CUTOVER_MODE == 'ordinary' && hashFiles('web/wrangler.production.jsonc') != ''";
+    const guard = "hashFiles('web/wrangler.production.jsonc') != ''";
     for (const index of [check, build, inventory]) assert.equal(steps[index].if, guard);
     assert.equal(
       steps[check].run,

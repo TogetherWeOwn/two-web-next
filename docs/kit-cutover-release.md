@@ -34,29 +34,3 @@ Use the successful run's `run:attempt:manifest SHA-256` from its summary.
 A failed run, a run from another ref, or a mismatched attempt, manifest,
 source config, module or asset refuses selection. The packet and proof expire
 after 30 days. Rerun all jobs to qualify a new attempt.
-
-## Protected release and recovery
-
-A separate release task follows the [production release gate](../CONTRIBUTING.md#production-release-gate).
-The ordinary protected deploy continues to select Hono. Pause automatic
-promotion for the two explicit cutover dispatches and the cutover hold.
-Use the same full `sha` and `cutover_pin` for both dispatches. The release
-workflow verifies the approved ledger against the actually serving version
-under the production mutation lock. The ordinary migration confirmation
-input cannot override this check.
-
-1. Dispatch `deploy-production` with `cutover_mode: hono` to prepare the
-   staged compatible undo on the existing production script. Record the UUID
-   from its successful protected promotion and watch.
-2. Dispatch `deploy-production` with `cutover_mode: kit` and
-   `cutover_undo_version` set to that live Hono UUID. The gate verifies its
-   source, packet annotation, UUID, bindings and readiness before uploading
-   the exact staged Kit files without rebuilding. The existing gradual
-   promotion, ordinary traffic smoke, and watch still apply. Record both
-   UUIDs and the production promotion receipt.
-3. For manual undo, dispatch `rollback-production` with
-   `environment: production`, `version_id` set to the recorded Hono UUID,
-   and `expected_current_version_id` set to the promoted Kit UUID. The
-   protected workflow checks the live version and the target's required
-   secret names, then verifies ordinary traffic on the restored Hono UUID.
-   Automatic rollback uses the same recorded version pair.

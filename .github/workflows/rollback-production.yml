@@ -20,10 +20,6 @@ on:
         description: "Recorded known-good Worker Version ID (lowercase UUID from `wrangler versions list`)"
         required: true
         type: string
-      expected_current_version_id:
-        description: "Optional exact currently serving UUID. For Kit undo, always set the promoted Kit UUID"
-        type: string
-        required: false
   workflow_call:
     inputs:
       environment:
@@ -203,7 +199,7 @@ jobs:
         # Automation passes expected_current_version_id: roll back only while
         # that version serves, report skip when version_id already serves,
         # and refuse when anything else is live (a deploy landed in between).
-        # Manual dispatch can pin the currently serving version too.
+        # Manual dispatch leaves it empty and always rolls back.
         id: guard
         run: |
           set -euo pipefail
