@@ -40,7 +40,7 @@ function refusal(url, headers) {
 }
 
 // Read the first frame directly so TCP teardown cannot pass as a policy Close.
-function openIdle(url, headers) {
+export function openIdle(url, headers) {
   const started = performance.now();
   return new Promise((resolve, reject) => {
     const req = upgrade(url, headers);
@@ -86,7 +86,7 @@ function openIdle(url, headers) {
   });
 }
 
-async function awaitServerClose(peer, expiry, label) {
+export async function awaitServerClose(peer, expiry, label) {
   assert.ok(Number.isFinite(expiry));
   while (!peer.first && !peer.error && !peer.socket.destroyed && Date.now() < expiry + 4_000) {
     await delay(25);
@@ -100,6 +100,17 @@ async function awaitServerClose(peer, expiry, label) {
     peer.at >= expiry - peer.upgradeMs - 2 && peer.at < expiry + 4_000,
     `${label}: closed ${peer.at - expiry} ms from DB expiry (upgrade ${peer.upgradeMs} ms)`,
   );
+}
+
+export async function finishIdle(peer) {
+  const mask = randomBytes(4);
+  const closed = once(peer.socket, "close", deadline());
+  peer.socket.write(
+    Buffer.from([0x88, 0x82, ...mask, peer.first[2] ^ mask[0], peer.first[3] ^ mask[1]]),
+  );
+  // Let the Close reply flush without waiting for a TCP FIN from the fixture proxy.
+  peer.socket.destroySoon();
+  await closed;
 }
 
 async function fixtureSession(secret) {
@@ -143,7 +154,11 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     await delay(2_100);
     const [resynced] = await send(guest, resync.padEnd(512), "message");
     assert.deepEqual(JSON.parse(resynced.data), unavailable);
-    assert.equal((await send(guest, subscribe, "close"))[0].code, 1008);
+    const duplicate = await open(headers);
+    const channels = JSON.stringify({ v: 1, type: "subscribe", topics: ["channels"] });
+    const [subscribed] = await send(duplicate, channels, "message");
+    assert.deepEqual(JSON.parse(subscribed.data), { ...unavailable, topic: "channels" });
+    assert.equal((await send(duplicate, channels, "close"))[0].code, 1008);
     for (const invalid of ["{", subscribe.padEnd(513)]) {
       const socket = await open(headers);
       assert.equal((await send(socket, invalid, "close"))[0].code, 1008);

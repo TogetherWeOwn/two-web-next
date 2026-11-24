@@ -65,7 +65,7 @@ export class LiveSequence<State, Delta> {
     return this.#recovering ?? this.#recover();
   }
 
-  async ingest(seq: number, delta: Delta): Promise<IngestResult> {
+  async ingest(seq: number, delta: Delta, onGap?: () => void): Promise<IngestResult> {
     if (!Number.isSafeInteger(seq) || seq < 1) return "invalid";
     if (seq <= this.#saved.applied) return "duplicate";
     const current = this.current;
@@ -85,6 +85,7 @@ export class LiveSequence<State, Delta> {
       }
     }
 
+    onGap?.();
     return (await this.synchronize()) ? "resynced" : "unavailable";
   }
 

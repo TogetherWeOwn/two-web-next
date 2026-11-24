@@ -48,7 +48,7 @@ function signed(
   return new Request(url, { method: "POST", body, headers });
 }
 
-function fixture(hubEnv: LiveSocketEnv = config) {
+function fixture(hubEnv: LiveSocketEnv = config, sockets: WebSocket[] = []) {
   const storage = new Map();
   const kv = { get: storage.get.bind(storage), put: vi.fn(storage.set.bind(storage)) };
   const setAlarm = vi.fn<(until: number | Date) => Promise<void>>().mockResolvedValue(undefined);
@@ -57,7 +57,8 @@ function fixture(hubEnv: LiveSocketEnv = config) {
   const transaction = (run: (storage: typeof txn) => Promise<void>) => run(txn);
   const ctx = {
     storage: { kv, transaction },
-    getWebSockets: () => [],
+    getWebSockets: () => sockets,
+    blockConcurrencyWhile: <T>(run: () => Promise<T>) => run(),
     waitUntil,
   } as unknown as DurableObjectState;
   let hub = new LiveGuildHub(ctx, hubEnv);
@@ -74,6 +75,7 @@ function fixture(hubEnv: LiveSocketEnv = config) {
     getByName,
     message: (socket: WebSocket, type: "subscribe" | "resync") =>
       hub.webSocketMessage(socket, JSON.stringify({ v: 1, type, topics: ["voice"] })),
+    alarm: () => hub.alarm(),
     evict: () => {
       hub = new LiveGuildHub(ctx, hubEnv);
     },
@@ -106,6 +108,7 @@ function guestSocket(until: number): WebSocket {
       meta = structuredClone(value);
     },
     send: vi.fn(),
+    close: vi.fn(),
   } as unknown as WebSocket;
 }
 
@@ -160,7 +163,7 @@ it.each([1, 2])("returns 503 if publishing cursor %i cannot be checkpointed", as
 });
 
 it.each([1, 2])(
-  "requires a browser to retry a failed public alarm after ingress cursor %i",
+  "requires a new browser command after a failed public alarm at ingress cursor %i",
   async (seq) => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -174,7 +177,8 @@ it.each([1, 2])(
       const send = async (cursor: number) => (await handleLiveIngress(signed(cursor), env))?.status;
       expect(await send(1)).toBe(204);
       expect(setAlarm).not.toHaveBeenCalled();
-      await expect(message(socket, "subscribe")).rejects.toThrow("alarm write unavailable");
+      await message(socket, "subscribe");
+      expect(socket.close).toHaveBeenCalledWith(1011);
       expect(await send(seq)).toBe(204);
       expect(waitUntil).not.toHaveBeenCalled();
       expect(setAlarm).toHaveBeenCalledOnce();
@@ -182,7 +186,7 @@ it.each([1, 2])(
 
       clock.mockReturnValue(now + 5_001);
       pull.mockResolvedValueOnce(snapshot(seq, observedAt));
-      await message(socket, "resync");
+      await message(guestSocket(now + 60_000), "subscribe");
       expect(waitUntil).toHaveBeenCalledOnce();
       expect(pull).toHaveBeenCalledTimes(3);
       expect(setAlarm).toHaveBeenCalledTimes(2);
@@ -206,6 +210,70 @@ it.each([2, 3])("checks continuity through alarm I/O when ingress advances to %i
   expect(pull).toHaveBeenCalledTimes(continuous ? 1 : 2);
   expect(setAlarm).toHaveBeenCalledOnce();
   expect(waitUntil).toHaveBeenCalledTimes(continuous ? 1 : 0);
+});
+
+it("shares the browser pull cooldown across sockets and hub reconstruction", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const pull = vi.fn(async () => snapshot(1, new Date(now).toISOString()));
+  vi.stubGlobal("fetch", pull);
+  const { message, evict } = fixture(publicConfig);
+  const first = guestSocket(now + 60_000);
+  const second = guestSocket(now + 60_000);
+  const unavailable = '{"v":1,"type":"unavailable","topic":"voice"}';
+  try {
+    await message(first, "subscribe");
+    expect(pull).toHaveBeenCalledOnce();
+    evict();
+    clock.mockReturnValue(now + 4_999);
+    const waiting = [message(second, "subscribe"), message(first, "resync")];
+    await Promise.resolve(); // Both guest commands have reached the shared pull.
+    expect(pull).toHaveBeenCalledOnce();
+    expect(second.send).toHaveBeenCalledExactlyOnceWith(unavailable);
+
+    clock.mockReturnValue(now + 5_000);
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.all(waiting);
+    expect(pull).toHaveBeenCalledTimes(2);
+    const snapshotFrame =
+      '{"v":1,"type":"snapshot","topic":"voice","seq":1,"value":{"count":null}}';
+    expect(first.send).toHaveBeenLastCalledWith(snapshotFrame);
+    expect(second.send).toHaveBeenLastCalledWith(snapshotFrame);
+  } finally {
+    clock.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
+it("withdraws a passive viewer on a warm gap after a shorter resync lease expires", async () => {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const pull = vi.fn(async () => snapshot(1, new Date(now).toISOString()));
+  vi.stubGlobal("fetch", pull);
+  const active = guestSocket(now + 60_000);
+  const passive = guestSocket(now + 60_000);
+  const { env, message, alarm } = fixture(publicConfig, [active, passive]);
+  const unavailable = '{"v":1,"type":"unavailable","topic":"voice"}';
+  try {
+    await message(active, "subscribe");
+    await message(passive, "subscribe");
+    vi.mocked(passive.send).mockClear();
+    clock.mockReturnValue(now + 6_000);
+    pull.mockResolvedValueOnce(snapshot(1, new Date(now - 15_000).toISOString()));
+    await message(active, "resync");
+
+    clock.mockReturnValue(now + 15_001);
+    await alarm();
+    expect(active.send).toHaveBeenLastCalledWith(unavailable);
+    expect(await handleLiveIngress(signed(1), env)).toHaveProperty("status", 204);
+    expect(passive.send).not.toHaveBeenCalled();
+
+    expect(await handleLiveIngress(signed(3), env)).toHaveProperty("status", 409);
+    expect(passive.send).toHaveBeenCalledExactlyOnceWith(unavailable);
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 it("carries both watermarks across eviction without persisting any guild payload", async () => {

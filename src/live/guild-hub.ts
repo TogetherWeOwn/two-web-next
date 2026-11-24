@@ -8,6 +8,7 @@ import { signedLiveSnapshot } from "./transport";
 import { decodeLiveDelta, type LiveDelta, liveId, type LiveState, snapshotTopics } from "./wire";
 
 const WATERMARKS = "live-watermarks-v1";
+const SOCKET_PULL_AFTER = "live-socket-pull-after-v1";
 const SOCKET_RECOVERY_INTERVAL_MS = 5_000;
 const PUBLIC_VOICE_PAGE = "public-voice";
 
@@ -30,8 +31,7 @@ export class LiveGuildHub {
   readonly #publicRooms: ReadonlySet<string> | null;
   // Producer recovery can restore the raw cursor. Only a browser pull arms delivery.
   #publicUntil = 0;
-  #nextSocketPull = 0;
-  #pullingPublic = false;
+  #publicPull: Promise<boolean> | null = null;
 
   constructor(
     private readonly ctx: DurableObjectState,
@@ -79,15 +79,14 @@ export class LiveGuildHub {
     // Only the Worker binding makes this request, from capped and verified bytes.
     const delta = decodeLiveDelta(await request.arrayBuffer(), this.#guildId);
     if (!delta) return new Response(null, { status: 400 });
-    const active = this.#publicUntil > Date.now();
-    const ingested = this.#sequence.ingest(delta.seq, delta);
-    // A warm gap can hide a revocation. Cold recovery has no local public proof.
-    if (active && !this.#sequence.current) {
+    const outcome = await this.#sequence.ingest(delta.seq, delta, () => {
+      // A warm gap can hide a revocation even after the newest lease expires.
+      if (!this.#publicUntil) return;
       this.#publicUntil = 0;
       this.#sockets.invalidate();
-    }
-    const outcome = await ingested;
-    if (active && outcome === "applied") this.ctx.waitUntil(this.#sockets.publish());
+    });
+    if (outcome === "applied" && this.#publicUntil > Date.now())
+      this.ctx.waitUntil(this.#sockets.publish());
     return new Response(null, {
       status: outcome === "unavailable" ? 409 : outcome === "invalid" ? 400 : 204,
     });
@@ -120,30 +119,37 @@ export class LiveGuildHub {
     return value === null ? null : { value, until };
   }
 
+  #refreshPublic(): Promise<boolean> {
+    if (!this.#sequence || !this.#publicRooms) return Promise.resolve(false);
+    // Concurrent commands share a covering observation. Each command resumes
+    // its own authorization before it can install a new socket lease.
+    return (this.#publicPull ??= this.#pullPublic(this.#sequence).finally(() => {
+      this.#publicPull = null;
+    }));
+  }
+
+  async #pullPublic(sequence: LiveSequence<LiveState, LiveDelta>): Promise<boolean> {
+    const kv = this.ctx.storage.kv;
+    const after = kv.get<number>(SOCKET_PULL_AFTER) ?? 0;
+    const wait = Math.min(SOCKET_RECOVERY_INTERVAL_MS, after - Date.now());
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    const now = Date.now();
+    if (now < after) return false;
+    // A reconstruction shares the same browser pull budget.
+    kv.put(SOCKET_PULL_AFTER, now + SOCKET_RECOVERY_INTERVAL_MS);
+    const proof = await sequence.refresh();
+    if (proof?.validUntil === undefined) return false;
+    await this.#sockets.scheduleExpiry(proof.validUntil);
+    // Only continuous state from the browser's observation can use this alarm.
+    if (!sequence.stillCovers(proof)) return false;
+    this.#publicUntil = proof.validUntil;
+    this.ctx.waitUntil(this.#sockets.publish());
+    return true;
+  }
+
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (!this.#sequence) return socket.close(1008);
-    if (!(await this.#sockets.message(socket, message))) return;
-    const now = Date.now();
-    if (
-      !this.#publicRooms ||
-      this.#publicUntil > now ||
-      this.#pullingPublic ||
-      now < this.#nextSocketPull
-    )
-      return;
-    this.#nextSocketPull = now + SOCKET_RECOVERY_INTERVAL_MS;
-    this.#pullingPublic = true;
-    try {
-      const proof = await this.#sequence.refresh();
-      if (proof?.validUntil === undefined) return;
-      await this.#sockets.scheduleExpiry(proof.validUntil);
-      // Only continuous state from the browser's observation can use this alarm.
-      if (!this.#sequence.stillCovers(proof)) return;
-      this.#publicUntil = proof.validUntil;
-      this.ctx.waitUntil(this.#sockets.publish());
-    } finally {
-      this.#pullingPublic = false;
-    }
+    await this.#sockets.message(socket, message, () => this.#refreshPublic());
   }
 
   webSocketClose(socket: WebSocket): void {
@@ -155,7 +161,8 @@ export class LiveGuildHub {
   }
 
   alarm(): Promise<void> {
-    if (this.#publicUntil <= Date.now()) this.#publicUntil = 0;
+    // Passive sockets can outlive the most recent proof. Keep the local marker
+    // until a gap or reconstruction so a later gap still withdraws them.
     return this.#sockets.expire(this.#publicUntil);
   }
 }
