@@ -151,6 +151,7 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
       SESSION_COOKIE,
       token,
       FIXTURE_SECRETS.SESSION_SECRET,
+      { path: "/", secure: true },
     );
     return signed.split(";", 1)[0];
   }
@@ -208,7 +209,7 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
       ["GET", "/events/line%0Abreak.ics", 401],
       ["GET", "/events/malformed%FF.ics", 404],
       ["GET", `/events/${eventKeys[0]}`, 401],
-      ["GET", `/api/public/events/${eventKeys[0]}.ics`, 404],
+      ["GET", `/api/public/events/${eventKeys[0]}.ics`, 422],
       ["GET", "/version", 200],
     ]) {
       await compareFallback(method, path, status, origin);
