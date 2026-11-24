@@ -66,12 +66,11 @@ is only a completeness signal: it does not prove that a hook implements every
 mapped gate or that a shared endpoint implements each method. Migration parity
 and matcher precedence require separate behavioral tests.
 
-The `/e/:file{.+\\.md}` and `/events/:file{.+\\.ics}` targets remain
-unresolved. Terminal matched-rest routes rank below the required `[key]` routes,
-so they would misroute ordinary single-segment suffix requests. A future route
-set must prove precedence and preserve single- and multi-segment behavior, auth,
-responses and URL semantics before either affected slice can be completed. The
-snapshot test does not enforce this prerequisite or validate the selected design.
+The `/e/:file{.+\\.md}` target remains unresolved. Terminal matched-rest routes
+rank below required `[key]` routes. The dormant per-event ICS endpoint uses
+`/events/[key].ics` for the single-segment form and retains Hono's handling of
+multisegment requests. The snapshot test checks inventory drift and the hosted
+Worker fixture checks the mounted ICS route and its neighbors.
 
 ## Current-main source checkpoint
 
@@ -119,7 +118,76 @@ separately registered `POST /events` has no matching POST ownership entry and
 remains Hono-owned. The staging manifest may differ. This distinction matters
 when the read and write families are migrated independently.
 
+The standalone resolver accepts a dormant reservation release list for future
+families. Each release requires an enabled manifest entry for the same method
+and literal pathname. HEAD follows GET. Encoded aliases and Kit data URLs
+remain reserved, as do adapter assets that reach the resolver. Dynamic feed
+admission does not release any reserved path.
+
 After Ember changes land, re-take and validate the mounted inventory, route map
 and pure-Hono golden evidence against the then-current main revision. This
 refresh is mandatory before shared dispatch integration or any production
 family flip; this earlier snapshot does not satisfy that release checkpoint.
+[`hooks.server.ts`](../web/src/hooks.server.ts) runs capture admission before
+the existing request dispatcher. The dispatcher checks host and ownership
+before Kit's same-origin check, shared session bridge and route guards. The
+family selector runs only when the existing ownership lookup falls back to
+Hono. Each family requires its own binding set to the literal string
+`true`. A candidate must match the original method, pathname and mounted Kit
+route ID. Static entries may release exact reserved pairs. Dynamic entries
+require a pathname predicate and leave reserved paths to Hono. HEAD follows
+GET. Conflicting claims and overlaps with disabled page ownership entries
+fall back to Hono.
+
+### Security disclosure endpoint
+
+`KIT_ROUTE_SECURITY_TXT=true` admits trusted GET and HEAD on the literal
+`/.well-known/security.txt`. Hono owns it by default and handles other methods,
+host refusals, encoded paths, trailing slashes, and Kit data URLs. The response
+uses the shared disclosure text, including a `Canonical` field from HTTPS
+`APP_URL`, and keeps its one-hour public cache policy. It requires no database
+or session access.
+
+### Search indexing endpoints
+
+`KIT_ROUTE_SEO=true` selects GET and HEAD on `/robots.txt` and
+`/sitemap_index.xml`. An unset or false binding, encoded or trailing-slash
+aliases, Kit data URLs and other methods stay with Hono. `/sitemap.xml` keeps
+its Hono 404. Both successful responses use the configured `APP_URL` and keep
+the one-hour public cache policy. Robots is database-free. The sitemap charges
+the shared public events-read budget once and lists the static URLs plus the
+bounded, renderable published events.
+
+Before activating the binding, qualify the exact candidate through the
+[production release gate](../CONTRIBUTING.md#production-release-gate). Verify
+both endpoints return to Hono when the binding is cleared, accounting for
+cached responses. Check delivery under the existing Tail Worker rules for the
+two registered route labels as part of release verification.
+
+### Feed endpoints
+
+`KIT_ROUTE_FEEDS=true` selects GET and HEAD on `/events.ics`, `/events.rss`
+and `/events/<key>.ics`. An absent or false binding leaves ownership with Hono.
+The per-event route requires the literal mount and suffix with a single key
+segment. Encoded key bytes follow Hono's parameter decoding. Trailing slashes,
+encoded mount or suffix aliases and multisegment forms go to Hono.
+
+The shared handlers charge the `events-read` bucket before reading events.
+Kit supplies the request ID, global response headers and completion log. Only
+a per-event draft resolves the signed session. The handler checks moderator
+access before honoring validators and delivers session renewal cookies on
+GET and HEAD when the shared session reader rotates the session.
+
+The hosted built-Worker fixture checks the compiled Kit manifest against the
+mounted Hono inventory, then compares feed bytes, validators, success and
+refusal headers, and shared budget charges across absent, off and on bindings.
+It exercises trailing slashes, encoded and data URL variants, wrong methods,
+an existing Kit page and the reserved Hono `/version` read. Per-event cases
+cover published, cancelled, missing and draft rows with anonymous, member and
+moderator requests. Event JSON and the public API keep their current owners.
+
+Before activating the flag, qualify the exact candidate with staging feed and
+rollback checks through the [production release gate](../CONTRIBUTING.md#production-release-gate).
+Use all three feed paths to confirm that clearing the binding returns requests
+to Hono. Account for the existing 300-second cache lifetime. The collections
+are public-cacheable and single-event downloads are private-cacheable.

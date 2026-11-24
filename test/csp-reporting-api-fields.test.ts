@@ -1,8 +1,8 @@
 // route-inventory: POST /csp-reports
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
 import { MAX_CSP_REPORT_BYTES, cspReportLogFields } from "../src/csp-reports";
 import type { Env } from "../src/env";
+import { requestApp } from "./helpers/fetch-app";
 
 const documentUrl = "https://next.example.test/events/synthetic";
 const envelopeUrl = "https://next.example.test/envelope";
@@ -76,7 +76,7 @@ async function post(body: string | ReadableStream<Uint8Array> | null, sampleRate
       return key === "CSP_REPORT_SAMPLE_RATE" ? sampleRate : Reflect.get(target, key, receiver);
     },
   });
-  const response = await app.request(
+  const response = await requestApp(
     "/csp-reports",
     {
       method: "POST",

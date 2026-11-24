@@ -211,11 +211,15 @@ describe("Kit home port: header, hero and metadata chrome", () => {
     expect(page).toContain("RSVP in Discord");
   });
 
-  it("ships no JavaScript on the page", () => {
+  it("allows only the flag-gated public voice island as page JavaScript", () => {
     const page = read(pagePath);
-    expect(page).not.toContain("<script src");
+    const island = 'src="/islands/kit-public-voice.js"';
+    expect(page.match(/<script[^>]+\bsrc="[^"]+"/g)).toEqual([`<script ${island}`]);
+    expect(page.match(/src="\/islands\/[^"]+"/g)).toEqual([island]);
+    expect(page).toMatch(
+      /\{#if data\.publicVoiceEnabled\}[^{}]+\{@html publicVoiceIsland\}\s*\{\/if\}/,
+    );
     expect(page).not.toContain("unsafe-inline");
-    expect(page).not.toContain('src="/islands/');
   });
 
   it("emits JSON-LD as markup, never as raw script content", () => {

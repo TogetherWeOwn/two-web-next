@@ -40,6 +40,36 @@ const CHECK_MATCHERS = [
     testContains: null,
   },
   {
+    id: "kit-payload-static-ics",
+    describe: "Kit feed anonymous payloads",
+    testContains: "GET /events.ics",
+  },
+  {
+    id: "kit-payload-static-rss",
+    describe: "Kit feed anonymous payloads",
+    testContains: "GET /events.rss",
+  },
+  {
+    id: "kit-payload-event-ics",
+    describe: "Kit feed anonymous payloads",
+    testContains: "GET /events/",
+  },
+  {
+    id: "kit-payload-robots",
+    describe: "Kit search indexing anonymous payloads",
+    testContains: "GET /robots.txt",
+  },
+  {
+    id: "kit-payload-sitemap",
+    describe: "Kit search indexing anonymous payloads",
+    testContains: "GET /sitemap_index.xml",
+  },
+  {
+    id: "kit-payload-security-txt",
+    describe: "Kit security.txt anonymous payload",
+    testContains: null,
+  },
+  {
     id: "kit-payload-events-past",
     describe: "Kit GET /events/past anonymous payload",
     testContains: null,

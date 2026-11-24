@@ -47,6 +47,9 @@ bundled `/events` GET with hostile database rows and checks the final full
 page and island response bytes. Its separate `kit-payload-events-binding`
 ID makes missing endpoint coverage fail vacuously instead of being masked
 by the model-level tests.
+The same suite invokes the static ICS and RSS bindings with a synthetic
+event carrying private fields and a synthetic session cookie. Each endpoint
+has its own check ID and must serve the public item without those bytes.
 
 ## Fixing a leak
 

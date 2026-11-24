@@ -6,7 +6,7 @@
 // only to every viewer.
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { updateEvent } from "../src/admin/store-event-writes";
 import { parseEventForm } from "../src/admin/validation";
 import {
@@ -160,7 +160,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
   });
 
   const get = async (path: string, init: RequestInit = {}, ip = "192.0.2.71") =>
-    app.request(path, { ...init, headers: { "cf-connecting-ip": ip, ...init.headers } }, env);
+    fetchAppPath(path, { ...init, headers: { "cf-connecting-ip": ip, ...init.headers } }, env);
 
   const seed = (n: number, extra: Record<string, unknown> = {}) =>
     db.insert(events).values({
@@ -226,7 +226,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
 
   it.each(UNKNOWN_PATHS)("GET %s answers JSON with a database present", async (path) => {
     await seed(21);
-    const res = await app.request(
+    const res = await fetchAppPath(
       path,
       { headers: { "cf-connecting-ip": "192.0.2.97" } },
       {
@@ -833,7 +833,11 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
     };
 
     const dbGet = (path: string, init: RequestInit = {}, ip = "192.0.2.97") =>
-      app.request(path, { ...init, headers: { "cf-connecting-ip": ip, ...init.headers } }, dbEnv());
+      fetchAppPath(
+        path,
+        { ...init, headers: { "cf-connecting-ip": ip, ...init.headers } },
+        dbEnv(),
+      );
 
     it.each(["/api/public/events", `/api/public/events/${key(51)}`])(
       "%s answers 304 for exact, weak, list and wildcard validators",
@@ -900,7 +904,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
       const ip = "192.0.2.100";
       const throttled = spentThrottleEnv(ip);
       for (const path of paths) {
-        const res = await app.request(
+        const res = await fetchAppPath(
           path,
           { headers: { "cf-connecting-ip": ip, "if-none-match": etags.get(path) as string } },
           throttled,

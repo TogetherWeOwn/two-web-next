@@ -3,6 +3,7 @@
 // tokens, SQL or personal data, so they never reach console output,
 // queue.failing or the ledger. Stable failure codes survive (sanitized).
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import { consume } from "../src/jobs/consumer";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "../src/jobs/constants";
 import { BotTerminalError, BotTransportError } from "../src/jobs/types";
@@ -16,12 +17,13 @@ const PII = "***synthetic-member-mail-6k1p***";
 // diagnostic line or forge alert fields.
 const SPLIT = "e1\ninjected-field";
 
-function deps(ledger?: QueueLedger): {
+function deps(announcementAttempts = 1): {
   bot: BotClient;
   events: EventStore;
   lock: UniqueLock;
   ledger: QueueLedger;
   failedReasons: string[];
+  announcementReconciliation: ReturnType<typeof announcementStore>;
 } {
   const failedReasons: string[] = [];
   const attempt = {
@@ -59,7 +61,7 @@ function deps(ledger?: QueueLedger): {
     bot: {} as BotClient,
     events: store,
     lock,
-    ledger: ledger ?? {
+    ledger: {
       enqueued: async () => {},
       reserved: async () => {},
       released: async () => {},
@@ -67,11 +69,12 @@ function deps(ledger?: QueueLedger): {
       failed: async (_id, _kind, _key, reason) => void failedReasons.push(reason),
     },
     failedReasons,
+    announcementReconciliation: announcementStore(announcementAttempts),
   };
 }
 
 function msg(body: unknown, attempts = 1) {
-  return { body, attempts, ack: vi.fn(), retry: vi.fn() };
+  return { body, attempts, timestamp: new Date(), ack: vi.fn(), retry: vi.fn() };
 }
 
 function capture() {
@@ -116,7 +119,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     } as unknown as BotClient;
     const m = msg({
       kind: "announcement",
-      idempotencyKey: "k",
+      idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
       action: { channelKey: "c", body: "b" },
       jobId: "j1",
     });
@@ -139,7 +142,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
 
   it("a thrown BotTerminalError alerts as its class, never its message", async () => {
     const lines = capture();
-    const d = deps();
+    const d = deps(2);
     const bot = {
       postAnnouncement: async () => {
         throw new BotTerminalError(`missing secret ${TOK} ${PII}`);
@@ -148,7 +151,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const m = msg(
       {
         kind: "announcement",
-        idempotencyKey: "k",
+        idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
         action: { channelKey: "c", body: "b" },
         jobId: "j2",
       },
@@ -162,7 +165,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
 
   it("an exhausted unexpected throw alerts as its class across sync-event and internal-action", async () => {
     const lines = capture();
-    const d = deps();
+    const d = deps(CALL_INTERNAL_ACTION.tries);
     const bot = {
       postAnnouncement: async () => {
         throw new TypeError(`boom ${SQL} ${TOK}\nforged-line`);
@@ -174,7 +177,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const a = msg(
       {
         kind: "announcement",
-        idempotencyKey: "k",
+        idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
         action: { channelKey: "c", body: "b" },
         jobId: "j3",
       },
@@ -301,7 +304,11 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
       }),
     } as unknown as BotClient;
     const attempt = msg(
-      { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } },
+      {
+        kind: "announcement",
+        idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
+        action: { channelKey: "c", body: "b" },
+      },
       1,
     );
     await consume({ messages: [attempt] }, { ...d, bot: retryable });
@@ -309,7 +316,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     expect(attempt.ack).not.toHaveBeenCalled();
 
     // Without a jobId there is no ledger row, so capture the alert reason instead.
-    const d2 = deps();
+    const d2 = deps(CALL_INTERNAL_ACTION.tries);
     const terminal = {
       postAnnouncement: async () => ({
         ok: false,
@@ -324,7 +331,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const last = msg(
       {
         kind: "announcement",
-        idempotencyKey: "k",
+        idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
         action: { channelKey: "c", body: "b" },
         jobId: "j7",
       },

@@ -24,6 +24,16 @@ export function verifyUploadRehearsal(receipt, parity, identity, context, config
   for (const rows of [parity.failures, parity.approved, parity.assets.failures]) {
     assert.deepEqual(rows, [], "expected clean parity without exceptions");
   }
+  assert.deepEqual(
+    parity.cutoverReadiness,
+    [
+      { name: "prefix-1033", status: 200, pending: 0 },
+      { name: "transition-1037", status: 200, pending: 0 },
+      { name: "missing-1034", status: 503, pending: 1 },
+      { name: "malformed", status: 503, pending: null },
+    ],
+    "missing or invalid installed cutover readiness evidence",
+  );
   assert.equal(receipt.scratchRemoved, true, "missing rehearsal scratch cleanup");
   assert.equal(receipt.wrangler?.version, wranglerVersion, "unexpected Wrangler version");
   assert.equal(receipt.tag, `${context.sourceSha}-${context.runId}-${context.runAttempt}`);

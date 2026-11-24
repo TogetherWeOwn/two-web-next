@@ -109,3 +109,122 @@ const subjectOf = (row: {
     </nav>
   </section>
 </AdminShell>
+
+<style>
+  section {
+    border-color: var(--color-hair2);
+    padding-block: var(--space-6);
+    font: var(--text-small) / var(--leading-body) var(--font-ui);
+  }
+
+  /* Anchor to this page's section without changing the shared HTML contract. */
+  section :global {
+    h1 {
+      margin-block: 0 var(--space-3);
+      font: var(--font-weight-display) var(--text-h3) / var(--leading-heading) var(--font-display);
+      letter-spacing: var(--tracking-h3);
+    }
+
+    .hint, #activity-log-scroll-hint {
+      color: var(--color-lobby-muted);
+      font-size: inherit;
+    }
+
+    .filters, .actions {
+      flex-wrap: wrap;
+      gap: var(--space-3);
+    }
+
+    .filters .field {
+      min-inline-size: 0;
+    }
+
+    .field label {
+      margin-block-end: var(--space-1);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .field input {
+      padding: var(--space-2) var(--space-3);
+      color: var(--color-lobby-ink);
+      background: var(--color-lobby-raised);
+      border: 1px solid var(--color-lobby-line);
+      border-radius: var(--radius-s);
+    }
+
+    .filters .btn {
+      padding-inline: var(--space-4);
+      color: var(--color-lobby-on-accent);
+      background: var(--color-lobby-accent);
+      border: 1px solid transparent;
+      border-radius: var(--radius-s);
+      font: inherit;
+      font-weight: var(--font-weight-semibold);
+      letter-spacing: normal;
+      text-transform: none;
+    }
+
+    .filters .btn:hover {
+      background: var(--color-accent-hi);
+    }
+
+    .admin-table-scroll {
+      scrollbar-color: var(--color-lobby-line) var(--color-lobby-surface);
+    }
+
+    .admin-table {
+      border-collapse: separate;
+      border-spacing: 0;
+    }
+
+    .admin-table :is(th, td) {
+      padding: var(--space-2) var(--space-3);
+      border-color: var(--color-hair2);
+    }
+
+    .admin-table th {
+      background: var(--color-lobby-raised);
+      font-weight: var(--font-weight-regular);
+      white-space: nowrap;
+    }
+
+    .admin-table :is(th, .admin-chronology) {
+      font-family: var(--font-data);
+    }
+
+    .admin-table :is(th:first-child, td:first-child:not([colspan])) {
+      position: sticky;
+      inset-inline-start: 0;
+    }
+
+    .admin-table td:first-child:not([colspan]) {
+      /* Wrap long IDs without letting this column shrink to individual digits. */
+      min-inline-size: min(25vw, 18ch);
+      max-inline-size: 25vw;
+      overflow-wrap: break-word;
+      background: var(--color-lobby-surface);
+    }
+
+    .admin-table :is(td:nth-child(2), td:last-child:not([colspan])) {
+      min-inline-size: 16ch;
+      overflow-wrap: anywhere;
+    }
+
+    .actions a {
+      padding-block: var(--space-1);
+      color: var(--color-lobby-accent);
+      text-decoration: underline;
+    }
+
+    :is(input, button, a, .admin-table-scroll):focus-visible {
+      outline: var(--focus-width) solid var(--color-lobby-focus);
+      outline-offset: var(--focus-offset);
+    }
+  }
+
+  @media (forced-colors: active) {
+    section :global(:is(input, button, a, .admin-table-scroll):focus-visible) {
+      outline-color: Highlight;
+    }
+  }
+</style>

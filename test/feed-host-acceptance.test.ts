@@ -38,7 +38,7 @@
 // (no other `mailto:` / real domain), never presence.
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { encodeEventRow } from "./helpers/pg-proxy-event-projection";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -600,7 +600,7 @@ function routeFixture(rows: EventRow[]) {
   const env = { APP_URL, ADMIN_DB: drizzle(query) as unknown as Db } as unknown as Env;
   return {
     query,
-    request: (path: string, init?: RequestInit) => app.request(path, init ?? {}, env),
+    request: (path: string, init?: RequestInit) => fetchAppPath(path, init ?? {}, env),
   };
 }
 

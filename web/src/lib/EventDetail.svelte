@@ -31,7 +31,7 @@ let {
 }: {
   model: KitEventDetailModel;
   restoredWrite?: boolean;
-  /** Composed presentation only; the isolated fixture is the sole caller. */
+  /** Composed server presentation. */
   lifeline?: readonly LifelineStep[];
 } = $props();
 const facts = $derived(kitEventFacts(model));
@@ -314,8 +314,8 @@ const detailIslands = $derived([
   <div class="event-discovery">{@render eventPagination(model.series, true)}{@render eventPagination(model.neighbors, false)}
     {#if model.related.length > 0}
       <section aria-label="Related events" data-testid="event-related">
-        <h2>More events you might like</h2>
-        <ul class="event-related-grid">
+        <h2 id="event-related-heading">More events you might like</h2>
+        <ul class="event-related-grid" role="list" aria-labelledby="event-related-heading">
           {#each model.related as event (event.key)}
             <li>
               <a href="/e/{event.key}" data-testid="event-related-link">

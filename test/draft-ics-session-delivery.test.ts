@@ -1,7 +1,7 @@
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { parseSigned, serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it } from "vitest";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { encodeEventRow } from "./helpers/pg-proxy-event-projection";
 import { AUTH_STATUS_COOKIE } from "../src/auth-status";
 import { events } from "../src/db/admin-schema";
@@ -100,7 +100,7 @@ function fixture(status: "draft" | "published" = "draft", clock: () => number = 
       const headers = new Headers();
       if (cookie) headers.set("cookie", cookie);
       if (etag) headers.set("if-none-match", etag);
-      return app.request(path, { headers }, env);
+      return fetchAppPath(path, { headers }, env);
     },
   };
 }

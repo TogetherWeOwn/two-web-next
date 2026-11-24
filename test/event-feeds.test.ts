@@ -5,7 +5,7 @@
 // output, plus route tests (agent-testdb; skipped without DATABASE_URL).
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { events } from "../src/db/admin-schema";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
@@ -368,7 +368,7 @@ describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
     },
     SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
   } as unknown as Env;
-  const req = (path: string, init: RequestInit = {}) => app.request(path, init, env);
+  const req = (path: string, init: RequestInit = {}) => fetchAppPath(path, init, env);
   const ins = (
     key: string,
     status: "draft" | "published" | "cancelled" | "past",

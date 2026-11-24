@@ -76,7 +76,8 @@ function minifyBytes(entry, root) {
   const args = entry.endsWith(".css")
     ? ["--loader:.css=css", "--minify", source]
     : entry === "public/islands/event-device-timezone.js" ||
-        entry === "public/islands/kit-live-event-time.js"
+        entry === "public/islands/kit-live-event-time.js" ||
+        entry === "public/islands/kit-public-voice.js"
       ? ["--bundle", "--format=iife", "--minify", source]
       : ["--minify", source];
   return execFileSync(esbuild, args, { maxBuffer: 16 * 1024 * 1024 });
@@ -219,6 +220,10 @@ function selftest() {
     cpSync(join(repoRoot, "public"), join(scratch, "public"), { recursive: true });
     cpSync(join(repoRoot, "vendor"), join(scratch, "vendor"), { recursive: true });
     cpSync(join(repoRoot, "lib"), join(scratch, "lib"), { recursive: true });
+    for (const path of ["src/live/browser-topic.ts", "src/live/client-topic.ts"]) {
+      mkdirSync(dirname(join(scratch, path)), { recursive: true });
+      copyFileSync(join(repoRoot, path), join(scratch, path));
+    }
     for (const path of [...HONO_CONSUMERS, ...ARTIFACTS, sourceFor(headerAsset)]) {
       mkdirSync(dirname(join(scratch, path)), { recursive: true });
       copyFileSync(join(repoRoot, path), join(scratch, path));
