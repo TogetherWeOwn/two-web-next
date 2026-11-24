@@ -31,7 +31,7 @@ it("queues same-origin calls and standalone runs without taking the caller's loc
   );
   expect(caller.jobs["staging-quality"].with.origin).toBe(ORIGIN);
   expect(caller.jobs["zap-baseline"].uses).toBe(
-    "TogetherWeOwn/two-web-next/.github/workflows/zap-staging.yml@38581ef492f5c972969f5dfada396a9f0e2ee989",
+    "TogetherWeOwn/two-web-next/.github/workflows/zap-staging.yml@57f1abbc25d0b39a77d83b46eb8b803b0249bb66",
   );
   expect(caller.jobs["zap-baseline"].with.candidate_sha).toBe("${{ needs.scope.outputs.sha }}");
   expect(workflow.on.workflow_call.inputs.origin).toEqual({ type: "string", required: true });
