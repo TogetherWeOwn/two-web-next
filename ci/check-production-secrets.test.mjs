@@ -588,7 +588,7 @@ const GUARDED_PRODUCTION_SECRET =
 // `inputs.target` or `inputs.environment` alone, or with a literal fallback
 // for scheduled runs.
 const TARGET_ENVIRONMENT =
-  /^\$\{\{\s*\(?\s*inputs\.(?:target|environment)\s*(?:\|\|\s*'[A-Za-z-]+'\s*)?\)?\s*\}\}$/;
+  /^\$\{\{\s*\(?\s*inputs\.(target|environment)\s*(?:\|\|\s*'[A-Za-z-]+'\s*)?\)?\s*\}\}$/;
 
 function stripQuotes(value) {
   return value
@@ -662,6 +662,27 @@ function delegatesToRollback(lines, environment) {
   );
 }
 
+// Permit only the exact Boolean scope checks in the database preflights. Inspect the
+// exact YAML value and keep scanning the rest of the job for secret references.
+function checksDatabaseSecretScope(file, lines) {
+  const source = lines.join("\n");
+  const document = parseDocument(source);
+  const presence = document.getIn(["steps", 0, "env", "BROADER_SCOPE_SECRETS"], true);
+  const expected =
+    "${{ secrets.PRODUCTION_DB_IDENTITY_APPROVED_SHA != '' || " +
+    "secrets.PRODUCTION_DB_IDENTITY_SHA256 != '' || secrets.PRODUCTION_DATABASE_URL != '' }}";
+  const repair =
+    "${{ secrets.PRODUCTION_DB_REPAIR_APPROVED_SHA != '' || " +
+    "secrets.PRODUCTION_DB_REPAIR_PLAN_SHA256 != '' || secrets.PRODUCTION_DB_REPAIR_PLAN != '' || " +
+    "secrets.PRODUCTION_DB_REPAIR_DATABASE_URL != '' }}";
+  if (!["db-production-identity.yml", "db-permissions-repair.yml"].includes(file)) return false;
+  const expectedScope = file === "db-production-identity.yml" ? expected : repair;
+  if (document.errors.length || !isScalar(presence) || presence.value !== expectedScope)
+    return false;
+  const [start, end] = presence.range;
+  return !PRODUCTION_SECRET.test(source.slice(0, start) + source.slice(end));
+}
+
 export function productionSecretEnvironmentViolations(text, file) {
   const { outside, jobs } = splitWorkflow(text);
   const violations = [];
@@ -676,6 +697,7 @@ export function productionSecretEnvironmentViolations(text, file) {
     const environment = jobEnvironment(lines);
     if (environment === undefined) {
       if (delegatesToRollback(lines, "production")) continue;
+      if (id === "preflight" && checksDatabaseSecretScope(file, lines)) continue;
       violations.push(`${file}: job ${id} reads a PRODUCTION_* secret without an environment`);
     } else if (/^production$/i.test(environment)) {
       // Bound to the protected Environment on every run.
@@ -729,10 +751,30 @@ test("every job that reads a PRODUCTION_* secret binds the production environmen
     "rollback-production.yml",
     "db-migrate.yml",
     "db-backup.yml",
+    "db-production-identity.yml",
+    "db-permissions-repair.yml",
   ]) {
     assert.ok(referencing.includes(expected), `expected ${expected} to reference PRODUCTION_*`);
   }
   assert.deepEqual(violations, []);
+});
+
+test("identity preflight never exempts direct production secret mappings", () => {
+  const file = "db-production-identity.yml";
+  const source = readFileSync(new URL(file, WORKFLOWS), "utf8");
+  assert.deepEqual(productionSecretEnvironmentViolations(source, file), []);
+  const direct = "${{ secrets.PRODUCTION_DATABASE_URL }}";
+  for (const widened of [
+    source.replace(
+      "          BROADER_SCOPE_SECRETS:",
+      `          RAW_URL: ${direct}\n          BROADER_SCOPE_SECRETS:`,
+    ),
+    source.replace(/\$\{\{ secrets.PRODUCTION_DB_IDENTITY_APPROVED_SHA[\s\S]*?\}\}/, direct),
+  ]) {
+    assert.deepEqual(productionSecretEnvironmentViolations(widened, file), [
+      `${file}: job preflight reads a PRODUCTION_* secret without an environment`,
+    ]);
+  }
 });
 
 test("db-backup selects its environment from the dispatch target, staging by default", () => {
@@ -741,6 +783,36 @@ test("db-backup selects its environment from the dispatch target, staging by def
   assert.ok(backup, "expected a backup job");
   // Scheduled runs carry no inputs, so they fall back to staging.
   assert.equal(jobEnvironment(backup.lines), "${{ inputs.target || 'staging' }}");
+});
+
+test("db-backup opts into S3 separately per target and never falls back to staging credentials", () => {
+  const workflow = parseDocument(readFileSync(new URL("db-backup.yml", WORKFLOWS), "utf8")).toJS();
+  const backup = workflow.jobs.backup;
+  assert.equal(
+    backup.env.BACKUP_TRANSPORT,
+    "${{ inputs.target == 'production' && vars.PRODUCTION_BACKUP_TRANSPORT || inputs.target != 'production' && vars.BACKUP_TRANSPORT || '' }}",
+  );
+  const steps = backup.steps.filter(({ run }) =>
+    /(?:^|\n)\s*\.\/bin\/db-backup\.sh (?:backup|promote-weekly|rotate|check) /.test(run ?? ""),
+  );
+  assert.deepEqual(
+    steps.map(({ name }) => name),
+    ["Backup to R2", "Promote weekly + rotate (Sundays)", "Verify all keys"],
+  );
+  for (const name of ["R2_ACCOUNT_ID", "R2_S3_ACCESS_KEY_ID", "R2_S3_SECRET_ACCESS_KEY"]) {
+    const mapping = `\${{ env.BACKUP_TRANSPORT == 's3' && (inputs.target == 'production' && secrets.PRODUCTION_${name} || inputs.target != 'production' && secrets.${name} || '') || '' }}`;
+    assert.equal(workflow.env?.[name], undefined, name);
+    assert.equal(backup.env[name], undefined, name);
+    assert.deepEqual(
+      backup.steps.filter((step) => step.env?.[name] !== undefined),
+      steps,
+      name,
+    );
+    for (const step of steps) {
+      assert.equal(step.env[name], mapping, `${step.name}: ${name}`);
+      assert.equal(step.env.BACKUP_TRANSPORT, undefined, step.name);
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -1034,9 +1106,9 @@ test("script data cannot stand in for a production delegation", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Staging Cloudflare secrets are Environment-scoped too.
+// Staging Cloudflare and R2 S3 secrets are Environment-scoped too.
 //
-// The unprefixed CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID names belong to
+// The unprefixed CLOUDFLARE_* and R2_* credential names belong to
 // the `staging` Environment, the same way the PRODUCTION_* names belong to
 // `production`. A job that reads them without binding an Environment falls
 // through to repository scope and skips the Environment's main-only branch
@@ -1051,7 +1123,7 @@ test("script data cannot stand in for a production delegation", () => {
 // ---------------------------------------------------------------------------
 
 const STAGING_CLOUDFLARE_SECRET =
-  /\bsecrets\s*(?:\.\s*|\[\s*['"])CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\b/i;
+  /\bsecrets\s*(?:\.\s*|\[\s*['"])(?:CLOUDFLARE_(?:API_TOKEN|ACCOUNT_ID)|R2_(?:ACCOUNT_ID|S3_ACCESS_KEY_ID|S3_SECRET_ACCESS_KEY))\b/i;
 // The production name is taken only under the same input that selects the
 // production Environment, and the staging name only under the inverse
 // guard, so an empty production secret resolves to '' (a loud downstream
@@ -1059,7 +1131,7 @@ const STAGING_CLOUDFLARE_SECRET =
 // (db-backup, deploy) and `inputs.environment` (rollback-production)
 // select the Environment.
 const TARGET_GUARDED_STAGING_CLOUDFLARE =
-  /\binputs\.(?:target|environment)\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\s*\|\|\s*inputs\.(?:target|environment)\s*!=\s*'production'\s*&&\s*secrets\s*\.\s*CLOUDFLARE_\1\s*\|\|\s*''/i;
+  /\binputs\.(target|environment)\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_(CLOUDFLARE_(?:API_TOKEN|ACCOUNT_ID)|R2_(?:ACCOUNT_ID|S3_ACCESS_KEY_ID|S3_SECRET_ACCESS_KEY))\s*\|\|\s*inputs\.\1\s*!=\s*'production'\s*&&\s*secrets\s*\.\s*\2\s*\|\|\s*''/i;
 
 // Job-level `environment:` is forbidden on reusable-workflow caller jobs
 // (`uses:`): GitHub only allows name/uses/with/secrets/needs/if/permissions
@@ -1080,6 +1152,7 @@ export function stagingCloudflareEnvironmentViolations(text, file) {
     const referencing = lines.filter((line) => STAGING_CLOUDFLARE_SECRET.test(line));
     if (referencing.length === 0) continue;
     const environment = jobEnvironment(lines);
+    const selector = TARGET_ENVIRONMENT.exec(environment ?? "")?.[1];
     if (environment === undefined && !delegatesToRollback(lines, "staging")) {
       violations.push(
         `${file}: job ${id} reads a staging Cloudflare secret without an environment`,
@@ -1089,11 +1162,11 @@ export function stagingCloudflareEnvironmentViolations(text, file) {
       // own jobs are gated independently.
     } else if (/^staging$/i.test(environment)) {
       // Bound to the staging Environment on every run.
-    } else if (TARGET_ENVIRONMENT.test(environment)) {
+    } else if (selector !== undefined) {
       for (const line of referencing) {
-        if (!TARGET_GUARDED_STAGING_CLOUDFLARE.test(line)) {
+        if (TARGET_GUARDED_STAGING_CLOUDFLARE.exec(line)?.[1] !== selector) {
           violations.push(
-            `${file}: job ${id} maps a staging Cloudflare secret without the inputs.target/environment == 'production' guard to its PRODUCTION_* pair`,
+            `${file}: job ${id} maps a staging Cloudflare secret without the inputs.${selector} == 'production' guard to its PRODUCTION_* pair`,
           );
           break;
         }
@@ -1388,6 +1461,11 @@ test("target-selected environment requires the PRODUCTION_* guard for staging Cl
     "secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.target != 'production' && secrets.CLOUDFLARE_API_TOKEN",
   );
   assert.equal(stagingCloudflareEnvironmentViolations(mismatched, "fixture.yml").length, 1);
+  // Both credential branches must use the exact input that binds the Environment.
+  const mixedSelectors = guarded.replace("inputs.target !=", "inputs.environment !=");
+  assert.equal(stagingCloudflareEnvironmentViolations(mixedSelectors, "fixture.yml").length, 1);
+  const wrongSelector = mixedSelectors.replace("inputs.target ==", "inputs.environment ==");
+  assert.equal(stagingCloudflareEnvironmentViolations(wrongSelector, "fixture.yml").length, 1);
   // An expression that cannot be shown to select staging is rejected.
   const opaque = guarded.replace("inputs.target || 'staging'", "vars.ENVIRONMENT_NAME");
   assert.equal(stagingCloudflareEnvironmentViolations(opaque, "fixture.yml").length, 1);

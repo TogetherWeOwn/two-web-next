@@ -54,6 +54,7 @@ type KitHomeLoadArgs = {
 };
 
 type KitHomeLoadData = {
+  nowMs: number;
   upcomingEvents: Array<
     { title: string; startsAt: Date; source: string } & Record<string, unknown>
   >;
@@ -65,6 +66,7 @@ type KitHomeLoadData = {
 type KitHomeLoad = (args: KitHomeLoadArgs) => Promise<KitHomeLoadData>;
 
 let load: KitHomeLoad;
+let dispatchHome: (args: KitHomeLoadArgs) => Promise<Response>;
 let retireHomeGuestCache: () => Promise<void>;
 let resetHomeGuestCache: () => void;
 let cacheTtlMs: number;
@@ -94,7 +96,18 @@ beforeAll(async () => {
   await build({
     stdin: {
       contents: [
-        `export { load } from ${JSON.stringify(routePath)};`,
+        `import { env } from "cloudflare:workers";`,
+        `import { load as routeLoad } from ${JSON.stringify(routePath)};`,
+        `import { prepareKitHomePanels } from ${JSON.stringify(join(root, "src/kit-home-panels.ts"))};`,
+        `export const load = async (args) => routeLoad({ ...args, locals: { ...args.locals, homePanels: await prepareKitHomePanels(env, args.request) } });`,
+        `import { dispatchHookRequest, ROUTE_MANIFEST } from ${JSON.stringify(join(root, "src/route-ownership.ts"))};`,
+        `export const dispatchHome = (args) => dispatchHookRequest({ ...args, route: { id: "/" } }, {
+          appUrl: args.url.origin,
+          manifest: ROUTE_MANIFEST.map((entry) => entry.path === "/" ? { ...entry, enabled: true } : entry),
+          honoFetch: async () => { throw new Error("Unexpected Hono fallback"); },
+          homePanelsFor: (request) => prepareKitHomePanels(env, request),
+          resolve: async (event) => Response.json(await routeLoad({ ...args, locals: event.locals })),
+        });`,
         `export {`,
         `  retireHomeGuestCache,`,
         `  __resetHomeGuestCacheForTests as resetHomeGuestCache,`,
@@ -130,11 +143,13 @@ beforeAll(async () => {
   });
   const mod = (await import(pathToFileURL(outfile).href)) as unknown as {
     load: KitHomeLoad;
+    dispatchHome: typeof dispatchHome;
     retireHomeGuestCache: () => Promise<void>;
     resetHomeGuestCache: () => void;
     cacheTtlMs: number;
   };
   load = mod.load;
+  dispatchHome = mod.dispatchHome;
   retireHomeGuestCache = mod.retireHomeGuestCache;
   resetHomeGuestCache = mod.resetHomeGuestCache;
   cacheTtlMs = mod.cacheTtlMs;
@@ -481,6 +496,30 @@ describe("Kit home guest cache: same-isolate memory", () => {
 });
 
 describe("Kit home guest cache: never-store rules", () => {
+  it("releases the home fallback while an optional schedule query is still pending", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const f = fixture();
+    f.use();
+    f.hold();
+    try {
+      const response = await dispatchHome(loadArgs().args);
+      expect(f.entered()).toBe(true);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(await response.json()).toMatchObject({
+        eventsUnavailable: true,
+        upcomingEvents: [],
+        featured: [expect.objectContaining({ title: "Featured slot 1" })],
+      });
+      expect(warn).toHaveBeenCalledWith(
+        "Home events unavailable; serving the fallback.",
+        expect.objectContaining({ exception: "HomeEventsDeadline" }),
+      );
+    } finally {
+      f.release();
+    }
+  });
+
   it("never stores an outage, so recovery shows without a retire", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const f = fixture();
@@ -641,6 +680,7 @@ describe("Kit home guest cache: correlation and DTOs", () => {
       "joinResult",
       "memberRsvps",
       "notice",
+      "nowMs",
       "session",
       "sessionUnavailable",
       "upcomingEvents",
@@ -669,12 +709,14 @@ describe("Kit home guest cache: TTL", () => {
     const f = fixture();
     f.use();
     const first = await load(loadArgs().args);
+    expect(first.nowMs).toBe(NOW.getTime());
     expect(first.upcomingEvents.map((row) => row.title)).toEqual(["Game night 1"]);
     const afterFirst = f.counts();
 
     // An intervening hit never extends the entry: still a hit at TTL-1ms.
     vi.setSystemTime(new Date(NOW.getTime() + cacheTtlMs - 1));
     const hit = await load(loadArgs().args);
+    expect(hit.nowMs).toBe(NOW.getTime() + cacheTtlMs - 1);
     expect(hit.upcomingEvents.map((row) => row.title)).toEqual(["Game night 1"]);
     expect(hit.featured.map((row) => row.title)).toEqual(["Featured slot 1"]);
     expect(f.counts()).toEqual(afterFirst);
@@ -699,7 +741,7 @@ describe("Kit home guest cache: shared sourcing, no duplicate retire path", () =
   ];
 
   it("routes the Kit home load through the shared guest cache", () => {
-    const server = read(ROUTE);
+    const server = read(ROUTE) + read(join(root, "src/kit-home-panels.ts"));
     expect(server).toContain("cachedHomeUpcoming");
     expect(server).toContain("cachedFeatured");
     expect(server).toContain("cachedHomeUpcoming(");
@@ -716,7 +758,7 @@ describe("Kit home guest cache: shared sourcing, no duplicate retire path", () =
   });
 
   it("adds no Kit-side duplicate retire path", () => {
-    const server = read(ROUTE);
+    const server = read(ROUTE) + read(join(root, "src/kit-home-panels.ts"));
     // Retirement stays the shared module's job (called by the committed
     // featured/event mutations below): the load only reads through it.
     expect(server).not.toContain("retireHomeGuestCache");
@@ -736,8 +778,7 @@ describe("Kit home guest cache: shared sourcing, no duplicate retire path", () =
     }
   });
 
-  it("leaves GET / ownership on Hono", () => {
-    // Cache sourcing lands before the flip; the flip itself is out of scope.
-    expect(read(MANIFEST)).toMatch(/method:\s*"GET",\s*path:\s*"\/",\s*enabled:\s*false/);
+  it("enables GET / with the shared cached panels", () => {
+    expect(read(MANIFEST)).toMatch(/method:\s*"GET",\s*path:\s*"\/",\s*enabled:\s*true/);
   });
 });

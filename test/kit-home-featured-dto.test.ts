@@ -72,7 +72,10 @@ beforeAll(async () => {
   await build({
     stdin: {
       contents: [
-        `export { load } from ${JSON.stringify(routePath)};`,
+        `import { env } from "cloudflare:workers";`,
+        `import { load as routeLoad } from ${JSON.stringify(routePath)};`,
+        `import { prepareKitHomePanels } from ${JSON.stringify(join(root, "src/kit-home-panels.ts"))};`,
+        `export const load = async (args) => routeLoad({ ...args, locals: { ...args.locals, homePanels: await prepareKitHomePanels(env, args.request) } });`,
         `export { __resetHomeGuestCacheForTests as resetHomeGuestCache } from ${JSON.stringify(homeCachePath)};`,
         ``,
       ].join("\n"),

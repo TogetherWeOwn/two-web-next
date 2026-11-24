@@ -12,6 +12,6 @@ export { ValidationError, containsControlCharacters, type FieldErrors } from "./
 export { isKnownTimezone, utcToWall, wallToUtc } from "./validation-wall-time";
 export type { FoldPreference } from "./validation-wall-time";
 export { newEventKey } from "./validation-event-keys";
-export { parseEventForm, type EventFormInput } from "./validation-event-form";
+export { parseEventForm, parseHumanEventForm, type EventFormInput } from "./validation-event-form";
 export { parseFeaturedForm, type FeaturedFormInput } from "./validation-featured-form";
 export { isMirrored, nextStatus, type EventStatus } from "./validation-status";

@@ -51,6 +51,33 @@
   },
   "overrides": [
     {
+      "includes": ["src/kit-session.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  ".": "Import the framework-neutral module directly, not the app entry.",
+                  "./": "Import the framework-neutral module directly, not the app entry.",
+                  "../src/": "Import the framework-neutral module directly, not the app entry.",
+                  "hono": "Use the framework-neutral session and cookie modules."
+                },
+                "patterns": [
+                  {
+                    "group": ["**/index", "**/index.tsx", "**/index.js", "**/index.jsx", "**/src"],
+                    "message": "Import the framework-neutral module directly, not an index or src barrel."
+                  },
+                  { "group": ["hono/**"], "message": "Use the framework-neutral cookie module." }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": [
         "assets/styles.css",
         "assets/theme.css",
@@ -62,6 +89,7 @@
         "public/admin-rsvp-review.css",
         "public/admin-theme.css",
         "public/theme.css",
+        "public/kit-site-header.css",
         "public/profile-theme.css",
         "public/schedule-theme.css",
         "public/event-theme.css",

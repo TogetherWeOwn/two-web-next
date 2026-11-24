@@ -1,0 +1,16 @@
+// Model the three mutation sites without depending on the live product files.
+export class ValidationError extends Error {}
+
+const isKnownTimezone = (timezone: string) => timezone === "Europe/London";
+const folds = [Date.UTC(2026, 9, 25, 0, 30), Date.UTC(2026, 9, 25, 1, 30)];
+
+export function wallToUtc(raw: string, timezone: string, fold = "later") {
+  if (!isKnownTimezone(timezone))
+    throw new ValidationError("Unknown zone");
+  const candidates = new Set(raw === "2026-10-25 01:30" ? folds : []);
+  if (candidates.size === 0) {
+    throw new ValidationError("Time never occurred");
+  }
+  const instants = [...candidates];
+  return new Date(fold === "later" ? Math.max(...instants) : Math.min(...instants));
+}

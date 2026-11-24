@@ -17,11 +17,11 @@ let { state, past, showPast, member, inviteUrl, loginReturnTo }: CalendarPastDra
 
 {#if showPast && past.length > 0}
   <div>
-    <h2>{EVENTS_PAST_LIST_HEADING}</h2>
+    <h2 id="calendar-past-heading">{EVENTS_PAST_LIST_HEADING}</h2>
     {#if state.past && !calendarSearching(state)}
       <p><a href={calendarUrl({ ...state, past: false })} data-testid={EVENTS_PAST_TOGGLE_TESTID}>{EVENTS_PAST_HIDE_COPY}</a></p>
     {/if}
-    <ul data-testid={EVENTS_PAST_LIST_TESTID}>
+    <ul role="list" aria-labelledby="calendar-past-heading" data-testid={EVENTS_PAST_LIST_TESTID}>
       {#each past as e (e.key)}
         <CalendarCard {e} isPast {member} {inviteUrl} {loginReturnTo} />
       {/each}

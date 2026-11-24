@@ -55,6 +55,21 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
           );
           if (viewport.width !== 320)
             await page.screenshot({ path: `${out}/${name}-${viewport.width}.png`, fullPage: true });
+          if (name !== "default" && name !== "guest") continue;
+          const header = page.getByRole("banner");
+          const join = header.getByRole("link", { name: "Join", exact: true });
+          const guest = name === "guest";
+          assert.equal(await join.count(), Number(guest), `${name} header at ${viewport.width}px`);
+          if (viewport.width !== 390) continue;
+          await header.getByRole("link", { name: "Menu", exact: true }).click();
+          const account = header.getByRole("navigation", { name: "Account" });
+          const actions = guest ? ["Sign in", "Join"] : ["Your profile"];
+          assert.deepEqual(await account.getByRole("link").allTextContents(), actions);
+          await page.screenshot({
+            path: `${out}/${name}-menu-open-390.png`,
+            animations: "disabled",
+          });
+          await header.getByRole("link", { name: "Close menu" }).click();
         }
       }
       // Default: six newcomers, active list, a Guide and an organizer; opted-out alias hidden.
@@ -124,7 +139,22 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
       ]) {
         await page.setViewportSize({ width, height });
         await open("?state=many");
+        const header = page.getByRole("banner");
+        assert.equal(await header.evaluate((node) => getComputedStyle(node).position), "sticky");
         const form = page.getByRole("search", { name: "Search members" });
+        const { inset, stickyHeight } = await form.evaluate((node) => {
+          const header = document.querySelector("[data-kit-site-header]");
+          const headerHeight =
+            getComputedStyle(header).position === "sticky"
+              ? header.getBoundingClientRect().height
+              : 0;
+          return {
+            inset: Number.parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop),
+            stickyHeight:
+              node.closest(".directory-toolbar").getBoundingClientRect().height + headerHeight,
+          };
+        });
+        assert.ok(inset >= stickyHeight, `${width}px: scroll inset ${inset} < ${stickyHeight}`);
         const top = await form.evaluate((node) => node.getBoundingClientRect().top + scrollY);
         await page.evaluate((y) => scrollTo({ top: y + 200, behavior: "instant" }), top);
         assert.ok(
@@ -148,6 +178,39 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
           );
         }
         await page.screenshot({ path: `${out}/scrolled-${width}.png` });
+      }
+
+      for (const { width, height } of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+        { width: 390, height: 200 },
+      ]) {
+        await page.setViewportSize({ width, height });
+        await open("?state=many");
+        await filters.getByRole("link", { name: /^Guides\b/ }).focus();
+        await page.keyboard.press("Tab");
+        assert.ok(
+          await list
+            .getByRole("link", { name: "Fixture Member 1", exact: true })
+            .evaluate((link) => {
+              const { left, top, bottom, width, height } = link.getBoundingClientRect();
+              const header = document
+                .querySelector("[data-kit-site-header]")
+                .getBoundingClientRect();
+              const toolbar = document.querySelector(".directory-toolbar").getBoundingClientRect();
+              const inset = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop);
+              return (
+                link.matches(":focus-visible") &&
+                (innerHeight > 360 || inset === header.height) &&
+                top >= Math.max(header.bottom, toolbar.bottom) &&
+                bottom <= innerHeight &&
+                link.contains(document.elementFromPoint(left + width / 2, top + height / 2))
+              );
+            }),
+          `the focused member link must clear the header and toolbar at ${width}×${height}`,
+        );
+        const capture = height === 200 ? "short-focus-390" : `regular-focus-${width}`;
+        await page.screenshot({ path: `${out}/${capture}.png` });
       }
 
       await page.setViewportSize({ width: 1280, height: 800 });
@@ -182,7 +245,7 @@ test("members directory passes Axe with JavaScript", { timeout: 720_000 }, async
   await mkdir(out, { recursive: true });
   const searches = [required.default, required["no-results"], required.guest, required["empty-e1"]];
   await withKitOfflineBrowser(
-    { page: await source(), searches, javaScriptEnabled: true },
+    { page: await source(), searches, javaScriptEnabled: true, headerMenu: true, csr: true },
     async ({ page, open }) => {
       for (const search of searches) {
         await open(search);

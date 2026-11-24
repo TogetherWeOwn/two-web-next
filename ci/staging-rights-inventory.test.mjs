@@ -574,6 +574,7 @@ test("policy scope pins exact proposal names against schema declarations", async
       "web_session_grace",
       "waitlist_offers",
       "event_echoes",
+      "announcement_send_claims",
       "bot_reconciliation_intents",
       "event_echo_members",
     ],

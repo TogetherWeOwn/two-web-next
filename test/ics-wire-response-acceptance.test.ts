@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import {
   APP_URL,
   KEY,
@@ -86,7 +86,7 @@ function fixture(initial = [calendarRow()]) {
           ).split(";")[0]!,
         );
       }
-      return app.request(path, { headers }, env);
+      return fetchAppPath(path, { headers }, env);
     },
   };
 }

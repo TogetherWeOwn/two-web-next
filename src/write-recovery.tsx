@@ -1,13 +1,15 @@
 import type { Context, Next } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import type { StatusCode } from "hono/utils/http-status";
 import { canonicalEventKey, eventKeyAllowed } from "./events/keys";
+import { exceedsUtf8ByteLimit } from "./http/length-limit";
 import { MAX_RETURN_DESTINATION_BYTES, safeNext } from "./join/service";
 import { acceptsJson, isJsonMediaType } from "./media-type";
 import { jsonRefusal } from "./json-refusal";
 import { AUTH_THROTTLE_PER_MINUTE, throttleGuard } from "./throttle";
 import { renderHtmlOutcome } from "./html-outcome";
 import { honoRecoveryRenderer } from "./recovery-hono";
-import { recoveryOutcome } from "./recovery-outcome";
+import { RECOVERY_RENDER, recoveryOutcome, type RecoveryRender } from "./recovery-outcome";
 
 export const EXPIRED_WRITE_COOKIE = "__Host-two_expired_write";
 const INTENDED_COOKIE = "__Host-two_login_intended";
@@ -88,6 +90,18 @@ export async function expiredWriteBounce(c: Ctx, jsonOnly = false): Promise<Resp
   return c.redirect(recoveryUrl(next), 303);
 }
 
+function recoveryRenderFor(c: Ctx): RecoveryRender | undefined {
+  try {
+    const context = c.executionCtx as typeof c.executionCtx & {
+      [RECOVERY_RENDER]?: RecoveryRender;
+    };
+    return context[RECOVERY_RENDER];
+  } catch {
+    // Hono callers without a Worker execution context use the default renderer.
+    return undefined;
+  }
+}
+
 /** Explicit recovery: carries only a safe GET destination, never a submitted body. */
 export async function recoveryLanding(c: Ctx): Promise<Response> {
   const raw = c.req.query("next");
@@ -96,8 +110,7 @@ export async function recoveryLanding(c: Ctx): Promise<Response> {
   // parity): the fallback still renders, but no budget is charged and — like
   // every landing visit — no pending notice is minted.
   const oversized =
-    typeof raw === "string" &&
-    new TextEncoder().encode(raw).byteLength > MAX_RETURN_DESTINATION_BYTES;
+    typeof raw === "string" && exceedsUtf8ByteLimit(raw, MAX_RETURN_DESTINATION_BYTES);
   if (!oversized) {
     const limited = await throttleGuard(c, "login-recover", AUTH_THROTTLE_PER_MINUTE);
     if (limited) return limited;
@@ -107,24 +120,34 @@ export async function recoveryLanding(c: Ctx): Promise<Response> {
   // (expiredWriteBounce above), so a bare link visit can never pre-arm a
   // false restored banner on the visitor's next login. The retry link below
   // carries the destination in its own ?next= query.
-  // Same model, status (200) and headers as the direct render: the one-use
-  // journey writes above stay Hono-owned and ride the buffered response (the
-  // injected renderer only changes who turns the model into bytes).
-  return renderHtmlOutcome(
-    c,
-    recoveryOutcome(
-      {
-        title: "Your session expired",
-        message:
-          "Your earlier changes were not saved. Sign in again, then review and submit them when you are ready.",
-        retryUrl: `/auth/discord?next=${encodeURIComponent(next)}`,
-        retryLabel: "Log in with Discord",
-        inviteUrl: "/discord",
-      },
-      honoRecoveryRenderer,
-      { headers: { "cache-control": "no-store, private", vary: "Cookie" } },
-    ),
-  );
+  const model = {
+    title: "Your session expired",
+    message:
+      "Your earlier changes were not saved. Sign in again, then review and submit them when you are ready.",
+    retryUrl: `/auth/discord?next=${encodeURIComponent(next)}`,
+    retryLabel: "Log in with Discord",
+    inviteUrl: "/discord",
+  };
+  const headers = { "cache-control": "no-store, private", vary: "Cookie" };
+  const render = recoveryRenderFor(c);
+  if (!render)
+    return renderHtmlOutcome(c, recoveryOutcome(model, honoRecoveryRenderer, { headers }));
+
+  const response = await render(model, c.get("requestId"));
+  // Hono keeps the signed cookie and private policy; Kit supplies the document
+  // and its asset headers, not a cache validator for the journey response.
+  const renderHeaders = new Headers(response.headers);
+  renderHeaders.delete("set-cookie");
+  renderHeaders.delete("etag");
+  renderHeaders.delete("last-modified");
+  if (renderHeaders.get("content-type") === "text/html") {
+    renderHeaders.set("content-type", "text/html; charset=UTF-8");
+  }
+  for (const [name, value] of Object.entries(headers)) renderHeaders.set(name, value);
+  return c.newResponse(response.body, {
+    status: response.status as StatusCode,
+    headers: renderHeaders,
+  });
 }
 
 /** Every terminal callback clears the pending notice, including denial/failure. */

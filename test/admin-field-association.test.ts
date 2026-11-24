@@ -2,7 +2,7 @@
 // no staging endpoint. Field mints the hint/error node ids and merges them
 // into the child control's aria-describedby (append, never clobber), plus
 // aria-invalid on error. Consumers pass bare controls; the text-limit island
-// keeps appending its own `-limit-error` token after Field's.
+// uses the server error association when present.
 import { jsx } from "hono/jsx/jsx-runtime";
 import { describe, expect, it } from "vitest";
 import { EventFormPage, FeaturedFormPage, Field } from "../src/admin/pages";

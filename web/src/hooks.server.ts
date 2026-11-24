@@ -2,12 +2,13 @@ import { captureRefusal, captureResponse } from "../../src/render-clock";
 import type { Handle } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
+import { prepareKitHomePanels } from "../../src/kit-home-panels";
 import { kitAccessSink } from "../../src/kit-access-sink";
 import { preserveHonoDataResponse } from "../../src/kit-worker-facade";
 import {
   kitAdminRenewalFor,
   kitAuthStatusCookieFor,
-  kitEventDetailRotationFor,
+  kitDocumentRotationFor,
   kitEventsJourneyFor,
   kitEventsSessionFor,
   kitSessionBridge,
@@ -17,7 +18,7 @@ import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
-import { honoFetch } from "#lib/server/hono.ts";
+import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
 
 // Pure env binding: trust, ownership, decoration, the read-only session
 // bridge and the archive/list/detail/hot-zone guard branches live in the tested core
@@ -30,7 +31,7 @@ import { honoFetch } from "#lib/server/hono.ts";
 // join-flash peek (no rotation, no consumption at the hook layer) for the
 // dispatch's shared-cache eligibility. Renewal stays route-specific: the
 // bridge never issues, rotates, revokes, or sets cookies, and the event
-// detail and admin reads renew only through the post-release bindings below,
+// detail, home and admin reads renew only through the post-release bindings below,
 // after the member-read boundary releases a successful GET. Logout and OAuth stay
 // Hono-owned, and a missing secret (the preview Worker sets none) resolves
 // to "unknown" rather than a false logout.
@@ -62,6 +63,7 @@ export const handle: Handle = async ({ event, resolve }) => {
     // core alone decides when the option is set.
     resolve: (hookEvent, opts) =>
       resolve(hookEvent as Parameters<typeof resolve>[0], opts as Parameters<typeof resolve>[1]),
+    recoveryPage: honoRecoveryFetch,
     pastArchive: (request, render, requestId) =>
       dispatchPastArchiveRequest(request, env, render, undefined, undefined, requestId),
     eventsPage: (request, render, requestId) =>
@@ -76,7 +78,9 @@ export const handle: Handle = async ({ event, resolve }) => {
       dispatchHotzonesRequest(request, env, render, undefined, requestId),
     sessionFor: kitSessionBridge(env),
     authStatusCookieFor: kitAuthStatusCookieFor(env),
-    eventDetailRotationFor: kitEventDetailRotationFor(env),
+    homePanelsFor: (request) => prepareKitHomePanels(env, request),
+    homeRenewalFor: kitDocumentRotationFor(env),
+    eventDetailRotationFor: kitDocumentRotationFor(env),
     adminRenewalFor: kitAdminRenewalFor(env),
     accessSink: kitAccessSink(env),
     // Loopback Kit parity fixture flags only: the core turns these booleans

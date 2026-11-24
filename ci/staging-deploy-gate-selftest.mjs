@@ -186,15 +186,20 @@ test("Kit route-family selection emits validated flags and fails closed", async 
       ["archive-static", ["archive", "static"]],
       ["events", ["events"]],
       ["home", ["home"]],
+      ["events-join", ["events", "join"]],
+      ["events-home", ["events", "home"]],
       ["join", ["join"]],
       ["ember-pages", ["events", "home", "join"]],
       ["all", null],
       ["events", ["events"], "workflow_run"],
+      ["events-join", ["events", "join"], "workflow_run"],
+      ["events-home", ["events", "home"], "workflow_run"],
       ["ember-pages", ["events", "home", "join"], "workflow_run"],
       [undefined, [], "workflow_run"],
       ["", [], "workflow_run"],
       ["all", [], "workflow_run"],
       ["EVENTS", [], "workflow_run"],
+      ["unknown", [], "workflow_run"],
     ]) {
       const automatic = eventName === "workflow_run";
       const disabled = emberRoutes.some(
@@ -242,6 +247,67 @@ test("the combined selection refuses any disabled or non-GET Ember entry", async
   }
 });
 
+test("events-join turns on only /events and /join and refuses either disabled GET", async () => {
+  const flags = kitRouteFlagsForFamily("events-join");
+  assert.deepEqual(flags, {
+    archive: "false",
+    static: "false",
+    events: "true",
+    home: "false",
+    join: "true",
+  });
+  const routes = ["/events", "/join"].map((path) => ({ method: "GET", path, enabled: true }));
+  await requireEnabledEmberRoutes(flags, routes);
+  for (const entry of routes) {
+    const rest = routes.filter((route) => route !== entry);
+    await assert.rejects(
+      requireEnabledEmberRoutes(flags, [...rest, { ...entry, enabled: false }]),
+      new RegExp(`GET ${entry.path} is not enabled`),
+    );
+  }
+});
+
+test("events-home turns on only /events and / and refuses either disabled GET", async () => {
+  const flags = kitRouteFlagsForFamily("events-home");
+  assert.deepEqual(flags, {
+    archive: "false",
+    static: "false",
+    events: "true",
+    home: "true",
+    join: "false",
+  });
+  const routes = ["/events", "/"].map((path) => ({ method: "GET", path, enabled: true }));
+  await requireEnabledEmberRoutes(flags, routes);
+  for (const entry of routes) {
+    const rest = routes.filter((route) => route !== entry);
+    await assert.rejects(
+      requireEnabledEmberRoutes(flags, [...rest, { ...entry, enabled: false }]),
+      new RegExp(`GET ${entry.path} is not enabled`),
+    );
+  }
+});
+
+function runKitProbe(path, fetchStub, env = process.env) {
+  // Record requested delays before shortening the retry wait in the offline subprocess.
+  const setup = `const retryDelays = [];
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      retryDelays.push(delay);
+      return realSetTimeout(callback, delay === 10_000 ? 0 : delay, ...args);
+    };
+    ${fetchStub}`;
+  return spawnSync(
+    process.execPath,
+    [
+      "--import",
+      `data:text/javascript,${encodeURIComponent(setup)}`,
+      "ci/staging-kit-route-check.mjs",
+      path,
+    ],
+    { cwd: root, encoding: "utf8", timeout: 5_000, env },
+  );
+}
+
 test("each Ember opt-in probes the exact staging GET after revision verification", () => {
   const preflight = workflow.indexOf("run: node --import tsx ci/kit-route-flags.mjs");
   assert.ok(preflight > workflow.indexOf("- name: Require successful exact-SHA full CI"));
@@ -256,6 +322,14 @@ test("each Ember opt-in probes the exact staging GET after revision verification
     assert.ok(lines.includes(`        if: steps.kit-route-flags.outputs.${flag} == 'true'`));
     assert.ok(lines.includes(`        run: node ci/staging-kit-route-check.mjs ${path}`));
   }
+  const smokeStep = workflow
+    .split("\n      - ")
+    .find((step) => step.startsWith("name: Smoke test staging public routes\n"));
+  assert.ok(
+    smokeStep?.includes(
+      "SMOKE_EXPECT_JOIN_RENDERER: ${{ steps.kit-route-flags.outputs.join == 'true' && 'kit' || 'hono' }}",
+    ),
+  );
   const cases = emberRoutes.flatMap(([, path]) => [
     [path, 200, "kit", 0],
     [path, 200, null, 1],
@@ -272,16 +346,7 @@ test("each Ember opt-in probes the exact staging GET after revision verification
       }
       return new Response(null, {status: ${status}, headers: ${JSON.stringify(marker ? { "x-two-renderer": marker } : {})}});
     };`;
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        `data:text/javascript,${encodeURIComponent(stub)}`,
-        "ci/staging-kit-route-check.mjs",
-        path,
-      ],
-      { cwd: root, encoding: "utf8", timeout: 5_000 },
-    );
+    const result = runKitProbe(path, stub);
     assert.equal(result.status, expected, `${status} / ${marker}: ${result.stderr}`);
     if (expected === 0) assert.match(result.stdout, /HTTP 200, x-two-renderer: kit/);
     else {
@@ -290,6 +355,41 @@ test("each Ember opt-in probes the exact staging GET after revision verification
       assert.match(result.stderr, refusal ?? (status === 200 ? /did not return/ : /expected 200/));
     }
   }
+});
+
+test("the staging Kit renderer probe recovers on attempt three", () => {
+  const result = runKitProbe(
+    "/",
+    `let calls = 0; globalThis.fetch = async () => {
+      calls += 1;
+      return new Response(null, {status: 200, headers: calls < 3 ? {"x-two-renderer": "hono"} : {"x-two-renderer": "kit"}});
+    };
+    process.on("exit", () => console.error("Retry delays:", retryDelays.join(",")));`,
+    { ...process.env, KIT_ROUTE_CHECK_DELAY_MS: "0" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /x-two-renderer: kit \(attempt 3\)/);
+  assert.match(result.stderr, /^Retry delays: 10000,10000$/m);
+});
+
+test("the staging Kit renderer probe fails after six Hono responses", () => {
+  const result = runKitProbe(
+    "/",
+    `let calls = 0; globalThis.fetch = async () => {
+      calls += 1;
+      return new Response(null, {status: 200, headers: {"x-two-renderer": "hono"}});
+    };
+    process.on("exit", () => {
+      console.error("Probe requests:", calls);
+      console.error("Retry delays:", retryDelays.join(","));
+    });`,
+    { ...process.env, KIT_ROUTE_CHECK_ATTEMPTS: "", KIT_ROUTE_CHECK_DELAY_MS: "1" },
+  );
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /GET \/ did not return x-two-renderer: kit/);
+  assert.match(result.stderr, /^Probe requests: 6$/m);
+  assert.match(result.stderr, /^Retry delays: 10000,10000,10000,10000,10000$/m);
 });
 
 const denied = [
@@ -480,6 +580,8 @@ for (const [family, archiveFlag, staticFlag, eventsFlag, homeFlag, joinFlag] of 
   ["archive-static", "true", "true", "false", "false", "false"],
   ["events", "false", "false", "true", "false", "false"],
   ["home", "false", "false", "false", "true", "false"],
+  ["events-join", "false", "false", "true", "false", "true"],
+  ["events-home", "false", "false", "true", "true", "false"],
   ["join", "false", "false", "false", "false", "true"],
   ["ember-pages", "false", "false", "true", "true", "true"],
 ]) {
@@ -669,7 +771,7 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(
     workflow,
-    /kit_route_family:\n        description: Kit staging route family; the default keeps all routes on Hono\n        type: choice\n        required: true\n        default: hono\n        options:\n          - hono\n          - archive\n          - archive-static\n          - events\n          - home\n          - join\n          - ember-pages\n/,
+    /kit_route_family:\n        description: Kit staging route family; the default keeps all routes on Hono\n        type: choice\n        required: true\n        default: hono\n        options:\n          - hono\n          - archive\n          - archive-static\n          - events\n          - home\n          - events-join\n          - events-home\n          - join\n          - ember-pages\n/,
   );
   assert.match(
     workflow,

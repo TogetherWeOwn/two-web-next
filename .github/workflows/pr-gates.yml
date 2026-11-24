@@ -47,12 +47,15 @@ env:
   # instance UI links and the internal host in a public title or body always fail; the rest
   # start as warnings; flip to "error" once the repo's open PRs are clear (target 2026-10-10).
   PR_STANDARDS_MODE: "warn"
+  PR_VERIFICATION_MODE: "error"
   # Dedicated cutoff (PR number) for branch-name internal-ID *errors* on public repos.
   # PRs numbered at/above this value get an error for internal IDs in the head ref;
   # older open PRs keep the warning (a head ref cannot be renamed after the PR is open).
   # Set at merge time to (newest open PR number + 1). Strict title/body checks always fail;
   # the remaining title/body checks stay on PR_STANDARDS_MODE.
   HEAD_REF_ERROR_FROM_PR: "627"
+  # Keep already-open PRs on their existing metadata contract.
+  RISK_TIER_ERROR_FROM_PR: "2671"
 
 jobs:
   # Convention for every change that lands on main:
@@ -100,6 +103,12 @@ jobs:
             echo "::warning::Ratchet tests absent at this head SHA; skipped (predates #651)."
           fi
           python3 -m unittest discover -s ci -p 'test_check_pr_conventions.py'
+          if [ -f ci/test_pr_risk_tier.py ]; then
+            python3 -m unittest discover -s ci -p 'test_pr_risk_tier.py'
+          elif [ -n "$(git log -1 --format=%H HEAD -- ci/test_pr_risk_tier.py)" ]; then
+            echo '::error::Risk-tier fixtures deleted at this head.'
+            exit 1
+          fi
           # Heads cut before this PR lack the waiver-body test; fail closed if a head
           # deletes it so a PR cannot silence the queue-visibility check.
           if [ -f ci/test_floor_waiver_body.py ]; then
@@ -260,6 +269,33 @@ jobs:
           printf 'head_ref=%s\n' "$head_ref" >> "$GITHUB_OUTPUT"
           printf 'base_sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
           printf 'base_ref=%s\n' "$base_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Check declared risk tier
+        if: github.event_name != 'push' && github.event_name != 'merge_group'
+        env:
+          PR_METADATA_PATH: ${{ steps.pr.outputs.metadata }}
+          BASE_REF: ${{ steps.head-ref.outputs.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '0' }}
+        run: |
+          set -euo pipefail
+          if [ "$PR_NUMBER" -lt "$RISK_TIER_ERROR_FROM_PR" ]; then
+            echo 'Skipping risk-tier validation for a PR opened before the enforcement cutoff.'
+            exit 0
+          fi
+          validator=ci/pr_risk_tier.py
+          if [ ! -f "$validator" ]; then
+            if [ -n "$(git log -1 --format=%H HEAD -- "$validator")" ]; then
+              echo '::error::Risk-tier validator deleted at this head.'
+              exit 1
+            fi
+            # Use the fetched main validator on heads cut before rollout.
+            git show "refs/remotes/origin/main:$validator" > "$RUNNER_TEMP/pr_risk_tier.py"
+            validator="$RUNNER_TEMP/pr_risk_tier.py"
+          fi
+          # Pin the fetched target tip so merged base changes stay out of the diff.
+          RISK_TIER_BASE_SHA=$(git rev-parse --verify "refs/remotes/origin/$BASE_REF^{commit}")
+          export RISK_TIER_BASE_SHA
+          python3 "$validator"
 
       - name: Check title, body and commits
         if: github.event_name != 'merge_group'

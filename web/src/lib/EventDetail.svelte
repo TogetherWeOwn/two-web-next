@@ -1,11 +1,16 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
+import Lifeline from "#lib/Lifeline.svelte";
 import Shell from "#lib/Shell.svelte";
 import Tag from "#lib/Tag.svelte";
 import TimeBlock from "#lib/TimeBlock.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
 import { kitEventFacts } from "../../../src/events/kit-event-facts";
-import { kitOpenSeat, KIT_SIGNUPS_OPEN } from "../../../src/events/kit-seat-actions";
+import {
+  kitOpenSeat,
+  kitSeatActionBar,
+  KIT_SIGNUPS_OPEN,
+} from "../../../src/events/kit-seat-actions";
 import { isPublicJoinUrl } from "../../../src/events/public-join-url";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
 import {
@@ -14,11 +19,21 @@ import {
   RSVP_SYNCED_TESTID,
   RSVP_SYNCING_TESTID,
 } from "../../../src/islands/contracts";
+import { listedSignUpCountText } from "../../../src/islands/contracts-going-count";
+import type { LifelineStep } from "./lifeline";
 
 // Member metadata, RSVP and roster are escaped server leaves shared with Hono.
 // Mutation ownership and native island mounts stay unchanged; this route is csr=false.
-let { model, restoredWrite = false }: { model: KitEventDetailModel; restoredWrite?: boolean } =
-  $props();
+let {
+  model,
+  restoredWrite = false,
+  lifeline,
+}: {
+  model: KitEventDetailModel;
+  restoredWrite?: boolean;
+  /** Composed presentation only; the isolated fixture is the sole caller. */
+  lifeline?: readonly LifelineStep[];
+} = $props();
 const facts = $derived(kitEventFacts(model));
 const lifecycle = $derived(model.lifecycle);
 const live = $derived(model.liveTime);
@@ -27,6 +42,7 @@ const savedLive = $derived(
 );
 const openSeat = $derived(kitOpenSeat(model));
 const seatHeading = $derived(openSeat ?? model.seatCard.heading);
+const bar = $derived(kitSeatActionBar(model));
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
@@ -114,11 +130,12 @@ const detailIslands = $derived([
   theme="event"
   activeNav="event"
   member={model.viewerMember}
+  authenticated={model.viewerAuthenticated}
   loginReturnTo={model.path}
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
-  <div class="event-layout" id={live ? "kit-live-snapshot" : undefined}
-    data-as-of={live?.asOf} data-stale-at={live?.staleAt}>
+  <div class="event-layout" class:live-action={!!live && !savedLive && !model.review}
+    id={live ? "kit-live-snapshot" : undefined} data-as-of={live?.asOf} data-stale-at={live?.staleAt}>
   <div class="event-layout-head">
   <nav class="event-back" aria-label="Event calendar">
     <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
@@ -130,9 +147,7 @@ const detailIslands = $derived([
     {#if model.isDraft}
       <p class="notice" data-testid="event-draft">Draft</p>
     {/if}
-    {#if lifecycle}
-      <div data-testid="event-past"><Tag>Sign-up record</Tag></div>
-    {:else if model.isPast}
+    {#if !model.isEnded && model.isPast}
       <p class="notice" data-testid="event-past">Past event</p>
     {/if}
     {#if model.status === "cancelled"}
@@ -165,18 +180,19 @@ const detailIslands = $derived([
   {:else if live}
     <div class="live-time" data-testid="kit-event-time">
       <TimeBlock start={new Date(model.timeDatetime)} end={new Date(model.endsAt)} asOf={new Date(live.asOf)}
-        state="live" stale={false} viewerZone={model.zoneLabel} serverLive={{ endLabel: model.endsWhenText }} />
+        state="live" stale={false} viewerZone={model.zoneLabel} serverLive />
     </div>
   {:else}
     {@html model.detailHtml.metadata}
   {/if}
   </div>
   <div class="event-layout-rail">
-    {#if lifecycle}
-      <section class="seat-card" aria-labelledby="signup-record-heading">
+    {#if model.isEnded}
+      {@const echoNote = lifeline?.some((step) => step.id === "echo") ? "" : "No Echo for this one. "}
+      <section class="seat-card" aria-labelledby="signup-record-heading" data-testid="event-past">
         <div class="seat-card-head"><h2 id="signup-record-heading">Sign-up record</h2></div>
-        <p class="seat-card-note">No Echo for this one. {model.goingCount} signed up.</p>
-        {#if lifecycle.next}<p><a href="/e/{lifecycle.next.key}">Next one: {lifecycle.next.date}</a></p>{/if}
+        <p class="seat-card-note">{`${echoNote}${listedSignUpCountText(model.goingCount)}.`}</p>
+        {#if model.endedNext}<p><a href="/e/{model.endedNext.key}">Next one: {model.endedNext.date}</a></p>{/if}
       </section>
       {#if model.viewerModerator && model.review}{@html model.review.rsvp}{/if}
     {:else if savedLive}
@@ -200,9 +216,6 @@ const detailIslands = $derived([
           {#if openSeat}<span class="seat-open-snapshot"><Tag variant="ok">{KIT_SIGNUPS_OPEN}</Tag></span>
           {:else if model.seatCard.tag}<span class="seat-card-tag">{model.seatCard.tag.text}</span>{/if}
         </div>
-      {/if}
-      {#if live && !model.review}
-        <p class="seat-card-note live-rsvp-end">Ends <time datetime={model.endsAt}>{model.endsWhenText}</time></p>
       {/if}
       <div class="event-rsvp">{@html model.detailHtml.rsvp}</div>
       {#if openSeat}<a class="seat-action" href={model.icsUrl}>Add to calendar</a>{/if}
@@ -229,8 +242,9 @@ const detailIslands = $derived([
     {/if}
     {@html model.detailHtml.share}
   </div>
-  <div class="event-layout-body">
+  <div class="event-layout-body" class:ended={Boolean(lifecycle)}>
   {#if lifecycle || live}{@html model.detailHtml.metadata}{/if}
+  {#if lifeline?.length}<Lifeline steps={lifeline} zone={model.zoneLabel} />{/if}
   <div class="event-detail-grid">
     <div>
       {#if model.description}
@@ -328,6 +342,23 @@ const detailIslands = $derived([
     {/if}
   </div>
   {#if model.viewerModerator && model.review}{@html model.review.actions}{/if}
+  {#if bar}
+    <aside class="event-seat-bar" aria-label="Your seat" data-state={bar.state}>
+      <p><strong>{bar.title}</strong><br />{bar.detail}</p>
+      <a class="seat-action seat-action-icon" href={model.icsUrl} aria-label="Add to calendar">
+        <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round">
+          <rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M8 3v4M16 3v4M3.5 10h17"/>
+        </svg>
+      </a>
+      {#if bar.state === "open"}
+        <form method="post" action={bar.action}>
+          <button class="seat-action seat-action-primary" type="submit" name="status" value="going">{RSVP_COPY.cta}</button>
+        </form>
+      {:else if bar.state === "guest"}
+        <a class="seat-action seat-action-primary" href={bar.href}>{bar.label}</a>
+      {/if}
+    </aside>
+  {/if}
 </Shell>
 
 <style>
@@ -341,12 +372,16 @@ const detailIslands = $derived([
     .lifecycle-time { flex-direction: column; }
     .lifecycle-figure { font-size: var(--text-figure-compact); }
     .live-time { --two-font-size-figure: var(--text-figure-compact); }
-    .live-rsvp-end { display: none; }
   }
   .event-layout-rail { grid-area: rail; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
   .event-layout-rail :global(> section) { border: 0; }
   .event-layout-rail :global(> .event-share) { padding: 0; margin-top: var(--space-2); }
   .event-layout-body { grid-area: body; min-width: 0; }
+  :global(.event-theme) .event-layout-body.ended :global(.event-meta > div) { padding: var(--space-2); }
+  /* Hidden comparison controls still reserve space on the live Hono page. */
+  :global(.event-theme) .event-layout-body.ended :global(.event-meta > div[hidden]),
+  :global(.event-theme) .event-layout-body.ended :global(.event-device-timezone:has(> button[hidden])),
+  .event-layout-body :global(.event-time-comparison:has(button[hidden])) { display: none; }
   .seat-card {
     background: var(--color-g2);
     border: 0;
@@ -370,7 +405,7 @@ const detailIslands = $derived([
   :global(.event-theme) .seat-card :global(.event-rsvp > section > a),
   :global(.event-theme) .seat-card :global(.event-rsvp button) { width: 100%; box-sizing: border-box; }
   :global(.event-theme) .event-detail-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
-  /* Native C5 calendar link with the Kit pill treatment. */
+  /* Native B4/C5 controls: the Kit pill treatment without a client handler. */
   .seat-action {
     display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
     min-height: 44px; border: 0; border-radius: var(--radius-pill); padding: 0 var(--space-5);
@@ -378,6 +413,8 @@ const detailIslands = $derived([
     font: var(--font-weight-semibold) var(--text-ui) var(--font-ui);
     font-stretch: var(--font-width-button); text-decoration: none; cursor: pointer;
   }
+  .seat-action-primary { background: var(--color-ember); color: var(--color-on-accent); box-shadow: none; }
+  .seat-action-icon { min-height: 36px; padding-inline: var(--space-3); }
   .seat-action:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
   .seat-card > .seat-action { width: 100%; margin-top: var(--space-3); }
   @media (forced-colors: active) { .seat-action { border: 1px solid ButtonText; } }
@@ -392,9 +429,44 @@ const detailIslands = $derived([
     .seat-open-snapshot { display: none; }
     .seat-open-fallback { display: inline; }
   }
+  .event-seat-bar { display: none; }
+  /* Kit B4 uses the sheet elevation and keeps the full bar out of the focus viewport. */
+  @media (max-width: 820px) {
+    :global(html):has(.event-seat-bar) {
+      --event-bar-safe: env(safe-area-inset-bottom, 0px);
+      --event-bar-height: calc(max(44px, 3.5rem) + 2 * var(--space-3) + 1px + var(--event-bar-safe));
+      /* Keep the focus outline clear of the fixed bar, including at max scroll. */
+      --event-bar-clearance: calc(var(--event-bar-height) + var(--space-2));
+      scroll-padding-bottom: var(--event-bar-clearance);
+      padding-bottom: var(--event-bar-clearance);
+    }
+    .event-seat-bar {
+      position: fixed;
+      z-index: 2;
+      inset: auto 0 0;
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      box-sizing: border-box;
+      min-height: var(--event-bar-height);
+      padding: var(--space-3) var(--space-3) calc(var(--space-3) + var(--event-bar-safe));
+      border-top: 1px solid var(--color-hair2);
+      background: color-mix(in srgb, var(--color-g1) 94%, transparent);
+    }
+    .event-seat-bar p { flex: 1; margin: 0; font-size: var(--text-small); color: var(--color-t2); }
+    .event-seat-bar strong { color: var(--color-t1); }
+    .event-seat-bar form { flex: none; margin: 0; }
+    /* The inline island can update without navigation. Never offer a stale B4
+       snapshot beside a changed or unconfirmed answer; native B4 POSTs reload. */
+    .event-layout:has(:global([data-seat-refresh]:not([data-seat-refresh="initial"]))) ~ .event-seat-bar[data-state="open"],
+    .event-layout:not(:has(:global([data-testid="rsvp-going"]:enabled))) ~ .event-seat-bar[data-state="open"],
+    .event-layout:not(:has(:global([data-testid="rsvp-withdraw"]:enabled))) ~ .event-seat-bar[data-state="saved"] { display: none; }
+  }
   /* Kit breakpoint.compact-max, layout.rail.seat, and layout.sticky-offset. */
   @media (min-width: 821px) {
     .event-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "head rail" "body rail"; column-gap: var(--space-9); align-items: start; }
+    /* Keep the sole scheduled end above the live RSVP action, even in two columns. */
+    .event-layout.live-action { grid-template-areas: "head ." "body rail"; }
     .event-layout-rail { position: sticky; top: 92px; }
   }
 </style>

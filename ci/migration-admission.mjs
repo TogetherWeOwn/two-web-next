@@ -4,9 +4,8 @@
 // - STAGING_MIGRATION_HOLD === "false" releases staging; every other value
 //   (absent, empty, "true", malformed) holds it. Exact-string match only: no
 //   case folding, trimming, or permissive fallback.
-// - The hold applies to staging ONLY. Production keeps its existing
-//   PRODUCTION_DEPLOY_ENABLED=true gate and ignores the hold entirely, so a
-//   staging hold can never disable the independently authorized production path.
+// - The hold applies to staging ONLY. Production requires its own enable
+//   flag and exact approved migration SHA; it ignores the staging hold.
 // - Single source for admission: migrationConfig (ci/db-migrate.mjs) calls
 //   assertMigrationAdmission below, so these messages are the ones operators
 //   see. Checked before URL parsing, driver construction, or any database
@@ -30,6 +29,9 @@ export function assertMigrationAdmission(env) {
   if (target === "production") {
     if (env.PRODUCTION_DEPLOY_ENABLED !== "true")
       refuse("Production migrations require PRODUCTION_DEPLOY_ENABLED=true.");
+    const approved = env.PRODUCTION_MIGRATION_APPROVED_SHA;
+    if (!/^[a-f0-9]{40}$/.test(approved ?? "") || approved !== env.GITHUB_SHA)
+      refuse("Production migration SHA is missing, malformed or does not match the run.");
     return { target, held: false };
   }
   assertStagingDeployHold(env);

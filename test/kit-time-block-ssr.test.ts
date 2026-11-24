@@ -87,6 +87,28 @@ describe("TimeBlock server output", () => {
     expect(html).not.toContain("8 in the room");
   });
 
+  it("dates a live snapshot and scheduled end across local midnight and a DST fold", () => {
+    const live = {
+      start: "2026-11-01T03:30:00Z",
+      asOf: "2026-11-01T06:10:00Z",
+      viewerZone: "America/New_York",
+      state: "live",
+      stale: false,
+      serverLive: true,
+    };
+    const html = render({ ...live, end: "2026-11-01T06:30:00Z" });
+    expect(html).toContain("Saturday 31 October");
+    expect(html).toContain("since 23:30 GMT-4");
+    expect(html).toContain('datetime="2026-11-01T06:10:00.000Z">1 Nov 01:10 GMT-5</time>');
+    expect(html).toContain(
+      'datetime="2026-11-01T06:30:00.000Z">Sunday 1 November, 01:30 America/New_York · 06:30 UTC</time>',
+    );
+    const missingEnd = render(live);
+    expect(missingEnd).toContain('<span data-live-fresh="">Live</span>');
+    expect(missingEnd).toContain('id="kit-live-refresh"');
+    expect(missingEnd).not.toContain("Ends");
+  });
+
   it("offers recovery when a live snapshot time is invalid", () => {
     const html = render({ ...base, state: "live", asOf: "invalid", roomCount: 8 });
     expect(html).toContain("Live status unavailable");

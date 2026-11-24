@@ -35,6 +35,7 @@ export const TABLE_RIGHTS = Object.freeze({
   "public.event_echoes": ["INSERT", "SELECT", "UPDATE"],
   "public.event_echo_members": ["DELETE", "INSERT", "SELECT"],
   "public.bot_reconciliation_intents": ["INSERT", "SELECT", "UPDATE"],
+  "public.announcement_send_claims": ["INSERT", "SELECT", "UPDATE"],
   // Dormant offers leave through the RSVP cascade, not direct runtime DELETE.
   "public.waitlist_offers": ["INSERT", "SELECT", "UPDATE"],
 });
@@ -115,7 +116,10 @@ export function validateDefaultAclRows(rows) {
 // own ACLs say, CREATE lets a holder plant objects beside it, and the runtime
 // has no reviewed need for USAGE there either.
 const LEDGER_ACL_QUERY = `
-  WITH targets(oid) AS (
+  WITH runtimes AS (
+    SELECT oid FROM pg_roles
+     WHERE rolname = 'two_web_app' OR (rolcanlogin AND rolname::text = $1::text)
+  ), targets(oid) AS (
     SELECT to_regclass('drizzle.__drizzle_migrations')
     UNION ALL
     SELECT CASE WHEN to_regclass('drizzle.__drizzle_migrations') IS NULL THEN NULL
@@ -141,17 +145,32 @@ const LEDGER_ACL_QUERY = `
       FROM pg_namespace AS n
       CROSS JOIN LATERAL aclexplode(n.nspacl) AS acl
      WHERE n.nspname = 'drizzle'
+    UNION ALL
+    -- Predefined roles confer rights without any object ACL entry. Check
+    -- reachability even before bootstrap creates the ledger and schema.
+    SELECT 'schema drizzle', oid, 'implicit USAGE', false FROM pg_roles
+     WHERE rolname IN ('pg_read_all_data', 'pg_write_all_data')
+    UNION ALL
+    SELECT '__drizzle_migrations', oid, 'implicit MAINTAIN', false FROM pg_roles
+     WHERE rolname = 'pg_maintain'
   )
   SELECT object_name,
-         CASE WHEN grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(grantee) END AS grantee,
+         CASE WHEN grantee = 0 THEN 'PUBLIC'
+              WHEN $1::text IS NOT NULL THEN 'runtime-reachable role'
+              ELSE pg_get_userbyid(grantee) END AS grantee,
          privilege_type,
          is_grantable,
          CASE WHEN grantee = 0 THEN true ELSE EXISTS (
-           SELECT 1 FROM pg_roles AS runtime
-            WHERE runtime.rolname = 'two_web_app'
-              AND pg_has_role(runtime.oid, rights.grantee, 'MEMBER')
+           SELECT 1 FROM runtimes AS runtime WHERE pg_has_role(runtime.oid, rights.grantee, 'MEMBER')
          ) END AS runtime_access
     FROM rights
+  UNION ALL
+  SELECT 'serving login or ledger identity', 'configured runtime', 'not found', false, true
+   WHERE $1::text IS NOT NULL AND (
+     NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolcanlogin AND rolname::text = $1::text)
+     OR NOT EXISTS (SELECT 1 FROM objects WHERE relkind = 'r' AND relname = '__drizzle_migrations')
+     OR NOT EXISTS (SELECT 1 FROM objects WHERE relkind = 'S')
+   )
    ORDER BY 1, 2, 3, 4
 `;
 
@@ -189,7 +208,20 @@ export async function assertRuntimeDefaultAcl(client) {
 }
 
 export async function assertRuntimeLedgerAcl(client) {
-  const rows = await client.unsafe(LEDGER_ACL_QUERY);
+  await checkLedgerAcl(client, null);
+}
+
+// Use the login from the serving binding, not the observer's session user
+// or the conventional grants role. The caller binds it to the target first.
+export async function assertServingLedgerIsolation(client, login) {
+  if (typeof login !== "string" || !login) {
+    throw new DefaultAclRefusal("Serving ledger isolation requires the configured runtime login.");
+  }
+  await checkLedgerAcl(client, login);
+}
+
+async function checkLedgerAcl(client, login) {
+  const rows = await client.unsafe(LEDGER_ACL_QUERY, [login]);
   const errors = validateLedgerAclRows(rows);
   if (errors.length)
     throw new DefaultAclRefusal(`Migration default-ACL guard refused: ${errors.join("; ")}`);

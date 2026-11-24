@@ -60,6 +60,11 @@ requires the live budget and measured route inventory to match the approved
 plan before it can propose lower ceilings. The report-only output does not feed
 that workflow or amend its approved history.
 
+The [reconciliation fixture route decision](../ci/budgets/decisions/kit-perf/2026-11-23-reconciliation-routes.md)
+adds two measured rows to the approved plan. Replay applies lowerings for the
+original inventory first, then adds the two rows, then applies lowerings that
+match the expanded inventory. The automatic writer still only lowers ceilings.
+
 ## Route evidence and layout resets
 
 REA source: the installed SvelteKit

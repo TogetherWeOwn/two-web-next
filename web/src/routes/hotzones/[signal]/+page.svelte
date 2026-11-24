@@ -48,6 +48,8 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
     {#if retentionNote}<p>{retentionNote}</p>{/if}
   {/if}
   {@html periodPickerHtml}
-  <p><a href="/hotzones{qs}">All hot zones</a> · <a href="/hotzones/joins{qs}">joins</a> · <a href="/hotzones/voice{qs}">voice</a> · <a href="/hotzones/games{qs}">games</a></p>
+  <nav aria-label="Hot zones">
+    <p><a href="/hotzones{qs}">All hot zones</a> · <a href="/hotzones/joins{qs}" aria-current={signal === "joins" ? "page" : undefined}>joins</a> · <a href="/hotzones/voice{qs}" aria-current={signal === "voice" ? "page" : undefined}>voice</a> · <a href="/hotzones/games{qs}" aria-current={signal === "games" ? "page" : undefined}>games</a></p>
+  </nav>
   {@html gridHtml}
 </Shell>

@@ -37,11 +37,32 @@ export type EventFormInput = {
   capacity: number | null;
 };
 
-/** Parse the event create/edit form. `carriers` holds the hidden *_utc edit-page hints (TOG-6805). */
+type EventTimeCarriers = { startsAtUtc?: string; endsAtUtc?: string };
+
+/** Preserve the raw text contract used by moderator API and locked PATCH defaults. */
 export function parseEventForm(
   data: Record<string, unknown>,
-  carriers?: { startsAtUtc?: string; endsAtUtc?: string },
+  carriers?: EventTimeCarriers,
 ): EventFormInput {
+  return parseEventInput(data, carriers, false);
+}
+
+/** Human editors count and store logical line breaks, not native POST CRLF bytes. */
+export function parseHumanEventForm(
+  data: Record<string, unknown>,
+  carriers?: EventTimeCarriers,
+): EventFormInput {
+  return parseEventInput(data, carriers, true);
+}
+
+function parseEventInput(
+  data: Record<string, unknown>,
+  carriers: EventTimeCarriers | undefined,
+  humanEditor: boolean,
+): EventFormInput {
+  // Raw data stays intact for the forbidden-character checks below (including BOM).
+  const text = (value: unknown) =>
+    str(humanEditor && typeof value === "string" ? value.replace(/\r\n?/g, "\n") : value);
   const fields: FieldErrors = {};
   // The route key is minted server-side and immutable once written (legacy
   // EventKeyTest): a forged key is refused with 422 rather than applied or
@@ -49,7 +70,7 @@ export function parseEventForm(
   if (data.event_key !== undefined || data.eventKey !== undefined) {
     fields.event_key = "The event key is assigned when the event is created and cannot be changed.";
   }
-  const title = str(data.title);
+  const title = text(data.title);
   if (!title) fields.title = "Give the event a title.";
   else if ([...title].length > 100) fields.title = "Keep the title to 100 characters.";
   // A supplied non-string must never silently clear saved text: null, blank
@@ -71,20 +92,20 @@ export function parseEventForm(
       fields[field] = `The ${field} must be text.`;
     }
   }
-  const game = str(data.game);
+  const game = text(data.game);
   if (game && [...game].length > 100) fields.game = "Keep the game to 100 characters.";
-  const description = str(data.description);
+  const description = text(data.description);
   if (description && [...description].length > 1000)
     fields.description = "Keep the description to 1000 characters.";
-  const accessibilityNotes = str(data.accessibility_notes);
+  const accessibilityNotes = text(data.accessibility_notes);
   if (accessibilityNotes && [...accessibilityNotes].length > 1000)
     fields.accessibility_notes = "Keep accessibility notes to 1000 characters.";
   const timezone = str(data.timezone) ?? "Europe/London";
   if (!isKnownTimezone(timezone)) fields.timezone = `Unknown timezone: ${timezone}.`;
-  const location = str(data.location);
+  const location = text(data.location);
   if (location && [...location].length > 255)
     fields.location = "Keep the location to 255 characters.";
-  const organizerName = str(data.organizer_name);
+  const organizerName = text(data.organizer_name);
   if (organizerName && [...organizerName].length > 500)
     fields.organizer_name = "Keep the organizer name to 500 characters.";
   const joinUrl = str(data.join_url);
@@ -92,7 +113,7 @@ export function parseEventForm(
     fields.join_url = "Keep the public joining link to 2048 characters.";
   else if (joinUrl && !isPublicJoinUrl(joinUrl))
     fields.join_url = "Enter a valid public HTTP or HTTPS link without sign-in credentials.";
-  const joinInstructions = str(data.join_instructions);
+  const joinInstructions = text(data.join_instructions);
   if (joinInstructions && [...joinInstructions].length > 5000)
     fields.join_instructions = "Keep joining instructions to 5000 characters.";
   // Check the submitted text, not its trimmed value: trim removes BOM.

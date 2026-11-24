@@ -5,7 +5,12 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { homeEvidencePage, homeEvidenceStates, withKitHomeEvidence } from "./kit-home-evidence.mjs";
+import {
+  homeEvidencePage,
+  homeEvidenceStates,
+  withKitHomeEvidence,
+  withKitHomeEvidenceStates,
+} from "./kit-home-evidence.mjs";
 import {
   fixedDateBanner,
   readFixtureAsset,
@@ -36,15 +41,16 @@ export async function assertHomeEvidence() {
       `export async function withKitOfflineBrowser({ source }, capture) {
   if (process.env.CAPTURE_CASE === "incomplete" && source.endsWith("after")) return;
   let focused = false;
+  let scrollY;
   const page = {
-    setViewportSize: async () => {},
+    setViewportSize: async () => { scrollY = 1; },
     locator: () => ({
       focus: async () => { focused = true; },
       evaluate: async () => process.env.CAPTURE_CASE !== "focus-hidden",
     }),
     screenshot: async (options) => {
       if (options.fullPage !== true) throw new Error("full-page capture required");
-      if (!options.path && focused) throw new Error("ordinary capture retained focus");
+      if (!options.path && (focused || scrollY !== 0)) throw new Error("ordinary capture retained focus or scroll");
       return Buffer.from("fixture image");
     },
     evaluate: async (fn) => {
@@ -61,7 +67,8 @@ export async function assertHomeEvidence() {
       try { return await fn(); } finally { delete globalThis.document; }
     },
   };
-  await capture({ page });
+  globalThis.window = { scrollTo: ({ top }) => { scrollY = top; } };
+  try { await capture({ page }); } finally { delete globalThis.window; }
 }`,
     );
     const script = new URL("./kit-home-capture.mjs", import.meta.url);
@@ -161,13 +168,16 @@ test("Kit home evidence rejects unknown fixture states", () => {
   assert.throws(() => homeEvidencePage("__proto__"), /Unknown home evidence state/);
 });
 
-for (const state of homeEvidenceStates) {
-  test(`Kit home evidence renders ${state} offline`, async () => {
-    await withKitHomeEvidence(state, async ({ page }) => {
-      assert.equal(await page.getByRole("heading", { level: 1 }).count(), 1, state);
-    });
+test("Kit home evidence renders all states offline", async (t) => {
+  await withKitHomeEvidenceStates(async (openState) => {
+    for (const state of homeEvidenceStates) {
+      await t.test(state, async () => {
+        const page = await openState(state);
+        assert.equal(await page.getByRole("heading", { level: 1 }).count(), 1, state);
+      });
+    }
   });
-}
+});
 
 test("Kit home hero presents its heading and action at desktop and mobile widths", async () => {
   await withKitHomeEvidence("guest", async ({ page }) => {
@@ -371,7 +381,7 @@ test("Kit fixture opts into compiled JavaScript hydration", async () => {
   });
   const timezoneId = "America/Los_Angeles";
   await withKitOfflineBrowser(
-    { page: fixture, javaScriptEnabled: true, timezoneId },
+    { page: fixture, javaScriptEnabled: true, timezoneId, csr: true, headerMenu: true },
     async ({ page }) => {
       assert.equal(
         await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone),
@@ -380,6 +390,10 @@ test("Kit fixture opts into compiled JavaScript hydration", async () => {
       await page.waitForLoadState("networkidle");
       await page.locator("button").click();
       await page.waitForFunction(() => document.querySelector("button")?.textContent === "1");
+      assert.equal(
+        await page.evaluate(async () => (await fetch("/islands/site-header-menu.js")).status),
+        200,
+      );
     },
   );
 });
@@ -456,6 +470,49 @@ test("Kit fixture denies public JavaScript even with hydration enabled", async (
     }),
     /events-calendar\.js/,
   );
+});
+
+test("Kit fixture serves the menu island only with explicit opt-in", async () => {
+  const path = "/islands/site-header-menu.js";
+  const options = { page: "<p>Fixture</p>", javaScriptEnabled: true };
+  const fetchFulfilled = (page, url) =>
+    page.evaluate(
+      (request) =>
+        fetch(request).then(
+          () => true,
+          () => false,
+        ),
+      url,
+    );
+
+  let menuFetchFulfilled;
+  await assert.rejects(
+    withKitOfflineBrowser(options, async ({ page }) => {
+      menuFetchFulfilled = await fetchFulfilled(page, path);
+    }),
+    /\/islands\/site-header-menu\.js/,
+  );
+  assert.equal(menuFetchFulfilled, false);
+
+  const body = await readFile(new URL(`../public${path}`, import.meta.url), "utf8");
+  let calendarFetchFulfilled;
+  await assert.rejects(
+    withKitOfflineBrowser({ ...options, headerMenu: true }, async ({ page }) => {
+      const response = await page.evaluate(async (url) => {
+        const asset = await fetch(url);
+        return {
+          status: asset.status,
+          type: asset.headers.get("content-type"),
+          body: await asset.text(),
+        };
+      }, path);
+      assert.deepEqual(response, { status: 200, type: "text/javascript", body });
+      calendarFetchFulfilled = await fetchFulfilled(page, "/islands/events-calendar.js");
+    }),
+    /\/islands\/events-calendar\.js/,
+  );
+  // The fixture's cleanup rejection can mask assertions inside the callback.
+  assert.equal(calendarFetchFulfilled, false);
 });
 
 test("Kit fixture renders query data and same-origin static assets", async () => {
@@ -663,10 +720,10 @@ const past: CalendarPersistedCard = { kind: 'event', key: 'past', eventKey: 'pas
 <div class="base-theme schedule-theme"><main class="events-page"><CalendarPastDrawer {state} past={${scenario === "empty" ? "[]" : "[past]"}} showPast={${scenario !== "closed"}} member={false} inviteUrl="https://discord.test/invite" loginReturnTo="/events?page=2" /></main></div>`,
       },
       async ({ page }) => {
-        assert.equal(
-          await page.getByTestId("events-past-list").count(),
-          scenario === "closed" || scenario === "empty" ? 0 : 1,
-        );
+        const list = page.getByRole("list", { name: "Past events", exact: true });
+        const listCount = scenario === "closed" || scenario === "empty" ? 0 : 1;
+        assert.equal(await list.count(), listCount);
+        assert.equal(await page.getByTestId("events-past-list").count(), listCount);
         assert.equal(
           await page.getByTestId("events-past-toggle").count(),
           scenario === "search" || scenario === "empty" ? 0 : 1,
@@ -678,6 +735,8 @@ const past: CalendarPersistedCard = { kind: 'event', key: 'past', eventKey: 'pas
           );
         }
         if (scenario !== "closed" && scenario !== "empty") {
+          assert.equal(await list.getAttribute("role"), "list");
+          assert.equal(await list.getByRole("listitem").count(), 1);
           assert.match(await page.getByTestId("events-past-list").innerText(), /Past game night/i);
           assert.equal(await page.getByTestId("signin").count(), 0);
         }
@@ -957,7 +1016,7 @@ const cancelled: CalendarPersistedCard = { ...event, key: 'cancelled', eventKey:
 const past: CalendarPersistedCard = { ...event, key: 'past', eventKey: 'past', title: 'Past game night', status: 'past', availability: { state: 'past', text: 'Ended', ongoing: false } };
 </script>
 <svelte:head><link rel="stylesheet" href="/styles.css" /><link rel="stylesheet" href="/theme.css" /><link rel="stylesheet" href="/schedule-theme.css" /></svelte:head>
-<div class="base-theme schedule-theme"><main class="events-page"><CalendarList {state} upcoming={${scenario === "out-of-range" ? "[]" : "[event, discord, cancelled]"}} past={[past]} totalPages={4} outOfRange={${scenario === "out-of-range"}} showPast={${scenario !== "closed"}} member={false} inviteUrl="https://discord.test/invite" loginReturnTo="/events?page=2" /></main></div>`,
+<div class="base-theme schedule-theme"><main class="events-page"><CalendarList {state} zone="UTC" now={new Date('2030-06-15T12:00:00Z')} upcoming={${scenario === "out-of-range" ? "[]" : "[event, discord, cancelled]"}} past={[past]} totalPages={4} outOfRange={${scenario === "out-of-range"}} showPast={${scenario !== "closed"}} member={false} inviteUrl="https://discord.test/invite" loginReturnTo="/events?page=2" /></main></div>`,
       },
       async ({ page }) => {
         assert.equal(
@@ -976,11 +1035,11 @@ const past: CalendarPersistedCard = { ...event, key: 'past', eventKey: 'past', t
           assert.equal(await page.getByTestId("events-out-of-range").count(), 1);
         } else {
           assert.match(await page.getByTestId("events-list").innerText(), /Game night/i);
+          assert.equal(await page.getByRole("list", { name: /Today · .*15 Jun/ }).count(), 1);
+          assert.equal(await page.getByRole("list", { name: /Today · .*16 Jun/ }).count(), 0);
           if (scenario === "search") {
-            assert.match(
-              await page.getByTestId("events-list").locator("mark").first().innerText(),
-              /^Game$/i,
-            );
+            const title = page.locator("#event-game").getByRole("heading", { level: 3 });
+            assert.match(await title.locator("mark").innerText(), /^Game$/i);
           }
           assert.match(await page.getByTestId("events-pager-next").getAttribute("href"), /page=3/);
           assert.equal(await page.getByTestId("event-cancelled").count(), 1);

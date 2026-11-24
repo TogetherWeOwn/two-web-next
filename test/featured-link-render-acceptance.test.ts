@@ -60,7 +60,10 @@ beforeAll(async () => {
         import Home from ${JSON.stringify(join(root, "web/src/routes/+page.svelte"))};
         import New from ${JSON.stringify(join(root, "web/src/routes/admin/featured/new/+page.svelte"))};
         import Edit from ${JSON.stringify(join(root, "web/src/routes/admin/featured/[id]/+page.svelte"))};
-        export { load } from ${JSON.stringify(join(root, "web/src/routes/+page.server.ts"))};
+        import { env } from "cloudflare:workers";
+        import { load as routeLoad } from ${JSON.stringify(join(root, "web/src/routes/+page.server.ts"))};
+        import { prepareKitHomePanels } from ${JSON.stringify(join(root, "src/kit-home-panels.ts"))};
+        export const load = async (args) => routeLoad({ ...args, locals: { ...args.locals, homePanels: await prepareKitHomePanels(env, args.request) } });
         export { __resetHomeGuestCacheForTests as reset } from ${JSON.stringify(join(root, "src/home-cache.ts"))};
         export const renderHome = data => render(Home, { props: { data } }).body;
         export const renderNew = data => render(New, { props: { data } }).body;

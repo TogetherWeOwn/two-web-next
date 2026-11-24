@@ -4,7 +4,7 @@ import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { EventMetadata, EventShare, withEventDetailHtml } from "../src/events/detail-leaves";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
-import { kitOpenSeat } from "../src/events/kit-seat-actions";
+import { kitOpenSeat, kitSeatActionBar } from "../src/events/kit-seat-actions";
 import { ATTENDEE_PAGE_SIZE, type PublicEvent } from "../src/events/reads";
 import type { KitSession } from "../src/kit-session";
 
@@ -129,6 +129,7 @@ describe("shared event detail server leaves", () => {
       expect(model.detailHtml.roster).toContain(
         viewer ? "event-roster-members-only" : "event-roster-guest-nudge",
       );
+      if (viewer) expect(model.detailHtml.roster).toContain("</a> to see who");
       expect(model.detailHtml.rsvp).not.toContain("<form");
     },
   );
@@ -224,7 +225,12 @@ describe("shared event detail server leaves", () => {
     expect(forcedClosed.rsvp).not.toContain("<form");
     expect(forcedClosed.metadata).not.toContain('data-testid="event-spots-left"');
     vi.setSystemTime(new Date(0));
-    const forcedOpen = withEventDetailHtml({ ...ended.model, rsvpClosed: null });
+    const forcedOpen = withEventDetailHtml({
+      ...ended.model,
+      rsvpClosed: null,
+      isEnded: false,
+      lifecycle: null,
+    });
     expect(forcedOpen.detailHtml.rsvp).toContain("data-rsvp-form");
     expect(forcedOpen.detailHtml.rsvp).not.toContain("rsvp-closed");
     // The open-seat card owns the initial count; the lineup can still refresh.
@@ -233,7 +239,7 @@ describe("shared event detail server leaves", () => {
     expect(kitOpenSeat(forcedOpen)).toBe("0 of 10 in");
   });
 
-  it("projects open-seat copy and refresh markup from the same RSVP snapshot", async () => {
+  it("projects open-seat copy and the native action from the same RSVP snapshot", async () => {
     const { model } = await resolve(
       {
         startsAt: new Date("2030-01-10T21:00:00Z"),
@@ -243,10 +249,16 @@ describe("shared event detail server leaves", () => {
       member,
       "?attendees=2",
     );
-    expect(kitOpenSeat(model)).toBe("2 of 10 in");
+    expect(kitSeatActionBar(model)).toEqual({
+      state: "open",
+      title: "2 of 10 in",
+      detail: "Sign-ups open",
+      action: `/e/${KEY}/rsvp?attendees=2`,
+    });
     expect(model.detailHtml.rsvp).toContain(`/e/${KEY}/rsvp?attendees=2`);
     expect(model.detailHtml.metadata).toContain('data-seat-refresh="initial"');
     expect(model.detailHtml.metadata).toContain("data-spots>8 of 10 spots left</span>");
+    expect(kitOpenSeat(model)).toBe("2 of 10 in");
     expect(kitOpenSeat({ ...model, capacity: null })).toBe("1 going");
     expect(kitOpenSeat({ ...model, goingOccupancy: 10 })).toBeNull();
     expect(kitOpenSeat({ ...model, rsvpOpen: false })).toBeNull();
@@ -257,6 +269,12 @@ describe("shared event detail server leaves", () => {
     expect(
       kitOpenSeat({ ...model, answer: { status: "going", syncedToDiscordAt: null } }),
     ).toBeNull();
+    expect(
+      kitSeatActionBar({
+        ...model,
+        answer: { status: "going", syncedToDiscordAt: null },
+      }),
+    ).toEqual({ state: "saved", title: "You're in", detail: "Starts at 21:00" });
   });
 
   it("keeps review form-free and the cancelled hidden-row difference explicit", async () => {

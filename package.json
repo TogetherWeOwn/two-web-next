@@ -57,7 +57,7 @@
     "mutation:sessions-join": "node ci/mutation-sessions-join.mjs",
     "mutation:sessions-join:selftest": "node ci/mutation-sessions-join.mjs --selftest",
     "mutation:roles-wall-time": "node ci/mutation-roles-wall-time.mjs",
-    "mutation:roles-wall-time:selftest": "node ci/mutation-sessions-join.mjs --selftest && node --test ci/mutation-roles-wall-time.test.mjs",
+    "mutation:roles-wall-time:selftest": "node --test ci/mutation-roles-wall-time.test.mjs",
     "scan:fetch-await": "node ci/http-boundary-suppressions.mjs && npx -y --package @ast-grep/cli@0.50.0 ast-grep scan && npm run scan:http-boundary",
     "scan:http-boundary": "node ci/http-boundary-suppressions.mjs && npx -y --package @ast-grep/cli@0.50.0 ast-grep scan src/http --filter '^http-no-hono' --no-ignore hidden --no-ignore dot --no-ignore vcs --no-ignore exclude --no-ignore global",
     "scan:rules-test": "npx -y --package @ast-grep/cli@0.50.0 ast-grep test",
@@ -123,6 +123,7 @@
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
     "@babel/parser": "8.1.2",
+    "@babel/traverse": "8.0.10",
     "@babel/types": "8.1.2",
     "@biomejs/biome": "2.6.7",
     "@cloudflare/workers-types": "^5.20261113.1",

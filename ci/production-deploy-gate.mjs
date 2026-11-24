@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
 import { APEX_ORIGIN } from "./operator-constants.mjs";
 import {
@@ -990,6 +991,71 @@ export function assertProductionTarget(configText) {
   }
 }
 
+export const KIT_ROUTE_FLAGS = ["ARCHIVE", "STATIC", "EVENTS", "HOME", "JOIN"].map(
+  (family) => `KIT_ROUTE_${family}`,
+);
+const KIT_BINDING_KEYS = (
+  "hyperdrive queues tail_consumers version_metadata services kv_namespaces r2_buckets " +
+  "d1_databases durable_objects analytics_engine_datasets ai browser workflows"
+).split(" ");
+const KIT_CONFIG_KEYS = new Set(
+  (
+    "$schema name main compatibility_date compatibility_flags observability workers_dev " +
+    "preview_urls placement tail_consumers version_metadata keep_vars triggers queues assets hyperdrive vars"
+  ).split(" "),
+);
+
+// Validate the source-only Kit production config without building or deploying.
+// The candidate must name the production Worker, keep every Kit route family
+// off, own no crons or routes, and match the checked production bindings.
+export function assertKitProductionCandidate(rootText, kitText) {
+  const root = readWranglerConfig(rootText);
+  const production = root.env?.production;
+  const kit = readWranglerConfig(kitText);
+  if (kit.name !== "two-web-next-production" || production?.name !== kit.name) {
+    throw new Error("Kit candidate must name the root production Worker two-web-next-production");
+  }
+  for (const flag of KIT_ROUTE_FLAGS) {
+    if (kit.vars?.[flag] !== "false") throw new Error(`Kit candidate ${flag} must be "false"`);
+  }
+  if (!Array.isArray(kit.triggers?.crons) || kit.triggers.crons.length !== 0) {
+    throw new Error("Kit candidate must declare empty crons");
+  }
+  if ("routes" in kit || "route" in kit || "env" in kit || kit.workers_dev !== false) {
+    throw new Error("Kit candidate must not declare routes, environments or workers.dev");
+  }
+  if (kit.preview_urls !== false) {
+    throw new Error("Kit candidate must disable preview URLs");
+  }
+  for (const key of KIT_BINDING_KEYS) {
+    if (!isDeepStrictEqual(kit[key], production[key])) {
+      throw new Error(`Kit candidate ${key} bindings differ from root env.production`);
+    }
+  }
+  const expectedAssets = {
+    ...(production.assets ?? root.assets),
+    directory: ".svelte-kit/cloudflare",
+  };
+  if (!isDeepStrictEqual(kit.assets, expectedAssets)) {
+    throw new Error("Kit candidate assets settings differ from the expected production settings");
+  }
+  for (const key of Object.keys(kit)) {
+    if (!KIT_CONFIG_KEYS.has(key)) {
+      throw new Error(`Kit candidate has unreviewed config section ${key}`);
+    }
+  }
+  for (const [name, value] of Object.entries(kit.vars)) {
+    if (!KIT_ROUTE_FLAGS.includes(name) && production.vars?.[name] !== value) {
+      throw new Error(`Kit candidate var ${name} differs from root env.production`);
+    }
+  }
+  for (const name of Object.keys(production.vars ?? {})) {
+    if (!Object.hasOwn(kit.vars, name)) {
+      throw new Error(`Kit candidate var ${name} is missing`);
+    }
+  }
+}
+
 // The checkout must be the promoted SHA itself: deploy-production.yml resolves
 // DEPLOY_SHA once (explicit input or latest staging-verified commit) and checks
 // it out in both gate jobs, so a newer main head never deploys.
@@ -1119,7 +1185,7 @@ export async function checkRollbackGate(env, fetchImpl = fetch, options = {}) {
 // gate. A bare invocation (or a non-flag positional, as before) runs the
 // full gate.
 export const PRODUCTION_DEPLOY_GATE_USAGE =
-  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-ancestry | --check-migrations | --help]\nWith no flag, runs the full production gate.";
+  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-ancestry | --check-migrations | --kit-candidate | --help]\nWith no flag, runs the full production gate.";
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
@@ -1317,6 +1383,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           console.log(`No pending production migrations (${deploySha} vs live ${liveSha})`);
         }
       }
+    } else if (process.argv[2] === "--kit-candidate") {
+      // Validate the working-directory checkout, even when the script lives
+      // in a separate tree.
+      assertKitProductionCandidate(
+        readFileSync("wrangler.jsonc", "utf8"),
+        readFileSync("web/wrangler.production.jsonc", "utf8"),
+      );
+      console.log("Inert Kit production candidate config matches root env.production");
     } else if (typeof process.argv[2] === "string" && process.argv[2].startsWith("-")) {
       // A mistyped flag must never run the full gate: refuse as a usage
       // error (exit 2) with the usage line, not a gate failure.
