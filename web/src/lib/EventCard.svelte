@@ -57,11 +57,11 @@ const zone = $derived(effectiveZone(e.timezone));
       <h2>
         <a href={archiveEventHref(e.eventKey, archive)}>{#if q && e.titleSpans}<span>{#each e.titleSpans as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>{:else}{e.title}{/if}</a>
       </h2>
-      <span class="event-state">Sign-up record</span>
+      <span class="event-state">{e.echo?.label ?? "Sign-up record"}</span>
     </div>
     <p><time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, zone)}</time>{" "}<span>{zone}</span>{#if e.location}{" · "}<span>{e.location}</span>{/if}</p>
     {#if e.game}<p>{e.game}</p>{/if}
     {#if host}<p data-testid="event-card-host">Hosted by {host}</p>{/if}{#if q && e.passage}<p class="archive-passage">{#each e.passage as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</p>{/if}
   </div>
-  <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
+  <span class="schedule-attendance">{e.echo ? `${e.echo.attendedCount} attended · peak ${e.echo.peakConcurrent} in voice` : goingCountText(e.goingCount, e.capacity)}</span>
 </li>
