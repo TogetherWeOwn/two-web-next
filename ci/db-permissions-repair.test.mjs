@@ -166,6 +166,14 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   assert.deepEqual(select(repair, "readback", tip, beforeIsolation), [0, beforeIsolation]);
   assert.deepEqual(select(executor, "revoke", tip, beforeIsolation), [0, beforeIsolation]);
   assert.deepEqual(select(isolation, "undo", tip, beforeIsolation), [1, tip]);
+  write(isolation, `${read(`../${isolation}`)}\n# changed isolation dispatcher\n`);
+  git("commit", "-qam", "changed isolation dispatcher");
+  const changedIsolationWorkflow = git("rev-parse", "HEAD");
+  assert.deepEqual(select(isolation, "undo", changedIsolationWorkflow, approved), [
+    1,
+    changedIsolationWorkflow,
+  ]);
+  git("checkout", "--detach", tip);
   write(isolationSelector, `${read(`../${isolationSelector}`)}\n# changed isolation selector\n`);
   git("commit", "-qam", "changed isolation selector");
   const changedIsolation = git("rev-parse", "HEAD");
