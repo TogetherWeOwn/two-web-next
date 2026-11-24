@@ -5,12 +5,49 @@
 // no database — these handlers stay 200→302 when everything behind them is
 // down. One register function behind the same barrel pattern as the event
 // routes; `src/index.tsx` only calls it.
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
+import { AlertRateLimit, alertRequestError } from "./alerts";
 import type { Env } from "./env";
+import { InviteConfigError, inviteDestination, isInviteConfigUsable } from "./invite";
+import { safeNext } from "./join/service";
 import { About, Faq, Rules } from "./pages";
 import { faqLastReviewed } from "./faq-last-reviewed";
 import { rulesLastUpdated } from "./rules-last-updated";
-import { vanityRedirects } from "./static-public";
+
+type Ctx = Context<{ Bindings: Env }>;
+
+// A broken invite has its own mute window so its alerts cannot compete
+// with unrelated request errors. The dynamic clock also supports time control.
+const inviteAlerts = new AlertRateLimit(undefined, () => Date.now());
+
+export const vanityRedirects = {
+  "/discord": (c: Ctx) => {
+    c.header("cache-control", "no-store, private");
+    const configured = c.env.DISCORD_INVITE_URL;
+    const destination = inviteDestination(configured);
+    if (!isInviteConfigUsable(configured)) {
+      alertRequestError(
+        new InviteConfigError(),
+        { method: c.req.method, route: "/discord", requestId: c.get("requestId") },
+        { limiter: inviteAlerts },
+      );
+    }
+    return c.redirect(destination, 302);
+  },
+  "/login": (c: Ctx) => {
+    // Only the OAuth entry point starts a sign-in journey and issues cookies.
+    const next = safeNext(c.req.query("next"));
+    c.header("cache-control", "no-store, private");
+    return c.redirect(
+      next ? `/auth/discord?${new URLSearchParams({ next })}` : "/auth/discord",
+      302,
+    );
+  },
+  "/community": (c: Ctx) => {
+    c.header("cache-control", "no-store, private");
+    return c.redirect("/", 302);
+  },
+};
 
 export function registerStaticLeaves(app: Hono<{ Bindings: Env }>): void {
   app.get("/discord", vanityRedirects["/discord"]);

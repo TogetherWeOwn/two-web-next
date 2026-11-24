@@ -1,5 +1,4 @@
 import { Context } from "hono";
-import { AlertRateLimit, alertRequestError } from "./alerts";
 import {
   llmsTxt,
   MARKDOWN_MIME,
@@ -15,9 +14,9 @@ import { internalErrorHandler } from "./errors";
 import { stagingRobots } from "./headers";
 import { etagFor, matchesIfNoneMatch } from "./http/conditional";
 import { safeRequestId } from "./http/request-log";
-import { InviteConfigError, inviteDestination, isInviteConfigUsable } from "./invite";
-import { safeNext } from "./join/service";
+import { inviteDestination } from "./invite";
 import { rulesLastUpdated } from "./rules-last-updated";
+import { vanityRedirects } from "./static-leaves";
 
 type Ctx = Context<{ Bindings: Env }>;
 
@@ -47,39 +46,6 @@ export const staticMarkdown = {
   "/privacy.md": (c: Ctx) => mdOk(c, mdPrivacy(c.env.APP_URL), STATIC_MD_CACHE),
   "/join.md": (c: Ctx) =>
     mdOk(c, mdJoin(c.env.APP_URL, inviteDestination(c.env.DISCORD_INVITE_URL)), STATIC_MD_CACHE),
-};
-
-// A broken invite has its own mute window so its alerts cannot compete
-// with unrelated request errors. The dynamic clock also supports time control.
-const inviteAlerts = new AlertRateLimit(undefined, () => Date.now());
-
-export const vanityRedirects = {
-  "/discord": (c: Ctx) => {
-    c.header("cache-control", "no-store, private");
-    const configured = c.env.DISCORD_INVITE_URL;
-    const destination = inviteDestination(configured);
-    if (!isInviteConfigUsable(configured)) {
-      alertRequestError(
-        new InviteConfigError(),
-        { method: c.req.method, route: "/discord", requestId: c.get("requestId") },
-        { limiter: inviteAlerts },
-      );
-    }
-    return c.redirect(destination, 302);
-  },
-  "/login": (c: Ctx) => {
-    // Only the OAuth entry point starts a sign-in journey and issues cookies.
-    const next = safeNext(c.req.query("next"));
-    c.header("cache-control", "no-store, private");
-    return c.redirect(
-      next ? `/auth/discord?${new URLSearchParams({ next })}` : "/auth/discord",
-      302,
-    );
-  },
-  "/community": (c: Ctx) => {
-    c.header("cache-control", "no-store, private");
-    return c.redirect("/", 302);
-  },
 };
 
 const handlers = new Map(Object.entries({ ...staticMarkdown, ...vanityRedirects }));
