@@ -194,7 +194,7 @@ Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
 | `source evidence snapshot failed; refusing evidence.` | The guarded source-evidence snapshot threw (`src/admin/source-evidence.ts`): a source read, freshness check or statement-shape validation failed. Ends the single attempt. | Fails closed with the `evidence_unavailable` 503. | Search logs for the line and its `incidentId`; then `SELECT id FROM queue_failed_jobs WHERE id = <incidentId>` to confirm the failed-row read, and check database health with the [alert runbook](runbook-alerts.md). | `exception` (class name), `incidentId` (numeric incident id). Never the exception message, SQL text, bindings, request URI, or any payload |
 | `source evidence database missing; refusing evidence.` | No database is configured (`src/admin/source-evidence.ts`): neither `DATABASE_URL` nor the `DB` Hyperdrive binding resolved, so the snapshot never started. | Fails closed with the `evidence_unavailable` 503. | Search logs for the line and its `incidentId`; then confirm the deployment carries a database binding (miniflare/Hyperdrive config for staging) before suspecting the database itself. | `exception` (fixed `MissingConfiguration`: nothing threw), `incidentId` (numeric incident id). Never the env, a URI, or any payload |
 | `queue redispatch prerequisites missing; refusing redispatch.` | No producer prerequisites on the real dispatch path (`src/admin/queue-redispatch.ts`): `SYNC_EVENT_QUEUE` unbound or no database URL resolved, so dispatch never started and nothing was written. | Fails closed with the `redispatch_unavailable` 503. | Search logs for the line and its `failureId`; then confirm the deployment carries a queue binding and a database binding (miniflare/Hyperdrive config for staging) before suspecting the database itself. | `exception` (fixed `MissingConfiguration`: nothing threw), `failureId` (numeric queue failure id). Never the env, a URI, or any payload |
-| `logout revocation failed` | Revoking the presented session (or its auth-status lineage) threw (`src/auth/routes.ts`). | Fails closed with the 503 "Sign-out temporarily unavailable" body (the branded maintenance page for HTML callers); the browser cookies are not cleared. | Search logs for the line and join by `request_id` to the matching `http.request` 503 on `POST /logout`; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. See [Login-start store failures and logout revocation](#login-start-store-failures-and-logout-revocation) for the sibling login-start warns. | `exception` (class name), validated `request_id` |
+| `logout revocation failed` | Revoking the presented session (or its auth-status lineage) threw (`src/auth/sign-out.ts`). | Fails closed with the 503 "Sign-out temporarily unavailable" body (the branded maintenance page for HTML callers); the browser cookies are not cleared. | Search logs for the line and join by `request_id` to the matching `http.request` 503 on `POST /logout`; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. See [Login-start store failures and logout revocation](#login-start-store-failures-and-logout-revocation) for the sibling login-start warns. | `exception` (class name), validated `request_id` |
 | `logout everywhere revocation failed` | Resolving the acting member or sweeping their live sessions threw on `POST /logout/everywhere` (`src/auth/routes.ts`). | Fails closed with the same 503 "Sign-out temporarily unavailable" body as single logout; the browser cookies are not cleared and the sweep is atomic, so a retry re-resolves and re-sweeps. | Search logs for the line and join by `request_id` to the matching `http.request` 503 on `POST /logout/everywhere`; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. | `exception` (class name), validated `request_id` |
 
 ### Kit admin read code-bug alerts
@@ -624,9 +624,9 @@ secret or the live access token.
 
 ### Login-start store failures and logout revocation
 
-Three auth-scoped lines cover the session-store failures around the Discord
-round trip (`src/auth/routes.ts`). None pages: each line accompanies the
-member-visible redirect or 503 the member already sees. Correlate by the
+The Discord sign-in warnings and sign-out-everywhere errors come from
+`src/auth/routes.ts`. Ordinary sign-out errors come from `src/auth/sign-out.ts`.
+Each line accompanies a member-visible redirect or 503. Correlate by the
 validated `request_id`, which joins to the `http.request` line. Where a line
 carries an exception, it is the class name only, never the raw error text,
 which can quote connection strings or tokens. An `issue()` returning `false`
@@ -970,8 +970,8 @@ line carries no fields, and the session-fallback line carries only the fixed
 no member identity either: the prune line carries the exception class (never the message), the attempt line
 carries the exception class, `outcome` and validated `request_id`, and the token-exchange line carries
 the exception class, kind/status, sanitized `source`, `outcome` and validated `request_id` (see
-[Join journey warnings](#join-journey-warnings)). The login-start store warns and the logout
-revocation error (`src/auth/routes.ts`) carry the exception class and the validated `request_id`
+[Join journey warnings](#join-journey-warnings)). The login-start store warnings (`src/auth/routes.ts`)
+and the logout revocation error (`src/auth/sign-out.ts`) carry the exception class and the validated `request_id`
 only — never a token, cookie, message, or member identity (see
 [Login-start store failures and logout revocation](#login-start-store-failures-and-logout-revocation)).
 `csp.report.violation`

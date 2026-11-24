@@ -64,6 +64,7 @@ import {
   recoveryLanding,
 } from "../write-recovery";
 import { SESSION_COOKIE } from "../session-cookie";
+import { signOut } from "./sign-out";
 
 export { SESSION_COOKIE };
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -345,48 +346,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     // `logout`-bucket spend, even on a spent budget.
     requestBodyLimit("action"),
     throttle("logout", WRITE_THROTTLE_PER_MINUTE),
-    async (c) => {
-      // The app-wide same-origin guard runs before throttling or session storage.
-      const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-      // No bearer, or a correctly-signed but malformed bearer: nothing to
-      // revoke — clear cookies and leave without touching session storage
-      // (stays 303 when the store is down; main #239 pins the authoritative
-      // 503 only for a well-formed presented token whose revocation fails).
-      // A malformed hash could never match a live row, so revoking it is
-      // useless work that would 503 a sign-out that must always clear.
-      if (isValidSessionToken(token)) {
-        try {
-          const store = await hooks.storeFor(c);
-          await store.revoke(await hashToken(token));
-          const statusHash = await getSignedCookie(c, c.env.SESSION_SECRET, AUTH_STATUS_COOKIE);
-          if (typeof statusHash === "string" && /^[a-f0-9]{64}$/.test(statusHash)) {
-            await store.revokeLineage(statusHash);
-          }
-        } catch (err) {
-          // Authoritative, not best-effort: a failed revocation must not clear
-          // this browser's cookie as if the server row were gone. The failure
-          // logs bounded facts only — the class, never the message, which can
-          // quote connection details. Explicit JSON callers get the correlated
-          // envelope; absent/wildcard callers keep the legacy text bytes and
-          // browsers the branded page (explicit-HTML opt-in).
-          console.error("logout revocation failed", {
-            exception: exceptionClass(err),
-            request_id: safeRequestId(c.get("requestId")),
-          });
-          c.header("cache-control", "no-store, private");
-          varyAccept(c);
-          if (prefersHtmlError(c)) return databaseUnavailable(c);
-          if (outageRepresentation(c) === "application/json") {
-            return databaseUnavailable(c, true);
-          }
-          return c.text("Sign-out temporarily unavailable", 503);
-        }
-      }
-      deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
-      clearAuthStatus(c);
-      await consumeExpiredWrite(c);
-      return c.redirect("/", 303);
-    },
+    (c) => signOut(c, () => hooks.storeFor(c)),
   );
 
   // Sign out everywhere: revokes every live session for the acting member,
