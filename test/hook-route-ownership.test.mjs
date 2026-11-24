@@ -627,6 +627,7 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain(
       "{ flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] }",
     );
+    expect(source).toContain("{ flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES }");
     // Production session composition lives in kitSessionBridge
     // (src/kit-session.ts), pinned by test/kit-session.test.ts: the hook must
     // not carry any session logic to mutate. Each of these mutants stays green

@@ -3,6 +3,7 @@ import { type Handle, sequence } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
 import { prepareKitHomePanels } from "../../src/kit-home-panels";
+import { KIT_SEO_ROUTES } from "../../src/kit-seo-routes";
 import { kitAccessSink } from "../../src/kit-access-sink";
 import { preserveHonoDataResponse } from "../../src/kit-worker-facade";
 import {
@@ -57,6 +58,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     kitRouteJoin: env.KIT_ROUTE_JOIN,
     apiFamilies: [
       { flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] },
+      { flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES },
     ],
     versionMetadata: env.CF_VERSION_METADATA,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,

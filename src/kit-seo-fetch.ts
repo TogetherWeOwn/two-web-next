@@ -2,6 +2,7 @@ import { Context } from "hono";
 import type { Env } from "./env";
 import { internalErrorHandler } from "./errors";
 import { safeRequestId } from "./http/request-log";
+import { KIT_SEO_PATHS } from "./kit-seo-routes";
 import { robotsResponse, sitemapResponse } from "./seo-responses";
 
 /**
@@ -16,17 +17,17 @@ export async function fetchKitSeo(
 ): Promise<Response | null> {
   if (request.method !== "GET" && request.method !== "HEAD") return null;
   const { pathname } = new URL(request.url);
-  if (pathname !== "/robots.txt" && pathname !== "/sitemap_index.xml") return null;
+  if (pathname !== KIT_SEO_PATHS.robots && pathname !== KIT_SEO_PATHS.sitemap) return null;
 
   const c = new Context<{ Bindings: Env }>(request, { env, path: pathname });
   const id = safeRequestId(requestId);
   if (id !== undefined) c.set("requestId", id);
   let response: Response;
   try {
-    response = pathname === "/robots.txt" ? robotsResponse(c) : await sitemapResponse(c);
+    response = pathname === KIT_SEO_PATHS.robots ? robotsResponse(c) : await sitemapResponse(c);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
-    response = await internalErrorHandler(error, c);
+    response = await internalErrorHandler(error, c, pathname);
   }
   return request.method === "HEAD" ? new Response(null, response) : response;
 }

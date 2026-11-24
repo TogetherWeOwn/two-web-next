@@ -1,8 +1,10 @@
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import type { Db } from "../src/db/index";
 import { checkJoinThrottle } from "../src/join/service";
 import { fetchKitSeo } from "../src/kit-seo-fetch";
+import { KIT_SEO_ROUTES } from "../src/kit-seo-routes";
 import {
   dispatchHookRequest,
   KIT_RENDERER_HEADER,
@@ -62,7 +64,7 @@ async function compare(
   });
   const honoFetch = vi.fn((req: Request) => fetchApp(req, env));
   const sessionFor = vi.fn().mockRejectedValue(new Error("SEO dispatch read a session"));
-  // The fixture catalog and resolve callback stand in for the mounted endpoints.
+  // The resolve callback stands in for the mounted endpoints.
   const response = await dispatchHookRequest(
     { request, url, route: { id: dataRoute ?? url.pathname }, isDataRequest: !!dataRoute },
     {
@@ -70,17 +72,7 @@ async function compare(
       honoFetch,
       resolve,
       sessionFor,
-      apiFamilies: [
-        {
-          flag,
-          routes: [ROBOTS, SITEMAP].map((path) => ({
-            method: "GET",
-            path,
-            enabled: true,
-            reads: "public",
-          })),
-        },
-      ],
+      apiFamilies: [{ flag, routes: KIT_SEO_ROUTES }],
     },
   );
   expect(resolve).toHaveBeenCalledTimes(fallback ? 0 : 1);
@@ -227,8 +219,10 @@ it("refuses a throttled sitemap before DB acquisition on GET and HEAD", async ()
 it("preserves Hono ownership with the flag off and for aliases, foreign hosts and other methods", async () => {
   for (const path of [ROBOTS, SITEMAP]) {
     expect(resolveRouteOwner({ method: "GET", path })).toBe("hono");
-    const { response } = await compare(path, baseEnv, { flag: "false", fallback: true });
-    expect(response.status).toBe(200);
+    for (const flag of ["false", "TRUE"]) {
+      const { response } = await compare(path, baseEnv, { flag, fallback: true });
+      expect(response.status).toBe(200);
+    }
   }
   for (const [path, status] of [
     ["/%72obots.txt", 200],
@@ -274,4 +268,35 @@ it("keeps the branded Hono failure and redacts unexpected error details", async 
   expect(response.headers.get("cache-control")).toBe("no-store, private");
   expect(body).toContain(REQUEST_ID);
   expect(body).not.toContain("synthetic driver detail");
+});
+
+it("labels detached alerts with the registered route and safe request reference", async () => {
+  __resetAlertRateLimitForTests();
+  const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const request = new Request(new URL(`${SITEMAP}?private=synthetic`, baseEnv.APP_URL));
+    const response = await fetchKitSeo(
+      request,
+      {
+        ...baseEnv,
+        get E2E_PUBLIC_READ_BUDGET(): string {
+          throw new Error("synthetic driver detail");
+        },
+      },
+      REQUEST_ID,
+    );
+    expect(response?.status).toBe(500);
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    const line = String(errorLog.mock.calls[0]?.[0]);
+    expect(JSON.parse(line)).toMatchObject({
+      event: "error.alert",
+      fingerprint: `Error@${SITEMAP}`,
+      route: SITEMAP,
+      request_id: REQUEST_ID,
+    });
+    expect(line).not.toContain("synthetic");
+  } finally {
+    errorLog.mockRestore();
+    __resetAlertRateLimitForTests();
+  }
 });

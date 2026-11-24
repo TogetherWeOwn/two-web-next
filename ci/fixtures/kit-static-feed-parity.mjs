@@ -5,6 +5,7 @@ import { generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { KIT_EVENT_CALENDAR_ROUTE } from "../../src/events/kit-event-calendar-route.ts";
 import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes.ts";
+import { KIT_SEO_ROUTES } from "../../src/kit-seo-routes.ts";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
 
 const eventKeys = [
@@ -15,6 +16,8 @@ const eventKeys = [
 const cachePolicy = "max-age=300, public";
 const detailCachePolicy = "max-age=300, private";
 const eventCalendar = (key) => `/events/${key}.ics`;
+const pastEventKey = "01J00000000000000000001004";
+const sitemap = "/sitemap_index.xml";
 const fixtureIp = "192.0.2.110";
 const wireHeaders = [
   "content-type",
@@ -40,7 +43,7 @@ const wireHeaders = [
   "reporting-endpoints",
 ];
 
-async function assertMountedFeeds() {
+async function assertMountedEndpoints() {
   const { manifest } = await import("../../web/.svelte-kit/output/server/manifest-full.js");
   const inventory = JSON.parse(
     await readFile(new URL("../../test/fixtures/route-inventory.json", import.meta.url), "utf8"),
@@ -52,7 +55,14 @@ async function assertMountedFeeds() {
       ["GET", "/events.rss"],
     ],
   );
-  for (const { path, method } of KIT_STATIC_FEED_ROUTES) {
+  assert.deepEqual(
+    KIT_SEO_ROUTES.map(({ method, path }) => [method, path]),
+    [
+      ["GET", "/robots.txt"],
+      ["GET", sitemap],
+    ],
+  );
+  for (const { path, method } of [...KIT_STATIC_FEED_ROUTES, ...KIT_SEO_ROUTES]) {
     const routes = manifest.routes.filter(
       ({ id, pattern }) => id !== "/[...path]" && pattern.test(path),
     );
@@ -130,12 +140,21 @@ function sessionRenewal(headers) {
 }
 
 export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl }) {
-  await assertMountedFeeds();
-  const [off, on] = await Promise.all([
-    startKit("kit-feed-off", { APP_URL: hono.origin, KIT_ROUTE_FEEDS: "false" }),
-    startKit("kit-feed-on", { APP_URL: hono.origin, KIT_ROUTE_FEEDS: "true" }),
+  await assertMountedEndpoints();
+  // Opposite flag values exercise both families independently on the same Workers.
+  const [seoOn, feedOn] = await Promise.all([
+    startKit("kit-seo-on", {
+      APP_URL: `${hono.origin}/`,
+      KIT_ROUTE_FEEDS: "false",
+      KIT_ROUTE_SEO: "true",
+    }),
+    startKit("kit-feed-on", {
+      APP_URL: hono.origin,
+      KIT_ROUTE_FEEDS: "true",
+      KIT_ROUTE_SEO: "false",
+    }),
   ]);
-  const modes = [hono, kit, off, on];
+  const modes = [hono, kit, seoOn, feedOn];
   const sql = postgres(databaseUrl, { max: 1 });
   const buckets = [`events-read:${fixtureIp}`];
   const sessionLineages = [];
@@ -182,8 +201,86 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
   async function compareFallback(method, path, status, origin = hono.origin) {
     const options = { method, status, headers: { origin } };
     const direct = await request(hono, path, options);
-    const actual = await request(on, path, options);
-    compare(actual, direct, on, path);
+    const actual = await request(feedOn, path, options);
+    compare(actual, direct, feedOn, path);
+  }
+
+  async function assertSeoParity() {
+    const baseline = new Map();
+    for (const [index, target] of modes.entries()) {
+      const ip = `192.0.2.${130 + index}`;
+      const bucket = `events-read:${ip}`;
+      buckets.push(bucket);
+      const canonical = target === kit ? kit.origin : hono.origin;
+      const headers = {
+        "cf-connecting-ip": ip,
+        "x-forwarded-for": ip,
+        "x-forwarded-host": "untrusted.example",
+        "if-none-match": "*",
+        "if-modified-since": "Fri, 01 Jan 2100 00:00:00 GMT",
+        cookie: "__Host-two_session=fixture",
+      };
+      for (const [path, type, expectedHits] of [
+        ["/robots.txt", "text/plain", 0],
+        [sitemap, "application/xml", 2],
+      ]) {
+        for (const method of ["GET", "HEAD"]) {
+          const label = `${method} ${path}`;
+          const result = await request(target, `${path}?crawler=1`, {
+            method,
+            headers,
+            status: 200,
+            renderer: target === seoOn ? "kit" : null,
+          });
+          if (target === hono) baseline.set(label, result);
+          else compare(result, baseline.get(label), target, label);
+          assert.equal(result.headers.get("content-type"), `${type}; charset=UTF-8`, label);
+          assert.equal(result.headers.get("cache-control"), "public, max-age=3600", label);
+          for (const name of ["etag", "last-modified", "x-robots-tag", "set-cookie"])
+            assert.equal(result.headers.get(name), null, `${label}: ${name}`);
+          if (method === "HEAD") continue;
+          if (path === "/robots.txt") {
+            assert.equal(
+              result.body,
+              `User-agent: *\nDisallow:\nSitemap: ${canonical}${sitemap}\n`,
+            );
+          } else {
+            assert.ok(result.body.includes(`<loc>${canonical}/</loc>`));
+            assert.ok(result.body.includes(`<loc>${canonical}/e/${eventKeys[0]}</loc>`));
+            assert.ok(result.body.includes("<lastmod>2026-01-01T18:00:00.000Z</lastmod>"));
+            for (const excluded of [
+              ...eventKeys.slice(1),
+              pastEventKey,
+              "seo-fixture-private-content",
+              "/events/past",
+            ])
+              assert.ok(!result.body.includes(excluded), "sitemap omits excluded fixture data");
+          }
+        }
+        const [{ count }] =
+          await sql`select count(*)::int from web_throttle_hits where bucket = ${bucket}`;
+        assert.equal(count, expectedHits, `${target.name}: shared read budget after ${path}`);
+      }
+    }
+
+    for (const [method, path, status, origin = hono.origin] of [
+      ["GET", "/%72obots.txt", 200],
+      ["GET", "/sitemap%5Findex.xml", 200],
+      ["HEAD", "/robots.txt/", 404],
+      ["GET", `${sitemap}/`, 404],
+      ["GET", "/robots.txt/__data.json", 404],
+      ["GET", "/sitemap.xml", 404],
+      ["POST", "/robots.txt", 404],
+      ["OPTIONS", sitemap, 404],
+      ["POST", sitemap, 403, "https://example.invalid"],
+    ]) {
+      const options = { method, status, headers: { origin } };
+      const direct = await request(hono, path, options);
+      compare(await request(seoOn, path, options), direct, seoOn, path);
+    }
+    console.log(
+      "PASS Worker robots and sitemap absent/off/on: ownership, wire parity, visibility and read budget",
+    );
   }
 
   try {
@@ -214,17 +311,20 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
     ]) {
       await compareFallback(method, path, status, origin);
     }
-    await request(on, "/about", { status: 200, renderer: "kit" });
-    await request(on, "/events/past", { status: 200, renderer: "kit" });
+    await request(feedOn, "/about", { status: 200, renderer: "kit" });
+    await request(feedOn, "/events/past", { status: 200, renderer: "kit" });
 
-    await sql`insert into events (event_key, title, game, status, starts_at, ends_at, updated_at)
-      values (${eventKeys[0]}, 'Fixture Racing Night', 'Fixture Racing', 'published',
+    await sql`insert into events (event_key, title, game, description, status, starts_at, ends_at, updated_at)
+      values (${eventKeys[0]}, 'Fixture Racing Night', 'Fixture Racing', 'seo-fixture-private-content', 'published',
         '2099-01-02 18:00+00', '2099-01-02 19:00+00', '2026-01-01 18:00+00'),
-        (${eventKeys[1]}, 'Fixture Cancelled Night', 'Fixture Puzzles', 'cancelled',
+        (${eventKeys[1]}, 'Fixture Cancelled Night', 'Fixture Puzzles', null, 'cancelled',
         '2099-01-03 18:00+00', '2099-01-03 19:00+00', '2026-01-01 18:00+00'),
-        (${eventKeys[2]}, 'Fixture Draft Night', 'Fixture Racing', 'draft',
-        '2099-01-04 18:00+00', '2099-01-04 19:00+00', '2026-01-01 18:00+00')`;
+        (${eventKeys[2]}, 'Fixture Draft Night', 'Fixture Racing', null, 'draft',
+        '2099-01-04 18:00+00', '2099-01-04 19:00+00', '2026-01-01 18:00+00'),
+        (${pastEventKey}, 'Fixture Past Night', null, null, 'past',
+        '2026-01-01 16:00+00', '2026-01-01 17:00+00', '2026-01-01 18:00+00')`;
     seeded = true;
+    await assertSeoParity();
 
     for (const [path, mediaType, disposition] of [
       ["/events.ics?game=Fixture%20Racing", "text/calendar", 'inline; filename="events.ics"'],
@@ -233,7 +333,7 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
       const run = (target, options) =>
         request(target, path, {
           ...options,
-          renderer: target === on ? "kit" : null,
+          renderer: target === feedOn ? "kit" : null,
         });
       const baseline = await run(hono, { status: 200 });
       for (const target of modes) {
@@ -282,7 +382,7 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
     for (const target of modes.slice(1)) {
       const actual = await request(target, invalidPath, {
         ...invalidOptions,
-        renderer: target === on ? "kit" : null,
+        renderer: target === feedOn ? "kit" : null,
       });
       compare(actual, invalid, target, invalidPath);
     }
@@ -299,7 +399,7 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
       const run = async (label, path, { headers, ...options }) => {
         const result = await request(target, path, {
           ...options,
-          renderer: target === on ? "kit" : null,
+          renderer: target === feedOn ? "kit" : null,
           headers: { "cf-connecting-ip": ip, "x-forwarded-for": ip, ...headers },
         });
         if (target === hono) detailBaseline.set(label, result);
@@ -425,7 +525,7 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
       await sql`insert into web_throttle_hits (bucket) select ${bucket} from generate_series(1, 59)`;
       buckets.push(bucket);
       const headers = { "cf-connecting-ip": ip, "x-forwarded-for": ip, accept: "application/json" };
-      const renderer = target === on ? "kit" : null;
+      const renderer = target === feedOn ? "kit" : null;
       await request(target, "/events.ics", { status: 200, headers, renderer });
       const limited = await request(target, "/events.rss", { status: 429, headers, renderer });
       assert.equal(limited.body, "Too many requests");
@@ -446,7 +546,8 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
     );
   } finally {
     try {
-      if (seeded) await sql`delete from events where event_key in ${sql(eventKeys)}`;
+      if (seeded)
+        await sql`delete from events where event_key in ${sql([...eventKeys, pastEventKey])}`;
       if (sessionLineages.length) {
         await sql`delete from web_session_grace where status_hash in ${sql(sessionLineages)}`;
         await sql`delete from web_sessions where status_hash in ${sql(sessionLineages)}`;
