@@ -9,13 +9,10 @@ import {
 } from "../../../../src/profiles/kit-write";
 import { ProfilePage } from "../../../../src/profiles/pages";
 
-export function profileDraftHeaders(
-  status: KitProfileWriteDraft["status"],
-): Record<string, string> {
-  return status === 503
+export const profileDraftHeaders = (status: 422 | 503): Record<string, string> =>
+  status === 503
     ? { "cache-control": "no-store, private", vary: "Accept" }
     : { "cache-control": "private, no-store" };
-}
 
 function renderProfileWriteDraft(request: Request, env: Env, draft: KitProfileWriteDraft) {
   return new Context(request).html(
@@ -52,9 +49,8 @@ export async function resolveProfileWrite(
   if (event.request.method !== "POST" || event.route.id !== KIT_PROFILE_WRITE_ROUTE_ID) {
     return render();
   }
-  // The ownership hook has already checked the origin. Kit would reject
-  // non-form POSTs or dispatch named-action keys before our default action.
-  // Preserve the public POST contract and treat those query keys as inert.
+  // Keep the public POST contract for non-form bodies and named-action keys,
+  // which Kit handles before invoking the default action.
   if (
     !isProfileForm(event.request) ||
     Array.from(event.url.searchParams.keys()).some((key) => key.startsWith("/"))
@@ -63,8 +59,7 @@ export async function resolveProfileWrite(
   }
   const response = await render();
   if (event.locals.profileWriteResponse) return event.locals.profileWriteResponse;
-  // Kit can serialize fail() as JSON for wildcard Accept ranges. The profile
-  // contract selects JSON only for an explicit application/json range.
+  // Preserve the HTML draft when Kit negotiates wildcard Accept as JSON.
   const draft = event.locals.profileWriteDraft;
   if (draft && !response.headers.get("content-type")?.startsWith("text/html")) {
     return renderProfileWriteDraft(event.request, env, draft);

@@ -9,6 +9,7 @@ import postgres from "postgres";
 const owner = "900000000000090810";
 const moderator = "900000000000090811";
 const outsider = "900000000000090812";
+const viewers = [owner, moderator, outsider];
 const profilePath = `/members/${owner}`;
 const base = "Synthetic saved profile";
 const draft = "Synthetic rejected draft <example>";
@@ -104,9 +105,11 @@ async function nativeForm(origin, cookie) {
     assert.equal(invalid.headers()["x-two-renderer"], "kit");
     assert.equal(invalid.headers()["cache-control"], "private, no-store");
     assert.equal(invalid.headers().vary, undefined);
-    await page.getByTestId("profile-error").waitFor();
-    assert.match(await page.getByTestId("profile-error").innerText(), /valid IANA timezone/);
+    const summary = page.getByTestId("profile-error");
+    const errorLink = summary.getByRole("link", { name: /valid IANA timezone/ });
+    assert.equal(await errorLink.getAttribute("href"), "#profile-timezone");
     assert.equal(await timezone.getAttribute("aria-invalid"), "true");
+    assert.match(await timezone.getAttribute("aria-describedby"), /\bprofile-timezone-error\b/);
     assert.equal(await bio.inputValue(), draft);
     assert.equal(await hide.isChecked(), true);
     assert.equal(await page.getByTestId("profile-edit").getAttribute("data-saved-bio"), base);
@@ -117,8 +120,16 @@ async function nativeForm(origin, cookie) {
     assert.ok(!(await page.content()).includes(value));
     await capture("rejected");
 
+    const cancel = page.getByTestId("profile-cancel");
+    assert.equal(await cancel.getAttribute("href"), profilePath);
+    await cancel.click();
+    assert.equal(await bio.inputValue(), base);
+    assert.equal(await timezone.inputValue(), "UTC");
+    assert.equal(await hide.isChecked(), false);
+    assert.equal(await summary.count(), 0);
     await bio.fill(updated);
     await timezone.fill("Europe/London");
+    await hide.check();
     await page.locator("#profile-games-text").fill("Chess\nGo\nChess");
     // Submit the real page only after its unchanged minimum-fill timer.
     const opened = Number(await form.locator('[name="formOpenedAt"]').inputValue());
@@ -140,11 +151,9 @@ async function nativeForm(origin, cookie) {
 /** The calling runner checks the disposable database URL and starts loopback Workers. */
 export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl, secret }) {
   const sql = postgres(databaseUrl, { max: 1 });
-  const tokens = [];
   async function session(id, { member = true, mod = false } = {}) {
     const token = `two_${randomBytes(32).toString("base64url")}`;
     const hash = createHash("sha256").update(token).digest("hex");
-    tokens.push(hash);
     await sql`
       insert into web_sessions (token_hash, user_id, username, member, moderator, expires_at, roles_checked_at)
       values (${hash}, ${id}, 'Synthetic Profile', ${member}, ${mod}, now() + interval '10 minutes', now())`;
@@ -158,6 +167,13 @@ export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl,
   let seeded = false;
   try {
     await sql.begin(async (tx) => {
+      const [existing] = await tx`
+        select exists(
+          select 1 from web_sessions where user_id in ${tx(viewers)}
+          union all
+          select 1 from web_session_grace where user_id in ${tx(viewers)}
+        ) as occupied`;
+      assert.equal(existing.occupied, false, "synthetic session identities must be unused");
       await tx`insert into users (id, username, member) values (${owner}, 'Synthetic Profile', true)`;
       await tx`
         insert into profiles (user_id, bio, games, timezone, leaderboard_opt_out)
@@ -259,6 +275,9 @@ export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl,
     }
 
     await nativeForm(kit, cookie);
+    // Document navigation rotates the browser's bearer. Issue a fresh token
+    // for the independent PATCH probe so it cannot rely on predecessor grace.
+    const patchCookie = await session(owner);
     const [native] = await sql`
       select bio, games, timezone, leaderboard_opt_out from profiles where user_id = ${owner}`;
     assert.deepEqual(native, {
@@ -280,7 +299,7 @@ export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl,
       method: "PATCH",
       body: JSON.stringify(patch),
       headers: json,
-      cookie,
+      cookie: patchCookie,
     });
     assert.equal(res.status, 200);
     assert.equal(res.headers.get("x-two-renderer"), "kit");
@@ -294,7 +313,7 @@ export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl,
         formOpenedAt: Date.now() + 2000,
       }),
       headers: json,
-      cookie,
+      cookie: patchCookie,
     });
     assert.deepEqual(await envelope(trapped), saved);
     const [persisted] = await sql`
@@ -307,7 +326,7 @@ export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl,
     });
     const [audit] = await sql`
       select count(*)::int as total from member_data_access_logs
-      where viewer_discord_id in ${sql([owner, moderator, outsider])}`;
+      where viewer_discord_id in ${sql(viewers)}`;
     assert.equal(audit.total, 0);
     console.log(
       "PASS profile write flag, admission, wire parity, native drafts and editor payload",
@@ -315,13 +334,14 @@ export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl,
   } finally {
     try {
       await sql.begin(async (tx) => {
-        if (tokens.length) await tx`delete from web_sessions where token_hash in ${tx(tokens)}`;
         if (seeded) {
-          await tx`delete from member_data_access_logs where viewer_discord_id in ${tx([owner, moderator, outsider])}`;
+          await tx`delete from web_session_grace where user_id in ${tx(viewers)}`;
+          await tx`delete from web_sessions where user_id in ${tx(viewers)}`;
+          await tx`delete from member_data_access_logs where viewer_discord_id in ${tx(viewers)}`;
           await tx`delete from profiles where user_id = ${owner}`;
           await tx`delete from users where id = ${owner}`;
+          await tx`delete from web_throttle_hits where bucket in ${tx([`profile-write:${owner}`, `profile-write:${moderator}`])}`;
         }
-        await tx`delete from web_throttle_hits where bucket in ${tx([`profile-write:${owner}`, `profile-write:${moderator}`])}`;
       });
     } finally {
       await sql.end({ timeout: 1 });
