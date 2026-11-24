@@ -5,8 +5,8 @@ import type { SessionStore } from "../src/sessions";
 const start = 1_000_000;
 const readSession = vi.fn<SessionStore["getLive"]>();
 const row = { userId: "101", member: true, remainingMs: 50 };
-const resyncTopic = (topic: string) => JSON.stringify({ v: 1, type: "resync", topics: [topic] });
-const resync = resyncTopic("voice");
+const resyncTopics = (...topics: string[]) => JSON.stringify({ v: 1, type: "resync", topics });
+const resync = resyncTopics("voice");
 const subscribe = JSON.stringify({ v: 1, type: "subscribe", topics: ["voice"] });
 const unavailable = JSON.stringify({ v: 1, type: "unavailable", topic: "voice" });
 
@@ -128,7 +128,7 @@ it("publishes voice while a members-only resync awaits its session lookup", asyn
   socket.serializeAttachment({ ...socket.deserializeAttachment(), topics: ["voice", "members"] });
   const lookup = deferred<typeof row>();
   readSession.mockReturnValueOnce(lookup.promise);
-  const resyncing = send(resyncTopic("members"));
+  const resyncing = send(resyncTopics("members"));
   try {
     await publish();
     expect(socket.send.mock.calls).toEqual([
@@ -151,7 +151,7 @@ it("rejects an overlapping command while a members-only resync awaits authorizat
   socket.serializeAttachment({ ...socket.deserializeAttachment(), topics: ["voice", "members"] });
   const lookup = deferred<typeof row>();
   readSession.mockReturnValueOnce(lookup.promise);
-  const resyncing = send(resyncTopic("members"));
+  const resyncing = send(resyncTopics("members"));
   try {
     await send(resync);
     expect(socket.close.mock.calls).toEqual([[1008]]);
@@ -163,32 +163,39 @@ it("rejects an overlapping command while a members-only resync awaits authorizat
   expect(socket.send).not.toHaveBeenCalled();
 });
 
-it("holds the voice baseline for the command across a concurrent publish read", async () => {
-  const { socket, send, publish } = connectedSocket(start + 300_000);
-  const lookup = deferred<typeof row>();
-  const entered = deferred<void>();
-  const pull = deferred<boolean>();
-  readSession.mockReturnValueOnce(lookup.promise);
-  const publishing = publish();
-  const resyncing = send(resync, () => {
-    entered.resolve();
-    return pull.promise;
-  });
-  await entered.promise;
-  try {
-    lookup.resolve(row);
-    await publishing;
-    await publish();
-    expect(readSession).toHaveBeenCalledTimes(2);
-    expect(socket.send).not.toHaveBeenCalled();
-  } finally {
-    pull.resolve(true);
-    await resyncing;
-  }
-  expect(socket.send.mock.calls).toEqual([
-    ['{"v":1,"type":"snapshot","topic":"voice","seq":2,"value":{"count":5}}'],
-  ]);
-});
+it.each([false, true])(
+  "holds the voice baseline for the command across a concurrent publish read (mixed=%s)",
+  async (mixed) => {
+    const { socket, send, publish } = connectedSocket(start + 300_000);
+    const topics = mixed ? ["members", "voice"] : ["voice"];
+    socket.serializeAttachment({ ...socket.deserializeAttachment(), topics });
+    const lookup = deferred<typeof row>();
+    const entered = deferred<void>();
+    const pull = deferred<boolean>();
+    readSession.mockReturnValueOnce(lookup.promise);
+    const publishing = publish();
+    const resyncing = send(resyncTopics(...topics), () => {
+      entered.resolve();
+      return pull.promise;
+    });
+    await entered.promise;
+    const expected = mixed ? [['{"v":1,"type":"unavailable","topic":"members"}']] : [];
+    try {
+      lookup.resolve(row);
+      await publishing;
+      await publish();
+      expect(readSession).toHaveBeenCalledTimes(2);
+      expect(socket.send.mock.calls).toEqual(expected);
+    } finally {
+      pull.resolve(true);
+      await resyncing;
+    }
+    expect(socket.send.mock.calls).toEqual([
+      ...expected,
+      ['{"v":1,"type":"snapshot","topic":"voice","seq":2,"value":{"count":5}}'],
+    ]);
+  },
+);
 
 it.each([
   ["revoked", 1008],

@@ -406,6 +406,8 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
       "PASS installed Kit pre-expiry resync with warm, socket-woken and producer-woken hubs",
     );
 
+    // Withdrawal can arrive before the last command's cooldown or the guild pull budget ends.
+    await delay(5_100);
     await source(snapshot(cursor, 5));
     guest.resync();
     await guest.frame(frames.withdrawal);
