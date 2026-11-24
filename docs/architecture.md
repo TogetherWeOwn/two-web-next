@@ -188,7 +188,10 @@ sessions have a 120-minute sliding window with rotation on authenticated reads
 `created_at`; a fresh login is required at the cap. Logout revokes the row;
 sign-out-everywhere (`POST /logout/everywhere`) revokes every live row for the
 acting member through the same hash-only sweep as fresh login, leaving other
-members live. Operators can revoke
+members live. Hono serves both POSTs. The detached
+[Kit response builders](../src/kit-sign-out.ts) share their handlers and require
+host, same-origin, action-body and shared logout-throttle admission before use.
+Operators can revoke
 one member's active sessions with
 [bin/revoke-sessions.mjs](../bin/revoke-sessions.mjs) (dry-run count by
 default, `--apply` revokes), implemented in
