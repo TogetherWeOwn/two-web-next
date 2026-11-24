@@ -17,11 +17,10 @@ configuration leaves the route dark (404); a missing, malformed or wrong
 bearer returns 401 without upstream access.
 
 The Kit Worker includes the same adapter behind `KIT_ROUTE_ADMIN`. The
-production apex and isolated cutover Workers require the Ember profile as
-well. The installed-Worker fixture checks the record response on loopback.
-Isolated staging checks credential separation and restores the exact Ember
-version with admin off. Legacy redirects and queue tools keep their Hono
-admission.
+production apex and isolated cutover Worker also require the Ember profile. The
+installed-Worker fixture enables it on loopback and checks that bearer
+requests bypass the browser session gate. The Hono admin guard continues
+to handle legacy redirects and the queue tools keep their existing admission.
 
 Credential binding and activation follow the protected release and secret
 procedures.

@@ -991,15 +991,9 @@ export function assertProductionTarget(configText) {
   }
 }
 
-export const KIT_ROUTE_FLAGS = [
-  "ARCHIVE",
-  "STATIC",
-  "EVENTS",
-  "HOME",
-  "JOIN",
-  "EMBER_PAGES",
-  "ADMIN",
-].map((family) => `KIT_ROUTE_${family}`);
+export const KIT_ROUTE_FLAGS = "ARCHIVE STATIC EVENTS HOME JOIN EMBER_PAGES ADMIN"
+  .split(" ")
+  .map((family) => `KIT_ROUTE_${family}`);
 const KIT_BINDING_KEYS = (
   "hyperdrive queues tail_consumers version_metadata services kv_namespaces r2_buckets " +
   "d1_databases durable_objects analytics_engine_datasets ai browser workflows"

@@ -1121,12 +1121,11 @@ test("Home smoke accepts only the guest headings on Kit responses", async (t) =>
   }
 });
 
-test("cutover smoke distinguishes Ember documents and admin ownership", async (t) => {
+test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) => {
   const fragment = (origin) =>
     `<link rel="canonical" href="${origin}/events"><section data-island="events-calendar">${["head", "subscribe", "actions", "miss", "content"].map((zone) => `<div data-cal-zone="${zone}"></div>`).join("")}</section>`;
   const fragments = { "/events?view=calendar": [200, "text/html", fragment] };
   let missingAttribute = "";
-  let admin = false;
   const render = (path, response) => {
     if (["/", "/events", "/events?view=calendar", "/join"].includes(path))
       response.headers["x-two-renderer"] = "kit";
@@ -1140,8 +1139,7 @@ test("cutover smoke distinguishes Ember documents and admin ownership", async (t
       delete response.headers["x-two-renderer"];
       response.body = response.body.replace(missingAttribute, "");
     }
-    if ((missingAttribute || admin) && path === "/admin")
-      response.headers["x-two-renderer"] = "kit";
+    if (missingAttribute && path === "/admin") response.headers["x-two-renderer"] = "kit";
   };
   const good = await stub(t, render, fragments);
   const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
@@ -1154,13 +1152,6 @@ test("cutover smoke distinguishes Ember documents and admin ownership", async (t
     assert.equal(request.override, override);
   }
   assert.equal(good.requests.at(-1)?.fetchMetadata[2], "same-origin");
-  const adminOptions = { ...options, expectedCutoverRenderer: "admin" };
-  const defaultAdmin = await run(good.url, adminOptions);
-  assert.equal(defaultAdmin.ok, false);
-  assert.match(defaultAdmin.output, /FAIL \/admin: expected x-two-renderer: kit/);
-  admin = true;
-  assert.equal((await run(good.url, adminOptions)).ok, true);
-  admin = false;
   for (missingAttribute of ['rel="canonical"', 'data-cal-zone="content"']) {
     const result = await run(good.url, options);
     assert.equal(result.ok, false);

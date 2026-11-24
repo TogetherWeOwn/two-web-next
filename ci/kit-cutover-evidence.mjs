@@ -222,59 +222,42 @@ export function verifyStagingProof(proof, pin) {
   );
   assert.equal(proof.schema, 1);
   assert.equal(proof.worker, `${STAGING_WORKER}-${runId}-${runAttempt}`);
-  if (pin.mode === "admin") {
-    verifyAdminStagingProof(proof);
-    return;
-  }
-  assertRollbackVersionId(proof.hono);
+  const admin = pin.mode === "admin";
+  const baseline = admin ? "ember" : "hono";
+  assertRollbackVersionId(proof[baseline]);
   assertRollbackVersionId(proof.kit);
-  assert.notEqual(proof.hono, proof.kit, "staging requires distinct versions on one Worker");
+  assert.notEqual(proof[baseline], proof.kit, "staging requires distinct versions on one Worker");
   assert.ok(
-    hex.test(proof.configs?.hono) && hex.test(proof.configs?.kit),
+    hex.test(proof.configs?.[baseline]) && hex.test(proof.configs?.kit),
     "invalid staged config digests",
   );
   assert.ok(
     Number.isSafeInteger(proof.routeCount) && proof.routeCount > 0,
     "empty staged route smoke",
   );
-  const bindingCheck = pin.mode === "ember" ? "isolated-and-ember" : "isolated-and-all-off";
+  const bindingCheck = `isolated-and-${admin || pin.mode === "ember" ? pin.mode : "all-off"}`;
   assert.ok(
     proof.bindingCheck === bindingCheck ||
       (pin.mode === "hono" && proof.bindingCheck === "isolated-and-ember"),
     "staged bindings do not match the requested cutover profile",
   );
-  assert.equal(proof.kitReadinessSamples, 6);
+  assert.equal(proof.kitReadinessSamples, admin ? 3 : 6);
+  const states = admin ? ["1037"] : LEDGER_STATES;
   assert.deepEqual(
     proof.checks,
-    LEDGER_STATES.flatMap((state) => [
-      { state, step: "hono", version: proof.hono, status: 200, pending: 0, smoke: "passed" },
-      { state, step: "kit", version: proof.kit, status: 200, pending: 0, smoke: "passed" },
-      { state, step: "undo", version: proof.hono, status: 200, pending: 0, smoke: "passed" },
-    ]),
-    "staging must prove both ledger states and both exact Hono undos",
+    states.flatMap((state) =>
+      [baseline, "kit", "undo"].map((step) => ({
+        state,
+        step,
+        version: step === "kit" ? proof.kit : proof[baseline],
+        status: 200,
+        pending: 0,
+        smoke: "passed",
+      })),
+    ),
+    "staging must prove the required ledger states and exact undos",
   );
-}
-
-function verifyAdminStagingProof(proof) {
-  assert.equal(proof.bindingCheck, "isolated-and-admin");
-  assert.ok(hex.test(proof.configs?.ember) && hex.test(proof.configs?.admin));
-  assertRollbackVersionId(proof.ember);
-  assertRollbackVersionId(proof.admin);
-  assert.notEqual(proof.ember, proof.admin, "ownership flip requires two versions");
-  assert.ok(Number.isSafeInteger(proof.routeCount) && proof.routeCount > 0);
-  assert.equal(proof.kitReadinessSamples, 3);
-  assert.deepEqual(
-    proof.checks,
-    ["ember", "admin", "undo"].map((step) => ({
-      state: "1037",
-      step,
-      version: step === "admin" ? proof.admin : proof.ember,
-      status: 200,
-      pending: 0,
-      smoke: "passed",
-    })),
-  );
-  assert.deepEqual(proof.adminChecks, ADMIN_STAGING_CHECKS);
+  if (admin) assert.deepEqual(proof.adminChecks, ADMIN_STAGING_CHECKS);
 }
 
 export function productionUploadConfig(profile, { root, kit }, mode = "all-off") {
@@ -307,7 +290,7 @@ export function uploadVersion(profile, directory, config, tag, options = {}) {
     "versions",
     "upload",
     "--config",
-    options.configPath ?? join(directory, "wrangler.json"),
+    join(directory, "wrangler.json"),
     "--no-bundle",
     "--upload-source-maps=false",
     "--tag",

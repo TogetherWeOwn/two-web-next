@@ -527,6 +527,7 @@ describe("Kit production route selection", () => {
     expect(vars.KIT_ROUTE_ADMIN).toBe("false");
   });
 
+  const invalidProofHost = "https://two-web-kit-cutover-proof-0-1.test.workers.dev";
   it.each([
     [apex, "true", "true", "/admin/ops-overrides", false, true],
     [cutover, "true", "true", "/admin/ops-overrides", false, true],
@@ -536,14 +537,7 @@ describe("Kit production route selection", () => {
     [apex, "true", "true", "/admin/ops-overrides", true, false],
     [apex, "true", "true", "/admin/ops-overrides/", false, false],
     [apex, "true", "true", "/admin/queue/source-evidence/1", false, false],
-    [
-      "https://two-web-kit-cutover-proof-0-1.test.workers.dev",
-      "true",
-      "true",
-      "/admin/ops-overrides",
-      false,
-      false,
-    ],
+    [invalidProofHost, "true", "true", "/admin/ops-overrides", false, false],
   ] as const)(
     "admits operator ownership on %s with Ember=%s admin=%s path=%s data=%s",
     async (origin, emberPages, admin, path, isDataRequest, owned) => {
