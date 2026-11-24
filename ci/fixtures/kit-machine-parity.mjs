@@ -50,24 +50,36 @@ async function checkAgentCreate(post) {
   assert.deepEqual(body, { status: "draft", agent_version: 1 });
 }
 
-async function checkMcpStream(post, disconnect) {
-  const entered = Promise.withResolvers();
-  const release = Promise.withResolvers();
-  const adminDb = {
-    // Hold the published-event count at the existing in-process Db seam.
+function eventDb(readCount) {
+  return {
     select(fields) {
       return {
         from: () => ({
           where: () => {
             if (!fields) return { orderBy: () => ({ limit: () => ({ offset: async () => [] }) }) };
             assert.deepEqual(Object.keys(fields), ["n"]);
-            entered.resolve();
-            return release.promise.then(() => [{ n: 0 }]);
+            return readCount().then(() => [{ n: 0 }]);
           },
         }),
       };
     },
   };
+}
+
+function checkMcpHeaders(response) {
+  checkHeaders(response, 200, "text/event-stream");
+  assert.equal(response.headers.get("x-accel-buffering"), "no");
+  assert.equal(response.headers.has("mcp-session-id"), false);
+  assert.ok(response.body, "MCP returned a readable body while the tool was held");
+}
+
+async function checkMcpStream(post, cancelReader) {
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const adminDb = eventDb(() => {
+    entered.resolve();
+    return release.promise;
+  });
   let timer;
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(
@@ -75,7 +87,7 @@ async function checkMcpStream(post, disconnect) {
       5_000,
     );
   });
-  const id = disconnect ? 92 : 91;
+  const id = cancelReader ? 92 : 91;
   let reader;
   try {
     const [response] = await Promise.race([
@@ -90,14 +102,11 @@ async function checkMcpStream(post, disconnect) {
         entered.promise,
       ]),
     ]);
-    checkHeaders(response, 200, "text/event-stream");
-    assert.equal(response.headers.get("x-accel-buffering"), "no");
-    assert.equal(response.headers.has("mcp-session-id"), false);
-    assert.ok(response.body, "MCP returned a readable body while the tool was held");
+    checkMcpHeaders(response);
 
-    if (disconnect) {
+    if (cancelReader) {
       reader = response.body.getReader();
-      await Promise.race([deadline, reader.cancel("synthetic client disconnect")]);
+      await Promise.race([deadline, reader.cancel("in-Worker reader cancellation")]);
       assert.deepEqual(await reader.read(), { done: true, value: undefined });
       return;
     }
@@ -149,7 +158,50 @@ export function machineParityWorker(inner, probePath) {
       await checkAgentCreate(post);
       await checkMcpStream(post, false);
       await checkMcpStream(post, true);
-      return Response.json({ agentCreate: 201, mcpComplete: "eof", mcpDisconnect: "cancelled" });
+      return Response.json({ agentCreate: 201, mcpComplete: "eof", mcpReaderCancel: "cancelled" });
+    },
+  };
+}
+
+// Only the direct loopback listener uses this entry. The control request reads
+// observations from the same isolate after the MCP client's socket has closed.
+export function machineDisconnectWorker(inner, probePath) {
+  const events = [];
+  return {
+    async fetch(request, _env, ctx) {
+      const url = new URL(request.url);
+      assert.equal(url.hostname, "127.0.0.1");
+      if (request.method === "GET" && url.pathname === probePath) return Response.json(events);
+      if (request.method !== "POST" || url.pathname !== "/mcp" || events.length) {
+        return new Response(null, { status: 404 });
+      }
+      const signal = request.signal;
+      assert.equal(signal.aborted, false, "incoming request starts live");
+      const adminDb = eventDb(() => {
+        const release = Promise.withResolvers();
+        const onAbort = () => {
+          events.push("incoming-abort");
+          release.resolve(signal.aborted ? "abort" : "abort-event-with-live-signal");
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        const timer = setTimeout(() => release.resolve("deadline"), 12_000);
+        events.push("read-held");
+        const read = release.promise.then((reason) => {
+          events.push(`read-settled:${reason}`);
+        });
+        ctx.waitUntil(
+          read.then(() => {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", onAbort);
+            events.push("waitUntil-cleanup");
+          }),
+        );
+        return read;
+      });
+      const bindings = { APP_URL: url.origin, ADMIN_DB: adminDb };
+      const response = await withEnv(bindings, () => inner.fetch(request, bindings, ctx));
+      checkMcpHeaders(response);
+      return response;
     },
   };
 }
