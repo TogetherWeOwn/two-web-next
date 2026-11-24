@@ -1405,7 +1405,7 @@ function exactFamilyRouteFor(
   const { pathname } = new URL(event.request.url);
   if (
     event.route?.id !== pathname ||
-    pathname === HONO_FALLBACK_ROUTE_ID ||
+    pathname.includes("[") ||
     pathname.includes(":") ||
     pathname.includes("%") ||
     normalizePath(pathname) !== pathname

@@ -737,17 +737,17 @@ describe("dormant API family admission", () => {
     expect(d.honoFetch).not.toHaveBeenCalled();
   });
 
-  it("keeps absent, disabled, conflicting and adapter asset entries with Hono", async () => {
+  it("keeps absent, disabled, conflicting, asset and parameter entries with Hono", async () => {
     expect(await owner(apiEvent(path))).toBe("hono");
     expect(
       await owner(apiEvent(path), { flag: "true", routes: [{ ...read, enabled: false }] }),
     ).toBe("hono");
     const enabled = { flag: "true", routes: [read] };
     expect(await owner(apiEvent(path), enabled, enabled)).toBe("hono");
-    const asset = "/_app/fixture.js";
-    expect(await owner(apiEvent(asset), { flag: "true", routes: [{ ...read, path: asset }] })).toBe(
-      "hono",
-    );
+    for (const excluded of ["/_app/fixture.js", "/api/items/[id]"]) {
+      const routes = [{ ...read, path: excluded }];
+      expect(await owner(apiEvent(excluded), { flag: "true", routes })).toBe("hono");
+    }
   });
 
   it("applies existing Kit security before a selected write can read a body", async () => {

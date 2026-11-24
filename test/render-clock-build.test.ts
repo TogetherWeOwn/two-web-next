@@ -37,12 +37,11 @@ function captureTransform(flag: string | undefined): { define?: Record<string, s
 
 const guard = 'typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true';
 
-// Exercise the real capture admission and hook composition with a stand-in
-// terminal dispatcher. The rest of the Worker needs Cloudflare bindings.
+// Exercise the real hook with a stand-in for the Cloudflare dispatch call.
 function captureHookSource(): string {
   const text = readFileSync("web/src/hooks.server.ts", "utf8");
   const statements = parse(text, { sourceType: "module", plugins: ["typescript"] }).program.body;
-  return ["admitCapture", "handle"]
+  return ["admitCapture", "dispatchWithSecurity", "handle"]
     .map((name) => {
       for (const statement of statements) {
         const declaration =
@@ -53,6 +52,21 @@ function captureHookSource(): string {
         );
         if (!variable) continue;
         assert.ok(typeof variable.start === "number" && typeof variable.end === "number");
+        if (name === "dispatchWithSecurity") {
+          const handler = variable.init;
+          assert.ok(
+            handler?.type === "ArrowFunctionExpression" && handler.body.type === "BlockStatement",
+          );
+          const dispatch = handler.body.body.find(
+            (part) =>
+              part.type === "VariableDeclaration" &&
+              part.declarations.some(
+                ({ id }) => id.type === "Identifier" && id.name === "response",
+              ),
+          );
+          assert.ok(typeof dispatch?.start === "number" && typeof dispatch.end === "number");
+          return `const ${text.slice(variable.start, dispatch.start)}const response = await resolve(event);${text.slice(dispatch.end, variable.end)};`;
+        }
         return `const ${text.slice(variable.start, variable.end)};`;
       }
       throw new Error(`capture fixture could not find ${name} in hooks.server.ts`);
@@ -90,10 +104,6 @@ import { with_request_store } from "@sveltejs/kit/internal/server";
 import { renderDate, captureRefusal, captureResponse } from ${JSON.stringify(resolve("src/render-clock.ts"))};
 export const stamp = (request, env) => ${guard} ? renderDate(request, env).toISOString() : "live";
 let env;
-const dispatchWithSecurity = async ({ event, resolve }) => {
-  const response = await resolve(event);
-  return ${guard} ? captureResponse(event.request, env, response) : response;
-};
 ${captureHookSource()}
 export const respond = (request, bindings, resolve) => {
   env = bindings;
