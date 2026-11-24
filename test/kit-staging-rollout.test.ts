@@ -556,7 +556,9 @@ describe("Kit production route selection", () => {
       await expectOwner(event, "hono", ember, origin);
       await expectOwner({ ...event, isDataRequest: true }, "hono", ember, origin);
     }
-    await expectOwner(productionEvent("/join/discord", "GET", origin), "hono", ember, origin);
+    for (const path of ["/admin", "/leaderboards/members", "/members", "/join/discord", "/up"]) {
+      await expectOwner(productionEvent(path, "GET", origin), "hono", ember, origin);
+    }
   });
 
   it("requires the exact proof or apex origin on both URLs", async () => {
@@ -574,6 +576,8 @@ describe("Kit production route selection", () => {
   it("only admits Home with the declared member-read boundary", () => {
     const event = productionEvent("/");
     const deps = { appUrl: apex, kitRouteEmberPages: "true" };
+    const [home] = productionManifestFor(event, deps) ?? [];
+    expect(home?.reads).toEqual({ resource: "member", action: "list", route: "home" });
     for (const reads of [undefined, "public"] as const) {
       const manifest = productionManifestFor(event, deps, [
         { method: "GET", path: "/", enabled: true, reads },
@@ -599,12 +603,7 @@ describe("Kit production route selection", () => {
   it("renders Kit Events after a Hono cache fill on the same Worker", async () => {
     const event = productionEvent("/events");
     const env = { APP_URL: apex } as Env;
-    const cached = {
-      status: 200,
-      cacheControl: "public, max-age=60",
-      vary: null,
-      body: "Hono HTML",
-    };
+    const cached = { status: 200, cacheControl: "public, max-age=60", vary: null, body: "Hono" };
     writeAnonCache(anonEventsKey("GET", "/events", false), anonCacheSource(env), cached, 60_000);
     const response = await dispatchHookRequest(event, {
       ...stagingDeps(ember),

@@ -31,6 +31,9 @@ import { KIT_ROUTE_FLAGS } from "./production-deploy-gate.mjs";
 import { liveVersion, rollbackAction } from "./rollback-target.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
+const cutoverProfile = process.env.CUTOVER_PROFILE || "all-off";
+const ember = cutoverProfile === "ember";
+
 function cloudflare() {
   const account = process.env.CLOUDFLARE_ACCOUNT_ID;
   const token = process.env.CLOUDFLARE_API_TOKEN;
@@ -111,8 +114,7 @@ function context() {
   );
   const runId = process.env.GITHUB_RUN_ID;
   const runAttempt = process.env.GITHUB_RUN_ATTEMPT;
-  const profile = process.env.CUTOVER_PROFILE || "all-off";
-  assert.ok(profile === "all-off" || profile === "ember", "invalid isolated cutover profile");
+  assert.ok(cutoverProfile === "all-off" || ember, "invalid isolated cutover profile");
   const names = fixtureNames(runId, runAttempt);
   return {
     identity: {
@@ -123,7 +125,6 @@ function context() {
     },
     names,
     worker: `${STAGING_WORKER}-${names.suffix}`,
-    ember: profile === "ember",
     claim: join(process.env.RUNNER_TEMP, "kit-cutover-claimed.json"),
   };
 }
@@ -154,7 +155,7 @@ async function cleanup({ claim, worker, names }, api, database) {
   await rm(claim);
 }
 
-async function deployPacket(dir, scratch, proof, origin, inputs, api, runtimeUrl, ember) {
+async function deployPacket(dir, scratch, proof, origin, inputs, api, runtimeUrl) {
   const { worker, identity, configs } = proof;
   const tag = `${identity.sourceSha}-${identity.runId}-${identity.runAttempt}`;
   const secretsFile = join(scratch, "synthetic-bindings.json");
@@ -207,7 +208,7 @@ async function deployPacket(dir, scratch, proof, origin, inputs, api, runtimeUrl
   }
 }
 
-async function exercise(proof, prefixes, owner, names, origin, config, ember) {
+async function exercise(proof, prefixes, owner, names, origin, config) {
   const { identity, hono, kit, checks } = proof;
   const run = (...args) => wrangler("hono", [...args, "--config", config]);
   const deployments = () => JSON.parse(run("deployments", "list", "--json"));
@@ -241,7 +242,7 @@ async function exercise(proof, prefixes, owner, names, origin, config, ember) {
 }
 
 async function qualify(dir, proofPath, ctx) {
-  const { identity, worker, names, claim, ember } = ctx;
+  const { identity, worker, names, claim } = ctx;
   const inputs = await sourceInputs();
   await verifyPackage(dir, identity, inputs);
   const prefixes = ledgerPrefixes(inputs.journal);
@@ -270,9 +271,9 @@ async function qualify(dir, proofPath, ctx) {
     owner = fixture.owner;
     await advanceFixture(owner, prefixes["1033"], names.login);
     phase = "same-script staged uploads";
-    await deployPacket(dir, scratch, proof, origin, inputs, api, fixture.runtimeUrl, ember);
+    await deployPacket(dir, scratch, proof, origin, inputs, api, fixture.runtimeUrl);
     phase = "exact readiness, public smoke and guarded Hono undo";
-    await exercise(proof, prefixes, owner, names, origin, join(dir, "hono/wrangler.json"), ember);
+    await exercise(proof, prefixes, owner, names, origin, join(dir, "hono/wrangler.json"));
   } catch (error) {
     // Report only the operation and numeric provider code from Wrangler.
     const detail = error instanceof WranglerOperationError ? ` (${error.message})` : "";

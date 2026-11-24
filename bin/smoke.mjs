@@ -25,8 +25,7 @@ const eventsFragment = {
   path: "/events?view=calendar",
   statuses: [200],
   type: "text/html",
-  body: /data-island="events-calendar"/,
-  headers: { "x-two-island": "events-calendar" },
+  headers: { "x-two-island": "events-calendar", "sec-fetch-site": "same-origin" },
 };
 // HTML leaves that stay non-indexable even on the indexable apex: the archive
 // and the branded 404s carry their noindex in <meta>, so the deploy smoke
@@ -263,6 +262,25 @@ async function hasGuestKitHomeHeading(body) {
   );
 }
 
+async function hasCalendarFragment(body, origin) {
+  const {
+    parseRenderedPage,
+    renderedAttribute: attribute,
+    renderedElements,
+  } = await import("../ci/rendered-page.mjs");
+  const page = parseRenderedPage(body);
+  const canonical = [...renderedElements(page, { tag: "link" })].find(
+    (link) =>
+      attribute(link, "rel") === "canonical" && attribute(link, "href") === `${origin}/events`,
+  );
+  const island = [...renderedElements(page, { tag: "section" })].find(
+    (section) => attribute(section, "data-island") === "events-calendar",
+  );
+  if (!canonical || !island) return false;
+  const zones = [...renderedElements(island, {})].map((node) => attribute(node, "data-cal-zone"));
+  return zones.filter(Boolean).sort().join(" ") === "actions content head miss subscribe";
+}
+
 function probeNavigation(url, headers, signal) {
   // Node fetch always supplies its own Sec-Fetch-Mode. The native GET keeps
   // navigation metadata and never follows redirects.
@@ -270,10 +288,7 @@ function probeNavigation(url, headers, signal) {
   const requestHeaders = { ...headers, "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document" };
   return new Promise((resolve, reject) => {
     get(url, { headers: requestHeaders, signal }, (response) => {
-      const headers = new Headers();
-      for (const [name, values] of Object.entries(response.headersDistinct)) {
-        for (const value of values) headers.append(name, value);
-      }
+      const headers = new Headers(response.headers);
       resolve({ status: response.statusCode, headers, text: () => text(response) });
     }).once("error", reject);
   });
@@ -795,6 +810,9 @@ export async function smoke(
           "Kit guest h1#home-heading with the lobby or scheduled text",
           "heading missing or did not match",
         );
+      } else if (route === eventsFragment) {
+        const usable = await hasCalendarFragment(body, base.origin);
+        check(usable, "calendar canonical and swap zones", "invalid fragment");
       } else if (!kitJoin && route.body) {
         check(route.body.test(body), `body matching ${route.body}`, "body did not match");
       }

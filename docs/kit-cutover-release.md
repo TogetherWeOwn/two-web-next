@@ -20,9 +20,7 @@ It runs public smoke and exact-version undo on both ledger states, then
 removes the run-owned Worker, database, and expiring login.
 To retry, select **Re-run all jobs** so staging uses a packet from that attempt.
 
-For the Ember release set `cutover_profile: ember` with `qualify_cutover: true`.
-Isolated staging checks Kit Home, Events, Join and the calendar fragment on the
-packaged bytes. The remaining smoke routes and each undo use Hono.
+Set `qualify_cutover: true` and `cutover_profile: ember` to qualify the Ember profile on both ledgers.
 
 ## Protected release and recovery
 

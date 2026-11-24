@@ -167,22 +167,18 @@ test("isolated cutover proof requires both exact versions and six healthy transi
   );
 });
 
-test("Ember cutover configuration opts in only the Ember documents", async () => {
-  const inputs = await sourceInputs();
+test("Ember cutover configuration opts in only the Ember documents", () => {
   const allOff = productionUploadConfig("kit", inputs);
-  const ember = productionUploadConfig("kit", inputs, true);
   assert.equal(allOff.vars.KIT_ROUTE_EMBER_PAGES, "false");
-  assert.deepEqual(ember, {
-    ...allOff,
-    vars: {
-      ...allOff.vars,
-      KIT_ROUTE_EMBER_PAGES: "true",
-      KIT_ROUTE_FEEDS: "false",
-      KIT_ROUTE_SEO: "false",
-      KIT_ROUTE_SECURITY_TXT: "false",
-      DISCORD_LIVE_SOCKET_ENABLED: "false",
-    },
-  });
+  const vars = {
+    ...allOff.vars,
+    KIT_ROUTE_EMBER_PAGES: "true",
+    KIT_ROUTE_FEEDS: "false",
+    KIT_ROUTE_SEO: "false",
+    KIT_ROUTE_SECURITY_TXT: "false",
+    DISCORD_LIVE_SOCKET_ENABLED: "false",
+  };
+  assert.deepEqual(productionUploadConfig("kit", inputs, true), { ...allOff, vars });
   assert.throws(() => productionUploadConfig("hono", inputs, true), /requires the Kit artifact/);
 });
 

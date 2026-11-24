@@ -145,8 +145,7 @@ async function stub(t, change = () => {}, extraFixtures = {}) {
       cookie: request.headers.cookie,
       host: request.headers.host,
       override: request.headers["cloudflare-workers-version-overrides"],
-      fetchMode: request.headers["sec-fetch-mode"],
-      fetchDest: request.headers["sec-fetch-dest"],
+      fetchMetadata: ["mode", "dest", "site"].map((name) => request.headers[`sec-fetch-${name}`]),
     });
     const fixture = extraFixtures[request.url] ?? fixtures[request.url];
     if (!fixture) {
@@ -1123,9 +1122,10 @@ test("Home smoke accepts only the guest headings on Kit responses", async (t) =>
 });
 
 test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) => {
-  const fragments = {
-    "/events?view=calendar": [200, "text/html", '<main data-island="events-calendar"></main>'],
-  };
+  const fragment = (origin) =>
+    `<link rel="canonical" href="${origin}/events"><section data-island="events-calendar">${["head", "subscribe", "actions", "miss", "content"].map((zone) => `<div data-cal-zone="${zone}"></div>`).join("")}</section>`;
+  const fragments = { "/events?view=calendar": [200, "text/html", fragment] };
+  let broken = false;
   const render = (path, response) => {
     if (["/", "/events", "/events?view=calendar", "/join"].includes(path))
       response.headers["x-two-renderer"] = "kit";
@@ -1135,6 +1135,11 @@ test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) =
         '<h2 id="join-card-heading">Join with one sign-in</h2>' +
         '<a href="/join/discord" data-testid="join-oneclick">Join with Discord</a>';
     }
+    if (broken && path === "/events?view=calendar") {
+      delete response.headers["x-two-renderer"];
+      response.body = response.body.replace('data-cal-zone="content"', 'data-cal-zone="miss"');
+    }
+    if (broken && path === "/admin") response.headers["x-two-renderer"] = "kit";
   };
   const good = await stub(t, render, fragments);
   const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
@@ -1143,22 +1148,15 @@ test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) =
   const documents = good.requests.filter(({ path }) => ["/", "/events", "/join"].includes(path));
   assert.equal(documents.length, 3);
   for (const request of documents) {
-    assert.equal(request.fetchMode, "navigate");
-    assert.equal(request.fetchDest, "document");
+    assert.deepEqual(request.fetchMetadata.slice(0, 2), ["navigate", "document"]);
     assert.equal(request.override, override);
   }
-  const mixed = await stub(
-    t,
-    (path, response) => {
-      render(path, response);
-      if (path === "/events?view=calendar") delete response.headers["x-two-renderer"];
-      if (path === "/admin") response.headers["x-two-renderer"] = "kit";
-    },
-    fragments,
-  );
-  const result = await run(mixed.url, options);
+  assert.equal(good.requests.at(-1)?.fetchMetadata[2], "same-origin");
+  broken = true;
+  const result = await run(good.url, options);
   assert.equal(result.ok, false);
   assert.match(result.output, /FAIL \/events\?view=calendar: expected x-two-renderer: kit/);
+  assert.match(result.output, /calendar canonical and swap zones; actual invalid fragment/);
   assert.match(result.output, /FAIL \/admin: expected no x-two-renderer/);
 });
 
