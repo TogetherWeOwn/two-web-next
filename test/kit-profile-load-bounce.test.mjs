@@ -71,6 +71,7 @@ beforeAll(async () => {
       [
         "@sveltejs/kit",
         `export const error = (status, message) => { throw {status, message}; };
+        export const fail = (status, data) => ({ status, data });
         export const redirect = (status, location) => { throw {status, location}; };`,
       ],
       ["cloudflare:workers", `export const env = ${JSON.stringify(fixtureEnv)};`],

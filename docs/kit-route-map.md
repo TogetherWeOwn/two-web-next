@@ -176,6 +176,15 @@ uses the shared disclosure text, including a `Canonical` field from HTTPS
 `APP_URL`, and keeps its one-hour public cache policy. It requires no database
 or session access.
 
+### Profile writes
+
+`KIT_ROUTE_PROFILE_WRITES=true` admits PATCH and the default form POST on
+`/members/:user`. The shared host and origin gates precede the body cap, then
+the shared signed session, per-viewer throttle and owner checks. The native
+POST retains the `_method=PATCH` form contract. GET and HEAD use their existing
+owners, including the frozen `/members` and `/members/` 404s. Leave the flag
+unset in deployed configuration until activation is qualified.
+
 ### Search indexing endpoints
 
 `KIT_ROUTE_SEO=true` selects GET and HEAD on `/robots.txt` and

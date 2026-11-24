@@ -23,8 +23,10 @@ import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes"
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
+import { KIT_PROFILE_WRITE_ROUTES } from "../../src/profiles/kit-write-route";
 import { authOriginRefusal, KIT_AUTH_ROUTES } from "#lib/server/auth.ts";
 import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
+import { resolveProfileWrite } from "#lib/server/profile-write.ts";
 
 // Pure env binding: trust, ownership, decoration, the read-only session
 // bridge and the archive/list/detail/hot-zone guard branches live in the tested core
@@ -71,6 +73,11 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
       { flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] },
       { flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES },
       { flag: env.KIT_ROUTE_SECURITY_TXT, routes: [KIT_SECURITY_TXT_ROUTE] },
+      {
+        flag: env.KIT_ROUTE_PROFILE_WRITES,
+        routes: KIT_PROFILE_WRITE_ROUTES,
+        crossOriginRefusal: authOriginRefusal,
+      },
     ],
     versionMetadata: env.CF_VERSION_METADATA,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,
@@ -82,8 +89,13 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     // pass transformPageChunk here (the zero-stylesheet strip), every other
     // route passes none. The hook carries no route logic of its own — the
     // core alone decides when the option is set.
-    resolve: (hookEvent, opts) =>
-      resolve(hookEvent as Parameters<typeof resolve>[0], opts as Parameters<typeof resolve>[1]),
+    resolve: (hookEvent, opts) => {
+      const owned = hookEvent as Parameters<typeof resolve>[0];
+      const render = () => resolve(owned, opts as Parameters<typeof resolve>[1]);
+      return env.KIT_ROUTE_PROFILE_WRITES === "true"
+        ? resolveProfileWrite(owned, render, env)
+        : render();
+    },
     recoveryPage: honoRecoveryFetch,
     pastArchive: (request, render, requestId) =>
       dispatchPastArchiveRequest(request, env, render, undefined, undefined, requestId),

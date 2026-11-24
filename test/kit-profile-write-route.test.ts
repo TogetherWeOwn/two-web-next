@@ -17,23 +17,33 @@ describe("default-off Kit profile ownership", () => {
     ["true", "PATCH", "/members", "hono", 200],
     ["true", "POST", "/members/", "hono", 200],
     ["true", "PATCH", `${PATH}/`, "hono", 200],
+    ["true", "PATCH", "/members/a%2Fb", "hono", 200],
     ["true", "POST", `${PATH}/__data.json`, "hono", 200],
     ["true", "GET", PATH, "hono", 200],
     ["true", "HEAD", "/members/", "hono", 200],
     ["true", "OPTIONS", PATH, "hono", 200],
     ["true", "POST", PATH, "kit", 403, "https://cross-origin.example.test"],
+    ["true", "PATCH", PATH, "kit", 403, "https://cross-origin.example.test"],
+    ["true", "POST", PATH, "kit", 200, null, "same-origin"],
+    ["true", "POST", PATH, "kit", 403, null, "cross-site"],
+    ["true", "POST", PATH, "hono", 200, APP_URL, undefined, "/[...path]"],
   ] as const)(
     "%s %s %s routes to %s",
-    async (flag, method, path, renderer, status, origin?: string) => {
+    async (flag, method, path, renderer, status, origin?:
+      | string
+      | null, site?: string, routeId?: string) => {
+      const headers = new Headers({ "cf-ray": REQUEST_ID });
+      if (origin !== null) headers.set("origin", origin ?? APP_URL);
+      if (site) headers.set("sec-fetch-site", site);
       const request = new Request(APP_URL + path, {
         method,
-        headers: { origin: origin ?? APP_URL, "cf-ray": REQUEST_ID },
+        headers,
         body: method === "POST" || method === "PATCH" ? "unread" : undefined,
       });
       const event: HookEventLike = {
         request,
         url: new URL(request.url),
-        route: { id: "/members/[user]" },
+        route: { id: routeId ?? "/members/[user]" },
         isDataRequest: path.endsWith("/__data.json"),
         locals: {},
       };
