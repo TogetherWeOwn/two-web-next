@@ -42,6 +42,18 @@ function trustedEvent(path, host = "example.com") {
   return eventFor(APP_URL, path, host);
 }
 
+function apiEvent(path, { method = "GET", routeId, origin = APP_URL, host = "example.com" } = {}) {
+  const request = new Request(new URL(path, APP_URL), {
+    method,
+    headers: { host, origin },
+    body: method === "POST" ? "fixture body" : undefined,
+  });
+  const url = new URL(request.url);
+  const isDataRequest = url.pathname.endsWith("/__data.json");
+  if (isDataRequest) url.pathname = url.pathname.slice(0, -"/__data.json".length);
+  return { request, url, isDataRequest, route: { id: routeId ?? url.pathname } };
+}
+
 function deps(overrides = {}) {
   return {
     appUrl: APP_URL,
@@ -608,6 +620,8 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("homePanelsFor: (request) => prepareKitHomePanels(env, request)");
     expect(source).toContain("homeRenewalFor: kitDocumentRotationFor(env)");
     expect(source.match(/dispatchHookRequest\(event,/g)?.length).toBe(1);
+    expect(source).toContain("sequence(admitCapture, dispatchWithSecurity)");
+    expect(source).not.toContain("apiFamilies");
     // Production session composition lives in kitSessionBridge
     // (src/kit-session.ts), pinned by test/kit-session.test.ts: the hook must
     // not carry any session logic to mutate. Each of these mutants stays green
@@ -642,5 +656,127 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).not.toContain('"kit"');
     expect(source).not.toContain("'kit'");
     expect(source).not.toContain("as const");
+  });
+});
+
+describe("dormant API family admission", () => {
+  const path = "/api/fixture";
+  const read = { method: "GET", path, enabled: true, reads: "public" };
+  const write = { ...read, method: "POST" };
+  const memberReads = { resource: "profile", action: "view", route: "fixture" };
+
+  async function owner(event, ...apiFamilies) {
+    const d = deps(apiFamilies.length ? { apiFamilies } : {});
+    const response = await dispatchHookRequest(event, d);
+    if (response.headers.get(KIT_RENDERER_HEADER) === KIT_RENDERER_VALUE) {
+      expect(d.resolve).toHaveBeenCalledExactlyOnceWith(event);
+      expect(d.honoFetch).not.toHaveBeenCalled();
+      return "kit";
+    }
+    expect(d.honoFetch).toHaveBeenCalledExactlyOnceWith(event.request);
+    expect(d.resolve).not.toHaveBeenCalled();
+    expect(event.request.bodyUsed).toBe(false);
+    return "hono";
+  }
+
+  it.each([
+    [undefined, undefined, "hono", "hono"],
+    ["false", "false", "hono", "hono"],
+    ["true", "false", "kit", "hono"],
+    ["false", "true", "hono", "kit"],
+    ["true", "true", "kit", "kit"],
+    ["TRUE", "1", "hono", "hono"],
+  ])("selects each family's method only with its own flag (%s, %s)", async (r, w, get, post) => {
+    const families = [
+      { flag: r, routes: [read] },
+      { flag: w, routes: [write] },
+    ];
+    expect(await owner(apiEvent(`${path}?q=one&q=two`), ...families)).toBe(get);
+    expect(await owner(apiEvent(path, { method: "HEAD" }), ...families)).toBe(get);
+    expect(await owner(apiEvent(path, { method: "POST" }), ...families)).toBe(post);
+  });
+
+  it.each([
+    [path, { method: "OPTIONS" }],
+    [`${path}/`, {}],
+    [`${path}/__data.json`, {}],
+    ["/api/fixture-sibling", {}],
+    [path, { routeId: HONO_FALLBACK_ROUTE_ID }],
+    [path, { host: "untrusted.example" }],
+  ])("leaves %s with Hono outside the exact trusted endpoint", async (url, options) => {
+    expect(await owner(apiEvent(url, options), { flag: "true", routes: [read] })).toBe("hono");
+  });
+
+  it("uses the request pathname even when Kit sees the decoded path", async () => {
+    const event = apiEvent("/api/%66ixture", { routeId: path });
+    event.url.pathname = path;
+    expect(await owner(event, { flag: "true", routes: [read] })).toBe("hono");
+  });
+
+  it("uses the existing owner policy when an enabled family claims the same pair", async () => {
+    const event = apiEvent("/events/past");
+    const pastArchive = vi.fn(async (_request, render) => render());
+    const sessionFor = vi.fn();
+    const competing = { ...read, path: event.url.pathname, reads: memberReads };
+    const d = deps({
+      manifest: KIT_MANIFEST,
+      apiFamilies: [{ flag: "true", routes: [competing] }],
+      pastArchive,
+      sessionFor,
+    });
+
+    const response = await dispatchHookRequest(event, d);
+    expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(pastArchive).toHaveBeenCalledExactlyOnceWith(
+      event.request,
+      expect.any(Function),
+      expect.any(String),
+    );
+    expect(sessionFor).not.toHaveBeenCalled();
+    expect(d.resolve).toHaveBeenCalledExactlyOnceWith(event);
+    expect(d.honoFetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps absent, disabled, conflicting, asset and parameter entries with Hono", async () => {
+    expect(await owner(apiEvent(path))).toBe("hono");
+    expect(
+      await owner(apiEvent(path), { flag: "true", routes: [{ ...read, enabled: false }] }),
+    ).toBe("hono");
+    const enabled = { flag: "true", routes: [read] };
+    expect(await owner(apiEvent(path), enabled, enabled)).toBe("hono");
+    for (const excluded of ["/_app/fixture.js", "/api/items/[id]"]) {
+      const routes = [{ ...read, path: excluded }];
+      expect(await owner(apiEvent(excluded), { flag: "true", routes })).toBe("hono");
+    }
+  });
+
+  it("applies existing Kit security before a selected write can read a body", async () => {
+    const sessionFor = vi.fn(async () => ({ status: "guest", session: null }));
+    const d = deps({
+      apiFamilies: [{ flag: "true", routes: [{ ...write, reads: memberReads }] }],
+      sessionFor,
+      resolve: vi.fn(async ({ request, locals }) => {
+        expect(locals.status).toBe("guest");
+        expect(request.bodyUsed).toBe(false);
+        return new Response(await request.text());
+      }),
+    });
+    const crossOrigin = apiEvent(path, { method: "POST", origin: "https://other.example" });
+    const refused = await dispatchHookRequest(crossOrigin, d);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({ error: "cross_origin" });
+    expect(refused.headers.get("content-security-policy")).toBeTruthy();
+    expect(refused.headers.get("x-request-id")).toBeTruthy();
+    expect(crossOrigin.request.bodyUsed).toBe(false);
+    expect(sessionFor).not.toHaveBeenCalled();
+    expect(d.resolve).not.toHaveBeenCalled();
+
+    const sameOrigin = apiEvent(path, { method: "POST" });
+    const accepted = await dispatchHookRequest(sameOrigin, d);
+    expect(accepted.status).toBe(200);
+    expect(await accepted.text()).toBe("fixture body");
+    expect(sessionFor).toHaveBeenCalledExactlyOnceWith(sameOrigin);
+    expect(d.resolve).toHaveBeenCalledExactlyOnceWith(sameOrigin);
+    expect(d.honoFetch).not.toHaveBeenCalled();
   });
 });

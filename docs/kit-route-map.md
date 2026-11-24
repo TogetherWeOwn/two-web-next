@@ -122,16 +122,30 @@ when the read and write families are migrated independently.
 The standalone resolver accepts a dormant reservation release list for future
 families. Each release requires an enabled manifest entry for the same method
 and literal pathname. HEAD follows GET. Encoded aliases and Kit data URLs
-remain reserved, as do adapter assets that reach the resolver. The request
-dispatcher supplies no releases.
+remain reserved, as do adapter assets that reach the resolver. The serving
+hook supplies no API family catalog, so the dispatcher releases no pairs.
 
 After Ember changes land, re-take and validate the mounted inventory, route map
 and pure-Hono golden evidence against the then-current main revision. This
 refresh is mandatory before shared dispatch integration or any production
 family flip; this earlier snapshot does not satisfy that release checkpoint.
-At integration, compose the ordered shared security hook in
-[`hooks.server.ts`](../web/src/hooks.server.ts). Select each family's exact
-entries and releases together from server-controlled, default-off flags. Use
-the original request pathname for release checks, before Kit strips data
-suffixes. Prove all-off Hono parity, one-family-at-a-time ownership, and the
-existing method refusals on the built Worker before considering activation.
+[`hooks.server.ts`](../web/src/hooks.server.ts) runs capture admission before
+the existing request dispatcher. The dispatcher checks host and ownership
+before Kit's same-origin check, shared session bridge and route guards. The
+dormant family selector runs only when the existing ownership lookup falls
+back to Hono. Each family requires its own binding set to the literal string
+`true`. A candidate must match the original method and pathname as well as a
+mounted, static Kit route ID. The entry supplies its own exact reservation
+release and read policy. HEAD follows GET. Conflicting claims from opted-in
+families fall back to Hono.
+
+In the first family integration PR, mount the ready `+server.ts` handlers and
+pass that family's reviewed catalog and binding to `dispatchHookRequest`.
+Validate every configured pair against the mounted inventory and reject
+duplicate claims. Check that each `+server.ts` exports the configured method.
+A static Kit route ID can also refer to a page. Keep request-specific auth,
+body caps and throttles on their existing shared helpers in the handler's
+established order. Extend the
+built Worker fixture to turn that one family on and back off and check method
+refusals, slash variants and `/<route>/__data.json`. Production activation
+follows its own release gate.

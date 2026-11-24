@@ -573,7 +573,7 @@ function enabledRouteFor(
 
 // A future family can supply concrete releases with its enabled manifest.
 // List uppercase methods and literal pathnames. GET includes HEAD as usual.
-// The request dispatcher does not pass releases.
+// The serving hook supplies no family catalog and releases no reservations.
 export function resolveRouteOwner(
   decision: RouteDecision,
   manifest: OwnedRoute[] = ROUTE_MANIFEST,
@@ -749,6 +749,7 @@ export interface HookDispatchDeps {
     render: () => Promise<Response>,
     requestId?: string,
   ) => Promise<Response>;
+  apiFamilies?: readonly KitApiFamily[];
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -1044,7 +1045,7 @@ async function dispatchOwnedRequest(
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }
-  // Single Request-to-decision path: decideOwner is the production call, so
+  // Shared Request-to-decision path: decideRoute is the production call, so
   // its method/path/query/decode coverage guards the dispatch too. Inlining
   // resolveRouteOwner here once left mutants (hard-coded GET, hard-coded
   // path, path+search) green against 32 dispatch tests.
@@ -1077,9 +1078,16 @@ async function dispatchOwnedRequest(
       ROUTE_MANIFEST,
     event.url,
   );
-  if (!route) {
-    return deps.honoFetch(event.request);
-  }
+  const selected = route ?? exactFamilyRouteFor(event, deps.apiFamilies);
+  if (!selected) return deps.honoFetch(event.request);
+  return dispatchKitRequest(event, deps, selected);
+}
+
+async function dispatchKitRequest(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+  route: OwnedRoute,
+): Promise<Response> {
   if (route.path === "/auth/recover") {
     // The no-JS recovery page has no Kit data representation. Never mint
     // journey state from a data request or run the generic session bridge.
@@ -1378,4 +1386,46 @@ async function dispatchOwnedRequest(
   response = decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   await allowlistKitFallbackStyle(response);
   return response;
+}
+
+// The serving hook supplies no families. A future caller must pair each
+// catalog with its own server binding and mount the corresponding endpoint.
+interface KitApiFamily {
+  flag: string | undefined;
+  routes: readonly (OwnedRoute & { reads: RouteReads })[];
+}
+
+function exactFamilyRouteFor(
+  event: HookEventLike,
+  families: readonly KitApiFamily[] | undefined,
+): OwnedRoute | undefined {
+  if (!families?.length || event.isDataRequest) return undefined;
+  // Kit may strip the data suffix from event.url. Use the original pathname
+  // and require a mounted static route before releasing a reservation.
+  const { pathname } = new URL(event.request.url);
+  if (
+    event.route?.id !== pathname ||
+    pathname.includes("[") ||
+    pathname.includes(":") ||
+    pathname.includes("%") ||
+    normalizePath(pathname) !== pathname
+  ) {
+    return undefined;
+  }
+
+  const method = event.request.method === "HEAD" ? "GET" : event.request.method;
+  let selected: OwnedRoute | undefined;
+  for (const family of families) {
+    if (family.flag !== "true") continue;
+    for (const route of family.routes) {
+      if (route.method !== method || route.path !== pathname) continue;
+      if (selected) return undefined;
+      selected = route;
+    }
+  }
+  if (!selected) return undefined;
+  return enabledRouteFor({ method: event.request.method, path: pathname }, [selected], {
+    originalUrl: event.request.url,
+    reservedReleases: [selected],
+  });
 }

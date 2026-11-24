@@ -89,6 +89,8 @@ reports deferred migrations, and does not qualify a release. The staging
 deploy; live production execution always requires separate authorization and is
 never part of a Worker deploy.
 `npm run db:migrate:selftest` exercises only disposable local/CI databases.
+For a human local run, install the pinned Kit workspace dependencies before
+the selftest. Its readiness rehearsal loads the real Kit hook.
 
 ### Adding a migration and running the offline gate
 

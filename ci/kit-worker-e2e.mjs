@@ -582,6 +582,7 @@ export default {
     "cross-origin-opener-policy",
     "cross-origin-resource-policy",
     "x-two-origin",
+    "x-two-renderer",
   ];
   const normalize = (value, worker, requestId) => {
     let out = value.split(worker.origin).join("ORIGIN");
@@ -812,6 +813,22 @@ export default {
     assert.notEqual(viaKit.headers.get("x-two-renderer"), "kit", `${path} is never Kit-rendered`);
   }
   console.log("PASS generated Worker canonical/API boundary parity");
+
+  // The composed hook has no API family bindings. The reserved version read
+  // and its method, slash and data variants still reach the direct Hono owner.
+  for (const [method, path, expected] of [
+    ["GET", "/version?probe=admission", 200],
+    ["HEAD", "/version", 200],
+    ["POST", "/version", 404],
+    ["GET", "/version/", 404],
+    ["GET", "/version/__data.json", 404],
+  ]) {
+    const label = `API families off: ${method} ${path}`;
+    const result = await assertParity(label, path, { method });
+    assert.equal(result.status, expected, label);
+    assert.equal(result.headers["x-two-renderer"], undefined, `${label}: Hono owns the response`);
+  }
+  console.log("PASS generated Worker reserved method/path parity with API families off");
 
   if (args.length) {
     const probePath = "/__fixture/machine-parity";
