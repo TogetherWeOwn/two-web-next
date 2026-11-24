@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      qualify_cutover:
+        description: "Retain the parity-tested all-off Kit and compatible Hono build packet"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,6 +52,8 @@ jobs:
           test "$result" -eq 42
 
   kit-fatal-proof:
+    outputs:
+      cutover_digest: ${{ steps.production-parity.outputs.digest }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -127,6 +134,7 @@ jobs:
         id: production-parity
         shell: bash
         env:
+          CUTOVER_PACKET_DIR: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.qualify_cutover && format('{0}/kit-cutover-packet', runner.temp) || '' }}
           PARITY_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: |
           out=artifacts/production-kit-parity
@@ -149,6 +157,15 @@ jobs:
           path: artifacts/production-kit-parity/
           if-no-files-found: error
           retention-days: 14
+      - name: Retain exact modules and assets for isolated cutover
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.qualify_cutover
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-cutover-packet-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kit-cutover-packet/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
       - name: Verify loopback Postgres stopped
         if: always()
         shell: bash

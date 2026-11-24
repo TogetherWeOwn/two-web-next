@@ -1,0 +1,13 @@
+# All-off Kit cutover and Hono undo
+
+The [XFS qualification workflow](../.github/workflows/xfs-qualification.yml)
+tests the Kit build with every route family off. It preserves the exact facade,
+adapter, and asset bytes from that run together with a pure Hono build compiled
+for the same database readiness profile. The packet manifest binds both file
+trees to the source SHA, root and Kit configuration digests, migration journal,
+run ID, run attempt, and the Hono compiler define and Wrangler pin.
+
+On `main`, dispatch XFS qualification with `qualify_cutover: true` to keep
+the packet from that exact attempt for 30 days. Parity replays the packaged
+Kit bytes. Isolated staging must exercise the separately compiled Hono undo
+bytes before protected deployment selection.
