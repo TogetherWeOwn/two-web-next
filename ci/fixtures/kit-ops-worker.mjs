@@ -178,8 +178,12 @@ async function verifyOps(inner, env, ctx) {
       assert.equal(health.queue[field], value, field);
     await pair("/up", "HEAD", 200, true, healthy);
     await pair("/up", "GET", 503, true);
-    await pair("/version?fixture=1", "GET", 200, true);
-    await pair("/version", "HEAD", 200, true);
+    const sha = "a".repeat(40);
+    const timestamp = "2026-01-02T03:04:05.000Z";
+    const tagged = { bindings: { CF_VERSION_METADATA: { tag: `${sha}-123-1`, timestamp } } };
+    const version = JSON.parse(await pair("/version?fixture=1", "GET", 200, true, tagged));
+    assert.deepEqual(version, { sha, deployedAt: timestamp });
+    await pair("/version", "HEAD", 200, true, tagged);
     await send("/version", "GET", "false", 200, false);
     await send("/version", "GET", "TRUE", 200, false);
 
