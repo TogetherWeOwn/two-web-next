@@ -159,12 +159,13 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
   it("requires a concrete API manifest entry and keeps adapter assets reserved", () => {
     const api = { method: "GET", path: "/api/public/events" };
     const pattern = { ...api, path: "/api/public/:key", enabled: true };
-    const manifest = [pattern, { ...api, enabled: true }];
+    const sibling = { ...api, path: "/api/public/community" };
+    const manifest = [pattern, { ...api, enabled: true }, { ...sibling, enabled: true }];
     expect(resolveRouteOwner({ ...api, method: "head" }, manifest, [api])).toBe("kit");
+    expect(resolveRouteOwner(sibling, manifest, [api])).toBe("hono");
     expect(resolveRouteOwner(api, [pattern], [api])).toBe("hono");
     expect(resolveRouteOwner(pattern, [pattern], [pattern])).toBe("hono");
     for (const path of [
-      "/api/public/sibling",
       "/api/public/%65vents",
       "/api/public/events/__data.json",
       "/api/public/events/%5F%5Fdata.json",
