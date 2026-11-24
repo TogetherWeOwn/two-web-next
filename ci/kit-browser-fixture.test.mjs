@@ -267,10 +267,21 @@ if (query.order === 'desc') rows.reverse();
         url.pathname = "/__browser_fixture__";
         return route.fallback({ url: url.href });
       });
+      // The root fixture emits relative Kit stylesheet URLs. Map their new base back to the built assets.
+      await page.route(`${origin}/admin/_app/immutable/assets/*.css`, (route) => {
+        const url = new URL(route.request().url());
+        url.pathname = url.pathname.slice("/admin".length);
+        return route.fallback({ url: url.href });
+      });
       const table = page.getByTestId("events-table");
       const header = (name) => table.getByRole("columnheader", { name, exact: true });
       const sortLink = (name) => table.getByRole("link", { name, exact: true });
       const assertSort = async (name, direction) => {
+        assert.equal(
+          await page.locator("html").evaluate((element) => getComputedStyle(element).colorScheme),
+          "dark",
+          "the compiled Kit stylesheet is loaded",
+        );
         assert.equal(await table.locator("th[aria-sort]").count(), 1);
         assert.equal(await header(name).getAttribute("aria-sort"), direction);
         assert.equal(
