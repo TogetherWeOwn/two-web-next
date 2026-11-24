@@ -114,6 +114,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_FEEDS?: string;
   // Static machine-readable text and vanity redirects. Unset keeps Hono.
   KIT_ROUTE_STATIC_TEXT?: string;
+  KIT_ROUTE_EVENT_JSON?: string;
+  KIT_ROUTE_PUBLIC_API?: string;
   // Robots and sitemap reads. Only the literal string "true" opts in.
   KIT_ROUTE_SEO?: string;
   // RFC 9116 disclosure file. Only the literal string "true" opts in.

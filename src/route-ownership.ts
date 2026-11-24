@@ -1579,7 +1579,11 @@ interface KitApiRoute extends OwnedRoute {
   reads: RouteReads;
   // A dynamic family uses a mounted route ID plus an explicit path predicate.
   // Its registered path remains the trusted route label for logging.
-  dynamic?: { id: string; matches: (raw: string, decoded: string) => boolean };
+  dynamic?: {
+    id: string;
+    matches: (raw: string, decoded: string) => boolean;
+    releaseReservedLiteral?: true;
+  };
 }
 
 function familyRouteFor(
@@ -1605,7 +1609,11 @@ function familyRouteFor(
       if (route.dynamic) {
         if (
           id !== route.dynamic.id ||
-          isReservedPath(decoded) ||
+          (isReservedPath(decoded) &&
+            (!route.dynamic.releaseReservedLiteral ||
+              pathname !== decoded ||
+              pathname.includes("%") ||
+              !matchPattern(route.path, pathname))) ||
           !route.dynamic.matches(pathname, decoded)
         )
           continue;

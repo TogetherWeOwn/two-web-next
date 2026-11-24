@@ -20,7 +20,9 @@ import {
 import { dispatchHookRequest } from "../../src/route-ownership";
 import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
 import { KIT_EVENT_CALENDAR_ROUTE } from "../../src/events/kit-event-calendar-route";
+import { KIT_EVENT_JSON_ROUTE } from "../../src/events/kit-json-routes";
 import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes";
+import { KIT_PUBLIC_API_ROUTES } from "../../src/public-data/kit-routes";
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
@@ -75,6 +77,8 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
       },
       { flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] },
       { flag: env.KIT_ROUTE_STATIC_TEXT, routes: KIT_STATIC_TEXT_ROUTES },
+      { flag: env.KIT_ROUTE_EVENT_JSON, routes: [KIT_EVENT_JSON_ROUTE] },
+      { flag: env.KIT_ROUTE_PUBLIC_API, routes: KIT_PUBLIC_API_ROUTES },
       { flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES },
       { flag: env.KIT_ROUTE_SECURITY_TXT, routes: [KIT_SECURITY_TXT_ROUTE] },
       {

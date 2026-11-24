@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
 import { assertKitAdminServing, prepareAdminFixture } from "./fixtures/kit-admin-serving.mjs";
+import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -959,21 +960,38 @@ export default {
   }
   console.log("PASS generated Worker reserved method/path parity with API families off");
 
+  async function startKit(name, vars) {
+    const instance = await startWorker(name, worker, assets, secret, vars);
+    await listen(instance.child, instance.origin, () => instance.log);
+    return instance;
+  }
+
+  const [eventJsonOn, publicApiOn] = await Promise.all([
+    startKit("kit-event-json-on", {
+      APP_URL: honoWithSession.origin,
+      KIT_ROUTE_FEEDS: "true",
+      KIT_ROUTE_EVENT_JSON: "true",
+      KIT_ROUTE_PUBLIC_API: "false",
+    }),
+    startKit("kit-public-api-on", {
+      APP_URL: honoWithSession.origin,
+      KIT_ROUTE_EVENT_JSON: "false",
+      KIT_ROUTE_PUBLIC_API: "true",
+    }),
+  ]);
+  await assertEventReadsParity({
+    hono: honoWithSession,
+    unset: kitWithSession,
+    eventJsonOn,
+    publicApiOn,
+    databaseUrl,
+  });
+
   await assertStaticFeedParity({
     hono: honoWithSession,
     kit: kitWithSession,
     databaseUrl,
-    startKit: async (name, vars) => {
-      const instance = await startWorker(
-        name,
-        worker,
-        assets,
-        FIXTURE_SECRETS.SESSION_SECRET,
-        vars,
-      );
-      await listen(instance.child, instance.origin, () => instance.log);
-      return instance;
-    },
+    startKit,
     startSecurityTxtPair: async () => {
       const appUrl = "https://policy.example.test";
       const [direct, enabled] = await Promise.all(
