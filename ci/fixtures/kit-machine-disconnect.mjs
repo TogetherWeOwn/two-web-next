@@ -101,7 +101,8 @@ export default machineDisconnectWorker(inner, ${JSON.stringify(probePath)});`,
       modulesRoot: scratch,
       script: bundle.outputFiles[0].text,
       compatibilityDate: "2026-09-29",
-      compatibilityFlags: ["nodejs_compat"],
+      // ADR 0002 §7. This fixture predates the 2026-11-17 default.
+      compatibilityFlags: ["nodejs_compat", "enable_request_signal"],
       // Wrangler's dev proxy can keep its upstream request open after the
       // downstream socket closes. Connect straight to workerd instead.
       unsafeDirectSockets: [{ host, port: 0 }],
