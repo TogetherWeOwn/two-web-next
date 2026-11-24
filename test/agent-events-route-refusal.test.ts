@@ -18,10 +18,10 @@
 // the sessions-join nightly contract exactly.
 //
 // Scope guard: must not import `src/agent-events/route.ts` bearer internals
-// or `src/agent-events/ingress.ts` directly; drive only through the mounted
-// app through `fetchApp` with minimal env.
+// or `src/agent-events/ingress.ts` directly. Use the mounted app via
+// `requestApp` with minimal env.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchApp } from "./helpers/fetch-app";
+import { requestApp } from "./helpers/fetch-app";
 import type { Env } from "../src/env";
 import { DEFAULT_CONFIG } from "../src/agent-events/service";
 import { makeFakeAgentDb } from "./helpers/fake-agent-ingress-db";
@@ -71,8 +71,9 @@ const executionCtx = {
 describe("agent-events route refusal (DB-free kill)", () => {
   it("a disabled ingress answers 404 without touching a store", async () => {
     noFetch();
-    const res = await fetchApp(
-      new Request(new URL("/api/agent-events", baseEnv.APP_URL), { method: "POST", body: "{}" }),
+    const res = await requestApp(
+      "/api/agent-events",
+      { method: "POST", body: "{}" },
       baseEnv,
       executionCtx,
     );
@@ -84,8 +85,9 @@ describe("agent-events route refusal (DB-free kill)", () => {
 
   it("an enabled ingress with no store answers 503", async () => {
     noFetch();
-    const res = await fetchApp(
-      new Request(new URL("/api/agent-events", enabledEnv.APP_URL), { method: "POST", body: "{}" }),
+    const res = await requestApp(
+      "/api/agent-events",
+      { method: "POST", body: "{}" },
       enabledEnv,
       executionCtx,
     );
@@ -110,15 +112,16 @@ describe("agent-events route refusal (DB-free kill)", () => {
       disabled_at: null,
     });
     const env = { ...enabledEnv, AGENT_EVENT_SQL: fake.sql } as unknown as Env;
-    const res = await fetchApp(
-      new Request(new URL("/api/agent-events", env.APP_URL), {
+    const res = await requestApp(
+      "/api/agent-events",
+      {
         method: "POST",
         headers: {
           authorization: `Bearer ${CRED}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({ op: "delete", idempotency_key: "route-g3-001" }),
-      }),
+      },
       env,
       executionCtx,
     );
@@ -139,8 +142,9 @@ describe("agent-events route refusal (DB-free kill)", () => {
       disabled_at: null,
     });
     const env = { ...enabledEnv, AGENT_EVENT_SQL: fake.sql } as unknown as Env;
-    const res = await fetchApp(
-      new Request(new URL("/api/agent-events", env.APP_URL), {
+    const res = await requestApp(
+      "/api/agent-events",
+      {
         method: "POST",
         headers: {
           authorization: `Bearer ${CRED}`,
@@ -151,7 +155,7 @@ describe("agent-events route refusal (DB-free kill)", () => {
           idempotency_key: "route-ok-001",
           fields: FIELDS,
         }),
-      }),
+      },
       env,
       executionCtx,
     );

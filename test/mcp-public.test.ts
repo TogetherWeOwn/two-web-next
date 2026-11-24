@@ -30,7 +30,7 @@ import type { EnvWithThrottle } from "../src/throttle";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { parseJsonLines } from "./helpers/parse-json-lines";
 import { validatePublicSchema } from "./helpers/public-api-schema";
-import { fetchMcp } from "./helpers/mcp-fetch";
+import { fetchAppPath } from "./helpers/fetch-app";
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -120,7 +120,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     init: RequestInit = {},
     ip = "192.0.2.71",
   ): Promise<RpcResponse> => {
-    const res = await fetchMcp(
+    const res = await fetchAppPath(
       "/mcp",
       {
         method: "POST",
@@ -203,6 +203,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     const hello = await initialize();
     expect(hello.status).toBe(200);
     expect(hello.messages).toHaveLength(1);
+    expect(hello.messages[0]).toMatchObject({ jsonrpc: "2.0", id: 1 });
     const result = hello.messages[0]!["result"] as Record<string, unknown>;
     expect(result["protocolVersion"]).toBe("2025-06-18");
     const serverInfo = result["serverInfo"] as Record<string, unknown>;
@@ -345,7 +346,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
   });
 
   it("refuses a foreign Host before routing", async () => {
-    const res = await fetchMcp(
+    const res = await fetchAppPath(
       "https://evil.test/mcp",
       {
         method: "POST",
@@ -367,28 +368,28 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     // Origin-less POSTs never reach routing: the global guard refuses first,
     // and the /mcp exemption covers the exact path only.
     for (const path of ["/mcp/extra", "/mcp/"]) {
-      const res = await fetchMcp(path, { method: "POST", headers: plain, body: "{}" }, env);
+      const res = await fetchAppPath(path, { method: "POST", headers: plain, body: "{}" }, env);
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: "cross_origin", request_id: expect.any(String) });
     }
     // Past the guard (same-origin callers), routing still 404s non-exact paths.
     for (const path of ["/mcp/extra", "/mcp/"]) {
-      const res = await fetchMcp(
+      const res = await fetchAppPath(
         path,
         { method: "POST", headers: { ...plain, origin: APP_URL }, body: "{}" },
         env,
       );
       expect(res.status).toBe(404);
     }
-    const get = await fetchMcp("/mcp", { method: "GET", headers: plain }, env);
+    const get = await fetchAppPath("/mcp", { method: "GET", headers: plain }, env);
     expect(get.status).toBe(404);
     // PUT/PATCH/DELETE stay under the global guard: no exemption, no handler.
     for (const method of ["PUT", "PATCH", "DELETE"]) {
-      const res = await fetchMcp("/mcp", { method, headers: plain }, env);
+      const res = await fetchAppPath("/mcp", { method, headers: plain }, env);
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: "cross_origin", request_id: expect.any(String) });
     }
-    const preflight = await fetchMcp(
+    const preflight = await fetchAppPath(
       "/mcp",
       {
         method: "OPTIONS",
@@ -469,7 +470,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
             return boomDb;
           },
         } as unknown as Env & EnvWithThrottle;
-        const res = await fetchMcp(
+        const res = await fetchAppPath(
           "/mcp",
           {
             method: "POST",
@@ -533,7 +534,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
           throw new McpFactoryBoomError("factory boom");
         },
       } as unknown as Env & EnvWithThrottle;
-      const res = await fetchMcp(
+      const res = await fetchAppPath(
         "/mcp",
         {
           method: "POST",
@@ -584,7 +585,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     __resetAlertRateLimitForTests();
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const res = await fetchMcp(
+      const res = await fetchAppPath(
         "/mcp",
         {
           method: "POST",

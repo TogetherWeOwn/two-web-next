@@ -43,7 +43,7 @@ import { getOpenApiDocument } from "../src/public-data/openapi";
 import { createMemorySessionStore, type Sql } from "../src/sessions";
 import type { EnvWithThrottle } from "../src/throttle";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
-import { fetchMcp } from "./helpers/mcp-fetch";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { parseJsonLines } from "./helpers/parse-json-lines";
 import { validatePublicSchema } from "./helpers/public-api-schema";
 
@@ -257,7 +257,7 @@ describe.skipIf(!process.env.DATABASE_URL)("route-native machine failures", () =
     app.request(path, { headers: { "cf-connecting-ip": ip, ...headers } }, env);
 
   const postMcp = async (init: RequestInit, ip = "192.0.2.71") =>
-    fetchMcp(
+    fetchAppPath(
       "/mcp",
       {
         method: "POST",

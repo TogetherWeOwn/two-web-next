@@ -35,7 +35,7 @@ import { getOpenApiDocument } from "../src/public-data/openapi";
 import { createMemorySessionStore, type SessionStore, type Sql } from "../src/sessions";
 import type { EnvWithThrottle } from "../src/throttle";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
-import { fetchMcp } from "./helpers/mcp-fetch";
+import { fetchAppPath } from "./helpers/fetch-app";
 
 const APP_URL = "https://next.example.test";
 const INVITE_URL = "https://discord.gg/test-invite-handoff";
@@ -357,7 +357,7 @@ describe.skipIf(!process.env.DATABASE_URL)("C4 typed results: advertised output 
     init: RequestInit = {},
     ip = "192.0.2.91",
   ): Promise<RpcResponse> => {
-    const res = await fetchMcp(
+    const res = await fetchAppPath(
       "/mcp",
       {
         method: "POST",

@@ -27,7 +27,7 @@
 // client opens. No DATABASE_URL, no Discord, no network.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type postgres from "postgres";
-import { fetchApp } from "./helpers/fetch-app";
+import { fetchApp, requestApp } from "./helpers/fetch-app";
 import type { Env } from "../src/env";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import { DEFAULT_CONFIG, digest } from "../src/agent-events/service";
@@ -188,12 +188,13 @@ function overCapRequest(headers: Record<string, string>, advertised: boolean) {
 }
 
 async function postJson(env: Env, headers: Record<string, string>, body: string) {
-  const res = await fetchApp(
-    new Request(new URL("/api/agent-events", env.APP_URL), {
+  const res = await requestApp(
+    "/api/agent-events",
+    {
       method: "POST",
       headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.1", ...headers },
       body,
-    }),
+    },
     env,
     executionCtx,
   );
