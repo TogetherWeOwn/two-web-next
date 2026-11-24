@@ -282,8 +282,7 @@ async function hasCalendarFragment(body, origin) {
 }
 
 function probeNavigation(url, headers, signal) {
-  // Node fetch always supplies its own Sec-Fetch-Mode. The native GET keeps
-  // navigation metadata and never follows redirects.
+  // Node fetch rewrites Sec-Fetch-Mode. Native GET preserves it without redirects.
   const get = url.protocol === "https:" ? httpsGet : httpGet;
   const requestHeaders = { ...headers, "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document" };
   return new Promise((resolve, reject) => {

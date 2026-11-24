@@ -1125,7 +1125,7 @@ test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) =
   const fragment = (origin) =>
     `<link rel="canonical" href="${origin}/events"><section data-island="events-calendar">${["head", "subscribe", "actions", "miss", "content"].map((zone) => `<div data-cal-zone="${zone}"></div>`).join("")}</section>`;
   const fragments = { "/events?view=calendar": [200, "text/html", fragment] };
-  let broken = false;
+  let missingAttribute = "";
   const render = (path, response) => {
     if (["/", "/events", "/events?view=calendar", "/join"].includes(path))
       response.headers["x-two-renderer"] = "kit";
@@ -1135,11 +1135,11 @@ test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) =
         '<h2 id="join-card-heading">Join with one sign-in</h2>' +
         '<a href="/join/discord" data-testid="join-oneclick">Join with Discord</a>';
     }
-    if (broken && path === "/events?view=calendar") {
+    if (missingAttribute && path === "/events?view=calendar") {
       delete response.headers["x-two-renderer"];
-      response.body = response.body.replace('data-cal-zone="content"', 'data-cal-zone="miss"');
+      response.body = response.body.replace(missingAttribute, "");
     }
-    if (broken && path === "/admin") response.headers["x-two-renderer"] = "kit";
+    if (missingAttribute && path === "/admin") response.headers["x-two-renderer"] = "kit";
   };
   const good = await stub(t, render, fragments);
   const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
@@ -1152,12 +1152,13 @@ test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) =
     assert.equal(request.override, override);
   }
   assert.equal(good.requests.at(-1)?.fetchMetadata[2], "same-origin");
-  broken = true;
-  const result = await run(good.url, options);
-  assert.equal(result.ok, false);
-  assert.match(result.output, /FAIL \/events\?view=calendar: expected x-two-renderer: kit/);
-  assert.match(result.output, /calendar canonical and swap zones; actual invalid fragment/);
-  assert.match(result.output, /FAIL \/admin: expected no x-two-renderer/);
+  for (missingAttribute of ['rel="canonical"', 'data-cal-zone="content"']) {
+    const result = await run(good.url, options);
+    assert.equal(result.ok, false);
+    assert.match(result.output, /FAIL \/events\?view=calendar: expected x-two-renderer: kit/);
+    assert.match(result.output, /calendar canonical and swap zones; actual invalid fragment/);
+    assert.match(result.output, /FAIL \/admin: expected no x-two-renderer/);
+  }
 });
 
 test("CLI enforces the selected staging Join renderer and its public action", async (t) => {
