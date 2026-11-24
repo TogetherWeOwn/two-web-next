@@ -1,18 +1,58 @@
-// JSON/ETag event routes: GET /events.json. Split out of
-// src/events/routes.tsx; publishes the same bounded projection to every session.
+// JSON/ETag responses for the event collection and individual events.
 import { dbFor } from "../admin/db";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, listJson } from "./reads";
+import { getPublicEvent, JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, listJson } from "./reads";
+import { waitlistPosition } from "./waitlist";
 import type { PublicEventCollectionDto } from "../public-data/contracts";
 import {
   publicEventJson,
   dbUnavailableJson,
+  eventJson,
   jsonResponse,
   jsonSession,
   type App,
+  type Ctx,
   type SessionReader,
   publicReadGuard,
 } from "./routes-shared";
+
+export async function eventDetailJson(
+  c: Ctx,
+  readKey: () => string,
+  readFragmentSession: SessionReader,
+): Promise<Response> {
+  const limited = await publicReadGuard(c);
+  if (limited) return limited;
+  const key = readKey();
+  // Canonicalize ULIDs before session or event reads. Demo keys and
+  // unrecognized keys continue to the usual session gate and key check.
+  const canonical = canonicalEventKey(key);
+  if (canonical && canonical !== key) {
+    const search = new URL(c.req.url).search;
+    return c.redirect(`/events/${encodeURIComponent(canonical)}${search}`, 301);
+  }
+  const session = await jsonSession(c, readFragmentSession);
+  if (session instanceof Response) return session;
+  if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
+  const db = await dbFor(c);
+  if (!db) return dbUnavailableJson(c);
+  const e = await getPublicEvent(db, key);
+  if (!e) return c.json({ error: "not_found" }, 404);
+  if (e.status === "draft" && !session.moderator) return c.json({ error: "forbidden" }, 403);
+  if (e.status === "cancelled")
+    return c.json(
+      {
+        reason: "event_cancelled",
+        message: "This event was cancelled.",
+        event_key: e.eventKey,
+        status: e.status,
+      },
+      410,
+    );
+  if (e.status === "draft") c.header("x-robots-tag", "noindex, nofollow");
+  const position = await waitlistPosition(db, e.id, session.id);
+  return jsonResponse(c, { data: { ...eventJson(e), waitlist_position: position } });
+}
 
 export function registerJsonRoutes(app: App, readFragmentSession: SessionReader): void {
   app.get("/events.json", async (c) => {
