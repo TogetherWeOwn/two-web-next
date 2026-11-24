@@ -1,11 +1,7 @@
 import { z } from "zod";
 import { exceedsUtf8ByteLimit } from "../http/length-limit";
-import {
-  type LiveSocketEnv,
-  readLiveSocketSession,
-  SESSION_REF,
-  SESSION_UNTIL,
-} from "./socket-route";
+import type { SessionStore } from "../sessions";
+import { type LiveSocketEnv, SESSION_REF, SESSION_UNTIL } from "./socket-route";
 import { readTimedSocketSession } from "./socket-session";
 
 const MAX_SOCKETS = 64;
@@ -59,13 +55,15 @@ function decode(message: string | ArrayBuffer) {
 }
 
 export class LiveSockets {
-  readonly #sending = new WeakSet<WebSocket>();
+  // The entry serializes commands. Its value says whether the command owns the voice baseline.
+  readonly #sending = new WeakMap<WebSocket, boolean>();
   readonly #publishing = new WeakSet<WebSocket>();
 
   constructor(
     private readonly ctx: DurableObjectState,
     private readonly env: LiveSocketEnv,
     private readonly projectVoice: () => { value: string; until: number } | null,
+    private readonly readSession: SessionStore["getLive"],
   ) {}
 
   scheduleExpiry(until: number): Promise<void> {
@@ -113,7 +111,8 @@ export class LiveSockets {
         : now >= meta.nextResync && incoming.topics.every((item) => meta.topics?.includes(item));
     if (!allowed) return this.#close(socket, 1008);
 
-    this.#sending.add(socket);
+    const sendsVoice = incoming.topics.includes("voice");
+    this.#sending.set(socket, sendsVoice);
     try {
       if (!(await this.#authorize(socket, meta))) return false;
       // A producer event can clear the previous baseline while the row read is pending.
@@ -132,7 +131,7 @@ export class LiveSockets {
           this.#unavailable(socket, item);
         }
       }
-      if (handledVoice || !incoming.topics.includes("voice")) return handledVoice;
+      if (handledVoice || !sendsVoice) return handledVoice;
 
       // An explicit resync requires independent proof even while the hub is warm.
       const refreshed = await refreshVoice();
@@ -151,9 +150,7 @@ export class LiveSockets {
 
   async #authorize(socket: WebSocket, meta: SocketMeta): Promise<boolean> {
     if (meta.ref === null) return true;
-    const row = await readTimedSocketSession(meta.ref, (ref) =>
-      readLiveSocketSession(this.env, ref),
-    );
+    const row = await readTimedSocketSession(meta.ref, this.readSession);
     if (!row) return this.#close(socket, 1008);
     if (row.validUntil >= meta.until) return true;
     // Shorten the hibernating lease without overwriting a concurrent update.
@@ -249,7 +246,7 @@ export class LiveSockets {
       sockets.map(async (socket) => {
         if (
           socket.readyState !== WebSocket.OPEN ||
-          this.#sending.has(socket) ||
+          this.#sending.get(socket) ||
           this.#publishing.has(socket)
         )
           return;
@@ -258,7 +255,7 @@ export class LiveSockets {
         if (meta.voiceUntil <= Date.now() || preview.value === meta.voicePrevious) return;
         this.#publishing.add(socket);
         try {
-          if (!(await this.#authorize(socket, meta)) || this.#sending.has(socket)) return;
+          if (!(await this.#authorize(socket, meta)) || this.#sending.get(socket)) return;
           const current = this.#active(socket);
           if (current) this.#voice(socket, current, false);
         } catch {

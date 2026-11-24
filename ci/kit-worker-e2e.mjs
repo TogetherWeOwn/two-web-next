@@ -237,10 +237,14 @@ function fetch(request, env, context) {
   return worker.fetch(secure, env, context);
 }\n`,
     );
+    const { LIVE_FIXTURE_GUILD, verifyPublicFanout } = await import(
+      "./fixtures/kit-live-fanout.mjs"
+    );
     const secret = FIXTURE_SECRETS.SESSION_SECRET;
     const live = await startWorker("kit-live", entry, assets, secret, {
       APP_URL: "https://kit-live.invalid",
       BOT_ENDPOINT_URL: "https://bot-live.invalid",
+      DISCORD_GUILD_ID: LIVE_FIXTURE_GUILD,
       DISCORD_LIVE_INGEST_ENABLED: "true",
       DISCORD_LIVE_SOCKET_ENABLED: "true",
       DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "10,11",
@@ -252,7 +256,6 @@ function fetch(request, env, context) {
     await listen(live.child, live.origin, () => live.log);
     const { verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
     await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
-    const { verifyPublicFanout } = await import("./fixtures/kit-live-fanout.mjs");
     await verifyPublicFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
   }
 
