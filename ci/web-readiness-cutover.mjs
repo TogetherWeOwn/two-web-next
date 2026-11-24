@@ -12,6 +12,7 @@ export async function buildCutoverApps(root) {
     stdin: {
       contents: `
         export { default as worker } from "./src/worker";
+        export { databaseOptions } from "./src/db/connection";
         export { pgEventStore } from "./src/jobs/events";
         export { handle } from "./web/src/hooks.server.ts";
         export { setEnv } from "cloudflare:workers";
@@ -20,6 +21,7 @@ export async function buildCutoverApps(root) {
     },
     outfile,
     bundle: true,
+    tsconfig: join(process.cwd(), "tsconfig.json"),
     packages: "external",
     platform: "node",
     format: "esm",
@@ -47,8 +49,11 @@ export async function buildCutoverApps(root) {
       },
     ],
   });
-  const { worker, handle, setEnv, pgEventStore } = await import(pathToFileURL(outfile).href);
+  const { worker, handle, setEnv, pgEventStore, databaseOptions } = await import(
+    pathToFileURL(outfile).href
+  );
   return {
+    databaseOptions,
     pgEventStore,
     apps: [
       {

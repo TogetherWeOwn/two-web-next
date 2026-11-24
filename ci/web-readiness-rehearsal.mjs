@@ -173,6 +173,9 @@ export async function rehearseWebReadiness(owner, url) {
     runtimeUrl.username = login;
     runtimeUrl.password = "";
     reader = postgres(runtimeUrl.href, {
+      // The jobs runtime disables prepared statements. Reusing a prepared
+      // SELECT * across 1036 would otherwise retain the pre-expansion shape.
+      ...cutover.databaseOptions,
       port: 5432,
       max: 2,
       connect_timeout: 5,
