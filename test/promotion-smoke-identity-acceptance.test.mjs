@@ -252,7 +252,8 @@ async function runPromotionScript(t, serve, envOverrides = {}) {
   const { script } = await promotionSmokeStep();
   const hermetic = script
     .replaceAll("https://togetherweown.com", url)
-    .replaceAll("sleep 10", "sleep 0");
+    .replaceAll("sleep 10", "sleep 0")
+    .replace("workflow-tip/ci/kit-cutover-deploy.mjs live", "-e 'process.exit(8)'");
   const result = await spawnCollect("bash", ["-c", hermetic], {
     cwd: repoRoot,
     env: {
@@ -290,6 +291,11 @@ test("extracted promotion smoke step passes once propagation serves the promoted
   assert.equal(result.code, 0, result.output);
   assert.match(result.output, /post-promotion production smoke ok \(attempt 2\)/);
   assert.ok(result.requests.every((r) => r.override === undefined));
+  const cutover = await runPromotionScript(t, serveUp(healthyUp(PROMOTED)), {
+    CUTOVER_MODE: "kit",
+  });
+  assert.equal(cutover.code, 1);
+  assert.match(cutover.output, /smoke: 24 routes, 0 failed assertions/);
 });
 
 test("extracted promotion smoke step fails closed on empty promoted output without probing", async (t) => {

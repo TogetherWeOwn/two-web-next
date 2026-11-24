@@ -420,7 +420,6 @@ jobs:
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
       - run: npm ci --include=dev
       - name: Prepare first-party generated inputs
-        if: env.CUTOVER_MODE == 'ordinary'
         # Rescue targets can predate the explicit preparation command.
         run: |
           if node -e 'process.exit(typeof require("./package.json").scripts?.["generate:first-party"] === "string" ? 0 : 1)'; then

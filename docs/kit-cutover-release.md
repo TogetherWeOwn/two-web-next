@@ -22,12 +22,8 @@ To retry, select **Re-run all jobs** so staging uses a packet from that attempt.
 
 ## Protected release and recovery
 
-Follow the [separate release gate](../CONTRIBUTING.md#production-release-gate).
-Pause automatic promotion. Use the same full `sha` and `cutover_pin` for both deploys.
-
-1. Dispatch `deploy-production` with `cutover_mode: hono` and record its serving UUID.
-2. Dispatch with `cutover_mode: kit` and set `cutover_undo_version` to that UUID.
-3. For manual or same-SHA undo, use `rollback-production` with Hono as
-   `version_id` and Kit as `expected_current_version_id`.
-
-Ordinary promotion from a cutover version requires the complete target ledger.
+Follow the [separate release gate](../CONTRIBUTING.md#production-release-gate) and pause automatic promotion.
+Dispatch `deploy-production` with `cutover_mode: hono` and record its serving UUID.
+Select `kit` with that UUID as `cutover_undo_version` and the same `sha` and `cutover_pin`.
+Undo with `rollback-production`, using Hono as `version_id` and Kit as `expected_current_version_id`.
+Ordinary promotion from cutover requires the full target ledger.
