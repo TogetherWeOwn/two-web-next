@@ -21,17 +21,14 @@ removes the run-owned Worker, database, and expiring login.
 To retry, select **Re-run all jobs** so staging uses a packet from that attempt.
 
 For the Ember release set `cutover_profile: ember` with `qualify_cutover: true`.
-The regular all-off parity job still verifies the packaged bytes. The isolated
-run uploads those bytes with the Ember flag on and checks that document GETs to
-Home, Events and Join use Kit, including the Events calendar fragment GET. It
-checks Hono on the remaining smoke routes and at each undo. APIs, Join OAuth,
-member and admin routes keep their Hono ownership.
+Isolated staging checks Kit Home, Events, Join and the calendar fragment on the
+packaged bytes. The remaining smoke routes and each undo use Hono.
 
 ## Protected release and recovery
 
 Follow the [separate release gate](../CONTRIBUTING.md#production-release-gate) and pause automatic promotion. Prepare Hono with `deploy-production` and `cutover_mode: hono`, then record its serving UUID.
 Select `ember` for the Ember-qualified proof or `kit` for the all-off proof.
 Use the serving Hono UUID as `cutover_undo_version` and the same `sha` and
-`cutover_pin`. The gradual rollout and final smoke check the selected renderers.
+`cutover_pin`. Ember adds renderer assertions to rollout and final smoke.
 Undo with `rollback-production`, specifying Hono as `version_id` and Kit as
 `expected_current_version_id`. Ordinary promotion requires the full target ledger.

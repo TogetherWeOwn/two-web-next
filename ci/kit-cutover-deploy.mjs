@@ -137,7 +137,7 @@ async function main() {
     config,
     `${pin.sourceSha}-${runId}-${attempt}`,
     {
-      message: profile === "hono" ? undoMessage(pin.digest) : `two-web-cutover-kit:${pin.digest}`,
+      message: pin.mode === "hono" ? undoMessage(pin.digest) : `two-web-cutover-kit:${pin.digest}`,
       output: process.env.WRANGLER_OUTPUT_FILE_PATH,
     },
   );

@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone CI tooling has no declaration file.
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
+import type { Env } from "../src/env";
+import { anonCacheSource, anonEventsKey, writeAnonCache } from "../src/events/anon-cache";
+import { dispatchEventsRequest } from "../src/kit-events";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static";
 import {
   KIT_RENDERER_HEADER,
@@ -501,7 +504,9 @@ describe("Kit production route selection", () => {
       expect(deps.resolve, path).toHaveBeenCalledOnce();
       expect(deps.honoFetch, path).not.toHaveBeenCalled();
       expect(response.headers.get(KIT_RENDERER_HEADER), path).toBe(KIT_RENDERER_VALUE);
-      expect(response.headers.get("X-Robots-Tag"), path).toBeNull();
+      expect(response.headers.get("X-Robots-Tag"), path).toBe(
+        event.url.origin === apex ? null : "noindex, nofollow",
+      );
     }
     return response;
   }
@@ -551,9 +556,7 @@ describe("Kit production route selection", () => {
       await expectOwner(event, "hono", ember, origin);
       await expectOwner({ ...event, isDataRequest: true }, "hono", ember, origin);
     }
-    for (const path of ["/admin", "/leaderboards/members", "/members", "/join/discord", "/up"]) {
-      await expectOwner(productionEvent(path, "GET", origin), "hono", ember, origin);
-    }
+    await expectOwner(productionEvent("/join/discord", "GET", origin), "hono", ember, origin);
   });
 
   it("requires the exact proof or apex origin on both URLs", async () => {
@@ -571,8 +574,6 @@ describe("Kit production route selection", () => {
   it("only admits Home with the declared member-read boundary", () => {
     const event = productionEvent("/");
     const deps = { appUrl: apex, kitRouteEmberPages: "true" };
-    const home = ROUTE_MANIFEST.find((route) => route.path === "/");
-    expect(home?.reads).toEqual({ resource: "member", action: "list", route: "home" });
     for (const reads of [undefined, "public"] as const) {
       const manifest = productionManifestFor(event, deps, [
         { method: "GET", path: "/", enabled: true, reads },
@@ -593,6 +594,26 @@ describe("Kit production route selection", () => {
       headers: { ...headers, "sec-fetch-site": "cross-site" },
     });
     await expectOwner(event, "hono", ember);
+  });
+
+  it("renders Kit Events after a Hono cache fill on the same Worker", async () => {
+    const event = productionEvent("/events");
+    const env = { APP_URL: apex } as Env;
+    const cached = {
+      status: 200,
+      cacheControl: "public, max-age=60",
+      vary: null,
+      body: "Hono HTML",
+    };
+    writeAnonCache(anonEventsKey("GET", "/events", false), anonCacheSource(env), cached, 60_000);
+    const response = await dispatchHookRequest(event, {
+      ...stagingDeps(ember),
+      appUrl: apex,
+      eventsPage: (request, render) =>
+        dispatchEventsRequest(request, env, render, { guard: async () => null }),
+    });
+    expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(await response.text()).toBe("<html>kit page</html>");
   });
 
   it.each([

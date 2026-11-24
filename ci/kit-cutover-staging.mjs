@@ -213,14 +213,8 @@ async function exercise(proof, prefixes, owner, names, origin, config, ember) {
   const deployments = () => JSON.parse(run("deployments", "list", "--json"));
   const capture = async (state, step, version) => {
     assert.equal(liveVersion(deployments()), version);
-    const routes = await verifyServed(
-      origin,
-      prefixes,
-      identity,
-      version,
-      state,
-      ember && step === "kit",
-    );
+    const emberKit = ember && step === "kit";
+    const routes = await verifyServed(origin, prefixes, identity, version, state, emberKit);
     proof.routeCount ??= routes;
     assert.equal(routes, proof.routeCount, "staged smoke route coverage changed");
     checks.push({ state, step, version, status: 200, pending: 0, smoke: "passed" });
