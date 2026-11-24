@@ -29,7 +29,7 @@ jobs:
     steps:
       - name: Create an isolated annotated tag
         id: probe
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           TARGET_SHA: ${{ inputs.target_sha }}
           PROBE_ARM: ${{ inputs.arm }}
@@ -103,7 +103,7 @@ jobs:
             }
       - name: Remove and verify the owned probe ref
         if: ${{ always() }}
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PROBE_REF: ${{ steps.probe.outputs.ref }}
           PROBE_TAG_SHA: ${{ steps.probe.outputs.tag_sha }}
