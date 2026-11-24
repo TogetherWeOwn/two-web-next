@@ -24,6 +24,7 @@ import {
 } from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
 import { runExecutorAuthority } from "./db-repair-executor.mjs";
+import { rehearseProjection } from "./fixtures/web-readiness-projection.mjs";
 import { OwnershipRefusal, assertMigratorOwnership } from "./migration-ownership.mjs";
 import {
   DefaultAclRefusal,
@@ -1353,6 +1354,10 @@ test("web readiness bridge rehearsal: locked expansion and scoped runtime cutove
       await dropRuntimeRoleIfCreated(client, created);
     }
   });
+});
+
+test("protected readiness projection installs, scopes access and undoes both ledger states", async () => {
+  await fixture(rehearseProjection);
 });
 
 test("implicit ledger rights refuse; object grants preserve runtime and audit operations", async () => {

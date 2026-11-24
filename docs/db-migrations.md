@@ -294,6 +294,36 @@ attempted, instead of surfacing as a masked mid-transaction failure; repairing
 the ownership is an operator action outside the runner, which never changes
 owners or role memberships itself.
 
+## Install or remove the readiness projection
+
+Use the [manual readiness workflow](../.github/workflows/db-readiness-projection.yml)
+after the [production release gate](../CONTRIBUTING.md#production-release-gate).
+It uses the [shared definition](web-readiness-projection.sql) outside the Drizzle
+journal, and accepts only `1033_session-roles-checked-at` or `1037_waitlist-offers`
+as the exact ledger end. Keep `1038` deferred.
+
+Set these pins in the `production` Environment:
+
+- `PRODUCTION_DB_READINESS_APPROVED_SHA` is the full dispatch commit.
+- `PRODUCTION_DB_READINESS_DATABASE_URL` uses the [pinned PlanetScale production host and branch](runbook.md#neon-web-schema-migrations-separate-operator-action)
+  over direct TLS to `/postgres`, with the ledger owner's schema creation rights.
+- `PRODUCTION_DB_READINESS_PLAN` is JSON with `operation` (`forward` or `undo`),
+  `identity` (the [executor fingerprint](runbook.md#neon-web-schema-migrations-separate-operator-action)),
+  `ledger` (one full tag above), `servingRole` (the shared Web and Jobs login),
+  and `webVersion` (`null` for forward or the qualified fallback Worker UUID for undo).
+  `PRODUCTION_DB_READINESS_PLAN_SHA256` pins the exact JSON bytes.
+- Undo uses `PRODUCTION_DB_READINESS_CF_ACCOUNT_ID` and
+  `PRODUCTION_DB_READINESS_CF_READ_TOKEN` with Workers read access.
+
+Install while the serving login can still read the base timestamp column.
+Before narrowing direct access, rehearse `/up` with the exact fallback Worker,
+direct timestamp access, and the view absent. For undo, restore that access and
+confirm the live binding. If another version serves, switch to the approved
+fallback through [protected Worker rollback](../.github/workflows/rollback-production.yml).
+Then dispatch the separately approved undo. It checks direct access, 100% fallback
+traffic, and healthy `/up` on the same ledger before dropping the view and schema with `RESTRICT`.
+Recheck `/up` and the ledger after the inverse.
+
 ## Audit tables are append-only (deployed-role prerequisite)
 
 `drizzle/1018_audit-immutability.sql` guards `agent_event_audits`,
