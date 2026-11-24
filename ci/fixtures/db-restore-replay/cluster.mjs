@@ -85,7 +85,7 @@ export function fixtureCluster(directory) {
   };
 }
 
-export async function using(sql, work) {
+export async function withClient(sql, work) {
   try {
     return await work(sql);
   } finally {

@@ -10,7 +10,7 @@ import {
   bootstrap,
   fixtureCluster,
   newPassword,
-  using,
+  withClient,
 } from "./fixtures/db-restore-replay/cluster.mjs";
 import {
   app,
@@ -54,7 +54,7 @@ function changes(before, after, removed, added) {
 }
 
 async function readAs(connect, role, database, readRows) {
-  return using(connect(role, database), (sql) =>
+  return withClient(connect(role, database), (sql) =>
     sql.begin("read only", async (tx) => {
       const [identity] =
         await tx`select session_user::text as login, current_user::text as effective,
@@ -221,8 +221,8 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     const sourcePasswords = Object.fromEntries(webRoles.map((role) => [role, newPassword()]));
     const sourceConnect = await seed(source, sourcePasswords, true);
     const connect = await seed(restore, sourcePasswords, false);
-    const readSource = () => using(source.admin(), roleCatalog);
-    const readRestore = () => using(restore.admin(), roleCatalog);
+    const readSource = () => withClient(source.admin(), roleCatalog);
+    const readRestore = () => withClient(restore.admin(), roleCatalog);
     const original = await readSource();
     const originalRepairState = await inspect(sourceConnect);
     const incoming = webRoles.map((role) => [role, provisioner, bootstrap, ...MISSING_EDGE]);
@@ -241,13 +241,13 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     );
     assert.ok(!missing.edges.some(([role]) => webRoles.includes(role)));
     await botReads(connect);
-    await using(connect(customer), (sql) => denies(grantAdmin(sql, provisioner, customer)));
-    await using(connect(provisioner), async (sql) => {
+    await withClient(connect(customer), (sql) => denies(grantAdmin(sql, provisioner, customer)));
+    await withClient(connect(provisioner), async (sql) => {
       for (const role of webRoles) await denies(setPassword(sql, role, newPassword()));
     });
     await assert.rejects(runAuthority(connect, "provision"), /approved scope/);
     for (const role of webRoles) {
-      await using(connect(role), (sql) => denies(sql`select current_user`, "28P01"));
+      await withClient(connect(role), (sql) => denies(sql`select current_user`, "28P01"));
     }
     assert.deepEqual(await readRestore(), missing);
     assert.deepEqual(
@@ -262,16 +262,16 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     // Fixture premise: the bootstrap user seeds three ADMIN-only edges on the
     // customer in this cluster. PlanetScale documents CREATEROLE and built-in
     // role privileges but no way to acquire these edges on retained custom roles.
-    await using(restore.admin(), (sql) => grantAdmin(sql, customer, bootstrap));
-    await using(connect(customer), async (sql) => {
+    await withClient(restore.admin(), (sql) => grantAdmin(sql, customer, bootstrap));
+    await withClient(connect(customer), async (sql) => {
       await denies(sql`grant two_web_app to fixture_provisioner
         with admin true, inherit false, set false granted by fixture_bootstrap`);
       await grantAdmin(sql, provisioner, customer);
     });
-    // Change passwords as the re-authorized provisioner, using the random
-    // password each connection will actually present to the SCRAM listener.
+    // The re-authorized provisioner assigns the random passwords that the
+    // fresh connections will present to the SCRAM listener.
     const webPasswords = Object.fromEntries(webRoles.map((role) => [role, newPassword()]));
-    await using(connect(provisioner), async (sql) => {
+    await withClient(connect(provisioner), async (sql) => {
       for (const role of webRoles) await setPassword(sql, role, webPasswords[role]);
     });
     const fresh = (role, database) =>
@@ -279,7 +279,7 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
         ? restore.connect(role, webPasswords[role], database)
         : connect(role, database);
     for (const role of webRoles) {
-      await using(connect(role), (sql) => denies(sql`select current_user`, "28P01"));
+      await withClient(connect(role), (sql) => denies(sql`select current_user`, "28P01"));
     }
     const replayed = await readRestore();
     assert.deepEqual(replayed.roles, original.roles);
@@ -309,7 +309,7 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     assert.deepEqual(namedRepairScope(unprovisioned), namedRepairScope(originalRepairState));
     await runAuthority(connect, "provision");
     const { digest: before } = await inspect(connect);
-    const expected = await using(connect(executor), expectedForward);
+    const expected = await withClient(connect(executor), expectedForward);
     const repair = (direction) => run(connect, direction, before, expected.digest);
     assert.equal(await repair("readback"), "before");
     assert.equal(await repair("forward"), "committed");
@@ -333,7 +333,7 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     // unchanged repair includes in its digest. Pin this attempt separately.
     const reprovisioned = await inspect(connect);
     assert.notEqual(reprovisioned.digest, before);
-    const retained = await using(connect(executor), expectedForward);
+    const retained = await withClient(connect(executor), expectedForward);
     assert.equal(await run(connect, "forward", reprovisioned.digest, retained.digest), "committed");
     await runAuthority(connect, "revoke");
     const { state: repaired } = await inspect(connect);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { bootstrap, newPassword, using } from "./cluster.mjs";
+import { bootstrap, newPassword, withClient } from "./cluster.mjs";
 
 const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
 export const inventory = JSON.parse(read("../../db-permissions-repair-inventory.json"));
@@ -42,7 +42,7 @@ export async function seed(cluster, sourcePasswords, source) {
   const credentials = Object.fromEntries(
     names.map((name) => [name, sourcePasswords[name] ?? newPassword()]),
   );
-  await using(cluster.admin(), async (sql) => {
+  await withClient(cluster.admin(), async (sql) => {
     const [{ major }] =
       await sql`select current_setting('server_version_num')::int / 10000 as major`;
     assert.equal(major, 18);
@@ -114,7 +114,7 @@ export async function seed(cluster, sourcePasswords, source) {
     await sql`create database two_bot`;
     if (source) await grantAdmin(sql, provisioner, bootstrap);
   });
-  await using(cluster.admin("two_bot"), async (sql) => {
+  await withClient(cluster.admin("two_bot"), async (sql) => {
     for (const table of botTables) {
       const name = sql(`public.${table}`);
       await sql`create table ${name} (id int primary key)`;
