@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { INTERNAL_ACTIONS_PATH, newNonce, sha256Hex, signInternalAction } from "../bot/signer";
 import { exceedsByteLimit } from "../http/length-limit";
+import { createRateLimitedWarn } from "../log-budget";
 import type { LiveSnapshot } from "./sequence";
 
 export const LIVE_INGEST_PATH = "/internal/discord-live/v1/ingest";
@@ -14,6 +15,13 @@ const HMAC = { name: "HMAC", hash: "SHA-256" };
 export const utcTimestamp = z.iso.datetime().max(30);
 type LiveKey = { keyId: string; secret: string };
 class TooLarge extends Error {}
+
+const observationAgeWarnings = createRateLimitedWarn({
+  shedLine: "live.snapshot.observation_too_old.shed",
+});
+const observationSkewWarnings = createRateLimitedWarn({
+  shedLine: "live.snapshot.observation_too_far_ahead.shed",
+});
 
 async function bounded<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const controller = new AbortController();
@@ -165,14 +173,19 @@ export function signedLiveSnapshot<State>(
         )
           return null;
         const state = decodeTopics(doc.topics);
+        if (state === null) return null;
         const now = Date.now();
         const observedAt = Date.parse(doc.observed_at);
         // Allow bounded clock skew and cap the lease at 30 seconds from this read.
         const validUntil = Math.min(observedAt, now) + SOURCE_LEASE_MS;
-        if (state === null || observedAt > now + OBSERVATION_SKEW_MS || !(validUntil > now)) {
+        if (observedAt > now + OBSERVATION_SKEW_MS) {
+          observationSkewWarnings.warn("live.snapshot.observation_too_far_ahead", { count: 1 });
           return null;
         }
-        return { seq: doc.seq, state, validUntil };
+        if (validUntil <= now) {
+          observationAgeWarnings.warn("live.snapshot.observation_too_old", { count: 1 });
+        }
+        return validUntil > now ? { seq: doc.seq, state, validUntil } : null;
       });
     } catch {
       return null;

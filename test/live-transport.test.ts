@@ -102,29 +102,82 @@ const decode = (topics: Record<string, unknown>) =>
   typeof topics.voice === "number" ? topics.voice : null;
 
 it.each([
-  () => Response.json({ ...snapshot(), guild_id: "4321" }),
+  () => Response.json({ ...snapshot("2000-01-01T00:00:00Z"), guild_id: "4321" }),
   () => Response.json({ ...snapshot(), topics: {} }),
+  () => Response.json({ ...snapshot("2099-01-01T00:00:00Z"), topics: {} }),
   () => Response.json({ ...snapshot(), seq: -1 }),
   () => Response.redirect("https://other.example/"),
+  () => Response.json(snapshot("2000-01-01T00:00:00Z"), { status: 503 }),
+  () => new Response("not JSON"),
   () => Response.json(snapshot("2026-02-30T02:10:00Z")),
   () => Response.json(snapshot(new Date().toISOString().replace("Z", "4567890Z"))),
-])("does not supply a watermark for a rejected snapshot", async (response) => {
-  expect(await signedLiveSnapshot(config, decode, async () => response())()).toBeNull();
+])("rejects an invalid snapshot without a watermark or clock diagnostic", async (response) => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(await signedLiveSnapshot(config, decode, async () => response())()).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 it("bounds leases by observation age and accepts at most two seconds of forward skew", async () => {
   const now = Date.parse("2026-11-21T04:00:00Z");
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   try {
     const loadAt = (offset: number) =>
       signedLiveSnapshot(config, decode, async () =>
         Response.json(snapshot(new Date(now + offset).toISOString())),
       )();
     expect(await loadAt(-30_000)).toBeNull();
+    expect(warn.mock.calls).toStrictEqual([["live.snapshot.observation_too_old", { count: 1 }]]);
     expect(await loadAt(-29_999)).toEqual({ seq: 11, state: 5, validUntil: now + 1 });
     expect(await loadAt(2_000)).toEqual({ seq: 11, state: 5, validUntil: now + 30_000 });
+    expect(warn).toHaveBeenCalledTimes(1);
     expect(await loadAt(2_001)).toBeNull();
+    expect(warn.mock.calls).toStrictEqual([
+      ["live.snapshot.observation_too_old", { count: 1 }],
+      ["live.snapshot.observation_too_far_ahead", { count: 1 }],
+    ]);
   } finally {
+    warn.mockRestore();
+    clock.mockRestore();
+  }
+});
+
+it("keeps clock warning and shed counts independent by reason", async () => {
+  vi.resetModules();
+  const { signedLiveSnapshot: loadSignedSnapshot } = await import("../src/live/transport");
+  const now = Date.parse("2026-11-21T04:00:00Z");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const load = (offset: number) =>
+      loadSignedSnapshot(config, decode, async () =>
+        Response.json(snapshot(new Date(Date.now() + offset).toISOString())),
+      );
+    const loadOld = load(-30_000);
+    const loadAhead = load(2_001);
+    for (let i = 0; i < 22; i++) expect(await loadOld()).toBeNull();
+    for (let i = 0; i < 21; i++) expect(await loadAhead()).toBeNull();
+
+    clock.mockReturnValue(now + 3_000);
+    expect(await loadOld()).toBeNull();
+    expect(await loadOld()).toBeNull();
+    expect(warn.mock.calls).toStrictEqual([
+      ...Array.from({ length: 20 }, () => ["live.snapshot.observation_too_old", { count: 1 }]),
+      ["live.snapshot.observation_too_old.shed", { dropped: 1 }],
+      ...Array.from({ length: 20 }, () => [
+        "live.snapshot.observation_too_far_ahead",
+        { count: 1 },
+      ]),
+      ["live.snapshot.observation_too_far_ahead.shed", { dropped: 1 }],
+      ["live.snapshot.observation_too_old", { count: 1 }],
+      ["live.snapshot.observation_too_old.shed", { dropped: 2 }],
+    ]);
+  } finally {
+    warn.mockRestore();
     clock.mockRestore();
   }
 });

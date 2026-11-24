@@ -1104,6 +1104,23 @@ identity. The `code` is a fixed allowlisted class, not a message.
    and note any `"completionFailed":true` or `"code":"..."` values. Compare the
    mix against the healthy and unhealthy shapes above.
 
+## Live source observation clock warnings
+
+These warnings require a bound live guild hub with signed snapshot pulls
+enabled. Currently only the installed CI fixture binds the hub. Treat silence
+before activation as an unavailable diagnostic. [Live configuration](config.md)
+
+In Workers Logs, `live.snapshot.observation_too_old` counts otherwise valid
+observations at least 30 seconds old and `live.snapshot.observation_too_far_ahead`
+counts those more than two seconds ahead of the Worker clock. Each warning
+carries `{ count: 1 }`. Each reason has an independent per-isolate budget. Its
+`.shed` warning carries `{ dropped }`, the number suppressed since the prior
+shed warning or isolate start. That count can span incident windows, and some
+drops may still be pending. Use shed warnings as a signal of suppression.
+
+These fields contain counts only. Check producer clock synchronization and
+snapshot freshness using the existing operator access.
+
 ## CSP sink shed signal
 
 `POST /csp-reports` (`src/csp-reports.ts`) owns one in-memory token bucket
