@@ -76,15 +76,14 @@ export const load: PageServerLoad = async ({
   const endsAt = Date.parse(model.endsAt);
   if (!(startsAt < endsAt)) return { model };
 
-  // The detail read supplies a schedule. The RSVP sync timestamp describes
-  // Discord mirroring. Keep seat state in the RSVP controls and let the
-  // sign-up record handle Echo until there is an Echo reader.
+  // The counting window follows from the schedule. Other steps need
+  // lifecycle facts this detail read does not supply.
   return {
     model,
     lifeline: composeLifeline(
       { eventKey: model.eventKey, startsAt, endsAt },
       {},
       now.getTime(),
-    ).filter((step) => step.id !== "echo"),
+    ).filter((step) => step.id === "counting"),
   };
 };

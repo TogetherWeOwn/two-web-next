@@ -1916,12 +1916,11 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
         const card = page.getByTestId("kit-seat-card");
         const bar = page.getByRole("complementary", { name: "Your seat" });
         const lifeline = page.getByRole("region", { name: "Lifeline" });
-        await expect(lifeline.locator(".title")).toHaveText([
-          "Reminder ping",
-          "Bot counts who’s in",
-          "Room opens",
-        ]);
-        await expect(lifeline.locator('[data-state="recorded"], a, button, form')).toHaveCount(0);
+        const step = lifeline.locator("li");
+        await expect(step).toHaveCount(1);
+        await expect(step).toHaveAttribute("data-state", "planned");
+        await expect(step.locator(".title")).toHaveText("Bot counts who’s in");
+        await expect(lifeline.locator("a, button, form")).toHaveCount(0);
         await expect(
           page
             .locator(".event-layout-head + .event-layout-rail + .event-layout-body")
@@ -2165,9 +2164,13 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
       expect(response?.status()).toBe(state === "cancelled" ? 410 : 200);
       expect(response?.headers()["x-two-renderer"]).toBe("kit");
       await expect(page.locator('aside[aria-label="Your seat"]')).toHaveCount(0);
-      await expect(page.getByRole("region", { name: "Lifeline" })).toHaveCount(
-        state === "invalid" || state === "cancelled" ? 0 : 1,
-      );
+      const lifeline = page.getByRole("region", { name: "Lifeline" });
+      await expect(lifeline).toHaveCount(state === "invalid" || state === "cancelled" ? 0 : 1);
+      if (state === "live") {
+        const step = lifeline.locator("li");
+        await expect(step).toHaveCount(1);
+        await expect(step).toHaveAttribute("data-state", "current");
+      }
     }
   } finally {
     await Promise.all([context.close(), enhanced.close()]);
@@ -2832,14 +2835,10 @@ test("Kit member event detail captures the ended record at both widths", async (
       }
       await expect(page.getByTestId("kit-seat-card")).toHaveCount(0);
       await expect(record).toContainText("No Echo for this one. 1 listed sign-up.");
-      const lifeline = page.getByRole("region", { name: "Lifeline" });
-      await expect(lifeline.locator('[data-state="waiting"] .title')).toHaveText([
-        "Reminder ping",
-        "Room opens",
-      ]);
-      await expect(lifeline.locator('[data-state="recorded"] .title')).toHaveText(
-        "Counting window closed",
-      );
+      const step = page.getByRole("region", { name: "Lifeline" }).locator("li");
+      await expect(step).toHaveCount(1);
+      await expect(step).toHaveAttribute("data-state", "recorded");
+      await expect(step.locator(".title")).toHaveText("Counting window closed");
       await expect(nextDates).toHaveCount(1);
       await expect(record.locator(`a[href="/e/${nextKey}"]`).and(nextDates)).toBeVisible();
       await expect(page.locator(`a[href="/e/${nextKey}"]`)).toHaveCount(1);
