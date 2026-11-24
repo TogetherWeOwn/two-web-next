@@ -30,12 +30,12 @@
 // never reported as a logout, so Kit renders "unknown" instead of flipping a
 // member to logged-out). The auth-status probe cookie is deliberately never
 // accepted here: it proves liveness only and is not a login token.
-import { generateSignedCookie } from "hono/cookie";
 import { parseSigned } from "hono/utils/cookie";
 import { exceptionClass } from "./alerts";
 import { AUTH_STATUS_COOKIE } from "./auth-status";
 import type { Env } from "./env";
-import { storeForEnv } from "./index";
+import { storeForEnv } from "./http/session";
+import { signedCookieHeader } from "./http/signed-cookie";
 import type { KitEventsSession } from "./kit-events";
 import { safeNext } from "./join/service";
 import {
@@ -344,15 +344,7 @@ export function kitDocumentRotationFor(env: Env): (event: HookEventLike) => Prom
       expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
     });
     if (!rotated) return null;
-    // Inline options, like Hono's setSignedCookie calls: the pinned-lifetime
-    // guard (test/privacy-policy-numbers.test.ts) reads maxAge from the call.
-    return generateSignedCookie(SESSION_COOKIE, replacement, env.SESSION_SECRET, {
-      path: "/",
-      secure: true,
-      httpOnly: true,
-      sameSite: "Lax",
-      maxAge: SESSION_TTL_SECONDS,
-    });
+    return signedCookieHeader(SESSION_COOKIE, replacement, env.SESSION_SECRET, SESSION_TTL_SECONDS);
   };
 }
 
@@ -413,25 +405,9 @@ export function kitAdminRenewalFor(env: Env): (event: HookEventLike) => Promise<
       expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
     });
     if (!rotated) return null;
-    // Inline options, like Hono's setSignedCookie calls: the pinned-lifetime
-    // guard (test/privacy-policy-numbers.test.ts) reads maxAge from the call.
-    return generateSignedCookie(SESSION_COOKIE, replacement, env.SESSION_SECRET, {
-      path: "/",
-      secure: true,
-      httpOnly: true,
-      sameSite: "Lax",
-      maxAge: SESSION_TTL_SECONDS,
-    });
+    return signedCookieHeader(SESSION_COOKIE, replacement, env.SESSION_SECRET, SESSION_TTL_SECONDS);
   };
 }
-
-const AUTH_STATUS_OPTIONS = {
-  path: "/",
-  secure: true,
-  httpOnly: true,
-  sameSite: "Lax" as const,
-  maxAge: SESSION_TTL_SECONDS,
-};
 
 /** The hook alone supplies the proof of a full account document released by the audit boundary. */
 export function kitAuthStatusCookieFor(
@@ -462,7 +438,12 @@ export function kitAuthStatusCookieFor(
       // boundary): a value outside the shape the read path accepts
       // (src/auth-status.ts) must never be signed into a probe cookie.
       if (!key || !/^[a-f0-9]{64}$/.test(key)) return null;
-      return generateSignedCookie(AUTH_STATUS_COOKIE, key, env.SESSION_SECRET, AUTH_STATUS_OPTIONS);
+      return await signedCookieHeader(
+        AUTH_STATUS_COOKIE,
+        key,
+        env.SESSION_SECRET,
+        SESSION_TTL_SECONDS,
+      );
     } catch {
       // A probe-store outage must not fail the already-authorized page render.
       return null;
