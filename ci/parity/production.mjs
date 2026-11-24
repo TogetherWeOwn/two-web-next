@@ -156,6 +156,48 @@ export function assertFixtureAdmission(recording, target) {
   logout("POST origin:missing", 403);
 }
 
+// Feed the installed Worker synthetic projection rows in the disposable
+// parity clone. The separate web-readiness rehearsal owns schema and ACL proof.
+async function checkCutoverReadiness(sql, readUp) {
+  const { entries } = JSON.parse(readFileSync(join(repo, "drizzle/meta/_journal.json"), "utf8"));
+  const end = (prefix) => {
+    const index = entries.findIndex(({ tag }) => tag.startsWith(`${prefix}_`));
+    assert.ok(index >= 0, "missing cutover journal boundary");
+    return index;
+  };
+  const through = (prefix) => entries.slice(0, end(prefix) + 1).map(({ when }) => String(when));
+  const cases = [
+    ["prefix-1033", through("1033"), 200, 0],
+    ["transition-1037", through("1037"), 200, 0],
+    ["missing-1034", through("1037").filter((_, i) => i !== end("1034")), 503, 1],
+    ["malformed", [...through("1033"), "invalid"], 503, null],
+  ];
+  await sql`CREATE SCHEMA web_readiness`;
+  try {
+    await sql`CREATE TABLE web_readiness.parity_ledger (created_at text NOT NULL)`;
+    await sql`CREATE VIEW web_readiness.migration_timestamps
+      AS SELECT created_at FROM web_readiness.parity_ledger`;
+    const results = [];
+    for (const [name, ledger, expectedStatus, expectedPending] of cases) {
+      await sql.begin(async (tx) => {
+        await tx`TRUNCATE web_readiness.parity_ledger`;
+        await tx`INSERT INTO web_readiness.parity_ledger SELECT unnest(${tx.array(ledger)}::text[])`;
+      });
+      const { status, body } = await readUp();
+      assert.equal(status, expectedStatus, `${name} /up status`);
+      const data = JSON.parse(body.toString("utf8"));
+      assert.equal(data.db, "ok", `${name} /up database`);
+      assert.equal(data.pending_migrations, expectedPending, `${name} /up pending`);
+      const timestamps = expectedPending === null ? null : ledger.map(Number).sort((a, b) => a - b);
+      assert.deepEqual(data.migration_ledger, timestamps, `${name} /up ledger`);
+      results.push({ name, status, pending: data.pending_migrations });
+    }
+    return results;
+  } finally {
+    await sql`DROP SCHEMA web_readiness CASCADE`;
+  }
+}
+
 async function main() {
   const { record } = await import("./record.mjs");
   const { securityHeadersFor } = await import("../../src/headers.ts");
@@ -194,6 +236,7 @@ async function main() {
   );
   const scratch = await mkdtemp(join(process.env.RUNNER_TEMP, "production-parity-"));
   try {
+    let cutoverReadiness;
     const capture = async (name, config) => {
       const targetConfig = join(scratch, `${name}.jsonc`);
       const dir = join(out, name);
@@ -203,6 +246,12 @@ async function main() {
         targetConfig,
         databaseUrl: process.env.PARITY_DATABASE_URL,
         extraPublicFiles: paths,
+        beforeRecording:
+          name === "kit"
+            ? async (sql, readUp) => {
+                cutoverReadiness = await checkCutoverReadiness(sql, readUp);
+              }
+            : undefined,
       });
       const recording = loadRecording(dir);
       assert.ok(meta.vectorCount > 0 && meta.coverage.length > 0, "empty route inventory");
@@ -232,6 +281,7 @@ async function main() {
       vectorCount: built.meta.vectorCount,
       ...diff,
       assets,
+      cutoverReadiness,
     });
     console.log(report(diff, "Hono vs installed Kit (production origin, all families off)"));
     console.log(report({ ...assets, approved: [], unused: [] }, "pre-hook asset security headers"));
