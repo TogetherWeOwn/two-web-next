@@ -600,6 +600,31 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
     }
     expect((await pgDiscordSnapshotStore(connect).claim(key)).token).toBeTruthy();
   });
+  it("serves a stale snapshot through the protected drain and resumes single-owner refresh", async () => {
+    const seed = discordSnapshotBoundaryRows().slice(0, 1);
+    await fixture.client`insert into discord_event_snapshots (key,payload,succeeded_at)
+      values (${key}, ${encodeDiscordSnapshot(seed)}::jsonb, clock_timestamp() - interval '61 seconds')`;
+    const http = vi.fn(async () => seed);
+    const request = () =>
+      cachedDiscordEventsSource(
+        env,
+        { upcoming: http, lastReadFailed: () => false },
+        pgDiscordSnapshotStore(connect),
+      );
+    await fixture.client.begin(async (tx) => {
+      await tx`lock table discord_event_snapshots in exclusive mode`;
+      const source = request();
+      expect(await source.upcoming()).toEqual(seed);
+      expect(source.lastReadFailed()).toBe(false);
+      expect(await pgDiscordSnapshotStore(connect).claim(`${key}-cold`)).toMatchObject({
+        token: null,
+        payload: null,
+      });
+      expect(http).not.toHaveBeenCalled();
+    });
+    await Promise.all([request().upcoming(), request().upcoming()]);
+    expect(http).toHaveBeenCalledTimes(1);
+  });
   it("a stale claim blocked on the admission row lock loses tokenless with the stale view", async () => {
     await fixture.client`insert into discord_event_snapshots (key,payload,succeeded_at) values (${key}, '[]', clock_timestamp() - interval '61 seconds')`;
     const holderClient = connect();

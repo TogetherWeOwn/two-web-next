@@ -3,6 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, copyFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createConnection } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
@@ -246,14 +248,126 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
           },
         );
       };
+      const waitFor = async (observe, message) => {
+        for (let attempt = 0; attempt < 60; attempt++) {
+          if ((await observe())[0].seen) return;
+          await delay(10);
+        }
+        assert.fail(message);
+      };
+      const runDuringSnapshotWrite = async (direction) => {
+        const writer = postgres(url.href, {
+          max: 1,
+          connect_timeout: 5,
+          socket: ({ host: [host], port: [port] }) =>
+            new Promise((resolve, reject) => {
+              const socket = createConnection({ host, port }, () => resolve(socket));
+              socket.once("error", reject);
+              const write = socket.write.bind(socket);
+              let stalled = false;
+              socket.write = (packet, ...options) => {
+                if (stalled) return true;
+                if (!packet.includes("repair_snapshot_writer")) return write(packet, ...options);
+                // Flush the completed INSERT but leave the extended exchange
+                // waiting for Sync, just as with a client that stops mid-query.
+                assert.equal(packet.subarray(-5).toString("hex"), "5300000004");
+                const flush = Buffer.from(packet);
+                flush[flush.length - 5] = 0x48;
+                stalled = true;
+                return write(flush, ...options);
+              };
+            }),
+        });
+        try {
+          const started = Promise.withResolvers();
+          const aborted = writer
+            .begin(async (tx) => {
+              const [{ pid }] = await tx`select pg_backend_pid() as pid`;
+              await tx`select set_config('lock_timeout', '350ms', true),
+                set_config('statement_timeout', '400ms', true),
+                set_config('idle_in_transaction_session_timeout', '1000ms', true),
+                set_config('transaction_timeout', '1500ms', true)`;
+              const write = tx`insert /* repair_snapshot_writer */
+                into public.discord_event_snapshots values (${1})`.execute();
+              started.resolve(pid);
+              await write;
+            })
+            .then(
+              () => assert.fail("Snapshot writer unexpectedly committed"),
+              (error) => {
+                started.reject(error);
+                assert.equal(error.code, "25P04");
+              },
+            );
+          const drain = async (pid) => {
+            await waitFor(
+              () => client`select exists (
+                select from pg_stat_activity a join pg_locks l using (pid)
+                where a.pid = ${pid} and a.state = 'active' and a.wait_event = 'ClientRead'
+                  and l.relation = 'public.discord_event_snapshots'::regclass
+                  and l.mode = 'RowExclusiveLock' and l.granted) as seen`,
+              "Snapshot writer never reached active ClientRead with its table lock",
+            );
+            await Promise.all([
+              run(direction).then((result) => assert.equal(result, "committed")),
+              waitFor(
+                () => client`select exists (
+                  select from pg_locks l
+                  where l.relation = 'public.discord_event_snapshots'::regclass
+                    and l.mode = 'ExclusiveLock' and not l.granted
+                    and ${pid} = any(pg_blocking_pids(l.pid))) as seen`,
+                "Repair never waited for the snapshot writer's table lock",
+              ),
+            ]);
+          };
+          await Promise.all([aborted, started.promise.then(drain)]);
+          const [{ count }] =
+            await client`select count(*)::int as count from public.discord_event_snapshots`;
+          assert.equal(count, 0);
+        } finally {
+          await writer.end({ timeout: 5 });
+        }
+      };
       await assert.rejects(run("forward", {}, "0".repeat(64)), /raw && raw.length/);
       await assert.rejects(run("forward", { after: "0".repeat(64) }));
       assert.equal(await run("readback"), "before");
-      assert.equal(await run("forward"), "committed");
+      await runDuringSnapshotWrite("forward");
       assert.equal(await run("readback"), "after");
       await assert.rejects(run("forward"));
-      assert.equal(await run("undo"), "committed");
+      await runDuringSnapshotWrite("undo");
       assert.equal(await run("readback"), "before");
+      const shortWriter = postgres(url.href, { max: 1, connect_timeout: 5 });
+      const writing = Promise.withResolvers();
+      const releaseWriter = Promise.withResolvers();
+      try {
+        await Promise.all([
+          assert.rejects(
+            shortWriter.begin(async (tx) => {
+              await tx`insert into public.events values (-1)`;
+              writing.resolve();
+              await releaseWriter.promise;
+              throw rollback;
+            }),
+            (error) => error === rollback,
+          ),
+          writing.promise.then(() =>
+            Promise.all([
+              run("forward").then((result) => assert.equal(result, "committed")),
+              waitFor(
+                () => client`select exists (
+                  select from pg_stat_activity
+                  where datname = current_database() and usename = 'repair_legacy'
+                    and state = 'active' and wait_event = 'PgSleep') as seen`,
+                "Repair never rechecked the guard for an unrelated writer",
+              ).finally(() => releaseWriter.resolve()),
+            ]),
+          ),
+        ]);
+      } finally {
+        releaseWriter.resolve();
+        await shortWriter.end({ timeout: 5 });
+      }
+      assert.equal(await run("undo"), "committed");
       await authority("revoke");
       await authority("revoke");
       assert.equal(await readState(), unprovisioned);

@@ -83,7 +83,8 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
       // caps prevent a JS race from leaving a lock/statement queued indefinitely.
       await tx`select set_config('lock_timeout', ${`${DISCORD_STORE_SQL_TIMEOUT_MS - 50}ms`}, true),
         set_config('statement_timeout', ${`${DISCORD_STORE_SQL_TIMEOUT_MS}ms`}, true),
-        set_config('idle_in_transaction_session_timeout', '1000ms', true)`;
+        set_config('idle_in_transaction_session_timeout', '1000ms', true),
+        set_config('transaction_timeout', ${`${DISCORD_STORE_DEADLINE_MS}ms`}, true)`;
       check();
       return body(tx, check);
     });
@@ -98,9 +99,8 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
   };
   return {
     claim: (key) => {
-      // Armed immediately before the admission UPDATE/INSERT and cleared when
-      // it succeeds. A 55P03 while armed means another claimant holds the row
-      // lock past our lock_timeout, so the race is lost, not failed. The
+      // A 55P03 at table admission means repair is draining writers. At the
+      // conditional UPDATE/INSERT it means a concurrent claimant won. The
       // transaction is aborted, so the loss returns this already-read view
       // instead of re-reading (any query in the aborted transaction would fail
       // with 25P02, and a fresh transaction would double the store opens the
@@ -113,6 +113,12 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
         let initial = await read(tx, key);
         check();
         if (refreshHeld(initial)) return { ...initial, token: null };
+        // Reserve write admission before any cleanup or lease mutation. Plain
+        // reads and the last usable snapshot remain available during the drain.
+        contentionFallback = initial;
+        await tx`lock table discord_event_snapshots in row exclusive mode nowait`;
+        contentionFallback = null;
+        check();
         if (!initial.exists) {
           // Serialize only new-key capacity admission, without waiting on another request.
           // Existing refreshes do not contend on this global lock.
