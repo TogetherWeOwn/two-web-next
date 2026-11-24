@@ -116,12 +116,7 @@ export function inspectRoutes(routes, inventory, rows) {
   return { checked, unowned };
 }
 
-/**
- * Read the exact build's SSR output graph and Kit's analyzed route methods.
- * The filter does not run in dev, on the client, or during an ordinary build.
- * @param {import("@sveltejs/kit").Adapter} adapter
- * @param {string | undefined} mode
- */
+// Read the exact build's SSR graph and Kit's analyzed route methods.
 export function kitRetirementBuild(adapter, mode, load = loadInventory) {
   if (mode === undefined) return;
   assert.ok(mode === "report" || mode === "strict", "invalid KIT_RETIREMENT_GUARD mode");
