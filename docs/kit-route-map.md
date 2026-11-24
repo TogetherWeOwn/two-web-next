@@ -160,6 +160,13 @@ sessions and mocked provider responses, including a no-JavaScript sign-out.
 Keep the binding unset in deployed configurations until the exact candidate
 qualifies through the [production release gate](../CONTRIBUTING.md#production-release-gate).
 
+### Admin serving
+
+`KIT_ROUTE_ADMIN=true` enables moderator pages, native admin form POSTs, and
+the operator overrides endpoint on canonical staging or HTTP loopback. The
+operator endpoint uses its bearer independently of the moderator cookie. The
+existing Hono guard serves legacy redirects and other unowned admin paths.
+
 ### Security disclosure endpoint
 
 `KIT_ROUTE_SECURITY_TXT=true` admits trusted GET and HEAD on the literal

@@ -3,11 +3,9 @@
 // event-form-status.tsx, event-form-roster.tsx) keeps the Hono panel's no-JS
 // behaviour and progressive islands, so flipping the manifest entry cannot
 // silently drop a field, a transition button, a roster control or an island.
-// The Hono POST /admin/events/:key update, the publish/cancel/RSVP-pause
-// /RSVP-reopen transitions (422 re-render / 303 redirect) and the guarded
-// /admin/events/:key/edit legacy redirect stay the single write authorities
-// until a later write slice lands: every ported form keeps submitting to the
-// unchanged Hono controllers during mixed mode. There is deliberately no
+// The edit and transition forms keep their existing no-JS URLs and use the
+// shared controller in both serving modes. The legacy edit URL stays a
+// guarded Hono redirect. There is deliberately no
 // event delete anywhere on this resource, and the Svelte port adds none.
 //
 // Source wiring and shared rendered HTML pin the exact selectors the admin edit
@@ -86,7 +84,7 @@ const load = readFileSync(
 );
 
 describe("Kit event-edit page contract", () => {
-  it("posts the edit form to the Hono-owned update endpoint with the editor guard", () => {
+  it("posts the edit form to the shared update URL with the editor guard", () => {
     expect(source).toContain("<form");
     expect(source).toContain('method="post"');
     expect(source).toContain("action={`/admin/events/${data.view.key}`}");
@@ -271,8 +269,8 @@ describe("Kit event-edit page contract", () => {
     expect(load).toContain("csr = false");
   });
 
-  it("leaves the write and legacy routes to Hono: no Kit action, no edit alias", () => {
-    expect(load).not.toContain("actions");
+  it("binds the admitted Kit form action and leaves the legacy alias to Hono", () => {
+    expect(load).toContain("export const actions = adminFormActions");
     expect(load).toContain("resolveKitEventEdit");
     expect(load).toContain("params.key");
   });

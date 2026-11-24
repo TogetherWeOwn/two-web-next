@@ -148,6 +148,11 @@
   ],
   "sessionRequired": [
     {
+      "route": "POST /admin/*",
+      "binding": "web/src/routes/admin/[...action]/+page.server.ts",
+      "reads": "exact moderator form actions admitted by the hook before controller dispatch"
+    },
+    {
       "route": "GET /profile",
       "binding": "web/src/routes/profile/+page.server.ts",
       "reads": "own member record (audited)"
@@ -229,6 +234,11 @@
     }
   ],
   "outOfScope": [
+    {
+      "route": "GET /admin/ops-overrides",
+      "binding": "web/src/routes/admin/ops-overrides/+server.ts",
+      "reason": "Private operator record behind independent control-bearer admission."
+    },
     {
       "route": "GET /e/:key",
       "binding": "web/src/routes/e/[key]/+page.server.ts",

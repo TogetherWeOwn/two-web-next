@@ -45,9 +45,9 @@ export async function buildCutoverApps(root) {
             path: join(process.cwd(), "web/src/lib/server/hono.ts"),
           }));
           // The scratch bundle sees only the root node_modules. Keep the
-          // pinned Kit hooks and request store in their installed workspace.
+          // pinned Kit API and request store in their installed workspace.
           bundle.onResolve(
-            { filter: /^@sveltejs\/kit\/(hooks|internal\/server)$/ },
+            { filter: /^@sveltejs\/kit(?:\/(hooks|internal\/server))?$/ },
             ({ path }) => ({
               path: join(
                 dirname(kitPackage),
